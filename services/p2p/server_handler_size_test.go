@@ -144,3 +144,20 @@ func TestHandleSubtreeTopic_OversizedDropped(t *testing.T) {
 
 	assertNoMessageTimeAdvance(t, reg, remotePeerID.String(), baseline, "oversized subtree must not advance LastMessageTime")
 }
+
+// TestTopicKindCaps_WithinGossipCeiling guards the invariant documented on
+// maxGossipMessageSize: every per-topic ingress cap (and therefore every
+// egress cap, since publishToNetwork uses the same table) stays at or under
+// the 10KB ceiling. Teranode gossip payloads are ~1KB announcements; a cap
+// drifting back up towards the libp2p 1MiB default would silently widen the
+// pre-parse abuse surface on that topic.
+func TestTopicKindCaps_WithinGossipCeiling(t *testing.T) {
+	for _, kind := range []topicKind{topicKindBlock, topicKindSubtree, topicKindRejectedTx, topicKindNodeStatus} {
+		require.Contains(t, topicKindCaps, kind, "every subscribed topic must have a cap")
+	}
+
+	for kind, capBytes := range topicKindCaps {
+		require.LessOrEqual(t, capBytes, maxGossipMessageSize, "topic %s cap exceeds the gossip ceiling", kind)
+		require.Positive(t, capBytes, "topic %s cap must be positive", kind)
+	}
+}

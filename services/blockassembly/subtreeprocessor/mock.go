@@ -8,6 +8,7 @@ package subtreeprocessor
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -36,6 +37,15 @@ var _ Interface = (*MockSubtreeProcessor)(nil)
 //   - Validating transaction processing workflows
 type MockSubtreeProcessor struct {
 	mock.Mock
+
+	// ResetRequested backs TakeResetRequested without testify expectations:
+	// the BlockAssembler main loop polls TakeResetRequested every heartbeat,
+	// so tests set it directly. TakeResetRequested reads and clears, like the
+	// real code.
+	ResetRequested atomic.Bool
+
+	// DrainResetRequested backs TakeDrainResetRequested the same way.
+	DrainResetRequested atomic.Bool
 }
 
 func (m *MockSubtreeProcessor) GetCurrentTxMap() TxInpointsMap {
@@ -69,7 +79,24 @@ func (m *MockSubtreeProcessor) Start(ctx context.Context) {
 
 func (m *MockSubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, useFastForwardReset bool, postProcess func() error) ResetResponse {
 	args := m.Called(blockHeader, moveBackBlocks, moveForwardBlocks, useFastForwardReset, postProcess)
+
+	// A func return value computes each call's response.
+	if fn, ok := args.Get(0).(func() ResetResponse); ok {
+		return fn()
+	}
+
 	return args.Get(0).(ResetResponse)
+}
+
+// TakeResetRequested implements Interface.TakeResetRequested: read and clear
+// ResetRequested.
+func (m *MockSubtreeProcessor) TakeResetRequested() bool {
+	return m.ResetRequested.Swap(false)
+}
+
+// TakeDrainResetRequested implements Interface.TakeDrainResetRequested.
+func (m *MockSubtreeProcessor) TakeDrainResetRequested() bool {
+	return m.DrainResetRequested.Swap(false)
 }
 
 func (m *MockSubtreeProcessor) GetCurrentBlockHeader() *model.BlockHeader {
@@ -152,6 +179,24 @@ func (m *MockSubtreeProcessor) ConsumerExited() bool {
 	return args.Bool(0)
 }
 
+func (m *MockSubtreeProcessor) QueueMaxItems() int64 {
+	args := m.Called()
+	return args.Get(0).(int64)
+}
+
+// MaxTransactionsInMemory implements Interface.MaxTransactionsInMemory. It reports no
+// limit without consulting the mock expectations, so tests that stub only the queue
+// values keep working.
+func (m *MockSubtreeProcessor) MaxTransactionsInMemory() int64 {
+	return 0
+}
+
+// QueueHeadAge implements Interface.QueueHeadAge
+func (m *MockSubtreeProcessor) QueueHeadAge() time.Duration {
+	args := m.Called()
+	return args.Get(0).(time.Duration)
+}
+
 func (m *MockSubtreeProcessor) SubtreeCount() int {
 	args := m.Called()
 	return args.Int(0)
@@ -180,12 +225,47 @@ func (m *MockSubtreeProcessor) GetIncompleteSubtreeMiningData(_ context.Context)
 	return args.Get(0).(*PrecomputedMiningData)
 }
 
+// DrainingAfterBlock implements Interface.DrainingAfterBlock. The mock never
+// defers a drain, so it is never draining.
+func (m *MockSubtreeProcessor) DrainingAfterBlock() bool {
+	return false
+}
+
 // AddBatch implements Interface.AddBatch
 func (m *MockSubtreeProcessor) AddBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
 	m.Called(nodes, txInpoints)
 }
 
+// AddBatchBounded implements Interface.AddBatchBounded
+func (m *MockSubtreeProcessor) AddBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, inBlock bool) Admission {
+	args := m.Called(nodes, txInpoints, inBlock)
+	return args.Get(0).(Admission)
+}
+
+// HeldCount implements Interface.HeldCount. It reports nothing held without consulting the
+// mock expectations, like MaxTransactionsInMemory.
+func (m *MockSubtreeProcessor) HeldCount() int64 {
+	return 0
+}
+
+// SetUnminedLoading implements Interface.SetUnminedLoading. It records nothing, like HeldCount.
+func (m *MockSubtreeProcessor) SetUnminedLoading(_ bool) {}
+
+// UnminedLoading implements Interface.UnminedLoading. It reports no hold, like HeldCount.
+func (m *MockSubtreeProcessor) UnminedLoading() bool { return false }
+
 func (m *MockSubtreeProcessor) AddDirectly(node *subtree.Node, txInpoints *subtree.TxInpoints, skipNotification bool) error {
+	args := m.Called(node, txInpoints, skipNotification)
+
+	if args.Get(0) == nil {
+		return nil
+	}
+
+	return args.Error(0)
+}
+
+// AddDirectlyReportOnly implements Interface.AddDirectlyReportOnly
+func (m *MockSubtreeProcessor) AddDirectlyReportOnly(node *subtree.Node, txInpoints *subtree.TxInpoints, skipNotification bool) error {
 	args := m.Called(node, txInpoints, skipNotification)
 
 	if args.Get(0) == nil {
@@ -206,6 +286,28 @@ func (m *MockSubtreeProcessor) AddNodesDirectly(txs []*utxostore.UnminedTransact
 	return args.Error(0)
 }
 
+// AddNodesDirectlyReportOnly implements Interface.AddNodesDirectlyReportOnly
+func (m *MockSubtreeProcessor) AddNodesDirectlyReportOnly(txs []*utxostore.UnminedTransaction, skipNotification bool) error {
+	args := m.Called(txs, skipNotification)
+
+	if args.Get(0) == nil {
+		return nil
+	}
+
+	return args.Error(0)
+}
+
+// FlushDiskTxMapForLoad implements Interface.FlushDiskTxMapForLoad
+func (m *MockSubtreeProcessor) FlushDiskTxMapForLoad(where string, isReload bool) error {
+	args := m.Called(where, isReload)
+
+	if args.Get(0) == nil {
+		return nil
+	}
+
+	return args.Error(0)
+}
+
 // CheckSubtreeProcessor implements Interface.CheckSubtreeProcessor
 func (m *MockSubtreeProcessor) CheckSubtreeProcessor() error {
 	args := m.Called()
@@ -217,6 +319,30 @@ func (m *MockSubtreeProcessor) MoveForwardBlock(block *model.Block) error {
 	args := m.Called(block)
 	return args.Error(0)
 }
+
+func (m *MockSubtreeProcessor) PrepareBlock(block *model.Block) {
+	m.Called(block)
+}
+
+// DrainPendingInvalidations and QueueInvalidation implement the invalidation
+// side of Interface.
+//
+// Deliberately plain no-ops rather than testify calls. Both are driven by block
+// movement on every announcement, so routing them through testify would make
+// every existing test that never mentions them fail on an unexpected call. The
+// obvious workaround — scanning m.ExpectedCalls to decide whether a test has
+// stubbed them — reads testify's state without its mutex, which races against
+// any test still registering expectations while the assembler runs.
+//
+// Nothing currently asserts on these through the mock; the behaviour is covered
+// against the real SubtreeProcessor in conflicting_ancestry_guard_test.go. A
+// test that needs to assert on them should route that method through testify
+// then, and set the expectation before starting the component under test.
+func (m *MockSubtreeProcessor) DrainPendingInvalidations() []chainhash.Hash {
+	return nil
+}
+
+func (m *MockSubtreeProcessor) QueueInvalidation(_ chainhash.Hash) {}
 
 // Reorg implements Interface.Reorg
 func (m *MockSubtreeProcessor) Reorg(moveBackBlocks []*model.Block, modeUpBlocks []*model.Block) error {
@@ -251,6 +377,11 @@ func (m *MockSubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
 	return args.Error(0)
 }
 
+// RequestBlockMaxSizeCheck implements Interface.RequestBlockMaxSizeCheck
+func (m *MockSubtreeProcessor) RequestBlockMaxSizeCheck() {
+	m.Called()
+}
+
 // Stop implements Interface.Stop
 func (m *MockSubtreeProcessor) Stop(ctx context.Context) {
 	m.Called(ctx)
@@ -260,4 +391,8 @@ func (m *MockSubtreeProcessor) Stop(ctx context.Context) {
 func (m *MockSubtreeProcessor) ReconcileCoinbases(ctx context.Context, gapBlocks []*model.Block) error {
 	args := m.Called(ctx, gapBlocks)
 	return args.Error(0)
+}
+
+func (m *MockSubtreeProcessor) MarkRecoveredConflicts(ctx context.Context, hashes []chainhash.Hash) error {
+	return m.Called(ctx, hashes).Error(0)
 }

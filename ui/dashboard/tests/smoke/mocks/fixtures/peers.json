@@ -79,8 +79,8 @@
       "connected_at": 1749990000,
       "bytes_sent": 1024,
       "bytes_received": 2048,
-      "last_block_time": 1749990500,
-      "last_message_time": 1749991000,
+      "last_block_time": 1750000320,
+      "last_message_time": 1750000380,
       "catchup_attempts": 0,
       "catchup_successes": 0,
       "catchup_failures": 0,
@@ -102,7 +102,45 @@
         "is_sync_peer": false,
         "time_connected": 1749990000
       }
+    },
+    {
+      "id": "legacy:198.51.100.55:8333",
+      "transport": "legacy",
+      "client_name": "/Bitcoin SV:1.0.11/",
+      "height": 900000,
+      "block_hash": "",
+      "data_hub_url": "",
+      "network_address": "198.51.100.55:8333",
+      "ban_score": 12,
+      "is_banned": false,
+      "is_connected": false,
+      "connected_at": 1749990000,
+      "bytes_sent": 1024,
+      "bytes_received": 2048,
+      "last_block_time": 1749993300,
+      "last_message_time": 1749993300,
+      "catchup_attempts": 0,
+      "catchup_successes": 0,
+      "catchup_failures": 0,
+      "catchup_last_attempt": 0,
+      "catchup_last_success": 0,
+      "catchup_last_failure": 0,
+      "catchup_reputation_score": 40,
+      "catchup_malicious_count": 0,
+      "catchup_avg_response_ms": 0,
+      "last_catchup_error": "",
+      "last_catchup_error_time": 0,
+      "legacy": {
+        "inbound": true,
+        "protocol_version": 70015,
+        "service_flags": 1,
+        "ping_micros": 0,
+        "time_offset_secs": 0,
+        "starting_height": 899000,
+        "is_sync_peer": false,
+        "time_connected": 1749991500
+      }
     }
   ],
-  "count": 3
+  "count": 4
 }

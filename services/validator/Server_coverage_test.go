@@ -433,66 +433,10 @@ func TestServerGetMedianBlockTime(t *testing.T) {
 	})
 }
 
-// TestExtractValidationParams tests parameter extraction
-func TestExtractValidationParams(t *testing.T) {
-	e := echo.New()
-
-	t.Run("no parameters", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/tx", nil)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-
-		height, options := extractValidationParams(c)
-		require.Equal(t, uint32(0), height)
-		require.False(t, options.SkipUtxoCreation)
-		require.True(t, options.AddTXToBlockAssembly) // Default is true
-		require.False(t, options.SkipPolicyChecks)
-		require.False(t, options.CreateConflicting)
-	})
-
-	t.Run("all parameters true", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/tx?blockHeight=100&skipUtxoCreation=true&addTxToBlockAssembly=true&skipPolicyChecks=true&createConflicting=true", nil)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-
-		height, options := extractValidationParams(c)
-		require.Equal(t, uint32(100), height)
-		require.True(t, options.SkipUtxoCreation)
-		require.True(t, options.AddTXToBlockAssembly)
-		require.True(t, options.SkipPolicyChecks)
-		require.True(t, options.CreateConflicting)
-	})
-
-	t.Run("parameters with 1", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/tx?skipUtxoCreation=1&addTxToBlockAssembly=1&skipPolicyChecks=1&createConflicting=1", nil)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-
-		_, options := extractValidationParams(c)
-		require.True(t, options.SkipUtxoCreation)
-		require.True(t, options.AddTXToBlockAssembly)
-		require.True(t, options.SkipPolicyChecks)
-		require.True(t, options.CreateConflicting)
-	})
-
-	t.Run("parameters explicitly false", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/tx?addTxToBlockAssembly=false", nil)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-
-		_, options := extractValidationParams(c)
-		require.False(t, options.AddTXToBlockAssembly)
-	})
-
-	t.Run("invalid block height", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/tx?blockHeight=invalid", nil)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-
-		height, _ := extractValidationParams(c)
-		require.Equal(t, uint32(0), height)
-	})
-}
+// The query-string parameter-extraction suite that used to live here is gone
+// with the function it tested: the /tx endpoint no longer reads validation
+// options from the query string. http_trust_flags_test.go replaces its
+// coverage, asserting that the parameters are ignored rather than parsed.
 
 // TestHandleSingleTx tests single transaction handling edge cases
 func TestHandleSingleTx(t *testing.T) {

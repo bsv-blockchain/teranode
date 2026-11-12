@@ -90,6 +90,15 @@ type Client struct {
 
 	// batcher manages transaction batching
 	batcher *batcher.Batcher[batchItem]
+
+	// inBlockBatcher batches transactions that arrived inside a block, kept apart from batcher
+	// so block assembly can apply a different verdict to the batch
+	inBlockBatcher *batcher.Batcher[batchItem]
+
+	// sendSlots is the one limiter both batchers share, so blockassembly_sendBatchMaxConcurrent
+	// bounds the sends in flight from this client in total. Each batcher's own limit applies
+	// only to it, and two of them together would allow twice the cap.
+	sendSlots chan struct{}
 }
 
 // NewClient creates a new block assembly client.
@@ -146,28 +155,10 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		batchCh:   make(chan []*batchItem),
 	}
 
-	sendBatch := func(batch []*batchItem) {
-		client.sendBatchToBlockAssembly(ctx, batch)
+	if batchSize > 0 {
+		client.batcher = client.newTxBatcher(ctx, "blockassembly_client", batchSize, duration)
+		client.inBlockBatcher = client.newTxBatcher(ctx, "blockassembly_client_in_block", batchSize, duration)
 	}
-	b := batcher.NewWithPool(batchSize, duration, sendBatch, tSettings.BatcherBackground,
-		batcher.WithName("blockassembly_client"),
-		batcher.WithLogger(logger),
-		batcher.WithMetrics(batchermetrics.Provider()),
-		batcher.WithTracer(tracing.Tracer("blockassembly").OTelTracer()),
-	)
-	if tSettings.BatcherDrainMode {
-		b.SetDrainMode(true)
-	}
-	// Tick interval after drain: go-batcher's drain-wins guard no-ops + warns under
-	// drain. Default 0 = disabled.
-	if ms := tSettings.BlockAssembly.SendBatchTickerIntervalMillis; ms > 0 {
-		b.SetTickInterval(time.Duration(ms) * time.Millisecond)
-	}
-	if tSettings.BlockAssembly.SendBatchMaxConcurrent > 0 {
-		b.SetMaxConcurrent(tSettings.BlockAssembly.SendBatchMaxConcurrent)
-		logger.Infof("Block assembly batch max concurrent: %d", tSettings.BlockAssembly.SendBatchMaxConcurrent)
-	}
-	client.batcher = b
 
 	return client, nil
 }
@@ -211,12 +202,34 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 		batchCh:   make(chan []*batchItem),
 	}
 
+	if batchSize > 0 {
+		client.batcher = client.newTxBatcher(ctx, "blockassembly_client", batchSize, duration)
+		client.inBlockBatcher = client.newTxBatcher(ctx, "blockassembly_client_in_block", batchSize, duration)
+	}
+
+	return client, nil
+}
+
+// newTxBatcher builds a batcher that sends batches of transactions to block assembly. The
+// client runs two of them, one for transactions that arrive through ingest and one for
+// transactions that arrive inside a block, because the in-memory transaction limit refuses the
+// first kind and must not refuse the second, and a block assembly batch carries one verdict.
+func (s *Client) newTxBatcher(ctx context.Context, name string, batchSize int, duration time.Duration) *batcher.Batcher[batchItem] {
+	tSettings := s.settings
+
+	slots := s.sharedSendSlots()
+
 	sendBatch := func(batch []*batchItem) {
-		client.sendBatchToBlockAssembly(ctx, batch)
+		if slots != nil {
+			slots <- struct{}{}
+			defer func() { <-slots }()
+		}
+
+		s.sendBatchToBlockAssembly(ctx, batch)
 	}
 	b := batcher.NewWithPool(batchSize, duration, sendBatch, tSettings.BatcherBackground,
-		batcher.WithName("blockassembly_client"),
-		batcher.WithLogger(logger),
+		batcher.WithName(name),
+		batcher.WithLogger(s.logger),
 		batcher.WithMetrics(batchermetrics.Provider()),
 		batcher.WithTracer(tracing.Tracer("blockassembly").OTelTracer()),
 	)
@@ -230,11 +243,40 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	}
 	if tSettings.BlockAssembly.SendBatchMaxConcurrent > 0 {
 		b.SetMaxConcurrent(tSettings.BlockAssembly.SendBatchMaxConcurrent)
-		logger.Infof("Block assembly batch max concurrent: %d", tSettings.BlockAssembly.SendBatchMaxConcurrent)
+		s.logger.Infof("Block assembly batch max concurrent: %d", tSettings.BlockAssembly.SendBatchMaxConcurrent)
 	}
-	client.batcher = b
 
-	return client, nil
+	return b
+}
+
+// sharedSendSlots returns the limiter shared by both batchers, or nil when
+// blockassembly_sendBatchMaxConcurrent does not set a cap.
+func (s *Client) sharedSendSlots() chan struct{} {
+	if s.sendSlots == nil {
+		if limit := s.settings.BlockAssembly.SendBatchMaxConcurrent; limit > 0 {
+			s.sendSlots = make(chan struct{}, limit)
+		}
+	}
+
+	return s.sendSlots
+}
+
+// inBlockContextKey marks a context whose block assembly hand-off is for a transaction that
+// arrived inside a block.
+type inBlockContextKey struct{}
+
+// ContextWithInBlock returns a context that makes Store send the transaction as one that arrived
+// inside a block. Block assembly then does not refuse it for the in-memory transaction limit. The
+// marker travels on the context so Store keeps its signature for every caller and test double.
+func ContextWithInBlock(ctx context.Context) context.Context {
+	return context.WithValue(ctx, inBlockContextKey{}, true)
+}
+
+// InBlockFromContext reports whether ctx carries the marker set by ContextWithInBlock.
+func InBlockFromContext(ctx context.Context) bool {
+	inBlock, _ := ctx.Value(inBlockContextKey{}).(bool)
+
+	return inBlock
 }
 
 // Close drains the transaction batcher (so queued submissions are flushed) and
@@ -245,6 +287,10 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 func (s *Client) Close() error {
 	if s.batcher != nil {
 		util.DrainBatcher(s.logger, "blockassembly_client", util.DefaultBatcherDrainTimeout, s.batcher.Close)
+	}
+
+	if s.inBlockBatcher != nil {
+		util.DrainBatcher(s.logger, "blockassembly_client_in_block", util.DefaultBatcherDrainTimeout, s.inBlockBatcher.Close)
 	}
 
 	if s.conn != nil {
@@ -309,14 +355,17 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 		return false, err
 	}
 
+	inBlock := InBlockFromContext(ctx)
+
 	req := &blockassembly_api.AddTxRequest{
 		Txid:       hash[:],
 		Fee:        fee,
 		Size:       size,
 		TxInpoints: txInpointsBytes,
+		InBlock:    inBlock,
 	}
 
-	if s.batchSize == 0 {
+	if s.batchSize <= 0 {
 		if _, err := s.client.AddTx(ctx, req); err != nil {
 			return false, errors.UnwrapGRPC(err)
 		}
@@ -327,14 +376,38 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 			req:   req,
 			group: group,
 		}
-		s.batcher.PutCtx(ctx, item)
+		if inBlock {
+			s.inBlockBatcher.PutCtx(ctx, item)
+		} else {
+			s.batcher.PutCtx(ctx, item)
+		}
 
-		// group.Wait(context.Background(), 0): 0 timeout allocates no timer and
-		// a background context never cancels, so this blocks purely on the
-		// dispatcher completing the item — identical to the previous bare
-		// <-done receive (no timeout, no ctx arm). It can only return nil, so
-		// the result slot is always safe to read here.
-		_ = group.Wait(context.Background(), 0)
+		// Bounded by the CALLER's context, in batch mode as well as unary mode.
+		// The validator hands this call a deadline precisely so a wedged block
+		// assembly cannot park an ingest goroutine — and the Kafka record batch
+		// it holds — indefinitely. Waiting on context.Background() here discarded
+		// that deadline, which made it inert at the shipped default
+		// (blockassembly_sendBatchSize = 1024).
+		//
+		// An early return is ABANDONMENT, not cancellation: the item is already
+		// on the batcher and the dispatcher may still send it, so the
+		// transaction may yet reach block assembly. Two consequences, both
+		// load-bearing:
+		//
+		//   - item.result MUST NOT be read on this path. The dispatcher writes it
+		//     later from its own goroutine; not reading it is what keeps that
+		//     write race-free (no concurrent reader), and it is why the read below
+		//     is reachable only after Wait returned nil.
+		//   - the error MUST NOT be mistakable for a queue-full shed. A shed is
+		//     unwound by the caller (record deleted, inputs unspent); doing that to
+		//     a transaction that is still in flight to block assembly could delete
+		//     a record already in a subtree or a template. Wrapping ctx.Err() in a
+		//     ServiceError keeps it out of the ErrThresholdExceeded branch and
+		//     inside the caller's "ambiguous hand-off failure, leave it locked"
+		//     branch.
+		if err := group.Wait(ctx, 0); err != nil {
+			return false, errors.NewServiceError("block assembly batch handoff abandoned before dispatch completed", err)
+		}
 
 		if item.result != nil {
 			return false, item.result
@@ -466,6 +539,21 @@ func (s *Client) GetCandidateBlock(ctx context.Context, candidateID []byte) (*bl
 	return res, nil
 }
 
+// PrepareBlock sends block assembly a block on its tip that block validation has started
+// validating, so it can build the block's transaction map before the block is added.
+func (s *Client) PrepareBlock(ctx context.Context, block *model.Block) error {
+	blockBytes, err := block.Bytes()
+	if err != nil {
+		return errors.NewProcessingError("[PrepareBlock][%s] failed to serialize block", block.String(), err)
+	}
+
+	if _, err = s.client.PrepareBlock(ctx, &blockassembly_api.PrepareBlockRequest{Block: blockBytes}); err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}
+
 // sendBatchToBlockAssembly sends a batch of transactions to block assembly.
 // Uses columnar format if enabled in settings, otherwise uses traditional row format.
 //
@@ -481,14 +569,9 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchIte
 	// (unbuffered handoff, no timeout). complete is CAS-guarded, so
 	// re-completing an item an earlier stage already completed is a no-op.
 	defer func() {
-		if r := recover(); r != nil {
-			s.logger.Errorf("[sendBatchToBlockAssembly] recovered panic, failing %d batch item(s): %v", len(batch), r)
-
-			err := errors.NewProcessingError("panic in sendBatchToBlockAssembly: %v", r)
-			for _, item := range batch {
-				item.complete(err)
-			}
-		}
+		util.SignalBatchPanic(recover(), batch, "sendBatchToBlockAssembly", s.logger, func(it *batchItem, err error) {
+			it.complete(err)
+		})
 	}()
 
 	if s.settings.BlockAssembly.UseColumnarBatch {
@@ -508,6 +591,7 @@ func (s *Client) sendBatchRowOriented(ctx context.Context, batch []*batchItem) {
 
 	txBatch := &blockassembly_api.AddTxBatchRequest{
 		TxRequests: txRequests,
+		InBlock:    batchIsInBlock(batch),
 	}
 
 	_, err := s.client.AddTxBatch(ctx, txBatch)
@@ -524,6 +608,13 @@ func (s *Client) sendBatchRowOriented(ctx context.Context, batch []*batchItem) {
 	for _, item := range batch {
 		item.complete(nil)
 	}
+}
+
+// batchIsInBlock reports whether a batch carries transactions that arrived inside a block. Store
+// routes the two kinds to separate batchers, so a batch is all one or all the other and the first
+// item speaks for it.
+func batchIsInBlock(batch []*batchItem) bool {
+	return len(batch) > 0 && batch[0].req.GetInBlock()
 }
 
 // sendBatchColumnar sends batch using optimized columnar format.
@@ -669,6 +760,7 @@ func (s *Client) convertToColumnarFormat(batch []*batchItem) (*blockassembly_api
 		ParentTxOffsets:      parentTxOffsets,
 		VoutIdxsPacked:       voutIdxsPacked,
 		VoutIdxsTxOffsets:    voutIdxsTxOffsets,
+		InBlock:              batchIsInBlock(batch),
 	}, nil
 }
 
@@ -743,6 +835,33 @@ func (s *Client) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.
 	}
 
 	return state, nil
+}
+
+// GetBlockAssemblyQueueStats retrieves a slim, atomic-only view of the ingest
+// queue (depth, head-batch age, and the drain floor the age is measured against)
+// for high-frequency control reads. It unwraps the protobuf response into native
+// Go types so callers never import the generated package.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - QueueStats: Queue depth, head-batch age, the reported double-spend window and the reported item cap
+//   - error: Any error encountered during retrieval
+func (s *Client) GetBlockAssemblyQueueStats(ctx context.Context) (QueueStats, error) {
+	stats, err := s.client.GetBlockAssemblyQueueStats(ctx, &blockassembly_api.EmptyMessage{})
+	if err != nil {
+		return QueueStats{}, errors.UnwrapGRPC(err)
+	}
+
+	return QueueStats{
+		Count:             stats.QueueCount,
+		HeadAge:           time.Duration(stats.QueueHeadAgeMillis) * time.Millisecond,
+		DoubleSpendWindow: time.Duration(stats.DoubleSpendWindowMillis) * time.Millisecond,
+		MaxItems:          stats.QueueMaxItems,
+		HeldCount:         stats.HeldCount,
+		MaxHeld:           stats.MaxHeld,
+	}, nil
 }
 
 // BlockAssemblyAPIClient returns the underlying gRPC client for block assembly API.

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/propagation"
@@ -46,8 +48,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	utxopruner "github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/test/utils/containers"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/test/utils/wait"
@@ -109,8 +111,8 @@ type TestOptions struct {
 	SkipRemoveDataDir       bool
 	StartDaemonDependencies bool
 	FSMState                blockchain.FSMStateType
-	// UTXOStoreType specifies which UTXO store backend to use ("aerospike", "postgres")
-	// If empty, defaults to "aerospike"
+	// UTXOStoreType specifies which UTXO store backend to use ("aerospike", "postgres", "sqlite")
+	// If empty, keeps the configured store (SQLite with SystemTestSettings).
 	UTXOStoreType string
 	// ContainerManager allows reusing an existing container manager from a previous TestDaemon.
 	// When set, the daemon will use the existing container instead of creating a new one.
@@ -150,6 +152,32 @@ func (je *JSONError) Error() string {
 // testDaemonCounter is used to generate unique context names for each TestDaemon
 var testDaemonCounter uint64
 
+// setTestDaemonRunning expresses explicit test setup. Automatic Run alone
+// intentionally refuses IDLE and cannot perform this operator action.
+func setTestDaemonRunning(ctx context.Context, client blockchain.ClientI) error {
+	err := client.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN)
+	if !errors.Is(err, errors.ErrStateError) {
+		return err
+	}
+	// Explicit RUN is invalid if another promotion already reached RUNNING.
+	// Confirm through the authority rather than a cached state read; this also
+	// reconciles uncertain persistence and still refuses a concurrent STOP.
+	return client.Run(ctx, "test/setup-confirm-running")
+}
+
+// setTestDaemonCatchingBlocks expresses explicit catchup setup, including from
+// IDLE. Automatic CatchUpBlocks alone intentionally preserves operator IDLE.
+func setTestDaemonCatchingBlocks(ctx context.Context, client blockchain.ClientI) error {
+	err := client.SendFSMEvent(ctx, blockchain_api.FSMEventType_CATCHUPBLOCKS)
+	if !errors.Is(err, errors.ErrStateError) && !errors.Is(err, errors.ErrInvalidArgument) {
+		return err
+	}
+	// Repeating the fixed CATCHUPBLOCKS event in CATCHINGBLOCKS is rejected by
+	// the server's manual-transition restriction as InvalidArgument. Confirm
+	// through the authority; it reconciles no-ops and still refuses a later STOP.
+	return client.CatchUpBlocks(ctx)
+}
+
 // NewTestDaemon creates a new TestDaemon instance with the provided options.
 func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	// Test daemons run multiple nodes in-process on the same host, so peers advertise
@@ -167,6 +195,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	)
 
 	appSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
+
+	// The test daemon drives its own RPC endpoint over Basic auth, and the RPC server
+	// fails closed when either credential is unset. Production no longer ships a default
+	// pair, so supply a throwaway one for the in-process node instead of depending on it.
+	if appSettings.RPC.RPCUser == "" || appSettings.RPC.RPCPass == "" {
+		appSettings.RPC.RPCUser = "testdaemon"
+		appSettings.RPC.RPCPass = "testdaemon"
+	}
 
 	// Generate a unique context for this TestDaemon to ensure util.GetListener
 	// creates unique listeners instead of returning cached ones from another TestDaemon.
@@ -256,12 +292,12 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.Validator.HTTPListenAddress = listenAddr
 	appSettings.Validator.HTTPAddress, _ = url.Parse(clientAddr)
 
-	// P2P - allocate port for libp2p (doesn't support pre-created listeners)
-	p2pPort, err := getFreePort()
-	require.NoError(t, err)
+	// P2P - libp2p doesn't support pre-created listeners, so its port is
+	// drawn (and, if it collides, redrawn) immediately before the daemon
+	// actually starts. See attemptP2PPort in NewTestDaemon below.
 	appSettings.P2P.StaticPeers = nil
+	appSettings.P2P.BootstrapPeers = nil
 	appSettings.P2P.ListenAddresses = []string{"0.0.0.0"}
-	appSettings.P2P.Port = p2pPort
 
 	// P2P gRPC
 	if opts.EnableP2P {
@@ -404,9 +440,9 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.RPC.CacheEnabled = false
 	appSettings.UsePrometheusGRPCMetrics = false
 
-	// Give the in-process P2P/Legacy servers and their clients a shared, non-placeholder
-	// admin API key so protected admin RPCs (ban/unban, connect/disconnect peer) authenticate.
-	// settings.conf ships no key, so without this every admin RPC would return Unauthenticated.
+	// Give Blockchain/P2P/Legacy servers and their clients a shared test credential.
+	// Blockchain requires it for startup, reads, writes and subscriptions.
+	// settings.conf deliberately ships no production default.
 	// Tests that need a specific key still override it below via SettingsOverrideFunc.
 	appSettings.GRPCAdminAPIKey = "teranode-testdaemon-admin-key"
 
@@ -454,8 +490,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		t.Logf("Initialized %s container with URL: %s", opts.UTXOStoreType, utxoStoreURL.String())
 	}
 
-	readyCh := make(chan struct{})
-
 	var (
 		logger        ulogger.Logger
 		loggerFactory Option
@@ -485,52 +519,79 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		})
 	}
 
-	// d := New(loggerFactory, WithContext(ctx))
-	d := New(loggerFactory, WithContext(ctx))
+	var d *Daemon
 
-	services := []string{
-		"-all=0",
-		"-blockchain=1",
-		"-subtreevalidation=1",
-		"-blockvalidation=1",
-		"-blockassembly=1",
-		"-asset=1",
-		"-propagation=1",
-	}
+	// Start the daemon, retrying with a freshly drawn p2p port when the one
+	// picked by getFreePort() loses the TOCTOU race against libp2p's later
+	// bind (see attemptP2PPort). Every other setup step above is stable
+	// across attempts (listeners already open via util.GetListener, data
+	// dir already created), so only the p2p port and the daemon start need
+	// to be redone.
+	startErr := attemptP2PPort(maxP2PPortAttempts, func(p2pPort int) error {
+		appSettings.P2P.Port = p2pPort
 
-	if opts.EnableRPC {
-		services = append(services, "-rpc=1")
-	}
+		d = New(loggerFactory, WithContext(ctx))
 
-	if opts.EnableP2P {
-		services = append(services, "-p2p=1")
-	}
+		services := []string{
+			"-all=0",
+			"-blockchain=1",
+			"-subtreevalidation=1",
+			"-blockvalidation=1",
+			"-blockassembly=1",
+			"-asset=1",
+			"-propagation=1",
+		}
 
-	if opts.EnableValidator {
-		services = append(services, "-validator=1")
-	}
+		if opts.EnableRPC {
+			services = append(services, "-rpc=1")
+		}
 
-	if opts.EnableLegacy {
-		services = append(services, "-legacy=1")
-	}
+		if opts.EnableP2P {
+			services = append(services, "-p2p=1")
+		}
 
-	if opts.EnableBlockPersister {
-		services = append(services, "-blockpersister=1")
-	}
+		if opts.EnableValidator {
+			services = append(services, "-validator=1")
+		}
 
-	if opts.EnablePruner {
-		services = append(services, "-pruner=1")
-	}
+		if opts.EnableLegacy {
+			services = append(services, "-legacy=1")
+		}
 
-	go d.Start(logger, services, appSettings, readyCh)
+		if opts.EnableBlockPersister {
+			services = append(services, "-blockpersister=1")
+		}
 
-	select {
-	case <-readyCh:
-		t.Logf("Daemon %s started successfully", appSettings.ClientName)
-	case <-time.After(30 * time.Second):
-		servicesNotReady := d.ServiceManager.ServicesNotReady()
-		t.Fatalf("Daemon %s failed to start within 30s. Waiting on: %v", appSettings.ClientName, servicesNotReady)
-	}
+		if opts.EnablePruner {
+			services = append(services, "-pruner=1")
+		}
+
+		readyCh := make(chan struct{})
+
+		// The select below learns of a start failure from stopCh and reads it
+		// from startError(), so Start's return value is not needed here.
+		go func() { _ = d.Start(logger, services, appSettings, readyCh) }()
+
+		select {
+		case <-readyCh:
+			t.Logf("Daemon %s started successfully", appSettings.ClientName)
+			return nil
+		case <-d.stopCh:
+			// startServices already failed and Start() ran its own teardown
+			// before closing stopCh; Stop() here is a defensive, idempotent
+			// pass over the same state so a retry never inherits a listener
+			// or service left behind by this attempt.
+			attemptErr := d.startError()
+			t.Logf("Daemon %s failed to start on p2p port %d: %v", appSettings.ClientName, p2pPort, attemptErr)
+			_ = d.Stop()
+
+			return attemptErr
+		case <-time.After(30 * time.Second):
+			servicesNotReady := d.ServiceManager.ServicesNotReady()
+			return errors.NewProcessingError("daemon %s failed to start within 30s. Waiting on: %v", appSettings.ClientName, servicesNotReady)
+		}
+	})
+	require.NoError(t, startErr, "Daemon %s failed to start", appSettings.ClientName)
 
 	ports := []int{getPortFromString(appSettings.HealthCheckHTTPListenAddress)}
 	if opts.WaitForHealthReadiness {
@@ -598,12 +659,21 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	if opts.FSMState.String() != "" {
 		switch opts.FSMState {
 		case blockchain.FSMStateRUNNING:
-			err = blockchainClient.Run(ctx, "test")
+			err = setTestDaemonRunning(ctx, blockchainClient)
 			require.NoError(t, err)
 		case blockchain.FSMStateCATCHINGBLOCKS:
-			err = blockchainClient.CatchUpBlocks(ctx)
+			err = setTestDaemonCatchingBlocks(ctx, blockchainClient)
 			require.NoError(t, err)
 		}
+	}
+
+	// When the daemon runs its own BlockValidation service, that service sets the
+	// mined status of blocks; a second setMined worker on the same stores races
+	// it and can leave an invalidated block's transactions marked mined. Without
+	// the service, this instance is the only one and keeps its worker.
+	blockValidationOpts := []interface{}{p2pClient}
+	if _, err = d.ServiceManager.GetService("BlockValidation"); err == nil {
+		blockValidationOpts = append(blockValidationOpts, blockvalidation.NoSetMined{})
 	}
 
 	blockValidation := blockvalidation.NewBlockValidation(
@@ -616,6 +686,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		utxoStore,
 		validatorClient,
 		subtreeValidationClient,
+		blockValidationOpts...,
 	)
 
 	assert.NotNil(t, blockchainClient)
@@ -668,13 +739,12 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		td.prunerObserver = prunerObserver
 
 		// Register the observer with the pruner service
-		aerospikeStore, ok := utxoStore.(*aerospike.Store)
+		prunerProvider, ok := utxo.As[utxopruner.PrunerServiceProvider](utxoStore)
 		if !ok {
-			t.Logf("Warning: UtxoStore is not an Aerospike store, cannot register pruner observer")
-			t.Fail()
+			t.Fatalf("UtxoStore does not provide a pruner service, cannot register pruner observer")
 		}
 
-		prunerService, err := aerospikeStore.GetPrunerService()
+		prunerService, err := prunerProvider.GetPrunerService()
 		if err != nil {
 			t.Logf("Warning: Failed to get pruner service: %v", err)
 		} else if prunerService != nil {
@@ -775,7 +845,6 @@ func WaitForPortsFree(t *testing.T, ctx context.Context, settings *settings.Sett
 // GetPorts returns a slice of ports from the provided settings.
 func GetPorts(appSettings *settings.Settings) []int {
 	ports := []int{
-		getPortFromString(appSettings.Asset.CentrifugeListenAddress),
 		getPortFromString(appSettings.Asset.HTTPListenAddress),
 		getPortFromString(appSettings.BlockPersister.HTTPListenAddress),
 		getPortFromString(appSettings.BlockAssembly.GRPCListenAddress),
@@ -821,21 +890,92 @@ func GetFreePort() (int, error) {
 	return getFreePort()
 }
 
-// getFreePort asks the kernel for a free open port that is ready to use.
+// freePortMin and freePortMax bound the ports getFreePort draws from. The range
+// sits below the kernel's ephemeral range (Linux 32768+, macOS 49152+), so an
+// outbound connection's source port can never take a port between the draw and
+// the service binding it, as happened to BlockValidation in TestDaemon_Start_AllServices.
+const (
+	freePortMin = 20000
+	freePortMax = 32000
+)
+
+// getFreePort returns a random port in [freePortMin, freePortMax) that is free
+// to bind on the wildcard address the services listen on.
 func getFreePort() (int, error) {
-	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
-	if err != nil {
-		return 0, err
+	var lastErr error
+
+	for range 100 {
+		n, err := rand.Int(rand.Reader, big.NewInt(freePortMax-freePortMin))
+		if err != nil {
+			return 0, err
+		}
+
+		port := freePortMin + int(n.Int64())
+
+		l, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		_ = l.Close()
+
+		return port, nil
 	}
 
-	l, err := net.ListenTCP("tcp", addr)
-	if err != nil {
-		return 0, err
+	return 0, errors.NewProcessingError("no free port in [%d, %d)", freePortMin, freePortMax, lastErr)
+}
+
+// maxP2PPortAttempts bounds how many times attemptP2PPort will redraw the
+// libp2p port after a bind collision before giving up. Random free-port
+// draws colliding more than a couple of times in a row is not expected in
+// practice; this exists so a persistent, genuine failure still fails rather
+// than retrying indefinitely.
+const maxP2PPortAttempts = 5
+
+// isAddrInUse reports whether err represents a TCP bind collision (the port
+// getFreePort() handed back was taken by something else before the later
+// bind that actually uses it - e.g. libp2p, in a parallel CI shard). It
+// deliberately does not match on anything else, so a genuine, unrelated
+// startup failure is not swallowed by the retry in attemptP2PPort.
+//
+// errors.Is(err, syscall.EADDRINUSE) is used rather than a hand-rolled
+// string match: when err unwraps to a real *net.OpError/*os.SyscallError
+// wrapping EADDRINUSE, stdlib unwrapping (which teranode/errors.Is defers
+// to) finds it directly. Our own error chain instead wraps the syscall error
+// inside plain fmt.Errorf("...: %w", ...) calls (see the vendored
+// go-p2p-message-bus client and services/p2p/Server.go), so by the time it
+// reaches here the top-level error is a *teranode/errors.Error whose target
+// is a bare syscall.Errno; (*errors.Error).Is falls back to matching the
+// errno's rendered text ("address already in use") against the error's own
+// full rendered message in that case, which still finds it. Both paths are
+// covered by the single errors.Is call.
+func isAddrInUse(err error) bool {
+	return err != nil && errors.Is(err, syscall.EADDRINUSE)
+}
+
+// attemptP2PPort draws a free port via getFreePort and passes it to fn.
+// If fn fails because that port lost the TOCTOU race against a later bind
+// (isAddrInUse), it draws a fresh port and retries, up to maxAttempts times.
+// Any other error - or exhausting maxAttempts - returns immediately with
+// fn's error, so a genuine startup failure still fails fast instead of being
+// retried blindly.
+func attemptP2PPort(maxAttempts int, fn func(port int) error) error {
+	var err error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		port, portErr := getFreePort()
+		if portErr != nil {
+			return portErr
+		}
+
+		err = fn(port)
+		if err == nil || !isAddrInUse(err) {
+			return err
+		}
 	}
 
-	defer func() { _ = l.Close() }()
-
-	return l.Addr().(*net.TCPAddr).Port, nil
+	return err
 }
 
 // getPortFromString extracts the port number from a string address.
@@ -1090,6 +1230,18 @@ func (td *TestDaemon) checkTransactionsInMiningCandidate(txs ...*bt.Tx) (map[cha
 	return txFoundMap, nil
 }
 
+// CountInBlockAssembly returns how many times tx appears in the subtrees of a fresh mining
+// candidate. A candidate asked for while block assembly is processing a block or a reset is
+// empty, so a caller polling this sees 0 until that work is done.
+func (td *TestDaemon) CountInBlockAssembly(tx *bt.Tx) (int, error) {
+	txFoundMap, err := td.checkTransactionsInMiningCandidate(tx)
+	if err != nil {
+		return 0, err
+	}
+
+	return txFoundMap[*tx.TxIDChainHash()], nil
+}
+
 // VerifyInBlockAssembly checks that the given transactions are present in the block assembly candidate's subtrees exactly once.
 func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	txFoundMap, err := td.checkTransactionsInMiningCandidate(txs...)
@@ -1137,17 +1289,35 @@ func (td *TestDaemon) WaitForTransactionInBlockAssembly(tx *bt.Tx, timeout time.
 	}
 }
 
-func (td *TestDaemon) WaitForPruner(t *testing.T, timeout time.Duration) {
+// WaitForPruner waits for the pruner to report a completed cycle.
+//
+// By default (no minHeight given) it returns whatever completion is next in the
+// queue, including one that was already buffered from an earlier, unconsumed
+// prune cycle — this preserves the historical behaviour for existing callers.
+//
+// Passing minHeight makes the wait height-aware: buffered completions for a
+// height below minHeight are discarded, and the call only returns once it has
+// observed a completion for minHeight or higher (or times out). Callers that
+// perform several prune-triggering operations before checking the resulting
+// UTXO-store state should pass the height they need the pruner to have reached,
+// otherwise a stale, already-queued completion for an earlier height can satisfy
+// the wait before the relevant pruning has actually happened.
+func (td *TestDaemon) WaitForPruner(t *testing.T, timeout time.Duration, minHeight ...uint32) {
 	if td.prunerObserver == nil {
 		return
+	}
+
+	var target uint32
+	if len(minHeight) > 0 {
+		target = minHeight[0]
 	}
 
 	t.Log("Phase 4: Waiting for pruner to remove spent parent transactions...")
 	// The pruner runs periodically. We need to wait for it to prune the old transactions.
 	// With GlobalBlockHeightRetention=1, transactions older than 1 block should be pruned.
 	// Current height is 10, so we wait for the pruner to complete its cycle.
-	t.Logf("Waiting for pruner to complete pruning cycle...")
-	prunedHeight, recordsProcessed, err := td.prunerObserver.waitForPrune(timeout)
+	t.Logf("Waiting for pruner to complete pruning cycle (minHeight=%d)...", target)
+	prunedHeight, recordsProcessed, err := td.prunerObserver.waitForPrune(timeout, target)
 	require.NoError(t, err, "Timeout waiting for pruner to complete")
 	t.Logf("✓ Pruner completed pruning up to height %d, processed %d records", prunedHeight, recordsProcessed)
 }
@@ -2337,33 +2507,69 @@ type pruneEvent struct {
 	recordsProcessed int64
 }
 
+// testPrunerObserver buffers every OnPruneComplete callback so waitForPrune can
+// later scan for one covering a specific height. The queue is an unbounded slice
+// rather than a fixed-capacity channel: a channel with a small capacity can fill
+// up and silently drop events (the observer would otherwise need to block the
+// pruner itself, which is worse), and the whole point of a height-aware wait is
+// that it must be able to see every completion, however many pile up before
+// something asks for one.
 type testPrunerObserver struct {
-	t              *testing.T
-	pruneCompleted chan pruneEvent
+	t      *testing.T
+	mu     sync.Mutex
+	events []pruneEvent
+	notify chan struct{} // capacity 1, coalesced wake-up signal
 }
 
 func newTestPrunerObserver(t *testing.T) *testPrunerObserver {
 	return &testPrunerObserver{
-		t:              t,
-		pruneCompleted: make(chan pruneEvent, 10),
+		t:      t,
+		notify: make(chan struct{}, 1),
 	}
 }
 
 func (o *testPrunerObserver) OnPruneComplete(height uint32, recordsProcessed int64) {
 	o.t.Logf("✓ Pruner callback invoked for height %d with %d records processed", height, recordsProcessed)
+
+	o.mu.Lock()
+	o.events = append(o.events, pruneEvent{height: height, recordsProcessed: recordsProcessed})
+	o.mu.Unlock()
+
 	select {
-	case o.pruneCompleted <- pruneEvent{height: height, recordsProcessed: recordsProcessed}:
+	case o.notify <- struct{}{}:
 	default:
-		o.t.Logf("Warning: pruneCompleted channel is full, dropping event for height %d", height)
 	}
 }
 
-func (o *testPrunerObserver) waitForPrune(timeout time.Duration) (uint32, int64, error) {
-	select {
-	case event := <-o.pruneCompleted:
-		return event.height, event.recordsProcessed, nil
-	case <-time.After(timeout):
-		return 0, 0, errors.NewProcessingError("timeout waiting for prune completion")
+// waitForPrune returns the first buffered completion event whose height is >=
+// minHeight, discarding any stale completions below it along the way. With
+// minHeight == 0 this is equivalent to "return whatever is next", matching the
+// pre-existing behaviour.
+func (o *testPrunerObserver) waitForPrune(timeout time.Duration, minHeight uint32) (uint32, int64, error) {
+	deadline := time.After(timeout)
+
+	for {
+		o.mu.Lock()
+		for len(o.events) > 0 {
+			event := o.events[0]
+			o.events = o.events[1:]
+
+			if event.height < minHeight {
+				o.t.Logf("Discarding stale prune completion for height %d (< requested minHeight %d)", event.height, minHeight)
+				continue
+			}
+
+			o.mu.Unlock()
+			return event.height, event.recordsProcessed, nil
+		}
+		o.mu.Unlock()
+
+		select {
+		case <-o.notify:
+			continue
+		case <-deadline:
+			return 0, 0, errors.NewProcessingError("timeout waiting for prune completion at height >= %d", minHeight)
+		}
 	}
 }
 

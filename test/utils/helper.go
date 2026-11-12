@@ -31,6 +31,7 @@ import (
 	ba "github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/mining"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -1105,8 +1106,7 @@ func CreateTransactionObject(ctx context.Context, node TeranodeTestClient, addre
 	return CreateTransaction(u, address, amount, privateKey)
 }
 
-//nolint:govet // this needs to be refactored to pass
-func FreezeUtxos(ctx context.Context, testenv TeranodeTestEnv, tx *bt.Tx, logger ulogger.Logger, tSettings *settings.Settings) error {
+func FreezeUtxos(ctx context.Context, testenv *TeranodeTestEnv, tx *bt.Tx, logger ulogger.Logger, tSettings *settings.Settings) error {
 	utxoHash, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	spend := &utxo.Spend{
 		TxID:     tx.TxIDChainHash(),
@@ -1124,8 +1124,7 @@ func FreezeUtxos(ctx context.Context, testenv TeranodeTestEnv, tx *bt.Tx, logger
 	return nil
 }
 
-//nolint:govet // this needs to be refactored to pass
-func ReassignUtxo(ctx context.Context, testenv TeranodeTestEnv, firstTx, reassignTx *bt.Tx, logger ulogger.Logger, tSettings *settings.Settings) error {
+func ReassignUtxo(ctx context.Context, testenv *TeranodeTestEnv, firstTx, reassignTx *bt.Tx, logger ulogger.Logger, tSettings *settings.Settings) error {
 	publicKey, err := extractPublicKey(reassignTx.Inputs[0].UnlockingScript.Bytes())
 	if err != nil {
 		return err
@@ -1266,27 +1265,18 @@ func SendEventRun(ctx context.Context, blockchainClient blockchain.ClientI, _ ul
 		case <-timeout:
 			return errors.NewError("Timeout waiting for Blockchain service", err)
 		default:
-			err = blockchainClient.Run(ctx, "test")
+			// Test setup is an explicit operator action and may leave IDLE.
+			// Automatic Run intentionally preserves operator IDLE.
+			state, stateErr := blockchainClient.GetFSMCurrentState(ctx)
+			if stateErr == nil && state != nil && *state == blockchain.FSMStateRUNNING {
+				return nil
+			}
+			err = blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN)
 			if err != nil {
 				time.Sleep(100 * time.Millisecond)
 
 				continue
 			}
-
-			// status, _, err = blockchainClient.Health(ctx, readiness)
-			// logger.Infof("Blockchain GRPC health status: %d", status)
-			// if err != nil || status != http.StatusOK {
-			// 	time.Sleep(100 * time.Millisecond)
-
-			// 	continue
-			// }
-
-			// err = blockchainClient.Run(ctx, "test")
-			// if err != nil {
-			// 	time.Sleep(100 * time.Millisecond)
-
-			// 	continue
-			// }
 
 			return err
 		}

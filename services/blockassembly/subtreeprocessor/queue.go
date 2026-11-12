@@ -2,10 +2,85 @@
 package subtreeprocessor
 
 import (
+	"math"
 	"sync/atomic"
 
 	"github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/ulogger"
 )
+
+// normalizeMaxQueueItems validates and normalizes the configured ingest-queue
+// item cap, following the clamp-and-warn convention used for other out-of-range
+// settings so a fat-fingered value is corrected loudly rather than silently.
+//
+// A negative cap is a misconfiguration, not a tiny cap, and is treated as
+// disabled (0). A positive cap below one full drain pass
+// (maxBatchesPerIteration x sendBatchSize items) would refuse every batch and
+// wedge ingest, so it is clamped up to that floor. Every call also logs exactly
+// one line stating the bound actually in force.
+//
+// Parameters:
+//   - logger: used to report the bound in force, and to warn when a value is clamped
+//   - maxItems: the configured item cap (0 disables the bound)
+//   - sendBatchSize: the configured per-batch item count
+//
+// Returns:
+//   - int64: the normalized cap to hand to NewLockFreeQueueWithLimit
+func normalizeMaxQueueItems(logger ulogger.Logger, maxItems int64, sendBatchSize int) int64 {
+	if maxItems < 0 {
+		logger.Warnf("BlockAssembly.MaxQueueItems=%d is negative; clamping to 0 (queue bound disabled)", maxItems)
+		return 0
+	}
+
+	if maxItems == 0 {
+		logger.Infof("BlockAssembly.MaxQueueItems=0; ingest queue is unbounded, set blockassembly_maxQueueItems to bound memory during long state transitions")
+		return 0
+	}
+
+	floor := int64(maxBatchesPerIteration) * int64(sendBatchSize)
+	if floor > 0 && maxItems < floor {
+		logger.Warnf("BlockAssembly.MaxQueueItems=%d is below one drain pass (%d items = %d batches x %d); clamping up to %d",
+			maxItems, floor, maxBatchesPerIteration, sendBatchSize, floor)
+
+		return floor
+	}
+
+	logger.Infof("BlockAssembly.MaxQueueItems=%d; ingest queue bounded at %d items", maxItems, maxItems)
+
+	return maxItems
+}
+
+// normalizeMaxTransactionsInMemory turns the configured in-memory transaction
+// limit into the value the queue enforces. 0 leaves the limit disabled. A limit
+// that cannot hold one drain pass plus the coinbase placeholder that every
+// subtree chain carries would refuse every batch and wedge ingest, so it is
+// clamped up to that floor. A value beyond int64 saturates instead of wrapping
+// negative. Every call logs one line stating the limit in force.
+func normalizeMaxTransactionsInMemory(logger ulogger.Logger, limit uint64, sendBatchSize int) int64 {
+	if limit == 0 {
+		logger.Infof("BlockAssembly.MaxTransactionsInMemory=0; transactions held in memory are not limited")
+		return 0
+	}
+
+	if limit > math.MaxInt64 {
+		logger.Warnf("BlockAssembly.MaxTransactionsInMemory=%d exceeds the largest supported value; using %d", limit, int64(math.MaxInt64))
+		return math.MaxInt64
+	}
+
+	maxHeld := int64(limit)
+
+	// The floor is never below 2: a sendBatchSize of 0 would otherwise give 1, and the
+	// coinbase placeholder already fills that, so every batch would be refused.
+	floor := max(int64(maxBatchesPerIteration)*int64(sendBatchSize)+1, 2)
+	if maxHeld < floor {
+		logger.Warnf("BlockAssembly.MaxTransactionsInMemory=%d is below one drain pass plus the coinbase placeholder (%d); clamping up to %d", maxHeld, floor, floor)
+		return floor
+	}
+
+	logger.Infof("BlockAssembly.MaxTransactionsInMemory=%d; ingest is refused beyond %d transactions held in memory", maxHeld, maxHeld)
+
+	return maxHeld
+}
 
 // LockFreeQueue represents a FIFO structure for batches of transactions.
 // This implementation is concurrent safe for queueing, but not for dequeueing.
@@ -20,23 +95,92 @@ import (
 // requiring explicit locking mechanisms, improving performance in high-concurrency
 // scenarios.
 type LockFreeQueue struct {
-	head        *TxBatch                // Points to the head of the queue (sentinel node)
-	tail        atomic.Pointer[TxBatch] // Atomic pointer to the tail
-	queueLength atomic.Int64            // Tracks the current number of TRANSACTIONS queued (see below), not batches
-	clock       clock                   // Source of batch timestamps; replaced in tests
+	head                *TxBatch                // Points to the head of the queue (sentinel node)
+	tail                atomic.Pointer[TxBatch] // Atomic pointer to the tail
+	queueLength         atomic.Int64            // Tracks the current number of TRANSACTIONS reserved-or-published (see below), not batches
+	oldestPendingMillis atomic.Int64            // Timestamp of the oldest pending batch; 0 when the queue is empty
+	clock               clock                   // Source of batch timestamps; replaced in tests
+	maxItems            int64                   // Hard ceiling on published-or-reserved items; <= 0 disables the bound
+	maxHeld             int64                   // Ceiling on transactions held in memory, queued plus already in subtrees; <= 0 disables the bound
+	heldBase            func() int64            // Transactions held outside the queue, counted against maxHeld
+	unsettled           atomic.Int64            // Transactions dequeued but not yet counted by heldBase; see settle
 }
 
-// NewLockFreeQueue creates and initializes a new LockFreeQueue instance.
+// NewLockFreeQueue creates and initializes a new, unbounded LockFreeQueue instance.
+//
+// Returns:
+//   - *LockFreeQueue: A new, initialized queue with no capacity limit
+func NewLockFreeQueue() *LockFreeQueue {
+	return NewLockFreeQueueWithLimit(0)
+}
+
+// NewLockFreeQueueWithLimit creates a LockFreeQueue bounded to maxItems items
+// (transactions, not batches). A value <= 0 leaves the queue unbounded, exactly
+// matching NewLockFreeQueue.
+//
+// Parameters:
+//   - maxItems: Hard ceiling on the number of published-or-reserved items
 //
 // Returns:
 //   - *LockFreeQueue: A new, initialized queue
-func NewLockFreeQueue() *LockFreeQueue {
+func NewLockFreeQueueWithLimit(maxItems int64) *LockFreeQueue {
 	return &LockFreeQueue{
-		head:        &TxBatch{},
-		tail:        atomic.Pointer[TxBatch]{},
-		queueLength: atomic.Int64{},
-		clock:       realClock{},
+		head:     &TxBatch{},
+		tail:     atomic.Pointer[TxBatch]{},
+		clock:    realClock{},
+		maxItems: maxItems,
 	}
+}
+
+// setHeldLimit bounds the transactions held in memory in total: the queued ones
+// plus those heldBase reports as already placed in subtrees. A maxHeld <= 0
+// disables the bound. It must be called before the queue is shared.
+func (q *LockFreeQueue) setHeldLimit(maxHeld int64, heldBase func() int64) {
+	q.maxHeld = maxHeld
+	q.heldBase = heldBase
+}
+
+// heldTotal returns the transactions held in memory if queued were queued.
+//
+// The total is the queued items, the items dequeued but not yet counted by heldBase, and
+// heldBase itself. The middle term closes the window in which a drain pass has taken
+// batches off the queue but has not yet added them to the subtree count: without it the
+// total under-reads by the size of the pass, up to maxBatchesPerIteration batches, and a
+// producer landing in that window is admitted past the limit.
+func (q *LockFreeQueue) heldTotal(queued int64) int64 {
+	held := queued + q.unsettled.Load()
+
+	if q.heldBase == nil {
+		return held
+	}
+
+	return q.heldBase() + held
+}
+
+// placedTotal returns the transactions placed in subtrees plus extra, leaving out the queued
+// and unsettled items that a drain pass is about to place or drop.
+func (q *LockFreeQueue) placedTotal(extra int64) int64 {
+	if q.heldBase == nil {
+		return extra
+	}
+
+	return q.heldBase() + extra
+}
+
+// settle releases n dequeued items from the unsettled count. Every dequeue adds the size of
+// the batch to it, so every caller of dequeueBatch or dequeueBatchUntil must settle what it
+// took once heldBase accounts for it, or once it has dropped it. A dequeue that is never
+// settled leaves the total over-counting for good, and the limit then refuses for good.
+//
+// The count is released after the items are accounted, never before, so the total can
+// transiently over-count and never under-count.
+func (q *LockFreeQueue) settle(n int64) {
+	q.unsettled.Add(-n)
+}
+
+// heldCount returns the transactions held in memory right now.
+func (q *LockFreeQueue) heldCount() int64 {
+	return q.heldTotal(q.queueLength.Load())
 }
 
 // length returns the current number of transactions queued, not the number
@@ -50,6 +194,10 @@ func NewLockFreeQueue() *LockFreeQueue {
 // full account). Read this as "queued transactions", never "queued
 // batches".
 //
+// On the bounded reservation path the count includes items that are reserved
+// but not yet published, so it never reads below the published-outstanding
+// count.
+//
 // Returns:
 //   - int64: The current queue length (number of transactions)
 //
@@ -58,14 +206,16 @@ func (q *LockFreeQueue) length() int64 {
 	return q.queueLength.Load()
 }
 
-// enqueueBatch adds a batch of transactions to the queue in a thread-safe manner.
-// It uses atomic operations to ensure thread safety during concurrent enqueue operations.
-// The entire batch receives a single timestamp when enqueued.
+// publish links a batch into the queue in a thread-safe manner, WITHOUT
+// mutating queueLength. It is the shared tail-swap-and-link core of both
+// enqueueBatch and enqueueBatchBounded, each of which reserves the batch's items
+// in queueLength before calling it. The entire batch receives a single timestamp
+// when published.
 //
 // Parameters:
 //   - nodes: The transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
-func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
+func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
 	batch := &TxBatch{
 		nodes:      nodes,
 		txInpoints: txInpoints,
@@ -76,13 +226,231 @@ func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree
 	prev := q.tail.Swap(batch)
 	if prev == nil {
 		q.head.next.Store(batch)
-		q.queueLength.Add(int64(len(nodes))) // gosec:nolint
-
-		return
+	} else {
+		prev.next.Store(batch)
 	}
 
-	prev.next.Store(batch)
-	q.queueLength.Add(int64(len(nodes))) // gosec:nolint
+	// Move the oldest-pending timestamp EARLIER toward this batch's time, never
+	// later. A producer sets it from 0 (the empty->non-empty transition) or lowers
+	// it when this batch predates the current latch, but it NEVER raises it. That
+	// one-directional rule is what makes the multi-producer race safe: with the
+	// latch at 0, producer A can link the true (older) head yet producer B links
+	// behind it and wins the store first; a plain CAS-from-0 would then leave B's
+	// LATER time and under-report the backlog age (the dangerous direction — the
+	// backpressure controller would fail to pause). Here A's corrective CAS(tB, tA)
+	// still lowers the latch to its older time, so it converges to the OLDEST
+	// pending time. A read landing in the gap between B's store and A's corrective
+	// CAS still sees the younger tB — a transient under-report — but that gap is one
+	// producer's own straight-line path from link to this loop (no I/O, lock or
+	// early return) and self-heals on A's very next CAS: a different class from the
+	// persistent, consumer-cadence-bounded under-report a plain CAS-from-0 leaves.
+	//
+	// batch.time is stamped before tail.Swap, so a stalled producer can carry a
+	// time earlier than the batch actually linked ahead of it; pulling the latch to
+	// that earlier time is an OVER-report (age reads older than the true head),
+	// bounded by the producers' inter-arrival gap and corrected by the consumer's
+	// next updateOldestPending. Over-report is the safe direction.
+	//
+	// The loop is lock-free and terminates: the common case (non-empty queue, this
+	// batch newer than the head) breaks on the first load with no store; a store
+	// runs only on the empty transition or a rarer out-of-order timestamp, and each
+	// failed CAS re-reads a latch another writer already moved toward this target or
+	// to 0, so progress is bounded by the finite set of concurrent writers.
+	//
+	// An empty queue is covered separately by the headAgeMillis clamp, which reads
+	// 0 whenever queueLength is 0, so a stale non-zero latch left on an empty queue
+	// (e.g. a CAS that landed just after a drain) is never observed while it stays
+	// empty — including for the whole of a dequeue-free state transition. Should a
+	// batch then arrive while such a stale OLDER latch is still set, min-CAS leaves
+	// it (it only lowers), so the age reads slightly old: an OVER-report, the safe
+	// direction, bounded and cleared by the consumer's next updateOldestPending.
+	for {
+		cur := q.oldestPendingMillis.Load()
+		if cur != 0 && batch.time >= cur {
+			break
+		}
+
+		if q.oldestPendingMillis.CompareAndSwap(cur, batch.time) {
+			break
+		}
+	}
+}
+
+// enqueueBatch adds a batch of transactions to the queue unconditionally,
+// accounting for its items in queueLength BEFORE publishing. It is the unbounded
+// path; it ignores maxItems but otherwise mirrors enqueueBatchBounded's
+// reserve-first ordering.
+//
+// Reserving before publishing upholds the queueLength >= published-outstanding
+// invariant on this path too: the counter is bumped before the batch is linked,
+// so its only transient miscount is an OVER-count (counter high for the brief
+// window before the link lands), never an under-count (counter reading below the
+// published count). That direction is load-bearing because queueLength is read as
+// an empty oracle — headAgeMillis clamps to 0 when it reads 0 — so it must never
+// read 0 while a batch is linked. Every other consumer (the state-transition
+// drain snapshot, the diagnostic gauges and RPCs) already tolerates a transient
+// one-batch over-count. Callers that need the bound must use enqueueBatchBounded.
+//
+// Parameters:
+//   - nodes: The transaction nodes to add
+//   - txInpoints: Parent transaction references for each node
+func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
+	q.queueLength.Add(int64(len(nodes))) // gosec:nolint  reserve before publishing
+	q.publish(nodes, txInpoints)
+}
+
+// Admission is the outcome of offering a batch to the bounded queue. A refusal says which bound
+// refused, so a caller can tell a refusal that clears in milliseconds from one that clears only
+// when a block connects, from the same atomic reservation that made the decision.
+type Admission int
+
+const (
+	// Admitted means the batch is queued.
+	Admitted Admission = iota
+
+	// RefusedQueue means the ingest queue bound refused the batch. It clears as the dispatcher
+	// drains, so waiting for room is reasonable.
+	RefusedQueue
+
+	// RefusedHeld means the in-memory transaction limit refused the batch. It clears when a block
+	// connects, so waiting for it is not.
+	RefusedHeld
+
+	// RefusedOversize means the batch is larger than a whole bound and is admitted only onto an
+	// empty queue, so the producer waits for the queue to empty and then retries.
+	RefusedOversize
+)
+
+// String returns the name of the outcome, for logs and test failures.
+func (a Admission) String() string {
+	switch a {
+	case Admitted:
+		return "admitted"
+	case RefusedQueue:
+		return "refused by the queue bound"
+	case RefusedHeld:
+		return "refused by the in-memory limit"
+	case RefusedOversize:
+		return "refused as oversize"
+	default:
+		return "unknown"
+	}
+}
+
+// enqueueBatchBounded adds a batch only if doing so would not push the number of
+// published-or-reserved items past maxItems, and reports whether it did.
+//
+// The bound is enforced by an atomic reservation, not a load-then-compare: the
+// batch's items are added to queueLength first, and only published if the
+// post-add value is within the limit; otherwise the reservation is rolled back
+// and nothing is published. Because reservations are totally ordered by the
+// atomic and the counter decreases only by dequeue of published items or by
+// rollback of a failed reservation, the published-but-not-yet-dequeued item
+// count can never exceed maxItems even with many concurrent producers. A
+// load-then-compare would not be a bound under the multi-producer contract,
+// because two producers could both observe room and both publish.
+//
+// This reservation-first ordering is also what upholds the
+// queueLength >= published-outstanding invariant: the counter is incremented
+// before the batch is linked, so it never reads below the published count. The
+// unbounded enqueueBatch path now shares that ordering (see its comment).
+//
+// When maxItems <= 0 and the in-memory limit is off the queue is unbounded and this degrades to enqueueBatch.
+//
+// # A batch larger than the whole cap is admitted alone onto an empty queue
+//
+// Such a batch can never satisfy a reservation, on any queue state, so refusing it
+// is permanent rather than transient: that producer never makes progress and its
+// bounded wait plus the hard shed simply run forever. The batch size is chosen by
+// the client from its own settings context, so this is reachable by cross-process
+// configuration skew and not only by a local mistake. Admitting it when the
+// reservation found the queue otherwise empty trades a transient one-batch overshoot
+// of the ceiling for liveness, which is the same trade enqueueBatch already makes.
+//
+// The overshoot is bounded to ONE batch: the emptiness test reads after-n from the
+// same atomic Add that made the reservation, not from a separate load, so of any
+// number of concurrent over-size producers exactly one can observe 0.
+//
+// The n > maxItems guard keeps this from becoming a general "an empty queue admits
+// anything" carve-out: an ordinary over-cap batch is still refused and still relies
+// on the bounded wait and the shed.
+//
+// The in-memory limit is checked in the same reservation. exemptHeld lifts it for this batch
+// and leaves the ingest queue bound, which is how transactions that arrived inside a block are
+// admitted. A block is the authority on what is valid, and a refused block transaction that
+// stays outside the template can leave a descendant, validated at a later level of the same
+// block or after a side-chain block unlocked its parent, entering the template without that
+// parent. That template is an invalid block. Admitting them is bounded: the block is already in
+// memory while it validates, and they count toward the total, so mempool ingest sees the node as
+// full.
+//
+// The queue bound is judged from the reservation's own read. The held bound reads the placed and
+// dequeued counts again, and leaves out every queued item, so a reservation another producer is
+// about to roll back cannot make this refusal a held one.
+//
+// Parameters:
+//   - nodes: The transaction nodes to add
+//   - txInpoints: Parent transaction references for each node
+//   - exemptHeld: Whether the in-memory limit is lifted for this batch
+//
+// Returns:
+//   - Admission: Admitted, or the bound that refused the batch
+func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, exemptHeld bool) Admission {
+	n := int64(len(nodes)) // gosec:nolint
+
+	if q.maxItems <= 0 && (q.maxHeld <= 0 || exemptHeld) {
+		q.enqueueBatch(nodes, txInpoints)
+		return Admitted
+	}
+
+	after := q.queueLength.Add(n) // reserve
+
+	queueRoom := q.maxItems <= 0 || after <= q.maxItems
+	heldRoom := exemptHeld || q.maxHeld <= 0 || q.heldTotal(after) <= q.maxHeld
+
+	if queueRoom && heldRoom {
+		q.publish(nodes, txInpoints) // reservation already accounted
+
+		return Admitted
+	}
+
+	// A batch larger than a whole bound can never satisfy a reservation, so it is
+	// admitted alone onto an empty queue (see above). For the in-memory limit that
+	// is allowed only while the node is not already at the limit, so repeated
+	// oversize batches cannot grow the holding without bound.
+	queueOversize := q.maxItems > 0 && n > q.maxItems
+	heldOversize := !exemptHeld && q.maxHeld > 0 && n > q.maxHeld
+	heldAtLimit := heldOversize && q.placedTotal(0) >= q.maxHeld
+
+	if after-n == 0 && (queueRoom || queueOversize) && (heldRoom || (heldOversize && !heldAtLimit)) {
+		// Nil-guarded because NewLockFreeQueue* is constructed directly by unit
+		// tests, which never run this package's metric registration.
+		if prometheusSubtreeProcessorOversizeBatchAdmitted != nil {
+			prometheusSubtreeProcessorOversizeBatchAdmitted.Inc()
+		}
+
+		q.publish(nodes, txInpoints)
+
+		return Admitted
+	}
+
+	q.queueLength.Add(-n) // roll back
+
+	// The total the reservation read counts every queued item, including reservations that
+	// other producers are about to roll back, and every dequeued item a drain pass has not yet
+	// settled, so it can overstate what the node holds. The held bound is claimed only when this
+	// batch breaks it on top of what is already placed in subtrees, which is the one cause that
+	// outlasts the queue: only a connecting block shrinks it. A refusal whose excess comes from
+	// queued or unsettled items is the queue's and is classified again on a later attempt, when
+	// the dispatcher has placed the real ones or the drain pass has settled.
+	switch {
+	case heldAtLimit, !heldRoom && !heldOversize && q.placedTotal(n) > q.maxHeld:
+		return RefusedHeld
+	case queueOversize || heldOversize:
+		return RefusedOversize
+	default:
+		return RefusedQueue
+	}
 }
 
 // dequeueBatch removes and returns the next batch from the queue.
@@ -99,15 +467,35 @@ func (q *LockFreeQueue) dequeueBatch(validFromMillis int64) (*TxBatch, bool) {
 	next := q.head.next.Load()
 
 	if next == nil {
+		// Make the empty observation authoritative. publish links a batch BEFORE
+		// its CAS(0, time), so a drain landing in that window clears the gauge and
+		// the producer's CAS then sets it with nothing left to dequeue — a non-zero
+		// head age latched on an empty queue, which no later dequeue would clear
+		// because they all take this early return. updateOldestPending stores 0 and
+		// re-reads head.next, so every interleaving converges: a batch already
+		// linked is picked up by value, and one not yet linked is set by the
+		// producer's own CAS.
+		q.updateOldestPending()
+
 		return nil, false
 	}
 
 	if validFromMillis > 0 && next.time >= validFromMillis {
+		// The head-of-line batch is queued but held back by the double-spend
+		// window (not yet drainable). Refresh the gauge to its true age so a
+		// transient stale 0 (from an earlier empty-clear that raced a producer)
+		// cannot persist for the whole hold-back: the drain loop calls
+		// dequeueBatch every idle-sleep, so this collapses any stale 0 to at most
+		// one loop iteration. next is the current head-of-line, so its time is
+		// the authoritative oldest-pending value.
+		q.oldestPendingMillis.Store(next.time)
 		return nil, false
 	}
 
 	q.head = next
+	q.unsettled.Add(int64(len(next.nodes)))    // gosec:nolint  count it held before it leaves the queue
 	q.queueLength.Add(-int64(len(next.nodes))) // gosec:nolint
+	q.updateOldestPending()
 
 	return next, true
 }
@@ -133,14 +521,105 @@ func (q *LockFreeQueue) dequeueBatch(validFromMillis int64) (*TxBatch, bool) {
 //   - bool: True iff a batch was dequeued.
 func (q *LockFreeQueue) dequeueBatchUntil(maxTimeMillis int64) (*TxBatch, bool) {
 	next := q.head.next.Load()
-	if next == nil || next.time > maxTimeMillis {
+
+	if next == nil {
+		// Empty observation: clear the gauge with the store-then-recheck, exactly as
+		// dequeueBatch does. See its comment for the latched-stale-age race.
+		q.updateOldestPending()
+
+		return nil, false
+	}
+
+	if next.time > maxTimeMillis {
+		// The head is queued but beyond the caller's time boundary. next is the
+		// authoritative oldest-pending batch, so refresh the gauge to its true age
+		// rather than leaving a stale value — mirroring dequeueBatch's hold-back arm.
+		q.oldestPendingMillis.Store(next.time)
+
 		return nil, false
 	}
 
 	q.head = next
+	q.unsettled.Add(int64(len(next.nodes)))    // gosec:nolint  count it held before it leaves the queue
 	q.queueLength.Add(-int64(len(next.nodes))) // gosec:nolint
+	q.updateOldestPending()
 
 	return next, true
+}
+
+// updateOldestPending refreshes the oldest-pending timestamp after the consumer
+// advances head, and is also the consumer's EMPTY-OBSERVATION clear: both
+// dequeue paths call it when they find head.next == nil, which is what stops a
+// producer CAS that landed just after a drain from latching a non-zero age on an
+// empty queue. It reads q.head, so it MUST only be called from the single
+// consumer goroutine (the same constraint as dequeue). A monitoring goroutine
+// must read headAgeMillis, never q.head.
+//
+// On the empty-clear it stores 0 and then re-reads head.next: a producer may
+// have linked a new head between the two loads, and this recheck picks it up by
+// value so the gauge never latches a stale 0 while a batch is present. The
+// recheck compares no timestamps, so two batches sharing a millisecond can never
+// be confused; if the producer has not linked yet, head.next is still nil
+// (correctly 0) and the producer's own CAS(0, time) sets the gauge when it links.
+func (q *LockFreeQueue) updateOldestPending() {
+	if following := q.head.next.Load(); following != nil {
+		q.oldestPendingMillis.Store(following.time)
+		return
+	}
+
+	q.oldestPendingMillis.Store(0)
+
+	// Re-read: a producer linking a new head between the load above and the
+	// Store(0) would otherwise leave the gauge at 0 with a batch present.
+	if following := q.head.next.Load(); following != nil {
+		q.oldestPendingMillis.Store(following.time)
+	}
+}
+
+// headAgeMillis returns how long the oldest pending batch has waited, in
+// milliseconds, given the current wall-clock time in Unix millis. It returns 0
+// when the queue is empty. It reads only an atomic and is therefore safe to
+// call from a monitoring goroutine.
+//
+// Parameters:
+//   - now: The current time in Unix milliseconds
+//
+// Returns:
+//   - int64: The age of the oldest pending batch in milliseconds, or 0 if empty
+func (q *LockFreeQueue) headAgeMillis(now int64) int64 {
+	// An empty queue has no pending batch, so report age 0 even when a stale
+	// non-zero oldestPendingMillis is still latched — e.g. a producer CAS that
+	// landed just before a long state transition (reorg/move-forward), whose only
+	// clear runs on the dequeue paths that transition never takes. Reserve-first
+	// accounting (see enqueueBatch) makes queueLength a safe empty oracle: it can
+	// only over-count a linked batch, never read 0 while one is present, so this
+	// clamp can never mask a real backlog. Reads only atomics, never q.head, so it
+	// stays safe to call from a monitoring goroutine.
+	if q.queueLength.Load() == 0 {
+		return 0
+	}
+
+	oldest := q.oldestPendingMillis.Load()
+	if oldest == 0 {
+		return 0
+	}
+
+	if age := now - oldest; age > 0 {
+		return age
+	}
+
+	return 0
+}
+
+// MaxItems returns the enforced (normalized) hard ceiling on published-or-
+// reserved items, or a value <= 0 when the queue is unbounded. It is the cap the
+// ingest reservation actually enforces, which the shed message reports so
+// operators see the real limit rather than the raw configured value.
+//
+// Returns:
+//   - int64: The enforced item cap (<= 0 when unbounded)
+func (q *LockFreeQueue) MaxItems() int64 {
+	return q.maxItems
 }
 
 // IsEmpty checks if the queue contains any batches.

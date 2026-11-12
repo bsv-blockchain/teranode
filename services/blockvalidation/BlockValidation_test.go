@@ -271,16 +271,17 @@ func (m *MockSubtreeValidationClient) CheckSubtreeFromBlock(ctx context.Context,
 	return nil
 }
 
-func (m *MockSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string) error {
+func (m *MockSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string, keepBlockAssemblyHandoff bool) error {
 	blockBytes, err := block.Bytes()
 	if err != nil {
 		return errors.NewServiceError("failed to serialize block for subtree validation", err)
 	}
 
 	request := subtreevalidation_api.CheckBlockSubtreesRequest{
-		Block:   blockBytes,
-		BaseUrl: baseURL,
-		PeerId:  peerID,
+		Block:                    blockBytes,
+		BaseUrl:                  baseURL,
+		PeerId:                   peerID,
+		KeepBlockAssemblyHandoff: keepBlockAssemblyHandoff,
 	}
 
 	_, err = m.server.CheckBlockSubtrees(ctx, &request)
@@ -298,8 +299,16 @@ func (m *MockSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, bl
 // - Subtree validation services
 // - Transaction and block storage systems
 // The function returns initialized components and a cleanup function to ensure
-// proper test isolation.
-func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockchain.ClientI, blob.Store, blob.Store, func()) {
+// proper test isolation. Each configure func adjusts the settings the stores and
+// the subtree validation server are built with.
+func setup(t *testing.T, configure ...func(*settings.Settings)) (utxostore.Store, subtreevalidation.Interface, blockchain.ClientI, blob.Store, blob.Store, func()) {
+	return setupWithSubtreeValidationStore(t, nil, configure...)
+}
+
+// setupWithSubtreeValidationStore is setup, with the subtree validation server
+// reading the UTXO store through wrap, when wrap is not nil. The returned store
+// is the unwrapped one.
+func setupWithSubtreeValidationStore(t *testing.T, wrap func(utxostore.Store) utxostore.Store, configure ...func(*settings.Settings)) (utxostore.Store, subtreevalidation.Interface, blockchain.ClientI, blob.Store, blob.Store, func()) {
 	// we only need the httpClient, utxoStore and validatorClient when blessing a transaction
 	httpmock.ActivateNonDefault(util.HTTPClient())
 	httpmock.RegisterResponder(
@@ -318,6 +327,10 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 	logger := ulogger.TestLogger{}
 
 	tSettings := test.CreateBaseTestSettings(t)
+
+	for _, fn := range configure {
+		fn(tSettings)
+	}
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	if err != nil {
@@ -346,7 +359,12 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	subtreeValidationStore := utxostore.Store(utxoStore)
+	if wrap != nil {
+		subtreeValidationStore = wrap(utxoStore)
+	}
+
+	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, subtreeValidationStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -467,7 +485,9 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	tSettings.ChainCfgParams = test.MainNetParamsForSyntheticPoW()
+	// This synthetic PoW fixture uses modern difficulty rules from genesis.
+	tSettings.ChainCfgParams.DaaForkHeight = 0
 
 	blockHeader := &model.BlockHeader{
 		Version:        1,
@@ -1625,6 +1645,16 @@ func TestBlockValidation_IncompleteBlockNilCoinbase(t *testing.T) {
 			coinbaseTx:  &bt.Tx{Inputs: []*bt.Input{}},
 			expectError: "coinbase tx is nil or empty",
 		},
+		{
+			// A stand-in coinbase: outputs but no input. The header does not commit to it, so it
+			// is missing data from the peer, not a miner's invalid coinbase.
+			name:        "Output-only coinbase the header does not commit to returns ErrBlockIncomplete",
+			coinbaseTx:  &bt.Tx{Outputs: []*bt.Output{{Satoshis: 50 * 100_000_000, LockingScript: &bscript.Script{0x51}}}},
+			expectError: "coinbase tx is nil or empty",
+		},
+		// A zero-input coinbase on a body that carries subtrees is not missing data: the merkle
+		// check over the subtrees judges it. TestCoinbaseNotDelivered_ZeroInputOnSubtreeBody covers
+		// that shape.
 	}
 
 	for _, tt := range tests {
@@ -1679,7 +1709,9 @@ func TestBlockValidation_IncompleteBlockNilCoinbase(t *testing.T) {
 			require.Error(t, err)
 			require.True(t, errors.Is(err, errors.ErrBlockIncomplete), "expected ErrBlockIncomplete, got: %v", err)
 			require.False(t, errors.Is(err, errors.ErrBlockInvalid), "should NOT be ErrBlockInvalid")
+			require.False(t, errors.Is(err, errors.ErrBlockCorrupt), "should NOT be ErrBlockCorrupt")
 			require.Contains(t, err.Error(), tt.expectError)
+			requireNothingPersisted(ctx, t, blockchainClient, block.Hash())
 		})
 	}
 }
@@ -1724,7 +1756,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 			Subtrees: make([]*chainhash.Hash, 0),
 		}
 
-		err = blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000")
+		err = blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000", false)
 		require.NoError(t, err)
 	})
 
@@ -1749,7 +1781,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 			},
 		}
 
-		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000"))
+		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000", false))
 	})
 
 	t.Run("fallback to series", func(t *testing.T) {
@@ -1782,14 +1814,22 @@ func Test_validateBlockSubtrees(t *testing.T) {
 			},
 		}
 
-		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000"))
+		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000", false))
 
 		// check that the subtree validation was called 3 times
 		assert.Len(t, subtreeValidationClient.Calls, 1)
 	})
 }
 
-func TestBlockValidation_InvalidCoinbaseScriptLength(t *testing.T) {
+// TestBlockValidation_UnboundCoinbaseLengthTamperBreaksMerkleBinding tampers the coinbase's
+// unlocking script AFTER the block was built around the original coinbase txid, which changes the
+// coinbase txid and so breaks the merkle binding the header already committed to. The body never
+// reaches the merkle-bound branch of block.Valid's coinbase-length check (step 4b): CheckMerkleRoot
+// (step 8) fails first, on the same unbound-body principle, and the block stays corrupt with
+// nothing persisted (bitcoin-sv/teranode#4692). The bound case — a genuinely merkle-matching body
+// whose coinbase length is bad — is covered separately at the service level in
+// TestValidateBlock_CoinbaseLengthBinding_Service, where it is condemned invalid.
+func TestBlockValidation_UnboundCoinbaseLengthTamperBreaksMerkleBinding(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1804,13 +1844,20 @@ func TestBlockValidation_InvalidCoinbaseScriptLength(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	// Create a valid block, then tamper with coinbase script length
+	// Create a valid block, then tamper with coinbase script length after the fact — this changes
+	// the coinbase txid, which the header's merkle root no longer commits to.
 	block := createValidBlock(t, tSettings, txMetaStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore)
 	block.CoinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x01}) // Too short
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test")
-	require.ErrorContains(t, err, "BLOCK_INVALID")
+	require.ErrorContains(t, err, "BLOCK_CORRUPT")
+	require.True(t, errors.IsBlockCorrupt(err))
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
+
+	exists, existsErr := blockchainClient.GetBlockExists(context.Background(), block.Header.Hash())
+	require.NoError(t, existsErr)
+	require.False(t, exists, "a corrupt (unbound) block must never be persisted")
 }
 
 func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore utxostore.Store, subtreeValidationClient subtreevalidation.Interface, blockchainClient blockchain.ClientI, txStore blob.Store, subtreeStore blob.Store) *model.Block {
@@ -2383,6 +2430,41 @@ func Test_checkOldBlockIDs(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "are not from current chain")
 	})
+}
+
+// Test_checkOldBlockIDs_ParentBlockIDsStayOutOfTheVerdict: the ids are this node's
+// own store keys, not block hashes or heights. The verdict crosses to RPC and is
+// stored as the invalid block's reason, so they go to the log and the verdict
+// names the transaction.
+func Test_checkOldBlockIDs_ParentBlockIDsStayOutOfTheVerdict(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := &warnCaptureLogger{Logger: ulogger.TestLogger{}}
+
+	prevHash := chainhash.HashH([]byte("prev"))
+	merkleRoot := chainhash.HashH([]byte("merkle"))
+	block := &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prevHash, HashMerkleRoot: &merkleRoot}}
+
+	blockchainMock := &blockchain.Mock{}
+	blockValidation := &BlockValidation{
+		logger:           logger,
+		blockchainClient: blockchainMock,
+	}
+
+	oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+	oldBlockIDsMap.Set(chainhash.HashH([]byte("child")), []uint32{77123, 88445})
+
+	blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(false, nil).Once()
+	blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{}, nil).Once()
+
+	err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, block)
+	require.ErrorIs(t, err, errors.ErrBlockInvalid)
+	require.Contains(t, err.Error(), "are not from current chain")
+	require.NotContains(t, err.Error(), "77123")
+	require.NotContains(t, err.Error(), "88445")
+
+	require.Contains(t, fmt.Sprint(logger.warned()), "77123", "the ids are still recorded")
+	require.Contains(t, fmt.Sprint(logger.warned()), "88445")
 }
 
 // Test_checkOldBlockIDs_inMemoryChainCheckRoute exercises the in-memory-chain-check
@@ -3305,15 +3387,32 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
+	// The header must be MINED to its own (regtest-easy) target: the two header-only
+	// proof-of-work gates now run above the parent-header fetch, so an unmined header would be
+	// rejected there and the header-fetch error under test would never be reached
+	// (bitcoin-sv/teranode#4844).
+	powNBits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *powNBits,
+		Nonce:          0,
+	}
+
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		blockHeader.Nonce++
+	}
+
 	block := &model.Block{
-		Header: &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
-			Bits:           model.NBit{},
-			Nonce:          0,
-		},
+		Header:           blockHeader,
 		CoinbaseTx:       coinbaseTx,
 		TransactionCount: 1,
 		SizeInBytes:      uint64(coinbaseTx.Size()), //nolint:gosec
@@ -3526,6 +3625,8 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 
 	mockBlockchain.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{100}, nil)
+	// reValidateBlock waits for the parent to be mined before block.Valid reads tx BlockIDs.
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
 	return bv, block, mockBlockchain, coinbaseTx
 }
@@ -3538,7 +3639,7 @@ func TestBlockValidation_reValidateBlock_Success(t *testing.T) {
 		baseURL: "test",
 	}
 
-	err := bv.reValidateBlock(blockData)
+	err := bv.reValidateBlock(context.Background(), blockData)
 	require.NoError(t, err)
 }
 
@@ -3581,7 +3682,7 @@ func TestBlockValidation_reValidateBlock_InvalidBlock(t *testing.T) {
 		baseURL: "test",
 	}
 
-	err = bv.reValidateBlock(blockData)
+	err = bv.reValidateBlock(context.Background(), blockData)
 	require.Error(t, err)
 
 	invalidateBlockCallCount := 0
@@ -3702,13 +3803,21 @@ func TestBlockValidation_RevalidateBlockChan_Retries(t *testing.T) {
 	mu.Unlock()
 }
 
-func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
+// TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute proves the invalidate-route
+// tradeoff on the opt-in optimistic-background path (bitcoin-sv/teranode#4692): a corrupt body that
+// was already AddBlock'd BEFORE block.Valid ran must NOT be left silently accepted. On this one
+// opt-in path (both optimistic flags set) it takes the invalidate route — InvalidateBlock is
+// called directly (poison-loudly, never silently accept) until the block.Valid integrity-floor
+// split lands and removes this path.
+func TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	tSettings := test.CreateBaseTestSettings(t)
+	// Opt in to optimistic mining on peer paths so the add-before-validate path runs.
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -3773,8 +3882,14 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
-	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
+	txMetaStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
+
+	// Let subtree validation pass so the corrupt verdict comes from the background block.Valid.
+	// The real service binds a cached body to its header up front and would reject this one
+	// synchronously, before the optimistic AddBlock this test pins.
+	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+	subtreeValidationClient.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 
@@ -3786,12 +3901,15 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	err = bv.ValidateBlock(ctx, block, "test", false)
 	require.NoError(t, err)
 
-	// Wait for the goroutine to call InvalidateBlock
+	// bitcoin-sv/teranode#4692: this block fails CheckMerkleRoot (its merkle root was zeroed), a
+	// tier-2 CORRUPT body. On the opt-in optimistic-background path the body was already AddBlock'd
+	// before block.Valid ran, so leaving it accepted would be a silently-accepted corrupt tip. The
+	// guard therefore takes the invalidate route: InvalidateBlock is called.
 	select {
 	case <-invalidateBlockCalled:
-		// Successfully received signal that InvalidateBlock was called
+		// correct: the optimistic-background corrupt body takes the invalidate route
 	case <-time.After(2 * time.Second):
-		t.Fatal("InvalidateBlock should be called in background goroutine")
+		t.Fatal("corrupt body on the opt-in optimistic-background path must take the invalidate route (bitcoin-sv/teranode#4692): InvalidateBlock was not called")
 	}
 }
 
@@ -3807,6 +3925,7 @@ func TestBlockValidation_OptimisticMining_RejectsFutureTimestampSynchronously(t 
 	defer cancel()
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -3823,12 +3942,16 @@ func TestBlockValidation_OptimisticMining_RejectsFutureTimestampSynchronously(t 
 
 	httpmock.RegisterResponder("GET", `=~^/subtree/[a-z0-9]+\z`, httpmock.NewBytesResponder(200, nodeBytes))
 
+	// The header commits to the body, so the only thing wrong with this block is its timestamp.
+	merkleRoot, err := subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size()))
+	require.NoError(t, err)
+
 	nBits, _ := model.NewNBitFromString("207fffff")
 	// Timestamp three hours in the future — past the two-hour bound.
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
-		HashMerkleRoot: &chainhash.Hash{},
+		HashMerkleRoot: merkleRoot,
 		Timestamp:      uint32(time.Now().Add(3 * time.Hour).Unix()), //nolint:gosec
 		Bits:           *nBits,
 		Nonce:          0,
@@ -3853,9 +3976,11 @@ func TestBlockValidation_OptimisticMining_RejectsFutureTimestampSynchronously(t 
 
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil)
-	// storeInvalidBlock persists the rejected block with WithInvalid(true); the accept-path AddBlock
-	// must never fire. Both would match here, so we additionally assert the background path never runs.
-	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil)
+	// No AddBlock at all is expected: a contextual header failure is a FINAL verdict on the header
+	// alone, whatever the body, so nothing is persisted (bitcoin-sv/teranode#4844) —
+	// and the accept-path AddBlock must never fire either. Registered so a regression surfaces as
+	// the assertion below rather than a missing-mock panic.
+	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil).Maybe()
 	// GetBlockHeaderIDs is only reached inside the optimistic background goroutine, which must not
 	// start when the header is rejected synchronously — mark it Maybe so a regression (block added
 	// optimistically) surfaces via the AssertNotCalled check below rather than a missing-mock panic.
@@ -3891,6 +4016,11 @@ func TestBlockValidation_OptimisticMining_RejectsFutureTimestampSynchronously(t 
 	// The optimistic background goroutine (which alone calls GetBlockHeaderIDs) must never start,
 	// confirming the rejection happened before the optimistic AddBlock.
 	mockBlockchain.AssertNotCalled(t, "GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything)
+
+	// And nothing is persisted: the two-hours-in-the-future rule is time-dependent, so a stored
+	// invalid record would make a block that later becomes valid permanently unacceptable
+	// (bitcoin-sv/teranode#4844).
+	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch verifies checkpoint
@@ -3906,6 +4036,7 @@ func TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch(t *testing.T) 
 	defer cancel()
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -3951,16 +4082,19 @@ func TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch(t *testing.T) 
 	require.False(t, block.Hash().IsEqual(otherHash))
 	tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: checkpointHeight, Hash: otherHash}}
 
-	// Matches only the storeInvalidBlock write (AddBlock with WithInvalid(true)), so it cannot
-	// be satisfied by an accept-path write. The mock hands the variadic options to testify as a
-	// single []StoreBlockOption arg, which ProcessStoreBlockOptions resolves.
+	// Matches only an invalid write (AddBlock with WithInvalid(true)), so it cannot be satisfied by
+	// an accept-path write. The mock hands the variadic options to testify as a single
+	// []StoreBlockOption arg, which ProcessStoreBlockOptions resolves. Registered so a regression
+	// surfaces as the assertion below rather than a missing-mock panic — the checkpoint verdict is
+	// final and reached before the body is bound, so it must write nothing at all
+	// (bitcoin-sv/teranode#4844).
 	invalidStore := mock.MatchedBy(func(opts []blockchainoptions.StoreBlockOption) bool {
 		return blockchainoptions.ProcessStoreBlockOptions(opts...).Invalid
 	})
 
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil).Maybe()
-	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, invalidStore).Return(nil).Once()
+	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, invalidStore).Return(nil).Maybe()
 	// GetBlockHeaderIDs is only reached inside the optimistic background goroutine, which must
 	// not start when the header is rejected synchronously.
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil).Maybe()
@@ -3988,9 +4122,13 @@ func TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch(t *testing.T) 
 	require.True(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "conflicts with hardcoded checkpoint")
 
-	// The block was persisted invalid (storeInvalidBlock -> AddBlock with WithInvalid(true)),
-	// proven by the invalidStore matcher; the accept path never ran (GetBlockHeaderIDs unused).
-	mockBlockchain.AssertCalled(t, "AddBlock", mock.Anything, block, mock.Anything, invalidStore)
+	// Nothing was persisted — not even an invalid record. A checkpoint conflict is a verdict on the
+	// header alone, reached before any body/header binding, and it is final, so there is nothing a
+	// later state change could recover; writing a row per fabricated announcement would itself be
+	// the denial of service, and that row would carry the peer's chosen coinbase
+	// (bitcoin-sv/teranode#4844). The accept path never ran either (GetBlockHeaderIDs unused).
+	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, block, mock.Anything, invalidStore)
+	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockBlockchain.AssertNotCalled(t, "GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -4225,6 +4363,12 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	// A pre-assigned block id must be the one reserved for the hash; the store
+	// refuses any other. On a fresh store the first reservation is id 1.
+	reservedID, err := blockchainClient.AssignBlockID(ctx, block.Hash())
+	require.NoError(t, err)
+	require.Equal(t, uint64(block.ID), reservedID)
+
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test")
 	require.NoError(t, err, "Block should be valid")
@@ -4397,6 +4541,9 @@ func TestSetMinedRetryBackoff(t *testing.T) {
 // to a dedicated, ctx-cancellable, WaitGroup-tracked goroutine that re-enqueues via the
 // non-blocking enqueueSetMined.
 func TestScheduleSetMinedRetry(t *testing.T) {
+	// The overflow path increments a counter that is nil until the metrics are initialised.
+	initPrometheusMetrics()
+
 	t.Run("re-enqueues after the backoff without blocking the caller", func(t *testing.T) {
 		u := newSetMinedTestBV(1)
 		ctx := context.Background()
@@ -4903,10 +5050,15 @@ func TestBlockValidation_SubtreeError_Classification(t *testing.T) {
 			wantPersisted: false,
 		},
 		{
-			name:          "tx invalid is a consensus violation, persisted",
+			// Subtree validation runs ABOVE block.Valid, so nothing has reconciled the block's
+			// subtree list against the header's merkle root when this verdict is reached: the body
+			// is still whatever the serving peer chose. It is a verdict on the DELIVERY, so the peer
+			// is struck, the body is re-downloaded, and the hash is not condemned
+			// (bitcoin-sv/teranode#4844).
+			name:          "tx invalid on an unbound subtree list is corrupt, not persisted",
 			subtreeErr:    errors.NewTxInvalidError("tx fails script validation"),
-			wantContains:  "BLOCK_INVALID",
-			wantPersisted: true,
+			wantContains:  "BLOCK_CORRUPT",
+			wantPersisted: false,
 		},
 	}
 

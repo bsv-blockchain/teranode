@@ -20,10 +20,14 @@ Usage:
 package validator
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -32,6 +36,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,7 +81,7 @@ var testTxs = []TestTx{
 //
 //	go clean -testcache &&go test -v -run Test_ScriptVerificationGoBDK ./services/validator/...
 func Test_ScriptVerificationGoBDK(t *testing.T) {
-	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams, 1)
 
 	for _, test := range testTxs {
 		tx, errTx := bt.NewTxFromString(test.ExtendedTx)
@@ -140,6 +145,14 @@ type fakeBDKTxValidator struct {
 	consensus   bool
 	utxoHeights []int32
 	err         error
+
+	// The consensus re-run of a policy-class script error.
+	rerunCalls       int
+	rerunBlockHeight int32
+	rerunConsensus   bool
+	rerunUtxoHeights []int32
+	rerunDeadline    bool
+	rerunErr         error
 }
 
 func (f *fakeBDKTxValidator) ValidateTransaction(_ []byte, utxoHeights []int32, blockHeight int32, consensus bool) error {
@@ -148,6 +161,146 @@ func (f *fakeBDKTxValidator) ValidateTransaction(_ []byte, utxoHeights []int32, 
 	f.blockHeight = blockHeight
 	f.consensus = consensus
 	return f.err
+}
+
+func (f *fakeBDKTxValidator) VerifyScriptContext(ctx context.Context, _ []byte, utxoHeights []int32, blockHeight int32, consensus bool) error {
+	f.rerunCalls++
+	f.rerunUtxoHeights = append([]int32(nil), utxoHeights...)
+	f.rerunBlockHeight = blockHeight
+	f.rerunConsensus = consensus
+	_, f.rerunDeadline = ctx.Deadline()
+	return f.rerunErr
+}
+
+// TestScriptVerifierGoBDKReRunsPolicyScriptErrorsInConsensusMode covers the
+// consensus re-run that decides whether a policy-mode script error is TxPolicy
+// (consensus-valid, published to KAFKA_TX_POLICY_REJECTED) or TxInvalid.
+func TestScriptVerifierGoBDKReRunsPolicyScriptErrorsInConsensusMode(t *testing.T) {
+	newVerifier := func(policyErr, rerunErr error) (*scriptVerifierGoBDK, *fakeBDKTxValidator) {
+		fake := &fakeBDKTxValidator{err: policyErr, rerunErr: rerunErr}
+
+		policy := settings.NewPolicySettings()
+		policy.MaxNonStdTxValidationDuration = 1000
+
+		return &scriptVerifierGoBDK{
+			logger:         ulogger.TestLogger{},
+			policy:         policy,
+			params:         &chaincfg.TestNetParams,
+			se:             fake,
+			consensusRerun: fake,
+			rerunSlots:     make(chan struct{}, 1),
+		}, fake
+	}
+
+	policyScriptErr := bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW)
+
+	t.Run("passes in consensus mode: TxPolicy", func(t *testing.T) {
+		verifier, fake := newVerifier(policyScriptErr, nil)
+
+		err := verifier.ValidateTransaction(aTx, 100, false, []uint32{1, unconfirmedParentHeight})
+		require.ErrorIs(t, err, errors.ErrTxPolicy)
+
+		require.Equal(t, 1, fake.rerunCalls)
+		require.True(t, fake.rerunConsensus)
+		require.True(t, fake.rerunDeadline, "the re-run must be bounded by maxnonstdtxvalidationduration")
+		// The candidate height, as block validation would see it, not the tip height
+		// policy mode hands BDK.
+		require.Equal(t, int32(100), fake.rerunBlockHeight)
+		// Unconfirmed parents stay at the candidate height: as mempoolHeight a
+		// consensus run would reject them as unconfirmed-input-in-block.
+		require.Equal(t, []int32{1, 100}, fake.rerunUtxoHeights)
+	})
+
+	t.Run("fails in consensus mode: TxInvalid", func(t *testing.T) {
+		verifier, fake := newVerifier(policyScriptErr, bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW))
+
+		err := verifier.ValidateTransaction(aTx, 100, false, []uint32{1, 2})
+		require.ErrorIs(t, err, errors.ErrTxInvalid)
+		require.False(t, errors.Is(err, errors.ErrTxPolicy), "a consensus failure must not be published as consensus-valid: %v", err)
+		require.Equal(t, 1, fake.rerunCalls)
+	})
+
+	t.Run("times out: TxPolicy", func(t *testing.T) {
+		// sv-node rejects a timed-out re-check without a ban score. Subtree validation
+		// still validates every tx it takes from the policy-rejected cache.
+		verifier, _ := newVerifier(policyScriptErr, &bdkscript.CancelledError{})
+
+		err := verifier.ValidateTransaction(aTx, 100, false, []uint32{1, 2})
+		require.ErrorIs(t, err, errors.ErrTxPolicy)
+		require.False(t, errors.Is(err, errors.ErrProcessing))
+	})
+
+	t.Run("no free re-run slot: TxPolicy without a re-run", func(t *testing.T) {
+		verifier, fake := newVerifier(policyScriptErr, nil)
+		verifier.rerunSlots <- struct{}{}
+
+		err := verifier.ValidateTransaction(aTx, 100, false, []uint32{1, 2})
+		require.ErrorIs(t, err, errors.ErrTxPolicy)
+		require.Zero(t, fake.rerunCalls)
+	})
+
+	t.Run("stack size in the re-run", func(t *testing.T) {
+		genesis := chaincfg.TestNetParams.GenesisActivationHeight
+		stackErr := bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_STACK_SIZE)
+
+		// Post-Genesis, STACK_SIZE in the re-run is the policy stack memory cap.
+		verifier, _ := newVerifier(policyScriptErr, stackErr)
+		err := verifier.ValidateTransaction(aTx, genesis+100, false, []uint32{genesis + 1, genesis + 2})
+		require.ErrorIs(t, err, errors.ErrTxPolicy)
+
+		// On a pre-Genesis UTXO it can be the 1000-element consensus limit.
+		verifier, _ = newVerifier(policyScriptErr, stackErr)
+		err = verifier.ValidateTransaction(aTx, genesis+100, false, []uint32{genesis + 1, genesis - 1})
+		require.ErrorIs(t, err, errors.ErrTxInvalid)
+		require.False(t, errors.Is(err, errors.ErrTxPolicy), "%v", err)
+	})
+
+	t.Run("pre-Genesis stack size with no free slot: TxInvalid", func(t *testing.T) {
+		genesis := chaincfg.TestNetParams.GenesisActivationHeight
+		verifier, fake := newVerifier(bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_STACK_SIZE), nil)
+		verifier.rerunSlots <- struct{}{}
+
+		err := verifier.ValidateTransaction(aTx, genesis+100, false, []uint32{genesis - 1})
+		require.ErrorIs(t, err, errors.ErrTxInvalid)
+		require.False(t, errors.Is(err, errors.ErrTxPolicy), "%v", err)
+		require.Zero(t, fake.rerunCalls)
+	})
+
+	t.Run("post-Genesis stack size: TxPolicy without a re-run", func(t *testing.T) {
+		// The re-run has the same stack memory cap, so it could only report policy again.
+		genesis := chaincfg.TestNetParams.GenesisActivationHeight
+		verifier, fake := newVerifier(bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_STACK_SIZE), nil)
+
+		err := verifier.ValidateTransaction(aTx, genesis+100, false, []uint32{genesis + 1})
+		require.ErrorIs(t, err, errors.ErrTxPolicy)
+		require.Zero(t, fake.rerunCalls)
+	})
+
+	t.Run("engine fault in the re-run: Processing", func(t *testing.T) {
+		verifier, _ := newVerifier(policyScriptErr, bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_CGO_EXCEPTION))
+
+		err := verifier.ValidateTransaction(aTx, 100, false, []uint32{1, 2})
+		require.ErrorIs(t, err, errors.ErrProcessing)
+		require.False(t, errors.Is(err, errors.ErrTxPolicy))
+	})
+
+	t.Run("not re-run", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			err       error
+			consensus bool
+		}{
+			"consensus mode":        {err: policyScriptErr, consensus: true},
+			"non-policy script err": {err: bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_EVAL_FALSE)},
+			"policy DoS err":        {err: bdkscript.NewDoSError(bdkscript.DOS_ERR_INSUFFICIENT_FEE)},
+		} {
+			t.Run(name, func(t *testing.T) {
+				verifier, fake := newVerifier(tc.err, nil)
+
+				require.Error(t, verifier.ValidateTransaction(aTx, 100, tc.consensus, []uint32{1, 2}))
+				require.Zero(t, fake.rerunCalls)
+			})
+		}
+	})
 }
 
 func TestScriptVerifierGoBDKValidateTransactionCallsBDKValidateTransaction(t *testing.T) {
@@ -194,11 +347,13 @@ func TestScriptVerifierGoBDKValidateTransactionRejectsCoinbaseBeforeBDK(t *testi
 func TestScriptVerifierGoBDKMapDoSErrors(t *testing.T) {
 	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
 
+	// Only codes inside the range this build knows. DOS_ERR_OK and an
+	// out-of-range code are not verdicts and are pinned separately by
+	// TestScriptVerifierGoBDKClassifiesOutOfRangeDoSCodeAsNodeFault.
 	tests := []struct {
 		code       bdkscript.DoSErrorCode
 		wantPolicy bool
 	}{
-		{code: bdkscript.DOS_ERR_OK},
 		{code: bdkscript.DOS_ERR_NULL_PREVOUT},
 		{code: bdkscript.DOS_ERR_P2SH_OUTPUT_POST_GENESIS},
 		{code: bdkscript.DOS_ERR_SIGOPS_CONSENSUS},
@@ -217,7 +372,6 @@ func TestScriptVerifierGoBDKMapDoSErrors(t *testing.T) {
 		{code: bdkscript.DOS_ERR_INPUT_VALUES_OUT_OF_RANGE},
 		{code: bdkscript.DOS_ERR_INPUTS_BELOW_OUTPUTS},
 		{code: bdkscript.DOS_ERR_INSUFFICIENT_FEE, wantPolicy: true},
-		{code: bdkscript.DoSErrorCode(999)},
 	}
 
 	for _, tt := range tests {
@@ -234,6 +388,90 @@ func TestScriptVerifierGoBDKMapDoSErrors(t *testing.T) {
 	// (e.g. RPC reject-reason mapping) can identify the policy-floor rejection.
 	feeErr := verifier.mapBDKValidationError(bdkscript.NewDoSError(bdkscript.DOS_ERR_INSUFFICIENT_FEE), false)
 	assert.Contains(t, feeErr.Error(), "transaction fee is too low")
+}
+
+// TestScriptVerifierGoBDKClassifiesOutOfRangeDoSCodeAsNodeFault pins the
+// fail-safe one level below the error-domain boundary.
+//
+// A DoS code outside the range this build knows is a value this node cannot
+// interpret, exactly like an unrecognised error domain. Returning a verdict for
+// it would let a policy-class DOS_ERR_* that BDK adds later read as a hard
+// consensus violation at SubtreeValidation.go and check_block_subtrees.go, and
+// condemn a block on a rule this node never evaluated.
+//
+// The sentinels are deliberately included: DOS_ERR_OK is "no failure" and
+// DOS_ERR_COUNT is an enum bound, so neither is a verdict about a transaction.
+func TestScriptVerifierGoBDKClassifiesOutOfRangeDoSCodeAsNodeFault(t *testing.T) {
+	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
+
+	for _, code := range []bdkscript.DoSErrorCode{
+		bdkscript.DOS_ERR_OK,
+		bdkscript.DOS_ERR_COUNT,
+		bdkscript.DoSErrorCode(999),
+		bdkscript.DoSErrorCode(-1),
+	} {
+		for _, consensus := range []bool{false, true} {
+			t.Run(fmt.Sprintf("dos_code_%d_consensus_%t", code, consensus), func(t *testing.T) {
+				got := verifier.mapBDKValidationError(bdkscript.NewDoSError(code), consensus)
+
+				require.ErrorIs(t, got, errors.ErrProcessing)
+				require.False(t, errors.Is(got, errors.ErrTxInvalid),
+					"a DoS code this build cannot interpret must never become a transaction verdict")
+				require.False(t, errors.Is(got, errors.ErrTxPolicy))
+			})
+		}
+	}
+}
+
+// capturingT records the Logf calls a logger makes so a test can assert on a
+// specific line. ulogger.UnifiedTestLogger routes every level through
+// TestingT.Logf, and its default level (Info) lets Warnf through.
+type capturingT struct{ lines []string }
+
+func (c *capturingT) Errorf(string, ...interface{}) {}
+func (c *capturingT) FailNow()                      {}
+func (c *capturingT) Logf(format string, args ...any) {
+	c.lines = append(c.lines, fmt.Sprintf(format, args...))
+}
+
+// TestScriptVerifierGoBDKLogsABIErrorDistinctly is what makes the ABIError branch
+// discriminable.
+//
+// That branch returns the same class as the unknown-domain catch-all, so no
+// assertion on the returned error can tell whether the branch ran. Without this
+// test, deleting it leaves the whole suite green while a later reorder could send
+// ABI errors into the verdict path and condemn a valid block. The log line is
+// also the only ABI-specific operational signal this node emits.
+func TestScriptVerifierGoBDKLogsABIErrorDistinctly(t *testing.T) {
+	for _, code := range abiFailureCodes {
+		t.Run(fmt.Sprintf("abi_code_%d", code), func(t *testing.T) {
+			capt := &capturingT{}
+			verifier := &scriptVerifierGoBDK{logger: ulogger.NewUnifiedTestLogger(capt, t.Name(), "validator")}
+
+			got := verifier.mapBDKValidationError(bdkscript.NewABIError(code), false)
+			require.ErrorIs(t, got, errors.ErrProcessing)
+
+			logged := strings.Join(capt.lines, "\n")
+			require.Contains(t, logged, "BDK ABI error")
+			require.Contains(t, logged, fmt.Sprintf("code=%d", code))
+		})
+	}
+
+	// The other node-fault paths must NOT emit the ABI line, or it would not
+	// identify anything.
+	t.Run("not_emitted_for_other_node_faults", func(t *testing.T) {
+		capt := &capturingT{}
+		verifier := &scriptVerifierGoBDK{logger: ulogger.NewUnifiedTestLogger(capt, t.Name(), "validator")}
+
+		require.ErrorIs(t,
+			verifier.mapBDKValidationError(bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_CGO_EXCEPTION), false),
+			errors.ErrProcessing)
+		require.ErrorIs(t,
+			verifier.mapBDKValidationError(foreignError{msg: "unknown TxError domain=7 code=3"}, false),
+			errors.ErrProcessing)
+
+		require.NotContains(t, strings.Join(capt.lines, "\n"), "BDK ABI error")
+	})
 }
 
 // TestScriptVerifierGoBDKSurfacesTheCauseOnce pins how the engine's own verdict
@@ -315,11 +553,11 @@ func TestScriptVerifierGoBDKMapScriptErrors(t *testing.T) {
 
 	policyCodes := []bdkscript.ScriptErrorCode{
 		bdkscript.SCRIPT_ERR_OP_COUNT,
-		bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW,
 		bdkscript.SCRIPT_ERR_SCRIPTNUM_MINENCODE,
 		bdkscript.SCRIPT_ERR_SCRIPT_SIZE,
 		bdkscript.SCRIPT_ERR_PUBKEY_COUNT,
 		bdkscript.SCRIPT_ERR_STACK_SIZE,
+		bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW,
 	}
 
 	for _, code := range policyCodes {
@@ -351,8 +589,108 @@ func TestScriptVerifierGoBDKMapScriptErrors(t *testing.T) {
 	}
 }
 
+// abiFailureCodes are the ABI error codes the binding actually emits.
+// ABI_ERR_OK (0) and ABI_ERR_COUNT (5) are enum sentinels, not failures, so they
+// are deliberately excluded; an out-of-range code is covered separately below.
+var abiFailureCodes = []bdkscript.ABIErrorCode{
+	bdkscript.ABI_ERR_LENGTH_NEGATIVE,
+	bdkscript.ABI_ERR_LENGTH_NOT_REPRESENTABLE,
+	bdkscript.ABI_ERR_NULL_BUFFER,
+	bdkscript.ABI_ERR_LENGTH_OVERFLOW,
+}
+
+// TestScriptVerifierGoBDKClassifiesABIErrorsAsNodeFaults pins the classification
+// the binding's own contract demands: an ABIError reports that the call could not
+// be expressed across the C boundary, so it says nothing about the transaction.
+// Classifying it as a verdict would let a local binding defect reject a
+// consensus-valid transaction — in block validation, a chain split.
+//
+// The classification is mode-independent: a call that could not be made is not a
+// verdict under consensus rules either.
+func TestScriptVerifierGoBDKClassifiesABIErrorsAsNodeFaults(t *testing.T) {
+	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
+
+	for _, code := range abiFailureCodes {
+		for _, consensus := range []bool{false, true} {
+			t.Run(fmt.Sprintf("abi_code_%d_consensus_%t", code, consensus), func(t *testing.T) {
+				got := verifier.mapBDKValidationError(bdkscript.NewABIError(code), consensus)
+
+				require.ErrorIs(t, got, errors.ErrProcessing)
+				require.False(t, errors.Is(got, errors.ErrTxInvalid), "an ABI error must never become a transaction verdict")
+				require.False(t, errors.Is(got, errors.ErrTxPolicy))
+			})
+		}
+	}
+}
+
+// TestScriptVerifierGoBDKKeepsABIErrorOpaque is the public-surface half: the
+// abi-* strings describe this node's binding, not the submitted transaction, so
+// none of them may cross the public error boundary. The expected message is
+// byte-identical to the CGO-exception one — the same node-fault class.
+func TestScriptVerifierGoBDKKeepsABIErrorOpaque(t *testing.T) {
+	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
+
+	for _, code := range abiFailureCodes {
+		for _, consensus := range []bool{false, true} {
+			t.Run(fmt.Sprintf("abi_code_%d_consensus_%t", code, consensus), func(t *testing.T) {
+				abiErr := bdkscript.NewABIError(code)
+				require.NotEmpty(t, abiErr.Error())
+
+				got := verifier.mapBDKValidationError(abiErr, consensus)
+
+				require.Equal(t, "PROCESSING (4): "+errMsgInvalidTx, errors.UserMessage(got))
+				require.NotContains(t, errors.UserMessage(got), abiErr.Error())
+			})
+		}
+	}
+}
+
+// TestScriptVerifierGoBDKClassifiesUnknownABICodeAsNodeFault pins that the branch
+// keys on the type, not on the set of codes: a code this build does not recognise
+// is still not a verdict.
+func TestScriptVerifierGoBDKClassifiesUnknownABICodeAsNodeFault(t *testing.T) {
+	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
+
+	got := verifier.mapBDKValidationError(bdkscript.NewABIError(bdkscript.ABIErrorCode(999)), false)
+
+	require.ErrorIs(t, got, errors.ErrProcessing)
+	require.False(t, errors.Is(got, errors.ErrTxInvalid))
+}
+
+// foreignError stands in for the value BDK's translateTxError returns for a
+// domain it does not recognise: a plain error that is neither a *errors.Error nor
+// any of the engine's three types. Declared here rather than built with
+// fmt.Errorf or the standard library's errors.New because the repo's linters
+// forbid both outside the errors package; what the test needs is only that the
+// value be foreign to this package.
+type foreignError struct{ msg string }
+
+func (e foreignError) Error() string { return e.msg }
+
+// TestScriptVerifierGoBDKClassifiesUnknownDomainErrorAsNodeFault covers the error
+// BDK's translateTxError returns for a domain it does not know: a plain error that
+// is none of the three engine types. It used to fall through to NewTxInvalidError,
+// making a value this node could not interpret into a verdict about a transaction
+// it never examined — so every future error domain re-opened the same hole.
+func TestScriptVerifierGoBDKClassifiesUnknownDomainErrorAsNodeFault(t *testing.T) {
+	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
+
+	for _, consensus := range []bool{false, true} {
+		t.Run(fmt.Sprintf("consensus_%t", consensus), func(t *testing.T) {
+			unknown := foreignError{msg: "unknown TxError domain=7 code=3"}
+
+			got := verifier.mapBDKValidationError(unknown, consensus)
+
+			require.ErrorIs(t, got, errors.ErrProcessing)
+			require.False(t, errors.Is(got, errors.ErrTxInvalid))
+			require.False(t, errors.Is(got, errors.ErrTxPolicy))
+			require.Equal(t, "PROCESSING (4): "+errMsgInvalidTx, errors.UserMessage(got))
+		})
+	}
+}
+
 func Test_ScriptVerificationGoBDK_invalid(t *testing.T) {
-	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams, 1)
 
 	for _, test := range testTxs {
 		tx, errTx := bt.NewTxFromString(test.ExtendedTx)
@@ -367,6 +705,234 @@ func Test_ScriptVerificationGoBDK_invalid(t *testing.T) {
 
 		err := verifier.ValidateTransaction(tx, test.BlockHeight, true, test.UTXOHeights)
 		require.Error(t, err, fmt.Sprintf("Failed tx with TXID %v", test.TxID))
+	}
+}
+
+// newPostChronicleSpendTx builds a transaction that spends one output with the
+// given locking script, created after Chronicle so the Chronicle opcodes are
+// active, and returns it with the block and UTXO heights to validate it at.
+func newPostChronicleSpendTx(t *testing.T, lockingScript, unlockingScript []byte) (*bt.Tx, uint32, []uint32) {
+	t.Helper()
+
+	chronicle := chaincfg.MainNetParams.ChronicleActivationHeight
+
+	return newSpendTx(t, lockingScript, unlockingScript), chronicle + 10, []uint32{chronicle + 1}
+}
+
+// newSpendTx builds a transaction that spends one output with the given locking
+// script.
+func newSpendTx(t *testing.T, lockingScript, unlockingScript []byte) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+	in := &bt.Input{
+		PreviousTxOutIndex: 0,
+		SequenceNumber:     bt.DefaultSequenceNumber,
+		PreviousTxSatoshis: 1000,
+		PreviousTxScript:   bscript.NewFromBytes(lockingScript),
+		UnlockingScript:    bscript.NewFromBytes(unlockingScript),
+	}
+	require.NoError(t, in.PreviousTxIDAddStr(testTxs[0].TxID))
+
+	tx.Inputs = append(tx.Inputs, in)
+	tx.Outputs = append(tx.Outputs, &bt.Output{
+		Satoshis:      500,
+		LockingScript: bscript.NewFromBytes([]byte{0x76, 0xa9, 0x88, 0xac}),
+	})
+
+	return tx
+}
+
+// TestScriptVerifierGoBDKRejectsInt64ScriptNumOverflow pins a consensus rule from
+// bitcoin-sv 1.2.3: a script number that does not fit in int64 is rejected with
+// SCRIPT_ERR_SCRIPTNUM_OVERFLOW. OP_LEFT reads its length operand as a non-big-int
+// script number, and GoBDK builds against earlier bitcoin-sv versions truncated a
+// 9-byte operand instead, so a later GoBDK pin cannot quietly undo the rule. Policy
+// mode must report it as TxInvalid too, or the transaction would be published as
+// consensus-valid on KAFKA_TX_POLICY_REJECTED.
+func TestScriptVerifierGoBDKRejectsInt64ScriptNumOverflow(t *testing.T) {
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, test.CreateBaseTestSettings(t).Policy, &chaincfg.MainNetParams, 1)
+
+	// Each unlocking script pushes "abc" and an OP_LEFT length; the locking script
+	// is OP_LEFT OP_DROP OP_1.
+	lockingScript := []byte{0xb4, 0x75, 0x51}
+
+	for _, consensus := range []bool{true, false} {
+		t.Run(fmt.Sprintf("consensus_%t", consensus), func(t *testing.T) {
+			t.Run("length that fits int64", func(t *testing.T) {
+				tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, lockingScript, []byte{0x03, 'a', 'b', 'c', 0x51})
+
+				require.NoError(t, verifier.ValidateTransaction(tx, blockHeight, consensus, utxoHeights))
+			})
+
+			t.Run("9-byte length", func(t *testing.T) {
+				// 2^64 + 1, minimally encoded
+				tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, lockingScript,
+					[]byte{0x03, 'a', 'b', 'c', 0x09, 0x01, 0, 0, 0, 0, 0, 0, 0, 0x01})
+
+				err := verifier.ValidateTransaction(tx, blockHeight, consensus, utxoHeights)
+				require.ErrorIs(t, err, errors.ErrTxInvalid)
+				require.False(t, errors.Is(err, errors.ErrTxPolicy), "an int64 overflow is a consensus failure: %v", err)
+				require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW).Error())
+			})
+		})
+	}
+}
+
+// TestScriptVerifierGoBDKClassifiesScriptNumOverPolicyLengthAsPolicy covers a
+// script number longer than maxscriptnumlengthpolicy but within int64. It is
+// consensus-valid, so policy mode must report TxPolicy, which publishes it to
+// KAFKA_TX_POLICY_REJECTED.
+func TestScriptVerifierGoBDKClassifiesScriptNumOverPolicyLengthAsPolicy(t *testing.T) {
+	policy := test.CreateBaseTestSettings(t).Policy
+	policy.MaxScriptNumLengthPolicy = 5
+
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, policy, &chaincfg.MainNetParams, 1)
+
+	// The unlocking script pushes a 6-byte number; the locking script is
+	// OP_1ADD OP_DROP OP_1.
+	tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, []byte{0x8b, 0x75, 0x51},
+		[]byte{0x06, 0x01, 0, 0, 0, 0, 0x01})
+
+	require.NoError(t, verifier.ValidateTransaction(tx, blockHeight, true, utxoHeights))
+
+	err := verifier.ValidateTransaction(tx, blockHeight, false, utxoHeights)
+	require.ErrorIs(t, err, errors.ErrTxPolicy)
+	require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW).Error())
+}
+
+// TestScriptVerifierGoBDKClassifiesPreGenesisOpCountAsInvalid covers an error
+// code that is policy-class post-Genesis but a consensus failure on a pre-Genesis
+// UTXO: more than 500 ops in a script. Policy mode must not report it as TxPolicy.
+func TestScriptVerifierGoBDKClassifiesPreGenesisOpCountAsInvalid(t *testing.T) {
+	// Testnet does not require standard inputs, so BDK reaches script execution.
+	params := &chaincfg.TestNetParams
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, test.CreateBaseTestSettings(t).Policy, params, 1)
+
+	lockingScript := bytes.Repeat([]byte{0x61}, 501) // 501 x OP_NOP
+	tx := newSpendTx(t, lockingScript, []byte{0x51})
+	blockHeight := params.GenesisActivationHeight + 100
+	utxoHeights := []uint32{params.GenesisActivationHeight - 100}
+
+	for _, consensus := range []bool{true, false} {
+		t.Run(fmt.Sprintf("consensus_%t", consensus), func(t *testing.T) {
+			err := verifier.ValidateTransaction(tx, blockHeight, consensus, utxoHeights)
+			require.ErrorIs(t, err, errors.ErrTxInvalid)
+			require.False(t, errors.Is(err, errors.ErrTxPolicy), "a pre-Genesis op-count failure is a consensus failure: %v", err)
+			require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_OP_COUNT).Error())
+		})
+	}
+}
+
+// TestScriptVerifierGoBDKBoundsTheConsensusReRun checks that
+// maxnonstdtxvalidationduration cancels the consensus re-run in BDK. The script
+// fails policy at its eleventh op, then runs 200,000 hashes under consensus limits
+// before it fails there too.
+func TestScriptVerifierGoBDKBoundsTheConsensusReRun(t *testing.T) {
+	// 200,000 x OP_SHA256, then OP_DROP OP_0
+	lockingScript := append(bytes.Repeat([]byte{0xa8}, 200_000), 0x75, 0x00)
+	tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, lockingScript, []byte{0x51})
+
+	newVerifier := func(durationMillis int) bdkValidator {
+		policy := test.CreateBaseTestSettings(t).Policy
+		policy.MaxOpsPerScriptPolicy = 10
+		policy.MaxNonStdTxValidationDuration = durationMillis
+
+		return newScriptVerifierGoBDK(ulogger.TestLogger{}, policy, &chaincfg.MainNetParams, 1)
+	}
+
+	t.Run("unbounded re-run finds the consensus failure", func(t *testing.T) {
+		err := newVerifier(0).ValidateTransaction(tx, blockHeight, false, utxoHeights)
+		require.ErrorIs(t, err, errors.ErrTxInvalid)
+		require.False(t, errors.Is(err, errors.ErrTxPolicy), "%v", err)
+		require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_EVAL_FALSE).Error())
+	})
+
+	t.Run("bounded re-run is cancelled and reports policy", func(t *testing.T) {
+		start := time.Now()
+		err := newVerifier(1).ValidateTransaction(tx, blockHeight, false, utxoHeights)
+		require.ErrorIs(t, err, errors.ErrTxPolicy)
+		require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_OP_COUNT).Error())
+		require.Less(t, time.Since(start), time.Second)
+	})
+}
+
+// TestScriptVerifierGoBDKCapsTheConsensusReRunStackMemory checks that the re-run
+// is held to maxstackmemoryusagepolicy rather than the consensus limit, which is
+// unlimited by default. Otherwise a transaction failing policy at its first op
+// could make the re-run allocate without bound. The script fails policy at
+// OP_1ADD, then copies a 20 KB number 100 times before it fails consensus too.
+func TestScriptVerifierGoBDKCapsTheConsensusReRunStackMemory(t *testing.T) {
+	num := bytes.Repeat([]byte{0x01}, 20_000)
+	unlockingScript := append([]byte{0x4d, byte(len(num)), byte(len(num) >> 8)}, num...) // OP_PUSHDATA2
+	// OP_1ADD, 100 x OP_DUP, OP_0
+	lockingScript := append(append([]byte{0x8b}, bytes.Repeat([]byte{0x76}, 100)...), 0x00)
+	tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, lockingScript, unlockingScript)
+
+	policy := test.CreateBaseTestSettings(t).Policy
+	policy.MaxStackMemoryUsageConsensus = 0 // unlimited
+	policy.MaxStackMemoryUsagePolicy = 1_000_000
+
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, policy, &chaincfg.MainNetParams, 1)
+
+	// Unlimited in consensus mode: the script runs to its end.
+	err := verifier.ValidateTransaction(tx, blockHeight, true, utxoHeights)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_EVAL_FALSE).Error())
+
+	// The re-run stops at the policy stack limit and reports policy.
+	err = verifier.ValidateTransaction(tx, blockHeight, false, utxoHeights)
+	require.ErrorIs(t, err, errors.ErrTxPolicy)
+	require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_STACK_SIZE).Error())
+}
+
+// TestScriptVerifierGoBDKClassifiesPreGenesisStackSizeAsInvalid covers the
+// pre-Genesis 1000-element stack limit, a consensus failure that BDK reports with
+// the same code as the stack memory cap.
+func TestScriptVerifierGoBDKClassifiesPreGenesisStackSizeAsInvalid(t *testing.T) {
+	params := &chaincfg.TestNetParams
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, test.CreateBaseTestSettings(t).Policy, params, 1)
+
+	tx := newSpendTx(t, []byte{0x51}, bytes.Repeat([]byte{0x51}, 1001)) // 1002 x OP_1
+
+	err := verifier.ValidateTransaction(tx, params.GenesisActivationHeight+100, false, []uint32{params.GenesisActivationHeight - 100})
+	require.ErrorIs(t, err, errors.ErrTxInvalid)
+	require.False(t, errors.Is(err, errors.ErrTxPolicy), "a pre-Genesis stack size failure is a consensus failure: %v", err)
+	require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_STACK_SIZE).Error())
+}
+
+// TestScriptVerifierGoBDKRejectsSplitPastInt32Max covers OP_SPLIT with a position
+// above INT32_MAX. bitcoin-sv 1.2.3 bounds the position by INT32_MAX as well as by
+// the element size, which only changes the outcome for elements longer than
+// INT32_MAX bytes; bitcoin-sv's op_split_int32_max covers that with a 2 GiB stack
+// element. On an ordinary element both bounds reject the position, so this test
+// passes against earlier GoBDK pins too.
+func TestScriptVerifierGoBDKRejectsSplitPastInt32Max(t *testing.T) {
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, test.CreateBaseTestSettings(t).Policy, &chaincfg.MainNetParams, 1)
+
+	// Each unlocking script pushes "abc" and a split position; the locking script
+	// is OP_SPLIT OP_2DROP OP_1.
+	lockingScript := []byte{0x7f, 0x6d, 0x51}
+
+	for _, consensus := range []bool{true, false} {
+		t.Run(fmt.Sprintf("consensus_%t", consensus), func(t *testing.T) {
+			t.Run("position inside the element", func(t *testing.T) {
+				tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, lockingScript, []byte{0x03, 'a', 'b', 'c', 0x51})
+
+				require.NoError(t, verifier.ValidateTransaction(tx, blockHeight, consensus, utxoHeights))
+			})
+
+			t.Run("position 2^31", func(t *testing.T) {
+				// INT32_MAX + 1, minimally encoded; the trailing 0x00 keeps it positive
+				tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, lockingScript,
+					[]byte{0x03, 'a', 'b', 'c', 0x05, 0, 0, 0, 0x80, 0})
+
+				err := verifier.ValidateTransaction(tx, blockHeight, consensus, utxoHeights)
+				require.ErrorIs(t, err, errors.ErrTxInvalid)
+				require.False(t, errors.Is(err, errors.ErrTxPolicy))
+				require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_INVALID_SPLIT_RANGE).Error())
+			})
+		})
 	}
 }
 
@@ -458,4 +1024,158 @@ func TestSubstituteUnconfirmedHeights_EmptySlice(t *testing.T) {
 	in := []uint32{}
 	out := substituteUnconfirmedHeights(in, 500, true)
 	require.Equal(t, in, out)
+}
+
+// The extended-serialisation length identity, and the helpers that state it.
+//
+// ScriptVerifierGoBDK.go:285 hands BDK tx.ExtendedBytes(). Both this node and the
+// BDK parser assume the extended representation is the bare one plus a fixed
+// marker plus a fixed per-input overhead:
+//
+//	extended = bare + 6 + Σᵢ (8 + varint(sᵢ) + sᵢ)
+//
+// where sᵢ is the length of input i's previous locking script. The 6 bytes are
+// the marker 00 00 00 00 00 EF and the 8 are the previous output's satoshi value.
+// The helpers below are test-only: nothing in the production path computes a
+// length, and nothing should start to on their account.
+
+// extendedOverhead returns the bytes the extended serialisation adds to the bare
+// one for inputs whose previous locking scripts have the given lengths. A nil
+// previous script contributes a length of 0, because go-bt writes a single 0x00
+// for it, which is exactly varint(0).
+func extendedOverhead(prevScriptLens []int) int {
+	overhead := 6 // the extended marker, 00 00 00 00 00 EF
+
+	for _, s := range prevScriptLens {
+		overhead += 8 + bt.VarInt(uint64(s)).Length() + s
+	}
+
+	return overhead
+}
+
+// extendedTxSize computes len(tx.ExtendedBytes()) without serialising anything.
+func extendedTxSize(tx *bt.Tx) int {
+	prevScriptLens := make([]int, 0, len(tx.Inputs))
+
+	for _, in := range tx.Inputs {
+		if in.PreviousTxScript == nil {
+			prevScriptLens = append(prevScriptLens, 0)
+		} else {
+			prevScriptLens = append(prevScriptLens, len(*in.PreviousTxScript))
+		}
+	}
+
+	return tx.Size() + extendedOverhead(prevScriptLens)
+}
+
+// newSyntheticExtendedTx builds a transaction with one input per entry of
+// prevScriptLens; a negative entry leaves that input's PreviousTxScript nil.
+func newSyntheticExtendedTx(t *testing.T, prevScriptLens []int) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+
+	for _, l := range prevScriptLens {
+		in := &bt.Input{
+			PreviousTxOutIndex: 0,
+			SequenceNumber:     bt.DefaultSequenceNumber,
+			PreviousTxSatoshis: 1000,
+			UnlockingScript:    bscript.NewFromBytes([]byte{0x51}),
+		}
+		require.NoError(t, in.PreviousTxIDAddStr(coinbaseTxID))
+
+		if l >= 0 {
+			in.PreviousTxScript = bscript.NewFromBytes(make([]byte, l))
+		}
+
+		tx.Inputs = append(tx.Inputs, in)
+	}
+
+	tx.Outputs = append(tx.Outputs, &bt.Output{
+		Satoshis:      500,
+		LockingScript: bscript.NewFromBytes([]byte{0x76, 0xa9, 0x88, 0xac}),
+	})
+
+	return tx
+}
+
+// TestExtendedTxSizeMatchesSerialiser asserts the identity against the serialiser
+// teranode actually pins, over real transactions and over synthetic ones sitting
+// on both varint transitions a corpus can reach (1→3 bytes at 253, 3→5 at 65536).
+// The 5→9 transition needs a 4 GiB previous locking script and is asserted
+// arithmetically instead — see TestExtendedOverheadVarIntFiveToNineTransition.
+func TestExtendedTxSizeMatchesSerialiser(t *testing.T) {
+	for _, test := range testTxs {
+		t.Run("real_tx_"+test.TxID, func(t *testing.T) {
+			tx, err := bt.NewTxFromString(test.ExtendedTx)
+			require.NoError(t, err)
+
+			require.Equal(t, len(tx.ExtendedBytes()), extendedTxSize(tx))
+		})
+	}
+
+	synthetic := []struct {
+		name           string
+		prevScriptLens []int
+	}{
+		{name: "empty_script", prevScriptLens: []int{0}},
+		{name: "one_byte_script", prevScriptLens: []int{1}},
+		{name: "varint_1_byte_max", prevScriptLens: []int{252}},
+		{name: "varint_3_byte_min", prevScriptLens: []int{253}},
+		{name: "varint_3_byte_max", prevScriptLens: []int{65535}},
+		{name: "varint_5_byte_min", prevScriptLens: []int{65536}},
+		{name: "nil_previous_script", prevScriptLens: []int{-1}},
+		{name: "multi_input_mix", prevScriptLens: []int{-1, 0, 1, 252, 253, 65535, 65536}},
+	}
+
+	for _, tt := range synthetic {
+		t.Run("synthetic_"+tt.name, func(t *testing.T) {
+			tx := newSyntheticExtendedTx(t, tt.prevScriptLens)
+
+			require.Equal(t, len(tx.ExtendedBytes()), extendedTxSize(tx))
+		})
+	}
+}
+
+// TestExtendedOverheadAtLengthBoundaries states the arithmetic at the total
+// lengths that matter to the C boundary: the issue's own construction, and totals
+// sitting exactly on and just past INT32_MAX and UINT32_MAX. It tests the size
+// arithmetic only — no transaction of this size is built, and the boundary itself
+// is proven on the bdk side.
+func TestExtendedOverheadAtLengthBoundaries(t *testing.T) {
+	// The issue's construction: three inputs, 720,000,000-byte previous locking
+	// scripts, a 143-byte bare transaction.
+	require.Equal(t, 2160000188, 143+extendedOverhead([]int{720000000, 720000000, 720000000}))
+
+	// One input, a 143-byte bare transaction: total = 143 + 6 + 8 + 5 + s.
+	tests := []struct {
+		name      string
+		scriptLen int
+		wantTotal int
+	}{
+		{name: "total_at_int32_max", scriptLen: 2147483485, wantTotal: math.MaxInt32},
+		{name: "total_past_int32_max", scriptLen: 2147483486, wantTotal: math.MaxInt32 + 1},
+		{name: "total_at_uint32_max", scriptLen: 4294967133, wantTotal: math.MaxUint32},
+		{name: "total_past_uint32_max", scriptLen: 4294967134, wantTotal: math.MaxUint32 + 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, 5, bt.VarInt(uint64(tt.scriptLen)).Length())
+			require.Equal(t, tt.wantTotal, 143+extendedOverhead([]int{tt.scriptLen}))
+		})
+	}
+}
+
+// TestExtendedOverheadVarIntFiveToNineTransition closes the one varint transition
+// a corpus cannot reach: it needs a previous locking script of MaxUint32+1 bytes,
+// a 4 GiB allocation. The real serialiser is deliberately NOT exercised here —
+// this asserts only that the helper charges what the pinned go-bt VarInt.Length()
+// charges on either side of the transition.
+func TestExtendedOverheadVarIntFiveToNineTransition(t *testing.T) {
+	require.Equal(t, 5, bt.VarInt(uint64(math.MaxUint32)).Length())
+	require.Equal(t, 6+8+5+math.MaxUint32, extendedOverhead([]int{math.MaxUint32}))
+
+	require.Equal(t, 9, bt.VarInt(uint64(math.MaxUint32+1)).Length())
+	require.Equal(t, 6+8+9+math.MaxUint32+1, extendedOverhead([]int{math.MaxUint32 + 1}))
 }

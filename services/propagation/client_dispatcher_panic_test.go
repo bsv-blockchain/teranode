@@ -55,7 +55,10 @@ func TestProcessTransactionBatch_DispatcherPanic(t *testing.T) {
 
 	require.NoError(t, group.Wait(context.Background(), 0))
 
-	for _, item := range batch {
-		require.Error(t, item.result)
+	// The sweep is shared (util.SignalBatchPanic); the error text it builds must
+	// stay "panic in <fnName>: <recovered>", as the hand-rolled sweep produced.
+	for i, item := range batch {
+		require.Error(t, item.result, "batch item %d must be completed, not stranded", i)
+		require.Contains(t, item.result.Error(), "panic in ProcessTransactionBatch")
 	}
 }

@@ -209,7 +209,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Try to call it (will likely error but might hit some lines)
@@ -327,6 +327,12 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		assert.False(t, valid)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no coinbase tx")
+		// bitcoin-sv/teranode#4692: a missing coinbase in an unbound received body is a body-integrity
+		// failure classified CORRUPT (re-download + strike), not Incomplete (which poisoned as a
+		// false "floater" when caught up). Corrupt matches neither ErrBlockInvalid nor
+		// ErrBlockIncomplete, so it is never persisted invalid.
+		require.True(t, errors.IsBlockCorrupt(err), "nil coinbase must be classified corrupt, not incomplete/invalid")
+		require.False(t, errors.Is(err, errors.ErrBlockIncomplete), "nil coinbase must no longer be ErrBlockIncomplete")
 	})
 
 	t.Run("block with median timestamp validation", func(t *testing.T) {
@@ -444,22 +450,18 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 // TestBlock_Valid_CoinbaseScriptSigLength pins the coinbase scriptSig length check in Block.Valid.
 // Parity with bitcoin-sv CheckCoinbase (bad-cb-length): valid iff 2 <= size <= MaxCoinbaseScriptSigSize,
 // inclusive. See GitHub issue #1141.
+//
+// It also pins the check's CLASSIFICATION (bitcoin-sv/teranode#4692): the check
+// runs after the merkle binding, so on a bound body a bad length is genuine consensus invalidity
+// (condemn once), while on an unbound body it stays corrupt (re-download, never poison).
 func TestBlock_Valid_CoinbaseScriptSigLength(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	maxLen := int(tSettings.ChainCfgParams.MaxCoinbaseScriptSigSize)
 
-	// buildBlock returns a coinbase-only, otherwise-valid block whose coinbase scriptSig is
-	// either a controlled byte length (setNil == false) or a nil UnlockingScript (setNil == true).
-	// Height 0 skips BIP-34 and the reward/fee checks; nil subtreeStore/txMetaStore skip the
-	// subtree and order/blessed checks; empty currentChain skips the median-time-past check.
-	buildBlock := func(t *testing.T, n int, setNil bool) *Block {
+	// buildCoinbase returns the shared coinbase fixture whose scriptSig is either a controlled byte
+	// length (setNil == false) or a nil UnlockingScript (setNil == true).
+	buildCoinbase := func(t *testing.T, n int, setNil bool) *bt.Tx {
 		t.Helper()
-
-		blockHeaderBytes, err := hex.DecodeString(block1Header)
-		require.NoError(t, err)
-
-		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
-		require.NoError(t, err)
 
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
@@ -470,10 +472,39 @@ func TestBlock_Valid_CoinbaseScriptSigLength(t *testing.T) {
 			coinbase.Inputs[0].UnlockingScript = bscript.NewFromBytes(make([]byte, n))
 		}
 
-		// The swapped coinbase must still be recognised as a coinbase for step 4b to fire.
+		// The swapped coinbase must still be recognised as a coinbase for the check to fire.
 		require.True(t, coinbase.IsCoinbase())
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
+		return coinbase
+	}
+
+	// buildBoundBlock returns a coinbase-only, otherwise-valid block whose header merkle root is the
+	// coinbase txid — the identity that holds for a single-transaction block — so the body is BOUND.
+	// Height 0 skips BIP-34 and the reward/fee checks; nil subtreeStore/txMetaStore skip the subtree
+	// and order/blessed checks; empty currentChain skips the median-time-past check. The header is
+	// mined against the coinbase because changing the scriptSig changes the coinbase txid.
+	buildBoundBlock := func(t *testing.T, n int, setNil bool) *Block {
+		t.Helper()
+
+		coinbase := buildCoinbase(t, n, setNil)
+
+		block, err := NewBlock(minedHeaderVersion(t, 1, coinbase.TxIDChainHash()), coinbase,
+			[]*chainhash.Hash{}, 1, 123, 0, 0)
+		require.NoError(t, err)
+
+		return block
+	}
+
+	// buildUnboundBlock returns a block that declares subtrees but is validated with no subtree
+	// store, so CheckMerkleRoot never runs and the body is never bound to the header.
+	buildUnboundBlock := func(t *testing.T, n int) *Block {
+		t.Helper()
+
+		coinbase := buildCoinbase(t, n, false)
+		subtreeHash := chainhash.Hash{0x01}
+
+		block, err := NewBlock(minedHeaderVersion(t, 1, coinbase.TxIDChainHash()), coinbase,
+			[]*chainhash.Hash{&subtreeHash}, 2, 123, 0, 0)
 		require.NoError(t, err)
 
 		return block
@@ -487,39 +518,53 @@ func TestBlock_Valid_CoinbaseScriptSigLength(t *testing.T) {
 	}
 
 	t.Run("too short (length 1) is rejected", func(t *testing.T) {
-		valid, err := callValid(t, buildBlock(t, 1, false))
+		valid, err := callValid(t, buildBoundBlock(t, 1, false))
 		require.False(t, valid)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "bad coinbase length")
+		// A bound body's coinbase IS the miner's committed coinbase, so a bad length on it is
+		// genuine consensus invalidity, condemnable once.
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		require.False(t, errors.IsBlockCorrupt(err))
 	})
 
 	t.Run("too long (length Max+1) is rejected", func(t *testing.T) {
-		valid, err := callValid(t, buildBlock(t, maxLen+1, false))
+		valid, err := callValid(t, buildBoundBlock(t, maxLen+1, false))
 		require.False(t, valid)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "bad coinbase length")
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		require.False(t, errors.IsBlockCorrupt(err))
 	})
 
 	t.Run("boundary low (length exactly 2) passes", func(t *testing.T) {
-		valid, err := callValid(t, buildBlock(t, 2, false))
+		valid, err := callValid(t, buildBoundBlock(t, 2, false))
 		require.NoError(t, err)
 		require.True(t, valid)
 	})
 
 	t.Run("boundary high (length exactly Max) passes", func(t *testing.T) {
-		valid, err := callValid(t, buildBlock(t, maxLen, false))
+		valid, err := callValid(t, buildBoundBlock(t, maxLen, false))
 		require.NoError(t, err)
 		require.True(t, valid)
 	})
 
 	t.Run("nil unlocking script is rejected", func(t *testing.T) {
-		valid, err := callValid(t, buildBlock(t, 0, true))
+		valid, err := callValid(t, buildBoundBlock(t, 0, true))
 		require.False(t, valid)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "bad coinbase length")
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		require.False(t, errors.IsBlockCorrupt(err))
+	})
+
+	t.Run("unbound body with a bad length stays corrupt (never poisoned)", func(t *testing.T) {
+		valid, err := callValid(t, buildUnboundBlock(t, 1))
+		require.False(t, valid)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "bad coinbase length")
+		require.True(t, errors.IsBlockCorrupt(err), "an unbound bad-cb-length body must be corrupt, got: %v", err)
+		require.False(t, errors.Is(err, errors.ErrBlockInvalid), "an unbound body must never be poisoned")
 	})
 }
 
@@ -1334,12 +1379,16 @@ func TestMedianTimestamp(t *testing.T) {
 }
 
 func TestBlock_ValidWithOneTransaction(t *testing.T) {
-	blockHeaderBytes, _ := hex.DecodeString(block1Header)
-	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
-	require.NoError(t, err)
-
 	coinbase, err := bt.NewTxFromString(CoinbaseHex)
 	require.NoError(t, err)
+
+	// A one-transaction block's merkle root IS its coinbase txid, so the header must be built
+	// against this coinbase for the body to be the coinbase-only block this test claims to
+	// validate. Block.Valid checks that identity and rejects a mismatched pair as corrupt.
+	// Anchor on the regtest genesis so the header satisfies BOTH constraints: its merkle root
+	// is the coinbase txid (the coinbase-only binding rule) and its parent is the regtest
+	// genesis the contextual-window check requires (issue 1467).
+	blockHeader := minedHeaderOnParent(t, 1, coinbase.TxIDChainHash(), regtestGenesisHeader(t).Hash())
 
 	b, err := NewBlock(
 		blockHeader,
@@ -1620,7 +1669,9 @@ func TestBlock_Valid_DupTxDetected_NilSubtreeStore(t *testing.T) {
 	valid, err := b.Valid(context.Background(), ulogger.TestLogger{}, nil, nil, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
 	require.False(t, valid)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected ErrBlockInvalid, got %v", err)
+	// bitcoin-sv/teranode#4692: duplicate tx is body-derived corruption → corrupt, not invalid.
+	require.True(t, errors.IsBlockCorrupt(err), "expected ErrBlockCorrupt, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "duplicate transaction")
 }
 
@@ -2218,7 +2269,7 @@ func TestBlock_CheckBlockRewardAndFees(t *testing.T) {
 		// and the below-checkpoint skip does not fire — this genuinely exercises the reward
 		// arithmetic: the height-1 coinbase claims exactly the 50 BTC subsidy, so it is valid.
 		params := &chaincfg.Params{SubsidyReductionInterval: 210000}
-		err = block.checkBlockRewardAndFees(params, true, true)
+		err = block.checkBlockRewardAndFees(params, true, true, true)
 		require.NoError(t, err)
 	})
 
@@ -2242,7 +2293,7 @@ func TestBlock_CheckBlockRewardAndFees(t *testing.T) {
 		}
 
 		params := &chaincfg.Params{SubsidyReductionInterval: 210000}
-		err = block.checkBlockRewardAndFees(params, true, true)
+		err = block.checkBlockRewardAndFees(params, true, true, true)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "overflow")
 	})
@@ -2344,12 +2395,21 @@ func TestCheckBlockRewardAndFees_SkipsBelowHardcodedCheckpoint(t *testing.T) {
 	}
 
 	bBelow := buildInflatedBlock(300) // below highest checkpoint (500)
-	require.NoError(t, bBelow.checkBlockRewardAndFees(params, true, true), "below checkpoint, fast-path store, confirmed checkpoint ancestor: fee check must be skipped")
-	require.Error(t, bBelow.checkBlockRewardAndFees(params, false, true), "below checkpoint but store lacks fast-path support: no-inflation must still be enforced")
-	require.Error(t, bBelow.checkBlockRewardAndFees(params, true, false), "below checkpoint, fast-path store, but NOT a confirmed checkpoint ancestor (forward-sync / detached fork): no-inflation must still be enforced")
+	require.NoError(t, bBelow.checkBlockRewardAndFees(params, true, true, true), "below checkpoint, fast-path store, confirmed checkpoint ancestor: fee check must be skipped")
+	require.Error(t, bBelow.checkBlockRewardAndFees(params, false, true, true), "below checkpoint but store lacks fast-path support: no-inflation must still be enforced")
+	require.Error(t, bBelow.checkBlockRewardAndFees(params, true, false, true), "below checkpoint, fast-path store, but NOT a confirmed checkpoint ancestor (forward-sync / detached fork): no-inflation must still be enforced")
 
 	bAbove := buildInflatedBlock(501) // above highest checkpoint (500)
-	require.Error(t, bAbove.checkBlockRewardAndFees(params, true, true), "above checkpoint: fee check must still be enforced regardless of store support / ancestry")
+	require.Error(t, bAbove.checkBlockRewardAndFees(params, true, true, true), "above checkpoint: fee check must still be enforced regardless of store support / ancestry")
+
+	// The skip's premise is that the checkpoint transitively commits the coinbase, which
+	// holds only once the body has been hashed against the header. On an unbound body the
+	// checkpoint says nothing about the coinbase, so the arithmetic must still run.
+	unboundErr := bBelow.checkBlockRewardAndFees(params, true, true, false)
+	require.Error(t, unboundErr, "below checkpoint with every policy conjunct satisfied, but the body was never bound to the header: no-inflation must still be enforced")
+	require.True(t, errors.Is(unboundErr, errors.ErrBlockCorrupt),
+		"an unbound body cannot be condemned as invalid — the verdict reads a body nothing has tied to the header: got %v", unboundErr)
+	require.False(t, errors.Is(unboundErr, errors.ErrBlockInvalid), "the honest hash must not be poisoned on an unbound body")
 }
 
 // TestCheckBlockRewardAndFees_BoundaryMatchesHighestCheckpointHeight pins the real
@@ -2401,11 +2461,11 @@ func TestCheckBlockRewardAndFees_BoundaryMatchesHighestCheckpointHeight(t *testi
 	}
 
 	// Exactly at the boundary (height == hc), fast-path store, confirmed ancestor: skipped.
-	require.NoError(t, buildInflatedBlock(hc).checkBlockRewardAndFees(params, true, true),
+	require.NoError(t, buildInflatedBlock(hc).checkBlockRewardAndFees(params, true, true, true),
 		"at height == HighestCheckpointHeight the check must be skipped (fast-path store, confirmed ancestor)")
 
 	// One above the boundary: enforced (inflated coinbase → error).
-	require.Error(t, buildInflatedBlock(hc+1).checkBlockRewardAndFees(params, true, true),
+	require.Error(t, buildInflatedBlock(hc+1).checkBlockRewardAndFees(params, true, true, true),
 		"at height == HighestCheckpointHeight+1 the check must be enforced")
 }
 
@@ -2815,7 +2875,9 @@ func TestBlock_CheckMerkleRoot_DuplicateSubtreeRoots(t *testing.T) {
 
 	err = block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	// bitcoin-sv/teranode#4692: duplicate subtree root is body-derived corruption → corrupt.
+	require.True(t, errors.IsBlockCorrupt(err), "expected BlockCorruptError, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "duplicate")
 	require.Contains(t, err.Error(), rootHash1.String())
 }
@@ -2858,7 +2920,7 @@ func TestBlock_CheckRewardAndFees_WithHeight(t *testing.T) {
 
 		// Test with a height that triggers the reward calculation logic
 		// This should error because coinbase output is too high
-		err = block.checkBlockRewardAndFees(&chaincfg.MainNetParams, true, true)
+		err = block.checkBlockRewardAndFees(&chaincfg.MainNetParams, true, true, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "coinbase output")
 	})
@@ -3168,43 +3230,16 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 	coinbase, err := bt.NewTxFromString(CoinbaseHex)
 	require.NoError(t, err)
 
-	t.Run("validateTransaction error paths", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
-		require.NoError(t, err)
-
-		// Initialize txMap but don't add any transactions
-		block.txMap = txmap.NewSplitSwissMapUint64(10)
-
-		ctx := context.Background()
-		deps := &validationDependencies{}
-
-		validationCtx := &validationContext{
-			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
-		}
-
-		hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-
-		params := &transactionValidationParams{
-			subtreeMetaSlice: nil, // This will cause an error
-			subtreeHash:      hash1,
-			sIdx:             0,
-			snIdx:            0,
-			subtreeNode:      subtreepkg.Node{Hash: *hash1},
-		}
-
-		// Should error because transaction not in txMap
-		_, err = block.validateTransaction(ctx, deps, validationCtx, params)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not in the txMap")
-	})
-
 	// Skip problematic validateSubtree test for now
 
 	// Skip problematic checkDuplicateInputs test for now
 
 	t.Run("Valid function path coverage", func(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
+		// A coinbase-only body is bound against the header by the coinbase-txid identity, so the
+		// header must be built from this coinbase for the block to validate.
+		block, err := NewBlock(minedHeaderVersion(t, 1, coinbase.TxIDChainHash()), coinbase,
+			[]*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		ctx := context.Background()
@@ -3729,7 +3764,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create validation context with empty parent spends map
 		validationCtx := &validationContext{
-			parentSpendsMap: NewSplitSyncedParentMap(4),
+			parentSpendsMap: newTestParentSpendsMap(4),
 		}
 
 		// Create subtree hash and node
@@ -3763,7 +3798,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create validation context with pre-populated parent spends map
 		validationCtx := &validationContext{
-			parentSpendsMap: NewSplitSyncedParentMap(4),
+			parentSpendsMap: newTestParentSpendsMap(4),
 		}
 
 		// Add an inpoint to simulate existing spend
@@ -3807,7 +3842,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create validation context
 		validationCtx := &validationContext{
-			parentSpendsMap: NewSplitSyncedParentMap(4),
+			parentSpendsMap: newTestParentSpendsMap(4),
 		}
 
 		// Create empty subtree meta slice (will likely cause GetTxInpoints to error)
@@ -3845,7 +3880,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create validation context
 		validationCtx := &validationContext{
-			parentSpendsMap: NewSplitSyncedParentMap(4),
+			parentSpendsMap: newTestParentSpendsMap(4),
 		}
 
 		// Test with various edge case values
@@ -4069,7 +4104,7 @@ func TestBlock_ValidateSubtree_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Create subtree with a node
@@ -4138,7 +4173,7 @@ func TestBlock_ValidateSubtree_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// The only node is the coinbase placeholder, which validateSubtree skips, so
@@ -4193,7 +4228,7 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 	validationCtx := &validationContext{
 		currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 		currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-		parentSpendsMap:             NewSplitSyncedParentMap(4),
+		parentSpendsMap:             newTestParentSpendsMap(4),
 	}
 
 	t.Run("missing parent not found in store", func(t *testing.T) {
@@ -4223,7 +4258,7 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 		subtestCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// The dummy parent is deliberately not seeded, so it is absent from the store.
@@ -4346,7 +4381,7 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 		subtestCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		err = block.validateSubtree(ctx, ulogger.TestLogger{}, seededDeps, subtestCtx, subtree, 0)
@@ -4380,7 +4415,7 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 		subtestCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Both nodes carry distinct inpoints, so they clear checkDuplicateInputs and
@@ -4477,7 +4512,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// All 4 nodes must validate. A shared inpoint across nodes would stop this at
@@ -4536,7 +4571,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Exercises the parallel parent checking logic:
@@ -4586,7 +4621,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// The single node's parent resolves, so validation completes cleanly.
@@ -4627,7 +4662,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}, 3: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Neither parent is in txMap or the store, so both become missingParentTx entries
@@ -4684,7 +4719,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{10: {}, 11: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// The parent is mined into block 5, which is outside the cached {10, 11} set, so
@@ -4732,43 +4767,6 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 	parentHash, _ := chainhash.NewHashFromStr("fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321")
 	subtreeHash, _ := chainhash.NewHashFromStr("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
 
-	t.Run("transaction not found in txMap", func(t *testing.T) {
-		// Test case where transaction hash is not in the block's txMap
-		deps := &validationDependencies{
-			txMetaStore:           createTestUTXOStore(t),
-			subtreeStore:          &mockSubtreeStore{shouldError: true},
-			currentChain:          []*BlockHeader{},
-			currentBlockHeaderIDs: []uint32{},
-			oldBlockIDsMap:        txmap.NewSyncedMap[chainhash.Hash, []uint32](),
-		}
-
-		validationCtx := &validationContext{
-			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
-			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
-		}
-
-		// Create subtree and subtree meta
-		subtree := &subtreepkg.Subtree{}
-		subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
-
-		params := &transactionValidationParams{
-			subtreeMetaSlice: subtreeMeta,
-			subtreeHash:      subtreeHash,
-			sIdx:             0,
-			snIdx:            0,
-			subtreeNode:      subtreepkg.Node{Hash: *txHash},
-		}
-
-		// Transaction not in txMap should return error
-		missingParents, err := block.validateTransaction(ctx, deps, validationCtx, params)
-
-		// Should error because transaction is not found in txMap
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not in the txMap")
-		assert.Nil(t, missingParents)
-	})
-
 	t.Run("successful validation with no missing parents", func(t *testing.T) {
 		// Test case where transaction validation succeeds
 		err := block.txMap.Put(*txHash, 1)
@@ -4787,7 +4785,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Create subtree and subtree meta
@@ -4829,7 +4827,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Create subtree and subtree meta
@@ -4873,7 +4871,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Create subtree and subtree meta
@@ -4916,7 +4914,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Add a duplicate input to trigger validation
@@ -4964,7 +4962,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Populate the current block header IDs map
@@ -5512,7 +5510,7 @@ func TestValidateSubtreeBenchmark(t *testing.T) {
 	validationCtx := &validationContext{
 		currentBlockHeaderHashesMap: map[chainhash.Hash]struct{}{*blockHeader.Hash(): {}},
 		currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}},
-		parentSpendsMap:             NewSplitSyncedParentMap(256), // THE CONTENDED RESOURCE
+		parentSpendsMap:             newTestParentSpendsMap(256), // THE CONTENDED RESOURCE
 	}
 
 	ctx := context.Background()
@@ -5658,7 +5656,9 @@ func TestBlock_Valid_DupTxDetected_DiskMapDirs(t *testing.T) {
 			valid, err := b.Valid(context.Background(), ulogger.TestLogger{}, nil, nil, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
 			require.False(t, valid)
 			require.Error(t, err)
-			require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected ErrBlockInvalid, got %v", err)
+			// bitcoin-sv/teranode#4692: duplicate tx is body-derived corruption → corrupt, not invalid.
+			require.True(t, errors.IsBlockCorrupt(err), "expected ErrBlockCorrupt, got %v", err)
+			require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 			require.Contains(t, err.Error(), "duplicate transaction")
 		})
 	}
@@ -5858,7 +5858,7 @@ func buildBlockForValidOrderBench(tb testing.TB, leaves, parentsPerTx int) (*Blo
 }
 
 // BenchmarkBlock_ValidOrderAndBlessed_DiskVsMemory compares the per-block cost
-// of validOrderAndBlessed between the in-memory SplitSyncedParentMap and the
+// of validOrderAndBlessed between the in-memory sort-based duplicate input check and the
 // disk-backed DiskParentSpendsMap (single-disk and multi-disk). The disk
 // variants include the full mmap-backed map (mmaphash) open + writer-loop
 // spin-up + close cost per block, which is the realistic per-block-validation
@@ -5868,7 +5868,7 @@ func buildBlockForValidOrderBench(tb testing.TB, leaves, parentsPerTx int) (*Blo
 //
 //	go test -tags testtxmetacache -run='^$' -bench=BenchmarkBlock_ValidOrderAndBlessed_DiskVsMemory -benchmem ./model/
 func BenchmarkBlock_ValidOrderAndBlessed_DiskVsMemory(b *testing.B) {
-	sizes := []int{1024, 16384}
+	sizes := []int{1024, 16384, 131072}
 	impls := []struct {
 		name string
 		dirs func(b *testing.B) []string
@@ -5969,7 +5969,9 @@ func TestCheckMerkleRoot_RejectsMidStreamIncompleteSubtree(t *testing.T) {
 
 	err := block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	// bitcoin-sv/teranode#4692: subtree-shape check is body-derived → corrupt, not invalid.
+	require.True(t, errors.IsBlockCorrupt(err), "expected BlockCorruptError, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "only the final subtree may be incomplete")
 }
 
@@ -5983,7 +5985,8 @@ func TestCheckMerkleRoot_RejectsFinalSubtreeLargerThanFirst(t *testing.T) {
 
 	err := block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.True(t, errors.IsBlockCorrupt(err), "expected BlockCorruptError, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "final subtree exceeds first subtree size")
 }
 
@@ -6016,8 +6019,53 @@ func TestCheckMerkleRoot_RejectsFirstSubtreeNotPowerOfTwo(t *testing.T) {
 
 	err := block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.True(t, errors.IsBlockCorrupt(err), "expected BlockCorruptError, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "first subtree leaf count is not a power of two")
+}
+
+// TestCheckMerkleRoot_AcceptsSingleNonPowerOfTwoSubtree pins the exemption the
+// power-of-two guard must never be applied to: a block with EXACTLY ONE subtree.
+//
+// CheckMerkleRoot takes its len(hashes) == 1 branch and returns that subtree's
+// coinbase-substituted root directly, before the guard and before the non-final/final
+// length rules. There is no second subtree to compose with, so nothing depends on the
+// leaf count being a lift-compatible capacity, and a single subtree of 3 leaves is a
+// legitimate body a real node accepts.
+//
+// TestCheckMerkleRoot_RejectsFirstSubtreeNotPowerOfTwo does NOT cover this:
+// buildBlockWithFirstSubtreeNonPowerOfTwo builds TWO subtrees, so it never reaches the
+// single-subtree branch at all.
+//
+// Mutation target: applying CheckSubtreeShape before the single-subtree early exit —
+// which is exactly what extracting the rules into a shared helper makes easy to do by
+// accident — must make this block be rejected.
+func TestCheckMerkleRoot_AcceptsSingleNonPowerOfTwoSubtree(t *testing.T) {
+	only, err := subtreepkg.NewIncompleteTreeByLeafCount(3)
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		require.NoError(t, only.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
+	}
+
+	require.False(t, subtreepkg.IsPowerOfTwo(only.Length()),
+		"precondition: the single subtree must NOT be a power of two, or the test proves nothing")
+
+	coinbaseTx := newTestCoinbaseTx(t)
+
+	root, err := only.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) // nolint: gosec
+	require.NoError(t, err)
+
+	block := &Block{
+		Header:        newTestBlockHeader(t),
+		CoinbaseTx:    coinbaseTx,
+		Subtrees:      []*chainhash.Hash{only.RootHash()},
+		SubtreeSlices: []*subtreepkg.Subtree{only},
+	}
+	block.Header.HashMerkleRoot = root
+
+	require.NoError(t, block.CheckMerkleRoot(context.Background()),
+		"a single non-power-of-two subtree is a legitimate body and must not be rejected")
 }
 
 // buildBlockWithFirstSubtreeNonPowerOfTwo returns a Block whose first subtree

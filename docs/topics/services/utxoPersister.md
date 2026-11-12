@@ -312,13 +312,13 @@ These settings control the I/O performance and memory usage patterns of the UTXO
 
 | Setting | Type | Default | Description | Impact |
 | --------- | ------ | --------- | ------------- | -------- |
-| `utxoPersister_buffer_size` | string | `"4KB"` | Controls the buffer size for reading from and writing to UTXO files | Affects I/O performance and memory usage when processing UTXO data |
+| `utxoPersister_buffer_size` | string | `"256KB"` | Controls the buffer size for reading from and writing to UTXO files | Affects I/O performance and memory usage when processing UTXO data |
 
 #### Performance Tuning Interactions and Dependencies
 
 The buffer size setting directly affects how efficiently the service reads and writes UTXO data:
 
-- Larger buffer sizes (e.g., 64KB to 1MB) can significantly improve I/O throughput by reducing the number of system calls needed for file operations
+- Larger buffer sizes (e.g., 512KB to 1MB) can significantly improve I/O throughput by reducing the number of system calls needed for file operations
 - Smaller buffer sizes reduce memory usage but may increase CPU overhead due to more frequent I/O operations
 - The optimal buffer size depends on the hardware characteristics, particularly disk I/O capabilities, available memory, and the size of typical UTXO files
 

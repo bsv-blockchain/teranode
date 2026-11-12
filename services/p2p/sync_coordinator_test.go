@@ -14,8 +14,10 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func newTestSyncCoordinator(t *testing.T) (*SyncCoordinator, *blockchain.CentralizedPeerRegistry) {
@@ -289,7 +291,7 @@ func TestSyncCoordinator_ConsiderReputationRecovery_ConcurrentWithBackoffWriters
 			sc.lastAllPeersAttemptTime = time.Now().Add(-time.Hour) // force backoff expiry
 			sc.mu.Unlock()
 			sc.checkAndClearExpiredBackoff() // doubles backoffMultiplier
-			sc.enterBackoffMode()            // re-enter so resetBackoff writes backoffMultiplier
+			sc.enterBackoffMode()
 			sc.resetBackoff()
 		}
 	}()
@@ -422,7 +424,7 @@ func TestSyncCoordinator_LogCandidateList_NoPanic(t *testing.T) {
 
 func TestSyncCoordinator_SendSyncMessage_PeerNotFoundErrors(t *testing.T) {
 	sc, _ := newTestSyncCoordinator(t)
-	err := sc.sendSyncMessage("not-in-registry")
+	_, err := sc.sendSyncMessage("not-in-registry")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not found")
 }
@@ -431,7 +433,7 @@ func TestSyncCoordinator_SendSyncMessage_NoBlockHashErrors(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	reg.Register(&blockchain.PeerInfo{ID: "p", DataHubURL: "x", Height: 100})
 
-	err := sc.sendSyncMessage("p")
+	_, err := sc.sendSyncMessage("p")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no block hash")
 }
@@ -1121,12 +1123,12 @@ func TestSyncCoordinator_MaxUnvalidatedAdvertisedHeightLead_AllowsProbeAtTenThou
 
 func TestSyncCoordinator_SendSyncTriggerToKafka_NilProducerNoOp(t *testing.T) {
 	sc, _ := newTestSyncCoordinator(t)
-	require.NotPanics(t, func() { sc.sendSyncTriggerToKafka("p", "abc") })
+	require.NotPanics(t, func() { sc.sendSyncTriggerToKafka("p", "abc", "http://p") })
 }
 
 func TestSyncCoordinator_SendSyncTriggerToKafka_EmptyHashNoOp(t *testing.T) {
 	sc, _ := newTestSyncCoordinator(t)
-	require.NotPanics(t, func() { sc.sendSyncTriggerToKafka("p", "") })
+	require.NotPanics(t, func() { sc.sendSyncTriggerToKafka("p", "", "http://p") })
 }
 
 func TestSyncCoordinator_StartStop_ExitsCleanly(t *testing.T) {
@@ -1211,6 +1213,153 @@ func TestSyncCoordinator_ProactiveInCatchingBlocks(t *testing.T) {
 
 	require.Equal(t, "ahead", sc.GetCurrentSyncPeer(),
 		"coordinator should proactively select a sync peer while in CATCHINGBLOCKS")
+}
+
+// A blocks producer whose publish channel is full (the state a dead or slow
+// broker leaves it in) must not wedge the coordinator: the sync decision has
+// to return and release decisionMu, and the trigger it could not hand over
+// must be re-sent on a later tick once the producer drains, because nothing
+// else re-sends it while the peer holds the slot.
+func TestSyncCoordinator_BackloggedProducerDoesNotWedgeDecisionLock(t *testing.T) {
+	sc, reg, _ := newTestSyncCoordinatorWithFSM(t, blockchain_api.FSMStateType_CATCHINGBLOCKS)
+	producer := kafka.NewKafkaAsyncProducerMockWithBuffer(1)
+	sc.blocksKafkaProducerClient = producer
+	producer.PublishChannel() <- &kafka.Message{Key: []byte("backlog")}
+
+	reg.Register(&blockchain.PeerInfo{ID: "ahead", DataHubURL: "http://ahead", Height: 100,
+		BlockHash: syncCoordinatorTestHash(t)})
+
+	tick := func() {
+		done := make(chan struct{})
+		go func() {
+			sc.checkFSMState()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("checkFSMState blocked on a backlogged Kafka producer while holding decisionMu")
+		}
+	}
+
+	tick()
+	require.Equal(t, "ahead", sc.GetCurrentSyncPeer())
+
+	// Another decisionMu path must still get the lock.
+	cleared := make(chan struct{})
+	go func() {
+		sc.decisionMu.Lock()
+		sc.decisionMu.Unlock() //nolint:staticcheck // empty critical section proves the lock is free
+		close(cleared)
+	}()
+	select {
+	case <-cleared:
+	case <-time.After(time.Second):
+		t.Fatal("decisionMu still held after the sync decision returned")
+	}
+
+	// A tick while the producer is still backlogged neither blocks nor sends.
+	tick()
+	require.Len(t, producer.PublishChannel(), 1)
+
+	// The producer drains; the next tick re-sends the deferred trigger once.
+	backlog := <-producer.PublishChannel()
+	require.Equal(t, []byte("backlog"), backlog.Key)
+	tick()
+	require.Len(t, producer.PublishChannel(), 1)
+	resent := <-producer.PublishChannel()
+	require.Equal(t, []byte(syncCoordinatorTestHash(t).String()), resent.Key)
+
+	tick()
+	require.Empty(t, producer.PublishChannel(), "a delivered trigger must not be re-sent")
+}
+
+// A deferred trigger belongs to the peer it was built for: once the slot has
+// moved on, re-sending it would point block validation at a peer the
+// coordinator no longer follows.
+func TestSyncCoordinator_DeferredTriggerDroppedWhenSlotMoves(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	producer := kafka.NewKafkaAsyncProducerMockWithBuffer(1)
+	sc.blocksKafkaProducerClient = producer
+	producer.PublishChannel() <- &kafka.Message{Key: []byte("backlog")}
+
+	reg.Register(&blockchain.PeerInfo{ID: "first", DataHubURL: "http://first", Height: 100,
+		BlockHash: syncCoordinatorTestHash(t)})
+
+	sc.decisionMu.Lock()
+	sc.mu.Lock()
+	sc.currentSyncPeer = "first"
+	sc.mu.Unlock()
+	deferred, err := sc.sendSyncMessage("first")
+	require.NoError(t, err)
+	require.True(t, deferred)
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = "second"
+	sc.mu.Unlock()
+	<-producer.PublishChannel()
+	sc.retryDeferredSyncTrigger()
+	sc.decisionMu.Unlock()
+
+	require.Empty(t, producer.PublishChannel(), "a trigger for a peer that lost the slot must not be re-sent")
+	require.Empty(t, sc.deferredTriggerPeer)
+}
+
+// failingGetPeerRegistry wraps a real registry client and fails GetPeer while
+// fail is set, standing in for a transient registry outage.
+type failingGetPeerRegistry struct {
+	blockchain.PeerRegistryClientI
+	fail bool
+}
+
+func (f *failingGetPeerRegistry) GetPeer(ctx context.Context, peerID string) (*blockchain.PeerInfo, bool, error) {
+	if f.fail {
+		return nil, false, errors.NewServiceError("registry unavailable")
+	}
+	return f.PeerRegistryClientI.GetPeer(ctx, peerID)
+}
+
+// A transient registry error during a retry must not end the deferral: the peer
+// still holds the slot and nothing else re-sends its trigger, so once the
+// registry and the producer recover the next retry has to deliver it, carrying
+// the DataHub URL read with the hash rather than an empty one.
+func TestSyncCoordinator_DeferredTriggerSurvivesRegistryError(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	flaky := &failingGetPeerRegistry{PeerRegistryClientI: sc.registry}
+	sc.registry = flaky
+	producer := kafka.NewKafkaAsyncProducerMockWithBuffer(1)
+	sc.blocksKafkaProducerClient = producer
+	producer.PublishChannel() <- &kafka.Message{Key: []byte("backlog")}
+
+	reg.Register(&blockchain.PeerInfo{ID: "first", DataHubURL: "http://first", Height: 100,
+		BlockHash: syncCoordinatorTestHash(t)})
+
+	sc.decisionMu.Lock()
+	defer sc.decisionMu.Unlock()
+	sc.mu.Lock()
+	sc.currentSyncPeer = "first"
+	sc.mu.Unlock()
+	deferred, err := sc.sendSyncMessage("first")
+	require.NoError(t, err)
+	require.True(t, deferred)
+
+	// The producer drains, but the registry is down for this tick.
+	<-producer.PublishChannel()
+	flaky.fail = true
+	sc.retryDeferredSyncTrigger()
+	require.Empty(t, producer.PublishChannel())
+	require.Equal(t, "first", sc.deferredTriggerPeer, "a registry error must keep the trigger deferred")
+
+	// The registry recovers; the next tick delivers the trigger with its URL.
+	flaky.fail = false
+	sc.retryDeferredSyncTrigger()
+	require.Len(t, producer.PublishChannel(), 1)
+	sent := <-producer.PublishChannel()
+	var msg kafkamessage.KafkaBlockTopicMessage
+	require.NoError(t, proto.Unmarshal(sent.Value, &msg))
+	require.Equal(t, syncCoordinatorTestHash(t).String(), msg.Hash)
+	require.Equal(t, "http://first", msg.URL)
+	require.Empty(t, sc.deferredTriggerPeer)
 }
 
 // A stalled, still-ahead PROVEN incumbent must be preempted by an unproven candidate with
@@ -1502,7 +1651,7 @@ func TestSyncCoordinator_SendSyncTriggerToKafka_RefusesBlacklistedURL(t *testing
 	})
 
 	// Control: without a blacklist entry the trigger is published.
-	sc.sendSyncTriggerToKafka("peer", syncCoordinatorTestHash(t).String())
+	sc.sendSyncTriggerToKafka("peer", syncCoordinatorTestHash(t).String(), "http://evil.example")
 	select {
 	case <-producer.PublishChannel():
 	default:
@@ -1512,7 +1661,7 @@ func TestSyncCoordinator_SendSyncTriggerToKafka_RefusesBlacklistedURL(t *testing
 	// Operator blacklists the host after the URL was stored.
 	sc.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
 
-	sc.sendSyncTriggerToKafka("peer", syncCoordinatorTestHash(t).String())
+	sc.sendSyncTriggerToKafka("peer", syncCoordinatorTestHash(t).String(), "http://evil.example")
 	select {
 	case published := <-producer.PublishChannel():
 		t.Fatalf("sync trigger with blacklisted DataHubURL must not be published: %+v", published)
@@ -1763,4 +1912,436 @@ func TestSyncCoordinator_WarnfUnlessStopping_DowngradesToDebugAfterStop(t *testi
 	warns, debugs = logger.counts()
 	require.Equal(t, 1, warns, "after Stop no new warn-level messages may be emitted")
 	require.Equal(t, 1, debugs, "after Stop the message must downgrade to debug level")
+}
+
+// registerSyncTestPeer registers a viable sync candidate for the FSM-latch tests.
+func registerSyncTestPeer(t *testing.T, reg *blockchain.CentralizedPeerRegistry, id string, height uint32, validatedWork []byte) {
+	t.Helper()
+
+	info := &blockchain.PeerInfo{
+		ID:         id,
+		DataHubURL: "http://" + id,
+		Height:     height,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	}
+	if len(validatedWork) > 0 {
+		info.ValidatedBlockHash = syncCoordinatorTestHash(t)
+		info.ValidatedChainWork = validatedWork
+	}
+	reg.Register(info)
+}
+
+// claimSyncTestPeer installs peerID as the current sync peer as claimSelectedSyncPeer
+// would, with the claim placed claimAge in the past.
+func claimSyncTestPeer(sc *SyncCoordinator, peerID string, claimAge time.Duration, localWork []byte) {
+	claimedAt := time.Now().Add(-claimAge)
+	sc.mu.Lock()
+	sc.currentSyncPeer = peerID
+	sc.syncStartTime = claimedAt
+	sc.lastSyncProgressTime = claimedAt
+	sc.lastLocalChainWork = localWork
+	sc.mu.Unlock()
+}
+
+// Regression for the missing FSM-state latch: a steady RUNNING tick (no
+// CATCHINGBLOCKS -> RUNNING completion edge) must not judge the in-flight sync,
+// even when the slot holder is credited with higher validated work from a
+// previous run. The old code declared it failed and recycled the slot every 2s.
+func TestSyncCoordinator_HandleFSMTransition_SteadyRunningTickDoesNotRecycleSlot(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", 0, []byte{0x02})
+
+	running := blockchain_api.FSMStateType_RUNNING
+	for i := range 3 {
+		require.False(t, sc.handleFSMTransition(&running), "steady RUNNING tick %d must not settle the sync", i)
+		require.Equal(t, "current", sc.GetCurrentSyncPeer(), "slot must not be recycled on tick %d", i)
+	}
+}
+
+// A CATCHINGBLOCKS -> RUNNING completion edge never issues a verdict: it cannot
+// say whose catchup finished (the header phase runs in RUNNING, and the slot may
+// have changed hands during another peer's header phase — the claim here
+// predates the excursion, exactly the handover shape that used to be judged by
+// the other peer's outcome). Verdicts come only from HandleCatchupSuccess.
+func TestSyncCoordinator_HandleFSMTransition_CompletionEdgeDoesNotJudgeSlot(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x02})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	require.False(t, sc.handleFSMTransition(&catching))
+	running := blockchain_api.FSMStateType_RUNNING
+	for i := range 2 {
+		require.False(t, sc.handleFSMTransition(&running), "tick %d: the edge must not judge the slot holder", i)
+		require.Equal(t, "current", sc.GetCurrentSyncPeer(), "tick %d: slot must survive the completion edge", i)
+	}
+}
+
+// An armed completion edge holds the fallback release off while the
+// authoritative report is in flight, bounded by pendingCompletionExpiry; once
+// the window expires the fallback becomes eligible again and releases a quiet
+// level holder.
+func TestSyncCoordinator_HandleFSMTransition_ArmedEdgeHoldsFallbackUntilExpiry(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	// Level and quiet past the guard: the fallback would release on this tick.
+	claimSyncTestPeer(sc, "current", 3*time.Minute, []byte{0x03})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	require.False(t, sc.handleFSMTransition(&catching))
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&running), "armed edge must hold the fallback release off")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+
+	sc.pendingCompletionSince = time.Now().Add(-pendingCompletionExpiry - time.Second)
+	require.False(t, sc.handleFSMTransition(&running), "the expiring tick disarms without releasing")
+	require.Empty(t, sc.pendingCompletionPeer, "window must be disarmed after expiry")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+
+	require.True(t, sc.handleFSMTransition(&running), "after expiry the fallback must release the quiet level holder")
+	require.Empty(t, sc.GetCurrentSyncPeer())
+}
+
+// A slot claimed while another peer's catchup is in its block phase must not be
+// judged by that catchup's completion; since edges never issue verdicts, the
+// fresh holder survives the excursion end untouched.
+func TestSyncCoordinator_HandleFSMTransition_SlotClaimedDuringCatchupNotJudgedByItsCompletion(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "fresh", 200, []byte{0x03})
+
+	// Observe CATCHINGBLOCKS with the slot empty (the running catchup belongs to
+	// an earlier, since-cleared peer), then claim a fresh peer mid-catchup.
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	require.False(t, sc.handleFSMTransition(&catching))
+	claimSyncTestPeer(sc, "fresh", 0, []byte{0x02})
+
+	running := blockchain_api.FSMStateType_RUNNING
+	for i := range 2 {
+		require.False(t, sc.handleFSMTransition(&running), "tick %d must not judge the freshly claimed slot", i)
+		require.Equal(t, "fresh", sc.GetCurrentSyncPeer(), "tick %d must keep the freshly claimed slot", i)
+	}
+}
+
+// HandleCatchupSuccess settles a completed sync from the authoritative block
+// validation signal, covering catchups that never leave RUNNING and are therefore
+// invisible to the FSM completion edge.
+func TestSyncCoordinator_HandleCatchupSuccess_LevelPeerSettlesWithoutFSMEdge(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x03})
+	sc.mu.Lock()
+	sc.backoffMultiplier = 8
+	sc.mu.Unlock()
+
+	sc.HandleCatchupSuccess("current", time.Minute)
+
+	require.Empty(t, sc.GetCurrentSyncPeer(), "reported catchup success for a level peer must settle the sync")
+	sc.mu.RLock()
+	require.Equal(t, 1, sc.backoffMultiplier)
+	sc.mu.RUnlock()
+}
+
+func TestSyncCoordinator_HandleCatchupSuccess_IgnoresNonSyncPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "other", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x02})
+
+	sc.HandleCatchupSuccess("other", time.Minute)
+
+	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "success for a different peer must not touch the slot")
+}
+
+// If HandleCatchupSuccess settles a completion and the retrigger claims a new
+// peer, the FSM completion edge observed afterwards must not evict that peer:
+// the edge arms the fallback-suppression window for the fresh holder but never
+// issues a verdict. (The window consumption inside HandleCatchupSuccess itself
+// is pinned separately by
+// TestSyncCoordinator_HandleCatchupSuccess_ConsumesDeferredEdge.)
+func TestSyncCoordinator_HandleCatchupSuccess_TrailingEdgeDoesNotEvictFreshSlot(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "done", 200, []byte{0x04})
+	registerSyncTestPeer(t, reg, "next", 200, []byte{0x03})
+	reg.RecordSyncAttempt("done")
+	claimSyncTestPeer(sc, "done", 2*time.Minute, []byte{0x02})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	require.False(t, sc.handleFSMTransition(&catching))
+
+	// The success report arrives first: "done" is still ahead, so it is cleared
+	// and the retrigger claims "next" (the only unbenched candidate).
+	sc.HandleCatchupSuccess("done", time.Minute)
+	require.Equal(t, "next", sc.GetCurrentSyncPeer())
+
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&running), "the trailing completion edge must not judge the fresh slot")
+	require.Equal(t, "next", sc.GetCurrentSyncPeer(), "fresh slot must survive the trailing FSM edge")
+}
+
+// Regression for the backoff ratchet: expiry cycles double the multiplier and
+// clear allPeersAttempted, so the old flag-gated reset never fired in production
+// ordering. resetBackoff must reset the multiplier unconditionally.
+func TestSyncCoordinator_ResetBackoff_ResetsRatchetedMultiplierAfterExpiredWindows(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	for range 3 {
+		sc.enterBackoffMode()
+		sc.mu.Lock()
+		sc.lastAllPeersAttemptTime = time.Now().Add(-time.Hour) // force window expiry
+		sc.mu.Unlock()
+		require.False(t, sc.checkAndClearExpiredBackoff())
+	}
+	sc.mu.RLock()
+	require.Equal(t, 8, sc.backoffMultiplier)
+	require.False(t, sc.allPeersAttempted, "expiry leaves the flag cleared — the production state at reset time")
+	sc.mu.RUnlock()
+
+	sc.resetBackoff()
+
+	sc.mu.RLock()
+	require.Equal(t, 1, sc.backoffMultiplier, "resetBackoff must de-escalate a ratcheted multiplier")
+	sc.mu.RUnlock()
+}
+
+// A local chainwork advance refreshes the probe budget but deliberately does NOT
+// de-escalate the backoff multiplier: gossip-driven advances are not attributable
+// to the sync slot, and resetting on every advance would let each ~2s
+// selection-failure cycle re-enter backoff (whose entry clears all sync-attempt
+// cooldowns) during IBD.
+func TestSyncCoordinator_LocalChainWorkAdvanceDoesNotResetBackoffMultiplier(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	sc.mu.Lock()
+	sc.backoffMultiplier = 32
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.unprovenProbeBudgetRemaining = 0
+	sc.mu.Unlock()
+
+	sc.resetProbeBudgetIfLocalChainWorkAdvanced([]byte{0x03})
+
+	sc.mu.RLock()
+	require.Equal(t, 32, sc.backoffMultiplier, "gossip-driven chainwork advance must not de-escalate the multiplier")
+	require.Positive(t, sc.unprovenProbeBudgetRemaining, "chainwork advance must still refresh the probe budget")
+	sc.mu.RUnlock()
+}
+
+// A level slot holder in steady RUNNING (no completion edge, no success signal —
+// e.g. its trigger was rejected by block validation's single-flight guard) is
+// quietly released by the fallback once it has gone the grace period without
+// delivering a validated block, instead of pinning the slot until the
+// no-progress deadline. The release is an inferred completion: it must not
+// fabricate a success verdict, so backoff and the probe budget stay untouched
+// and no sync attempt is recorded against the peer.
+func TestSyncCoordinator_HandleFSMTransition_LevelQuietPeerFallbackReleasesAfterGrace(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	sc.mu.Lock()
+	sc.backoffMultiplier = 16
+	sc.unprovenProbeBudgetRemaining = 0
+	sc.mu.Unlock()
+
+	running := blockchain_api.FSMStateType_RUNNING
+
+	// Inside the grace (default 5m no-progress -> 2.5m guard): no release.
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x03})
+	require.False(t, sc.handleFSMTransition(&running), "level peer inside the grace must not be released")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+
+	// Past the grace but short of the 5m no-progress deadline: released quietly.
+	claimSyncTestPeer(sc, "current", 3*time.Minute, []byte{0x03})
+	require.True(t, sc.handleFSMTransition(&running), "quiet level peer past the grace must be released")
+	require.Empty(t, sc.GetCurrentSyncPeer())
+
+	sc.mu.RLock()
+	require.Equal(t, 16, sc.backoffMultiplier, "an inferred completion must not reset backoff")
+	require.Zero(t, sc.unprovenProbeBudgetRemaining, "an inferred completion must not refill the probe budget")
+	sc.mu.RUnlock()
+	got, ok := reg.Get("current")
+	require.True(t, ok)
+	require.True(t, got.LastSyncAttempt.IsZero(), "release must not record a sync attempt against the peer")
+}
+
+// The fallback keys on progress age, not claim age: a level peer that is
+// actively delivering validated blocks keeps the slot no matter how long it has
+// held it, matching evaluateSyncPeer's keep-while-caught-up policy.
+func TestSyncCoordinator_HandleFSMTransition_FallbackKeepsActivelyDeliveringLevelPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+
+	// Claimed 5 minutes ago, but validated progress is as fresh as it can be.
+	claimSyncTestPeer(sc, "current", 5*time.Minute, []byte{0x03})
+	sc.mu.Lock()
+	sc.lastSyncProgressTime = time.Now()
+	sc.mu.Unlock()
+
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&running), "actively delivering level peer must not be released")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+}
+
+// The fallback never settles a slot holder that is still ahead by validated
+// work — that would reintroduce the churn the latch removes.
+func TestSyncCoordinator_HandleFSMTransition_FallbackDoesNotSettleAheadPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", 3*time.Minute, []byte{0x02})
+
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&running))
+	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "ahead peer must be left to the completion edge or the no-progress deadline")
+}
+
+// A success report whose catchup started before the current claim (the peer was
+// evicted and re-claimed while its old catchup kept running) must not judge the
+// fresh claim.
+func TestSyncCoordinator_HandleCatchupSuccess_StaleReportDoesNotJudgeFreshClaim(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", 0, []byte{0x02})
+
+	// The reported catchup ran 10 minutes, so it started well before the claim.
+	sc.HandleCatchupSuccess("current", 10*time.Minute)
+
+	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "stale success must not touch the fresh claim")
+}
+
+// The latch fields are documented as decisionMu-guarded; exercise the FSM path
+// and the success signal concurrently so -race can observe a violation.
+func TestSyncCoordinator_LatchFields_ConcurrentFSMAndSuccessSignal(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x03})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+		running := blockchain_api.FSMStateType_RUNNING
+		for range 100 {
+			sc.decisionMu.Lock()
+			sc.handleFSMTransition(&catching)
+			sc.handleFSMTransition(&running)
+			sc.decisionMu.Unlock()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			sc.HandleCatchupSuccess("current", time.Minute)
+		}
+	}()
+	wg.Wait()
+}
+
+// The monitor tick calls reputation recovery through a 30s throttle so the
+// FSM latch (which stopped short-circuiting steady RUNNING ticks) does not
+// turn it into a per-2s ReconsiderBadPeers RPC.
+func TestSyncCoordinator_ConsiderReputationRecoveryThrottled_SamplesAtInterval(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	sc.decisionMu.Lock()
+	defer sc.decisionMu.Unlock()
+
+	sc.considerReputationRecoveryThrottled()
+	first := sc.lastReputationRecovery
+	require.False(t, first.IsZero())
+
+	sc.considerReputationRecoveryThrottled()
+	require.Equal(t, first, sc.lastReputationRecovery, "second call inside the interval must be skipped")
+
+	sc.lastReputationRecovery = time.Now().Add(-reputationRecoveryMinInterval - time.Second)
+	stale := sc.lastReputationRecovery
+	sc.considerReputationRecoveryThrottled()
+	require.NotEqual(t, stale, sc.lastReputationRecovery, "call past the interval must run")
+}
+
+// HandleCatchupSuccess disarms an armed completion window even when its own
+// verdict defers for missing validated work: the report owns that completion,
+// so the window must stop suppressing the fallback release, and nothing may
+// settle the slot holder afterwards on the edge's behalf.
+func TestSyncCoordinator_HandleCatchupSuccess_ConsumesDeferredEdge(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 1_000, nil) // no validated work yet
+	claimSyncTestPeer(sc, "current", 2*time.Minute, []byte{0x02})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&catching))
+	require.False(t, sc.handleFSMTransition(&running), "the edge arms a window, never a verdict")
+	require.Equal(t, "current", sc.pendingCompletionPeer, "edge window must be armed")
+
+	// The success report's own verdict defers (still no validated work) but it
+	// disarms the window on the way.
+	sc.HandleCatchupSuccess("current", time.Minute)
+	require.Empty(t, sc.pendingCompletionPeer, "success signal must disarm the edge window")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+
+	// Validated work arriving later must not produce an edge-derived verdict.
+	require.NoError(t, reg.RecordValidatedPeerProgress("current", 1_000, syncCoordinatorTestHash(t), []byte{0x04}))
+	require.False(t, sc.handleFSMTransition(&running), "disarmed window must not settle after the fact")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+}
+
+// An armed completion window expires after pendingCompletionExpiry whether or
+// not validated work ever arrives; the expiry disarms without touching the
+// slot, and a credit landing later produces no edge-derived verdict.
+func TestSyncCoordinator_HandleFSMTransition_ArmedEdgeWindowExpires(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 1_000, nil) // no validated work yet
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x02})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&catching))
+	require.False(t, sc.handleFSMTransition(&running))
+	require.Equal(t, "current", sc.pendingCompletionPeer, "window must stay armed inside the expiry")
+
+	sc.pendingCompletionSince = time.Now().Add(-pendingCompletionExpiry - time.Second)
+	require.False(t, sc.handleFSMTransition(&running), "the expiring tick disarms without a verdict")
+	require.Empty(t, sc.pendingCompletionPeer, "expired window must be disarmed")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "expiry must leave the slot alone")
+
+	require.NoError(t, reg.RecordValidatedPeerProgress("current", 1_000, syncCoordinatorTestHash(t), []byte{0x04}))
+	require.False(t, sc.handleFSMTransition(&running), "late credit must not produce an edge-derived verdict")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+}
+
+// A peer that is ahead by raw chainwork but demoted by an active full-storage
+// penalty (it served header work it failed to back with a block body) reads as
+// "not ahead" through peerAheadByValidatedWork; the fallback must not release it
+// as a finished sync — it is left to the no-progress deadline, which benches it.
+func TestSyncCoordinator_HandleFSMTransition_FallbackDoesNotReleasePenalizedAheadPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	hash := syncCoordinatorTestHash(t)
+	reg.Register(&blockchain.PeerInfo{
+		ID:                      "current",
+		DataHubURL:              "http://current",
+		Height:                  200,
+		BlockHash:               hash,
+		ValidatedBlockHash:      hash,
+		ValidatedChainWork:      []byte{0x03}, // ahead by raw chainwork
+		FullStoragePenaltyUntil: time.Now().Add(time.Hour),
+	})
+	claimSyncTestPeer(sc, "current", 3*time.Minute, []byte{0x02})
+
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&running), "penalized ahead peer must not be released as level")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
 }

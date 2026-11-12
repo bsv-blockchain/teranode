@@ -16,6 +16,7 @@ package blockassembly
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	bt "github.com/bsv-blockchain/go-bt/v2"
@@ -63,6 +64,13 @@ func txSpending(parent chainhash.Hash) *bt.Tx {
 	_ = in.PreviousTxIDAdd(&parent)
 	tx.Inputs = []*bt.Input{in}
 	return tx
+}
+
+func validationTestInpoints(t *testing.T, parent chainhash.Hash) subtreepkg.TxInpoints {
+	t.Helper()
+	inpoints, err := subtreepkg.NewTxInpointsFromInputs(txSpending(parent).Inputs)
+	require.NoError(t, err)
+	return inpoints
 }
 
 // ----------------------------------------------------------------------------
@@ -160,7 +168,7 @@ func TestBlockAssembly_CheckInputValidation(t *testing.T) {
 
 		// T spends parent:0, not yet conflicting.
 		mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
-			Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+			Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
 		// parent:0 is recorded as spent by a different ("winner") tx.
 		mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), mock.Anything).
 			Return(&meta.Data{SpendingDatas: []*spend.SpendingData{spend.NewSpendingData(&winnerHash, 0)}}, nil)
@@ -284,7 +292,7 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseA_SpentByDifferentTxCascades(
 	mockStore := new(utxostore.MockUtxostore)
 	// T metadata: one input spending parentHash:0, not yet conflicting.
 	mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
-		Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+		Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
 	// parent:0 is spent by a different ("winner") tx.
 	mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), mock.Anything).
 		Return(&meta.Data{SpendingDatas: []*spend.SpendingData{spend.NewSpendingData(&winnerHash, 0)}}, nil)
@@ -308,7 +316,8 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseA_SpentByDifferentTxCascades(
 		subtreeProcessor: mockStp,
 	}
 
-	ok := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, false)
+	ok, err := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, false)
+	require.NoError(t, err)
 	assert.False(t, ok, "BA-STARTUP-007(a): tx whose input is spent by another tx must be invalid")
 
 	mockStore.AssertExpectations(t)
@@ -330,7 +339,7 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseB_CounterConflictingOnChain(t
 	mockStore := new(utxostore.MockUtxostore)
 	// T metadata.
 	mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
-		Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+		Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
 	// parent:0 is spent by T itself (matches) -> fall through to case 2.
 	mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), fieldsContain(fields.Utxos)).
 		Return(&meta.Data{SpendingDatas: []*spend.SpendingData{spend.NewSpendingData(&txHash, 0)}}, nil)
@@ -354,9 +363,137 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseB_CounterConflictingOnChain(t
 		subtreeProcessor: mockStp,
 	}
 
-	ok := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{confirmedBlockID: true}, false)
+	ok, err := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{confirmedBlockID: true}, false)
+	require.NoError(t, err)
 	assert.False(t, ok, "BA-STARTUP-007(b): tx must be invalid when a counter-conflicting tx is confirmed on chain")
 
 	mockStore.AssertExpectations(t)
 	mockStp.AssertExpectations(t)
+}
+
+// A tx spending several outputs of one parent reads the parent's spends and its
+// conflicting children once each, not once per output.
+func TestBlockAssembly_ValidateUnminedTxInputs_ReadsEachParentOnce(t *testing.T) {
+	ctx := context.Background()
+
+	parentHash := chainhash.HashH([]byte("one-read-parent"))
+	txHash := chainhash.HashH([]byte("one-read-tx"))
+
+	const outputs = 5
+
+	tx := bt.NewTx()
+	spendingDatas := make([]*spend.SpendingData, outputs)
+
+	for i := uint32(0); i < outputs; i++ {
+		in := &bt.Input{PreviousTxOutIndex: i}
+		require.NoError(t, in.PreviousTxIDAdd(&parentHash))
+		tx.Inputs = append(tx.Inputs, in)
+		spendingDatas[i] = spend.NewSpendingData(&txHash, int(i))
+	}
+
+	inpoints, err := subtreepkg.NewTxInpointsFromInputs(tx.Inputs)
+	require.NoError(t, err)
+
+	mockStore := new(utxostore.MockUtxostore)
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
+		Return(&meta.Data{TxInpoints: inpoints}, nil)
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), fieldsContain(fields.Utxos)).
+		Return(&meta.Data{SpendingDatas: spendingDatas}, nil).Once()
+	// Two conflicting children, neither confirmed: each is read once, not once per output.
+	counterA := chainhash.HashH([]byte("one-read-counter-a"))
+	counterB := chainhash.HashH([]byte("one-read-counter-b"))
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), fieldsContain(fields.ConflictingChildren)).
+		Return(&meta.Data{ConflictingChildren: []chainhash.Hash{counterA, counterB}}, nil).Once()
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(counterA), fieldsContain(fields.BlockIDs)).
+		Return(&meta.Data{BlockIDs: []uint32{7}}, nil).Once()
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(counterB), fieldsContain(fields.BlockIDs)).
+		Return(&meta.Data{}, nil).Once()
+
+	ba := &BlockAssembler{
+		logger:    ulogger.TestLogger{},
+		settings:  createTestSettings(t),
+		utxoStore: mockStore,
+	}
+
+	ok, err := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, true)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	mockStore.AssertExpectations(t)
+	mockStore.AssertNumberOfCalls(t, "Get", 5)
+}
+
+// warnCapturingLogger records every Warnf message so a test can assert on its content.
+type warnCapturingLogger struct {
+	ulogger.TestLogger
+	warns []string
+}
+
+func (l *warnCapturingLogger) Warnf(format string, args ...interface{}) {
+	l.warns = append(l.warns, fmt.Sprintf(format, args...))
+}
+
+// Issue 1768 diagnostics gap: when the parent lookup fails, validateUnminedTxInputs
+// used to return false silently, so CheckBlockAssemblyValidateInputs could only report
+// "found N unmined transactions with invalid inputs" with no indication of which ones
+// or why. The offending transaction and parent must be logged at WARN.
+func TestBlockAssembly_ValidateUnminedTxInputs_MissingParentIsLogged(t *testing.T) {
+	ctx := context.Background()
+
+	parentHash := chainhash.HashH([]byte("missing-parent"))
+	txHash := chainhash.HashH([]byte("orphaned-child"))
+
+	t.Run("store error", func(t *testing.T) {
+		mockStore := new(utxostore.MockUtxostore)
+		mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
+			Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
+		mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), mock.Anything).
+			Return(nil, errors.NewTxNotFoundError("%s not found", parentHash.String()))
+
+		logger := &warnCapturingLogger{}
+
+		ba := &BlockAssembler{
+			logger:    logger,
+			settings:  createTestSettings(t),
+			utxoStore: mockStore,
+		}
+
+		ok, err := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, true)
+		require.NoError(t, err, "a parent that is not found is a verdict, not a store failure")
+		assert.False(t, ok, "tx whose parent cannot be loaded must be invalid")
+
+		require.Len(t, logger.warns, 1, "missing parent must be logged exactly once")
+		assert.Contains(t, logger.warns[0], txHash.String())
+		assert.Contains(t, logger.warns[0], parentHash.String())
+		assert.Contains(t, logger.warns[0], "not found")
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("nil parent without error", func(t *testing.T) {
+		mockStore := new(utxostore.MockUtxostore)
+		mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
+			Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
+		mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), mock.Anything).
+			Return(nil, nil)
+
+		logger := &warnCapturingLogger{}
+
+		ba := &BlockAssembler{
+			logger:    logger,
+			settings:  createTestSettings(t),
+			utxoStore: mockStore,
+		}
+
+		// A store answering with no record and no error has failed to answer, so
+		// this reports an error naming both hashes rather than a verdict: calling
+		// the transaction invalid would drop it from the candidate on a store fault.
+		ok, err := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, true)
+		require.Error(t, err)
+		assert.False(t, ok)
+		assert.Contains(t, err.Error(), txHash.String())
+		assert.Contains(t, err.Error(), parentHash.String())
+
+		mockStore.AssertExpectations(t)
+	})
 }

@@ -71,6 +71,26 @@ Also watch:
 - `teranode_blockvalidation_catchup_active` and
   `teranode_blockvalidation_processing_blocks_stuck` — non-zero for extended
   periods means the node has fallen behind or a block is wedged.
+- `teranode_blockvalidation_catchup_prefetch_budget_parked_total` and
+  `teranode_blockvalidation_catchup_prefetch_oversized_blocks_total` — why a
+  catch-up is slow when nothing else looks wrong. Occasional parking is normal
+  back-pressure; a sustained rate means sustained contention for
+  `blockvalidation_catchup_prefetch_budget_bytes` — the budget may be too small
+  for the blocks being synced, but a slow peer or slow storage also prolongs
+  the reservations already held, so correlate peer and storage latency and
+  catch-up progress before raising it. A rising oversized count means those
+  blocks declare sizes larger than the budget, so each of them parses its
+  subtrees one at a time. Raise the budget only against measured memory
+  headroom.
+- `teranode_blockvalidation_catchup_prefetch_undeclared_size_blocks_total` —
+  blocks served without a declared size, which parse their subtrees one at a
+  time for a different reason: an undeclared size is not worth trusting. A
+  healthy peer declares a size, so a sustained rise points at the peer serving
+  the blocks rather than at your own node.
+
+These three are unlabelled counters — no `blockhash` label, so alert on the
+aggregate rate and resolve the specific block from the accompanying
+blockvalidation log line.
 
 ### Block assembly
 
@@ -131,10 +151,20 @@ Also watch:
 
 ## Starter Alerting
 
-Teranode does not ship Prometheus alerting rules — alert thresholds depend on
-your hardware, network, and risk tolerance, so this is left to the operator.
+Teranode ships five block-assembler alert rules — `BlockAssemblerStuckInState`,
+`SlowTipAdvance`, `FrequentReorgs`, `BlockAssemblyBehindTip` and
+`BlockAssemblyProcessingStuck` — in
+[`deploy/docker/base/blockassembly.rules.yml`](https://github.com/bsv-blockchain/teranode/blob/main/deploy/docker/base/blockassembly.rules.yml).
+Every Prometheus config used by a Docker stack in the repo loads that file via
+`rule_files`, so on the operator `mainnet` and `testnet` stacks those five are
+already being evaluated. Alert *delivery* is a different matter: only the
+`deploy/docker/base` stack runs an Alertmanager, and it has no notifier
+attached, so firing alerts are visible in the Prometheus and Alertmanager UIs
+but are not sent anywhere until you add a receiver.
 
-Both state metrics are numeric gauges, so state alerts must be written as
+Everything beyond block assembly is left to the operator — thresholds depend on
+your hardware, network, and risk tolerance. Both state metrics are numeric
+gauges, so state alerts must be written as
 numeric comparisons; a string comparison such as
 `teranode_blockchain_fsm_current_state != "RUNNING"` is not valid PromQL and
 will be rejected. As a starting point, consider:
@@ -152,6 +182,8 @@ groups:
 
       # Block assembly stuck outside running (1) for 5 minutes. Tune the window
       # to the block time you expect on your network.
+      # DUPLICATE: the shipped `BlockAssemblerStuckInState` is the same
+      # expression with `for: 1m`. Keep one.
       - alert: TeranodeBlockAssemblyNotRunning
         expr: teranode_blockassembly_current_state != 1
         for: 5m
@@ -176,6 +208,9 @@ groups:
           summary: "Sustained validation or UTXO store errors"
 
       # Reorgs happening more than once every 10 seconds.
+      # DUPLICATE: the shipped `FrequentReorgs` covers this, and aggregates per
+      # `job`/`instance` so the threshold is not node-count dependent. Kept here
+      # only to illustrate the label-casing point below. Keep one.
       - alert: TeranodeFrequentReorgs
         expr: sum(rate(teranode_blockassembly_state_transitions_total{to="reorging"}[5m])) > 0.1
         for: 5m
@@ -187,9 +222,14 @@ Note the `to="reorging"` label value: the `state`, `from`, and `to` labels carry
 the lower-camelCase state names listed above, so capitalised selectors return an
 empty series and the alert silently never fires.
 
-The [BlockAssembler State Monitoring dashboard
+Two of the rules above duplicate ones Teranode already ships — see the comments
+in the block. Before pasting the starter set into your own rules file, check it
+against
+[`deploy/docker/base/blockassembly.rules.yml`](https://github.com/bsv-blockchain/teranode/blob/main/deploy/docker/base/blockassembly.rules.yml)
+so you do not end up with two alerts firing on the same condition. The
+[BlockAssembler State Monitoring dashboard
 notes](https://github.com/bsv-blockchain/teranode/blob/main/compose/grafana/dashboards/README.md#alerting-rules)
-carry further examples in the same style.
+record which stack loads that file and where alert delivery is wired.
 
 ## Related Documentation
 

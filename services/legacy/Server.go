@@ -123,6 +123,41 @@ type Server struct {
 	peerRegistry blockchain.PeerRegistryClientI
 }
 
+// Dependencies holds the service clients and stores the legacy server needs.
+// It exists so New keeps a manageable parameter list as the server grows.
+//
+// Every field is required unless its own comment says otherwise.
+type Dependencies struct {
+	// BlockchainClient queries blockchain state and submits new blocks.
+	BlockchainClient blockchain.ClientI
+
+	// ValidationClient validates incoming transactions before relay.
+	ValidationClient validator.Interface
+
+	// SubtreeStore holds merkle subtree data.
+	SubtreeStore blob.Store
+
+	// TempStore holds ephemeral data produced during processing.
+	TempStore blob.Store
+
+	// UtxoStore is the UTXO set, used for validation and queries.
+	UtxoStore utxo.Store
+
+	// SubtreeValidation verifies merkle proofs and block structure.
+	SubtreeValidation subtreevalidation.Interface
+
+	// BlockValidation validates incoming blocks before acceptance.
+	BlockValidation blockvalidation.Interface
+
+	// BlockAssemblyClient serves mining and block template generation.
+	BlockAssemblyClient *blockassembly.Client
+
+	// PeerRegistry mirrors connected legacy peers into the centralized peer
+	// registry for dashboard visibility. It may be nil, which disables the
+	// mirror without otherwise affecting the service.
+	PeerRegistry blockchain.PeerRegistryClientI
+}
+
 // New creates and returns a new Server instance with the provided dependencies.
 // It initializes Prometheus metrics and returns a configured server ready for use.
 //
@@ -133,44 +168,25 @@ type Server struct {
 // Parameters:
 //   - logger: Provides structured logging capabilities for the server
 //   - tSettings: Contains all configuration settings for the server and its components
-//   - blockchainClient: Interface to the blockchain service for querying and submitting blocks
-//   - validationClient: Interface to the transaction validation service
-//   - subtreeStore: Blob storage interface for merkle subtree data
-//   - tempStore: Temporary blob storage for ephemeral data
-//   - utxoStore: Interface to the UTXO (Unspent Transaction Output) database
-//   - subtreeValidation: Interface to the subtree validation service
-//   - blockValidation: Interface to the block validation service
-//   - blockAssemblyClient: Client for the block assembly service (used for mining)
-//   - peerRegistry: Client for the centralized peer registry (dashboard visibility; may be nil)
+//   - deps: The service clients and stores the server depends on; see Dependencies
 //
 // Returns a properly configured Server instance that is ready to be initialized and started.
-func New(logger ulogger.Logger,
-	tSettings *settings.Settings,
-	blockchainClient blockchain.ClientI,
-	validationClient validator.Interface,
-	subtreeStore blob.Store,
-	tempStore blob.Store,
-	utxoStore utxo.Store,
-	subtreeValidation subtreevalidation.Interface,
-	blockValidation blockvalidation.Interface,
-	blockAssemblyClient *blockassembly.Client,
-	peerRegistry blockchain.PeerRegistryClientI,
-) *Server {
+func New(logger ulogger.Logger, tSettings *settings.Settings, deps Dependencies) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
 		logger:              logger,
 		settings:            tSettings,
 		stats:               gocore.NewStat("legacy"),
-		blockchainClient:    blockchainClient,
-		validationClient:    validationClient,
-		subtreeStore:        subtreeStore,
-		tempStore:           tempStore,
-		utxoStore:           utxoStore,
-		subtreeValidation:   subtreeValidation,
-		blockValidation:     blockValidation,
-		blockAssemblyClient: blockAssemblyClient,
-		peerRegistry:        peerRegistry,
+		blockchainClient:    deps.BlockchainClient,
+		validationClient:    deps.ValidationClient,
+		subtreeStore:        deps.SubtreeStore,
+		tempStore:           deps.TempStore,
+		utxoStore:           deps.UtxoStore,
+		subtreeValidation:   deps.SubtreeValidation,
+		blockValidation:     deps.BlockValidation,
+		blockAssemblyClient: deps.BlockAssemblyClient,
+		peerRegistry:        deps.PeerRegistry,
 	}
 }
 
@@ -520,7 +536,8 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 // operator observability. Returns (adds, capHits): `adds` counts
 // AddRebroadcastInventory sends that were dropped because
 // modifyRebroadcastInv was full; `capHits` counts in-handler adds that
-// were dropped because pendingInvs was at maxRebroadcastInventory.
+// were dropped because the queue was full of already-retried entries. Both are
+// also exported as Prometheus counters, see metrics.go.
 //
 // Both counters are cumulative since process start and are never reset.
 // Returns (0, 0) when the internal server is not initialised.
@@ -682,6 +699,9 @@ func (s *Server) banPeer(peerAddr string, until int64) error {
 //   - ctx: Context that controls when logging should stop
 func (s *Server) logPeerStats(ctx context.Context) {
 	ctxLogger := s.logger.WithTraceContext(ctx)
+
+	var gapWatch slotGapWatch
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -701,6 +721,22 @@ func (s *Server) logPeerStats(ctx context.Context) {
 				lastRecvElapsed := time.Since(time.Unix(p.GetLastRecv(), 0))
 				ctxLogger.Infof("[Legacy Server] Peer %s (ID: %d) - Services: %s, Inbound: %t, Bytes Sent: %d, Bytes Received: %d, Ping: %dµs, Last Send: %v ago, Last Recv: %v ago, Height: %d, BanScore: %d",
 					p.GetAddr(), p.GetId(), p.GetServices(), p.GetInbound(), p.GetBytesSent(), p.GetBytesReceived(), p.GetPingTime(), lastSendElapsed, lastRecvElapsed, p.GetCurrentHeight(), p.GetBanscore())
+			}
+
+			// The connection manager's own count against the automatic outbound
+			// peers actually connected: a gap that lasts is a leaked slot, which
+			// stops the node dialling and leaves it syncing on fewer peers. Both
+			// sides leave out permanent (addnode) peers; the peer_api list has no
+			// persistent flag, so the connected side is read from the server peers.
+			if s.server != nil && s.server.connManager != nil {
+				outbound := automaticOutboundConnected(s.server.getPeers())
+
+				counted := s.server.connManager.AutomaticOutboundCount()
+				ctxLogger.Infof("[Legacy Server] outbound: %d automatic slots counted by the connection manager, %d automatic outbound peers connected", counted, outbound)
+
+				if gap := gapWatch.observe(counted, outbound); gap > 0 {
+					ctxLogger.Warnf("[Legacy Server] %d outbound slots are counted with no peer behind them, for over a minute: the connection manager will not dial to replace them", gap)
+				}
 			}
 
 			state, err := s.blockchainClient.GetFSMCurrentState(ctx)
@@ -754,7 +790,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	s.logger.Infof("[Legacy Server] Starting internal server...")
 	go s.server.Start()
-	s.logger.Infof("[Legacy Server] Internal server started on port %s", s.settings.Legacy.GRPCListenAddress)
+	s.logger.Infof("[Legacy Server] Internal server started on port %s", s.settings.Legacy.GRPCListenAddress) // urlsafe: a host:port listen address, no userinfo
 
 	// Start periodic peer statistics logging
 	go s.logPeerStats(ctx)

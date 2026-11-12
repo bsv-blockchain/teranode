@@ -97,6 +97,22 @@ func (c settingsConf) resolve(key, settingsContext string) (string, bool) {
 	return v, ok
 }
 
+var placeholderRE = regexp.MustCompile(`\$\{([A-Za-z0-9_]+)\}`)
+
+// expandPlaceholders replaces ${VAR} references with the value settings.conf
+// itself defines for VAR in the given context, mirroring gocore's own
+// variable substitution. Unknown placeholders are left untouched.
+func (c settingsConf) expandPlaceholders(value, settingsContext string) string {
+	return placeholderRE.ReplaceAllStringFunc(value, func(ph string) string {
+		key := placeholderRE.FindStringSubmatch(ph)[1]
+		if v, ok := c.resolve(key, settingsContext); ok {
+			return v
+		}
+
+		return ph
+	})
+}
+
 var settingsLineRE = regexp.MustCompile(`^([A-Za-z0-9_.]+)\s*=\s*(.*)$`)
 
 // readCommittedSettingsConf parses the repository's settings.conf. Values keep
@@ -105,10 +121,30 @@ var settingsLineRE = regexp.MustCompile(`^([A-Za-z0-9_.]+)\s*=\s*(.*)$`)
 func readCommittedSettingsConf(t *testing.T) settingsConf {
 	t.Helper()
 
-	path := filepath.Join("..", "settings.conf")
+	return readSettingsFile(t, filepath.Join("..", "settings.conf"))
+}
+
+// layered returns a copy of c with every key from over written on top, the way
+// a mounted settings_local.conf overrides settings.conf at runtime.
+func (c settingsConf) layered(over settingsConf) settingsConf {
+	out := make(settingsConf, len(c)+len(over))
+	for k, v := range c {
+		out[k] = v
+	}
+
+	for k, v := range over {
+		out[k] = v
+	}
+
+	return out
+}
+
+// readSettingsFile parses one committed settings-format file into key -> value.
+func readSettingsFile(t *testing.T, path string) settingsConf {
+	t.Helper()
 
 	data, err := os.ReadFile(path)
-	require.NoError(t, err, "committed settings.conf must be readable at %s", path)
+	require.NoError(t, err, "committed settings file must be readable at %s", path)
 
 	conf := make(settingsConf)
 
@@ -123,16 +159,20 @@ func readCommittedSettingsConf(t *testing.T) settingsConf {
 			continue
 		}
 
-		// Strip a trailing comment, then surrounding quotes.
-		value := m[2]
-		if idx := strings.Index(value, " #"); idx >= 0 {
-			value = value[:idx]
+		// Strip a comment, then one pair of surrounding quotes, exactly as
+		// gocore does: it cuts at the first # and unquotes only a value longer
+		// than two characters, so `key = ""` stays the literal "" at runtime.
+		value, _, _ := strings.Cut(m[2], "#")
+		value = strings.TrimSpace(value)
+
+		if len(value) > 2 && value[0] == '"' && value[len(value)-1] == '"' {
+			value = value[1 : len(value)-1]
 		}
 
-		conf[m[1]] = strings.Trim(strings.TrimSpace(value), `"`)
+		conf[m[1]] = value
 	}
 
-	require.NotEmpty(t, conf, "parsed no settings from settings.conf")
+	require.NotEmpty(t, conf, "parsed no settings from %s", path)
 
 	return conf
 }

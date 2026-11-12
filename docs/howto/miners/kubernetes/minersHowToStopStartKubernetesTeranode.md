@@ -1,6 +1,6 @@
 # How to Start and Stop Teranode in Kubernetes
 
-Last modified: 6-March-2025
+Last modified: 7-September-2026
 
 ## Introduction
 
@@ -45,8 +45,11 @@ kubectl logs -n teranode-operator -l app=blockchain -f
 
 ### 3. Start Syncing (if needed)
 
+If the restored FSM state is `IDLE`, start catch-up explicitly. A normal
+restart otherwise resumes its persisted state.
+
 ```bash
-kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate -fsmstate running
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate catchingblocks
 ```
 
 ## Stopping Teranode

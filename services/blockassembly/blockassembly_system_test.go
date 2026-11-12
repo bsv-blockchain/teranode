@@ -22,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
@@ -474,17 +475,17 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx1, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1})
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}, false))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2})
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}, false))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3})
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}, false))
 
 	t.Log("Waiting for transactions to be processed...")
 
@@ -611,15 +612,15 @@ func TestShouldHandleReorg(t *testing.T) {
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx1, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1})
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}, false))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2})
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}, false))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3})
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}, false))
 
 	// Add Chain A block (lower difficulty)
 	t.Log("Adding Chain A block...")
@@ -679,12 +680,8 @@ func TestShouldHandleReorg(t *testing.T) {
 	err = waitForBestBlockHash(ctx, ba.blockchainClient, chainBHeader1.Hash(), 10*time.Second)
 	require.NoError(t, err, "Timeout waiting for reorganization to Chain B")
 
-	// Additional wait to ensure block assembly has processed the reorg
-	time.Sleep(500 * time.Millisecond)
-
 	// Verify transactions are still present after reorg
-	mc2, st2, err := ba.blockAssembler.GetMiningCandidate(context.Background())
-	require.NoError(t, err)
+	mc2, st2 := waitForMiningCandidate(t, ba.blockAssembler, chainBHeader1.Hash(), 10*time.Second)
 	require.NotNil(t, mc2)
 	require.NotEmpty(t, st2)
 
@@ -737,6 +734,34 @@ func waitForAssemblerBlock(ctx context.Context, assembler *BlockAssembler, expec
 	}
 
 	return errors.NewProcessingError("timeout waiting for block assembler to adopt block %s", expectedHash)
+}
+
+// waitForMiningCandidate polls until block assembly hands out a mining candidate built on
+// expectedHash with at least one subtree. Block assembly adopts a block before it finishes
+// processing the announcement, and until then it returns an empty template, so the adopted
+// block alone does not mean the candidate is ready.
+func waitForMiningCandidate(t *testing.T, assembler *BlockAssembler, expectedHash *chainhash.Hash, timeout time.Duration) (*model.MiningCandidate, []*subtree.Subtree) {
+	t.Helper()
+
+	var (
+		mc       *model.MiningCandidate
+		subtrees []*subtree.Subtree
+	)
+
+	require.Eventually(t, func() bool {
+		var err error
+
+		mc, subtrees, err = assembler.GetMiningCandidate(context.Background())
+		if err != nil || mc == nil {
+			return false
+		}
+
+		prevHash := chainhash.Hash(mc.PreviousHash)
+
+		return prevHash.IsEqual(expectedHash) && len(subtrees) > 0
+	}, timeout, 100*time.Millisecond, "timeout waiting for a mining candidate on %s", expectedHash)
+
+	return mc, subtrees
 }
 
 func waitForBestBlockHash(ctx context.Context, blockchainClient blockchain.ClientI, expectedHash *chainhash.Hash, timeout time.Duration) error {
@@ -851,15 +876,15 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx1, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1})
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}, false))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2})
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}, false))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3})
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}, false))
 
 	// Add Chain A blocks (lower difficulty)
 	t.Log("Adding Chain A blocks...")
@@ -907,14 +932,10 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	err = waitForBestBlockHash(ctx, ba.blockchainClient, chainAHeader4.Hash(), 10*time.Second)
 	require.NoError(t, err, "Timeout waiting for Chain A block 4 to be processed")
 
-	// Additional wait to ensure block assembly has processed the block
-	time.Sleep(500 * time.Millisecond)
-
 	// Get mining candidate while on Chain A
 	t.Log("Getting mining candidate on Chain A...")
 
-	mc1, subtrees1, err := ba.blockAssembler.GetMiningCandidate(context.Background())
-	require.NoError(t, err)
+	mc1, subtrees1 := waitForMiningCandidate(t, ba.blockAssembler, chainAHeader4.Hash(), 10*time.Second)
 	require.NotNil(t, mc1)
 	require.NotEmpty(t, subtrees1)
 
@@ -947,8 +968,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	require.NoError(t, err, "Timeout waiting for block assembler to adopt Chain B")
 
 	// Verify transactions are still present after reorg
-	mc2, subtrees2, err := ba.blockAssembler.GetMiningCandidate(context.Background())
-	require.NoError(t, err)
+	mc2, subtrees2 := waitForMiningCandidate(t, ba.blockAssembler, chainBHeader1.Hash(), 10*time.Second)
 	require.NotNil(t, mc2)
 	require.NotEmpty(t, subtrees2)
 

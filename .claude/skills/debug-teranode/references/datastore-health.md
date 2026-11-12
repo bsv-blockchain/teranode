@@ -123,7 +123,7 @@ service is often a Kafka problem. Redpanda speaks the Kafka API; the same checks
 |---|---|---|
 | **Consumer-group lag** per topic | growing | consumer can't keep up with the producer (the consumer service is the bottleneck) |
 | Under-replicated / offline partitions | >0 | broker/disk problem; durability at risk |
-| Partition count vs consumer concurrency | — | effective concurrency = `partitions / consumer_ratio`, *not* the `kafkaWorkers` setting |
+| Partition count vs consumer concurrency | — | effective concurrency = partition count (one group member per instance, one goroutine per assigned partition). `consumer_ratio` does not exist in the code and `*_kafkaWorkers` is never read |
 | Broker disk usage | near full | Redpanda/Kafka will throttle or stall producers |
 | Topic throughput (msgs/s in vs out) | out << in | backlog building |
 
@@ -135,7 +135,7 @@ Map lag to the responsible consumer:
 | `txmeta` | Subtree Validation behind |
 | `blocks` | Block Validation behind / catching up |
 | `subtrees` | Subtree Validation behind |
-| `blocksFinal` | Block Persister behind |
+| `blocksFinal` | Legacy P2P behind (Block Persister has no Kafka consumer — it polls Blockchain over gRPC; check `blockpersister_persistSleep` / DB query latency instead) |
 | `rejectedTx` | P2P behind (low impact) |
 
 Lag on `blocks` while the node is in **CATCHINGBLOCKS** is expected during sync — correlate

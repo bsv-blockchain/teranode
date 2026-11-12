@@ -54,22 +54,19 @@ func TestLegacyTxBroadcast942_TeranodeRPCToSVMempool(t *testing.T) {
 
 	ctx := t.Context()
 
-	// SV's RPC/P2P use non-default ports so this test runs alongside the
-	// node-validation harness stack (which holds 18332/18333/18444).
+	// SV's RPC/P2P use ports picked free at start (svnode FreePorts), so this
+	// test runs alongside the node-validation harness stack (which holds
+	// 18332/18333/18444). The fixed 48332/48333 it used before sat in the
+	// Linux ephemeral range and intermittently failed to bind in CI.
 	// Teranode's legacy listener binds an ephemeral port (":0", OS-assigned):
 	// 942 only dials OUT (ConnectPeers=[sv]) and SV never connects back, so a
 	// fixed inbound port is unnecessary. A fixed port (was 48444) intermittently
 	// failed to bind under CI load (TIME_WAIT/teardown of preceding containers),
 	// which used to crash the whole package — see issue #1032.
-	const (
-		svRPCPort            = 48332
-		svP2PPort            = 48333
-		teranodeLegacyListen = "0.0.0.0:0"
-	)
+	const teranodeLegacyListen = "0.0.0.0:0"
 
 	opts := svnode.DefaultOptions()
-	opts.RPCPort = svRPCPort
-	opts.P2PPort = svP2PPort
+	opts.FreePorts = true
 	sv := svnode.New(opts)
 	require.NoError(t, sv.Start(ctx), errStartSVNode)
 	// Use a fresh context for the cleanup Stop: t.Context() is cancelled

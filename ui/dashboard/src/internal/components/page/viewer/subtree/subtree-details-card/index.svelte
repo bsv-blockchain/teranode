@@ -31,18 +31,19 @@
     data = {},
     display = DetailTab.overview,
     blockHash = '',
+    index,
     ondisplay,
   }: {
     data?: any
     display?: DetailTab
     blockHash?: string
+    index?: number
     ondisplay?: (detail: { value: string }) => void
   } = $props()
 
   const expandedData = $derived(data?.expandedData)
   const isOverview = $derived(display === DetailTab.overview)
   const isJson = $derived(display === DetailTab.json)
-  const isMerkleProof = $derived(display === DetailTab.merkleproof)
 
   let paginatedData: any = $state(null)
   let page = $state(1)
@@ -51,7 +52,9 @@
 
   const totalPages = $derived(Math.max(1, Math.ceil(totalItems / pageSize)))
   const showPagerNav = $derived(totalPages > 1)
-  const showPagerSize = $derived(showPagerNav || (totalPages === 1 && paginatedData?.Nodes?.length > 5))
+  const showPagerSize = $derived(
+    showPagerNav || (totalPages === 1 && paginatedData?.Nodes?.length > 5),
+  )
 
   function onDisplay(value) {
     ondisplay?.({ value })
@@ -91,35 +94,37 @@
   })
 </script>
 
-<Card title={t(`${baseKey}.title`, { height: expandedData.height })}>
+<Card
+  title={index === undefined ? t(`${baseKey}.title_generic`) : t(`${baseKey}.title`, { index })}
+>
   {#snippet subtitle()}
-  <div class="copy-link">
-    <div class="hash">{expandedData.hash}</div>
-    <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
-      <ActionStatusIcon
-        icon="icon-duplicate-line"
-        action={copyTextToClipboardVanilla}
-        actionData={expandedData.hash}
-        size={15}
-      />
+    <div class="copy-link">
+      <div class="hash">{expandedData.hash}</div>
+      <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
+        <ActionStatusIcon
+          icon="icon-duplicate-line"
+          action={copyTextToClipboardVanilla}
+          actionData={expandedData.hash}
+          size={15}
+        />
+      </div>
+      <div class="icon" use:$tippy={{ content: t('tooltip.copy-url-to-clipboard') }}>
+        <ActionStatusIcon
+          icon="icon-bracket-line"
+          action={copyTextToClipboardVanilla}
+          actionData={getItemApiUrl(ItemType.subtree, expandedData.hash)}
+          size={15}
+        />
+      </div>
+      <button
+        class="icon"
+        onclick={() => onReverseHash(expandedData.hash)}
+        use:$tippy={{ content: t('tooltip.reverse-hash') }}
+        type="button"
+      >
+        <Icon name="icon-reeverse-line" size={15} />
+      </button>
     </div>
-    <div class="icon" use:$tippy={{ content: t('tooltip.copy-url-to-clipboard') }}>
-      <ActionStatusIcon
-        icon="icon-bracket-line"
-        action={copyTextToClipboardVanilla}
-        actionData={getItemApiUrl(ItemType.subtree, expandedData.hash)}
-        size={15}
-      />
-    </div>
-    <button
-      class="icon"
-      onclick={() => onReverseHash(expandedData.hash)}
-      use:$tippy={{ content: t('tooltip.reverse-hash') }}
-      type="button"
-    >
-      <Icon name="icon-reeverse-line" size={15} />
-    </button>
-  </div>
   {/snippet}
   <div class="content">
     <div class="tabs">
@@ -136,13 +141,6 @@
         selected={isJson}
         variant={isJson ? 'tertiary' : 'primary'}
         onclick={() => onDisplay('json')}>{t(`${baseKey}.tab.json`)}</Button
-      >
-      <Button
-        size="medium"
-        hasFocusRect={false}
-        selected={isMerkleProof}
-        variant={isMerkleProof ? 'tertiary' : 'primary'}
-        onclick={() => onDisplay('merkleproof')}>{t(`${baseKey}.tab.merkleproof`)}</Button
       >
     </div>
     {#if isOverview}
@@ -248,9 +246,6 @@
           />
         </div>
       {/if}
-    {:else if isMerkleProof}
-      <div class="merkle-proof">
-      </div>
     {/if}
   </div>
 </Card>
@@ -304,13 +299,6 @@
     text-align: center;
     padding: 40px;
   }
-
-  .merkle-proof {
-    box-sizing: var(--box-sizing);
-    margin-top: 32px;
-    width: 100%;
-  }
-
 
   .fields {
     box-sizing: var(--box-sizing);

@@ -196,7 +196,13 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 	var (
 		childRecords []aerospike.BatchRecordIfc
 		childOwner   []int // childRecords[k] belongs to batch[childOwner[k]]
+		childIndex   []int // childRecords[k] is pagination record childIndex[k] of that tx
 	)
+
+	// A locked master loses its deleteAtHeight, and the setLocked of each page clears the page's own
+	// without a version. The pages are cleared again with the master's version, so a page write for an
+	// earlier stamp that is still in flight cannot restamp the pages of a locked master.
+	lockClears := make(map[int]childDAHItem)
 
 	for idx, batchRecord := range batchRecords {
 		if handled[idx] {
@@ -259,6 +265,10 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 			continue
 		}
 
+		if batchItem.setValue && res.HasDAHVersion {
+			lockClears[idx] = childDAHItem{TxID: &batch[idx].txHash, ChildCount: extraRecords, Version: reportedDAHVersion(res)}
+		}
+
 		// Child/extra records are written inline by the pass below rather than
 		// re-queued into the lockedBatcher: re-entry from inside the batcher
 		// callback deadlocks a draining Close (see the function doc). Defer this
@@ -279,6 +289,7 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 				batch[idx].setValue,
 			))
 			childOwner = append(childOwner, idx)
+			childIndex = append(childIndex, i)
 		}
 	}
 
@@ -301,7 +312,7 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 
 				if childRecord.BatchRec().Err != nil {
 					s.demoteNativeOnUnsupported(childRecord.BatchRec().Err)
-					childErr[idx] = errors.NewProcessingError("could not write locked child record", childRecord.BatchRec().Err)
+					childErr[idx] = errors.NewProcessingError("[setLocked][%s] could not write pagination child record %d", describeLockedBatchItem(batch[idx]), childIndex[k], childRecord.BatchRec().Err)
 					continue
 				}
 
@@ -314,8 +325,28 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 				if perr != nil {
 					childErr[idx] = errors.NewProcessingError("could not parse child response", perr)
 				} else if cres.Status != LuaStatusOK {
-					childErr[idx] = errors.NewProcessingError("error from setLocked child: %s", cres.Message)
+					childErr[idx] = errors.NewProcessingError("[setLocked][%s] pagination child record %d rejected, so the record cannot be unlocked; if it is missing the record is incomplete and needs a complete delete: %s", describeLockedBatchItem(batch[idx]), childIndex[k], cres.Message)
 				}
+			}
+		}
+	}
+
+	var (
+		clearItems []childDAHItem
+		clearOwner []int
+	)
+
+	for idx, item := range lockClears {
+		if childErr[idx] == nil {
+			clearItems = append(clearItems, item)
+			clearOwner = append(clearOwner, idx)
+		}
+	}
+
+	if len(clearItems) > 0 {
+		if err := s.setDAHForChildRecordsMultiAt(clearItems); err != nil {
+			for _, idx := range clearOwner {
+				childErr[idx] = errors.NewProcessingError("[setLocked][%s] could not clear the deleteAtHeight of the pagination records of the locked tx", describeLockedBatchItem(batch[idx]), err)
 			}
 		}
 	}

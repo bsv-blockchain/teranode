@@ -2,6 +2,7 @@ package validator
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
@@ -615,4 +617,204 @@ func TestValidate_OutpointOnlySpend_BIP68HeightSkipped(t *testing.T) {
 	// AFTER fix: OutpointOnlySpend=true short-circuits BIP68 → returns nil.
 	_, err = v.ValidateWithOptions(ctx, childTx, 1000, opts)
 	require.NoError(t, err, "BIP68 sequence-lock must be skipped on OutpointOnlySpend fast path")
+}
+
+// outpointOnlyFixture is one isolated outpoint-only scenario: its own SQL-memory
+// store (keyed by the URL path, so a distinct path per case), its own funded
+// coinbase parent and its own un-extended child spending that parent's output:0.
+//
+// Per-case isolation is mandatory, not tidiness: an admitted outpoint-only
+// validation CONSUMES the parent output, so a shared fixture would make a later
+// case's outcome depend on whether an earlier case had already spent the UTXO
+// rather than on the bound under test.
+type outpointOnlyFixture struct {
+	store *sql.Store
+	child *bt.Tx
+}
+
+// newOutpointOnlyFixture builds the fixture. tipHeight is the store's own chain
+// tip (what the tip bound reads); parentHeight is the height the coinbase parent
+// is created at and must be at or below tipHeight, or the parent reads back
+// IMMATURE and the spend fails for a reason unrelated to the bound.
+func newOutpointOnlyFixture(t *testing.T, ctx context.Context, logger ulogger.Logger,
+	tSettings *settings.Settings, storePath string, tipHeight, parentHeight uint32) *outpointOnlyFixture {
+	t.Helper()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///" + storePath)
+	require.NoError(t, err)
+
+	store, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+	require.NoError(t, store.SetBlockHeight(tipHeight))
+	require.NoError(t, store.SetMedianBlockTime(1700000000))
+
+	coinbaseScript, err := bscript.NewP2PKHFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+	require.NoError(t, err)
+
+	parentTx := bt.NewTx()
+	coinbaseInput := &bt.Input{
+		PreviousTxOutIndex: 0xffffffff,
+		SequenceNumber:     0xffffffff,
+		UnlockingScript:    bscript.NewFromBytes([]byte{0x00}),
+	}
+	require.NoError(t, coinbaseInput.PreviousTxIDAdd(new(chainhash.Hash)))
+	parentTx.Inputs = append(parentTx.Inputs, coinbaseInput)
+	parentTx.Outputs = append(parentTx.Outputs, &bt.Output{Satoshis: 500, LockingScript: coinbaseScript})
+
+	_, err = store.Create(ctx, parentTx, parentHeight, utxostore.WithSkipExtendedInputs(true))
+	require.NoError(t, err)
+
+	childTx := bt.NewTx()
+	childInput := &bt.Input{
+		PreviousTxOutIndex: 0,
+		SequenceNumber:     0xfffffffe,
+		UnlockingScript:    bscript.NewFromBytes([]byte{0x00}),
+	}
+	require.NoError(t, childInput.PreviousTxIDAdd(parentTx.TxIDChainHash()))
+	childTx.Inputs = append(childTx.Inputs, childInput)
+	childTx.Outputs = append(childTx.Outputs, &bt.Output{Satoshis: 400, LockingScript: coinbaseScript})
+
+	return &outpointOnlyFixture{store: store, child: childTx}
+}
+
+func (f *outpointOnlyFixture) validator(logger ulogger.Logger, tSettings *settings.Settings) *Validator {
+	return &Validator{
+		logger:      logger,
+		utxoStore:   f.store,
+		settings:    tSettings,
+		txValidator: NewTxValidator(logger, tSettings),
+		stats:       gocore.NewStat("validator"),
+	}
+}
+
+// TestValidate_OutpointOnlySpend_TipBound is the regression guard for the second
+// checkpoint bound: the pre-existing guard bounds the height the CALLER asserts,
+// which an attacker simply sets low, so it is satisfied by construction. This one
+// bounds the height the NODE'S OWN CHAIN has reached, which the caller cannot set.
+//
+// The caller height stays at 500 in every row — comfortably below the checkpoint,
+// so the caller-height guard passes and the only thing varying is the store's own
+// tip. The 1,000,000 row is the boundary the `>` comparison claims to admit and is
+// the initial-block-download regression guard: validating the block AT checkpoint
+// height must still work. The 1,000,001 row is what used to pass.
+func TestValidate_OutpointOnlySpend_TipBound(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	const checkpointHeight = 1_000_000
+
+	cases := []struct {
+		name      string
+		tipHeight uint32
+		rejected  bool
+	}{
+		{name: "tip below checkpoint", tipHeight: checkpointHeight - 1},
+		{name: "tip at checkpoint", tipHeight: checkpointHeight},
+		{name: "tip past checkpoint", tipHeight: checkpointHeight + 1, rejected: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: checkpointHeight}}
+
+			f := newOutpointOnlyFixture(t, ctx, logger, tSettings,
+				fmt.Sprintf("outpointonly_tipbound_%d", tc.tipHeight), tc.tipHeight, 499)
+
+			opts := &Options{
+				SkipUtxoCreation:     true,
+				SkipScriptValidation: true,
+				SkipPolicyChecks:     true,
+				OutpointOnlySpend:    true,
+				IgnoreLocked:         true,
+			}
+
+			_, err := f.validator(logger, tSettings).ValidateWithOptions(ctx, f.child, 500, opts)
+
+			if !tc.rejected {
+				require.NoError(t, err,
+					"a node whose own tip is at or below the checkpoint must still admit the fast path")
+
+				return
+			}
+
+			require.Error(t, err, "a node whose own tip is past the checkpoint must reject the fast path")
+			require.Contains(t, err.Error(), "chain tip is past the highest checkpoint")
+			require.Contains(t, err.Error(), fmt.Sprintf("%d", tc.tipHeight),
+				"the error must name the tip height the operator can act on")
+		})
+	}
+}
+
+// TestValidate_OutpointOnlySpend_LegacyCandidateBlockShape pins the tip bound
+// against the shape the legitimate producer actually sends: legacy netsync's
+// below-checkpoint fast path, validating candidate block C while the tip is still
+// C-1. That ordering is not incidental — netsync validates block H's transactions
+// inside prepareSubtrees BEFORE H is handed to block validation, and block
+// dispatch is serial (a single goroutine consumes the block queue), so the tip
+// cannot reach H while H is being validated.
+//
+// Sub-case 1 is that boundary and must succeed. Sub-case 2 is the same request on
+// a node whose tip has genuinely moved past the checkpoint and must be rejected.
+func TestValidate_OutpointOnlySpend_LegacyCandidateBlockShape(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	const checkpointHeight = 1_000_000
+
+	// The option set handle_block.go's below-checkpoint fast path builds, not a
+	// minimal subset: a guard that only bit on a reduced option set would not
+	// prove anything about the real caller.
+	legacyOpts := func() *Options {
+		return &Options{
+			SkipUtxoCreation:          true,
+			AddTXToBlockAssembly:      false,
+			SkipPolicyChecks:          true,
+			InBlock:                   true,
+			SkipTxMetaPublishing:      true,
+			SkipScriptValidation:      true,
+			CandidateBlockTime:        1700000000,
+			CandidateParentMedianTime: 1700000000,
+			CreateConflicting:         true,
+			OutpointOnlySpend:         true,
+			IgnoreLocked:              true,
+		}
+	}
+
+	cases := []struct {
+		name      string
+		tipHeight uint32
+		rejected  bool
+	}{
+		{name: "candidate block at checkpoint, tip one behind", tipHeight: checkpointHeight - 1},
+		{name: "same request once the tip is past the checkpoint", tipHeight: checkpointHeight + 1, rejected: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: checkpointHeight}}
+
+			f := newOutpointOnlyFixture(t, ctx, logger, tSettings,
+				fmt.Sprintf("outpointonly_candidateshape_%d", tc.tipHeight), tc.tipHeight, tc.tipHeight-1)
+
+			// Caller height is the candidate block C itself, which the pre-existing
+			// caller-height guard admits (`>` , not `>=`).
+			_, err := f.validator(logger, tSettings).ValidateWithOptions(ctx, f.child, checkpointHeight, legacyOpts())
+
+			if !tc.rejected {
+				require.NoError(t, err,
+					"the checkpoint-proven legacy caller must still work at the boundary")
+
+				return
+			}
+
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "chain tip is past the highest checkpoint")
+			require.Contains(t, err.Error(), fmt.Sprintf("%d", tc.tipHeight),
+				"the error must name the tip height the operator can act on")
+		})
+	}
 }

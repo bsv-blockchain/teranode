@@ -41,6 +41,14 @@ type Options struct {
 	HashPrefix int
 	// AllowOverwrite determines if existing blobs can be overwritten
 	AllowOverwrite bool
+	// ExclusivePublish makes a no-overwrite write in the file store exclusive (FileOption).
+	// Without it the file store refuses a key that exists with a check made before the body
+	// is written, and of two writers racing past that check the later publish replaces the
+	// earlier one. With it the blob is published by hard-linking the finished temporary file
+	// to its name, which fails if the name exists, so exactly one of the two is told it
+	// created the blob and the other gets ErrBlobAlreadyExists. Ignored when AllowOverwrite
+	// is set, and by every other store.
+	ExclusivePublish bool
 	// SkipHeader determines if the file header should be skipped for easier CLI readability
 	SkipHeader bool
 	// PersistSubDir is a subdirectory for persistent storage in tiered storage models
@@ -58,6 +66,12 @@ type Options struct {
 	// StoreType identifies which blob store this is (StoreOption)
 	// Used by blockchain service to identify which store this is in the deletion queue
 	StoreType storetypes.BlobStoreType
+	// HTTPAuthToken is the shared secret the HTTP blob store presents on mutating
+	// requests (StoreOption)
+	HTTPAuthToken string
+	// HTTPAuthTokenSet records that WithHTTPAuthToken was given, so an explicit empty token
+	// is distinguishable from no option at all (StoreOption)
+	HTTPAuthTokenSet bool
 }
 
 // StoreOption is a function type for configuring store-level options.
@@ -159,12 +173,52 @@ func WithStoreType(storeType storetypes.BlobStoreType) StoreOption {
 	}
 }
 
+// WithHTTPAuthToken sets the shared secret the HTTP blob store presents on mutating
+// requests. It is an option rather than a URL parameter because store URLs are logged
+// verbatim (see services/pruner/blob_deletion_worker.go).
+func WithHTTPAuthToken(token string) StoreOption {
+	return func(s *Options) {
+		s.HTTPAuthToken = token
+		s.HTTPAuthTokenSet = true
+	}
+}
+
 // Per-call options
 
 // WithDeleteAt configures the DAH for the file.
 func WithDeleteAt(dah uint32) FileOption {
 	return func(s *Options) {
 		s.DAH = dah
+	}
+}
+
+// WithExclusivePublish asks the file store to publish a no-overwrite write exclusively
+// (see Options.ExclusivePublish). The legacy sync's subtree writer passes it, because it
+// records only the subtree files it created and must never be told it created one another
+// writer published. It costs a crash-left temporary name that is a second hard link to the
+// blob, and a store on a filesystem without hard links falls back to a plain rename.
+func WithExclusivePublish() FileOption {
+	return func(s *Options) {
+		s.ExclusivePublish = true
+	}
+}
+
+// WithNoDAH turns Delete-At-Height off for one operation, whatever retention the
+// store itself was built with. It is the file-level counterpart of the
+// WithDisableDAH store option, and the counterpart of WithNoHashPrefix below:
+// something a caller can pass to undo a store-level default it does not own.
+//
+// It exists because MergeOptions copies the store's BlockHeightRetention into
+// every operation BEFORE any file option runs, and the file store then derives a
+// DAH from that retention for any blob that has none of its own. A caller that
+// owns the whole lifetime of the blobs it writes — deleting them itself, on its
+// own schedule, and needing them present until it does — otherwise has no way to
+// say so, and would silently start losing blobs the day somebody gave its store
+// a retention. Pass it on every operation for such a blob, not only the write.
+func WithNoDAH() FileOption {
+	return func(s *Options) {
+		s.DAH = 0
+		s.DisableDAH = true
 	}
 }
 
@@ -258,6 +312,12 @@ func MergeOptions(storeOpts *Options, fileOpts []FileOption) *Options {
 	return options
 }
 
+// AllowOverwriteQueryParam is the query key an HTTP blob client sets on a POST that asks to
+// replace an existing blob. Only HTTPBlobServer.handleSet reads it, and only for a caller that
+// presented the shared secret; FileOptionsToQuery never emits it and QueryToFileOptions never
+// reads it, so no other request can carry or honour it.
+const AllowOverwriteQueryParam = "allowOverwrite"
+
 // FileOptionsToQuery converts FileOptions to URL query parameters
 // FileOptionsToQuery converts FileOptions to URL query parameters.
 // This is useful for transmitting blob options over HTTP or other URL-based protocols.
@@ -288,10 +348,6 @@ func FileOptionsToQuery(fileType fileformat.FileType, opts ...FileOption) url.Va
 		query.Set("filename", options.Filename)
 	}
 
-	if options.AllowOverwrite {
-		query.Set("allowOverwrite", "true")
-	}
-
 	return query
 }
 
@@ -308,6 +364,11 @@ func FileOptionsToQuery(fileType fileformat.FileType, opts ...FileOption) url.Va
 // The "blockHeightRetention" query key, despite its name, maps to WithDeleteAt() and is
 // treated as an absolute DAH value (not a relative retention window). It is not sent in
 // normal peer-to-peer blob transfers; it exists for explicit override scenarios only.
+//
+// Overwrite is deliberately NOT reconstructed here: this runs for every method, before the
+// caller is known. HTTPBlobServer.handleSet reads AllowOverwriteQueryParam itself and honours
+// it only for a caller that passed the bearer-token check. The "filename" key is still
+// honoured; sanitising it is tracked separately in #4847.
 //
 // Parameters:
 //   - query: URL query parameters to convert
@@ -327,10 +388,6 @@ func QueryToFileOptions(query url.Values) []FileOption {
 		opts = append(opts, WithFilename(filename))
 	}
 
-	if allowOverwrite := query.Get("allowOverwrite"); allowOverwrite == "true" {
-		opts = append(opts, WithAllowOverwrite(true))
-	}
-
 	return opts
 }
 
@@ -338,18 +395,14 @@ func QueryToFileOptions(query url.Values) []FileOption {
 // path traversal attacks. It resolves both paths to absolute form and checks that
 // the target path is a subdirectory of the base path.
 func validatePathWithinBase(basePath, targetPath string) error {
-	absBase, err := filepath.Abs(basePath)
+	absBase, err := absolutePath(basePath)
 	if err != nil {
 		return err
 	}
-	absTarget, err := filepath.Abs(targetPath)
+	absTarget, err := absolutePath(targetPath)
 	if err != nil {
 		return err
 	}
-
-	// Clean paths to remove any . or .. components
-	absBase = filepath.Clean(absBase)
-	absTarget = filepath.Clean(absTarget)
 
 	// Ensure target is within base (with proper separator handling)
 	// The target must either equal the base or start with base + separator
@@ -358,6 +411,20 @@ func validatePathWithinBase(basePath, targetPath string) error {
 	}
 
 	return nil
+}
+
+// absolutePath cleans a path that is already absolute, removing any . or .. components, and
+// resolves a relative one against the working directory. filepath.Abs behaves the same way on
+// unix, but only as an implementation detail; spelling the split out here makes the guarantee
+// local. The file store hands ConstructFilename an absolute base and joins every target onto
+// it, so on the read and write path neither call reaches os.Getwd, which stats "." and $PWD
+// each time. Only a relative base, such as the null store's empty one, still pays for that.
+func absolutePath(path string) (string, error) {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), nil
+	}
+
+	return filepath.Abs(path)
 }
 
 func (o *Options) ConstructFilename(basePath string, key []byte, fileType fileformat.FileType) (string, error) {

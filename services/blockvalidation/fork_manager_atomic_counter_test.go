@@ -109,7 +109,7 @@ func TestForkManager_AtomicCounter_CleanupDuringProcessing(t *testing.T) {
 	// Start processing some blocks
 	numProcessing := 10
 	for i := 0; i < numProcessing; i++ {
-		fm.StartProcessingBlock(blockHashes[i])
+		fm.StartProcessingBlock(blockHashes[i], PriorityChainExtending)
 	}
 
 	// Verify initial state
@@ -193,7 +193,7 @@ func TestForkManager_AtomicCounter_NoCounterDrift(t *testing.T) {
 					hash[0] = byte(idx)
 					hash[1] = byte(j)
 
-					if fm.StartProcessingBlock(hash) {
+					if fm.StartProcessingBlock(hash, PriorityChainExtending) {
 						time.Sleep(5 * time.Millisecond)
 						fm.FinishProcessingBlock(hash)
 					}
@@ -280,7 +280,7 @@ func TestForkManager_AtomicCounter_RaceBetweenCleanupAndFinish(t *testing.T) {
 
 	// Start processing all blocks
 	for i := 0; i < numBlocks; i++ {
-		fm.StartProcessingBlock(blockHashes[i])
+		fm.StartProcessingBlock(blockHashes[i], PriorityChainExtending)
 	}
 
 	var wg sync.WaitGroup
@@ -432,7 +432,7 @@ func TestForkManager_AtomicCounter_CleanupOldForksWithProcessing(t *testing.T) {
 
 			// Mark half as processing
 			if i%2 == 0 {
-				fm.StartProcessingBlock(blockHash)
+				fm.StartProcessingBlock(blockHash, PriorityChainExtending)
 			}
 		}
 	}

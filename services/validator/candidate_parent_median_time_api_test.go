@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
-	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -83,50 +82,10 @@ func TestBuildValidateTxRequest_OmitsCandidateParentMedianTimeWhenZero(t *testin
 		"buildValidateTxRequest must leave CandidateParentMedianTime nil when Options.CandidateParentMedianTime is zero")
 }
 
-// TestBuildValidateTxHTTPQuery_PopulatesCandidateParentMedianTimeWhenSet pins
-// the HTTP fallback path. The fallback fires on gRPC ResourceExhausted (large
-// txs), and large txs validated in a fork / historical context still need the
-// candidate-parent MTP to land on the server side.
-func TestBuildValidateTxHTTPQuery_PopulatesCandidateParentMedianTimeWhenSet(t *testing.T) {
-	opts := &Options{CandidateParentMedianTime: 1699999000}
-	q := buildValidateTxHTTPQuery(opts, 420000)
-
-	require.Equal(t, "1699999000", q.Get("candidateParentMedianTime"))
-	require.Equal(t, "420000", q.Get("blockHeight"))
-}
-
-// TestBuildValidateTxHTTPQuery_OmitsCandidateParentMedianTimeWhenZero confirms
-// the HTTP path also avoids the field for requests that don't carry one.
-func TestBuildValidateTxHTTPQuery_OmitsCandidateParentMedianTimeWhenZero(t *testing.T) {
-	opts := &Options{}
-	q := buildValidateTxHTTPQuery(opts, 420000)
-
-	require.Equal(t, "", q.Get("candidateParentMedianTime"))
-}
-
-// TestExtractValidationParams_ReadsCandidateParentMedianTime pins the server-
-// side HTTP parse that pairs with buildValidateTxHTTPQuery. Closes the loop on
-// the HTTP fallback path for post-CSV consensus: client builds the query,
-// server reads it back.
-func TestExtractValidationParams_ReadsCandidateParentMedianTime(t *testing.T) {
-	e := echo.New()
-	req, err := echoRequestWithQuery(e, "candidateParentMedianTime=1699999000")
-	require.NoError(t, err)
-
-	_, opts := extractValidationParams(req)
-	require.Equal(t, uint32(1699999000), opts.CandidateParentMedianTime)
-}
-
-// TestExtractValidationParams_CandidateParentMedianTimeZeroWhenAbsent confirms
-// the parse is permissive of omitted fields.
-func TestExtractValidationParams_CandidateParentMedianTimeZeroWhenAbsent(t *testing.T) {
-	e := echo.New()
-	req, err := echoRequestWithQuery(e, "")
-	require.NoError(t, err)
-
-	_, opts := extractValidationParams(req)
-	require.Equal(t, uint32(0), opts.CandidateParentMedianTime)
-}
+// The query-build and query-parse cases that used to live here are gone: the
+// /tx endpoint no longer reads validation options from the query string, so
+// there is no HTTP projection of candidateParentMedianTime to pin on either
+// side. The gRPC projection below is the surviving wire.
 
 // TestOptionsFromValidateRequest_CandidateParentMedianTimeRoundTrip pins the
 // server-side gRPC option mapping. Combined with buildValidateTxRequest, this
@@ -139,32 +98,6 @@ func TestOptionsFromValidateRequest_CandidateParentMedianTimeRoundTrip(t *testin
 	require.NoError(t, err)
 
 	require.Equal(t, src.CandidateParentMedianTime, got.CandidateParentMedianTime)
-}
-
-// TestHTTPHandlerPath_CandidateParentMedianTime_EndToEnd mirrors what the /tx
-// HTTP handler does internally: parse the query string into Options, then
-// build the validator request from those Options. Pins the HTTP-fallback
-// handler path so a future regression dropping CandidateParentMedianTime at
-// either step is caught here, not at runtime in production — where post-CSV
-// consensus would hit selectFinalityComparisonTime's hard-error path with a
-// less-precise diagnostic than the parse-time warning issued by
-// extractValidationParams.
-func TestHTTPHandlerPath_CandidateParentMedianTime_EndToEnd(t *testing.T) {
-	const wantMTP uint32 = 1699999000
-
-	q := buildValidateTxHTTPQuery(&Options{CandidateParentMedianTime: wantMTP}, 420000)
-
-	e := echo.New()
-	ctx, err := echoRequestWithQuery(e, q.Encode())
-	require.NoError(t, err)
-	blockHeight, opts := extractValidationParams(ctx)
-
-	req := buildValidateTxRequest(newTinyTx(t).SerializeBytes(), blockHeight, opts)
-
-	require.Equal(t, uint32(420000), req.BlockHeight)
-	require.NotNil(t, req.CandidateParentMedianTime,
-		"HTTP handler path must propagate candidateParentMedianTime through to the gRPC request")
-	require.Equal(t, wantMTP, *req.CandidateParentMedianTime)
 }
 
 // TestCandidateParentMedianTimePtr_AliasesOptsField pins the no-alloc contract

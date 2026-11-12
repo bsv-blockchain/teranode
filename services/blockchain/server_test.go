@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -36,6 +37,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -1827,7 +1830,7 @@ func TestGetHashOfAncestorBlock(t *testing.T) {
 	})
 }
 
-func TestGetLatestBlockHeaderFromBlockLocatorRequest(t *testing.T) {
+func TestGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -1851,14 +1854,14 @@ func TestGetLatestBlockHeaderFromBlockLocatorRequest(t *testing.T) {
 			BlockLocatorHashes: [][]byte{(&locator).CloneBytes()},
 		}
 
-		resp, err := server.GetLatestBlockHeaderFromBlockLocatorRequest(ctx, req)
+		resp, err := server.GetLatestBlockHeaderFromBlockLocator(ctx, req)
 		require.Error(t, err)
 		require.Nil(t, resp)
 		assert.Contains(t, err.Error(), "forced error")
 	})
 }
 
-func TestGetBlockHeadersFromOldestRequest(t *testing.T) {
+func TestGetBlockHeadersFromOldest(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -1899,7 +1902,7 @@ func TestGetBlockHeadersFromOldestRequest(t *testing.T) {
 			NumberOfHeaders: 1,
 		}
 
-		resp, err := server.GetBlockHeadersFromOldestRequest(ctx, req)
+		resp, err := server.GetBlockHeadersFromOldest(ctx, req)
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		require.Len(t, resp.BlockHeaders, 1)
@@ -1924,7 +1927,7 @@ func TestGetBlockHeadersFromOldestRequest(t *testing.T) {
 			NumberOfHeaders: 1,
 		}
 
-		resp, err := server.GetBlockHeadersFromOldestRequest(ctx, req)
+		resp, err := server.GetBlockHeadersFromOldest(ctx, req)
 		require.Error(t, err)
 		require.Nil(t, resp)
 	})
@@ -2823,6 +2826,48 @@ func TestLocateBlockHeaders(t *testing.T) {
 		require.Len(t, resp.BlockHeaders, 1)
 		assert.NotNil(t, resp.BlockHeaders[0])
 	})
+
+	t.Run("error - short locator hash rejected instead of reaching the store", func(t *testing.T) {
+		// mockStoreLocateBlockHeaders has no expectations set, so the test fails
+		// if the handler reaches the store with an unparsed nil locator hash.
+		mockStore := &mockStoreLocateBlockHeaders{}
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		stop := chainhash.DoubleHashH([]byte("stop"))
+
+		req := &blockchain_api.LocateBlockHeadersRequest{
+			Locator:   [][]byte{{0x01, 0x02, 0x03}}, // not 32 bytes
+			HashStop:  (&stop).CloneBytes(),
+			MaxHashes: 5,
+		}
+
+		resp, err := server.LocateBlockHeaders(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Equal(t, codes.InvalidArgument, status.Code(err))
+		mockStore.AssertNotCalled(t, "LocateBlockHeaders", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("error - short hash stop rejected instead of reaching the store", func(t *testing.T) {
+		mockStore := &mockStoreLocateBlockHeaders{}
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		locator := chainhash.DoubleHashH([]byte("locator"))
+
+		req := &blockchain_api.LocateBlockHeadersRequest{
+			Locator:   [][]byte{(&locator).CloneBytes()},
+			HashStop:  []byte{0x01, 0x02, 0x03}, // not 32 bytes
+			MaxHashes: 5,
+		}
+
+		resp, err := server.LocateBlockHeaders(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Equal(t, codes.InvalidArgument, status.Code(err))
+		mockStore.AssertNotCalled(t, "LocateBlockHeaders", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
 }
 
 // Test_GetBlockHeadersFromTill tests the GetBlockHeadersFromTill gRPC method
@@ -3713,32 +3758,11 @@ func Test_IsFullyReady(t *testing.T) {
 func Test_Idle(t *testing.T) {
 	ctx := setup(t)
 
-	tests := []struct {
-		name        string
-		expectError bool
-	}{
-		{
-			name:        "idle request",
-			expectError: true, // Fresh node starts in CATCHINGBLOCKS; STOP event has no CATCHINGBLOCKS->IDLE edge
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			request := &emptypb.Empty{}
-
-			response, err := ctx.server.Idle(context.Background(), request)
-
-			if tt.expectError {
-				require.Error(t, err)
-				require.Nil(t, response)
-				return
-			}
-
-			require.NoError(t, err)
-			require.NotNil(t, response)
-		})
-	}
+	// A fresh node starts in CATCHINGBLOCKS; STOP parks it in IDLE.
+	response, err := ctx.server.Idle(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	require.Equal(t, blockchain_api.FSMStateType_IDLE.String(), ctx.server.finiteStateMachine.Current())
 }
 
 // Test_WaitUntilFSMTransitionFromIdleState tests the WaitUntilFSMTransitionFromIdleState gRPC method
@@ -3913,4 +3937,60 @@ func TestServerAssignBlockID(t *testing.T) {
 
 	_, err = ctx.server.AssignBlockID(c, &blockchain_api.AssignBlockIDRequest{BlockHash: []byte{0x01, 0x02}})
 	require.Error(t, err, "a non-32-byte hash must be rejected as invalid argument")
+}
+
+// warnCapturingLogger records every Warnf call so a test can assert both
+// that a coercion warning fired and what it said, rather than only that no
+// panic occurred.
+type warnCapturingLogger struct {
+	ulogger.TestLogger
+	warnings []string
+}
+
+func (l *warnCapturingLogger) Warnf(format string, args ...interface{}) {
+	l.warnings = append(l.warnings, fmt.Sprintf(format, args...))
+}
+
+// TestResolvePeerRegistryTTL_FloorsTooShortValue guards the p2p_peer_registry_ttl
+// floor: a connected peer only refreshes its registry entry every ~10s
+// (node_status) and the gossip-handler batcher can coalesce that for up to a
+// minute (registryReassertTTL) before re-asserting, so a TTL configured well
+// below that window risks evicting an actively-connected peer between
+// refreshes. A too-short positive value must be coerced up to
+// minPeerRegistryTTL, and the coercion must be logged — a silently-corrected
+// setting is exactly the failure mode this settings-wiring batch exists to fix.
+func TestResolvePeerRegistryTTL_FloorsTooShortValue(t *testing.T) {
+	logger := &warnCapturingLogger{}
+
+	got := resolvePeerRegistryTTL(logger, 30*time.Second)
+
+	require.Equal(t, minPeerRegistryTTL, got, "a too-short TTL must be coerced up to the floor")
+	require.Len(t, logger.warnings, 1, "the coercion must be logged")
+	require.Contains(t, logger.warnings[0], "30s")
+	require.Contains(t, logger.warnings[0], minPeerRegistryTTL.String())
+}
+
+// TestResolvePeerRegistryTTL_LeavesLegitimateSentinelAlone guards the other
+// half: ttl<=0 is the documented "use the 24h default" sentinel (distinct
+// from the too-short-but-positive case above) and must not be treated as a
+// too-short value to warn about and coerce to the floor — it already resolves
+// to a value far above the floor.
+func TestResolvePeerRegistryTTL_LeavesLegitimateSentinelAlone(t *testing.T) {
+	logger := &warnCapturingLogger{}
+
+	got := resolvePeerRegistryTTL(logger, 0)
+
+	require.Equal(t, 24*time.Hour, got)
+	require.Empty(t, logger.warnings, "the zero-sentinel path must not log a coercion warning")
+}
+
+// TestResolvePeerRegistryTTL_LeavesValidValueAlone confirms a configured value
+// at or above the floor passes through unchanged and unwarned.
+func TestResolvePeerRegistryTTL_LeavesValidValueAlone(t *testing.T) {
+	logger := &warnCapturingLogger{}
+
+	got := resolvePeerRegistryTTL(logger, 7*time.Minute)
+
+	require.Equal(t, 7*time.Minute, got)
+	require.Empty(t, logger.warnings)
 }

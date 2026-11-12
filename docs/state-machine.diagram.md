@@ -6,6 +6,7 @@ The mermaid diagram outlined below represents the various states and events that
 stateDiagram-v2
     [*] --> IDLE
     CATCHINGBLOCKS --> RUNNING: RUN
+    CATCHINGBLOCKS --> IDLE: STOP
     IDLE --> CATCHINGBLOCKS: CATCHUPBLOCKS
     IDLE --> RUNNING: RUN
     RUNNING --> CATCHINGBLOCKS: CATCHUPBLOCKS

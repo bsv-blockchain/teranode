@@ -6,6 +6,10 @@
 // - protoc             v7.34.1
 // source: services/alert/alert_api/alert_api.proto
 
+// Version: v1 (implicit). No version suffix; the unsuffixed name IS v1. A
+// breaking change adds the next suffixed version (v2) alongside it -- see
+// docs/references/protoVersioning.md.
+
 package alert_api
 
 import (

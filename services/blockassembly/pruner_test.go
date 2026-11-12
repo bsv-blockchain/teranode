@@ -34,6 +34,7 @@ func TestCleanupDuringStartup(t *testing.T) {
 
 		// Then iterator should be called
 		mockIterator := new(utxo.MockUnminedTxIterator)
+		mockIterator.On("Close").Return(nil).Maybe()
 		mockStore.On("GetUnminedTxIterator").
 			Return(mockIterator, nil).
 			Run(func(args mock.Arguments) {
@@ -51,6 +52,7 @@ func TestCleanupDuringStartup(t *testing.T) {
 
 		subtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
 		subtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil)
+		subtreeProcessor.On("FlushDiskTxMapForLoad", mock.Anything, false).Return(nil).Once()
 
 		// Create BlockAssembler with mocked dependencies
 		ba := &BlockAssembler{
@@ -66,7 +68,7 @@ func TestCleanupDuringStartup(t *testing.T) {
 		ba.setBestBlockHeader(nil, 100)
 
 		// Call loadUnminedTransactions which includes cleanup
-		err := ba.loadUnminedTransactions(ctx)
+		err := ba.loadUnminedTransactions(ctx, false)
 
 		require.NoError(t, err)
 		assert.True(t, iteratorCalled)
@@ -102,6 +104,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 
 		// Setup iterator expectations - iterator should only return non-conflicting transactions
 		mockIterator := new(utxo.MockUnminedTxIterator)
+		mockIterator.On("Close").Return(nil).Maybe()
 		mockStore.On("GetUnminedTxIterator").
 			Return(mockIterator, nil).
 			Once()
@@ -125,6 +128,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 		}), true).Return(nil).Once()
 		// GetCurrentBlockHeader may be called multiple times during loading
 		mockSubtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil).Maybe()
+		mockSubtreeProcessor.On("FlushDiskTxMapForLoad", mock.Anything, false).Return(nil).Once()
 
 		blockchainClient := &blockchain.Mock{}
 		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{0}, nil)
@@ -142,7 +146,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 		ba.setBestBlockHeader(nil, 100)
 
 		// Call loadUnminedTransactions
-		err := ba.loadUnminedTransactions(ctx)
+		err := ba.loadUnminedTransactions(ctx, false)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,14 +32,17 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
-	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
+	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka" //nolint:gci
 	"github.com/bsv-blockchain/teranode/util/test"
+	teranodetestutil "github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/jarcoal/httpmock"
+	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,7 +107,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 		nilConsumer := &kafka.KafkaConsumerGroup{}
 		tSettings := test.CreateBaseTestSettings(t)
 
-		subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+		subtreeValidation, err := New(newCancelCtx(t), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 		require.NoError(t, err)
 
 		v := ValidateSubtree{
@@ -153,13 +157,13 @@ func setup(t *testing.T) (utxo.Store, *validator.MockValidator, blob.Store, blob
 
 	validatorClient := &validator.MockValidator{UtxoStore: utxoStore}
 
-	mockBlockChainStore := &blockchainstore.MockStore{}
-
-	// Create LocalClient properly using the constructor to ensure all fields are initialized
-	blockchainClient, err := blockchain.NewLocalClient(logger, tSettings, mockBlockChainStore, subtreeStore, utxoStore)
-	if err != nil {
-		panic(err)
-	}
+	// Real sqlitememory-backed blockchain client (per repo testing convention:
+	// don't mock the blockchain client/store). Unlike blockchainstore.MockStore,
+	// this store has a genesis best block from creation, so New()'s
+	// updateBestBlock/blockchainSubscriptionListener never hits the
+	// "no best block set" retry loop that MockStore left running for the
+	// lifetime of the test binary.
+	blockchainClient := teranodetestutil.NewMemorySQLiteBlockchainClient(logger, tSettings, t)
 
 	return utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, func() {
 		httpmock.DeactivateAndReset()
@@ -189,7 +193,7 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	subtreeValidation, err := New(newCancelCtx(t), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 	require.NoError(t, err)
 
 	// Create a mock context
@@ -249,7 +253,7 @@ func TestBlockValidationValidateSubtreeInternalLegacy(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	subtreeValidation, err := New(newCancelCtx(t), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 	require.NoError(t, err)
 
 	// Create a mock context
@@ -285,7 +289,7 @@ func TestValidateSubtreeInternal_DuplicateTxid(t *testing.T) {
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 	tSettings := test.CreateBaseTestSettings(t)
 
-	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	subtreeValidation, err := New(newCancelCtx(t), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 	require.NoError(t, err)
 
 	v := ValidateSubtree{
@@ -297,7 +301,10 @@ func TestValidateSubtreeInternal_DuplicateTxid(t *testing.T) {
 
 	_, err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight, nil)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected ErrBlockInvalid, got %v", err)
+	// bitcoin-sv/teranode#4692: a duplicate tx in the received subtree is body-derived corruption →
+	// corrupt (re-download + strike peer), not invalid (poison).
+	require.True(t, errors.IsBlockCorrupt(err), "expected ErrBlockCorrupt, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "duplicate")
 	require.Contains(t, err.Error(), hash1.String())
 }
@@ -318,7 +325,7 @@ func TestValidateSubtreeInternal_RetryBackoffAndMetrics(t *testing.T) {
 	tSettings.SubtreeValidation.ProcessTxMetaUsingCacheMissingTxThreshold = 1
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
-	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	subtreeValidation, err := New(newCancelCtx(t), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 	require.NoError(t, err)
 
 	retryCounterStart := testutil.ToFloat64(prometheusSubtreeValidationValidateSubtreeRetry)
@@ -339,6 +346,50 @@ func TestValidateSubtreeInternal_RetryBackoffAndMetrics(t *testing.T) {
 	retryCounterDelta := testutil.ToFloat64(prometheusSubtreeValidationValidateSubtreeRetry) - retryCounterStart
 	assert.Equal(t, float64(2), retryCounterDelta, "maxRetries=2 should produce exactly 2 retries (3 total attempts)")
 	assert.GreaterOrEqual(t, elapsed, 2*retrySleep, "retry loop should wait retrySleepDuration between retry attempts")
+}
+
+// A store miss above blockvalidation_processTxMetaUsingStore_MissingTxThreshold under fail
+// fast must wait and retry like a cache miss, then fetch the missing txs on the final attempt.
+// It used to return THRESHOLD_EXCEEDED on the first attempt, which dropped every announced
+// subtree with 2+ txs this node had not seen yet and left it to block validation.
+func TestValidateSubtreeInternal_StoreMissesRetryThenFetch(t *testing.T) {
+	InitPrometheusMetrics()
+
+	utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
+	defer deferFunc()
+
+	retrySleep := 20 * time.Millisecond
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Block.FailFastValidation = true
+	tSettings.BlockValidation.ValidationWarmupCount = 0
+	tSettings.BlockValidation.ValidationMaxRetries = 2
+	tSettings.BlockValidation.RetrySleep = retrySleep
+	tSettings.BlockValidation.ValidationRetrySleep = retrySleep
+	tSettings.SubtreeValidation.ProcessTxMetaUsingCacheMissingTxThreshold = 1000
+	tSettings.BlockValidation.ProcessTxMetaUsingStoreMissingTxThreshold = 1
+
+	nilConsumer := &kafka.KafkaConsumerGroup{}
+	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	require.NoError(t, err)
+
+	retryCounterStart := testutil.ToFloat64(prometheusSubtreeValidationValidateSubtreeRetry)
+
+	v := ValidateSubtree{
+		SubtreeHash:   *hash1,
+		BaseURL:       "not-a-url",
+		TxHashes:      []chainhash.Hash{*hash1, *hash2},
+		AllowFailFast: true,
+	}
+
+	_, err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight, nil)
+
+	// Neither tx exists anywhere, so the final attempt's network fetch fails. What matters is
+	// that it got there: the store-miss threshold did not end validation early.
+	require.Error(t, err)
+	require.False(t, errors.Is(err, errors.ErrThresholdExceeded), "store misses must not abort the subtree: %v", err)
+
+	retryCounterDelta := testutil.ToFloat64(prometheusSubtreeValidationValidateSubtreeRetry) - retryCounterStart
+	assert.Equal(t, float64(2), retryCounterDelta, "store misses should be retried maxRetries times before the final attempt")
 }
 
 func TestServer_prepareTxsPerLevel(t *testing.T) {
@@ -945,7 +996,7 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 		// Setup and run validation
 		nilConsumer := &kafka.KafkaConsumerGroup{}
 		tSettings := test.CreateBaseTestSettings(t)
-		subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+		subtreeValidation, err := New(newCancelCtx(t), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 		require.NoError(t, err)
 
 		// Validate subtree1
@@ -1026,8 +1077,8 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 		_, _, err = s.utxoStore.SpendAndCreate(ctx, tx1, 123, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		// Call the checkCounterConflictingOnCurrentChain method
-		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
+		// Run the check blessMissingTransaction runs
+		err = s.blessConflictCheck(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
 		require.NoError(t, err)
 	})
 
@@ -1066,8 +1117,8 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 		_, _, err = s.utxoStore.SpendAndCreate(ctx, tx1, 123, utxo.WithConflicting(true), utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		// Call the checkCounterConflictingOnCurrentChain method, should be OK since tx1DoubleSpend has not been mined
-		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
+		// Run the check blessMissingTransaction runs, should be OK since tx1DoubleSpend has not been mined
+		err = s.blessConflictCheck(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
 		require.NoError(t, err)
 
 		// set the tx1DoubleSpend to mined
@@ -1080,8 +1131,8 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 		require.Len(t, blockIDsMap, 1)
 		require.Equal(t, []uint32{122}, blockIDsMap[*tx1DoubleSpend.TxIDChainHash()])
 
-		// Call the checkCounterConflictingOnCurrentChain method, should be OK since tx1DoubleSpend has not been mined
-		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{
+		// Run the check blessMissingTransaction runs, should fail now that tx1DoubleSpend is mined
+		err = s.blessConflictCheck(ctx, *tx1.TxIDChainHash(), map[uint32]bool{
 			122: true,
 		})
 		require.Error(t, err, "should be an error since tx1DoubleSpend has been mined")
@@ -1112,7 +1163,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			blockchainClient: blockchainClient,
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, []utxo.UnresolvedMetaData{}, []chainhash.Hash{}, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, []utxo.UnresolvedMetaData{}, []chainhash.Hash{}, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 0, "should be no missing txs since all txs are in the subtree")
@@ -1145,7 +1196,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			httpmock.NewBytesResponder(200, append(tx1.ExtendedBytes(), tx2.ExtendedBytes()...)),
 		)
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, unresolved, []chainhash.Hash{}, "http://localhost:8000", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, unresolved, []chainhash.Hash{}, "http://localhost:8000", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 2, "should be 2 missing txs since all txs are in the subtree")
@@ -1195,7 +1246,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			*hash4,
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, unresolved, allTxs, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, unresolved, allTxs, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 2, "should be 2 missing txs since all txs are in the subtree")
@@ -1246,7 +1297,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			*hash3,
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 1, "should be 1 missing txs since all txs are in the subtree")
@@ -1296,7 +1347,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			*hash3,
 		}
 
-		_, err = s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "")
+		_, err = s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "", true)
 		require.Error(t, err, "should be an error since txs are in the wrong order")
 	})
 
@@ -1342,7 +1393,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			*hash3,
 		}
 
-		_, err = s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "")
+		_, err = s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "", true)
 		require.Error(t, err, "should be an error since we are missing a tx")
 	})
 }
@@ -1412,7 +1463,7 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 			})
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), subtreeHash, nil, unresolved, allTxs, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), subtreeHash, nil, unresolved, allTxs, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 3, "should be 3 missing txs since all txs are in the subtree")
@@ -1483,7 +1534,7 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 			})
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), subtreeHash, nil, unresolved, allTxs, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), subtreeHash, nil, unresolved, allTxs, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 1024, "should be 1024 missing txs since all txs are in the subtree")
@@ -1566,7 +1617,7 @@ func Test_getSubtreeMissingTxs_InvalidSubtreeData(t *testing.T) {
 
 		// The function should not panic even when NewSubtreeDataFromReader fails for the first URL
 		// It should continue to the next URL
-		_, err = s.getSubtreeMissingTxs(context.Background(), *subtreeHash, subtree, unresolved, allTxs, "test", "")
+		_, err = s.getSubtreeMissingTxs(context.Background(), *subtreeHash, subtree, unresolved, allTxs, "test", "", true)
 
 		// The test passes if there's no panic
 		// Since we're testing error handling, we expect either success (if second URL works)
@@ -1620,7 +1671,7 @@ func Test_getSubtreeMissingTxs_InvalidSubtreeData(t *testing.T) {
 		}
 
 		// This should not panic, even though all URLs return invalid data
-		_, err = s.getSubtreeMissingTxs(context.Background(), *subtreeHash, subtree, unresolved, allTxs, "test", "")
+		_, err = s.getSubtreeMissingTxs(context.Background(), *subtreeHash, subtree, unresolved, allTxs, "test", "", true)
 
 		// We expect an error since no valid data could be retrieved
 		// The important thing is that it doesn't panic
@@ -1775,4 +1826,116 @@ func TestPrepareTxsPerLevel_CircularDependency(t *testing.T) {
 		t.Logf("Successfully processed %d transactions with max level %d using iterative algorithm",
 			totalProcessed, maxLevel)
 	})
+}
+
+// warnCaptureLogger records Warnf messages so a test can assert what was logged,
+// delegating every other method to an embedded test logger.
+type warnCaptureLogger struct {
+	ulogger.Logger
+
+	mu       sync.Mutex
+	warnings []string
+}
+
+func (l *warnCaptureLogger) Warnf(format string, args ...interface{}) {
+	l.mu.Lock()
+	l.warnings = append(l.warnings, fmt.Sprintf(format, args...))
+	l.mu.Unlock()
+	l.Logger.Warnf(format, args...)
+}
+
+func (l *warnCaptureLogger) warned() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	out := make([]string, len(l.warnings))
+	copy(out, l.warnings)
+
+	return out
+}
+
+// minedValidator accepts every transaction and reports it mined in blockIDs.
+type minedValidator struct {
+	validator.Interface
+	blockIDs []uint32
+}
+
+func (v minedValidator) ValidateWithOptions(context.Context, *bt.Tx, uint32, *validator.Options) (*meta.Data, error) {
+	return &meta.Data{BlockIDs: v.blockIDs}, nil
+}
+
+// TestBlessMissing_AlreadyMinedNamesNoStoreID: a transaction already mined on this
+// chain is a TX_INVALID verdict, a class on the shared allowlist, so any boundary
+// that sees it shows its message (reconsiderblock's revalidation reaches RPC with
+// it). The block it was mined in is named by this node's store id, which is no
+// block's public identifier, so it goes to the log and the verdict names the
+// transaction.
+func TestBlessMissing_AlreadyMinedNamesNoStoreID(t *testing.T) {
+	logger := &warnCaptureLogger{Logger: ulogger.TestLogger{}}
+
+	server, _, txs, _ := newUnlockFailureServer(t, false, alwaysFail)
+	server.logger = logger
+	server.validatorClient = minedValidator{Interface: server.validatorClient, blockIDs: []uint32{77123}}
+
+	_, _, err := server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, txs[1], 2,
+		map[uint32]bool{77123: true}, validator.ProcessOptions())
+	require.ErrorIs(t, err, errors.ErrTxInvalid)
+	require.Contains(t, err.Error(), "transaction is already mined on our chain")
+	require.NotContains(t, err.Error(), "77123")
+
+	require.Contains(t, fmt.Sprint(logger.warned()), "77123", "the id is still recorded")
+}
+
+// metaRefusingStore fails every .subtreeMeta write and passes everything else through.
+type metaRefusingStore struct {
+	blob.Store
+}
+
+func (s *metaRefusingStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...bloboptions.FileOption) error {
+	if fileType == fileformat.FileTypeSubtreeMeta {
+		return errors.NewStorageError("meta write refused for the test")
+	}
+
+	return s.Store.Set(ctx, key, fileType, value, opts...)
+}
+
+// TestStoreSubtreeFiles_FailedMetaWriteStoresNoSubtree pins the write order in
+// storeSubtreeFiles. The .subtree file is what every later check reads as "this subtree
+// is done", so a failed meta write must not leave one behind: written in parallel, it
+// did, and the subtree stayed without a meta for good.
+func TestStoreSubtreeFiles_FailedMetaWriteStoresNoSubtree(t *testing.T) {
+	ctx := context.Background()
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(chainhash.HashH([]byte{0x01}), 1, 100))
+	require.NoError(t, subtree.AddNode(chainhash.HashH([]byte{0x02}), 1, 100))
+
+	subtreeHash := subtree.RootHash()
+
+	memStore := blobmemory.New()
+
+	utxoStore := &utxo.MockUtxostore{}
+	utxoStore.On("GetBlockHeight").Return(uint32(100)).Maybe()
+
+	server := &Server{
+		logger:       ulogger.TestLogger{},
+		settings:     test.CreateBaseTestSettings(t),
+		subtreeStore: &metaRefusingStore{Store: memStore},
+		utxoStore:    utxoStore,
+	}
+
+	meta := subtreepkg.NewSubtreeMeta(subtree)
+	for i := range subtree.Nodes {
+		parent := chainhash.HashH([]byte{byte(i), 0xbb})
+		require.NoError(t, meta.SetTxInpoints(i, subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{parent}, []uint32{1, 0})))
+	}
+
+	err = server.storeSubtreeFiles(ctx, gocore.NewStat("test"), subtreeHash, subtree, meta)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to store subtree meta")
+
+	exists, err := memStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.False(t, exists, "a subtree whose meta write failed must not be stored, or nothing writes the meta again")
 }

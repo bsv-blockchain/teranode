@@ -3,7 +3,6 @@ package validator
 import (
 	"testing"
 
-	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,18 +37,9 @@ func TestOptionsFromValidateRequest_InBlockDefaultsFalse(t *testing.T) {
 	require.False(t, got.InBlock)
 }
 
-// TestHTTPHandlerPath_InBlock_EndToEnd mirrors the /tx HTTP fallback handler:
-// client builds the query, server parses it back into Options.
-func TestHTTPHandlerPath_InBlock_EndToEnd(t *testing.T) {
-	q := buildValidateTxHTTPQuery(&Options{InBlock: true}, 420000)
-
-	e := echo.New()
-	ctx, err := echoRequestWithQuery(e, q.Encode())
-	require.NoError(t, err)
-
-	_, opts := extractValidationParams(ctx)
-	require.True(t, opts.InBlock)
-}
+// The HTTP leg of this pair is deliberately gone: the /tx endpoint no longer
+// carries validation options, so InBlock has no HTTP round trip to survive. The
+// refusal is pinned by http_trust_flags_test.go.
 
 // TestWithInBlock pins the functional option setter.
 func TestWithInBlock(t *testing.T) {

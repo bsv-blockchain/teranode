@@ -128,9 +128,9 @@ func TestBlockValidRejectsOutdatedVersion(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.ChainCfgParams = &mainParams
 
-		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
-		require.NoError(t, err)
-		blockHeader.Version = 2
+		// Coinbase-only body: the header merkle root must be the coinbase txid, otherwise the body
+		// is rejected as corrupt at the binding and the coinbase-height check is never reached.
+		blockHeader := minedHeaderVersion(t, 2, coinbase.TxIDChainHash())
 
 		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 300000, 0)
 		require.NoError(t, err)
@@ -151,9 +151,6 @@ func TestBlockValidRejectsOutdatedVersion(t *testing.T) {
 // heightAtOrAfterActivation(0, 0) would be true and Block.Valid would attempt ExtractCoinbaseHeight
 // and reject the genesis block.
 func TestBlockValidGenesisExemption(t *testing.T) {
-	blockHeaderBytes, err := hex.DecodeString(block1Header)
-	require.NoError(t, err)
-
 	coinbase, err := bt.NewTxFromString(CoinbaseHex)
 	require.NoError(t, err)
 
@@ -161,9 +158,9 @@ func TestBlockValidGenesisExemption(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &teraParams
 
-	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
-	require.NoError(t, err)
-	blockHeader.Version = 1
+	// Coinbase-only body: bind the header to this coinbase so the block reaches the height-0 guard
+	// under test rather than being rejected earlier at the binding.
+	blockHeader := minedHeaderVersion(t, 1, coinbase.TxIDChainHash())
 
 	block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 	require.NoError(t, err)

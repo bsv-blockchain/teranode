@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -31,29 +33,40 @@ func TestHTTPEndpoints(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("Single transaction via HTTP endpoint", func(t *testing.T) {
-		// Create test settings with policy checks disabled
+		// The /tx endpoint carries transaction bytes only — it accepts no
+		// validation options on any body shape — so the transaction has to stand
+		// up to plain mempool-submission semantics: policy checks on, UTXOs
+		// created, block assembly requested. Block assembly is disabled here so
+		// the requested hand-off is a no-op.
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.BlockAssembly.Disabled = true
 
 		// Create a mock UTXO store with expectations
 		utxoMock := &utxo.MockUtxostore{}
 		utxoMock.On("GetBlockState").Return(utxo.BlockState{Height: 1000, MedianTime: 1625097600})
-		utxoMock.On("PreviousOutputsDecorate", mock.Anything, mock.Anything).Return(nil)
 
-		// Add expectation for the Get method which may be called regardless of skipUtxoCreation.
-		// BlockHeights must be non-empty so the validator does not take the fallback path
+		// Add expectation for the parent read, which may happen regardless of skipUtxoCreation.
+		// The parent must be reported as mined so the validator does not take the fallback path
 		// (which stamps the unconfirmedParentHeight sentinel — BDK then rejects with
 		// bad-txns-unconfirmed-input-in-block in consensus mode); this mock represents
 		// a parent that is already confirmed in a real block.
 		metaData := &meta.Data{
-			Fee:          32279815860,
-			SizeInBytes:  245,
-			BlockHeights: []uint32{999},
+			Fee:         32279815860,
+			SizeInBytes: 245,
 		}
-		utxoMock.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(metaData, nil)
+		// The parent read is one ParentOutputsForValidation call per transaction.
+		utxoMock.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return([]utxo.ParentOutput{{
+			Status:        utxo.ParentOutputMined,
+			Height:        999,
+			Satoshis:      sampleTxParent().Outputs[1].Satoshis,
+			LockingScript: sampleTxParent().Outputs[1].LockingScript,
+		}}, nil)
 
-		// Mock the SpendAndCreate method with empty slice of *utxo.Spend for the return value
-		utxoMock.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, nil)
+		// SpendAndCreate must return the transaction's metadata: without the
+		// skipUtxoCreation option the validator no longer derives it from the
+		// transaction itself, and the handler serialises whatever the store
+		// returns before replying 200.
+		utxoMock.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(metaData, []*utxo.Spend{}, nil)
 
 		// Create a new server
 		server := validator.NewServer(logger, tSettings, utxoMock, nil, nil, nil, nil, nil, nil)
@@ -65,9 +78,8 @@ func TestHTTPEndpoints(t *testing.T) {
 		// Test HTTP handler for a single transaction
 		e := echo.New()
 
-		// Build URL with parameters to bypass validation issues
-		queryParams := "skipUtxoCreation=true&addTxToBlockAssembly=false&skipPolicyChecks=true&createConflicting=false&candidateParentMedianTime=1625097600"
-		req := httptest.NewRequest(http.MethodPost, "/tx?"+queryParams, bytes.NewReader(txBytes))
+		// No query parameters: the endpoint does not read them.
+		req := httptest.NewRequest(http.MethodPost, "/tx", bytes.NewReader(txBytes))
 		rec := httptest.NewRecorder()
 
 		req.Header.Set("Content-Type", "application/octet-stream")
@@ -86,29 +98,35 @@ func TestHTTPEndpoints(t *testing.T) {
 	})
 
 	t.Run("Multiple transactions via HTTP endpoint", func(t *testing.T) {
-		// Create test settings with policy checks disabled
+		// Same contract as /tx: /txs carries transaction bytes only, so every
+		// transaction in the stream is validated with default options.
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.BlockAssembly.Disabled = true
 
 		// Create a mock UTXO store
 		utxoMock := &utxo.MockUtxostore{}
 		utxoMock.On("GetBlockState").Return(utxo.BlockState{Height: 1000, MedianTime: 1625097600})
-		utxoMock.On("PreviousOutputsDecorate", mock.Anything, mock.Anything).Return(nil)
 
-		// Add expectation for the Get method. BlockHeights must be non-empty so the
+		// Add expectation for the parent read. The parent must be reported as mined so the
 		// validator does not take the fallback path (which stamps the
 		// unconfirmedParentHeight sentinel — BDK then rejects with
 		// bad-txns-unconfirmed-input-in-block in consensus mode); this mock represents
 		// a parent that is already confirmed in a real block.
 		metaData := &meta.Data{
-			Fee:          32279815860,
-			SizeInBytes:  245,
-			BlockHeights: []uint32{999},
+			Fee:         32279815860,
+			SizeInBytes: 245,
 		}
-		utxoMock.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(metaData, nil)
+		// The parent read is one ParentOutputsForValidation call per transaction.
+		utxoMock.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return([]utxo.ParentOutput{{
+			Status:        utxo.ParentOutputMined,
+			Height:        999,
+			Satoshis:      sampleTxParent().Outputs[1].Satoshis,
+			LockingScript: sampleTxParent().Outputs[1].LockingScript,
+		}}, nil)
 
-		// Mock the SpendAndCreate method with empty slice of *utxo.Spend for the return value
-		utxoMock.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, nil)
+		// SpendAndCreate must return the transaction's metadata — see the single-tx
+		// case above for why.
+		utxoMock.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(metaData, []*utxo.Spend{}, nil)
 
 		// Create a new server
 		server := validator.NewServer(logger, tSettings, utxoMock, nil, nil, nil, nil, nil, nil)
@@ -126,9 +144,8 @@ func TestHTTPEndpoints(t *testing.T) {
 		buf.Write(txBytes)
 		buf.Write(txBytes)
 
-		// Build URL with parameters to bypass validation issues
-		queryParams := "skipUtxoCreation=true&addTxToBlockAssembly=false&skipPolicyChecks=true&createConflicting=false&candidateParentMedianTime=1625097600"
-		req := httptest.NewRequest(http.MethodPost, "/txs?"+queryParams, &buf)
+		// No query parameters: the endpoint does not read them.
+		req := httptest.NewRequest(http.MethodPost, "/txs", &buf)
 		rec := httptest.NewRecorder()
 
 		req.Header.Set("Content-Type", "application/octet-stream")
@@ -145,4 +162,20 @@ func TestHTTPEndpoints(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, rec.Code, "Response body: %s", rec.Body.String())
 	})
+}
+
+// sampleTxParent is the parent transaction sampleTxHex spends: its input takes
+// vout 1, so the output vector is padded to that index.
+func sampleTxParent() *bt.Tx {
+	script, err := hex.DecodeString("76a914c52f8797b57f0b0cfc5856a5dd4a6f491a41822c88ac")
+	if err != nil {
+		panic(err)
+	}
+
+	return &bt.Tx{
+		Outputs: []*bt.Output{
+			{Satoshis: 0, LockingScript: bscript.NewFromBytes(script)},
+			{Satoshis: 797702, LockingScript: bscript.NewFromBytes(script)},
+		},
+	}
 }

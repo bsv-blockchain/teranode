@@ -21,7 +21,7 @@ import (
 // newOnMainChainTestStore creates a *SQL backed by an sqlitememory DB, waits
 // for the background startup rebuild to complete, and returns the store ready
 // for use. The caller is responsible for s.Close(context.Background()) (via t.Cleanup).
-func newOnMainChainTestStore(t *testing.T) *SQL {
+func newOnMainChainTestStore(t testing.TB) *SQL {
 	t.Helper()
 	return newOnMainChainTestStoreWith(t, nil)
 }
@@ -29,7 +29,7 @@ func newOnMainChainTestStore(t *testing.T) *SQL {
 // newOnMainChainTestStoreWith is the same as newOnMainChainTestStore but lets
 // the caller mutate settings before the store is created (e.g. to tweak
 // CoinbaseMaturity or enable UseInMemoryChainCheck).
-func newOnMainChainTestStoreWith(t *testing.T, mutate func(*settings.Settings)) *SQL {
+func newOnMainChainTestStoreWith(t testing.TB, mutate func(*settings.Settings)) *SQL {
 	t.Helper()
 	tSettings := test.CreateBaseTestSettings(t)
 	if mutate != nil {
@@ -47,7 +47,7 @@ func newOnMainChainTestStoreWith(t *testing.T, mutate func(*settings.Settings)) 
 
 // storeBlocks stores a sequence of blocks via StoreBlock, failing the test on
 // any error. Returns the list for convenience.
-func storeBlocks(t *testing.T, s *SQL, blocks ...*model.Block) {
+func storeBlocks(t testing.TB, s *SQL, blocks ...*model.Block) {
 	t.Helper()
 	for i, b := range blocks {
 		_, _, err := s.StoreBlock(context.Background(), b, "peer")
@@ -57,7 +57,7 @@ func storeBlocks(t *testing.T, s *SQL, blocks ...*model.Block) {
 
 // getOnMainChain reads the on_main_chain flag directly from the database for the block
 // with the given hash. Returns false if the block does not exist.
-func getOnMainChain(t *testing.T, s *SQL, hashBytes []byte) bool {
+func getOnMainChain(t testing.TB, s *SQL, hashBytes []byte) bool {
 	t.Helper()
 	var v bool
 	err := s.db.QueryRow(`SELECT on_main_chain FROM blocks WHERE hash = $1`, hashBytes).Scan(&v)
@@ -966,7 +966,7 @@ func TestReconcileOnMainChain_ReorgDiff(t *testing.T) {
 	require.False(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()))
 
 	// Reconcile: walks from the actual best (forkB4 by chain_work) and fixes flags.
-	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.NoError(t, s.reconcileOnMainChain(context.Background(), s.db))
 
 	// Post-state: block1 (LCA) untouched, block2/block3 off-chain, fork chain on-chain.
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "LCA stays on main chain")
@@ -977,7 +977,7 @@ func TestReconcileOnMainChain_ReorgDiff(t *testing.T) {
 	require.True(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()), "new branch flipped on (tip)")
 
 	// Idempotency: a second call against the now-correct state must be a no-op.
-	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.NoError(t, s.reconcileOnMainChain(context.Background(), s.db))
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
 	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()))
 	require.True(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()))
@@ -989,7 +989,7 @@ func TestReconcileOnMainChain_AlreadyConsistent(t *testing.T) {
 	s := newOnMainChainTestStore(t)
 	storeBlocks(t, s, block1, block2)
 
-	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.NoError(t, s.reconcileOnMainChain(context.Background(), s.db))
 
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "block1 unchanged")
 	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "tip unchanged")
@@ -1004,7 +1004,7 @@ func TestReconcileOnMainChain_EmptyDB(t *testing.T) {
 	_, err := s.db.Exec(`DELETE FROM blocks`)
 	require.NoError(t, err)
 
-	require.NoError(t, s.reconcileOnMainChain(context.Background()),
+	require.NoError(t, s.reconcileOnMainChain(context.Background(), s.db),
 		"reconcile must commit cleanly on an empty blocks table")
 }
 
@@ -1023,7 +1023,7 @@ func TestReconcileOnMainChain_LowCoinbaseMaturityFloor(t *testing.T) {
 		block2.Hash().CloneBytes())
 	require.NoError(t, err)
 
-	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.NoError(t, s.reconcileOnMainChain(context.Background(), s.db))
 	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()),
 		"floor-bounded walk must still cover the actual best's lineage")
 }
@@ -1035,7 +1035,7 @@ func TestReconcileOnMainChain_BeginTxError(t *testing.T) {
 	s := newOnMainChainTestStore(t)
 	require.NoError(t, s.db.Close())
 
-	err := s.reconcileOnMainChain(context.Background())
+	err := s.reconcileOnMainChain(context.Background(), s.db)
 	require.Error(t, err, "reconcile must return an error when the DB is unusable")
 }
 
@@ -1050,7 +1050,7 @@ func TestReconcileOnMainChain_QueryError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := s.reconcileOnMainChain(ctx)
+	err := s.reconcileOnMainChain(ctx, s.db)
 	require.Error(t, err, "reconcile must return an error when context is canceled")
 }
 
@@ -1112,7 +1112,7 @@ func TestReconcileOnMainChain_FillsFastPathDescendantGap(t *testing.T) {
 	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
 
 	// Reconcile must walk the actual best's lineage and flip the gap closed.
-	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.NoError(t, s.reconcileOnMainChain(context.Background(), s.db))
 
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
 	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "gap on the actual main chain must be filled")
@@ -1139,7 +1139,7 @@ func TestReconcileOnMainChain_NoStaleBranchSurvives(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()), "pre-condition: stale flag")
 
-	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.NoError(t, s.reconcileOnMainChain(context.Background(), s.db))
 
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
 	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()))

@@ -74,7 +74,7 @@ import (
 var teranodeLUA []byte
 
 var (
-	LuaPackage      = "teranode_v61" // N.B. Do not have any "." in this string
+	LuaPackage      = "teranode_v65" // N.B. Do not have any "." in this string
 	LuaPackageMined = LuaPackage + "_mined"
 )
 
@@ -275,6 +275,14 @@ type LuaMapResponse struct {
 	BlockIDs   []int                `json:"blockIDs,omitempty"`
 	Errors     map[int]LuaErrorInfo `json:"errors,omitempty"`
 	ChildCount int                  `json:"childCount,omitempty"`
+	// DeleteAtHeight is the master record's stamped delete-at-height, present only with a DAHSET signal from a Lua package that reports it.
+	DeleteAtHeight    int  `json:"deleteAtHeight,omitempty"`
+	HasDeleteAtHeight bool `json:"-"`
+	// DAHVersion is the master's deleteAtHeight version after the update, present with a DAHSET or DAHUNSET signal and with a paginated master's page state.
+	DAHVersion    int64 `json:"dahVer,omitempty"`
+	HasDAHVersion bool  `json:"-"`
+	// Conflicting is true when a DAHSET signal comes from a conflicting master, which is prunable whatever its spent state.
+	Conflicting bool `json:"conflicting,omitempty"`
 	// Debug      string               `json:"debug,omitempty"`
 }
 
@@ -307,6 +315,11 @@ func (r *LuaMapResponse) Reset() {
 		}
 	}
 	r.ChildCount = 0
+	r.DeleteAtHeight = 0
+	r.HasDeleteAtHeight = false
+	r.DAHVersion = 0
+	r.HasDAHVersion = false
+	r.Conflicting = false
 }
 
 // luaMapResponsePool reuses LuaMapResponse structs across set_mined batch records,
@@ -444,6 +457,24 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 		if count, ok := luaResponseInt(childCount); ok {
 			result.ChildCount = count
 		}
+	}
+
+	if dah, ok := respMap["deleteAtHeight"]; ok {
+		if height, ok := luaResponseInt(dah); ok {
+			result.DeleteAtHeight = height
+			result.HasDeleteAtHeight = true
+		}
+	}
+
+	if ver, ok := respMap["dahVer"]; ok {
+		if version, ok := luaResponseInt(ver); ok {
+			result.DAHVersion = int64(version)
+			result.HasDAHVersion = true
+		}
+	}
+
+	if conflicting, ok := respMap["conflicting"].(bool); ok {
+		result.Conflicting = conflicting
 	}
 
 	return nil

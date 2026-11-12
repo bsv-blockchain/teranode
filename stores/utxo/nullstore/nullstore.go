@@ -21,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/util"
 )
 
@@ -33,6 +34,11 @@ type NullStore struct {
 	// it satisfies the interface contract rather than being a laxer special
 	// case that the shared test suite would let through.
 	utxo.BlockStateFields
+}
+
+// Stamper implements utxo.Store. The null store keeps nothing, so it has nothing to stamp.
+func (m *NullStore) Stamper() pruner.Stamper {
+	return pruner.NoStamp
 }
 
 // BatchDecorate implements utxo.Store.
@@ -65,8 +71,47 @@ func (m *NullStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fie
 	// purpose is "everything succeeds with default data"; an empty BlockHeights
 	// would force the consensus-mode rejection (bad-txns-unconfirmed-input-in-block)
 	// on any test that uses NullStore as a parent-tx source.
-	return &meta.Data{BlockHeights: []uint32{1}}, nil
+	//
+	// Tx carries outputs for the same reason: the validator re-extends every
+	// transaction from the store instead of trusting the submitter's
+	// previous-output fields (GHSA-v76m-6vc7-g7c7), so a parent with no outputs
+	// now fails extension outright. The slice is built once and shared; nothing
+	// on the extend path mutates it.
+	return &meta.Data{BlockHeights: []uint32{1}, Tx: &bt.Tx{Outputs: nullStoreOutputs}}, nil
 }
+
+const (
+	// nullStoreOutputCount sizes the default output vector. NullStore has no way
+	// to know a caller's real output count, so it is large enough that fixtures
+	// referencing a non-zero vout resolve.
+	nullStoreOutputCount = 256
+
+	// nullStoreOutputSatoshis is 1000 BSV per output — high enough that a
+	// fixture's outputs never exceed its inputs and trip a value check. It
+	// matches the value PreviousOutputsDecorate reports for the same reason.
+	nullStoreOutputSatoshis = 100_000_000_000
+)
+
+// nullStoreOutputs is the default output vector every NullStore parent reports.
+//
+// Shared, not copied per call: NullStore's documented purpose includes
+// performance testing, and Get is called once per parent, so allocating 256
+// outputs per call would show up in exactly the measurements it exists to serve.
+// The consumers are the extension paths, which copy the satoshi value and the
+// script pointer onto transaction inputs and never mutate either. A future
+// caller that mutates an output or a script in place would corrupt it for every
+// other caller in the process; treat these as immutable.
+var nullStoreOutputs = func() []*bt.Output {
+	outputs := make([]*bt.Output, nullStoreOutputCount)
+	for i := range outputs {
+		outputs[i] = &bt.Output{
+			Satoshis:      nullStoreOutputSatoshis,
+			LockingScript: bscript.NewFromBytes([]byte{0x51}),
+		}
+	}
+
+	return outputs
+}()
 
 func (m *NullStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return nil, nil
@@ -100,6 +145,40 @@ func (m *NullStore) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error 
 	}
 
 	return nil
+}
+
+// ParentOutputsForValidation answers every outpoint as mined at height 1 with
+// the null store's default outputs, matching Get, so validation against the null
+// store succeeds. An index past the default outputs is NoSuchIndex. A cancelled
+// context fails the whole call, as it does on the other stores.
+func (m *NullStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, _ ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	answers := make([]utxo.ParentOutput, len(outpoints))
+
+	for i, op := range outpoints {
+		if int(op.Vout) >= len(nullStoreOutputs) {
+			answers[i] = utxo.ParentOutput{Status: utxo.ParentOutputNoSuchIndex}
+			continue
+		}
+
+		out := nullStoreOutputs[op.Vout]
+		answers[i] = utxo.ParentOutput{
+			Status:        utxo.ParentOutputMined,
+			Satoshis:      out.Satoshis,
+			LockingScript: out.LockingScript,
+			Height:        1,
+		}
+	}
+
+	return answers, nil
+}
+
+// SpendAndCreateMulti writes the list through DefaultSpendAndCreateMulti.
+func (m *NullStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	return utxo.DefaultSpendAndCreateMulti(ctx, m, utxo.UniformSpendAndCreateMultiWidths(1), txs, blockHeight, opts...)
 }
 
 func (m *NullStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
@@ -197,6 +276,11 @@ func (m *NullStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 	return nil, nil
 }
 
+// ConflictingTxHashes reports no conflicting transactions: the null store holds none.
+func (m *NullStore) ConflictingTxHashes(_ context.Context) ([]chainhash.Hash, bool, error) {
+	return nil, true, nil
+}
+
 func (m *NullStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
 	return nil
 }
@@ -206,6 +290,10 @@ func (m *NullStore) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDs
 }
 
 func (m *NullStore) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	return nil
+}
+
+func (m *NullStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
@@ -262,5 +350,28 @@ func (m *NullStore) PreserveTransactions(ctx context.Context, txIDs []chainhash.
 }
 
 func (m *NullStore) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
+	return nil
+}
+
+// SpendsMadeBy returns nothing, in keeping with every other method here.
+func (m *NullStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
+}
+
+func (m *NullStore) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return nil
+}
+func (m *NullStore) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return nil, nil
+}
+func (m *NullStore) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return nil
+}
+
+func (m *NullStore) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return nil
+}
+
+func (m *NullStore) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
 	return nil
 }

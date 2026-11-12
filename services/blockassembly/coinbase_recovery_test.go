@@ -1999,3 +1999,64 @@ func TestStartupCoinbaseDivergenceCheck_ContextCodeShutdownIsNotReportedAsLostDe
 	require.False(t, logger.sawError("no coinbase-divergence detection will run until the next restart"),
 		"a node that is shutting down has not lost its detection coverage")
 }
+
+// creatingRecordUtxoStore answers for one hash the way aerospike answers for a
+// multi-record create that was interrupted before clearCreatingFlag ran: the
+// master record exists, every scalar on it reads back normally, and the
+// Creating bin is still true. Like aerospike, it reports Creating only when
+// fields.Creating was asked for.
+type creatingRecordUtxoStore struct {
+	utxoStore.Store
+	creating chainhash.Hash
+}
+
+func (s *creatingRecordUtxoStore) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
+	data, err := s.Store.Get(ctx, hash, f...)
+	if err != nil || data == nil || !hash.IsEqual(&s.creating) {
+		return data, err
+	}
+
+	for _, name := range f {
+		if name == fields.Creating {
+			withFlag := *data
+			withFlag.Creating = true
+
+			return &withFlag, nil
+		}
+	}
+
+	return data, nil
+}
+
+// TestCanonicalCoinbaseAt_CreatingRecordIsNotPresent pins what the probe
+// promises: the store holds a usable coinbase, not merely a row for it. A
+// coinbase whose create was interrupted still has Creating=true, and spends
+// refuse a record in that state, so reporting it present would skip the one
+// repair that finishes the create (processCoinbaseUtxos tolerates ErrTxExists,
+// and the aerospike create path clears the flag on that retry). Probing with
+// fields.Fee reported it present.
+func TestCanonicalCoinbaseAt_CreatingRecordIsNotPresent(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := t.Context()
+	items := setupBlockAssemblyTestWithUtxoStore(t, withCoinbaseMaturity(testCoinbaseMaturity))
+	require.NotNil(t, items)
+
+	cb1 := coinbaseTxForHeader(t, blockHeader1)
+	addCanonicalBlockWithCoinbase(ctx, t, items, blockHeader1, cb1)
+
+	_, _, err := items.utxoStore.SpendAndCreate(ctx, cb1, 1, utxoStore.WithCreateOnly())
+	require.NoError(t, err)
+
+	// Control: the same record with the flag clear is present.
+	present, _, err := items.blockAssembler.canonicalCoinbaseAt(ctx, 1)
+	require.NoError(t, err)
+	require.True(t, present)
+
+	items.blockAssembler.utxoStore = &creatingRecordUtxoStore{Store: items.utxoStore, creating: *cb1.TxIDChainHash()}
+
+	present, blk, err := items.blockAssembler.canonicalCoinbaseAt(ctx, 1)
+	require.NoError(t, err)
+	require.False(t, present, "a coinbase record still marked Creating is not a usable coinbase")
+	require.NotNil(t, blk, "the canonical block is still handed back for the repair path")
+}

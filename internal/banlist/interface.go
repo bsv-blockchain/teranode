@@ -16,7 +16,12 @@ type Interface interface {
 	// Add adds an IP or CIDR subnet to the ban list with an expiration time.
 	Add(ctx context.Context, ipOrSubnet string, expirationTime time.Time) error
 
-	// Remove removes an IP or subnet from the ban list.
+	// Remove removes bans from the ban list. A request containing "/" is an
+	// explicit CIDR and removes only that exact raw key. Any other valid request
+	// is a host and removes every stored host entry for the same IP, whatever its
+	// port, spelling or IPv4-mapped form; CIDR rules are never removed by a host
+	// request, so a covering CIDR can keep the host banned. A valid request that
+	// matches nothing, confirmed against the database, succeeds.
 	Remove(ctx context.Context, ipOrSubnet string) error
 
 	// ListBanned returns all currently banned IPs and subnets.

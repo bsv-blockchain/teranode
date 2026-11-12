@@ -36,10 +36,12 @@ import (
 	"sort"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 )
 
@@ -76,6 +78,11 @@ const (
 // completes, so a process kill between any two steps can be detected and the
 // operation replayed on restart. See ProcessConflicting / ReverseProcessConflicting.
 type ConflictIntent struct {
+	// Recovery is the versioned before-image and progress of a forward operation.
+	// BeginConflictIntent stores it. PendingConflictIntents leaves it nil; use
+	// LoadConflictRecovery to read it.
+	Recovery *ConflictRecovery `json:"recovery,omitempty"`
+
 	// Kind is the operation direction: forward = ProcessConflicting,
 	// reverse = ReverseProcessConflicting.
 	Kind ConflictIntentKind
@@ -96,32 +103,62 @@ type ConflictIntent struct {
 
 	// StartedAt is the unix-nanosecond timestamp the intent was recorded.
 	StartedAt int64
+
+	// ID is the key the record is stored under. PendingConflictIntents sets it, so a record
+	// written by an older build, under the key formula of that build, is still addressed by its
+	// own key. A zero ID means the key is derived from the other fields.
+	ID chainhash.Hash
 }
 
-// IntentID derives a deterministic identifier for the intent from its kind,
-// block hash, block height and the (sorted) set of tx hashes. Two invocations
-// with the same (kind, block, height, hashes) yield the same id, which makes
-// BeginConflictIntent idempotent across a crash-retry of the same operation
-// and lets startup replay deduplicate naturally. The hash ordering is
-// normalised so callers need not pre-sort.
+// IntentID derives a deterministic identifier for the intent. A forward intent is keyed by its
+// block alone (ForwardConflictIntentID): its checklist holds the winners, so a retry with a subset of
+// them, or a caller that filters them differently, finds the same record. A reverse intent is keyed
+// by its kind, block hash, block height and the (sorted) set of tx hashes. Two invocations with the
+// same key yield the same id, which makes BeginConflictIntent idempotent across a crash-retry of the
+// same operation and lets startup replay deduplicate naturally.
 func (ci ConflictIntent) IntentID() chainhash.Hash {
-	sorted := make([]chainhash.Hash, len(ci.TxHashes))
-	copy(sorted, ci.TxHashes)
+	if ci.ID != (chainhash.Hash{}) {
+		return ci.ID
+	}
+
+	if ci.Kind == ConflictIntentForward {
+		return ForwardConflictIntentID(ci.BlockHash)
+	}
+
+	return LegacyConflictIntentID(ci.Kind, ci.BlockHash, ci.BlockHeight, ci.TxHashes)
+}
+
+// LegacyConflictIntentID is the key formula of older builds for every intent, and of this build for
+// a reverse intent: a hash of the kind, block hash, block height and the sorted tx hashes. A forward
+// record that an older build wrote is stored under this key.
+func LegacyConflictIntentID(kind ConflictIntentKind, blockHash chainhash.Hash, blockHeight uint32, txHashes []chainhash.Hash) chainhash.Hash {
+	sorted := make([]chainhash.Hash, len(txHashes))
+	copy(sorted, txHashes)
 	sort.Slice(sorted, func(i, j int) bool {
 		return bytes.Compare(sorted[i][:], sorted[j][:]) < 0
 	})
 
-	buf := make([]byte, 0, len(ci.Kind)+chainhash.HashSize+4+len(sorted)*chainhash.HashSize)
-	buf = append(buf, []byte(ci.Kind)...)
-	buf = append(buf, ci.BlockHash[:]...)
+	buf := make([]byte, 0, len(kind)+chainhash.HashSize+4+len(sorted)*chainhash.HashSize)
+	buf = append(buf, []byte(kind)...)
+	buf = append(buf, blockHash[:]...)
 
 	var heightBytes [4]byte
-	binary.BigEndian.PutUint32(heightBytes[:], ci.BlockHeight)
+	binary.BigEndian.PutUint32(heightBytes[:], blockHeight)
 	buf = append(buf, heightBytes[:]...)
 
 	for i := range sorted {
 		buf = append(buf, sorted[i][:]...)
 	}
+
+	return chainhash.HashH(buf)
+}
+
+// ForwardConflictIntentID is the ID of the forward intent of a block. Callers that acknowledge or
+// retire a block's intent compute it, so they need no scan of the WAL.
+func ForwardConflictIntentID(blockHash chainhash.Hash) chainhash.Hash {
+	buf := make([]byte, 0, len(ConflictIntentForward)+chainhash.HashSize)
+	buf = append(buf, []byte(ConflictIntentForward)...)
+	buf = append(buf, blockHash[:]...)
 
 	return chainhash.HashH(buf)
 }
@@ -191,6 +228,14 @@ type IgnoreFlags struct {
 	// Set ONLY on the gated below-checkpoint outpoint-only path (spec §3.2 Seam 1). Default
 	// false — above-checkpoint and steady-state spends always enforce the hash.
 	SkipUTXOHashCheck bool
+	// RequireParentOutputs makes a spend whose parent output is not found fail, even when the
+	// spending transaction already has a record. Without it the store reads that record as
+	// proof the spends were made in an earlier attempt and the parent has since been pruned
+	// ("already blessed"), which holds only when records are created after their spends. Set
+	// ONLY by DefaultSpendAndCreateMulti's second-wave spends for a WithBelowCheckpoint list,
+	// whose records the first wave created before any of those spends, so the record proves
+	// nothing. Its first-wave combined calls spend before they create and leave it unset.
+	RequireParentOutputs bool
 }
 
 // ConflictingChildRemoval identifies one (parent, child) pair that should be
@@ -242,6 +287,9 @@ type CreateOption func(*CreateOptions)
 type CreateOptions struct {
 	MinedBlockInfos    []MinedBlockInfo
 	TxID               *chainhash.Hash
+	TxIDs              []chainhash.Hash // SpendAndCreateMulti only: one txid per transaction of the list
+	SubtreeIdxs        []int            // SpendAndCreateMulti only: one subtree index per transaction of the list
+	BelowCheckpoint    bool             // SpendAndCreateMulti only: the list is from a block the caller already knows is valid
 	IsCoinbase         *bool
 	Frozen             bool
 	Conflicting        bool
@@ -273,6 +321,107 @@ func WithTXID(txID *chainhash.Hash) CreateOption {
 	}
 }
 
+// WithSubtreeIdxs supplies the subtree index of each transaction of a SpendAndCreateMulti list,
+// in the same order, so a list that spans several subtrees of one block records each
+// transaction where it is. Each index replaces SubtreeIdx on the list's mined-block info for that
+// transaction only. It needs WithMinedBlockInfo and has no effect on SpendAndCreate.
+func WithSubtreeIdxs(idxs []int) CreateOption {
+	return func(o *CreateOptions) {
+		o.SubtreeIdxs = idxs
+	}
+}
+
+// WithBelowCheckpoint tells SpendAndCreateMulti that the list comes from a block at or below a
+// checkpoint the caller trusts, so the block is already known valid and the list may be written in
+// any order. DefaultSpendAndCreateMulti then writes it in two waves instead of one dependency
+// level at a time: a first wave that creates every record, spending in the same call the inputs
+// of each transaction with no parent in the list, and a second that spends the rest. A chain of
+// N transactions costs two rounds of store calls rather than N. A store that nets the list may ignore it. Never
+// set it above the checkpoint: there a transaction's inputs must be spent before its outputs
+// exist, or a transaction that fails its spends leaves outputs behind. It has no effect on
+// SpendAndCreate.
+func WithBelowCheckpoint() CreateOption {
+	return func(o *CreateOptions) {
+		o.BelowCheckpoint = true
+	}
+}
+
+// ItemOptions returns the options transaction i of a SpendAndCreateMulti list is written with: a
+// copy carrying its own subtree index on the mined-block info, with the list-only fields, which
+// describe the whole list, cleared.
+func (o *CreateOptions) ItemOptions(i int) *CreateOptions {
+	c := *o
+	c.TxIDs = nil
+	c.SubtreeIdxs = nil
+	c.BelowCheckpoint = false
+
+	if o.SubtreeIdxs != nil && i < len(o.SubtreeIdxs) && len(o.MinedBlockInfos) > 0 {
+		c.MinedBlockInfos = make([]MinedBlockInfo, len(o.MinedBlockInfos))
+		copy(c.MinedBlockInfos, o.MinedBlockInfos)
+
+		for k := range c.MinedBlockInfos {
+			c.MinedBlockInfos[k].SubtreeIdx = o.SubtreeIdxs[i]
+		}
+	}
+
+	return &c
+}
+
+// withRequireParentOutputs sets IgnoreFlags.RequireParentOutputs, for the spend wave of a
+// list written create-then-spend.
+func withRequireParentOutputs() CreateOption {
+	return func(o *CreateOptions) {
+		o.IgnoreFlags.RequireParentOutputs = true
+	}
+}
+
+// The boolean CreateOptions below return one of two package-level closures
+// rather than closing over their argument. A closure that captures anything is
+// heap-allocated the moment it escapes, and these escape on every call: they go
+// straight into SpendAndCreate's variadic list, which the quick-validation write
+// path built once per TRANSACTION when this was measured.
+//
+// That is one allocation per option per transaction, and on a node whose heap
+// sits at GOMEMLIMIT an allocation is not cheap. A CPU profile taken on Hetzner
+// mainnet while block 760431 was applied charged 14.77 core-seconds to
+// runtime.newobject underneath WithIgnoreLocked alone, inside a 25-second
+// window, because each allocation first pays off sweep debt through
+// runtime.deductSweepCredit before it is allowed to proceed.
+//
+// A closure that captures nothing is a static function value, so these cost
+// nothing at all. TestCreateOptionsDoNotAllocate holds them to that.
+var (
+	optFrozenTrue  CreateOption = func(o *CreateOptions) { o.Frozen = true }
+	optFrozenFalse CreateOption = func(o *CreateOptions) { o.Frozen = false }
+
+	optConflictingTrue  CreateOption = func(o *CreateOptions) { o.Conflicting = true }
+	optConflictingFalse CreateOption = func(o *CreateOptions) { o.Conflicting = false }
+
+	optLockedTrue  CreateOption = func(o *CreateOptions) { o.Locked = true }
+	optLockedFalse CreateOption = func(o *CreateOptions) { o.Locked = false }
+
+	optSkipExtendedInputsTrue  CreateOption = func(o *CreateOptions) { o.SkipExtendedInputs = true }
+	optSkipExtendedInputsFalse CreateOption = func(o *CreateOptions) { o.SkipExtendedInputs = false }
+
+	optIgnoreConflictingTrue  CreateOption = func(o *CreateOptions) { o.IgnoreFlags.IgnoreConflicting = true }
+	optIgnoreConflictingFalse CreateOption = func(o *CreateOptions) { o.IgnoreFlags.IgnoreConflicting = false }
+
+	optIgnoreLockedTrue  CreateOption = func(o *CreateOptions) { o.IgnoreFlags.IgnoreLocked = true }
+	optIgnoreLockedFalse CreateOption = func(o *CreateOptions) { o.IgnoreFlags.IgnoreLocked = false }
+
+	optSkipUTXOHashCheckTrue  CreateOption = func(o *CreateOptions) { o.IgnoreFlags.SkipUTXOHashCheck = true }
+	optSkipUTXOHashCheckFalse CreateOption = func(o *CreateOptions) { o.IgnoreFlags.SkipUTXOHashCheck = false }
+)
+
+// WithTXIDs supplies the txids of a SpendAndCreateMulti list, in the same order,
+// so the store does not rehash each transaction. It is the list form of WithTXID
+// and has no effect on SpendAndCreate.
+func WithTXIDs(txIDs []chainhash.Hash) CreateOption {
+	return func(o *CreateOptions) {
+		o.TxIDs = txIDs
+	}
+}
+
 // WithSetCoinbase returns a CreateOption that marks a UTXO as coming from a coinbase transaction.
 func WithSetCoinbase(b bool) CreateOption {
 	return func(o *CreateOptions) {
@@ -282,48 +431,60 @@ func WithSetCoinbase(b bool) CreateOption {
 
 // WithFrozen returns a CreateOption that marks a UTXO as frozen.
 func WithFrozen(b bool) CreateOption {
-	return func(o *CreateOptions) {
-		o.Frozen = b
+	if b {
+		return optFrozenTrue
 	}
+
+	return optFrozenFalse
 }
 
 // WithConflicting marks a transaction as conflicting with another transaction.
 func WithConflicting(b bool) CreateOption {
-	return func(o *CreateOptions) {
-		o.Conflicting = b
+	if b {
+		return optConflictingTrue
 	}
+
+	return optConflictingFalse
 }
 
 // WithLocked sets the transactions as locked and not spendable on creation
 func WithLocked(b bool) CreateOption {
-	return func(o *CreateOptions) {
-		o.Locked = b
+	if b {
+		return optLockedTrue
 	}
+
+	return optLockedFalse
 }
 
 // WithSkipExtendedInputs marks a create as minimal: compute meta with fee=0 (no GetFees) and
 // persist per-input parent script/satoshis as empty/zero, while ALWAYS retaining the per-input
 // outpoint and every output. Set ONLY on the gated below-checkpoint path (spec §3.2 Seam 3, §3.3).
 func WithSkipExtendedInputs(b bool) CreateOption {
-	return func(o *CreateOptions) {
-		o.SkipExtendedInputs = b
+	if b {
+		return optSkipExtendedInputsTrue
 	}
+
+	return optSkipExtendedInputsFalse
 }
 
 // WithIgnoreConflicting makes the spend phase of SpendAndCreate ignore the
 // conflicting flag on the UTXOs being spent.
 func WithIgnoreConflicting(b bool) CreateOption {
-	return func(o *CreateOptions) {
-		o.IgnoreFlags.IgnoreConflicting = b
+	if b {
+		return optIgnoreConflictingTrue
 	}
+
+	return optIgnoreConflictingFalse
 }
 
 // WithIgnoreLocked makes the spend phase of SpendAndCreate ignore the locked
 // flag on the UTXOs being spent.
 func WithIgnoreLocked(b bool) CreateOption {
-	return func(o *CreateOptions) {
-		o.IgnoreFlags.IgnoreLocked = b
+	if b {
+		return optIgnoreLockedTrue
 	}
+
+	return optIgnoreLockedFalse
 }
 
 // WithSkipUTXOHashCheck disables the per-input utxo-hash integrity comparison in
@@ -332,9 +493,11 @@ func WithIgnoreLocked(b bool) CreateOption {
 // does not implement the outpoint-only fast path and treats this flag as a
 // no-op (see SupportsOutpointOnlySpend).
 func WithSkipUTXOHashCheck(b bool) CreateOption {
-	return func(o *CreateOptions) {
-		o.IgnoreFlags.SkipUTXOHashCheck = b
+	if b {
+		return optSkipUTXOHashCheckTrue
 	}
+
+	return optSkipUTXOHashCheckFalse
 }
 
 // WithCreateOnly makes SpendAndCreate skip the spend phase: only the
@@ -354,6 +517,51 @@ func WithSpendOnly() CreateOption {
 		o.SpendOnly = true
 	}
 }
+
+// Outpoint names one output of one transaction.
+type Outpoint struct {
+	TxID chainhash.Hash
+	Vout uint32
+}
+
+// ParentOutputStatus says what ParentOutputsForValidation found for one outpoint.
+type ParentOutputStatus uint8
+
+const (
+	// ParentOutputUnknown is the zero value and never a valid answer: a slot left
+	// at it must carry an Err.
+	ParentOutputUnknown ParentOutputStatus = iota
+	// ParentOutputMined means Satoshis, LockingScript and Height are set.
+	ParentOutputMined
+	// ParentOutputNotMined means Satoshis and LockingScript are set, and the store
+	// has no block recorded for the parent at all. Height is not set.
+	ParentOutputNotMined
+	// ParentOutputTxNotFound means the store looked and holds no such transaction.
+	// It is never used for a transient fault; those come back as Err.
+	ParentOutputTxNotFound
+	// ParentOutputNoSuchIndex means the store holds the parent and its output list
+	// proves there is no spendable output at Vout. Callers treat it as an invalid
+	// spend.
+	ParentOutputNoSuchIndex
+)
+
+// ParentOutput is ParentOutputsForValidation's answer for one outpoint.
+type ParentOutput struct {
+	Status        ParentOutputStatus
+	Satoshis      uint64
+	LockingScript *bscript.Script
+	// Height is the creation height, valid only when Status is ParentOutputMined.
+	Height uint32
+	// Err is set when this outpoint could not be answered; Status is then Unknown.
+	Err error
+}
+
+// ParentOutputOptions holds the options of ParentOutputsForValidation. It has no
+// fields yet; the parameter naming the chain being validated will arrive here.
+type ParentOutputOptions struct{}
+
+// ParentOutputOption configures a ParentOutputsForValidation call.
+type ParentOutputOption func(*ParentOutputOptions)
 
 type MinedBlockInfo struct {
 	BlockID        uint32
@@ -410,6 +618,20 @@ type Store interface {
 	// Delete removes a UTXO and its associated metadata from the store.
 	Delete(ctx context.Context, hash *chainhash.Hash) error
 
+	// DeleteComplete removes a transaction and every record it owns: the master
+	// record, all pagination (child) records, and any external blob(s). Unlike
+	// Delete — which on paginated backends removes only the master record — a
+	// SUCCESSFUL DeleteComplete leaves nothing behind, so a descendant spending any
+	// output gets a clean missing-parent answer rather than TX_LOCKED against a
+	// surviving locked pagination record. A cascade that FAILS after the master is
+	// gone can leave locked orphan pagination records, and a descendant of an output
+	// that lived on one gets TX_LOCKED instead; see the backend implementation for
+	// the ordering rationale and what that costs the descendant. It is idempotent:
+	// an absent record, absent children and absent blobs are all treated as success.
+	// On a backend whose Delete is already complete (e.g. SQL) this is equivalent to
+	// Delete.
+	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
+
 	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) // Remove? Only used in tests
 	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
 
@@ -439,9 +661,75 @@ type Store interface {
 	//     zero-input tx is undefined.
 	SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, []*Spend, error)
 
+	// SpendAndCreateMulti is SpendAndCreate for an ordered list of transactions,
+	// parents before children, that have already passed every consensus and
+	// script check. It spends every input and creates every record, applying
+	// opts to every transaction exactly as SpendAndCreate applies them to one;
+	// with no WithMinedBlockInfo each record is created unmined. WithTXID and
+	// WithSetCoinbase describe one transaction and are refused; WithTXIDs is the
+	// list form of WithTXID. WithCreateOnly and WithSpendOnly are refused: the
+	// results cannot report half a write.
+	//
+	// It returns one result per transaction, in list order. The call is not
+	// atomic across the list: each transaction succeeds or fails on its own, a
+	// failed transaction's descendants in the list are not written
+	// (MultiTxParentFailed), and a transaction whose create finds its record
+	// already there (ErrTxExists) is reported MultiTxExisted. Callers drop
+	// transactions that already have a record before calling, as the
+	// per-transaction block path does. A repeat after a crash is safe for the
+	// same reasons it is there: a spend repeated by the same spender is accepted
+	// as the same spend, and SpendAndCreate spends before it creates, so a
+	// record that exists has made its spends.
+	//
+	// A caller may repeat only the transactions that were not Created or
+	// Existed, with their parents in the list, in list order; quick validation
+	// does. The parents keep each transaction written the way it was the first
+	// time, which the store's reading of an existing record relies on. So a
+	// store that reports
+	// per-transaction failures must leave the store such that the shorter list
+	// finishes the write, with every parent that went through outside it. A
+	// store whose write depends on the whole list, one that leaves out the
+	// coins a later transaction of the list spends for instance, cannot: it
+	// returns an error for the whole call instead, and the caller repeats the
+	// whole list.
+	//
+	// WithBelowCheckpoint lets the store write the list in any order, because
+	// the caller already knows the block is valid. In that order a record can
+	// exist before its spends are made, after a crash for instance, so finding
+	// a record no longer proves its spends: the store makes the spends of a
+	// MultiTxExisted transaction itself before reporting it. See
+	// DefaultSpendAndCreateMulti for how the option changes the results.
+	//
+	// A list that breaks the caller's guarantees (a transaction spending a later
+	// one or an outpoint spent twice, an output index past the end of a parent
+	// in the list, a coinbase) is refused with nothing written; see
+	// IsSpendAndCreateMultiRefused. Stores without a faster implementation
+	// delegate to DefaultSpendAndCreateMulti.
+	SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...CreateOption) ([]SpendAndCreateMultiResult, error)
+
 	// Unspend reverses a previous spend operation, marking UTXOs as unspent.
 	// This is used during blockchain reorganizations.
 	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
+
+	// SpendsMadeBy returns the coins this transaction consumed, as records its own
+	// Unspend can restore. Undoing a conflict resolution uses it to put those coins
+	// back.
+	//
+	// The store answers rather than the caller working it out from the transaction,
+	// because a coin's identity is computed from the amount and locking script of the
+	// output being spent, and a transaction only records those when it is stored in
+	// extended form. A store that keeps transactions in the plain form cannot answer
+	// the question that way and has to answer it from what it does keep.
+	//
+	// Only what the store can still speak for is returned. An input whose coin was
+	// never actually spent, or whose record has passed out of retention, is omitted
+	// rather than guessed at, because a record that cannot be restored fails the whole
+	// restore on a store that checks.
+	//
+	// Called only when undoing a conflict resolution, which happens during a chain
+	// reorganisation or when replaying an operation a crash interrupted. It is never on
+	// the path an ordinary transaction takes, so it may be as expensive as it needs to be.
+	SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*Spend, error)
 
 	// SetMinedMulti marks transactions as mined in the block described by minedBlockInfo.
 	//
@@ -495,6 +783,34 @@ type Store interface {
 	// PreviousOutputsDecorate fetches information about transaction inputs' previous outputs.
 	PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error
 
+	// ParentOutputsForValidation returns, for each outpoint, the output's value and
+	// locking script and the height of the block that created it. It is read-only:
+	// it never modifies its argument or any transaction, and callers assign the
+	// values they need themselves.
+	//
+	// The result has one entry per outpoint, in the same order; duplicate outpoints
+	// get identical answers. Answers come only from the parent's own stored outputs,
+	// never from a child's stored copy of an input. The returned error covers the
+	// whole call only (a cancelled context, a store unreachable before any work);
+	// anything that affects some outpoints goes in that entry's Err.
+	//
+	// Height is the lowest height among the blocks recorded for the parent. The
+	// contract is the height on the chain being validated, but nothing tells the
+	// store which chain that is yet, so a parent recorded in two forks reports the
+	// lower of the two. The validator reads the height for two things: the script
+	// era (Genesis, Chronicle), and BIP68 sequence locks, which TxValidator only
+	// enforces below Genesis. On a fork above the highest checkpoint the choice
+	// cannot change a verdict while both activation heights sit below that
+	// checkpoint, as they do on mainnet and testnet. A side chain forking below
+	// the checkpoint can never become the best chain, but blocks on it are not
+	// yet refused outright, so a verdict on one below Genesis can still read the
+	// wrong fork's height. The chain-blind read it replaces, the first recorded
+	// height, had the same limit.
+	//
+	// Parent flags (frozen, conflicting, locked, creating, spendable-in, coinbase
+	// maturity) are not reported: the spend checks them.
+	ParentOutputsForValidation(ctx context.Context, outpoints []Outpoint, opts ...ParentOutputOption) ([]ParentOutput, error)
+
 	// BatchPreviousOutputsDecorate fetches previous output information for inputs across
 	// multiple transactions in bulk. This is more efficient than calling PreviousOutputsDecorate
 	// per-transaction because it reduces database round-trips.
@@ -510,8 +826,11 @@ type Store interface {
 	// UnFreezeUTXOs removes the frozen status from UTXOs, allowing them to be spent again.
 	UnFreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error
 
-	// ReAssignUTXO reassigns a UTXO to a new transaction output.
-	// The UTXO will become spendable after ReAssignedUtxoSpendableAfterBlocks blocks.
+	// ReAssignUTXO updates a frozen UTXO's commitment and maturity gate.
+	// It does not persist a replacement locking script. Changing the owner
+	// currently strands the output for both owners even after maturity; see
+	// https://github.com/bsv-blockchain/teranode/issues/1725.
+	// SQL honors the configured delay; Aerospike currently uses the fixed constant.
 	ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend, tSettings *settings.Settings) error
 
 	// GetCounterConflicting returns the counter conflicting transactions for a given transaction hash.
@@ -546,6 +865,17 @@ type Store interface {
 	// transactions during a rewind.
 	GetConflictingTxIterator() (UnminedTxIterator, error)
 
+	// ConflictingTxHashes returns the hash of every transaction whose record the
+	// store currently flags conflicting, answered from an index of conflicting
+	// records rather than by reading each transaction. Block validation uses it to
+	// check already-validated subtrees without a read per transaction.
+	//
+	// indexed is false when the store cannot answer from an index right now (an
+	// index still building, or a server that cannot hold one); the hashes are then
+	// nil and the caller must find the conflicting transactions some other way.
+	// An error means the store failed to answer and must not be read as "none".
+	ConflictingTxHashes(ctx context.Context) (hashes []chainhash.Hash, indexed bool, err error)
+
 	// SetLocked marks transactions as locked for spending.
 	SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error
 
@@ -560,6 +890,26 @@ type Store interface {
 	// caller — the operation must not proceed without a durable intent record.
 	BeginConflictIntent(ctx context.Context, intent ConflictIntent) error
 
+	// SaveConflictRecovery atomically publishes the recovery checklist and phase.
+	// The intent must already exist. A failed write must stop state mutation.
+	SaveConflictRecovery(ctx context.Context, intentID chainhash.Hash, recovery *ConflictRecovery) error
+
+	// SetConflictLocks acquires/releases only locks owned by this WAL operation.
+	// Backends whose conflict Unspend never locks parents may implement a no-op.
+	SetConflictLocks(ctx context.Context, intentID chainhash.Hash, parents []chainhash.Hash, locked bool) error
+
+	// ReleaseConflictLocks releases the parent locks this WAL operation still owns and leaves every
+	// other lock as it is. A rollback before mutation uses it: the operation may never have taken a
+	// lock that another holder has. Backends that never lock parents may implement a no-op.
+	ReleaseConflictLocks(ctx context.Context, intentID chainhash.Hash, parents []chainhash.Hash) error
+
+	// LoadConflictRecovery returns nil for an absent or legacy intent.
+	LoadConflictRecovery(ctx context.Context, intentID chainhash.Hash) (*ConflictRecovery, error)
+
+	// RestoreConflictSpends restores only the specified recorded spends. Each
+	// write must reject a different existing spender and accept the same spender.
+	RestoreConflictSpends(ctx context.Context, spends []*Spend, blockHeight uint32) error
+
 	// CompleteConflictIntent deletes the intent record identified by intentID
 	// after the operation's terminal step has committed. Removing an
 	// already-absent intent is idempotent (no error).
@@ -572,7 +922,8 @@ type Store interface {
 
 	// MarkTransactionsOnLongestChain marks transactions as being on the longest chain or not.
 	// When onLongestChain is true, the unminedSince field is unset (transaction is mined).
-	// When onLongestChain is false, the unminedSince field is set to the current block height.
+	// When onLongestChain is false, an existing unminedSince is kept; only an absent value is
+	// stamped, with BackdatedUnminedSince (issue 1768).
 	MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error
 
 	// internal state functions
@@ -615,4 +966,11 @@ type Store interface {
 	// its writer — SetBlockState publishes both fields from one tip
 	// atomically, while the individual setters update one field at a time.
 	GetBlockState() BlockState
+
+	// Stamper returns the store's stamp: the deep pass that writes each UTXO's block onto it
+	// once its tx_mined partition is deep enough. Every store answers, so no caller has to test
+	// the store's type to find it, and a wrapper forwards it like any other method. A store
+	// whose UTXOs carry their block from the moment they are mined has nothing to stamp and
+	// returns pruner.NoStamp, whose WindowBlocks is zero.
+	Stamper() pruner.Stamper
 }

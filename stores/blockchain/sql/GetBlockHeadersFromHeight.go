@@ -95,8 +95,8 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 	defer cancel()
 
 	// we are getting all forks, so we need a bit more than the limit
-	blockHeaders := make([]*model.BlockHeader, 0, 2*limit)
-	blockMetas := make([]*model.BlockHeaderMeta, 0, 2*limit)
+	blockHeaders := make([]*model.BlockHeader, 0, preallocFor(2*uint64(limit)))
+	blockMetas := make([]*model.BlockHeaderMeta, 0, preallocFor(2*uint64(limit)))
 
 	q := `
 		SELECT
@@ -119,7 +119,7 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 		ORDER BY height DESC
 	`
 
-	rows, err := s.db.QueryContext(ctx, q, height, height+limit)
+	rows, err := s.db.QueryContext(ctx, q, height, uint64(height)+uint64(limit))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return blockHeaders, blockMetas, nil
@@ -179,6 +179,11 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 
 		blockHeaders = append(blockHeaders, blockHeader)
 		blockMetas = append(blockMetas, blockHeaderMeta)
+	}
+
+	// An error part way through the rows would otherwise return, and cache, a short list.
+	if err = rows.Err(); err != nil {
+		return nil, nil, errors.NewStorageError("failed to read headers", err)
 	}
 
 	// Cache the result in response cache

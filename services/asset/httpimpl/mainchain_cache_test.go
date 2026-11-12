@@ -129,6 +129,54 @@ func TestMainChainCache_BelowWindowRPCErrorNotCached(t *testing.T) {
 	bcMock.AssertExpectations(t)
 }
 
+// TestMainChainCache_BelowWindowFillPanicReturnsErrorToWaiters pins that a panic in
+// the shared singleflight fill is recovered and turned into an error for every
+// waiter, rather than taking the process down. DoChan re-panics in a fresh
+// goroutine for any caller beyond the first when the fill is not guarded, which
+// bypasses echo's request-goroutine Recover entirely.
+func TestMainChainCache_BelowWindowFillPanicReturnsErrorToWaiters(t *testing.T) {
+	bcMock := &blockchain.Mock{}
+	c := populatedCache(t, bcMock)
+
+	bcMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{7}).
+		Panic("boom").Once()
+
+	require.NotPanics(t, func() {
+		_, err := c.IsOnMainChain(context.Background(), 7, 50)
+		require.Error(t, err)
+	})
+
+	bcMock.AssertExpectations(t)
+}
+
+// TestMainChainCache_WriteBackPanicDoesNotLeaveMutexLocked pins a defect in the panic
+// recovery itself: the below-window write-back took c.mu.Lock() and released it with a
+// plain statement, not a defer. Now that a panic in the fill is recovered instead of
+// crashing the process, a panic between Lock and that plain Unlock would leave mu locked
+// forever, deadlocking every subsequent lookup instead of taking the process down.
+func TestMainChainCache_WriteBackPanicDoesNotLeaveMutexLocked(t *testing.T) {
+	bcMock := &blockchain.Mock{}
+	c := populatedCache(t, bcMock)
+
+	bcMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{7}).Return(true, nil).Once()
+
+	// Force the write-back's map assignment to panic (assignment to a nil map) while
+	// the generation guard would otherwise let it through.
+	c.mu.Lock()
+	c.oldCache = nil
+	c.mu.Unlock()
+
+	_, err := c.IsOnMainChain(context.Background(), 7, 50)
+	require.Error(t, err)
+
+	locked := c.mu.TryLock()
+	require.True(t, locked, "mu must not stay locked after a panic during the write-back")
+
+	if locked {
+		c.mu.Unlock()
+	}
+}
+
 func TestMainChainCache_AboveWindowFallbackUncached(t *testing.T) {
 	bcMock := &blockchain.Mock{}
 	c := populatedCache(t, bcMock)
@@ -402,4 +450,193 @@ func TestMainChainCache_ConcurrentLookupsSafe(t *testing.T) {
 	c.rebuild(context.Background())
 	c.invalidate()
 	wg.Wait()
+}
+
+// ctxAwareChainMock behaves like a real gRPC client for CheckBlockIsInCurrentChain:
+// the call blocks until released and fails if its context is cancelled while it is
+// in flight. blockchain.Mock returns its canned value regardless of context, which
+// would hide context-ownership bugs.
+type ctxAwareChainMock struct {
+	*blockchain.Mock
+
+	entered chan struct{}
+	release chan struct{}
+
+	calls int32
+
+	mu     sync.Mutex
+	rpcCtx context.Context
+}
+
+func newCtxAwareChainMock(inner *blockchain.Mock) *ctxAwareChainMock {
+	return &ctxAwareChainMock{
+		Mock:    inner,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (m *ctxAwareChainMock) CheckBlockIsInCurrentChain(ctx context.Context, _ []uint32) (bool, error) {
+	if atomic.AddInt32(&m.calls, 1) == 1 {
+		m.mu.Lock()
+		m.rpcCtx = ctx
+		m.mu.Unlock()
+		close(m.entered)
+	}
+
+	select {
+	case <-m.release:
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+func (m *ctxAwareChainMock) sharedCtx() context.Context {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.rpcCtx
+}
+
+// ctxAwareCache builds a cache whose window covers IDs 10..12 at heights 100..102,
+// backed by a context-honouring CheckBlockIsInCurrentChain.
+func ctxAwareCache(t *testing.T) (*mainChainCache, *ctxAwareChainMock) {
+	t.Helper()
+
+	bcMock := &blockchain.Mock{}
+	expectWindow(bcMock, windowMetas(10, 100, 3), true)
+
+	client := newCtxAwareChainMock(bcMock)
+	c := newMainChainCache(client, ulogger.TestLogger{}, 3)
+	c.rebuild(context.Background())
+	require.True(t, c.windowHealthy)
+
+	return c, client
+}
+
+// TestMainChainCache_SharedFillUsesServiceContext pins the context boundary: the
+// deduplicated below-window RPC is shared by unrelated requests, so it must not run
+// on the leader's request context. Cancelling the leader must leave the shared call's
+// context alive.
+func TestMainChainCache_SharedFillUsesServiceContext(t *testing.T) {
+	c, client := ctxAwareCache(t)
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	defer cancelLeader()
+
+	leaderDone := make(chan struct{})
+
+	go func() {
+		defer close(leaderDone)
+
+		_, _ = c.IsOnMainChain(leaderCtx, 7, 50)
+	}()
+
+	<-client.entered // the shared RPC is in flight; client.rpcCtx is published
+
+	cancelLeader()
+
+	require.NoError(t, client.sharedCtx().Err(),
+		"shared singleflight fill must not run on the leader's request context")
+
+	close(client.release)
+	<-leaderDone
+}
+
+// TestMainChainCache_LeaderCancelDoesNotFailWaiters is the end-to-end form of the
+// same defect: one client disconnecting must not turn every concurrent waiter's
+// lookup into an error.
+func TestMainChainCache_LeaderCancelDoesNotFailWaiters(t *testing.T) {
+	c, client := ctxAwareCache(t)
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	defer cancelLeader()
+
+	leaderDone := make(chan struct{})
+
+	go func() {
+		defer close(leaderDone)
+
+		_, _ = c.IsOnMainChain(leaderCtx, 7, 50)
+	}()
+
+	<-client.entered
+
+	type waiterResult struct {
+		onChain bool
+		err     error
+	}
+
+	waiterCh := make(chan waiterResult, 1)
+
+	go func() {
+		onChain, err := c.IsOnMainChain(context.Background(), 7, 50)
+		waiterCh <- waiterResult{onChain: onChain, err: err}
+	}()
+
+	// Let the waiter reach the singleflight join before the leader walks away.
+	// The call-count assertion below fails loudly if it did not get there.
+	time.Sleep(100 * time.Millisecond)
+
+	cancelLeader()
+
+	// The leader stops waiting immediately; the shared fill keeps running.
+	select {
+	case <-leaderDone:
+	case <-time.After(time.Second):
+		t.Fatal("leader did not return after its own context was cancelled")
+	}
+
+	close(client.release)
+
+	res := <-waiterCh
+	require.NoError(t, res.err, "waiter must not inherit the leader's cancellation")
+	require.True(t, res.onChain)
+
+	require.Equal(t, int32(1), atomic.LoadInt32(&client.calls),
+		"the waiter must have joined the shared fill, not issued a second RPC")
+}
+
+// TestMainChainCache_ServiceContextCancelledOnShutdown pins that the service-owned
+// context used for shared fills dies with the service, so a shutdown cannot leave a
+// deduplicated RPC running forever.
+func TestMainChainCache_ServiceContextCancelledOnShutdown(t *testing.T) {
+	notifyCh := make(chan *blockchain_api.Notification)
+	bcMock := &blockchain.Mock{}
+	bcMock.On("Subscribe", mock.Anything, "asset-mainchain-cache").Return(notifyCh, nil)
+	expectWindow(bcMock, windowMetas(10, 100, 3), false)
+
+	c := newMainChainCache(bcMock, ulogger.TestLogger{}, 3)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, c.Start(ctx))
+
+	require.Eventually(t, func() bool {
+		c.mu.RLock()
+		defer c.mu.RUnlock()
+
+		return c.windowHealthy
+	}, time.Second, time.Millisecond)
+
+	require.NoError(t, c.sfCtx.Err(), "service context must be live while the cache runs")
+
+	cancel()
+
+	select {
+	case <-c.consumeDone:
+	case <-time.After(time.Second):
+		t.Fatal("consume goroutine did not stop after shutdown")
+	}
+
+	select {
+	case <-c.sfCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("service-owned context was not cancelled on shutdown")
+	}
 }

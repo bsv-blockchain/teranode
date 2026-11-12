@@ -30,6 +30,8 @@ message NewValidationResponse {
 
 **Note:** All service names in Teranode use the `API` suffix (e.g., `SubtreeValidationAPI`, `ValidatorAPI`, `BlockchainAPI`).
 
+**Note:** If your change to an existing `.proto` file breaks wire compatibility (removing/renumbering a field, removing an RPC, etc.), see the [Proto Versioning Policy](../references/protoVersioning.md) before touching the `package` declaration.
+
 You can also define a completely new service and corresponding messages in a new `.proto` file, such as `services/newservice/newservice_api/newservice_api.proto`.
 
 ## Step 2: Update the `Makefile`

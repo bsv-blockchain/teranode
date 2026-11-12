@@ -19,15 +19,19 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
@@ -48,6 +52,7 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -57,6 +62,33 @@ const (
 	SourceTypeNormal  = "normal"
 	SourceTypeRetry   = "retry"
 	SourceTypeCatchup = "catchup"
+
+	// blockFetchRetryDelay is how long a block waits before it is requeued after a fetch failure.
+	blockFetchRetryDelay = 5 * time.Second
+
+	// blockDeadlineRetryDelay is how long a block waits before it is requeued after its
+	// validation hit a deadline. Longer than the fetch delay: the subtree validation the
+	// deadline cut off is still running server side and cannot be cancelled.
+	blockDeadlineRetryDelay = time.Minute
+
+	// validationDoneBestHeaderTimeout bounds the best-header read that decides whether children
+	// of a just-validated block extend the tip.
+	validationDoneBestHeaderTimeout = 5 * time.Second
+
+	// blockRetryAttemptsTTL bounds how long a block's requeue count is kept. It must outlive
+	// MaxRetries attempts that each run into CheckBlockSubtreesTimeout (30 min by default).
+	blockRetryAttemptsTTL = 24 * time.Hour
+
+	// blockRetryAttemptsCapacity bounds the requeue counter cache.
+	blockRetryAttemptsCapacity = 10_000
+
+	// maxCatchupAlternatives bounds how many alternative sources are retained
+	// per block hash in catchupAlternatives. Each element holds a full
+	// deserialized block for up to the cache TTL, and failover only ever walks
+	// a handful of sources; the list length must not be left to the upstream
+	// per-hash announcement rate (p2p's ingest dedup admits a few per publish
+	// window, which compounds over the 10-minute entry TTL).
+	maxCatchupAlternatives = 3
 )
 
 // processBlockFound encapsulates information about a newly discovered block
@@ -73,9 +105,34 @@ type processBlockFound struct {
 	// peerID is the P2P peer identifier used for peer tracking via P2P service
 	peerID string
 
-	// errCh receives any errors encountered during block validation and allows
-	// synchronous waiting for validation completion
-	errCh chan error
+	// reply, when not nil, is the answer a BlockFound caller with WaitToComplete waits for. The
+	// step that settles the block answers it: nil once the block is stored, otherwise the error.
+	// It is nil on the Kafka path. See blockFoundReply.
+	reply *blockFoundReply
+
+	// servedBy, when not nil, holds the peerID of the peer whose bytes this item is processing.
+	// processBlockFoundChItem sets it to the announcer. After a 429 from the announcer,
+	// fetchAnnouncedBlockFromTipPeers sets it to the alternative peer before it fetches from that
+	// peer. The blockFoundCh recover reads it, so a panic counts for the peer that served the bytes.
+	// Copies of the item share it. Only the blockFoundCh worker that owns the item writes or reads it.
+	servedBy *string
+
+	// priority and height are the block's class and height in the priority queue, set when
+	// a worker takes it off the queue, so a retry goes back where it was.
+	priority BlockPriority
+	height   uint32
+
+	// parentHash is the block's parent, set when the block is queued. The queue holds the
+	// block back while its parent is still queued or processing.
+	parentHash *chainhash.Hash
+}
+
+// setServedBy records peerID as the peer that serves this item's bytes. It does nothing when the
+// item has no servedBy, for an item that did not come through processBlockFoundChItem.
+func (bf processBlockFound) setServedBy(peerID string) {
+	if bf.servedBy != nil {
+		*bf.servedBy = peerID
+	}
 }
 
 // processBlockCatchup contains information needed to process a block during chain catchup
@@ -167,11 +224,16 @@ type Server struct {
 	// Kafka messages for distributed coordination
 	kafkaConsumerClient kafka.KafkaConsumerGroupI
 
+	// blockMessageRetries tracks Kafka block messages being retried in-process after a
+	// recoverable failure (see kafka_block_retry.go)
+	blockMessageRetries blockMessageRetries
+
 	// processBlockNotify caches subtree processing state to prevent duplicate
 	// processing of the same subtree from multiple miners
 	processBlockNotify *ttlcache.Cache[chainhash.Hash, bool]
 
-	// catchupAlternatives tracks alternative peer sources for blocks in catchup
+	// catchupAlternatives tracks alternative peer sources for blocks in
+	// catchup, at most maxCatchupAlternatives per hash.
 	catchupAlternatives *ttlcache.Cache[chainhash.Hash, []processBlockCatchup]
 
 	// blockCatchupAttempts counts catchup re-entry cycles per block hash within a
@@ -182,6 +244,78 @@ type Server struct {
 	// block can be retried again later if better peers appear.
 	blockCatchupAttempts *ttlcache.Cache[chainhash.Hash, int]
 
+	// blockRetryAttempts counts worker requeues per block hash after a failure that is not
+	// a verdict (fetch error, deadline). Capped by BlockValidation.MaxRetries and cleared
+	// when the block is processed.
+	blockRetryAttempts *ttlcache.Cache[chainhash.Hash, int]
+
+	// peerMaliciousCache is a short-lived cache of IsPeerMalicious verdicts.
+	// Every gossip-driven Kafka message costs two of these checks and each is
+	// a p2p gRPC that fans into a blockchain RPC, so an announcement flood
+	// would otherwise turn into an RPC storm. reportCatchupMalicious
+	// invalidates the entry for a peer this node itself flags; bans raised by
+	// other routes (invalid-block/-subtree reports via Kafka, operator bans,
+	// other nodes' scoring) surface within the TTL, which is short enough
+	// that a fresh ban takes effect within seconds. Nil-safe: Server literals
+	// in tests that don't wire it get uncached lookups.
+	peerMaliciousCache *ttlcache.Cache[string, bool]
+
+	// ttlCachesStarted records that Init reached the point where it starts the
+	// ttlcache eviction loops (processBlockNotify, catchupAlternatives,
+	// blockCatchupAttempts, peerMaliciousCache, blockCorruptAttempts,
+	// blockPolicyDeclineAttempts, blockPanicAttempts, announcedBlockRateLimits), so Stop only calls
+	// ttlcache.Stop - a blocking send to that loop - when a receiver exists.
+	ttlCachesStarted atomic.Bool
+
+	// blockCorruptAttempts counts corrupt-body failures per (block hash, serving peerID)
+	// within a fixed cooldown window (bitcoin-sv/teranode#4692). Once a (hash, peerID)
+	// reaches MaxCorruptAttemptsPerBlock that peer's next RUNNING delivery of the hash is
+	// dropped before the expensive download/subtree-prepare/merkle work until the window
+	// expires. It is ban-score-INDEPENDENT PER IDENTITY (holds even when p2pClient
+	// is nil or a single peer serves everything — an empty peerID degrades to one shared
+	// (hash, "") bucket, i.e. the hard per-hash bound for that deployment). Residual
+	// aggregate bound: worst-case per-hash corrupt re-downloads <= (concurrent distinct
+	// serving peers) x MaxCorruptAttemptsPerBlock per window; the distinct-peer count is
+	// bounded by legacy's connection controls (MaxPeers default 125, MaxPeersPerIP
+	// default 5), and a peer spreading corruption across hashes is banned by ban score. The
+	// corrupt path persists nothing (no invalid=true, no SetBlockExists, no AddBlock), so the
+	// (hash, peerID) is only rate-limited, never condemned; once the window lapses an honest
+	// body flows through and is accepted. Same fixed-window/no-touch-on-hit shape as
+	// blockCatchupAttempts so gate reads can never extend the window (no wedge). Bounded by
+	// corruptAttemptsMaxTracked so a pathological stream of distinct pairs cannot grow it
+	// without limit.
+	blockCorruptAttempts *ttlcache.Cache[blockAttemptKey, int]
+
+	// blockPolicyDeclineAttempts bounds repeat deliveries of a block this node declines on LOCAL
+	// POLICY (excessiveblocksize) rather than on evidence about the block
+	// (bitcoin-sv/teranode#4692). Deliberately separate from
+	// blockCorruptAttempts: a policy decline is not a corrupt body, it earns no ban score, and
+	// conflating the two would make every "corrupt" name, log line and metric on that path false.
+	// It reuses the corrupt cap's CONFIGURED VALUES (MaxCorruptAttemptsPerBlock /
+	// CorruptAttemptCooldown) so operators get no new knobs; the two mechanisms are independent
+	// budgets that happen to be sized the same. Same key type, fixed window and no-touch-on-hit
+	// semantics as the corrupt cap, for the same anti-wedge reason.
+	blockPolicyDeclineAttempts *ttlcache.Cache[blockAttemptKey, int]
+
+	// blockPanicAttempts counts the panics that the priority worker and the blockFoundCh workers
+	// recovered for each (block hash, serving peerID) (BV-STARTUP-007). After
+	// MaxCorruptAttemptsPerBlock panics in one CorruptAttemptCooldown window, processBlockFoundChItem
+	// drops that peer's next announcements of the hash before the fetch, and processBlockFound drops
+	// its next deliveries before its own download and the validation, so a block that panics every
+	// time does not log a full stack on each announcement. It is a third independent budget that uses the corrupt cap's configured values,
+	// as blockPolicyDeclineAttempts does, so operators get no new knob. It is keyed on the pair for
+	// the reason blockAttemptKey gives: a panic can come from one peer's bytes, and a per-hash
+	// count would let that peer stop an honest delivery of the same hash. An empty peerID is not
+	// capped (fail-open), as for the corrupt cap.
+	blockPanicAttempts *ttlcache.Cache[blockAttemptKey, int]
+
+	// announcedBlockRateLimits counts, per announcing peer, the 429s its /block/:hash answered
+	// within a fixed window, so a 429 is free only up to an allowance. See
+	// reportAnnouncedBlockFetchFailure. announcedBlockRateLimitsMu makes its read-modify-write
+	// atomic across the blockFound workers.
+	announcedBlockRateLimits   *ttlcache.Cache[string, int]
+	announcedBlockRateLimitsMu sync.Mutex
+
 	// stats tracks operational metrics for monitoring and troubleshooting
 	stats *gocore.Stat
 
@@ -189,10 +323,20 @@ type Server struct {
 	// or skipped because the tx distributor is keeping the UTXO store up to date.
 	adaptiveFetch *adaptivefetch.State
 
+	// catchupPrefetchBudget caps, by declared serialized block bytes, the blocks admitted
+	// concurrently into the catch-up subtree-data prewarm. nil means disabled
+	// (blockvalidation_catchup_prefetch_budget_bytes = 0, or a Server built directly by a
+	// test). Only the catch-up pipeline takes a reservation: RevalidateBlock's single-block
+	// prewarm does not, so an operator-triggered revalidation can never park behind catch-up.
+	// It DOES share the oversized-block subtree-concurrency rule — see
+	// boundSubtreeConcurrencyByBudget, which explains why that is deliberate.
+	catchupPrefetchBudget      *semaphore.Weighted
+	catchupPrefetchBudgetBytes int64
+
 	// fetchSubtreeDataForBlockFn is the function used by blockWorker to fetch
 	// subtree data for a block. Production code always uses the real method;
 	// tests override this field before dispatching work to blockWorker.
-	fetchSubtreeDataForBlockFn func(ctx context.Context, block *model.Block, peerID, baseURL string) (map[string]struct{}, error)
+	fetchSubtreeDataForBlockFn func(ctx context.Context, block *model.Block, peerID, baseURL string) (map[string]struct{}, map[chainhash.Hash]map[fileformat.FileType]struct{}, error)
 
 	// peerCircuitBreakers manages circuit breakers for each peer to prevent
 	// cascading failures and protect against misbehaving peers
@@ -384,13 +528,45 @@ func New(
 			// hold the suppression open past the safety-net TTL.
 			ttlcache.WithDisableTouchOnHit[chainhash.Hash, bool](),
 		),
-		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](ttlcache.WithTTL[chainhash.Hash, []processBlockCatchup](10 * time.Minute)),
+		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](
+			ttlcache.WithTTL[chainhash.Hash, []processBlockCatchup](10*time.Minute),
+			// Read on every duplicate announcement for a hash in catchup;
+			// touch-on-hit would let that stream hold the retained blocks past
+			// the TTL. Same reasoning as processBlockNotify above.
+			ttlcache.WithDisableTouchOnHit[chainhash.Hash, []processBlockCatchup](),
+		),
+		blockRetryAttempts: newBlockRetryAttemptsCache(),
 		blockCatchupAttempts: ttlcache.New[chainhash.Hash, int](
 			ttlcache.WithTTL[chainhash.Hash, int](10*time.Minute),
 			// Do not extend the window on reads: the cooldown runs a fixed time from
 			// the first failed attempt, so the enqueue-gate's Get checks cannot keep a
 			// block suppressed forever.
 			ttlcache.WithDisableTouchOnHit[chainhash.Hash, int](),
+		),
+		peerMaliciousCache: ttlcache.New[string, bool](
+			ttlcache.WithTTL[string, bool](peerMaliciousCacheTTL),
+			// Do not extend the window on reads: a flood of checks for one peer
+			// must not keep serving an ever-staler verdict.
+			ttlcache.WithDisableTouchOnHit[string, bool](),
+		),
+		announcedBlockRateLimits: newAnnouncedBlockRateLimitCache(),
+		blockCorruptAttempts: ttlcache.New[blockAttemptKey, int](
+			ttlcache.WithTTL[blockAttemptKey, int](corruptAttemptCooldown(tSettings)),
+			// Fixed window from the first corrupt failure; gate Get checks must never
+			// extend it, so a persistent attacker cannot suppress an honest body forever
+			// (bitcoin-sv/teranode#4692).
+			ttlcache.WithDisableTouchOnHit[blockAttemptKey, int](),
+			ttlcache.WithCapacity[blockAttemptKey, int](corruptAttemptsMaxTracked),
+		),
+		blockPolicyDeclineAttempts: ttlcache.New[blockAttemptKey, int](
+			ttlcache.WithTTL[blockAttemptKey, int](corruptAttemptCooldown(tSettings)),
+			ttlcache.WithDisableTouchOnHit[blockAttemptKey, int](),
+			ttlcache.WithCapacity[blockAttemptKey, int](corruptAttemptsMaxTracked),
+		),
+		blockPanicAttempts: ttlcache.New[blockAttemptKey, int](
+			ttlcache.WithTTL[blockAttemptKey, int](corruptAttemptCooldown(tSettings)),
+			ttlcache.WithDisableTouchOnHit[blockAttemptKey, int](),
+			ttlcache.WithCapacity[blockAttemptKey, int](corruptAttemptsMaxTracked),
 		),
 		adaptiveFetch:       af,
 		stats:               gocore.NewStat("blockvalidation"),
@@ -402,6 +578,16 @@ func New(
 
 	bVal.fetchSubtreeDataForBlockFn = bVal.fetchSubtreeDataForBlock
 	bVal.catchupFunc = bVal.catchup
+
+	// 0 disables rather than falling back to a default: an explicit operator opt-out that
+	// turns off the byte budget AND the oversized-block subtree-concurrency rule
+	// (bsv-blockchain/teranode#1139). It does NOT restore the pre-change behaviour exactly —
+	// the streamed store write in fetchAndStoreSubtreeData is unconditional and applies either
+	// way. It keeps every test that builds a bare &Server{...} working unchanged.
+	if budget := tSettings.BlockValidation.CatchupPrefetchBudgetBytes; budget > 0 {
+		bVal.catchupPrefetchBudgetBytes = budget
+		bVal.catchupPrefetchBudget = semaphore.NewWeighted(budget)
+	}
 
 	return bVal
 }
@@ -603,6 +789,25 @@ func (u *Server) GetCatchupStatus(ctx context.Context, _ *blockvalidation_api.Em
 // hasn't caught up yet, not that the peer is faulty, so they must fall through to
 // alternative-peer retry. See issue #1031.
 func isUnvalidatablePeerError(err error) bool {
+	// A corrupt block body (bitcoin-sv/teranode#4692) is explicitly NOT unvalidatable: the received
+	// body is not bound to the header, so we must not give up on alternative sources —
+	// re-download from another peer instead.
+	//
+	// That deliberately includes the unbound invalid-transaction verdict (isUnboundTxInvalidVerdict,
+	// bitcoin-sv/teranode#4844). Its subtree list came from the primary and was never reconciled to
+	// the header's merkle root, so a primary that named its own subtrees produces exactly this error,
+	// and another peer's copy is how the honest body is recovered. Stopping here would hide it: peers
+	// absorbed into catchupAlternatives do not announce again. For a block whose real body is invalid,
+	// each alternative re-validates and fails, and the cycle counts once toward
+	// CatchupMaxAttemptsPerBlock, so the repeats stop at cooldown.
+	//
+	// A plain corrupt verdict would also fail the ErrBlockInvalid check below (dedicated
+	// ERR_BLOCK_CORRUPT sentinel, no match). This one would not, because it wraps ErrTxInvalid, so this
+	// guard is load-bearing for it.
+	if errors.IsBlockCorrupt(err) {
+		return false
+	}
+
 	return errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid)
 }
 
@@ -640,10 +845,28 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		return errors.NewConfigurationError("could not get utxostore URL", err)
 	}
 
-	// Only create a new BlockValidation if one wasn't already set (for testing)
-	if u.blockValidation == nil {
-		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient)
+	// A store that nets below the checkpoint takes those blocks only through quick
+	// validation, so settings that keep catch-up from quick validating them stop the sync.
+	if err = model.CheckNettedRouteCatchupSettings(u.settings, u.utxoStore); err != nil {
+		return err
 	}
+
+	// Only create a new BlockValidation if one wasn't already set (for testing).
+	// Pass the P2P client through the variadic opts so block-validation can strike the peer
+	// that served a corrupt block body (bitcoin-sv/teranode#4692) with correct attribution to
+	// the serving peer — wired inside the constructor before any worker goroutine starts.
+	if u.blockValidation == nil {
+		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient, u.p2pClient, u.blockAssemblyClient)
+	}
+
+	u.wireValidationInFlight()
+
+	// Record that the ttlcache eviction loops start here, BEFORE the go
+	// statements: ttlcache.Stop is an unbuffered send whose only receiver
+	// lives inside Start, so Stop must skip every cache whose loop never ran
+	// (a Server whose Init never reached this point, including its early
+	// returns above) or it hangs forever.
+	u.ttlCachesStarted.Store(true)
 
 	go u.processBlockNotify.Start()
 	go u.catchupAlternatives.Start()
@@ -651,6 +874,30 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	// call Init without initialising it (NewServer always does). Matches Stop().
 	if u.blockCatchupAttempts != nil {
 		go u.blockCatchupAttempts.Start()
+	}
+
+	if u.blockRetryAttempts != nil {
+		go u.blockRetryAttempts.Start()
+	}
+
+	if u.peerMaliciousCache != nil {
+		go u.peerMaliciousCache.Start()
+	}
+
+	if u.blockCorruptAttempts != nil {
+		go u.blockCorruptAttempts.Start()
+	}
+
+	if u.blockPolicyDeclineAttempts != nil {
+		go u.blockPolicyDeclineAttempts.Start()
+	}
+
+	if u.blockPanicAttempts != nil {
+		go u.blockPanicAttempts.Start()
+	}
+
+	if u.announcedBlockRateLimits != nil {
+		go u.announcedBlockRateLimits.Start()
 	}
 
 	// Start fork manager cleanup routine
@@ -673,29 +920,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 				case blockFound := <-u.blockFoundCh:
 					u.logger.Infof("[Init] Worker %d received block %s from blockFoundCh, processing", workerID, blockFound.hash.String())
-					func(bf processBlockFound) {
-						defer func() {
-							if r := recover(); r != nil {
-								u.logger.Errorf("[Init] PANIC in processBlockFoundChannel for block %s: %v", bf.hash.String(), r)
-								if bf.errCh != nil {
-									bf.errCh <- errors.NewProcessingError("panic in processBlockFoundChannel: %v", r)
-								}
-							}
-						}()
-						if u.isPeerMalicious(ctx, blockFound.peerID) {
-							u.logger.Warnf("[blockFound][%s] peer %s (%s) is marked as malicious, skipping", bf.hash.String(), bf.peerID, bf.baseURL)
-							if bf.errCh != nil {
-								bf.errCh <- errors.NewProcessingError("peer %s is marked as malicious", bf.peerID)
-							}
-							return
-						}
-						u.logger.Debugf("[Init] Worker %d starting processBlockFoundChannel for block %s", workerID, bf.hash.String())
-						if err := u.processBlockFoundChannel(ctx, bf); err != nil {
-							u.logger.Errorf("[Init] processBlockFoundChannel failed for block %s: %v", bf.hash.String(), err)
-						} else {
-							u.logger.Debugf("[Init] processBlockFoundChannel completed successfully for block %s", bf.hash.String())
-						}
-					}(blockFound)
+					u.processBlockFoundChItem(ctx, workerID, blockFound)
 				}
 			}
 		}()
@@ -758,44 +983,37 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.Kaf
 
 		u.logger.Infof("[consumerMessageHandler] Processing block %s from peer %s at %s", kafkaMsg.Hash, kafkaMsg.GetPeerId(), kafkaMsg.URL)
 
-		errCh := make(chan error, 1)
-		go func() {
-			errCh <- u.blockHandler(&kafkaMsg)
-		}()
+		err := u.runBlockHandler(ctx, &kafkaMsg)
+		if err == nil {
+			return nil
+		}
 
-		select {
-		case err := <-errCh:
-			// if err is nil, it means function is successfully executed, return nil.
-			if err == nil {
-				return nil
-			}
+		// Shutting down: return the error so the message is left uncommitted.
+		if ctx.Err() != nil {
+			return err
+		}
 
-			// if error is not nil, check if the error is a recoverable error.
-			// If the error is a recoverable error, then return the error, so that it kafka message is not marked as committed.
-			// So the message will be consumed again.
-			if errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrContextCanceled) || errors.Is(err, errors.ErrExternal) {
-				u.logger.Errorf("Recoverable error (%v) processing kafka message %v for handling block, returning error, thus not marking Kafka message as complete.\n", msg, err)
-				return err
-			}
-
-			// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
-			// kafka message should be committed, so return nil to mark message.
-			u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling block, marking Kafka message as completed.\n", msg, err)
-
-			// mark peer failure
-			blockHash, _ := chainhash.NewHashFromStr(kafkaMsg.Hash)
-			if err = u.blockchainClient.ReportPeerFailure(ctx, blockHash, kafkaMsg.GetPeerId(), "block", err.Error()); err != nil {
-				u.logger.Errorf("Failed to report peer failure: %v", err)
-			}
+		// A recoverable error is retried in-process rather than returned to Kafka: the
+		// consumer commits the highest marked offset per partition, so a later success
+		// on the same partition would commit past it and it would never be redelivered.
+		if isRecoverableBlockMessageError(err) {
+			u.logger.Errorf("Recoverable error (%v) processing kafka message %v for handling block, queueing in-process retry.\n", err, msg)
+			u.scheduleBlockMessageRetry(ctx, &kafkaMsg)
 
 			return nil
-		case <-ctx.Done():
-			return ctx.Err()
 		}
+
+		// Unrecoverable: commit the message and blame the announcing peer.
+		u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling block, marking Kafka message as completed.\n", err, msg)
+		u.reportBlockMessagePeerFailure(ctx, &kafkaMsg, err)
+
+		return nil
 	}
 }
 
-func (u *Server) blockHandler(kafkaMsg *kafkamessage.KafkaBlockTopicMessage) error {
+// blockHandler queues a block announced on Kafka for validation. It stops when ctx
+// ends, so a caller that has returned knows the handler has too.
+func (u *Server) blockHandler(ctx context.Context, kafkaMsg *kafkamessage.KafkaBlockTopicMessage) error {
 	u.logger.Debugf("[blockHandler] Starting to process block %s from peer %s", kafkaMsg.Hash, kafkaMsg.GetPeerId())
 
 	hash, err := chainhash.NewHashFromStr(kafkaMsg.Hash)
@@ -815,10 +1033,10 @@ func (u *Server) blockHandler(kafkaMsg *kafkamessage.KafkaBlockTopicMessage) err
 	// Special case: "legacy" is allowed for blocks from the legacy service
 	if kafkaMsg.URL != "legacy" && baseURL.Scheme != "http" && baseURL.Scheme != "https" {
 		u.logger.Errorf("[BlockFound] Invalid URL scheme '%s' for URL '%s' from peer %s - expected http or https. Possible peer ID/URL field confusion.", baseURL.Scheme, kafkaMsg.URL, kafkaMsg.GetPeerId())
-		return errors.NewProcessingError("[BlockFound] invalid URL scheme '%s' - expected http or https", baseURL.Scheme)
+		return errors.NewNetworkInvalidResponseError("[BlockFound] invalid URL scheme '%s' - expected http or https", baseURL.Scheme)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	// Don't skip blocks from malicious peers entirely - we still want to add them to the queue
@@ -848,22 +1066,89 @@ func (u *Server) blockHandler(kafkaMsg *kafkamessage.KafkaBlockTopicMessage) err
 	}
 
 	if exists {
-		u.logger.Infof("[BlockFound][%s] already validated, skipping", hash.String())
+		u.logger.Debugf("[BlockFound][%s] already validated, skipping", hash.String())
 		return nil
 	}
 
 	u.logger.Debugf("[blockHandler] Adding block %s to blockFoundCh", hash.String())
 
-	u.blockFoundCh <- processBlockFound{
+	select {
+	case u.blockFoundCh <- processBlockFound{
 		hash:    hash,
 		baseURL: baseURL.String(),
 		peerID:  kafkaMsg.GetPeerId(),
-		errCh:   nil, // Don't block Kafka consumer waiting for validation
+		// No reply: the Kafka consumer does not wait for validation.
+	}:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 	prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 
 	u.logger.Debugf("[blockHandler] Block %s queued for processing", hash.String())
 	return nil
+}
+
+// processBlockFoundChItem runs one blockFoundCh item on a blockFoundCh worker and recovers a panic,
+// so one bad block cannot kill the worker or the process (BV-STARTUP-007). The recover counts the
+// panic on the block_found path of the recovered-panics counter and logs the stack on one line.
+// The error it sends to a WaitToComplete caller has no panic value in its text: callers read
+// errors with substring classifiers such as IsNetworkError and IsMaliciousResponseError, which
+// match words such as "http" or "timeout". The panic value is in the log line.
+//
+// A WaitToComplete caller waits on bf.reply, which answers once (see blockFoundReply). The
+// processing below answers it on every early return, and the worker that settles a queued block
+// answers it later. If the processing panics, the recover answers the panic error. When the
+// processing had already answered, the panic error is dropped. When it had already queued the
+// block, the panic error reaches the caller first, before the worker settles the block, and the
+// worker's answer is dropped. Either way the caller never gets two answers and this worker never
+// blocks on one.
+//
+// The recover also counts the panic toward the recovered-panic cap of (bf.hash, serving peerID), in
+// blockPanicAttempts, the budget that the priority worker's recover also fills. The serving peer is
+// the announcer, or after a 429 fallback in fetchAnnouncedBlock the alternative peer that served
+// the bytes; bf.servedBy carries it to this recover. This path fetches and parses the bytes before
+// processBlockFound's gate, so it has two gates of its own, each keyed like the record: the gate in
+// processBlockFoundChannel drops the announcer's next deliveries of the hash before the fetch, and
+// fetchAnnouncedBlockFromTipPeers skips a capped alternative before it fetches from it. Both hold
+// until the cooldown window lapses. The announcer's gate runs after the exists check, so a stored
+// block still answers nil. The malicious-peer gate sits next to it in processBlockFoundChannel, for
+// the same reason. The panic gate answers a WaitToComplete caller with ERR_PROCESSING. Its text has no word that IsNetworkError or
+// IsMaliciousResponseError matches. Neither gate reports a peer failure: a panic is a bug in this
+// node. Another peer's announcement of the hash has its own key and is still processed. An empty
+// peerID is not capped (fail-open), as for the other caps.
+//
+// In production the announcer's cap applies only to Kafka-announced blocks, and those have no
+// WaitToComplete caller: the Kafka handler queues the item with a nil reply, so a capped
+// announcement is logged and dropped. The BlockFound gRPC request has a peer_id field, but
+// Client.BlockFound never sets it, and no code in this repository calls Client.BlockFound. A
+// gRPC announcement therefore has an empty peerID and is never capped. The capped answer above
+// reaches only a gRPC caller that sets peer_id itself, which today means the tests.
+// fetchAnnouncedBlock runs the 429 fallback only for an announcement with a peerID, so a gRPC
+// announcement never reaches the fallback peer's cap either.
+func (u *Server) processBlockFoundChItem(ctx context.Context, workerID int, bf processBlockFound) {
+	servedBy := bf.peerID
+	bf.servedBy = &servedBy
+
+	defer func() {
+		r := recover()
+		if r != nil {
+			countRecoveredPanic(recoveredPanicPathBlockFound)
+			attempts := u.recordPanicAttempt(bf.hash, servedBy)
+			u.logger.Errorf("[Init] PANIC in processBlockFoundChannel for block %s served by peer %s, announced by peer %s (panic %d for the serving peer in the cooldown window): %v stack=%q", bf.hash.String(), servedBy, bf.peerID, attempts, r, debug.Stack())
+		}
+
+		if r != nil {
+			bf.reply.answer(errors.NewProcessingError(recoveredPanicErrFormat, bf.hash.String()))
+		}
+	}()
+
+	u.logger.Debugf("[Init] Worker %d starting processBlockFoundChannel for block %s", workerID, bf.hash.String())
+
+	if err := u.processBlockFoundChannel(ctx, bf); err != nil {
+		u.logger.Errorf("[Init] processBlockFoundChannel failed for block %s: %v", bf.hash.String(), err)
+	} else {
+		u.logger.Debugf("[Init] processBlockFoundChannel completed successfully for block %s", bf.hash.String())
+	}
 }
 
 // processBlockFoundChannel processes newly found blocks from the block found channel.
@@ -886,47 +1171,85 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 			u.logger.Errorf("[processBlockFoundChannel][%s] Invalid baseURL '%s' for peer %s - must be valid http/https URL, not peer ID", blockFound.hash.String(), blockFound.baseURL, blockFound.peerID)
 			err := errors.NewProcessingError("[processBlockFoundChannel][%s] invalid baseURL - not a valid http/https URL", blockFound.hash.String())
 
-			if blockFound.errCh != nil {
-				blockFound.errCh <- err
-			}
+			blockFound.reply.answer(err)
 
 			return err
 		}
 	}
+
+	// The fetching mark is claimed before the exists check, which must come after its in-flight
+	// check (see claimFetchMark). It is dropped once the block is queued or this call returns.
+	releaseFetchMark := u.claimFetchMark(blockFound.hash)
+	defer releaseFetchMark()
 
 	// Check if block already exists to avoid redundant processing
 	exists, err := u.blockValidation.GetBlockExists(ctx, blockFound.hash)
 	if err != nil {
 		u.logger.Errorf("[processBlockFoundChannel] Failed to check if block %s exists: %v", blockFound.hash.String(), err)
 
-		if blockFound.errCh != nil {
-			blockFound.errCh <- err
-		}
+		blockFound.reply.answer(err)
 
 		return errors.NewServiceError("[processBlockFoundChannel] failed to check if block exists", err)
 	}
 
 	if exists {
-		u.logger.Infof("[processBlockFoundChannel][%s] already validated, skipping", blockFound.hash.String())
+		u.logger.Debugf("[processBlockFoundChannel][%s] already validated, skipping", blockFound.hash.String())
 
-		if blockFound.errCh != nil {
-			blockFound.errCh <- nil
-		}
+		u.answerStoredBlock(ctx, blockFound.reply, blockFound.hash)
 
 		return nil
 	}
+
+	// The announcer's two gates come after the exists check and before both fetches below (the
+	// backlog branch and addBlockToPriorityQueue). After the exists check, so an announcer that one
+	// of them stops still gets nil for a block this node has stored, as any other peer does. Before
+	// the fetches, so nothing is fetched from that announcer. The 429 fallback in
+	// fetchAnnouncedBlockFromTipPeers checks each alternative peer itself.
+	//
+	// The malicious gate runs first, so a peer that is both malicious and at its panic cap gets
+	// the malicious answer, as it did when this gate ran in processBlockFoundChItem.
+	if u.isPeerMalicious(ctx, blockFound.peerID) {
+		u.logger.Warnf("[blockFound][%s] peer %s (%s) is marked as malicious, skipping", blockFound.hash.String(), blockFound.peerID, blockFound.baseURL)
+
+		blockFound.reply.answer(errors.NewProcessingError("peer %s is marked as malicious", blockFound.peerID))
+
+		return nil
+	}
+
+	// The announcer's recovered-panic gate (BV-STARTUP-007), see processBlockFoundChItem.
+	if u.panicAttemptsExhausted(blockFound.hash, blockFound.peerID) {
+		u.logger.Warnf("[processBlockFoundChannel][%s] recovered-panic cap reached for peer %s; dropping this announcement before the fetch until the cooldown window expires", blockFound.hash.String(), blockFound.peerID)
+
+		blockFound.reply.answer(errors.NewProcessingError("[blockFound][%s] recovered-panic cap reached for this peer; announcement dropped until the cooldown window expires (block not fetched)", blockFound.hash.String()))
+
+		return nil
+	}
+
+	// Both paths below fetch from this announcer. A waiter for a hash already queued joins the queued
+	// entry first, so the fetch can only add a source, never settle the waiter.
+	blockFound = u.joinQueuedBlock(blockFound)
 
 	// Check queue depth and determine if we might need catchup mode
 	queueSize := u.blockPriorityQueue.Size()
 	shouldConsiderCatchup := u.settings.BlockValidation.UseCatchupWhenBehind && (queueSize > 10 || len(u.blockFoundCh) > 3)
 
+	// Set when the backlog branch below has fetched the block and falls through to the queue.
+	var block *model.Block
+
 	if shouldConsiderCatchup {
-		// Fetch the block to classify it before deciding on catchup
-		block, err := u.fetchSingleBlock(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+		// Fetch the block to classify it before deciding on catchup. Bound the
+		// fetch: ctx here is the blockFoundCh worker's service-lifetime context,
+		// and this branch is reached exactly when the queue is backed up — a
+		// state an announcement flood creates — so an unbounded fetch would let
+		// a slow peer pin the worker indefinitely. Same budget as the
+		// priority-queue catchup fetch in addBlockToPriorityQueue.
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, peerBlockFetchTimeout)
+		fetched, source, err := u.fetchAnnouncedBlock(ctx, fetchCtx, blockFound)
+		fetchCancel()
+		block = fetched
+		blockFound = source
 		if err != nil {
-			if blockFound.errCh != nil {
-				blockFound.errCh <- err
-			}
+			u.answerFetchFailure(blockFound, err)
 			return errors.NewProcessingError("[processBlockFoundChannel] failed to get block [%s]", blockFound.hash.String(), err)
 		}
 
@@ -934,16 +1257,22 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
 		if err != nil {
 			u.logger.Errorf("[processBlockFoundChannel] Failed to check if parent block %s exists: %v", block.Header.HashPrevBlock.String(), err)
-			if blockFound.errCh != nil {
-				blockFound.errCh <- err
-			}
+			blockFound.reply.answer(err)
 			return err
 		}
 
+		// A parent still being validated is not a gap: queue the block behind it.
+		parentInFlight := !parentExists && u.isBlockInFlight(block.Header.HashPrevBlock)
+
 		// If parent doesn't exist, always use catchup
-		if !parentExists {
+		if !parentExists && !parentInFlight {
 			if u.isPeerMalicious(ctx, blockFound.peerID) {
 				u.logger.Warnf("[processBlockFoundChannel][%s] peer %s is malicious, skipping catchup for block with missing parent", blockFound.hash.String(), blockFound.peerID)
+
+				// Every return path must answer a WaitToComplete caller, which otherwise waits
+				// until its context ends.
+				blockFound.reply.answer(errors.NewProcessingError("peer %s is marked as malicious, skipping catchup", blockFound.peerID))
+
 				return nil
 			}
 			u.logger.Infof("[processBlockFoundChannel] Parent block %s doesn't exist for block %s, using catchup",
@@ -961,20 +1290,19 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 				u.logger.Warnf("[processBlockFoundChannel] Catchup channel full, dropping block %s", block.Hash().String())
 			}
 
-			if blockFound.errCh != nil {
-				blockFound.errCh <- nil
-			}
+			blockFound.reply.answer(errNotCommittedCatchup(blockFound.hash))
 			return nil
 		}
 
-		// Parent exists, classify the block
+		// Parent exists or is in flight, classify the block
 		priority, err := u.blockClassifier.ClassifyBlock(ctx, block)
 		if err != nil {
 			u.logger.Warnf("[processBlockFoundChannel] Failed to classify block %s: %v", blockFound.hash.String(), err)
 			// Continue with normal processing if classification fails
-		} else if priority == PriorityChainExtending {
-			// Chain-extending blocks should NOT go to catchup, process normally
-			u.logger.Debugf("[processBlockFoundChannel] Block %s is chain-extending (queue depth %d), processing normally",
+		} else if priority == PriorityChainExtending || parentInFlight {
+			// Chain-extending blocks, and blocks whose parent is still being validated,
+			// should NOT go to catchup, process normally
+			u.logger.Debugf("[processBlockFoundChannel] Block %s is chain-extending or its parent is in flight (queue depth %d), processing normally",
 				blockFound.hash.String(), queueSize)
 		} else {
 			// Non-chain-extending blocks can go to catchup when behind
@@ -993,23 +1321,36 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 				u.logger.Warnf("[processBlockFoundChannel] Catchup channel full, dropping block %s", block.Hash().String())
 			}
 
-			if blockFound.errCh != nil {
-				blockFound.errCh <- nil
-			}
+			blockFound.reply.answer(errNotCommittedCatchup(blockFound.hash))
 			return nil
 		}
 	}
 
-	// Add block to priority queue
-	u.addBlockToPriorityQueue(ctx, blockFound)
+	// Add block to priority queue. If the backlog branch fetched it, queue that block: fetching it
+	// again would charge the source a second time, and after a fallback that source is an alternative.
+	if block != nil {
+		u.queueFetchedBlock(ctx, blockFound, block)
+	} else {
+		u.addBlockToPriorityQueue(ctx, blockFound)
+	}
 
 	// Update metrics
 	prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 
-	// Send response to error channel if it exists (addBlockToPriorityQueue handles the errCh internally)
-	// but if it doesn't send a response in all cases, we need to ensure we don't leave the caller hanging
-	// The errCh should already be handled by addBlockToPriorityQueue, so we just return
+	// Both queue paths answer blockFound.reply on an early return. A queued block's reply goes
+	// with it to the worker, which answers it once the block is settled (answerQueuedBlock).
 	return nil
+}
+
+// errNotCommittedCatchup is the answer for a WaitToComplete caller whose block was not stored:
+// it was handed to catchup, or dropped because the catchup channel was full or its catchup
+// attempts were spent, instead of being validated. The parent may be missing, or, for a
+// non-chain-extending block diverted while the queue is backed up, stored. The block was not
+// stored, so the caller must not get nil (BV-INGRESS-017). It is a ServiceError, which callers
+// read as retry-later: once the node has caught up or the catchup cooldown has lapsed, a new
+// BlockFound may succeed.
+func errNotCommittedCatchup(hash *chainhash.Hash) error {
+	return errors.NewServiceError("[BlockFound][%s] block not validated: it was handed to catchup or dropped instead of being stored; retry later", hash.String())
 }
 
 // Start begins the block validation service operations including gRPC server startup
@@ -1032,9 +1373,10 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Start Kafka consumer only after the blockchain FSM transitions from IDLE.
 	// This prevents validation processing from starting too early, while still allowing
 	// the gRPC server to accept administrative calls (e.g. RevalidateBlock).
-	g.Go(func() error {
+	g.Go(func() (err error) {
+		defer recoverChildPanic(u.logger, recoveredPanicPathService, &err, nil, "[Start] Kafka consumer")
 		// Blocks until the FSM transitions from the IDLE state
-		err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(gctx)
+		err = u.blockchainClient.WaitUntilFSMTransitionFromIdleState(gctx)
 		if err != nil {
 			if errors.IsContextError(err) {
 				u.logger.Infof("[Block Validation Service] Shutting down during FSM wait")
@@ -1068,7 +1410,8 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	})
 
 	// Start gRPC server immediately (blocks until shutdown)
-	g.Go(func() error {
+	g.Go(func() (err error) {
+		defer recoverChildPanic(u.logger, recoveredPanicPathService, &err, nil, "[Start] gRPC server")
 		return util.StartGRPCServer(gctx, u.logger, u.settings, "blockvalidation", u.settings.BlockValidation.GRPCListenAddress, func(server *grpc.Server) {
 			blockvalidation_api.RegisterBlockValidationAPIServer(server, u)
 			closeOnce.Do(func() { close(readyCh) })
@@ -1084,6 +1427,8 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// on shutdown (ctx cancelled) we simply leave it pessimistic and return nil
 	// so this goroutine never tears down the service.
 	g.Go(func() error {
+		// A panic is logged, counted and swallowed, for the same reason: the gate stays pessimistic.
+		defer recoverChildPanic(u.logger, recoveredPanicPathService, nil, nil, "[Start] adaptive-fetch arm")
 		if err := u.blockchainClient.WaitForFSMtoTransitionToGivenState(gctx, blockchain.FSMStateRUNNING); err != nil {
 			u.logger.Infof("[BlockValidation] adaptive-fetch staying pessimistic; FSM did not reach RUNNING: %v", err)
 			return nil
@@ -1105,19 +1450,52 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 //
 // Returns an error if shutdown encounters issues, though typically returns nil
 func (u *Server) Stop(ctx context.Context) error {
-	u.processBlockNotify.Stop()
-	u.catchupAlternatives.Stop()
-	// nil-guarded: this cache is newer than some Server-literal test fixtures that
-	// don't initialise it (NewServer always does). Matches the nil-safe helpers.
-	if u.blockCatchupAttempts != nil {
-		u.blockCatchupAttempts.Stop()
+	// Stop the ttlcache eviction loops only if Init actually started them:
+	// ttlcache.Stop is an unbuffered send whose only receiver lives inside
+	// Start, so stopping a never-started cache (a Server from NewServer whose
+	// Init never ran or returned early) hangs forever. One flag covers all
+	// seven caches — they start together in Init. Nil guards retained for
+	// Server-literal test fixtures that wire only some of them.
+	if u.ttlCachesStarted.Load() {
+		u.processBlockNotify.Stop()
+		u.catchupAlternatives.Stop()
+		if u.blockCatchupAttempts != nil {
+			u.blockCatchupAttempts.Stop()
+		}
+		if u.blockRetryAttempts != nil {
+			u.blockRetryAttempts.Stop()
+		}
+		if u.peerMaliciousCache != nil {
+			u.peerMaliciousCache.Stop()
+		}
+
+		if u.blockCorruptAttempts != nil {
+			u.blockCorruptAttempts.Stop()
+		}
+
+		if u.blockPolicyDeclineAttempts != nil {
+			u.blockPolicyDeclineAttempts.Stop()
+		}
+
+		if u.blockPanicAttempts != nil {
+			u.blockPanicAttempts.Stop()
+		}
+
+		if u.announcedBlockRateLimits != nil {
+			u.announcedBlockRateLimits.Stop()
+		}
 	}
 
 	// Wait for all background tasks in BlockValidation to complete, bounded by the
 	// caller's stop deadline (ctx) so a worker whose Init ctx was not cancelled first
-	// cannot hang shutdown indefinitely.
+	// cannot hang shutdown indefinitely. Wait gets the deadline less a reserve, because
+	// commitBlock registers its commit tail there and a hung store holds Wait to its
+	// bound: without the reserve, Close below would start with ctx already done and the
+	// invalid-block producer's final flush would be abandoned.
 	if u.blockValidation != nil {
-		u.blockValidation.Wait(ctx)
+		waitCtx, cancelWait := stopWaitContext(ctx)
+		u.blockValidation.Wait(waitCtx)
+		cancelWait()
 		u.blockValidation.StopCaches()
 
 		// DC11: drain the BlockValidation-owned invalid-block kafka producer via
@@ -1152,6 +1530,32 @@ func (u *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
+// stopCloseReserveMax caps the part of the stop deadline that Stop holds back from
+// BlockValidation.Wait so that BlockValidation.Close still has time to run.
+const stopCloseReserveMax = 5 * time.Second
+
+// stopWaitContext returns the context Stop gives BlockValidation.Wait: ctx with its
+// deadline moved earlier by a quarter of the time left, capped at stopCloseReserveMax.
+// With the default 30s service_manager_stopTimeout that leaves Close about 5s. A ctx
+// with no deadline is returned unchanged, apart from the cancel func.
+func stopWaitContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return context.WithCancel(ctx)
+	}
+
+	reserve := time.Until(deadline) / 4
+	if reserve > stopCloseReserveMax {
+		reserve = stopCloseReserveMax
+	}
+
+	if reserve <= 0 {
+		return context.WithCancel(ctx)
+	}
+
+	return context.WithDeadline(ctx, deadline.Add(-reserve))
+}
+
 // BlockFound notifies the service about a newly discovered block that needs validation.
 // It initiates the block validation process, optionally waiting for completion based
 // on the request parameters.
@@ -1165,7 +1569,20 @@ func (u *Server) Stop(ctx context.Context) error {
 //   - req: Contains the block hash and source URL
 //
 // Returns an EmptyMessage on success or an error if validation cannot be initiated.
-// If WaitToComplete is set in the request, waits for validation to finish before returning.
+// If WaitToComplete is set in the request, waits until the worker's first attempt at the block
+// ends and returns the outcome:
+//   - nil once the block is stored and not marked invalid. With optimistic mining on the
+//     peer-block path (blockvalidation_optimistic_mining and
+//     blockvalidation_optimistic_mining_peer_blocks both true) the block is added before its
+//     block-level checks finish in the background, so nil means added, not fully validated.
+//   - the validation error if the block is rejected, and ERR_BLOCK_INVALID if it is already
+//     stored as invalid.
+//   - the first attempt's error if the fetch fails, even though the block is requeued for a
+//     retry; a fetch failure's code says retry-later, not that the block is bad.
+//   - a retry-later ERR_SERVICE_ERROR if the block was handed to catchup or dropped instead of
+//     being stored: a missing parent, a non-chain-extending block diverted while the queue is
+//     backed up, a full catchup channel or spent catchup attempts.
+//   - ERR_CONTEXT_CANCELED if ctx ends first.
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*blockvalidation_api.EmptyMessage, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "BlockFound",
 		tracing.WithParentStat(u.stats),
@@ -1183,19 +1600,26 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	// first check if the block exists, it is very expensive to do all the checks below
 	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
 	if err != nil {
-		return nil, errors.WrapGRPC(
-			errors.NewServiceError("[BlockFound][%s] failed to check if block exists", hash.String(), err))
+		return nil, errors.WrapGRPC(blockLookupError(ctx, hash, "check if block exists", err))
 	}
 
 	if exists {
-		u.logger.Infof("[BlockFound][%s] already validated, skipping", util.ReverseAndHexEncodeSlice(req.Hash))
+		u.logger.Debugf("[BlockFound][%s] already validated, skipping", util.ReverseAndHexEncodeSlice(req.Hash))
+
+		// A waiting caller gets the stored outcome, which is an error for a block stored invalid.
+		if req.WaitToComplete {
+			if err := u.storedBlockAnswer(ctx, hash); err != nil {
+				return nil, errors.WrapGRPC(err)
+			}
+		}
+
 		return &blockvalidation_api.EmptyMessage{}, nil
 	}
 
-	var errCh chan error
+	var reply *blockFoundReply
 
 	if req.WaitToComplete {
-		errCh = make(chan error)
+		reply = newBlockFoundReply()
 	}
 
 	// process the block in the background, in the order we receive them, but without blocking the grpc call
@@ -1205,15 +1629,22 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 			hash:    hash,
 			baseURL: req.GetBaseUrl(),
 			peerID:  req.GetPeerId(),
-			errCh:   errCh,
+			reply:   reply,
 		}
 		prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 	}()
 
 	if req.WaitToComplete {
-		err := <-errCh
-		if err != nil {
-			return nil, errors.WrapGRPC(err)
+		// The reply comes once the block is stored, rejected, or handed to catchup, which can take
+		// as long as validation does. A caller that gives up first gets its context error; the
+		// answer still lands in the reply's buffer, so the worker that sends it never blocks.
+		select {
+		case err := <-reply.ch:
+			if err != nil {
+				return nil, errors.WrapGRPC(err)
+			}
+		case <-ctx.Done():
+			return nil, errors.WrapGRPC(errors.NewContextCanceledError("[BlockFound][%s] caller stopped waiting for validation", hash.String(), ctx.Err()))
 		}
 	}
 
@@ -1251,7 +1682,7 @@ func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_a
 		} else if peer != nil {
 			baseURL = peer.DataHubURL
 		}
-		if _, err := u.fetchSubtreeDataForBlock(ctx, block, blockHeaderMeta.PeerID, baseURL); err != nil {
+		if _, _, err := u.fetchSubtreeDataForBlock(ctx, block, blockHeaderMeta.PeerID, baseURL); err != nil {
 			return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed to fetch missing subtree data", block.String(), err))
 		}
 	}
@@ -1340,7 +1771,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid base URL", err))
 	}
 
-	if err = u.processBlockFound(ctx, block.Header.Hash(), request.PeerId, baseURL, block); err != nil {
+	if err = u.processBlockFound(ctx, block.Header.Hash(), request.PeerId, baseURL, request.HeaderProven, block); err != nil {
 		// error from processBlockFound is already wrapped
 		return nil, errors.WrapGRPC(err)
 	}
@@ -1409,6 +1840,14 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		if errors.Is(err, errors.ErrBlockIncomplete) {
 			return nil, errors.WrapGRPC(errors.NewBlockIncompleteError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err))
 		}
+		// A corrupt block body (bitcoin-sv/teranode#4692) must NOT be surfaced as ERR_BLOCK_INVALID:
+		// wrapping it in NewBlockInvalidError would make errors.Is(err, ErrBlockInvalid) true
+		// across this stateless RPC boundary, defeating the dedicated sentinel. Preserve the
+		// corrupt classification (WrapGRPC keeps the chain; the caller's UnwrapGRPC/IsBlockCorrupt
+		// recovers it).
+		if errors.IsBlockCorrupt(err) {
+			return nil, errors.WrapGRPC(errors.NewBlockCorruptError("[ValidateBlock][%s] block body is corrupt", block.String(), err))
+		}
 
 		// Infrastructure failures are not verdicts on the block: a storage/service outage, or a
 		// parent-header run from our own store that was unanchored or unlinked (issue #1467),
@@ -1422,7 +1861,6 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrBlockHeaderContext) {
 			return nil, errors.WrapGRPC(err)
 		}
-
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
 	}
 
@@ -1455,6 +1893,33 @@ func deriveBlockHeight(claimed, parentHeight uint32) (uint32, error) {
 	return derived, nil
 }
 
+// optimisticMiningDisabledForPeerPath reports whether optimistic mining must be disabled on the
+// peer-served new-block path (processBlockFound) and the catch-up path (validateBlocksOnChannel)
+// for this block (bitcoin-sv/teranode#4692). Optimistic mining is permitted on those paths ONLY
+// when BOTH the global OptimisticMining flag AND the dedicated OptimisticMiningPeerBlocks opt-in
+// are set, so the global opt-out always wins and the new peer-blocks flag can never bypass it.
+// The downstream useOptimisticMining seed in ValidateBlockWithOptions applies the same conjunction
+// on every validation path; it is repeated here at the gate (belt-and-suspenders). Revalidation of an already-stored block (RevalidateBlock) is never
+// optimistic and does not use this gate.
+//
+// Blocks arriving over the legacy sync route (baseURL == "legacy") are unconditionally
+// non-optimistic, whatever the two flags say, as they were before this gate existed. That
+// exclusion predates and is independent of the corrupt-body work: it is kept here so the rule is
+// visible from the helper and cannot be dropped by a new call site.
+func optimisticMiningDisabledForPeerPath(s *settings.Settings, baseURL string) bool {
+	// Nil-safe like the sibling gate helpers: a nil settings reports "disabled" — the fail-safe
+	// direction (never optimistically accept a peer body under a missing config).
+	if s == nil {
+		return true
+	}
+
+	if baseURL == "legacy" {
+		return true
+	}
+
+	return !(s.BlockValidation.OptimisticMining && s.BlockValidation.OptimisticMiningPeerBlocks)
+}
+
 // processBlockFound processes a newly discovered block by validating it and managing
 // parent block dependencies. It handles block retrieval, validation sequencing,
 // and ensures proper processing order for blockchain consistency.
@@ -1463,22 +1928,18 @@ func deriveBlockHeight(claimed, parentHeight uint32) (uint32, error) {
 //   - ctx: Context for tracing and operation management
 //   - hash: Hash of the block to process
 //   - baseURL: Base URL for block retrieval operations
+//   - headerProven: the caller's ancestry proof for a below-checkpoint block (see
+//     legacyUnifiedRoute). Only legacy netsync can supply it; every other caller passes false.
 //   - useBlock: Optional pre-loaded block to avoid retrieval (variadic parameter)
 //
 // Returns an error if block processing, validation, or dependency management fails
-func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, peerID, baseURL string, useBlock ...*model.Block) error {
+func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, peerID, baseURL string, headerProven bool, useBlock ...*model.Block) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processBlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationProcessBlockFound),
 		tracing.WithDebugLogMessage(u.logger, "[processBlockFound][%s] processing block found from %s", hash.String(), baseURL),
 	)
 	defer deferFn()
-
-	// Check if the peer is malicious before attempting to fetch
-	if u.isPeerMalicious(ctx, peerID) {
-		u.logger.Warnf("[processBlockFound][%s] peer %s is malicious, not fetching from [%s]", hash.String(), peerID, baseURL)
-		return errors.NewProcessingError("[processBlockFound][%s] peer %s is malicious", hash.String(), peerID)
-	}
 
 	// first check if the block exists, it might have already been processed
 	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
@@ -1491,14 +1952,113 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return nil
 	}
 
+	// The peer gates below all run after the exists check and before the fetch. After it, so a
+	// peer that one of them stops still gets nil for a block this node has stored, as any other
+	// peer does. Before it, so nothing is fetched from a peer they stop. processBlockFoundChannel
+	// orders its announcer gates the same way.
+	//
+	// The malicious gate runs first, so a peer that is both malicious and at one of the caps below
+	// gets the malicious answer, as it did when this gate ran ahead of the exists check.
+	if u.isPeerMalicious(ctx, peerID) {
+		u.logger.Warnf("[processBlockFound][%s] peer %s is malicious, not fetching from [%s]", hash.String(), peerID, baseURL)
+		return errors.NewProcessingError("[processBlockFound][%s] peer %s is malicious", hash.String(), peerID)
+	}
+
+	// Per-(hash, peerID) corrupt re-download cap (bitcoin-sv/teranode#4692): once this serving peer
+	// has hit MaxCorruptAttemptsPerBlock corrupt-body failures for this hash within the cooldown
+	// window, skip the expensive download/subtree-prepare/merkle work until the fixed window lapses.
+	// This is the universal RUNNING chokepoint (worker, direct ProcessBlock RPC, retries all funnel
+	// here), so the drop happens before fetchSingleBlock below. Keying on (hash, peerID) means an
+	// honest peer keeps a fresh budget for the same hash, so a bad peer can never wedge the honest
+	// tip. The corrupt path persisted nothing, so this only rate-limits the pair — it never poisons
+	// the hash, and once the window expires an honest body flows through. GetBlockExists returned
+	// false just above, so the block is NOT stored: returning nil here would be read by a caller as
+	// "accepted" for a block that was never stored (bitcoin-sv/teranode#4692). Return a
+	// CORRUPT-CLASSIFIED, non-poisoning error instead: it is not ErrBlockInvalid, so it never
+	// poisons, and no caller can mistake it for acceptance. It never fires for a legacy block,
+	// because accountCorruptAttempt records nothing for baseURL "legacy"; netsync's own corrupt
+	// row (parkCommitFailure, services/legacy/netsync/block_park_policy.go) neither marks the hash
+	// failed nor blames the peer.
+	if u.corruptAttemptsExhausted(hash, peerID) {
+		u.logger.Warnf("[processBlockFound][%s] corrupt re-download cap reached for peer %s; suppressing this re-download until the cooldown window expires", hash.String(), peerID)
+		return errors.NewBlockCorruptError("[processBlockFound][%s] corrupt re-download cap reached for peer %s; re-download suppressed until the cooldown window expires (block not stored, not invalid)", hash.String(), peerID)
+	}
+
+	// Per-(hash, peerID) LOCAL POLICY decline cap (bitcoin-sv/teranode#4692).
+	// An oversized block is declined but never remembered anywhere else, so without this the same
+	// peer's re-announcements cost a fresh block-message fetch every time. Its own counter, not the
+	// corrupt one: a policy decline is not evidence about the block, so it must not spend the
+	// corrupt budget. GetBlockExists returned false just above, so returning nil would be read as
+	// "accepted" for a block that was never stored (bitcoin-sv/teranode#4692). This gate is a RATE
+	// LIMIT on re-fetching a block we have ALREADY declined on local policy — not a different verdict
+	// — so it returns the SAME classification the uncapped excessiveblocksize decline returns a few
+	// lines below (errors.NewBlockPolicyDeclinedError, ERR_BLOCK_POLICY_DECLINED; twin in
+	// ValidateBlockWithOptions). A capped drop must be INDISTINGUISHABLE to every caller from the
+	// decline it rate-limits: it must NOT be classified corrupt (a local policy choice is not the
+	// peer's corruption, so no corrupt-body ban score is earned on the legacy strike path), and it
+	// must not poison (ERR_BLOCK_POLICY_DECLINED is not ErrBlockInvalid, so it never reaches
+	// storeInvalidBlock / InvalidateBlock — same as the decline it mirrors, which already flows out
+	// of this function today).
+	if u.policyDeclineAttemptsExhausted(hash, peerID) {
+		u.logger.Warnf("[processBlockFound][%s] local policy decline cap reached for peer %s; suppressing this re-fetch until the cooldown window expires", hash.String(), peerID)
+		return errors.NewBlockPolicyDeclinedError("[processBlockFound][%s] block declined on local policy (excessiveblocksize); re-fetch suppressed until the cooldown window expires (block not stored, not invalid)", hash.String())
+	}
+
+	// Per-(hash, peerID) recovered-panic cap (BV-STARTUP-007). The priority worker recovers a panic
+	// and records it in blockPanicAttempts for the peer that served the attempt. After the cap, this
+	// peer's deliveries of the hash stop here until the window lapses. A block that panics every
+	// time then skips the download below and the validation that panics. The same count also stops
+	// the peer's announcements of the hash in processBlockFoundChItem, before the fetch that
+	// addBlockToPriorityQueue does to classify the block. The error is ERR_PROCESSING. Its text has no word that
+	// IsNetworkError or IsMaliciousResponseError matches, and it has no peerID, so the worker does
+	// not requeue the block, no peer gets a strike, and the hash is not marked invalid.
+	//
+	// Legacy sync reaches this gate too: the unified route counts a quick-validation goroutine
+	// panic for netsync's peer (issue 4993). netsync's parkCommitFailure reads an ERR_PROCESSING
+	// error it does not know as a judgement on the block, and deletes the parked record, blames
+	// the peer and marks the hash failed. So for baseURL "legacy" the gate answers with a
+	// ServiceError, netsync's retry-later row, which keeps the record and blames no one, as the
+	// panic it caps does.
+	if u.panicAttemptsExhausted(hash, peerID) {
+		u.logger.Warnf("[processBlockFound][%s] recovered-panic cap reached for peer %s; suppressing this delivery until the cooldown window expires", hash.String(), peerID)
+
+		if baseURL == "legacy" {
+			return errors.NewServiceError("[processBlockFound][%s] recovered-panic cap reached for this peer; delivery suppressed until the cooldown window expires, retrying later (block not stored)", hash.String())
+		}
+
+		return errors.NewProcessingError("[processBlockFound][%s] recovered-panic cap reached for this peer; delivery suppressed until the cooldown window expires (block not stored)", hash.String())
+	}
+
 	var block *model.Block
 	if len(useBlock) > 0 {
 		block = useBlock[0]
 	} else {
-		block, err = u.fetchSingleBlock(ctx, hash, peerID, baseURL)
+		// Bound the fetch: this ctx is the block-processing worker's service-lifetime context
+		// with no deadline of its own, and fetchSingleBlock's DoHTTPRequestBodyReader would
+		// otherwise fall back to http_streaming_timeout (600 s in settings.conf,
+		// bitcoin-sv/teranode#4742) - a 20x wider window for a hostile peer than the 30 s budget
+		// every sibling fetchSingleBlock call site sets explicitly.
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, peerBlockFetchTimeout)
+		block, err = u.fetchSingleBlock(fetchCtx, hash, peerID, baseURL)
+		fetchCancel()
 		if err != nil {
 			return err
 		}
+	}
+
+	// Local policy decline, remembered per serving identity (bitcoin-sv/teranode#4692). The size
+	// judged here is the peer-supplied SizeInBytes varint, so a per-HASH suppression would let one
+	// peer inflate that varint and suppress the honest tip for the whole window — the same
+	// honest-tip wedge the corrupt cap is keyed on (hash, peerID) to avoid. Keyed on the pair, an
+	// inflated varint only spends that peer's own budget. No peer strike (a legitimately oversized
+	// block from an honest miner is not misbehaviour) and no invalid=true (never poison a hash we
+	// merely decline on local policy); this only stops us re-fetching the same block message from
+	// the same peer, and lapses with the fixed cooldown window. The authoritative decline for every
+	// other caller stays in ValidateBlockWithOptions.
+	if excessiveBlockSizeDeclined(u.settings, block) {
+		u.recordPolicyDeclineAttempt(hash, peerID)
+
+		return errors.NewBlockPolicyDeclinedError("[processBlockFound][%s] block size %d exceeds excessiveblocksize %d (local policy)", hash.String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
 	}
 
 	u.checkParentProcessingComplete(ctx, block, baseURL)
@@ -1510,6 +2070,19 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	}
 
 	if !parentExists {
+		// A legacy block must never take the catch-up divert, on either route: legacy sync
+		// resolves its own orphans with a getblocks, and the divert returns nil, which legacy
+		// records as an accepted block with nothing stored (bitcoin-sv/teranode#4973). Legacy
+		// hands a block over only once its parent is in the chain, so a missing parent here is a
+		// local fault. A ServiceError is what legacy's park reads as retry-later
+		// (parkCommitFailure), so the block is kept and committed again once the parent lands.
+		//
+		// Not gated on legacyUnifiedEligible or the header proof: an above-checkpoint block, or an
+		// unproven one, is still a legacy block whose parent legacy promised to have committed.
+		if baseURL == "legacy" {
+			return errors.NewServiceError("[processBlockFound][%s] legacy block has no stored parent %s", hash.String(), block.Header.HashPrevBlock.String())
+		}
+
 		// add to catchup channel, which will block processing any new blocks until we have caught up
 		go func() {
 			u.logger.Debugf("[processBlockFound][%s] processBlockFound add to catchup channel", hash.String())
@@ -1528,9 +2101,9 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return nil
 	}
 
-	// Settle the peer-supplied height against the on-chain parent before anything reads
-	// block.Height (block-assembly gating and the unified-route decision below, and downstream
-	// the checkpoint guard, difficulty skip and coinbase subsidy in ValidateBlockWithOptions).
+	// Settle the peer-supplied height against the parent before anything reads block.Height
+	// (block-assembly gating and the unified-route decision below, and downstream the
+	// checkpoint guard, difficulty skip and coinbase subsidy in ValidateBlockWithOptions).
 	// See deriveBlockHeight.
 	_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
 	if err != nil {
@@ -1544,56 +2117,186 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return errors.NewServiceError("[processBlockFound][%s] nil metadata for parent header %s", hash.String(), block.Header.HashPrevBlock.String())
 	}
 
-	settledHeight, err := deriveBlockHeight(block.Height, parentMeta.Height)
+	parentHeight := parentMeta.Height
+
+	settledHeight, err := deriveBlockHeight(block.Height, parentHeight)
 	if err != nil {
 		return errors.NewBlockInvalidError("[processBlockFound][%s] rejecting block with peer-inconsistent height", hash.String(), err)
 	}
 
 	block.Height = settledHeight
 
+	// Unified below-checkpoint route: legacy blocks go through the same quick-validation
+	// machinery as native catchup (default off). Re-evaluated on the settled height, which is
+	// what every consumer downstream reads.
+	unifiedRoute := u.legacyUnifiedRoute(block, baseURL, headerProven)
+
+	// Reaching full validation for an eligible block is meant to be rare: netsync refuses to
+	// commit an unproven eligible record before it makes this call (HandleConvertedBlock), so
+	// this is the cache-replace race, a direct RPC, or a netsync whose route flags disagree
+	// with this service's. It is logged because it is the slow, correct path, and an operator
+	// seeing it at volume has a provenance problem to look at, not a validation one.
+	if !unifiedRoute && !headerProven && u.legacyUnifiedEligible(block, baseURL) {
+		u.logger.Warnf("[processBlockFound][%s] legacy block at height %d is eligible for the unified route but carries no header proof; taking full validation", hash.String(), block.Height)
+	}
+
 	// Wait for block assembly to be ready before processing the block
 	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height, u.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
+		if u.legacyUnifiedEligible(block, baseURL) {
+			// A parked gate is a local condition for every eligible legacy block, proven or
+			// not, so this keys on eligibility rather than on the route taken: the wait
+			// returns a ProcessingError, which legacy sync's park reads as a rejection and
+			// answers by deleting its only copy of the block. Wrap so legacy sync neither
+			// rejects the block nor rotates the peer.
+			return errors.NewServiceError("[processBlockFound][%s] block assembly not ready for height %d on the unified route", hash.String(), block.Height, err)
+		}
+
 		// block-assembly is still behind, so we cannot process this block
 		return err
 	}
 
-	// Unified below-checkpoint route: legacy blocks go through the same
-	// quick-validation machinery as native catchup (default off).
-	if u.legacyUnifiedRoute(block, baseURL) {
+	if unifiedRoute {
 		u.logger.Debugf("[processBlockFound][%s] unified route: quick-validating legacy block at height %d", block.Hash().String(), block.Height)
-		return u.blockValidation.quickValidateBlock(ctx, block, peerID, baseURL)
+
+		// A corrupt result here is returned to the legacy caller, whose parkCommitFailure
+		// (services/legacy/netsync/block_park_policy.go) classifies it as a local record fault:
+		// the record is dropped and downloaded again, with no strike and no mark, because the
+		// body was verified against the header at the pipeline sink before the record existed.
+		qErr := u.blockValidation.quickValidateBlock(ctx, block, peerID, baseURL)
+		u.accountCorruptAttempt(hash, peerID, baseURL, qErr)
+
+		// A panic in a quick-validation goroutine comes back as an error (issue 4993), so the
+		// recover in processBlockFoundRecovered never sees it. Count it toward the (hash, peerID)
+		// cap that the panicAttemptsExhausted gate above reads, or a block that panics every time
+		// is validated again on every attempt. Return it as a ServiceError: the legacy caller's
+		// parkCommitFailure reads an ERR_PROCESSING error it does not know as a judgement on the
+		// block, and deletes the parked record, blames the peer and marks the hash failed. A
+		// ServiceError is its retry-later row, which keeps the record and blames no one.
+		if isLocalPanic(qErr) {
+			attempts := u.recordPanicAttempt(hash, peerID)
+			u.logger.Errorf("[processBlockFound][%s] a goroutine panicked quick-validating the block from peer %s (panic %d for this peer in the cooldown window), see the PANIC log line", hash.String(), peerID, attempts)
+
+			return errors.NewServiceError("[processBlockFound][%s] a goroutine panicked in this node during quick validation; retrying later", hash.String(), qErr)
+		}
+
+		// A structure or data file that does not hash to the key it is stored under comes back
+		// as a bare ProcessingError carrying only a data marker, which the legacy caller's table
+		// cannot key on and would read as a judgement on the block. The route is legacy here
+		// (legacyUnifiedEligible requires it), so the file is this node's own and the sink has
+		// already verified the bytes it was written from. When the quarantine confirmed the blob
+		// removed, the record is corrupt and a re-download rewrites the file, so say so with the
+		// code the caller's corrupt row reads. When the blob could NOT be confirmed removed, a
+		// re-download cannot repair it (subtreeWriter.put never rewrites an existing key) and a
+		// corrupt drop would loop every wanted-range pass, so that case is a local fault to
+		// retry later, which the caller reads as keep.
+		if qErr != nil && len(subtreeKeyMismatchRefs(qErr)) > 0 {
+			if isUnquarantinedLocalSubtree(qErr) {
+				return errors.NewServiceError("[processBlockFound][%s] a subtree file this node wrote does not hash to its key and could not be confirmed removed; retrying later", hash.String(), qErr)
+			}
+
+			return errors.NewBlockCorruptError("[processBlockFound][%s] a subtree file this node wrote does not hash to its key; it has been removed so the block can be downloaded again", hash.String(), qErr)
+		}
+
+		return qErr
+	}
+
+	if u.blockValidation.mustStayOnQuickValidation(block) {
+		// Below the checkpoint a netting UTXO store may already hold part of this block
+		// without spend-journal rows, which full validation would read. Wait for the header
+		// proof that sends the block to quick validation instead.
+		return newNettedRouteRefusal("[processBlockFound][%s] block at height %d is below the hardcoded checkpoint on a netting UTXO store and can only be quick validated; it has no header proof yet", hash.String(), block.Height)
 	}
 
 	// validate the block
 	u.logger.Infof("[processBlockFound][%s] validate block from %s", hash.String(), baseURL)
 
-	// Create validation options
+	// Create validation options.
+	//
+	// bitcoin-sv/teranode#4692: this peer-serving (corruption-reachable) path is non-optimistic
+	// UNLESS the operator opts in via BOTH blockvalidation_optimistic_mining and
+	// blockvalidation_optimistic_mining_peer_blocks (see optimisticMiningDisabledForPeerPath).
+	// Optimistic mining AddBlocks the body BEFORE block.Valid runs in the background, so a
+	// corrupt body would be accepted first and then require rollback — but there is no
+	// non-poisoning removal primitive (only InvalidateBlock, which poisons). With the default
+	// (opt-out) gate, block.Valid runs monolithically before AddBlock, so no corrupt body is
+	// ever added. When opted in, a corrupt body on the optimistic-background path takes the
+	// invalidate route (see the block.Valid background handler). This gate is removed once
+	// block.Valid is split so its integrity floor runs before the optimistic AddBlock.
 	opts := &ValidateBlockOptions{
-		DisableOptimisticMining: baseURL == "legacy",
+		DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings, baseURL),
 		IsRevalidation:          false, // processBlockFound is for new blocks, not revalidation
 		PeerID:                  peerID,
 	}
 
 	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, opts)
+	u.accountCorruptAttempt(hash, peerID, baseURL, err)
+
 	if err != nil {
+		// A verdict on the block goes back as itself. The ServiceError wrap below is for
+		// everything else (a store that did not answer, a fetch that failed), which a caller
+		// reads as retry-later; wrapping a genuine rejection or a corrupt body in it made the
+		// legacy caller's table read every full-route rejection as a transient local fault, so
+		// the block was kept and retried on every sweep for as long as it stayed parked.
+		if errors.Is(err, errors.ErrBlockInvalid) || errors.IsBlockCorrupt(err) {
+			return err
+		}
+
 		return errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err)
 	}
 
 	return nil
 }
 
-// legacyUnifiedRoute reports whether this block should take the unified
-// below-checkpoint route: legacy-sourced, operator opted into both the
-// outpoint-only fast path and the unified route, and the shared eligibility
-// gate holds (store capability + hardcoded checkpoint boundary via
-// model.OutpointOnlyEligible — never the operator catchup override). When true,
-// processBlockFound hands the block to quickValidateBlock — the same machinery
-// the native catchup path uses below checkpoints — instead of full validation.
-// Netsync has already written the subtree files, verified PoW and the merkle
-// root, and waited for block assembly; quickValidateBlock does UTXO
-// create+spend, AddBlock(MinedSet+SubtreesSet) and DAH.
-func (u *Server) legacyUnifiedRoute(block *model.Block, baseURL string) bool {
-	if !u.settings.BlockValidation.LegacyUnifiedBelowCheckpoint {
+// legacyUnifiedRoute reports whether this block takes the unified
+// below-checkpoint route: legacyUnifiedEligible holds AND the caller has proved
+// the block's ancestry. When true, processBlockFound hands the block to
+// quickValidateBlock, the same machinery the native catchup path uses below
+// checkpoints, instead of full validation. Netsync has already written the
+// subtree files, verified PoW and the merkle root, and waited for block
+// assembly; quickValidateBlock does UTXO create+spend,
+// AddBlock(MinedSet+SubtreesSet) and DAH.
+//
+// Height is the weaker conjunct and headerProven is the hash half. The hardcoded
+// checkpoints certify ONE CHAIN, not a height range, so a block's height alone
+// says nothing about whether it belongs to that chain: a peer can fabricate a
+// block claiming any height in the certified prefix. quickValidateBlock runs no
+// header or chain-membership rule beyond the version floor, so it must never see
+// a block nobody has tied to a pinned checkpoint hash. headerProven is that tie,
+// computed by netsync's header cache (headerCache.Proven: the hash sits in an
+// internally linked header run at or below a height a matched pinned checkpoint
+// commits) and carried on the request because block bytes cannot carry it. This
+// is the block-validation half of GHSA-gggq-8f59-4jm9; netsync's
+// quickValidationAllowed is the other half.
+//
+// An eligible block without the proof falls to ValidateBlockWithOptions. That is
+// correct for a legacy record because netsync writes its structure files as
+// FileTypeSubtreeToCheck, which full validation treats as unvalidated: subtree
+// validation creates the transactions and rebuilds the fees before the reward
+// check reads them. It is also slow, which is why netsync refuses to commit an
+// unproven eligible record before it makes this RPC and re-offers it once the
+// header walk has proven it.
+func (u *Server) legacyUnifiedRoute(block *model.Block, baseURL string, headerProven bool) bool {
+	return headerProven && u.legacyUnifiedEligible(block, baseURL)
+}
+
+// legacyUnifiedEligible is the settings-and-height half of legacyUnifiedRoute:
+// legacy-sourced, operator opted into both the outpoint-only fast path and the
+// unified route, and the shared eligibility gate holds (store capability +
+// hardcoded checkpoint boundary via model.OutpointOnlyEligible, never the
+// operator catchup override). It says nothing about which chain the block is on;
+// legacyUnifiedRoute adds that. The parent-missing guard in processBlockFound
+// reads this one on purpose, so an unproven legacy orphan is refused rather than
+// diverted to catch-up.
+//
+// On a store that nets below the checkpoint (model.NettedRouteAt) this service's own copy of
+// blockvalidation_legacy_unified_below_checkpoint is not read: full validation of such a block
+// is not possible. Netsync's unifiedRoute and model.OutpointOnlyEligible ignore both route
+// settings on such a store too, so legacy and block validation agree on the route whatever
+// either service's copies say (per-service overrides or split pods).
+func (u *Server) legacyUnifiedEligible(block *model.Block, baseURL string) bool {
+	// The return below requires model.OutpointOnlyEligible, so "the store nets" alone here is
+	// model.NettedRouteAt.
+	if !u.settings.BlockValidation.LegacyUnifiedBelowCheckpoint && !utxo.NetsBelowCheckpoint(u.utxoStore) {
 		return false
 	}
 
@@ -1739,64 +2442,418 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 		default:
 			blockFound, status := u.blockPriorityQueue.WaitForBlock(ctx, u.forkManager)
 
+			// The block's processing slot is already claimed by Get.
 			if status != GetOK {
-				continue
-			}
-
-			if !u.forkManager.StartProcessingBlock(blockFound.hash) {
 				continue
 			}
 
 			u.logger.Debugf("[BlockProcessing] Worker %d processing block %s", workerID, blockFound.hash.String())
 
-			err := u.processBlockWithPriority(ctx, blockFound)
+			err := u.processBlockWithPriorityRecovered(ctx, blockFound)
 
-			u.forkManager.FinishProcessingBlock(blockFound.hash)
-
-			if err != nil {
-				u.logger.Errorf("[BlockProcessing] Worker %d failed to process block %s: %v", workerID, blockFound.hash.String(), err)
-
-				// Note: Failures are not reported here as these are normal block processing failures
-				// Catchup failures are reported by the catchup() function
-
-				// Update processed metric with failure
-				if prometheusBlockPriorityQueueProcessed != nil {
-					// We don't have the priority here, so we'll use "unknown"
-					prometheusBlockPriorityQueueProcessed.WithLabelValues("unknown", "failure").Inc()
-				}
-
-				// If the error indicates the block couldn't be fetched (network error, malicious node, etc),
-				// we should retry the block later rather than dropping it completely
-				// TODO: We might want to limit the number of retries per block to avoid infinite loops
-				// For now, we'll just re-queue it with deepFork priority to ensure it gets retried eventually
-				// Note: This could lead to blocks being retried indefinitely if they are always failing to fetch
-				// A more robust solution would involve tracking retry counts and eventually giving up after a threshold
-				if errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err) {
-					u.logger.Warnf("[BlockProcessing] Block %s fetch failed, will retry later", blockFound.hash.String())
-					// Re-add the block to the queue for retry
-					// We need to get the block metadata (height and priority) for re-queuing
-					// For now, we'll use deepFork priority as a safe default for retries
-					go func() {
-						// Add a small delay to avoid tight loops
-						time.Sleep(5 * time.Second)
-						// Create a new blockFound without specific peer info so any peer can provide it
-						retryBlock := processBlockFound{
-							hash:    blockFound.hash,
-							baseURL: SourceTypeRetry, // Special marker for retry attempts
-							peerID:  "",              // Clear peer ID so any peer can be used
-							errCh:   nil,             // No error channel for async retry
-						}
-						u.blockPriorityQueue.RequeueForRetry(retryBlock, PriorityDeepFork, 0)
-						u.logger.Infof("[BlockProcessing] Re-queued block %s for retry from any available peer", blockFound.hash.String())
-					}()
-				}
-			} else {
-				// Update processed metric with success
-				if prometheusBlockPriorityQueueProcessed != nil {
-					prometheusBlockPriorityQueueProcessed.WithLabelValues("unknown", "success").Inc()
-				}
-			}
+			u.finishProcessedBlock(workerID, blockFound, err)
+			u.answerQueuedBlock(ctx, blockFound, err)
 		}
+	}
+}
+
+// processBlockWithPriorityRecovered runs processBlockWithPriority and turns a panic into an
+// ERR_PROCESSING error, so one bad block cannot kill the worker or the process (BV-STARTUP-007).
+// It never answers blockFound.reply: the worker answers it from the outcome, in answerQueuedBlock.
+// The panic value goes to the log only, not into the error text: the worker reads its error with
+// IsNetworkError and IsMaliciousResponseError, which match words such as "http" or "timeout" in
+// the text, and a panic value with such a word would requeue the block as a fetch failure.
+// Only this worker's goroutine is covered here. An errgroup goroutine that the processing starts
+// recovers its own panic with recoverChildPanic, which returns a local-panic error (issue 4993).
+//
+// A panic inside a processBlockFound call is recovered one level down, in
+// processBlockFoundRecovered, which knows the peer that served that attempt and counts the panic
+// toward its cap. This recover catches only a panic outside those calls. No peer served anything
+// there, so it counts toward no peer's cap.
+func (u *Server) processBlockWithPriorityRecovered(ctx context.Context, blockFound processBlockFound) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			countRecoveredPanic(recoveredPanicPathWorker)
+			u.logger.Errorf("[BlockProcessing] PANIC processing block %s outside a delivery attempt: %v stack=%q", blockFound.hash.String(), r, debug.Stack())
+			err = errors.NewProcessingError(recoveredPanicErrFormat, blockFound.hash.String())
+		}
+	}()
+
+	return u.processBlockWithPriority(ctx, blockFound)
+}
+
+// processBlockFoundRecovered runs processBlockFound for one source and turns a panic into an
+// ERR_PROCESSING error (BV-STARTUP-007). It counts the panic for (hash, peerID), the peer that
+// served this attempt. That is the same key that the cap gate in processBlockFound reads, so the
+// peer whose delivery panics is the one that gets capped. processBlockWithPriority changes the
+// source on its retry path and in its alternatives loop, so a recover above it charged the queue
+// entry's peer instead. The error text has no panic value, for the reason that
+// processBlockWithPriorityRecovered gives.
+func (u *Server) processBlockFoundRecovered(ctx context.Context, hash *chainhash.Hash, peerID, baseURL string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			countRecoveredPanic(recoveredPanicPathWorker)
+			attempts := u.recordPanicAttempt(hash, peerID)
+			u.logger.Errorf("[BlockProcessing] PANIC processing block %s from peer %s (panic %d for this peer in the cooldown window): %v stack=%q", hash.String(), peerID, attempts, r, debug.Stack())
+			err = errors.NewProcessingError(recoveredPanicErrFormat, hash.String())
+		}
+	}()
+
+	// The block-found queue never carries a header proof: only legacy netsync holds one.
+	return u.processBlockFound(ctx, hash, peerID, baseURL, false)
+}
+
+// finishProcessedBlock handles the outcome of a worker's block and releases its slot.
+func (u *Server) finishProcessedBlock(workerID int, blockFound processBlockFound, err error) {
+	// The slot is released last. A block being retried must already be back on the queue
+	// when the release wakes a worker: in between it is neither queued nor processing, and a
+	// child waiting behind it would be taken and sent to catchup.
+	defer u.forkManager.FinishProcessingBlock(blockFound.hash)
+
+	// A child queued while this block was being fetched was classified without it. The
+	// deferred slot release lets it start, so give it this block's class first.
+	u.blockPriorityQueue.PromoteChildren(blockFound.hash, blockFound.priority)
+
+	if err != nil {
+		u.logger.Errorf("[BlockProcessing] Worker %d failed to process block %s: %v", workerID, blockFound.hash.String(), err)
+
+		// Note: Failures are not reported here as these are normal block processing failures
+		// Catchup failures are reported by the catchup() function
+
+		// Update processed metric with failure
+		if prometheusBlockPriorityQueueProcessed != nil {
+			prometheusBlockPriorityQueueProcessed.WithLabelValues(priorityToString(blockFound.priority), "failure").Inc()
+		}
+
+		// IsBlockCorrupt is tested BEFORE the network/malicious pair (bitcoin-sv/teranode#4692):
+		// IsMaliciousResponseError substring-matches the word "corrupt" in the rendered error
+		// text, so an ERR_BLOCK_CORRUPT error would otherwise always match the malicious branch
+		// and this dedicated corrupt-recovery branch would be dead code.
+		if errors.IsBlockCorrupt(err) {
+			// RUNNING corrupt body (bitcoin-sv/teranode#4692): the serving peer was already struck
+			// inside ValidateBlockWithOptions and nothing was persisted — no invalid=true,
+			// SetBlockExists never set, block never AddBlock'd. Clear the in-flight dedup
+			// marker so the same hash re-announced by an honest peer re-enters validation
+			// instead of being dropped as already-in-progress. Recovery is the natural
+			// re-announcement (many peers hold the honest block in RUNNING); the
+			// already-exists-as-invalid short-circuit never fires because we did not poison.
+			// If the corrupt peer was the sole announcer, no honest peer holds the hash and
+			// it correctly never connects.
+			u.logger.Warnf("[BlockProcessing] Block %s had a corrupt body, cleared for re-download from another peer", blockFound.hash.String())
+			u.processBlockNotify.Delete(*blockFound.hash)
+			// The per-(hash, peerID) corrupt cap (bitcoin-sv/teranode#4692) is accounted inside
+			// processBlockFound (accountCorruptAttempt), which both this worker route and the
+			// direct ProcessBlock route funnel through — so it is counted there exactly once,
+			// not here (which would double-count the worker route and miss the direct route).
+		} else if delay, retry := u.blockRetryDelay(blockFound.hash, err); retry {
+			u.logger.Warnf("[BlockProcessing] Block %s failed without a verdict, requeueing in %s", blockFound.hash.String(), delay)
+			u.requeueBlock(blockFound, delay)
+		}
+	} else {
+		// Update processed metric with success
+		if prometheusBlockPriorityQueueProcessed != nil {
+			prometheusBlockPriorityQueueProcessed.WithLabelValues(priorityToString(blockFound.priority), "success").Inc()
+		}
+
+		u.clearBlockRetryAttempts(blockFound.hash)
+
+		// The per-(hash, peerID) corrupt counter (bitcoin-sv/teranode#4692) is cleared on a
+		// genuine validation success inside processBlockFound (accountCorruptAttempt). It is NOT
+		// cleared here: a worker "success" also covers the exists / catchup / cap-exhausted
+		// early returns (which return nil), and clearing on a cap-exhausted skip would reset
+		// the very cooldown the cap just enforced.
+	}
+}
+
+// answerQueuedBlock answers a WaitToComplete caller with the outcome of the worker's attempt at its
+// queued block.
+//
+// A failure is answered at once, even one that finishProcessedBlock retries, such as a fetch that
+// failed with an HTTP 500. The queue's retry exists for blocks that arrived by Kafka: nobody waits
+// on those, the announcement is already committed and will not be sent again, so without the retry
+// the node would miss the block until a peer re-announces it. A waiting caller is different: it
+// can call BlockFound again itself. Holding it through every retry (3 by default, 5 s apart for a
+// fetch failure, a minute apart for a deadline) would make it wait for an error it could already
+// act on, and the retry asks the same peer that just failed: the requeued item carries only that
+// source, not the other announcers' (the worker's take dropped them). Only an announcement that
+// arrives after the take, and so makes a new queue entry, brings another source. So the caller
+// gets the first failure, and the block still goes back on the queue. A fetch failure is not a verdict on the block, and its error code says so, so the caller
+// can tell "try again" from "the block is bad". The cost: the caller can hear a failure for a
+// block that the node stores a few seconds later, on the retry. requeueBlock drops the reply, so
+// a caller that announces the hash again waits on the retry's outcome, not this answered one.
+//
+// A caller that announced a hash already on the queue was joined to that entry's reply (see
+// joinQueuedBlock and BlockPriorityQueue.Add). It gets the outcome of the attempt on the first
+// announcer's source, not on its own: a failed fetch from its own source does not answer it, and
+// its source is not tried by the worker before that answer is sent.
+//
+// A nil from the processing is not enough for nil: processBlockFound also returns nil when it
+// hands the block to catchup, or finds it stored already, which may be as invalid. So the store
+// decides (storedBlockAnswer).
+func (u *Server) answerQueuedBlock(ctx context.Context, blockFound processBlockFound, err error) {
+	if err != nil {
+		blockFound.reply.answer(err)
+		return
+	}
+
+	u.answerStoredBlock(ctx, blockFound.reply, blockFound.hash)
+}
+
+// answerStoredBlock answers a WaitToComplete caller whose block was found stored before it was
+// queued. It reads the store only when someone waits, so the Kafka path pays nothing.
+func (u *Server) answerStoredBlock(ctx context.Context, reply *blockFoundReply, hash *chainhash.Hash) {
+	if reply.isAnswered() {
+		return
+	}
+
+	reply.answer(u.storedBlockAnswer(ctx, hash))
+}
+
+// storedBlockAnswer is the answer for a WaitToComplete caller whose block processing has ended
+// without an error: nil only if the block is stored and not marked invalid (BV-INGRESS-005).
+// A block that is not stored was handed to catchup or dropped, and gets the retry-later
+// ServiceError of errNotCommittedCatchup (BV-INGRESS-017).
+func (u *Server) storedBlockAnswer(ctx context.Context, hash *chainhash.Hash) error {
+	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
+	if err != nil {
+		return blockLookupError(ctx, hash, "check if block is stored", err)
+	}
+
+	if !exists {
+		return errNotCommittedCatchup(hash)
+	}
+
+	// The header is read from the client the exists check used, so both reads see one chain.
+	_, meta, err := u.blockValidation.blockchainClient.GetBlockHeader(ctx, hash)
+	if err != nil {
+		return blockLookupError(ctx, hash, "read stored block header", err)
+	}
+
+	if meta != nil && meta.Invalid {
+		return errors.NewBlockInvalidError("[BlockFound][%s] block is stored as invalid", hash.String())
+	}
+
+	return nil
+}
+
+// blockLookupError is the answer for a failed store read made for a BlockFound caller. If ctx has
+// ended, the read failed because the caller stopped waiting, whatever error the client returned, so
+// the answer is ERR_CONTEXT_CANCELED. Otherwise the store failed, which is a retry-later
+// ERR_SERVICE_ERROR.
+func blockLookupError(ctx context.Context, hash *chainhash.Hash, action string, err error) error {
+	if ctx.Err() != nil {
+		return errors.NewContextCanceledError("[BlockFound][%s] context ended during the attempt to %s", hash.String(), action, ctx.Err())
+	}
+
+	return errors.NewServiceError("[BlockFound][%s] failed to %s", hash.String(), action, err)
+}
+
+func newBlockRetryAttemptsCache() *ttlcache.Cache[chainhash.Hash, int] {
+	return ttlcache.New[chainhash.Hash, int](
+		ttlcache.WithTTL[chainhash.Hash, int](blockRetryAttemptsTTL),
+		ttlcache.WithCapacity[chainhash.Hash, int](blockRetryAttemptsCapacity),
+		ttlcache.WithDisableTouchOnHit[chainhash.Hash, int](),
+	)
+}
+
+// blockRetryDelay reports whether a block that failed with err goes back on the queue, and
+// after how long. Only failures that are not a verdict on the block are retried: a fetch
+// failure, and a deadline (the subtree check running past CheckBlockSubtreesTimeout). Each
+// block gets at most BlockValidation.MaxRetries requeues.
+func (u *Server) blockRetryDelay(hash *chainhash.Hash, err error) (time.Duration, bool) {
+	var delay time.Duration
+
+	// Causes that cannot be a verdict come first. NewBlockFromReader wraps every read failure
+	// as ErrBlockInvalid, so a download cut short by a deadline or the connection would
+	// otherwise be taken for one. The deadline is also checked before IsNetworkError, which
+	// matches substrings such as "timeout" and "http" that a deadline error's message can contain.
+	// A final verdict is then never retried, whatever its text: the proof-of-work limit
+	// rejection says "network proof-of-work limit", which IsNetworkError matches.
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		delay = blockDeadlineRetryDelay
+	case isTransportFailure(err):
+		delay = blockFetchRetryDelay
+	case isUnvalidatablePeerError(err):
+		return 0, false
+	case errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err):
+		delay = blockFetchRetryDelay
+	default:
+		return 0, false
+	}
+
+	if u.blockRetryAttempts == nil {
+		return 0, false
+	}
+
+	attempts := 1
+	if item := u.blockRetryAttempts.Get(*hash); item != nil {
+		attempts = item.Value() + 1
+	}
+
+	if attempts > u.settings.BlockValidation.MaxRetries {
+		u.logger.Warnf("[BlockProcessing] Block %s reached %d retries, not requeueing", hash.String(), u.settings.BlockValidation.MaxRetries)
+		return 0, false
+	}
+
+	u.blockRetryAttempts.Set(*hash, attempts, ttlcache.DefaultTTL)
+
+	return delay, true
+}
+
+// isTransportFailure reports whether err's root cause is a foreign error, such as one from io or
+// net, that IsNetworkError matches. A wrapped foreign error keeps only its text, so its type is
+// gone; its ERR_UNKNOWN code is what tells it apart from a verdict whose text happens to match.
+func isTransportFailure(err error) bool {
+	var current *errors.Error
+	if !errors.As(err, &current) {
+		return errors.IsNetworkError(err)
+	}
+
+	for {
+		next := current.Unwrap()
+		if next == nil {
+			return current.Code() == errors.ERR_UNKNOWN && errors.IsNetworkError(current)
+		}
+
+		wrapped, ok := next.(*errors.Error)
+		if !ok {
+			return errors.IsNetworkError(next)
+		}
+
+		current = wrapped
+	}
+}
+
+func (u *Server) clearBlockRetryAttempts(hash *chainhash.Hash) {
+	if u.blockRetryAttempts != nil {
+		u.blockRetryAttempts.Delete(*hash)
+	}
+}
+
+// requeueBlock puts a failed block back on the queue with the peer that announced it and the
+// class and height it had, held back for delay. The worker answers a waiting caller with this
+// attempt's failure right after this returns (see answerQueuedBlock), so the reply is dropped
+// from the requeued item: left on it, a
+// caller who announces the hash again would be joined to it and get that stale answer at once,
+// instead of the retry's outcome.
+func (u *Server) requeueBlock(blockFound processBlockFound, delay time.Duration) {
+	blockFound.reply = nil
+	u.blockPriorityQueue.RequeueAfter(blockFound, blockFound.priority, blockFound.height, delay)
+	u.logger.Infof("[BlockProcessing] Re-queued block %s for retry from %s in %s", blockFound.hash.String(), blockFound.baseURL, delay)
+}
+
+// isBlockInFlight reports whether a block is being fetched, queued or validated. A child
+// whose parent is in flight waits in the queue for it instead of going to catchup, which
+// would move the FSM to CATCHINGBLOCKS and stop mining while the parent is still validating.
+func (u *Server) isBlockInFlight(hash *chainhash.Hash) bool {
+	return u.forkManager.IsBlockInFlight(hash, u.blockPriorityQueue.IsPending)
+}
+
+// wireValidationInFlight makes a block validated outside the queue count as in flight, so its
+// child waits behind it instead of going to catchup, and wakes the queue when such a validation
+// ends, so that child is released.
+func (u *Server) wireValidationInFlight() {
+	// nil-guarded: some Server-literal test fixtures call Init without a queue or fork manager.
+	if u.forkManager == nil || u.blockPriorityQueue == nil {
+		return
+	}
+
+	u.forkManager.SetValidatingCheck(u.blockValidation.IsValidating)
+
+	// The hook runs on its own goroutine after Init, so it keeps the client it was wired with
+	// instead of reading the field.
+	blockchainClient := u.blockchainClient
+
+	u.blockValidation.SetValidationDoneHooks(func(hash *chainhash.Hash, err error) {
+		u.settleValidatedBlock(blockchainClient, hash, err)
+	}, u.blockPriorityQueue.Broadcast)
+}
+
+// claimFetchMark marks an announced block as being fetched, so a child announced meanwhile waits
+// for it instead of going to catchup, and returns the function that drops the mark. It may be
+// called more than once. Only the first fetcher gets a mark. The mark is taken before checking
+// whether the block is already queued, holding a slot or validated elsewhere, and dropped at once
+// if it is: a fetcher queues its block before dropping its own mark, so a later mark's check always
+// sees that block, and once it is stored its children must not wait on this duplicate's fetch.
+// The caller checks the store after this, so a block that finished in between is caught there.
+func (u *Server) claimFetchMark(hash *chainhash.Hash) func() {
+	if !u.blockPriorityQueue.MarkFetching(hash) {
+		return func() {
+			// Another fetch holds the mark and drops it itself.
+		}
+	}
+
+	var once sync.Once
+
+	release := func() {
+		once.Do(func() { u.blockPriorityQueue.UnmarkFetching(hash) })
+	}
+
+	if u.forkManager.IsBlockInFlight(hash, u.blockPriorityQueue.Contains) {
+		release()
+	}
+
+	return release
+}
+
+// settleValidatedBlock runs when a validation of a block through runOncePerBlock ends, while its
+// children are still held; the quick-validation paths below the checkpoint do not run it. A block
+// that validated is stored, so a fetch of it still running no longer holds its children: its mark
+// is dropped. Then, if the block is the best block, its children take the tip class. A later
+// UnmarkFetching by that fetch is harmless: any mark taken since is checked against the store and
+// dropped by claimFetchMark's caller.
+func (u *Server) settleValidatedBlock(blockchainClient blockchain.ClientI, hash *chainhash.Hash, err error) {
+	if err == nil {
+		u.blockPriorityQueue.ClearFetching(hash)
+	}
+
+	u.promoteChildrenOfNewTip(blockchainClient, hash, err)
+}
+
+// promoteChildrenOfNewTip runs when any validation of a block ends, while its children are still
+// held. A child queued while this block was validated outside the queue was classified without it
+// and got a fork class; if the block is now the best block, the child extends the tip, so it gets
+// the tip class. The queue is woken after this returns.
+func (u *Server) promoteChildrenOfNewTip(blockchainClient blockchain.ClientI, hash *chainhash.Hash, err error) {
+	if err != nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), validationDoneBestHeaderTimeout)
+	defer cancel()
+
+	bestHeader, _, headerErr := blockchainClient.GetBestBlockHeader(ctx)
+	if headerErr != nil {
+		// Only the child's class is at stake: it keeps its fork class and still starts.
+		u.logger.Warnf("[onValidationDone][%s] failed to read the best block header, children keep their class: %v", hash.String(), headerErr)
+		return
+	}
+
+	if bestHeader.Hash().IsEqual(hash) {
+		u.blockPriorityQueue.PromoteChildren(hash, PriorityChainExtending)
+	}
+}
+
+// inFlightPriority returns the class of a queued or processing block, so a child queued
+// behind it gets the same class: a child of a chain-extending block extends the chain once
+// its parent is stored. ok is false if the parent finished in the meantime, or is still being
+// fetched and has no class yet; such a child takes the parent's class when the parent finishes.
+func (u *Server) inFlightPriority(hash *chainhash.Hash) (BlockPriority, bool) {
+	if priority, ok := u.blockPriorityQueue.PriorityOf(hash); ok {
+		return priority, true
+	}
+
+	return u.forkManager.ProcessingPriority(hash)
+}
+
+// logCatchupFSMRefusal selects severity only; the caller uses typed StateError
+// for handling. Do not infer authoritative state from the client's cache.
+func (u *Server) logCatchupFSMRefusal(blockHash string, err error) {
+	if strings.Contains(err.Error(), "automatic CATCHUPBLOCKS refused from IDLE") {
+		u.logger.Infof("[catchup] Catchup not started for block %s while operator IDLE; explicit operator resume is required, clearing markers for a later notification: %v", blockHash, err)
+	} else {
+		u.logger.Warnf("[catchup] FSM rejected catchup for block %s, clearing markers: %v", blockHash, err)
 	}
 }
 
@@ -1808,6 +2865,51 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 // item. Returns to the caller (the consumer's for-loop) on every path — where the
 // inline version used `continue`.
 func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup) {
+	// BV-STARTUP-007: a panic on the consumer goroutine must not kill it and with it the process.
+	// catchup() releases its lock in its own defer, and fetchAndValidateBlocks restores the FSM in
+	// its defer. The two run during the unwind. Here we clear the markers so a later announcement
+	// can retry the block, and count the attempt so a block that panics every time stays inside
+	// the #1057 cap. A branch below that already counted this cycle sets attemptRecorded, so a
+	// panic after that count does not count the cycle twice. No peer is reported: a panic is a
+	// bug in this node, not evidence against the peer. Only this goroutine is covered here. The
+	// errgroup goroutines that catchup starts recover their own panics with recoverChildPanic, and
+	// catchup gets a local-panic error back (issue 4993).
+	attemptRecorded := false
+
+	// acquireCatchupLock is the only writer of catchupAttempts and the only place that resets
+	// blocksValidated, and this goroutine runs each catchup. If the counter did not change, no
+	// catchup in this cycle took the lock, and blocksValidated still holds an earlier cycle's count.
+	lockCountBefore := u.catchupAttempts.Load()
+
+	defer func() {
+		if r := recover(); r != nil {
+			countRecoveredPanic(recoveredPanicPathCatchup)
+
+			if c.block == nil {
+				u.logger.Errorf("[catchup] PANIC processing catchup item with nil block from peer %s: %v stack=%q", c.peerID, r, debug.Stack())
+				return
+			}
+
+			blockHash := c.block.Hash()
+
+			attempts := 0
+
+			switch {
+			case attemptRecorded:
+			case u.catchupAttempts.Load() == lockCountBefore:
+				// The panic came before a catchup took the lock. blocksValidated is from an
+				// earlier cycle and says nothing about this one, so count the attempt always.
+				attempts = u.recordCatchupAttempt(blockHash)
+			default:
+				attempts = u.recordCatchupAttemptUnlessProgress(blockHash)
+			}
+
+			u.logger.Errorf("[catchup] PANIC processing catchup for block %s from peer %s (attempt %d/%d, counted before the panic: %v), clearing markers: %v stack=%q", blockHash.String(), c.peerID, attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, attemptRecorded, r, debug.Stack())
+			u.processBlockNotify.Delete(*blockHash)
+			u.catchupAlternatives.Delete(*blockHash)
+		}
+	}()
+
 	// #1057: authoritative cap chokepoint. catchup() takes the catchup lock and
 	// re-validates, so a block no peer can complete must not be processed once it
 	// has exhausted its attempt budget — skip it (clear its guard) until the
@@ -1820,12 +2922,50 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 		return
 	}
 
+	// Local-policy decline cooldown, keyed per (hash, peerID) (bitcoin-sv/teranode#4692). THIS PEER
+	// has spent its decline budget for this hash; the hash itself is not in cooldown, because the
+	// size that produced those declines is peer-declared — see excessiveBlockSizeDeclined for why
+	// that must never spend a per-hash budget. So this is a PEER-scoped skip, and it takes the same
+	// shape as the bad/malicious skip below: try the other peers first, and clear the shared caches
+	// only if none of them can serve the hash. Fail-open on an empty peerID, like every sibling cap.
+	if u.policyDeclineAttemptsExhausted(c.block.Hash(), c.peerID) {
+		u.logger.Warnf("[catchup] Block %s from peer %s in cooldown after exhausting local-policy declines (cap %d); trying alternative peers", c.block.Hash().String(), c.peerID, u.settings.BlockValidation.MaxCorruptAttemptsPerBlock)
+
+		succeeded, localPanic := u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID)
+		if localPanic {
+			attemptRecorded = true
+			u.endCatchupCycleOnLocalPanic(c.block.Hash())
+
+			return
+		}
+
+		if !succeeded {
+			blockHash := c.block.Hash()
+			u.logger.Warnf("[catchup] All alternative peers failed for block %s, clearing processing marker for retry", blockHash.String())
+			u.processBlockNotify.Delete(*blockHash)
+			u.catchupAlternatives.Delete(*blockHash)
+		}
+
+		return
+	}
+
 	// Check if peer is bad or malicious before attempting catchup
-	if u.isPeerBad(c.peerID) || u.isPeerMalicious(ctx, c.peerID) {
-		u.logger.Warnf("[catchup][%s] peer %s (%s) is marked as bad or malicious, trying alternative peers", c.block.Hash().String(), c.peerID, c.baseURL)
+	if bad, badReason := u.isPeerBad(c.peerID); bad || u.isPeerMalicious(ctx, c.peerID) {
+		malicious := !bad
+		reason := classifyPeerRefusalReason(badReason, malicious)
+		prometheusCatchupPeerHealthGate.WithLabelValues(reason).Inc()
+		u.logger.Warnf("[catchup][%s] peer %s (%s) refused as catchup source (%s), trying alternative peers", c.block.Hash().String(), c.peerID, c.baseURL, reason)
 
 		// Try alternative peers from P2P service instead of just skipping
-		if !u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {
+		succeeded, localPanic := u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID)
+		if localPanic {
+			attemptRecorded = true
+			u.endCatchupCycleOnLocalPanic(c.block.Hash())
+
+			return
+		}
+
+		if !succeeded {
 			blockHash := c.block.Hash()
 			u.logger.Warnf("[catchup] All alternative peers failed for block %s, clearing processing marker for retry", blockHash.String())
 			u.processBlockNotify.Delete(*blockHash)
@@ -1845,7 +2985,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 
 		// FSM rejected the transition — not a peer issue
 		if errors.Is(err, errors.ErrStateError) {
-			u.logger.Warnf("[catchup] FSM rejected catchup for block %s (node not in RUNNING state), clearing markers", c.block.Hash().String())
+			u.logCatchupFSMRefusal(c.block.Hash().String(), err)
 			u.processBlockNotify.Delete(*c.block.Hash())
 			u.catchupAlternatives.Delete(*c.block.Hash())
 			return
@@ -1875,6 +3015,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			// #1057: count this cycle toward the per-block cap (unless it made
 			// progress) so persistently failing peers cannot drive unbounded
 			// re-entry via repeated P2P notifications.
+			attemptRecorded = true
 			attempts := u.recordCatchupAttemptUnlessProgress(c.block.Hash())
 			u.logger.Warnf("[catchup] All peers failed for block %s (attempt %d/%d), clearing markers and reporting peer failure to allow retry from a different peer: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
 			u.processBlockNotify.Delete(*c.block.Hash())
@@ -1939,10 +3080,46 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			// #1057: count this cycle toward the per-block cap (unless it made
 			// progress) so a persistent local service or storage error cannot drive
 			// unbounded re-entry.
+			attemptRecorded = true
 			attempts := u.recordCatchupAttemptUnlessProgress(c.block.Hash())
 			u.logger.Warnf("[catchup] Local service/storage error during catchup for block %s (attempt %d/%d), clearing markers to allow retry: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
 			u.processBlockNotify.Delete(*c.block.Hash())
 			u.catchupAlternatives.Delete(*c.block.Hash())
+			return
+		}
+
+		// This node declined a block under its own local policy (excessiveblocksize). Terminal for
+		// THIS peer but unpersisted (bitcoin-sv/teranode#4692): nothing is stored, nothing is
+		// poisoned, no peer is charged and no rotation is signalled. Walking the alternative sources
+		// in the same cycle is pointless work — this node's limit is the same for whoever serves it —
+		// so the cycle ends here rather than re-downloading from every peer in turn.
+		//
+		// SCOPED PER SERVING IDENTITY, and that is load-bearing: the verdict rests on a peer-declared
+		// size, so it spends only that peer's decline budget and never the per-hash catch-up budget.
+		// See excessiveBlockSizeDeclined for the field it reads and why. The progress exemption of
+		// the sibling branches is preserved by recordPolicyDeclineAttemptUnlessProgress.
+		//
+		// The processing marker is cleared so the hash can be re-entered, but catchupAlternatives is
+		// deliberately LEFT INTACT. It is the only record of the other peers that announced this
+		// hash: addBlockToPriorityQueue absorbs an announcement for a hash already in
+		// processBlockNotify into that list instead of enqueueing it, and those peers do not announce
+		// again. Since the verdict is about this peer's declared size, their copies are exactly the
+		// recovery route — deleting them would discard it and leave nothing pending for the hash.
+		//
+		// Residual, deliberately inherited from the sibling caps: an EMPTY peerID records nothing and
+		// is never gated (fail-open), so an unidentified declined delivery is bounded only by the
+		// announcement rate. That is the same trade recordCorruptAttempt and
+		// policyDeclineAttemptsExhausted already make — a delivery under no identity must never be
+		// able to gate an honest tip — and catch-up items carry a peer identity in production.
+		//
+		// Placed here, before reportCatchupFailureForError and ReportPeerFailure below, so it
+		// pre-empts both the reputation charge and the sync-peer rotation signal, and never reaches
+		// isUnvalidatablePeerError or the alternative-source walk.
+		if errors.Is(err, errors.ErrBlockPolicyDeclined) {
+			declines := u.recordPolicyDeclineAttemptUnlessProgress(c.block.Hash(), c.peerID)
+			u.logger.Warnf("[catchup] Local policy declined a block during catchup toward block %s from peer %s (decline %d/%d for this peer); ending this catchup cycle without charging any peer: %v", c.block.Hash().String(), c.peerID, declines, u.settings.BlockValidation.MaxCorruptAttemptsPerBlock, err)
+			u.processBlockNotify.Delete(*c.block.Hash())
+
 			return
 		}
 
@@ -1977,9 +3154,19 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 		blockHash := c.block.Hash()
 
 		// First, try intelligent peer selection from P2P service
-		if u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {
+		succeeded, localPanic := u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID)
+		if succeeded {
 			// Recovered via an alternative peer — reset the attempt counter.
 			u.clearCatchupAttempts(blockHash)
+			return
+		}
+
+		// A goroutine panicked in this node. Every cached alternative would hit the same bug,
+		// so end the cycle here, as the primary path does for that error.
+		if localPanic {
+			attemptRecorded = true
+			u.endCatchupCycleOnLocalPanic(blockHash)
+
 			return
 		}
 
@@ -2015,6 +3202,14 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 					u.clearCatchupAttempts(blockHash)
 					catchupSucceeded = true
 					break
+				} else if isLocalPanic(altErr) {
+					// A goroutine panicked in this node, a bug that is the same for
+					// every peer. Try no further alternative and charge none. The block below
+					// then counts the attempt unless the cycle made progress and clears the
+					// markers, as the primary path does for this error.
+					u.logger.Warnf("[catchup] Alternative peer %s: a goroutine panicked in this node validating block %s; trying no further alternatives: %v", alt.peerID, blockHash.String(), altErr)
+
+					break
 				} else {
 					u.logger.Warnf("[catchup] Alternative peer %s also failed for block %s: %v", alt.peerID, blockHash.String(), altErr)
 					u.reportCatchupFailureForError(ctx, alt.peerID, altErr)
@@ -2030,6 +3225,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			// so an incomplete block no peer can complete (e.g. ErrBlockIncomplete from
 			// a seeded peer) cannot re-enter catchup forever; re-enqueue is gated by
 			// catchupAttemptsExhausted once the cap is reached.
+			attemptRecorded = true
 			attempts := u.recordCatchupAttemptUnlessProgress(blockHash)
 			if u.settings.BlockValidation.CatchupMaxAttemptsPerBlock > 0 && attempts >= u.settings.BlockValidation.CatchupMaxAttemptsPerBlock {
 				u.logger.Warnf("[catchup] Block %s exhausted catchup attempts (%d/%d); entering cooldown before any further retry", blockHash.String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock)
@@ -2047,6 +3243,19 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 		// Clear the processing marker
 		u.processBlockNotify.Delete(*c.block.Hash())
 	}
+}
+
+// endCatchupCycleOnLocalPanic ends a catchup cycle in which an alternative peer's catchup got a
+// local-panic error (isLocalPanic, BV-STARTUP-007): the waiter error of a validation that
+// panicked on another goroutine, or the error of an errgroup goroutine that panicked (issue
+// 4993). It leaves the same state as the primary path's isLocalCatchupFault branch: the attempt
+// counts toward the #1057 cap unless the cycle made progress, both markers are cleared so a
+// later announcement can retry the block, and no peer is charged or reported.
+func (u *Server) endCatchupCycleOnLocalPanic(blockHash *chainhash.Hash) {
+	attempts := u.recordCatchupAttemptUnlessProgress(blockHash)
+	u.logger.Warnf("[catchup] A goroutine panicked in this node validating block %s during an alternative peer's catchup (attempt %d/%d); ending this cycle and clearing markers to allow retry", blockHash.String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock)
+	u.processBlockNotify.Delete(*blockHash)
+	u.catchupAlternatives.Delete(*blockHash)
 }
 
 // recordCatchupAttemptUnlessProgress records a failed catchup cycle toward the
@@ -2127,6 +3336,352 @@ func (u *Server) catchupAttemptsExhausted(blockHash *chainhash.Hash) bool {
 	return item != nil && item.Value() >= maxAttempts
 }
 
+// corruptAttemptCooldown returns the fixed cooldown window for the per-block corrupt
+// re-download cap (bitcoin-sv/teranode#4692), falling back to settings.DefaultCorruptAttemptCooldown
+// when settings are nil or the setting is unset or non-positive so the ttlcache always has a valid
+// finite window. Mirrors legacyCorruptAttemptCooldown in services/legacy/netsync; both share the one
+// fallback constant so the two caches can never drift apart.
+func corruptAttemptCooldown(s *settings.Settings) time.Duration {
+	if s != nil {
+		if d := s.BlockValidation.CorruptAttemptCooldown; d > 0 {
+			return d
+		}
+	}
+
+	return settings.DefaultCorruptAttemptCooldown
+}
+
+// corruptAttemptsMaxTracked bounds the per-(hash, peerID) attempt maps. Matches the legacy twin's
+// blockFailureBackoffMaxTracked (bitcoin-sv/teranode#4692). Entries only appear
+// on real corrupt failures or real policy declines, so this is a pathological-stream backstop rather
+// than a hot limit. Eviction can only LOOSEN a cap — an evicted pair starts a fresh window — which is
+// the same fail-open direction the cap already takes on misconfiguration
+// (MaxCorruptAttemptsPerBlock <= 0 / nil cache), and the direction that can never make a node drop an
+// honest block.
+const corruptAttemptsMaxTracked = 1024
+
+// blockAttemptKey keys the RUNNING per-block attempt caps on (block hash, serving peerID)
+// (bitcoin-sv/teranode#4692). Keying on the pair — not the hash alone — is what stops one peer's
+// behaviour consuming the budget for a hash an honest peer can still serve: each serving identity
+// is capped independently, so the honest tip is never wedged. The legacy route supplies a real
+// per-peer identity (peer.Addr()), so it is genuinely capped per serving peer. An empty peerID
+// (p2pClient nil, or a caller that supplied no identity) is NOT capped at all — the gate helpers
+// fail open on it — so an unidentified delivery can never make the gate drop an honest block.
+// Comparable (chainhash.Hash is [32]byte), so usable directly as a ttlcache key. Shared by
+// blockCorruptAttempts and blockPolicyDeclineAttempts, which are independent budgets keyed the same
+// way.
+type blockAttemptKey struct {
+	hash   chainhash.Hash
+	peerID string
+}
+
+// recordCorruptAttempt increments and returns the corrupt-body failure count for a
+// (block hash, serving peerID) within the current fixed cooldown window
+// (bitcoin-sv/teranode#4692). Mirrors recordCatchupAttempt: the window starts at the FIRST corrupt
+// failure and is not extended by subsequent failures or by gate reads, so once it lapses an honest
+// body is admitted again. Called ONLY on an actual IsBlockCorrupt failure, never on every
+// announcement. A nil cache (Server literals in tests that don't wire it) degrades to no tracking.
+// Never records under an empty peerID: an unidentified delivery is uncapped (fail-open), so it must
+// not accumulate a count under the shared (hash, "") key — matching recordPolicyDeclineAttempt and
+// the empty-peerID guards on the gate/accounting helpers (bitcoin-sv/teranode#4692).
+func (u *Server) recordCorruptAttempt(blockHash *chainhash.Hash, peerID string) int {
+	if u.blockCorruptAttempts == nil || peerID == "" {
+		return 0
+	}
+
+	key := blockAttemptKey{hash: *blockHash, peerID: peerID}
+
+	// Preserve the ORIGINAL expiry: re-Set with the time REMAINING to the original expiry,
+	// not a fresh full window (see recordCatchupAttempt for the ttlcache semantics).
+	if item := u.blockCorruptAttempts.Get(key); item != nil {
+		remaining := time.Until(item.ExpiresAt())
+		if remaining <= 0 {
+			remaining = ttlcache.DefaultTTL
+		}
+
+		n := item.Value() + 1
+		u.blockCorruptAttempts.Set(key, n, remaining)
+
+		return n
+	}
+
+	u.blockCorruptAttempts.Set(key, 1, ttlcache.DefaultTTL)
+
+	return 1
+}
+
+// accountCorruptAttempt records or clears the per-(hash, peerID) corrupt re-download counter from a
+// block-validation OUTCOME in processBlockFound (bitcoin-sv/teranode#4692). This is the SINGLE
+// accounting point for every peer-served delivery route: both the block-processing worker
+// (processBlockWithPriority) and the direct ProcessBlock gRPC handler funnel through
+// processBlockFound, so a corrupt delivery is counted exactly once regardless of route and the cap
+// cannot be bypassed by hammering ProcessBlock directly. A corrupt result records toward the cap; a
+// genuine success clears it (so an honest body resets the count). Only true validation outcomes
+// reach here — the exists / catchup / cap-exhausted early returns never call this. The cap-exhausted
+// return is itself a corrupt-classified error, not nil, so it plays no part in this accounting;
+// this function's own peerID=="" fail-open guard is what actually keeps it from recording under an
+// unidentified delivery. Non-corrupt errors (transient / service / invalid) leave the counter
+// untouched.
+//
+// Nothing is recorded for a block whose baseURL is "legacy". A legacy block arrives converted:
+// netsync's pipeline sink verified the body against the header before anything was written, so
+// a corrupt verdict here is this node's own record or files, never the peer's bytes. Counting it
+// would trip corruptAttemptsExhausted after MaxCorruptAttemptsPerBlock and hand netsync a
+// corrupt error for a block nobody did anything wrong with. Keyed on the route rather than on
+// the LegacyPeerIDPrefix of peerID because the fact that justifies the skip is the route (a
+// sink-verified body), not the identity string.
+func (u *Server) accountCorruptAttempt(blockHash *chainhash.Hash, peerID, baseURL string, validationErr error) {
+	if validationErr == nil {
+		u.clearCorruptAttempts(blockHash, peerID)
+		return
+	}
+
+	if baseURL == "legacy" {
+		return
+	}
+
+	// Never record under an empty key: an unidentified delivery is uncapped (fail-open), so
+	// it must not accumulate a count that could later read as exhausted.
+	if peerID == "" {
+		return
+	}
+
+	if errors.IsBlockCorrupt(validationErr) {
+		u.recordCorruptAttempt(blockHash, peerID)
+	}
+}
+
+// clearCorruptAttempts resets a (hash, peerID)'s corrupt-attempt counter (and its cooldown
+// window). Called on the RUNNING success path so an honest re-try never drives the counter and a
+// later corruption starts fresh (bitcoin-sv/teranode#4692). Nil-safe.
+func (u *Server) clearCorruptAttempts(blockHash *chainhash.Hash, peerID string) {
+	if u.blockCorruptAttempts != nil {
+		u.blockCorruptAttempts.Delete(blockAttemptKey{hash: *blockHash, peerID: peerID})
+	}
+}
+
+// corruptAttemptsExhausted reports whether a (hash, peerID) has reached the corrupt re-download cap
+// and is therefore in its cooldown window (bitcoin-sv/teranode#4692). A cap of <= 0 disables the
+// bound (re-opens the corrupt-body bandwidth DoS). Nil-safe: a nil settings or nil cache (Server
+// literals in tests that don't wire them) behaves as CAP DISABLED — it returns false (never
+// "exhausted"), so a missing config can never silently drop honest blocks. Returns a bool — never
+// an error — so the gate can never emit a poisoning result. It cannot trip for a legacy block:
+// accountCorruptAttempt records nothing for baseURL "legacy", so the counter it reads is never
+// written for one.
+func (u *Server) corruptAttemptsExhausted(blockHash *chainhash.Hash, peerID string) bool {
+	if u.settings == nil || u.blockCorruptAttempts == nil {
+		return false
+	}
+
+	// An empty peerID is never capped (fail-open). The gate must never return true — and
+	// thus never make processBlockFound return nil-as-accept — for a block delivered under
+	// no identity, or an honest tip could be wedged by an unidentified delivery.
+	if peerID == "" {
+		return false
+	}
+
+	maxAttempts := u.settings.BlockValidation.MaxCorruptAttemptsPerBlock
+	if maxAttempts <= 0 {
+		return false
+	}
+
+	item := u.blockCorruptAttempts.Get(blockAttemptKey{hash: *blockHash, peerID: peerID})
+
+	return item != nil && item.Value() >= maxAttempts
+}
+
+// excessiveBlockSizeDeclined reports whether a block exceeds this node's local excessiveblocksize
+// policy limit (0 means unlimited). Shared by the RUNNING pre-validation gate in processBlockFound
+// and the authoritative decline in ValidateBlockWithOptions so the two cannot drift apart
+// (bitcoin-sv/teranode#4692).
+//
+// THE FIELD THIS READS IS PEER-DECLARED, and every consequence of a decline follows from that. It
+// is block.SizeInBytes, which model.readBlockFromReader reads straight off the wire and no header
+// commits to; the authoritative size is only recomputed from real subtree data post-load, inside
+// block.Valid. So at every site that consults this predicate, "over the limit" is uncorroborated: a
+// peer can announce the honest tip and declare an inflated size for the price of a block message —
+// header, counts, 32 bytes per subtree hash, no body. Two rules follow, and every decline site
+// keeps them:
+//   - never poison the hash (no invalid=true), because a node with a larger limit accepts the same
+//     block and an inflated varint must not condemn an honest one; and
+//   - never spend a budget keyed by hash alone. Declines spend the per-(hash, peerID)
+//     blockPolicyDeclineAttempts budget, so one peer's inflated varint cools only that peer down
+//     and the hash stays reachable through the honest peers whose copy carries the true varint.
+//     Charging blockCatchupAttempts (hash-keyed) instead would cool the hash for EVERY peer, which
+//     is the self-isolation this work exists to remove.
+//
+// A configured limit is positive,
+// so the width conversion cannot fail; if it somehow did, reporting "not declined" is the fail-open
+// direction that can never drop an honest block.
+func excessiveBlockSizeDeclined(tSettings *settings.Settings, block *model.Block) bool {
+	if tSettings == nil || block == nil || tSettings.Policy.ExcessiveBlockSize <= 0 {
+		return false
+	}
+
+	limit, err := safeconversion.IntToUint64(tSettings.Policy.ExcessiveBlockSize)
+	if err != nil {
+		return false
+	}
+
+	return block.SizeInBytes > limit
+}
+
+// recordPolicyDeclineAttempt increments and returns the local-policy decline count for a
+// (block hash, serving peerID) within the current fixed cooldown window
+// (bitcoin-sv/teranode#4692). Same fixed-window semantics as recordCorruptAttempt: the window
+// starts at the FIRST decline and is not extended by later declines or by gate reads, so once it
+// lapses the pair is admitted again. This is a SEPARATE budget from the corrupt cap — a policy
+// decline never spends the corrupt budget and vice versa. A nil cache degrades to no tracking.
+func (u *Server) recordPolicyDeclineAttempt(blockHash *chainhash.Hash, peerID string) int {
+	if u.blockPolicyDeclineAttempts == nil {
+		return 0
+	}
+
+	// Never record under an empty key: an unidentified delivery is uncapped (fail-open).
+	if peerID == "" {
+		return 0
+	}
+
+	key := blockAttemptKey{hash: *blockHash, peerID: peerID}
+
+	// Preserve the ORIGINAL expiry: re-Set with the time REMAINING to the original expiry,
+	// not a fresh full window (see recordCatchupAttempt for the ttlcache semantics).
+	if item := u.blockPolicyDeclineAttempts.Get(key); item != nil {
+		remaining := time.Until(item.ExpiresAt())
+		if remaining <= 0 {
+			remaining = ttlcache.DefaultTTL
+		}
+
+		n := item.Value() + 1
+		u.blockPolicyDeclineAttempts.Set(key, n, remaining)
+
+		return n
+	}
+
+	u.blockPolicyDeclineAttempts.Set(key, 1, ttlcache.DefaultTTL)
+
+	return 1
+}
+
+// recordPolicyDeclineAttemptUnlessProgress is recordPolicyDeclineAttempt carrying the same progress
+// exemption recordCatchupAttemptUnlessProgress applies, for the catch-up terminal decline branch
+// (bitcoin-sv/teranode#4692). A cycle that actually advanced the chain before reaching a declined
+// block must not spend the peer's decline budget — otherwise a peer feeding us hundreds of blocks
+// per cycle would be cooled off the target hash precisely for making progress — and on progress the
+// counter is cleared, so a recovering peer never carries stale declines. blocksValidated is reset at
+// the start of every catch-up, so a non-zero value means THIS cycle made progress.
+//
+// It is deliberately keyed on (hash, peerID) rather than on the hash alone: see
+// excessiveBlockSizeDeclined for why a peer-declared size must never spend a per-hash budget.
+func (u *Server) recordPolicyDeclineAttemptUnlessProgress(blockHash *chainhash.Hash, peerID string) int {
+	if u.blocksValidated.Load() > 0 {
+		if u.blockPolicyDeclineAttempts != nil && peerID != "" {
+			u.blockPolicyDeclineAttempts.Delete(blockAttemptKey{hash: *blockHash, peerID: peerID})
+		}
+
+		return 0
+	}
+
+	return u.recordPolicyDeclineAttempt(blockHash, peerID)
+}
+
+// policyDeclineAttemptsExhausted reports whether a (hash, peerID) has reached the local-policy
+// decline cap and is therefore in its cooldown window (bitcoin-sv/teranode#4692). Sized by
+// MaxCorruptAttemptsPerBlock, which is a separate budget from the corrupt cap that happens to share
+// the operator's knob. A cap of <= 0 disables the bound. Nil-safe and fail-open for the same reason
+// as corruptAttemptsExhausted: a missing config must never silently drop an honest block.
+func (u *Server) policyDeclineAttemptsExhausted(blockHash *chainhash.Hash, peerID string) bool {
+	if u.settings == nil || u.blockPolicyDeclineAttempts == nil {
+		return false
+	}
+
+	// An empty peerID is never capped (fail-open) — same reason as corruptAttemptsExhausted:
+	// a delivery under no identity must never gate an honest tip.
+	if peerID == "" {
+		return false
+	}
+
+	maxAttempts := u.settings.BlockValidation.MaxCorruptAttemptsPerBlock
+	if maxAttempts <= 0 {
+		return false
+	}
+
+	item := u.blockPolicyDeclineAttempts.Get(blockAttemptKey{hash: *blockHash, peerID: peerID})
+
+	return item != nil && item.Value() >= maxAttempts
+}
+
+// recordPanicAttempt increments and returns the recovered-panic count for a (block hash, serving
+// peerID) in its fixed cooldown window (BV-STARTUP-007). Same window rules as recordCorruptAttempt.
+// Nil-safe, and it records nothing for an empty peerID (fail-open).
+func (u *Server) recordPanicAttempt(blockHash *chainhash.Hash, peerID string) int {
+	if u.blockPanicAttempts == nil || blockHash == nil || peerID == "" {
+		return 0
+	}
+
+	key := blockAttemptKey{hash: *blockHash, peerID: peerID}
+
+	if item := u.blockPanicAttempts.Get(key); item != nil {
+		remaining := time.Until(item.ExpiresAt())
+		if remaining <= 0 {
+			remaining = ttlcache.DefaultTTL
+		}
+
+		n := item.Value() + 1
+		u.blockPanicAttempts.Set(key, n, remaining)
+
+		return n
+	}
+
+	u.blockPanicAttempts.Set(key, 1, ttlcache.DefaultTTL)
+
+	return 1
+}
+
+// panicAttemptsExhausted reports whether a (block hash, serving peerID) reached the recovered-panic
+// cap and is in its cooldown window (BV-STARTUP-007). It uses MaxCorruptAttemptsPerBlock as the
+// cap. A cap of 0 or less, a nil settings or cache, or an empty peerID reports false (fail-open).
+func (u *Server) panicAttemptsExhausted(blockHash *chainhash.Hash, peerID string) bool {
+	if u.settings == nil || u.blockPanicAttempts == nil || peerID == "" {
+		return false
+	}
+
+	maxAttempts := u.settings.BlockValidation.MaxCorruptAttemptsPerBlock
+	if maxAttempts <= 0 {
+		return false
+	}
+
+	item := u.blockPanicAttempts.Get(blockAttemptKey{hash: *blockHash, peerID: peerID})
+
+	return item != nil && item.Value() >= maxAttempts
+}
+
+// Path label values for prometheusRecoveredPanics.
+const (
+	recoveredPanicPathWorker     = "worker"
+	recoveredPanicPathCatchup    = "catchup"
+	recoveredPanicPathKafka      = "kafka"
+	recoveredPanicPathBlockFound = "block_found"
+
+	// The paths below count panics in errgroup goroutines, recovered by recoverChildPanic.
+	recoveredPanicPathCatchupFetch    = "catchup_fetch"    // catchup's fetch and validate pipeline
+	recoveredPanicPathBlockValidation = "block_validation" // fan-outs inside one block's validation
+	recoveredPanicPathService         = "service"          // service start and startup sweeps
+)
+
+// recoveredPanicErrFormat is the error text a recover on the priority worker or a blockFoundCh
+// worker returns, with the block hash as its one argument. It has no panic value, and no word
+// that IsNetworkError or IsMaliciousResponseError matches, so the error never requeues the block.
+const recoveredPanicErrFormat = "panic processing block %s, see the PANIC log line"
+
+// countRecoveredPanic increments prometheusRecoveredPanics for one path. It runs inside the
+// recovers, so it must not panic: a Server built without initPrometheusMetrics has a nil vector.
+func countRecoveredPanic(path string) {
+	if prometheusRecoveredPanics != nil {
+		prometheusRecoveredPanics.WithLabelValues(path).Inc()
+	}
+}
+
 // addBlockToPriorityQueue adds a block to the priority queue with appropriate classification
 func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound processBlockFound) {
 	u.logger.Debugf("[addBlockToPriorityQueue] Started for block %s from %s", blockFound.hash.String(), blockFound.baseURL)
@@ -2135,55 +3690,73 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 	exists, err := u.blockValidation.GetBlockExists(ctx, blockFound.hash)
 	if err != nil {
 		u.logger.Errorf("[addBlockToPriorityQueue] Failed to check if block exists: %v", err)
-		if blockFound.errCh != nil {
-			blockFound.errCh <- err
-		}
+		blockFound.reply.answer(err)
 		return
 	}
 
 	if exists {
 		u.logger.Debugf("[addBlockToPriorityQueue] Block %s already exists, skipping", blockFound.hash.String())
-		if blockFound.errCh != nil {
-			blockFound.errCh <- nil
-		}
+		u.answerStoredBlock(ctx, blockFound.reply, blockFound.hash)
 		return
 	}
 
 	// Create isolated context with timeout for transient fetch operation
 	// This ensures fetch failures don't affect other operations using parent context
-	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), peerBlockFetchTimeout)
 	defer fetchCancel()
 
-	// Fetch the block to classify it
-	block, err := u.fetchSingleBlock(fetchCtx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+	// Fetch the block to classify it. On a 429 the block may come from another peer, which then
+	// becomes the source for the rest of this announcement.
+	block, blockFound, err := u.fetchAnnouncedBlock(ctx, fetchCtx, blockFound)
 	if err != nil {
 		u.logger.Errorf("[addBlockToPriorityQueue] Failed to fetch block %s: %v", blockFound.hash.String(), err)
 
-		// Report peer failure to P2P service for reputation tracking
-		// This ensures peers with misconfigured asset servers (e.g., 401 errors) have their reputation degraded
-		if blockFound.peerID != "" {
-			u.reportCatchupFailure(ctx, blockFound.peerID)
-			u.reportCatchupError(ctx, blockFound.peerID, err.Error())
-		}
+		u.answerFetchFailure(blockFound, err)
 
-		if blockFound.errCh != nil {
-			blockFound.errCh <- err
-		}
 		return
 	}
 
+	u.queueFetchedBlock(ctx, blockFound, block)
+}
+
+// joinQueuedBlock joins a waiting caller to the queue entry for its hash, if there is one, and
+// returns blockFound without its reply, so nothing later on this announcement's path can answer it.
+// The caller then gets the queued block's outcome, and this announcement can only add a source.
+// With no queue entry to join, blockFound is returned as it is.
+func (u *Server) joinQueuedBlock(blockFound processBlockFound) processBlockFound {
+	if u.blockPriorityQueue.JoinReply(blockFound.hash, blockFound.reply) {
+		blockFound.reply = nil
+	}
+
+	return blockFound
+}
+
+// answerFetchFailure answers a waiting caller whose announcer's source failed to serve the block.
+// Another announcement can have queued the hash while the fetch ran, so the join is tried again: the
+// failure says nothing about that entry. With no entry the caller gets the failure, even if another
+// worker is fetching or validating the hash outside the queue: the failure is a retry-later one, and
+// calling BlockFound again gets the outcome.
+func (u *Server) answerFetchFailure(blockFound processBlockFound, err error) {
+	blockFound = u.joinQueuedBlock(blockFound)
+	blockFound.reply.answer(err)
+}
+
+// queueFetchedBlock hands an announced block, already fetched from blockFound's source, to catchup
+// if its parent is missing and to the priority queue otherwise. It answers blockFound.reply on
+// every path that does not queue the block.
+func (u *Server) queueFetchedBlock(ctx context.Context, blockFound processBlockFound, block *model.Block) {
 	// Check if parent exists - if not, send directly to catchup
 	parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {
-		u.logger.Errorf("[addBlockToPriorityQueue] Failed to check if parent block %s exists: %v", block.Header.HashPrevBlock.String(), err)
-		if blockFound.errCh != nil {
-			blockFound.errCh <- err
-		}
+		u.logger.Errorf("[queueFetchedBlock] Failed to check if parent block %s exists: %v", block.Header.HashPrevBlock.String(), err)
+		blockFound.reply.answer(err)
 		return
 	}
 
-	if !parentExists {
-		u.logger.Infof("[addBlockToPriorityQueue] Parent block %s doesn't exist for block %s, sending to catchup", block.Header.HashPrevBlock.String(), blockFound.hash.String())
+	parentInFlight := !parentExists && u.isBlockInFlight(block.Header.HashPrevBlock)
+
+	if !parentExists && !parentInFlight {
+		u.logger.Infof("[queueFetchedBlock] Parent block %s doesn't exist for block %s, sending to catchup", block.Header.HashPrevBlock.String(), blockFound.hash.String())
 
 		// #1057: bound catchup retries. If this block has exhausted its per-block
 		// attempt budget within the cooldown window, do not re-enqueue it — a block
@@ -2192,18 +3765,16 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 		// cache TTL lets the block be retried again once the window expires, so a
 		// transient outage self-heals.
 		if u.catchupAttemptsExhausted(blockFound.hash) {
-			u.logger.Warnf("[addBlockToPriorityQueue] Block %s has exhausted catchup attempts (cap %d); skipping re-enqueue until cooldown expires", blockFound.hash.String(), u.settings.BlockValidation.CatchupMaxAttemptsPerBlock)
+			u.logger.Warnf("[queueFetchedBlock] Block %s has exhausted catchup attempts (cap %d); skipping re-enqueue until cooldown expires", blockFound.hash.String(), u.settings.BlockValidation.CatchupMaxAttemptsPerBlock)
 
-			if blockFound.errCh != nil {
-				blockFound.errCh <- nil
-			}
+			blockFound.reply.answer(errNotCommittedCatchup(blockFound.hash))
 
 			return
 		}
 
 		// Check if we're already processing this block in catchup
 		if u.processBlockNotify.Get(*blockFound.hash) != nil {
-			u.logger.Infof("[addBlockToPriorityQueue] Block %s already being processed in catchup, adding as alternative source", blockFound.hash.String())
+			u.logger.Infof("[queueFetchedBlock] Block %s already being processed in catchup, adding as alternative source", blockFound.hash.String())
 
 			// Add to alternative sources for potential failover
 			catchupBlock := processBlockCatchup{
@@ -2216,16 +3787,16 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 			alternatives := u.catchupAlternatives.Get(*blockFound.hash)
 			if alternatives == nil || alternatives.Value() == nil {
 				u.catchupAlternatives.Set(*blockFound.hash, []processBlockCatchup{catchupBlock}, ttlcache.DefaultTTL)
-			} else {
-				// Append to existing alternatives
-				altList := alternatives.Value()
+			} else if altList := alternatives.Value(); len(altList) < maxCatchupAlternatives {
+				// Append to existing alternatives. Each element retains a full
+				// deserialized block for up to the entry TTL and failover only
+				// ever walks a handful of sources, so the list is capped rather
+				// than trusting the upstream per-hash announcement rate.
 				altList = append(altList, catchupBlock)
 				u.catchupAlternatives.Set(*blockFound.hash, altList, ttlcache.DefaultTTL)
 			}
 
-			if blockFound.errCh != nil {
-				blockFound.errCh <- nil
-			}
+			blockFound.reply.answer(errNotCommittedCatchup(blockFound.hash))
 			return
 		}
 
@@ -2234,7 +3805,7 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 
 		// Send directly to catchup channel (non-blocking)
 		go func() {
-			u.logger.Infof("[addBlockToPriorityQueue] Attempting to send block %s to catchup channel (queue size: %d/%d)",
+			u.logger.Infof("[queueFetchedBlock] Attempting to send block %s to catchup channel (queue size: %d/%d)",
 				blockFound.hash.String(), len(u.catchupCh), cap(u.catchupCh))
 
 			select {
@@ -2243,37 +3814,50 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 				baseURL: blockFound.baseURL,
 				peerID:  blockFound.peerID,
 			}:
-				u.logger.Infof("[addBlockToPriorityQueue] Successfully sent block %s to catchup channel", blockFound.hash.String())
+				u.logger.Infof("[queueFetchedBlock] Successfully sent block %s to catchup channel", blockFound.hash.String())
 			default:
 				// Channel is full, log warning but don't block
-				u.logger.Warnf("[addBlockToPriorityQueue] Catchup channel full (%d/%d), dropping block %s from peer %s",
+				u.logger.Warnf("[queueFetchedBlock] Catchup channel full (%d/%d), dropping block %s from peer %s",
 					len(u.catchupCh), cap(u.catchupCh), blockFound.hash.String(), blockFound.peerID)
 				// Clear the processing marker so it can be retried later
 				u.processBlockNotify.Delete(*blockFound.hash)
 			}
 		}()
 
-		if blockFound.errCh != nil {
-			blockFound.errCh <- nil
-		}
+		blockFound.reply.answer(errNotCommittedCatchup(blockFound.hash))
 		return
 	}
 
-	// Classify the block
-	priority, err := u.blockClassifier.ClassifyBlock(ctx, block)
-	if err != nil {
-		u.logger.Warnf("[addBlockToPriorityQueue] Failed to classify block %s, using deep fork priority: %v", blockFound.hash.String(), err)
-		priority = PriorityDeepFork
+	blockFound.parentHash = block.Header.HashPrevBlock
+
+	var priority BlockPriority
+
+	inherited := false
+
+	if parentInFlight {
+		priority, inherited = u.inFlightPriority(block.Header.HashPrevBlock)
+		u.logger.Infof("[queueFetchedBlock] Parent block %s of block %s is still being validated, queueing behind it", block.Header.HashPrevBlock.String(), blockFound.hash.String())
+	}
+
+	// A parent that finished since the in-flight check, or is still being fetched, has nothing
+	// to inherit from: classify. finishProcessedBlock promotes the child once the parent is done.
+	if !inherited {
+		// Classify the block
+		priority, err = u.blockClassifier.ClassifyBlock(ctx, block)
+		if err != nil {
+			u.logger.Warnf("[queueFetchedBlock] Failed to classify block %s, using deep fork priority: %v", blockFound.hash.String(), err)
+			priority = PriorityDeepFork
+		}
 	}
 
 	// Add block to appropriate fork if it's not chain-extending
 	if priority != PriorityChainExtending {
 		forkID, err := u.forkManager.DetermineForkID(ctx, block, u.blockchainClient)
 		if err != nil {
-			u.logger.Warnf("[addBlockToPriorityQueue] Failed to determine fork ID for block %s: %v", blockFound.hash.String(), err)
+			u.logger.Warnf("[queueFetchedBlock] Failed to determine fork ID for block %s: %v", blockFound.hash.String(), err)
 		} else {
 			if err := u.forkManager.AddBlockToFork(block, forkID); err != nil {
-				u.logger.Errorf("[addBlockToPriorityQueue] Failed to add block to fork %s: %v", forkID, err)
+				u.logger.Errorf("[queueFetchedBlock] Failed to add block to fork %s: %v", forkID, err)
 			}
 		}
 	}
@@ -2281,15 +3865,10 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 	// Add to priority queue
 	u.blockPriorityQueue.Add(blockFound, priority, block.Height)
 
-	u.logger.Infof("[addBlockToPriorityQueue] Added block %s with priority %d at height %d", blockFound.hash.String(), priority, block.Height)
+	u.logger.Infof("[queueFetchedBlock] Added block %s with priority %d at height %d", blockFound.hash.String(), priority, block.Height)
 
-	// Send success signal if someone is waiting
-	if blockFound.errCh != nil {
-		u.logger.Debugf("[addBlockToPriorityQueue] Sending success response to errCh for block %s", blockFound.hash.String())
-		blockFound.errCh <- nil
-	} else {
-		u.logger.Debugf("[addBlockToPriorityQueue] No errCh to respond to for block %s", blockFound.hash.String())
-	}
+	// A waiting caller is not answered here: its reply is on the queued item, and the worker
+	// answers it once the block is settled (answerQueuedBlock).
 }
 
 // processBlockWithPriority processes a block based on its priority
@@ -2308,8 +3887,18 @@ func (u *Server) processBlockWithPriority(ctx context.Context, blockFound proces
 		}
 	}
 
-	// Try to process with the primary source
-	err := u.processBlockFound(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+	// Try to process with the primary source. Each attempt recovers its own panic, so a panic
+	// counts toward the cap of the peer that served that attempt (BV-STARTUP-007).
+	err := u.processBlockFoundRecovered(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+
+	// A corrupt body (bitcoin-sv/teranode#4692) is NOT a fetch failure: the peer served bytes that
+	// failed a body-integrity check. Do not walk alternative sources here (that loop is for
+	// network/malicious fetch failures) — return so the worker's corrupt-recovery branch clears the
+	// dedup marker and the per-(hash, peerID) cap bounds re-download. Tested BEFORE the
+	// network/malicious pair because IsMaliciousResponseError substring-matches "corrupt".
+	if err != nil && errors.IsBlockCorrupt(err) {
+		return err
+	}
 
 	// If fetch failed and it's not a validation error, try alternative sources
 	if err != nil && (errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err)) {
@@ -2326,7 +3915,7 @@ func (u *Server) processBlockWithPriority(ctx context.Context, blockFound proces
 			u.logger.Infof("[processBlockWithPriority] Trying alternative source for block %s from %s (peer: %s)", blockFound.hash.String(), alternative.baseURL, alternative.peerID)
 
 			// Try with alternative source
-			altErr := u.processBlockFound(ctx, alternative.hash, alternative.peerID, alternative.baseURL)
+			altErr := u.processBlockFoundRecovered(ctx, alternative.hash, alternative.peerID, alternative.baseURL)
 			if altErr == nil {
 				// Success with alternative source
 				return nil

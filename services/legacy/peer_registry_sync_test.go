@@ -23,6 +23,7 @@ type countingRegistry struct {
 	metricsCalls    int
 	lastMessageCals int
 	failRegister    error
+	failLastMessage bool
 }
 
 func newCountingRegistry(reg *blockchain.CentralizedPeerRegistry) *countingRegistry {
@@ -59,6 +60,10 @@ func (c *countingRegistry) UpdatePeerMetrics(ctx context.Context, peerID string,
 
 func (c *countingRegistry) UpdateLastMessageTime(ctx context.Context, peerID string) error {
 	c.lastMessageCals++
+
+	if c.failLastMessage {
+		return context.DeadlineExceeded
+	}
 
 	return c.PeerRegistryClientI.UpdateLastMessageTime(ctx, peerID)
 }
@@ -366,4 +371,233 @@ func TestReconcile_BaselineLookupFailureStillReports(t *testing.T) {
 	require.True(t, got.IsConnected)
 	require.Equal(t, uint64(500), got.BytesReceived,
 		"without a baseline the whole total is reported")
+}
+
+// hangingRegistry blocks every RegisterPeer until its context is done, standing
+// in for an unresponsive blockchain service.
+type hangingRegistry struct {
+	blockchain.PeerRegistryClientI
+	waited time.Duration
+}
+
+func (h *hangingRegistry) RegisterPeer(ctx context.Context, _ *blockchain.PeerInfo) error {
+	started := time.Now()
+	<-ctx.Done()
+	h.waited = time.Since(started)
+
+	return ctx.Err()
+}
+
+// TestReconcile_BoundsEachRegistryCall checks a stalled registry costs one
+// bounded wait rather than hanging the tick for as long as gRPC takes to give
+// up. The reconcile loop is a goroutine, so an unbounded call would also delay
+// the shutdown path that only runs between ticks.
+func TestReconcile_BoundsEachRegistryCall(t *testing.T) {
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	hanging := &hangingRegistry{PeerRegistryClientI: blockchain.NewLocalPeerRegistryClient(reg)}
+
+	snap := testSnapshot("203.0.113.7:8333", 500, time.Unix(1750000100, 0))
+	sync := newPeerRegistrySync(ulogger.TestLogger{}, testSyncSettings(), hanging,
+		func() []peerSnapshot { return []peerSnapshot{snap} })
+	sync.rpcTimeout = 50 * time.Millisecond
+
+	done := make(chan struct{})
+	go func() {
+		sync.reconcile(context.Background())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reconcile did not return: a registry call was not bounded")
+	}
+
+	require.Less(t, hanging.waited, time.Second,
+		"the call must be cut off at the RPC timeout, not left to the transport")
+
+	// A peer whose registration failed must not be recorded as pushed, so the
+	// next tick retries it.
+	_, ok := reg.Get("legacy:203.0.113.7:8333")
+	require.False(t, ok)
+}
+
+// TestReconcile_DefaultRPCTimeoutIsSet guards the wiring: an unset timeout would
+// make context.WithTimeout fire immediately and every call fail.
+func TestReconcile_DefaultRPCTimeoutIsSet(t *testing.T) {
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	sync := newPeerRegistrySync(ulogger.TestLogger{}, testSyncSettings(),
+		blockchain.NewLocalPeerRegistryClient(reg), func() []peerSnapshot { return nil })
+
+	require.Equal(t, defaultRegistryRPCTimeout, sync.rpcTimeout)
+	require.Positive(t, sync.rpcTimeout)
+}
+
+// failingMetrics wraps a registry client and fails only UpdatePeerMetrics.
+type failingMetrics struct {
+	blockchain.PeerRegistryClientI
+	fail bool
+}
+
+func (f *failingMetrics) UpdatePeerMetrics(ctx context.Context, peerID string, height uint32,
+	bytesSentDelta, bytesRecvDelta uint64, recordSuccess, recordFailure, recordMalicious bool,
+	responseTimeMs int64) error {
+	if f.fail {
+		return context.DeadlineExceeded
+	}
+
+	return f.PeerRegistryClientI.UpdatePeerMetrics(ctx, peerID, height, bytesSentDelta,
+		bytesRecvDelta, recordSuccess, recordFailure, recordMalicious, responseTimeMs)
+}
+
+// TestReconcile_FailedMetricsPushIsRetriedNextTick is a regression test. A
+// failed metrics call used only to log, then fall through to the unconditional
+// lastSeen rebaseline, so the tick's byte delta was dropped for good rather than
+// retried. The RegisterPeer path already avoided that by continuing.
+func TestReconcile_FailedMetricsPushIsRetriedNextTick(t *testing.T) {
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	client := &failingMetrics{PeerRegistryClientI: blockchain.NewLocalPeerRegistryClient(reg)}
+
+	snap := testSnapshot("203.0.113.7:8333", 500, time.Unix(1750000100, 0))
+	sync := newPeerRegistrySync(ulogger.TestLogger{}, testSyncSettings(), client,
+		func() []peerSnapshot { return []peerSnapshot{snap} })
+
+	// First tick registers the peer but its byte push fails.
+	client.fail = true
+	sync.reconcile(context.Background())
+
+	got, ok := reg.Get("legacy:203.0.113.7:8333")
+	require.True(t, ok, "registration itself succeeded")
+	require.Zero(t, got.BytesReceived, "the failed push contributed nothing")
+
+	// The registry recovers. The peer has since received more bytes. The next
+	// tick must report everything not yet accepted, not just the new increment.
+	client.fail = false
+	snap.bytesReceived = 700
+	snap.lastRecv = time.Unix(1750000200, 0)
+	sync.reconcile(context.Background())
+
+	got, _ = reg.Get("legacy:203.0.113.7:8333")
+	require.Equal(t, uint64(700), got.BytesReceived,
+		"the dropped 500 must be retried, not lost to a rebaseline")
+}
+
+// TestReconcile_FailedLastMessagePushIsRetriedNextTick covers the same rule for
+// the last-message timestamp.
+func TestReconcile_FailedLastMessagePushIsRetriedNextTick(t *testing.T) {
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	counting := newCountingRegistry(reg)
+	counting.failLastMessage = true
+
+	snap := testSnapshot("203.0.113.7:8333", 500, time.Unix(1750000100, 0))
+	sync := newPeerRegistrySync(ulogger.TestLogger{}, testSyncSettings(), counting,
+		func() []peerSnapshot { return []peerSnapshot{snap} })
+
+	sync.reconcile(context.Background())
+	require.Equal(t, 1, counting.lastMessageCals)
+
+	// Same lastRecv, recovered registry: the tick must retry rather than decide
+	// nothing advanced.
+	counting.failLastMessage = false
+	sync.reconcile(context.Background())
+	require.Equal(t, 2, counting.lastMessageCals,
+		"a failed last-message push must be retried on the next tick")
+}
+
+// TestReconcile_ClearsPhantomConnectedOnFirstTick is a regression test for a
+// restart hazard that only became reachable once the p2p connection sweep
+// stopped clearing wire peers.
+//
+// The loop's disconnect sweep only knows peers it has seen itself. After a
+// legacy-service restart lastSeen is empty, so an entry left IsConnected=true
+// by the previous process is in neither current nor lastSeen and nothing
+// touches it. It would report as a connected legacy peer until the registry TTL
+// expired it, which is measured in hours.
+func TestReconcile_ClearsPhantomConnectedOnFirstTick(t *testing.T) {
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	counting := newCountingRegistry(reg)
+	client := blockchain.NewLocalPeerRegistryClient(reg)
+
+	// State left behind by a previous process: two connected wire peers.
+	for _, id := range []string{"legacy:203.0.113.7:8333", "legacy:198.51.100.9:8333"} {
+		reg.Register(&blockchain.PeerInfo{
+			ID:               id,
+			TransportType:    blockchain_api.TransportType_TRANSPORT_WIRE_PROTOCOL,
+			TransportTypeSet: true,
+			Legacy:           &blockchain.LegacyPeerInfo{ProtocolVersion: 70016},
+		})
+		require.NoError(t, client.UpdateConnectionState(context.Background(), id, true))
+	}
+
+	// A libp2p peer must be left alone: it is not this service's to manage.
+	reg.Register(&blockchain.PeerInfo{
+		ID:               "12D3KooWGRUEbFsXTBnpVRHtE3ZBSbSMd4x8hs9NfCVCNhqTFPHb",
+		TransportType:    blockchain_api.TransportType_TRANSPORT_HTTP,
+		TransportTypeSet: true,
+	})
+	require.NoError(t, client.UpdateConnectionState(context.Background(),
+		"12D3KooWGRUEbFsXTBnpVRHtE3ZBSbSMd4x8hs9NfCVCNhqTFPHb", true))
+
+	// Fresh loop, as after a restart. Only one of the two peers reconnects.
+	snap := testSnapshot("203.0.113.7:8333", 500, time.Unix(1750000100, 0))
+	sync := newPeerRegistrySync(ulogger.TestLogger{}, testSyncSettings(), counting,
+		func() []peerSnapshot { return []peerSnapshot{snap} })
+
+	sync.reconcile(context.Background())
+
+	got, ok := reg.Get("legacy:203.0.113.7:8333")
+	require.True(t, ok)
+	require.True(t, got.IsConnected, "the peer that reconnected stays connected")
+
+	got, ok = reg.Get("legacy:198.51.100.9:8333")
+	require.True(t, ok)
+	require.False(t, got.IsConnected,
+		"a peer left connected by the previous process must be cleared on the first tick")
+
+	got, ok = reg.Get("12D3KooWGRUEbFsXTBnpVRHtE3ZBSbSMd4x8hs9NfCVCNhqTFPHb")
+	require.True(t, ok)
+	require.True(t, got.IsConnected, "a libp2p peer is not this loop's to clear")
+
+	// The pass runs once, not on every tick.
+	sync.reconcile(context.Background())
+	require.Equal(t, []bool{false}, counting.connStateCalls["legacy:198.51.100.9:8333"],
+		"the phantom must be cleared exactly once")
+}
+
+// TestReconcile_NilFirstSnapshotDoesNotClearPhantoms checks the startup pass is
+// gated on having real data. A nil snapshot at startup must not be read as
+// "nothing is connected".
+func TestReconcile_NilFirstSnapshotDoesNotClearPhantoms(t *testing.T) {
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	client := blockchain.NewLocalPeerRegistryClient(reg)
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:               "legacy:203.0.113.7:8333",
+		TransportType:    blockchain_api.TransportType_TRANSPORT_WIRE_PROTOCOL,
+		TransportTypeSet: true,
+	})
+	require.NoError(t, client.UpdateConnectionState(context.Background(),
+		"legacy:203.0.113.7:8333", true))
+
+	healthy := false
+	sync := newPeerRegistrySync(ulogger.TestLogger{}, testSyncSettings(), client,
+		func() []peerSnapshot {
+			if healthy {
+				return []peerSnapshot{}
+			}
+
+			return nil
+		})
+
+	sync.reconcile(context.Background())
+
+	got, _ := reg.Get("legacy:203.0.113.7:8333")
+	require.True(t, got.IsConnected, "a nil snapshot must not clear anything")
+
+	// Once the server answers, an empty peer list is real data and the phantom goes.
+	healthy = true
+	sync.reconcile(context.Background())
+
+	got, _ = reg.Get("legacy:203.0.113.7:8333")
+	require.False(t, got.IsConnected)
 }

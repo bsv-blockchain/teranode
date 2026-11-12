@@ -3,6 +3,8 @@
 package httpimpl
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"net/http"
 	"strings"
 
@@ -83,4 +85,47 @@ func sendError(c echo.Context, status int, code int32, err error) error {
 	}
 
 	return c.JSON(status, e)
+}
+
+// genericServerErrorMessage is the body returned in place of a server-side
+// failure's own text when public error detail is turned off.
+const genericServerErrorMessage = "internal error"
+
+// errorChainSeparator is what errors.(*Error).Error() writes between an error
+// and its wrapped cause. Everything after the first one is the internal chain.
+const errorChainSeparator = " -> "
+
+// newCorrelationID returns a short random identifier that ties a redacted
+// public error body to the full error logged server-side. It returns an empty
+// string if the system source of randomness fails, in which case the caller
+// simply omits the field.
+func newCorrelationID() string {
+	var b [8]byte
+
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+
+	return hex.EncodeToString(b[:])
+}
+
+// publicErrorMessage projects an HTTP error message onto the text an API caller
+// is allowed to see, returning the projected message and a correlation id that
+// is non-empty only when the original text was withheld.
+//
+// Server-side failures (5xx) collapse to a generic message: their text is
+// produced by stores, drivers and RPC clients and routinely names hosts, ports
+// and internal operations. Client errors (4xx) describe the caller's own
+// request and stay, minus any wrapped Teranode cause chain — Error() splices
+// the whole chain in behind " -> ", which is the internal half of the string.
+func publicErrorMessage(code int, message string) (string, string) {
+	if code >= http.StatusInternalServerError {
+		return genericServerErrorMessage, newCorrelationID()
+	}
+
+	if idx := strings.Index(message, errorChainSeparator); idx >= 0 {
+		return message[:idx], ""
+	}
+
+	return message, ""
 }

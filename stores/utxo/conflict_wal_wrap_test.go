@@ -7,6 +7,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -18,9 +19,10 @@ import (
 type walSpyStore struct {
 	*MockUtxostore
 
-	beginErr  error
-	begun     []ConflictIntent
-	completed []chainhash.Hash
+	completeErr error
+	beginErr    error
+	begun       []ConflictIntent
+	completed   []chainhash.Hash
 }
 
 func (w *walSpyStore) BeginConflictIntent(_ context.Context, intent ConflictIntent) error {
@@ -35,7 +37,7 @@ func (w *walSpyStore) BeginConflictIntent(_ context.Context, intent ConflictInte
 
 func (w *walSpyStore) CompleteConflictIntent(_ context.Context, intentID chainhash.Hash) error {
 	w.completed = append(w.completed, intentID)
-	return nil
+	return w.completeErr
 }
 
 func (w *walSpyStore) PendingConflictIntents(_ context.Context) ([]ConflictIntent, error) {
@@ -53,7 +55,7 @@ func TestProcessConflicting_WALBeginFailureAborts(t *testing.T) {
 	// proving the function aborted before touching the store.
 	spy := &walSpyStore{MockUtxostore: &MockUtxostore{}, beginErr: errors.NewStorageError("wal unavailable")}
 
-	_, _, err := ProcessConflicting(ctx, spy, 100, chainhash.Hash{}, []chainhash.Hash{createTestHash("winner")}, nil)
+	_, _, err := ProcessConflicting(ctx, spy, 100, chainhash.Hash{}, []chainhash.Hash{createTestHash("winner")}, nil, NoAncestryGuard)
 
 	require.Error(t, err)
 	require.ErrorIs(t, err, errors.ErrStorageError)
@@ -100,6 +102,8 @@ func TestReverseProcessConflicting_WALLifecycleOnSuccess(t *testing.T) {
 		Return(&meta.Data{Tx: counterTx, Conflicting: true}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return([]*Spend{{TxID: &demotedHash, Vout: 0}}, []chainhash.Hash{}, nil).Once()
+	mockStore.On("SpendsMadeBy", mock.Anything, demotedHash).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, nil).Once()
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 	mockStore.On("Get", mock.Anything, &counterHash, mock.Anything).
@@ -117,4 +121,21 @@ func TestReverseProcessConflicting_WALLifecycleOnSuccess(t *testing.T) {
 	require.Len(t, spy.completed, 1, "successful op must complete its intent")
 	require.Equal(t, spy.begun[0].IntentID(), spy.completed[0], "completed id must match the begun intent")
 	mockStore.AssertExpectations(t)
+}
+
+func TestReverseProcessConflicting_WALCompletionFailurePropagates(t *testing.T) {
+	mockStore := &MockUtxostore{}
+	failure := errors.NewStorageError("injected WAL cleanup failure")
+	spy := &walSpyStore{MockUtxostore: mockStore, completeErr: failure}
+	hash := createTestHash("cleanup-failure")
+	// An absent record, which the reverse skips, so the run reaches the completion. A record
+	// with neither inpoints nor a body is refused before it (counterConflictingInpoints).
+	mockStore.On("Get", mock.Anything, &hash, mock.Anything).Return((*meta.Data)(nil), nil)
+	before := testutil.ToFloat64(prometheusConflictWALCompletionFailures)
+	_, _, err := ReverseProcessConflicting(t.Context(), spy, 100, chainhash.Hash{}, []chainhash.Hash{hash})
+	require.ErrorIs(t, err, failure)
+	require.Contains(t, err.Error(), "failed to complete conflict WAL")
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusConflictWALCompletionFailures))
+	require.Len(t, spy.begun, 1)
+	require.Len(t, spy.completed, 1)
 }

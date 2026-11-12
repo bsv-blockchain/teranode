@@ -641,7 +641,7 @@ func TestSetMinedMulti(t *testing.T) {
 		assert.Zero(t, txMeta.UnminedSince)
 	})
 
-	t.Run("unset last block_id sets unmined_since to current block height", func(t *testing.T) {
+	t.Run("unset last block_id keeps the existing unmined_since", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -680,12 +680,14 @@ func TestSetMinedMulti(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Verify: tx should have zero block_ids and unmined_since set to current block height (501 = 500+1)
+		// Verify: tx should have zero block_ids and keep the unmined_since it was created with. A
+		// mined -> unmined transition (no prior unmined_since) is covered by
+		// TestUnsetMinedBackdatesUnminedSince.
 		txMeta, err = utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
 		require.NoError(t, err)
 		assert.Len(t, txMeta.BlockIDs, 0, "tx should have no block_ids after unsetting the only one")
-		assert.Equal(t, uint32(501), txMeta.UnminedSince,
-			"unmined_since should be set to current block height (store height + 1), not the invalidated block's height")
+		assert.Equal(t, uint32(100), txMeta.UnminedSince,
+			"an existing unmined_since must not be overwritten")
 		assert.False(t, txMeta.Locked, "tx should be unlocked after unset mined")
 	})
 
@@ -1023,6 +1025,24 @@ func Test_SmokeTests(t *testing.T) {
 		tests.SpendErrorTypes(t, db)
 	})
 
+	t.Run("set conflicting after create", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SetConflictingAfterCreate(t, db)
+	})
+
+	t.Run("partial spend rollback", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.PartialSpendRollback(t, db)
+	})
+
 	t.Run("get spend not found", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 
@@ -1065,6 +1085,24 @@ func Test_SmokeTests(t *testing.T) {
 		tests.SetConflictingBehavior(t, db)
 	})
 
+	t.Run("quick path create spend mined semantics", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.QuickPathCreateSpendMinedSemantics(t, db)
+	})
+
+	t.Run("absent record observables", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.AbsentRecordObservables(t, db)
+	})
+
 	t.Run("set mined unmined since", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 
@@ -1101,6 +1139,12 @@ func Test_SmokeTests(t *testing.T) {
 		tests.SpendAndCreateCreateOnly(t, db)
 	})
 
+	t.Run("create returns written state", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.CreateReturnsWrittenState(t, db)
+	})
+
 	t.Run("spend and create spend only", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 
@@ -1135,6 +1179,24 @@ func Test_SmokeTests(t *testing.T) {
 		require.NoError(t, err)
 
 		tests.SpendAndCreateInvalidOptions(t, db)
+	})
+
+	t.Run("delete then unspend restores parent", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.DeleteThenUnspendRestoresParent(t, db)
+	})
+
+	t.Run("delete then unspend restores parent paginated", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.DeleteThenUnspendRestoresParentPaginated(t, db, test.CreateBaseTestSettings(t).UtxoStore.UtxoBatchSize)
 	})
 
 	t.Run("set mined with spent", func(t *testing.T) {
@@ -1212,10 +1274,12 @@ func TestSetTTL(t *testing.T) {
 	// Now DAH should be set: all outputs spent AND mined AND on longest chain
 	assert.NotNil(t, tombstoneMillis)
 
-	// Verify the exact DAH value: blockHeight + 1 + retention (mirrors aerospike set_mined.go:162)
+	// The tx is mined at height 100 while the cached tip is still 0, so the stamp is floored at
+	// the mined height + retention rather than the lagging tip + 1 + retention.
 	retention := store.settings.GetUtxoStoreBlockHeightRetention()
-	expectedDAH := int64(store.GetBlockHeight() + 1 + retention)
-	require.Equal(t, expectedDAH, *tombstoneMillis, "DAH should be blockHeight + 1 + retention")
+	expectedDAH := int64(100 + retention)
+	require.Greater(t, expectedDAH, int64(store.GetBlockHeight()+1+retention), "setup: the mined height must be above the cached tip")
+	require.Equal(t, expectedDAH, *tombstoneMillis, "DAH should be mined height + retention when the cached tip lags")
 
 	// Verify DAH bump: advance block height, re-run setDAH — DAH should increase
 	oldDAH := *tombstoneMillis
@@ -3727,4 +3791,31 @@ func TestGetBlockPlacementFieldsIndependently(t *testing.T) {
 		require.Equal(t, []uint32{99}, data.BlockHeights)
 		require.Equal(t, []int{3}, data.SubtreeIdxs)
 	})
+}
+
+// TestPreviousOutputsDecorate_MissingParentIsTxNotFound pins the class a missing
+// parent output is reported as. Aerospike reports it as TX_NOT_FOUND, and the
+// JSON-RPC boundary turns that into sendrawtransaction's "Missing inputs"; this
+// store reported PROCESSING, which the boundary can only answer as "internal
+// error". TX_NOT_FOUND also keeps legacy sync's per-transaction fallback
+// (services/legacy/netsync, extendPerTxFallback) taking the same branch, since it
+// keys on ErrProcessing or ErrTxNotFound.
+func TestPreviousOutputsDecorate_MissingParentIsTxNotFound(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, tx := setup(ctx, t)
+
+	// setup's transaction arrives extended, and the decorator only fills what is
+	// missing. Clear the supplied previous outputs, as sendrawtransaction does, so
+	// the store has to resolve a parent that was never created.
+	for _, input := range tx.Inputs {
+		input.PreviousTxScript = nil
+		input.PreviousTxSatoshis = 0
+	}
+
+	err := store.PreviousOutputsDecorate(ctx, tx)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, errors.ErrTxNotFound)
 }

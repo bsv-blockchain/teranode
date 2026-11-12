@@ -437,14 +437,15 @@ The Asset Server provides health check endpoints for monitoring and orchestratio
     - Response: Plain text with uptime information
     - Status: 200 OK when service is alive
 
-- **GET /health**: Readiness probe endpoint
-    - Checks readiness of all service dependencies
-    - Verifies HTTP server, UTXO store, transaction store, block persister store, and blockchain client
-    - Returns 200 OK when all dependencies are ready
-    - Returns 503 Service Unavailable if any dependency is not ready
-    - Response includes details about dependency status
+- **GET /health**: Dependency status endpoint
+    - Checks HTTP server, UTXO store, transaction store, block persister store, and blockchain client
+    - **By default it always returns 200 OK**, with each dependency's status in the body; a failing dependency does not change the status code
+    - Returns 503 Service Unavailable when a dependency is not ready **only if `asset_healthStrictStatus = true`**
+    - The body is the dependency JSON by default; with `asset_publicHealthDetail = false` it is the plain string `OK` or `UNAVAILABLE`
 
 **Kubernetes Integration Example:**
+
+Operator-managed deployments probe the service health port instead (`/health/readiness` and `/health/liveness` on port 8000), which already returns 503 when a dependency is unhealthy. The example below probes the Asset HTTP port directly. With the default `asset_healthStrictStatus = false`, the readiness probe on `/health` never fails. Setting it to `true` makes the probe fail whenever a dependency is unhealthy: a UTXO-store outage such as Aerospike `stop_writes` then removes every Asset pod from its Service, and peers catching up from this node lose their block and subtree source until the dependency recovers.
 
 ```yaml
 livenessProbe:
@@ -470,8 +471,9 @@ The Asset Server provides real-time blockchain event notifications through WebSo
 
 - **WebSocket URL**: `/connection/websocket`
     - Protocol: WebSocket (ws:// or wss://)
-    - Default port: 8892 (configurable via `asset_centrifugeListenAddress`)
-    - Authentication: Automatic credential assignment on connection
+    - Served on the Asset HTTP server (`asset_httpListenAddress`, default port 8090). `asset_centrifugeListenAddress` only enables the socket and is not bound as a separate listener
+    - Authentication: none. Each connection is assigned a random user ID. The socket carries the same public, read-only telemetry the P2P service gossips
+    - Origin check: browser connections must come from the same hostname as the request or from `asset_centrifugeAllowOrigins`; cross-site origins get HTTP 403
     - Connection requirements: Asset service must have cached current node status from P2P
 
 #### Subscription Management
@@ -716,12 +718,17 @@ The Asset Server can be configured using various settings that control its behav
     - Impact: When `true`, disables real-time WebSocket functionality entirely
     - Code Usage: Controls conditional Centrifuge server creation (Server.go line 204)
 
-- **Asset Centrifuge Listen Address (`asset_centrifugeListenAddress`)**: WebSocket server listen address.
+- **Asset Centrifuge Listen Address (`asset_centrifugeListenAddress`)**: Enables the Centrifuge WebSocket when non-empty.
     - Type: `string`
     - Default: `":8892"`
     - Environment Variable: `TERANODE_ASSET_CENTRIFUGELISTENADDRESS`
-    - Impact: Determines Centrifuge WebSocket server listening address when enabled
-    - Code Usage: Used for Centrifuge server address configuration
+    - Impact: The address is **not bound**. The WebSocket is served on Asset HTTP at `/connection/websocket`, so restricting this address does not protect it
+    - Code Usage: An empty value skips Centrifuge creation; otherwise the value is only logged at startup
+
+- **Asset Centrifuge Allow Origins (`asset_centrifugeAllowOrigins`)**: Extra browser origins allowed to open the WebSocket.
+    - Type: `string` (pipe-separated `scheme://host[:port]` origins; `*` allows all)
+    - Default: `""` (same-host origins and non-browser clients only)
+    - Impact: Needed only when a reverse proxy rewrites the Host header seen by the Asset service
 
 **Centrifuge Subscription Channels:**
 
@@ -785,8 +792,8 @@ Centrifuge supports the following subscription channels:
 **Centrifuge Real-time Updates:**
 
 - **Primary Setting**: `asset_centrifuge_disable` (controls feature)
-- **Dependencies**: `asset_centrifugeListenAddress`, `asset_httpAddress`
-- **Interaction**: When enabled, requires valid HTTP address and listen address; URL validation performed
+- **Dependencies**: `asset_centrifugeListenAddress` (non-empty enables), `asset_httpAddress`, `asset_centrifugeAllowOrigins`
+- **Interaction**: When enabled, requires a valid HTTP address; URL validation performed. The WebSocket shares the Asset HTTP listener
 
 Centrifuge supports the following subscription channels:
 
@@ -855,7 +862,7 @@ The asset service enforces a tiered rate limit as defense in depth (it does **no
 - **Peer** — requests with a valid Ed25519 signature, where the peer ID is listed in `asset_peerAuthAllowlist`. Bucketed by libp2p peer ID (not IP), so two authenticated peers behind one NAT or CDN egress get independent buckets. Rate: `asset_httpRateLimit × asset_httpPeerRateMultiplier` req/s, default `1024 × 5 = 5120`.
 - **Miner** — authenticated peers whose `BlocksReceived > 0` and `ReputationScore ≥ asset_peerMinerReputationThreshold` (default `50.0`), and who are in `asset_peerAuthAllowlist`. Either **fully exempt** (default, `asset_httpMinerRateLimit = 0`) or bucketed per peer ID at `asset_httpMinerRateLimit` req/s when set. Setting an explicit cap is recommended as defense in depth.
 
-Heavy endpoints (`/subtree*`, `/blocks/:hash`, `/block/:hash`, `/block_legacy/:hash`, `/rest/block/:hash.bin`, and `POST /subtree/:hash/txs`) carry an additional, stricter limiter at `asset_httpHeavyRateLimit` req/s (default `10`). The global and heavy limiters stack — a request must pass both.
+Heavy endpoints (`/subtree*`, `/blocks/:hash`, `/block/:hash`, `/block_legacy/:hash`, `/rest/block/:hash.bin`, `POST /subtree/:hash/txs`, and the `/headers_to_common_ancestor/:hash` variants) carry an additional, stricter limiter at `asset_httpHeavyRateLimit` req/s (default `10`). The global and heavy limiters stack — a request must pass both.
 
 **Allowlist is opt-in.** When `asset_peerAuthAllowlist` is empty (the default), peer signatures are still cryptographically verified (replay cache, body digest, freshness window all apply) but no tier elevation is granted — every authenticated peer is treated as `tierUnverified` for rate-limit purposes. Operators must explicitly list peer IDs they want to trust before any peer benefits from the elevated rate.
 
@@ -887,7 +894,7 @@ See `docs/references/settings/services/asset_settings.md` for the full list of r
 - `TERANODE_ASSET_HTTPPUBLICADDRESS` - Public-facing URL
 - `TERANODE_ASSET_APIPREFIX` - API URL prefix
 - `TERANODE_ASSET_CENTRIFUGE_DISABLE` - Disable Centrifuge service
-- `TERANODE_ASSET_CENTRIFUGELISTENADDRESS` - Centrifuge listen address
+- `TERANODE_ASSET_CENTRIFUGELISTENADDRESS` - Enables the Centrifuge WebSocket when non-empty; not bound as a listener (the socket is served on Asset HTTP)
 - `TERANODE_ASSET_SIGN_HTTP_RESPONSES` - Enable response signing
 - `TERANODE_SECURITYLEVELHTTP` - HTTP security level
 - `TERANODE_SERVER_CERTFILE` - TLS certificate file

@@ -99,12 +99,14 @@ func (cm *clientChannelMap) add(ch chan []byte, cancel context.CancelFunc) {
 	cm.Lock()
 	defer cm.Unlock()
 	cm.channels[ch] = cancel
+	prometheusP2PWebsocketConnections.Set(float64(len(cm.channels)))
 }
 
 func (cm *clientChannelMap) remove(ch chan []byte) {
 	cm.Lock()
 	defer cm.Unlock()
 	delete(cm.channels, ch)
+	prometheusP2PWebsocketConnections.Set(float64(len(cm.channels)))
 }
 
 // evict removes a client channel and cancels its connection. Without the

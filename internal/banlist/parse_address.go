@@ -28,17 +28,11 @@ func parseAddress(ipOrSubnet string) (subnet *net.IPNet, err error) {
 		return nil, errors.New(errors.ERR_INVALID_IP, fmt.Sprintf("can't parse IP: %s", ipOrSubnet))
 	}
 
-	var cidr string
-	if ip.To4() != nil {
-		cidr = fmt.Sprintf("%s/32", ipOrSubnet)
-	} else {
-		cidr = fmt.Sprintf("%s/128", ipOrSubnet)
+	// Build the host network from parsed bytes, not the original spelling, so
+	// IPv4-mapped IPv6 hosts become IPv4 /32 hosts rather than IPv6 /32 prefixes.
+	if ipv4 := ip.To4(); ipv4 != nil {
+		return &net.IPNet{IP: ipv4, Mask: net.CIDRMask(32, 32)}, nil
 	}
 
-	_, subnet, err = net.ParseCIDR(cidr)
-	if err != nil {
-		return nil, errors.New(errors.ERR_INVALID_IP, fmt.Sprintf("can't create subnet from IP: %s", ipOrSubnet))
-	}
-
-	return subnet, nil
+	return &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}, nil
 }

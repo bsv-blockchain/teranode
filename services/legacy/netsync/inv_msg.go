@@ -17,6 +17,12 @@ import (
 type invMsg struct {
 	inv  *wire.MsgInv
 	peer *peerpkg.Peer
+
+	// txChunks are the message's transaction announcements, copied out of
+	// the decoded message and charged to the node cap by newInvMsg, which
+	// leaves only the block items in inv. handleInvMsg queues them for the
+	// lookup workers or gives their charge back. See inv_queue.go.
+	txChunks []*invChunk
 }
 
 func (i *invMsg) Bytes() []byte {

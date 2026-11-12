@@ -4,6 +4,13 @@
 // - protoc             v7.34.1
 // source: services/blockassembly/blockassembly_api/blockassembly_api.proto
 
+// Version: v1 (implicit). No version suffix; the unsuffixed name IS v1. This
+// package has already had a breaking change handled via `reserved` fields
+// without a version bump (see AddTxBatchColumnarRequest below) -- reserving
+// prevents wire corruption but is not the same as version coexistence. A
+// version bump (v2) is for changes reserved fields can't express -- see
+// docs/references/protoVersioning.md.
+
 package blockassembly_api
 
 import (
@@ -33,11 +40,13 @@ const (
 	BlockAssemblyAPI_ResetBlockAssemblyValidateInputs_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/ResetBlockAssemblyValidateInputs"
 	BlockAssemblyAPI_CheckBlockAssemblyValidateInputs_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/CheckBlockAssemblyValidateInputs"
 	BlockAssemblyAPI_GetBlockAssemblyState_FullMethodName            = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyState"
+	BlockAssemblyAPI_GetBlockAssemblyQueueStats_FullMethodName       = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyQueueStats"
 	BlockAssemblyAPI_GenerateBlocks_FullMethodName                   = "/blockassembly_api.BlockAssemblyAPI/GenerateBlocks"
 	BlockAssemblyAPI_CheckBlockAssembly_FullMethodName               = "/blockassembly_api.BlockAssemblyAPI/CheckBlockAssembly"
 	BlockAssemblyAPI_GetBlockAssemblyBlockCandidate_FullMethodName   = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyBlockCandidate"
 	BlockAssemblyAPI_GetBlockAssemblyTxs_FullMethodName              = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyTxs"
 	BlockAssemblyAPI_GetCandidateBlock_FullMethodName                = "/blockassembly_api.BlockAssemblyAPI/GetCandidateBlock"
+	BlockAssemblyAPI_PrepareBlock_FullMethodName                     = "/blockassembly_api.BlockAssemblyAPI/PrepareBlock"
 )
 
 // BlockAssemblyAPIClient is the client API for BlockAssemblyAPI service.
@@ -96,6 +105,12 @@ type BlockAssemblyAPIClient interface {
 	// GetBlockAssemblyState retrieves the current state of block assembly.
 	// Provides detailed information about the assembly process status.
 	GetBlockAssemblyState(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*StateMessage, error)
+	// GetBlockAssemblyQueueStats retrieves a slim view of the ingest queue for
+	// high-frequency control reads (e.g. a backpressure controller). It returns
+	// only the queue depth and the head-batch age, both backed by atomic loads,
+	// so it never blocks on the subtree-processor main loop the way
+	// GetBlockAssemblyState can (that call may wait up to 1s on GetSubtreeHashes).
+	GetBlockAssemblyQueueStats(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*QueueStatsMessage, error)
 	// GenerateBlocks creates new blocks (typically for testing purposes).
 	// Allows specification of block count and recipient address.
 	GenerateBlocks(ctx context.Context, in *GenerateBlocksRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
@@ -115,6 +130,11 @@ type BlockAssemblyAPIClient interface {
 	// The response contains everything needed to assemble a standard Bitcoin wire format block.
 	// Returns NotFound if the candidate ID has expired or is invalid.
 	GetCandidateBlock(ctx context.Context, in *GetCandidateBlockRequest, opts ...grpc.CallOption) (*GetCandidateBlockResponse, error)
+	// PrepareBlock tells block assembly about a block on its current tip that block validation has
+	// started validating, so it can build the block's transaction map before the block is added.
+	// It is a hint: block assembly binds the subtree list to the header itself, and the map is only
+	// used for a block with that hash and subtree list.
+	PrepareBlock(ctx context.Context, in *PrepareBlockRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 }
 
 type blockAssemblyAPIClient struct {
@@ -255,6 +275,16 @@ func (c *blockAssemblyAPIClient) GetBlockAssemblyState(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *blockAssemblyAPIClient) GetBlockAssemblyQueueStats(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*QueueStatsMessage, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(QueueStatsMessage)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_GetBlockAssemblyQueueStats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blockAssemblyAPIClient) GenerateBlocks(ctx context.Context, in *GenerateBlocksRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EmptyMessage)
@@ -299,6 +329,16 @@ func (c *blockAssemblyAPIClient) GetCandidateBlock(ctx context.Context, in *GetC
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetCandidateBlockResponse)
 	err := c.cc.Invoke(ctx, BlockAssemblyAPI_GetCandidateBlock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockAssemblyAPIClient) PrepareBlock(ctx context.Context, in *PrepareBlockRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmptyMessage)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_PrepareBlock_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -361,6 +401,12 @@ type BlockAssemblyAPIServer interface {
 	// GetBlockAssemblyState retrieves the current state of block assembly.
 	// Provides detailed information about the assembly process status.
 	GetBlockAssemblyState(context.Context, *EmptyMessage) (*StateMessage, error)
+	// GetBlockAssemblyQueueStats retrieves a slim view of the ingest queue for
+	// high-frequency control reads (e.g. a backpressure controller). It returns
+	// only the queue depth and the head-batch age, both backed by atomic loads,
+	// so it never blocks on the subtree-processor main loop the way
+	// GetBlockAssemblyState can (that call may wait up to 1s on GetSubtreeHashes).
+	GetBlockAssemblyQueueStats(context.Context, *EmptyMessage) (*QueueStatsMessage, error)
 	// GenerateBlocks creates new blocks (typically for testing purposes).
 	// Allows specification of block count and recipient address.
 	GenerateBlocks(context.Context, *GenerateBlocksRequest) (*EmptyMessage, error)
@@ -380,6 +426,11 @@ type BlockAssemblyAPIServer interface {
 	// The response contains everything needed to assemble a standard Bitcoin wire format block.
 	// Returns NotFound if the candidate ID has expired or is invalid.
 	GetCandidateBlock(context.Context, *GetCandidateBlockRequest) (*GetCandidateBlockResponse, error)
+	// PrepareBlock tells block assembly about a block on its current tip that block validation has
+	// started validating, so it can build the block's transaction map before the block is added.
+	// It is a hint: block assembly binds the subtree list to the header itself, and the map is only
+	// used for a block with that hash and subtree list.
+	PrepareBlock(context.Context, *PrepareBlockRequest) (*EmptyMessage, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }
 
@@ -429,6 +480,9 @@ func (UnimplementedBlockAssemblyAPIServer) CheckBlockAssemblyValidateInputs(cont
 func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyState(context.Context, *EmptyMessage) (*StateMessage, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBlockAssemblyState not implemented")
 }
+func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyQueueStats(context.Context, *EmptyMessage) (*QueueStatsMessage, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetBlockAssemblyQueueStats not implemented")
+}
 func (UnimplementedBlockAssemblyAPIServer) GenerateBlocks(context.Context, *GenerateBlocksRequest) (*EmptyMessage, error) {
 	return nil, status.Error(codes.Unimplemented, "method GenerateBlocks not implemented")
 }
@@ -443,6 +497,9 @@ func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyTxs(context.Context, 
 }
 func (UnimplementedBlockAssemblyAPIServer) GetCandidateBlock(context.Context, *GetCandidateBlockRequest) (*GetCandidateBlockResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCandidateBlock not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) PrepareBlock(context.Context, *PrepareBlockRequest) (*EmptyMessage, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareBlock not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) mustEmbedUnimplementedBlockAssemblyAPIServer() {}
 func (UnimplementedBlockAssemblyAPIServer) testEmbeddedByValue()                          {}
@@ -699,6 +756,24 @@ func _BlockAssemblyAPI_GetBlockAssemblyState_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_GetBlockAssemblyQueueStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EmptyMessage)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).GetBlockAssemblyQueueStats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_GetBlockAssemblyQueueStats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).GetBlockAssemblyQueueStats(ctx, req.(*EmptyMessage))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockAssemblyAPI_GenerateBlocks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GenerateBlocksRequest)
 	if err := dec(in); err != nil {
@@ -789,6 +864,24 @@ func _BlockAssemblyAPI_GetCandidateBlock_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_PrepareBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).PrepareBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_PrepareBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).PrepareBlock(ctx, req.(*PrepareBlockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockAssemblyAPI_ServiceDesc is the grpc.ServiceDesc for BlockAssemblyAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -849,6 +942,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BlockAssemblyAPI_GetBlockAssemblyState_Handler,
 		},
 		{
+			MethodName: "GetBlockAssemblyQueueStats",
+			Handler:    _BlockAssemblyAPI_GetBlockAssemblyQueueStats_Handler,
+		},
+		{
 			MethodName: "GenerateBlocks",
 			Handler:    _BlockAssemblyAPI_GenerateBlocks_Handler,
 		},
@@ -867,6 +964,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetCandidateBlock",
 			Handler:    _BlockAssemblyAPI_GetCandidateBlock_Handler,
+		},
+		{
+			MethodName: "PrepareBlock",
+			Handler:    _BlockAssemblyAPI_PrepareBlock_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

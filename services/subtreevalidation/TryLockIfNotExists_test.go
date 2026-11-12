@@ -304,12 +304,11 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		require.NoError(t, os.WriteFile(lockFilePath, []byte("locked"), 0600))
 		defer os.Remove(lockFilePath)
 
-		// Keep the lock permanently fresh by setting its mtime in the future.
-		// A ticker-based refresher goroutine is racy under full-suite -race load:
-		// staleness is mtime age > q.timeout (50ms here), so any scheduler
-		// starvation beyond that expires the lock mid-test and the lock IS
-		// acquired. A future mtime makes freshness deterministic with no
-		// goroutine to starve.
+		// Keep the lock file fresh so it never becomes stale. Staleness is
+		// time.Since(modTime) > timeout, so a modTime in the future keeps the age
+		// negative for the whole run. A refresher goroutine ticking against the
+		// 50ms timeout instead makes this test load-flaky: starve the goroutine
+		// once and the lock ages out, gets treated as stale, and is acquired.
 		fresh := time.Now().Add(time.Hour)
 		require.NoError(t, os.Chtimes(lockFilePath, fresh, fresh))
 
@@ -574,25 +573,40 @@ func TestAutoReleaseLockModes(t *testing.T) {
 	})
 }
 
-// capturingLogger captures log messages for testing
+// capturingLogger captures log messages for testing.
+//
+// The buffer is mutex-guarded: callers such as processTxMetaUsingStore log from
+// inside an errgroup fan-out, so an unsynchronised bytes.Buffer would trip the
+// race detector as soon as a test drives more than one batch.
 type capturingLogger struct {
 	ulogger.TestLogger
-	WarnBuf *bytes.Buffer
+
+	mu      sync.Mutex
+	warnBuf *bytes.Buffer
 }
 
 func newCapturingLogger() *capturingLogger {
-	buf := &bytes.Buffer{}
-
 	return &capturingLogger{
 		TestLogger: ulogger.TestLogger{},
-		WarnBuf:    buf,
+		warnBuf:    &bytes.Buffer{},
 	}
 }
 
 func (m *capturingLogger) Warnf(format string, args ...interface{}) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	// Basic formatting to capture the essence
-	fmt.Fprintf(m.WarnBuf, format, args...)
-	m.WarnBuf.WriteString("\n") // Add newline for easier assertion
+	fmt.Fprintf(m.warnBuf, format, args...)
+	m.warnBuf.WriteString("\n") // Add newline for easier assertion
+}
+
+// warnings returns everything logged at WARN so far.
+func (m *capturingLogger) warnings() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.warnBuf.String()
 }
 
 func Test_releaseLock(t *testing.T) {
@@ -604,7 +618,7 @@ func Test_releaseLock(t *testing.T) {
 
 		releaseLock(mLogger, lockFile)
 
-		assert.Empty(t, mLogger.WarnBuf.String(), "No warning should be logged for ErrNotExist")
+		assert.Empty(t, mLogger.warnings(), "No warning should be logged for ErrNotExist")
 	})
 
 	t.Run("OtherError_LogsWarning", func(t *testing.T) {
@@ -629,8 +643,8 @@ func Test_releaseLock(t *testing.T) {
 			}
 		}
 
-		assert.NotEmpty(t, mLogger.WarnBuf.String(), "Warning should be logged for errors other than ErrNotExist")
-		assert.Contains(t, mLogger.WarnBuf.String(), fmt.Sprintf("failed to remove lock file %q", lockDir), "Warning message should contain expected format")
+		assert.NotEmpty(t, mLogger.warnings(), "Warning should be logged for errors other than ErrNotExist")
+		assert.Contains(t, mLogger.warnings(), fmt.Sprintf("failed to remove lock file %q", lockDir), "Warning message should contain expected format")
 	})
 }
 

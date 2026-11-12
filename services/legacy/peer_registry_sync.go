@@ -19,9 +19,18 @@ const legacyPeerIDPrefix = "legacy:"
 // missing or not positive.
 const defaultPeerRegistrySyncInterval = 10 * time.Second
 
+// defaultRegistryRPCTimeout bounds a single registry call. It matches the p2p
+// sync coordinator's rpcTimeout, which bounds the identical RPCs.
+const defaultRegistryRPCTimeout = 5 * time.Second
+
 // legacyRegistryID builds the registry key for a wire-protocol peer address.
-// The address is stable across reconnects, so ban state and history survive a
-// peer that flaps.
+//
+// For an outbound peer the address is the one we dialled, so it is stable
+// across reconnects and ban state and history survive a peer that flaps. An
+// inbound peer is keyed on its remote address, which carries an ephemeral
+// source port (see peer.Peer.addr, set from conn.RemoteAddr), so each inbound
+// reconnect produces a new entry rather than reusing the old one. The dashboard
+// bounds how long a disconnected legacy entry stays listed for that reason.
 func legacyRegistryID(addr string) string {
 	return legacyPeerIDPrefix + addr
 }
@@ -54,11 +63,16 @@ func (s peerSnapshot) registrationEqual(other peerSnapshot) bool {
 // read-only visibility path: nothing here feeds a sync, catchup or
 // peer-selection decision.
 type peerRegistrySync struct {
-	logger   ulogger.Logger
-	registry blockchain.PeerRegistryClientI
-	interval time.Duration
-	snapshot func() []peerSnapshot
-	lastSeen map[string]peerSnapshot
+	logger     ulogger.Logger
+	registry   blockchain.PeerRegistryClientI
+	interval   time.Duration
+	rpcTimeout time.Duration
+	snapshot   func() []peerSnapshot
+	lastSeen   map[string]peerSnapshot
+
+	// adoptedExisting records that the startup pass over pre-existing registry
+	// entries has run. See adoptExistingEntries.
+	adoptedExisting bool
 }
 
 // newPeerRegistrySync builds the reconcile loop. The snapshot function must
@@ -72,12 +86,22 @@ func newPeerRegistrySync(logger ulogger.Logger, tSettings *settings.Settings,
 	}
 
 	return &peerRegistrySync{
-		logger:   logger,
-		registry: registry,
-		interval: interval,
-		snapshot: snapshot,
-		lastSeen: make(map[string]peerSnapshot),
+		logger:     logger,
+		registry:   registry,
+		interval:   interval,
+		rpcTimeout: defaultRegistryRPCTimeout,
+		snapshot:   snapshot,
+		lastSeen:   make(map[string]peerSnapshot),
 	}
+}
+
+// boundedContext derives a per-RPC deadline. The registry client adds no
+// deadline of its own, so without this an unresponsive blockchain service
+// stalls a tick for as long as the gRPC connection takes to give up — a visible
+// gap in the dashboard at a 10 second cadence. The p2p sync coordinator bounds
+// the identical calls the same way.
+func (p *peerRegistrySync) boundedContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, p.rpcTimeout)
 }
 
 // run reconciles on every tick until ctx is cancelled.
@@ -133,14 +157,22 @@ func (p *peerRegistrySync) reconcile(ctx context.Context) {
 				Legacy:           &legacyCopy,
 			}
 
-			if err := p.registry.RegisterPeer(ctx, info); err != nil {
+			rpcCtx, cancel := p.boundedContext(ctx)
+			err := p.registry.RegisterPeer(rpcCtx, info)
+			cancel()
+
+			if err != nil {
 				p.logger.Warnf("[LegacyPeerRegistry] RegisterPeer %s failed: %v", snap.id, err)
 				continue
 			}
 		}
 
 		if !known {
-			if err := p.registry.UpdateConnectionState(ctx, snap.id, true); err != nil {
+			rpcCtx, cancel := p.boundedContext(ctx)
+			err := p.registry.UpdateConnectionState(rpcCtx, snap.id, true)
+			cancel()
+
+			if err != nil {
 				p.logger.Warnf("[LegacyPeerRegistry] connect %s failed: %v", snap.id, err)
 				continue
 			}
@@ -155,7 +187,10 @@ func (p *peerRegistrySync) reconcile(ctx context.Context) {
 		haveBaseline := known
 
 		if !known {
-			stored, found, err := p.registry.GetPeer(ctx, snap.id)
+			rpcCtx, cancel := p.boundedContext(ctx)
+			stored, found, err := p.registry.GetPeer(rpcCtx, snap.id)
+			cancel()
+
 			switch {
 			case err != nil:
 				p.logger.Warnf("[LegacyPeerRegistry] byte baseline %s failed: %v", snap.id, err)
@@ -168,28 +203,56 @@ func (p *peerRegistrySync) reconcile(ctx context.Context) {
 		sentDelta := byteDelta(snap.bytesSent, sentBaseline, haveBaseline)
 		recvDelta := byteDelta(snap.bytesReceived, recvBaseline, haveBaseline)
 
+		// What gets recorded as pushed is tracked per dimension. A rejected
+		// call must not be rebaselined away: the next tick has to retry it,
+		// otherwise one transient RPC failure drops those bytes for good.
+		accepted := snap
+
 		if sentDelta > 0 || recvDelta > 0 {
-			if err := p.registry.UpdatePeerMetrics(ctx, snap.id, 0, sentDelta, recvDelta,
-				false, false, false, 0); err != nil {
+			rpcCtx, cancel := p.boundedContext(ctx)
+			err := p.registry.UpdatePeerMetrics(rpcCtx, snap.id, 0, sentDelta, recvDelta,
+				false, false, false, 0)
+			cancel()
+
+			if err != nil {
 				p.logger.Warnf("[LegacyPeerRegistry] metrics %s failed: %v", snap.id, err)
+
+				// Carry the old baseline forward so the next tick reports this
+				// tick's bytes as well as its own.
+				accepted.bytesSent, accepted.bytesReceived = sentBaseline, recvBaseline
+				if !haveBaseline {
+					accepted.bytesSent, accepted.bytesReceived = 0, 0
+				}
 			}
 		}
 
 		if snap.lastRecv.After(previous.lastRecv) {
-			if err := p.registry.UpdateLastMessageTime(ctx, snap.id); err != nil {
+			rpcCtx, cancel := p.boundedContext(ctx)
+			err := p.registry.UpdateLastMessageTime(rpcCtx, snap.id)
+			cancel()
+
+			if err != nil {
 				p.logger.Warnf("[LegacyPeerRegistry] last message %s failed: %v", snap.id, err)
+
+				accepted.lastRecv = previous.lastRecv
 			}
 		}
 
-		p.lastSeen[snap.id] = snap
+		p.lastSeen[snap.id] = accepted
 	}
+
+	p.adoptExistingEntries(ctx, current)
 
 	for id := range p.lastSeen {
 		if _, present := current[id]; present {
 			continue
 		}
 
-		if err := p.registry.UpdateConnectionState(ctx, id, false); err != nil {
+		rpcCtx, cancel := p.boundedContext(ctx)
+		err := p.registry.UpdateConnectionState(rpcCtx, id, false)
+		cancel()
+
+		if err != nil {
 			p.logger.Warnf("[LegacyPeerRegistry] disconnect %s failed: %v", id, err)
 			continue
 		}
@@ -199,6 +262,60 @@ func (p *peerRegistrySync) reconcile(ctx context.Context) {
 		// that kept being registered would never age out.
 		delete(p.lastSeen, id)
 	}
+}
+
+// adoptExistingEntries clears the connected flag on wire-protocol entries this
+// loop has never seen and the current snapshot does not contain. It runs once,
+// on the first tick that produced real data.
+//
+// The disconnect sweep only knows peers the loop has tracked itself, so after a
+// restart lastSeen is empty and an entry left connected by the previous process
+// is in neither current nor lastSeen. Nothing else clears it either: the p2p
+// connection sweep is scoped to libp2p transports precisely because it cannot
+// see wire peers. Without this pass such an entry reports as a connected legacy
+// peer until the registry TTL expires it, which is measured in hours.
+//
+// The caller must only invoke this with a snapshot that really came from the
+// legacy server; a nil snapshot means "no data", not "nothing is connected".
+func (p *peerRegistrySync) adoptExistingEntries(ctx context.Context, current map[string]peerSnapshot) {
+	if p.adoptedExisting {
+		return
+	}
+
+	transport := blockchain_api.TransportType_TRANSPORT_WIRE_PROTOCOL
+
+	rpcCtx, cancel := p.boundedContext(ctx)
+	peers, err := p.registry.ListPeers(rpcCtx, &transport, 0, 0, false, false)
+	cancel()
+
+	if err != nil {
+		// Retry on the next tick rather than marking the pass done.
+		p.logger.Warnf("[LegacyPeerRegistry] startup adoption failed: %v", err)
+		return
+	}
+
+	for _, info := range peers {
+		if info == nil || !info.IsConnected {
+			continue
+		}
+
+		if _, live := current[info.ID]; live {
+			continue
+		}
+
+		rpcCtx, cancel := p.boundedContext(ctx)
+		stateErr := p.registry.UpdateConnectionState(rpcCtx, info.ID, false)
+		cancel()
+
+		if stateErr != nil {
+			p.logger.Warnf("[LegacyPeerRegistry] clearing stale %s failed: %v", info.ID, stateErr)
+			continue
+		}
+
+		p.logger.Infof("[LegacyPeerRegistry] cleared stale connected entry %s", info.ID)
+	}
+
+	p.adoptedExisting = true
 }
 
 // byteDelta converts an absolute counter into bytes not yet reported.

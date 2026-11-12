@@ -8,7 +8,6 @@
 |---------|------|---------|---------------------|-------|
 | GRPCAddress | string | "localhost:8081" | validator_grpcAddress | gRPC client connections |
 | GRPCListenAddress | string | ":8081" | validator_grpcListenAddress | **CRITICAL** - gRPC server binding, service only starts if not empty |
-| KafkaWorkers | int | 0 | validator_kafkaWorkers | Kafka worker thread configuration |
 | SendBatchSize | int | 100 | validator_sendBatchSize | Batch processing size |
 | SendBatchTimeout | int | 2 | validator_sendBatchTimeout | Batch processing timeout |
 | SendBatchWorkers | int | 10 | validator_sendBatchWorkers | Batch worker thread count |
@@ -20,31 +19,39 @@
 | HTTPAddress | *url.URL | "" | validator_httpAddress | HTTP client connections |
 | HTTPRateLimit | int | 1024 | validator_httpRateLimit | **CRITICAL** - HTTP request rate limiting |
 | KafkaMaxMessageBytes | int | 1048576 | validator_kafka_maxMessageBytes | Kafka message size limits |
+| ConsensusRerunSlots | int | 1 | validator_consensusRerunSlots | Maximum concurrent consensus re-runs of policy script failures; with no free slot the tx is TxPolicy. 0 disables re-runs |
 | UseLocalValidator | bool | false (true in settings.conf) | useLocalValidator | **CRITICAL** - Local vs remote validator deployment mode |
 | HTTPBodyLimit | string | 100MB | validator_httpBodyLimit | Maximum HTTP request body size (prevents OOM on oversized requests) |
 | TxMetaKafkaBatchSize | int | 1024 | validator_txmeta_kafka_batchSize | Transaction metadata Kafka batch size |
 | TxMetaKafkaBatchTimeoutMs | int | 5 | validator_txmeta_kafka_batchTimeoutMs | Transaction metadata Kafka batch timeout (ms) |
+| KafkaBackpressure.PauseQueueFillPercent | int | 90 | validator_kafkaBackpressurePauseFillPercent | Pause the Kafka consumer when the block assembly ingest queue, or the held count against `blockassembly_maxTransactionsInMemory`, reaches this percentage of its reported limit. 0 disables both predicates |
+| KafkaBackpressure.ResumeHeldPercent | int | 80 | validator_kafkaBackpressureResumeHeldPercent | Resume a held-count pause once the held count falls to this percentage of the reported in-memory limit. The threshold is kept at least 1 and at least one below the pause threshold, so a small block does not toggle the consumer |
 
 ## Configuration Dependencies
 
 ### gRPC Server Management
+
 - Service only starts if `GRPCListenAddress` is not empty
 - Health checks are conditional on gRPC server configuration
 
 ### HTTP Server Management
+
 - HTTP server only starts if `HTTPListenAddress` is not empty
 - Rate limiting applied when HTTP server is enabled
 - Uses `HTTPRateLimit` for middleware configuration
 
 ### Debug Logging
+
 - When `VerboseDebug = true`, provides detailed logging for validation operations
 - Controls logging in block assembly interactions
 
 ### Batch Processing
+
 - `SendBatchSize`, `SendBatchTimeout`, and `SendBatchWorkers` work together
 - Controls transaction batch processing performance
 
 ### Block Validation Retry Logic
+
 - `BlockValidationMaxRetries`, `BlockValidationRetrySleep`, and `BlockValidationDelay` control resilience
 - Manages block validation failure recovery
 

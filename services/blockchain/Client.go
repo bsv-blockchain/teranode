@@ -25,7 +25,10 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -123,6 +126,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 			MaxRetries:   tSettings.GRPCMaxRetries,
 			RetryBackoff: tSettings.GRPCRetryBackoff,
 			CallerName:   "blockchain",
+			APIKey:       tSettings.GRPCAdminAPIKey,
 		}, tSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("failed to init blockchain service connection for '%s'", source, err)
@@ -151,6 +155,13 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 		}
 
 		break
+	}
+
+	// HealthGRPC is public, so it cannot tell a wrong key from a right one.
+	if err = checkAdminAPIKeyAccepted(ctx, baClient); err != nil {
+		_ = baConn.Close()
+
+		return nil, errors.NewConfigurationError("blockchain service at '%s' rejected grpc_admin_api_key for '%s'", address, source, err)
 	}
 
 	running := atomic.Bool{}
@@ -311,7 +322,22 @@ func (c *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		return http.StatusFailedDependency, resp.GetDetails(), nil
 	}
 
+	if err = checkAdminAPIKeyAccepted(ctx, c.client); err != nil {
+		return http.StatusFailedDependency, "blockchain rejected grpc_admin_api_key", err
+	}
+
 	return http.StatusOK, resp.GetDetails(), nil
+}
+
+// checkAdminAPIKeyAccepted makes one cheap protected call and fails only on
+// Unauthenticated, so an uninitialised FSM or an older server without the
+// auth interceptor is not treated as a key mismatch.
+func checkAdminAPIKeyAccepted(ctx context.Context, client blockchain_api.BlockchainAPIClient) error {
+	if _, err := client.GetFSMCurrentState(ctx, &emptypb.Empty{}); status.Code(err) == codes.Unauthenticated {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
 }
 
 // AddBlock sends a request to add a new block to the blockchain.
@@ -734,6 +760,38 @@ func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *m
 	return header, meta, nil
 }
 
+// GetBestBlockHeaderUncached retrieves the best block header past the store's response cache,
+// with the block id on the meta. See the interface for why it exists beside GetBestBlockHeader.
+func (c *Client) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	resp, err := c.client.GetBestBlockHeaderUncached(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, nil, errors.UnwrapGRPC(err)
+	}
+
+	header, err := model.NewBlockHeaderFromBytes(resp.BlockHeader)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	meta := &model.BlockHeaderMeta{
+		ID:             resp.Id,
+		Height:         resp.Height,
+		TxCount:        resp.TxCount,
+		SizeInBytes:    resp.SizeInBytes,
+		Miner:          resp.Miner,
+		PeerID:         resp.PeerId,
+		BlockTime:      resp.BlockTime,
+		Timestamp:      resp.Timestamp,
+		ChainWork:      resp.ChainWork,
+		MinedSet:       resp.MinedSet,
+		SubtreesSet:    resp.SubtreesSet,
+		Invalid:        resp.Invalid,
+		MedianTimePast: resp.MedianTimePast,
+	}
+
+	return header, meta, nil
+}
+
 // CheckBlockIsInCurrentChain checks if ANY of the given blockIDs is in the current chain.
 // It will return true if at least of the blockIDs is in the current chain.
 // It will return false if none of the blockIDs is in the current chain.
@@ -832,6 +890,20 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 // GetBlockHeaders retrieves multiple block headers starting from a specific hash.
 func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBlockHeaders(ctx, &blockchain_api.GetBlockHeadersRequest{
+		StartHash:       blockHash.CloneBytes(),
+		NumberOfHeaders: numberOfHeaders,
+	})
+	if err != nil {
+		return nil, nil, errors.UnwrapGRPC(err)
+	}
+
+	return c.returnBlockHeaders(resp)
+}
+
+// GetBlockHeadersByParentLinks retrieves headers by walking parent links back from a hash. See
+// the interface for why it exists beside GetBlockHeaders.
+func (c *Client) GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	resp, err := c.client.GetBlockHeadersByParentLinks(ctx, &blockchain_api.GetBlockHeadersRequest{
 		StartHash:       blockHash.CloneBytes(),
 		NumberOfHeaders: numberOfHeaders,
 	})
@@ -1031,6 +1103,62 @@ func (c *Client) GetBlockHeadersFromHeight(ctx context.Context, height, limit ui
 	}
 
 	return headers, metas, nil
+}
+
+// BlocksBetterThan returns the valid blocks that sort better than after in the best-tip order, worst first.
+func (c *Client) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
+	req := &blockchain_api.BlocksBetterThanRequest{
+		After:     after.Bytes(),
+		MinHeight: minHeight,
+		Limit:     limit,
+	}
+
+	if from != nil {
+		req.From = from.Bytes()
+	}
+
+	resp, err := c.client.BlocksBetterThan(ctx, req)
+	if err != nil {
+		return nil, nil, false, errors.UnwrapGRPC(err)
+	}
+
+	if len(resp.Metas) != len(resp.BlockHeaders) {
+		return nil, nil, false, errors.NewProcessingError("[BlocksBetterThan] response lengths differ: %d headers, %d metas", len(resp.BlockHeaders), len(resp.Metas))
+	}
+
+	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
+
+	for _, headerBytes := range resp.BlockHeaders {
+		header, err := model.NewBlockHeaderFromBytes(headerBytes)
+		if err != nil {
+			return nil, nil, false, err
+		}
+
+		headers = append(headers, header)
+	}
+
+	metas := make([]*model.BlockHeaderMeta, 0, len(resp.Metas))
+
+	for _, metaBytes := range resp.Metas {
+		meta, err := model.NewBlockHeaderMetaFromBytes(metaBytes)
+		if err != nil {
+			return nil, nil, false, err
+		}
+
+		metas = append(metas, meta)
+	}
+
+	// A server that predates the more field leaves it false, so a full page counts as more.
+	return headers, metas, resp.More || uint64(len(headers)) >= uint64(limit), nil
+}
+
+// ClearBestTipLowWater deletes the best tip's low-water mark if it still holds expected.
+func (c *Client) ClearBestTipLowWater(ctx context.Context, expected []byte) error {
+	if _, err := c.client.ClearBestTipLowWater(ctx, &blockchain_api.ClearBestTipLowWaterRequest{Expected: expected}); err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
 }
 
 // GetBlockHeadersByHeight retrieves block headers between two specified heights.
@@ -2002,29 +2130,22 @@ func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEvent
 
 // Run sends a run FSM event to the blockchain service.
 func (c *Client) Run(ctx context.Context, source string) error {
-	currentState := ""
-
-	state, _ := c.GetFSMCurrentState(ctx)
-	if state != nil {
-		// check whether the current state is the same as the target state
-		if *state == FSMStateRUNNING {
-			return nil
-		}
-
-		currentState = state.String()
-	}
-
-	c.logger.Infof("[Blockchain Client] Sending Run event %s (%s => Run)", source, currentState)
+	c.logger.Infof("[Blockchain Client] Sending Run event %s", source)
 
 	_, err := c.client.Run(ctx, &emptypb.Empty{})
 	if err != nil {
+		// Keep transport status available to bounded catchup promotion retries.
+		if code := status.Code(err); code == codes.Unavailable || code == codes.DeadlineExceeded {
+			return err
+		}
 		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
 }
 
-// CatchUpBlocks sends a catchup blocks FSM event to the blockchain service.
+// CatchUpBlocks requests automatic catchup from the blockchain authority.
+// Operator IDLE is refused; explicit operator resume uses SendFSMEvent(CATCHUPBLOCKS).
 // This method initiates a blockchain synchronization process by transitioning the
 // blockchain service's finite state machine to the CATCHING_BLOCKS state, which
 // triggers the service to synchronize with the network and catch up on any
@@ -2037,14 +2158,12 @@ func (c *Client) Run(ctx context.Context, source string) error {
 // - Maintaining consensus with the BSV Blockchain network
 // - Coordinating synchronization across distributed Teranode components
 //
-// The method first checks if the FSM is already in the CATCHING_BLOCKS state
-// to avoid unnecessary state transitions. If not already catching up, it sends
-// the appropriate FSM event to trigger the synchronization process.
+// The server checks authoritative state and reconciles uncertain persistence
+// before acknowledging an already-current target state.
 //
 // This operation is typically used during:
 // - Service startup when the local chain may be behind
 // - Recovery from network partitions or connectivity issues
-// - Manual synchronization requests from operators
 // - Automated catch-up processes in distributed deployments
 //
 // The method communicates with the blockchain service via gRPC to send the
@@ -2056,14 +2175,6 @@ func (c *Client) Run(ctx context.Context, source string) error {
 // Returns:
 //   - error: Any error encountered during the FSM event transmission
 func (c *Client) CatchUpBlocks(ctx context.Context) error {
-	currentState := c.fmsState.Load()
-	if currentState != nil {
-		// check whether the current state is the same as the target state
-		if *currentState == FSMStateCATCHINGBLOCKS {
-			return nil
-		}
-	}
-
 	c.logger.Infof("[Blockchain Client] Sending Catchup Transactions event")
 
 	_, err := c.client.CatchUpBlocks(ctx, &emptypb.Empty{})
@@ -2076,6 +2187,12 @@ func (c *Client) CatchUpBlocks(ctx context.Context) error {
 
 // ReportPeerFailure reports a peer download failure to the blockchain service.
 func (c *Client) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, peerID string, failureType string, reason string) error {
+	// A failure can be about a message whose hash did not parse. The peer is still
+	// reported; the notification must carry a 32-byte hash, so send the zero hash.
+	if hash == nil {
+		hash = &chainhash.Hash{}
+	}
+
 	req := &blockchain_api.ReportPeerFailureRequest{
 		Hash:        hash[:],
 		PeerId:      peerID,
@@ -2096,9 +2213,8 @@ func (c *Client) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, pe
 // causing it to transition to the IDLE state where it stops active processing
 // and waits for further commands.
 //
-// The method first checks if the FSM is already in the IDLE state to avoid
-// unnecessary transitions. If the current state is already IDLE, it returns
-// immediately without sending the event.
+// The server checks authoritative state and reconciles uncertain persistence
+// before acknowledging an already-current target state.
 //
 // The IDLE state is used for:
 // - Graceful shutdown preparation
@@ -2116,14 +2232,6 @@ func (c *Client) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, pe
 // Returns:
 //   - error: Any error encountered during the FSM event transmission
 func (c *Client) Idle(ctx context.Context) error {
-	currentState := c.fmsState.Load()
-	if currentState != nil {
-		// check whether the current state is the same as the target state
-		if *currentState == FSMStateIDLE {
-			return nil
-		}
-	}
-
 	c.logger.Infof("[Blockchain Client] Sending IDLE event")
 
 	_, err := c.client.Idle(ctx, &emptypb.Empty{})
@@ -2496,11 +2604,20 @@ func (c *Client) CompleteBlobDeletions(ctx context.Context, completedIDs []int64
 }
 
 // AcquireBlobDeletionBatch acquires a batch of deletions with locking.
-func (c *Client) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+func (c *Client) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int, excludeStoreTypes []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
+	var excluded []int32
+	if len(excludeStoreTypes) > 0 {
+		excluded = make([]int32, len(excludeStoreTypes))
+		for i, storeType := range excludeStoreTypes {
+			excluded[i] = int32(storeType)
+		}
+	}
+
 	resp, err := c.client.AcquireBlobDeletionBatch(ctx, &blockchain_api.AcquireBlobDeletionBatchRequest{
 		Height:             height,
 		Limit:              int32(limit),
 		LockTimeoutSeconds: int32(lockTimeoutSeconds),
+		ExcludeStoreTypes:  excluded,
 	})
 	if err != nil {
 		return "", nil, errors.UnwrapGRPC(err)
@@ -2539,24 +2656,87 @@ func (c *Client) GetMedianTimePastForHeights(ctx context.Context, heights []uint
 // GetMedianTimePastRange returns the MTP values for all blocks in [fromHeight, toHeight].
 // Returns a dense slice where result[i] = MTP for height (fromHeight + i).
 // Internally builds a full heights array to reuse the existing GetMedianTimePastByHeights RPC,
-// avoiding the need for a new proto endpoint.
+// with up to four concurrent requests.
+//
+// The request is chunked client-side into batches of at most
+// maxMedianTimePastHeightsPerRequest: GetMedianTimePastByHeights rejects any
+// single request above that count (an unauthenticated-RPC DoS bound), but a
+// first-party caller can legitimately need MTP for the entire chain in one
+// logical call - most notably the validator's MTP pre-load, which asks for
+// [0, blockHeight] on its first invocation after startup. Chunking here keeps
+// the server-side cap meaningful without breaking that caller.
 func (c *Client) GetMedianTimePastRange(ctx context.Context, fromHeight, toHeight uint32) ([]uint32, error) {
 	if toHeight < fromHeight {
 		return []uint32{}, nil
 	}
 
-	count := toHeight - fromHeight + 1
-	heights := make([]uint32, count)
+	count := uint64(toHeight) - uint64(fromHeight) + 1
+	result := make([]uint32, count)
+	chunkSize := uint64(maxMedianTimePastHeightsPerRequest(c.settings))
+	group, fetchCtx := errgroup.WithContext(ctx)
+	// Keep startup latency bounded without issuing a whole-chain burst of RPCs.
+	group.SetLimit(4)
+	for offset := uint64(0); offset < count; offset += chunkSize {
+		if fetchCtx.Err() != nil {
+			break
+		}
+		end := offset + chunkSize
+		if end > count {
+			end = count
+		}
+		start := uint32(uint64(fromHeight) + offset)
+		output := result[offset:end]
+		group.Go(func() error { return c.fetchMedianTimePastChunk(fetchCtx, start, output) })
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// A smaller server cap must degrade to extra requests instead of stopping
+// validation. Retry only range-size rejections, down to a single height.
+func (c *Client) fetchMedianTimePastChunk(ctx context.Context, start uint32, output []uint32) error {
+	heights := make([]uint32, len(output))
 	for i := range heights {
-		heights[i] = fromHeight + uint32(i)
+		heights[i] = start + uint32(i)
 	}
-
-	resp, err := c.client.GetMedianTimePastByHeights(ctx, &blockchain_api.GetMedianTimePastByHeightsRequest{
-		Heights: heights,
-	})
+	resp, err := c.client.GetMedianTimePastByHeights(ctx, &blockchain_api.GetMedianTimePastByHeightsRequest{Heights: heights})
 	if err != nil {
-		return nil, errors.UnwrapGRPC(err)
+		if status.Code(err) == codes.InvalidArgument && len(output) > 1 {
+			half := len(output) / 2
+			if err := c.fetchMedianTimePastChunk(ctx, start, output[:half]); err != nil {
+				return err
+			}
+			return c.fetchMedianTimePastChunk(ctx, start+uint32(half), output[half:])
+		}
+		return errors.UnwrapGRPC(err)
+	}
+	if resp == nil || len(resp.MedianTimePast) != len(output) {
+		return errors.NewProcessingError("GetMedianTimePastByHeights returned an unexpected number of values")
+	}
+	copy(output, resp.MedianTimePast)
+	return nil
+}
+
+// maxMedianTimePastHeightsPerRequest returns the per-request chunk size used
+// by GetMedianTimePastRange, mirroring the server-side
+// BlockChain.MaxMedianTimePastHeights bound. If settings differ across processes,
+// fetchMedianTimePastChunk retries with smaller batches. Falls back to the default
+// when settings is nil or unset.
+func maxMedianTimePastHeightsPerRequest(tSettings *settings.Settings) uint32 {
+	const defaultMaxMedianTimePastHeights = 10000
+
+	if tSettings == nil || tSettings.BlockChain.MaxMedianTimePastHeights <= 0 {
+		return defaultMaxMedianTimePastHeights
 	}
 
-	return resp.MedianTimePast, nil
+	configured := uint64(tSettings.BlockChain.MaxMedianTimePastHeights)
+	if configured > uint64(^uint32(0)) {
+		return ^uint32(0)
+	}
+	return uint32(configured) //nolint:gosec // bounded above before conversion
 }

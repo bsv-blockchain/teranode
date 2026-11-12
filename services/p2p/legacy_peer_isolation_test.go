@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/stretchr/testify/require"
@@ -33,8 +34,8 @@ func registerWirePeer(t *testing.T, reg *blockchain.CentralizedPeerRegistry, id 
 func TestGetNodeStatusMessage_SeparatesLegacyPeerCount(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 
-	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", 10, nil, "")
-	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", 20, nil, "")
+	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", peerHeightClaim{Height: 10, AdvertisedHeight: 10}, nil, "")
+	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", peerHeightClaim{Height: 20, AdvertisedHeight: 20}, nil, "")
 	registerWirePeer(t, reg, "legacy:203.0.113.7:8333", 30, "")
 	registerWirePeer(t, reg, "legacy:203.0.113.8:8333", 31, "")
 	registerWirePeer(t, reg, "legacy:203.0.113.9:8333", 32, "")
@@ -72,7 +73,7 @@ func TestSyncCoordinator_NeverSeesWirePeer(t *testing.T) {
 func TestGetPeerRegistry_ExcludesWirePeers(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 
-	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", 10, nil, "")
+	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", peerHeightClaim{Height: 10, AdvertisedHeight: 10}, nil, "")
 	registerWirePeer(t, reg, "legacy:203.0.113.7:8333", 30, "")
 
 	resp, err := s.GetPeerRegistry(context.Background(), nil)
@@ -85,11 +86,59 @@ func TestGetPeerRegistry_ExcludesWirePeers(t *testing.T) {
 func TestGetPeers_ExcludesWirePeers(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 
-	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", 10, nil, "")
+	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", peerHeightClaim{Height: 10, AdvertisedHeight: 10}, nil, "")
 	registerWirePeer(t, reg, "legacy:203.0.113.7:8333", 30, "")
 
 	resp, err := s.GetPeers(context.Background(), nil)
 	require.NoError(t, err)
 	require.Len(t, resp.Peers, 1)
 	require.NotEqual(t, "legacy:203.0.113.7:8333", resp.Peers[0].Id)
+}
+
+// TestReconcileConnectionStates_LeavesWirePeersConnected is a regression test.
+// reconcileConnectionStates builds its liveness set from P2PClient.GetPeers(),
+// which reports libp2p IDs only, so a "legacy:host:port" key can never be a
+// member. Listing the registry without a transport filter therefore drove every
+// connected legacy peer down the "flagged but not live" arm and cleared it,
+// which zeroed legacy_connected_peers_count and greyed every dashboard row.
+//
+// Nothing repairs that from the legacy side: the reconcile loop only asserts
+// the connected state on a peer's first sighting, and Register never writes
+// IsConnected on an existing entry.
+//
+// This asserts the end state rather than the filter argument, so it still fails
+// if the filter is dropped again.
+func TestReconcileConnectionStates_LeavesWirePeersConnected(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+
+	liveID := mustNewPeerID(t)
+	goneID := mustNewPeerID(t)
+
+	s.addConnectedPeer(liveID, "", peerHeightClaim{}, nil, "")
+	s.addConnectedPeer(goneID, "", peerHeightClaim{}, nil, "")
+	registerWirePeer(t, reg, "legacy:203.0.113.7:8333", 912344, "")
+	registerWirePeer(t, reg, "legacy:198.51.100.9:8333", 912100, "")
+
+	s.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{
+		{ID: liveID.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}},
+		{ID: goneID.String()},
+	}}
+
+	s.reconcileConnectionStates(context.Background())
+
+	for _, id := range []string{"legacy:203.0.113.7:8333", "legacy:198.51.100.9:8333"} {
+		got, ok := reg.Get(id)
+		require.True(t, ok, "%s must still be registered", id)
+		require.True(t, got.IsConnected,
+			"%s is a wire peer: a libp2p connectedness sweep must not clear it", id)
+	}
+
+	// The libp2p half of the sweep must keep working.
+	got, ok := reg.Get(liveID.String())
+	require.True(t, ok)
+	require.True(t, got.IsConnected, "peer with a live connection keeps its flag")
+
+	got, ok = reg.Get(goneID.String())
+	require.True(t, ok)
+	require.False(t, got.IsConnected, "disconnected libp2p peer is still cleared")
 }

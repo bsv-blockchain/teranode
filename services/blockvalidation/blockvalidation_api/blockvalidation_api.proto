@@ -2,6 +2,9 @@ syntax = "proto3";
 
 option go_package = "./;blockvalidation_api";
 
+// Version: v1 (implicit). No version suffix; the unsuffixed name IS v1. A
+// breaking change adds the next suffixed version (v2) alongside it -- see
+// docs/references/protoVersioning.md.
 package blockvalidation_api;
 
 import "google/protobuf/timestamp.proto";
@@ -41,6 +44,11 @@ message ProcessBlockRequest {
   string base_url = 3;
   string peer_id = 4; // P2P peer identifier for peer tracking via P2P service
   uint32 block_id = 5; // Pre-assigned block ID from legacy netsync (0 = not pre-assigned, blockchain will auto-assign)
+  // True only when legacy netsync can show the block's hash sits at or below a pinned
+  // checkpoint hash matched in an internally linked header run (headerCache.Proven).
+  // Absent or false means no proof: block validation must not take the below-checkpoint
+  // quick route for the block and falls to full validation instead.
+  bool header_proven = 6;
 }
 
 // swagger:model ValidateBlockRequest

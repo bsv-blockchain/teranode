@@ -51,27 +51,30 @@ less docs/NETWORKS.md
 
 ### Set the gRPC admin API key
 
-The Docker deployment runs `peer`, `blockvalidation` and `subtreevalidation` as
-separate containers, so their gRPC calls cross the auth interceptor. Set
-`grpc_admin_api_key` in `settings_local.conf` to the **same** strong random value
-for every service:
+Blockchain refuses to start without `grpc_admin_api_key`, and every other
+service needs the **same** value to call it. The compose files read the key from
+the environment and pass it to every service. Generate a strong random value:
 
 ```bash
 openssl rand -hex 32
 ```
 
-```conf
-# settings_local.conf
-grpc_admin_api_key.docker.m = <the generated value>
+Put it in the quickstart `.env` file (never commit it):
+
+```bash
+# .env
+grpc_admin_api_key=<the generated value>
 ```
 
-This is required for a working node, not only for admin operations. Besides the
-admin RPCs (ban/unban, connect/disconnect peer, reset reputation), the key gates
-the P2P reporters that block and subtree validation use to record validated chain
-progress and block delivery. Leave it unset and those reports are rejected: no
-peer ever becomes a proven sync candidate, catchup stays in the budget-gated probe
-tier, and the node never settles on a good sync peer. The service logs this at
-`ERROR` on startup. Never commit the value.
+If it is missing, `docker compose` refuses to render the stack. If it is empty,
+a known placeholder, or shorter than 16 characters, Blockchain exits with a
+`grpc_admin_api_key is required` configuration error. A service started with a
+different key fails at startup, and turns its readiness check red if the key
+stops matching later.
+
+If you previously set `grpc_admin_api_key.docker.m` in `settings_local.conf`,
+move that same value into `.env` and delete the line. The environment value
+takes precedence, so the old line becomes dead config.
 
 ## Start
 

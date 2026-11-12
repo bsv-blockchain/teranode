@@ -2,11 +2,15 @@
 package blockassembly
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"sort"
+	mathbits "math/bits"
+	"os"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,15 +22,16 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/unminedsort"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
-	"github.com/bsv-blockchain/teranode/stores/tempstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
@@ -102,6 +107,34 @@ type BlockAssembler struct {
 	// logger provides logging functionality for the assembler
 	logger ulogger.Logger
 
+	// undecidedMu guards undecidedSince: each unmined transaction whose input check the store
+	// has not answered, with the time it was first left undecided. One undecided for longer than
+	// undecidedExcludeAfter is left out of a load instead of failing it (see undecidedLoad).
+	undecidedMu    sync.Mutex
+	undecidedSince map[chainhash.Hash]time.Time
+
+	// undecidedExcludeAfter overrides defaultUndecidedExcludeAfter; zero means the default.
+	// Tests shorten it.
+	undecidedExcludeAfter time.Duration
+
+	// unminedReloadPending is set when the unmined reload inside a reset failed after the reset
+	// had already cleared the subtrees, which leaves the mempool out of every template. The
+	// heartbeat tick queues a fresh reset for it, no sooner than unminedReloadRetryInterval after
+	// the failure or the last retry, until a reload succeeds (see retryFailedUnminedReload). Atomics, because the reload runs on the subtree
+	// processor's goroutine and the tick on the assembler's.
+	unminedReloadPending  atomic.Bool
+	pendingReloadHeld     atomic.Bool
+	unminedReloadValidate atomic.Bool
+	unminedReloadFailedAt atomic.Int64
+
+	// unminedReloadRetryInterval overrides defaultUnminedReloadRetryInterval; zero means the
+	// default. Tests shorten it.
+	unminedReloadRetryInterval time.Duration
+
+	// staleTip remembers since when block assembly has differed from the same chain tip, so a
+	// candidate is only reported as stale once the gap outlasts the normal new-block notification delay.
+	staleTip staleTipTracker
+
 	// stats tracks operational statistics for monitoring and debugging
 	stats *gocore.Stat
 
@@ -119,6 +152,11 @@ type BlockAssembler struct {
 
 	// subtreeProcessor handles the processing and organization of transaction subtrees
 	subtreeProcessor subtreeprocessor.Interface
+
+	// txMetaEvictor publishes txmeta DELETEs for txs the conflict-intent replay
+	// marks conflicting, so subtree validation's txmeta cache drops them.
+	// Nil when the txmeta topic is not configured.
+	txMetaEvictor *subtreeprocessor.TxMetaEvictor
 
 	// bestBlock atomically stores the current best block header and height together
 	bestBlock atomic.Pointer[BestBlockInfo]
@@ -141,19 +179,26 @@ type BlockAssembler struct {
 	// occupies a slot exactly once (see mtpFloor)
 	mtpFloorFlight singleflight.Group
 
+	// heldParents remembers the last parents whose emergency-difficulty hold was logged, so the hold
+	// is logged once per parent whether or not the median-time-past floor was readable
+	heldParents heldParentLatch
+
 	// stateChangeCh notifies listeners of state changes
 	// Protected by stateChangeMu to prevent race conditions
 	stateChangeMu sync.RWMutex
 	stateChangeCh chan BestBlockInfo
 
-	// currentChainMap maps block hashes to their heights
-	currentChainMap map[chainhash.Hash]uint32
+	// heartbeat records that the main select loop is still being serviced, so
+	// the liveness probe can distinguish a wedged assembler from an idle one
+	// (issue 1447)
+	heartbeat health.Heartbeat
 
-	// currentChainMapIDs tracks block IDs in the current chain
-	currentChainMapIDs map[uint32]struct{}
-
-	// currentChainMapMu protects access to chain maps
-	currentChainMapMu sync.RWMutex
+	// heartbeatInterval is how often the main loop's idle tick fires. It only
+	// needs to be comfortably shorter than any liveness timeout an operator
+	// would configure. Held per-assembler rather than as a package variable so
+	// a test that shrinks it cannot race another test's running loop.
+	// Set by NewBlockAssembler; read once when the loop starts.
+	heartbeatInterval time.Duration
 
 	// blockchainSubscriptionCh receives blockchain notifications
 	blockchainSubscriptionCh chan *blockchain.Notification
@@ -164,10 +209,103 @@ type BlockAssembler struct {
 	// resetCh handles reset requests for the assembler
 	resetCh chan resetRequest
 
+	// diskTxMapDegraded is set when a storage-triggered reset (see
+	// resetRequest.StorageTriggered) still hit a disk tx map storage error
+	// itself: the disk fault is one a fresh rotation can't cure, so further
+	// storage-triggered resets are suspended rather than reloading in a loop.
+	// Any reset that completes clean clears it (onResetDone). Touched only by
+	// the main loop goroutine.
+	diskTxMapDegraded bool
+
+	// diskTxMapResetPending is set when a storage-triggered reset is owed but
+	// did not run: it failed before the tx map rotation, so the phantom it was
+	// for is still there (onResetDone), or its request arrived within
+	// storageResetMinInterval of the previous one. The heartbeat runs it once
+	// allowed; any reset that rotates cancels it. Touched only by the main
+	// loop goroutine.
+	diskTxMapResetPending bool
+
+	// resetOwed holds the options of a reset that is not storage-triggered (after a failed
+	// queue drain, a ResetBlockAssembly call, or an invalid block block assembly built itself)
+	// that handleResetRequests refused because the mark of skipped fork transactions it would
+	// owe could not be recorded. The heartbeat queues it again once resetOwedRetryAt is past
+	// (requeueRefusedReset); resetOwedWait is the back-off, doubled on each refusal in a row.
+	// Touched only by the main loop goroutine.
+	resetOwed        *resetRequest
+	resetOwedWait    time.Duration
+	resetOwedRetryAt time.Time
+
+	// storageResetMinInterval is the least time between the end of one
+	// storage-triggered reset and the start of the next (zero means
+	// defaultStorageResetMinInterval), so a fault that each reset cures but
+	// that comes back straight after can't run a full unmined reload every
+	// heartbeat. lastStorageResetDone is when the last one was queued, then
+	// again when it finished. Touched
+	// only by the main loop goroutine.
+	storageResetMinInterval time.Duration
+	lastStorageResetDone    time.Time
+
 	// reconcileCh signals the channel listener to reconcile BA's tip with the
 	// blockchain service's tip via processNewBlockAnnouncement. Buffered cap 1
 	// so multiple triggers coalesce into a single reconciliation pass.
 	reconcileCh chan struct{}
+
+	// bestTipPos is the replay position: the place in the blockchain store's best-tip order of
+	// the last block block assembly handled (see replayBestTipChanges). bestTipPosKnown is
+	// false until the position has been read, and stays false against a blockchain service
+	// that does not serve that order, which leaves block assembly following the best header.
+	bestTipPos                atomic.Pointer[model.BestTipKey]
+	bestTipPosKnown           atomic.Bool
+	bestTipResetReplayPending atomic.Bool // candidates stay empty until reset's pending history succeeds or is given up
+	bestTipResetIncomplete    atomic.Bool // reset moved its target but has not finished reloading/persisting
+
+	// bestTipPosSaved is the position last persisted under BestTipPositionStateKey, and
+	// lastBestTipPosSave when a save was last tried, in Unix nanoseconds.
+	bestTipPosSaved    atomic.Pointer[model.BestTipKey]
+	lastBestTipPosSave atomic.Int64
+
+	// bestTipLowWaterQuiet is set when the last read of the low-water mark found none and no
+	// BlockMinedUnset notification arrived since, and lastBestTipLowWaterRead is when the mark
+	// was last read, in Unix nanoseconds (see readBestTipLowWaterIfDue).
+	bestTipLowWaterQuiet    atomic.Bool
+	lastBestTipLowWaterRead atomic.Int64
+
+	// lastBestTipReplay is when processNewBlockAnnouncement last ran, in Unix nanoseconds.
+	// The idle tick wakes a replay once it is older than blockassembly_reconcileInterval.
+	lastBestTipReplay atomic.Int64
+
+	// bestTipReplayFailures counts consecutive failed replay passes.
+	bestTipReplayFailures atomic.Int32
+
+	// lastBestTipProbe is when loadBestTipPosition last found the blockchain service without
+	// the best-tip order, in Unix nanoseconds. The next probe waits bestTipProbeInterval.
+	lastBestTipProbe atomic.Int64
+
+	// bestTipUnsupportedLogged is set once that finding has been logged as a warning.
+	bestTipUnsupportedLogged atomic.Bool
+
+	// skippedForkBlocksMarked holds the fork blocks, by hash with their height, whose
+	// transactions markSkippedForkTxs has already marked or given up. skippedForkMarkPending is
+	// set while a run of it is unfinished, and skippedForkReloadPending while the pool reload a
+	// run needs has not run (skippedForkWorkOwed reads both). skippedForkMarkWait is the back-off
+	// after the last run that did not finish, and the next one is not due before
+	// skippedForkMarkRetryAt. skippedForkMarkRan is set once a run started in the current pass
+	// (runOwedSkippedForkWork). skippedForkRecheck holds transactions a mark wrote off the
+	// longest chain without finishing its check against the best chain (markOffLongestChain).
+	// skippedForkHeldRepair holds the transactions block assembly held that a fork block whose
+	// subtree is gone mined, while their mark off the longest chain is unfinished; the record
+	// under SkippedForkMarkStateKey carries them, so a start repairs them although its pool is
+	// empty. skippedForkAtStart is set while Start runs the mark, before the pool is loaded. All
+	// are owned by the block-processing loop, and by Start before it.
+	skippedForkBlocksMarked  map[chainhash.Hash]uint32
+	skippedForkHeldRepair    []chainhash.Hash
+	skippedForkAtStart       bool
+	skippedForkMarkPending   bool
+	skippedForkReloadPending bool
+	skippedForkMarkWait      time.Duration
+	skippedForkMarkRetryAt   time.Time
+	skippedForkMarkRan       bool
+	skippedForkRecheck       map[chainhash.Hash]struct{}
 
 	// currentRunningState tracks the current operational state
 	currentRunningState atomic.Value
@@ -184,6 +322,11 @@ type BlockAssembler struct {
 	// unminedTransactionsLoading indicates if unmined transactions are currently being loaded
 	unminedTransactionsLoading atomic.Bool
 
+	// startupLoadHeld is set from construction until Start's load phase ends. It holds the
+	// subtree processor in its loading state, so the held count reads full while gRPC ingest is
+	// already up and the unmined load has not yet run or finished.
+	startupLoadHeld atomic.Bool
+
 	// unminedDropHashes accumulates hashes that should be dropped from the
 	// input queue at the end of loadUnminedTransactions. Populated by
 	// markAsConflicting via the cascade returned from MarkConflictingRecursively.
@@ -191,6 +334,10 @@ type BlockAssembler struct {
 	// then handed to subtreeProcessor.DrainQueue. Serialized by
 	// unminedTransactionsLoading; must not be touched concurrently.
 	unminedDropHashes map[chainhash.Hash]struct{}
+
+	// conflictWALRead paces the retries of a failed startup read of the conflict WAL. The zero
+	// value uses the defaults; tests shorten it.
+	conflictWALRead conflictWALReadBackoff
 
 	// wg tracks background goroutines for clean shutdown
 	wg sync.WaitGroup
@@ -212,6 +359,20 @@ type blockWithMeta struct {
 	meta  *model.BlockHeaderMeta
 }
 
+// BlockAssemblerOption configures optional NewBlockAssembler dependencies.
+type BlockAssemblerOption func(*blockAssemblerOptions)
+
+type blockAssemblerOptions struct {
+	txMetaEvictor *subtreeprocessor.TxMetaEvictor
+}
+
+// WithTxMetaEvictor makes the assembler (and its subtree processor) publish txmeta
+// DELETEs for every tx a conflict demotion marks conflicting. A nil evictor
+// disables publishing.
+func WithTxMetaEvictor(e *subtreeprocessor.TxMetaEvictor) BlockAssemblerOption {
+	return func(o *blockAssemblerOptions) { o.txMetaEvictor = e }
+}
+
 // NewBlockAssembler creates and initializes a new BlockAssembler instance.
 //
 // Parameters:
@@ -227,7 +388,17 @@ type blockWithMeta struct {
 // Returns:
 //   - *BlockAssembler: New block assembler instance
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, stats *gocore.Stat, utxoStore utxo.Store,
-	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) (*BlockAssembler, error) {
+	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest,
+	opts ...BlockAssemblerOption) (*BlockAssembler, error) {
+	var options blockAssemblerOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	// The main loop updates metrics (e.g. the disk tx map degraded gauge)
+	// whether or not a Server was built around this assembler.
+	initPrometheusMetrics()
+
 	bytesLittleEndian := make([]byte, 4)
 
 	if tSettings.ChainCfgParams == nil {
@@ -249,6 +420,10 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		stpOpts = append(stpOpts, subtreeprocessor.WithTxMapDirs(tSettings.BlockAssembly.TxMapDirs))
 	}
 
+	if options.txMetaEvictor != nil {
+		stpOpts = append(stpOpts, subtreeprocessor.WithTxMetaEvictor(options.txMetaEvictor))
+	}
+
 	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan, stpOpts...)
 	if err != nil {
 		return nil, err
@@ -262,17 +437,40 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		subtreeStore:        subtreeStore,
 		blockchainClient:    blockchainClient,
 		subtreeProcessor:    subtreeProcessor,
-		currentChainMap:     make(map[chainhash.Hash]uint32, tSettings.BlockAssembly.MaxBlockReorgCatchup),
-		currentChainMapIDs:  make(map[uint32]struct{}, tSettings.BlockAssembly.MaxBlockReorgCatchup),
+		txMetaEvictor:       options.txMetaEvictor,
 		defaultMiningNBits:  defaultMiningBits,
 		resetCh:             make(chan resetRequest, 2),
 		reconcileCh:         make(chan struct{}, 1),
 		currentRunningState: atomic.Value{},
+		heartbeatInterval:   defaultHeartbeatInterval,
 	}
 
 	b.setCurrentRunningState(StateStarting)
 
+	b.startupLoadHeld.Store(true)
+	subtreeProcessor.SetUnminedLoading(true)
+
+	// MoveForwardBlock and Reorg block the main loop for the whole call, so the
+	// processor beats on the loop's behalf at each step that proves the work is
+	// advancing. BeatIfStarted, not Beat: WaitForPendingBlocks also runs from
+	// Start, before the loop owns the heartbeat (issue 1447).
+	subtreeProcessor.SetProgressHook(b.heartbeat.BeatIfStarted)
+
 	return b, nil
+}
+
+// endStartupLoad ends the loading state NewBlockAssembler set, once. Start calls it when its load
+// phase ends and again on return, so the state clears on success and on every error path.
+func (b *BlockAssembler) endStartupLoad() {
+	if b.startupLoadHeld.CompareAndSwap(true, false) {
+		b.subtreeProcessor.SetUnminedLoading(false)
+	}
+}
+
+// HeldByUnminedLoad reports whether the held count reads full because the assembler is loading its
+// unmined transactions, at startup, inside a reset, or while a failed reload waits for its retry.
+func (b *BlockAssembler) HeldByUnminedLoad() bool {
+	return b.subtreeProcessor.UnminedLoading()
 }
 
 // TxCount returns the total number of transactions in the assembler.
@@ -323,6 +521,34 @@ func (b *BlockAssembler) ConsumerExited() bool {
 	return b.subtreeProcessor.ConsumerExited()
 }
 
+// QueueMaxItems returns the enforced (normalized) ingest-queue item cap, or a
+// value <= 0 when the queue is unbounded.
+//
+// Returns:
+//   - int64: The enforced item cap (<= 0 when unbounded)
+func (b *BlockAssembler) QueueMaxItems() int64 {
+	return b.subtreeProcessor.QueueMaxItems()
+}
+
+// MaxTransactionsInMemory returns the enforced limit on transactions held in
+// memory, or a value <= 0 when there is no limit.
+//
+// Returns:
+//   - int64: The enforced limit (<= 0 when unlimited)
+func (b *BlockAssembler) MaxTransactionsInMemory() int64 {
+	return b.subtreeProcessor.MaxTransactionsInMemory()
+}
+
+// QueueHeadAge returns how long the oldest queued batch has been waiting.
+// It is a diagnostic gauge for dispatcher-stall visibility and returns 0 when
+// the queue is empty.
+//
+// Returns:
+//   - time.Duration: Age of the oldest queued batch, or 0 if empty
+func (b *BlockAssembler) QueueHeadAge() time.Duration {
+	return b.subtreeProcessor.QueueHeadAge()
+}
+
 // SubtreeCount returns the total number of subtrees.
 //
 // Returns:
@@ -349,11 +575,43 @@ func (b *BlockAssembler) GetChainedSubtreesTotalSize() uint64 {
 	return b.subtreeProcessor.GetChainedSubtreesTotalSize()
 }
 
+// defaultHeartbeatInterval is the idle-tick period every assembler starts with.
+// Tests shrink the per-assembler field instead, so waiting several tick
+// intervals costs milliseconds rather than tens of seconds.
+const defaultHeartbeatInterval = 5 * time.Second
+
+// effectiveHeartbeatInterval is the idle tick the listener goroutine will
+// actually use. NewBlockAssembler always sets a positive interval, but the
+// package builds &BlockAssembler{} literals in a lot of tests, and
+// time.NewTicker panics on a non-positive interval from inside a goroutine,
+// which takes the process down rather than failing a test.
+func effectiveHeartbeatInterval(configured time.Duration) time.Duration {
+	if configured <= 0 {
+		return defaultHeartbeatInterval
+	}
+
+	return configured
+}
+
+// livenessTimeoutTooTight reports whether a configured liveness stall timeout
+// sits close enough to the idle tick that it cannot tell an idle loop from a
+// wedged one. Split out from the warning it drives so the rule can be tested
+// without capturing log output. Zero or less means the check is disabled, which
+// is never too tight.
+func livenessTimeoutTooTight(stallTimeout, heartbeatInterval time.Duration) bool {
+	return stallTimeout > 0 && stallTimeout <= 2*heartbeatInterval
+}
+
 // startChannelListeners initializes and starts all channel listeners for block assembly operations.
 // It handles blockchain notifications, mining candidate requests, and reset operations.
+// The listener goroutine also owns the liveness heartbeat, beating on every pass
+// of its select so a wedged loop can be told apart from an idle one.
 //
 // Parameters:
 //   - ctx: Context for cancellation
+//
+// Returns:
+//   - error: Any error encountered subscribing to blockchain notifications
 func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) {
 	// start a subscription for the best block header and the FSM state
 	// this will be used to reset the subtree processor when a new block is mined
@@ -369,64 +627,340 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 	// node it returns early when hashes match.
 	b.triggerReconcile()
 
+	heartbeatInterval := effectiveHeartbeatInterval(b.heartbeatInterval)
+
+	// A liveness timeout at or below the idle tick cannot tell an idle loop from
+	// a wedged one, so it would restart a healthy node. Warn rather than clamp:
+	// the operator chose the value and silently overriding it would hide the
+	// mistake (issue 1447).
+	if stallTimeout := b.settings.BlockAssembly.LivenessStallTimeout; livenessTimeoutTooTight(stallTimeout, heartbeatInterval) {
+		b.logger.Warnf("[BlockAssembler] blockassembly_livenessStallTimeout %s is not comfortably longer than the %s heartbeat interval: a healthy idle node may be reported as wedged and restarted", stallTimeout, heartbeatInterval)
+	}
+
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
 		// variables are defined here to prevent unnecessary allocations
 		b.setCurrentRunningState(StateRunning)
 
+		// Beat on every pass of the select, including the idle tick below, so an
+		// idle loop still beats. Why that is the right signal: health.Heartbeat.
+		heartbeatTicker := time.NewTicker(heartbeatInterval)
+		defer heartbeatTicker.Stop()
+
+		// First beat happens HERE, not at construction, so the heartbeat does
+		// not age through the startup work before this point (health.Heartbeat
+		// explains why). The first pass claims the heartbeat and every later
+		// pass renews it. Work inside a single pass beats as it advances; which
+		// steps beat is listed once, in the blockassembly_livenessStallTimeout
+		// long description.
 		for {
+			b.heartbeat.Beat()
+
 			select {
 			case <-ctx.Done():
 				b.logger.Infof("Stopping blockassembler as ctx is done")
+
+				// A deliberate stop is not a wedge. On the OS-signal shutdown
+				// path the health server stays up through the whole drain, so
+				// without this the heartbeat would age past the timeout and the
+				// probe would report a node that is stopping on purpose as
+				// wedged. On Kubernetes that kills the container immediately
+				// instead of letting the grace period finish the drain.
+				b.heartbeat.Disable()
+
+				// Saves after a pass are spaced out, so save the last position now. The
+				// context is done, so the write gets a short one of its own.
+				saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bestTipPositionShutdownSaveTimeout)
+				b.saveBestTipPosition(saveCtx)
+				cancel()
+
 				// Note: We don't close blockchainSubscriptionCh here because we don't own it -
 				// it's created by the blockchain client's Subscribe method
 				return
 
+			case <-heartbeatTicker.C:
+				// Idle tick: proves the loop is alive without requiring work.
+				// Also the polling point for a disk tx map post-commit storage
+				// error (moveForwardBlock, reorgBlocks, dequeue, removeTx,
+				// Stop, or reset's own reload): none of those call sites can
+				// fail the operation that observed the error - it already
+				// committed - so they request a reset instead, of which this
+				// is the only reader. A reset reloads unmined transactions
+				// from the UTXO store, the source of truth, curing any
+				// phantom the storage error left in the filter.
+				//
+				//
+				// One storage-triggered reset per fault: if that reset hits a
+				// storage error itself, the node is degraded and requests are
+				// consumed without resetting again, so a persistent disk fault
+				// can't loop full reloads. A clean reset of any kind clears it.
+				// A storage-triggered reset that failed before the tx map
+				// rotation left its phantom in place and is retried here too.
+				// Storage-triggered resets are paced by
+				// storageResetMinInterval; a request arriving sooner waits.
+				// A failed queue drain after a block left the txs it had
+				// dequeued in no subtree. Not a storage fault, so it resets
+				// even while degraded, as a plain (not storage-triggered)
+				// reset.
+				b.retryFailedUnminedReload()
+
+				if b.subtreeProcessor.TakeDrainResetRequested() {
+					b.logger.Warnf("[BlockAssembler] the queue drain after a block failed; resetting block assembly")
+					b.resetAfterDrainFailure()
+				}
+
+				b.requeueRefusedReset()
+
+				requested := b.subtreeProcessor.TakeResetRequested()
+				if b.diskTxMapResetPending {
+					b.diskTxMapResetPending = false
+					requested = true
+				}
+
+				if requested {
+					switch {
+					case b.diskTxMapDegraded:
+						b.logger.Debugf("[BlockAssembler] disk tx map degraded; not resetting for another post-commit storage error")
+					case time.Since(b.lastStorageResetDone) < b.storageResetInterval():
+						b.diskTxMapResetPending = true
+					default:
+						b.logger.Warnf("[BlockAssembler] disk tx map reported a storage error; resetting block assembly")
+
+						// Stamped when queued too, so a tick before the reset
+						// is picked up can't queue a second one.
+						b.lastStorageResetDone = time.Now()
+						b.resetStorageTriggered()
+					}
+				}
+
+				// Wake a replay of the tip changes if none ran for
+				// blockassembly_reconcileInterval: a dropped subscription
+				// delivers no notification until it reconnects. The check
+				// runs outside StateReconciling, so a mining candidate asked
+				// for meanwhile is not an empty one, and a replay starts only
+				// when the tip moved.
+				b.wakeIdleReconcile(ctx)
+
 			case resetReq := <-b.resetCh:
 				b.setCurrentRunningState(StateResetting)
-
-				// If FullReset requested, run lightweight consistency scan first
-				if resetReq.FullReset {
-					if fixErr := b.fixUnminedSinceInconsistencies(ctx); fixErr != nil {
-						b.logger.Errorf("[BlockAssembler] error fixing unmined_since inconsistencies: %v", fixErr)
-					}
-				}
-
-				err := b.reset(ctx, resetReq.ValidateInputs)
-
-				// empty out the reset channel
-				for len(b.resetCh) > 0 {
-					bufferedCh := <-b.resetCh
-					if bufferedCh.ErrCh != nil {
-						bufferedCh.ErrCh <- nil
-					}
-				}
-
-				if resetReq.ErrCh != nil {
-					resetReq.ErrCh <- err
-				}
-
-				b.setCurrentRunningState(StateRunning)
+				b.handleResetRequests(ctx, resetReq)
+				b.returnToRunning(ctx)
 
 			case notification := <-b.blockchainSubscriptionCh:
 				b.setCurrentRunningState(StateBlockchainSubscription)
 
-				if notification.Type == model.NotificationType_Block {
+				if b.takeBlockNotifications(notification) {
 					b.processNewBlockAnnouncement(ctx)
 				}
 
-				b.setCurrentRunningState(StateRunning)
+				b.returnToRunning(ctx)
 
 			case <-b.reconcileCh:
 				b.setCurrentRunningState(StateReconciling)
 				b.processNewBlockAnnouncement(ctx)
-				b.setCurrentRunningState(StateRunning)
+				b.returnToRunning(ctx)
 			} // select
 		} // for
 	}()
 
 	return nil
+}
+
+// handleResetRequests runs one reset on behalf of first and of every request
+// already queued in resetCh, and answers each of them with that reset's result.
+//
+// The queue is drained before the reset runs, and the flags are merged: the reset
+// scans for unmined_since inconsistencies if any request asked for a full reset,
+// validates inputs if any asked for it, and counts as storage-triggered if any
+// was. Draining after the run instead would answer a queued validating or full
+// request with nil although the reset that ran did neither. A request that arrives
+// while the reset runs stays queued and gets its own reset on the next pass of the
+// loop.
+//
+// Each ErrCh is buffered (cap 1) by its sender (resetWithOptions,
+// resetStorageTriggered, resetAfterDrainFailure), which only logs a non-nil error.
+func (b *BlockAssembler) handleResetRequests(ctx context.Context, first resetRequest) {
+	batch := []resetRequest{first}
+
+	// Every sender is a goroutine blocked on resetCh once its two slots are full,
+	// and each receive lets the next one in, so drain until a receive would block
+	// rather than counting len once: a count takes only the buffered two and
+	// leaves the rest of a burst to run as resets of their own.
+drain:
+	for {
+		select {
+		case req := <-b.resetCh:
+			batch = append(batch, req)
+		default:
+			break drain
+		}
+	}
+
+	var fullReset, validateInputs, storageTriggered bool
+
+	for _, req := range batch {
+		fullReset = fullReset || req.FullReset
+		validateInputs = validateInputs || req.ValidateInputs
+		storageTriggered = storageTriggered || req.StorageTriggered
+	}
+
+	// A reset refused earlier (resetOwed) runs with this one, so it does not run again. If this
+	// one then fails before the rotation, the owed options go with it, as a failed reset's own
+	// options always did; nothing asks for them again.
+	owed := b.resetOwed
+	b.resetOwed = nil
+
+	if owed != nil {
+		fullReset = fullReset || owed.FullReset
+		validateInputs = validateInputs || owed.ValidateInputs
+	}
+
+	answer := func(err error) {
+		for _, req := range batch {
+			if req.ErrCh != nil {
+				req.ErrCh <- err
+			}
+		}
+	}
+
+	b.skippedForkMarkRan = false
+
+	// A reset traverses only its endpoint lineages. Keep the replay position so any
+	// briefly winning branch outside those lineages is still replayed afterwards. Without a
+	// replay position nothing replays them, so the reset owes the mark of skipped fork
+	// transactions a move to the best header owes. As for that move, it is recorded first,
+	// since the reset persists its new tip, and without the record the reset does not run.
+	//
+	// Owed work runs before the reset, whose reload takes in what it unmarks, so the pass
+	// needs no second reload. Without a replay position the record is then written again
+	// and the work owed again: the reset reads the best tip anew, and a block that became the
+	// best tip in between is marked by the run that ends the pass. A run that does not finish
+	// is not run a second time in the pass (runOwedSkippedForkWork).
+	// A refused reset stays owed, since nothing else asks for it again: a storage-triggered one
+	// as a reset that failed before the rotation (onResetDone), any other in resetOwed, which
+	// the heartbeat queues again after its own back-off.
+	refuse := func(err error) {
+		b.skippedForkMarkPending = true
+		b.noteSkippedForkMarkFailure(time.Now())
+		prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_record").Inc()
+
+		refused := errors.NewProcessingError("[BlockAssembler] reset refused: the mark of skipped fork transactions it would owe cannot be recorded", err)
+		b.logger.Errorf("%v", refused)
+
+		b.onResetDone(storageTriggered, subtreeprocessor.ResetResponse{}, refused)
+
+		b.resetOwed = owed
+
+		for _, req := range batch {
+			if req.StorageTriggered {
+				continue
+			}
+
+			if b.resetOwed == nil {
+				b.resetOwed = &resetRequest{}
+			}
+
+			b.resetOwed.FullReset = b.resetOwed.FullReset || req.FullReset
+			b.resetOwed.ValidateInputs = b.resetOwed.ValidateInputs || req.ValidateInputs
+		}
+
+		// Its own back-off, so a mark that keeps failing for another reason, which pushes
+		// skippedForkMarkRetryAt out on every pass, does not hold it back. It doubles while
+		// refusals follow one another, the heartbeat's retry among them, which arrives as a new
+		// request with resetOwed already cleared (requeueRefusedReset).
+		if b.resetOwed != nil {
+			if b.resetOwedWait == 0 {
+				b.resetOwedWait = skippedForkMarkRetryBase
+			} else {
+				b.resetOwedWait = retry.CappedExponentialBackoff(b.resetOwedWait, 2, skippedForkMarkRetryMax)
+			}
+
+			b.resetOwedRetryAt = time.Now().Add(b.resetOwedWait)
+		}
+
+		b.drainPendingInvalidations(ctx)
+		answer(refused)
+	}
+
+	wasPending := b.bestTipResetReplayPending.Load()
+	if !b.bestTipPosKnown.Load() {
+		if err := b.saveSkippedForkMark(ctx, true); err != nil {
+			refuse(err)
+			return
+		}
+
+		b.skippedForkMarkPending = true
+	}
+
+	if b.skippedForkWorkOwed() {
+		if err := b.markSkippedForkTxs(ctx, true); err == nil && !b.bestTipPosKnown.Load() {
+			if err = b.saveSkippedForkMark(ctx, true); err != nil {
+				refuse(err)
+				return
+			}
+
+			b.skippedForkMarkPending = true
+			b.skippedForkMarkRan = false
+		}
+	}
+
+	// Past the last refusal: the next refused reset starts its back-off over.
+	b.resetOwedWait = 0
+
+	// If FullReset requested, run lightweight consistency scan first
+	if fullReset {
+		if fixErr := b.fixUnminedSinceInconsistencies(ctx); fixErr != nil {
+			b.logger.Errorf("[BlockAssembler] error fixing unmined_since inconsistencies: %v", fixErr)
+		}
+	}
+
+	if b.bestTipPosKnown.Load() {
+		b.bestTipResetReplayPending.Store(true)
+	}
+	resp, err := b.resetWithResponse(ctx, validateInputs)
+	if err != nil && !resp.Rotated {
+		// Nothing was discarded: block assembly is still on its old tip with its old pool,
+		// and the ordinary replay from the unchanged position carries it forward.
+		b.bestTipResetReplayPending.Store(wasPending)
+	}
+
+	if err != nil {
+		// The failed reset is the pass's one attempt: the owed work, which may need a reload
+		// that is a reset too, waits for the next pass or for the idle wake after a back-off,
+		// counted once in the pass.
+		if b.skippedForkWorkOwed() && !time.Now().Before(b.skippedForkMarkRetryAt) {
+			b.noteSkippedForkMarkFailure(time.Now())
+		}
+
+		b.skippedForkMarkRan = true
+	}
+	// Judge the storage outcome of this reset before replay can return an
+	// unrelated history error. A clean rotation still cured its disk fault.
+	b.onResetDone(storageTriggered, resp, err)
+	// The senders get the reset's own outcome. A failed replay afterwards is not a failed reset:
+	// the pending history stays set, and the next pass replays it from the saved position
+	// without resetting again.
+	if err == nil && b.bestTipPosKnown.Load() {
+		b.bestTipResetReplayPending.Store(true)
+
+		if _, replayErr := b.replayBestTipChanges(ctx); replayErr != nil {
+			b.logger.Errorf("[BlockAssembler] reset completed but pending tip changes need retrying: %v", replayErr)
+			b.triggerReconcile()
+		}
+	}
+
+	// The pass ends with the work a mark of skipped fork transactions owes, whether or not
+	// there is a replay position, unless it ran the mark before the reset.
+	b.runOwedSkippedForkWork(ctx)
+
+	// The Reset path replays moveForward blocks through the same
+	// conflict resolution, so it can queue refusals too. Unlike the
+	// reorg path this does not run inside processNewBlockAnnouncement,
+	// so nothing else would drain them until the next block arrives.
+	b.drainPendingInvalidations(ctx)
+
+	answer(err)
 }
 
 // triggerReconcile asks the channel listener to run processNewBlockAnnouncement.
@@ -439,12 +973,54 @@ func (b *BlockAssembler) triggerReconcile() {
 	}
 }
 
+// takeBlockNotifications takes first and every notification already queued behind it, and
+// reports whether any of them calls for a replay pass. One pass covers them all, since it reads
+// every block better than the replay position. During initial sync notifications queue up while
+// block assembly works, and a pass per notification would cost calls to the blockchain service
+// for each one that finds nothing new. A BlockMinedUnset notification means a block was
+// invalidated, which may have set the low-water mark, so the next pass reads it.
+func (b *BlockAssembler) takeBlockNotifications(first *blockchain.Notification) bool {
+	replay := false
+
+	take := func(notification *blockchain.Notification) {
+		if notification == nil {
+			return
+		}
+
+		switch notification.Type {
+		case model.NotificationType_Block:
+			replay = true
+		case model.NotificationType_BlockMinedUnset:
+			b.bestTipLowWaterQuiet.Store(false)
+			replay = true
+		}
+	}
+
+	take(first)
+
+	for queued := len(b.blockchainSubscriptionCh); queued > 0; queued-- {
+		select {
+		case notification, ok := <-b.blockchainSubscriptionCh:
+			if !ok {
+				return replay
+			}
+
+			take(notification)
+		default:
+			return replay
+		}
+	}
+
+	return replay
+}
+
 // reset performs a full reset of the block assembler state by clearing all subtrees and reloading from blockchain.
 //
 // This is the "nuclear option" for handling blockchain reorganizations and is used when:
-// 1. Large reorgs (>= CoinbaseMaturity blocks AND height > 1000) where incremental reorg is too expensive
-// 2. Failed reorgs where subtreeProcessor.Reorg() encountered errors
-// 3. Reorgs involving invalid blocks that require clean state
+//  1. Large reorgs (>= CoinbaseMaturity blocks AND height > 1000, or >= the UTXO retention at any height)
+//     where incremental reorg is too expensive or the moveForward txs may already be pruned
+//  2. Failed reorgs where subtreeProcessor.Reorg() encountered errors
+//  3. Reorgs involving invalid blocks that require clean state
 //
 // The reset process:
 // 1. Waits for BlockValidation background jobs to complete (WaitForPendingBlocks)
@@ -472,18 +1048,87 @@ func (b *BlockAssembler) triggerReconcile() {
 // Returns:
 //   - error: Any error encountered during reset
 func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) error {
+	_, err := b.resetWithResponse(ctx, validateInputs...)
+	return err
+}
+
+// resetExistenceChunkSize bounds one BatchDecorate call in dropPrunedTxs.
+const resetExistenceChunkSize = 10_000
+
+// dropPrunedTxs returns hashes without the ones the UTXO store reports as not
+// found (pruned), in order. Any other per-tx error is no evidence the record is
+// gone, so that hash is kept: dropping a live tx would leave it flagged mined while
+// its block is off the chain, and nothing repairs that later. A failing lookup
+// call, or a cancelled ctx, returns an error.
+func (b *BlockAssembler) dropPrunedTxs(ctx context.Context, hashes []chainhash.Hash) ([]chainhash.Hash, error) {
+	kept := make([]chainhash.Hash, 0, len(hashes))
+	pruned, unverified := 0, 0
+
+	for start := 0; start < len(hashes); start += resetExistenceChunkSize {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		b.heartbeat.BeatIfStarted()
+
+		chunk := hashes[start:min(start+resetExistenceChunkSize, len(hashes))]
+
+		unresolved := make([]*utxo.UnresolvedMetaData, len(chunk))
+		for i := range chunk {
+			unresolved[i] = &utxo.UnresolvedMetaData{Hash: chunk[i], Idx: i}
+		}
+
+		if err := b.utxoStore.BatchDecorate(ctx, unresolved, fields.UnminedSince); err != nil {
+			return nil, err
+		}
+
+		for i, u := range unresolved {
+			switch {
+			case u.Err == nil:
+				kept = append(kept, chunk[i])
+			case errors.Is(u.Err, errors.ErrTxNotFound):
+				pruned++
+			default:
+				unverified++
+
+				kept = append(kept, chunk[i])
+			}
+		}
+	}
+
+	if pruned > 0 || unverified > 0 {
+		b.logger.Warnf("[BlockAssembler][Reset] moveBack transactions before the unmined mark: %d pruned (no record) left out, %d with a lookup error kept", pruned, unverified)
+	}
+
+	return kept, nil
+}
+
+// resetWithResponse is reset, also returning the subtree processor's reset
+// response for onResetDone: the zero value when reset failed before reaching
+// the subtree processor, so before the tx map rotation.
+func (b *BlockAssembler) resetWithResponse(ctx context.Context, validateInputs ...bool) (subtreeprocessor.ResetResponse, error) {
+	var resp subtreeprocessor.ResetResponse
+
 	bestBlockchainBlockHeader, meta, err := b.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
-		return errors.NewProcessingError("[Reset] error getting best block header", err)
+		return resp, errors.NewProcessingError("[Reset] error getting best block header", err)
 	}
+
+	return b.resetToBlockWithResponse(ctx, bestBlockchainBlockHeader, meta.Height, validateInputs...)
+}
+
+// resetToBlockWithResponse rebuilds assembly at the requested block, which may be a
+// historical winner being replayed rather than the blockchain service's current tip.
+func (b *BlockAssembler) resetToBlockWithResponse(ctx context.Context, bestBlockchainBlockHeader *model.BlockHeader, targetHeight uint32, validateInputs ...bool) (subtreeprocessor.ResetResponse, error) {
+	var resp subtreeprocessor.ResetResponse
 
 	// reset the block assembly
 	hash, h := b.CurrentBlock()
-	b.logger.Warnf("[BlockAssembler][Reset] resetting: %d: %s -> %d: %s", h, hash.Hash(), meta.Height, bestBlockchainBlockHeader.String())
+	b.logger.Warnf("[BlockAssembler][Reset] resetting: %d: %s -> %d: %s", h, hash.Hash(), targetHeight, bestBlockchainBlockHeader.String())
 
-	moveBackBlocksWithMeta, moveForwardBlocksWithMeta, err := b.getReorgBlocks(ctx, bestBlockchainBlockHeader, meta.Height)
+	moveBackBlocksWithMeta, moveForwardBlocksWithMeta, err := b.getReorgBlocks(ctx, bestBlockchainBlockHeader, targetHeight)
 	if err != nil {
-		return errors.NewProcessingError("[Reset] error getting reorg blocks", err)
+		return resp, errors.NewProcessingError("[Reset] error getting reorg blocks", err)
 	}
 
 	// Fast-forward reset is safe when the whole forward range is at/below the
@@ -500,14 +1145,14 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 	// forward range entirely. The safety therefore rests on these being the real
 	// historical chain (gated by the checkpoint), not on the height test alone.
 	//
-	// Testing meta.Height (the target tip) alone is sufficient: it is the max
-	// height of the forward range, so meta.Height <= checkpoint implies every
+	// Testing targetHeight (the target tip) alone is sufficient: it is the max
+	// height of the forward range, so targetHeight <= checkpoint implies every
 	// forward block is <= checkpoint. A range that straddles the checkpoint has
-	// meta.Height > checkpoint and takes the full path.
+	// targetHeight > checkpoint and takes the full path.
 	highestCheckpoint := blockchain.HighestCheckpointHeight(b.settings.ChainCfgParams.Checkpoints)
-	useFastForwardReset := meta.Height <= highestCheckpoint
+	useFastForwardReset := targetHeight <= highestCheckpoint
 
-	currentHeight := meta.Height
+	currentHeight := targetHeight
 
 	moveBackBlocks := make([]*model.Block, len(moveBackBlocksWithMeta))
 	for i, withMeta := range moveBackBlocksWithMeta {
@@ -519,11 +1164,11 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 		moveForwardBlocks[i] = withMeta.block
 	}
 
-	b.logger.Warnf("[BlockAssembler][Reset] resetting to new best block header: %d", meta.Height)
+	b.logger.Warnf("[BlockAssembler][Reset] resetting to new best block header: %d", targetHeight)
 
 	// make sure we have processed all pending blocks before resetting
 	if err = b.subtreeProcessor.WaitForPendingBlocks(ctx); err != nil {
-		return errors.NewProcessingError("[Reset] error waiting for pending blocks", err)
+		return resp, errors.NewProcessingError("[Reset] error waiting for pending blocks", err)
 	}
 
 	// Best-effort wait for BlockValidation to finish processing any invalid moveBack blocks.
@@ -540,7 +1185,7 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 			b.logger.Infof("[BlockAssembler][Reset] waiting for invalid block %s to be processed by BlockValidation", blockHash.String())
 			if waitErr := b.waitForBlockMinedSet(ctx, blockHash); waitErr != nil {
 				if ctx.Err() != nil {
-					return errors.NewProcessingError("[Reset] context cancelled while waiting for invalid block mined_set", waitErr)
+					return resp, errors.NewProcessingError("[Reset] context cancelled while waiting for invalid block mined_set", waitErr)
 				}
 				b.logger.Warnf("[BlockAssembler][Reset] gave up waiting for invalid block %s mined_set: %v (proceeding anyway — txs may be recovered on next reset)", blockHash.String(), waitErr)
 			}
@@ -574,7 +1219,15 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 		// transactions that appear in BOTH moveBack and moveForward as unmined
 		moveForwardTxMap := make(map[chainhash.Hash]struct{})
 		moveForwardMapComplete := true
+
+		// This loop and the moveBack one below run one GetSubtrees per block
+		// inside a single pass of the main select, so each iteration beats at the
+		// top, proving the previous block's read returned (issue 1447). A reset
+		// can move hundreds of blocks and persists state only at the end, so a
+		// probe kill part-way through would restart straight into the same reset.
 		for _, blockWithMeta := range moveForwardBlocksWithMeta {
+			b.heartbeat.BeatIfStarted()
+
 			if blockWithMeta.meta.Invalid {
 				continue
 			}
@@ -617,6 +1270,8 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 			moveBackTxs := make([]chainhash.Hash, 0, len(moveBackBlocksWithMeta)*100)
 
 			for _, blockWithMeta := range moveBackBlocksWithMeta {
+				b.heartbeat.BeatIfStarted()
+
 				if blockWithMeta.meta.Invalid {
 					// Skip invalid blocks — BlockValidation has already handled them via
 					// setTxMinedStatus(unsetMined=true) which we waited for above.
@@ -642,8 +1297,30 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 				}
 			}
 
+			// Leave out moveBack txs the UTXO store has already pruned. A moveBack block can
+			// sit deeper than the retention window, so its fully spent txs may be gone, and
+			// the store treats marking a missing record as fatal. A pruned tx was mined
+			// deeper than the retention window and has no record left to re-add to assembly;
+			// its live children stay protected by the pruner's parent preservation.
+			kept, existsErr := b.dropPrunedTxs(ctx, moveBackTxs)
+
+			switch {
+			case existsErr == nil:
+				moveBackTxs = kept
+			case ctx.Err() != nil:
+				return resp, existsErr
+			default:
+				// Cannot tell pruned from live: mark them all, as before the lookup existed.
+				// Leaving them out would strand live txs flagged mined with their block off
+				// the chain; a pruned tx among them still hits the store's fatal, as before.
+				b.logger.Errorf("[BlockAssembler][Reset] error checking moveBack transactions exist, marking all %d: %v", len(moveBackTxs), existsErr)
+			}
+
 			// Mark net unmined transactions as NOT on longest chain (set unmined_since)
 			if len(moveBackTxs) > 0 {
+				// Proves the last moveBack read returned; the mark is one store call.
+				b.heartbeat.BeatIfStarted()
+
 				if err = b.utxoStore.MarkTransactionsOnLongestChain(ctx, moveBackTxs, false); err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset] error marking moveBack transactions as unmined: %v", err)
 				} else {
@@ -659,17 +1336,24 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 	// in the for/select in the subtreeprocessor
 	postProcessFn := func() error {
 		// reload the unmined transactions
-		if err = b.loadUnminedTransactions(ctx, shouldValidateInputs); err != nil {
+		if err = b.loadUnminedTransactions(ctx, true, shouldValidateInputs); err != nil {
+			// The reset has already cleared the subtrees, so the mempool is out of every
+			// template until a load succeeds. The callers only log this error, so the retry
+			// is queued here rather than left to an operator.
+			if ctx.Err() == nil {
+				b.noteFailedUnminedReload(shouldValidateInputs)
+			}
+
 			return errors.NewProcessingError("[Reset] error loading unmined transactions", err)
 		}
 
+		b.clearPendingUnminedReload(shouldValidateInputs)
+
 		// Drop any in-flight children of cascaded conflicting parents from
 		// the input queue before the existing post-postProcess drain runs
-		// and before default-case dequeue resumes.
-		if drop := b.unminedDropHashes; len(drop) > 0 {
-			b.subtreeProcessor.DrainQueue(drop)
-		}
-		b.unminedDropHashes = nil
+		// and before default-case dequeue resumes. Report-only: this runs
+		// inside reset's postProcess, after reset has already committed.
+		_ = b.drainUnminedDropHashes("drainQueue_reset_reload", true) // report-only: never returns a non-nil error for isReload=true
 
 		return nil
 	}
@@ -695,8 +1379,22 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 	// does not depend on a lookup that can itself fail. See resetBlockHeights.
 	resetHeights := resetBlockHeights(bestBlockchainBlockHeader, currentHeight, moveBackBlocksWithMeta, moveForwardBlocksWithMeta)
 
-	if response := b.subtreeProcessor.Reset(baBestBlockHeader, moveBackBlocks, moveForwardBlocks, useFastForwardReset, postProcessFn); response.Err != nil {
-		b.logger.Errorf("[BlockAssembler][Reset] resetting error resetting subtree processor: %v", response.Err)
+	wasIncomplete, wasPending := b.bestTipResetIncomplete.Load(), b.bestTipResetReplayPending.Load()
+	if b.bestTipPosKnown.Load() {
+		b.bestTipResetIncomplete.Store(true)
+		b.bestTipResetReplayPending.Store(true)
+	}
+
+	resp = b.subtreeProcessor.Reset(baBestBlockHeader, moveBackBlocks, moveForwardBlocks, useFastForwardReset, postProcessFn)
+	if resp.Err != nil {
+		b.logger.Errorf("[BlockAssembler][Reset] resetting error resetting subtree processor: %v", resp.Err)
+
+		if !resp.Rotated {
+			// The subtree processor failed before its tx map rotation, so it still holds its
+			// old tip, subtrees and pool. Nothing was discarded that a replay must rebuild.
+			b.bestTipResetIncomplete.Store(wasIncomplete)
+			b.bestTipResetReplayPending.Store(wasPending)
+		}
 		// something went wrong, we need to set the best block header in the block assembly to be the
 		// same as the subtree processor's best block header
 		stpHeader := b.subtreeProcessor.GetCurrentBlockHeader()
@@ -704,7 +1402,7 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 			// Nothing to realign to at all. Restore the pre-reset tip for the
 			// same reason as the unresolvable-height branch below.
 			b.setBestBlockHeader(baBestBlockHeader, baHeight)
-			return errors.NewProcessingError("[Reset] subtree processor has no current block header after a failed reset", response.Err)
+			return resp, errors.NewProcessingError("[Reset] subtree processor has no current block header after a failed reset", resp.Err)
 		}
 
 		// Resolve the height locally first. Every entry in resetHeights came from
@@ -736,7 +1434,7 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 				// with nothing left to trigger a retry. Being behind is
 				// recoverable; being wrongly level is not.
 				b.setBestBlockHeader(baBestBlockHeader, baHeight)
-				return errors.NewProcessingError("[Reset] error getting best block header meta", err)
+				return resp, errors.NewProcessingError("[Reset] error getting best block header meta", err)
 			}
 
 			stpHeight = stpHeaderMeta.Height
@@ -756,21 +1454,23 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 		// return value and the Errorf above agree with each other. The two
 		// branches above already return without persisting state for the same
 		// reason.
-		return errors.NewProcessingError("[Reset] subtree processor reset failed; block assembly realigned to %s at height %d", stpHeader.Hash().String(), currentHeight, response.Err)
+		return resp, errors.NewProcessingError("[Reset] subtree processor reset failed; block assembly realigned to %s at height %d", stpHeader.Hash().String(), currentHeight, resp.Err)
 	}
 
 	b.setBestBlockHeader(bestBlockchainBlockHeader, currentHeight)
 
 	if err = b.SetState(ctx); err != nil {
-		return errors.NewProcessingError("[Reset] error setting state", err)
+		return resp, errors.NewProcessingError("[Reset] error setting state", err)
 	}
 
 	_, height := b.CurrentBlock()
 	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(height))
 
+	b.bestTipResetIncomplete.Store(false)
+
 	b.logger.Warnf("[BlockAssembler][Reset] resetting block assembler DONE")
 
-	return nil
+	return resp, nil
 }
 
 // resetBlockHeights maps the hash of every block a reset can leave the subtree
@@ -847,6 +1547,13 @@ func (b *BlockAssembler) waitForBlockMinedSet(ctx context.Context, blockHash *ch
 
 	_, err := retry.Retry(retryCtx, b.logger, func() (bool, error) {
 		isMined, err := b.blockchainClient.GetBlockIsMined(retryCtx, blockHash)
+
+		// An answered poll is progress for liveness, a failed call is not: see
+		// the blockassembly_livenessStallTimeout long description (issue 1447).
+		if err == nil {
+			b.heartbeat.BeatIfStarted()
+		}
+
 		if err != nil {
 			// Short-circuit on non-retriable errors (block doesn't exist in DB)
 			if errors.Is(err, errors.ErrBlockNotFound) {
@@ -877,7 +1584,16 @@ func (b *BlockAssembler) waitForBlockMinedSet(ctx context.Context, blockHash *ch
 	return err
 }
 
-// processNewBlockAnnouncement updates the best block information.
+// processNewBlockAnnouncement brings block assembly to the chain's best tip. Every block
+// notification and every reconcile wake-up lands here, and the notification's own block is
+// not read: the blocks that sort better than the replay position are.
+//
+// It moves through every valid block that sorts better than the last one block assembly
+// handled, in the blockchain store's best-tip order, and from the low-water mark the store
+// records when the tip drops (replayBestTipChanges), so a branch that was the best chain only
+// briefly is moved forward and back like any other, even when block assembly was busy while
+// it won and lost. Against a blockchain service without that order it follows the best
+// header, as before.
 //
 // Parameters:
 //   - ctx: Context for cancellation
@@ -893,6 +1609,23 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		deferFn()
 	}()
 
+	// Drain on every exit path, including the error returns below: a refusal is
+	// recorded during block movement, and the block still needs invalidating
+	// even if a later step of this round failed. Cheap when empty (one mutex
+	// acquisition), and it must run AFTER movement, never during it.
+	defer b.drainPendingInvalidations(ctx)
+
+	// Whatever path this pass takes, it ends with the work a mark of skipped fork transactions
+	// owes (deferred after the drain, so it runs before it).
+	b.skippedForkMarkRan = false
+	defer b.runOwedSkippedForkWork(ctx)
+
+	b.lastBestTipReplay.Store(time.Now().UnixNano())
+
+	if !b.followBestTipChanges(ctx) {
+		return
+	}
+
 	// Use context-aware logger for trace correlation
 	ctxLogger := b.logger.WithTraceContext(ctx)
 
@@ -901,6 +1634,52 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		ctxLogger.Errorf("[BlockAssembler] error getting best block header: %v", err)
 		return
 	}
+
+	before, _ := b.CurrentBlock()
+
+	// Following the best header owes a mark of the fork blocks it skips when it moves the tip.
+	// The move persists block assembly's new tip, so the mark is recorded first: a crash right
+	// after the move still finishes it at the next start. Without that record block assembly
+	// does not move, and the pending run wakes the next pass after a back-off. With no move the
+	// mark a replay give-up owes is recorded already (followBestTipChanges), and the pass ends
+	// with it (runOwedSkippedForkWork), unless a failed reset was the pass's one attempt; the
+	// idle wake then runs it after the back-off.
+	if before == nil || !bestBlockchainBlockHeader.Hash().IsEqual(before.Hash()) {
+		if err = b.saveSkippedForkMark(ctx, true); err != nil {
+			b.skippedForkMarkPending = true
+			b.noteSkippedForkMarkFailure(time.Now())
+			prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_record").Inc()
+			b.logger.Errorf("[BlockAssembler] not following the best header to %s, the mark of skipped fork transactions it would owe cannot be recorded, retrying at %s: %v", bestBlockchainBlockHeader.Hash(), b.skippedForkMarkRetryAt.Format(time.RFC3339), err)
+
+			// The failure is this pass's one attempt (runOwedSkippedForkWork).
+			b.skippedForkMarkRan = true
+
+			return
+		}
+
+		b.skippedForkMarkPending = true
+	}
+
+	// A move that ran a reset ends on the best tip as well (errBestTipReset is the replay's
+	// version of the same outcome).
+	if err = b.moveToBlock(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta); err != nil && !errors.Is(err, errors.ErrBlockAssemblyReset) {
+		// The pending mark keeps the idle wake retrying the move, after a back-off. The
+		// failure is this pass's one attempt (runOwedSkippedForkWork).
+		b.noteSkippedForkMarkFailure(time.Now())
+		b.skippedForkMarkRan = true
+	}
+}
+
+// moveToBlock moves block assembly from its tip to the given block by the shortest path
+// through their common ancestor: a single move-forward, a catch-up, an in-memory reorg, or a
+// full reset. The block need not be the best tip: the replay passes each block that may
+// have been the best tip in turn. On success block assembly's tip is the block and its
+// state is persisted.
+//
+// It logs and counts its own failures, and returns the error so the replay can stop at the
+// failed change. An ErrBlockAssemblyReset means a reset successfully rebuilt assembly on this block.
+func (b *BlockAssembler) moveToBlock(ctx context.Context, bestBlockchainBlockHeader *model.BlockHeader, bestBlockchainBlockHeaderMeta *model.BlockHeaderMeta) (err error) {
+	ctxLogger := b.logger.WithTraceContext(ctx)
 
 	ctxLogger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), bestBlockchainBlockHeaderMeta.Height)
 
@@ -929,14 +1708,14 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	switch {
 	case bestBlockAccordingToBlockchain.Hash().IsEqual(bestBlockAccordingToBlockAssembly.Hash()):
 		ctxLogger.Infof("[BlockAssembler][%s] best block header is the same as the current best block header: %s", bestBlockchainBlockHeader.Hash(), bestBlockAccordingToBlockAssembly.Hash())
-		return
+		return nil
 
 	case !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(bestBlockAccordingToBlockAssembly.Hash()):
 		moveBackBlocksWithMeta, moveForwardBlocksWithMeta, err := b.getReorgBlocks(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height)
 		if err != nil {
 			ctxLogger.Errorf("[BlockAssembler][%s] error fetching blocks for reorg/catch-up decision: %v", bestBlockchainBlockHeader.Hash(), err)
 			prometheusBlockAssemblyProcessingStuck.WithLabelValues("reorg_blocks_fetch").Inc()
-			return
+			return err
 		}
 
 		if len(moveBackBlocksWithMeta) == 0 {
@@ -945,9 +1724,13 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 			b.setCurrentRunningState(StateMovingUp)
 
 			if err = b.handleCatchUp(ctx, moveForwardBlocksWithMeta); err != nil {
+				if subtreeprocessor.IsResetRequired(err) {
+					return b.resetAfterRefusedMove(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height, "catchup", err)
+				}
+
 				ctxLogger.Errorf("[BlockAssembler][%s] error catching up: %v", bestBlockchainBlockHeader.Hash(), err)
 				prometheusBlockAssemblyProcessingStuck.WithLabelValues("catchup").Inc()
-				return
+				return err
 			}
 		} else {
 			ctxLogger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), bestBlockAccordingToBlockAssembly.Hash())
@@ -962,7 +1745,7 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 					prometheusBlockAssemblyProcessingStuck.WithLabelValues("reorg").Inc()
 				}
 
-				return
+				return err
 			}
 		}
 	default:
@@ -973,15 +1756,19 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		if block, err = b.blockchainClient.GetBlock(ctx, bestBlockchainBlockHeader.Hash()); err != nil {
 			ctxLogger.Errorf("[BlockAssembler][%s] error getting block from blockchain: %v", bestBlockchainBlockHeader.Hash(), err)
 			prometheusBlockAssemblyProcessingStuck.WithLabelValues("get_block").Inc()
-			return
+			return err
 		}
 
 		b.setCurrentRunningState(StateMovingUp)
 
 		if err = b.subtreeProcessor.MoveForwardBlock(block); err != nil {
+			if subtreeprocessor.IsResetRequired(err) {
+				return b.resetAfterRefusedMove(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height, "moveforward", err)
+			}
+
 			ctxLogger.Errorf("[BlockAssembler][%s] error moveForwardBlock in subtree processor: %v", bestBlockchainBlockHeader.Hash(), err)
 			prometheusBlockAssemblyProcessingStuck.WithLabelValues("moveforward").Inc()
-			return
+			return err
 		}
 	}
 
@@ -997,6 +1784,35 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	if err = b.SetState(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		ctxLogger.Errorf("[BlockAssembler][%s] error setting state: %v", bestBlockchainBlockHeader.Hash(), err)
 	}
+
+	return nil
+}
+
+// resetAfterRefusedMove resets block assembly onto the block that moveToBlock was
+// moving to, after the subtree processor refused the move with a ResetRequiredError.
+// The processor refuses every reorg and move-forward after a failed fork reorg until a
+// reset has rotated its state. handleReorg resets on any failure, but the catch-up and
+// the single move-forward return theirs, so without this a chain that went back to the
+// losing side of that reorg would be refused on every pass.
+//
+// It returns ErrBlockAssemblyReset when the reset succeeded, as handleReorg does, so the
+// caller does not overwrite the tip the reset set. A reset that fails before the
+// processor's tx map rotation, for example in getReorgBlocks or in the sweep before the
+// rotation, leaves the processor refusing, so the next pass resets again. A reset that
+// fails after the rotation has already cleared the refusal.
+func (b *BlockAssembler) resetAfterRefusedMove(ctx context.Context, header *model.BlockHeader, height uint32, stuckLabel string, refusal error) error {
+	b.logger.Warnf("[BlockAssembler][%s] the subtree processor needs a reset after a failed fork reorg, resetting instead of moving: %v", header.Hash(), refusal)
+
+	// validateInputs=true for the same reason as a reset after a failed reorg in
+	// handleReorg: the refusal stands for that failed reorg.
+	if err := b.resetToBlockAndRecord(ctx, header, height, true); err != nil {
+		b.logger.Errorf("[BlockAssembler][%s] error resetting after the subtree processor refused to move: %v", header.Hash(), err)
+		prometheusBlockAssemblyProcessingStuck.WithLabelValues(stuckLabel).Inc()
+
+		return errors.NewProcessingError("error resetting after the subtree processor refused to move", err)
+	}
+
+	return errors.NewBlockAssemblyResetError("reset instead of moving, the last fork reorg failed and left the subtree processor needing a reset")
 }
 
 // setBestBlockHeader updates the internal best block header and height atomically.
@@ -1088,9 +1904,16 @@ func (b *BlockAssembler) GetCurrentRunningState() State {
 // Returns:
 //   - error: Any error encountered during startup
 func (b *BlockAssembler) Start(ctx context.Context) (err error) {
+	defer b.endStartupLoad()
+
 	if err = b.initState(ctx); err != nil {
 		return errors.NewProcessingError("[BlockAssembler] failed to initialize state: %v", err)
 	}
+
+	// Read the replay position before the first wake-up, so the best tips made while block
+	// assembly was down are replayed from where it stopped.
+	b.loadBestTipPosition(ctx)
+	b.lastBestTipReplay.Store(time.Now().UnixNano())
 
 	// Wait for any pending blocks to be processed before loading unmined transactions
 	if !b.skipWaitForPendingBlocks {
@@ -1100,28 +1923,60 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		}
 	}
 
+	// A mark of skipped fork transactions a restart cut short makes them unmined, so it runs
+	// before they are loaded.
+	if err = b.finishSkippedForkMarkAtStart(ctx); err != nil {
+		return err
+	}
+
 	// Replay any conflict-resolution WAL intents left behind by a crash mid-
 	// ProcessConflicting / ReverseProcessConflicting (#861), BEFORE chain-tip
 	// reconciliation — loadUnminedTransactions and any reset() rebuild must see a
-	// healed UTXO state. Replay failures are logged + counted, not fatal: an
-	// unrepaired intent is surfaced for alerting and retried on the next restart.
-	b.replayPendingConflictIntents(ctx)
+	// healed UTXO state. Unresolved recovery prevents startup below.
+	replayFailed := b.replayPendingConflictIntents(ctx)
+	if err = b.checkConflictRecoveryReady(ctx, replayFailed); err != nil {
+		return err
+	}
 
 	// Load unmined transactions (this includes cleanup of old unmined transactions first)
-	if err = b.loadUnminedTransactions(ctx); err != nil {
+	if err = b.loadUnminedTransactions(ctx, false); err != nil {
 		// we cannot start block assembly if we have not loaded unmined transactions successfully
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
 	}
+
+	// That load is the pool reload a mark of skipped fork transactions at start-up may owe.
+	b.skippedForkReloadPending = false
+
+	recoveredIDs, recoveryErr := b.prepareRecoveredConflictUpdates(ctx)
+	if recoveryErr != nil {
+		return recoveryErr
+	}
+
+	// the unmined txs were added outside the processing loop, so the loop has not yet
+	// checked the resulting subtrees against blockmaxsize
+	b.subtreeProcessor.RequestBlockMaxSizeCheck()
 
 	// AddTx is already enqueueing on the gRPC side. If loadUnminedTransactions
 	// flagged any tx as conflicting (and cascaded its descendants), drain the
 	// input queue with that set as a drop filter before the event-loop
 	// goroutine starts — otherwise in-flight children whose parent was just
 	// flagged would be admitted to the next mining candidate.
-	if drop := b.unminedDropHashes; len(drop) > 0 {
-		b.subtreeProcessor.DrainQueue(drop)
+	// Same reasoning as the reset postProcess DrainQueue call (see
+	// drainUnminedDropHashes): DrainQueue's own writes land after
+	// loadUnminedTransactions' end-of-load flush and need the same
+	// flush-and-check. Unlike reset, this is the startup load itself
+	// (isReload=false): fail, consistent with the load rule.
+	if err = b.drainUnminedDropHashes("drainQueue_startup", false); err != nil {
+		return errors.NewStorageError("[BlockAssembler] failed to flush disk tx map after startup queue drain: %v", err)
 	}
-	b.unminedDropHashes = nil
+
+	for _, id := range recoveredIDs {
+		if err = utxo.CompleteConflictIntent(ctx, b.utxoStore, id); err != nil {
+			return err
+		}
+	}
+
+	b.endStartupLoad()
 
 	// Start SubtreeProcessor goroutine after loading unmined transactions to avoid race conditions
 	b.subtreeProcessor.Start(ctx)
@@ -1146,6 +2001,60 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	return nil
 }
 
+// Defaults of conflictWALReadBackoff. The read is retried for conflictWALReadBudget: long enough to
+// ride out a storage cluster that is slow while every service starts at once, short enough that a
+// store that keeps failing still stops Block Assembly with the store's error.
+const (
+	conflictWALReadInitialBackoff = time.Second
+	conflictWALReadMaxBackoff     = 30 * time.Second
+	conflictWALReadBudget         = 10 * time.Minute
+)
+
+// conflictWALReadBackoff paces the retries of a startup read of the conflict WAL. A zero field
+// takes its default.
+type conflictWALReadBackoff struct {
+	initial time.Duration
+	max     time.Duration
+	budget  time.Duration
+}
+
+// pendingConflictIntents reads the conflict WAL for startup. A failed read is retried with
+// exponential backoff until the budget runs out or ctx ends, so a transient storage error delays
+// Block Assembly startup instead of failing it. Every error is retried: a permanent one, such as a
+// corrupt record, still fails startup, once the budget is spent. No new attempt starts after the
+// budget, but one already running is bounded only by the store's own timeouts and ctx.
+func (b *BlockAssembler) pendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
+	backoff := cmp.Or(b.conflictWALRead.initial, conflictWALReadInitialBackoff)
+	maxBackoff := cmp.Or(b.conflictWALRead.max, conflictWALReadMaxBackoff)
+	budget := cmp.Or(b.conflictWALRead.budget, conflictWALReadBudget)
+	deadline := time.Now().Add(budget)
+
+	for attempt := 1; ; attempt++ {
+		intents, err := b.utxoStore.PendingConflictIntents(ctx)
+		if err == nil {
+			return intents, nil
+		}
+
+		if ctx.Err() != nil {
+			return nil, err
+		}
+
+		if time.Now().Add(backoff).After(deadline) {
+			return nil, errors.NewStorageError("[BlockAssembler] could not read the conflict WAL in %d attempt(s) over %s", attempt, budget, err)
+		}
+
+		b.logger.Warnf("[BlockAssembler] reading the conflict WAL failed (attempt %d), retrying in %s: %v", attempt, backoff, err)
+
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(backoff):
+		}
+
+		backoff = retry.CappedExponentialBackoff(backoff, 2, maxBackoff)
+	}
+}
+
 // replayPendingConflictIntents drives crash recovery for the conflict-resolution
 // WAL (#861). It loads every intent that a previous process began but never
 // completed (interrupted ProcessConflicting / ReverseProcessConflicting), and
@@ -1153,98 +2062,96 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 // fully-applied or partially-applied operation converges to the same end-state —
 // so a clean restart heals the UTXO store with no operator action.
 //
-// Replay failures are NOT fatal to startup: a failed replay is logged loudly and
-// counted on a Prometheus metric for alerting, and the intent is left in the WAL
-// to be retried on the next restart. Failing startup outright would wedge the
-// node on a single bad intent.
-func (b *BlockAssembler) replayPendingConflictIntents(ctx context.Context) {
+// Replay failures are logged and counted. Start checks the remaining WAL before
+// loading transactions and refuses to mine against unresolved recovery. The
+// returned set holds the IDs of the intents that replay could not resolve.
+//
+// Reverse intents run first. A successful reverse retires the finished forward
+// intent of its block, so the forward intents are read again afterwards. A
+// forward intent whose block still has a pending reverse intent is left alone:
+// rolling it back over a partial reverse would corrupt the store.
+func (b *BlockAssembler) replayPendingConflictIntents(ctx context.Context) (failed map[chainhash.Hash]struct{}) {
+	failed = make(map[chainhash.Hash]struct{})
+
 	if b.utxoStore == nil {
-		return
+		return failed
 	}
 
-	intents, err := b.utxoStore.PendingConflictIntents(ctx)
+	intents, err := b.pendingConflictIntents(ctx)
 	if err != nil {
 		// Distinct from per-intent "failure": this is a failure to read the WAL at
 		// all, not a replay attempt — keep the two apart on dashboards/alerts.
 		prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("load_error").Inc()
 		b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] failed to load pending conflict intents: %v", err)
 
-		return
+		return failed
 	}
 
 	prometheusBlockAssemblerConflictIntentsPending.Set(float64(len(intents)))
 
 	if len(intents) == 0 {
-		return
+		return failed
 	}
 
 	b.logger.Warnf("[BlockAssembler][replayPendingConflictIntents] replaying %d interrupted conflict-resolution intent(s)", len(intents))
 
+	var forwards []utxo.ConflictIntent
+
 	for _, intent := range intents {
-		// Gate on chain membership before re-applying. An intent only describes a
-		// valid operation while the block that triggered it is in the expected
-		// chain position: a forward resolution is valid only while its block is on
-		// the longest chain; a reverse is valid only while its block is off it.
-		// A completed-but-not-tombstoned intent whose block was since reorged the
-		// other way is STALE — blindly re-running it would undo the later, valid
-		// reorg and corrupt UTXO state. Such intents are healed (inverse applied),
-		// not replayed — see the stale branch below.
-		onChain, chainErr := b.isBlockOnLongestChain(ctx, intent.BlockHash)
-		if chainErr != nil {
-			// Could not determine chain state — leave the intent for the next
-			// restart rather than guess. Counted distinctly from a replay failure.
-			prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("chain_check_error").Inc()
-			b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] could not check chain membership of block %s for %s intent (id %s): %v",
-				intent.BlockHash.String(), intent.Kind, intent.IntentID().String(), chainErr)
+		if intent.Kind == utxo.ConflictIntentReverse {
+			if !b.replayOneConflictIntent(ctx, intent) {
+				failed[intent.IntentID()] = struct{}{}
+			}
 
 			continue
 		}
 
-		if b.isConflictIntentStale(intent.Kind, onChain) {
-			// The block reorged into the OPPOSITE position from what the operation
-			// assumed. Re-running the original op would be wrong, but so would a bare
-			// discard: a partially-applied op (e.g. a forward killed after step 2
-			// locked parents but before step 5 unlocked them, whose block then
-			// reorged off-chain while block assembly was down) would be left torn
-			// with no recovery path. Heal by applying the INVERSE so the UTXO state
-			// converges to the new chain reality.
-			b.logger.Warnf("[BlockAssembler][replayPendingConflictIntents] healing stale %s intent for block %s (onLongestChain=%t, id %s) — block reorged the other way; applying the inverse",
-				intent.Kind, intent.BlockHash.String(), onChain, intent.IntentID().String())
+		forwards = append(forwards, intent)
+	}
 
-			if healErr := b.healStaleConflictIntent(ctx, intent); healErr != nil {
-				prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("failure").Inc()
-				b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] MANUAL INTERVENTION MAY BE REQUIRED: failed to heal stale %s intent (height %d, %d txs, id %s): %v",
-					intent.Kind, intent.BlockHeight, len(intent.TxHashes), intent.IntentID().String(), healErr)
+	if len(forwards) > 0 && len(forwards) < len(intents) {
+		pending, err := b.pendingConflictIntents(ctx)
+		if err != nil {
+			prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("load_error").Inc()
+			b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] failed to re-read pending conflict intents after the reverse intents: %v", err)
+
+			for _, intent := range forwards {
+				failed[intent.IntentID()] = struct{}{}
+			}
+
+			return failed
+		}
+
+		forwards = forwards[:0]
+		reverseBlocks := make(map[chainhash.Hash]struct{})
+
+		for _, intent := range pending {
+			if intent.Kind == utxo.ConflictIntentReverse {
+				reverseBlocks[intent.BlockHash] = struct{}{}
+			}
+		}
+
+		for _, intent := range pending {
+			if intent.Kind == utxo.ConflictIntentReverse {
+				continue
+			}
+
+			if _, ok := reverseBlocks[intent.BlockHash]; ok {
+				b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] leaving %s intent %s pending: the reverse intent of block %s is unresolved",
+					intent.Kind, intent.IntentID().String(), intent.BlockHash.String())
+
+				failed[intent.IntentID()] = struct{}{}
 
 				continue
 			}
 
-			prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("stale_healed").Inc()
-
-			if completeErr := b.utxoStore.CompleteConflictIntent(ctx, intent.IntentID()); completeErr != nil {
-				b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] healed stale %s intent %s but failed to clear WAL record (will retry next restart): %v",
-					intent.Kind, intent.IntentID().String(), completeErr)
-			}
-
-			continue
+			forwards = append(forwards, intent)
 		}
+	}
 
-		if replayErr := b.replayConflictIntent(ctx, intent); replayErr != nil {
-			prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("failure").Inc()
-			b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] MANUAL INTERVENTION MAY BE REQUIRED: failed to replay %s intent (height %d, %d txs, id %s): %v",
-				intent.Kind, intent.BlockHeight, len(intent.TxHashes), intent.IntentID().String(), replayErr)
-
-			continue
-		}
-
-		prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("success").Inc()
-
-		// ProcessConflicting / ReverseProcessConflicting already complete the
-		// intent on success via their own wrapper; this is a belt-and-suspenders
-		// delete (idempotent) so replay is self-contained.
-		if completeErr := b.utxoStore.CompleteConflictIntent(ctx, intent.IntentID()); completeErr != nil {
-			b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] replayed %s intent %s but failed to clear WAL record (will retry next restart): %v",
-				intent.Kind, intent.IntentID().String(), completeErr)
+	for _, intent := range forwards {
+		if !b.replayOneConflictIntent(ctx, intent) {
+			failed[intent.IntentID()] = struct{}{}
 		}
 	}
 
@@ -1259,6 +2166,84 @@ func (b *BlockAssembler) replayPendingConflictIntents(ctx context.Context) {
 	} else {
 		prometheusBlockAssemblerConflictIntentsPending.Set(float64(len(remaining)))
 	}
+
+	return failed
+}
+
+// replayOneConflictIntent replays or heals one pending intent and reports whether it resolved it.
+func (b *BlockAssembler) replayOneConflictIntent(ctx context.Context, intent utxo.ConflictIntent) bool {
+	// Gate on chain membership before re-applying. An intent only describes a
+	// valid operation while the block that triggered it is in the expected
+	// chain position: a forward resolution is valid only while its block is on
+	// the longest chain; a reverse is valid only while its block is off it.
+	// A completed-but-not-tombstoned intent whose block was since reorged the
+	// other way is STALE — blindly re-running it would undo the later, valid
+	// reorg and corrupt UTXO state. Such intents are healed (inverse applied),
+	// not replayed — see the stale branch below.
+	onChain, chainErr := b.isBlockOnLongestChain(ctx, intent.BlockHash)
+	if chainErr != nil {
+		// Could not determine chain state — leave the intent for the next
+		// restart rather than guess. Counted distinctly from a replay failure.
+		prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("chain_check_error").Inc()
+		b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] could not check chain membership of block %s for %s intent (id %s): %v",
+			intent.BlockHash.String(), intent.Kind, intent.IntentID().String(), chainErr)
+
+		return false
+	}
+
+	if b.isConflictIntentStale(intent.Kind, onChain) {
+		// The block reorged into the OPPOSITE position from what the operation
+		// assumed. Re-running the original op would be wrong, but so would a bare
+		// discard: a partially-applied op (e.g. a forward killed after step 2
+		// locked parents but before step 5 unlocked them, whose block then
+		// reorged off-chain while block assembly was down) would be left torn
+		// with no recovery path. Heal by applying the INVERSE so the UTXO state
+		// converges to the new chain reality.
+		b.logger.Warnf("[BlockAssembler][replayPendingConflictIntents] healing stale %s intent for block %s (onLongestChain=%t, id %s) — block reorged the other way; applying the inverse",
+			intent.Kind, intent.BlockHash.String(), onChain, intent.IntentID().String())
+
+		if healErr := b.healStaleConflictIntent(ctx, intent); healErr != nil {
+			prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("failure").Inc()
+			b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] MANUAL INTERVENTION MAY BE REQUIRED: failed to heal stale %s intent (height %d, %d txs, id %s): %v",
+				intent.Kind, intent.BlockHeight, len(intent.TxHashes), intent.IntentID().String(), healErr)
+
+			return false
+		}
+
+		prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("stale_healed").Inc()
+
+		if completeErr := utxo.CompleteConflictIntent(ctx, b.utxoStore, intent.IntentID()); completeErr != nil {
+			b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] healed stale %s intent %s but failed to clear WAL record (will retry next restart): %v",
+				intent.Kind, intent.IntentID().String(), completeErr)
+		}
+
+		return true
+	}
+
+	if replayErr := b.replayConflictIntent(ctx, intent); replayErr != nil {
+		prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("failure").Inc()
+		b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] MANUAL INTERVENTION MAY BE REQUIRED: failed to replay %s intent (height %d, %d txs, id %s): %v",
+			intent.Kind, intent.BlockHeight, len(intent.TxHashes), intent.IntentID().String(), replayErr)
+
+		return false
+	}
+
+	prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("success").Inc()
+
+	// A replayed forward intent stays pending until Start acknowledges it.
+	if intent.Kind == utxo.ConflictIntentForward {
+		return true
+	}
+
+	// ProcessConflicting / ReverseProcessConflicting already complete the
+	// intent on success via their own wrapper; this is a belt-and-suspenders
+	// delete (idempotent) so replay is self-contained.
+	if completeErr := utxo.CompleteConflictIntent(ctx, b.utxoStore, intent.IntentID()); completeErr != nil {
+		b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] replayed %s intent %s but failed to clear WAL record (will retry next restart): %v",
+			intent.Kind, intent.IntentID().String(), completeErr)
+	}
+
+	return true
 }
 
 // isConflictIntentStale reports whether an intent of the given kind is stale —
@@ -1298,29 +2283,145 @@ func (b *BlockAssembler) isBlockOnLongestChain(ctx context.Context, blockHash ch
 	return b.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{meta.ID})
 }
 
+// conflictIntentRefusalHandler builds the refusal callback used by WAL replay. Unlike the block-movement path there is no block movement in flight
+// here, but invalidating a block during startup replay would fight the FSM, so
+// refusals are logged and counted only. A refused replay leaves the UTXO set
+// consistent with the honest chain, which is the outcome that matters.
+func (b *BlockAssembler) conflictIntentRefusalHandler(blockHash chainhash.Hash) utxo.ProcessConflictingOption {
+	return utxo.WithRefusalHandler(
+		func(loser chainhash.Hash) {
+			b.logger.Errorf("[replayPendingConflictIntents][%s] REFUSED to demote transaction %s during WAL replay: it is mined on that block's own ancestry",
+				blockHash.String(), loser.String())
+
+			// Queue it like the live path does. A refusal here means a previous
+			// process recorded an intent for a block that is an ancestor double
+			// spend; the demotion is correctly not re-applied, but the block is
+			// still on the chain, and logging alone would leave it there with
+			// nothing to act on it. The first drain after startup picks it up.
+			if b.subtreeProcessor != nil {
+				b.subtreeProcessor.QueueInvalidation(blockHash)
+			}
+		},
+	)
+}
+
+// conflictIntentConfirmedLoserHandler logs a losing transaction that WAL replay did not demote
+// because it is mined on the current chain. #2071 was this shape: a replay demoted the winner's own
+// mined descendants and the pruner deleted them. The block is not queued for invalidation.
+func (b *BlockAssembler) conflictIntentConfirmedLoserHandler(blockHash chainhash.Hash) utxo.ProcessConflictingOption {
+	return utxo.WithConfirmedLoserHandler(
+		func(loser chainhash.Hash) {
+			b.logger.Errorf("[replayPendingConflictIntents][%s] REFUSED to demote transaction %s during WAL replay: it is mined on the current chain, so it cannot lose to that block",
+				blockHash.String(), loser.String())
+		},
+	)
+}
+
+// drainPendingInvalidations invalidates any block whose conflict resolution was
+// refused because it would have reversed a confirmed spend. Called after block
+// movement has completed, never during it: InvalidateBlock re-enters the
+// blockchain service and emits notifications, which is unsafe while the subtree
+// processor still holds movement state. "Completed" means MoveForwardBlock has
+// returned, so the block is committed and finalized; the subtree processor may
+// still be draining its queue (see deferredBlockDrain), but any reorg or reset
+// that InvalidateBlock leads to reaches it as a request it only takes once that
+// drain is done.
+//
+// Best-effort by design. The UTXO set is already consistent with the honest
+// chain thanks to the refusal itself; invalidation is what restores agreement
+// on which chain is best. A failure here is logged, not propagated, so it can
+// never turn a consensus problem into a block-assembly outage.
+func (b *BlockAssembler) drainPendingInvalidations(ctx context.Context) {
+	if b.subtreeProcessor == nil {
+		return
+	}
+
+	for _, blockHash := range b.subtreeProcessor.DrainPendingInvalidations() {
+		blockHash := blockHash
+
+		b.logger.Errorf("[drainPendingInvalidations][%s] invalidating block: its conflict resolution would have reversed a spend confirmed in its own ancestry",
+			blockHash.String())
+
+		if _, err := b.blockchainClient.InvalidateBlock(ctx, &blockHash); err != nil {
+			// Put it back rather than dropping it. The refusal already made
+			// conflict resolution a no-op for this block, so until it is
+			// actually invalidated the node is extending a chain it knows to be
+			// invalid. A transient RPC failure must not be the thing that makes
+			// that permanent — the next block announcement retries.
+			b.subtreeProcessor.QueueInvalidation(blockHash)
+
+			b.logger.Errorf("[drainPendingInvalidations][%s] failed to invalidate block, re-queued for retry: %v",
+				blockHash.String(), err)
+		}
+	}
+}
+
 // replayConflictIntent re-runs a single WAL intent against the UTXO store.
 func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+	if intent.Kind == utxo.ConflictIntentForward {
+		recovery, err := b.utxoStore.LoadConflictRecovery(ctx, intent.IntentID())
+		if err != nil {
+			return err
+		}
+		if recovery == nil {
+			return errors.NewProcessingError("legacy forward conflict intent %s requires manual repair; no recovery checklist", intent.IntentID().String())
+		}
+	}
+
 	switch intent.Kind {
 	case utxo.ConflictIntentForward:
-		// Seed the processed-hashes map with the intent's own hashes so the
-		// ProcessConflicting "tx is not conflicting" guard never fires when
-		// replaying a completed-but-not-tombstoned op (winners already
-		// Conflicting=false). The remaining steps are idempotent re-applications.
-		seeded := make(map[chainhash.Hash]struct{}, len(intent.TxHashes))
-		for _, h := range intent.TxHashes {
-			seeded[h] = struct{}{}
-		}
 
-		_, _, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, seeded)
-
-		return err
+		// Replay is chain-authorised too. The isBlockOnLongestChain gate above
+		// only establishes that the intent's block is still on the main chain; it
+		// says nothing about whether a losing transaction is confirmed on that
+		// block's own ancestry. Without the guard, replaying an intent recorded by
+		// a pre-fix process would re-apply the very corruption this prevents.
+		return b.processConflictingAndEvict(ctx, intent, intent.TxHashes)
 	case utxo.ConflictIntentReverse:
-		_, _, err := utxo.ReverseProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes)
-
-		return err
+		return b.reverseProcessConflictingAndEvict(ctx, intent)
 	default:
 		return errors.NewProcessingError("[replayConflictIntent] unknown conflict intent kind %q", intent.Kind)
 	}
+}
+
+// processConflictingAndEvict re-runs ProcessConflicting for the given winners of a
+// WAL intent and evicts every tx it marked conflicting (losers and their cascaded
+// descendants) from subtree validation's txmeta cache. On failure it evicts what
+// the run may have flipped.
+func (b *BlockAssembler) processConflictingAndEvict(ctx context.Context, intent utxo.ConflictIntent, winners []chainhash.Hash) error {
+	_, allMarkedConflicting, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, winners, nil,
+		utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash), utxo.WithDeferredConflictCompletion(), utxo.WithRecoveryChainGuard(b.currentChainGuard()),
+		b.conflictIntentConfirmedLoserHandler(intent.BlockHash),
+		utxo.WithConflictEvictor(b.txMetaEvictor.Evict))
+
+	b.txMetaEvictor.Evict(allMarkedConflicting)
+
+	return err
+}
+
+// reverseProcessConflictingAndEvict re-runs ReverseProcessConflicting for a WAL
+// intent and evicts every tx the reverse flipped to conflicting (the demoted
+// winners and their descendants). The counter side it flips back to
+// non-conflicting needs no eviction: the txmeta cache never holds conflicting
+// entries, so there is nothing stale, and a miss repopulates from the store. On
+// failure it evicts what the run may have flipped.
+//
+// After a successful reverse it retires the block's forward checklist. A failure there is only
+// logged: a re-add of the block or the next startup retires a checklist whose winners are reversed.
+func (b *BlockAssembler) reverseProcessConflictingAndEvict(ctx context.Context, intent utxo.ConflictIntent) error {
+	cascadedToConflicting, _, err := utxo.ReverseProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, b.currentChainGuard())
+
+	b.txMetaEvictor.Evict(cascadedToConflicting)
+
+	if err != nil {
+		return err
+	}
+
+	if retireErr := utxo.RetireConflictIntentsForBlocks(ctx, b.utxoStore, []chainhash.Hash{intent.BlockHash}); retireErr != nil {
+		b.logger.Warnf("[reverseProcessConflictingAndEvict] could not retire the forward conflict checklist of reversed block %s: %v", intent.BlockHash.String(), retireErr)
+	}
+
+	return nil
 }
 
 // healStaleConflictIntent converges the UTXO state for an intent whose block has
@@ -1329,74 +2430,109 @@ func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.C
 // operation torn with no recovery path — the exact failure class this WAL exists
 // to prevent.
 //
-//   - stale forward (block now off-chain): undo it — ReverseProcessConflicting
-//     demotes the winners and restores their counters, then unlock the parents
-//     the forward locked at step 2 (the step-5 unlock a crash may have skipped;
-//     SetLocked(false) is a no-op when already unlocked).
-//   - stale reverse (block now back on-chain): re-apply the forward via
-//     ProcessConflicting, which manages its own step-2 lock / step-5 unlock. The
-//     processed-hashes map is seeded so the "tx is not conflicting" guard does
-//     not fire on an already-applied winner.
+// A stale forward restores its durable before-image. A stale reverse starts a
+// forward operation and retains its WAL until caller updates are acknowledged.
 func (b *BlockAssembler) healStaleConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
 	switch intent.Kind {
 	case utxo.ConflictIntentForward:
-		if _, _, err := utxo.ReverseProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes); err != nil {
-			return err
-		}
+		mayBeMarked, err := utxo.HealStaleForwardIntent(ctx, b.utxoStore, intent, b.currentChainGuard(), func(ctx context.Context) (bool, error) {
+			return b.assemblyReachedBlock(ctx, intent.BlockHash)
+		})
 
-		return b.unlockConflictParents(ctx, intent.TxHashes)
-	case utxo.ConflictIntentReverse:
-		seeded := make(map[chainhash.Hash]struct{}, len(intent.TxHashes))
-		for _, h := range intent.TxHashes {
-			seeded[h] = struct{}{}
-		}
-
-		_, _, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, seeded)
+		b.txMetaEvictor.Evict(mayBeMarked)
 
 		return err
+	case utxo.ConflictIntentReverse:
+		// The reverse may have stopped before it reached some winners. ProcessConflicting skips the
+		// winners that are still applied and plans the rest.
+		//
+		// Replay is chain-authorised too. The isBlockOnLongestChain gate above
+		// only establishes that the intent's block is still on the main chain; it
+		// says nothing about whether a losing transaction is confirmed on that
+		// block's own ancestry. Without the guard, replaying an intent recorded by
+		// a pre-fix process would re-apply the very corruption this prevents.
+		return b.processConflictingAndEvict(ctx, intent, intent.TxHashes)
 	default:
 		return errors.NewProcessingError("[healStaleConflictIntent] unknown conflict intent kind %q", intent.Kind)
 	}
 }
 
-// unlockConflictParents clears the Locked flag on the parents of the given txs'
-// inputs — the parents a forward ProcessConflicting locks at step 2 and unlocks
-// at step 5. Used when healing a stale forward whose step-5 unlock a crash
-// skipped. A winner whose record is gone (pruned) contributes no parents.
-func (b *BlockAssembler) unlockConflictParents(ctx context.Context, txHashes []chainhash.Hash) error {
-	parentSet := make(map[chainhash.Hash]struct{}, len(txHashes))
-
-	for i := range txHashes {
-		h := txHashes[i]
-
-		txMeta, err := b.utxoStore.Get(ctx, &h, fields.Tx)
-		if err != nil {
-			if errors.Is(err, errors.ErrTxNotFound) {
-				continue
-			}
-
-			return errors.NewProcessingError("[unlockConflictParents][%s] failed to load tx", h.String(), err)
-		}
-
-		if txMeta == nil || txMeta.Tx == nil {
-			continue
-		}
-
-		for _, in := range txMeta.Tx.Inputs {
-			parentSet[*in.PreviousTxIDChainHash()] = struct{}{}
-		}
+// spentOutpoints returns the outpoints a stored transaction spends, preferring
+// the stored inpoints on the identity record over the serialized body.
+//
+// The two carry the same set, but only the inpoints survive the loss of the
+// body, and a UTXO store may legitimately hold a transaction with Tx nil: once
+// its tx_body partition has aged out, and, with utxostore_skipTxBodyBelowCheckpoint
+// on, for every transaction mined at or below the hardcoded checkpoint, whose
+// bytes were never written. Reading the body alone meant every such record
+// yielded no outpoints and was skipped in silence.
+//
+// A record carrying NEITHER is an error rather than an empty result, which is
+// the same call the store layer already makes for the same question (see
+// counterConflictingInpoints in stores/utxo/process_conflicting.go): an empty
+// result reports a transaction that spends nothing, and the caller here acts on
+// that answer: it decides whether a transaction may be mined. Both shapes exist on the utxoset store below the checkpoint, where
+// createMinedPlanSQL stores NULL tx_inpoints and the skip-body gate stores no
+// body, so this is not a hypothetical.
+//
+// Precondition: hash is never a coinbase. A coinbase genuinely spends nothing, so
+// the both-absent branch would refuse it for telling the truth. The caller cannot
+// be handed one, because a coinbase is never an unmined transaction, which is why there is no coinbase carve-out here
+// rather than a silent exemption that would also swallow the real case.
+func spentOutpoints(hash *chainhash.Hash, txMeta *meta.Data, caller string) ([]subtree.Inpoint, error) {
+	if txMeta == nil {
+		return nil, errors.NewTxNotFoundError("[%s][%s] no metadata for the transaction", caller, hash.String())
 	}
 
-	if len(parentSet) == 0 {
-		return nil
+	if len(txMeta.TxInpoints.ParentTxHashes) > 0 {
+		return txMeta.TxInpoints.GetTxInpoints(), nil
 	}
 
-	parents := make([]chainhash.Hash, 0, len(parentSet))
-	for p := range parentSet {
-		parents = append(parents, p)
+	if txMeta.Tx == nil {
+		// Permanent: asking again reads the same record. Marked here, at the one place the
+		// condition is known, so a caller can tell it from a store that did not answer.
+		return nil, permanentInputCheck{errors.NewProcessingError("[%s][%s] record carries neither stored inpoints nor a transaction body, so its parents cannot be resolved (a body-less record is the steady state once the tx_body partition has aged out, or below the boundary when utxostore_skipTxBodyBelowCheckpoint is on)", caller, hash.String())}
 	}
 
-	return b.utxoStore.SetLocked(ctx, parents, false)
+	inpoints := make([]subtree.Inpoint, 0, len(txMeta.Tx.Inputs))
+
+	for _, in := range txMeta.Tx.Inputs {
+		inpoints = append(inpoints, subtree.Inpoint{
+			Hash:  *in.PreviousTxIDChainHash(),
+			Index: in.PreviousTxOutIndex,
+		})
+	}
+
+	return inpoints, nil
+}
+
+// spentOutpointsFromStore is spentOutpoints with the body fetched lazily: the
+// stored inpoints answer on their own for every record that has them, and only a
+// record without them is worth a second read.
+//
+// Splitting the read matters on the reload path. validateUnminedTxInputs runs
+// once per unmined transaction at startup, and asking for fields.Tx up front
+// undoes what the original "NOT full Tx (avoids loading heavy output data)"
+// comment was protecting: on the SQL store it adds an outputs query per
+// transaction, and on aerospike it pulls a large transaction back from the
+// external blob store. The fallback exists for correctness, not for the common
+// case, so it costs nothing until it is needed.
+func (b *BlockAssembler) spentOutpointsFromStore(ctx context.Context, hash *chainhash.Hash,
+	txMeta *meta.Data, caller string) ([]subtree.Inpoint, error) {
+	if txMeta != nil && len(txMeta.TxInpoints.ParentTxHashes) > 0 {
+		return txMeta.TxInpoints.GetTxInpoints(), nil
+	}
+
+	withBody, err := b.utxoStore.Get(ctx, hash, fields.Tx)
+	if err != nil {
+		if errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound) {
+			return nil, errors.NewTxNotFoundError("[%s][%s] no record for the transaction", caller, hash.String())
+		}
+
+		return nil, errors.NewProcessingError("[%s][%s] failed to load the transaction body", caller, hash.String(), err)
+	}
+
+	return spentOutpoints(hash, withBody, caller)
 }
 
 // Wait blocks until all background goroutines have finished.
@@ -1518,13 +2654,28 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return info.Header, info.Height
 }
 
-// AddTxBatch adds a batch of transactions to the block assembler.
+// AddTxBatchBounded offers a batch under the configured bounds and reports which bound refused
+// it, if one did. inBlock marks transactions that arrived inside a block, which the in-memory
+// transaction limit does not refuse.
 //
 // Parameters:
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
-func (b *BlockAssembler) AddTxBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
-	b.subtreeProcessor.AddBatch(nodes, txInpoints)
+//   - inBlock: Whether the transactions arrived inside a block
+//
+// Returns:
+//   - subtreeprocessor.Admission: Admitted, or the bound that refused the batch
+func (b *BlockAssembler) AddTxBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, inBlock bool) subtreeprocessor.Admission {
+	return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, inBlock)
+}
+
+// HeldCount returns the transactions held in memory: queued, dequeued but not yet counted, and
+// already in subtrees.
+//
+// Returns:
+//   - int64: Transactions held in memory
+func (b *BlockAssembler) HeldCount() int64 {
+	return b.subtreeProcessor.HeldCount()
 }
 
 // RemoveTx removes a transaction from the block assembler.
@@ -1543,6 +2694,12 @@ type resetRequest struct {
 	FullReset      bool
 	ValidateInputs bool
 	ErrCh          chan error
+
+	// StorageTriggered marks a reset requested because the subtree processor
+	// reported a post-commit disk tx map storage error (see
+	// SubtreeProcessor.TakeResetRequested). Only such a reset can leave block
+	// assembly degraded (onResetDone); a clean reset of any kind clears it.
+	StorageTriggered bool
 }
 
 // Reset triggers a reset of the block assembler state.
@@ -1577,6 +2734,141 @@ func (b *BlockAssembler) resetWithOptions(fullReset bool, validateInputs bool) {
 	}()
 }
 
+// resetStorageTriggered requests a reset because the subtree processor
+// reported a post-commit disk tx map storage error (heartbeatTicker.C's
+// TakeResetRequested poll). onResetDone decides, once the resetCh handler has
+// run it, whether it cured the map or left block assembly degraded.
+func (b *BlockAssembler) resetStorageTriggered() {
+	go func() {
+		errCh := make(chan error, 1)
+
+		b.resetCh <- resetRequest{
+			ErrCh:            errCh,
+			StorageTriggered: true,
+		}
+
+		if err := <-errCh; err != nil {
+			b.logger.Errorf("[BlockAssembler] error resetting (storage-triggered): %v", err)
+		}
+	}()
+}
+
+// resetAfterDrainFailure queues a reset that is not storage-triggered, for a
+// failed queue drain after a block (see Interface.TakeDrainResetRequested).
+func (b *BlockAssembler) resetAfterDrainFailure() {
+	go func() {
+		errCh := make(chan error, 1)
+
+		b.resetCh <- resetRequest{ErrCh: errCh}
+
+		if err := <-errCh; err != nil {
+			b.logger.Errorf("[BlockAssembler] error resetting after a failed queue drain: %v", err)
+		}
+	}()
+}
+
+// requeueRefusedReset queues again, with its options, a reset handleResetRequests refused
+// (resetOwed), once its back-off is over (resetOwedRetryAt), so a record that keeps failing
+// does not refuse one reset after another.
+func (b *BlockAssembler) requeueRefusedReset() {
+	if b.resetOwed == nil || time.Now().Before(b.resetOwedRetryAt) {
+		return
+	}
+
+	owed := *b.resetOwed
+	b.resetOwed = nil
+
+	b.logger.Warnf("[BlockAssembler] retrying a reset refused because the mark of skipped fork transactions it would owe could not be recorded")
+
+	go func() {
+		errCh := make(chan error, 1)
+		owed.ErrCh = errCh
+
+		b.resetCh <- owed
+
+		if err := <-errCh; err != nil {
+			b.logger.Errorf("[BlockAssembler] error retrying a refused reset: %v", err)
+		}
+	}()
+}
+
+// defaultStorageResetMinInterval is the default storageResetMinInterval.
+const defaultStorageResetMinInterval = 10 * time.Minute
+
+// storageResetInterval returns storageResetMinInterval, or its default.
+func (b *BlockAssembler) storageResetInterval() time.Duration {
+	if b.storageResetMinInterval > 0 {
+		return b.storageResetMinInterval
+	}
+
+	return defaultStorageResetMinInterval
+}
+
+// resetAndRecord runs a reset that is not storage-triggered (the reorg
+// fallbacks) and records its outcome like the resetCh handler does.
+func (b *BlockAssembler) resetAndRecord(ctx context.Context, validateInputs bool) error {
+	resp, err := b.resetWithResponse(ctx, validateInputs)
+	b.onResetDone(false, resp, err)
+
+	return err
+}
+
+// resetToBlockAndRecord preserves the movement target when a reorg needs a reset.
+func (b *BlockAssembler) resetToBlockAndRecord(ctx context.Context, header *model.BlockHeader, height uint32, validateInputs bool) error {
+	resp, err := b.resetToBlockWithResponse(ctx, header, height, validateInputs)
+	b.onResetDone(false, resp, err)
+
+	return err
+}
+
+// onResetDone updates the disk tx map degraded state once a reset has run,
+// from how that reset ended (every reset completion path calls it):
+//   - completed without a storage error: clears degraded;
+//   - storage-triggered and hit a storage error itself (resp.StorageFailed):
+//     sets degraded;
+//   - storage-triggered and failed before the tx map rotation: the phantom it
+//     was for is still there, so the next heartbeat retries it (any reset
+//     that rotates cancels that retry);
+//   - anything else (a non-storage failure after the rotation, which
+//     discarded the phantom, or a manual/reorg reset whose reload left one,
+//     which raises its own request): unchanged.
+func (b *BlockAssembler) onResetDone(storageTriggered bool, resp subtreeprocessor.ResetResponse, resetErr error) {
+	if storageTriggered {
+		b.lastStorageResetDone = time.Now()
+	}
+
+	// Any rotation discards the phantom a pending reset was for.
+	if resp.Rotated {
+		b.diskTxMapResetPending = false
+	}
+
+	// A reset that finished reloaded every unmined transaction, which is the pool reload a
+	// mark of skipped fork transactions may still owe.
+	if resetErr == nil {
+		b.skippedForkReloadPending = false
+	}
+
+	switch {
+	case resetErr == nil && !resp.StorageFailed:
+		if b.diskTxMapDegraded {
+			b.logger.Infof("[BlockAssembler] reset completed without a disk tx map storage error; no longer degraded")
+		}
+
+		b.diskTxMapDegraded = false
+		prometheusBlockAssemblyDiskTxMapDegraded.Set(0)
+	case storageTriggered && resp.StorageFailed:
+		if !b.diskTxMapDegraded {
+			b.logger.Errorf("[BlockAssembler] reset for a disk tx map storage error hit a storage error again (reset error: %v); degraded, not resetting again until a reset completes clean", resetErr)
+		}
+
+		b.diskTxMapDegraded = true
+		prometheusBlockAssemblyDiskTxMapDegraded.Set(1)
+	case storageTriggered && resetErr != nil && !resp.Rotated:
+		b.logger.Warnf("[BlockAssembler] reset for a disk tx map storage error failed before the tx map rotation; retrying once storageResetMinInterval allows: %v", resetErr)
+		b.diskTxMapResetPending = true
+	}
+}
+
 // GetMiningCandidate retrieves a candidate block for mining.
 //
 // Parameters:
@@ -1596,9 +2888,12 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 
 	prometheusBlockAssemblerGetMiningCandidate.Inc()
 
-	// Handle block-processing-in-progress state
+	// Handle block-processing-in-progress state. A reorg, reconcile or reset is
+	// still moving block assembly to the chain tip, so a candidate built on the
+	// block assembly tip would mine on the old side of a reorg.
 	currentState := b.GetCurrentRunningState()
-	if currentState == StateBlockchainSubscription || currentState == StateMovingUp {
+	if currentState == StateBlockchainSubscription || currentState == StateMovingUp ||
+		currentState == StateReorging || currentState == StateReconciling || currentState == StateResetting || b.bestTipResetReplayPending.Load() {
 		b.logger.Infof("[GetMiningCandidate] Block processing in progress (state: %s), returning empty block template for new height", StateStrings[currentState])
 
 		bestBlockHeader, bestBlockMeta, err := b.blockchainClient.GetBestBlockHeader(ctx)
@@ -1613,6 +2908,28 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	baBestBlockHeader, baBestBlockHeight := b.CurrentBlock()
 	if baBestBlockHeader == nil {
 		return nil, nil, errors.NewError("best block header is not available")
+	}
+
+	// Block assembly is idle but behind the chain: a failed catch-up or move-forward left it on an
+	// older tip, and nothing is moving it forward. A candidate built on that tip is an
+	// orphan, and its transaction set grows without bound because mined transactions are never
+	// removed. Hand out an empty block on the chain tip instead, as for the in-motion states. If
+	// the chain tip cannot be read, fall through: a transient error must not stop mining.
+	chainTipHeader, chainTipMeta, tipErr := b.blockchainClient.GetBestBlockHeader(ctx)
+
+	if tipErr != nil {
+		b.logger.Warnf("[GetMiningCandidate] could not read the blockchain tip to check for a stale block assembly tip: %v", tipErr)
+	} else if behind, sustained := b.staleTip.check(chainTipHeader.Hash(), chainTipMeta.Height, baBestBlockHeader.Hash(), baBestBlockHeight, time.Now()); behind {
+		if sustained {
+			prometheusBlockAssemblyStaleTipCandidates.Inc()
+			b.logger.Warnf("[GetMiningCandidate] block assembly tip %s (height %d) is behind the blockchain tip %s (height %d), returning empty block template on the blockchain tip",
+				baBestBlockHeader.Hash(), baBestBlockHeight, chainTipHeader.Hash(), chainTipMeta.Height)
+		} else {
+			b.logger.Debugf("[GetMiningCandidate] block assembly tip %s is catching up to the blockchain tip %s, returning empty block template on the blockchain tip",
+				baBestBlockHeader.Hash(), chainTipHeader.Hash())
+		}
+
+		return b.generateEmptyBlockCandidate(ctx, chainTipHeader, chainTipMeta.Height)
 	}
 
 	// Get pre-computed data (atomic read, no locks, no channel sync)
@@ -1795,14 +3112,22 @@ func (b *BlockAssembler) generateEmptyBlockCandidate(ctx context.Context, bestBl
 
 	blockSubsidy := util.GetBlockSubsidyForHeight(nextBlockHeight, b.settings.ChainCfgParams)
 
-	id := &chainhash.Hash{}
-	copy(id[:], bestBlockHeader.Hash()[:])
-	id[0] ^= 0xFF
+	// The id covers the time as well as the parent, as the main candidate's does. A job keeps the
+	// time it was issued with, and a solution that omits its time is mined with the job's. With an id
+	// from the parent alone every poll at one tip shared a job, each poll overwrote its time, and a
+	// miner still hashing an earlier poll's time submitted a header the node rebuilt with a later one,
+	// which failed the proof-of-work check. A poll with a different candidate time now gets a job of
+	// its own. Polls that share a time, in the same second or while the median-time-past floor holds
+	// the time fixed, share a job and that time.
+	timeBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(timeBytes, timeNowUint32)
+	previousHash := bestBlockHeader.Hash()
+	id := chainhash.HashB(append(previousHash.CloneBytes(), timeBytes...))
 
 	// Version uses miningCandidateVersion (same as the main candidate) rather than the tip's version.
 	miningCandidate := &model.MiningCandidate{
-		Id:                  id[:],
-		PreviousHash:        bestBlockHeader.Hash()[:],
+		Id:                  id,
+		PreviousHash:        previousHash[:],
 		CoinbaseValue:       blockSubsidy,
 		Version:             miningCandidateVersion,
 		NBits:               nBits[:],
@@ -1817,6 +3142,38 @@ func (b *BlockAssembler) generateEmptyBlockCandidate(ctx context.Context, bestBl
 	b.logger.Infof("[generateEmptyBlockCandidate] Empty block template: height=%d, subsidy=%d, prev=%s", nextBlockHeight, blockSubsidy, bestBlockHeader.Hash())
 
 	return miningCandidate, []*subtree.Subtree{}, nil
+}
+
+// reorgNeedsReset decides whether a reorg must go through a full reset instead of
+// subtreeProcessor.Reorg.
+//
+// A reorg whose deeper side reaches the effective UTXO retention can bring forward
+// blocks whose transactions the pruner has already deleted (delete-at-height is
+// height + retention), which reorgBlocks cannot handle after its commit point, so
+// those reorgs reset at any height. Reorgs of at least CoinbaseMaturity blocks reset
+// above height 1000; below that the incremental reorg is kept. A retention of 0
+// means pruning is disabled, so only the maturity rule applies.
+//
+// moveBack is what bounds the risk: the pruner runs at most up to block assembly's
+// tip (checkBlockAssemblySafeForPruner), so a side-chain record stamped after the
+// fork is deletable only once the main chain is retention blocks past it. Taking
+// the deeper of the two sides is deliberately conservative, and >= resets one block
+// before the earliest deletable height. Catch-up without a moveBack does not come
+// through here.
+//
+// It returns which rule fired, for the log, or "" when the reorg can go in place.
+func reorgNeedsReset(moveBack, moveForward int, currentHeight, coinbaseMaturity, utxoRetention uint32) string {
+	depth := uint64(max(moveBack, moveForward)) //nolint:gosec // block counts, never negative
+
+	if utxoRetention > 0 && depth >= uint64(utxoRetention) {
+		return "depth reaches UTXO retention"
+	}
+
+	if depth >= uint64(coinbaseMaturity) && currentHeight > 1000 {
+		return "depth reaches coinbase maturity above height 1000"
+	}
+
+	return ""
 }
 
 // handleReorg handles blockchain reorganization.
@@ -1842,15 +3199,17 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 
 	_, currentHeight := b.CurrentBlock()
 
-	if (len(moveBackBlocksWithMeta) >= int(b.settings.ChainCfgParams.CoinbaseMaturity) || len(moveForwardBlocksWithMeta) >= int(b.settings.ChainCfgParams.CoinbaseMaturity)) && currentHeight > 1000 {
+	if why := reorgNeedsReset(len(moveBackBlocksWithMeta), len(moveForwardBlocksWithMeta), currentHeight, uint32(b.settings.ChainCfgParams.CoinbaseMaturity), b.settings.GetUtxoStoreBlockHeightRetention()); why != "" {
 		// large reorg, log it and Reset the block assembler
-		b.logger.Warnf("[BlockAssembler] large reorg detected, resetting block assembly, moveBackBlocks: %d, moveForwardBlocks: %d", len(moveBackBlocksWithMeta), len(moveForwardBlocksWithMeta))
+		b.logger.Warnf("[BlockAssembler] large reorg detected (%s), resetting block assembly, moveBackBlocks: %d, moveForwardBlocks: %d", why, len(moveBackBlocksWithMeta), len(moveForwardBlocksWithMeta))
 
 		// make sure we wait for the reset to complete
 		// validateInputs=true: getConflictingNodes() may miss conflicts not stored in subtree
 		// files; validateUnminedTxInputs() independently catches them via SpendingData.
-		if err = b.reset(ctx, true); err != nil {
-			b.logger.Errorf("[BlockAssembler] error resetting after large reorg: %v", err)
+		err = b.resetToBlockAndRecord(ctx, header, height, true)
+
+		if err != nil {
+			return errors.NewProcessingError("error resetting after large reorg", err)
 		}
 
 		// return an error to indicate we reset due to a large reorg
@@ -1895,7 +3254,9 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 		// already detected by reorgBlocks; re-running validateInputs here is redundant
 		// and currently broken (fields.Inputs alone does not populate data.Tx in the
 		// SQL store, so validateUnminedTxInputs always returns false).
-		if err = b.reset(ctx, reorgFailed); err != nil {
+		err = b.resetToBlockAndRecord(ctx, header, height, reorgFailed)
+
+		if err != nil {
 			return errors.NewProcessingError("error resetting block assembly after reorg with invalid block", err)
 		}
 
@@ -1914,9 +3275,10 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 
 // handleCatchUp executes a forward-only catch-up. Delegates to the subtree
 // processor's reorgBlocks fast path (the `len(moveBackBlocks)==0 && len(moveForwardBlocks)>0`
-// branch, see SubtreeProcessor.go:2794), which iterates moveForwardBlock per block with
-// skipNotification + skipDequeue on every block except the last and rolls back to
-// pre-catchup state on mid-loop failure. ctx is unused at this layer — Reorg controls
+// branch), which drains the queue into the subtrees first, so every block's remainder pass
+// filters the backlog, then iterates moveForwardBlock per block with skipNotification +
+// skipDequeue on every block except the last, and rolls back to the drained pre-catchup
+// state on mid-loop failure. ctx is unused at this layer — Reorg controls
 // its own internal lifecycle via reorgBlockChan.
 func (b *BlockAssembler) handleCatchUp(_ context.Context, moveForward []blockWithMeta) error {
 	if len(moveForward) == 0 {
@@ -1965,8 +3327,15 @@ func (b *BlockAssembler) getReorgBlocks(ctx context.Context, header *model.Block
 	// moveBackBlocks will contain all blocks we need to move down to get to the common ancestor
 	moveBackBlocks := make([]blockWithMeta, 0, len(moveBackBlockHeadersWithMeta))
 
+	// Both loops below run one GetBlock round trip per block inside a single pass
+	// of the main select, so each iteration beats. The beat sits at the top, so for
+	// every block after the first it proves the previous fetch returned: a fetch
+	// that stops progressing still goes stale. BeatIfStarted so a future startup
+	// caller cannot arm the probe (issue 1447).
 	var block *model.Block
 	for _, headerWithMeta := range moveForwardBlockHeadersWithMeta {
+		b.heartbeat.BeatIfStarted()
+
 		block, err = b.blockchainClient.GetBlock(ctx, headerWithMeta.header.Hash())
 		if err != nil {
 			return nil, nil, errors.NewServiceError("error getting block", err)
@@ -1979,6 +3348,8 @@ func (b *BlockAssembler) getReorgBlocks(ctx context.Context, header *model.Block
 	}
 
 	for _, headerWithMeta := range moveBackBlockHeadersWithMeta {
+		b.heartbeat.BeatIfStarted()
+
 		block, err = b.blockchainClient.GetBlock(ctx, headerWithMeta.header.Hash())
 		if err != nil {
 			return nil, nil, errors.NewServiceError("error getting block", err)
@@ -2189,6 +3560,11 @@ func (b *BlockAssembler) validateParentChain(
 
 	// Process transactions in batches for performance
 	for i := 0; i < len(unminedTxs); i += batchSize {
+		// Beat once per batch, at the top, so for every batch after the first it
+		// proves the previous one finished (issue 1447). BeatIfStarted because
+		// this also runs from Start, before the main loop owns the heartbeat.
+		b.heartbeat.BeatIfStarted()
+
 		// Check for context cancellation at start of each batch
 		select {
 		case <-ctx.Done():
@@ -2452,7 +3828,12 @@ func (b *BlockAssembler) validateParentChain(
 		for h := range conflictingDescendants {
 			cascadeHashes = append(cascadeHashes, h)
 		}
-		if _, _, mErr := utxo.MarkConflictingRecursively(ctx, b.utxoStore, cascadeHashes); mErr != nil {
+		_, marked, mErr := utxo.MarkConflictingRecursively(ctx, b.utxoStore, cascadeHashes)
+
+		// a failed cascade may still have flipped some of them
+		b.txMetaEvictor.Evict(marked)
+
+		if mErr != nil {
 			b.logger.Errorf("[BlockAssembler][validateParentChain] failed to mark %d cascaded conflicting txs: %v", len(cascadeHashes), mErr)
 		} else {
 			b.logger.Infof("[BlockAssembler][validateParentChain] marked %d txs conflicting (descendants of conflicting parents)", len(cascadeHashes))
@@ -2487,14 +3868,20 @@ func (b *BlockAssembler) validateParentChain(
 // and drops the child (cascading to its descendants). The stable base sort
 // preserves iterator order on ties, and the per-run reorder guarantees parents
 // precede their children regardless of iterator order.
-func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) {
-	sort.SliceStable(txs, func(i, j int) bool {
-		return txs[i].CreatedAt < txs[j].CreatedAt
-	})
+//
+// It runs on every core with a radix sort (see sortUnminedByCreatedAt) and returns
+// false when it had to fall back to the comparison sort.
+func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) bool {
+	return sortUnminedByCreatedAt(txs, runtime.GOMAXPROCS(0))
+}
 
-	// Reorder within each maximal run of equal CreatedAt so in-set parents come
-	// before their children. Only same-timestamp transactions can be misordered,
-	// so unrelated timestamps are left untouched.
+// orderEqualCreatedAtRunsParentsFirst reorders, within each maximal run of equal
+// CreatedAt in txs (already sorted by CreatedAt), in-set parents before their
+// children. Only same-timestamp transactions can be misordered, so unrelated
+// timestamps are left untouched.
+func orderEqualCreatedAtRunsParentsFirst(txs []*utxo.UnminedTransaction) {
+	var scratch runOrderScratch
+
 	for start := 0; start < len(txs); {
 		end := start + 1
 		for end < len(txs) && txs[end].CreatedAt == txs[start].CreatedAt {
@@ -2502,11 +3889,31 @@ func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) {
 		}
 
 		if end-start > 1 {
-			orderRunParentsFirst(txs[start:end])
+			orderRunParentsFirst(txs[start:end], &scratch)
 		}
 
 		start = end
 	}
+}
+
+// runOrderScratch holds the buffers orderRunParentsFirst reuses from one run to
+// the next. A reload has hundreds of thousands of runs, and allocating a map and
+// slices per run dominated the reorder.
+type runOrderScratch struct {
+	slotKeys  []uint64
+	slots     []int
+	edgeStart []int
+	edges     []int
+	depth     []int
+	state     []int8
+	stack     []int
+	count     []int
+	reordered []*utxo.UnminedTransaction
+}
+
+// hashPrefix is the first 8 bytes of a tx hash, the slot table's key.
+func hashPrefix(h *chainhash.Hash) uint64 {
+	return binary.LittleEndian.Uint64(h[:8])
 }
 
 // orderRunParentsFirst reorders, in place, a run of transactions that all share
@@ -2514,27 +3921,76 @@ func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) {
 // appears before its children. Transactions with no parent/child relationship
 // inside the run keep their incoming relative order (the sort is stable), which
 // preserves the iterator's ordering for unrelated transactions.
-func orderRunParentsFirst(run []*utxo.UnminedTransaction) {
+func orderRunParentsFirst(run []*utxo.UnminedTransaction, s *runOrderScratch) {
 	n := len(run)
 
-	// Map each hash in the run to its slot so intra-run parent edges can be found.
-	pos := make(map[chainhash.Hash]int, n)
-	for i, tx := range run {
-		pos[tx.Node.Hash] = i
+	// Map each hash in the run to its slot so intra-run parent edges can be found:
+	// an open-addressing table indexed by the hash's first 8 bytes (tx hashes are
+	// uniformly distributed), at most half full. slots holds slot+1, 0 is empty.
+	// The prefix only narrows the probe; a match is always the full hash.
+	tableSize := 1 << mathbits.Len(uint(2*n-1))
+	mask := uint64(tableSize - 1)
+
+	if cap(s.slots) < tableSize {
+		s.slotKeys = make([]uint64, tableSize)
+		s.slots = make([]int, tableSize)
 	}
 
-	// parents[i] = slots within the run whose outputs transaction i spends.
-	parents := make([][]int, n)
+	slotKeys, slots := s.slotKeys[:tableSize], s.slots[:tableSize]
+	clear(slots)
+
 	for i, tx := range run {
+		k := hashPrefix(&tx.Node.Hash)
+
+		idx := k & mask
+		for slots[idx] != 0 && (slotKeys[idx] != k || run[slots[idx]-1].Node.Hash != tx.Node.Hash) {
+			idx = (idx + 1) & mask
+		}
+
+		// A repeated hash takes the later slot, as a map assignment would.
+		slotKeys[idx], slots[idx] = k, i+1
+	}
+
+	slotOf := func(h *chainhash.Hash) (int, bool) {
+		k := hashPrefix(h)
+
+		for idx := k & mask; slots[idx] != 0; idx = (idx + 1) & mask {
+			if p := slots[idx] - 1; slotKeys[idx] == k && run[p].Node.Hash == *h {
+				return p, true
+			}
+		}
+
+		return 0, false
+	}
+
+	// The parents of transaction i, as slots within the run, are
+	// edges[edgeStart[i]:edgeStart[i+1]].
+	s.edgeStart = resizeInts(s.edgeStart, n+1)
+	s.edges = s.edges[:0]
+
+	for i, tx := range run {
+		s.edgeStart[i] = len(s.edges)
+
 		if tx.TxInpoints == nil {
 			continue
 		}
 
 		for _, parentHash := range tx.TxInpoints.GetParentTxHashes() {
-			if p, ok := pos[parentHash]; ok && p != i {
-				parents[i] = append(parents[i], p)
+			if p, ok := slotOf(&parentHash); ok && p != i {
+				s.edges = append(s.edges, p)
 			}
 		}
+	}
+
+	s.edgeStart[n] = len(s.edges)
+
+	// Every depth would be 0 and the stable order unchanged.
+	if len(s.edges) == 0 {
+		return
+	}
+
+	parents := func(v int) []int {
+		return s.edges[s.edgeStart[v]:s.edgeStart[v+1]]
 	}
 
 	// depth[i] = length of the longest in-run ancestor chain ending at i. A
@@ -2547,38 +4003,47 @@ func orderRunParentsFirst(run []*utxo.UnminedTransaction) {
 		done
 	)
 
-	depth := make([]int, n)
-	state := make([]int8, n)
-	stack := make([]int, 0, n)
+	s.depth = resizeInts(s.depth, n)
+	s.stack = s.stack[:0]
+
+	if cap(s.state) < n {
+		s.state = make([]int8, n)
+	}
+
+	s.state = s.state[:n]
+	clear(s.state)
+
+	depth, state := s.depth, s.state
+	maxDepth := 0
 
 	for i := 0; i < n; i++ {
 		if state[i] != unvisited {
 			continue
 		}
 
-		stack = append(stack, i)
+		s.stack = append(s.stack, i)
 
-		for len(stack) > 0 {
-			v := stack[len(stack)-1]
+		for len(s.stack) > 0 {
+			v := s.stack[len(s.stack)-1]
 
 			if state[v] == unvisited {
 				state[v] = active
-				for _, p := range parents[v] {
+				for _, p := range parents(v) {
 					if state[p] == unvisited {
-						stack = append(stack, p)
+						s.stack = append(s.stack, p)
 					}
 				}
 
 				continue
 			}
 
-			stack = stack[:len(stack)-1]
+			s.stack = s.stack[:len(s.stack)-1]
 			if state[v] == done {
 				continue
 			}
 
 			d := 0
-			for _, p := range parents[v] {
+			for _, p := range parents(v) {
 				// Parents still active indicate a cycle (impossible for a tx
 				// DAG); skip them so this terminates rather than looping.
 				if state[p] == done && depth[p]+1 > d {
@@ -2588,25 +4053,44 @@ func orderRunParentsFirst(run []*utxo.UnminedTransaction) {
 
 			depth[v] = d
 			state[v] = done
+			maxDepth = max(maxDepth, d)
 		}
 	}
 
-	// Stable-sort slot indices by depth; equal depths keep original order.
-	order := make([]int, n)
-	for i := range order {
-		order[i] = i
+	// Counting sort by depth: stable, so equal depths keep their order.
+	s.count = resizeInts(s.count, maxDepth+2)
+	clear(s.count)
+
+	for _, d := range depth {
+		s.count[d+1]++
 	}
 
-	sort.SliceStable(order, func(a, b int) bool {
-		return depth[order[a]] < depth[order[b]]
-	})
+	for d := 1; d < len(s.count); d++ {
+		s.count[d] += s.count[d-1]
+	}
 
-	reordered := make([]*utxo.UnminedTransaction, n)
-	for k, idx := range order {
-		reordered[k] = run[idx]
+	if cap(s.reordered) < n {
+		s.reordered = make([]*utxo.UnminedTransaction, n)
+	}
+
+	reordered := s.reordered[:n]
+
+	for i, tx := range run {
+		reordered[s.count[depth[i]]] = tx
+		s.count[depth[i]]++
 	}
 
 	copy(run, reordered)
+	clear(reordered)
+}
+
+// resizeInts returns buf with length n, reallocating only when it is too small.
+func resizeInts(buf []int, n int) []int {
+	if cap(buf) < n {
+		return make([]int, n)
+	}
+
+	return buf[:n]
 }
 
 // fixUnminedSinceInconsistencies performs a lightweight scan of all records in the UTXO store
@@ -2685,7 +4169,13 @@ func (b *BlockAssembler) fixUnminedSinceInconsistencies(ctx context.Context) err
 
 	markAsMinedOnLongestChain := make([]chainhash.Hash, 0, 1024)
 
+	// The scan walks every record in the UTXO store inside one pass of the main
+	// select (the full-reset case), so each batch beats. The beat sits at the top,
+	// so for every batch after the first it proves the previous read returned: a
+	// scan that stops answering still goes stale (issue 1447).
 	for {
+		b.heartbeat.BeatIfStarted()
+
 		batch, err := it.Next(ctx)
 		if err != nil {
 			return errors.NewProcessingError("error during consistency scan", err)
@@ -2743,7 +4233,40 @@ func (b *BlockAssembler) fixUnminedSinceInconsistencies(ctx context.Context) err
 // Called from:
 //   - reset() as postProcessFn (after reorg processing)
 //   - Startup initialization
-func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateInputs ...bool) (err error) {
+//
+// isReload distinguishes the two: true when called from reset's postProcess,
+// false for the startup load. reset has already committed its state change
+// (maps cleared, header at the target tip) by the time postProcess runs, so a
+// disk tx map error surfacing during this reload cannot be rolled back - it
+// is logged and counted (via AddDirectlyReportOnly/AddNodesDirectlyReportOnly)
+// rather than failing the reload, matching reset's own commit-point handling.
+// The startup load has no such commit to protect, so it keeps failing on a
+// pending map error (AddDirectly/AddNodesDirectly): the map may be partially
+// populated, and a restart reloads it.
+// drainUnminedDropHashes drains the input queue with b.unminedDropHashes (set
+// by markAsConflicting during the load just completed) as the drop filter,
+// then flushes and checks the disk tx map for DrainQueue's own writes: they
+// land after loadUnminedTransactions' own end-of-load FlushDiskTxMapForLoad
+// call, so a trailing unflushed failure there needs the same check, or it
+// surfaces later as a spurious "not found in currentTxMap" failure on an
+// unrelated block instead. where and isReload have the same meaning as
+// FlushDiskTxMapForLoad: isReload=true (reset's postProcess) reports only;
+// isReload=false (startup) fails, consistent with the load rule. A no-op,
+// returning nil, when there is nothing to drop.
+func (b *BlockAssembler) drainUnminedDropHashes(where string, isReload bool) error {
+	drop := b.unminedDropHashes
+	b.unminedDropHashes = nil
+
+	if len(drop) == 0 {
+		return nil
+	}
+
+	b.subtreeProcessor.DrainQueue(drop)
+
+	return b.subtreeProcessor.FlushDiskTxMapForLoad(where, isReload)
+}
+
+func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload bool, validateInputs ...bool) (err error) {
 	shouldValidateInputs := len(validateInputs) > 0 && validateInputs[0]
 
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "loadUnminedTransactions",
@@ -2754,7 +4277,10 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 
 	// Set flag to indicate unmined transactions are being loaded
 	b.unminedTransactionsLoading.Store(true)
+	b.subtreeProcessor.SetUnminedLoading(true)
 	defer func() {
+		b.subtreeProcessor.SetUnminedLoading(false)
+
 		// Clear flag when loading is complete
 		b.unminedTransactionsLoading.Store(false)
 		b.logger.Infof("[loadUnminedTransactions] unmined transaction loading completed")
@@ -2773,13 +4299,13 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 	// 2. OnRestartValidateParentChain is false (parent validation requires in-memory for small datasets)
 	if b.settings.BlockAssembly.UnminedTxDiskSortEnabled && !b.settings.BlockAssembly.OnRestartValidateParentChain {
 		b.logger.Infof("[loadUnminedTransactions] using disk-based sorting to reduce RAM usage")
-		return b.loadUnminedTransactionsWithDiskSort(ctx)
+		return b.loadUnminedTransactionsWithDiskSort(ctx, isReload)
 	}
 
 	// Wait for the unmined_since index to be ready before attempting to get the iterator
-	if indexWaiter, ok := b.utxoStore.(interface {
+	if indexWaiter, ok := utxo.As[interface {
 		WaitForIndexReady(ctx context.Context, indexName string) error
-	}); ok {
+	}](b.utxoStore); ok {
 		indexName := "unminedSinceIndex"
 		prometheusBlockAssemblerUtxoIndexReady.WithLabelValues(indexName).Set(0)
 
@@ -2828,6 +4354,14 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 	}
 	prometheusBlockAssemblerGetUnminedTxIteratorTime.WithLabelValues("false", "success").Observe(duration)
 	b.logger.Infof("[loadUnminedTransactions] successfully created unmined tx iterator, starting to process transactions")
+	iteratorClosed := false
+	defer func() {
+		if !iteratorClosed {
+			if closeErr := it.Close(); closeErr != nil {
+				b.logger.Warnf("[loadUnminedTransactions] error closing unmined iterator: %v", closeErr)
+			}
+		}
+	}()
 
 	unminedTransactions := make([]*utxo.UnminedTransaction, 0, 16*1024*1024) // preallocate a large slice to avoid reallocations
 	lockedTransactions := make([]chainhash.Hash, 0, 1024)
@@ -2843,6 +4377,11 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 	alreadyMinedCount := atomic.Int64{}
 	lockedCount := atomic.Int64{}
 	invalidInputCount := atomic.Int64{}
+
+	// The input checks the store could not answer. See undecidedLoad.
+	b.undecidedMu.Lock()
+	undecided := newUndecidedLoad(b.undecidedSince, b.undecidedExcludeAfterOrDefault(), time.Now())
+	b.undecidedMu.Unlock()
 
 	// Worker pool configuration — workers only filter and append to slices,
 	// they are not the bottleneck (Aerospike partition queries are). Keep low.
@@ -2901,23 +4440,6 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 						}
 					}
 
-					if shouldValidateInputs {
-						validatedCount := invalidInputCount.Load() + int64(len(localResult.unminedTxs))
-						if validatedCount > 0 && validatedCount%1000 == 0 {
-							b.logger.Infof("[loadUnminedTransactions] input validation progress: %d txs checked, %d invalid", validatedCount, invalidInputCount.Load())
-						}
-
-						if !b.validateUnminedTxInputs(ctx, unminedTransaction.Hash, bestBlockHeaderIDsMap, false) {
-							invalidInputCount.Add(1)
-							continue
-						}
-					}
-
-					if !b.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
-						// clear the TxInpoints to save memory if we are not using subtree meta
-						unminedTransaction.TxInpoints = &subtree.TxInpoints{}
-					}
-
 					localResult.unminedTxs = append(localResult.unminedTxs, unminedTransaction)
 
 					if unminedTransaction.Locked {
@@ -2932,13 +4454,19 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 
 	b.logger.Infof("[loadUnminedTransactions] feeding unmined transactions to %d workers", numWorkers)
 
-	// Feed batches from the iterator to workers
+	// Feed batches from the iterator to workers. This runs inside reset's
+	// post-process step as well as at startup, and scales with the unmined set,
+	// so each batch beats (issue 1447). BeatIfStarted keeps the startup call
+	// from arming the probe.
 	lastLogTime := time.Now()
 	for {
+		b.heartbeat.BeatIfStarted()
+
 		batch, err := it.Next(ctx)
 		if err != nil {
 			close(workChan)
 			wg.Wait()
+
 			return errors.NewProcessingError("error getting unmined transaction", err)
 		}
 
@@ -2980,6 +4508,23 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 
 	workerResults = nil // release memory
 
+	// Validation can mark conflicts and their descendants. Drain and close the
+	// iterator before those writes: SQLite's open read cursor otherwise blocks
+	// the write transaction, while a worker waits for it and prevents the drain.
+	if err = it.Close(); err != nil {
+		return errors.NewProcessingError("error closing unmined iterator before validation", err)
+	}
+
+	iteratorClosed = true
+
+	if shouldValidateInputs {
+		unminedTransactions, lockedTransactions, err = b.validateLoadedUnminedTxs(ctx, unminedTransactions, lockedTransactions,
+			bestBlockHeaderIDsMap, undecided, numWorkers, &invalidInputCount)
+		if err != nil {
+			return err
+		}
+	}
+
 	iteratorDuration := time.Since(iteratorStart).Seconds()
 	prometheusBlockAssemblerIteratorProcessingTime.WithLabelValues("false").Observe(iteratorDuration)
 	prometheusBlockAssemblerIteratorTransactionsTotal.WithLabelValues("false").Add(float64(totalProcessed.Load()))
@@ -3007,7 +4552,9 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 
 	b.logger.Infof("[loadUnminedTransactions] sorting %d unmined transactions by createdAt", len(unminedTransactions))
 
-	stableSortUnminedByCreatedAt(unminedTransactions)
+	if !stableSortUnminedByCreatedAt(unminedTransactions) {
+		b.logger.Warnf("[loadUnminedTransactions] CreatedAt range of %d unmined transactions too wide for the radix sort, used the comparison sort", len(unminedTransactions))
+	}
 
 	txCount := len(unminedTransactions)
 
@@ -3074,9 +4621,16 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 				end = totalTxs
 			}
 
+			b.heartbeat.BeatIfStarted()
+
 			// Pass slice segment directly - no copy needed
 			batch := unminedTransactions[start:end]
-			if err = b.subtreeProcessor.AddNodesDirectly(batch, true); err != nil {
+			if isReload {
+				err = b.subtreeProcessor.AddNodesDirectlyReportOnly(batch, true)
+			} else {
+				err = b.subtreeProcessor.AddNodesDirectly(batch, true)
+			}
+			if err != nil {
 				return errors.NewProcessingError("error adding unmined transactions batch to subtree processor", err)
 			}
 
@@ -3096,12 +4650,19 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 	} else {
 		// Sequential mode: use AddDirectly for each transaction
 		for idx, unminedTransaction := range unminedTransactions {
-			if err = b.subtreeProcessor.AddDirectly(unminedTransaction.Node, unminedTransaction.TxInpoints, true); err != nil {
+			if isReload {
+				err = b.subtreeProcessor.AddDirectlyReportOnly(unminedTransaction.Node, unminedTransaction.TxInpoints, true)
+			} else {
+				err = b.subtreeProcessor.AddDirectly(unminedTransaction.Node, unminedTransaction.TxInpoints, true)
+			}
+			if err != nil {
 				return errors.NewProcessingError("error adding unmined transaction to subtree processor", err)
 			}
 
 			// add every 10_000 transactions log the time taken
 			if (idx+1)%10_000 == 0 {
+				b.heartbeat.BeatIfStarted()
+
 				prometheusBlockAssemblerAddDirectlyTime.Observe(time.Since(addStart).Seconds())
 				prometheusBlockAssemblerAddDirectlyTotal.Add(addTxs)
 				addStart = time.Now()
@@ -3118,10 +4679,18 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 
 	prometheusBlockAssemblerAddDirectlyBatchTime.Observe(time.Since(batchStart).Seconds())
 
+	// The tail of the load leaves writes below the disk tx map's flush
+	// threshold unflushed; AddNodesDirectly/AddDirectly's own per-call check
+	// cannot see a flush failure for those. Flush once here, after the whole
+	// load, and check.
+	if err = b.subtreeProcessor.FlushDiskTxMapForLoad("loadUnminedTransactions", isReload); err != nil {
+		return errors.NewProcessingError("error flushing disk tx map after loading unmined transactions", err)
+	}
+
 	// unlock any locked transactions
 	if len(lockedTransactions) > 0 {
 		if err = b.utxoStore.SetLocked(ctx, lockedTransactions, false); err != nil {
-			return errors.NewProcessingError("[BlockAssembler] failed to unlock %d unmined transactions: %v", len(lockedTransactions), err)
+			return errors.NewProcessingError("[BlockAssembler] failed to unlock %d unmined transactions so block assembly cannot start on this attempt; the store error below names the transaction and the record that rejected the unlock: %v", len(lockedTransactions), err)
 		} else {
 			b.logger.Infof("[BlockAssembler] unlocked %d previously locked unmined transactions", len(lockedTransactions))
 		}
@@ -3130,11 +4699,145 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 	return nil
 }
 
-// sortEntry is a lightweight in-memory structure for sorting.
-// Only 12 bytes per transaction instead of full UnminedTransaction.
-type sortEntry struct {
-	CreatedAt int    // 8 bytes - timestamp with milliseconds for sorting
-	Sequence  uint64 // 8 bytes - key to retrieve from temp store
+// validateLoadedUnminedTxs checks the inputs of every loaded transaction, with workers
+// bounded and concurrent store reads, once the unmined iterator is closed. It returns the
+// transactions and locked hashes that stay in the candidate.
+//
+// The checks only read. A transaction found conflicting is collected, and the marks are written
+// after every check has finished (applyDeferredConflictMarks), so its cascade also drops any
+// child that was checked first. An input check the store could not answer fails the load, as an
+// iterator error does, unless it has stayed undecided long enough to be left out (undecidedLoad).
+func (b *BlockAssembler) validateLoadedUnminedTxs(ctx context.Context, txs []*utxo.UnminedTransaction, locked []chainhash.Hash,
+	bestBlockHeaderIDsMap map[uint32]bool, undecided *undecidedLoad, numWorkers int, invalidInputCount *atomic.Int64) ([]*utxo.UnminedTransaction, []chainhash.Hash, error) {
+	type validationResult struct{ keep, conflicting bool }
+
+	results := make([]validationResult, len(txs))
+	work := make(chan int, numWorkers)
+
+	var (
+		wg             sync.WaitGroup
+		validatedCount atomic.Int64
+	)
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for idx := range work {
+				b.heartbeat.BeatIfStarted()
+
+				if n := validatedCount.Add(1); n%1000 == 0 {
+					b.logger.Infof("[loadUnminedTransactions] validated %d/%d unmined transactions, %d invalid", n, len(txs), invalidInputCount.Load())
+				}
+
+				// The load is already failing, so nothing it would decide here is used. Not
+				// checking keeps a store outage from costing a timeout per transaction.
+				if undecided.failing.Load() {
+					continue
+				}
+
+				hash := txs[idx].Hash
+
+				valid, conflicting, validateErr := b.checkUnminedTxInputsRetrying(ctx, hash, bestBlockHeaderIDsMap, &undecided.failing)
+				results[idx].conflicting = conflicting
+
+				if validateErr != nil {
+					if isPermanentInputCheck(validateErr) {
+						// It cannot be decided, now or by retrying, so it is left out, and the
+						// load goes on.
+						undecided.answered.Add(1)
+
+						b.logger.Errorf("[loadUnminedTransactions][%s] could not validate inputs (permanent), leaving the transaction out of the candidate: %v",
+							hash.String(), validateErr)
+						prometheusBlockAssemblerUnminedUndecidedExcluded.Inc()
+						invalidInputCount.Add(1)
+
+						continue
+					}
+
+					// Undecided, not decided: the store did not answer, even on a retry. It
+					// stays out of this load either way. Whether the load fails for it or goes
+					// on without it is undecidedLoad's call, made from how long it has been
+					// undecided.
+					if !undecided.undecided(hash, validateErr) {
+						b.logger.Errorf("[loadUnminedTransactions][%s] could not validate inputs, failing the load: %v", hash.String(), validateErr)
+					}
+
+					continue
+				}
+
+				undecided.decided(hash)
+
+				if !valid {
+					invalidInputCount.Add(1)
+					continue
+				}
+
+				results[idx].keep = true
+			}
+		}()
+	}
+
+	for idx := range txs {
+		work <- idx
+	}
+
+	close(work)
+	wg.Wait()
+
+	// The collected conflicting marks are dropped with a failed load, for the same cause.
+	undecidedErr := undecided.finish()
+
+	b.undecidedMu.Lock()
+	b.undecidedSince = undecided.next()
+	b.undecidedMu.Unlock()
+
+	if undecidedErr != nil {
+		return nil, nil, undecidedErr
+	}
+
+	for _, p := range undecided.persistent {
+		b.logger.Errorf("[loadUnminedTransactions][%s] could not validate inputs, undecided since %s, leaving the transaction out of the candidate: %v",
+			p.hash.String(), p.since.Format(time.RFC3339), p.err)
+		prometheusBlockAssemblerUnminedUndecidedExcluded.Inc()
+		invalidInputCount.Add(1)
+	}
+
+	conflictingTxs := make([]chainhash.Hash, 0)
+
+	for idx := range txs {
+		if results[idx].conflicting {
+			conflictingTxs = append(conflictingTxs, txs[idx].Hash)
+		}
+	}
+
+	markedConflicting := b.applyDeferredConflictMarks(ctx, conflictingTxs, numWorkers)
+
+	// Leave out every transaction that failed its check, and anything the marks above made
+	// conflicting, including a child checked before its parent was marked.
+	dropped := make(map[chainhash.Hash]struct{})
+	kept := txs[:0]
+
+	for idx, tx := range txs {
+		_, marked := markedConflicting[tx.Hash]
+		if results[idx].keep && !marked {
+			kept = append(kept, tx)
+			continue
+		}
+
+		dropped[tx.Hash] = struct{}{}
+	}
+
+	clear(txs[len(kept):])
+
+	locked = slices.DeleteFunc(locked, func(h chainhash.Hash) bool {
+		_, isDropped := dropped[h]
+		return isDropped
+	})
+
+	return kept, locked, nil
 }
 
 // validateUnminedTxInputs checks that each input of an unmined transaction is still validly
@@ -3143,96 +4846,276 @@ type sortEntry struct {
 //  2. Input is spent by THIS tx, but a counter-conflicting tx is confirmed on the current chain
 //     (e.g. ProcessConflicting incorrectly made this tx the winner over a confirmed tx)
 //
-// Returns true if the transaction is valid for inclusion in block assembly.
-func (b *BlockAssembler) validateUnminedTxInputs(ctx context.Context, txHash chainhash.Hash, bestBlockIDsMap map[uint32]bool, dryRun bool) bool {
-	// Load only inputs and conflicting flag — NOT full Tx (avoids loading heavy output data)
-	txMeta, err := b.utxoStore.Get(ctx, &txHash, fields.Inputs, fields.Conflicting)
-	if err != nil || txMeta == nil || txMeta.Tx == nil || txMeta.Tx.Inputs == nil {
-		return false
+// Returns true if the transaction is valid for inclusion in block assembly, and
+// an error when it could not be decided at all -- which is NOT the same answer.
+// "Invalid" drops a transaction from the mining candidate on purpose; "could not
+// decide" must not be reported as that, and used to be: the read asked for
+// fields.Inputs and bailed on a nil txMeta.Tx, so on the SQL store, which sets
+// data.Tx only for fields.Tx (sql.go:1757), EVERY transaction was silently
+// dropped, and on the utxoset store every record whose body had aged out was
+// too. The parents and their vouts are read from the stored inpoints now, which
+// is where an unmined record keeps them.
+//
+// Every store read here follows the same rule: a not-found is a decision about
+// the transaction (a parent that is gone cannot be validly spent, a counter with
+// no record is on no block), and any other store failure is returned. The two
+// counter-conflict reads matter most, because they used to `continue` on error:
+// that is the check which drops a transaction whose counter-conflict is confirmed
+// on chain, so skipping it on a transient failure failed OPEN and let exactly that
+// transaction into the candidate.
+func (b *BlockAssembler) validateUnminedTxInputs(ctx context.Context, txHash chainhash.Hash, bestBlockIDsMap map[uint32]bool, dryRun bool) (bool, error) {
+	valid, conflicting, err := b.checkUnminedTxInputs(ctx, txHash, bestBlockIDsMap)
+	if conflicting && !dryRun {
+		b.markAsConflicting(ctx, txHash)
+	}
+
+	return valid, err
+}
+
+// permanentInputCheck marks an input check that can never be answered for this record, such as
+// a record with neither stored inpoints nor a body. A reload leaves such a transaction out of
+// the candidate instead of failing, because no retry can decide it. Every other error from the
+// check is a store that did not answer this time.
+type permanentInputCheck struct{ err error }
+
+func (p permanentInputCheck) Error() string { return p.err.Error() }
+
+func (p permanentInputCheck) Unwrap() error { return p.err }
+
+func isPermanentInputCheck(err error) bool {
+	_, ok := err.(permanentInputCheck) //nolint:errorlint // returned unwrapped by checkUnminedTxInputs
+
+	return ok
+}
+
+// checkUnminedTxInputs is validateUnminedTxInputs without the write: it reports
+// whether the transaction must be marked conflicting instead of marking it, and
+// only ever reads the store. loadUnminedTransactions calls it from its workers
+// while the unmined iterator is still open, and applies the marks itself once
+// the iterator is closed. On the SQL store over SQLite that ordering is
+// load-bearing: the iterator holds a read cursor on the transactions table, a
+// SetConflicting UPDATE on that table waits for the cursor, and the iterator's
+// own next read then waits behind the pending write, so marking from a worker
+// wedged the reload for good.
+//
+// It returns (valid, conflicting, err); conflicting is true only together with
+// valid == false and a nil error.
+func (b *BlockAssembler) checkUnminedTxInputs(ctx context.Context, txHash chainhash.Hash, bestBlockIDsMap map[uint32]bool) (bool, bool, error) {
+	// TxInpoints, not the body: the parent hashes and their vouts are on the
+	// identity record, so this neither loads heavy output data nor depends on a
+	// body the store may no longer hold. spentOutpointsFromStore fetches the body
+	// only for a record that carries no inpoints.
+	txMeta, err := b.utxoStore.Get(ctx, &txHash, fields.TxInpoints, fields.Conflicting)
+	if err != nil {
+		if errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound) {
+			// No record at all: there is nothing to mine, and that is a decision,
+			// not a failure to make one.
+			return false, false, nil
+		}
+
+		return false, false, recordUnread{errors.NewProcessingError("[validateUnminedTxInputs][%s] failed to load tx", txHash.String(), err)}
+	}
+
+	if txMeta == nil {
+		return false, false, permanentInputCheck{errors.NewProcessingError("[validateUnminedTxInputs][%s] store returned no record and no error", txHash.String())}
 	}
 
 	if txMeta.Conflicting {
-		return false
+		return false, false, nil
 	}
 
-	for _, input := range txMeta.Tx.Inputs {
-		parentHash := input.PreviousTxIDChainHash()
+	inpoints, err := b.spentOutpointsFromStore(ctx, &txHash, txMeta, "validateUnminedTxInputs")
+	if err != nil {
+		if errors.Is(err, errors.ErrTxNotFound) {
+			// The record went away between the two reads: nothing to mine, and
+			// that is a decision rather than a failure to make one.
+			return false, false, nil
+		}
+
+		// A record with neither stored inpoints nor a body is marked permanent where
+		// spentOutpoints finds it. Anything else here is the body read failing, which is
+		// the store not answering this time, and a retry can decide it.
+		return false, false, err
+	}
+
+	// Read each parent once for all the outputs this transaction spends from it, keeping the
+	// order the parents first appear in.
+	type parentVouts struct {
+		hash  chainhash.Hash
+		vouts []uint32
+	}
+
+	parents := make([]parentVouts, 0, len(inpoints))
+	parentIdx := make(map[chainhash.Hash]int, len(inpoints))
+
+	for _, inpoint := range inpoints {
+		idx, seen := parentIdx[inpoint.Hash]
+		if !seen {
+			idx = len(parents)
+			parentIdx[inpoint.Hash] = idx
+			parents = append(parents, parentVouts{hash: inpoint.Hash})
+		}
+
+		parents[idx].vouts = append(parents[idx].vouts, inpoint.Index)
+	}
+
+	for i := range parents {
+		parentHash := &parents[i].hash
 
 		parentMeta, err := b.utxoStore.Get(ctx, parentHash, fields.Utxos)
-		if err != nil || parentMeta == nil {
-			return false
-		}
+		if err != nil {
+			if errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound) {
+				// The parent is gone. That is the one classified outcome here: an
+				// input whose parent no longer exists cannot be validly spent, so
+				// this is a decision about the transaction. Logged so a pruned
+				// parent of a live unmined transaction (issue 1768) is diagnosable.
+				b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d parent could not be loaded (%v) — counting as invalid",
+					txHash.String(), parentHash.String(), parents[i].vouts[0], err)
 
-		vout := int(input.PreviousTxOutIndex)
-		if parentMeta.SpendingDatas == nil || vout >= len(parentMeta.SpendingDatas) {
-			continue
-		}
-
-		spendingData := parentMeta.SpendingDatas[vout]
-		if spendingData == nil || spendingData.TxID == nil {
-			continue
-		}
-
-		if !spendingData.TxID.IsEqual(&txHash) {
-			// Case 1: input spent by a different tx
-			b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d is spent by different tx %s — marking conflicting",
-				txHash.String(), parentHash.String(), vout, spendingData.TxID.String())
-
-			if !dryRun {
-				b.markAsConflicting(ctx, txHash)
+				return false, false, nil
 			}
-			return false
+
+			// Anything else is the store failing to answer. Reporting that as
+			// "invalid" is the same conflation the inpoint resolution above stopped
+			// making, one loop iteration later.
+			return false, false, errors.NewProcessingError("[validateUnminedTxInputs][%s] failed to load parent %s", txHash.String(), parentHash.String(), err)
+		}
+
+		if parentMeta == nil {
+			return false, false, errors.NewProcessingError("[validateUnminedTxInputs][%s] store returned no record and no error for parent %s", txHash.String(), parentHash.String())
+		}
+
+		// The vout of the first output this tx spends, or -1 when it spends none of them.
+		spentVout := -1
+
+		for _, outputIndex := range parents[i].vouts {
+			vout := int(outputIndex)
+			if parentMeta.SpendingDatas == nil || vout >= len(parentMeta.SpendingDatas) {
+				continue
+			}
+
+			spendingData := parentMeta.SpendingDatas[vout]
+			if spendingData == nil || spendingData.TxID == nil {
+				continue
+			}
+
+			if !spendingData.TxID.IsEqual(&txHash) {
+				// Case 1: input spent by a different tx
+				b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d is spent by different tx %s — marking conflicting",
+					txHash.String(), parentHash.String(), vout, spendingData.TxID.String())
+
+				return false, true, nil
+			}
+
+			if spentVout < 0 {
+				spentVout = vout
+			}
+		}
+
+		if spentVout < 0 {
+			continue
 		}
 
 		// Case 2: spending data matches, but check if the counter-conflicting tx
 		// (the one this tx replaced via ProcessConflicting) is on the current chain.
-		// This catches the scenario where ProcessConflicting incorrectly flipped a
-		// confirmed transaction to "loser" status.
-		counterTxMeta, err := b.utxoStore.Get(ctx, parentHash, fields.ConflictingChildren)
-		if err != nil || counterTxMeta == nil {
+		// The answer is the same for every output of the parent, so it is checked once.
+		counterConfirmed, err := b.counterConflictConfirmed(ctx, txHash, parentHash, spentVout, bestBlockIDsMap)
+		if err != nil {
+			return false, false, err
+		}
+
+		if counterConfirmed {
+			return false, true, nil
+		}
+	}
+
+	return true, false, nil
+}
+
+// counterConflictConfirmed reports whether a transaction that contests the
+// same parent as txHash (the one txHash replaced via ProcessConflicting) is
+// confirmed on the current chain. This catches the scenario where
+// ProcessConflicting incorrectly flipped a confirmed transaction to "loser"
+// status. It only reads the store, and a store failure is returned rather than
+// read as "not confirmed".
+func (b *BlockAssembler) counterConflictConfirmed(ctx context.Context, txHash chainhash.Hash, parentHash *chainhash.Hash, vout int, bestBlockIDsMap map[uint32]bool) (bool, error) {
+	counterTxMeta, err := b.utxoStore.Get(ctx, parentHash, fields.ConflictingChildren)
+	if err != nil {
+		if errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound) {
+			// No parent record, so no contest recorded against it.
+			return false, nil
+		}
+
+		// Skipping on a store failure fails OPEN: this check is what drops a
+		// transaction whose counter-conflict is confirmed on chain, so a
+		// transient error would let exactly that transaction into the
+		// candidate. Fail closed by reporting it instead.
+		return false, errors.NewProcessingError("[validateUnminedTxInputs][%s] failed to load the contest on parent %s", txHash.String(), parentHash.String(), err)
+	}
+
+	if counterTxMeta == nil {
+		return false, nil
+	}
+
+	for _, counterChild := range counterTxMeta.ConflictingChildren {
+		if counterChild.IsEqual(&txHash) {
 			continue
 		}
 
-		for _, counterChild := range counterTxMeta.ConflictingChildren {
-			if counterChild.IsEqual(&txHash) {
+		counterMeta, err := b.utxoStore.Get(ctx, &counterChild, fields.BlockIDs)
+		if err != nil {
+			if errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound) {
+				// The counter's own record is gone, so it is on no block.
 				continue
 			}
 
-			counterMeta, err := b.utxoStore.Get(ctx, &counterChild, fields.BlockIDs)
-			if err != nil || counterMeta == nil {
-				continue
-			}
+			// Same fail-open hazard as the read above: this is the lookup that
+			// decides whether the counter is confirmed on the current chain.
+			return false, errors.NewProcessingError("[validateUnminedTxInputs][%s] failed to load counter-conflicting tx %s", txHash.String(), counterChild.String(), err)
+		}
 
-			for _, blockID := range counterMeta.BlockIDs {
-				if bestBlockIDsMap[blockID] {
-					b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d has counter-conflicting tx %s confirmed on chain (blockID %d) — marking conflicting",
-						txHash.String(), parentHash.String(), vout, counterChild.String(), blockID)
+		if counterMeta == nil {
+			continue
+		}
 
-					if !dryRun {
-						b.markAsConflicting(ctx, txHash)
-					}
-					return false
-				}
+		for _, blockID := range counterMeta.BlockIDs {
+			if bestBlockIDsMap[blockID] {
+				b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d has counter-conflicting tx %s confirmed on chain (blockID %d) — marking conflicting",
+					txHash.String(), parentHash.String(), vout, counterChild.String(), blockID)
+
+				return true, nil
 			}
 		}
 	}
 
-	return true
+	return false, nil
 }
 
 func (b *BlockAssembler) markAsConflicting(ctx context.Context, txHash chainhash.Hash) {
-	_, cascadedHashes, err := utxo.MarkConflictingRecursively(ctx, b.utxoStore, []chainhash.Hash{txHash})
-	if err != nil {
-		b.logger.Errorf("[validateUnminedTxInputs][%s] failed to mark as conflicting: %v", txHash.String(), err)
-		return
-	}
+	cascadedHashes := b.markConflictingCascade(ctx, txHash)
 
 	// Stash cascade hashes for the post-load DrainQueue call. Safe because
-	// loadUnminedTransactions is serialised by unminedTransactionsLoading.
+	// loadUnminedTransactions is serialised by unminedTransactionsLoading, and
+	// its own marks are stashed by applyDeferredConflictMarks from one goroutine.
 	if b.unminedDropHashes != nil {
 		for _, h := range cascadedHashes {
 			b.unminedDropHashes[h] = struct{}{}
 		}
+	}
+}
+
+// markConflictingCascade is markAsConflicting without the drop-filter stash, so
+// it is safe to call from several goroutines at once. It returns every hash it
+// marked, txHash first, or nil when the store write failed.
+func (b *BlockAssembler) markConflictingCascade(ctx context.Context, txHash chainhash.Hash) []chainhash.Hash {
+	_, cascadedHashes, err := utxo.MarkConflictingRecursively(ctx, b.utxoStore, []chainhash.Hash{txHash})
+
+	// a failed cascade may still have flipped some of them
+	b.txMetaEvictor.Evict(cascadedHashes)
+
+	if err != nil {
+		b.logger.Errorf("[validateUnminedTxInputs][%s] failed to mark as conflicting: %v", txHash.String(), err)
+		return nil
 	}
 
 	for _, h := range cascadedHashes {
@@ -3240,6 +5123,81 @@ func (b *BlockAssembler) markAsConflicting(ctx context.Context, txHash chainhash
 			b.logger.Warnf("[validateUnminedTxInputs][%s] failed to evict cascaded tx from subtree processor: %v", h.String(), removeErr)
 		}
 	}
+
+	return cascadedHashes
+}
+
+// applyDeferredConflictMarks writes the conflicting marks input validation
+// collected during an unmined load and returns every hash those marks covered:
+// the roots and their spending descendants. What was marked is also added to
+// b.unminedDropHashes for the post-load queue drain.
+//
+// It runs after the unmined iterator is closed, so no mark is written while
+// the SQL store's read cursor is open. The cost of deferring is that the
+// workers no longer see a mark an earlier transaction's cascade would have
+// written: a descendant of a conflicting transaction can read as not
+// conflicting and pass validation. The caller closes that gap by dropping
+// every returned hash from what it loads, and from what it unlocks. That is
+// tighter than marking inline ever was, since there whether a descendant was
+// dropped depended on which worker reached it first.
+//
+// The marks are written by up to `workers` goroutines, the same concurrency
+// the load's workers wrote them with before: each one waits on the store's
+// read batchers, so writing them one at a time made a large conflicting set
+// several times slower to clear. Two roots that share descendants mark them
+// twice, which is idempotent. A root whose mark fails is logged by
+// markConflictingCascade and stays out of the load, as it did when it was
+// marked inline.
+func (b *BlockAssembler) applyDeferredConflictMarks(ctx context.Context, roots []chainhash.Hash, workers int) map[chainhash.Hash]struct{} {
+	if len(roots) == 0 {
+		return nil
+	}
+
+	cascades := make([][]chainhash.Hash, len(roots))
+	next := atomic.Int64{}
+
+	var wg sync.WaitGroup
+
+	for w := 0; w < min(workers, len(roots)); w++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for {
+				idx := int(next.Add(1) - 1)
+				if idx >= len(roots) {
+					return
+				}
+
+				// Scales with the conflicting set and runs inside reset's
+				// post-process step, so it beats like the feed loop does
+				// (issue 1447).
+				b.heartbeat.BeatIfStarted()
+
+				cascades[idx] = b.markConflictingCascade(ctx, roots[idx])
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	marked := make(map[chainhash.Hash]struct{}, len(roots))
+
+	for idx, root := range roots {
+		marked[root] = struct{}{}
+
+		// Only what was actually marked goes to the queue drain, as before.
+		for _, h := range cascades[idx] {
+			marked[h] = struct{}{}
+
+			if b.unminedDropHashes != nil {
+				b.unminedDropHashes[h] = struct{}{}
+			}
+		}
+	}
+
+	return marked
 }
 
 // CheckInputValidation iterates all unmined transactions and checks whether their inputs
@@ -3291,7 +5249,12 @@ func (b *BlockAssembler) CheckInputValidation(ctx context.Context) (int, error) 
 			if alreadyMined {
 				continue
 			}
-			if !b.validateUnminedTxInputs(ctx, tx.Hash, bestBlockHeaderIDsMap, true) {
+			valid, validateErr := b.validateUnminedTxInputs(ctx, tx.Hash, bestBlockHeaderIDsMap, true)
+			if validateErr != nil {
+				b.logger.Errorf("[BlockAssembler][%s] could not validate inputs during the dry run: %v", tx.Hash.String(), validateErr)
+			}
+
+			if !valid {
 				invalidCount++
 			}
 		}
@@ -3299,19 +5262,21 @@ func (b *BlockAssembler) CheckInputValidation(ctx context.Context) (int, error) 
 	return invalidCount, nil
 }
 
-// loadUnminedTransactionsWithDiskSort loads unmined transactions using disk-based sorting
-// to reduce RAM usage. Instead of loading all transaction data into memory, it:
-// 1. Writes transaction data to BadgerDB temp storage
-// 2. Keeps only minimal sort entries (12 bytes each) in memory
-// 3. Sorts in memory by CreatedAt
-// 4. Reads back from disk in sorted order
-func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context) error {
-	scanHeaders := uint64(1000)
-
+// loadUnminedTransactionsWithDiskSort loads unmined transactions with memory
+// bounded by blockassembly_unminedTxSortBufferRecords instead of by the size of
+// the unmined set. Transactions are buffered as compact records, sorted runs are
+// spilled to blockassembly_unminedTxDiskSortPath as buffers fill, and the runs
+// are merged straight into the subtree processor. With no sort path the compact
+// records are sorted in memory.
+//
+// isReload has the same meaning as in loadUnminedTransactions: true when this
+// is reset's postProcess reload (report-only on a disk tx map error), false
+// for the startup load (fail on one).
+func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context, isReload bool) error {
 	// Wait for the unmined_since index to be ready
-	if indexWaiter, ok := b.utxoStore.(interface {
+	if indexWaiter, ok := utxo.As[interface {
 		WaitForIndexReady(ctx context.Context, indexName string) error
-	}); ok {
+	}](b.utxoStore); ok {
 		indexName := "unminedSinceIndex"
 		prometheusBlockAssemblerUtxoIndexReady.WithLabelValues(indexName).Set(0)
 
@@ -3332,8 +5297,11 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 		prometheusBlockAssemblerUtxoIndexWaitDuration.WithLabelValues("unminedSinceIndex", "skipped").Observe(0)
 	}
 
-	bestBlockHeader, _ := b.CurrentBlock()
-	bestBlockHeaderIDs, err := b.blockchainClient.GetBlockHeaderIDs(ctx, bestBlockHeader.Hash(), scanHeaders)
+	// Same best-chain coverage as the in-memory path: every header back to
+	// genesis, so a tx mined deep in the chain is still recognised as mined.
+	bestBlockHeader, bestBlockHeight := b.CurrentBlock()
+
+	bestBlockHeaderIDs, err := b.blockchainClient.GetBlockHeaderIDs(ctx, bestBlockHeader.Hash(), uint64(bestBlockHeight)+1)
 	if err != nil {
 		return errors.NewProcessingError(errGettingBestBlockHeaders, err)
 	}
@@ -3352,56 +5320,81 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 		return errors.NewProcessingError(errGettingUnminedTxIterator, err)
 	}
 	prometheusBlockAssemblerGetUnminedTxIteratorTime.WithLabelValues("false", "success").Observe(duration)
-	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] successfully created unmined tx iterator")
 
-	// Create temporary BadgerDB store
-	tempStore, err := tempstore.New(tempstore.Options{
-		BasePath: b.settings.BlockAssembly.UnminedTxDiskSortPath,
-		Prefix:   "unmined-sort",
+	return b.loadUnminedSorted(ctx, it, bestBlockHeaderIDsMap, isReload)
+}
+
+// unminedSortDirs returns the configured sort directories, or the OS temp
+// directory when none is set: enabling disk sort always bounds memory, as the
+// previous Badger implementation did.
+func unminedSortDirs(paths []string) []string {
+	dirs := make([]string, 0, len(paths))
+
+	for _, p := range paths {
+		if p = strings.TrimSpace(p); p != "" {
+			dirs = append(dirs, p)
+		}
+	}
+
+	if len(dirs) == 0 {
+		return []string{os.TempDir()}
+	}
+
+	return dirs
+}
+
+// loadUnminedSorted filters the iterator's transactions like the in-memory
+// path, orders them by CreatedAt through an unminedsort.Sorter, and adds them
+// to the subtree processor in batches. isReload is as in
+// loadUnminedTransactionsWithDiskSort.
+func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedTxIterator, bestBlockHeaderIDsMap map[uint32]bool, isReload bool) error {
+	// the inpoints go through the sort in every mode: block assembly keeps each tx's parent links
+	// whatever blockassembly_storeTxInpointsForSubtreeMeta says
+	sorter, err := unminedsort.New(unminedsort.Options{
+		Dirs:          unminedSortDirs(b.settings.BlockAssembly.UnminedTxDiskSortPaths),
+		BufferRecords: b.settings.BlockAssembly.UnminedTxSortBufferRecords,
+		WithInpoints:  true,
 	})
 	if err != nil {
-		return errors.NewProcessingError("error creating temp store for disk-based sorting", err)
+		return errors.NewProcessingError("error creating unmined transaction sorter", err)
 	}
+
 	defer func() {
-		if closeErr := tempStore.Close(); closeErr != nil {
-			b.logger.Warnf("[loadUnminedTransactionsWithDiskSort] error closing temp store: %v", closeErr)
+		if closeErr := sorter.Close(); closeErr != nil {
+			b.logger.Warnf("[loadUnminedTransactionsWithDiskSort] error removing sort runs: %v", closeErr)
 		}
 	}()
 
-	// Lightweight sort entries - only 12 bytes per tx
-	sortEntries := make([]sortEntry, 0, 1024*1024)
 	lockedTransactions := make([]chainhash.Hash, 0, 1024)
 	markAsMinedOnLongestChain := make([]chainhash.Hash, 0, 1024)
 
 	iteratorStart := time.Now()
-	var sequence uint64
-	totalProcessed := atomic.Int64{}
-	skippedCount := atomic.Int64{}
-	alreadyMinedCount := atomic.Int64{}
-	lockedCount := atomic.Int64{}
+	lastLogTime := iteratorStart
 
-	// Write batch for efficient disk writes
-	writeBatch := tempStore.NewWriteBatch()
+	var totalProcessed, skippedCount, alreadyMinedCount int64
 
-	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] processing unmined transactions and writing to temp store")
+	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] scanning unmined transactions (sort dirs %v, buffer %d records)",
+		unminedSortDirs(b.settings.BlockAssembly.UnminedTxDiskSortPaths), b.settings.BlockAssembly.UnminedTxSortBufferRecords)
 
-	// Process batches from iterator
+	// Process batches from iterator. Beats per batch for the same reason as
+	// loadUnminedTransactions: this also runs inside reset (issue 1447).
 	for {
+		b.heartbeat.BeatIfStarted()
+
 		batch, err := it.Next(ctx)
 		if err != nil {
-			writeBatch.Cancel()
 			return errors.NewProcessingError("error getting unmined transaction", err)
 		}
 
-		if batch == nil || len(batch) == 0 {
+		if len(batch) == 0 {
 			break
 		}
 
 		for _, unminedTx := range batch {
-			totalProcessed.Add(1)
+			totalProcessed++
 
 			if unminedTx.Skip {
-				skippedCount.Add(1)
+				skippedCount++
 				continue
 			}
 
@@ -3415,7 +5408,7 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 				}
 
 				if skipAlreadyMined {
-					alreadyMinedCount.Add(1)
+					alreadyMinedCount++
 					if unminedTx.UnminedSince > 0 {
 						markAsMinedOnLongestChain = append(markAsMinedOnLongestChain, unminedTx.Node.Hash)
 					}
@@ -3423,60 +5416,29 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 				}
 			}
 
-			// Serialize and write to temp store
-			txData, serErr := utxo.SerializeUnminedTransaction(unminedTx)
-			if serErr != nil {
-				writeBatch.Cancel()
-				return errors.NewProcessingError("error serializing unmined transaction", serErr)
+			if err = sorter.Add(int64(unminedTx.CreatedAt), *unminedTx.Node, unminedTx.TxInpoints); err != nil {
+				return errors.NewProcessingError("error buffering unmined transaction %s for sorting", unminedTx.Node.Hash, err)
 			}
-
-			// Use sequence number as key (8 bytes, big-endian for lexicographic ordering)
-			key := make([]byte, 8)
-			binary.BigEndian.PutUint64(key, sequence)
-
-			if setErr := writeBatch.Set(key, txData); setErr != nil {
-				writeBatch.Cancel()
-				return errors.NewProcessingError("error writing to temp store", setErr)
-			}
-
-			// Add lightweight sort entry
-			sortEntries = append(sortEntries, sortEntry{
-				CreatedAt: unminedTx.CreatedAt,
-				Sequence:  sequence,
-			})
 
 			if unminedTx.Locked {
 				lockedTransactions = append(lockedTransactions, unminedTx.Node.Hash)
-				lockedCount.Add(1)
-			}
-
-			sequence++
-
-			// Flush batch periodically to prevent memory buildup
-			if writeBatch.Count() >= 10000 {
-				if flushErr := writeBatch.Flush(); flushErr != nil {
-					return errors.NewProcessingError("error flushing temp store batch", flushErr)
-				}
 			}
 		}
 
-		if totalProcessed.Load()%100_000 == 0 {
-			b.logger.Infof("[loadUnminedTransactionsWithDiskSort] processed %d unmined transactions so far", totalProcessed.Load())
+		if time.Since(lastLogTime) >= 10*time.Second {
+			elapsed := time.Since(iteratorStart)
+			b.logger.Infof("[loadUnminedTransactionsWithDiskSort] progress: %d txs processed, %.0f txs/sec, elapsed %s",
+				totalProcessed, float64(totalProcessed)/elapsed.Seconds(), elapsed.Truncate(time.Second))
+			lastLogTime = time.Now()
 		}
 	}
 
-	// Flush any remaining writes
-	if flushErr := writeBatch.Flush(); flushErr != nil {
-		return errors.NewProcessingError("error flushing final temp store batch", flushErr)
-	}
-
-	iteratorDuration := time.Since(iteratorStart).Seconds()
-	prometheusBlockAssemblerIteratorProcessingTime.WithLabelValues("false").Observe(iteratorDuration)
-	prometheusBlockAssemblerIteratorTransactionsTotal.WithLabelValues("false").Add(float64(totalProcessed.Load()))
-	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "skipped").Add(float64(skippedCount.Load()))
-	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "already_mined").Add(float64(alreadyMinedCount.Load()))
-	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "locked").Add(float64(lockedCount.Load()))
-	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "added").Add(float64(len(sortEntries)))
+	prometheusBlockAssemblerIteratorProcessingTime.WithLabelValues("false").Observe(time.Since(iteratorStart).Seconds())
+	prometheusBlockAssemblerIteratorTransactionsTotal.WithLabelValues("false").Add(float64(totalProcessed))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "skipped").Add(float64(skippedCount))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "already_mined").Add(float64(alreadyMinedCount))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "locked").Add(float64(len(lockedTransactions)))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "added").Add(float64(sorter.Len()))
 
 	// Fix data inconsistencies
 	if len(markAsMinedOnLongestChain) > 0 {
@@ -3490,80 +5452,56 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 		b.logger.Infof("[BlockAssembler] fixed %d transactions with inconsistent unmined_since", len(markAsMinedOnLongestChain))
 	}
 
-	// Sort the lightweight entries in memory
-	sortStart := time.Now()
-	sort.Slice(sortEntries, func(i, j int) bool {
-		if sortEntries[i].CreatedAt != sortEntries[j].CreatedAt {
-			return sortEntries[i].CreatedAt < sortEntries[j].CreatedAt
-		}
-		// Deterministic tiebreak on equal CreatedAt: Sequence is the iterator
-		// yield order, which places parents before children where the iterator
-		// itself is ordered. This path does not run validateParentChain (it is
-		// gated on OnRestartValidateParentChain being false), so it never drops
-		// on misordering; the tiebreak removes non-determinism between restarts.
-		return sortEntries[i].Sequence < sortEntries[j].Sequence
-	})
-	txCount := len(sortEntries)
-	var countBucket string
-	switch {
-	case txCount < 1000:
-		countBucket = "<1k"
-	case txCount < 10000:
-		countBucket = "1k-10k"
-	case txCount < 100000:
-		countBucket = "10k-100k"
-	case txCount < 1000000:
-		countBucket = "100k-1M"
-	default:
-		countBucket = ">1M"
+	b.logger.Infof("[BlockAssembler] sorted %d unmined transactions (total processed: %d, skipped: %d, already mined: %d, locked: %d), adding to subtree processor",
+		sorter.Len(), totalProcessed, skippedCount, alreadyMinedCount, len(lockedTransactions))
+
+	batchSize := b.settings.BlockAssembly.UnminedLoadingBatchSize
+	if batchSize <= 0 {
+		batchSize = 1024 * 1024
 	}
-	prometheusBlockAssemblerSortTransactionsTime.WithLabelValues(countBucket).Observe(time.Since(sortStart).Seconds())
 
-	b.logger.Infof("[BlockAssembler] loaded %d unmined transactions into temp store (total processed: %d, skipped: %d, already mined: %d, locked: %d)",
-		len(sortEntries), totalProcessed.Load(), skippedCount.Load(), alreadyMinedCount.Load(), lockedCount.Load())
-
-	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] reading back transactions in sorted order and adding to subtree processor")
-
-	// Read back in sorted order and add to subtree processor
-	batchStart := time.Now()
 	addStart := time.Now()
-	addTxs := float64(0)
 
-	for idx, entry := range sortEntries {
-		// Get transaction data from temp store
-		key := make([]byte, 8)
-		binary.BigEndian.PutUint64(key, entry.Sequence)
+	err = sorter.Drain(ctx, batchSize, func(batch []*utxo.UnminedTransaction) error {
+		// One beat per drained batch (issue 1447): a 10M batch adds in about a
+		// second (BenchmarkAddNodesDirectly), well inside any stall timeout.
+		b.heartbeat.BeatIfStarted()
 
-		txData, getErr := tempStore.Get(key)
-		if getErr != nil {
-			return errors.NewProcessingError("error reading from temp store", getErr)
+		// Drain never splits an equal-CreatedAt group across batches, so the
+		// parents-first tiebreak sees every member of a group.
+		orderEqualCreatedAtRunsParentsFirst(batch)
+
+		var addErr error
+		if isReload {
+			addErr = b.subtreeProcessor.AddNodesDirectlyReportOnly(batch, true)
+		} else {
+			addErr = b.subtreeProcessor.AddNodesDirectly(batch, true)
 		}
 
-		unminedTx, deserErr := utxo.DeserializeUnminedTransaction(txData)
-		if deserErr != nil {
-			return errors.NewProcessingError("error deserializing unmined transaction", deserErr)
+		if addErr != nil {
+			return errors.NewProcessingError("error adding unmined transactions batch to subtree processor", addErr)
 		}
 
-		if err = b.subtreeProcessor.AddDirectly(unminedTx.Node, unminedTx.TxInpoints, true); err != nil {
-			return errors.NewProcessingError("error adding unmined transaction to subtree processor", err)
-		}
+		prometheusBlockAssemblerAddDirectlyBatchTime.Observe(time.Since(addStart).Seconds())
+		prometheusBlockAssemblerAddDirectlyTotal.Add(float64(len(batch)))
+		addStart = time.Now()
 
-		if (idx+1)%10_000 == 0 {
-			prometheusBlockAssemblerAddDirectlyTime.Observe(time.Since(addStart).Seconds())
-			prometheusBlockAssemblerAddDirectlyTotal.Add(addTxs)
-			addStart = time.Now()
-			addTxs = 0
-		}
-
-		addTxs++
+		return nil
+	})
+	if err != nil {
+		return errors.NewProcessingError("error merging sorted unmined transactions into the subtree processor", err)
 	}
 
-	prometheusBlockAssemblerAddDirectlyBatchTime.Observe(time.Since(batchStart).Seconds())
+	// See the same call in loadUnminedTransactions: the last batch's writes
+	// can sit below the disk tx map's flush threshold, unflushed.
+	if err = b.subtreeProcessor.FlushDiskTxMapForLoad("loadUnminedTransactionsWithDiskSort", isReload); err != nil {
+		return errors.NewProcessingError("error flushing disk tx map after loading unmined transactions", err)
+	}
 
 	// Unlock any locked transactions
 	if len(lockedTransactions) > 0 {
 		if err = b.utxoStore.SetLocked(ctx, lockedTransactions, false); err != nil {
-			return errors.NewProcessingError("[BlockAssembler] failed to unlock %d unmined transactions: %v", len(lockedTransactions), err)
+			return errors.NewProcessingError("[BlockAssembler] failed to unlock %d unmined transactions so block assembly cannot start on this attempt; the store error below names the transaction and the record that rejected the unlock: %v", len(lockedTransactions), err)
 		}
 		b.logger.Infof("[BlockAssembler] unlocked %d previously locked unmined transactions", len(lockedTransactions))
 	}
@@ -3575,4 +5513,171 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 // This is primarily used in test environments to prevent blocking on pending blocks.
 func (b *BlockAssembler) SetSkipWaitForPendingBlocks(skip bool) {
 	b.skipWaitForPendingBlocks = skip
+}
+
+// checkConflictRecoveryReady prevents mining against an unresolved recovery.
+// Only finished forward intents awaiting caller acknowledgement may remain. An
+// intent whose replay failed is refused even when its checklist reads finished:
+// the store may contradict the checklist, and the checklist is its only record.
+func (b *BlockAssembler) checkConflictRecoveryReady(ctx context.Context, replayFailed map[chainhash.Hash]struct{}) error {
+	if b.utxoStore == nil {
+		return nil
+	}
+
+	intents, err := b.pendingConflictIntents(ctx)
+	if err != nil {
+		return err
+	}
+	for _, intent := range intents {
+		if _, ok := replayFailed[intent.IntentID()]; ok {
+			return errors.NewProcessingError("conflict recovery %s failed to replay; BlockAssembly cannot start", intent.IntentID().String())
+		}
+		r, err := b.utxoStore.LoadConflictRecovery(ctx, intent.IntentID())
+		if err != nil {
+			return err
+		}
+		if intent.Kind != utxo.ConflictIntentForward || r == nil || r.Phase != utxo.ConflictRecoveryFinished {
+			return errors.NewProcessingError("conflict recovery %s is unresolved; BlockAssembly cannot start", intent.IntentID().String())
+		}
+		onChain, err := b.isBlockOnLongestChain(ctx, intent.BlockHash)
+		if err != nil {
+			return err
+		}
+		if !onChain {
+			return errors.NewProcessingError("conflict recovery %s is stale; BlockAssembly cannot start", intent.IntentID().String())
+		}
+	}
+	return nil
+}
+
+// prepareRecoveredConflictUpdates is called after loading unmined transactions
+// and before the startup queue drain. Return IDs only after subtree updates succeed.
+func (b *BlockAssembler) prepareRecoveredConflictUpdates(ctx context.Context) ([]chainhash.Hash, error) {
+	if b.utxoStore == nil {
+		return nil, nil
+	}
+
+	intents, err := b.pendingConflictIntents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var ids []chainhash.Hash
+	for _, intent := range intents {
+		if intent.Kind != utxo.ConflictIntentForward {
+			continue
+		}
+		r, err := b.utxoStore.LoadConflictRecovery(ctx, intent.IntentID())
+		if err != nil {
+			return nil, err
+		}
+		if r == nil || r.Phase != utxo.ConflictRecoveryFinished {
+			continue
+		}
+		onChain, err := b.isBlockOnLongestChain(ctx, intent.BlockHash)
+		if err != nil {
+			return nil, err
+		}
+		if !onChain {
+			continue
+		}
+		// A crash can stop block assembly before it applied the intent's block. The catch-up then
+		// applies the block, finds the finished checklist and acknowledges the intent. Completing it
+		// here would delete the only record that lets that catch-up accept the applied winners.
+		reached, err := b.assemblyReachedBlock(ctx, intent.BlockHash)
+		if err != nil {
+			return nil, err
+		}
+		if !reached {
+			b.logger.Infof("[prepareRecoveredConflictUpdates] block assembly has not reached block %s; leaving conflict intent %s to the catch-up", intent.BlockHash.String(), intent.IntentID().String())
+			continue
+		}
+		if err = b.subtreeProcessor.MarkRecoveredConflicts(ctx, r.Losers); err != nil {
+			return nil, err
+		}
+		if b.unminedDropHashes == nil {
+			b.unminedDropHashes = make(map[chainhash.Hash]struct{})
+		}
+		for _, h := range r.Losers {
+			b.unminedDropHashes[h] = struct{}{}
+		}
+		ids = append(ids, intent.IntentID())
+	}
+	return ids, nil
+}
+
+// assemblyReachedBlock reports whether block assembly's tip is the given block or a descendant of it.
+// A block that the blockchain does not know cannot be an ancestor of the tip.
+func (b *BlockAssembler) assemblyReachedBlock(ctx context.Context, blockHash chainhash.Hash) (bool, error) {
+	tip, _ := b.CurrentBlock()
+	if tip == nil {
+		return false, nil
+	}
+
+	if tip.Hash().IsEqual(&blockHash) {
+		return true, nil
+	}
+
+	_, meta, err := b.blockchainClient.GetBlockHeader(ctx, &blockHash)
+	if err != nil {
+		if errors.Is(err, errors.ErrBlockNotFound) || errors.Is(err, errors.ErrNotFound) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	if meta == nil {
+		return false, nil
+	}
+
+	return b.blockchainClient.CheckBlockIsAncestorOfBlock(ctx, []uint32{meta.ID}, tip.Hash())
+}
+
+// currentChainGuard protects transactions confirmed on the current chain during conflict recovery.
+// It resolves block IDs so a forward rollback accepts the winners' own block.
+func (b *BlockAssembler) currentChainGuard() utxo.CurrentChainGuard {
+	return subtreeprocessor.CurrentChainGuard(b.blockchainClient)
+}
+
+// staleTipGrace is how long block assembly may remain on the same tip behind the blockchain before the gap counts as a stall.
+// A healthy node differs for the short delay between a block reaching the Blockchain service and block assembly
+// hearing about it.
+const staleTipGrace = 10 * time.Second
+
+type staleTipTracker struct {
+	mu    sync.Mutex
+	tip   chainhash.Hash
+	since time.Time
+}
+
+// sustained records a gap at the same block assembly tip, even as the chain advances.
+func (s *staleTipTracker) sustained(assemblyTip chainhash.Hash, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.since.IsZero() || s.tip != assemblyTip {
+		s.tip = assemblyTip
+		s.since = now
+	}
+
+	return now.Sub(s.since) >= staleTipGrace
+}
+
+func (s *staleTipTracker) clear() {
+	s.mu.Lock()
+	s.since = time.Time{}
+	s.mu.Unlock()
+}
+
+// check compares the two tips. behind is true when block assembly sits on a different tip that is not ahead
+// of the chain. A tip ahead of the chain, for example after the chain tip was invalidated back to its parent,
+// is not a stall: a candidate on the chain tip would be refused at submission as stale. sustained is true once
+// a behind gap has outlasted staleTipGrace.
+func (s *staleTipTracker) check(chainTip *chainhash.Hash, chainHeight uint32, baTip *chainhash.Hash, baHeight uint32, now time.Time) (behind, sustained bool) {
+	if chainTip.IsEqual(baTip) || chainHeight < baHeight {
+		s.clear()
+		return false, false
+	}
+
+	return true, s.sustained(*baTip, now)
 }

@@ -1,0 +1,232 @@
+package pruner
+
+import (
+	"context"
+	"encoding/binary"
+	"testing"
+
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/stretchr/testify/require"
+)
+
+// makeInputBytes builds a minimal Aerospike input-bin entry consisting of
+// a 32-byte previous TXID plus a 4-byte little-endian previous output index.
+// This matches the wire format consumed by extractInputReference.
+func makeInputBytes(t *testing.T, parentTxID chainhash.Hash, prevIndex uint32) []byte {
+	t.Helper()
+	buf := make([]byte, 36)
+	copy(buf[0:32], parentTxID[:])
+	binary.LittleEndian.PutUint32(buf[32:36], prevIndex)
+	return buf
+}
+
+// makeChildResult constructs an aerospike.Result that processRecordChunk will
+// treat as a non-external, non-defensive, deletable record with the supplied
+// parent inputs. The child txid is also synthesised from the index seed.
+func makeChildResult(t *testing.T, s *Service, childSeed byte, parents []chainhash.Hash) *aerospike.Result {
+	t.Helper()
+
+	var childTxID chainhash.Hash
+	for i := range childTxID {
+		childTxID[i] = childSeed
+	}
+
+	inputs := make([]interface{}, 0, len(parents))
+	for i, p := range parents {
+		inputs = append(inputs, makeInputBytes(t, p, uint32(i)))
+	}
+
+	key, err := aerospike.NewKey(s.namespace, s.set, childTxID[:])
+	require.NoError(t, err)
+
+	bins := aerospike.BinMap{
+		s.fieldTxID:     childTxID.CloneBytes(),
+		s.fieldInputs:   inputs,
+		s.fieldExternal: false,
+	}
+
+	return &aerospike.Result{
+		Record: &aerospike.Record{
+			Key:  key,
+			Bins: bins,
+		},
+	}
+}
+
+// newTestService builds a Service configured for direct unit testing of
+// processRecordChunk. Defensive mode is off and SkipDeletions is on so the
+// deletion path stays gated and flushCleanupBatches never attempts a real
+// Aerospike call.
+func newTestService(t *testing.T) *Service {
+	t.Helper()
+	ensurePrometheusMetrics()
+
+	return &Service{
+		logger: ulogger.NewVerboseTestLogger(t),
+		settings: &settings.Settings{
+			Pruner: settings.PrunerSettings{
+				SkipDeletions: true,
+			},
+		},
+		namespace:            "test",
+		set:                  "test",
+		utxoBatchSize:        128,
+		defensiveEnabled:     false,
+		fieldTxID:            fields.TxID.String(),
+		fieldUtxos:           fields.Utxos.String(),
+		fieldInputs:          fields.Inputs.String(),
+		fieldDeletedChildren: fields.DeletedChildren.String(),
+		fieldExternal:        fields.External.String(),
+		fieldDeleteAtHeight:  fields.DeleteAtHeight.String(),
+		fieldTotalExtraRecs:  fields.TotalExtraRecs.String(),
+		fieldUnminedSince:    fields.UnminedSince.String(),
+		fieldBlockHeights:    fields.BlockHeights.String(),
+	}
+}
+
+// TestProcessRecordChunk_RecordWithoutInputs verifies a record with no inputs
+// (e.g. coinbase) is processed without a parent update. The chunk is crafted
+// with zero inputs so no parent updates accumulate and the flushCleanupBatches
+// deletion path stays gated by SkipDeletions.
+func TestProcessRecordChunk_RecordWithoutInputs(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+
+	var childTxID chainhash.Hash
+	for i := range childTxID {
+		childTxID[i] = 0x77
+	}
+
+	key, keyErr := aerospike.NewKey(svc.namespace, svc.set, childTxID[:])
+	require.NoError(t, keyErr)
+
+	// Empty inputs (e.g. coinbase) — getTxInputsFromBins returns an empty
+	// slice, so no parent loop runs.
+	chunk := []*aerospike.Result{
+		{
+			Record: &aerospike.Record{
+				Key: key,
+				Bins: aerospike.BinMap{
+					svc.fieldTxID:     childTxID.CloneBytes(),
+					svc.fieldInputs:   []interface{}{},
+					svc.fieldExternal: false,
+				},
+			},
+		},
+	}
+
+	processed, skipped, err := svc.processRecordChunk(ctx, 1000, chunk)
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+	require.Equal(t, 0, skipped)
+}
+
+func TestProcessRecordChunk_ClearsParentRefsOfConflictingRecords(t *testing.T) {
+	ctx := context.Background()
+
+	var childTxID chainhash.Hash
+	for i := range childTxID {
+		childTxID[i] = 0x55
+	}
+
+	build := func(svc *Service, conflicting interface{}) []*aerospike.Result {
+		key, err := aerospike.NewKey(svc.namespace, svc.set, childTxID[:])
+		require.NoError(t, err)
+
+		bins := aerospike.BinMap{
+			svc.fieldTxID:     childTxID.CloneBytes(),
+			svc.fieldInputs:   []interface{}{},
+			svc.fieldExternal: false,
+		}
+
+		if conflicting != nil {
+			bins[svc.fieldConflicting] = conflicting
+		}
+
+		return []*aerospike.Result{{Record: &aerospike.Record{Key: key, Bins: bins}}}
+	}
+
+	newSvc := func(t *testing.T, defensive bool, fn func(context.Context, *chainhash.Hash) error) *Service {
+		svc := newTestService(t)
+		svc.defensiveEnabled = defensive
+		svc.fieldConflicting = fields.Conflicting.String()
+		svc.clearParentRefs = fn
+
+		return svc
+	}
+
+	t.Run("conflicting record has its parent references cleared before deletion", func(t *testing.T) {
+		var calls []chainhash.Hash
+
+		svc := newSvc(t, true, func(_ context.Context, h *chainhash.Hash) error {
+			calls = append(calls, *h)
+			return nil
+		})
+
+		processed, skipped, err := svc.processRecordChunk(ctx, 1000, build(svc, true))
+		require.NoError(t, err)
+		require.Equal(t, 1, processed)
+		require.Equal(t, 0, skipped)
+		require.Equal(t, []chainhash.Hash{childTxID}, calls)
+	})
+
+	t.Run("record is kept when clearing parent references fails", func(t *testing.T) {
+		calls := 0
+
+		svc := newSvc(t, true, func(context.Context, *chainhash.Hash) error {
+			calls++
+			return errors.NewServiceError("boom")
+		})
+
+		processed, skipped, err := svc.processRecordChunk(ctx, 1000, build(svc, true))
+		require.NoError(t, err)
+		require.Equal(t, 0, processed)
+		require.Equal(t, 1, skipped)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("non-conflicting record is not cleared", func(t *testing.T) {
+		for _, conflicting := range []interface{}{nil, false} {
+			calls := 0
+
+			svc := newSvc(t, true, func(context.Context, *chainhash.Hash) error {
+				calls++
+				return nil
+			})
+
+			processed, skipped, err := svc.processRecordChunk(ctx, 1000, build(svc, conflicting))
+			require.NoError(t, err)
+			require.Equal(t, 1, processed)
+			require.Equal(t, 0, skipped)
+			require.Equal(t, 0, calls)
+		}
+	})
+
+	t.Run("non-defensive mode never clears", func(t *testing.T) {
+		calls := 0
+
+		svc := newSvc(t, false, func(context.Context, *chainhash.Hash) error {
+			calls++
+			return nil
+		})
+
+		processed, _, err := svc.processRecordChunk(ctx, 1000, build(svc, true))
+		require.NoError(t, err)
+		require.Equal(t, 1, processed)
+		require.Equal(t, 0, calls)
+	})
+
+	t.Run("defensive mode without a clear function deletes as before", func(t *testing.T) {
+		svc := newSvc(t, true, nil)
+
+		processed, skipped, err := svc.processRecordChunk(ctx, 1000, build(svc, true))
+		require.NoError(t, err)
+		require.Equal(t, 1, processed)
+		require.Equal(t, 0, skipped)
+	})
+}

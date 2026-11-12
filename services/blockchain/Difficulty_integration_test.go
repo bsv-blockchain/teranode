@@ -30,7 +30,9 @@ func TestDifficultyAdjustmentShouldNotChangeDifficultyIfBlocksAreMinedInTime(t *
 	currentTime := time.Now().Unix()
 
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	params := chaincfg.MainNetParams
+	params.DaaForkHeight = 0 // This synthetic short chain exercises the modern DAA.
+	tSettings.ChainCfgParams = &params
 
 	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
@@ -113,7 +115,9 @@ func TestDifficultyAdjustmentShouldChangeDifficultyIfBlocksAreMinedFasterThanExp
 	currentTime := time.Now().Unix()
 
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	params := chaincfg.MainNetParams
+	params.DaaForkHeight = 0 // This synthetic short chain exercises the modern DAA.
+	tSettings.ChainCfgParams = &params
 
 	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)

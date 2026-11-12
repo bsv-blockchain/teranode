@@ -268,7 +268,8 @@
     },
     "viewer-subtree": {
       "details": {
-        "title": "Subtree Details #{{ height }}",
+        "title": "Subtree Details #{{ index }}",
+        "title_generic": "Subtree Details",
         "tab": {
           "overview": "Overview",
           "json": "JSON",
@@ -290,7 +291,8 @@
         }
       },
       "txs": {
-        "title": "Transactions for Subtree #{{ height }}",
+        "title": "Transactions for Subtree #{{ index }}",
+        "title_generic": "Transactions for Subtree",
         "subtitle": "{{ count }} transactions found",
         "subtitle_singular": "{{ count }} transaction found",
         "col-defs-label": {

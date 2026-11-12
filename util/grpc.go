@@ -25,6 +25,11 @@ type AuthOptions struct {
 	// Map of method names that require authentication
 	ProtectedMethods map[string]bool
 
+	// RequireAuthByDefault protects every unary and streaming method except PublicMethods.
+	// It is opt-in so existing services retain their protected-method policy.
+	RequireAuthByDefault bool
+	PublicMethods        map[string]bool
+
 	// ExtraUnaryInterceptors are additional unary interceptors to chain
 	// alongside the auth interceptor (e.g., ban list checking).
 	ExtraUnaryInterceptors []grpc.UnaryServerInterceptor
@@ -34,6 +39,15 @@ type AuthOptions struct {
 // It handles TLS setup, authentication, metrics, tracing, and graceful shutdown.
 // The server will listen on the provided address and register services via the callback function.
 func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.Settings, serviceName string, grpcListenerAddress string, register func(server *grpc.Server), authOptions *AuthOptions, maxConnectionAge ...time.Duration) error {
+	if authOptions != nil && authOptions.RequireAuthByDefault {
+		if err := ValidateRequiredAdminAPIKey(authOptions.APIKey); err != nil {
+			return err
+		}
+		if len(authOptions.ProtectedMethods) != 0 {
+			return errors.NewConfigurationError("RequireAuthByDefault cannot be combined with ProtectedMethods")
+		}
+	}
+
 	listener, address, _, err := GetListener(tSettings.Context, serviceName, "", grpcListenerAddress)
 	if err != nil {
 		return errors.NewServiceError("[%s] GRPC server failed to listen", serviceName, err)
@@ -58,21 +72,27 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.
 	}
 
 	// Create server options
-	var serverOptions []grpc.ServerOption
+	serverOptions := make([]grpc.ServerOption, 0, 2)
 
-	// Collect unary interceptors: auth + extras
-	var unaryInterceptors []grpc.UnaryServerInterceptor
+	// Collect unary interceptors: panic recovery first, then auth + extras.
+	// Recovery has to sit outermost so it also covers the interceptors after it.
+	unaryInterceptors := []grpc.UnaryServerInterceptor{CreatePanicRecoveryUnaryInterceptor(l, serviceName)}
 
 	if authOptions != nil {
-		if authOptions.APIKey != "" {
+		if authOptions.RequireAuthByDefault {
+			unary, stream := requiredAuthInterceptors(authOptions.APIKey, authOptions.PublicMethods)
+			unaryInterceptors = append(unaryInterceptors, unary)
+			serverOptions = append(serverOptions, grpc.ChainStreamInterceptor(stream))
+		} else if authOptions.APIKey != "" {
 			unaryInterceptors = append(unaryInterceptors, CreateAuthInterceptor(authOptions.APIKey, authOptions.ProtectedMethods))
 		}
 		unaryInterceptors = append(unaryInterceptors, authOptions.ExtraUnaryInterceptors...)
 	}
 
-	if len(unaryInterceptors) > 0 {
-		serverOptions = append(serverOptions, grpc.ChainUnaryInterceptor(unaryInterceptors...))
-	}
+	serverOptions = append(serverOptions,
+		grpc.ChainUnaryInterceptor(unaryInterceptors...),
+		grpc.ChainStreamInterceptor(CreatePanicRecoveryStreamInterceptor(l, serviceName)),
+	)
 
 	connectionOptions := &ConnectionOptions{
 		SecurityLevel: securityLevel,
@@ -89,8 +109,10 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.
 		return errors.NewConfigurationError("[%s] could not create GRPC server", serviceName, err)
 	}
 
-	// Register reflection service on gRPC server.
-	reflection.Register(grpcServer)
+	// Reflection is an explicit diagnostic opt-in. Stream auth also covers it.
+	if tSettings.GRPCEnableReflection {
+		reflection.Register(grpcServer)
+	}
 
 	if securityLevel == 0 {
 		servicemanager.AddListenerInfo(fmt.Sprintf("%s GRPC listening on %s", serviceName, address))

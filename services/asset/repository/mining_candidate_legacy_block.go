@@ -67,7 +67,8 @@ func (repo *Repository) streamSubtreeTransactions(ctx context.Context, w io.Writ
 		return errors.NewProcessingError("[streamSubtreeTransactions] invalid subtree hash", err)
 	}
 
-	// Try pre-assembled subtree data first (fast path)
+	// Try pre-assembled subtree data first (fast path). FileTypeSubtreeData is read without a
+	// validation check; GetSubtreeDataReader in GetSubtreeData.go explains why that is safe.
 	subtreeDataExists, err := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 	if err == nil && subtreeDataExists {
 		return repo.streamSubtreeDataSkipCoinbase(ctx, w, subtreeHash)

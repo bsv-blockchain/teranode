@@ -140,5 +140,10 @@
       }
     }
   },
-  "version": "2"
+  "version": "2",
+  "run": {
+    "build-tags": [
+      "longtest"
+    ]
+  }
 }

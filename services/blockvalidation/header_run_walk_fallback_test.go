@@ -50,6 +50,7 @@ func TestValidateBlock_UnusableHeaderRunIsRebuiltByHashWalk(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	coinbaseTx, err := bt.NewTxFromString(model.CoinbaseHex)
 	require.NoError(t, err)
@@ -98,8 +99,13 @@ func TestValidateBlock_UnusableHeaderRunIsRebuiltByHashWalk(t *testing.T) {
 	require.False(t, staleRun[len(staleRun)-1].HashPrevBlock.IsEqual(genesisHash),
 		"the stale run must not reach genesis, or the carve-out would legitimately accept it")
 
+	// The header commits to the body, so subtree validation's body binding passes
+	// and the run reaches the header check this test is about.
+	merkleRoot, err := subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size()))
+	require.NoError(t, err)
+
 	blockHeader := &model.BlockHeader{
-		Version: 1, HashPrevBlock: parent.Hash(), HashMerkleRoot: subtree.RootHash(),
+		Version: 1, HashPrevBlock: parent.Hash(), HashMerkleRoot: merkleRoot,
 		Timestamp: now + 100, Bits: *nBits,
 	}
 	mineHeader(t, blockHeader)
@@ -162,7 +168,10 @@ func TestValidateBlock_UnusableHeaderRunIsRebuiltByHashWalk(t *testing.T) {
 
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
-	subtreeBytes, err := subtree.SerializeNodes()
+	// Serialize(), not SerializeNodes(): the cached-subtree ancestry check reads this blob
+	// back with DeserializeSubtreeConflictingFromReader, which needs the conflicting-nodes
+	// trailer that only the full serialisation carries. Production writes Serialize() here.
+	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
 	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 

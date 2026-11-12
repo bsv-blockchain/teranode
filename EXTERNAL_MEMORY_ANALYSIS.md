@@ -95,7 +95,10 @@ fmt.Println(breakdown.FormatTopRegions(20))
 
 ### 2. HTTP Handler
 
-Add to any service for runtime inspection:
+Add to any service for runtime inspection. Register it only on a loopback-bound
+listener: the output includes exact process address mappings and defeats ASLR.
+The daemon does this automatically (`/debug/memory` answers 404 on a non-loopback
+`profilerAddr`).
 
 ```go
 http.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
@@ -130,13 +133,13 @@ go build -o memanalyzer ./cmd/memanalyzer
 
 ### For Development
 
-1. Use `/debug/memory` endpoint in local development
+1. Use `/debug/memory` endpoint in local development (loopback-bound `profilerAddr` only)
 2. Compare Go heap profile with RSS breakdown
 3. Monitor TXMetaCache mmap size vs configuration
 
 ### For Production
 
-1. Add memory breakdown to monitoring dashboards
+1. Export the breakdown totals via `profiling.GetCompleteMemoryProfile()` in-process; do not poll `/debug/memory` (it is not served on a network-reachable `profilerAddr`)
 2. Set up alerts if anonymous memory grows unexpectedly
 3. Track RSS growth trends by category
 
@@ -197,7 +200,7 @@ The provided tools enable:
 - Real-time memory breakdown
 - Identification of memory growth sources
 - Debugging of RSS vs heap discrepancies
-- Production monitoring and alerting
+- Production monitoring and alerting (via in-process export, not the HTTP route)
 
 For questions about unexplained memory usage, first check:
 

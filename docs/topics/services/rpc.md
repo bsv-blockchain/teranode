@@ -73,7 +73,7 @@ The below table summarises the services supported in the current version:
 | getminingcandidate        | Supported  | Returns data needed to construct a block to work on                          |
 | invalidateblock           | Supported  | Permanently marks a block as invalid                                         |
 | isbanned                  | Supported  | Checks if a network address is currently banned                              |
-| reassign                  | Supported  | Reassigns ownership of a specific UTXO to a new Bitcoin address              |
+| reassign                  | Restricted | Updates a frozen UTXO commitment; ownership changes currently strand the output |
 | reconsiderblock           | Supported  | Removes invalidity status of a block                                         |
 | sendrawtransaction        | Supported  | Submits raw transaction to local node and network                            |
 | setban                    | Supported  | Attempts to add or remove an IP/Subnet from the banned list                  |
@@ -134,11 +134,22 @@ All RPC commands require a valid username and password for authentication. The s
 
 #### GRPC API Key Authentication
 
-For GRPC services, certain administrative operations require additional API key authentication. The following methods require an API key:
+The `grpc_admin_api_key` setting supplies the shared `x-api-key` metadata credential.
+Source it from the environment or secret storage.
 
-- **Ban/Unban Operations**: `BanPeer` and `UnbanPeer` methods in both P2P and Legacy services require API key authentication for security.
+- **Blockchain:** refuses startup without a valid key in every environment.
+  All BlockchainAPI and PeerRegistryService methods require it, including reads
+  and subscriptions, except HealthGRPC. HTTP invalidation/revalidation require
+  authenticated POST requests.
+- **P2P and Legacy:** retain their existing protected-method policy. An unset or
+  known-placeholder key causes these servers to generate a random key, leaving
+  protected operations unreachable until a shared key is configured.
 
-The API key is configured via the `grpc_admin_api_key` setting and must be included in GRPC requests as metadata with the key `x-api-key`. Source it from an environment variable or secret store rather than committing it to configuration; a *configured* key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive. Well-known placeholders such as `testkey` or `changeme` are ignored at startup (logged and treated as unset). If no API key is provided, the server generates a random key at startup; this generated key is never logged and leaves these admin operations unreachable (fail-closed) until an operator configures a shared key that both the server and its internal clients read.
+A key set in a settings file is masked in startup settings dumps but held in clear in the file.
+
+Upgrade credential-capable Blockchain clients first and the Blockchain service
+last. See [Blockchain authentication](blockchainAuthentication.md) for deployment,
+HTTP admin changes, transport, and reflection configuration.
 
 ## 2. Architecture
 
@@ -1041,59 +1052,60 @@ The `isbanned` command checks if a specific network address is currently banned 
 
 ### 3.19. Command: Reassign
 
-The `reassign` command allows administrators to change the ownership of a specific UTXO by reassigning it to a new Bitcoin address.
+The `reassign` command replaces the stored commitment of a frozen UTXO using an
+outpoint and the old and new UTXO hashes. It does not accept a destination address.
+
+**Known regression:** do not reassign to a different owner. The RPC can succeed
+with a `null` result while leaving the output unspendable by both owners, even
+after maturity. See the [reassignment limitation](alert.md#24-utxo-reassignment)
+and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
 
 #### Function Overview
 
-- **Purpose**: To reassign ownership of a specific transaction output (UTXO) to a new Bitcoin address
+- **Purpose**: Update a frozen output's commitment and maturity gate; no replacement locking script is stored.
 
-- **Parameters**:
+- **Parameters** (positional, in this order):
 
-    - `txid` (string, required): The transaction ID of the output to reassign
-    - `vout` (numeric, required): The output index to reassign
-    - `destination` (string, required): The Bitcoin address to reassign the UTXO to
+    - `oldtxid` (string, required): Transaction ID of the frozen output, as a hex hash
+    - `oldvout` (numeric, required): Output index
+    - `oldutxohash` (string, required): Current UTXO commitment, as a hex hash
+    - `newutxohash` (string, required): Replacement UTXO commitment, as a hex hash
 
 - **Return Value**:
 
-    - On success: Returns `true` indicating the UTXO was successfully reassigned
-    - On failure: Returns an error if the UTXO cannot be found or reassigned
+    - On success: JSON `null`; this confirms the store operation, not spendability
+    - On failure: An error if a hash cannot be parsed or the store operation fails
 
 #### Process Flow
 
-![rpc-reassign.svg](img/plantuml/rpc/rpc-reassign.svg)
-
 1. **Request Processing**:
 
-    - Receives request with transaction ID, output index, and destination address
-    - Validates input parameters
+    - Reads the outpoint and both commitment hashes from `ReassignCmd`
     - Initializes tracing and metrics
+    - Parses the transaction ID and both UTXO hashes
 
-2. **UTXO and Address Validation**:
+2. **Store Operation**:
 
-    - Checks if the specified UTXO exists
-    - Validates the destination address format and network compatibility
+    - Calls `ReAssignUTXO` with the old outpoint/commitment and new commitment
+    - The store requires a frozen output, replaces its commitment, clears the freeze and sets its maturity gate
+    - Neither the handler nor the store constructs or persists a replacement locking script
 
-3. **Reassignment Operation**:
+3. **Response Construction**:
 
-    - Creates a new scriptPubKey for the destination address
-    - Updates the UTXO record with the new ownership information
-    - Records the reassignment action for auditing purposes
-
-4. **Response Construction**:
-
-    - Returns `true` on successful reassignment operation
-    - Returns error if validation fails or database update fails
+    - Returns JSON `null` when the store operation succeeds, or an error on failure
 
 #### (Success) Response Fields
 
-- Returns boolean `true` on successful reassignment operation
+- `result`: `null`
+- `error`: `null`
+- `id`: The request ID
 
 #### Important Notes
 
-- Reassigning a UTXO changes its spending conditions without creating a new transaction
-- This is an administrative function that bypasses normal Bitcoin transaction rules
-- Should only be used in specific regulatory or recovery scenarios
-- The operation creates a permanent record in the audit log
+- Passing the maturity gate does not restore spendability after an ownership-changing reassignment.
+- The RPC does not validate that the new commitment has an authoritative replacement script.
+- SQL honors the configured maturity delay; Aerospike currently uses the fixed 1,000-block delay.
+- Recovery for already-reassigned outputs needs a validated procedure; see issue 1725 above.
 
 ### 3.20. Command: Reconsider Block
 

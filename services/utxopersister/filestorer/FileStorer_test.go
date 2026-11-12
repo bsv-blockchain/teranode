@@ -1,14 +1,18 @@
 package filestorer
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
@@ -671,4 +675,427 @@ func TestAbort_SafeToCallMultipleTimes(t *testing.T) {
 	fs.Abort(nil)
 
 	mockStore.AssertExpectations(t)
+}
+
+// failingWriter records everything offered to it and fails every write, so a bufio.Writer
+// over it ends up holding both unflushed bytes and a sticky error.
+type failingWriter struct {
+	offered []byte
+	err     error
+}
+
+func (w *failingWriter) Write(p []byte) (int, error) {
+	w.offered = append(w.offered, p...)
+	return 0, w.err
+}
+
+// TestSequentialStorersProduceIndependentBlobs pins the invariant the writer pool must not
+// break: a storer handed a recycled buffer writes its own bytes and nothing else.
+func TestSequentialStorersProduceIndependentBlobs(t *testing.T) {
+	ctx := createTestContext()
+	logger := ulogger.TestLogger{}
+	tSettings := createTestSettings()
+	store := memory.New()
+
+	first := bytes.Repeat([]byte("a"), 3000)
+	second := bytes.Repeat([]byte("b"), 40)
+
+	writeBlob := func(key []byte, payload []byte) {
+		fs, err := NewFileStorer(ctx, logger, tSettings, store, key, fileformat.FileTypeUtxoSet)
+		require.NoError(t, err)
+
+		n, err := fs.Write(payload)
+		require.NoError(t, err)
+		require.Equal(t, len(payload), n)
+		require.NoError(t, fs.Close(ctx))
+	}
+
+	writeBlob([]byte("blob-one"), first)
+	writeBlob([]byte("blob-two"), second)
+
+	gotFirst, err := store.Get(ctx, []byte("blob-one"), fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.Equal(t, first, gotFirst)
+
+	gotSecond, err := store.Get(ctx, []byte("blob-two"), fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.Equal(t, second, gotSecond)
+	require.NotContains(t, string(gotSecond), "a", "the second blob must carry none of the first blob's bytes")
+}
+
+// TestWriteAfterTerminalReturnsError pins that a write issued once the buffer has gone back
+// to the pool is an error rather than a nil dereference.
+func TestWriteAfterTerminalReturnsError(t *testing.T) {
+	ctx := createTestContext()
+	logger := ulogger.TestLogger{}
+	tSettings := createTestSettings()
+	fileType := fileformat.FileTypeUtxoSet
+
+	t.Run("after Close", func(t *testing.T) {
+		store := memory.New()
+
+		fs, err := NewFileStorer(ctx, logger, tSettings, store, []byte("write-after-close"), fileType)
+		require.NoError(t, err)
+		require.NoError(t, fs.Close(ctx))
+
+		n, err := fs.Write([]byte("after close"))
+		require.Error(t, err)
+		require.Zero(t, n)
+	})
+
+	t.Run("after Abort", func(t *testing.T) {
+		mockStore := &MockBlobStore{}
+		key := createTestKey()
+
+		// The handler returns nil, so no reader error is recorded and the released
+		// buffer is the only thing that can make the write below fail.
+		mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
+		mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
+			buf := make([]byte, 1024)
+			for {
+				if _, readErr := reader.Read(buf); readErr != nil {
+					break
+				}
+			}
+
+			return reader.Close()
+		}
+
+		fs, err := NewFileStorer(ctx, logger, tSettings, mockStore, key, fileType)
+		require.NoError(t, err)
+
+		fs.Abort(errors.NewProcessingError("aborted by test"))
+
+		n, err := fs.Write([]byte("after abort"))
+		require.Error(t, err)
+		require.Zero(t, n)
+	})
+}
+
+// TestTerminalOrderingOutcomes asserts each terminal ordering individually rather than
+// claiming repeated calls are stable: they are not, and the differences are intended.
+func TestTerminalOrderingOutcomes(t *testing.T) {
+	ctx := createTestContext()
+	logger := ulogger.TestLogger{}
+	tSettings := createTestSettings()
+	fileType := fileformat.FileTypeUtxoSet
+
+	t.Run("close then close", func(t *testing.T) {
+		store := memory.New()
+
+		fs, err := NewFileStorer(ctx, logger, tSettings, store, []byte("close-close"), fileType)
+		require.NoError(t, err)
+
+		_, err = fs.Write([]byte("payload"))
+		require.NoError(t, err)
+
+		require.NoError(t, fs.Close(ctx))
+		require.NoError(t, fs.Close(ctx))
+	})
+
+	t.Run("close after flush error", func(t *testing.T) {
+		store := memory.New()
+
+		fs, err := NewFileStorer(ctx, logger, tSettings, store, []byte("flush-error-close"), fileType)
+		require.NoError(t, err)
+
+		_, err = fs.Write([]byte("payload"))
+		require.NoError(t, err)
+
+		// Closing the pipe's write side makes the flush inside Close fail.
+		_ = fs.writer.Close()
+
+		err = fs.Close(ctx)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Error flushing writer")
+
+		// The second Close has no buffer to flush and finds no reader error, so it
+		// returns nil - the same outcome as before, by a different route.
+		require.NoError(t, fs.Close(ctx))
+	})
+
+	t.Run("close after abort", func(t *testing.T) {
+		store := memory.New()
+
+		fs, err := NewFileStorer(ctx, logger, tSettings, store, []byte("abort-close"), fileType)
+		require.NoError(t, err)
+
+		_, err = fs.Write([]byte("payload"))
+		require.NoError(t, err)
+
+		fs.Abort(errors.NewProcessingError("aborted by test"))
+
+		err = fs.Close(ctx)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Error in reader goroutine")
+	})
+
+	t.Run("close then abort twice", func(t *testing.T) {
+		store := memory.New()
+
+		fs, err := NewFileStorer(ctx, logger, tSettings, store, []byte("close-abort-abort"), fileType)
+		require.NoError(t, err)
+
+		_, err = fs.Write([]byte("payload"))
+		require.NoError(t, err)
+
+		require.NoError(t, fs.Close(ctx))
+
+		fs.Abort(errors.NewProcessingError("first abort after close"))
+		fs.Abort(nil)
+	})
+}
+
+// TestCloseBlockedInFlushIsUnblockedByAbort is the regression for the design in which Close
+// and Abort shared a sync.Once: Close would sit in the flush holding the mutex while Abort
+// waited on the Once, never reaching the CloseWithError that is the only thing able to
+// release it.
+func TestCloseBlockedInFlushIsUnblockedByAbort(t *testing.T) {
+	ctx := createTestContext()
+	logger := ulogger.TestLogger{}
+	tSettings := createTestSettings()
+	mockStore := &MockBlobStore{}
+	key := createTestKey()
+	fileType := fileformat.FileTypeUtxoSet
+
+	entered := make(chan struct{})
+	unblock := make(chan struct{})
+
+	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
+	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
+		close(entered)
+
+		// Deliberately never read: the pipe cannot drain, so the flush inside Close
+		// blocks until something closes the pipe.
+		<-unblock
+
+		return reader.Close()
+	}
+
+	fs, err := NewFileStorer(ctx, logger, tSettings, mockStore, key, fileType)
+	require.NoError(t, err)
+
+	<-entered
+
+	_, err = fs.Write([]byte("0123456789"))
+	require.NoError(t, err)
+
+	closeCh := make(chan error, 1)
+	abortCh := make(chan struct{}, 1)
+
+	go func() { closeCh <- fs.Close(ctx) }()
+
+	// Bias the ordering so Close reaches the flush first. The assertions below hold
+	// whichever goroutine gets to the pipe first.
+	time.Sleep(50 * time.Millisecond)
+
+	go func() {
+		fs.Abort(errors.NewProcessingError("aborted while Close was flushing"))
+		abortCh <- struct{}{}
+	}()
+
+	select {
+	case closeErr := <-closeCh:
+		require.Error(t, closeErr, "Close must surface the flush failure that Abort caused")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return after Abort closed the pipe")
+	}
+
+	close(unblock)
+
+	select {
+	case <-abortCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Abort did not return after the background reader finished")
+	}
+}
+
+// TestAbortAfterFlushErrorWaitsForBackgroundReader pins the wait that Abort supplies and the
+// flush-error return in Close skips.
+func TestAbortAfterFlushErrorWaitsForBackgroundReader(t *testing.T) {
+	ctx := createTestContext()
+	logger := ulogger.TestLogger{}
+	tSettings := createTestSettings()
+	mockStore := &MockBlobStore{}
+	key := createTestKey()
+	fileType := fileformat.FileTypeUtxoSet
+
+	unblock := make(chan struct{})
+
+	var exited atomic.Bool
+
+	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
+	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
+		<-unblock
+
+		// The sleep is the point: without it an Abort that failed to wait could still
+		// be ordered after the store by luck, and this test could not fail.
+		time.Sleep(50 * time.Millisecond)
+		exited.Store(true)
+
+		return reader.Close()
+	}
+
+	fs, err := NewFileStorer(ctx, logger, tSettings, mockStore, key, fileType)
+	require.NoError(t, err)
+
+	_, err = fs.Write([]byte("payload"))
+	require.NoError(t, err)
+
+	// Force the flush to fail, so Close returns on the path that does not wait.
+	_ = fs.writer.Close()
+
+	err = fs.Close(ctx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Error flushing writer")
+	require.False(t, exited.Load(), "Close must have returned without waiting for the background reader")
+
+	close(unblock)
+
+	fs.Abort(errors.NewProcessingError("abort after the flush error"))
+	require.True(t, exited.Load(), "Abort must wait for the background reader to finish")
+}
+
+// TestBlockedWriteRacingAbort pins that Abort releases a Write blocked in the pipe, which it
+// can only do by signalling before it takes any lock or waits on anything.
+func TestBlockedWriteRacingAbort(t *testing.T) {
+	ctx := createTestContext()
+	logger := ulogger.TestLogger{}
+	tSettings := &settings.Settings{
+		Block: settings.BlockSettings{
+			// One byte, so the very first Write goes straight into the pipe and blocks.
+			UTXOPersisterBufferSize: "1",
+		},
+	}
+	mockStore := &MockBlobStore{}
+	key := createTestKey()
+	fileType := fileformat.FileTypeUtxoSet
+
+	entered := make(chan struct{})
+	unblock := make(chan struct{})
+
+	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
+	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
+		one := make([]byte, 1)
+		_, _ = reader.Read(one)
+
+		close(entered)
+		<-unblock
+
+		_ = reader.Close()
+
+		return errors.NewProcessingError("reader stopped")
+	}
+
+	fs, err := NewFileStorer(ctx, logger, tSettings, mockStore, key, fileType)
+	require.NoError(t, err)
+
+	writeCh := make(chan error, 1)
+	abortCh := make(chan struct{}, 1)
+
+	go func() {
+		_, writeErr := fs.Write([]byte("a payload longer than the buffer"))
+		writeCh <- writeErr
+	}()
+
+	<-entered
+
+	go func() {
+		fs.Abort(errors.NewProcessingError("aborted while Write was blocked"))
+		abortCh <- struct{}{}
+	}()
+
+	select {
+	case writeErr := <-writeCh:
+		require.Error(t, writeErr, "a Write blocked in the pipe must fail once Abort closes it")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write did not return after Abort closed the pipe")
+	}
+
+	close(unblock)
+
+	select {
+	case <-abortCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Abort did not return after the background reader finished")
+	}
+}
+
+// TestFlushErrorPathReleasesWriter checks the white-box fact rather than the behaviour of a
+// second storer, which would pass even if the first buffer were never released.
+func TestFlushErrorPathReleasesWriter(t *testing.T) {
+	ctx := createTestContext()
+	logger := ulogger.TestLogger{}
+	tSettings := createTestSettings()
+	store := memory.New()
+
+	fs, err := NewFileStorer(ctx, logger, tSettings, store, []byte("flush-error-release"), fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+
+	_, err = fs.Write([]byte("payload"))
+	require.NoError(t, err)
+
+	_ = fs.writer.Close()
+
+	err = fs.Close(ctx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Error flushing writer")
+
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	require.Nil(t, fs.bufferedWriter, "the flush-error path must still hand the buffer back")
+}
+
+// TestResetForPoolClearsWriter tests the release-time reset directly, and checks the buffer
+// state before anything else touches the writer: a later Reset would clear it anyway, so a
+// no-op helper would pass a test that looked afterwards.
+func TestResetForPoolClearsWriter(t *testing.T) {
+	dest := &failingWriter{err: errors.NewProcessingError("destination is down")}
+	bw := bufio.NewWriterSize(dest, 16)
+
+	n, err := bw.Write([]byte("12345678"))
+	require.NoError(t, err)
+	require.Equal(t, 8, n)
+	require.Positive(t, bw.Buffered())
+
+	require.Error(t, bw.Flush())
+	require.Positive(t, bw.Buffered(), "the failed flush must leave the bytes buffered")
+
+	offeredBeforeRelease := len(dest.offered)
+
+	resetForPool(bw)
+
+	require.Zero(t, bw.Buffered(), "release must drop the previous writer's buffered bytes")
+	require.Equal(t, bw.Size(), bw.Available(), "release must leave the whole buffer free")
+
+	other := &bytes.Buffer{}
+	bw.Reset(other)
+
+	_, err = bw.Write([]byte("xyz"))
+	require.NoError(t, err)
+	require.NoError(t, bw.Flush())
+	require.Equal(t, "xyz", other.String())
+	require.Equal(t, offeredBeforeRelease, len(dest.offered), "no byte may reach the previous destination after release")
+}
+
+// TestSmallBufferIsNotSatisfiedFromPool pins that the pool never widens a caller's buffer,
+// which is what keeps a one-byte configuration meaningful.
+func TestSmallBufferIsNotSatisfiedFromPool(t *testing.T) {
+	ctx := createTestContext()
+	logger := ulogger.TestLogger{}
+	store := memory.New()
+
+	large := &settings.Settings{Block: settings.BlockSettings{UTXOPersisterBufferSize: "256KB"}}
+	small := &settings.Settings{Block: settings.BlockSettings{UTXOPersisterBufferSize: "1"}}
+
+	first, err := NewFileStorer(ctx, logger, large, store, []byte("pool-size-large"), fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.Equal(t, 256*1024, first.bufferedWriter.Size())
+	require.NoError(t, first.Close(ctx))
+
+	second, err := NewFileStorer(ctx, logger, small, store, []byte("pool-size-small"), fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.Equal(t, 1, second.bufferedWriter.Size(), "a one-byte configuration must not be served a recycled 256KB buffer")
+	require.NoError(t, second.Close(ctx))
 }

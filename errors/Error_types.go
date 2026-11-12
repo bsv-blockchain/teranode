@@ -12,7 +12,10 @@ var (
 	ErrBlobError                  = New(ERR_BLOB_ERROR, "blob error")
 	ErrBlobNotFound               = New(ERR_BLOB_NOT_FOUND, "blob not found")
 	ErrBlockAssemblyReset         = New(ERR_BLOCK_ASSEMBLY_RESET, "block assembly reset")
+	ErrBlockBodyMismatch          = New(ERR_BLOCK_BODY_MISMATCH, "the body is not the body its header commits to")
 	ErrBlockCoinbaseMissingHeight = New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase signature script doesn't have the block height")
+	ErrBlockCorrupt               = New(ERR_BLOCK_CORRUPT, "block corrupt")
+	ErrBlockPolicyDeclined        = New(ERR_BLOCK_POLICY_DECLINED, "block declined by local policy")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
 	ErrBlockHeaderContext         = New(ERR_BLOCK_HEADER_CONTEXT, "block header context invalid")
@@ -35,6 +38,8 @@ var (
 	ErrServiceError               = New(ERR_SERVICE_ERROR, "service error")
 	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
 	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
+	ErrServiceRateLimited         = New(ERR_SERVICE_RATE_LIMITED, "service rate limited")
+	ErrServiceNotReady            = New(ERR_SERVICE_NOT_READY, "service not ready")
 	ErrFrozen                     = New(ERR_UTXO_FROZEN, "tx is frozen")
 	ErrNonFinal                   = New(ERR_UTXO_NON_FINAL, "tx is non-final")
 	ErrSpent                      = New(ERR_UTXO_SPENT, "utxo already spent")
@@ -56,6 +61,7 @@ var (
 	ErrThresholdExceeded          = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
 	ErrTxCoinbaseImmature         = New(ERR_TX_COINBASE_IMMATURE, "coinbase is not spendable yet")
 	ErrTxConflicting              = New(ERR_TX_CONFLICTING, "tx conflicting")
+	ErrTxRejectedConflicting      = New(ERR_TX_REJECTED_CONFLICTING, "tx rejected as conflicting")
 	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
 	ErrTxExists                   = New(ERR_TX_EXISTS, "tx already exists")
 	ErrTxInvalid                  = New(ERR_TX_INVALID, "tx invalid")
@@ -66,6 +72,7 @@ var (
 	ErrTxPolicy                   = New(ERR_TX_POLICY, "tx policy error")
 	ErrTxLocked                   = New(ERR_TX_LOCKED, "tx locked")
 	ErrTxCreating                 = New(ERR_TX_CREATING, "tx creating")
+	ErrTxUnlockFailed             = New(ERR_TX_UNLOCK_FAILED, "tx unlock failed")
 	ErrUnknown                    = New(ERR_UNKNOWN, "unknown error")
 	ErrNetworkError               = New(ERR_NETWORK_ERROR, "network error")
 	ErrNetworkTimeout             = New(ERR_NETWORK_TIMEOUT, "network timeout")
@@ -215,6 +222,109 @@ func NewBlockInvalidError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_INVALID, message, params...)
 }
 
+// NewBlockCorruptError creates a new error for a block whose received body fails a
+// body-derived check before the body is bound to its header (see bitcoin-sv/teranode#4692). A
+// corrupt body is insufficient evidence to permanently condemn the block hash: it
+// cannot distinguish an honestly-mined block corrupted in transit from an attacker's
+// junk, so unlike NewBlockInvalidError it must NOT persist invalid=true. Callers
+// re-download from another peer and strike the serving connection, mirroring svnode's
+// CorruptionOrDoS stance (bitcoin-sv/src/consensus/validation.h). A dedicated code,
+// not ERR_BLOCK_INVALID, so it never matches errors.Is(err, ErrBlockInvalid) on the
+// poison paths (extends the transient-vs-invalid split from PR #1036 / a0790830b).
+func NewBlockCorruptError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_CORRUPT, message, sanitizeCorruptParams(params)...)
+}
+
+// sanitizeCorruptParams guards against a call site wrapping an invalid-classified cause
+// into a corrupt error: New's trailing-error handling would chain it as wrappedErr, and
+// since (*Error).Is walks that chain, the resulting corrupt error would also satisfy
+// errors.Is(_, ErrBlockInvalid) and could slip past a poisoning branch that gates
+// specifically on IsBlockCorrupt (bitcoin-sv/teranode#4692). No call site does this today;
+// this is a runtime backstop for a programming error, not a condition to route around. Silent by
+// design (this package does not otherwise log): it replaces the offending argument with a plain
+// error carrying the same message text — New still wraps it (preserving the "cause -> message"
+// rendering) but as a bare error rather than an *Error, so the resulting chain never carries
+// ERR_BLOCK_INVALID.
+//
+// Never mutates the caller's slice: params is variadic, so a caller passing an existing slice
+// via NewBlockCorruptError(msg, args...) still owns it. A substitution copies first, on the
+// (expected-empty) slow path only.
+func sanitizeCorruptParams(params []interface{}) []interface{} {
+	var sanitized []interface{} // allocated lazily, only once a substitution is actually needed
+
+	for i, p := range params {
+		if err, ok := p.(error); ok && Is(err, ErrBlockInvalid) {
+			if sanitized == nil {
+				sanitized = make([]interface{}, len(params))
+				copy(sanitized, params)
+			}
+
+			sanitized[i] = stderrors.New(err.Error())
+		}
+	}
+
+	if sanitized != nil {
+		return sanitized
+	}
+
+	return params
+}
+
+// NewBlockPolicyDeclinedError creates a new error for a block this node declined under its own
+// local policy — an excessiveblocksize above the configured limit, say. It is a statement about
+// this node's configuration, not about the block and not about the peer that served it: the rest
+// of the network may well accept the block, so unlike NewBlockInvalidError it must NOT persist
+// invalid=true (that would cascade to every descendant and fork this node off the chain), and
+// unlike NewBlockCorruptError it must not charge the peer or spend the corrupt budget. A
+// dedicated code, not ERR_BLOCK_ERROR, so callers can end the catch-up cycle on it without also
+// ending it on the retryable "given up waiting on previous blocks" timeout, which keeps
+// ERR_BLOCK_ERROR (bitcoin-sv/teranode#4692).
+//
+// No sanitizing wrapper is needed here: unlike NewBlockCorruptError this code carries no
+// mutual-exclusion obligation against ERR_BLOCK_INVALID, it simply never matches it. And the
+// rendered name "BLOCK_POLICY_DECLINED" contains none of IsMaliciousResponseError's substrings
+// (invalid header, malformed, corrupt, attack, malicious, invalid format, protocol violation),
+// so the substring fallback over the rendered text cannot mis-classify a decline as malicious —
+// the trap ERR_BLOCK_CORRUPT fell into and needed an early-out for.
+func NewBlockPolicyDeclinedError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_POLICY_DECLINED, message, params...)
+}
+
+// IsBlockBodyMismatch reports whether err carries ERR_BLOCK_BODY_MISMATCH anywhere
+// in its chain: a block body that was read to its declared end and cannot be the
+// block its header names (wrong merkle root, duplicate transaction, no coinbase).
+//
+// The code is a marker, not a verdict of its own. The sites that raise it (the
+// legacy pipeline sink and its stream builder and transaction stream,
+// services/legacy/netsync) wrap ErrBlockBodyMismatch inside their
+// NewBlockInvalidError, so the outermost code stays ERR_BLOCK_INVALID and every
+// reader of that verdict is unchanged; this marker is what lets the legacy peer
+// server tell those three refusals, which SV Node scores DoS(100), from every
+// other invalid verdict, which it does not ban for. A delivery that ended early
+// never carries it: those sites judge only a body that parsed to its end. The
+// marker alone is not grounds for a ban: SV Node scores those three only after
+// the message checksum passed, and the legacy streaming path cannot check that
+// checksum yet (peer.BlockBodyRejectedError.ProvenBad).
+func IsBlockBodyMismatch(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return Is(err, ErrBlockBodyMismatch)
+}
+
+// IsBlockCorrupt reports whether err (or anything it wraps, including across a gRPC
+// boundary) is a block-corrupt error. Callers gate the re-download / peer-strike path
+// on this and must check it BEFORE any generic ErrBlockInvalid handling so a corrupt
+// body is never routed onto a poison path.
+func IsBlockCorrupt(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return Is(err, ErrBlockCorrupt)
+}
+
 // NewBlockExistsError creates a new error with the block exists error code.
 func NewBlockExistsError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_EXISTS, message, params...)
@@ -280,6 +390,12 @@ func NewTxConflictingError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_CONFLICTING, message, params...)
 }
 
+// NewTxRejectedConflictingError creates a new error with the transaction rejected as
+// conflicting error code: every input that failed to spend conflicts with an accepted tx.
+func NewTxRejectedConflictingError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_REJECTED_CONFLICTING, message, params...)
+}
+
 // NewTxLockedError creates a new error with the transaction locked error code.
 func NewTxLockedError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_LOCKED, message, params...)
@@ -288,6 +404,13 @@ func NewTxLockedError(message string, params ...interface{}) *Error {
 // NewTxCreatingError creates a new error with the transaction creating error code.
 func NewTxCreatingError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_CREATING, message, params...)
+}
+
+// NewTxUnlockFailedError creates a new error with the transaction unlock failed error code.
+// It marks a transaction that was accepted, spent and created, but whose two-phase-commit
+// unlock did not complete, so the record stays locked until it is mined.
+func NewTxUnlockFailedError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_UNLOCK_FAILED, message, params...)
 }
 
 // NewTxCoinbaseImmatureError creates a new error with the transaction coinbase immature error code.
@@ -303,6 +426,28 @@ func NewTxError(message string, params ...interface{}) *Error {
 // NewServiceUnavailableError creates a new error with the service unavailable error code.
 func NewServiceUnavailableError(message string, params ...interface{}) *Error {
 	return New(ERR_SERVICE_UNAVAILABLE, message, params...)
+}
+
+// NewServiceRateLimitedError creates a new error with the service rate limited error code.
+//
+// This is a REMOTE admission decision: the server we called answered 429 because we
+// exceeded its rate limit. It is deliberately distinct from ERR_SERVICE_UNAVAILABLE,
+// which IsTransientLocalError treats as a fault in this node's own stack and which
+// legacy block sync uses to decide whether to keep a delivering peer. A single 429 is
+// not the peer's fault; retry with backoff.
+func NewServiceRateLimitedError(message string, params ...interface{}) *Error {
+	return New(ERR_SERVICE_RATE_LIMITED, message, params...)
+}
+
+// NewServiceNotReadyError creates a new error with the service not ready error code.
+//
+// The service is up but still loading state it needs, and refuses work it will
+// accept shortly; nothing is broken. It is distinct from ERR_SERVICE_NOT_STARTED,
+// whose producers report a service that failed to start, and from
+// ERR_SERVICE_UNAVAILABLE, which callers treat as a fault. It carries no gRPC
+// status of its own (codes.Internal), so it does not wake the client retry gate.
+func NewServiceNotReadyError(message string, params ...interface{}) *Error {
+	return New(ERR_SERVICE_NOT_READY, message, params...)
 }
 
 // NewServiceNotStartedError creates a new error with the service not started error code.
