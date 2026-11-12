@@ -571,17 +571,21 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %v", batchID, err)
 
-		var batchErr error = err
-		if aeErr, isAeErr := err.(aerospike.Error); isAeErr && aeErr.IsInDoubt() {
-			// The write may have committed; see inDoubtCreateError.
-			batchErr = inDoubtCreateError(err)
-		}
+		batchInDoubt := isInDoubt(err)
 
 		for idx, bItem := range batch {
 			if resultHandledElsewhere[idx] {
 				continue
 			}
-			bItem.complete(batchErr)
+
+			// A batch spans nodes, and the error names one of them: a record
+			// another node wrote is OK while the call failed.
+			if batchInDoubt || writeMayHaveApplied(batchRecords[idx].BatchRec()) {
+				bItem.complete(createMayHaveCommittedError(err))
+				continue
+			}
+
+			bItem.complete(err)
 		}
 
 		// MUST return here. The previous code fell through to the per-record loop
@@ -637,7 +641,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			// be surfaced. Previously the SafeSend was nested inside the type-asserted
 			// branch and a non-matching error left the caller hung on <-errCh.
 			if batchRecord.BatchRec().InDoubt {
-				batch[idx].complete(inDoubtCreateError(err))
+				batch[idx].complete(createMayHaveCommittedError(err))
 				continue
 			}
 
@@ -1200,7 +1204,13 @@ func (s *Store) storeExternallyWithLock(
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
 	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
-		bItem.complete(errors.NewProcessingError("[%s] BatchOperate failed for tx %s", funcName, bItem.txHash, err))
+		failErr := errors.NewProcessingError("[%s] BatchOperate failed for tx %s", funcName, bItem.txHash, err)
+		if isInDoubt(err) || masterMayExist(batchRecords[0].BatchRec()) {
+			bItem.complete(createMayHaveCommittedError(failErr))
+			return
+		}
+
+		bItem.complete(failErr)
 		return
 	}
 
@@ -1219,7 +1229,15 @@ func (s *Store) storeExternallyWithLock(
 		// Do NOT clean up partial records - leave them for the next attempt to complete
 		// The creating bin in each record prevents UTXO spending until all records exist
 		// The defer will release the lock, allowing another process to finish the creation
-		bItem.complete(errors.NewProcessingError("failed to create all records for tx %s - partial records remain for next attempt to complete", bItem.txHash))
+		failErr := errors.NewProcessingError("failed to create all records for tx %s - partial records remain for next attempt to complete", bItem.txHash)
+		if masterMayExist(batchRecords[0].BatchRec()) {
+			// The master record makes the transaction exist, creating, so its
+			// spends must stay for the next attempt to complete it.
+			bItem.complete(createMayHaveCommittedError(failErr))
+			return
+		}
+
+		bItem.complete(failErr)
 		return
 	}
 
@@ -1511,11 +1529,40 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 	return nil
 }
 
-// inDoubtCreateError wraps a create write the client reports in doubt: it was
-// sent and may have committed on the server. utxo.SequentialSpendAndCreate
-// unspends the inputs of a create that failed for certain, which for a write
-// that did commit leaves a stored transaction with live inputs that nothing
-// heals. Marked outcome-unknown, the spends stay, as for a context error.
-func inDoubtCreateError(err error) error {
-	return utxo.MarkCreateOutcomeUnknown(errors.NewStorageError("aerospike create write is in doubt and may have committed", err))
+// createMayHaveCommittedError marks err, from a create write that may have
+// committed on the server, as leaving the create's outcome unknown.
+// utxo.SequentialSpendAndCreate unspends the inputs of a create that failed for
+// certain, and doing that for a write that did commit leaves a stored
+// transaction with live inputs, which a repeat never heals because a repeat
+// drops a transaction whose record exists. Marked outcome-unknown, the spends
+// stay, as for a context error, until a repeat finds the record or writes it.
+func createMayHaveCommittedError(err error) error {
+	var tErr *errors.Error
+	if !errors.As(err, &tErr) {
+		tErr = errors.NewStorageError("aerospike create write may have committed", err)
+	}
+
+	return utxo.MarkCreateOutcomeUnknown(tErr)
+}
+
+// isInDoubt reports whether err is an Aerospike error for a write that was
+// sent and may have been applied.
+func isInDoubt(err error) bool {
+	aeErr, ok := err.(aerospike.Error)
+
+	return ok && aeErr.IsInDoubt()
+}
+
+// writeMayHaveApplied reports whether a batch write's record may have been
+// written: the server applied it (OK), or the client sent it and lost the
+// answer (in doubt). A record the call never sent keeps NO_RESPONSE.
+func writeMayHaveApplied(rec *aerospike.BatchRecord) bool {
+	return rec.InDoubt || (rec.Err == nil && rec.ResultCode == types.OK)
+}
+
+// masterMayExist reports whether the master record of a multi-record create
+// may exist after its batch write: written now, in doubt, or left by an
+// earlier attempt (KEY_EXISTS).
+func masterMayExist(rec *aerospike.BatchRecord) bool {
+	return writeMayHaveApplied(rec) || isKeyExists(rec.Err)
 }

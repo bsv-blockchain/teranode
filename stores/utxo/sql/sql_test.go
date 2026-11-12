@@ -3854,9 +3854,9 @@ func TestPgCreateError(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := pgCreateError(errors.NewStorageError("batch close failed, results may not be visible", tc.cause), tc.cause)
+			require.Equal(t, tc.wantUnknown, pgCreateMayHaveCommitted(tc.cause))
 
-			require.Error(t, err)
+			err := pgCreateError("batch close failed, results may not be visible", tc.cause)
 			require.Equal(t, tc.wantUnknown, utxo.IsCreateOutcomeUnknown(err))
 			require.True(t, errors.Is(err, errors.ErrStorageError), "the storage error must survive the marking: %v", err)
 		})

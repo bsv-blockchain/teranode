@@ -342,11 +342,14 @@ func TestSendStoreBatch_InDoubtWriteLeavesOutcomeUnknown(t *testing.T) {
 		name        string
 		topLevel    aerospike.Error
 		perRecord   aerospike.Error
+		recordOK    bool
 		wantUnknown bool
 	}{
 		{name: "top-level error in doubt", topLevel: inDoubt, wantUnknown: true},
 		{name: "top-level error not sent", topLevel: notSent},
 		{name: "top-level const network error", topLevel: aerospike.ErrNetwork},
+		// A batch spans nodes: one node's error comes back while another wrote its records.
+		{name: "top-level error, record written by another node", topLevel: aerospike.ErrNetwork, recordOK: true, wantUnknown: true},
 		{name: "per-record error in doubt", perRecord: inDoubt, wantUnknown: true},
 		{name: "per-record error not sent", perRecord: notSent},
 		{name: "per-record const timeout", perRecord: aerospike.ErrTimeout},
@@ -357,6 +360,12 @@ func TestSendStoreBatch_InDoubtWriteLeavesOutcomeUnknown(t *testing.T) {
 			s := newTestStoreForSendStoreBatch(t)
 
 			s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+				if tc.recordOK {
+					for _, rec := range records {
+						rec.BatchRec().ResultCode = types.OK
+					}
+				}
+
 				if tc.perRecord != nil {
 					for _, rec := range records {
 						rec.BatchRec().Err = tc.perRecord
