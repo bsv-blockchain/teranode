@@ -59,6 +59,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
+	"math"
 	"slices"
 	"sync/atomic"
 
@@ -1983,8 +1985,11 @@ func creationHeightFromBlockHeights(blockHeights []uint32, genesisActivationHeig
 }
 
 func (s *Store) getExternalOutpoints(ctx context.Context, previousTxHash chainhash.Hash, creationHeight uint32) (*bt.Tx, int, error) {
-	// get the full transaction from the external store
-	tx, err := s.getExternalTransaction(ctx, previousTxHash)
+	// get the full transaction from the external store. Not sized to the blob:
+	// this path nils the inputs and the unspendable outputs and caches the rest,
+	// and with one arena slab the surviving scripts would keep the dropped ones
+	// (a large OP_FALSE OP_RETURN payload, typically) alive with them.
+	tx, err := s.readExternalTransaction(ctx, previousTxHash, false)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -2032,7 +2037,17 @@ func (s *Store) GetTxFromExternalStore(ctx context.Context, previousTxHash chain
 	return s.getExternalTransaction(ctx, previousTxHash)
 }
 
+// getExternalTransaction reads the full transaction stored externally under
+// previousTxHash, with its scripts in one allocation sized to the blob where the
+// store can say how long the blob is. See decodeOwnTxBlob.
 func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
+	return s.readExternalTransaction(ctx, previousTxHash, true)
+}
+
+// readExternalTransaction reads the transaction stored externally under
+// previousTxHash. sizeToBlob selects decodeOwnTxBlob's exact allocation for a
+// FileTypeTx blob; without it each script is read through go-bt's incremental read.
+func (s *Store) readExternalTransaction(ctx context.Context, previousTxHash chainhash.Hash, sizeToBlob bool) (*bt.Tx, error) {
 	fileType := fileformat.FileTypeTx
 
 	// Stream parse from external store rather than reading the whole blob into a
@@ -2071,6 +2086,14 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 
 	tx := &bt.Tx{}
 
+	// Measured before the buffered reader below consumes anything.
+	blobLen, blobLenKnown := 0, false
+	if sizeToBlob && fileType == fileformat.FileTypeTx {
+		if blobLen, blobLenKnown, err = remainingBlobBytes(reader); err != nil {
+			return nil, errors.NewStorageError("[GetTxFromExternalStore][%s] could not size tx blob", previousTxHash.String(), err)
+		}
+	}
+
 	// Use buffered reader for all file types to reduce syscalls
 	bufferedReader := bufio.NewReader(reader)
 
@@ -2081,7 +2104,7 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 		// truncated or torn — never evidence about the block or the peer that
 		// served it. See the classification note on the re-hash below; a truncated
 		// blob is the more likely corruption mode of the two.
-		if _, err = tx.ReadFrom(bufferedReader); err != nil {
+		if err = decodeOwnTxBlob(tx, bufferedReader, blobLen, blobLenKnown); err != nil {
 			return nil, errors.NewStorageError("[GetTxFromExternalStore][%s] could not read tx from stream", previousTxHash.String(), err)
 		}
 
@@ -2270,6 +2293,78 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 	}
 
 	return tx, nil
+}
+
+// decodeOwnTxBlob decodes a FileTypeTx blob this node wrote under the
+// transaction's own txid. When the blob's length is known, every script is
+// drawn from one arena of exactly that length, so the decode allocates the blob
+// once (issue 2176).
+//
+// The plain ReadFrom path grows each script buffer in 64KiB steps against the
+// bytes that actually arrive (go-bt v2.7.3, bsv-blockchain/go-bt#187). That
+// guards against a peer that declares a huge script and sends nothing, but
+// costs a large script about five times its size in reallocation and copying:
+// 457MB of allocation for a 91MB data-carrier output. The guard is not needed
+// here. The blob is local, its length comes from the store, and the scripts in
+// it can never add up to more than that length, so the arena never grows on a
+// sound blob. Every path that decodes peer-supplied bytes keeps the
+// incremental read.
+//
+// What a corrupt blob costs: a flipped bit in a script length can make the
+// arena allocate once, up to go-bt's MaxArenaAlloc (1GiB, longer lengths are
+// refused before allocating), before the short read fails as a storage fault.
+// That is the bound the non-arena read had before go-bt v2.7.3.
+//
+// All scripts share the arena's slab, so the transaction keeps the whole blob
+// alive for as long as it keeps any of its scripts. Callers that keep only some
+// of the scripts must not use this path; see getExternalOutpoints.
+func decodeOwnTxBlob(tx *bt.Tx, r io.Reader, blobLen int, blobLenKnown bool) error {
+	var arena *bt.Arena
+	if blobLenKnown && blobLen > 0 {
+		arena = bt.NewArena(blobLen)
+	}
+
+	// ReadFromWithArena with a nil arena is exactly ReadFrom.
+	_, err := tx.ReadFromWithArena(r, arena)
+
+	return err
+}
+
+// remainingBlobBytes returns how many bytes r has left to read, when r can say.
+// The file blob store's reader can seek, so it can; the memory store's, and a
+// file store's fallback to a remote long-term store, cannot, and known is then
+// false. It leaves r where it found it, or returns an error.
+func remainingBlobBytes(r io.Reader) (n int, known bool, err error) {
+	seeker, ok := r.(io.Seeker)
+	if !ok {
+		return 0, false, nil
+	}
+
+	cur, err := seeker.Seek(0, io.SeekCurrent)
+	if err != nil {
+		// Some wrappers implement Seek only to report that they cannot.
+		return 0, false, nil
+	}
+
+	end, err := seeker.Seek(0, io.SeekEnd)
+	if err != nil {
+		// Seek may have moved the offset before it failed; put it back.
+		if _, rewindErr := seeker.Seek(cur, io.SeekStart); rewindErr != nil {
+			return 0, false, rewindErr
+		}
+
+		return 0, false, nil
+	}
+
+	if _, err = seeker.Seek(cur, io.SeekStart); err != nil {
+		return 0, false, err
+	}
+
+	if end < cur || end-cur > int64(math.MaxInt) {
+		return 0, false, nil
+	}
+
+	return int(end - cur), true, nil
 }
 
 // GetTxInpointsFromExternalStore efficiently extracts TxInpoints from an external transaction
