@@ -101,6 +101,7 @@ func TestHeldLimitGate_AFailedReadKeepsThePollCadenceWhileTheReadingIsFresh(t *t
 
 func TestHeldLimitGate_AReadingGoesStale(t *testing.T) {
 	gate := newPollingGate(t, &fakeReader{})
+	gate.once.Do(func() {}) // the test moves the clock itself, so no background poller may read it
 
 	base := time.Unix(9000, 0)
 	now := base
