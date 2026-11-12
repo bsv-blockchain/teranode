@@ -1500,7 +1500,7 @@ func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 				addBlockWithMinedSet(ctx, t, items, d)
 				_, err = items.blockchainClient.InvalidateBlock(ctx, d.Hash())
 				require.NoError(t, err)
-				require.NoError(t, items.blockchainClient.SetBlockMinedSet(ctx, d.Hash()))
+				setBlockMinedSetAtCurrentGeneration(ctx, t, items, d.Hash())
 			}
 
 			// C overtakes B's fork before block assembly looks.
@@ -2046,7 +2046,7 @@ func TestMarkSkippedForkTxs_WaitsForMinedSet(t *testing.T) {
 
 	// The header read can still say mined_set is not set, from a cache SetBlockMinedSet does
 	// not clear; the mark asks the block itself.
-	require.NoError(t, items.blockchainClient.SetBlockMinedSet(ctx, f.Hash()))
+	setBlockMinedSetAtCurrentGeneration(ctx, t, items, f.Hash())
 	client.staleMinedSet = true
 	require.NoError(t, ba.markSkippedForkTxs(ctx, false))
 	require.False(t, ba.skippedForkMarkPending)
@@ -2240,7 +2240,9 @@ func TestFinishSkippedForkMarkAtStart_WaitsForBlockValidation(t *testing.T) {
 
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			_ = items.blockchainClient.SetBlockMinedSet(context.Background(), f.Hash())
+			if _, fMeta, err := items.blockchainClient.GetBlockHeader(context.Background(), f.Hash()); err == nil {
+				_ = items.blockchainClient.SetBlockMinedSet(context.Background(), f.Hash(), fMeta.MinedSetGeneration)
+			}
 		}()
 	}
 
@@ -2423,7 +2425,7 @@ func TestMarkSkippedForkTxs_NoReloadWhileABlockIsUnprocessed(t *testing.T) {
 	require.Zero(t, client.headerIDsCalls, "no reload while G waits for block validation")
 	require.True(t, ba.skippedForkReloadPending, "the reload stays owed")
 
-	require.NoError(t, items.blockchainClient.SetBlockMinedSet(ctx, g.Hash()))
+	setBlockMinedSetAtCurrentGeneration(ctx, t, items, g.Hash())
 	require.NoError(t, ba.markSkippedForkTxs(ctx, false), "G, whose subtree is gone, is given up")
 	require.True(t, ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the reload ran")
 }
