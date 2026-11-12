@@ -31,6 +31,7 @@
 | DoubleSpendWindow                    | time.Duration | 0                | double_spend_window_millis | Double-spend detection window; 0 disables it                                         |
 | MaxGetReorgHashes                    | int           | 10000            | blockassembly_maxGetReorgHashes                    | **CRITICAL** - Reorganization hash limit                                             |
 | MinerWalletPrivateKeys               | []string      | []               | miner_wallet_private_keys                          | Mining wallet keys                                                                   |
+| EmergencyDifficultyDelay             | time.Duration | 0s               | blockassembly_emergencyDifficultyDelay             | Extra wait before a minimum-difficulty candidate; staggers miners (testnets only)    |
 | DifficultyCache                      | bool          | true             | blockassembly_difficultyCache                      | Enables difficulty calculation caching (Blockchain service)                          |
 | UseDynamicSubtreeSize                | bool          | false            | blockassembly_useDynamicSubtreeSize                | Dynamic subtree sizing                                                               |
 | BlockchainSubscriptionTimeout        | time.Duration | 5m               | blockassembly_blockchainSubscriptionTimeout        | Blockchain event subscription timeout                                                |

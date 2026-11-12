@@ -154,6 +154,14 @@ func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Log
 // initAerospikeWith is initAerospike with beforeStore run on the raw client once
 // the namespace accepts writes and before the store is constructed.
 func initAerospikeWith(t *testing.T, settings *settings.Settings, logger ulogger.Logger, beforeStore func(*uaerospike.Client)) (*uaerospike.Client, *teranode_aerospike.Store, context.Context, func()) {
+	client, db, ctx, cleanup, _ := initAerospikeWithURL(t, settings, logger, beforeStore)
+
+	return client, db, ctx, cleanup
+}
+
+// initAerospikeWithURL is initAerospikeWith, also returning the URL the store
+// was built from.
+func initAerospikeWithURL(t *testing.T, settings *settings.Settings, logger ulogger.Logger, beforeStore func(*uaerospike.Client)) (*uaerospike.Client, *teranode_aerospike.Store, context.Context, func(), *url.URL) {
 	teranode_aerospike.InitPrometheusMetrics()
 
 	ctx := context.Background()
@@ -260,7 +268,7 @@ func initAerospikeWith(t *testing.T, settings *settings.Settings, logger ulogger
 	return client, db, ctx, func() {
 		db.StopConflictingIndexSelfTest()
 		client.Close()
-	}
+	}, aeroURL
 }
 
 func cleanDB(t *testing.T, client *uaerospike.Client) {

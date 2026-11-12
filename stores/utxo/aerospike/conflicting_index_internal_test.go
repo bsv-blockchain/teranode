@@ -189,3 +189,68 @@ func TestReadConflictingIndexResults_Outcomes(t *testing.T) {
 		})
 	}
 }
+
+// TestReadQueryResults_WaitsOnErrorForTheClose pins that a WAL read ending on a node error returns
+// only once its recordset has closed. Its caller retries, and a retry that started while the last
+// walk's node reads still ran would overlap two namespace walks.
+func TestReadQueryResults_WaitsOnErrorForTheClose(t *testing.T) {
+	newRead := func() (chan *aerospike.Result, chan struct{}, func()) {
+		results := make(chan *aerospike.Result, 1)
+		results <- &aerospike.Result{Err: &aerospike.AerospikeError{ResultCode: types.TIMEOUT}}
+
+		unblockClose := make(chan struct{})
+		closeRecordset := func() {
+			<-unblockClose // Close waits for a node goroutine stuck in a socket read
+			close(results)
+		}
+
+		return results, unblockClose, closeRecordset
+	}
+
+	t.Run("waits for the close", func(t *testing.T) {
+		results, unblockClose, closeRecordset := newRead()
+
+		returned := make(chan error, 1)
+
+		go func() {
+			_, _, err := readQueryResults(context.Background(), "wal read failed", true, results, closeRecordset, func(*aerospike.Record) bool { return false })
+			returned <- err
+		}()
+
+		select {
+		case <-returned:
+			require.FailNow(t, "the read returned while its recordset was still closing")
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		close(unblockClose)
+
+		select {
+		case err := <-returned:
+			require.ErrorContains(t, err, "wal read failed")
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "the read never returned after the close")
+		}
+	})
+
+	t.Run("a cancelled context ends the wait", func(t *testing.T) {
+		results, unblockClose, closeRecordset := newRead()
+		defer close(unblockClose)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		returned := make(chan error, 1)
+
+		go func() {
+			_, _, err := readQueryResults(ctx, "wal read failed", true, results, closeRecordset, func(*aerospike.Record) bool { return false })
+			returned <- err
+		}()
+
+		cancel()
+
+		select {
+		case <-returned:
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "a cancelled read kept waiting for the close")
+		}
+	})
+}

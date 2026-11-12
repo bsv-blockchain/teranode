@@ -138,7 +138,17 @@ type Daemon struct {
 	// must fail fast, without reaching into logger internals.
 	startErr   error
 	startErrMu sync.Mutex
+	// crashed is set by crash; the shutdown path then skips closeClients and
+	// closeStores, as a killed process would.
+	crashed atomic.Bool
 }
+
+const (
+	// serviceStopTimeout is how long Stop allows the services to stop.
+	serviceStopTimeout = 30 * time.Second
+	// closeStoresTimeout bounds closeStores, which drains the store batchers.
+	closeStoresTimeout = 30 * time.Second
+)
 
 // New creates a new Daemon instance with the provided options.
 func New(opts ...Option) *Daemon {
@@ -219,8 +229,13 @@ func (d *Daemon) Stop(skipTracerShutdown ...bool) error {
 		return nil
 	}
 
-	// // Default timeout of 30 seconds if it wasn't provided
-	shutdownTimeout := 30 * time.Second
+	// stopCh closes only after closeStores, so the wait allows for the
+	// services' Stop() calls plus closeStores' own budget. It is not a
+	// guarantee: the service manager stops the services one after another,
+	// each with its own StopTimeout, so several slow services can still use
+	// it up. Stop then returns a timeout error, which TestDaemon.Stop reports
+	// as a test failure.
+	shutdownTimeout := serviceStopTimeout + closeStoresTimeout
 
 	// Set up a timeout channel
 	timeoutCh := time.After(shutdownTimeout)
@@ -305,8 +320,23 @@ func applyPeerURLPolicy(logger ulogger.Logger, appSettings *settings.Settings) {
 	}
 }
 
-// Start initializes and starts the Daemon and its services.
-func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settings.Settings, readyChannel ...chan struct{}) {
+// waitForPostgres is the wait Start runs for -wait_for_postgres=1. It is a
+// variable so a test can make the wait fail without a minute-long timeout.
+var waitForPostgres = waitForPostgresToStart
+
+// Start initializes and starts the Daemon and its services, and blocks until
+// they have all stopped.
+//
+// It returns nil when the services stopped cleanly, whether because Stop() was
+// called, a SIGINT/SIGTERM arrived (during service startup too, though not
+// during the -wait_for_postgres wait, which ignores it), or they finished on
+// their own. It returns an error when the daemon could not start, when a
+// service failed and brought the daemon down, or when a service failed to stop
+// during a requested shutdown. The deferred client and store teardown has run
+// by the time Start returns, so the caller can turn the error into an exit
+// status: a supervisor with an on-failure restart policy only sees a failure
+// if the process exits non-zero.
+func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settings.Settings, readyChannel ...chan struct{}) error {
 	if d.loggerFactory == nil {
 		d.loggerFactory = func(serviceName string) ulogger.Logger {
 			return ulogger.New(serviceName, ulogger.WithLevel(appSettings.LogLevel))
@@ -315,11 +345,16 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 
 	applyPeerURLPolicy(logger, appSettings)
 
-	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready
+	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready.
+	//
+	// Known limit: this wait takes no context, so a SIGINT/SIGTERM that arrives
+	// while it polls does not end it. The process keeps polling until the
+	// database answers or the one-minute timeout passes, and the timeout is
+	// reported as a failure (exit 1), not as a requested shutdown.
 	if d.shouldStart("wait_for_postgres", args) {
-		if err := waitForPostgresToStart(logger, appSettings.PostgresCheckAddress); err != nil {
+		if err := waitForPostgres(logger, appSettings.PostgresCheckAddress); err != nil {
 			logger.Errorf("error waiting for postgres: %v", err)
-			return
+			return err
 		}
 	}
 
@@ -337,14 +372,20 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 		readyChInternal = readyChannel[0]
 	}
 
-	err := d.startServices(sm.Ctx, logger, appSettings, sm, args, readyChInternal)
+	startErr := d.startServices(sm.Ctx, logger, appSettings, sm, args, readyChInternal)
+
+	// Whether this process's own context was already cancelled when startup
+	// failed: a signal, Stop(), or the errgroup after a running service
+	// failed. It must be read here, because the ForceShutdown below cancels
+	// sm.Ctx on every start failure.
+	cancelledDuringStart := startErr != nil && sm.Ctx.Err() != nil
 
 	d.startErrMu.Lock()
-	d.startErr = err
+	d.startErr = startErr
 	d.startErrMu.Unlock()
 
-	if err != nil {
-		logger.Errorf("error starting services: %v", err)
+	if startErr != nil {
+		logger.Errorf("error starting services: %v", startErr)
 		sm.ForceShutdown()
 		d.closeDoneOnce.Do(func() { close(d.doneCh) })
 	}
@@ -392,7 +433,8 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 		// here, execution would fall through to server.Serve(listener) with a nil
 		// listener and panic. Return so a failed listener never reaches Serve.
 		logger.Fatalf("Failed to get health check listener: %v", err)
-		return
+
+		return errors.NewServiceError("failed to get health check listener", err)
 	}
 
 	server := &http.Server{
@@ -422,6 +464,13 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	go func() {
 		waitErr <- sm.Wait()
 	}()
+
+	// stopCh is closed last, after closeClients and closeStores below (defers
+	// run LIFO), so Stop() returns only once the stores are closed and their
+	// batchers drained. Closing it before them let Stop() return, and the test
+	// daemon reset the store singletons, before closeStores read them, so no
+	// store was closed at all.
+	defer d.closeStopOnce.Do(func() { close(d.stopCh) })
 
 	// closeStores must run on BOTH shutdown paths (OS-signal via waitErr,
 	// daemon.Stop() via doneCh) and MUST run after every service has
@@ -470,7 +519,27 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 		logger.Infof("daemon shutdown completed")
 	}
 
-	d.closeStopOnce.Do(func() { close(d.stopCh) })
+	// A startServices failure closes doneCh itself, so the select above takes
+	// the requested-shutdown branch, and sm.Wait() can return nil because the
+	// failing service never reached the errgroup (an Init or constructor
+	// error). Report the start failure, which is the root cause.
+	//
+	// A start "failure" that is only context.Canceled is not one: a SIGINT or
+	// SIGTERM, or Stop(), cancelled a context-aware Init. The service manager
+	// treats a service that returns on its own cancelled context as a clean
+	// stop, so defer to sm.Wait()'s result here: nil
+	// for a requested stop, or the real error when a running service failed
+	// first and its errgroup cancellation reached the Init.
+	//
+	// It counts only if this process's own context was cancelled when startup
+	// failed. The project errors.Is also matches a gRPC codes.Canceled, which a
+	// remote service returns while it is stopping; an Init that fails on that,
+	// with sm.Ctx still live, is a real start failure and must exit non-zero.
+	if startErr != nil && (!cancelledDuringStart || !errors.Is(startErr, context.Canceled)) {
+		return startErr
+	}
+
+	return err
 }
 
 // clientCloser is the optional close contract the daemon uses to tear down the
@@ -492,6 +561,10 @@ type clientCloser interface {
 // closeStores, because clients sit in front of the stores in the dependency
 // graph. Each client is closed via the Stage-E clientCloser contract.
 func (d *Daemon) closeClients(logger ulogger.Logger) {
+	if d.crashed.Load() {
+		return
+	}
+
 	d.daemonStores.constructedClientsMu.Lock()
 	clients := d.daemonStores.constructedClients
 	d.daemonStores.constructedClients = nil
@@ -513,7 +586,11 @@ func (d *Daemon) closeClients(logger ulogger.Logger) {
 // batcher drain — to run with real time available, not return
 // immediately with context.Canceled.
 func (d *Daemon) closeStores(logger ulogger.Logger) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if d.crashed.Load() {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), closeStoresTimeout)
 	defer cancel()
 
 	globalStoreMutex.RLock()
@@ -596,11 +673,23 @@ func (d *Daemon) closeStores(logger ulogger.Logger) {
 }
 
 func (d *Daemon) shouldStart(app string, args []string) bool {
+	if !serviceEnabled(app, args) {
+		return false
+	}
+
+	d.appCount++
+
+	return true
+}
+
+// serviceEnabled reports whether app is switched on, by the command line first and the
+// config second. It is shouldStart without the app count, so code that runs before the
+// Daemon exists (GC tuning) can ask which services this process will host.
+func serviceEnabled(app string, args []string) bool {
 	// See if the app is enabled in the command line
 	cmdArg := fmt.Sprintf("-%s=1", strings.ToLower(app))
 	for _, cmd := range args {
 		if cmd == cmdArg {
-			d.appCount++
 			return true
 		}
 	}
@@ -624,12 +713,7 @@ func (d *Daemon) shouldStart(app string, args []string) bool {
 	// If the app was not specified on the command line, see if it is enabled in the config
 	varArg := fmt.Sprintf("start%s", app)
 
-	b := gocore.Config().GetBool(varArg)
-	if b {
-		d.appCount++
-	}
-
-	return b
+	return gocore.Config().GetBool(varArg)
 }
 
 // printUsage prints the usage information for the Daemon command line options.
