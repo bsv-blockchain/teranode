@@ -2315,20 +2315,39 @@ func (s *Store) readExternalTransaction(ctx context.Context, previousTxHash chai
 // refused before allocating), before the short read fails as a storage fault.
 // That is the bound the non-arena read had before go-bt v2.7.3.
 //
-// All scripts share the arena's slab, so the transaction keeps the whole blob
-// alive for as long as it keeps any of its scripts. Callers that keep only some
-// of the scripts must not use this path; see getExternalOutpoints.
+// The scripts left in the arena share its slab, so any one of them keeps the
+// whole blob alive. Output scripts below detachOutputScriptBelow are therefore
+// copied out after the decode: a child extends its input by pointing at the
+// parent's output script (the validator's extendInputFromPrefetchedParent, and
+// the other PreviousTxScript extenders), so a 25-byte P2PKH change output left in
+// the slab would let the child pin a 96MB parent for as long as the child lives.
+// Callers that drop some of the large scripts and keep the rest must still not
+// use this path; see getExternalOutpoints.
 func decodeOwnTxBlob(tx *bt.Tx, r io.Reader, blobLen int, blobLenKnown bool) error {
-	var arena *bt.Arena
-	if blobLenKnown && blobLen > 0 {
-		arena = bt.NewArena(blobLen)
+	if !blobLenKnown || blobLen <= 0 {
+		_, err := tx.ReadFrom(r)
+		return err
 	}
 
-	// ReadFromWithArena with a nil arena is exactly ReadFrom.
-	_, err := tx.ReadFromWithArena(r, arena)
+	if _, err := tx.ReadFromWithArena(r, bt.NewArena(blobLen)); err != nil {
+		return err
+	}
 
-	return err
+	for _, output := range tx.Outputs {
+		if output != nil && output.LockingScript != nil && len(*output.LockingScript) < detachOutputScriptBelow {
+			detached := bscript.Script(bytes.Clone(*output.LockingScript))
+			output.LockingScript = &detached
+		}
+	}
+
+	return nil
 }
+
+// detachOutputScriptBelow is the size under which decodeOwnTxBlob copies an
+// output script out of the arena. It is go-bt's incremental read chunk, so these
+// scripts cost the one exact allocation they cost before the arena; the larger
+// ones, which the arena exists for, stay in it.
+const detachOutputScriptBelow = 64 * 1024
 
 // remainingBlobBytes returns how many bytes r has left to read, when r can say.
 // The file blob store's reader can seek, so it can; the memory store's, and a

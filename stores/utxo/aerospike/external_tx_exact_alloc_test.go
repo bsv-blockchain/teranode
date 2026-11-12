@@ -206,3 +206,42 @@ func TestGetExternalTransactionTruncatedBlobOnFileStore(t *testing.T) {
 	require.True(t, errors.Is(err, errors.ErrStorageError), "a torn blob is a storage fault")
 	require.False(t, errors.Is(err, errors.ErrTxInvalid))
 }
+
+// TestGetExternalTransactionSmallOutputDoesNotPinBlob covers how a child holds
+// a parent: extending an input points PreviousTxScript at the parent's output
+// script. A child spending the 25-byte P2PKH change of a data-carrier parent
+// must not keep the parent's whole blob alive once the parent itself is gone.
+func TestGetExternalTransactionSmallOutputDoesNotPinBlob(t *testing.T) {
+	ctx := context.Background()
+
+	parent := buildDataCarrierTx(t)
+	parentHash := *parent.TxIDChainHash()
+
+	s := newFileExternalStore(t)
+	require.NoError(t, s.externalStore.Set(ctx, parentHash[:], fileformat.FileTypeTx, parent.ExtendedBytes()))
+
+	parent = nil
+
+	var before, after runtime.MemStats
+
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+
+	tx, err := s.getExternalTransaction(ctx, parentHash)
+	require.NoError(t, err)
+
+	// What extendInputFromPrefetchedParent keeps of the parent.
+	changeScript := tx.Outputs[1].LockingScript
+	require.Len(t, *changeScript, 25)
+
+	tx = nil
+
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+
+	retained := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	t.Logf("a held change script retains %d bytes after GC", retained)
+	require.Less(t, retained, int64(dataCarrierPayloadSize/4), "the parent's data-carrier payload must be collectable")
+
+	runtime.KeepAlive(changeScript)
+}
