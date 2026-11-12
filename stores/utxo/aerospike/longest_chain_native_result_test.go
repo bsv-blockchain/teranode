@@ -113,6 +113,17 @@ func TestCollectNativeMarkFollowUp(t *testing.T) {
 		require.Nil(t, st.oldUnminedSince)
 	})
 
+	t.Run("DAHSET without a height queues nothing", func(t *testing.T) {
+		var f childDAHFollowUps
+
+		states := map[chainhash.Hash]masterState{}
+		collectNativeMarkFollowUp(&f, states, &hash, &LuaMapResponse{Status: LuaStatusOK, Signal: LuaSignalDAHSet, ChildCount: 2})
+
+		require.Empty(t, f.sets())
+		require.Empty(t, f.unsets())
+		require.Empty(t, states)
+	})
+
 	t.Run("no signal queues nothing", func(t *testing.T) {
 		var f childDAHFollowUps
 
@@ -123,4 +134,53 @@ func TestCollectNativeMarkFollowUp(t *testing.T) {
 		require.Empty(t, f.unsets())
 		require.Empty(t, states)
 	})
+}
+
+// TestCollectResentFollowUp checks a resent master always queues its page follow-up, whatever its
+// deleteAtHeight was before, and that a record with no pages queues nothing.
+func TestCollectResentFollowUp(t *testing.T) {
+	hash := chainhash.HashH([]byte("resent-follow-up"))
+	pages := 2
+	noPages := 0
+	dah := uint32(1011)
+	version := dahVersion{value: 3, known: true}
+
+	t.Run("a master with a deleteAtHeight sets its pages", func(t *testing.T) {
+		var f childDAHFollowUps
+
+		collectResentFollowUp(&f, &hash, SetMinedState{External: true, TotalExtraRecs: &pages, OldDeleteAtHeight: &dah, NewDeleteAtHeight: &dah, DAHVersion: version})
+
+		sets := f.sets()
+		require.Len(t, sets, 1)
+		require.Equal(t, uint32(1011), sets[0].DeleteAtHeight)
+		require.Equal(t, version, sets[0].Version)
+		require.Empty(t, f.unsets())
+	})
+
+	t.Run("a master without a deleteAtHeight clears its pages", func(t *testing.T) {
+		var f childDAHFollowUps
+
+		collectResentFollowUp(&f, &hash, SetMinedState{External: true, TotalExtraRecs: &pages, DAHVersion: version})
+
+		unsets := f.unsets()
+		require.Len(t, unsets, 1)
+		require.Equal(t, 2, unsets[0].ChildCount)
+		require.Equal(t, version, unsets[0].Version)
+		require.Empty(t, f.sets())
+	})
+
+	for name, state := range map[string]SetMinedState{
+		"not external":  {TotalExtraRecs: &pages, NewDeleteAtHeight: &dah},
+		"no page count": {External: true, NewDeleteAtHeight: &dah},
+		"zero pages":    {External: true, TotalExtraRecs: &noPages, NewDeleteAtHeight: &dah},
+	} {
+		t.Run(name+" queues nothing", func(t *testing.T) {
+			var f childDAHFollowUps
+
+			collectResentFollowUp(&f, &hash, state)
+
+			require.Empty(t, f.sets())
+			require.Empty(t, f.unsets())
+		})
+	}
 }

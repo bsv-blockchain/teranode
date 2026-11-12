@@ -964,6 +964,29 @@ func TestMarkTransactionsOnLongestChain_NativeResultsAndFallback(t *testing.T) {
 		requireMarked(t, hashes)
 	})
 
+	t.Run("a one-record batch rejected as a whole is resent down the expression path", func(t *testing.T) {
+		hashes := seed(t, "single-record", 1)
+		store.SetNativeMarkForTest(true)
+
+		var nativeCalls atomic.Int64
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if len(records) > 0 && isNative(records[0]) {
+				nativeCalls.Add(1)
+
+				return &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+			}
+
+			return client.BatchOperate(policy, records)
+		})
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, hashes, true))
+		require.Equal(t, int64(1), nativeCalls.Load())
+		require.False(t, store.UsesNativeMark())
+		require.True(t, store.UsesNativeTeranodeOps(), "a sub-op 14 rejection leaves the other native ops on")
+		requireMarked(t, hashes)
+	})
+
 	t.Run("a resent batch that fails is returned", func(t *testing.T) {
 		hashes := seed(t, "resend-fails", 3)
 		store.SetNativeMarkForTest(true)
