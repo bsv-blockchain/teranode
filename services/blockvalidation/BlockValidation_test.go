@@ -4260,7 +4260,6 @@ func TestDeriveBlockHeight(t *testing.T) {
 	}
 }
 
-// TestBlockValidation_SetMined_UpdatesTxMeta ensures that after block validation, calling setTxMined marks all block transactions as mined in the txMetaStore.
 // buildBlockWithReservedID builds a valid block at height 1 holding a coinbase and one
 // child transaction, stores both transactions unmined in txMetaStore and the subtree in
 // subtreeStore, and reserves the block's id the way quick validation does before it can
@@ -4367,6 +4366,7 @@ func buildBlockWithReservedID(ctx context.Context, t *testing.T, tSettings *sett
 	return block, coinbaseTx, childTx
 }
 
+// TestBlockValidation_SetMined_UpdatesTxMeta ensures that after block validation, calling setTxMined marks all block transactions as mined in the txMetaStore.
 func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	initPrometheusMetrics()
 
