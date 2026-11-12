@@ -65,7 +65,7 @@ func RunDaemon(progname, version, commit string) error {
 
 	// Configure GC tuning (GOMEMLIMIT + GOGC) based on cgroup memory limits.
 	// Must happen early, before services allocate significant memory.
-	daemon.ConfigureGCTuning(tSettings.GCTuning)
+	daemon.ConfigureGCTuning(tSettings, os.Args[1:])
 
 	debugflags.Init(debugflags.Flags{
 		All:       tSettings.Debug.All,
