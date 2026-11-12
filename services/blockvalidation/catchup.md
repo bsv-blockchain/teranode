@@ -19,7 +19,7 @@ The catchup lifecycle is orchestrated by the server in `services/blockvalidation
 
 3. **Find common ancestor**
    - Computes the best common ancestor between local and remote chains using the header list and locator.
-   - Implemented by `services/blockvalidation/catchup/common_ancestor.go` and `common_ancestor_finder.go`.
+   - Implemented by `findCommonAncestor` in `services/blockvalidation/catchup.go`; the chain-connection check is `ValidateChainConnection` in `services/blockvalidation/catchup/header_validation.go`.
    - Also determines fork depth.
 
 4. **Validate fork depth**
@@ -59,7 +59,7 @@ The catchup lifecycle is orchestrated by the server in `services/blockvalidation
   - Step sequencing, exclusive lock, FSM transitions, metrics, logging.
 - **Header fetcher**: `services/blockvalidation/catchup_get_block_headers.go`
   - Locator-based header retrieval, per-iteration peer checks, and result aggregation.
-- **Common ancestor**: `services/blockvalidation/catchup/common_ancestor.go`, `common_ancestor_finder.go`
+- **Common ancestor**: `findCommonAncestor` in `services/blockvalidation/catchup.go`, with `ValidateChainConnection` in `services/blockvalidation/catchup/header_validation.go`
   - Common ancestor resolution and chain connection checks.
 - **Header cache**: `services/blockvalidation/catchup/header_chain_cache.go`
   - Builds an in-memory cache to accelerate subsequent validation.

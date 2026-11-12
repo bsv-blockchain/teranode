@@ -136,3 +136,24 @@ func TestCreateSqliteSchema_DropsRetiredIndex(t *testing.T) {
 	).Scan(&count))
 	require.Zero(t, count, "idx_inserted_at must be dropped")
 }
+
+// Both retired-index helpers must hand a database failure back to the schema
+// setup rather than swallow it. A closed database makes every statement fail.
+func TestRetiredIndexHelpers_ReturnDatabaseErrors(t *testing.T) {
+	storeURL, err := url.Parse("sqlitememory:///retired_index_errors")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+
+	db := s.GetDB()
+	require.NoError(t, db.Close())
+
+	present, err := retiredIndexPresent(db)
+	require.Error(t, err)
+	require.False(t, present)
+
+	err = dropRetiredIndexes(db)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "could not drop idx_inserted_at index")
+}
