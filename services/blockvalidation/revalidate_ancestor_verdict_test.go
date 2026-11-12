@@ -105,29 +105,24 @@ func TestReValidateBlock_InvalidAncestorVerdictNeverStoredBlockStillPublishes(t 
 		"no invalid-block notification was published for a never-stored block with an INVALID ancestor verdict")
 }
 
-// TestReValidateBlock_InvalidAncestorVerdictOnForkChainIsNotActedOn covers the false INVALID that
-// the revalidation path must not act on. checkOldBlockIDs asks whether a parent's block is on the
-// MAIN chain, not whether it is an ancestor of this block. The two agree only while this block's
-// own parent is on the main chain. On the in-memory chain-check route every parent block deeper
-// than blockvalidation_previous_block_header_count goes straight to that main-chain lookup. So an
-// honest block whose chain a reorg has moved off the main chain reads as spending an off-chain
-// parent.
+// TestReValidateBlock_HonestBlockOnForkChainRevalidatesClean covers an honest block whose chain a
+// reorg has moved off the main chain. It spends a parent mined deeper than the header window, on its
+// own fork. checkOldBlockIDs asks whether the parent's block is an ancestor of this block, so the
+// block revalidates clean, with nothing invalidated or published. When the check asked whether the
+// parent's block was on the MAIN chain, the in-memory route returned a false INVALID here.
 //
 // Fixture: fork chain genesis-F1..F12-C, with the funding tx mined in F1 and C spending it, and a
 // longer main chain genesis-A1..A14. C is honest, because F1 is its own ancestor. F1 is 12 blocks
-// below C, past the 11-header window, so the ancestor check resolves it against the main chain and
-// says INVALID. reValidateBlock must hand that verdict back unacted, as it did before the INVALID
-// ancestor branch existed, because C's parent F12 is not on the main chain.
-func TestReValidateBlock_InvalidAncestorVerdictOnForkChainIsNotActedOn(t *testing.T) {
+// below C, past the 11-header window, so the ancestor check resolves it with the store's ancestor
+// walk from C's parent F12.
+func TestReValidateBlock_HonestBlockOnForkChainRevalidatesClean(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	bv, blockchainClient, blockC, kafkaProducer := newAncestorVerdictFixture(ctx, t, ancestorVerdictFixtureOpts{storeC: true, deepFork: true, parentMinedSet: true})
 
 	err := bv.reValidateBlock(context.Background(), revalidateBlockData{block: blockC, baseURL: "test"})
-
-	// The verdict itself is still wrong on this route. What this test pins is that it is not acted on.
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected the main-chain ancestor check to return ErrBlockInvalid for a block on a fork chain, got: %v", err)
+	require.NoError(t, err, "an honest block on a fork chain must revalidate clean")
 
 	_, cMeta, err := blockchainClient.GetBlockHeader(ctx, blockC.Hash())
 	require.NoError(t, err)
@@ -273,7 +268,7 @@ type ancestorVerdictExtras struct {
 // real sqlitememory stores, the blockchain client, the child block C and the Kafka producer. When
 // opts.storeC is false, C is never added to the blockchain store.
 //
-// When opts.deepFork is true it builds the fixture TestReValidateBlock_InvalidAncestorVerdictOnForkChainIsNotActedOn
+// When opts.deepFork is true it builds the fixture TestReValidateBlock_HonestBlockOnForkChainRevalidatesClean
 // describes instead: C is honest, on a fork chain F1..F12 that funds it from F1, and a longer main
 // chain A1..A14 has moved that fork off the main chain. It turns on the in-memory chain check and
 // sets the parent-header window to its floor of 11, so F1 falls outside the window.

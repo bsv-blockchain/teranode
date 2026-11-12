@@ -31,6 +31,9 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **A block whose transaction spends an output mined only outside the block's own history is now
+  invalid.** Earlier versions accepted it when that output's block was on the main chain, so
+  upgrade every block validation pod together; a mixed fleet can disagree on such a fork block.
 - **`blockassembly_storeTxInpointsForSubtreeMeta=false` now only skips the subtree meta files.**
   Block assembly keeps every unmined tx's parent links in memory in both modes. With it off, the
   restart reload and a block move-back now read each tx's inputs from the UTXO store (an external tx

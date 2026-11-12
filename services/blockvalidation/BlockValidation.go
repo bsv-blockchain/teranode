@@ -3815,12 +3815,11 @@ func (u *BlockValidation) reValidateBlock(ctx context.Context, blockData revalid
 	// left an optimistically added block on-chain, with no invalid-block notification, once the
 	// worker's retries ran out (bitcoin-sv/teranode#4980).
 	//
-	// checkOldBlockIDs answers "is a parent's block on the MAIN chain", not "is it an ancestor of
-	// this block". The two agree only while this block's parent is on the main chain. Otherwise,
-	// on the in-memory chain-check route, an honest block whose chain a reorg moved off the main
-	// chain reads INVALID for any parent mined deeper than the parent-header window. So act only
-	// when the parent is on the main chain, and otherwise return the verdict unacted for the worker
-	// to retry, as before. The verdict also relies on the parent txs' BlockIDs being complete, which
+	// checkOldBlockIDs answers "is a parent's block an ancestor of this block", so its verdict holds
+	// whichever chain this block's parent is on. ancestorVerdictIsSound dates from when it answered
+	// "is it on the MAIN chain" instead, and still acts only when the parent is on the main chain,
+	// otherwise returning the verdict unacted for the worker to retry. That is the direction that
+	// never invalidates. The verdict also relies on the parent txs' BlockIDs being complete, which
 	// the isParentMined check above guarantees.
 	err = u.checkOldBlockIDs(ctx, oldBlockIDsMap, blockData.block)
 	if errors.Is(err, errors.ErrBlockInvalid) && u.ancestorVerdictIsSound(ctx, blockData.block, blockHeadersMeta) {
@@ -4067,8 +4066,8 @@ func (u *BlockValidation) liftFinalSubtreeRootForBUMP(ctx context.Context, block
 	return subtreeHashes, nil
 }
 
-// checkOldBlockIDs verifies that referenced blocks are in the current chain.
-// It prevents invalid chain reorganizations and maintains chain consistency.
+// checkOldBlockIDs verifies that each transaction's parent is mined in this block's own history:
+// at least one of its parent block IDs must be the block's parent or an ancestor of it.
 //
 // Parameters:
 //   - ctx: Context for the operation
@@ -4107,35 +4106,35 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 	defer deferFn()
 
 	// Two strategies, identical result. For every tx in the block we
-	// need to answer "is at least one of this tx's parent block IDs on
-	// the current main chain?".
+	// need to answer "is at least one of this tx's parent block IDs an
+	// ancestor of this block?", meaning the block's parent or one below it.
+	// It is NOT "is it on the main chain": a fork block may only spend
+	// outputs mined in its own history, and a main-chain block above the
+	// fork point is not in that history.
 	//
 	//   ON-CHAIN PREFETCH (this function, default):
-	//     - Fetch the 10,000 most-recent main-chain block IDs via
+	//     - Fetch the 10,000 nearest ancestors of the block's parent via
 	//       GetBlockHeaderIDs.
 	//     - Build a local map and check each tx's parent block IDs
-	//       against it. Membership in a freshly-fetched main-chain set is a
-	//       SOUND positive: a present id is on chain.
-	//     - The window is truncated, so on a miss fall back to a per-tx
-	//       CheckBlockIsInCurrentChain RPC.
+	//       against it. Membership in that ancestor set is a SOUND positive.
+	//     - The window is truncated, so on a miss fall back to a per-set
+	//       CheckBlockIsAncestorOfBlock RPC anchored at the block's parent.
 	//
 	//   IN-MEMORY CHAIN CHECK (checkOldBlockIDsInMemoryChainCheck, gated by
 	//   blockchain_use_in_memory_chain_check):
 	//     - Holds NO local set. Every distinct parent-block-ID set is resolved
-	//       by the authoritative CheckBlockIsInCurrentChain, which uses the
-	//       store's in-memory off-chain set as a fast negative filter and then
-	//       confirms survivors against on_main_chain in one self-consistent
-	//       snapshot. The off-chain (negative) set cannot prove on-chain
-	//       membership, so it must not drive a local accept (see #1055).
+	//       by the same CheckBlockIsAncestorOfBlock RPC anchored at the
+	//       block's parent.
 	//
-	// The on-chain prefetch fetches an unbounded, ever-growing positive set
-	// and was a sensible amortisation when CheckBlockIsInCurrentChain was a
-	// recursive SQL CTE per call. With blockchain_use_in_memory_chain_check the
-	// store answers CheckBlockIsInCurrentChain from its in-memory off-chain set
-	// (no recursive CTE), so this route can defer every decision to that single
-	// authority without re-fetching anything into this service. Live profiling
-	// on betfair-pc mainnet showed the on-chain prefetch holding ~35% of inuse
-	// heap (464 MB) and ~16% of CPU on its own.
+	// CheckBlockIsAncestorOfBlock is a recursive walk down parent links from
+	// the anchor, so a lookup costs time in proportion to how deep the
+	// shallowest matching parent block is.
+	//
+	// The prefetch exists to amortise that walk: most parents are recent, and a
+	// hit in the 10,000-ID set costs no RPC. The in-memory route was added to
+	// drop the prefetch, which live profiling on betfair-pc mainnet showed
+	// holding ~35% of inuse heap (464 MB) and ~16% of CPU on its own, back when
+	// its fallback was an in-memory main-chain lookup.
 	if u.settings != nil && u.settings.BlockChain.UseInMemoryChainCheck {
 		return u.checkOldBlockIDsInMemoryChainCheck(ctx, oldBlockIDsMap, block)
 	}
@@ -4157,7 +4156,7 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 	}
 
 	// Fast pre-check: parent block IDs that appear in the freshly-fetched
-	// main-chain set short-circuit before the dedupe cache and the RPC.
+	// ancestor set short-circuit before the dedupe cache and the RPC.
 	fastPath := func(blockIDs []uint32) bool {
 		for _, blockID := range blockIDs {
 			if _, ok := currentChainBlockIDsMap[blockID]; ok {
@@ -4168,10 +4167,10 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 	}
 
 	iterationError, fastPathCount, lookupCount, cacheHitCount :=
-		u.iterateOldBlockIDsWithCachedLookup(ctx, oldBlockIDsMap, block, fastPath, u.blockchainClient.CheckBlockIsInCurrentChain)
+		u.iterateOldBlockIDsWithCachedLookup(ctx, oldBlockIDsMap, block, fastPath, u.isAncestorOfParentLookup(block))
 
 	if u.logger != nil {
-		// "lookup" is the per-tx CheckBlockIsInCurrentChain reached on a fast-path
+		// "lookup" is the per-set CheckBlockIsAncestorOfBlock reached on a fast-path
 		// miss. Both routes use the same label for this counter so logs are
 		// directly comparable across the on-chain and off-chain prefetch paths.
 		u.logger.Infof("[checkOldBlockIDs][%s] prefetch route done: fastPath=%d, lookup=%d, cacheHit=%d", block.Hash().String(), fastPathCount, lookupCount, cacheHitCount)
@@ -4180,12 +4179,30 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 	return
 }
 
+// isAncestorOfParentLookup returns the per-set lookup both checkOldBlockIDs routes use: it
+// reports whether any of blockIDs is the block's parent or an ancestor of it. The anchor is
+// HashPrevBlock because the block itself is not stored yet on the normal path, while on the
+// optimistic path it is; the parent is stored on both. The answer is ANY-of for one set, so it
+// must be asked per transaction's set, never once over every set in the block.
+func (u *BlockValidation) isAncestorOfParentLookup(block *model.Block) func(ctx context.Context, blockIDs []uint32) (bool, error) {
+	anchor := block.Header.HashPrevBlock
+
+	return func(ctx context.Context, blockIDs []uint32) (bool, error) {
+		return u.blockchainClient.CheckBlockIsAncestorOfBlock(ctx, blockIDs, anchor)
+	}
+}
+
 // checkOldBlockIDsInMemoryChainCheck is the in-memory-chain-check variant of
 // checkOldBlockIDs (gated by blockchain_use_in_memory_chain_check). It answers
-// the same per-tx question — "is at least one of this tx's parent block IDs on
-// the current main chain?" — but, unlike the default on-chain-prefetch route,
-// holds NO local set: every distinct parent-block-ID set is resolved by the
-// authoritative CheckBlockIsInCurrentChain.
+// the same per-tx question — "is at least one of this tx's parent block IDs an
+// ancestor of this block?" — but, unlike the default on-chain-prefetch route,
+// holds NO local set: every distinct parent-block-ID set is resolved by
+// CheckBlockIsAncestorOfBlock anchored at the block's parent.
+//
+// Earlier versions asked CheckBlockIsInCurrentChain, "is it on the main chain".
+// That accepts a fork block spending an output mined only on the main chain
+// above the fork point, and rejects an honest block on a fork that a reorg moved
+// off the main chain. The history below is why the route holds no local set.
 //
 // #1055: the earlier version prefetched the off-chain (forked) set once via
 // OffChainBlockIDs and treated a parent absent from that set as on-chain. That
@@ -4196,29 +4213,20 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 // cannot drive a sound accept HERE, in this service, because a prefetched copy
 // of it is a snapshot with no guard over it.
 //
-// CheckBlockIsInCurrentChain is the single authority. Note what that does and
-// does not buy: the store applies the same absence-means-on-chain rule, but it
-// applies it against a set and a maxBlockID from one self-consistent snapshot,
-// under mainChainRebuilding, and with the shadow comparison available to measure
-// it (stores/blockchain/sql/CheckBlockIsInCurrentChain.go). So the two routes CAN
-// still diverge on a gap id, an id at or below maxBlockID with no committed row.
-// That divergence is documented and measured at
-// TestCheckBlockIsInCurrentChain_GapIDDivergesBetweenRoutes; read that before
-// concluding anything about it. What deferring to the store removes is this
-// service holding a stale copy, not the underlying rule. Deferring every decision to it — rather than
-// caching a prefetched set in this service and deciding locally — also avoids
-// the snapshot-skew window a local decision would carry across a concurrent
-// reorg (a stale "off-chain" classification could wrongly reject, the more
-// dangerous direction, since an invalid block is cached). The per-call dedupe
-// cache collapses identical parent-block-ID sets (sibling txs spending outputs
-// from the same parent block), so this is one authoritative lookup per DISTINCT
-// set, not per tx.
+// The store's ancestor walk is the single authority. It follows committed
+// parent links from the block's parent, so a gap id, which has no blocks row,
+// is never found and is rejected on both routes. Deferring every decision to
+// it, rather than caching a prefetched set in this service and deciding
+// locally, also avoids the snapshot-skew window a local decision would carry
+// across a concurrent reorg. The per-call dedupe cache collapses identical
+// parent-block-ID sets (sibling txs spending outputs from the same parent
+// block), so this is one lookup per DISTINCT set, not per tx.
 func (u *BlockValidation) checkOldBlockIDsInMemoryChainCheck(ctx context.Context,
 	oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
 	block *model.Block,
 ) (iterationError error) {
 	iterationError, _, lookupCount, cacheHitCount :=
-		u.iterateOldBlockIDsWithCachedLookup(ctx, oldBlockIDsMap, block, nil, u.blockchainClient.CheckBlockIsInCurrentChain)
+		u.iterateOldBlockIDsWithCachedLookup(ctx, oldBlockIDsMap, block, nil, u.isAncestorOfParentLookup(block))
 
 	if u.logger != nil {
 		u.logger.Infof("[checkOldBlockIDs][%s] in-memory-chain-check route (authoritative per-set lookup): lookup=%d, cacheHit=%d", block.Hash().String(), lookupCount, cacheHitCount)
@@ -4234,14 +4242,14 @@ func (u *BlockValidation) checkOldBlockIDsInMemoryChainCheck(ctx context.Context
 //
 //  1. Rejects an empty blockIDs slice as a processing error.
 //  2. (prefetch only) invokes fastPath(blockIDs) and short-circuits true if
-//     a parent is already known on-chain via a SOUND positive set. fastPath
+//     a parent is already known to be an ancestor via a SOUND positive set. fastPath
 //     may be nil to skip this step, in which case every set is resolved by the
 //     authoritative lookup (the in-memory-chain-check route passes nil).
 //  3. Builds a sorted string key from blockIDs and consults a per-call
 //     dedupe cache. Identical blockIDs slices across sibling txs (a parent
 //     block referenced by many children) hit the cache and skip the lookup.
-//  4. On cache miss, calls lookup(ctx, blockIDs) (typically the
-//     CheckBlockIsInCurrentChain RPC), caches the result, and either
+//  4. On cache miss, calls lookup(ctx, blockIDs) (the
+//     CheckBlockIsAncestorOfBlock RPC), caches the result, and either
 //     continues iteration on hit or records a BlockInvalidError on miss.
 //
 // Returns the iteration error (or nil) plus counters. lookupCount counts

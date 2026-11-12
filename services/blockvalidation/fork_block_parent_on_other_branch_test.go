@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +22,8 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
@@ -31,14 +34,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A block's transactions may only spend outputs of transactions mined in that block's OWN history.
-// These tests build a main chain genesis - P0 - P1 - P2 and a fork block F on P0. F holds a
-// transaction C that spends an output of a transaction T. When T is mined only in P2, F spends a
-// coin that does not exist on F's chain, so F must be rejected even though P2 is on the main chain.
-// When T is mined in P0, F's own parent, F is valid.
+// A block's transactions may only spend outputs of transactions mined in that block's OWN history,
+// meaning the block's parent or a block below it. Most tests here build a main chain
+// genesis - P0 - P1 - P2 and a fork block F on P0. F holds a transaction C that spends an output of
+// a transaction T. When T is mined only in P2, F spends a coin that does not exist on F's chain, so
+// F must be rejected even though P2 is on the main chain. When T is mined in P0, F's own parent, F
+// is valid.
 //
 // Both checkOldBlockIDs routes run, the default prefetch route and blockchain_use_in_memory_chain_check.
-// The blockchain store is a real sqlitememory store, so the main-chain answers are the store's own.
+// The blockchain store is a real sqlitememory store, so the chain answers are the store's own.
 
 // forkParentFundedIn names the main-chain block the funding transaction T is mined in.
 type forkParentFundedIn int
@@ -48,14 +52,18 @@ const (
 	fundedInP2                           // on the main chain but not in F's history
 )
 
-// chainCheckCall records one CheckBlockIsInCurrentChain call and what the store answered.
+// chainCheckCall records one chain-membership call and what the store answered. anchor is nil for
+// CheckBlockIsInCurrentChain.
 type chainCheckCall struct {
+	method   string
 	blockIDs []uint32
-	onChain  bool
+	anchor   *chainhash.Hash
+	answer   bool
 }
 
 // chainCheckSpy delegates every call to the real blockchain client and records the
-// CheckBlockIsInCurrentChain calls, so a test can show which answer let a block through.
+// CheckBlockIsInCurrentChain and CheckBlockIsAncestorOfBlock calls, so a test can show which
+// answer decided a block.
 type chainCheckSpy struct {
 	blockchain.ClientI
 
@@ -64,13 +72,23 @@ type chainCheckSpy struct {
 }
 
 func (s *chainCheckSpy) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
-	onChain, err := s.ClientI.CheckBlockIsInCurrentChain(ctx, blockIDs)
+	answer, err := s.ClientI.CheckBlockIsInCurrentChain(ctx, blockIDs)
+	s.record(chainCheckCall{method: "CheckBlockIsInCurrentChain", blockIDs: slices.Clone(blockIDs), answer: answer})
 
+	return answer, err
+}
+
+func (s *chainCheckSpy) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	answer, err := s.ClientI.CheckBlockIsAncestorOfBlock(ctx, blockIDs, blockHash)
+	s.record(chainCheckCall{method: "CheckBlockIsAncestorOfBlock", blockIDs: slices.Clone(blockIDs), anchor: blockHash, answer: answer})
+
+	return answer, err
+}
+
+func (s *chainCheckSpy) record(call chainCheckCall) {
 	s.mu.Lock()
-	s.calls = append(s.calls, chainCheckCall{blockIDs: slices.Clone(blockIDs), onChain: onChain})
+	s.calls = append(s.calls, call)
 	s.mu.Unlock()
-
-	return onChain, err
 }
 
 func (s *chainCheckSpy) recorded() []chainCheckCall {
@@ -78,6 +96,163 @@ func (s *chainCheckSpy) recorded() []chainCheckCall {
 	defer s.mu.Unlock()
 
 	return slices.Clone(s.calls)
+}
+
+// ancestorCalls returns the recorded CheckBlockIsAncestorOfBlock calls.
+func (s *chainCheckSpy) ancestorCalls() []chainCheckCall {
+	var out []chainCheckCall
+
+	for _, c := range s.recorded() {
+		if c.method == "CheckBlockIsAncestorOfBlock" {
+			out = append(out, c)
+		}
+	}
+
+	return out
+}
+
+func describeChainCheckCalls(calls []chainCheckCall) string {
+	if len(calls) == 0 {
+		return "none"
+	}
+
+	parts := make([]string, 0, len(calls))
+	for _, c := range calls {
+		parts = append(parts, fmt.Sprintf("%s%v -> %t", c.method, c.blockIDs, c.answer))
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+// parentCheckStores holds the real stores one parent-check fixture builds on.
+type parentCheckStores struct {
+	settings     *settings.Settings
+	client       blockchain.ClientI
+	spy          *chainCheckSpy
+	utxoStore    utxostore.Store
+	subtreeStore blob.Store
+	txStore      blob.Store
+}
+
+func newParentCheckStores(ctx context.Context, t *testing.T, inMemoryChainCheck bool) *parentCheckStores {
+	t.Helper()
+
+	initPrometheusMetrics()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// Set the route explicitly: the default can come from the machine's settings_local.conf.
+	tSettings.BlockChain.UseInMemoryChainCheck = inMemoryChainCheck
+
+	blockChainStore, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+
+	realClient, err := blockchain.NewLocalClient(logger, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///forkparentonotherbranch")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	return &parentCheckStores{
+		settings:     tSettings,
+		client:       realClient,
+		spy:          &chainCheckSpy{ClientI: realClient},
+		utxoStore:    utxoStore,
+		subtreeStore: blobmemory.New(),
+		txStore:      blobmemory.New(),
+	}
+}
+
+// newBlockValidation builds the BlockValidation under test on an already cancelled context, so its
+// background workers exit at once and do not run setTxMined behind the test's back. ValidateBlock
+// does not use this context. Subtree validation is mocked to succeed.
+func (s *parentCheckStores) newBlockValidation(ctx context.Context, t *testing.T) *BlockValidation {
+	t.Helper()
+
+	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+	subtreeValidationClient.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	bvCtx, bvCancel := context.WithCancel(ctx)
+	bvCancel()
+
+	bv := NewBlockValidation(bvCtx, ulogger.TestLogger{}, s.settings, s.spy, s.subtreeStore, s.txStore, s.utxoStore, nil, subtreeValidationClient)
+	t.Cleanup(bv.StopCaches)
+
+	return bv
+}
+
+// buildBlockSpendingFrom stores a funding transaction T as mined only in the block fundingMeta
+// names, and returns a block on parent at height holding a transaction C that spends T's output.
+// The block is not stored.
+func (s *parentCheckStores) buildBlockSpendingFrom(ctx context.Context, t *testing.T, fundingMeta *model.BlockHeaderMeta,
+	parent *chainhash.Hash, height uint32, timestamp uint32,
+) (*model.Block, chainhash.Hash) {
+	t.Helper()
+
+	privateKey, err := bec.NewPrivateKey()
+	require.NoError(t, err)
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	require.NoError(t, err)
+
+	fundingTx := bt.NewTx()
+	require.NoError(t, fundingTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
+	fundingTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x65, 0x00, 0x00, 0x00, '/', 'F', 'u', 'n', 'd'})
+	require.NoError(t, fundingTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000))
+
+	childTx := bt.NewTx()
+	require.NoError(t, childTx.FromUTXOs(&bt.UTXO{
+		TxIDHash:      fundingTx.TxIDChainHash(),
+		Vout:          0,
+		LockingScript: fundingTx.Outputs[0].LockingScript,
+		Satoshis:      fundingTx.Outputs[0].Satoshis,
+	}))
+	require.NoError(t, childTx.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000))
+	require.NoError(t, childTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey}))
+
+	_, _, err = s.utxoStore.SpendAndCreate(ctx, fundingTx, fundingMeta.Height,
+		utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: fundingMeta.ID, BlockHeight: fundingMeta.Height, OnLongestChain: true}),
+		utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	_, _, err = s.utxoStore.SpendAndCreate(ctx, childTx, height, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*childTx.TxIDChainHash(), uint64(childTx.Size()), 0)) //nolint:gosec
+
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
+	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, s.subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	subtreeMetaBytes, err := subtreeMeta.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, s.subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
+
+	// The coinbase claims nothing, so the block passes the reward check at any height: the regtest
+	// subsidy halves every 150 blocks and is spent long before the deep fixture's height.
+	coinbaseTx := coinbaseAtHeight(t, height)
+	coinbaseTx.Outputs[0].Satoshis = 0
+
+	replicated := subtree.Duplicate()
+	replicated.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
+
+	hdr := minedBIP34Header(t, 4, parent, replicated.RootHash())
+	remineAt(t, hdr, timestamp)
+
+	block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{subtree.RootHash()},
+		uint64(subtree.Length()), uint64(coinbaseTx.Size()+childTx.Size()), height, 0) //nolint:gosec
+	require.NoError(t, err)
+
+	return block, *childTx.TxIDChainHash()
 }
 
 type forkParentFixture struct {
@@ -96,39 +271,14 @@ type forkParentFixture struct {
 func newForkParentFixture(ctx context.Context, t *testing.T, inMemoryChainCheck bool, fundedIn forkParentFundedIn) *forkParentFixture {
 	t.Helper()
 
-	initPrometheusMetrics()
-
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	// Set the route explicitly: the default can come from the machine's settings_local.conf.
-	tSettings.BlockChain.UseInMemoryChainCheck = inMemoryChainCheck
-
-	blockChainStore, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
-	require.NoError(t, err)
-
-	realClient, err := blockchain.NewLocalClient(logger, tSettings, blockChainStore, nil, nil)
-	require.NoError(t, err)
-
-	spy := &chainCheckSpy{ClientI: realClient}
-
-	utxoStoreURL, err := url.Parse("sqlitememory:///forkparentonotherbranch")
-	require.NoError(t, err)
-
-	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
-	require.NoError(t, err)
-
-	subtreeStore := blobmemory.New()
-	txStore := blobmemory.New()
-
-	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
-	subtreeValidationClient.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	stores := newParentCheckStores(ctx, t, inMemoryChainCheck)
+	realClient := stores.client
 
 	// Rising timestamps ending in the past, so every block passes median-time-past.
 	baseTime := uint32(time.Now().Add(-time.Hour).Unix()) //nolint:gosec
 
 	// Main chain: genesis - P0 - P1 - P2.
-	blockP0 := ancestorVerdictCoinbaseOnlyBlockAt(t, tSettings.ChainCfgParams.GenesisHash, 1, baseTime+1)
+	blockP0 := ancestorVerdictCoinbaseOnlyBlockAt(t, stores.settings.ChainCfgParams.GenesisHash, 1, baseTime+1)
 	require.NoError(t, realClient.AddBlock(ctx, blockP0, "test"))
 
 	blockP1 := ancestorVerdictCoinbaseOnlyBlockAt(t, blockP0.Hash(), 2, baseTime+2)
@@ -149,66 +299,10 @@ func newForkParentFixture(ctx context.Context, t *testing.T, inMemoryChainCheck 
 		fundingMeta = p2Meta
 	}
 
-	// T, the funding transaction, mined only in fundingMeta's block.
-	privateKey, err := bec.NewPrivateKey()
-	require.NoError(t, err)
-	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
-	require.NoError(t, err)
-
-	fundingTx := bt.NewTx()
-	require.NoError(t, fundingTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
-	fundingTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x65, 0x00, 0x00, 0x00, '/', 'F', 'u', 'n', 'd'})
-	require.NoError(t, fundingTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000))
-
-	// C spends T's output.
-	childTx := bt.NewTx()
-	require.NoError(t, childTx.FromUTXOs(&bt.UTXO{
-		TxIDHash:      fundingTx.TxIDChainHash(),
-		Vout:          0,
-		LockingScript: fundingTx.Outputs[0].LockingScript,
-		Satoshis:      fundingTx.Outputs[0].Satoshis,
-	}))
-	require.NoError(t, childTx.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000))
-	require.NoError(t, childTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey}))
-
-	_, _, err = utxoStore.SpendAndCreate(ctx, fundingTx, fundingMeta.Height,
-		utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: fundingMeta.ID, BlockHeight: fundingMeta.Height, OnLongestChain: true}),
-		utxostore.WithCreateOnly())
-	require.NoError(t, err)
-
-	_, _, err = utxoStore.SpendAndCreate(ctx, childTx, 2, utxostore.WithCreateOnly())
-	require.NoError(t, err)
-
 	// F: the fork block on P0 at height 2, holding C.
-	subtree, err := subtreepkg.NewTreeByLeafCount(2)
-	require.NoError(t, err)
-	require.NoError(t, subtree.AddCoinbaseNode())
-	require.NoError(t, subtree.AddNode(*childTx.TxIDChainHash(), uint64(childTx.Size()), 0)) //nolint:gosec
-
-	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
-	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx))
-
-	subtreeBytes, err := subtree.Serialize()
-	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
-
-	subtreeMetaBytes, err := subtreeMeta.Serialize()
-	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
-
 	const forkHeight = uint32(2)
 
-	coinbaseTx := coinbaseAtHeight(t, forkHeight)
-
-	replicated := subtree.Duplicate()
-	replicated.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
-
-	hdr := minedBIP34Header(t, 4, blockP0.Hash(), replicated.RootHash())
-	remineAt(t, hdr, baseTime+forkHeight)
-
-	blockF, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{subtree.RootHash()},
-		uint64(subtree.Length()), uint64(coinbaseTx.Size()+childTx.Size()), forkHeight, 0) //nolint:gosec
-	require.NoError(t, err)
+	blockF, childTxHash := stores.buildBlockSpendingFrom(ctx, t, fundingMeta, blockP0.Hash(), forkHeight, baseTime+forkHeight)
 
 	// F's parent has had setTxMined run, as it would on a live node.
 	require.NoError(t, realClient.SetBlockMinedSet(ctx, blockP0.Hash()))
@@ -227,19 +321,11 @@ func newForkParentFixture(ctx context.Context, t *testing.T, inMemoryChainCheck 
 	require.NoError(t, err)
 	require.True(t, p2OnMain, "precondition: the store reports P2 on the main chain")
 
-	// Build bv on an already cancelled context, so its background workers exit at once and do not
-	// run setTxMined behind the test's back. ValidateBlock does not use this context.
-	bvCtx, bvCancel := context.WithCancel(ctx)
-	bvCancel()
-
-	bv := NewBlockValidation(bvCtx, logger, tSettings, spy, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
-	t.Cleanup(bv.StopCaches)
-
 	return &forkParentFixture{
-		bv:              bv,
-		spy:             spy,
+		bv:              stores.newBlockValidation(ctx, t),
+		spy:             stores.spy,
 		blockF:          blockF,
-		childTxHash:     *childTx.TxIDChainHash(),
+		childTxHash:     childTxHash,
 		fundingBlockID:  fundingMeta.ID,
 		p2ID:            p2Meta.ID,
 		blockchainStore: realClient,
@@ -269,7 +355,7 @@ func TestCheckOldBlockIDs_RejectsForkBlockSpendingParentMinedOnlyOnOtherBranch(t
 
 			err := fx.bv.checkOldBlockIDs(ctx, oldBlockIDsMap, fx.blockF)
 
-			require.Error(t, err, "fork block F was accepted although its transaction spends an output mined only in P2 (block id %d), which is not in F's history; CheckBlockIsInCurrentChain calls: %s",
+			require.Error(t, err, "fork block F was accepted although its transaction spends an output mined only in P2 (block id %d), which is not in F's history; chain calls: %s",
 				fx.p2ID, describeChainCheckCalls(fx.spy.recorded()))
 			require.ErrorIs(t, err, errors.ErrBlockInvalid)
 			require.Contains(t, err.Error(), "are not from current chain")
@@ -290,7 +376,7 @@ func TestValidateBlock_RejectsForkBlockSpendingParentMinedOnlyOnOtherBranch(t *t
 
 			err := fx.bv.ValidateBlock(ctx, fx.blockF, "test", true)
 
-			require.Error(t, err, "fork block F was accepted although its transaction spends an output mined only in P2 (block id %d), which is not in F's history; CheckBlockIsInCurrentChain calls: %s",
+			require.Error(t, err, "fork block F was accepted although its transaction spends an output mined only in P2 (block id %d), which is not in F's history; chain calls: %s",
 				fx.p2ID, describeChainCheckCalls(fx.spy.recorded()))
 			require.ErrorIs(t, err, errors.ErrBlockInvalid)
 			require.Contains(t, err.Error(), "are not from current chain")
@@ -351,19 +437,61 @@ func TestValidateBlock_AcceptsBlockSpendingParentMinedDeepOnItsOwnFork(t *testin
 	}
 }
 
-func describeChainCheckCalls(calls []chainCheckCall) string {
-	if len(calls) == 0 {
-		return "none"
+// TestValidateBlock_AcceptsMainChainBlockSpendingParentMinedPastThePrefetchWindow covers a parent
+// mined deeper than the prefetch route's 10,000-ID window. The main chain is genesis - B1 .. B10002,
+// T is mined in B1, and block C on B10002 spends it. B1 is C's own ancestor, so C is valid. B1 is
+// outside both the header window block.Valid checks and the prefetch window, so both routes must
+// resolve it with the ancestor lookup and accept C.
+func TestValidateBlock_AcceptsMainChainBlockSpendingParentMinedPastThePrefetchWindow(t *testing.T) {
+	const chainLength = uint32(10_002)
+
+	for _, route := range forkParentRoutes {
+		t.Run(route.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			stores := newParentCheckStores(ctx, t, route.inMemoryChainCheck)
+
+			// One minute apart, ending in the past, so every block passes median-time-past.
+			baseTime := uint32(time.Now().Add(-time.Duration(chainLength+10) * time.Minute).Unix()) //nolint:gosec
+
+			parent := stores.settings.ChainCfgParams.GenesisHash
+
+			var blockB1 *model.Block
+
+			for height := uint32(1); height <= chainLength; height++ {
+				b := ancestorVerdictCoinbaseOnlyBlockAt(t, parent, height, baseTime+height*60)
+				require.NoError(t, stores.client.AddBlock(ctx, b, "test"))
+
+				if height == 1 {
+					blockB1 = b
+				}
+
+				parent = b.Hash()
+			}
+
+			_, b1Meta, err := stores.client.GetBlockHeader(ctx, blockB1.Hash())
+			require.NoError(t, err)
+
+			childHeight := chainLength + 1
+			blockC, _ := stores.buildBlockSpendingFrom(ctx, t, b1Meta, parent, childHeight, baseTime+childHeight*60)
+			require.NoError(t, stores.client.SetBlockMinedSet(ctx, parent))
+
+			window, err := stores.client.GetBlockHeaderIDs(ctx, parent, 10_000)
+			require.NoError(t, err)
+			require.NotContains(t, window, b1Meta.ID, "precondition: B1 is outside the prefetch window")
+
+			bv := stores.newBlockValidation(ctx, t)
+
+			require.NoError(t, bv.ValidateBlock(ctx, blockC, "test", true), "a main-chain block spending a parent mined past the prefetch window was rejected; chain calls: %s",
+				describeChainCheckCalls(stores.spy.recorded()))
+
+			// Both routes reached the ancestor lookup for B1, anchored at C's parent.
+			ancestorCalls := stores.spy.ancestorCalls()
+			require.Len(t, ancestorCalls, 1, "chain calls: %s", describeChainCheckCalls(stores.spy.recorded()))
+			require.Equal(t, []uint32{b1Meta.ID}, ancestorCalls[0].blockIDs)
+			require.Equal(t, parent.String(), ancestorCalls[0].anchor.String())
+			require.True(t, ancestorCalls[0].answer)
+		})
 	}
-
-	out := ""
-	for i, c := range calls {
-		if i > 0 {
-			out += ", "
-		}
-
-		out += fmt.Sprintf("%v -> onMainChain=%t", c.blockIDs, c.onChain)
-	}
-
-	return out
 }
