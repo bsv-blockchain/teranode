@@ -571,11 +571,17 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %v", batchID, err)
 
+		var batchErr error = err
+		if aeErr, isAeErr := err.(aerospike.Error); isAeErr && aeErr.IsInDoubt() {
+			// The write may have committed; see inDoubtCreateError.
+			batchErr = inDoubtCreateError(err)
+		}
+
 		for idx, bItem := range batch {
 			if resultHandledElsewhere[idx] {
 				continue
 			}
-			bItem.complete(err)
+			bItem.complete(batchErr)
 		}
 
 		// MUST return here. The previous code fell through to the per-record loop
@@ -630,6 +636,11 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			// and KEY_NOT_FOUND_ERROR on a real BatchWrite (which is NOT a NOOP) — must
 			// be surfaced. Previously the SafeSend was nested inside the type-asserted
 			// branch and a non-matching error left the caller hung on <-errCh.
+			if batchRecord.BatchRec().InDoubt {
+				batch[idx].complete(inDoubtCreateError(err))
+				continue
+			}
+
 			batch[idx].complete(errors.NewStorageError("[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d", batch[idx].txHash.String(), idx, batchID, err))
 			continue
 		}
@@ -1498,4 +1509,13 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 	}
 
 	return nil
+}
+
+// inDoubtCreateError wraps a create write the client reports in doubt: it was
+// sent and may have committed on the server. utxo.SequentialSpendAndCreate
+// unspends the inputs of a create that failed for certain, which for a write
+// that did commit leaves a stored transaction with live inputs that nothing
+// heals. Marked outcome-unknown, the spends stay, as for a context error.
+func inDoubtCreateError(err error) error {
+	return utxo.MarkCreateOutcomeUnknown(errors.NewStorageError("aerospike create write is in doubt and may have committed", err))
 }

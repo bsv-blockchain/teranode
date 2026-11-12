@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
@@ -324,5 +325,60 @@ func TestSendStoreBatch_PanicCompletesGroup(t *testing.T) {
 
 	for i, item := range batch {
 		require.Error(t, item.result, "item %d: panic sweep must complete each item with an error", i)
+	}
+}
+
+// TestSendStoreBatch_InDoubtWriteLeavesOutcomeUnknown checks that a batch write
+// the client reports in doubt reaches the caller marked outcome-unknown. The
+// write may have committed, and utxo.SequentialSpendAndCreate unspends the
+// inputs of any create that failed for certain: an in-doubt write reported as
+// a plain error would leave a stored transaction with its inputs live again. A
+// write that never reached the server stays a plain failure.
+func TestSendStoreBatch_InDoubtWriteLeavesOutcomeUnknown(t *testing.T) {
+	inDoubt := &aerospike.AerospikeError{ResultCode: types.TIMEOUT, InDoubt: true}
+	notSent := &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+
+	cases := []struct {
+		name        string
+		topLevel    aerospike.Error
+		perRecord   aerospike.Error
+		wantUnknown bool
+	}{
+		{name: "top-level error in doubt", topLevel: inDoubt, wantUnknown: true},
+		{name: "top-level error not sent", topLevel: notSent},
+		{name: "top-level const network error", topLevel: aerospike.ErrNetwork},
+		{name: "per-record error in doubt", perRecord: inDoubt, wantUnknown: true},
+		{name: "per-record error not sent", perRecord: notSent},
+		{name: "per-record const timeout", perRecord: aerospike.ErrTimeout},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestStoreForSendStoreBatch(t)
+
+			s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+				if tc.perRecord != nil {
+					for _, rec := range records {
+						rec.BatchRec().Err = tc.perRecord
+						rec.BatchRec().InDoubt = tc.perRecord.IsInDoubt()
+					}
+				}
+
+				return tc.topLevel
+			}
+
+			group := completion.NewGroup(1)
+			tx := txWithSingleOutput(t)
+			batch := []*BatchStoreItem{
+				NewBatchStoreItem(tx.TxIDChainHash(), false, tx, 100, nil, 0, group),
+			}
+
+			s.sendStoreBatch(batch)
+
+			requireGroupCompleted(t, group, 2*time.Second)
+			require.Error(t, batch[0].result)
+			require.False(t, errors.Is(batch[0].result, errors.ErrTxExists))
+			require.Equal(t, tc.wantUnknown, utxo.IsCreateOutcomeUnknown(batch[0].result), "result: %v", batch[0].result)
+		})
 	}
 }

@@ -62,6 +62,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -3818,4 +3819,46 @@ func TestPreviousOutputsDecorate_MissingParentIsTxNotFound(t *testing.T) {
 
 	require.Error(t, err)
 	require.ErrorIs(t, err, errors.ErrTxNotFound)
+}
+
+// sentBeforeWriteErr is an error pgconn.SafeToRetry accepts: one returned
+// before any bytes of the write reached the server.
+type sentBeforeWriteErr struct{}
+
+func (sentBeforeWriteErr) Error() string     { return "failed before sending" }
+func (sentBeforeWriteErr) SafeToRetry() bool { return true }
+
+// wrappedErr wraps a driver error the way pgx wraps the errors it returns.
+type wrappedErr struct{ cause error }
+
+func (w wrappedErr) Error() string { return "batch: " + w.cause.Error() }
+func (w wrappedErr) Unwrap() error { return w.cause }
+
+// TestPgCreateError checks which Postgres create failures leave the create's
+// outcome unknown. A lost connection or reply can come after the batch's
+// implicit transaction committed, and utxo.SequentialSpendAndCreate must then
+// keep the spends rather than unspend the inputs of a stored transaction. An
+// error the server reported rolled the transaction back, and one returned
+// before anything was sent wrote nothing, so for those the unspend stays right.
+func TestPgCreateError(t *testing.T) {
+	cases := []struct {
+		name        string
+		cause       error
+		wantUnknown bool
+	}{
+		{name: "server reported error", cause: &pgconn.PgError{Code: "23505"}},
+		{name: "server error wrapped", cause: wrappedErr{&pgconn.PgError{Code: "40001"}}},
+		{name: "failed before sending", cause: sentBeforeWriteErr{}},
+		{name: "connection lost after sending", cause: errors.NewStorageError("unexpected EOF"), wantUnknown: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := pgCreateError(errors.NewStorageError("batch close failed, results may not be visible", tc.cause), tc.cause)
+
+			require.Error(t, err)
+			require.Equal(t, tc.wantUnknown, utxo.IsCreateOutcomeUnknown(err))
+			require.True(t, errors.Is(err, errors.ErrStorageError), "the storage error must survive the marking: %v", err)
+		})
+	}
 }

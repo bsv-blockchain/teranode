@@ -617,10 +617,35 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 	}
 
 	if err = txn.Commit(); err != nil {
+		if s.engine == string(util.Postgres) {
+			return nil, pgCreateError(errors.NewStorageError("failed to commit the create", err), err)
+		}
+
 		return nil, err
 	}
 
 	return txMeta, nil
+}
+
+// pgCreateError returns err for a Postgres create write that failed with cause,
+// marked outcome-unknown unless cause proves the write did not commit. A pgx
+// batch runs as one implicit transaction, committed when its results are read
+// to the end, so a create that reported its row inserted is not committed
+// until br.Close returns. Two failures are certain: an error the server
+// reported, which rolls the transaction back, and one pgconn says happened
+// before anything was sent. Any other failure, a dropped connection or a lost
+// reply, can come after the commit. utxo.SequentialSpendAndCreate unspends the
+// inputs of a create that failed for certain, and doing that for a create that
+// committed leaves a stored transaction with live inputs that nothing heals.
+// Marked outcome-unknown, the spends stay, as for a context error, until a
+// repeat of the write finds the record or creates it.
+func pgCreateError(err *errors.Error, cause error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(cause, &pgErr) || pgconn.SafeToRetry(cause) {
+		return err
+	}
+
+	return utxo.MarkCreateOutcomeUnknown(err)
 }
 
 // unspendableMinedTxDAH returns the delete_at_height to assign at creation time
@@ -1200,7 +1225,7 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 			}
 			if queryErr != nil {
 				results = append(results, batchResult{idx: idx, result: batchCreateResult{
-					Err: errors.NewStorageError("Failed to create UTXO", queryErr),
+					Err: pgCreateError(errors.NewStorageError("Failed to create UTXO", queryErr), queryErr),
 				}, logError: true})
 			} else if !inserted {
 				// ON CONFLICT (hash) DO NOTHING — new_tx returned 0 rows, tx already exists
@@ -1224,7 +1249,7 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 		for _, r := range results {
 			if closeErr != nil && r.result.Err == nil {
 				batch[r.idx].done <- batchCreateResult{
-					Err: errors.NewStorageError("batch close failed, results may not be visible", closeErr),
+					Err: pgCreateError(errors.NewStorageError("batch close failed, results may not be visible", closeErr), closeErr),
 				}
 				continue
 			}
