@@ -87,6 +87,7 @@ const (
 	errOutputNotFound           = "output %s:%d not found"
 	errFailedCreateSpendingData = "failed to create spending data from bytes"
 	errSQLUpdatingTransactions  = "SQL error updating transactions: %v"
+	errSpendUtxoFrozen          = "[Spend] utxo is frozen for %s:%d"
 )
 
 // batchSpend represents a single UTXO spend request in a batch.
@@ -2793,7 +2794,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		}
 
 		if r.frozen {
-			validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+			validationErrors[i] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
 			continue
 		}
 		if r.conflicting && !item.ignoreConflicting {
@@ -3154,7 +3155,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			if !updatedSet[u.batchIdx] {
 				spend := batch[u.batchIdx].spend
 				if frozenSet[u.batchIdx] {
-					validationErrors[u.batchIdx] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+					validationErrors[u.batchIdx] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
 					continue
 				}
 				validationErrors[u.batchIdx] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
@@ -3360,7 +3361,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 
 		// Validate the UTXO state
 		if frozen {
-			validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+			validationErrors[i] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
 			continue
 		}
 
@@ -3456,7 +3457,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 			}
 
 			if currentFrozen && len(currentSpendingData) == 0 {
-				validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+				validationErrors[i] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
 				continue
 			}
 
