@@ -112,19 +112,6 @@ type ForkCleanupConfig struct {
 	CheckInterval    time.Duration
 }
 
-// ForkResolution represents a resolved fork
-type ForkResolution struct {
-	ForkID       string
-	ResolvedAt   time.Time
-	ResolvedTo   string
-	FinalBlock   *chainhash.Hash
-	FinalHeight  uint32
-	BlocksInFork int
-}
-
-// ForkResolutionCallback is called when a fork is resolved
-type ForkResolutionCallback func(resolution *ForkResolution)
-
 // DefaultForkCleanupConfig returns default cleanup settings
 func DefaultForkCleanupConfig() ForkCleanupConfig {
 	return ForkCleanupConfig{
@@ -136,21 +123,18 @@ func DefaultForkCleanupConfig() ForkCleanupConfig {
 }
 
 type ForkManager struct {
-	logger              ulogger.Logger
-	settings            *settings.Settings
-	forks               map[string]*ForkBranch
-	blockToFork         map[chainhash.Hash]string
-	processingBlocks    map[chainhash.Hash]bool
-	processingPriority  map[chainhash.Hash]BlockPriority // class each processing block was queued with
-	mu                  sync.RWMutex
-	maxParallelForks    int
-	maxTrackedForks     int
-	priorityQueue       condBroadcaster
-	cleanupConfig       ForkCleanupConfig
-	mainChainTip        *chainhash.Hash
-	mainChainHeight     uint32
-	resolutionCallbacks []ForkResolutionCallback
-	processingCount     atomic.Int32 // Atomic counter for fast-path checking
+	logger             ulogger.Logger
+	settings           *settings.Settings
+	forks              map[string]*ForkBranch
+	blockToFork        map[chainhash.Hash]string
+	processingBlocks   map[chainhash.Hash]bool
+	processingPriority map[chainhash.Hash]BlockPriority // class each processing block was queued with
+	mu                 sync.RWMutex
+	maxParallelForks   int
+	maxTrackedForks    int
+	priorityQueue      condBroadcaster
+	cleanupConfig      ForkCleanupConfig
+	processingCount    atomic.Int32 // Atomic counter for fast-path checking
 	// validating reports a block being validated outside the queue (catchup, gRPC, legacy sync),
 	// which never takes a worker slot. Nil until SetValidatingCheck.
 	validating func(*chainhash.Hash) bool
@@ -174,16 +158,15 @@ func NewForkManagerWithConfig(logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	return &ForkManager{
-		logger:              logger,
-		settings:            tSettings,
-		forks:               make(map[string]*ForkBranch),
-		blockToFork:         make(map[chainhash.Hash]string),
-		processingBlocks:    make(map[chainhash.Hash]bool),
-		processingPriority:  make(map[chainhash.Hash]BlockPriority),
-		maxParallelForks:    maxParallelForks,
-		maxTrackedForks:     maxTrackedForks,
-		cleanupConfig:       cleanupConfig,
-		resolutionCallbacks: make([]ForkResolutionCallback, 0),
+		logger:             logger,
+		settings:           tSettings,
+		forks:              make(map[string]*ForkBranch),
+		blockToFork:        make(map[chainhash.Hash]string),
+		processingBlocks:   make(map[chainhash.Hash]bool),
+		processingPriority: make(map[chainhash.Hash]BlockPriority),
+		maxParallelForks:   maxParallelForks,
+		maxTrackedForks:    maxTrackedForks,
+		cleanupConfig:      cleanupConfig,
 	}
 }
 
@@ -827,69 +810,6 @@ func (fm *ForkManager) applyRetentionPolicy(candidates []*ForkBranch) []*ForkBra
 	return result
 }
 
-// OnForkResolution registers a callback for fork resolution events
-func (fm *ForkManager) OnForkResolution(callback ForkResolutionCallback) {
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-
-	fm.resolutionCallbacks = append(fm.resolutionCallbacks, callback)
-}
-
-// CheckForkResolution checks if a fork has been resolved after block processing
-func (fm *ForkManager) CheckForkResolution(ctx context.Context, processedBlock *model.Block, newMainChainTip *chainhash.Hash, newMainChainHeight uint32) {
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-
-	previousTip := fm.mainChainTip
-	fm.mainChainTip = newMainChainTip
-	fm.mainChainHeight = newMainChainHeight
-
-	forkID, exists := fm.blockToFork[*processedBlock.Hash()]
-	if !exists {
-		return
-	}
-
-	fork, exists := fm.forks[forkID]
-	if !exists {
-		return
-	}
-
-	if processedBlock.Hash().IsEqual(newMainChainTip) {
-		fm.handleForkResolution(fork, "main", processedBlock)
-		fm.checkOrphanedForks(newMainChainHeight)
-	}
-
-	_ = previousTip
-}
-
-// handleForkResolution marks a fork as resolved and notifies callbacks
-func (fm *ForkManager) handleForkResolution(fork *ForkBranch, resolvedTo string, finalBlock *model.Block) {
-	fm.logger.Infof("Fork %s resolved to %s at height %d with %d blocks", fork.ID, resolvedTo, finalBlock.Height, len(fork.Blocks))
-
-	fork.State = ForkStateResolved
-	fork.LastActivity = time.Now()
-
-	resolution := &ForkResolution{
-		ForkID:       fork.ID,
-		ResolvedAt:   time.Now(),
-		ResolvedTo:   resolvedTo,
-		FinalBlock:   finalBlock.Hash(),
-		FinalHeight:  finalBlock.Height,
-		BlocksInFork: len(fork.Blocks),
-	}
-
-	for _, callback := range fm.resolutionCallbacks {
-		go callback(resolution)
-	}
-
-	if prometheusForkResolved != nil {
-		prometheusForkResolved.WithLabelValues(resolvedTo).Inc()
-	}
-	if prometheusForkResolutionDepth != nil {
-		prometheusForkResolutionDepth.Observe(float64(len(fork.Blocks)))
-	}
-}
-
 // updateProcessingBlocksMetrics tracks blocks that may be stuck in processing state
 func (fm *ForkManager) updateProcessingBlocksMetrics() {
 	if prometheusProcessingBlocksStuck == nil {
@@ -940,26 +860,4 @@ func (fm *ForkManager) updateAggregateMetrics() {
 	}
 
 	prometheusForkLongestDepth.Set(float64(longestDepth))
-}
-
-// checkOrphanedForks marks forks as orphaned if they're too far behind the main chain
-func (fm *ForkManager) checkOrphanedForks(newMainHeight uint32) {
-	orphanThreshold := uint32(fm.settings.ChainCfgParams.CoinbaseMaturity)
-
-	for _, fork := range fm.forks {
-		if fork.State != ForkStateActive {
-			continue
-		}
-
-		if newMainHeight > fork.BaseHeight+orphanThreshold {
-			fm.logger.Warnf("Fork %s potentially orphaned (base: %d, main: %d)", fork.ID, fork.BaseHeight, newMainHeight)
-
-			fork.State = ForkStateOrphaned
-			fork.LastActivity = time.Now()
-
-			if prometheusOrphanedForks != nil {
-				prometheusOrphanedForks.Inc()
-			}
-		}
-	}
 }

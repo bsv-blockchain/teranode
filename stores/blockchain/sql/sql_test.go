@@ -1,12 +1,17 @@
 package sql
 
 import (
+	"context"
+	"net/url"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -106,4 +111,28 @@ func assertRegtestGenesis(t *testing.T, blockHeader *model.BlockHeader) {
 	assert.Equal(t, uint32(1296688602), blockHeader.Timestamp)
 	assert.Equal(t, []byte{0xff, 0xff, 0x7f, 0x20}, blockHeader.Bits.CloneBytes())
 	assert.Equal(t, uint32(2), blockHeader.Nonce)
+}
+
+// A SQLite database created by an older version still carries idx_inserted_at, which
+// served only the removed GetBlocksByTime. Running the schema setup again must drop it.
+func TestCreateSqliteSchema_DropsRetiredIndex(t *testing.T) {
+	storeURL, err := url.Parse("sqlitememory:///drop_retired_index")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	db := s.GetDB()
+
+	_, err = db.Exec(`CREATE INDEX idx_inserted_at ON blocks (inserted_at)`)
+	require.NoError(t, err)
+
+	require.NoError(t, createSqliteSchema(db))
+
+	var count int
+	require.NoError(t, db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_inserted_at'`,
+	).Scan(&count))
+	require.Zero(t, count, "idx_inserted_at must be dropped")
 }

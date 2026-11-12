@@ -580,10 +580,16 @@ var (
 		"idx_not_persisted_height",
 		"idx_height",
 		"idx_parent_id",
-		"idx_inserted_at",
 		"idx_invalid_height",
 		"idx_on_main_chain_height",
 		"idx_off_main_chain",
+	}
+
+	// blockchainSchemaRetiredIndexes are indexes the withIndexes branch drops.
+	// While one still exists the schema is not current, so the DDL sequence
+	// runs once on an existing database and its DROP INDEX removes it.
+	blockchainSchemaRetiredIndexes = []string{
+		"idx_inserted_at",
 	}
 )
 
@@ -664,6 +670,22 @@ func isBlockchainSchemaCurrent(db *usql.DB, withIndexes bool) (bool, error) {
 		}
 		if !exists {
 			return false, nil
+		}
+	}
+
+	// Any retired index still present?
+	if withIndexes {
+		for _, idx := range blockchainSchemaRetiredIndexes {
+			var exists bool
+			if err := db.QueryRow(
+				`SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = $1 AND relkind = 'i')`,
+				idx,
+			).Scan(&exists); err != nil {
+				return false, err
+			}
+			if exists {
+				return false, nil
+			}
 		}
 	}
 
@@ -838,6 +860,11 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 			_ = db.Close()
 			return errors.NewStorageError("could not drop idx_persisted_at index", err)
 		}
+		// idx_inserted_at served only GetBlocksByTime, which has been removed
+		if _, err := db.Exec(`DROP INDEX IF EXISTS idx_inserted_at;`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not drop idx_inserted_at index", err)
+		}
 
 		// === CHAIN WORK INDEXES ===
 		// Primary index for best block queries without invalid filter
@@ -887,13 +914,6 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_parent_id ON blocks (parent_id);`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not create idx_parent_id index", err)
-		}
-
-		// === TIME-BASED INDEXES ===
-		// Index for GetBlocksByTime query: WHERE inserted_at >= x AND inserted_at <= y
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_inserted_at ON blocks (inserted_at);`); err != nil {
-			_ = db.Close()
-			return errors.NewStorageError("could not create idx_inserted_at index", err)
 		}
 
 		// === INVALID BLOCKS INDEX ===
@@ -1149,6 +1169,11 @@ func createSqliteSchema(db *usql.DB) error {
 		_ = db.Close()
 		return errors.NewStorageError("could not drop idx_persisted_at index", err)
 	}
+	// idx_inserted_at served only GetBlocksByTime, which has been removed
+	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_inserted_at;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not drop idx_inserted_at index", err)
+	}
 
 	// === CHAIN WORK INDEXES ===
 	// Primary index for best block queries without invalid filter
@@ -1198,13 +1223,6 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_parent_id ON blocks (parent_id);`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_parent_id index", err)
-	}
-
-	// === TIME-BASED INDEXES ===
-	// Index for GetBlocksByTime query: WHERE inserted_at >= x AND inserted_at <= y
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_inserted_at ON blocks (inserted_at);`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create idx_inserted_at index", err)
 	}
 
 	// === INVALID BLOCKS INDEX ===

@@ -432,10 +432,8 @@ stores/blockchain
     ├── GetBlockStats.go
     ├── GetBlock_test.go
     ├── GetBlocks.go
-    ├── GetBlocksByTime.go
     ├── GetBlocksMinedNotSet.go
     ├── GetBlocksSubtreesNotSet.go
-    ├── GetForkedBlockHeaders.go
     ├── GetHashOfAncestorBlock.go
     ├── GetHashOfAncestorBlock_test.go
     ├── GetHeader.go
