@@ -645,11 +645,23 @@ func (d *Daemon) closeStores(logger ulogger.Logger) {
 }
 
 func (d *Daemon) shouldStart(app string, args []string) bool {
+	if !serviceEnabled(app, args) {
+		return false
+	}
+
+	d.appCount++
+
+	return true
+}
+
+// serviceEnabled reports whether app is switched on, by the command line first and the
+// config second. It is shouldStart without the app count, so code that runs before the
+// Daemon exists (GC tuning) can ask which services this process will host.
+func serviceEnabled(app string, args []string) bool {
 	// See if the app is enabled in the command line
 	cmdArg := fmt.Sprintf("-%s=1", strings.ToLower(app))
 	for _, cmd := range args {
 		if cmd == cmdArg {
-			d.appCount++
 			return true
 		}
 	}
@@ -673,12 +685,7 @@ func (d *Daemon) shouldStart(app string, args []string) bool {
 	// If the app was not specified on the command line, see if it is enabled in the config
 	varArg := fmt.Sprintf("start%s", app)
 
-	b := gocore.Config().GetBool(varArg)
-	if b {
-		d.appCount++
-	}
-
-	return b
+	return gocore.Config().GetBool(varArg)
 }
 
 // printUsage prints the usage information for the Daemon command line options.
