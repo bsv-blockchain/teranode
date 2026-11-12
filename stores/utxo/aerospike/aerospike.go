@@ -682,6 +682,17 @@ func (s *Store) GetClient() *uaerospike.Client {
 	return s.client
 }
 
+// CloseClient closes the Aerospike client and evicts it from the per-host
+// connection cache, without draining the store's batchers or closing its
+// external blob store. The test daemon uses it to emulate a crash. Evicting
+// matters: a later store for the same host, such as a restarted daemon, would
+// otherwise reuse the closed client and fail with INVALID_NODE_ERROR.
+func (s *Store) CloseClient() {
+	if s.client != nil {
+		util.CloseAerospikeClient(s.url.Host)
+	}
+}
+
 // GetNamespace returns the Aerospike namespace used by this store.
 // This method is safe to call concurrently.
 func (s *Store) GetNamespace() string {
