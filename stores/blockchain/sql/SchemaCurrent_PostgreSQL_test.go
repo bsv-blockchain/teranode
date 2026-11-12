@@ -284,3 +284,26 @@ func TestCreatePostgresSchema_DropsRetiredIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, current, "schema must be current once the retired index is gone")
 }
+
+// A failed DROP INDEX on the retired index must stop the schema setup with an
+// error rather than carry on. A table with the index's name makes Postgres refuse
+// the drop, because the name is not an index.
+func TestCreatePostgresSchema_RetiredIndexDropFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	_, err = db.Exec(`CREATE TABLE idx_inserted_at (id INTEGER)`)
+	require.NoError(t, err)
+
+	err = createPostgresSchemaUnlocked(db, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "could not drop idx_inserted_at index")
+}
