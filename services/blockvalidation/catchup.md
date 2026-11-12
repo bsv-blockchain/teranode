@@ -136,13 +136,13 @@ The `headers_from_common_ancestor` endpoint is central to the catchup process. U
 
 1. **Request Format**: The endpoint receives a block locator (list of block hashes) and returns headers starting from the common ancestor.
 
-2. **Response Format**: 
+2. **Response Format**:
    - The response MUST include the common ancestor as the first header
    - Followed by headers AFTER the common ancestor in oldest-to-newest order
    - This allows the receiver to verify the chain connection
 
 3. **Common Ancestor Finding**:
-   - The `FindCommonAncestor` function expects to find a match between the locator hashes and the returned headers
+   - `findCommonAncestor` in `catchup.go` expects to find a match between the locator hashes and the returned headers
    - The common ancestor MUST be present in the returned headers for the algorithm to work
    - After finding the common ancestor, headers are filtered to remove those already in the local chain
 

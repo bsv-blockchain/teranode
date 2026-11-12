@@ -124,7 +124,6 @@ func DefaultForkCleanupConfig() ForkCleanupConfig {
 
 type ForkManager struct {
 	logger             ulogger.Logger
-	settings           *settings.Settings
 	forks              map[string]*ForkBranch
 	blockToFork        map[chainhash.Hash]string
 	processingBlocks   map[chainhash.Hash]bool
@@ -159,7 +158,6 @@ func NewForkManagerWithConfig(logger ulogger.Logger, tSettings *settings.Setting
 
 	return &ForkManager{
 		logger:             logger,
-		settings:           tSettings,
 		forks:              make(map[string]*ForkBranch),
 		blockToFork:        make(map[chainhash.Hash]string),
 		processingBlocks:   make(map[chainhash.Hash]bool),
