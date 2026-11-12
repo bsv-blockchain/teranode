@@ -323,7 +323,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GRPCMaxRetries:                       getInt("blockassembly_grpcMaxRetries", 3, alternativeContext...),
 			GRPCRetryBackoff:                     getDuration("blockassembly_grpcRetryBackoff", 2*time.Second, alternativeContext...),
 			LocalDAHCache:                        getString("blockassembly_localDAHCache", "", alternativeContext...),
-			MaxBlockReorgCatchup:                 getInt("blockassembly_maxBlockReorgCatchup", 100, alternativeContext...),
 			MaxBlockReorgRollback:                getInt("blockassembly_maxBlockReorgRollback", 100, alternativeContext...),
 			MoveBackBlockConcurrency:             getInt("blockassembly_moveBackBlockConcurrency", 375, alternativeContext...),
 			ProcessRemainderTxHashesConcurrency:  getInt("blockassembly_processRemainderTxHashesConcurrency", 375, alternativeContext...),
@@ -740,6 +739,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ProcessTxMetaUsingCacheConcurrency:        getInt("subtreevalidation_processTxMetaUsingCache_Concurrency", 32, alternativeContext...),
 			PeerSubtreeConcurrency:                    getInt("subtreevalidation_peerSubtreeConcurrency", 32, alternativeContext...),
 			SkippedSubtreeBackfillMax:                 getInt("subtreevalidation_skippedSubtreeBackfillMax", 4096, alternativeContext...),
+			FailedSubtreeNegativeCacheTTL:             getDuration("subtreevalidation_failedSubtreeNegativeCacheTTL", 30*time.Second, alternativeContext...),
 			ProcessTxMetaUsingCacheMissingTxThreshold: getInt("subtreevalidation_processTxMetaUsingCache_MissingTxThreshold", 1, alternativeContext...),
 			SubtreeDAHConcurrency:                     getInt("subtreevalidation_subtreeDAHConcurrency", 8, alternativeContext...),
 			TxMetaCacheEnabled:                        getBool("subtreevalidation_txMetaCacheEnabled", true, alternativeContext...),
@@ -801,6 +801,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			AllowSyncCandidateFromLocalPeers: getBool("legacy_allowSyncCandidateFromLocalPeers", false, alternativeContext...),
 			TempStore:                        getURL("temp_store", "file://./data/tempstore", alternativeContext...),
 			PeerIdleTimeout:                  getDuration("legacy_peerIdleTimeout", 125*time.Second, alternativeContext...), // ping/pong interval is 2 mins, so we set this to 125s to be sure
+			PeerSendTimeout:                  getDuration("legacy_peerSendTimeout", 20*time.Minute, alternativeContext...),  // SV Node -p2ptimeout default
 			MaxAddnodePeers:                  getInt("legacy_maxAddnodePeers", 8, alternativeContext...),
 			ReplenishInterval:                getDuration("legacy_replenishInterval", 2*time.Second, alternativeContext...),
 			MaxFeelerPeers:                   getInt("legacy_maxFeelerPeers", 1, alternativeContext...),

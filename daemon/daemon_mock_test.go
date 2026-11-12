@@ -16,6 +16,9 @@ type mockService struct {
 	running     bool
 	startErr    error
 	stopErr     error
+	// blockUntilCancel makes Start behave like a long-running service: it
+	// signals ready, then blocks until its context is cancelled.
+	blockUntilCancel bool
 }
 
 // newMockService creates a new instance of mockService with the given name.
@@ -35,7 +38,7 @@ func (m *mockService) Init(_ context.Context) error {
 }
 
 // Start implements the servicemanager.Service interface for mockService.
-func (m *mockService) Start(_ context.Context, ready chan<- struct{}) error { // Corrected signature
+func (m *mockService) Start(ctx context.Context, ready chan<- struct{}) error { // Corrected signature
 	if m.startErr != nil {
 		return m.startErr
 	}
@@ -43,6 +46,12 @@ func (m *mockService) Start(_ context.Context, ready chan<- struct{}) error { //
 	m.running = true
 
 	close(ready) // Signal that the service is ready
+
+	if m.blockUntilCancel {
+		<-ctx.Done()
+
+		return ctx.Err()
+	}
 
 	return nil
 }

@@ -3,10 +3,14 @@ package aerospike_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
+	"runtime/metrics"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -286,4 +290,137 @@ func createRealisticTransaction(seed int) *bt.Tx {
 	}
 
 	return tx
+}
+
+var (
+	markAllocsOnce    sync.Once
+	markAllocsStore   utxo.Store
+	markAllocsCtx     context.Context
+	markAllocsHashes  []chainhash.Hash
+	markAllocsBallast []*ballastNode
+)
+
+// ballastNode is one object of the pointer-rich heap BenchmarkMarkTransactionsOnLongestChainAllocs can
+// hold, so the garbage collector has a large live graph to mark while the mark allocates.
+type ballastNode struct {
+	next, other *ballastNode
+	pad         [6]uint64
+}
+
+// BenchmarkMarkTransactionsOnLongestChainAllocs measures allocations per transaction and records a
+// second of MarkTransactionsOnLongestChain, off and on the longest chain, with the batch settings of
+// the scale environment (64 records a batch, 4096 routines). Run each sub-benchmark once per count:
+//
+//	DOCKER_HOST=... go test -run=^$ -bench=BenchmarkMarkTransactionsOnLongestChainAllocs -benchtime=1x -count=3 -timeout=60m ./stores/utxo/aerospike/
+//
+// LONGEST_CHAIN_BENCH_TXS sets the number of transactions (default 1,000,000). LONGEST_CHAIN_BENCH_ROUTINES
+// sets the routine count (default 4096); at scale each routine sends about a thousand batches, which 16
+// routines reproduces at 1,000,000 transactions. LONGEST_CHAIN_BENCH_BALLAST_MB
+// holds that many MB of pointer-rich live heap for the whole run; pair it with GOMEMLIMIT a little above
+// it so the collector runs continuously, as it does in block assembly.
+func BenchmarkMarkTransactionsOnLongestChainAllocs(b *testing.B) {
+	if testing.Short() {
+		b.Skip("Skipping production-scale benchmark in short mode")
+	}
+
+	markAllocsOnce.Do(func() {
+		count := envInt(b, "LONGEST_CHAIN_BENCH_TXS", 1_000_000)
+
+		tSettings := test.CreateBaseTestSettings(b)
+		tSettings.UtxoStore.MaxMinedBatchSize = 64
+		tSettings.UtxoStore.MaxMinedRoutines = envInt(b, "LONGEST_CHAIN_BENCH_ROUTINES", 4096)
+
+		store, ctx, _ := initAerospikeBench(b, tSettings, ulogger.NewErrorTestLogger(b))
+		markAllocsStore, markAllocsCtx = store, ctx
+		markAllocsHashes = createProductionLikeTransactions(b, ctx, store, count, 50_000_000)
+
+		if mb := envInt(b, "LONGEST_CHAIN_BENCH_BALLAST_MB", 0); mb > 0 {
+			n := mb << 20 / int(unsafe.Sizeof(ballastNode{}))
+			markAllocsBallast = make([]*ballastNode, n)
+
+			for i := range markAllocsBallast {
+				markAllocsBallast[i] = &ballastNode{}
+				if i > 0 {
+					markAllocsBallast[i].next = markAllocsBallast[i-1]
+					markAllocsBallast[i].other = markAllocsBallast[i/2]
+				}
+			}
+
+			b.Logf("holding %d MB of ballast in %d objects", mb, n)
+		}
+	})
+
+	for _, onLongestChain := range []bool{false, true} {
+		b.Run(fmt.Sprintf("onLongestChain=%t", onLongestChain), func(b *testing.B) {
+			count := len(markAllocsHashes)
+
+			runtime.GC()
+
+			var before, after runtime.MemStats
+
+			runtime.ReadMemStats(&before)
+			cpuBefore := readCPUClasses()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				require.NoError(b, markAllocsStore.MarkTransactionsOnLongestChain(markAllocsCtx, markAllocsHashes, onLongestChain))
+			}
+
+			b.StopTimer()
+			runtime.ReadMemStats(&after)
+			cpuAfter := readCPUClasses()
+
+			txs := float64(count * b.N)
+			b.ReportMetric(float64(after.Mallocs-before.Mallocs)/txs, "allocs/tx")
+			b.ReportMetric(float64(after.TotalAlloc-before.TotalAlloc)/txs, "B/tx")
+			b.ReportMetric(float64(after.NumGC-before.NumGC), "gc-cycles")
+			b.ReportMetric(txs/b.Elapsed().Seconds(), "tx/sec")
+
+			// Shares of the CPU time the process used during the mark (runtime/metrics CPU classes, total
+			// minus idle), comparable to the share of samples in a CPU profile.
+			if used := (cpuAfter[2] - cpuAfter[3]) - (cpuBefore[2] - cpuBefore[3]); used > 0 {
+				b.ReportMetric(100*(cpuAfter[0]-cpuBefore[0])/used, "gc-assist-%")
+				b.ReportMetric(100*(cpuAfter[1]-cpuBefore[1])/used, "gc-total-%")
+			}
+		})
+	}
+
+	runtime.KeepAlive(markAllocsBallast)
+}
+
+func envInt(b *testing.B, name string, def int) int {
+	b.Helper()
+
+	v := os.Getenv(name)
+	if v == "" {
+		return def
+	}
+
+	n, err := strconv.Atoi(v)
+	require.NoError(b, err, name)
+
+	return n
+}
+
+// readCPUClasses returns the process's GC assist, total GC, total available and idle CPU seconds so far.
+// The runtime updates these at each GC cycle, so a run without a cycle reports no GC share.
+func readCPUClasses() [4]float64 {
+	samples := []metrics.Sample{
+		{Name: "/cpu/classes/gc/mark/assist:cpu-seconds"},
+		{Name: "/cpu/classes/gc/total:cpu-seconds"},
+		{Name: "/cpu/classes/total:cpu-seconds"},
+		{Name: "/cpu/classes/idle:cpu-seconds"},
+	}
+
+	metrics.Read(samples)
+
+	var out [4]float64
+
+	for i, sample := range samples {
+		if sample.Value.Kind() == metrics.KindFloat64 {
+			out[i] = sample.Value.Float64()
+		}
+	}
+
+	return out
 }

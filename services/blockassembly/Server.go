@@ -1262,15 +1262,12 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 
 	ba.logger.Debugf("[AddTx] added tx %s to block assembler", chainhash.Hash(req.Txid).String())
 
-	var txInpoints subtreepkg.TxInpoints
-	if ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
-		txInpoints, err = subtreepkg.NewTxInpointsFromBytes(req.TxInpoints)
-		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewProcessingError("unable to deserialize tx inpoints", err))
-		}
-	} else {
-		// Create empty TxInpoints if not storing for subtree meta
-		txInpoints = subtreepkg.TxInpoints{}
+	// the parent links are kept whatever blockassembly_storeTxInpointsForSubtreeMeta says: the
+	// descendant cascades read them to take a removed tx's children out of block assembly. The
+	// setting only decides whether subtree meta files are written.
+	txInpoints, err := subtreepkg.NewTxInpointsFromBytes(req.TxInpoints)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("unable to deserialize tx inpoints", err))
 	}
 
 	if !ba.settings.BlockAssembly.Disabled {
@@ -1546,8 +1543,6 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	txInpointsArr := make([]subtreepkg.TxInpoints, len(requests))
 	txInpointsList := make([]*subtreepkg.TxInpoints, len(requests))
 
-	storeTxInpoints := ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta
-
 	for i, req := range requests {
 		if len(req.Txid) != 32 {
 			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid txid length at index %d: %d", i, len(req.Txid)))
@@ -1559,16 +1554,13 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 			SizeInBytes: req.Size,
 		}
 
-		if storeTxInpoints {
-			ti, err := subtreepkg.NewTxInpointsFromBytes(req.TxInpoints)
-			if err != nil {
-				return nil, errors.WrapGRPC(errors.NewProcessingError("unable to deserialize tx inpoints", err))
-			}
-
-			txInpointsArr[i] = ti
+		// kept in every mode, as in AddTx
+		ti, err := subtreepkg.NewTxInpointsFromBytes(req.TxInpoints)
+		if err != nil {
+			return nil, errors.WrapGRPC(errors.NewProcessingError("unable to deserialize tx inpoints", err))
 		}
-		// else: txInpointsArr[i] stays zero-valued — the empty TxInpoints
-		// behaviour for callers that do not need parent inpoints stored.
+
+		txInpointsArr[i] = ti
 
 		txInpointsList[i] = &txInpointsArr[i]
 	}
@@ -1732,8 +1724,6 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 		)
 	}
 
-	storeTxInpoints := ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta
-
 	for i := 0; i < txCount; i++ {
 		// Extract TXID (32 bytes) — no allocation, copy into the Node.
 		txidStart := i * 32
@@ -1743,16 +1733,12 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 			SizeInBytes: req.Sizes[i],
 		}
 
-		if storeTxInpoints {
-			// Two slice operations per tx: parent hashes and packed voutIdxs.
-			// Bounds are guaranteed by the offset-array validation above, so
-			// these slice expressions cannot panic.
-			parentSlice := parents[req.ParentTxOffsets[i]:req.ParentTxOffsets[i+1]]
-			voutSlice := req.VoutIdxsPacked[req.VoutIdxsTxOffsets[i]:req.VoutIdxsTxOffsets[i+1]]
-			txInpointsArr[i] = subtreepkg.NewTxInpointsFromPacked(parentSlice, voutSlice)
-		}
-		// else: txInpointsArr[i] is the zero-value TxInpoints, which is the
-		// desired behaviour when not storing inpoints for subtree meta.
+		// Kept in every mode, as in AddTx. Two slice operations per tx: parent
+		// hashes and packed voutIdxs. Bounds are guaranteed by the offset-array
+		// validation above, so these slice expressions cannot panic.
+		parentSlice := parents[req.ParentTxOffsets[i]:req.ParentTxOffsets[i+1]]
+		voutSlice := req.VoutIdxsPacked[req.VoutIdxsTxOffsets[i]:req.VoutIdxsTxOffsets[i+1]]
+		txInpointsArr[i] = subtreepkg.NewTxInpointsFromPacked(parentSlice, voutSlice)
 
 		txInpointsList[i] = &txInpointsArr[i]
 	}
@@ -3069,8 +3055,10 @@ func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *
 			Bits:           nbits,
 			Nonce:          0,
 		},
-		CoinbaseTx:       coinbaseTx,
-		TransactionCount: uint64(candidate.NumTxs),
+		CoinbaseTx: coinbaseTx,
+		// NumTxs leaves the coinbase out, and the block's count includes it. An empty candidate
+		// carries 0, which block validation rejects on a body with no subtrees.
+		TransactionCount: uint64(candidate.NumTxs) + 1,
 		SizeInBytes:      candidate.GetSizeWithoutCoinbase() + coinbaseSizeUint64,
 		Subtrees:         subtreeHashes,
 		Height:           candidate.Height,

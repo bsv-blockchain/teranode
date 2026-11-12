@@ -1635,9 +1635,26 @@ func TestBlockValidation_IncompleteBlockNilCoinbase(t *testing.T) {
 			coinbaseTx:  nil,
 			expectError: "coinbase tx is nil or empty",
 		},
-		// A present coinbase with no inputs is not an absent coinbase: BV-BODY-005 reserves
-		// ErrBlockIncomplete for the absent one. Its class is GAP-BV-046 and is asserted by
-		// TestKnownDefect_InputlessCoinbaseOnUnboundBody_IsCorruptNotIncomplete (bvgaps).
+		{
+			name:        "Coinbase with nil inputs returns ErrBlockIncomplete",
+			coinbaseTx:  &bt.Tx{Inputs: nil},
+			expectError: "coinbase tx is nil or empty",
+		},
+		{
+			name:        "Coinbase with empty inputs returns ErrBlockIncomplete",
+			coinbaseTx:  &bt.Tx{Inputs: []*bt.Input{}},
+			expectError: "coinbase tx is nil or empty",
+		},
+		{
+			// A stand-in coinbase: outputs but no input. The header does not commit to it, so it
+			// is missing data from the peer, not a miner's invalid coinbase.
+			name:        "Output-only coinbase the header does not commit to returns ErrBlockIncomplete",
+			coinbaseTx:  &bt.Tx{Outputs: []*bt.Output{{Satoshis: 50 * 100_000_000, LockingScript: &bscript.Script{0x51}}}},
+			expectError: "coinbase tx is nil or empty",
+		},
+		// A zero-input coinbase on a body that carries subtrees is not missing data: the merkle
+		// check over the subtrees judges it. TestCoinbaseNotDelivered_ZeroInputOnSubtreeBody covers
+		// that shape.
 	}
 
 	for _, tt := range tests {
@@ -1692,7 +1709,9 @@ func TestBlockValidation_IncompleteBlockNilCoinbase(t *testing.T) {
 			require.Error(t, err)
 			require.True(t, errors.Is(err, errors.ErrBlockIncomplete), "expected ErrBlockIncomplete, got: %v", err)
 			require.False(t, errors.Is(err, errors.ErrBlockInvalid), "should NOT be ErrBlockInvalid")
+			require.False(t, errors.Is(err, errors.ErrBlockCorrupt), "should NOT be ErrBlockCorrupt")
 			require.Contains(t, err.Error(), tt.expectError)
+			requireNothingPersisted(ctx, t, blockchainClient, block.Hash())
 		})
 	}
 }
