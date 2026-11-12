@@ -2298,7 +2298,7 @@ func (s *Store) readExternalTransaction(ctx context.Context, previousTxHash chai
 // decodeOwnTxBlob decodes a FileTypeTx blob this node wrote under the
 // transaction's own txid. When the blob's length is known, every script is
 // drawn from one arena of exactly that length, so the decode allocates the blob
-// once (issue 2176).
+// about once (issue 2176).
 //
 // The plain ReadFrom path grows each script buffer in 64KiB steps against the
 // bytes that actually arrive (go-bt v2.7.3, bsv-blockchain/go-bt#187). That
@@ -2308,23 +2308,31 @@ func (s *Store) readExternalTransaction(ctx context.Context, previousTxHash chai
 // here. The blob is local, its length comes from the store, and the scripts in
 // it can never add up to more than that length, so the arena never grows on a
 // sound blob. Every path that decodes peer-supplied bytes keeps the
-// incremental read.
+// incremental read, and so does a blob whose length is unknown or above go-bt's
+// MaxArenaAlloc (1GiB), which no valid transaction reaches.
 //
-// What a corrupt blob costs: a flipped bit in a script length can make the
-// arena allocate once, up to go-bt's MaxArenaAlloc (1GiB, longer lengths are
-// refused before allocating), before the short read fails as a storage fault.
-// That is the bound the non-arena read had before go-bt v2.7.3.
+// What a corrupt blob costs. The arena itself is the blob's length B, at most
+// 1GiB. A corrupt script length that overruns the remaining bytes makes the
+// arena grow once, to max(2B, B + L) with L at most 1GiB (go-bt refuses longer
+// lengths before allocating), while the first slab is still referenced; the
+// short read then fails as a storage fault. So the transient worst case is
+// B + max(2B, B + 1GiB): about B + 1GiB for blobs up to 1GiB, and 3GiB at the
+// 1GiB cap. The incremental read would hold only the bytes that arrive.
 //
 // The scripts left in the arena share its slab, so any one of them keeps the
-// whole blob alive. Output scripts below detachOutputScriptBelow are therefore
-// copied out after the decode: a child extends its input by pointing at the
-// parent's output script (the validator's extendInputFromPrefetchedParent, and
-// the other PreviousTxScript extenders), so a 25-byte P2PKH change output left in
-// the slab would let the child pin a 96MB parent for as long as the child lives.
+// whole blob alive. A child extends its input by pointing at the parent's
+// output script (the validator's extendInputFromPrefetchedParent, and the other
+// PreviousTxScript extenders), so a 25-byte P2PKH change output left in the slab
+// would let the child pin a 96MB parent for as long as the child lives. Every
+// output script shorter than half the blob is therefore copied out after the
+// decode. A script that stays in the slab is at least half of it, so holding it
+// keeps at most about twice its own size alive. The usual shape, one data
+// carrier and small outputs, still allocates the blob once; a blob split into
+// several mid-sized outputs costs up to one more copy of them.
 // Callers that drop some of the large scripts and keep the rest must still not
 // use this path; see getExternalOutpoints.
 func decodeOwnTxBlob(tx *bt.Tx, r io.Reader, blobLen int, blobLenKnown bool) error {
-	if !blobLenKnown || blobLen <= 0 {
+	if !blobLenKnown || blobLen <= 0 || blobLen > bt.MaxArenaAlloc {
 		_, err := tx.ReadFrom(r)
 		return err
 	}
@@ -2334,7 +2342,7 @@ func decodeOwnTxBlob(tx *bt.Tx, r io.Reader, blobLen int, blobLenKnown bool) err
 	}
 
 	for _, output := range tx.Outputs {
-		if output != nil && output.LockingScript != nil && len(*output.LockingScript) < detachOutputScriptBelow {
+		if output != nil && output.LockingScript != nil && 2*len(*output.LockingScript) < blobLen {
 			detached := bscript.Script(bytes.Clone(*output.LockingScript))
 			output.LockingScript = &detached
 		}
@@ -2342,12 +2350,6 @@ func decodeOwnTxBlob(tx *bt.Tx, r io.Reader, blobLen int, blobLenKnown bool) err
 
 	return nil
 }
-
-// detachOutputScriptBelow is the size under which decodeOwnTxBlob copies an
-// output script out of the arena. It is go-bt's incremental read chunk, so these
-// scripts cost the one exact allocation they cost before the arena; the larger
-// ones, which the arena exists for, stay in it.
-const detachOutputScriptBelow = 64 * 1024
 
 // remainingBlobBytes returns how many bytes r has left to read, when r can say.
 // The file blob store's reader can seek, so it can; the memory store's, and a

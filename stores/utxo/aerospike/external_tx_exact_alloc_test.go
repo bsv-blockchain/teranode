@@ -2,6 +2,7 @@ package aerospike
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"net/url"
 	"runtime"
@@ -14,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
@@ -88,6 +90,71 @@ func allocatedBy(fn func()) uint64 {
 	return after.TotalAlloc - before.TotalAlloc
 }
 
+// retainedBy returns how much more live heap there is, after GC, while the
+// value fn returns is still held.
+func retainedBy(fn func() any) int64 {
+	var before, after runtime.MemStats
+
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+
+	held := fn()
+
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(held)
+
+	return int64(after.HeapAlloc) - int64(before.HeapAlloc)
+}
+
+const mib = 1024 * 1024
+
+// perScriptRetainBound is what holding a keptLen script read by go-bt's per-script
+// read may retain: the incremental read leaves up to about a quarter of spare
+// capacity on a large script. Half of droppedLen on top tells "kept script only"
+// apart from "kept script plus the dropped one".
+func perScriptRetainBound(keptLen, droppedLen int) int {
+	return keptLen*5/4 + droppedLen/2
+}
+
+// buildTwoLargeOutputsTx returns a transaction with an OP_FALSE OP_RETURN output
+// of droppedLen payload bytes at vout 0 and a spendable output at vout 1 whose
+// locking script, <keptLen bytes> OP_DROP OP_1, is just over keptLen bytes.
+func buildTwoLargeOutputsTx(t *testing.T, droppedLen, keptLen int) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+
+	in := &bt.Input{PreviousTxOutIndex: 0, SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{0x51})}
+	require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{9}))
+	tx.Inputs = append(tx.Inputs, in)
+
+	dropped := &bscript.Script{}
+	require.NoError(t, dropped.AppendOpcodes(bscript.OpFALSE, bscript.OpRETURN))
+	require.NoError(t, dropped.AppendPushData(make([]byte, droppedLen)))
+
+	kept := &bscript.Script{}
+	require.NoError(t, kept.AppendPushData(make([]byte, keptLen)))
+	require.NoError(t, kept.AppendOpcodes(bscript.OpDROP, bscript.Op1))
+
+	tx.Outputs = append(tx.Outputs,
+		&bt.Output{Satoshis: 0, LockingScript: dropped},
+		&bt.Output{Satoshis: 1000, LockingScript: kept},
+	)
+
+	return tx
+}
+
+// storeTx writes tx's extended bytes under its txid as a FileTypeTx blob.
+func storeTx(t *testing.T, s *Store, tx *bt.Tx) chainhash.Hash {
+	t.Helper()
+
+	hash := *tx.TxIDChainHash()
+	require.NoError(t, s.externalStore.Set(context.Background(), hash[:], fileformat.FileTypeTx, tx.ExtendedBytes()))
+
+	return hash
+}
+
 // TestGetExternalTransactionAllocatesBlobSizeOnce pins issue 2176: decoding the
 // node's own external blob must allocate its scripts once, not grow each one in
 // 64KiB steps the way go-bt's incremental anti-DoS read does (about 5x the
@@ -152,40 +219,31 @@ func TestGetExternalTransactionAllocatesBlobSizeOnce(t *testing.T) {
 
 // TestGetExternalOutpointsDoesNotPinDroppedOutputs guards the one own-blob path
 // that keeps the per-script decode. getExternalOutpoints drops the inputs and
-// the unspendable outputs and the result is cached; if its scripts shared one
-// slab, the surviving 25-byte P2PKH script would keep the dropped data-carrier
-// payload alive with it.
+// the unspendable outputs and the result is cached. The output it keeps here is
+// more than half the blob, so the sized decode would leave it in the arena slab,
+// where it would keep the dropped data-carrier payload alive with it.
 func TestGetExternalOutpointsDoesNotPinDroppedOutputs(t *testing.T) {
-	ctx := context.Background()
-
-	parent := buildDataCarrierTx(t)
-	parentHash := *parent.TxIDChainHash()
+	const (
+		droppedLen = 24 * mib
+		keptLen    = 28 * mib // over half the blob, so a sized decode would leave it in the slab
+	)
 
 	s := newFileExternalStore(t)
-	require.NoError(t, s.externalStore.Set(ctx, parentHash[:], fileformat.FileTypeTx, parent.ExtendedBytes()))
+	parentHash := storeTx(t, s, buildTwoLargeOutputsTx(t, droppedLen, keptLen))
 
-	parent = nil
+	retained := retainedBy(func() any {
+		// A post-Genesis height, so the OP_FALSE OP_RETURN output is dropped.
+		tx, active, err := s.getExternalOutpoints(context.Background(), parentHash, s.settings.ChainCfgParams.GenesisActivationHeight+1)
+		require.NoError(t, err)
+		require.Equal(t, 1, active)
+		require.Nil(t, tx.Outputs[0])
+		require.Greater(t, len(*tx.Outputs[1].LockingScript), keptLen)
 
-	var before, after runtime.MemStats
+		return tx
+	})
 
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-
-	// A post-Genesis height, so the OP_FALSE OP_RETURN output is dropped.
-	tx, active, err := s.getExternalOutpoints(ctx, parentHash, s.settings.ChainCfgParams.GenesisActivationHeight+1)
-	require.NoError(t, err)
-	require.Equal(t, 1, active)
-	require.Nil(t, tx.Outputs[0])
-	require.Len(t, *tx.Outputs[1].LockingScript, 25)
-
-	runtime.GC()
-	runtime.ReadMemStats(&after)
-
-	retained := int64(after.HeapAlloc) - int64(before.HeapAlloc)
 	t.Logf("outpoint reconstruction retains %d bytes after GC", retained)
-	require.Less(t, retained, int64(dataCarrierPayloadSize/4), "the dropped payload must be collectable")
-
-	runtime.KeepAlive(tx)
+	require.Less(t, retained, int64(perScriptRetainBound(keptLen, droppedLen)), "the dropped payload must be collectable")
 }
 
 // TestGetExternalTransactionTruncatedBlobOnFileStore checks the sized decode
@@ -207,41 +265,95 @@ func TestGetExternalTransactionTruncatedBlobOnFileStore(t *testing.T) {
 	require.False(t, errors.Is(err, errors.ErrTxInvalid))
 }
 
-// TestGetExternalTransactionSmallOutputDoesNotPinBlob covers how a child holds
-// a parent: extending an input points PreviousTxScript at the parent's output
-// script. A child spending the 25-byte P2PKH change of a data-carrier parent
-// must not keep the parent's whole blob alive once the parent itself is gone.
-func TestGetExternalTransactionSmallOutputDoesNotPinBlob(t *testing.T) {
-	ctx := context.Background()
+// TestGetExternalTransactionHeldOutputDoesNotPinBlob covers how a child holds a
+// parent: extending an input points PreviousTxScript at the parent's output
+// script. A child holding a spendable output of a data-carrier parent must not
+// keep the parent's whole blob alive once the parent itself is gone, whether
+// that output is a 25-byte P2PKH change or a script well past 64KiB.
+func TestGetExternalTransactionHeldOutputDoesNotPinBlob(t *testing.T) {
+	tests := []struct {
+		name    string
+		parent  func(t *testing.T) *bt.Tx
+		heldLen int
+	}{
+		{name: "P2PKH change", parent: buildDataCarrierTx, heldLen: 25},
+		{name: "1MiB spendable script", parent: func(t *testing.T) *bt.Tx {
+			return buildTwoLargeOutputsTx(t, dataCarrierPayloadSize, 1*mib)
+		}, heldLen: 1*mib + 7}, // OP_PUSHDATA4 <len> <data> OP_DROP OP_1
+	}
 
-	parent := buildDataCarrierTx(t)
-	parentHash := *parent.TxIDChainHash()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newFileExternalStore(t)
+			parentHash := storeTx(t, s, tt.parent(t))
 
-	s := newFileExternalStore(t)
-	require.NoError(t, s.externalStore.Set(ctx, parentHash[:], fileformat.FileTypeTx, parent.ExtendedBytes()))
+			retained := retainedBy(func() any {
+				tx, err := s.getExternalTransaction(context.Background(), parentHash)
+				require.NoError(t, err)
 
-	parent = nil
+				// What extendInputFromPrefetchedParent keeps of the parent.
+				held := tx.Outputs[1].LockingScript
+				require.Equal(t, tt.heldLen, len(*held))
 
-	var before, after runtime.MemStats
+				return held
+			})
 
-	runtime.GC()
-	runtime.ReadMemStats(&before)
+			t.Logf("a held vout 1 script retains %d bytes after GC", retained)
+			require.Less(t, retained, int64(tt.heldLen+dataCarrierPayloadSize/4), "the parent's data-carrier payload must be collectable")
+		})
+	}
+}
 
-	tx, err := s.getExternalTransaction(ctx, parentHash)
+// TestGetExternalTransactionUnknownLengthKeepsPerScriptRead covers a store whose
+// reader cannot report the blob length (the memory store here; a file store's
+// remote long-term fallback in production). It must keep go-bt's per-script
+// read: an arena grown from nothing would put both large outputs in one slab, so
+// holding the spendable one would pin the dropped one too.
+func TestGetExternalTransactionUnknownLengthKeepsPerScriptRead(t *testing.T) {
+	const (
+		droppedLen = 24 * mib
+		keptLen    = 28 * mib // over half the blob, so a sized decode would leave it in the slab
+	)
+
+	s := &Store{logger: ulogger.TestLogger{}, externalStore: memory.New(), settings: settings.NewSettings()}
+	parentHash := storeTx(t, s, buildTwoLargeOutputsTx(t, droppedLen, keptLen))
+
+	reader, err := s.externalStore.GetIoReader(context.Background(), parentHash[:], fileformat.FileTypeTx)
 	require.NoError(t, err)
 
-	// What extendInputFromPrefetchedParent keeps of the parent.
-	changeScript := tx.Outputs[1].LockingScript
-	require.Len(t, *changeScript, 25)
+	_, known, err := remainingBlobBytes(reader)
+	require.NoError(t, err)
+	require.False(t, known, "the fixture needs a reader that cannot report its length")
+	require.NoError(t, reader.Close())
 
-	tx = nil
+	retained := retainedBy(func() any {
+		tx, err := s.getExternalTransaction(context.Background(), parentHash)
+		require.NoError(t, err)
+		require.Equal(t, parentHash, *tx.TxIDChainHash())
 
-	runtime.GC()
-	runtime.ReadMemStats(&after)
+		return tx.Outputs[1].LockingScript
+	})
 
-	retained := int64(after.HeapAlloc) - int64(before.HeapAlloc)
-	t.Logf("a held change script retains %d bytes after GC", retained)
-	require.Less(t, retained, int64(dataCarrierPayloadSize/4), "the parent's data-carrier payload must be collectable")
+	t.Logf("a held vout 1 script retains %d bytes after GC", retained)
+	require.Less(t, retained, int64(perScriptRetainBound(keptLen, droppedLen)), "the dropped payload must be collectable")
+}
 
-	runtime.KeepAlive(changeScript)
+// TestDecodeOwnTxBlobRefusesArenaAboveMaxArenaAlloc covers a blob whose reported
+// length is beyond what any valid transaction reaches (appended junk, or a store
+// misreporting it): the decode must not preallocate that length.
+func TestDecodeOwnTxBlobRefusesArenaAboveMaxArenaAlloc(t *testing.T) {
+	small := buildParentTx(t, 1000, 0xaa)
+
+	var (
+		tx        *bt.Tx
+		decodeErr error
+	)
+
+	allocated := allocatedBy(func() {
+		tx = &bt.Tx{}
+		decodeErr = decodeOwnTxBlob(tx, bytes.NewReader(small.ExtendedBytes()), bt.MaxArenaAlloc+1, true)
+	})
+	require.NoError(t, decodeErr)
+	require.Equal(t, *small.TxIDChainHash(), *tx.TxIDChainHash())
+	require.Less(t, allocated, uint64(mib), "a reported length above MaxArenaAlloc must not be preallocated")
 }
