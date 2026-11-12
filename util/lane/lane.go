@@ -4,7 +4,10 @@
 //
 // The high byte is the lane: one per process that creates records, handed out
 // by the blockchain service. The low seven bytes are the position: the record's
-// place in that lane, counting up by one per record. A lane position is unique
+// place in that lane, counting up by one per record within a range. A lane goes
+// to a new process once it has had no hand-out for blockchain_laneFreeAfter, so a
+// slow process still using its range can end up sharing its lane; positions stay
+// distinct, but they then no longer rise in creation order. A lane position is unique
 // across the hand-outs recorded in one blockchain database and is written once,
 // so later work can say which block took a record by keeping a range of positions
 // per lane per block, instead of writing to the record. Restoring an older
