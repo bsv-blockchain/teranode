@@ -6331,14 +6331,27 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 
 	// get all child spends of the coinbase, this will lock them in the utxo store
 	// so they cannot be spent while we are processing the reorg
-	childSpendHashes, err := utxostore.GetAndLockChildren(ctx, stp.utxoStore, *block.CoinbaseTx.TxIDChainHash())
+	childSpendHashes, missingHashes, err := utxostore.GetAndLockChildrenSkippingMissing(ctx, stp.utxoStore, *block.CoinbaseTx.TxIDChainHash())
 	if err != nil {
+		// the walk reports ErrTxNotFound only for the coinbase itself: a descendant whose record is
+		// gone is skipped and returned in missingHashes, so it cannot cancel the cleanup
 		if errors.Is(err, errors.ErrTxNotFound) {
 			// coinbase tx not found, nothing to do
 			return nil
 		}
 
 		return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error getting child spends for coinbase tx %s", block.String(), block.CoinbaseTx.String(), err)
+	}
+
+	// a parent's spending data still names these, but their records are gone, so there is nothing
+	// to save or delete for them in the utxo store. This move-back saves and deletes every descendant
+	// the walk returns that is still in the store when it is saved; one that vanishes after the lock
+	// is counted in teranode_subtreeprocessor_reorg_deleted_txs_vanished_total and only removed from
+	// block assembly. A descendant reachable only through a missing record is not reached by the
+	// walk, so its utxo record is not saved or deleted; if block assembly holds it, the cascade below
+	// still takes it out of the assembly.
+	for i := range missingHashes {
+		stp.logger.Errorf("[removeCoinbaseUtxos][%s] skipping tx %s, a descendant of coinbase tx %s named by its parent's spending data but not in the utxo store", block.String(), missingHashes[i].String(), block.CoinbaseTx.TxIDChainHash().String())
 	}
 
 	// save the txs first: if a reorg returns to this block, they are recreated from this copy. The
@@ -6380,8 +6393,60 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 		}
 	}
 
+	// a tx the walk locked whose record vanished before the save is in neither savedHashes nor
+	// missingHashes. Like a missing tx it has no record left to delete, but block assembly can still
+	// hold a copy of either: mark them for removal and take them out of the subtrees with the saved txs
+	goneHashes := append(make([]chainhash.Hash, 0, len(missingHashes)), missingHashes...)
+
+	savedSet := make(map[chainhash.Hash]struct{}, len(savedHashes))
+	for _, savedHash := range savedHashes {
+		savedSet[savedHash] = struct{}{}
+	}
+
+	for _, childSpendHash := range childSpendHashes {
+		if _, saved := savedSet[childSpendHash]; !saved {
+			goneHashes = append(goneHashes, childSpendHash)
+		}
+	}
+
+	for _, goneHash := range goneHashes {
+		if !stp.removeMap.Exists(goneHash) {
+			if err = stp.removeMap.Put(goneHash, 1); err != nil {
+				return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error adding missing child spend to remove map for tx %s", block.String(), goneHash.String(), err)
+			}
+		}
+	}
+
+	// the walk cannot reach a descendant whose only path from the coinbase runs through a missing
+	// record, but block assembly can hold one, and it must not stay there with its parent gone. Find
+	// such descendants, and any of a vanished tx, from the assembly's own parent links. The saved txs
+	// are roots too: the walk named their spenders, but a spend made with IgnoreLocked can land behind
+	// it, and a tx must not stay in the assembly with its parent deleted. The pass reads the whole
+	// assembly, so a move-back with nothing missing or vanished skips it and leaves such a late spender
+	// to the parent chain check of the next unmined reload.
+	var assemblyDescendants []chainhash.Hash
+
+	if len(goneHashes) > 0 {
+		assemblyDescendants = stp.inAssemblyDescendantsOf(savedHashes, goneHashes)
+
+		for _, descendantHash := range assemblyDescendants {
+			stp.logger.Errorf("[removeCoinbaseUtxos][%s] removing tx %s from block assembly, it descends from a tx this move-back removed or found missing, its utxo record is left in place", block.String(), descendantHash.String())
+
+			if !stp.removeMap.Exists(descendantHash) {
+				if err = stp.removeMap.Put(descendantHash, 1); err != nil {
+					return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error adding descendant of a missing tx to remove map for tx %s", block.String(), descendantHash.String(), err)
+				}
+			}
+		}
+	}
+
+	removeFromSubtrees := make([]chainhash.Hash, 0, len(savedHashes)+len(goneHashes)+len(assemblyDescendants))
+	removeFromSubtrees = append(removeFromSubtrees, savedHashes...)
+	removeFromSubtrees = append(removeFromSubtrees, goneHashes...)
+	removeFromSubtrees = append(removeFromSubtrees, assemblyDescendants...)
+
 	// remove from the subtree processor as well
-	if err = stp.removeTxsFromSubtrees(ctx, savedHashes); err != nil {
+	if err = stp.removeTxsFromSubtrees(ctx, removeFromSubtrees); err != nil {
 		return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error removing child spends from subtrees", block.String(), err)
 	}
 
@@ -6390,6 +6455,104 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 	}
 
 	return nil
+}
+
+// inAssemblyDescendantsOf returns, in subtree order, every tx block assembly holds that spends a
+// tx in removed or missing, directly or through other txs it holds. The hashes in removed and
+// missing are not returned. Subtree order puts parents before children, so one pass with
+// rejectConflicting, which adds each match to the set, finds the whole cascade. It reads the
+// subtrees and the tx map, so it must run on the processor goroutine, before removeTxsFromSubtrees
+// takes the removed txs out of the map.
+func (stp *SubtreeProcessor) inAssemblyDescendantsOf(removed, missing []chainhash.Hash) []chainhash.Hash {
+	gone := make(map[chainhash.Hash]struct{}, len(removed)+len(missing))
+
+	for _, hash := range removed {
+		gone[hash] = struct{}{}
+	}
+
+	for _, hash := range missing {
+		gone[hash] = struct{}{}
+	}
+
+	var descendants []chainhash.Hash
+
+	visit := func(nodes []subtreepkg.Node) {
+		for _, node := range nodes {
+			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+				continue
+			}
+
+			if _, ok := gone[node.Hash]; ok {
+				continue
+			}
+
+			// a node with no tx map entry has no known parents, so it cannot be matched by parent
+			txInpoints, _ := stp.currentTxMap.Get(node.Hash)
+
+			if rejectConflicting(node.Hash, txInpoints, gone) {
+				descendants = append(descendants, node.Hash)
+			}
+		}
+	}
+
+	for _, chainedSubtree := range stp.chainedSubtrees {
+		visit(chainedSubtree.Nodes)
+	}
+
+	if currentSubtree := stp.currentSubtree.Load(); currentSubtree != nil {
+		visit(currentSubtree.Nodes)
+	}
+
+	return descendants
+}
+
+// moveBackStoreReadBatchSize caps how many records one txInpointsFromUtxoStore store call asks for.
+// A subtree can hold 2,097,152 nodes, and one Aerospike batch request for all of them is about
+// 216 MiB, over the client's 120 MiB buffer cap. 16,384 keys is about 1.7 MiB per request. It is a
+// var so a test can shrink it.
+var moveBackStoreReadBatchSize = 16_384
+
+// txInpointsFromUtxoStore reads the parent links of nodes from the utxo store, in batches of
+// moveBackStoreReadBatchSize, for a moved-back block whose subtree meta was not written
+// (blockassembly_storeTxInpointsForSubtreeMeta off). A node whose record is gone, and the coinbase
+// placeholder, get empty links; any other read failure is returned, so the move-back fails rather
+// than return txs to block assembly blind.
+func (stp *SubtreeProcessor) txInpointsFromUtxoStore(ctx context.Context, nodes []subtreepkg.Node) ([]subtreepkg.TxInpoints, error) {
+	txInpoints := make([]subtreepkg.TxInpoints, len(nodes))
+	unresolved := make([]*utxostore.UnresolvedMetaData, 0, len(nodes))
+
+	for i := range nodes {
+		if nodes[i].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			continue
+		}
+
+		unresolved = append(unresolved, &utxostore.UnresolvedMetaData{Hash: nodes[i].Hash, Idx: i})
+	}
+
+	if len(unresolved) == 0 {
+		return txInpoints, nil
+	}
+
+	for start := 0; start < len(unresolved); start += moveBackStoreReadBatchSize {
+		end := min(start+moveBackStoreReadBatchSize, len(unresolved))
+
+		if err := stp.utxoStore.BatchDecorate(ctx, unresolved[start:end], fields.TxInpoints); err != nil {
+			return nil, err
+		}
+	}
+
+	for _, item := range unresolved {
+		switch {
+		case item.Err != nil && errors.Is(item.Err, errors.ErrTxNotFound):
+			continue
+		case item.Err != nil:
+			return nil, errors.NewProcessingError("error reading the parent links of tx %s", item.Hash.String(), item.Err)
+		case item.Data != nil:
+			txInpoints[item.Idx] = item.Data.TxInpoints
+		}
+	}
+
+	return txInpoints, nil
 }
 
 func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block *model.Block) ([][]subtreepkg.Node, [][]subtreepkg.TxInpoints, []chainhash.Hash, error) {
@@ -6474,10 +6637,12 @@ func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block
 
 				subtreeMetaTxInpoints[idx] = subtreeMeta.TxInpoints
 			} else {
-				subtreeMetaTxInpoints[idx] = make([]subtreepkg.TxInpoints, len(subtree.Nodes))
-
-				for i := range subtreeMetaTxInpoints[idx] {
-					subtreeMetaTxInpoints[idx][i] = subtreepkg.TxInpoints{}
+				// no subtree meta was written for this block, so read the parent links from the utxo
+				// store: the descendant cascades need them for the txs this move-back returns to
+				// block assembly
+				subtreeMetaTxInpoints[idx], err = stp.txInpointsFromUtxoStore(gCtx, subtree.Nodes)
+				if err != nil {
+					return errors.NewProcessingError("[moveBackBlock:GetSubtrees][%s] error reading the parent links of subtree %s", block.String(), subtreeHash.String(), err)
 				}
 			}
 
