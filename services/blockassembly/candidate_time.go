@@ -38,7 +38,6 @@ type mtpFloorEntry struct {
 	minTime       int64
 	warnedFloor   atomic.Bool
 	warnedCeiling atomic.Bool
-	loggedHold    atomic.Bool
 }
 
 // candidateTime returns the timestamp to stamp on a mining candidate built on
@@ -88,7 +87,7 @@ func (b *BlockAssembler) candidateTime(ctx context.Context, parentHeader *model.
 	if entry == nil {
 		// mtpFloor has already logged the cause. Serve the wall clock rather
 		// than stopping mining on a blockchain hiccup.
-		return b.delayEmergencyDifficulty(parentHeader, timeNow, 0), nil
+		return b.holdCandidateTime(parentHeader, timeNow, 0), nil
 	}
 
 	// Check the ceiling before applying the floor: when the two cross there is
@@ -137,12 +136,22 @@ func (b *BlockAssembler) candidateTime(ctx context.Context, parentHeader *model.
 		timeNow = entry.minTime
 	}
 
-	held := b.delayEmergencyDifficulty(parentHeader, timeNow, entry.minTime)
-	if held != timeNow && entry.loggedHold.CompareAndSwap(false, true) {
+	return b.holdCandidateTime(parentHeader, timeNow, entry.minTime), nil
+}
+
+func (b *BlockAssembler) holdCandidateTime(parentHeader *model.BlockHeader, timeNow, minTime int64) int64 {
+	held := b.delayEmergencyDifficulty(parentHeader, timeNow, minTime)
+	if held == timeNow {
+		return held
+	}
+
+	parentHash := parentHeader.Hash()
+
+	if last := b.heldParent.Load(); (last == nil || !last.IsEqual(parentHash)) && b.heldParent.CompareAndSwap(last, parentHash) {
 		b.logger.Infof("[candidateTime] holding candidate time at %d for parent %s to delay the minimum-difficulty rule by %s (blockassembly_emergencyDifficultyDelay)", held, parentHash.String(), b.settings.BlockAssembly.EmergencyDifficultyDelay)
 	}
 
-	return held, nil
+	return held
 }
 
 func minDifficultyRule(params *chaincfg.Params) bool {

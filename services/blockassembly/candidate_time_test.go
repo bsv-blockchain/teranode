@@ -1173,12 +1173,17 @@ func TestEmergencyDifficultyDelayCandidateTime(t *testing.T) {
 		mockClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil, context.DeadlineExceeded)
 		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, context.DeadlineExceeded)
 
-		assembler := &BlockAssembler{logger: ulogger.TestLogger{}, blockchainClient: mockClient, settings: newSettings()}
+		logger := &warnCountingLogger{}
+		assembler := &BlockAssembler{logger: logger, blockchainClient: mockClient, settings: newSettings()}
 
-		got, err := assembler.candidateTime(t.Context(), tip)
-		require.NoError(t, err)
-		require.Equal(t, int64(tipTime)+1200, got)
+		for i := 0; i < 3; i++ {
+			got, err := assembler.candidateTime(t.Context(), tip)
+			require.NoError(t, err)
+			require.Equal(t, int64(tipTime)+1200, got)
+		}
+
 		require.Nil(t, assembler.memoizedMtpFloor(tip.Hash()), "the lookup must have failed or this test proves nothing")
+		require.Equal(t, 1, logger.countMatching("holding candidate time"), "the hold is logged once per parent on this path too")
 	})
 }
 
