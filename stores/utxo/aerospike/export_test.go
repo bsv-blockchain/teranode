@@ -1,6 +1,10 @@
 package aerospike
 
-import "context"
+import (
+	"context"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
+)
 
 // ConflictingIndexVerdict reports whether the conflicting index self-test has
 // finished and, if it has, whether it trusted the index.
@@ -48,4 +52,26 @@ func (s *Store) SetNativeMarkForTest(on bool) {
 // DetectNativeMarkForTest runs the sub-op 14 start-up probe on its own.
 func (s *Store) DetectNativeMarkForTest(ctx context.Context) bool {
 	return s.detectNativeMarkLongestChainSupport(ctx)
+}
+
+// ConflictWALIndexName is the name of the WAL index.
+func (s *Store) ConflictWALIndexName() string {
+	return s.conflictWALIndexName()
+}
+
+// EnsureConflictWALIndex creates the WAL index when it is missing, as New does.
+func (s *Store) EnsureConflictWALIndex() {
+	s.ensureConflictWALIndex()
+}
+
+// QueryConflictWALIndex reads the WAL through its index alone and returns how many roots it found,
+// and whether the index was readable.
+func (s *Store) QueryConflictWALIndex(ctx context.Context) (int, bool, error) {
+	records, readable, err := s.queryConflictWALIndex(ctx)
+	return len(records), readable, err
+}
+
+// ConflictWALFallbackScans is the number of WAL reads that scanned the set, for this process.
+func ConflictWALFallbackScans() float64 {
+	return testutil.ToFloat64(prometheusConflictWALFallbackScans)
 }

@@ -81,6 +81,7 @@ var (
 	prometheusUtxoSpendExpressionLuaRetryN prometheus.Counter
 
 	prometheusTxMetaAerospikeMapGet                   prometheus.Counter
+	prometheusConflictWALFallbackScans                prometheus.Counter
 	prometheusUtxostoreCreate                         prometheus.Counter
 	prometheusTxMetaAerospikeMapErrors                *prometheus.CounterVec
 	prometheusTxMetaAerospikeMapGetMulti              prometheus.Counter
@@ -116,6 +117,14 @@ func InitPrometheusMetrics() {
 // _initPrometheusMetrics performs the actual initialization of all Prometheus metrics.
 // This is called only once via sync.Once from InitPrometheusMetrics.
 func _initPrometheusMetrics() {
+	prometheusConflictWALFallbackScans = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "conflict_wal_fallback_scans",
+			Help:      "Reads of the conflict WAL that scanned the namespace because the WAL index was missing or not built",
+		},
+	)
 	prometheusTxMetaAerospikeMapGet = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
