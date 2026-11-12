@@ -2242,6 +2242,18 @@ func (b *BlockAssembler) conflictIntentRefusalHandler(blockHash chainhash.Hash) 
 	)
 }
 
+// conflictIntentConfirmedLoserHandler logs a losing transaction that WAL replay did not demote
+// because it is mined on the current chain. #2071 was this shape: a replay demoted the winner's own
+// mined descendants and the pruner deleted them. The block is not queued for invalidation.
+func (b *BlockAssembler) conflictIntentConfirmedLoserHandler(blockHash chainhash.Hash) utxo.ProcessConflictingOption {
+	return utxo.WithConfirmedLoserHandler(
+		func(loser chainhash.Hash) {
+			b.logger.Errorf("[replayPendingConflictIntents][%s] REFUSED to demote transaction %s during WAL replay: it is mined on the current chain, so it cannot lose to that block",
+				blockHash.String(), loser.String())
+		},
+	)
+}
+
 // drainPendingInvalidations invalidates any block whose conflict resolution was
 // refused because it would have reversed a confirmed spend. Called after block
 // movement has completed, never during it: InvalidateBlock re-enters the
@@ -2316,6 +2328,7 @@ func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.C
 func (b *BlockAssembler) processConflictingAndEvict(ctx context.Context, intent utxo.ConflictIntent, winners []chainhash.Hash) error {
 	_, allMarkedConflicting, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, winners, nil,
 		utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash), utxo.WithDeferredConflictCompletion(), utxo.WithRecoveryChainGuard(b.currentChainGuard()),
+		b.conflictIntentConfirmedLoserHandler(intent.BlockHash),
 		utxo.WithConflictEvictor(b.txMetaEvictor.Evict))
 
 	b.txMetaEvictor.Evict(allMarkedConflicting)
