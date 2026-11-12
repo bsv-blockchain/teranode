@@ -14,27 +14,26 @@ package subtreeprocessor
 import (
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/stretchr/testify/require"
 )
 
-// TestKnownDefect_PartialFailureRollbackLeavesMovedBackTx: when a reorg fails half
-// way, the rollback MUST restore block assembly's internal state, not only the tip. A
-// tx that only the moved-back block carried must not stay in the tx map, and the
-// subtree processor's invariants must hold.
+// TestKnownDefect_MoveBackBuildFailureLeavesMovedBackTxsInTheMap: when a fork reorg
+// fails, the tx map MUST agree with the subtrees it leaves in place.
 //
-// Today reorgBlocks snapshots currentTxMap by pointer before the move-back, and the
-// move-back adds txBack to that same map in place. The rollback reassigns the
-// already-mutated map, so txBack survives and the tx map no longer matches the
-// restored subtrees. In production handleReorg falls back to a full reset on reorg
-// failure, which hides this.
+// A failure inside the move-back's bulk build puts back the subtrees the move-back
+// started from, but the move-back has already written the moved-back block's
+// transactions into the tx map in place, and nothing takes them out. The map then
+// holds a1, which no installed subtree does. Only a reset may run after a failed fork
+// reorg, and it clears the map, which hides this.
 //
 // Spec: BA-REORG-007 (tracked as GAP-BA-004).
-func TestKnownDefect_PartialFailureRollbackLeavesMovedBackTx(t *testing.T) {
-	r := runPartialFailureReorg(t)
-	requireFailedAfterMoveBack(t, r)
+func TestKnownDefect_MoveBackBuildFailureLeavesMovedBackTxsInTheMap(t *testing.T) {
+	f := newStepRestoreFixture(t, stepRestoreOptions{})
 
-	require.NoError(t, r.stp.CheckSubtreeProcessor(),
-		"rolled-back reorg must restore subtree processor invariants")
-	require.False(t, r.stp.GetCurrentTxMap().Exists(r.txBack),
-		"move-back-only tx must not remain in currentTxMap after rollback")
+	err := f.stp.Reorg([]*model.Block{f.blockABadBuild}, []*model.Block{f.blockF, f.blockF2})
+	require.ErrorContains(t, err, "error bulk building subtrees", "the reorg must fail inside the move-back's bulk build")
+
+	require.NoError(t, f.stp.CheckSubtreeProcessor(), "the tx map must agree with the subtrees after a failed move-back")
+	require.False(t, f.stp.GetCurrentTxMap().Exists(f.a1), "a1 is in no installed subtree, so it must not be in the map")
 }

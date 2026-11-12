@@ -2242,6 +2242,18 @@ func (b *BlockAssembler) conflictIntentRefusalHandler(blockHash chainhash.Hash) 
 	)
 }
 
+// conflictIntentConfirmedLoserHandler logs a losing transaction that WAL replay did not demote
+// because it is mined on the current chain. #2071 was this shape: a replay demoted the winner's own
+// mined descendants and the pruner deleted them. The block is not queued for invalidation.
+func (b *BlockAssembler) conflictIntentConfirmedLoserHandler(blockHash chainhash.Hash) utxo.ProcessConflictingOption {
+	return utxo.WithConfirmedLoserHandler(
+		func(loser chainhash.Hash) {
+			b.logger.Errorf("[replayPendingConflictIntents][%s] REFUSED to demote transaction %s during WAL replay: it is mined on the current chain, so it cannot lose to that block",
+				blockHash.String(), loser.String())
+		},
+	)
+}
+
 // drainPendingInvalidations invalidates any block whose conflict resolution was
 // refused because it would have reversed a confirmed spend. Called after block
 // movement has completed, never during it: InvalidateBlock re-enters the
@@ -2316,6 +2328,7 @@ func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.C
 func (b *BlockAssembler) processConflictingAndEvict(ctx context.Context, intent utxo.ConflictIntent, winners []chainhash.Hash) error {
 	_, allMarkedConflicting, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, winners, nil,
 		utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash), utxo.WithDeferredConflictCompletion(), utxo.WithRecoveryChainGuard(b.currentChainGuard()),
+		b.conflictIntentConfirmedLoserHandler(intent.BlockHash),
 		utxo.WithConflictEvictor(b.txMetaEvictor.Evict))
 
 	b.txMetaEvictor.Evict(allMarkedConflicting)
@@ -4364,11 +4377,6 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 						}
 					}
 
-					if !b.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
-						// clear the TxInpoints to save memory if we are not using subtree meta
-						clearUnminedTxInpoints(unminedTransaction)
-					}
-
 					localResult.unminedTxs = append(localResult.unminedTxs, unminedTransaction)
 
 					if unminedTransaction.Locked {
@@ -4626,18 +4634,6 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 	}
 
 	return nil
-}
-
-// clearUnminedTxInpoints empties a reloaded transaction's inpoints in place.
-// Every store iterator allocates inpoints per transaction, so resetting the
-// existing value is safe and avoids retaining a second object per transaction.
-func clearUnminedTxInpoints(tx *utxo.UnminedTransaction) {
-	if tx.TxInpoints == nil {
-		tx.TxInpoints = &subtree.TxInpoints{}
-		return
-	}
-
-	*tx.TxInpoints = subtree.TxInpoints{}
 }
 
 // validateLoadedUnminedTxs checks the inputs of every loaded transaction, with workers
@@ -5289,12 +5285,12 @@ func unminedSortDirs(paths []string) []string {
 // to the subtree processor in batches. isReload is as in
 // loadUnminedTransactionsWithDiskSort.
 func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedTxIterator, bestBlockHeaderIDsMap map[uint32]bool, isReload bool) error {
-	storeTxInpoints := b.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta
-
+	// the inpoints go through the sort in every mode: block assembly keeps each tx's parent links
+	// whatever blockassembly_storeTxInpointsForSubtreeMeta says
 	sorter, err := unminedsort.New(unminedsort.Options{
 		Dirs:          unminedSortDirs(b.settings.BlockAssembly.UnminedTxDiskSortPaths),
 		BufferRecords: b.settings.BlockAssembly.UnminedTxSortBufferRecords,
-		WithInpoints:  storeTxInpoints,
+		WithInpoints:  true,
 	})
 	if err != nil {
 		return errors.NewProcessingError("error creating unmined transaction sorter", err)
@@ -5410,9 +5406,7 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 
 		// Drain never splits an equal-CreatedAt group across batches, so the
 		// parents-first tiebreak sees every member of a group.
-		if storeTxInpoints {
-			orderEqualCreatedAtRunsParentsFirst(batch)
-		}
+		orderEqualCreatedAtRunsParentsFirst(batch)
 
 		var addErr error
 		if isReload {

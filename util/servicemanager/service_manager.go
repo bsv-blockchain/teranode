@@ -191,7 +191,23 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 		sm.dependencyChannelsMux.Unlock()
 
 		if err := service.Start(ctx, sw.readyCh); err != nil {
+			// A service that returns because its own context was cancelled
+			// (a signal, ForceShutdown, a cancelled parent context, or the
+			// errgroup after another service failed) has stopped cleanly.
+			// This must be decided here, before the error reaches the
+			// errgroup: returning it cancels ctx, so any later check would
+			// see a cancelled context whatever the cause. A cancellation
+			// that arrives while ctx is still live, such as a gRPC
+			// codes.Canceled from a remote service that is stopping (which
+			// the project errors.Is matches against context.Canceled), is a
+			// failure.
+			if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+				sm.logger.Infof("[%s] Service stopped: %v", name, err)
+				return nil
+			}
+
 			sm.logger.Errorf("Error from service start %s: %v", name, err)
+
 			return err
 		}
 
@@ -267,13 +283,12 @@ func (sm *ServiceManager) ForceShutdown() {
 // If any service errors, all other services are stopped gracefully and the error is returned.
 func (sm *ServiceManager) Wait() error {
 	// Wait for all services to complete or error
+	// A service that stopped because its context was cancelled returns nil
+	// from its errgroup worker (see AddService), so any error here is a real
+	// failure, including a cancellation that did not come from this process.
 	err := sm.g.Wait()
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			sm.logger.Infof("Shutdown signal received, stopping services...")
-		} else {
-			sm.logger.Errorf("Received error: %v", err)
-		}
+		sm.logger.Errorf("Received error: %v", err)
 	}
 
 	// Per-service Stop() timeout; configurable (default DefaultStopTimeout)
@@ -306,12 +321,6 @@ func (sm *ServiceManager) Wait() error {
 	}
 
 	sm.logger.Infof("🛑 All services stopped.")
-
-	// A context.Canceled from g.Wait() is the normal shutdown-signal path, not
-	// a failure — drop it so only real errors propagate.
-	if errors.Is(err, context.Canceled) {
-		err = nil
-	}
 
 	// Combine the original Wait error (if any) with any Stop() failures using
 	// the PROJECT errors.Join (the repo's depguard lint forbids importing the

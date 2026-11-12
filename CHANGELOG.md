@@ -31,6 +31,10 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **`blockassembly_storeTxInpointsForSubtreeMeta=false` now only skips the subtree meta files.**
+  Block assembly keeps every unmined tx's parent links in memory in both modes. With it off, the
+  restart reload and a block move-back now read each tx's inputs from the UTXO store (an external tx
+  from the blob store), and memory per unmined tx rises; nothing to change. (#2128)
 - **Upgrade every validator and subtree-validation pod before you set
   `blockassembly_maxTransactionsInMemory`, and keep the default 0 until then.** An old validator
   never sends `inBlock`, so a new block assembly with the limit set refuses its block transactions
@@ -78,7 +82,11 @@ read every section between yours and the target.
   rejects, so they stop validating. Upgrade Blockchain last or raise the cap above chain height. (#1776)
 - **Conflict recovery adds five `utxo.Store` methods and changes the UTXO WAL.** Upgrade block
   assembly together with the UTXO store and don't downgrade while conflict-recovery records are
-  pending; they block startup. Follow [conflict recovery](docs/topics/conflict-recovery.md). (#2023)
+  pending; they block startup. Follow [conflict recovery](docs/topics/conflict-recovery.md).
+  Before upgrading from v0.16.0, stop block assembly and [check the conflict WAL is
+  empty](docs/topics/conflict-recovery.md#upgrading-from-v0160): a v0.16.0 forward intent left in
+  it keeps block assembly from starting until it is repaired. The v0.16.0 `conflict_intents_pending`
+  gauge can't tell you; it only counts at startup. (#2023)
 - **PostgreSQL UTXO store: stop previous-release processes before upgrading.** One that starts while
   the new `px_transactions_conflicting` index builds blocks all `transactions` reads and writes until
   the build ends. Out-of-tree `utxo.Store` implementations add `ConflictingTxHashes`. (#2110)
