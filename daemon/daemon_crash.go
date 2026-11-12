@@ -2,17 +2,17 @@ package daemon
 
 import (
 	"github.com/bsv-blockchain/teranode/services/p2p"
+	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/bsv-blockchain/teranode/util/usql"
 )
 
 // The database handles under the stores. A crash closes these directly, so the
 // stores' own Close, which drains their batchers first, never runs.
 type (
-	utxoRawDB         interface{ RawDB() *usql.DB }
-	blockchainRawDB   interface{ GetDB() *usql.DB }
-	aerospikeClientDB interface{ GetClient() *uaerospike.Client }
+	utxoRawDB             interface{ RawDB() *usql.DB }
+	blockchainRawDB       interface{ GetDB() *usql.DB }
+	aerospikeClientCloser interface{ CloseClient() }
 )
 
 // crash stops the Daemon the way a killed process stops, as far as that can be
@@ -34,18 +34,7 @@ func (d *Daemon) crash(logger ulogger.Logger) {
 	blockchainStore := d.daemonStores.rawBlockchainStore
 	globalStoreMutex.RUnlock()
 
-	switch s := utxoStore.(type) {
-	case utxoRawDB:
-		if db := s.RawDB(); db != nil {
-			if err := db.Close(); err != nil {
-				logger.Warnf("[Daemon] crash: closing utxo database: %v", err)
-			}
-		}
-	case aerospikeClientDB:
-		if client := s.GetClient(); client != nil {
-			client.Close()
-		}
-	}
+	crashCloseUtxoStore(logger, utxoStore)
 
 	if s, ok := blockchainStore.(blockchainRawDB); ok {
 		if db := s.GetDB(); db != nil {
@@ -65,4 +54,31 @@ func (d *Daemon) crash(logger ulogger.Logger) {
 
 	d.ServiceManager.Kill()
 	d.closeDoneOnce.Do(func() { close(d.doneCh) })
+}
+
+// crashCloseUtxoStore closes the database handle under the UTXO store without
+// draining its batchers. It looks through wrappers such as the logging store, so
+// logging=true does not leave the database open. A store with no handle it
+// knows how to close is logged, since its queued writes will still commit.
+func crashCloseUtxoStore(logger ulogger.Logger, store utxostore.Store) {
+	if store == nil {
+		return
+	}
+
+	if s, ok := utxostore.As[utxoRawDB](store); ok {
+		if db := s.RawDB(); db != nil {
+			if err := db.Close(); err != nil {
+				logger.Warnf("[Daemon] crash: closing utxo database: %v", err)
+			}
+		}
+
+		return
+	}
+
+	if s, ok := utxostore.As[aerospikeClientCloser](store); ok {
+		s.CloseClient()
+		return
+	}
+
+	logger.Warnf("[Daemon] crash: utxo store %T exposes no database handle to close, so its queued writes may still commit", store)
 }

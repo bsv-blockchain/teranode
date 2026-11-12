@@ -143,6 +143,13 @@ type Daemon struct {
 	crashed atomic.Bool
 }
 
+const (
+	// serviceStopTimeout is how long Stop allows the services to stop.
+	serviceStopTimeout = 30 * time.Second
+	// closeStoresTimeout bounds closeStores, which drains the store batchers.
+	closeStoresTimeout = 30 * time.Second
+)
+
 // New creates a new Daemon instance with the provided options.
 func New(opts ...Option) *Daemon {
 	ctx := context.Background()
@@ -222,8 +229,10 @@ func (d *Daemon) Stop(skipTracerShutdown ...bool) error {
 		return nil
 	}
 
-	// // Default timeout of 30 seconds if it wasn't provided
-	shutdownTimeout := 30 * time.Second
+	// stopCh closes only after closeStores, so the wait covers the services'
+	// Stop() calls plus closeStores' own budget. Waiting less would return a
+	// timeout, and let the test daemon reset the stores, mid-drain.
+	shutdownTimeout := serviceStopTimeout + closeStoresTimeout
 
 	// Set up a timeout channel
 	timeoutCh := time.After(shutdownTimeout)
@@ -578,7 +587,7 @@ func (d *Daemon) closeStores(logger ulogger.Logger) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), closeStoresTimeout)
 	defer cancel()
 
 	globalStoreMutex.RLock()
