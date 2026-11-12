@@ -38,6 +38,11 @@ func (ExtendedFormError) Error() string { return "transaction is in the extended
 // maxScriptAlloc is the largest script this reader will allocate, the same bound go-bt applies.
 const maxScriptAlloc = bt.MaxArenaAlloc
 
+// scriptChunk is the most readScriptBody allocates for a script before any of its bytes arrive,
+// the same reserve go-wire uses. Nearly every real script fits, so it is read with one allocation.
+// A larger one is allocated whole once a quarter of it has arrived (see readScriptBody).
+const scriptChunk = 64 * 1024
+
 // DataOutputScript stands in for the locking script of an output whose script was passed through
 // without being kept (see Options.SkipDataScripts). It is OP_FALSE OP_RETURN, so anything checking
 // whether the output can be spent sees that it cannot. It is shared: never modify it.
@@ -316,8 +321,42 @@ func (t *Reader) readScriptBody(l uint64) ([]byte, error) {
 		return nil, errors.NewTxInvalidError("[txstream] script length %d exceeds %d", l, maxScriptAlloc)
 	}
 
+	if l <= scriptChunk {
+		script := make([]byte, l)
+		if _, err := io.ReadFull(t, script); err != nil {
+			return nil, unexpected(err)
+		}
+
+		return script, nil
+	}
+
+	// The length is the sender's claim, not proof the bytes exist. A quarter of the script is read
+	// first, in chunks that double as the bytes arrive, and only then is the whole script allocated
+	// and the rest read straight into it. A sender must therefore deliver a quarter of what it makes
+	// this reader allocate, and an honest script costs about 1.25 times its size, with one copy.
+	var (
+		prefix   [][]byte
+		received uint64
+	)
+
+	for size, proof := uint64(scriptChunk), l/4; received < proof; size *= 2 {
+		chunk := make([]byte, min(size, proof-received))
+		if _, err := io.ReadFull(t, chunk); err != nil {
+			return nil, unexpected(err)
+		}
+
+		prefix = append(prefix, chunk)
+		received += uint64(len(chunk))
+	}
+
 	script := make([]byte, l)
-	if _, err := io.ReadFull(t, script); err != nil {
+
+	at := 0
+	for _, chunk := range prefix {
+		at += copy(script[at:], chunk)
+	}
+
+	if _, err := io.ReadFull(t, script[at:]); err != nil {
 		return nil, unexpected(err)
 	}
 
