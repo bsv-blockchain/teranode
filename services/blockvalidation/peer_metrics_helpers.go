@@ -282,9 +282,10 @@ func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string
 		return
 	}
 
-	if isConcurrentValidationPanic(err) {
-		// A validation in this catchup waited in runOncePerBlock on a validation of the same block
-		// that panicked on another goroutine (BV-STARTUP-007). The panic is a bug in this node, so
+	if isLocalPanic(err) {
+		// An errgroup goroutine in this catchup panicked (issue 4993), or a validation in this
+		// catchup waited in runOncePerBlock on a validation of the same block that panicked on
+		// another goroutine (BV-STARTUP-007). The panic is a bug in this node, so
 		// no peer may be charged for it. releaseCatchupLock already scored the cycle local_panic.
 		// The exemption is here, and not only in processCatchupChItem's isLocalCatchupFault branch,
 		// for the reason the policy-decline exemption above gives: tryAlternativePeersForCatchup and
@@ -328,32 +329,10 @@ func markCatchupFailureReported(err error) error {
 }
 
 // catchupFailureAlreadyReported reports whether err carries the
-// markCatchupFailureReported marker anywhere in its wrapped chain. The walk is
-// depth-bounded defensively, mirroring the errors package's own chain walks.
+// markCatchupFailureReported marker in its wrapped chain, within hasErrorMarker's
+// depth bound.
 func catchupFailureAlreadyReported(err error) bool {
-	var e *errors.Error
-	if !errors.As(err, &e) {
-		return false
-	}
-
-	for depth := 0; e != nil && depth < 32; depth++ {
-		if v, ok := e.GetData(catchupFailureReportedKey).(bool); ok && v {
-			return true
-		}
-
-		next := e.WrappedErr()
-		if next == nil {
-			return false
-		}
-
-		var nextErr *errors.Error
-		if !errors.As(next, &nextErr) {
-			return false
-		}
-		e = nextErr
-	}
-
-	return false
+	return hasErrorMarker(err, catchupFailureReportedKey)
 }
 
 func (u *Server) reportCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) {
@@ -489,8 +468,9 @@ func isUnboundTxInvalidVerdict(err error) bool {
 // answering 429 deliberately must not be able to dodge every charge. The announced-block
 // fetch has its own, bounded rule; see reportAnnouncedBlockFetchFailure.
 //
-// A validation that waited in runOncePerBlock on a validation that panicked on another
-// goroutine (BV-STARTUP-007) is local too. The panic is a bug in this node. Without this the
+// A local-panic error (isLocalPanic, BV-STARTUP-007) is local too: a validation that waited in
+// runOncePerBlock on a validation that panicked on another goroutine, or an errgroup goroutine
+// that panicked (issue 4993). The panic is a bug in this node. Without this the
 // waiter's ERR_PROCESSING error reached processCatchupChItem's peer-failure report and charged
 // the primary.
 func isLocalCatchupFault(err error) bool {
@@ -498,7 +478,7 @@ func isLocalCatchupFault(err error) bool {
 		errors.Is(err, errors.ErrServiceRateLimited) ||
 		errors.IsContextError(err) ||
 		errors.Is(err, errors.ErrContextCanceled) ||
-		isConcurrentValidationPanic(err) ||
+		isLocalPanic(err) ||
 		isLocalProcessingFault(err)
 }
 

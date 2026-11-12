@@ -41,6 +41,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 )
 
@@ -77,6 +78,11 @@ const (
 // completes, so a process kill between any two steps can be detected and the
 // operation replayed on restart. See ProcessConflicting / ReverseProcessConflicting.
 type ConflictIntent struct {
+	// Recovery is the versioned before-image and progress of a forward operation.
+	// BeginConflictIntent stores it. PendingConflictIntents leaves it nil; use
+	// LoadConflictRecovery to read it.
+	Recovery *ConflictRecovery `json:"recovery,omitempty"`
+
 	// Kind is the operation direction: forward = ProcessConflicting,
 	// reverse = ReverseProcessConflicting.
 	Kind ConflictIntentKind
@@ -97,32 +103,62 @@ type ConflictIntent struct {
 
 	// StartedAt is the unix-nanosecond timestamp the intent was recorded.
 	StartedAt int64
+
+	// ID is the key the record is stored under. PendingConflictIntents sets it, so a record
+	// written by an older build, under the key formula of that build, is still addressed by its
+	// own key. A zero ID means the key is derived from the other fields.
+	ID chainhash.Hash
 }
 
-// IntentID derives a deterministic identifier for the intent from its kind,
-// block hash, block height and the (sorted) set of tx hashes. Two invocations
-// with the same (kind, block, height, hashes) yield the same id, which makes
-// BeginConflictIntent idempotent across a crash-retry of the same operation
-// and lets startup replay deduplicate naturally. The hash ordering is
-// normalised so callers need not pre-sort.
+// IntentID derives a deterministic identifier for the intent. A forward intent is keyed by its
+// block alone (ForwardConflictIntentID): its checklist holds the winners, so a retry with a subset of
+// them, or a caller that filters them differently, finds the same record. A reverse intent is keyed
+// by its kind, block hash, block height and the (sorted) set of tx hashes. Two invocations with the
+// same key yield the same id, which makes BeginConflictIntent idempotent across a crash-retry of the
+// same operation and lets startup replay deduplicate naturally.
 func (ci ConflictIntent) IntentID() chainhash.Hash {
-	sorted := make([]chainhash.Hash, len(ci.TxHashes))
-	copy(sorted, ci.TxHashes)
+	if ci.ID != (chainhash.Hash{}) {
+		return ci.ID
+	}
+
+	if ci.Kind == ConflictIntentForward {
+		return ForwardConflictIntentID(ci.BlockHash)
+	}
+
+	return LegacyConflictIntentID(ci.Kind, ci.BlockHash, ci.BlockHeight, ci.TxHashes)
+}
+
+// LegacyConflictIntentID is the key formula of older builds for every intent, and of this build for
+// a reverse intent: a hash of the kind, block hash, block height and the sorted tx hashes. A forward
+// record that an older build wrote is stored under this key.
+func LegacyConflictIntentID(kind ConflictIntentKind, blockHash chainhash.Hash, blockHeight uint32, txHashes []chainhash.Hash) chainhash.Hash {
+	sorted := make([]chainhash.Hash, len(txHashes))
+	copy(sorted, txHashes)
 	sort.Slice(sorted, func(i, j int) bool {
 		return bytes.Compare(sorted[i][:], sorted[j][:]) < 0
 	})
 
-	buf := make([]byte, 0, len(ci.Kind)+chainhash.HashSize+4+len(sorted)*chainhash.HashSize)
-	buf = append(buf, []byte(ci.Kind)...)
-	buf = append(buf, ci.BlockHash[:]...)
+	buf := make([]byte, 0, len(kind)+chainhash.HashSize+4+len(sorted)*chainhash.HashSize)
+	buf = append(buf, []byte(kind)...)
+	buf = append(buf, blockHash[:]...)
 
 	var heightBytes [4]byte
-	binary.BigEndian.PutUint32(heightBytes[:], ci.BlockHeight)
+	binary.BigEndian.PutUint32(heightBytes[:], blockHeight)
 	buf = append(buf, heightBytes[:]...)
 
 	for i := range sorted {
 		buf = append(buf, sorted[i][:]...)
 	}
+
+	return chainhash.HashH(buf)
+}
+
+// ForwardConflictIntentID is the ID of the forward intent of a block. Callers that acknowledge or
+// retire a block's intent compute it, so they need no scan of the WAL.
+func ForwardConflictIntentID(blockHash chainhash.Hash) chainhash.Hash {
+	buf := make([]byte, 0, len(ConflictIntentForward)+chainhash.HashSize)
+	buf = append(buf, []byte(ConflictIntentForward)...)
+	buf = append(buf, blockHash[:]...)
 
 	return chainhash.HashH(buf)
 }
@@ -675,6 +711,26 @@ type Store interface {
 	// This is used during blockchain reorganizations.
 	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
 
+	// SpendsMadeBy returns the coins this transaction consumed, as records its own
+	// Unspend can restore. Undoing a conflict resolution uses it to put those coins
+	// back.
+	//
+	// The store answers rather than the caller working it out from the transaction,
+	// because a coin's identity is computed from the amount and locking script of the
+	// output being spent, and a transaction only records those when it is stored in
+	// extended form. A store that keeps transactions in the plain form cannot answer
+	// the question that way and has to answer it from what it does keep.
+	//
+	// Only what the store can still speak for is returned. An input whose coin was
+	// never actually spent, or whose record has passed out of retention, is omitted
+	// rather than guessed at, because a record that cannot be restored fails the whole
+	// restore on a store that checks.
+	//
+	// Called only when undoing a conflict resolution, which happens during a chain
+	// reorganisation or when replaying an operation a crash interrupted. It is never on
+	// the path an ordinary transaction takes, so it may be as expensive as it needs to be.
+	SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*Spend, error)
+
 	// SetMinedMulti marks transactions as mined in the block described by minedBlockInfo.
 	//
 	// Postcondition (when minedBlockInfo.UnsetMined is false and a nil error is returned):
@@ -809,6 +865,17 @@ type Store interface {
 	// transactions during a rewind.
 	GetConflictingTxIterator() (UnminedTxIterator, error)
 
+	// ConflictingTxHashes returns the hash of every transaction whose record the
+	// store currently flags conflicting, answered from an index of conflicting
+	// records rather than by reading each transaction. Block validation uses it to
+	// check already-validated subtrees without a read per transaction.
+	//
+	// indexed is false when the store cannot answer from an index right now (an
+	// index still building, or a server that cannot hold one); the hashes are then
+	// nil and the caller must find the conflicting transactions some other way.
+	// An error means the store failed to answer and must not be read as "none".
+	ConflictingTxHashes(ctx context.Context) (hashes []chainhash.Hash, indexed bool, err error)
+
 	// SetLocked marks transactions as locked for spending.
 	SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error
 
@@ -822,6 +889,26 @@ type Store interface {
 	// operation does not create a duplicate. A non-nil error MUST abort the
 	// caller — the operation must not proceed without a durable intent record.
 	BeginConflictIntent(ctx context.Context, intent ConflictIntent) error
+
+	// SaveConflictRecovery atomically publishes the recovery checklist and phase.
+	// The intent must already exist. A failed write must stop state mutation.
+	SaveConflictRecovery(ctx context.Context, intentID chainhash.Hash, recovery *ConflictRecovery) error
+
+	// SetConflictLocks acquires/releases only locks owned by this WAL operation.
+	// Backends whose conflict Unspend never locks parents may implement a no-op.
+	SetConflictLocks(ctx context.Context, intentID chainhash.Hash, parents []chainhash.Hash, locked bool) error
+
+	// ReleaseConflictLocks releases the parent locks this WAL operation still owns and leaves every
+	// other lock as it is. A rollback before mutation uses it: the operation may never have taken a
+	// lock that another holder has. Backends that never lock parents may implement a no-op.
+	ReleaseConflictLocks(ctx context.Context, intentID chainhash.Hash, parents []chainhash.Hash) error
+
+	// LoadConflictRecovery returns nil for an absent or legacy intent.
+	LoadConflictRecovery(ctx context.Context, intentID chainhash.Hash) (*ConflictRecovery, error)
+
+	// RestoreConflictSpends restores only the specified recorded spends. Each
+	// write must reject a different existing spender and accept the same spender.
+	RestoreConflictSpends(ctx context.Context, spends []*Spend, blockHeight uint32) error
 
 	// CompleteConflictIntent deletes the intent record identified by intentID
 	// after the operation's terminal step has committed. Removing an
@@ -879,4 +966,11 @@ type Store interface {
 	// its writer — SetBlockState publishes both fields from one tip
 	// atomically, while the individual setters update one field at a time.
 	GetBlockState() BlockState
+
+	// Stamper returns the store's stamp: the deep pass that writes each UTXO's block onto it
+	// once its tx_mined partition is deep enough. Every store answers, so no caller has to test
+	// the store's type to find it, and a wrapper forwards it like any other method. A store
+	// whose UTXOs carry their block from the moment they are mined has nothing to stamp and
+	// returns pruner.NoStamp, whose WindowBlocks is zero.
+	Stamper() pruner.Stamper
 }

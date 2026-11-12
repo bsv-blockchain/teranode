@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -1912,6 +1913,38 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 	}, nil
 }
 
+// GetBestBlockHeaderUncached is GetBestBlockHeader with the store's response cache left out,
+// and with the block id and mined flag carried on the response.
+func (b *Blockchain) GetBestBlockHeaderUncached(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBlockHeaderResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBestBlockHeaderUncached",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBestBlockHeader),
+	)
+	defer deferFn()
+
+	chainTip, meta, err := b.store.GetBestBlockHeaderUncached(ctx)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.GetBlockHeaderResponse{
+		BlockHeader:    chainTip.Bytes(),
+		Id:             meta.ID,
+		Height:         meta.Height,
+		TxCount:        meta.TxCount,
+		SizeInBytes:    meta.SizeInBytes,
+		Miner:          meta.Miner,
+		PeerId:         meta.PeerID,
+		BlockTime:      meta.BlockTime,
+		Timestamp:      meta.Timestamp,
+		ChainWork:      meta.ChainWork,
+		MinedSet:       meta.MinedSet,
+		SubtreesSet:    meta.SubtreesSet,
+		Invalid:        meta.Invalid,
+		MedianTimePast: meta.MedianTimePast,
+	}, nil
+}
+
 // CheckBlockIsInCurrentChain verifies if a block is part of the current main chain.
 func (b *Blockchain) CheckBlockIsInCurrentChain(ctx context.Context, req *blockchain_api.CheckBlockIsCurrentChainRequest) (*blockchain_api.CheckBlockIsCurrentChainResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "CheckBlockIsInCurrentChain",
@@ -2052,6 +2085,41 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 	}, nil
 }
 
+// GetBlockHeadersByParentLinks retrieves headers by walking parent links back from a hash,
+// never by the main-chain flag and never from a cache.
+func (b *Blockchain) GetBlockHeadersByParentLinks(ctx context.Context, req *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersByParentLinks",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
+	)
+	defer deferFn()
+
+	startHash, err := chainhash.NewHash(req.StartHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][GetBlockHeadersByParentLinks] request's hash is not valid", err))
+	}
+
+	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeadersByParentLinks(ctx, startHash, req.NumberOfHeaders)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockHeaderBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		blockHeaderBytes[i] = blockHeader.Bytes()
+	}
+
+	blockHeaderMetaBytes := make([][]byte, len(blockHeaders))
+	for i, meta := range blockHeaderMetas {
+		blockHeaderMetaBytes[i] = meta.Bytes()
+	}
+
+	return &blockchain_api.GetBlockHeadersResponse{
+		BlockHeaders: blockHeaderBytes,
+		Metas:        blockHeaderMetaBytes,
+	}, nil
+}
+
 func (b *Blockchain) GetBlockHeadersToCommonAncestor(ctx context.Context, req *blockchain_api.GetBlockHeadersToCommonAncestorRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeaders",
 		tracing.WithParentStat(b.stats),
@@ -2170,6 +2238,96 @@ func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockch
 		BlockHeaders: blockHeaderBytes,
 		Metas:        metasBytes,
 	}, nil
+}
+
+// BlocksBetterThan returns the valid blocks that sort better than a key in the best-tip order, worst first.
+func (b *Blockchain) BlocksBetterThan(ctx context.Context, req *blockchain_api.BlocksBetterThanRequest) (*blockchain_api.BlocksBetterThanResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "BlocksBetterThan",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	if req.Limit == 0 {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid limit %d, must be 1 to %d", req.Limit, b.maxBlockHeadersPerRequest()))
+	}
+
+	after, err := model.NewBestTipKeyFromBytes(req.After)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid after key", err))
+	}
+
+	var from *model.BestTipKey
+
+	if len(req.From) > 0 {
+		key, keyErr := model.NewBestTipKeyFromBytes(req.From)
+		if keyErr != nil {
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid from key", keyErr))
+		}
+
+		from = &key
+	}
+
+	// Return a bounded page instead of rejecting a first-party caller's larger
+	// preferred page size. The caller continues from the last block it handled.
+	limit := req.Limit
+	if maximum := b.maxBlockHeadersPerRequest(); uint64(limit) > maximum {
+		limit = uint32(maximum) //nolint:gosec // maximum is smaller than the uint32 request
+	}
+
+	blockHeaders, metas, more, err := blocksBetterThanPage(ctx, b.store, after, from, req.MinHeight, limit)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockHeaderBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		blockHeaderBytes[i] = blockHeader.Bytes()
+	}
+
+	metasBytes := make([][]byte, len(metas))
+	for i, meta := range metas {
+		metasBytes[i] = meta.Bytes()
+	}
+
+	return &blockchain_api.BlocksBetterThanResponse{
+		BlockHeaders: blockHeaderBytes,
+		Metas:        metasBytes,
+		More:         more,
+	}, nil
+}
+
+// blocksBetterThanPage reads one page of BlocksBetterThan and whether more blocks follow it, by
+// asking the store for one block past the page.
+func blocksBetterThanPage(ctx context.Context, store blockchain_store.Store, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
+	probe := limit
+	if probe < math.MaxUint32 {
+		probe++
+	}
+
+	headers, metas, err := store.BlocksBetterThan(ctx, after, from, minHeight, probe)
+	if err != nil {
+		return nil, nil, false, err
+	}
+
+	if uint64(len(headers)) <= uint64(limit) {
+		return headers, metas, false, nil
+	}
+
+	return headers[:limit], metas[:limit], true, nil
+}
+
+// ClearBestTipLowWater deletes the best tip's low-water mark if it still holds the expected bytes.
+func (b *Blockchain) ClearBestTipLowWater(ctx context.Context, req *blockchain_api.ClearBestTipLowWaterRequest) (*emptypb.Empty, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "ClearBestTipLowWater",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	if err := b.store.ClearBestTipLowWater(ctx, req.Expected); err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &emptypb.Empty{}, nil
 }
 
 // GetBlockHeadersByHeight retrieves block headers between two specified heights.

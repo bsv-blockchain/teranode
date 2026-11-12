@@ -259,7 +259,16 @@ func (h *HTTP) GetPeers(c echo.Context) error {
 			continue
 		}
 
-		peerResponses = append(peerResponses, peerInfoToResponse(peer))
+		response := peerInfoToResponse(peer)
+
+		// last_catchup_error is backend error text from a fetch at a peer-chosen URL,
+		// so it follows the same switch as /catchup/status error_message
+		// (bitcoin-sv/teranode#4855). Its timestamp stays public.
+		if !h.settings.Asset.PublicErrorDetail {
+			response.LastCatchupError = ""
+		}
+
+		peerResponses = append(peerResponses, response)
 	}
 
 	return c.JSON(http.StatusOK, PeersResponse{

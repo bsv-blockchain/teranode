@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -173,6 +174,30 @@ func (b *BlockAssembler) MinCandidateTime(parentHash *chainhash.Hash) (int64, bo
 	return 0, false
 }
 
+// ParentMedianTimePast returns the median time past of the 11 headers ending at parentHash, which
+// is what bitcoin-sv measures a time-based coinbase nLockTime against from CSV onwards. The submit
+// path uses it for the coinbase finality check (bitcoin-sv/teranode#4981).
+//
+// Unlike MinCandidateTime it neither stops at a memo miss nor defers to GenerateSupported: finality
+// is a consensus rule on every chain, so a miss goes to the blockchain service, and a failed lookup
+// is an error the caller refuses on rather than a reason to skip the rule. A hit reads the floor
+// memo, but a miss neither fills it nor logs through the floor's latch: a submit is not a candidate,
+// so its lookup must not evict a candidate path's entry, and a failure here is a refused submit that
+// the caller reports, not an unfloored candidate time.
+func (b *BlockAssembler) ParentMedianTimePast(ctx context.Context, parentHash *chainhash.Hash) (uint32, error) {
+	if entry := b.memoizedMtpFloor(parentHash); entry != nil {
+		// The memo holds the floor, median time past plus one.
+		return safeconversion.Int64ToUint32(entry.minTime - 1)
+	}
+
+	median, _, err := b.parentChainMedianTimePast(ctx, nil, parentHash)
+	if err != nil {
+		return 0, errors.NewProcessingError("median time past of parent %s could not be established", parentHash.String(), err)
+	}
+
+	return safeconversion.Int64ToUint32(median.Unix())
+}
+
 // mtpFloor returns the memoized median-time-past floor for parentHash,
 // computing it on a miss. It returns nil — having logged the cause — when the
 // floor cannot be established, leaving the caller to decide how to degrade.
@@ -265,6 +290,33 @@ func (b *BlockAssembler) placeMtpFloor(entry *mtpFloorEntry) {
 // time. It returns nil — having logged the cause — when the floor cannot be
 // established, leaving the caller to decide how to degrade.
 func (b *BlockAssembler) computeMtpFloor(ctx context.Context, parentHeader *model.BlockHeader, parentHash *chainhash.Hash) *mtpFloorEntry {
+	medianTimestamp, walkCause, err := b.parentChainMedianTimePast(ctx, parentHeader, parentHash)
+	if err != nil {
+		b.logFloorLookupFailure(parentHash, "%v", err)
+
+		return nil
+	}
+
+	if walkCause != nil {
+		// Name the cause of the slower path rather than discarding the error
+		// silently: the walk costs one round-trip per header, so an operator
+		// seeing the extra latency needs to know why it engaged.
+		b.logger.Warnf("[candidateTime] batched header fetch for parent %s was unusable (%v); fell back to the hash-keyed parent-chain walk", parentHash.String(), walkCause)
+	}
+
+	entry := &mtpFloorEntry{parent: *parentHash, minTime: medianTimestamp.Unix() + 1}
+
+	b.placeMtpFloor(entry)
+
+	return entry
+}
+
+// parentChainMedianTimePast computes the median time past of the headers ending
+// at parentHash. It logs nothing and memoizes nothing, so a caller that is not
+// building a candidate can use it without spending the floor's log latch or
+// evicting a memo entry. When the batched run was unusable and the walk succeeded
+// instead, walkCause is why, for the caller to report.
+func (b *BlockAssembler) parentChainMedianTimePast(ctx context.Context, parentHeader *model.BlockHeader, parentHash *chainhash.Hash) (median time.Time, walkCause error, err error) {
 	// A transport failure and an unusable result call for opposite responses, so
 	// the fetch and the verification are separate steps. If the call itself fails
 	// the blockchain service is unhealthy, and walking it once per header would
@@ -275,26 +327,27 @@ func (b *BlockAssembler) computeMtpFloor(ctx context.Context, parentHeader *mode
 	// walk exists to recover from and its per-hash reads cannot hit it.
 	headers, fetchErr := b.fetchParentChainHeaders(ctx, parentHash)
 	if fetchErr != nil {
-		b.logFloorLookupFailure(parentHash, "the blockchain service did not answer the batched header fetch (%v); not attempting the %d-read parent-chain walk against a service that is already failing", fetchErr, blockchain.MedianTimeBlocks-1)
-
-		return nil
+		return time.Time{}, nil, errors.NewProcessingError("the blockchain service did not answer the batched header fetch; not attempting the %d-read parent-chain walk against a service that is already failing", blockchain.MedianTimeBlocks-1, fetchErr)
 	}
 
 	run := headers
 
 	if verifyErr := verifyParentChainRun(parentHash, headers); verifyErr != nil {
-		walked, walkErr := b.walkParentChain(ctx, parentHeader, blockchain.MedianTimeBlocks)
-		if walkErr != nil {
-			b.logFloorLookupFailure(parentHash, "the batched header fetch returned an unusable run (%v) and the hash-keyed parent-chain walk also failed (%v)", verifyErr, walkErr)
-
-			return nil
+		// Candidate creation already holds this header; a submit lookup only needs to fetch it
+		// when the batched result is unusable and the hash-keyed walk is necessary.
+		if parentHeader == nil {
+			parentHeader, _, err = b.blockchainClient.GetBlockHeader(ctx, parentHash)
+			if err != nil {
+				return time.Time{}, nil, errors.NewProcessingError("failed to fetch parent header %s for the hash-keyed walk", parentHash.String(), err)
+			}
 		}
 
-		// Name the cause of the slower path rather than discarding the error
-		// silently: the walk costs one round-trip per header, so an operator
-		// seeing the extra latency needs to know why it engaged.
-		b.logger.Warnf("[candidateTime] batched header fetch for parent %s was unusable (%v); fell back to the hash-keyed parent-chain walk", parentHash.String(), verifyErr)
+		walked, walkErr := b.walkParentChain(ctx, parentHeader, blockchain.MedianTimeBlocks)
+		if walkErr != nil {
+			return time.Time{}, nil, errors.NewProcessingError("the batched header fetch returned an unusable run (%v) and the hash-keyed parent-chain walk also failed", verifyErr, walkErr)
+		}
 
+		walkCause = verifyErr
 		run = walked
 	}
 
@@ -307,16 +360,10 @@ func (b *BlockAssembler) computeMtpFloor(ctx context.Context, parentHeader *mode
 	// producers above guarantee at least one header.
 	medianTimestamp, err := model.CalculateMedianTimestamp(timestamps)
 	if err != nil {
-		b.logFloorLookupFailure(parentHash, "the median timestamp over %d headers could not be calculated (%v)", len(run), err)
-
-		return nil
+		return time.Time{}, nil, errors.NewProcessingError("the median timestamp over %d headers could not be calculated", len(run), err)
 	}
 
-	entry := &mtpFloorEntry{parent: *parentHash, minTime: medianTimestamp.Unix() + 1}
-
-	b.placeMtpFloor(entry)
-
-	return entry
+	return *medianTimestamp, walkCause, nil
 }
 
 // generateSupported reports whether this chain lets blocks be generated quickly,

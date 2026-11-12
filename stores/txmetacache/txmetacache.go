@@ -30,6 +30,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/cespare/xxhash/v2"
@@ -1004,6 +1005,11 @@ func (t *TxMetaCache) GetConflictingTxIterator() (utxo.UnminedTxIterator, error)
 	return t.utxoStore.GetConflictingTxIterator()
 }
 
+// ConflictingTxHashes asks the underlying store; the cache holds no conflicting set.
+func (t *TxMetaCache) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	return t.utxoStore.ConflictingTxHashes(ctx)
+}
+
 func (t *TxMetaCache) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
 	return t.utxoStore.RemoveFromConflictingChildren(ctx, removals)
 }
@@ -1222,6 +1228,11 @@ func (t *TxMetaCache) Health(ctx context.Context, checkLiveness bool) (int, stri
 // SupportsOutpointOnlySpend delegates to the wrapped store.
 func (t *TxMetaCache) SupportsOutpointOnlySpend() bool {
 	return t.utxoStore.SupportsOutpointOnlySpend()
+}
+
+// NetsBelowCheckpoint forwards the wrapped store's answer.
+func (t *TxMetaCache) NetsBelowCheckpoint() bool {
+	return utxo.NetsBelowCheckpoint(t.utxoStore)
 }
 
 // Close delegates to the wrapped UTXO store so its in-flight batched writes
@@ -1575,6 +1586,11 @@ func (t *TxMetaCache) GetBlockState() utxo.BlockState {
 	return t.utxoStore.GetBlockState()
 }
 
+// Stamper forwards to the underlying UTXO store, whose stamp it is.
+func (t *TxMetaCache) Stamper() pruner.Stamper {
+	return t.utxoStore.Stamper()
+}
+
 // QueryOldUnminedTransactions forwards the query request to the underlying UTXO store.
 // The cache doesn't directly manage unmined transactions, so this is a pass-through operation.
 func (t *TxMetaCache) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
@@ -1591,4 +1607,28 @@ func (t *TxMetaCache) PreserveTransactions(ctx context.Context, txIDs []chainhas
 // The cache doesn't directly manage preservation expiry, so this is a pass-through operation.
 func (t *TxMetaCache) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
 	return t.utxoStore.ProcessExpiredPreservations(ctx, currentHeight)
+}
+
+// SpendsMadeBy passes through. There is nothing to cache: it is asked only when undoing a
+// conflict resolution, which is a reorg or a crash replay, and the answer describes coins whose
+// state the same operation is about to change.
+func (t *TxMetaCache) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return t.utxoStore.SpendsMadeBy(ctx, txHash)
+}
+
+func (t *TxMetaCache) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return t.utxoStore.LoadConflictRecovery(ctx, id)
+}
+func (t *TxMetaCache) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return t.utxoStore.SaveConflictRecovery(ctx, id, r)
+}
+func (t *TxMetaCache) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return t.utxoStore.RestoreConflictSpends(ctx, spends, height)
+}
+func (t *TxMetaCache) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return t.utxoStore.SetConflictLocks(ctx, id, parents, locked)
+}
+
+func (t *TxMetaCache) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
+	return t.utxoStore.ReleaseConflictLocks(ctx, id, parents)
 }

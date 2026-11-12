@@ -780,7 +780,7 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 	err = baseServer.processBlockFoundChannel(processingCtx, processBlockFound{
 		hash:    dummyBlock.Hash(),
 		baseURL: "http://peer0",
-		errCh:   make(chan error, 1),
+		reply:   newBlockFoundReply(),
 	})
 	require.NoError(t, err)
 
@@ -884,13 +884,13 @@ func TestServer_blockFoundCh_triggersCatchupCh_BlockLocator(t *testing.T) {
 	}
 
 	// Create block found request - will be processed directly
-	pbf1 := processBlockFound{hash: blocks[0].Header.Hash(), baseURL: "http://peer0", errCh: make(chan error, 1)}
+	pbf1 := processBlockFound{hash: blocks[0].Header.Hash(), baseURL: "http://peer0", reply: newBlockFoundReply()}
 
 	// Fill blockFoundCh with 4+ blocks to trigger catchup path (condition: len > 3)
-	server.blockFoundCh <- processBlockFound{hash: blocks[1].Header.Hash(), baseURL: "http://peer0", errCh: make(chan error, 1)}
-	server.blockFoundCh <- processBlockFound{hash: blocks[2].Header.Hash(), baseURL: "http://peer0", errCh: make(chan error, 1)}
-	server.blockFoundCh <- processBlockFound{hash: blocks[3].Header.Hash(), baseURL: "http://peer0", errCh: make(chan error, 1)}
-	server.blockFoundCh <- processBlockFound{hash: blocks[0].Header.Hash(), baseURL: "http://peer0", errCh: make(chan error, 1)}
+	server.blockFoundCh <- processBlockFound{hash: blocks[1].Header.Hash(), baseURL: "http://peer0", reply: newBlockFoundReply()}
+	server.blockFoundCh <- processBlockFound{hash: blocks[2].Header.Hash(), baseURL: "http://peer0", reply: newBlockFoundReply()}
+	server.blockFoundCh <- processBlockFound{hash: blocks[3].Header.Hash(), baseURL: "http://peer0", reply: newBlockFoundReply()}
+	server.blockFoundCh <- processBlockFound{hash: blocks[0].Header.Hash(), baseURL: "http://peer0", reply: newBlockFoundReply()}
 
 	// Process the first block - this should trigger catchup since:
 	// 1. len(blockFoundCh) > 3 makes shouldConsiderCatchup true
@@ -981,10 +981,10 @@ func TestProcessBlockFoundChannelCatchup(t *testing.T) {
 		blocks: blocks,
 	}
 
-	pbf1 := processBlockFound{hash: blocks[0].Header.Hash(), baseURL: "http://peer1", errCh: make(chan error, 1)}
-	pbf2 := processBlockFound{hash: blocks[1].Header.Hash(), baseURL: "http://peer1", errCh: make(chan error, 1)}
-	pbf3 := processBlockFound{hash: blocks[2].Header.Hash(), baseURL: "http://peer2", errCh: make(chan error, 1)}
-	pbf4 := processBlockFound{hash: blocks[3].Header.Hash(), baseURL: "http://peer2", errCh: make(chan error, 1)}
+	pbf1 := processBlockFound{hash: blocks[0].Header.Hash(), baseURL: "http://peer1", reply: newBlockFoundReply()}
+	pbf2 := processBlockFound{hash: blocks[1].Header.Hash(), baseURL: "http://peer1", reply: newBlockFoundReply()}
+	pbf3 := processBlockFound{hash: blocks[2].Header.Hash(), baseURL: "http://peer2", reply: newBlockFoundReply()}
+	pbf4 := processBlockFound{hash: blocks[3].Header.Hash(), baseURL: "http://peer2", reply: newBlockFoundReply()}
 
 	// Fill blockFoundCh with blocks
 	server.blockFoundCh <- pbf1
@@ -1491,8 +1491,11 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
-		// Simulate server returning headers in chunks
+		// Simulate server returning headers in chunks. Each chunk continues the chain from the
+		// last header of the one before, as a real peer's does: the header fetch rejects a chunk
+		// that does not build on the last header it holds.
 		callCount := 0
+		prevHash := bestBlock.Header.Hash()
 		httpmock.RegisterResponder(
 			"GET",
 			`=~^http://test-peer/headers_from_common_ancestor/.*`,
@@ -1501,7 +1504,6 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 				// Create valid headers for testing
 				numHeaders := 10000
 				headers := make([]*model.BlockHeader, numHeaders)
-				prevHash := bestBlock.Header.Hash()
 
 				// Create a valid difficulty setting
 				nBits, _ := model.NewNBitFromString("207fffff") // minimum difficulty
@@ -1536,6 +1538,9 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		assert.LessOrEqual(t, len(result.Headers), 100000)
 		assert.Contains(t, result.StopReason, "Memory limit reached")
 		assert.False(t, result.ReachedTarget)
+		// Ten chunks of 10,000 fill the 100,000 cap and the eleventh would overflow it, so the
+		// cap, not the iteration limit, ends the fetch.
+		require.Equal(t, 11, callCount, "the accumulated-header cap must end the fetch")
 	})
 
 	t.Run("Context Cancellation During Catchup", func(t *testing.T) {
@@ -3324,6 +3329,9 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 		BIP0034Height: 100000000,
 		BIP0065Height: 100000000,
 		BIP0066Height: 100000000,
+		// The stubbed client has no ancestry for the catch-up difficulty precheck to read, so the
+		// synthetic chains never adjust: each header must repeat its parent's bits.
+		NoDifficultyAdjustment: true,
 	}
 
 	mockBlockchainClient := &blockchain.Mock{}
@@ -3333,6 +3341,9 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 	mockBlockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBitsCatchup, nil).Maybe()
 	// Mock GetBlockIsMined for parent block verification during validation
 	mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	// findCommonAncestor narrows its ancestor to our current chain. These fixtures hold no side
+	// branches, so every stored block they report is on it.
+	mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	// Permissive default for locator capping (blockchain height > UTXO height fallback)
 	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, mock.Anything).
 		Return((*model.Block)(nil), errors.NewServiceError("not mocked")).Maybe()
@@ -3439,6 +3450,9 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 		BIP0034Height: 100000000,
 		BIP0065Height: 100000000,
 		BIP0066Height: 100000000,
+		// The stubbed client has no ancestry for the catch-up difficulty precheck to read, so the
+		// synthetic chains never adjust: each header must repeat its parent's bits.
+		NoDifficultyAdjustment: true,
 	}
 
 	mockBlockchainClient := &blockchain.Mock{}
@@ -3448,6 +3462,9 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 	mockBlockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBitsCatchup, nil).Maybe()
 	// Mock GetBlockIsMined for parent block verification during validation
 	mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	// findCommonAncestor narrows its ancestor to our current chain. These fixtures hold no side
+	// branches, so every stored block they report is on it.
+	mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	// Permissive default for locator capping (blockchain height > UTXO height fallback)
 	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, mock.Anything).
 		Return((*model.Block)(nil), errors.NewServiceError("not mocked")).Maybe()
@@ -4145,12 +4162,60 @@ func TestFindCommonAncestor_FindsAncestorAboveLaggingUTXOHeight(t *testing.T) {
 
 	blocks := testhelpers.CreateTestBlockChain(t, 5)
 
-	peerHeaders := make([]*model.BlockHeader, 3)
-	for i := 0; i < 3; i++ {
+	peerHeaders := make([]*model.BlockHeader, 4)
+	for i := 0; i < 4; i++ {
 		peerHeaders[i] = blocks[i].Header
 	}
 
-	// All three exist in our chain at 150, 151, 152 — above the old ceiling of 100.
+	// The first three exist in our chain at 150, 151, 152 — above the old ceiling of 100.
+	for i, header := range peerHeaders[:3] {
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, header.Hash()).Return(
+			header,
+			&model.BlockHeaderMeta{Height: uint32(150 + i)},
+			nil,
+		)
+	}
+
+	// The fourth is where the chains diverge. Without it the walk would run out of headers, which
+	// measures no fork depth at all (TestFindCommonAncestor_ListWeAllHoldMeasuresNoForkDepth).
+	mockBlockchainClient.On("GetBlockHeader", mock.Anything, peerHeaders[3].Hash()).Return(
+		(*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+		errors.NewBlockNotFoundError("block not found"),
+	)
+
+	catchupCtx := &CatchupContext{
+		blockUpTo: blocks[4],
+		headersFetchResult: &catchup.Result{
+			Headers: peerHeaders,
+		},
+	}
+
+	require.NoError(t, server.findCommonAncestor(context.Background(), catchupCtx))
+	assert.Equal(t, 2, catchupCtx.commonAncestorIndex)
+	assert.Equal(t, uint32(152), catchupCtx.commonAncestorMeta.Height)
+	assert.False(t, catchupCtx.walkExhausted)
+
+	// And the depth is measured from the accepted tip: 200 - 152.
+	assert.Equal(t, uint32(48), catchupCtx.forkDepth)
+}
+
+// TestFindCommonAncestor_ListWeAllHoldMeasuresNoForkDepth covers the walk running off the end of
+// the peer's list with every header one we hold, below our tip. The walk found no header we lack,
+// so it has seen no divergence: the last header is where the list ended, not where the chains part,
+// and 200 - 152 is no fork depth. The walk records that it ran out, and catchup() acts on that
+// (TestCatchup_HeadersWeAllHoldAreNoFork).
+func TestFindCommonAncestor_ListWeAllHoldMeasuresNoForkDepth(t *testing.T) {
+	server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+		&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 200}, nil,
+	)
+
+	blocks := testhelpers.CreateTestBlockChain(t, 5)
+
+	peerHeaders := []*model.BlockHeader{blocks[0].Header, blocks[1].Header, blocks[2].Header}
+
 	for i, header := range peerHeaders {
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, header.Hash()).Return(
 			header,
@@ -4167,11 +4232,9 @@ func TestFindCommonAncestor_FindsAncestorAboveLaggingUTXOHeight(t *testing.T) {
 	}
 
 	require.NoError(t, server.findCommonAncestor(context.Background(), catchupCtx))
-	assert.Equal(t, 2, catchupCtx.commonAncestorIndex)
+	assert.True(t, catchupCtx.walkExhausted, "every header was held, so the walk ran out")
 	assert.Equal(t, uint32(152), catchupCtx.commonAncestorMeta.Height)
-
-	// And the depth is measured from the accepted tip: 200 - 152.
-	assert.Equal(t, uint32(48), catchupCtx.forkDepth)
+	assert.Equal(t, uint32(0), catchupCtx.forkDepth, "running out of headers is no evidence of a fork")
 }
 
 // TestFindCommonAncestor_IgnoresStoredBlocksAboveOurTip pins the ceiling that survives the
@@ -4677,6 +4740,7 @@ func TestCatchup_ReportsValidatedHeaderChainWorkAfterHeaderValidation(t *testing
 	).Maybe()
 	mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
 	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(errors.NewStateError("stop after validated progress report"))
+	expectFSMRunning(mockBlockchainClient)
 
 	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
@@ -4939,6 +5003,8 @@ func TestFetchAndValidateBlocks_FSMRejectsWhenNotRunning(t *testing.T) {
 	// from an invalid source state (so CATCHUPBLOCKS event is invalid)
 	mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
 	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(errors.NewStateError("event CATCHUPBLOCKS inappropriate in current state IDLE"))
+	idle := blockchain.FSMStateIDLE
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&idle, nil).Maybe()
 	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, errors.NewBlockNotFoundError("not stored"))
 
 	blocks := testhelpers.CreateTestBlockChain(t, 3)

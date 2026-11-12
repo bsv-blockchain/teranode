@@ -29,6 +29,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jellydator/ttlcache/v3"
@@ -698,6 +699,12 @@ func (m *MockBlockchainClient) GetBlockHeader(ctx context.Context, blockHash *ch
 func (m *MockBlockchainClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
+func (m *MockBlockchainClient) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return m.GetBestBlockHeader(ctx)
+}
+func (m *MockBlockchainClient) GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return nil, nil, nil
+}
 func (m *MockBlockchainClient) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
@@ -715,6 +722,12 @@ func (m *MockBlockchainClient) GetBlockHeadersFromTill(ctx context.Context, bloc
 }
 func (m *MockBlockchainClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
+}
+func (m *MockBlockchainClient) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
+	return nil, nil, false, nil
+}
+func (m *MockBlockchainClient) ClearBestTipLowWater(ctx context.Context, expected []byte) error {
+	return nil
 }
 func (m *MockBlockchainClient) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
@@ -1012,6 +1025,9 @@ func (m *MockUTXOStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (
 func (m *MockUTXOStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 	return nil, nil
 }
+func (m *MockUTXOStore) ConflictingTxHashes(_ context.Context) ([]chainhash.Hash, bool, error) {
+	return nil, true, nil
+}
 func (m *MockUTXOStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
 	return nil
 }
@@ -1086,6 +1102,8 @@ func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
 		MedianTime: m.GetMedianBlockTime(),
 	}
 }
+
+func (m *MockUTXOStore) Stamper() pruner.Stamper { return pruner.NoStamp }
 
 // Comprehensive tests for Start method
 
@@ -1871,6 +1889,11 @@ func TestHealthConcurrency(t *testing.T) {
 	assert.Equal(t, 0, errorCount)
 }
 
+// SpendsMadeBy returns nothing: no test here drives the conflict-undo path.
+func (m *MockUTXOStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
+}
+
 // shutdownLogger records when the processing loop logs that it is shutting down.
 type shutdownLogger struct {
 	ulogger.TestLogger
@@ -1994,4 +2017,21 @@ func TestStart_ProcessingLoopStopsDuringPersistSleep(t *testing.T) {
 			}
 		})
 	}
+}
+
+func (m *MockUTXOStore) SaveConflictRecovery(context.Context, chainhash.Hash, *utxo.ConflictRecovery) error {
+	return nil
+}
+func (m *MockUTXOStore) LoadConflictRecovery(context.Context, chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) RestoreConflictSpends(context.Context, []*utxo.Spend, uint32) error {
+	return nil
+}
+func (m *MockUTXOStore) SetConflictLocks(context.Context, chainhash.Hash, []chainhash.Hash, bool) error {
+	return nil
+}
+
+func (m *MockUTXOStore) ReleaseConflictLocks(context.Context, chainhash.Hash, []chainhash.Hash) error {
+	return nil
 }

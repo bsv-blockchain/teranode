@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -387,6 +388,74 @@ func Test_SqlGetChainTips(t *testing.T) {
 		assert.Equal(t, uint32(1), forkTip.Branchlen)
 		assert.Equal(t, "headers-only", forkTip.Status)
 	})
+}
+
+// TestProcessChainTipRows_ClosesTheCursorBeforeBranchLength holds a write transaction on
+// the blocks table inside branchLen. On SQLite in shared-cache mode the write waits for any
+// open read of the table, and a waiting writer blocks every new read, so with the tip
+// cursor still open the write could never commit and a store query would never return.
+// This is how the on_main_chain repair loop hung Test_SqlGetChainTips.
+func TestProcessChainTipRows_ClosesTheCursorBeforeBranchLength(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	for _, block := range []*model.Block{block1, block2, blockAlternative2} {
+		_, _, err = s.StoreBlock(ctx, block, "")
+		require.NoError(t, err)
+		require.NoError(t, s.SetBlockProcessedAt(ctx, block.Hash()))
+	}
+
+	rows, err := s.queryChainTipRows(ctx)
+	require.NoError(t, err)
+
+	branchLenCalls := 0
+	writeCommitted := false
+
+	tips, err := s.processChainTipRows(ctx, rows, func(tipHash *chainhash.Hash) bool {
+		return *tipHash == *block2.Hash()
+	}, func(ctx context.Context, _ []byte) (uint32, error) {
+		branchLenCalls++
+
+		done := make(chan error, 1)
+
+		go func() {
+			tx, txErr := s.db.BeginTx(ctx, nil)
+			if txErr != nil {
+				done <- txErr
+				return
+			}
+
+			if _, txErr = tx.ExecContext(ctx, `UPDATE blocks SET peer_id = peer_id WHERE id = 1`); txErr != nil {
+				_ = tx.Rollback()
+				done <- txErr
+
+				return
+			}
+
+			done <- tx.Commit()
+		}()
+
+		select {
+		case txErr := <-done:
+			require.NoError(t, txErr)
+
+			writeCommitted = true
+		case <-time.After(5 * time.Second):
+		}
+
+		return 1, nil
+	})
+	require.NoError(t, err)
+	require.Len(t, tips, 2)
+	require.Equal(t, 1, branchLenCalls)
+	require.True(t, writeCommitted, "a write to the blocks table could not commit while branchLen ran, so the chain tip cursor was still open")
 }
 
 // Helper function to create block3 on top of a given parent block

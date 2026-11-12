@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -915,9 +916,10 @@ func TestMiningCandidateMainPathTimeFloored(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		txHash := chainhash.HashH([]byte{byte(i), 0xBB})
-		require.True(t, ba.AddTxBatchIfRoom(
+		require.Equal(t, subtreeprocessor.Admitted, ba.AddTxBatchBounded(
 			[]subtreepkg.Node{{Hash: txHash, Fee: uint64(100), SizeInBytes: 250}},
 			[]*subtreepkg.TxInpoints{{}},
+			false,
 		))
 	}
 

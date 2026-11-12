@@ -1,6 +1,7 @@
 package aerospike_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -564,4 +565,278 @@ func TestIssue1768_ParentPreservedDespiteLateUnminedSince(t *testing.T) {
 		assert.Equal(t, int(lastSafeHeight+tSettings.UtxoStore.ParentPreservationBlocks), bins[fields.PreserveUntil.String()], "parent %d must be preserved", i+1)
 		assert.Nil(t, bins[fields.DeleteAtHeight.String()], "parent %d deleteAtHeight must be cleared", i+1)
 	}
+}
+
+// TestMarkTransactionsOnLongestChain_ReusedBatchSlots checks every bin of every record a mark touches, and
+// of records it must not touch, when each worker sends several batches through the same reused keys and
+// batch writes. 31 hashes with a batch size of 4 and 3 workers give each worker batches of 4, 4 and 3 (the
+// last 4, 4 and 1, which goes through the client's single-record path), so a key or batch write that kept
+// the previous batch's transaction writes the wrong record and leaves the right one as it was.
+func TestMarkTransactionsOnLongestChain_ReusedBatchSlots(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.MaxMinedBatchSize = 4
+	tSettings.UtxoStore.MaxMinedRoutines = 3
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	const (
+		height       = 1000
+		count        = 31
+		missingIndex = 27 // the third worker's second batch
+	)
+
+	require.NoError(t, store.SetBlockHeight(height))
+
+	retention := int(tSettings.GetUtxoStoreBlockHeightRetention())
+	require.NotZero(t, retention)
+
+	dahBin := fields.DeleteAtHeight.String()
+	unminedBin := fields.UnminedSince.String()
+	dahVerBin := fields.DAHVersion.String()
+
+	keyOf := func(txID chainhash.Hash, page byte) *aerospike.Key {
+		var k *aerospike.Key
+
+		var err error
+
+		if page == 0 {
+			k, err = aerospike.NewKey(store.GetNamespace(), store.GetName(), txID[:])
+		} else {
+			k, err = aerospike.NewKey(store.GetNamespace(), store.GetName(), append(txID.CloneBytes(), page, 0, 0, 0))
+		}
+
+		require.NoError(t, err)
+
+		return k
+	}
+
+	// master writes a mined record. pages > 0 makes it external with that many pagination records.
+	master := func(txID chainhash.Hash, spent bool, pages int, extra aerospike.BinMap) aerospike.BinMap {
+		spentUtxos := 0
+		if spent {
+			spentUtxos = 1
+		}
+
+		bins := aerospike.BinMap{
+			fields.TxID.String():           txID.CloneBytes(),
+			fields.Conflicting.String():    false,
+			fields.TotalExtraRecs.String(): pages,
+			fields.SpentExtraRecs.String(): 0,
+			fields.SpentUtxos.String():     spentUtxos,
+			fields.RecordUtxos.String():    1,
+			fields.BlockIDs.String():       []interface{}{1},
+			fields.BlockHeights.String():   []interface{}{900},
+		}
+
+		if pages > 0 {
+			bins[fields.External.String()] = true
+			bins[fields.SpentExtraRecs.String()] = pages
+		}
+
+		for k, v := range extra {
+			bins[k] = v
+		}
+
+		require.NoError(t, client.Put(nil, keyOf(txID, 0), bins))
+
+		return bins
+	}
+
+	page := func(txID chainhash.Hash, idx byte, extra aerospike.BinMap) aerospike.BinMap {
+		bins := aerospike.BinMap{fields.TxID.String(): txID.CloneBytes()}
+		for k, v := range extra {
+			bins[k] = v
+		}
+
+		require.NoError(t, client.Put(nil, keyOf(txID, idx), bins))
+
+		return bins
+	}
+
+	// with returns a copy of bins with set applied; a nil value removes the bin.
+	with := func(bins, set aerospike.BinMap) aerospike.BinMap {
+		out := make(aerospike.BinMap, len(bins))
+		for k, v := range bins {
+			out[k] = v
+		}
+
+		for k, v := range set {
+			if v == nil {
+				delete(out, k)
+			} else {
+				out[k] = v
+			}
+		}
+
+		return out
+	}
+
+	requireBins := func(t *testing.T, key *aerospike.Key, want aerospike.BinMap, msg string) {
+		t.Helper()
+
+		rec, err := client.Get(nil, key)
+		require.NoError(t, err, msg)
+		require.Equal(t, want, rec.Bins, msg)
+	}
+
+	hashes := func(prefix string) []chainhash.Hash {
+		out := make([]chainhash.Hash, count)
+		for i := range out {
+			out[i] = chainhash.HashH([]byte(fmt.Sprintf("reused-slots-%s-%d", prefix, i)))
+		}
+
+		return out
+	}
+
+	// controls are records the call is not given; they must come out exactly as they went in.
+	controls := func(t *testing.T, prefix string) func() {
+		t.Helper()
+
+		want := make(map[chainhash.Hash]aerospike.BinMap, 3)
+
+		for i := range 3 {
+			txID := chainhash.HashH([]byte(fmt.Sprintf("reused-slots-%s-control-%d", prefix, i)))
+			want[txID] = master(txID, true, 0, aerospike.BinMap{unminedBin: 77, dahBin: 555})
+		}
+
+		return func() {
+			t.Helper()
+
+			for txID, bins := range want {
+				requireBins(t, keyOf(txID, 0), bins, "control record "+txID.String())
+			}
+		}
+	}
+
+	t.Run("off the longest chain stamps only records without unmined_since", func(t *testing.T) {
+		txIDs := hashes("off")
+		checkControls := controls(t, "off")
+		stamp := int(utxo.BackdatedUnminedSince(height, tSettings.UtxoStore.UnminedTxRetention))
+
+		want := make([]aerospike.BinMap, count)
+
+		for i, txID := range txIDs {
+			if i%2 == 0 {
+				want[i] = master(txID, true, 0, aerospike.BinMap{unminedBin: 50}) // kept
+			} else {
+				want[i] = with(master(txID, true, 0, nil), aerospike.BinMap{unminedBin: stamp})
+			}
+		}
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, txIDs, false))
+
+		for i, txID := range txIDs {
+			requireBins(t, keyOf(txID, 0), want[i], fmt.Sprintf("tx %d", i))
+		}
+
+		checkControls()
+	})
+
+	t.Run("on the longest chain without a DAH restamp clears unmined_since and skips a missing record", func(t *testing.T) {
+		previousGlobal := tSettings.GlobalBlockHeightRetention
+		previousAdjustment := tSettings.UtxoStore.BlockHeightRetentionAdjustment
+
+		tSettings.GlobalBlockHeightRetention = 0
+		tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
+
+		t.Cleanup(func() {
+			tSettings.GlobalBlockHeightRetention = previousGlobal
+			tSettings.UtxoStore.BlockHeightRetentionAdjustment = previousAdjustment
+		})
+
+		require.Zero(t, tSettings.GetUtxoStoreBlockHeightRetention())
+
+		txIDs := hashes("on-no-restamp")
+		checkControls := controls(t, "on-no-restamp")
+
+		want := make([]aerospike.BinMap, count)
+
+		for i, txID := range txIDs {
+			if i == missingIndex {
+				continue
+			}
+
+			want[i] = with(master(txID, true, 0, aerospike.BinMap{unminedBin: 50, dahBin: 555}), aerospike.BinMap{unminedBin: nil})
+		}
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, txIDs, true))
+
+		for i, txID := range txIDs {
+			if i == missingIndex {
+				exists, err := client.Exists(nil, keyOf(txID, 0))
+				require.NoError(t, err)
+				require.False(t, exists, "a missing record must not be created")
+
+				continue
+			}
+
+			requireBins(t, keyOf(txID, 0), want[i], fmt.Sprintf("tx %d", i))
+		}
+
+		checkControls()
+	})
+
+	t.Run("on the longest chain restamps the DAH of masters and their pagination records", func(t *testing.T) {
+		require.Equal(t, uint32(retention), tSettings.GetUtxoStoreBlockHeightRetention())
+
+		txIDs := hashes("on-restamp")
+		checkControls := controls(t, "on-restamp")
+		newDAH := height + 1 + retention
+
+		type record struct {
+			key  *aerospike.Key
+			want aerospike.BinMap
+			name string
+		}
+
+		var records []record
+
+		for i, txID := range txIDs {
+			if i == missingIndex {
+				continue
+			}
+
+			name := fmt.Sprintf("tx %d", i)
+			add := func(idx byte, want aerospike.BinMap, suffix string) {
+				records = append(records, record{key: keyOf(txID, idx), want: want, name: name + suffix})
+			}
+
+			switch i % 4 {
+			case 0: // fully spent: gets a DAH
+				bins := master(txID, true, 0, aerospike.BinMap{unminedBin: 50})
+				add(0, with(bins, aerospike.BinMap{unminedBin: nil, dahBin: newDAH, dahVerBin: 1}), "")
+			case 1: // unspent with a stale DAH: the DAH is cleared
+				bins := master(txID, false, 0, aerospike.BinMap{unminedBin: 50, dahBin: 1002})
+				add(0, with(bins, aerospike.BinMap{unminedBin: nil, dahBin: nil, dahVerBin: 1}), "")
+			case 2: // external, fully spent: master and both pages get the DAH
+				bins := master(txID, true, 2, aerospike.BinMap{unminedBin: 50})
+				add(0, with(bins, aerospike.BinMap{unminedBin: nil, dahBin: newDAH, dahVerBin: 1}), "")
+
+				for idx := byte(1); idx <= 2; idx++ {
+					add(idx, with(page(txID, idx, nil), aerospike.BinMap{dahBin: newDAH, dahVerBin: 1}), fmt.Sprintf(" page %d", idx))
+				}
+			case 3: // external, unspent with a stale DAH: master and both pages lose it
+				bins := master(txID, false, 2, aerospike.BinMap{unminedBin: 50, dahBin: 1002})
+				add(0, with(bins, aerospike.BinMap{unminedBin: nil, dahBin: nil, dahVerBin: 1}), "")
+
+				for idx := byte(1); idx <= 2; idx++ {
+					add(idx, with(page(txID, idx, aerospike.BinMap{dahBin: 1002}), aerospike.BinMap{dahBin: nil, dahVerBin: 1}), fmt.Sprintf(" page %d", idx))
+				}
+			}
+		}
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, txIDs, true))
+
+		for _, r := range records {
+			requireBins(t, r.key, r.want, r.name)
+		}
+
+		exists, err := client.Exists(nil, keyOf(txIDs[missingIndex], 0))
+		require.NoError(t, err)
+		require.False(t, exists, "a missing record must not be created")
+
+		checkControls()
+	})
 }

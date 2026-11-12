@@ -20,9 +20,12 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/null"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -4699,4 +4702,339 @@ func TestRemoveCoinbaseUtxos_NilCoinbase_ReturnsErrorNotPanic(t *testing.T) {
 	// mapping it onto ErrTxNotFound would make every caller skip it silently.
 	require.False(t, errors.Is(err, errors.ErrTxNotFound),
 		"a nil coinbase must not be reported as an absent transaction")
+}
+
+type coinbaseChildFixture struct {
+	stp         *SubtreeProcessor
+	utxoStore   utxo.Store
+	blobStore   blob.Store
+	block       *model.Block
+	coinbase    *bt.Tx
+	otherParent *bt.Tx
+	child       *bt.Tx
+}
+
+func newCoinbaseChildFixture(t *testing.T, subtreeStore func(blob.Store) blob.Store) *coinbaseChildFixture {
+	t.Helper()
+
+	ctx := context.Background()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///" + t.Name())
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
+	require.NoError(t, err)
+	require.NoError(t, utxoStore.SetBlockHeight(4))
+
+	settings := test.CreateBaseTestSettings(t)
+	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 128
+
+	newSubtreeChan := make(chan NewSubtreeRequest, 10)
+	go func() {
+		for req := range newSubtreeChan {
+			if req.ErrChan != nil {
+				req.ErrChan <- nil
+			}
+		}
+	}()
+	t.Cleanup(func() { close(newSubtreeChan) })
+
+	backing := blob_memory.New()
+
+	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, subtreeStore(backing), nil, utxoStore, newSubtreeChan)
+	require.NoError(t, err)
+	stp.Start(ctx)
+
+	coinbase := coinbaseTx
+	_, err = utxoStore.Create(ctx, coinbase, 1)
+	require.NoError(t, err)
+
+	otherParent := bt.NewTx()
+	require.NoError(t, otherParent.From(coinbase.TxIDChainHash().String(), 0, coinbase.Outputs[0].LockingScript.String(), uint64(coinbase.Outputs[0].Satoshis)))
+	require.NoError(t, otherParent.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+	otherParent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+	_, err = utxoStore.Create(ctx, otherParent, 1)
+	require.NoError(t, err)
+
+	child := bt.NewTx()
+	require.NoError(t, child.From(coinbase.TxIDChainHash().String(), 0, coinbase.Outputs[0].LockingScript.String(), uint64(coinbase.Outputs[0].Satoshis)))
+	require.NoError(t, child.From(otherParent.TxIDChainHash().String(), 0, otherParent.Outputs[0].LockingScript.String(), otherParent.Outputs[0].Satoshis))
+	require.NoError(t, child.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
+	child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+	child.Inputs[1].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+	_, err = utxoStore.Create(ctx, child, 1)
+	require.NoError(t, err)
+
+	spends, err := utxoStore.Spend(ctx, child, 2, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	for _, s := range spends {
+		require.NoError(t, s.Err)
+	}
+
+	return &coinbaseChildFixture{
+		stp:         stp,
+		utxoStore:   utxoStore,
+		blobStore:   backing,
+		coinbase:    coinbase,
+		otherParent: otherParent,
+		child:       child,
+		block: &model.Block{
+			CoinbaseTx: coinbase,
+			Header: &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  &chainhash.Hash{},
+				HashMerkleRoot: &chainhash.Hash{},
+				Timestamp:      1234567890,
+				Bits:           model.NBit{},
+				Nonce:          12345,
+			},
+			Subtrees: []*chainhash.Hash{},
+		},
+	}
+}
+
+func (f *coinbaseChildFixture) otherParentSpend(t *testing.T) *utxo.SpendResponse {
+	t.Helper()
+
+	utxoHash, err := util.UTXOHashFromInput(f.child.Inputs[1])
+	require.NoError(t, err)
+
+	resp, err := f.utxoStore.GetSpend(context.Background(), &utxo.Spend{
+		TxID:     f.otherParent.TxIDChainHash(),
+		Vout:     0,
+		UTXOHash: utxoHash,
+	})
+	require.NoError(t, err)
+
+	return resp
+}
+
+func TestRemoveCoinbaseUtxosUnspendsParentsOfDeletedChildren(t *testing.T) {
+	ctx := context.Background()
+	f := newCoinbaseChildFixture(t, func(s blob.Store) blob.Store { return s })
+
+	before := f.otherParentSpend(t)
+	require.NotNil(t, before.SpendingData, "precondition: other parent output is spent by the child")
+	require.Equal(t, f.child.TxIDChainHash().String(), before.SpendingData.TxID.String())
+
+	require.NoError(t, f.stp.removeCoinbaseUtxos(ctx, f.block))
+
+	_, err := f.utxoStore.Get(ctx, f.child.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "the child record must be deleted")
+
+	require.Nil(t, f.otherParentSpend(t).SpendingData, "a surviving parent must not name the deleted child as its spender")
+}
+
+func TestRemoveCoinbaseUtxosKeepsDeletedChildrenForReorgBack(t *testing.T) {
+	ctx := context.Background()
+	f := newCoinbaseChildFixture(t, func(s blob.Store) blob.Store { return s })
+
+	require.NoError(t, f.stp.removeCoinbaseUtxos(ctx, f.block))
+
+	kept, err := f.blobStore.Get(ctx, f.block.Header.Hash()[:], fileformat.FileTypeReorgDeletedTxs)
+	require.NoError(t, err, "the deleted children must be kept under the moved-back block's hash")
+
+	saved, err := decodeReorgDeletedTxs(kept)
+	require.NoError(t, err)
+	require.Len(t, saved, 1)
+	require.Equal(t, f.child.TxIDChainHash().String(), saved[0].tx.TxIDChainHash().String())
+	require.True(t, saved[0].tx.IsExtended(), "the kept tx must carry its previous outputs so it can be spent again")
+}
+
+type failingSetStore struct {
+	blob.Store
+}
+
+func (failingSetStore) Set(context.Context, []byte, fileformat.FileType, []byte, ...options.FileOption) error {
+	return errors.NewStorageError("disk full")
+}
+
+func TestRemoveCoinbaseUtxosKeepsEverythingWhenTheChildrenCannotBeSaved(t *testing.T) {
+	ctx := context.Background()
+	f := newCoinbaseChildFixture(t, func(s blob.Store) blob.Store { return failingSetStore{Store: s} })
+
+	require.Error(t, f.stp.removeCoinbaseUtxos(ctx, f.block))
+
+	_, err := f.utxoStore.Get(ctx, f.child.TxIDChainHash())
+	require.NoError(t, err, "no record may be deleted when its data could not be saved")
+
+	_, err = f.utxoStore.Get(ctx, f.coinbase.TxIDChainHash())
+	require.NoError(t, err, "the coinbase must survive too")
+
+	require.NotNil(t, f.otherParentSpend(t).SpendingData, "no parent may be unspent")
+}
+
+func TestMoveForwardBlockRestoresChildrenDeletedWhenTheBlockWasMovedBack(t *testing.T) {
+	ctx := context.Background()
+	f := newCoinbaseChildFixture(t, func(s blob.Store) blob.Store { return s })
+
+	require.NoError(t, f.stp.removeCoinbaseUtxos(ctx, f.block))
+
+	_, err := f.utxoStore.Get(ctx, f.child.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "precondition: the child was deleted by the move back")
+	require.Nil(t, f.otherParentSpend(t).SpendingData, "precondition: the surviving parent was unspent")
+
+	require.NoError(t, f.stp.processCoinbaseUtxos(ctx, f.block), "the move forward recreates the coinbase first")
+
+	_, restoreErr := f.stp.restoreReorgDeletedTxs(ctx, f.block)
+	require.NoError(t, restoreErr)
+
+	restored, err := f.utxoStore.Get(ctx, f.child.TxIDChainHash(), fields.Tx)
+	require.NoError(t, err, "the child must exist again")
+	require.Equal(t, f.child.TxIDChainHash().String(), restored.Tx.TxIDChainHash().String())
+
+	spend := f.otherParentSpend(t)
+	require.NotNil(t, spend.SpendingData, "the surviving parent's output is spent by the recreated child again")
+	require.Equal(t, f.child.TxIDChainHash().String(), spend.SpendingData.TxID.String())
+
+	_, restoreErr = f.stp.restoreReorgDeletedTxs(ctx, f.block)
+	require.NoError(t, restoreErr, "restoring twice must be safe")
+}
+
+func TestRestoreReorgDeletedTxsIgnoresABlockWithNothingSaved(t *testing.T) {
+	f := newCoinbaseChildFixture(t, func(s blob.Store) blob.Store { return s })
+
+	_, restoreErr := f.stp.restoreReorgDeletedTxs(context.Background(), f.block)
+	require.NoError(t, restoreErr)
+}
+
+func TestMoveForwardBlockRecreatesChildrenOfAnEmptyBlockMovedBackEarlier(t *testing.T) {
+	ctx := context.Background()
+	f := newCoinbaseChildFixture(t, func(s blob.Store) blob.Store { return s })
+
+	f.stp.currentBlockHeader.Store(&model.BlockHeader{Version: 1, HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}, Nonce: 1})
+	f.block.Header.HashPrevBlock = f.stp.currentBlockHeader.Load().Hash()
+
+	require.NoError(t, f.stp.removeCoinbaseUtxos(ctx, f.block))
+	require.Nil(t, f.otherParentSpend(t).SpendingData, "precondition: the surviving parent was unspent")
+
+	_, _, err := f.stp.moveForwardBlock(ctx, f.block, true, map[chainhash.Hash]struct{}{}, false, true)
+	require.NoError(t, err)
+
+	_, err = f.utxoStore.Get(ctx, f.child.TxIDChainHash())
+	require.NoError(t, err, "moving the block forward must recreate the child")
+	require.NotNil(t, f.otherParentSpend(t).SpendingData, "the recreated child spends the surviving parent again")
+}
+
+// With blockassembly_storeTxInpointsForSubtreeMeta off no subtree meta is written, so a moved-back
+// block's parent links come from the utxo store. A tx whose record is gone, and the coinbase
+// placeholder, get none.
+func TestMoveBackBlockGetSubtreesReadsParentLinksFromTheStoreWithSubtreeMetaOff(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+	tSettings.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	blobStore := blob_memory.New()
+
+	stp, err := NewSubtreeProcessor(t.Context(), ulogger.TestLogger{}, tSettings, blobStore, nil, utxoStore, make(chan NewSubtreeRequest, 1))
+	require.NoError(t, err)
+
+	parentHash := chainhash.Hash{0x01}
+
+	stored := bt.NewTx()
+	stored.Inputs = []*bt.Input{{PreviousTxOutIndex: 0, PreviousTxSatoshis: 2000, UnlockingScript: bscript.NewFromBytes([]byte{})}}
+	require.NoError(t, stored.Inputs[0].PreviousTxIDAdd(&parentHash))
+	require.NoError(t, stored.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+
+	_, err = utxoStore.Create(t.Context(), stored, 0)
+	require.NoError(t, err)
+
+	goneHash := chainhash.Hash{0x02}
+
+	blockSubtree, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, blockSubtree.AddCoinbaseNode())
+	require.NoError(t, blockSubtree.AddNode(*stored.TxIDChainHash(), 1, 1))
+	require.NoError(t, blockSubtree.AddNode(goneHash, 1, 1))
+
+	subtreeBytes, err := blockSubtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, blobStore.Set(t.Context(), blockSubtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	_, txInpoints, _, err := stp.moveBackBlockGetSubtrees(t.Context(), &model.Block{
+		Header:   prevBlockHeader,
+		Subtrees: []*chainhash.Hash{blockSubtree.RootHash()},
+	})
+	require.NoError(t, err)
+	require.Len(t, txInpoints, 1)
+	require.Len(t, txInpoints[0], 3)
+
+	require.Empty(t, txInpoints[0][0].ParentTxHashes, "the coinbase placeholder has no parents")
+	require.Equal(t, []chainhash.Hash{parentHash}, txInpoints[0][1].ParentTxHashes, "a moved-back tx gets its parent links from the store")
+	require.Empty(t, txInpoints[0][2].ParentTxHashes, "a tx whose record is gone has no links to read")
+}
+
+// batchSizeRecordingStore records how many records each BatchDecorate call asks for.
+type batchSizeRecordingStore struct {
+	utxo.Store
+	batchSizes []int
+}
+
+func (s *batchSizeRecordingStore) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, fieldNames ...fields.FieldName) error {
+	s.batchSizes = append(s.batchSizes, len(items))
+
+	return s.Store.BatchDecorate(ctx, items, fieldNames...)
+}
+
+// A subtree can hold more nodes than one Aerospike batch request can carry, so the subtree-meta-off
+// move-back reads parent links in bounded batches, and every link still lands on its own node.
+func TestTxInpointsFromUtxoStoreReadsInBoundedBatches(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	sqlStore, err := sql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	store := &batchSizeRecordingStore{Store: sqlStore}
+
+	stp := &SubtreeProcessor{utxoStore: store}
+
+	previous := moveBackStoreReadBatchSize
+	moveBackStoreReadBatchSize = 2
+
+	t.Cleanup(func() { moveBackStoreReadBatchSize = previous })
+
+	nodes := []subtreepkg.Node{{Hash: subtreepkg.CoinbasePlaceholderHashValue}}
+	parents := make([]chainhash.Hash, 0, 3)
+
+	for i := byte(1); i <= 3; i++ {
+		parentHash := chainhash.Hash{i}
+		parents = append(parents, parentHash)
+
+		tx := bt.NewTx()
+		tx.Inputs = []*bt.Input{{PreviousTxOutIndex: 0, PreviousTxSatoshis: 2000, UnlockingScript: bscript.NewFromBytes([]byte{})}}
+		require.NoError(t, tx.Inputs[0].PreviousTxIDAdd(&parentHash))
+		require.NoError(t, tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(1000+int(i))))
+
+		_, err = sqlStore.Create(t.Context(), tx, 0)
+		require.NoError(t, err)
+
+		nodes = append(nodes, subtreepkg.Node{Hash: *tx.TxIDChainHash()})
+	}
+
+	nodes = append(nodes, subtreepkg.Node{Hash: chainhash.Hash{0xff}})
+
+	txInpoints, err := stp.txInpointsFromUtxoStore(t.Context(), nodes)
+	require.NoError(t, err)
+
+	require.Equal(t, []int{2, 2}, store.batchSizes, "four records in batches of two, the coinbase placeholder skipped")
+	require.Len(t, txInpoints, len(nodes))
+	require.Empty(t, txInpoints[0].ParentTxHashes, "the coinbase placeholder has no parents")
+
+	for i, parentHash := range parents {
+		require.Equal(t, []chainhash.Hash{parentHash}, txInpoints[i+1].ParentTxHashes, "node %d gets its own parent links", i+1)
+	}
+
+	require.Empty(t, txInpoints[4].ParentTxHashes, "a tx whose record is gone has no links to read")
 }

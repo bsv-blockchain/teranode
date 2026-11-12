@@ -110,7 +110,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				unminedOp,
 			)
 			// +1: the store height trails the block being validated, the allowance the spend path makes
-			ops = append(ops, s.buildDeleteAtHeightOpsFromRecordHeight(currentBlockHeight+1, retention, true)...)
+			ops = append(ops, s.buildDeleteAtHeightOps(currentBlockHeight+1, retention, true)...)
 			ops = append(ops, aerospike.GetBinOp(fields.DeleteAtHeight.String()))
 		} else {
 			ops = []*aerospike.Operation{unminedOp}
@@ -141,9 +141,12 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 		workerHashes := txHashes[workerStart:workerEnd]
 
 		g.Go(func() error {
-			// Get pooled slice, reuse across sequential batches
-			batchRecordsPtr := getBatchRecordsSlice(batchSize)
-			defer putBatchRecordsSlice(batchRecordsPtr)
+			// One set of batch slots per worker, reused by each of its sequential batches, so a
+			// transaction costs no key, batch-write or hash allocation of its own (see longestChainSlots).
+			slots := newLongestChainSlots(min(batchSize, len(workerHashes)), batchWritePolicy, ops)
+
+			// states is only read for the records followUps queued, within the same batch.
+			states := make(map[chainhash.Hash]masterState)
 
 			for i := 0; i < len(workerHashes); i += batchSize {
 				if gCtx.Err() != nil {
@@ -153,14 +156,11 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				batchEnd := min(i+batchSize, len(workerHashes))
 				chunk := workerHashes[i:batchEnd]
 
-				// Reuse pooled slice, sized to this chunk; batchHashes[j] is the
-				// hash of batchRecords[j] (a key that failed to build is left out)
-				batchRecords := (*batchRecordsPtr)[:0]
-				batchHashes := make([]chainhash.Hash, 0, len(chunk))
+				// batchHashes[j] is the hash of batchRecords[j] (a key that failed to build is left out)
+				n := 0
 
-				for _, txHash := range chunk {
-					key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
-					if err != nil {
+				for idx := range chunk {
+					if err := slots.set(n, &chunk[idx], s.namespace, s.setName); err != nil {
 						atomic.AddInt64(&errorCount, 1)
 						mu.Lock()
 						if len(allErrors) < 10 {
@@ -170,17 +170,15 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 						continue
 					}
 
-					batchRecords = append(batchRecords, aerospike.NewBatchWrite(
-						batchWritePolicy,
-						key,
-						ops...,
-					))
-					batchHashes = append(batchHashes, txHash)
+					n++
 				}
 
-				if len(batchRecords) == 0 {
+				if n == 0 {
 					continue
 				}
+
+				batchRecords := slots.records[:n]
+				batchHashes := slots.hashes[:n]
 
 				if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
 					count := int64(len(batchRecords))
@@ -197,19 +195,24 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				// bounded chunks, so one worker never holds sum(totalExtraRecs) writes at once and the
 				// follow-up still runs if another worker fails. A page missing its DAH is harmless: pages
 				// are deleted by computed key together with their master when the master is pruned.
+				//
+				// followUps points into batchHashes, which the next batch overwrites, so it and states
+				// must not outlive this iteration: applyLongestChainChildDAH below consumes both.
 				var followUps childDAHFollowUps
 
-				states := make(map[chainhash.Hash]masterState)
+				clear(states)
 
 				// Check individual record results
 				for j, batchRecord := range batchRecords {
 					recErr := batchRecord.BatchRec().Err
 					if recErr == nil {
-						if restampDAH && batchRecord.BatchRec().Record != nil {
+						// collect queues nothing for a record that is not external, and states is read only
+						// for queued records, so the parse is skipped for the rest (most transactions).
+						if restampDAH && batchRecord.BatchRec().Record != nil && binsSayExternal(batchRecord.BatchRec().Record.Bins) {
 							if state, perr := s.parseSetMinedState(batchRecord.BatchRec().Record.Bins); perr == nil {
-								h := batchHashes[j]
-								followUps.collect(&h, state)
-								states[h] = masterState{oldDAH: state.OldDeleteAtHeight, newDAH: state.NewDeleteAtHeight, oldUnminedSince: oldUnminedSinceFrom(batchRecord.BatchRec().Record.Bins)}
+								h := &batchHashes[j]
+								followUps.collect(h, state)
+								states[*h] = masterState{oldDAH: state.OldDeleteAtHeight, newDAH: state.NewDeleteAtHeight, oldUnminedSince: oldUnminedSinceFrom(batchRecord.BatchRec().Record.Bins)}
 							}
 						}
 
@@ -398,4 +401,73 @@ func oldUnminedSinceFrom(bins aerospike.BinMap) *int {
 	}
 
 	return nil
+}
+
+// longestChainSlots is one worker's reusable batch for MarkTransactionsOnLongestChain. Slot k holds
+// the hash of records[k] in hashes[k], and keys[k] reads that hash through values[k], so a later
+// batch only copies a hash in and recomputes the key's digest in place (Key.SetValue).
+//
+// The mark writes one record per transaction of the blocks a reorg moves, hundreds of millions at
+// scale. Allocating a key, its boxed value, a hash copy and a BatchWrite for each one fed the
+// garbage collector of block assembly's very large heap, and the mark's goroutines spent their time
+// in GC assist. Each slot now allocates once per call, on its first use.
+//
+// Reuse is safe because BatchOperate returns only after every node command has finished, and it
+// resets each record's result fields (Record, ResultCode, Err, InDoubt) before sending, so a
+// result never carries over from the previous batch. The slots are scoped to one call, so no key
+// keeps a reference to memory after the call returns.
+type longestChainSlots struct {
+	hashes  []chainhash.Hash
+	values  []aerospike.Value
+	keys    []*aerospike.Key
+	records []aerospike.BatchRecordIfc
+
+	policy *aerospike.BatchWritePolicy
+	ops    []*aerospike.Operation
+}
+
+func newLongestChainSlots(size int, policy *aerospike.BatchWritePolicy, ops []*aerospike.Operation) *longestChainSlots {
+	return &longestChainSlots{
+		hashes:  make([]chainhash.Hash, size),
+		values:  make([]aerospike.Value, size),
+		keys:    make([]*aerospike.Key, size),
+		records: make([]aerospike.BatchRecordIfc, size),
+		policy:  policy,
+		ops:     ops,
+	}
+}
+
+// set points slot k at hash. On an error the caller leaves the transaction out of the batch and
+// gives slot k to the next transaction, whose set resets the slot's key again.
+func (ls *longestChainSlots) set(k int, hash *chainhash.Hash, namespace, setName string) error {
+	ls.hashes[k] = *hash
+
+	if ls.keys[k] != nil {
+		// values[k] already reads hashes[k]; only the digest changes.
+		return ls.keys[k].SetValue(ls.values[k])
+	}
+
+	if ls.values[k] == nil {
+		// Boxed once per slot: the slice header never changes, only the bytes it points at.
+		ls.values[k] = aerospike.BytesValue(ls.hashes[k][:])
+	}
+
+	key, err := aerospike.NewKey(namespace, setName, ls.values[k])
+	if err != nil {
+		return err
+	}
+
+	ls.keys[k] = key
+	// NewBatchWrite, not a struct literal: it sets the unexported flag that routes the record as a write.
+	ls.records[k] = aerospike.NewBatchWrite(ls.policy, key, ls.ops...)
+
+	return nil
+}
+
+// binsSayExternal reports whether a longest-chain write read back external=true, the only case in
+// which childDAHFollowUps.collect queues anything (it also needs totalExtraRecs, checked there).
+func binsSayExternal(bins aerospike.BinMap) bool {
+	external, ok := bins[fields.External.String()].(bool)
+
+	return ok && external
 }

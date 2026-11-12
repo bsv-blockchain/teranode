@@ -102,3 +102,32 @@ func TestNullStoreParentOutputsForValidation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, answers)
 }
+
+// The null store has no conflict WAL. Its recovery methods accept every call and return nothing.
+func TestNullStore_ConflictRecoveryMethods(t *testing.T) {
+	s := &NullStore{}
+	ctx := context.Background()
+	id := chainhash.Hash{1}
+
+	require.NoError(t, s.SaveConflictRecovery(ctx, id, &utxo.ConflictRecovery{Version: 1, Phase: utxo.ConflictRecoveryPlanning}))
+
+	r, err := s.LoadConflictRecovery(ctx, id)
+	require.NoError(t, err)
+	require.Nil(t, r)
+
+	require.NoError(t, s.RestoreConflictSpends(ctx, nil, 1))
+	require.NoError(t, s.SetConflictLocks(ctx, id, []chainhash.Hash{{2}}, true))
+	require.NoError(t, s.ReleaseConflictLocks(ctx, id, []chainhash.Hash{{2}}))
+}
+
+// TestNullStoreConflictingTxHashes pins that the null store answers from its
+// (empty) index rather than sending callers to a per-transaction fallback.
+func TestNullStoreConflictingTxHashes(t *testing.T) {
+	store, err := NewNullStore()
+	require.NoError(t, err)
+
+	hashes, indexed, err := store.ConflictingTxHashes(context.Background())
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Empty(t, hashes)
+}
