@@ -902,7 +902,9 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, errors.NewStorageError("Failed to create UTXO", err)
+		// The statement auto-commits, so a connection lost after it was sent
+		// can follow the commit.
+		return nil, pgCreateError("Failed to create UTXO", err)
 	}
 	if !inserted {
 		return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", isCoinbase)

@@ -579,8 +579,9 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			}
 
 			// A batch spans nodes, and the error names one of them: a record
-			// another node wrote is OK while the call failed.
-			if batchInDoubt || writeMayHaveApplied(batchRecords[idx].BatchRec()) {
+			// another node wrote is OK, or KEY_EXISTS from an earlier attempt,
+			// while the call failed.
+			if batchInDoubt || recordMayExist(batchRecords[idx].BatchRec()) {
 				bItem.complete(createMayHaveCommittedError(err))
 				continue
 			}
@@ -1205,7 +1206,7 @@ func (s *Store) storeExternallyWithLock(
 
 	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
 		failErr := errors.NewProcessingError("[%s] BatchOperate failed for tx %s", funcName, bItem.txHash, err)
-		if isInDoubt(err) || masterMayExist(batchRecords[0].BatchRec()) {
+		if isInDoubt(err) || recordMayExist(batchRecords[0].BatchRec()) {
 			bItem.complete(createMayHaveCommittedError(failErr))
 			return
 		}
@@ -1230,7 +1231,7 @@ func (s *Store) storeExternallyWithLock(
 		// The creating bin in each record prevents UTXO spending until all records exist
 		// The defer will release the lock, allowing another process to finish the creation
 		failErr := errors.NewProcessingError("failed to create all records for tx %s - partial records remain for next attempt to complete", bItem.txHash)
-		if masterMayExist(batchRecords[0].BatchRec()) {
+		if recordMayExist(batchRecords[0].BatchRec()) {
 			// The master record makes the transaction exist, creating, so its
 			// spends must stay for the next attempt to complete it.
 			bItem.complete(createMayHaveCommittedError(failErr))
@@ -1545,12 +1546,35 @@ func createMayHaveCommittedError(err error) error {
 	return utxo.MarkCreateOutcomeUnknown(tErr)
 }
 
-// isInDoubt reports whether err is an Aerospike error for a write that was
-// sent and may have been applied.
+// isInDoubt reports whether err, from a write, says the write may have been
+// applied. BatchOperate runs one command per node and chains their errors, so
+// the head names only the last node to fail, and a node's in-doubt flag can be
+// lost: the client judges a node's batch a read when its last record is one.
+// isInDoubt therefore walks the whole chain and answers true for any error
+// marked in doubt, any TIMEOUT, and any client-side code (zero or below:
+// network and connection failures), the codes the client's own in-doubt rule
+// uses. That over-marks a write that timed out before it went out, which only
+// keeps its spends until a repeat of the create, the safe direction.
 func isInDoubt(err error) bool {
-	aeErr, ok := err.(aerospike.Error)
+	for err != nil {
+		// As reads this one link of the chain, the client's constant errors
+		// included; errors.As would stop at the first link.
+		if link, ok := err.(interface{ As(any) bool }); ok {
+			aeErr := &aerospike.AerospikeError{}
+			if link.As(aeErr) && (aeErr.InDoubt || aeErr.ResultCode == types.TIMEOUT || aeErr.ResultCode <= 0) {
+				return true
+			}
+		}
 
-	return ok && aeErr.IsInDoubt()
+		unwrapper, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+
+		err = unwrapper.Unwrap()
+	}
+
+	return false
 }
 
 // writeMayHaveApplied reports whether a batch write's record may have been
@@ -1560,9 +1584,8 @@ func writeMayHaveApplied(rec *aerospike.BatchRecord) bool {
 	return rec.InDoubt || (rec.Err == nil && rec.ResultCode == types.OK)
 }
 
-// masterMayExist reports whether the master record of a multi-record create
-// may exist after its batch write: written now, in doubt, or left by an
-// earlier attempt (KEY_EXISTS).
-func masterMayExist(rec *aerospike.BatchRecord) bool {
+// recordMayExist reports whether a create's record may exist after its batch
+// write: written now, in doubt, or left by an earlier attempt (KEY_EXISTS).
+func recordMayExist(rec *aerospike.BatchRecord) bool {
 	return writeMayHaveApplied(rec) || isKeyExists(rec.Err)
 }

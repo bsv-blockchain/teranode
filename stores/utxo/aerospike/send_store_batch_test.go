@@ -333,10 +333,11 @@ func TestSendStoreBatch_PanicCompletesGroup(t *testing.T) {
 // write may have committed, and utxo.SequentialSpendAndCreate unspends the
 // inputs of any create that failed for certain: an in-doubt write reported as
 // a plain error would leave a stored transaction with its inputs live again. A
-// write that never reached the server stays a plain failure.
+// write the server rejected stays a plain failure.
 func TestSendStoreBatch_InDoubtWriteLeavesOutcomeUnknown(t *testing.T) {
 	inDoubt := &aerospike.AerospikeError{ResultCode: types.TIMEOUT, InDoubt: true}
 	notSent := &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+	rejected := &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
 
 	cases := []struct {
 		name        string
@@ -346,10 +347,18 @@ func TestSendStoreBatch_InDoubtWriteLeavesOutcomeUnknown(t *testing.T) {
 		wantUnknown bool
 	}{
 		{name: "top-level error in doubt", topLevel: inDoubt, wantUnknown: true},
-		{name: "top-level error not sent", topLevel: notSent},
-		{name: "top-level const network error", topLevel: aerospike.ErrNetwork},
+		{name: "top-level server rejection", topLevel: rejected},
+		// The client drops a node's in-doubt flag when that node's last record
+		// is a read, so a timeout counts as in doubt on its own.
+		{name: "top-level timeout not flagged in doubt", topLevel: notSent, wantUnknown: true},
+		{name: "top-level const network error", topLevel: aerospike.ErrNetwork, wantUnknown: true},
+		// BatchOperate chains one error per node and the head names only the
+		// last node to fail: an in-doubt node further down must still count.
+		{name: "top-level chain, inner node in doubt", topLevel: chainedNodeErrors{AerospikeError: rejected, inner: inDoubt}, wantUnknown: true},
+		{name: "top-level chain, every node rejected", topLevel: chainedNodeErrors{AerospikeError: rejected, inner: rejected}},
 		// A batch spans nodes: one node's error comes back while another wrote its records.
-		{name: "top-level error, record written by another node", topLevel: aerospike.ErrNetwork, recordOK: true, wantUnknown: true},
+		{name: "top-level error, record written by another node", topLevel: rejected, recordOK: true, wantUnknown: true},
+		{name: "top-level error, record left by an earlier attempt", topLevel: rejected, perRecord: &aerospike.AerospikeError{ResultCode: types.KEY_EXISTS_ERROR}, wantUnknown: true},
 		{name: "per-record error in doubt", perRecord: inDoubt, wantUnknown: true},
 		{name: "per-record error not sent", perRecord: notSent},
 		{name: "per-record const timeout", perRecord: aerospike.ErrTimeout},
@@ -391,3 +400,13 @@ func TestSendStoreBatch_InDoubtWriteLeavesOutcomeUnknown(t *testing.T) {
 		})
 	}
 }
+
+// chainedNodeErrors stands in for the chain BatchOperate builds from one error
+// per node, which the client's exported API cannot construct: the head is one
+// node's error and Unwrap reaches the next.
+type chainedNodeErrors struct {
+	*aerospike.AerospikeError
+	inner error
+}
+
+func (c chainedNodeErrors) Unwrap() error { return c.inner }
