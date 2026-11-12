@@ -185,3 +185,54 @@ func TestConfigureGOMEMLIMIT(t *testing.T) {
 		require.Equal(t, int64(123*bytesPerMiB), debug.SetMemoryLimit(-1))
 	})
 }
+
+// TestConfigureGCTuningAppliesOffHeapReserve checks the wiring from the daemon's
+// arguments to GOMEMLIMIT: a process that starts subtreevalidation gets the
+// off-heap reserve taken off, one that doesn't keeps ratio * limit.
+func TestConfigureGCTuningAppliesOffHeapReserve(t *testing.T) {
+	const limit = 8 * bytesPerGiB
+
+	ratio := 0.9
+
+	prevDetect := detectMemoryLimit
+	detectMemoryLimit = func() (uint64, error) { return limit, nil }
+
+	prevLimit := debug.SetMemoryLimit(-1)
+
+	t.Cleanup(func() {
+		detectMemoryLimit = prevDetect
+		debug.SetMemoryLimit(prevLimit)
+	})
+
+	// An explicit GOGC makes ConfigureGCTuning leave the GC percent alone; the
+	// runtime reads the variable only at startup, so setting it here changes nothing else.
+	t.Setenv("GOGC", "100")
+
+	tSettings := &settings.Settings{
+		GCTuning: settings.GCTuningSettings{Enabled: true, Ratio: ratio, GCTarget: 100},
+		SubtreeValidation: settings.SubtreeValidationSettings{
+			TxMetaCacheEnabled:    true,
+			TxMetaCacheMaxMB:      1024,
+			TxMetaCacheBucketType: "unallocated",
+		},
+	}
+
+	tests := []struct {
+		name string
+		args []string
+		want int64
+	}{
+		{name: "subtreevalidation started here", args: []string{"-subtreevalidation=1"}, want: int64(ratio * float64(limit-1024*bytesPerMiB-offHeapHeadroomBytes))},
+		{name: "subtreevalidation not started here", args: []string{"-all=0"}, want: int64(ratio * float64(limit))},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GOMEMLIMIT", "") // restores the original value after the test
+			require.NoError(t, os.Unsetenv("GOMEMLIMIT"))
+
+			ConfigureGCTuning(tSettings, tt.args)
+			require.Equal(t, tt.want, debug.SetMemoryLimit(-1))
+		})
+	}
+}

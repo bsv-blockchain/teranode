@@ -338,9 +338,10 @@ func TestGetExternalTransactionUnknownLengthKeepsPerScriptRead(t *testing.T) {
 	require.Less(t, retained, int64(perScriptRetainBound(keptLen, droppedLen)), "the dropped payload must be collectable")
 }
 
-// TestDecodeOwnTxBlobRefusesArenaAboveMaxArenaAlloc covers a blob whose reported
-// length is beyond what any valid transaction reaches (appended junk, or a store
-// misreporting it): the decode must not preallocate that length.
+// TestDecodeOwnTxBlobRefusesArenaAboveMaxArenaAlloc covers a reported length
+// above MaxArenaAlloc (appended junk, a misreporting store, or a valid
+// transaction whose extended form passes 1GiB): the decode must not preallocate
+// that length.
 func TestDecodeOwnTxBlobRefusesArenaAboveMaxArenaAlloc(t *testing.T) {
 	small := buildParentTx(t, 1000, 0xaa)
 
@@ -356,4 +357,85 @@ func TestDecodeOwnTxBlobRefusesArenaAboveMaxArenaAlloc(t *testing.T) {
 	require.NoError(t, decodeErr)
 	require.Equal(t, *small.TxIDChainHash(), *tx.TxIDChainHash())
 	require.Less(t, allocated, uint64(mib), "a reported length above MaxArenaAlloc must not be preallocated")
+}
+
+// buildSpreadOutputsTx returns a transaction with one input and n outputs whose
+// locking scripts are scriptLen bytes each, so no script is anywhere near half
+// the blob. The input carries a P2PKH previous script and a typical unlocking
+// script, as an extended parent does.
+func buildSpreadOutputsTx(t *testing.T, n, scriptLen int) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+
+	in := &bt.Input{
+		PreviousTxOutIndex: 0,
+		PreviousTxSatoshis: uint64(n) * 1000,
+		PreviousTxScript:   bscript.NewFromBytes(append([]byte{0x76, 0xa9, 0x14}, append(make([]byte, 20), 0x88, 0xac)...)),
+		UnlockingScript:    bscript.NewFromBytes(make([]byte, 107)),
+		SequenceNumber:     0xffffffff,
+	}
+	require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{11}))
+	tx.Inputs = append(tx.Inputs, in)
+
+	tx.Outputs = make([]*bt.Output, n)
+	for i := range tx.Outputs {
+		tx.Outputs[i] = &bt.Output{Satoshis: 1000, LockingScript: bscript.NewFromBytes(make([]byte, scriptLen))}
+	}
+
+	return tx
+}
+
+// TestGetExternalTransactionHeldParentRetainsNoMoreThanPerScriptRead covers a
+// parent held whole, as externalTxCache and Data.Tx hold it, when no script in
+// it is half the blob. Every output is then copied out of the arena, so if any
+// input script stayed in the slab the parent would keep the whole blob alive on
+// top of the copies. It must retain no more than go-bt's per-script read of the
+// same blob retains.
+func TestGetExternalTransactionHeldParentRetainsNoMoreThanPerScriptRead(t *testing.T) {
+	tests := []struct {
+		name      string
+		outputs   int
+		scriptLen int
+	}{
+		{name: "fan-out of 100,000 P2PKH outputs", outputs: 100_000, scriptLen: 25},
+		{name: "five mid-sized outputs", outputs: 5, scriptLen: 4 * mib},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Built in a closure so the fixture tx is garbage before either measurement.
+			blobBytes, parentHash := func() ([]byte, chainhash.Hash) {
+				parent := buildSpreadOutputsTx(t, tt.outputs, tt.scriptLen)
+				return parent.ExtendedBytes(), *parent.TxIDChainHash()
+			}()
+			blobLen := len(blobBytes)
+
+			s := newFileExternalStore(t)
+			require.NoError(t, s.externalStore.Set(context.Background(), parentHash[:], fileformat.FileTypeTx, blobBytes))
+
+			perScript := retainedBy(func() any {
+				tx := &bt.Tx{}
+				_, err := tx.ReadFrom(bytes.NewReader(blobBytes))
+				require.NoError(t, err)
+
+				return tx
+			})
+
+			sized := retainedBy(func() any {
+				tx, err := s.getExternalTransaction(context.Background(), parentHash)
+				require.NoError(t, err)
+				require.Len(t, tx.Outputs, tt.outputs)
+
+				return tx
+			})
+
+			// blobBytes is last used by the per-script read; keep it live past both
+			// measurements so its own release is not netted off either of them.
+			runtime.KeepAlive(blobBytes)
+
+			t.Logf("blob %d bytes; held parent retains %d bytes after GC, per-script read %d", blobLen, sized, perScript)
+			require.Less(t, sized, perScript+int64(blobLen/2), "the blob must be collectable once every script is copied out")
+		})
+	}
 }

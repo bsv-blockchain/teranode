@@ -2307,9 +2307,9 @@ func (s *Store) readExternalTransaction(ctx context.Context, previousTxHash chai
 // 457MB of allocation for a 91MB data-carrier output. The guard is not needed
 // here. The blob is local, its length comes from the store, and the scripts in
 // it can never add up to more than that length, so the arena never grows on a
-// sound blob. Every path that decodes peer-supplied bytes keeps the
-// incremental read, and so does a blob whose length is unknown or reported above
-// go-bt's MaxArenaAlloc (1GiB). That cap bounds the up-front allocation; it is
+// sound blob. Every other decode in this store keeps the incremental read, and
+// so does a blob whose length is unknown or reported above go-bt's
+// MaxArenaAlloc (1GiB). That cap bounds the up-front allocation; it is
 // not a transaction size limit. The stored form is the extended serialization,
 // which adds each input's previous script, so a valid transaction near the
 // 1GB consensus limit could exceed it and would then just keep the old cost.
@@ -2326,12 +2326,17 @@ func (s *Store) readExternalTransaction(ctx context.Context, previousTxHash chai
 // whole blob alive. A child extends its input by pointing at the parent's
 // output script (the validator's extendInputFromPrefetchedParent, and the other
 // PreviousTxScript extenders), so a 25-byte P2PKH change output left in the slab
-// would let the child pin a 96MB parent for as long as the child lives. Every
-// output script shorter than half the blob is therefore copied out after the
-// decode. A script that stays in the slab is at least half of it, so holding it
-// keeps at most about twice its own size alive. The usual shape, one data
-// carrier and small outputs, still allocates the blob once; a blob split into
-// several mid-sized outputs costs up to one more copy of them.
+// would let the child pin a 96MB parent for as long as the child lives. A
+// parent's own small input scripts would likewise pin it for as long as the
+// parent is cached. Every script shorter than half the blob, input and output
+// alike, is therefore copied out after the decode. At most one script can be
+// that large, and holding it keeps at most about twice its own size alive; a
+// blob with no such script is garbage once this returns. The usual shape, one
+// data carrier and small scripts, still allocates the blob about once. A blob
+// with no large script (a fan-out of many small outputs, or several mid-sized
+// ones) allocates the blob plus a copy of its scripts, but only the copies stay
+// resident. For a fan-out the per-script read was already exact, so there the
+// sized decode allocates more than it did, transiently.
 // Callers that drop some of the large scripts and keep the rest must still not
 // use this path; see getExternalOutpoints.
 func decodeOwnTxBlob(tx *bt.Tx, r io.Reader, blobLen int, blobLenKnown bool) error {
@@ -2344,14 +2349,32 @@ func decodeOwnTxBlob(tx *bt.Tx, r io.Reader, blobLen int, blobLenKnown bool) err
 		return err
 	}
 
+	for _, input := range tx.Inputs {
+		if input != nil {
+			input.UnlockingScript = detachSmallScript(input.UnlockingScript, blobLen)
+			input.PreviousTxScript = detachSmallScript(input.PreviousTxScript, blobLen)
+		}
+	}
+
 	for _, output := range tx.Outputs {
-		if output != nil && output.LockingScript != nil && 2*len(*output.LockingScript) < blobLen {
-			detached := bscript.Script(bytes.Clone(*output.LockingScript))
-			output.LockingScript = &detached
+		if output != nil {
+			output.LockingScript = detachSmallScript(output.LockingScript, blobLen)
 		}
 	}
 
 	return nil
+}
+
+// detachSmallScript returns a copy of s outside the arena when s is shorter than
+// half of the blobLen-byte blob it was decoded from, and s itself otherwise.
+func detachSmallScript(s *bscript.Script, blobLen int) *bscript.Script {
+	if s == nil || 2*len(*s) >= blobLen {
+		return s
+	}
+
+	detached := bscript.Script(bytes.Clone(*s))
+
+	return &detached
 }
 
 // remainingBlobBytes returns how many bytes r has left to read, when r can say.
