@@ -119,4 +119,8 @@ enum ERR {
   // (not yet: see services/legacy/peer streamingBlockHandler). Wrapped inside the BLOCK_INVALID
   // verdict at the sites that raise it, never the outermost code.
   BLOCK_BODY_MISMATCH=122;
+  // A block whose id is not above its parent's id. Ids come from one sequence and a child's id is
+  // taken only after its parent is stored, so a child always sits above its parent; the ancestry
+  // queries bound their walk by that. StoreBlock refuses a block that would break it.
+  BLOCK_ID_ORDER=123;
 }
