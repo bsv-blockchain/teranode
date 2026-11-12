@@ -40,6 +40,17 @@ func TestStoreBlock_RefusesIDNotAboveParent(t *testing.T) {
 		_, stored, err := s.blockIDByHash(ctx, block2.Hash())
 		require.NoError(t, err)
 		require.False(t, stored, "a refused child must leave no blocks row")
+
+		// storeInvalidBlock in blockvalidation stores a failed block with its
+		// reserved id. The ancestry walks follow parent_id whatever the invalid
+		// flag says, so the check must refuse an invalid child too.
+		_, _, err = s.StoreBlock(ctx, block2, "", options.WithID(childReserved), options.WithInvalid(true))
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrBlockIDOrder), "want the id-order refusal for an invalid child, got %v", err)
+
+		_, stored, err = s.blockIDByHash(ctx, block2.Hash())
+		require.NoError(t, err)
+		require.False(t, stored, "a refused invalid child must leave no blocks row")
 	}
 
 	t.Run("sqlite", func(t *testing.T) {

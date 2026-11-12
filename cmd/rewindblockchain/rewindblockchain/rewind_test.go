@@ -1824,10 +1824,58 @@ func TestRewind_ClearsBlockIDReservations(t *testing.T) {
 	ctx := context.Background()
 	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
 
+	storeChainWithPendingChild(t, ctx, bcStore, tSettings, nil)
+
+	stats, err := Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 2,
+		AssumeYes:    true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       utxoStore,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.BlocksDeleted, "the rewind must delete blocks for the reservations to matter")
+	require.Zero(t, countBlockIDReservations(t, ctx, bcStore), "a rewind that deletes blocks must clear every reservation")
+}
+
+// TestRewind_ClearsBlockIDReservationsBeforeAFailure checks that phase 2 clears the
+// reservations before it deletes the first block, so a run that fails part-way
+// never leaves deleted blocks beside surviving reservations. The tip names a
+// subtree with no blob in the subtree store, so rewindOneBlock fails on its first
+// block, on GetSubtrees.
+func TestRewind_ClearsBlockIDReservationsBeforeAFailure(t *testing.T) {
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	missingSubtree := chainhash.HashH([]byte("subtree with no blob"))
+	storeChainWithPendingChild(t, ctx, bcStore, tSettings, &missingSubtree)
+
+	_, err := Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 2,
+		AssumeYes:    true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       utxoStore,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "GetSubtrees", "the run must fail inside phase 2, after it starts")
+	require.Zero(t, countBlockIDReservations(t, ctx, bcStore), "phase 2 must clear the reservations before it deletes any block")
+}
+
+// storeChainWithPendingChild stores four blocks on genesis and reserves an id for
+// a child of the tip that is never stored. Only the tip may name a subtree, and
+// that subtree has no blob unless the caller writes one; the others name none, so
+// phase 2 can delete them without subtree blobs.
+func storeChainWithPendingChild(t *testing.T, ctx context.Context, bcStore blockchain_store.Store, tSettings *settings.Settings, tipSubtree *chainhash.Hash) {
+	t.Helper()
+
 	bits, err := model.NewNBitFromString("207fffff")
 	require.NoError(t, err)
 
-	// Blocks with no subtrees, so phase 2 can delete them without subtree blobs.
 	prevHash := tSettings.ChainCfgParams.GenesisHash
 	var blocks []*model.Block
 	for i := 1; i <= 4; i++ {
@@ -1844,6 +1892,9 @@ func TestRewind_ClearsBlockIDReservations(t *testing.T) {
 			CoinbaseTx:       coinbase,
 			TransactionCount: 1,
 		}
+		if i == 4 && tipSubtree != nil {
+			block.Subtrees = []*chainhash.Hash{tipSubtree}
+		}
 		_, _, err = bcStore.StoreBlock(ctx, block, "peer", blockchainoptions.WithMinedSet(true))
 		require.NoError(t, err, "StoreBlock height %d", i)
 
@@ -1859,19 +1910,6 @@ func TestRewind_ClearsBlockIDReservations(t *testing.T) {
 	_, err = bcStore.AssignBlockID(ctx, &pendingChild)
 	require.NoError(t, err)
 	require.Equal(t, 1, countBlockIDReservations(t, ctx, bcStore))
-
-	stats, err := Rewind(ctx, logger(), tSettings, Options{
-		TargetHeight: 2,
-		AssumeYes:    true,
-		Stores: &Stores{
-			Blockchain: bcStore,
-			UTXO:       utxoStore,
-			Subtree:    subtreeStore,
-		},
-	})
-	require.NoError(t, err)
-	require.Equal(t, 2, stats.BlocksDeleted, "the rewind must delete blocks for the reservations to matter")
-	require.Zero(t, countBlockIDReservations(t, ctx, bcStore), "a rewind that deletes blocks must clear every reservation")
 }
 
 func countBlockIDReservations(t *testing.T, ctx context.Context, store blockchain_store.Store) int {
