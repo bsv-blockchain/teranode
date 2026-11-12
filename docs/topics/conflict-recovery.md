@@ -163,7 +163,75 @@ If recovery fails:
    state before repair. This change does not provide an automatic legacy repair
    command.
 
+### Upgrading from v0.16.0
+
+v0.16.0 writes forward intents without a recovery checklist. If one is still in the
+WAL when the new build starts, replay refuses it ("legacy forward conflict intent ...
+requires manual repair") and BlockAssembly does not start. Any stop can leave one,
+a graceful stop included, if it lands while a block with conflicts is being resolved.
+
+Before upgrading, stop BlockAssembly, then check that the WAL is empty. Check after
+the stop: a running v0.16.0 process can write a new intent at any time. If the WAL
+is not empty, follow "If recovery fails" above before upgrading.
+
+The v0.16.0 `teranode_blockassembly_conflict_intents_pending` gauge cannot answer
+this. It is set only during the startup replay, so it misses every intent written
+since, including one the upgrade stop itself leaves.
+
+Aerospike keeps the WAL in the `<set>_conflictwal` set of the UTXO namespace.
+`<namespace>` is the path of the `utxostore` URL and `<set>` its `set` parameter
+(`txmeta` when absent). For `aerospike://host:3000/utxo-store?set=utxo` the set is
+`utxo_conflictwal` in namespace `utxo-store`.
+
+```bash
+# One row per namespace and set across the cluster. The WAL is empty when the
+# <namespace> / <set>_conflictwal row shows 0 Total Records, or there is no such
+# row. `asadm -e "show statistics sets"` gives the same counts per node.
+asadm -e "info set"
+
+# The same check against a single node: empty when it reports objects=0 or
+# returns nothing. Run it on every node.
+asinfo -v "sets/<namespace>/<set>_conflictwal"
+
+# List the records with their kind (forward or reverse).
+aql -c "SELECT kind, blockHeight FROM <namespace>.<set>_conflictwal"
+```
+
+The SQL stores (PostgreSQL and SQLite) keep it in the `conflict_intents` table:
+
+```sql
+SELECT count(*) FROM conflict_intents;
+SELECT kind, block_height FROM conflict_intents;
+```
+
+These checks cover the in-tree stores only. An out-of-tree `utxo.Store` keeps its
+WAL wherever it implements `PendingConflictIntents`.
+
 See PR 2023 for the implementation and regression tests.
+
+### The WAL index (Aerospike)
+
+BlockAssembly startup reads the pending intents through a secondary index on the
+`startedAt` bin of the `<set>_conflictwal` set, named `<set>_conflictwal_startedAt`.
+The UTXO store creates it when it starts. Each node reserves at least 16 MiB for a
+new secondary index: check the namespace's `indexes-memory-budget` has room before
+the upgrade, or the namespace can go into stop-writes.
+
+While the index is missing or still building, startup scans the set instead, which
+walks the whole namespace. `teranode_aerospike_conflict_wal_fallback_scans` counts
+those scans. If Teranode's Aerospike user cannot create indexes, create it by hand,
+with `<ns>` the namespace and `<set>` the UTXO set:
+
+```bash
+# Aerospike 8.1 and later
+asinfo -v 'sindex-create:namespace=<ns>;set=<set>_conflictwal;indexname=<set>_conflictwal_startedAt;bin=startedAt;type=numeric'
+
+# Aerospike 8.0
+asinfo -v 'sindex-create:ns=<ns>;set=<set>_conflictwal;indexname=<set>_conflictwal_startedAt;indexdata=startedAt,numeric'
+```
+
+The read returns only WAL roots with an integer `startedAt`. Every build writes it
+when it begins an intent, so only a corrupted or hand-edited root lacks it.
 
 ## Current-chain protection
 

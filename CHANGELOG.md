@@ -31,6 +31,18 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **`blockassembly_storeTxInpointsForSubtreeMeta=false` now only skips the subtree meta files.**
+  Block assembly keeps every unmined tx's parent links in memory in both modes. With it off, the
+  restart reload and a block move-back now read each tx's inputs from the UTXO store (an external tx
+  from the blob store), and memory per unmined tx rises; nothing to change. (#2128)
+- **Upgrade every validator and subtree-validation pod before you set
+  `blockassembly_maxTransactionsInMemory`, and keep the default 0 until then.** An old validator
+  never sends `inBlock`, so a new block assembly with the limit set refuses its block transactions
+  and the old validator unlocks them without a template entry. With the limit set,
+  `teranode_validator_invalid_transactions` no longer counts a transaction refused at the limit;
+  `teranode_validator_held_limit_shed_transactions` does. A new validator setting,
+  `validator_kafkaBackpressureResumeHeldPercent` (default 80), sets where a held-count pause
+  resumes. (#1593)
 - **`grpc_admin_api_key` is required.** Blockchain refuses to start if it is empty, a placeholder
   or under 16 characters, and every RPC but `HealthGRPC` needs it. Give every client service the
   same key and upgrade Blockchain last, or restart them together. (#1755)
@@ -43,6 +55,13 @@ read every section between yours and the target.
 - **The alert service picks its network by `network` and validates `alert_genesis_keys`.** On
   testnet and stn, clear `alert_genesis_keys`, `alert_protocol_id` and `alert_topic_name` if they
   hold mainnet values. An explicit key list needs 3–10 compressed public keys or startup fails. (#1955)
+- **Block Validation `BlockFound` with `wait_to_complete` returns the block's outcome.** It no
+  longer answers success at enqueue. A rejected block returns its validation error, whose code
+  varies; one already stored invalid returns `ERR_BLOCK_INVALID`; a failed fetch returns at once with
+  a retryable error; a block sent to catchup or dropped returns a retryable `ERR_SERVICE_ERROR`; a
+  caller whose context ends gets `ERR_CONTEXT_CANCELED`. Under opt-in optimistic peer-block mining,
+  success means the block was added, not fully validated. gRPC callers that wait must handle these.
+  (#2132)
 - **`utxostore_updateTxMinedStatus` is removed.** Nodes that set it to `false` now always run
   mined-tagging and its duplicate-transaction check, with no way to turn them off. Delete the
   key; the loader ignores it. (#2019)
@@ -63,13 +82,20 @@ read every section between yours and the target.
   rejects, so they stop validating. Upgrade Blockchain last or raise the cap above chain height. (#1776)
 - **Conflict recovery adds five `utxo.Store` methods and changes the UTXO WAL.** Upgrade block
   assembly together with the UTXO store and don't downgrade while conflict-recovery records are
-  pending; they block startup. Follow [conflict recovery](docs/topics/conflict-recovery.md). (#2023)
+  pending; they block startup. Follow [conflict recovery](docs/topics/conflict-recovery.md).
+  Before upgrading from v0.16.0, stop block assembly and [check the conflict WAL is
+  empty](docs/topics/conflict-recovery.md#upgrading-from-v0160): a v0.16.0 forward intent left in
+  it keeps block assembly from starting until it is repaired. The v0.16.0 `conflict_intents_pending`
+  gauge can't tell you; it only counts at startup. (#2023)
 - **PostgreSQL UTXO store: stop previous-release processes before upgrading.** One that starts while
   the new `px_transactions_conflicting` index builds blocks all `transactions` reads and writes until
   the build ends. Out-of-tree `utxo.Store` implementations add `ConflictingTxHashes`. (#2110)
 - **`SetBlockMinedSet` takes a mined-set generation and can refuse a write with `ERR_STATE_ERROR`.**
   Out-of-tree blockchain store and client implementations add the parameter; a caller that sets
   `mined_set_generation` must handle the refusal. Mixed versions keep working, in any order. (#2018)
+- **The Aerospike UTXO store adds a `<set>_conflictwal_startedAt` index, at least 16 MiB per node.**
+  Check `indexes-memory-budget` has room first, or the namespace can stop writes. Without
+  index-create rights, create it by hand ([conflict recovery](docs/topics/conflict-recovery.md)). (#2151)
 - **Script-number overflow is a consensus failure.** Earlier builds accept transactions and blocks
   this one rejects: upgrade all your nodes together. These transactions are no longer published to
   the `kafka_txPolicyRejectedConfig` topic. (#1911)
@@ -135,6 +161,18 @@ read every section between yours and the target.
   Count those 429s with `teranode_asset_http_rate_limited_total{scope="global"}`. (#1793)
 - **Out-of-tree `utxo.Store` implementations must add `SpendAndCreateMulti` and
   `ParentOutputsForValidation`.** `utxo.DefaultSpendAndCreateMulti` provides the first. (#1875)
+- **Block assembly can fail to start while a skipped-fork mark is unfinished.** A restart finishes
+  it before loading the pool, and fails if the subtree or UTXO store doesn't answer or
+  `BlockAssemblerSkippedForkMark` is malformed: restart once they answer, or clear that key. (#2065)
+- **`teranode_blockassembly_processing_stuck_total` gains three reasons:**
+  `skipped_fork_mark_unfinished`, `skipped_fork_mark_record`, `skipped_fork_subtree_lost`. An alert
+  on the total without a `reason` filter now fires on them too. (#2065)
+- **Asset block-list endpoints honour `fromHeight` with `includeOrphans`.** They now page down
+  instead of returning the chain's top; clients passing both get the blocks at or below
+  `fromHeight`. (#2065)
+- **`blockassembly_maxBlockReorgCatchup` is removed.** It never capped a reorg; it only sized two
+  unused maps. A config that still sets it starts as before and the value is ignored, so no
+  action is needed beyond deleting the line. (#2163)
 
 ## [0.16.0] - 2026-10-05
 

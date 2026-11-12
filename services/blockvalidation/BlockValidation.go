@@ -2121,10 +2121,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// rejected by block.Valid with the bad-version token; a below-floor block that ALSO fails the
 		// outer nil-coinbase precheck below returns earlier with the documented non-parity reason
 		// (block-incomplete) instead. Either way the block is rejected.
-		if block.CoinbaseTx == nil || block.CoinbaseTx.Inputs == nil || len(block.CoinbaseTx.Inputs) == 0 {
+		if coinbaseNotDelivered(block) {
 			// Use BlockIncomplete rather than BlockInvalid — a missing coinbase likely means the peer
 			// doesn't have full block data (e.g. seeded peer). Don't store as invalid so we can
-			// accept the valid version from another peer later.
+			// accept the valid version from another peer later. A coinbase with no inputs that the
+			// header commits to is not missing: it falls through and block.Valid condemns it (see
+			// coinbaseNotDelivered).
 			//
 			// This is the ABSENT-DATA ErrBlockIncomplete, distinct from the FLOATER ErrBlockIncomplete
 			// that the caught-up handlers poison (bitcoin-sv/teranode#4692). This return is an outer
@@ -2373,8 +2375,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			if !opts.IsRevalidation {
 				reason := fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String())
 
-				// CoinbaseTx is non-nil here: the precheck at the top of this function rejects a
-				// block without one.
+				// CoinbaseTx is non-nil here: the coinbaseNotDelivered precheck at the top of this
+				// function rejects a block without one.
 				if len(block.Subtrees) == 0 && block.CheckCoinbaseOnlyBodyBound() == nil {
 					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
 				} else {
@@ -2478,8 +2480,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// ErrProcessing test placed above ErrTxInvalid would swallow every genuine verdict. A
 				// storage failure or a cancelled context is not evidence of peer misconduct, so it
 				// must neither strike the peer nor produce a corrupt verdict — return it retryable.
+				// ERR_CONTEXT_CANCELED is the code subtree validation wraps its own cancellations
+				// in (settledError); it is not the stdlib context.Canceled, so it needs its own test.
 				if errors.Is(err, context.Canceled) ||
 					errors.Is(err, context.DeadlineExceeded) ||
+					errors.Is(err, errors.ErrContextCanceled) ||
 					errors.Is(err, errors.ErrStorageError) ||
 					errors.Is(err, errors.ErrServiceError) {
 					ctxLogger.Warnf("[ValidateBlock][%s] local failure during subtree transaction validation, will retry: %s", block.Hash().String(), err)
@@ -2547,6 +2552,21 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			if !opts.IsCatchupMode {
 				ctxLogger.Infof("[ValidateBlock][%s] useOptimisticMining override: %v", block.Header.Hash().String(), useOptimisticMining)
 			}
+		}
+
+		// A block whose coinbase is not coinbase-shaped (for instance a coinbase with no inputs,
+		// which the precheck lets through when the header commits to it or the body carries
+		// subtrees) must not be added to the chain before block.Valid runs. Valid condemns it when
+		// the header commits to it and returns corrupt when it does not. Under optimistic mining it
+		// would otherwise be added first: from BIP34 activation the store's coinbase height read
+		// fails AddBlock as a storage error, and below activation the block is published and only
+		// condemned later in the background. Validate it synchronously. This keys on coinbase
+		// shape only; a correctly shaped coinbase whose height the store rejects is not covered.
+		//
+		// The same goes for a coinbase-only body claiming more than one transaction, because Valid
+		// checks the count last: a peer's count must not turn a condemnable body into a corrupt one.
+		if useOptimisticMining && (!model.IsConsensusCoinbase(block.CoinbaseTx) || block.CheckCoinbaseOnlyBodyCount() != nil) {
+			useOptimisticMining = false
 		}
 
 		// The block's subtrees are in the subtree store now. Under optimistic mining the block is

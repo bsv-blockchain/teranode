@@ -87,6 +87,7 @@ func setupBlockAssemblyTestWithUtxoStore(t *testing.T, withSettings ...func(*set
 		}
 	})
 
+	ba.endStartupLoad()
 	ba.subtreeProcessor.Start(t.Context())
 	items.blockAssembler = ba
 

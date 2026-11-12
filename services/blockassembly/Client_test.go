@@ -139,6 +139,58 @@ func TestNewClientWithAddress_BatchLogging(t *testing.T) {
 	// Note: Connection may or may not fail in test environment
 }
 
+func TestNewClientWithAddress_UnaryModeBuildsNoBatchers(t *testing.T) {
+	ctx := context.Background()
+
+	newClient := func(t *testing.T, batchSize int) *Client {
+		t.Helper()
+
+		tSettings := &settings.Settings{
+			GRPCMaxRetries:   1,
+			GRPCRetryBackoff: 1000,
+			BlockAssembly: settings.BlockAssemblySettings{
+				SendBatchSize:    batchSize,
+				SendBatchTimeout: 100,
+			},
+		}
+
+		client, err := NewClientWithAddress(ctx, ulogger.TestLogger{}, tSettings, "localhost:0")
+		require.NoError(t, err)
+
+		t.Cleanup(func() { _ = client.Close() })
+
+		return client
+	}
+
+	t.Run("unary mode", func(t *testing.T) {
+		client := newClient(t, 0)
+
+		require.Nil(t, client.batcher, "unary mode sends each transaction on its own, so there is nothing to batch")
+		require.Nil(t, client.inBlockBatcher)
+
+		mockClient := &mockBlockAssemblyAPIClient{}
+		client.client = mockClient
+
+		hash, err := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+		require.NoError(t, err)
+
+		mockClient.On("AddTx", mock.Anything, mock.MatchedBy(func(req *blockassembly_api.AddTxRequest) bool { return req.InBlock }), mock.Anything).
+			Return(&blockassembly_api.AddTxResponse{}, nil)
+
+		ok, err := client.Store(ContextWithInBlock(ctx), hash, 1000, 250, subtree.TxInpoints{})
+		require.NoError(t, err)
+		require.True(t, ok, "a block transaction is stored in unary mode without a batcher")
+		mockClient.AssertExpectations(t)
+	})
+
+	t.Run("batch mode", func(t *testing.T) {
+		client := newClient(t, 10)
+
+		require.NotNil(t, client.batcher)
+		require.NotNil(t, client.inBlockBatcher)
+	})
+}
+
 func TestClient_Health(t *testing.T) {
 	ctx := context.Background()
 	mockClient := &mockBlockAssemblyAPIClient{}
@@ -1052,6 +1104,80 @@ func TestClient_Store_BatchMode_MaxConcurrent(t *testing.T) {
 		"concurrent calls should never exceed maxConcurrent=2")
 }
 
+// The ingest batcher and the block-transaction batcher each take the configured limit, so
+// without a limiter they share, two of them allow twice the documented in-flight sends.
+func TestClient_Store_BothBatchersShareTheMaxConcurrentCap(t *testing.T) {
+	ctx := context.Background()
+	mockClient := &mockBlockAssemblyAPIClient{}
+
+	tSettings := &settings.Settings{
+		BatcherBackground: true,
+		BlockAssembly: settings.BlockAssemblySettings{
+			SendBatchSize:          1,
+			SendBatchTimeout:       10,
+			SendBatchMaxConcurrent: 2,
+		},
+	}
+
+	client := &Client{
+		client:    mockClient,
+		logger:    ulogger.TestLogger{},
+		settings:  tSettings,
+		batchSize: 1,
+		batchCh:   make(chan []*batchItem),
+	}
+
+	var inFlight, maxSeen, started atomic.Int32
+
+	gate := make(chan struct{})
+
+	mockClient.On("AddTxBatch", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ mock.Arguments) {
+			current := inFlight.Add(1)
+
+			for {
+				old := maxSeen.Load()
+				if current <= old || maxSeen.CompareAndSwap(old, current) {
+					break
+				}
+			}
+
+			started.Add(1)
+			<-gate
+			inFlight.Add(-1)
+		}).
+		Return(&blockassembly_api.AddTxBatchResponse{}, nil)
+
+	client.batcher = client.newTxBatcher(ctx, "test_ingest", 1, 10*time.Millisecond)
+	client.inBlockBatcher = client.newTxBatcher(ctx, "test_in_block", 1, 10*time.Millisecond)
+
+	hash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	txInpoints := subtree.TxInpoints{}
+
+	for i := 0; i < 6; i++ {
+		go func() {
+			_, _ = client.Store(ctx, hash, 1000, 250, txInpoints)
+		}()
+
+		go func() {
+			_, _ = client.Store(ContextWithInBlock(ctx), hash, 1000, 250, txInpoints)
+		}()
+	}
+
+	require.Eventually(t, func() bool { return inFlight.Load() == 2 }, 2*time.Second, 5*time.Millisecond, "the cap is reached")
+
+	// Give a second batcher the time it needs to start a send it should not be allowed.
+	time.Sleep(200 * time.Millisecond)
+
+	require.Equal(t, int32(2), inFlight.Load(), "both batchers together hold the cap, not the cap each")
+	require.Equal(t, int32(2), started.Load())
+
+	close(gate)
+
+	require.Eventually(t, func() bool { return started.Load() == 12 }, 5*time.Second, 10*time.Millisecond, "every batch is sent once slots free")
+	require.LessOrEqual(t, maxSeen.Load(), int32(2), "sends in flight never exceeded the configured cap across both batchers")
+}
+
 func TestNewClientWithAddress_ConfigErrors(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
@@ -1129,4 +1255,113 @@ func TestClient_GetBlockAssemblyQueueStats_RoundTrip(t *testing.T) {
 		require.Error(t, err)
 		require.Equal(t, QueueStats{}, stats, "a failed read must not present a partially-populated snapshot")
 	})
+}
+
+func newInBlockTestClient(mockClient *mockBlockAssemblyAPIClient, batchSize int, columnar bool) *Client {
+	client := createTestClient(mockClient, batchSize)
+	client.settings.BlockAssembly.UseColumnarBatch = columnar
+
+	if batchSize > 0 {
+		sendBatch := func(batch []*batchItem) {
+			client.sendBatchToBlockAssembly(context.Background(), batch)
+		}
+		client.inBlockBatcher = batcher.New(batchSize, 100*time.Millisecond, sendBatch, true)
+	}
+
+	return client
+}
+
+func TestContextWithInBlock(t *testing.T) {
+	require.False(t, InBlockFromContext(context.Background()))
+	require.True(t, InBlockFromContext(ContextWithInBlock(context.Background())))
+}
+
+func TestClient_StoreMarksBlockTransactionsInTheirOwnBatch(t *testing.T) {
+	hash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	for _, columnar := range []bool{false, true} {
+		name := "row"
+		if columnar {
+			name = "columnar"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			mockClient := &mockBlockAssemblyAPIClient{}
+			client := newInBlockTestClient(mockClient, 1, columnar)
+
+			var mu sync.Mutex
+
+			var seen []bool
+
+			record := func(inBlock bool) {
+				mu.Lock()
+				defer mu.Unlock()
+
+				seen = append(seen, inBlock)
+			}
+
+			mockClient.On("AddTxBatch", mock.Anything, mock.Anything, mock.Anything).
+				Run(func(args mock.Arguments) {
+					record(args.Get(1).(*blockassembly_api.AddTxBatchRequest).GetInBlock())
+				}).Return(&blockassembly_api.AddTxBatchResponse{}, nil)
+			mockClient.On("AddTxBatchColumnar", mock.Anything, mock.Anything, mock.Anything).
+				Run(func(args mock.Arguments) {
+					record(args.Get(1).(*blockassembly_api.AddTxBatchColumnarRequest).GetInBlock())
+				}).Return(&blockassembly_api.AddTxBatchResponse{}, nil)
+
+			ok, err := client.Store(context.Background(), hash, 1, 250, subtree.TxInpoints{})
+			require.NoError(t, err)
+			require.True(t, ok)
+
+			ok, err = client.Store(ContextWithInBlock(context.Background()), hash, 1, 250, subtree.TxInpoints{})
+			require.NoError(t, err)
+			require.True(t, ok)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			require.Equal(t, []bool{false, true}, seen, "an ingest transaction is sent unmarked and a block transaction is sent marked")
+		})
+	}
+}
+
+func TestClient_StoreUnaryMarksBlockTransactions(t *testing.T) {
+	hash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	mockClient := &mockBlockAssemblyAPIClient{}
+	client := newInBlockTestClient(mockClient, 0, false)
+
+	var seen []bool
+
+	mockClient.On("AddTx", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			seen = append(seen, args.Get(1).(*blockassembly_api.AddTxRequest).GetInBlock())
+		}).Return(&blockassembly_api.AddTxResponse{Ok: true}, nil)
+
+	_, err := client.Store(context.Background(), hash, 1, 250, subtree.TxInpoints{})
+	require.NoError(t, err)
+
+	_, err = client.Store(ContextWithInBlock(context.Background()), hash, 1, 250, subtree.TxInpoints{})
+	require.NoError(t, err)
+
+	require.Equal(t, []bool{false, true}, seen)
+}
+
+func TestBatchIsInBlock(t *testing.T) {
+	require.False(t, batchIsInBlock(nil), "an empty batch is not a block batch")
+	require.False(t, batchIsInBlock([]*batchItem{{req: &blockassembly_api.AddTxRequest{}}}))
+	require.True(t, batchIsInBlock([]*batchItem{{req: &blockassembly_api.AddTxRequest{InBlock: true}}}))
+}
+
+func TestClient_QueueStatsCarriesHeldCount(t *testing.T) {
+	mockClient := &mockBlockAssemblyAPIClient{}
+	client := createTestClient(mockClient, 0)
+
+	mockClient.On("GetBlockAssemblyQueueStats", mock.Anything, mock.Anything, mock.Anything).
+		Return(&blockassembly_api.QueueStatsMessage{QueueCount: 3, HeldCount: 70, MaxHeld: 100}, nil)
+
+	stats, err := client.GetBlockAssemblyQueueStats(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(70), stats.HeldCount)
+	require.Equal(t, int64(100), stats.MaxHeld)
 }

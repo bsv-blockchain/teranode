@@ -223,5 +223,9 @@ func setupTestStore(t *testing.T) *SQL {
 	store, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
+	// A block stored while the startup rebuild still runs leaves a repair owed, which keeps
+	// the fast path off until the repair loop gets to it.
+	waitForStartupRebuild(t, store)
+
 	return store
 }

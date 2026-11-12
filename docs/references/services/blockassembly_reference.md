@@ -89,15 +89,6 @@ type BlockAssembler struct {
     // This is updated via BlockPersisted notifications
     lastPersistedHeight atomic.Uint32
 
-    // currentChainMap maps block hashes to their heights
-    currentChainMap map[chainhash.Hash]uint32
-
-    // currentChainMapIDs tracks block IDs in the current chain
-    currentChainMapIDs map[uint32]struct{}
-
-    // currentChainMapMu protects access to chain maps
-    currentChainMapMu sync.RWMutex
-
     // blockchainSubscriptionCh receives blockchain notifications
     blockchainSubscriptionCh chan *blockchain.Notification
 
