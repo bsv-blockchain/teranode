@@ -193,7 +193,12 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 
 			// markBatch writes one batch down one path and returns the records a node rejected sub-op 14
 			// for, appended to rejected. Only the native path rejects.
-			markBatch := func(useNative bool, chunk []chainhash.Hash, rejected []chainhash.Hash) []chainhash.Hash {
+			//
+			// resend marks the expression-path resend of those records. Some may already be written: a
+			// record left unanswered beside a rejection can belong to a node that applied sub-op 14 and
+			// then failed before replying. Its resend reads a DAH that already moved, so the resend
+			// queues each external master's page follow-up from the DAH it reads, changed or not.
+			markBatch := func(useNative bool, chunk []chainhash.Hash, rejected []chainhash.Hash, resend bool) []chainhash.Hash {
 				slots := nativeSlots
 				if !useNative {
 					if exprSlots == nil {
@@ -314,7 +319,11 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 						if restampDAH && batchRecord.BatchRec().Record != nil && binsSayExternal(batchRecord.BatchRec().Record.Bins) {
 							if state, perr := s.parseSetMinedState(batchRecord.BatchRec().Record.Bins); perr == nil {
 								h := &batchHashes[j]
-								followUps.collect(h, state)
+								if resend {
+									collectResentFollowUp(&followUps, h, state)
+								} else {
+									followUps.collect(h, state)
+								}
 								states[*h] = masterState{oldDAH: state.OldDeleteAtHeight, newDAH: state.NewDeleteAtHeight, oldUnminedSince: oldUnminedSinceFrom(batchRecord.BatchRec().Record.Bins)}
 							}
 						}
@@ -373,14 +382,14 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 
 				batchEnd := min(i+batchSize, len(workerHashes))
 
-				rejected = markBatch(useNative, workerHashes[i:batchEnd], rejected[:0])
+				rejected = markBatch(useNative, workerHashes[i:batchEnd], rejected[:0], false)
 
 				// Records a node rejected sub-op 14 for are written now through the expression path, so
 				// every write still lands before this call returns.
 				if len(rejected) > 0 {
 					useNative = false
 
-					markBatch(false, rejected, nil)
+					markBatch(false, rejected, nil, true)
 				}
 			}
 
@@ -595,6 +604,25 @@ func (ls *longestChainSlots) set(k int, hash *chainhash.Hash, namespace, setName
 	ls.records[k] = aerospike.NewBatchWrite(ls.policy, key, ls.ops...)
 
 	return nil
+}
+
+// collectResentFollowUp queues the page follow-up of an external master written by a resend. Unlike
+// childDAHFollowUps.collect it does not compare the DAH before and after: the record may have been
+// written by a node that failed before replying, so the resend can read a DAH that already moved
+// while its pages never did. The pages are set to the master's DAH, or cleared when it has none,
+// which is idempotent, and a resend only follows a node rejecting sub-op 14.
+func collectResentFollowUp(f *childDAHFollowUps, hash *chainhash.Hash, state SetMinedState) {
+	if !state.External || state.TotalExtraRecs == nil || *state.TotalExtraRecs <= 0 {
+		return
+	}
+
+	if state.NewDeleteAtHeight != nil {
+		f.addSet(hash, *state.TotalExtraRecs, *state.NewDeleteAtHeight, state.DAHVersion)
+
+		return
+	}
+
+	f.addUnset(hash, *state.TotalExtraRecs, state.DAHVersion)
 }
 
 // binsSayExternal reports whether a longest-chain write read back external=true, the only case in

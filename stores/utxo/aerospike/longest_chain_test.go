@@ -1130,6 +1130,64 @@ func TestMarkTransactionsOnLongestChain_NativeResultsAndFallback(t *testing.T) {
 
 		requireMarked(t, onOldNode) // the old node's record is resent down the expression path
 	})
+
+	// One node rejects sub-op 14 while another applies the mark to an external master and then times
+	// out before replying. The master is left unanswered beside a TIMEOUT in the call's error chain,
+	// and its resend reads a DAH that already moved, so the pages must still follow it.
+	t.Run("a master written natively before its node timed out still moves its pages", func(t *testing.T) {
+		txID := chainhash.HashH([]byte("native-fallback-timeout-master"))
+		masterKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID[:])
+		require.NoError(t, err)
+		require.NoError(t, client.Put(nil, masterKey, aerospike.BinMap{
+			fields.TxID.String():           txID.CloneBytes(),
+			fields.External.String():       true,
+			fields.TotalExtraRecs.String(): 2,
+			fields.SpentExtraRecs.String(): 2, // every page spent too, so the master earns a DAH
+			fields.SpentUtxos.String():     1,
+			fields.RecordUtxos.String():    1,
+			fields.BlockIDs.String():       []interface{}{1},
+			fields.BlockHeights.String():   []interface{}{900},
+			fields.UnminedSince.String():   50,
+		}))
+
+		pageKeys := make([]*aerospike.Key, 2)
+		for i := range pageKeys {
+			pageKeys[i], err = aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(&txID, uint32(i+1))) // nolint: gosec
+			require.NoError(t, err)
+			require.NoError(t, client.Put(nil, pageKeys[i], aerospike.BinMap{fields.TxID.String(): txID.CloneBytes()}))
+		}
+
+		onOldNode := seed(t, "timeout-old-node", 1)
+		wantDAH := height + 1 + retention
+
+		store.SetNativeMarkForTest(true)
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if len(records) == 0 || !isNative(records[0]) {
+				return client.BatchOperate(policy, records) // the resend and the page writes
+			}
+
+			// The upgraded node applies the mark to the master, as sub-op 14 would, then times out.
+			require.NoError(t, client.Put(nil, masterKey, aerospike.BinMap{
+				fields.UnminedSince.String():   nil,
+				fields.DeleteAtHeight.String(): wantDAH,
+			}))
+
+			// Both nodes leave their records unanswered. The client would chain the old node's
+			// rejection with the timeout; the mark reads only the rejection, so it stands for both.
+			return &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+		})
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID, onOldNode[0]}, true))
+
+		for i, key := range pageKeys {
+			rec, err := client.Get(nil, key)
+			require.NoError(t, err)
+			require.Equal(t, wantDAH, rec.Bins[fields.DeleteAtHeight.String()], "page %d follows the master the timed-out node wrote", i+1)
+		}
+
+		requireMarked(t, onOldNode)
+	})
 }
 
 // TestMarkTransactionsOnLongestChain_NativeProbe runs the sub-op 14 probe against the server the tests
