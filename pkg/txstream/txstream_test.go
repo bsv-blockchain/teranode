@@ -160,31 +160,40 @@ func TestStandardOnlyRefusesTheExtendedForm(t *testing.T) {
 	require.False(t, called, "refused before any output is read")
 }
 
-// A declared script length is the peer's word, not proof the bytes exist. A 52-byte transaction
+// A declared script length is the peer's word, not proof the bytes exist. A 61-byte transaction
 // declaring a 512 MiB locking script, and then ending, must fail without allocating the 512 MiB:
-// the buffer grows only as bytes arrive.
+// the script is read in growing chunks, and is allocated whole only once a quarter of it has
+// arrived. The 64 MiB cases pin that quarter: just under it the whole script is never allocated,
+// just over it it is.
 func TestADeclaredScriptLengthIsNotAllocatedBeforeItsBytesArrive(t *testing.T) {
-	var raw bytes.Buffer
+	var header bytes.Buffer
 
-	raw.Write([]byte{1, 0, 0, 0})                   // version
-	raw.WriteByte(1)                                // one input
-	raw.Write(make([]byte, 32+4))                   // previous outpoint
-	raw.Write([]byte{1, 0x51})                      // unlocking script OP_TRUE
-	raw.Write([]byte{0xff, 0xff, 0xff, 0xff})       // sequence
-	raw.WriteByte(1)                                // one output
-	raw.Write(make([]byte, 8))                      // satoshis
-	raw.Write([]byte{0xfe, 0x00, 0x00, 0x00, 0x20}) // locking script of 512 MiB
+	header.Write([]byte{1, 0, 0, 0})             // version
+	header.WriteByte(1)                          // one input
+	header.Write(make([]byte, 32+4))             // previous outpoint
+	header.Write([]byte{1, 0x51})                // unlocking script OP_TRUE
+	header.Write([]byte{0xff, 0xff, 0xff, 0xff}) // sequence
+	header.WriteByte(1)                          // one output
+	header.Write(make([]byte, 8))                // satoshis
+
+	declare512MiB := []byte{0xfe, 0x00, 0x00, 0x00, 0x20}
+	declare64MiB := []byte{0xfe, 0x00, 0x00, 0x00, 0x04}
 
 	for _, tc := range []struct {
-		name  string
-		sent  int
-		limit uint64
+		name     string
+		declared []byte
+		sent     int
+		below    uint64 // TotalAlloc must stay under this, when set
+		atLeast  uint64 // TotalAlloc must reach this, when set
 	}{
-		{name: "none of it sent", sent: 0, limit: 1 << 20},
-		{name: "1 MiB of it sent", sent: 1 << 20, limit: 4 << 20},
+		{name: "512 MiB declared, none of it sent", declared: declare512MiB, sent: 0, below: 1 << 20},
+		{name: "512 MiB declared, 1 MiB of it sent", declared: declare512MiB, sent: 1 << 20, below: 4 << 20},
+		{name: "64 MiB declared, just under a quarter sent", declared: declare64MiB, sent: 16<<20 - 1<<10, below: 32 << 20},
+		{name: "64 MiB declared, just over a quarter sent", declared: declare64MiB, sent: 16<<20 + 1<<10, atLeast: 64 << 20},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			stream := append(bytes.Clone(raw.Bytes()), make([]byte, tc.sent)...)
+			stream := append(bytes.Clone(header.Bytes()), tc.declared...)
+			stream = append(stream, make([]byte, tc.sent)...)
 
 			var before, after runtime.MemStats
 
@@ -193,7 +202,15 @@ func TestADeclaredScriptLengthIsNotAllocatedBeforeItsBytesArrive(t *testing.T) {
 			runtime.ReadMemStats(&after)
 
 			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
-			require.Less(t, after.TotalAlloc-before.TotalAlloc, tc.limit, "allocated for bytes that never arrived")
+
+			allocated := after.TotalAlloc - before.TotalAlloc
+			if tc.below > 0 {
+				require.Less(t, allocated, tc.below, "allocated for bytes that never arrived")
+			}
+
+			if tc.atLeast > 0 {
+				require.GreaterOrEqual(t, allocated, tc.atLeast, "the whole script was not allocated once a quarter arrived")
+			}
 		})
 	}
 }
