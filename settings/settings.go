@@ -345,6 +345,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			CoinbaseRecoveryConsecutiveGood:      getInt("blockassembly_coinbaseRecoveryConsecutiveGood", 6, alternativeContext...),
 			CoinbaseRecoveryMaxAttempts:          getInt("blockassembly_coinbaseRecoveryMaxAttempts", 3, alternativeContext...),
 			MinerWalletPrivateKeys:               getMultiString("miner_wallet_private_keys", "|", []string{}, alternativeContext...),
+			EmergencyDifficultyDelay:             getDuration("blockassembly_emergencyDifficultyDelay", 0, alternativeContext...),
 			DifficultyCache:                      getBool("blockassembly_difficultyCache", true, alternativeContext...),
 			UseDynamicSubtreeSize:                getBool("blockassembly_useDynamicSubtreeSize", false, alternativeContext...),
 			BlockchainSubscriptionTimeout:        getDuration("blockassembly_blockchainSubscriptionTimeout", 5*time.Minute, alternativeContext...),
