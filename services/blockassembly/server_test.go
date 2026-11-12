@@ -318,7 +318,13 @@ func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *subtreepkg.Subtree, s
 }
 
 func setupServer(t *testing.T) (*BlockAssembly, *memory.Memory) {
+	return setupServerWithSettings(t, func(*settings.Settings) {})
+}
+
+func setupServerWithSettings(t *testing.T, configure func(*settings.Settings)) (*BlockAssembly, *memory.Memory) {
 	common := testutil.NewCommonTestSetup(t)
+	configure(common.Settings)
+
 	subtreeStore := testutil.NewMemoryBlobStore()
 
 	// Create a cancellable context for proper cleanup
