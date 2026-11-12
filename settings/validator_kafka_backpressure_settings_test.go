@@ -23,6 +23,7 @@ func TestValidatorKafkaBackpressureSettings_Defaults(t *testing.T) {
 	require.Equal(t, time.Second, kbp.MaxFailOpenCooldown)
 	require.Equal(t, 3, kbp.StaleErrorLimit)
 	require.Equal(t, 90, kbp.PauseQueueFillPercent)
+	require.Equal(t, 80, kbp.ResumeHeldPercent)
 }
 
 // TestValidatorKafkaBackpressureSettings_LoaderReadsKeys guards against the
@@ -38,6 +39,7 @@ func TestValidatorKafkaBackpressureSettings_LoaderReadsKeys(t *testing.T) {
 	t.Setenv("validator_kafkaBackpressureMaxFailOpenCooldown", "2s")
 	t.Setenv("validator_kafkaBackpressureStaleErrorLimit", "5")
 	t.Setenv("validator_kafkaBackpressurePauseFillPercent", "75")
+	t.Setenv("validator_kafkaBackpressureResumeHeldPercent", "60")
 
 	kbp := NewSettings().Validator.KafkaBackpressure
 
@@ -50,6 +52,7 @@ func TestValidatorKafkaBackpressureSettings_LoaderReadsKeys(t *testing.T) {
 	require.Equal(t, 2*time.Second, kbp.MaxFailOpenCooldown)
 	require.Equal(t, 5, kbp.StaleErrorLimit)
 	require.Equal(t, 75, kbp.PauseQueueFillPercent)
+	require.Equal(t, 60, kbp.ResumeHeldPercent)
 }
 
 // A percentage outside 0..100 cannot express a fill fraction. Negative must become
@@ -106,6 +109,48 @@ func TestValidatorKafkaBackpressureSettings_PauseFillPercentClamps(t *testing.T)
 			require.Equal(t, pct, got.PauseQueueFillPercent)
 		}
 	})
+}
+
+func TestValidatorKafkaBackpressureSettings_ResumeHeldPercentClamps(t *testing.T) {
+	base := ValidatorKafkaBackpressureSettings{
+		Enabled:             true,
+		PauseQueueAge:       500 * time.Millisecond,
+		ResumeQueueAge:      100 * time.Millisecond,
+		PollInterval:        50 * time.Millisecond,
+		ReadTimeout:         100 * time.Millisecond,
+		MaxPause:            30 * time.Second,
+		MaxFailOpenCooldown: time.Second,
+		StaleErrorLimit:     3,
+	}
+
+	for _, tc := range []struct {
+		name string
+		in   int
+		want int
+		warn bool
+	}{
+		{"negative clamps to zero", -1, 0, true},
+		{"above 100 clamps to 100", 101, 100, true},
+		{"zero is legal", 0, 0, false},
+		{"default is legal", 80, 80, false},
+		{"100 is legal", 100, 100, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base
+			cfg.ResumeHeldPercent = tc.in
+
+			got, warnings := cfg.validated()
+
+			require.Equal(t, tc.want, got.ResumeHeldPercent)
+
+			if tc.warn {
+				require.Len(t, warnings, 1)
+				require.Contains(t, warnings[0], "resumeHeldPercent")
+			} else {
+				require.Empty(t, warnings)
+			}
+		})
+	}
 }
 
 // TestValidatorKafkaBackpressureSettings_MaxFailOpenCooldownFloor verifies the cap

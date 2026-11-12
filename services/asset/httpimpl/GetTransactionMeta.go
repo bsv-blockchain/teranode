@@ -182,6 +182,16 @@ func (h *HTTP) GetTransactionMeta(mode ReadMode) func(c echo.Context) error {
 		// arrays so mainChainIndex can never index beyond their common length.
 		for i := 0; i < numEntries; i++ {
 			blockID := meta.BlockIDs[i]
+
+			// An id whose block lookup failed above is skipped. Quick validation can
+			// leave one on a transaction: a retry after its block id reservation was
+			// swept commits under a new id, and the old id, which no block is stored
+			// under, stays. The in-memory chain check can report such an id as on the
+			// main chain.
+			if blockHashes[i] == "" {
+				continue
+			}
+
 			var (
 				onChain bool
 				err     error

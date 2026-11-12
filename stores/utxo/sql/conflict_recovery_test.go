@@ -30,6 +30,21 @@ func TestConflictRecoveryForwardOwnBlock(t *testing.T) {
 	tests.ConflictRecoveryForwardOwnBlock(t, store)
 }
 
+func TestConflictRecoveryConfirmedLoserNotDemoted(t *testing.T) {
+	store, _ := newTestStore(t)
+	tests.ConflictRecoveryConfirmedLoserNotDemoted(t, store)
+}
+
+func TestConflictRecoveryConfirmedLoserOwnsWinningInput(t *testing.T) {
+	store, _ := newTestStore(t)
+	tests.ConflictRecoveryConfirmedLoserOwnsWinningInput(t, store)
+}
+
+func TestConflictRecoveryConfirmedLoserMixedChains(t *testing.T) {
+	store, _ := newTestStore(t)
+	tests.ConflictRecoveryConfirmedLoserMixedChains(t, store)
+}
+
 func TestConflictRecoveryForeignLock(t *testing.T) {
 	store, _ := newTestStore(t)
 	tests.ConflictRecoveryForeignLock(t, store)

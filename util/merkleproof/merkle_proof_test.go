@@ -5,6 +5,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
+	terr "github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,6 +19,10 @@ type MockMerkleProofConstructor struct {
 	subtrees          map[string]*subtree.Subtree
 	mainChainBlockIDs map[uint32]bool
 
+	// missingBlockIDs are ids GetBlockByID reports as not found, as for an id no
+	// block is stored under.
+	missingBlockIDs map[uint32]bool
+
 	// subtreeLoads counts complete-subtree deserializations, the cost the
 	// block-roots cache exists to cut.
 	subtreeLoads int
@@ -28,6 +33,10 @@ func (m *MockMerkleProofConstructor) GetTxMeta(txHash *chainhash.Hash) (*TxMetaD
 }
 
 func (m *MockMerkleProofConstructor) GetBlockByID(id uint64) (*model.Block, error) {
+	if m.missingBlockIDs[uint32(id)] { //nolint:gosec // test ids are small
+		return nil, terr.NewBlockNotFoundError("block %d not found", id)
+	}
+
 	return m.block, nil
 }
 
@@ -529,6 +538,28 @@ func TestConstructMerkleProof_MainChainFilter(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, proof)
 		assert.Equal(t, uint32(101), proof.BlockHeight, "must pick the main-chain entry, not BlockIDs[0]")
+	})
+
+	t.Run("id with no stored block is skipped", func(t *testing.T) {
+		// BlockIDs[0]=7 is an id no block is stored under, left by a quick-validation
+		// retry after its reservation was swept. The chain check reports it on chain.
+		mock := &MockMerkleProofConstructor{
+			txMeta: &TxMetaData{
+				BlockIDs:     []uint32{7, 99},
+				BlockHeights: []uint32{100, 101},
+				SubtreeIdxs:  []int{0, 0},
+			},
+			block:             block,
+			blockHeader:       blockHeader,
+			subtrees:          map[string]*subtree.Subtree{subtreeRoot.String(): st},
+			mainChainBlockIDs: map[uint32]bool{7: true, 99: true},
+			missingBlockIDs:   map[uint32]bool{7: true},
+		}
+
+		proof, err := ConstructMerkleProof(txHash, mock)
+		require.NoError(t, err)
+		require.NotNil(t, proof)
+		require.Equal(t, uint32(101), proof.BlockHeight, "must use the id the block is stored under")
 	})
 
 	t.Run("tx only in orphan returns not-found", func(t *testing.T) {

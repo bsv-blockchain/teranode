@@ -1217,3 +1217,158 @@ func TestPrepareRecoveredConflictUpdates_TransientReadIsRetried(t *testing.T) {
 	require.Equal(t, 2, wrapped.pendingSeen)
 	mockStp.AssertCalled(t, "MarkRecoveredConflicts", mock.Anything, []chainhash.Hash{*txL.TxIDChainHash()})
 }
+
+// spendFirstOutput stores a transaction that owns parent[0] and has one output of its own.
+func spendFirstOutput(ctx context.Context, t *testing.T, store utxo.Store, parent *bt.Tx, satoshis uint64) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+	require.NoError(t, tx.From(parent.TxIDChainHash().String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+	tx.Outputs = []*bt.Output{{Satoshis: satoshis, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
+
+	_, _, err := store.SpendAndCreate(ctx, tx, 10, utxo.WithCreateOnly())
+	require.NoError(t, err)
+	_, _, err = store.SpendAndCreate(ctx, tx, store.GetBlockHeight()+1, utxo.WithSpendOnly())
+	require.NoError(t, err)
+
+	return tx
+}
+
+// appliedForwardWithMinedDescendants builds the starting state of #2071. C owns P:0 in the mempool,
+// and block 1 mines W, which also spends P:0. The forward resolution of block 1 makes W the owner
+// and leaves its intent in the WAL, as a stop before the acknowledgement does. W's child D and
+// grandchild E are then mined in block 2 on the same chain.
+//
+// With legacy set, the resolution is applied by hand and the intent is a v0.16.0 record with no
+// recovery checklist.
+func appliedForwardWithMinedDescendants(t *testing.T, legacy bool) (items *baTestItems, c, w, d, e *bt.Tx) {
+	t.Helper()
+
+	ctx := t.Context()
+	items = setupBlockAssemblyTest(t)
+	store := items.utxoStore
+	require.NoError(t, store.SetBlockHeight(10))
+
+	parent := createStaleReverseParent(ctx, t, store, 1)
+	c = createStaleReverseSpender(ctx, t, store, parent, 0, 90000, true)
+	w = createStaleReverseSpender(ctx, t, store, parent, 0, 80000, false)
+	addBlockWithMinedSet(ctx, t, items, blockHeader1)
+	_, meta1, err := items.blockchainClient.GetBlockHeader(ctx, blockHeader1.Hash())
+	require.NoError(t, err)
+
+	winners := []chainhash.Hash{*w.TxIDChainHash()}
+	if legacy {
+		cSpends, err := utxo.GetSpends(c)
+		require.NoError(t, err)
+		require.NoError(t, store.Unspend(ctx, cSpends))
+		_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*c.TxIDChainHash()}, true)
+		require.NoError(t, err)
+		wSpends, err := utxo.GetSpends(w)
+		require.NoError(t, err)
+		require.NoError(t, store.RestoreConflictSpends(ctx, wSpends, 1))
+		_, _, err = store.SetConflicting(ctx, winners, false)
+		require.NoError(t, err)
+		require.NoError(t, store.BeginConflictIntent(ctx, utxo.ConflictIntent{Kind: utxo.ConflictIntentForward, BlockHeight: 1, BlockHash: *blockHeader1.Hash(), TxHashes: winners, StartedAt: 1}))
+		recovery, err := store.LoadConflictRecovery(ctx, utxo.ForwardConflictIntentID(*blockHeader1.Hash()))
+		require.NoError(t, err)
+		require.Nil(t, recovery, "a v0.16.0 intent has no checklist")
+	} else {
+		_, _, err = utxo.ProcessConflicting(ctx, store, 1, *blockHeader1.Hash(), winners, nil, utxo.NoAncestryGuard, utxo.WithDeferredConflictCompletion())
+		require.NoError(t, err)
+	}
+
+	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{w.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: meta1.ID, BlockHeight: 1})
+	require.NoError(t, err)
+	requireConflictOwner(ctx, t, store, w, c)
+
+	d = spendFirstOutput(ctx, t, store, w, 70000)
+	e = spendFirstOutput(ctx, t, store, d, 60000)
+	addBlockWithMinedSet(ctx, t, items, blockHeader2)
+	_, meta2, err := items.blockchainClient.GetBlockHeader(ctx, blockHeader2.Hash())
+	require.NoError(t, err)
+	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{d.TxIDChainHash(), e.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: meta2.ID, BlockHeight: 2})
+	require.NoError(t, err)
+
+	pending, err := store.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "the forward intent of block 1 is left in the WAL")
+
+	onChain, err := items.blockAssembler.isBlockOnLongestChain(ctx, *blockHeader1.Hash())
+	require.NoError(t, err)
+	require.True(t, onChain)
+
+	return items, c, w, d, e
+}
+
+// requireMinedDescendantsKept checks that W, D and E each still own their input and are not
+// Conflicting, and that C is still the demoted loser.
+func requireMinedDescendantsKept(ctx context.Context, t *testing.T, store utxo.Store, c, w, d, e *bt.Tx) {
+	t.Helper()
+
+	requireConflictOwner(ctx, t, store, w, c)
+	requireConflictOwner(ctx, t, store, d)
+	requireConflictOwner(ctx, t, store, e)
+}
+
+// #2071: on v0.16.0 a startup replay of a completed forward intent took the winner as the
+// counter-spender of its own inputs, demoted the winner's mined descendants, and the pruner deleted
+// them. Replay must return the saved result and leave them alone, also when it runs again on the
+// next start.
+func TestReplayPendingConflictIntents_AppliedForwardKeepsMinedDescendants(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := t.Context()
+	items, c, w, d, e := appliedForwardWithMinedDescendants(t, false)
+	store := items.utxoStore
+
+	for range 2 {
+		failed := items.blockAssembler.replayPendingConflictIntents(ctx)
+		require.Empty(t, failed)
+		require.NoError(t, items.blockAssembler.checkConflictRecoveryReady(ctx, failed))
+
+		requireMinedDescendantsKept(ctx, t, store, c, w, d, e)
+
+		recovery, err := store.LoadConflictRecovery(ctx, utxo.ForwardConflictIntentID(*blockHeader1.Hash()))
+		require.NoError(t, err)
+		require.NotNil(t, recovery)
+		require.Equal(t, utxo.ConflictRecoveryFinished, recovery.Phase)
+		require.Equal(t, []chainhash.Hash{*c.TxIDChainHash()}, recovery.Losers)
+	}
+}
+
+// The ProcessConflicting call that replay makes, with the production guards, so the loser set it
+// returns can be checked directly.
+func TestReplayPendingConflictIntents_AppliedForwardRerunReturnsSavedLosers(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := t.Context()
+	items, c, w, d, e := appliedForwardWithMinedDescendants(t, false)
+
+	losers, marked, err := utxo.ProcessConflicting(ctx, items.utxoStore, 1, *blockHeader1.Hash(), []chainhash.Hash{*w.TxIDChainHash()}, nil,
+		utxo.NewAncestryGuard(items.blockchainClient.CheckBlockIsAncestorOfBlock), utxo.WithDeferredConflictCompletion(),
+		utxo.WithRecoveryChainGuard(items.blockAssembler.currentChainGuard()))
+	require.NoError(t, err)
+	require.Equal(t, 1, losers.Length())
+	require.True(t, losers.Exists(*c.TxIDChainHash()))
+	require.Equal(t, []chainhash.Hash{*c.TxIDChainHash()}, marked)
+	requireMinedDescendantsKept(ctx, t, items.utxoStore, c, w, d, e)
+}
+
+// A v0.16.0 forward intent has no checklist, so replay cannot tell what it applied. For a block on
+// the longest chain it must fail closed and keep block assembly from starting, not demote anything.
+func TestReplayPendingConflictIntents_LegacyOnChainForwardFailsClosed(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := t.Context()
+	items, c, w, d, e := appliedForwardWithMinedDescendants(t, true)
+
+	failed := items.blockAssembler.replayPendingConflictIntents(ctx)
+	require.Len(t, failed, 1)
+	require.ErrorContains(t, items.blockAssembler.checkConflictRecoveryReady(ctx, failed), "failed to replay")
+	requireMinedDescendantsKept(ctx, t, items.utxoStore, c, w, d, e)
+
+	pending, err := items.utxoStore.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "the legacy intent stays for manual repair")
+}
