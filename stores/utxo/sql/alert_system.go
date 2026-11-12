@@ -49,6 +49,10 @@ import (
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 )
 
+// freezeBeforeWrite runs in FreezeUTXOs between the check and the write. It is nil
+// outside tests, which use it to commit a spend inside that gap.
+var freezeBeforeWrite func()
+
 // FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.
 // Returns an error if any UTXO is already spent or frozen.
 func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSettings *settings.Settings) error {
@@ -91,11 +95,39 @@ func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSet
 
 	// if not, freeze the UTXO
 	for _, spend := range spends {
+		if freezeBeforeWrite != nil {
+			freezeBeforeWrite()
+		}
+
 		id := txHashIDMap[spend.TxID.String()]
 
 		q := `UPDATE outputs SET frozen = true WHERE transaction_id = $1 AND idx = $2 AND spending_data IS NULL`
-		if _, err := s.db.ExecContext(ctx, q, id, spend.Vout); err != nil {
+
+		result, err := s.db.ExecContext(ctx, q, id, spend.Vout)
+		if err != nil {
 			return err
+		}
+
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+
+		// A spend committed after the check above, so the coin was not frozen.
+		if affected == 0 {
+			var spendingDataBytes []byte
+
+			if err = s.db.QueryRowContext(ctx, `SELECT spending_data FROM outputs WHERE transaction_id = $1 AND idx = $2`,
+				id, spend.Vout).Scan(&spendingDataBytes); err != nil {
+				return err
+			}
+
+			spendingData, err := spendpkg.NewSpendingDataFromBytes(spendingDataBytes)
+			if err != nil {
+				return errors.NewProcessingError("failed to create spending data from bytes", err)
+			}
+
+			return errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spendingData)
 		}
 	}
 
