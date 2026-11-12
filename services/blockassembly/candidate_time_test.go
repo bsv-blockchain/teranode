@@ -1002,6 +1002,20 @@ func buildSpacedChain(t *testing.T, ctx context.Context, blockchainClient blockc
 	return prevHeader
 }
 
+func startAssemblerOnSpacedChain(t *testing.T, server *BlockAssembly, tipTime uint32) *model.BlockHeader {
+	t.Helper()
+
+	tip := buildSpacedChain(t, t.Context(), server.blockchainClient, tipTime)
+
+	server.blockAssembler.setBestBlockHeader(tip, emergencyTestChainLength)
+	server.blockAssembler.subtreeProcessor.InitCurrentBlockHeader(tip)
+	require.NoError(t, server.blockAssembler.SetState(t.Context()))
+
+	require.NoError(t, server.blockAssembler.Start(t.Context()))
+
+	return tip
+}
+
 func TestDelayEmergencyDifficulty(t *testing.T) {
 	const (
 		parentTime = int64(1_700_000_000)
@@ -1078,11 +1092,8 @@ func TestEmergencyDifficultyDelayCandidate(t *testing.T) {
 				tSettings.BlockAssembly.EmergencyDifficultyDelay = tt.delay
 			})
 
-			require.NoError(t, server.blockAssembler.Start(t.Context()))
-
 			tipTime := uint32(time.Now().Add(-tt.tipAge).Unix())
-			tip := buildSpacedChain(t, t.Context(), server.blockchainClient, tipTime)
-			server.blockAssembler.setBestBlockHeader(tip, emergencyTestChainLength)
+			tip := startAssemblerOnSpacedChain(t, server, tipTime)
 
 			usual, err := server.blockchainClient.GetNextWorkRequired(t.Context(), tip.Hash(), int64(tipTime)+1)
 			require.NoError(t, err)
@@ -1179,11 +1190,8 @@ func TestGetCurrentDifficultyWhenNoCandidateTimeExists(t *testing.T) {
 		tSettings.BlockAssembly.EmergencyDifficultyDelay = 5 * time.Minute
 	})
 
-	require.NoError(t, server.blockAssembler.Start(t.Context()))
-
 	tipTime := uint32(time.Now().Add(3 * time.Hour).Unix())
-	tip := buildSpacedChain(t, t.Context(), server.blockchainClient, tipTime)
-	server.blockAssembler.setBestBlockHeader(tip, emergencyTestChainLength)
+	tip := startAssemblerOnSpacedChain(t, server, tipTime)
 
 	_, err := server.blockAssembler.candidateTime(t.Context(), tip)
 	require.ErrorContains(t, err, "two-hour future bound", "the chain must be in the state where no candidate time exists")

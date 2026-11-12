@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -144,6 +145,10 @@ func (b *BlockAssembler) candidateTime(ctx context.Context, parentHeader *model.
 	return held, nil
 }
 
+func minDifficultyRule(params *chaincfg.Params) bool {
+	return params.ReduceMinDifficulty && !params.NoDifficultyAdjustment
+}
+
 func (b *BlockAssembler) currentDifficultyTime(parentHeader *model.BlockHeader) int64 {
 	var minTime int64
 
@@ -162,7 +167,7 @@ func (b *BlockAssembler) delayEmergencyDifficulty(parentHeader *model.BlockHeade
 	params := b.settings.ChainCfgParams
 	delay := int64(b.settings.BlockAssembly.EmergencyDifficultyDelay / time.Second)
 
-	if delay <= 0 || !params.ReduceMinDifficulty || params.NoDifficultyAdjustment {
+	if delay <= 0 || !minDifficultyRule(params) {
 		return timeNow
 	}
 
