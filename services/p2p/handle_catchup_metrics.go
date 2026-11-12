@@ -67,7 +67,16 @@ func (s *Server) RecordCatchupSuccess(ctx context.Context, req *p2p_api.RecordCa
 	// The registry call keeps the raw req.PeerId, matching the sibling handlers
 	// in this file; the coordinator call below needs the canonical form because
 	// currentSyncPeer is stored canonically.
-	if err := s.peerRegistry.RecordCatchupSuccess(ctx, req.PeerId, req.DurationMs); err != nil {
+	//
+	// DurationMs is the wall-clock time of the whole catchup: checkpoint and DAA
+	// checks, fork handling, and fetching AND validating every block. Most of that
+	// is this node's own work and scales with the catchup size, not with how fast
+	// the peer answered. It is not a response time, so it is not blended into
+	// AvgResponseTimeMs: one catchup of 30s or more applied the 0.6 speed factor
+	// and cut a healthy peer's score from 90 to 54 (issue 2092). The peer's actual
+	// latency is credited per header request by ReportValidBlockHeaders. The
+	// duration still settles the sync slot below.
+	if err := s.peerRegistry.RecordCatchupSuccess(ctx, req.PeerId, 0); err != nil {
 		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("record catchup success", err))
 	}
 
