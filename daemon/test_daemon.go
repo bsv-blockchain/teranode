@@ -568,7 +568,9 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 		readyCh := make(chan struct{})
 
-		go d.Start(logger, services, appSettings, readyCh)
+		// The select below learns of a start failure from stopCh and reads it
+		// from startError(), so Start's return value is not needed here.
+		go func() { _ = d.Start(logger, services, appSettings, readyCh) }()
 
 		select {
 		case <-readyCh:
