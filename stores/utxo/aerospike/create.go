@@ -641,7 +641,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			// and KEY_NOT_FOUND_ERROR on a real BatchWrite (which is NOT a NOOP) — must
 			// be surfaced. Previously the SafeSend was nested inside the type-asserted
 			// branch and a non-matching error left the caller hung on <-errCh.
-			if batchRecord.BatchRec().InDoubt {
+			if writeMayHaveApplied(batchRecord.BatchRec()) {
 				batch[idx].complete(createMayHaveCommittedError(err))
 				continue
 			}
@@ -1579,9 +1579,13 @@ func isInDoubt(err error) bool {
 
 // writeMayHaveApplied reports whether a batch write's record may have been
 // written: the server applied it (OK), or the client sent it and lost the
-// answer (in doubt). A record the call never sent keeps NO_RESPONSE.
+// answer (in doubt). A record the call never sent keeps NO_RESPONSE. The
+// record's error is read with isInDoubt as well, because the client flags a
+// batch record in doubt only after a retry: a write the server answered with
+// TIMEOUT on the first send, which may have applied on the master, comes back
+// unflagged.
 func writeMayHaveApplied(rec *aerospike.BatchRecord) bool {
-	return rec.InDoubt || (rec.Err == nil && rec.ResultCode == types.OK)
+	return rec.InDoubt || isInDoubt(rec.Err) || (rec.Err == nil && rec.ResultCode == types.OK)
 }
 
 // recordMayExist reports whether a create's record may exist after its batch

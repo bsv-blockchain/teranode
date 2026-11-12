@@ -336,7 +336,7 @@ func TestSendStoreBatch_PanicCompletesGroup(t *testing.T) {
 // write the server rejected stays a plain failure.
 func TestSendStoreBatch_InDoubtWriteLeavesOutcomeUnknown(t *testing.T) {
 	inDoubt := &aerospike.AerospikeError{ResultCode: types.TIMEOUT, InDoubt: true}
-	notSent := &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+	unflaggedTimeout := &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
 	rejected := &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
 
 	cases := []struct {
@@ -350,7 +350,7 @@ func TestSendStoreBatch_InDoubtWriteLeavesOutcomeUnknown(t *testing.T) {
 		{name: "top-level server rejection", topLevel: rejected},
 		// The client drops a node's in-doubt flag when that node's last record
 		// is a read, so a timeout counts as in doubt on its own.
-		{name: "top-level timeout not flagged in doubt", topLevel: notSent, wantUnknown: true},
+		{name: "top-level timeout not flagged in doubt", topLevel: unflaggedTimeout, wantUnknown: true},
 		{name: "top-level const network error", topLevel: aerospike.ErrNetwork, wantUnknown: true},
 		// BatchOperate chains one error per node and the head names only the
 		// last node to fail: an in-doubt node further down must still count.
@@ -360,8 +360,11 @@ func TestSendStoreBatch_InDoubtWriteLeavesOutcomeUnknown(t *testing.T) {
 		{name: "top-level error, record written by another node", topLevel: rejected, recordOK: true, wantUnknown: true},
 		{name: "top-level error, record left by an earlier attempt", topLevel: rejected, perRecord: &aerospike.AerospikeError{ResultCode: types.KEY_EXISTS_ERROR}, wantUnknown: true},
 		{name: "per-record error in doubt", perRecord: inDoubt, wantUnknown: true},
-		{name: "per-record error not sent", perRecord: notSent},
-		{name: "per-record const timeout", perRecord: aerospike.ErrTimeout},
+		{name: "per-record server rejection", perRecord: rejected},
+		// The client flags a batch record in doubt only after a retry, so a
+		// timeout on the first send comes back unflagged.
+		{name: "per-record timeout not flagged in doubt", perRecord: unflaggedTimeout, wantUnknown: true},
+		{name: "per-record const timeout", perRecord: aerospike.ErrTimeout, wantUnknown: true},
 	}
 
 	for _, tc := range cases {
