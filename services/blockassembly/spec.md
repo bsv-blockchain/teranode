@@ -158,7 +158,7 @@ The implementation MAY apply additional usage-derived ceilings; such ceilings ar
 
 **BA-REORG-006.** The service MUST perform a full reset rather than an in-place reorganization when the deeper side of the reorganization (blocks moved back or forward from the common ancestor) is at least the effective UTXO store block height retention (`GetUtxoStoreBlockHeightRetention()`: the global retention plus the UTXO store adjustment, floored at 0; 0 disables this rule), at any height, or when it is at least the coinbase-maturity threshold and the current chain height is greater than 1000.
 
-**BA-REORG-007.** Advancement of the service's best-block reference SHALL be atomic with successful completion of subtree-processor reconciliation for the new tip. A partial failure during reorg or move-forward MUST leave the best-block reference unchanged.
+**BA-REORG-007.** Advancement of the service's best-block reference SHALL be atomic with successful completion of subtree-processor reconciliation for the new tip. A partial failure during reorg or move-forward MUST leave the best-block reference unchanged, and MUST leave the transaction map consistent with the subtrees it leaves in place.
 
 **BA-REORG-008.** The operational state SHALL return to `Running` at the end of every reconciliation cycle, regardless of cycle outcome. The service MUST NOT be wedged in `Reorging`, `MovingUp`, or other transient states due to reconciliation failure.
 
@@ -796,6 +796,11 @@ The current implementation does not validate `InitialMerkleItemsPerSubtree` and 
 *Affects:* BA-SUBTREE-024.
 The current implementation hardcodes `50` as the anti-creep threshold at `subtreeprocessor/SubtreeProcessor.go:1600`. The spec requires it to be a function of `MinimumMerkleItemsPerSubtree` so the gate scales with deployment configuration.
 *Work required:* replace the hardcoded constant with a derived value (e.g. a small multiple of `MinimumMerkleItemsPerSubtree`); the chosen factor MUST be commented in the source.
+
+**GAP-BA-004.** A fork reorg that fails inside its move-back's bulk build leaves the moved-back transactions in the transaction map.
+*Affects:* BA-REORG-007.
+A failed fork reorg keeps the subtrees and transaction map of its last completed step, and a step that fails part way puts back its own input. The move-back, though, writes the moved-back block's transactions into `currentTxMap` in place before its bulk build, and when that build fails it puts back only the subtrees it started from. Those transactions stay in the map, which then no longer matches the subtrees (`CheckSubtreeProcessor` reports the mismatch), contrary to BA-REORG-007. Only a reset may run after a failed fork reorg (`failedForkReorgNeedsReset`), and it clears the map, which hides the stale entries. Proof: `TestKnownDefect_MoveBackBuildFailureLeavesMovedBackTxsInTheMap` (build tag `bagaps`).
+*Work required:* have the move-back delete the entries it inserted (it knows them from `wasSet`) when its build fails.
 
 ---
 

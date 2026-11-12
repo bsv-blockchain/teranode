@@ -39,7 +39,10 @@ read every section between yours and the target.
   refuses to open if a transaction holds a table for five minutes, and a process already running
   does not see the column until it restarts, so switch the flag on across a node's processes
   together. (#2136)
-
+- **`blockassembly_storeTxInpointsForSubtreeMeta=false` now only skips the subtree meta files.**
+  Block assembly keeps every unmined tx's parent links in memory in both modes. With it off, the
+  restart reload and a block move-back now read each tx's inputs from the UTXO store (an external tx
+  from the blob store), and memory per unmined tx rises; nothing to change. (#2128)
 - **Upgrade every validator and subtree-validation pod before you set
   `blockassembly_maxTransactionsInMemory`, and keep the default 0 until then.** An old validator
   never sends `inBlock`, so a new block assembly with the limit set refuses its block transactions
@@ -165,6 +168,9 @@ read every section between yours and the target.
 - **Asset block-list endpoints honour `fromHeight` with `includeOrphans`.** They now page down
   instead of returning the chain's top; clients passing both get the blocks at or below
   `fromHeight`. (#2065)
+- **`blockassembly_maxBlockReorgCatchup` is removed.** It never capped a reorg; it only sized two
+  unused maps. A config that still sets it starts as before and the value is ignored, so no
+  action is needed beyond deleting the line. (#2163)
 
 ## [0.16.0] - 2026-10-05
 
