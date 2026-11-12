@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -89,20 +90,26 @@ func readFreezeRaceRow(ctx context.Context, t *testing.T, store *Store) (frozen 
 }
 
 // pauseOnce installs fn into hook so the first caller blocks until release, and
-// removes it at cleanup.
+// removes it at cleanup. Later callers pass straight through, so a competing write
+// can run the same code path while the first caller is held.
 func pauseOnce(t *testing.T, hook *func()) (reached chan struct{}, release func()) {
 	t.Helper()
 
 	reached = make(chan struct{})
 	resume := make(chan struct{})
 
-	var once, releaseOnce sync.Once
+	var (
+		first       atomic.Bool
+		releaseOnce sync.Once
+	)
 
 	*hook = func() {
-		once.Do(func() {
-			close(reached)
-			<-resume
-		})
+		if !first.CompareAndSwap(false, true) {
+			return
+		}
+
+		close(reached)
+		<-resume
 	}
 
 	release = func() { releaseOnce.Do(func() { close(resume) }) }
@@ -281,55 +288,105 @@ func TestFreezeAndSpendNeverBothWin_Postgres(t *testing.T) {
 	}
 }
 
-// Two copies of one spend in one bulk batch share a single UPDATE row. When a freeze
-// stops that row, the copy must fail too, not be reported as an idempotent success.
-func TestBulkSpendDuplicateSharesFreezeRefusal_Postgres(t *testing.T) {
+// Two copies of one spend in one bulk batch share a single UPDATE row. When that row
+// is refused after the bulk SELECT, by a freeze or by a different spender, the copy
+// must fail with the same error, not be reported as an idempotent success.
+func TestBulkSpendDuplicateSharesRefusal_Postgres(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
 
+	// otherSpendTx spends output 0 of tests.Tx to a different amount, so its txid
+	// differs from freezeRaceSpendTx.
+	otherSpendTx := func(t *testing.T) *bt.Tx {
+		t.Helper()
+
+		out := tests.Tx.Outputs[0]
+
+		tx := bt.NewTx()
+		require.NoError(t, tx.From(tests.Tx.TxIDChainHash().String(), 0, out.LockingScript.String(), out.Satoshis))
+		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 2000))
+
+		return tx
+	}
+
+	refusals := []struct {
+		name    string
+		wantErr error
+		// refuse commits the competing write while the bulk spend is paused, and
+		// returns the spending data the row must end with (nil for unspent).
+		refuse func(ctx context.Context, t *testing.T, store *Store, outpoint []*utxo.Spend) []byte
+		frozen bool
+	}{
+		{
+			name:    "frozen",
+			wantErr: errors.ErrFrozen,
+			frozen:  true,
+			refuse: func(ctx context.Context, t *testing.T, store *Store, outpoint []*utxo.Spend) []byte {
+				require.NoError(t, store.FreezeUTXOs(ctx, outpoint, store.settings))
+
+				return nil
+			},
+		},
+		{
+			name:    "spent by another tx",
+			wantErr: errors.ErrSpent,
+			refuse: func(ctx context.Context, t *testing.T, store *Store, _ []*utxo.Spend) []byte {
+				other := otherSpendTx(t)
+				require.NotEqual(t, freezeRaceSpendTx(t).TxIDChainHash(), other.TxIDChainHash())
+
+				_, err := store.Spend(ctx, other, freezeRaceSpendHeight+1)
+				require.NoError(t, err)
+
+				return spendpkg.NewSpendingData(other.TxIDChainHash(), 0).Bytes()
+			},
+		},
+	}
+
 	for _, path := range freezeRacePaths[1:] {
-		t.Run(path.name, func(t *testing.T) {
-			store, ctx := setupFreezeRaceStore(t, path)
-			outpoint := freezeRaceOutpoint(t)
+		for _, refusal := range refusals {
+			t.Run(path.name+"/"+refusal.name, func(t *testing.T) {
+				store, ctx := setupFreezeRaceStore(t, path)
+				outpoint := freezeRaceOutpoint(t)
 
-			spendTx := freezeRaceSpendTx(t)
-			item := *outpoint[0]
-			item.SpendingData = spendpkg.NewSpendingData(spendTx.TxIDChainHash(), 0)
+				spendTx := freezeRaceSpendTx(t)
+				item := *outpoint[0]
+				item.SpendingData = spendpkg.NewSpendingData(spendTx.TxIDChainHash(), 0)
 
-			batch := make([]*batchSpend, 2)
-			for i := range batch {
-				batch[i] = &batchSpend{spend: &item, blockHeight: freezeRaceSpendHeight + 1, errCh: make(chan error, 1)}
-			}
-
-			reached, release := pauseOnce(t, &spendBeforeWrite)
-
-			retryDone := make(chan error, 1)
-
-			go func() {
-				if store.trySendSpendBatchBulk(ctx, batch) {
-					retryDone <- errors.NewProcessingError("bulk spend asked for a retry")
-
-					return
+				batch := make([]*batchSpend, 2)
+				for i := range batch {
+					batch[i] = &batchSpend{spend: &item, blockHeight: freezeRaceSpendHeight + 1, errCh: make(chan error, 1)}
 				}
-				retryDone <- nil
-			}()
 
-			waitReached(t, reached, retryDone, "bulk spend")
+				reached, release := pauseOnce(t, &spendBeforeWrite)
 
-			require.NoError(t, store.FreezeUTXOs(ctx, outpoint, store.settings))
+				retryDone := make(chan error, 1)
 
-			release()
+				go func() {
+					if store.trySendSpendBatchBulk(ctx, batch) {
+						retryDone <- errors.NewProcessingError("bulk spend asked for a retry")
 
-			require.NoError(t, <-retryDone)
+						return
+					}
+					retryDone <- nil
+				}()
 
-			for i, b := range batch {
-				require.ErrorIs(t, <-b.errCh, errors.ErrFrozen, "batch entry %d", i)
-			}
+				waitReached(t, reached, retryDone, "bulk spend")
 
-			frozen, spendingData := readFreezeRaceRow(ctx, t, store)
-			require.True(t, frozen)
-			require.Nil(t, spendingData)
-		})
+				wantSpendingData := refusal.refuse(ctx, t, store, outpoint)
+
+				release()
+
+				require.NoError(t, <-retryDone)
+
+				for i, b := range batch {
+					require.ErrorIs(t, <-b.errCh, refusal.wantErr, "batch entry %d", i)
+				}
+
+				frozen, spendingData := readFreezeRaceRow(ctx, t, store)
+				require.Equal(t, refusal.frozen, frozen)
+				require.Equal(t, wantSpendingData, spendingData)
+			})
+		}
 	}
 }
