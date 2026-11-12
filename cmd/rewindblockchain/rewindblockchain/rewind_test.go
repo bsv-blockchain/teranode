@@ -1812,3 +1812,73 @@ func TestRewindBlockchain_SQLStoreHasNoStampBoundary(t *testing.T) {
 	})
 	require.NoError(t, err)
 }
+
+// TestRewind_ClearsBlockIDReservations checks that a rewind which deletes blocks
+// also clears every durable block-id reservation. A reservation that outlived the
+// rewind would let a child keep an id reserved before its deleted parent was stored
+// again under a new, higher id, so the child would land below its parent, which
+// StoreBlock refuses. The node is stopped while the tool runs, so the durable table
+// is the only reservation state the next start sees; the in-memory map of the store
+// instance used here is not checked because the tool runs as its own process.
+func TestRewind_ClearsBlockIDReservations(t *testing.T) {
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	// Blocks with no subtrees, so phase 2 can delete them without subtree blobs.
+	prevHash := tSettings.ChainCfgParams.GenesisHash
+	var blocks []*model.Block
+	for i := 1; i <= 4; i++ {
+		coinbase := makeCoinbaseTx(t, byte(i), byte(i))
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				Timestamp:      uint32(1700000000 + i),
+				Nonce:          uint32(i),
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: coinbase.TxIDChainHash(),
+				Bits:           *bits,
+			},
+			CoinbaseTx:       coinbase,
+			TransactionCount: 1,
+		}
+		_, _, err = bcStore.StoreBlock(ctx, block, "peer", blockchainoptions.WithMinedSet(true))
+		require.NoError(t, err, "StoreBlock height %d", i)
+
+		blocks = append(blocks, block)
+		prevHash = block.Hash()
+	}
+
+	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+	require.NoError(t, setBlockAssemblerState(ctx, bcStore, 4, blocks[3].Header))
+
+	// A child of the tip that was reserved but never stored.
+	pendingChild := chainhash.HashH([]byte("reserved before the rewind"))
+	_, err = bcStore.AssignBlockID(ctx, &pendingChild)
+	require.NoError(t, err)
+	require.Equal(t, 1, countBlockIDReservations(t, ctx, bcStore))
+
+	stats, err := Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 2,
+		AssumeYes:    true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       utxoStore,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.BlocksDeleted, "the rewind must delete blocks for the reservations to matter")
+	require.Zero(t, countBlockIDReservations(t, ctx, bcStore), "a rewind that deletes blocks must clear every reservation")
+}
+
+func countBlockIDReservations(t *testing.T, ctx context.Context, store blockchain_store.Store) int {
+	t.Helper()
+
+	var count int
+	require.NoError(t, store.GetDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM block_id_reservations`).Scan(&count))
+
+	return count
+}

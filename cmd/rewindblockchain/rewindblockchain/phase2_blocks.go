@@ -14,11 +14,45 @@ import (
 // phase2Blocks walks deleteList tip-first, removing every block + its
 // subtree data + its transactions from the UTXO store.
 func (e *env) phase2Blocks(ctx context.Context, pf *preflightResult) error {
+	if len(pf.deleteList) > 0 {
+		if err := e.clearBlockIDReservations(ctx); err != nil {
+			return err
+		}
+	}
+
 	for _, b := range pf.deleteList {
 		if err := e.rewindOneBlock(ctx, pf, b); err != nil {
 			return errors.NewProcessingError("rewinding block %s (height %d)", b.hash.String(), b.height, err)
 		}
 	}
+	return nil
+}
+
+// clearBlockIDReservations deletes every durable block-id reservation before the
+// first block is deleted. A deleted block that is stored again gets a new, higher
+// id, while a child reserved before the rewind would keep its older, lower id and
+// land below its parent, which StoreBlock refuses. Clearing first means a run that
+// fails part-way never leaves deleted blocks beside surviving reservations. There
+// is no transaction to share: each DeleteBlock is its own store call.
+//
+// A block whose transactions were already stamped with a cleared reservation gets
+// a fresh id when it is validated again, which leaves the old id with no blocks
+// row: the same outcome as a reservation swept by age.
+func (e *env) clearBlockIDReservations(ctx context.Context) error {
+	db := e.blockchainStore.GetDB()
+	if db == nil {
+		return errors.NewStorageError("blockchain store has no SQL database to clear block id reservations from")
+	}
+
+	res, err := db.ExecContext(ctx, `DELETE FROM block_id_reservations`)
+	if err != nil {
+		return errors.NewStorageError("failed to clear block id reservations", err)
+	}
+
+	if cleared, rowsErr := res.RowsAffected(); rowsErr == nil {
+		e.logger.Infof("cleared %d block id reservations before deleting blocks", cleared)
+	}
+
 	return nil
 }
 
