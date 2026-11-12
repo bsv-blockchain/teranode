@@ -497,9 +497,21 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		// should include the 7 transactions added + the coinbase placeholder of the first subtree
 		assert.Equal(t, uint64(8), testItems.blockAssembler.subtreeProcessor.TxCount())
 
-		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
-		require.NoError(t, err)
-		assert.NotNil(t, miningCandidate)
+		// A candidate asked for while a pass of the listeners is running, such as the startup
+		// reconcile or the subscription's first notification, is an empty block, so wait for one
+		// that carries the subtrees.
+		var (
+			miningCandidate *model.MiningCandidate
+			subtrees        []*subtreepkg.Subtree
+		)
+
+		require.Eventually(t, func() bool {
+			var mcErr error
+
+			miningCandidate, subtrees, mcErr = testItems.blockAssembler.GetMiningCandidate(ctx)
+
+			return mcErr == nil && miningCandidate != nil && len(subtrees) == 2
+		}, 5*time.Second, 20*time.Millisecond, "mining candidate did not include the completed subtrees in time")
 		assert.NotNil(t, subtrees)
 		assert.Equal(t, uint64(5000001332), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
@@ -990,14 +1002,21 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 
 		// Wait until the assembler has committed all 3 txs into the mining candidate.
 		// completeWg.Done() previously fired before the assembler acked the subtree
-		// via ErrChan, so GetMiningCandidate could see NumTxs < 3.
-		require.Eventually(t, func() bool {
-			mc, _, err := testItems.blockAssembler.GetMiningCandidate(ctx)
-			return err == nil && mc != nil && mc.NumTxs == 3
-		}, 5*time.Second, 20*time.Millisecond)
+		// via ErrChan, so GetMiningCandidate could see NumTxs < 3. The candidate checked is the
+		// one the wait returned: a second request could land in a pass of the listeners and get
+		// an empty block.
+		var (
+			miningCandidate *model.MiningCandidate
+			subtrees        []*subtreepkg.Subtree
+		)
 
-		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
-		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			var mcErr error
+
+			miningCandidate, subtrees, mcErr = testItems.blockAssembler.GetMiningCandidate(ctx)
+
+			return mcErr == nil && miningCandidate != nil && miningCandidate.NumTxs == 3
+		}, 5*time.Second, 20*time.Millisecond)
 
 		assert.NotNil(t, miningCandidate)
 		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", util.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
@@ -1101,10 +1120,22 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 
 		completeWg.Wait()
 
-		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
-		require.NoError(t, err)
+		// A candidate asked for while a pass of the listeners is running, such as the startup
+		// reconcile or the subscription's first notification, is an empty block, so wait for one
+		// that carries the subtrees.
+		var (
+			miningCandidate *model.MiningCandidate
+			subtrees        []*subtreepkg.Subtree
+		)
 
-		assert.NotNil(t, miningCandidate)
+		require.Eventually(t, func() bool {
+			var mcErr error
+
+			miningCandidate, subtrees, mcErr = testItems.blockAssembler.GetMiningCandidate(ctx)
+
+			return mcErr == nil && miningCandidate != nil && len(subtrees) == 1
+		}, 5*time.Second, 20*time.Millisecond, "mining candidate did not include the completed subtree in time")
+
 		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", util.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		assert.Equal(t, uint64(8000000000), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
@@ -1768,23 +1799,29 @@ func TestBlockAssembler_GetMiningCandidate_StaleFallbackIntegration(t *testing.T
 			))
 		}
 
-		// Give the subtree processor time to dequeue
-		time.Sleep(200 * time.Millisecond)
-
 		// The subtree processor's block header and the block assembler's
 		// best block both point to genesis. Precomputed data (if any) and
-		// incomplete subtree data should be fresh.
-		candidate, subtrees, err := ba.GetMiningCandidate(ctx)
-		require.NoError(t, err)
-		require.NotNil(t, candidate)
-		assert.Equal(t, uint32(1), candidate.Height)
+		// incomplete subtree data should be fresh. Depending on subtree size
+		// settings, we may get completed subtrees from precomputed data or an
+		// incomplete subtree snapshot. Either way the candidate should have
+		// transaction data once the subtree processor has dequeued the txs; a
+		// candidate asked for while a pass of the listeners is running, such as
+		// the startup reconcile, is an empty block, so wait for one that has it.
+		var (
+			candidate *model.MiningCandidate
+			subtrees  []*subtreepkg.Subtree
+		)
 
-		// Depending on subtree size settings, we may get completed subtrees
-		// from precomputed data or an incomplete subtree snapshot.
-		// Either way the candidate should have transaction data.
-		if len(subtrees) > 0 {
-			assert.Greater(t, candidate.CoinbaseValue, uint64(0))
-		}
+		require.Eventually(t, func() bool {
+			var mcErr error
+
+			candidate, subtrees, mcErr = ba.GetMiningCandidate(ctx)
+
+			return mcErr == nil && candidate != nil && len(subtrees) > 0
+		}, 5*time.Second, 20*time.Millisecond, "mining candidate did not include the transactions in time")
+
+		assert.Equal(t, uint32(1), candidate.Height)
+		assert.Greater(t, candidate.CoinbaseValue, uint64(0))
 	})
 }
 
