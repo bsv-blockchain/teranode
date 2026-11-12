@@ -209,6 +209,30 @@ WAL wherever it implements `PendingConflictIntents`.
 
 See PR 2023 for the implementation and regression tests.
 
+### The WAL index (Aerospike)
+
+BlockAssembly startup reads the pending intents through a secondary index on the
+`startedAt` bin of the `<set>_conflictwal` set, named `<set>_conflictwal_startedAt`.
+The UTXO store creates it when it starts. Each node reserves at least 16 MiB for a
+new secondary index: check the namespace's `indexes-memory-budget` has room before
+the upgrade, or the namespace can go into stop-writes.
+
+While the index is missing or still building, startup scans the set instead, which
+walks the whole namespace. `teranode_aerospike_conflict_wal_fallback_scans` counts
+those scans. If Teranode's Aerospike user cannot create indexes, create it by hand,
+with `<ns>` the namespace and `<set>` the UTXO set:
+
+```bash
+# Aerospike 8.1 and later
+asinfo -v 'sindex-create:namespace=<ns>;set=<set>_conflictwal;indexname=<set>_conflictwal_startedAt;bin=startedAt;type=numeric'
+
+# Aerospike 8.0
+asinfo -v 'sindex-create:ns=<ns>;set=<set>_conflictwal;indexname=<set>_conflictwal_startedAt;indexdata=startedAt,numeric'
+```
+
+The read returns only WAL roots with an integer `startedAt`. Every build writes it
+when it begins an intent, so only a corrupted or hand-edited root lacks it.
+
 ## Current-chain protection
 
 A transaction can be in both an orphaned block and a later main-chain block.
