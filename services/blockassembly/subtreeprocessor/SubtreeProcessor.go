@@ -2310,6 +2310,10 @@ func (stp *SubtreeProcessor) collectMoveBackConflictingNodes(ctx context.Context
 	perBlock := make([][]chainhash.Hash, len(moveBackBlocks))
 
 	for i, block := range moveBackBlocks {
+		// On a pure rewind every subtree read of a reset or reorg happens here,
+		// before the moveBack loop that otherwise beats once per block.
+		stp.reportProgressUnlessDone(ctx)
+
 		conflicting, err := stp.getConflictingNodes(ctx, block)
 		if err != nil {
 			return nil, errors.NewProcessingError("[collectMoveBackConflictingNodes][%s] error getting conflicting nodes", block.String(), err)
