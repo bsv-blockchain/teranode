@@ -5,16 +5,21 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/services/blockchain"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -272,55 +277,247 @@ func TestFindReMinedInMoveForward(t *testing.T) {
 	})
 }
 
-// TestMoveForwardLookupRunsBeforeStoreChanges checks that reset and reorgBlocks
-// look up the moveBack blocks' conflicting nodes in the moveForward blocks
-// before their moveBack loops touch the UTXO store. The moveBack block has no
-// coinbase, so its first store step (removing the coinbase UTXOs) would fail;
-// getting the lookup's error instead proves the lookup ran first, and so a
-// failed lookup leaves nothing half applied for a retry to apply twice.
-func TestMoveForwardLookupRunsBeforeStoreChanges(t *testing.T) {
-	setup := func(t *testing.T) (*SubtreeProcessor, []*model.Block, []*model.Block) {
-		t.Helper()
+// moveBackFixture is block assembly sitting at block 2 of the chain genesis -> block 1 -> block 2,
+// both applied through moveForwardBlock, with both coinbases in the UTXO store. Block 1 holds only
+// its coinbase. With a conflict, block 2 lists winner as a conflicting node, so applying it gave
+// winner the output loser had spent. side is a block on genesis for a reorg or reset to move to.
+type moveBackFixture struct {
+	stp          *SubtreeProcessor
+	store        *countPendingScans
+	subtreeStore *blob_memory.Memory
+	chain        *walTestChain
+	loser        *bt.Tx
+	winner       *bt.Tx
+	side         *model.Block
+}
 
-		store := blob_memory.New()
-		stp := newReverseHelpersStp(t, plainBlob{store})
+func newMoveBackFixture(t *testing.T, withConflict bool, seed byte) *moveBackFixture {
+	t.Helper()
 
-		s, txs := buildSubtreeWithTxs(t, "lookup-ordering", 2)
-		require.NoError(t, s.AddConflictingNode(txs[0]))
-		require.NoError(t, store.Set(t.Context(), s.RootHash()[:], fileformat.FileTypeSubtree, mustSerialize(t, s)))
+	ctx := t.Context()
+	stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false)
 
-		moveBack := []*model.Block{{
-			Header:   dummyHeader(),
-			Subtrees: []*chainhash.Hash{s.RootHash()},
-		}}
+	f := &moveBackFixture{stp: stp, store: store, subtreeStore: subtreeStore, chain: chain}
 
-		missing := chainhash.HashH([]byte("lookup-ordering-missing-forward-subtree"))
-		moveForward := []*model.Block{{
-			Header:   dummyHeader(),
-			Subtrees: []*chainhash.Hash{&missing},
-		}}
+	block1, block2 := chain.moveForward[0], chain.moveForward[1]
+	block1.Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, unstoredTx(t, seed))}
 
-		return stp, moveBack, moveForward
+	if withConflict {
+		f.loser, f.winner = createResetWALConflict(t, store, seed)
+		block2.Subtrees = []*chainhash.Hash{storeConflictSubtree(t, subtreeStore, f.winner)}
+	} else {
+		block2.Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false)}
 	}
 
-	t.Run("reset", func(t *testing.T) {
-		stp, moveBack, moveForward := setup(t)
+	for _, block := range chain.moveForward {
+		_, _, err := stp.moveForwardBlock(ctx, block, true, map[chainhash.Hash]struct{}{}, true, false)
+		require.NoError(t, err)
+		stp.currentBlockHeader.Store(block.Header)
+		requireCoinbaseInStore(t, store, block)
+	}
 
-		err := stp.reset(dummyHeader(), moveBack, moveForward, false, nil)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "error checking conflicting nodes against moveForward blocks")
+	f.side = &model.Block{Height: 1, CoinbaseTx: coinbaseTx2, TransactionCount: 1, Subtrees: []*chainhash.Hash{}, Header: childHeader(chain.genesis, 500+uint32(seed))}
+	require.NoError(t, stp.blockchainClient.AddBlock(ctx, f.side, "", blockchainoptions.WithMinedSet(true)))
+
+	return f
+}
+
+// unstoredTx returns a tx that is in no store, to give a subtree its own root hash.
+func unstoredTx(t *testing.T, seed byte) *bt.Tx {
+	t.Helper()
+
+	parent := bt.NewTx()
+	parent.Outputs = []*bt.Output{{Satoshis: 1000 + uint64(seed), LockingScript: bscript.NewFromBytes([]byte{0x52})}}
+
+	return resetWALSpendTx(t, parent, 900)
+}
+
+// requireCoinbaseInStore creates the block's coinbase in the UTXO store unless it is there already.
+func requireCoinbaseInStore(t *testing.T, store utxo.Store, block *model.Block) {
+	t.Helper()
+
+	if _, err := store.Get(t.Context(), block.CoinbaseTx.TxIDChainHash()); err == nil {
+		return
+	}
+
+	_, _, err := store.SpendAndCreate(t.Context(), block.CoinbaseTx, block.Height, utxo.WithCreateOnly())
+	require.NoError(t, err)
+}
+
+// moveBackBlocks returns the fixture's blocks in move-back order, tip first.
+func (f *moveBackFixture) moveBackBlocks() []*model.Block {
+	return []*model.Block{f.chain.moveForward[1], f.chain.moveForward[0]}
+}
+
+// run moves back both blocks and forward to side, through reorgBlocks or reset.
+func (f *moveBackFixture) run(t *testing.T, viaReset bool) error {
+	t.Helper()
+
+	if viaReset {
+		return f.stp.reset(f.chain.genesis, f.moveBackBlocks(), []*model.Block{f.side}, false, func() error { return nil })
+	}
+
+	return f.stp.reorgBlocks(t.Context(), f.moveBackBlocks(), []*model.Block{f.side})
+}
+
+// requireNothingChanged checks that neither moved-back block's coinbase was deleted and, with a
+// conflict, that winner still holds the output and loser is still conflicting.
+func (f *moveBackFixture) requireNothingChanged(t *testing.T) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	for _, block := range f.chain.moveForward {
+		_, err := f.store.Get(ctx, block.CoinbaseTx.TxIDChainHash())
+		require.NoError(t, err, "the coinbase of moved-back block %d must survive a move-back that failed before it started", block.Height)
+	}
+
+	if f.winner == nil {
+		return
+	}
+
+	spends, err := utxo.GetSpends(f.winner)
+	require.NoError(t, err)
+
+	owner, err := f.store.GetSpend(ctx, spends[0])
+	require.NoError(t, err)
+	require.Equal(t, f.winner.TxIDChainHash(), owner.SpendingData.TxID, "nothing may be reversed: winner must keep the output")
+
+	m, err := f.store.Get(ctx, f.loser.TxIDChainHash(), fields.Conflicting)
+	require.NoError(t, err)
+	require.True(t, m.Conflicting, "nothing may be reversed: loser must stay conflicting")
+}
+
+// TestMoveForwardSubtreeMissingChangesNothing checks that a reorg or reset whose moveForward block
+// names a subtree that is not in the store fails before the move-back changes the UTXO store. With
+// no conflicting nodes in the moved-back blocks nothing reads the moveForward subtrees until the
+// moveForward step, so this is what checkMoveForwardSubtreesExist is for: without it both
+// coinbases are deleted before the failure.
+func TestMoveForwardSubtreeMissingChangesNothing(t *testing.T) {
+	for _, viaReset := range []bool{false, true} {
+		for _, withConflict := range []bool{false, true} {
+			name := map[bool]string{false: "reorg", true: "reset"}[viaReset] + map[bool]string{false: ", no conflicting nodes", true: ", conflicting node"}[withConflict]
+
+			t.Run(name, func(t *testing.T) {
+				f := newMoveBackFixture(t, withConflict, 60)
+
+				missing := chainhash.HashH([]byte("missing-move-forward-subtree"))
+				f.side.Subtrees = []*chainhash.Hash{&missing}
+
+				err := f.run(t, viaReset)
+				require.Error(t, err)
+
+				f.requireNothingChanged(t)
+			})
+		}
+	}
+}
+
+// TestMoveBackSubtreeMissingChangesNothing is the two-block case: block 2, moved back first, has a
+// conflicting node, and block 1's subtree is missing. Both blocks' conflicting nodes are read before
+// the move-back loop, so the missing subtree fails the reorg or reset before block 2's coinbase is
+// deleted or its conflict reversed. Reading them inside the loop, as each block is moved back,
+// would reverse block 2 and then fail on block 1.
+func TestMoveBackSubtreeMissingChangesNothing(t *testing.T) {
+	for _, viaReset := range []bool{false, true} {
+		t.Run(map[bool]string{false: "reorg", true: "reset"}[viaReset], func(t *testing.T) {
+			f := newMoveBackFixture(t, true, 70)
+
+			block1 := f.chain.moveForward[0]
+			require.NoError(t, f.subtreeStore.Del(t.Context(), block1.Subtrees[0][:], fileformat.FileTypeSubtree))
+
+			err := f.run(t, viaReset)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "error getting conflicting nodes of moveBack blocks")
+
+			f.requireNothingChanged(t)
+		})
+	}
+}
+
+// TestResetSkipsReverseOfReMinedWinner checks that a reset leaves alone a moved-back block's winner
+// that the new chain mines again: the winner keeps the output and the loser stays conflicting, as
+// TestReorgBlocks_PartialRemineAfterAcceptedHeal checks for reorgBlocks.
+func TestResetSkipsReverseOfReMinedWinner(t *testing.T) {
+	ctx := t.Context()
+	stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false)
+
+	loser, winner := createResetWALConflict(t, store, 80)
+
+	block := chain.moveForward[0]
+	block.Subtrees = []*chainhash.Hash{storeConflictSubtree(t, subtreeStore, winner)}
+
+	_, _, err := stp.moveForwardBlock(ctx, block, true, map[chainhash.Hash]struct{}{}, true, false)
+	require.NoError(t, err)
+
+	side := &model.Block{Height: 1, CoinbaseTx: coinbaseTx2, TransactionCount: 2, Header: childHeader(chain.genesis, 580),
+		Subtrees: []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, winner, unstoredTx(t, 80))}}
+	require.NoError(t, stp.blockchainClient.AddBlock(ctx, side, "", blockchainoptions.WithMinedSet(true)))
+
+	require.NoError(t, stp.reset(chain.genesis, []*model.Block{block}, []*model.Block{side}, false, func() error { return nil }))
+
+	spends, err := utxo.GetSpends(winner)
+	require.NoError(t, err)
+	owner, err := store.GetSpend(ctx, spends[0])
+	require.NoError(t, err)
+	require.Equal(t, winner.TxIDChainHash(), owner.SpendingData.TxID, "winner is mined again on the new chain, so it keeps the output")
+
+	m, err := store.Get(ctx, winner.TxIDChainHash(), fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, m.Conflicting, "the reset must not demote a re-mined winner")
+
+	m, err = store.Get(ctx, loser.TxIDChainHash(), fields.Conflicting)
+	require.NoError(t, err)
+	require.True(t, m.Conflicting)
+}
+
+// existsFailingStore is a blob store whose Exists always fails.
+type existsFailingStore struct {
+	*blob_memory.Memory
+}
+
+func (s existsFailingStore) Exists(context.Context, []byte, fileformat.FileType, ...options.FileOption) (bool, error) {
+	return false, errors.NewStorageError("exists failed")
+}
+
+// TestCheckMoveForwardSubtreesExist checks the preflight on its own: a subtree is found under
+// either file type, nil blocks and hashes are skipped, and a missing subtree or a failing store
+// is an error.
+func TestCheckMoveForwardSubtreesExist(t *testing.T) {
+	store := blob_memory.New()
+	stp := newReverseHelpersStp(t, plainBlob{store})
+
+	asSubtree := chainhash.HashH([]byte("exists-as-subtree"))
+	asToCheck := chainhash.HashH([]byte("exists-as-subtree-to-check"))
+	missing := chainhash.HashH([]byte("exists-missing"))
+
+	require.NoError(t, store.Set(t.Context(), asSubtree[:], fileformat.FileTypeSubtree, []byte{1}))
+	require.NoError(t, store.Set(t.Context(), asToCheck[:], fileformat.FileTypeSubtreeToCheck, []byte{1}))
+
+	t.Run("present under either file type", func(t *testing.T) {
+		require.NoError(t, stp.checkMoveForwardSubtreesExist(t.Context(), []*model.Block{
+			nil,
+			{Header: dummyHeader(), Subtrees: []*chainhash.Hash{&asSubtree, nil, &asToCheck}},
+		}))
 	})
 
-	t.Run("reorgBlocks", func(t *testing.T) {
-		stp, moveBack, moveForward := setup(t)
-
-		blockchainClient := &blockchain.Mock{}
-		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
-		stp.blockchainClient = blockchainClient
-
-		err := stp.reorgBlocks(t.Context(), moveBack, moveForward)
+	t.Run("missing", func(t *testing.T) {
+		err := stp.checkMoveForwardSubtreesExist(t.Context(), []*model.Block{
+			{Header: dummyHeader(), Subtrees: []*chainhash.Hash{&asSubtree, &missing}},
+		})
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "error checking conflicting nodes against moveForward blocks")
+		require.True(t, errors.Is(err, errors.ErrNotFound))
+	})
+
+	t.Run("store error", func(t *testing.T) {
+		failing := newReverseHelpersStp(t, plainBlob{store})
+		failing.subtreeStore = existsFailingStore{store}
+
+		err := failing.checkMoveForwardSubtreesExist(t.Context(), []*model.Block{
+			{Header: dummyHeader(), Subtrees: []*chainhash.Hash{&asSubtree}},
+		})
+		require.Error(t, err)
+		require.False(t, errors.Is(err, errors.ErrNotFound))
 	})
 }
 
