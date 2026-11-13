@@ -1928,9 +1928,11 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 // Setting it up front left the transactions untagged and skipped the post-storage
 // double-spend cross-check in setTxMinedStatus. Quick validation sets mined_set itself in
 // commitBlock, after it has stamped every transaction. Tagging a transaction that quick
-// validation already stamped with the same id adds no second block entry in any UTXO store;
-// the rest of setMined (clearing the locked and unmined markers, stamping the
-// delete-at-height) runs as it does for any fully validated block.
+// validation already stamped with the same id adds no second block entry in any UTXO store.
+// The rest of setMined (clearing the locked and unmined markers, stamping the
+// delete-at-height) runs as it does for any fully validated block, except on Aerospike with
+// aerospike_enable_setmined_filter_expressions on: that path filters out a record already
+// holding the id and only unlocks it.
 //
 // For a block with no id (block.ID == 0) this returns nil and the store assigns one.
 func (u *BlockValidation) buildAddBlockOpts(block *model.Block) []blockchainoptions.StoreBlockOption {

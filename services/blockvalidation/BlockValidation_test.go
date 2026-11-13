@@ -4414,7 +4414,18 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 // setMinedChan worker tags its transactions and runs the post-storage double-spend check.
 // Storing it with mined_set true made the worker skip the block, and the child transaction
 // was never tagged. The test makes no direct setTxMinedStatus call: the worker has to do it.
+// It runs once per AddBlock call site: the normal path and the optimistic-mining path.
 func TestBlockValidation_ReservedBlockIDStillTagsTransactions(t *testing.T) {
+	t.Run("normal", func(t *testing.T) {
+		testReservedBlockIDStillTagsTransactions(t, false)
+	})
+
+	t.Run("optimistic mining", func(t *testing.T) {
+		testReservedBlockIDStillTagsTransactions(t, true)
+	})
+}
+
+func testReservedBlockIDStillTagsTransactions(t *testing.T, optimisticMining bool) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -4423,6 +4434,8 @@ func TestBlockValidation_ReservedBlockIDStillTagsTransactions(t *testing.T) {
 	defer deferFunc()
 
 	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = optimisticMining
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = optimisticMining
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
@@ -4437,7 +4450,7 @@ func TestBlockValidation_ReservedBlockIDStillTagsTransactions(t *testing.T) {
 	reservedID := block.ID
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, tracker, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
-	require.NoError(t, blockValidation.ValidateBlock(ctx, block, "test", true))
+	require.NoError(t, blockValidation.ValidateBlock(ctx, block, "test", !optimisticMining))
 
 	_, headerMeta, err := blockchainClient.GetBlockHeader(ctx, block.Hash())
 	require.NoError(t, err)
