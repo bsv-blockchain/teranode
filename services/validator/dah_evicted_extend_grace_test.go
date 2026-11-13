@@ -1,19 +1,17 @@
 package validator
 
-// Tests for the extend/heights-step DAH-evicted-parent grace.
+// Tests for the ingest extend-step DAH-evicted-parent grace.
 //
-// The spend step has long tolerated a missing parent when the child itself is
-// already mined and unflagged (see TestValidate_TxNotFoundShortcut). The
-// extend/heights step used to hard-fail on the same condition, so a re-validated
-// mined child whose parent had been DAH-evicted (or lost with a store partition)
-// could never pass extension even though its stored metadata proves prior full
-// validation. These tests pin the parity: the same dahEvictedParentGrace gate
-// must short-circuit the extend step, and must NOT fire for unmined, conflicting
-// or locked children.
+// A resubmitted tx whose parents were all DAH-evicted (or lost with a store
+// partition) fails extension with ErrTxMissingParent. The grace accepts it when
+// its own record is mined on the current chain and is not conflicting, locked or
+// creating. It must not fire on block paths, with any parent present, on a store
+// or chain fault, or after the caller's context is done.
 
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -25,9 +23,31 @@ import (
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+func makeTwoParentGraceTx(t *testing.T) (*bt.Tx, *bt.Tx) {
+	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	parentA := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/Test miner A/"),
+		transactions.WithP2PKHOutputs(1, 50e8, publicKey),
+	)
+	parentB := transactions.Create(t,
+		transactions.WithCoinbaseData(101, "/Test miner B/"),
+		transactions.WithP2PKHOutputs(1, 50e8, publicKey),
+	)
+	tx := transactions.Create(t,
+		transactions.WithPrivateKey(privateKey),
+		transactions.WithInput(parentA, 0),
+		transactions.WithInput(parentB, 0),
+		transactions.WithP2PKHOutputs(1, 1000),
+		transactions.WithChangeOutput(),
+	)
+
+	return tx, parentA
+}
 
 func makeExtendGraceTx(t *testing.T) *bt.Tx {
 	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
@@ -52,6 +72,17 @@ type extendGraceSetup struct {
 	chainErr       error
 	parentResult   []utxo.ParentOutput
 	parentErr      error
+	chainStall     bool
+	metaStall      bool
+}
+
+const extendGraceStallLimit = 5 * time.Second
+
+func stallUntilDone(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+	case <-time.After(extendGraceStallLimit):
+	}
 }
 
 func setupExtendGraceValidator(t *testing.T, tx *bt.Tx, cfg extendGraceSetup) (*Validator, *utxo.MockUtxostore, *blockchain.Mock) {
@@ -62,7 +93,11 @@ func setupExtendGraceValidator(t *testing.T, tx *bt.Tx, cfg extendGraceSetup) (*
 
 	blockchainMock := &blockchain.Mock{}
 
-	if cfg.childMeta != nil {
+	if cfg.chainStall {
+		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, cfg.childMeta.BlockIDs).
+			Run(func(args mock.Arguments) { stallUntilDone(args.Get(0).(context.Context)) }).
+			Return(false, errors.NewServiceError("chain check interrupted", context.DeadlineExceeded))
+	} else if cfg.childMeta != nil {
 		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, cfg.childMeta.BlockIDs).Return(cfg.onCurrentChain, cfg.chainErr).Maybe()
 	}
 
@@ -87,7 +122,11 @@ func setupExtendGraceValidator(t *testing.T, tx *bt.Tx, cfg extendGraceSetup) (*
 	// The grace must read the CHILD's record, never a parent's.
 	childHash := mock.MatchedBy(func(h *chainhash.Hash) bool { return h.IsEqual(tx.TxIDChainHash()) })
 
-	if cfg.childMetaErr != nil {
+	if cfg.metaStall {
+		mockStore.On("GetMeta", mock.Anything, childHash, mock.Anything).
+			Run(func(args mock.Arguments) { stallUntilDone(args.Get(0).(context.Context)) }).
+			Return(errors.NewStorageError("meta read interrupted", context.DeadlineExceeded))
+	} else if cfg.childMetaErr != nil {
 		mockStore.On("GetMeta", mock.Anything, childHash, mock.Anything).Return(cfg.childMetaErr)
 	} else {
 		mockStore.On("GetMeta", mock.Anything, childHash, mock.Anything).
@@ -306,4 +345,114 @@ func TestExtendGraceChainCheckErrorsRetried(t *testing.T) {
 	}
 
 	chain.AssertNumberOfCalls(t, "CheckBlockIsInCurrentChain", 3)
+}
+
+// The ingest grace runs before any state is written, so it must honour the
+// caller's cancellation and deadline. A done context denies the grace and the
+// caller sees the original missing-parent error, never a node fault.
+func TestExtendGraceHonoursCallerContext(t *testing.T) {
+	t.Run("cancelled context skips the grace", func(t *testing.T) {
+		tx := makeExtendGraceTx(t)
+		minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
+		v, mockStore, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, onCurrentChain: true})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		txMetaData, err := v.validateInternal(ctx, tx, 100, &Options{})
+
+		require.Nil(t, txMetaData)
+		require.ErrorIs(t, err, errors.ErrTxMissingParent)
+		mockStore.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
+		chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
+	})
+
+	for _, tc := range []struct {
+		name string
+		cfg  extendGraceSetup
+	}{
+		{"stalled chain check", extendGraceSetup{childMeta: &meta.Data{BlockIDs: []uint32{1, 2}}, chainStall: true}},
+		{"stalled meta read", extendGraceSetup{metaStall: true}},
+	} {
+		t.Run(tc.name+" stops at the caller deadline", func(t *testing.T) {
+			tx := makeExtendGraceTx(t)
+			v, _, _ := setupExtendGraceValidator(t, tx, tc.cfg)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+
+			faultsBefore := testutil.ToFloat64(prometheusValidatorDAHGraceFault.WithLabelValues("meta_read")) +
+				testutil.ToFloat64(prometheusValidatorDAHGraceFault.WithLabelValues("chain_check"))
+
+			start := time.Now()
+			txMetaData, err := v.validateInternal(ctx, tx, 100, &Options{})
+			elapsed := time.Since(start)
+
+			require.Less(t, elapsed, extendGraceStallLimit, "the grace must stop when the caller deadline expires")
+			require.Nil(t, txMetaData)
+			require.ErrorIs(t, err, errors.ErrTxMissingParent)
+			require.False(t, errors.Is(err, errors.ErrStorageError), "a caller deadline is not a store fault, got: %v", err)
+			require.False(t, errors.Is(err, errors.ErrServiceUnavailable), "a caller deadline is not a blockchain fault, got: %v", err)
+
+			faultsAfter := testutil.ToFloat64(prometheusValidatorDAHGraceFault.WithLabelValues("meta_read")) +
+				testutil.ToFloat64(prometheusValidatorDAHGraceFault.WithLabelValues("chain_check"))
+			require.Equal(t, faultsBefore, faultsAfter, "a caller deadline must not count as a grace fault")
+		})
+	}
+}
+
+// The grace records no spends, so it may fire only when every parent is gone.
+// A present parent still holds the outputs this tx spends.
+func TestExtendGraceRequiresEveryParentAbsent(t *testing.T) {
+	notFound := utxo.ParentOutput{Status: utxo.ParentOutputTxNotFound}
+	present := utxo.ParentOutput{Status: utxo.ParentOutputMined, Height: 50, Satoshis: 50e8}
+
+	t.Run("every parent absent is granted", func(t *testing.T) {
+		tx, _ := makeTwoParentGraceTx(t)
+		minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{3}}
+		v, _, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, onCurrentChain: true, parentResult: []utxo.ParentOutput{notFound, notFound}})
+
+		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+
+		require.NoError(t, err)
+		require.NotNil(t, txMetaData)
+		chain.AssertCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, []uint32{3})
+	})
+
+	for _, tc := range []struct {
+		name    string
+		answers []utxo.ParentOutput
+	}{
+		{"first absent, second present", []utxo.ParentOutput{notFound, present}},
+		{"first present, second absent", []utxo.ParentOutput{present, notFound}},
+		{"first absent, second read fault", []utxo.ParentOutput{notFound, {Err: errors.NewStorageError("read failed")}}},
+	} {
+		t.Run(tc.name+" is denied", func(t *testing.T) {
+			tx, _ := makeTwoParentGraceTx(t)
+			minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{3}}
+			v, mockStore, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, onCurrentChain: true, parentResult: tc.answers})
+
+			txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+
+			require.Nil(t, txMetaData)
+			require.ErrorIs(t, err, errors.ErrTxMissingParent)
+			mockStore.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
+			chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
+		})
+	}
+
+	t.Run("a prefetched parent counts as present", func(t *testing.T) {
+		tx, parentA := makeTwoParentGraceTx(t)
+		minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{3}}
+		v, mockStore, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, onCurrentChain: true, parentResult: []utxo.ParentOutput{notFound}})
+
+		opts := &Options{PrefetchedParents: map[chainhash.Hash]*meta.Data{*parentA.TxIDChainHash(): {Tx: parentA, BlockHeights: []uint32{50}}}}
+
+		txMetaData, err := v.validateInternal(context.Background(), tx, 100, opts)
+
+		require.Nil(t, txMetaData)
+		require.ErrorIs(t, err, errors.ErrTxMissingParent)
+		mockStore.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
+		chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
+	})
 }
