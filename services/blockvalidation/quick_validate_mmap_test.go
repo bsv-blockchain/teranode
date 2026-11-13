@@ -339,11 +339,28 @@ func malformedSubtreeBytes(count uint64) []byte {
 	return b
 }
 
+// countHeapSubtreeFromBytes swaps heapSubtreeFromBytes for a wrapper that counts calls,
+// restoring it when the test ends. Tests using it must not run in parallel.
+func countHeapSubtreeFromBytes(t *testing.T) *int {
+	t.Helper()
+
+	calls := 0
+	orig := heapSubtreeFromBytes
+	heapSubtreeFromBytes = func(b []byte) (*subtreepkg.Subtree, error) {
+		calls++
+		return orig(b)
+	}
+
+	t.Cleanup(func() { heapSubtreeFromBytes = orig })
+
+	return &calls
+}
+
 // TestSubtreeFromBytesWithMmap_MalformedCount_ReturnsError pins that a persisted
 // subtree whose declared count cannot be real comes back as an error carrying the
-// go-subtree sentinel, with no panic and no scratch file left behind. That the
-// heap retry is skipped is pinned by TestReadSubtree_MmapMalformedCount_ReturnsError,
-// where the extra blob read is observable.
+// go-subtree sentinel, with no panic, no scratch file left behind and no heap retry.
+// The heap loader returns the same sentinel, so only the call count tells the paths
+// apart.
 func TestSubtreeFromBytesWithMmap_MalformedCount_ReturnsError(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -363,6 +380,8 @@ func TestSubtreeFromBytesWithMmap_MalformedCount_ReturnsError(t *testing.T) {
 				err error
 			)
 
+			heapCalls := countHeapSubtreeFromBytes(t)
+
 			require.NotPanics(t, func() {
 				st, err = subtreeFromBytesWithMmap(malformedSubtreeBytes(tt.count), mmapDir)
 			})
@@ -371,6 +390,7 @@ func TestSubtreeFromBytesWithMmap_MalformedCount_ReturnsError(t *testing.T) {
 			require.True(t, errors.Is(err, tt.wantErr), "want %v, got %v", tt.wantErr, err)
 			require.Nil(t, st)
 			requireMmapDirEmpty(t, mmapDir)
+			require.Zero(t, *heapCalls, "malformed bytes must not be retried on the heap loader")
 		})
 	}
 }
@@ -386,8 +406,11 @@ func TestSubtreeFromBytesWithMmap_InfraFailureFallsBackToHeap(t *testing.T) {
 	b, err := subtree.Serialize()
 	require.NoError(t, err)
 
+	heapCalls := countHeapSubtreeFromBytes(t)
+
 	st, err := subtreeFromBytesWithMmap(b, filepath.Join(t.TempDir(), "does-not-exist"))
 	require.NoError(t, err)
+	require.Equal(t, 1, *heapCalls, "an mmap infrastructure failure falls back to the heap loader once")
 	require.False(t, st.IsMmapBacked(), "expected heap-backed subtree from the fallback path")
 	require.Equal(t, subtree.RootHash(), st.RootHash())
 }
