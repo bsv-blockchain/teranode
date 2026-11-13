@@ -126,3 +126,26 @@ func ValidateHeaderAgainstCheckpoints(header *model.BlockHeader, height uint32, 
 // - Checkpoint conflicts (if height is known)
 //
 // Processes headers individually with context cancellation checks.
+
+// ValidateChainConnection reports whether headers form one chain: each header's parent is the
+// header before it, and the first header's parent is startHash when startHash is not nil.
+// An empty slice is a valid chain.
+func ValidateChainConnection(headers []*model.BlockHeader, startHash *chainhash.Hash) bool {
+	if len(headers) == 0 {
+		return true
+	}
+
+	// First header should connect to startHash if provided
+	if startHash != nil && !headers[0].HashPrevBlock.IsEqual(startHash) {
+		return false
+	}
+
+	// Each subsequent header should connect to the previous
+	for i := 1; i < len(headers); i++ {
+		if !headers[i].HashPrevBlock.IsEqual(headers[i-1].Hash()) {
+			return false
+		}
+	}
+
+	return true
+}

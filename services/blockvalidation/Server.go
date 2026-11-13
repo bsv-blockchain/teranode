@@ -454,11 +454,6 @@ func New(
 	fm := NewForkManager(logger, tSettings)
 	fm.SetPriorityQueue(pq)
 
-	// Register fork resolution callback
-	fm.OnForkResolution(func(resolution *ForkResolution) {
-		logger.Infof("Fork %s resolved to %s at height %d with %d blocks", resolution.ForkID, resolution.ResolvedTo, resolution.FinalHeight, resolution.BlocksInFork)
-	})
-
 	// Construct adaptive-fetch state machine. The gate decides whether to
 	// pre-fetch subtreeData during catchup or skip it because the tx
 	// distributor is keeping our UTXO store up to date. Transitions are

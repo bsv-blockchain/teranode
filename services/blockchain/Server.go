@@ -530,7 +530,7 @@ const (
 	maxNotificationMetadataFieldLen = 256
 
 	// maxBlockHeadersPerRequest bounds the header-only RPCs' (GetBlockHeaders,
-	// GetBlockHeadersFromOldest, GetBlockHeadersToCommonAncestor,
+	// GetBlockHeadersToCommonAncestor,
 	// GetBlockHeadersFromCommonAncestor, GetBlockHeadersFromHeight,
 	// LocateBlockHeaders) caller-supplied header counts. The store's
 	// preallocFor already bounds the initial slice capacity, but not the
@@ -1841,89 +1841,6 @@ func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockc
 	}, nil
 }
 
-func (b *Blockchain) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, request *blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetLatestBlockHeaderFromBlockLocator",
-		tracing.WithParentStat(b.stats),
-		tracing.WithHistogram(prometheusBlockchainGetLatestBlockHeaderFromBlockLocator),
-	)
-	defer deferFn()
-
-	bestBlockHash, err := chainhash.NewHash(request.BestBlockHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetLatestBlockHeaderFromBlockLocator] request's best block hash is not valid", err))
-	}
-
-	locatorHashes := make([]chainhash.Hash, len(request.BlockLocatorHashes))
-	for i, hashBytes := range request.BlockLocatorHashes {
-		hash, err := chainhash.NewHash(hashBytes)
-		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetLatestBlockHeaderFromBlockLocator] request's block locator hash is not valid", err))
-		}
-
-		locatorHashes[i] = *hash
-	}
-
-	blockHeader, meta, err := b.store.GetLatestBlockHeaderFromBlockLocator(ctx, bestBlockHash, locatorHashes)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader:    blockHeader.Bytes(),
-		Height:         meta.Height,
-		TxCount:        meta.TxCount,
-		SizeInBytes:    meta.SizeInBytes,
-		Miner:          meta.Miner,
-		ChainWork:      meta.ChainWork,
-		BlockTime:      meta.BlockTime,
-		Timestamp:      meta.Timestamp,
-		MedianTimePast: meta.MedianTimePast,
-	}, nil
-}
-
-func (b *Blockchain) GetBlockHeadersFromOldest(ctx context.Context, request *blockchain_api.GetBlockHeadersFromOldestRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersFromOldest",
-		tracing.WithParentStat(b.stats),
-		tracing.WithHistogram(prometheusBlockchainGetBlockHeadersFromOldest),
-	)
-	defer deferFn()
-
-	chainTipHash, err := chainhash.NewHash(request.ChainTipHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldest] request's start hash is not valid", err))
-	}
-
-	targetHash, err := chainhash.NewHash(request.TargetHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldest] request's target hash is not valid", err))
-	}
-
-	if uint64(request.NumberOfHeaders) > b.maxBlockHeadersPerRequest() {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldest] %d headers requested, maximum is %d", request.NumberOfHeaders, b.maxBlockHeadersPerRequest()))
-	}
-
-	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeadersFromOldest(ctx, chainTipHash, targetHash, request.GetNumberOfHeaders())
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	blockHeaderBytes := make([][]byte, len(blockHeaders))
-
-	for i, blockHeader := range blockHeaders {
-		blockHeaderBytes[i] = blockHeader.Bytes()
-	}
-
-	blockHeaderMetaBytes := make([][]byte, len(blockHeaderMetas))
-	for i, meta := range blockHeaderMetas {
-		blockHeaderMetaBytes[i] = meta.Bytes()
-	}
-
-	return &blockchain_api.GetBlockHeadersResponse{
-		BlockHeaders: blockHeaderBytes,
-		Metas:        blockHeaderMetaBytes,
-	}, nil
-}
-
 // GetBlockExists checks if a block with the given hash exists in the blockchain.
 func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockExists",
@@ -2208,45 +2125,6 @@ func (b *Blockchain) GetBlockHeadersToCommonAncestor(ctx context.Context, req *b
 	}
 
 	blockHeaders, blockHeaderMetas, err := getBlockHeadersToCommonAncestor(ctx, b.store, targetHash, blockLocatorHashes, req.MaxHeaders)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	blockHeaderBytes := make([][]byte, len(blockHeaders))
-	for i, blockHeader := range blockHeaders {
-		blockHeaderBytes[i] = blockHeader.Bytes()
-	}
-
-	blockHeaderMetaBytes := make([][]byte, len(blockHeaders))
-	for i, meta := range blockHeaderMetas {
-		blockHeaderMetaBytes[i] = meta.Bytes()
-	}
-
-	return &blockchain_api.GetBlockHeadersResponse{
-		BlockHeaders: blockHeaderBytes,
-		Metas:        blockHeaderMetaBytes,
-	}, nil
-}
-
-// GetBlockHeadersFromTill retrieves block headers between two specified blocks.
-func (b *Blockchain) GetBlockHeadersFromTill(ctx context.Context, req *blockchain_api.GetBlockHeadersFromTillRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersFromTill",
-		tracing.WithParentStat(b.stats),
-		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
-	)
-	defer deferFn()
-
-	startHash, err := chainhash.NewHash(req.StartHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][GetBlockHeadersFromTill] request's start hash is not valid", err))
-	}
-
-	endHash, err := chainhash.NewHash(req.EndHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][GetBlockHeadersFromTill] request's end hash is not valid", err))
-	}
-
-	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeadersFromTill(ctx, startHash, endHash)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}

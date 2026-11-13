@@ -256,20 +256,6 @@ func (c *LocalClient) GetBlockHeadersFromCommonAncestor(ctx context.Context, cha
 	return getBlockHeadersFromCommonAncestor(ctx, c.store, chainTipHash, blockLocatorHashes, maxHeaders)
 }
 
-// GetLatestBlockHeaderFromBlockLocator retrieves the latest block header from a block locator.
-func (c *LocalClient) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	return c.store.GetLatestBlockHeaderFromBlockLocator(ctx, bestBlockHash, blockLocator)
-}
-
-// GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
-func (c *LocalClient) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return c.store.GetBlockHeadersFromOldest(ctx, chainTipHash, targetHash, numberOfHeaders)
-}
-
-func (c *LocalClient) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return c.store.GetBlockHeadersFromTill(ctx, blockHashFrom, blockHashTill)
-}
-
 func (c *LocalClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	return c.store.CheckBlockIsInCurrentChain(ctx, blockIDs)
 }

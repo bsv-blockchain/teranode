@@ -712,15 +712,6 @@ func (m *MockBlockchainClient) GetBlockHeadersToCommonAncestor(ctx context.Conte
 func (m *MockBlockchainClient) GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
-func (m *MockBlockchainClient) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	return nil, nil, nil
-}
-func (m *MockBlockchainClient) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return nil, nil, nil
-}
-func (m *MockBlockchainClient) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return nil, nil, nil
-}
 func (m *MockBlockchainClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }

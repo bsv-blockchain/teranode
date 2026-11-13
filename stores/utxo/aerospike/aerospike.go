@@ -255,6 +255,12 @@ type Store struct {
 	// read it concurrently (see demoteNativeOnUnsupported in native_op.go).
 	useNativeTeranodeOps atomic.Bool
 
+	// useNativeMarkLongestChain is whether the server also serves native sub-op 14, markLongestChain,
+	// which MarkTransactionsOnLongestChain uses in place of its expression write. Set by its own
+	// start-up probe (detectNativeMarkLongestChainSupport) and cleared on a runtime PARAMETER_ERROR
+	// from that sub-op only, so an older server keeps every other native op.
+	useNativeMarkLongestChain atomic.Bool
+
 	// conflictingIndexState is whether this process trusts the conflicting index
 	// (conflictingIndexUnchecked/Usable/Unusable); see conflicting_index.go.
 	// conflictingIndexCancel and conflictingIndexDone stop and await the

@@ -39,6 +39,13 @@ read every section between yours and the target.
   refuses to open if a transaction holds a table for five minutes, and a process already running
   does not see the column until it restarts, so switch the flag on across a node's processes
   together. (#2136)
+- **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
+  `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
+  now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,
+  `_fork_resolution_depth_blocks` and `_fork_orphaned_total`, which nothing ever updated, and
+  `teranode_blockchain_get_latest_block_header_from_block_locator` and
+  `_get_block_headers_from_oldest`, which recorded only calls to the two removed RPCs; drop any
+  panel or alert on them. (#2185)
 - **`blockassembly_storeTxInpointsForSubtreeMeta=false` now only skips the subtree meta files.**
   Block assembly keeps every unmined tx's parent links in memory in both modes. With it off, the
   restart reload and a block move-back now read each tx's inputs from the UTXO store (an external tx

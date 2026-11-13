@@ -63,12 +63,6 @@ service BlockchainAPI {
   // GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specified depth.
   rpc GetHashOfAncestorBlock (GetHashOfAncestorBlockRequest) returns (GetHashOfAncestorBlockResponse) {}
 
-  // GetLatestBlockHeaderFromBlockLocator retrieves the latest block header using a block locator.
-  rpc GetLatestBlockHeaderFromBlockLocator (GetLatestBlockHeaderFromBlockLocatorRequest) returns (GetBlockHeaderResponse) {}
-
-  // GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
-  rpc GetBlockHeadersFromOldest (GetBlockHeadersFromOldestRequest) returns (GetBlockHeadersResponse) {}
-
   // GetNextWorkRequired calculates the required proof of work for the next block.
   rpc GetNextWorkRequired (GetNextWorkRequiredRequest) returns (GetNextWorkRequiredResponse) {}
 
@@ -94,9 +88,6 @@ service BlockchainAPI {
 
   // GetBlockHeadersFromCommonAncestor retrieves headers from a common ancestor to a target block.
   rpc GetBlockHeadersFromCommonAncestor(GetBlockHeadersFromCommonAncestorRequest) returns (GetBlockHeadersResponse) {}
-
-  // GetBlockHeadersFromTill retrieves block headers between two specified blocks.
-  rpc GetBlockHeadersFromTill(GetBlockHeadersFromTillRequest) returns (GetBlockHeadersResponse) {}
 
   // GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
   rpc GetBlockHeadersFromHeight(GetBlockHeadersFromHeightRequest) returns (GetBlockHeadersFromHeightResponse) {}
@@ -388,12 +379,6 @@ message GetBlockHeadersResponse {
   repeated bytes metas = 2;         // List of serialized metadata
 }
 
-// GetBlockHeadersFromTillRequest requests headers between two blocks.
-message GetBlockHeadersFromTillRequest {
-  bytes startHash = 1;  // Starting block hash
-  bytes endHash = 2;    // Ending block hash
-}
-
 // GetBlockHeadersFromHeightRequest requests headers starting from a height.
 message GetBlockHeadersFromHeightRequest {
   uint32 startHeight = 1;  // Starting height
@@ -625,19 +610,6 @@ message GetSuitableBlockResponse {
 message GetHashOfAncestorBlockRequest {
   bytes hash = 1;     // Starting block hash
   uint32 depth = 2;   // Number of generations to go back
-}
-
-// GetLatestBlockHeaderFromBlockLocatorRequest
-message GetLatestBlockHeaderFromBlockLocatorRequest {
-  bytes bestBlockHash = 1;                // Best block hash
-  repeated bytes blockLocatorHashes = 2;  // Block locator hashes
-}
-
-// GetBlockHeadersFromOldestRequest retrieves block headers starting from the oldest block.
-message GetBlockHeadersFromOldestRequest {
-  bytes chainTipHash = 1;     // Chain tip hash
-  bytes targetHash = 2;       // Target block hash
-  uint64 numberOfHeaders = 3; // Maximum number of hashes to return
 }
 
 // GetHashOfAncestorBlockResponse contains an ancestor block hash.

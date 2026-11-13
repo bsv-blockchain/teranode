@@ -16,7 +16,6 @@ import (
 	"context"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -622,15 +621,6 @@ func (m *MockStore) GetBlockHeadersByParentLinks(ctx context.Context, blockHash 
 	return m.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
 }
 
-// GetBlockHeadersFromTill retrieves block headers between two specified blocks.
-func (m *MockStore) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
-}
-
-func (m *MockStore) GetForkedBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic(implementMe)
-}
-
 func (m *MockStore) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
 }
@@ -783,10 +773,6 @@ func (m *MockStore) SetBlockPersistedAt(ctx context.Context, blockHash *chainhas
 // GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
 func (m *MockStore) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
 	return []*model.Block{}, nil
-}
-
-func (m *MockStore) GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error) {
-	panic(implementMe)
 }
 
 func (m *MockStore) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {

@@ -30,7 +30,6 @@ package blockchain
 
 import (
 	"context"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
@@ -261,22 +260,6 @@ type Store interface {
 	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error encountered
 	GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
-	// GetBlockHeadersFromTill retrieves block headers between two blocks.
-	// Parameters:
-	//   - ctx: Context for the operation
-	//   - blockHashFrom: Starting block hash
-	//   - blockHashTill: Ending block hash
-	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error encountered
-	GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-
-	// GetForkedBlockHeaders retrieves headers of forked blocks.
-	// Parameters:
-	//   - ctx: Context for the operation
-	//   - blockHash: Starting block hash
-	//   - numberOfHeaders: Number of headers to retrieve
-	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error encountered
-	GetForkedBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-
 	// GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
 	// Parameters:
 	//   - ctx: Context for the operation
@@ -440,14 +423,6 @@ type Store interface {
 	//   - ctx: Context for the operation
 	// Returns: Slice of blocks with unprocessed subtrees and any error encountered
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
-
-	// GetBlocksByTime retrieves blocks within a specified time range.
-	// Parameters:
-	//   - ctx: Context for the operation
-	//   - fromTime: Start time
-	//   - toTime: End time
-	// Returns: Slice of block data and any error encountered
-	GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error)
 
 	// CheckBlockIsInCurrentChain checks if blocks are in the current chain.
 	// Parameters:
