@@ -203,5 +203,52 @@ func TestSqlGetChainTip(t *testing.T) {
 
 		require.True(t, getOnMainChain(t, s, blockFromLaterPeer.Header.Hash().CloneBytes()))
 		require.False(t, getOnMainChain(t, s, blockFromEarlierPeer.Header.Hash().CloneBytes()))
+
+		// StoreBlock and GetChainTips read the tip through getBestBlockID.
+		_, bestHash, err := s.getBestBlockID(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, blockFromLaterPeer.Header.Hash().String(), bestHash.String())
+
+		tips, err := s.GetChainTips(context.Background())
+		require.NoError(t, err)
+
+		tipStatus := make(map[string]string, len(tips))
+		for _, chainTip := range tips {
+			tipStatus[chainTip.Hash] = chainTip.Status
+		}
+
+		require.Equal(t, "active", tipStatus[blockFromLaterPeer.Header.Hash().String()])
+		require.NotEqual(t, "active", tipStatus[blockFromEarlierPeer.Header.Hash().String()])
+
+		// While on_main_chain is being rebuilt the by-height reads walk back from the best tip
+		// instead of trusting the flag, so they must pick the same tip.
+		s.mainChainRebuilding.Add(1)
+
+		headers, _, err := s.GetBlockHeadersByHeight(context.Background(), 2, 2)
+		require.NoError(t, err)
+		require.Len(t, headers, 1)
+		require.Equal(t, blockFromLaterPeer.Header.Hash().String(), headers[0].Hash().String())
+
+		blocks, err := s.GetBlocksByHeight(context.Background(), 2, 2)
+		require.NoError(t, err)
+		require.Len(t, blocks, 1)
+		require.Equal(t, blockFromLaterPeer.Header.Hash().String(), blocks[0].Header.Hash().String())
+
+		for _, fromHeight := range []uint32{0, 2} {
+			lastBlocks, err := s.GetLastNBlocks(context.Background(), 1, false, fromHeight)
+			require.NoError(t, err)
+			require.Len(t, lastBlocks, 1)
+
+			lastHeader, err := model.NewBlockHeaderFromBytes(lastBlocks[0].BlockHeader)
+			require.NoError(t, err)
+			require.Equal(t, blockFromLaterPeer.Header.Hash().String(), lastHeader.Hash().String(), "fromHeight %d", fromHeight)
+		}
+
+		s.mainChainRebuilding.Add(-1)
+
+		// Startup rebuilds on_main_chain from the best tip; the flags must not move.
+		require.NoError(t, s.rebuildOnMainChainFlagTx(context.Background(), true, 0))
+		require.True(t, getOnMainChain(t, s, blockFromLaterPeer.Header.Hash().CloneBytes()))
+		require.False(t, getOnMainChain(t, s, blockFromEarlierPeer.Header.Hash().CloneBytes()))
 	})
 }
