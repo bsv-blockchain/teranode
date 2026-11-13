@@ -259,6 +259,11 @@ func TestConflictRecoveryReverseThenReadd(t *testing.T) {
 	tests.ConflictRecoveryReverseThenReadd(t, store)
 }
 
+func TestConflictRecoveryReverseKeepsForeignLock(t *testing.T) {
+	store, _ := newTestStore(t)
+	tests.ConflictRecoveryReverseKeepsForeignLock(t, store)
+}
+
 // lockAfterPrepare wraps the store. Once the checklist is prepared, another holder locks the parent,
 // so the operation cannot take its locks.
 type lockAfterPrepare struct {

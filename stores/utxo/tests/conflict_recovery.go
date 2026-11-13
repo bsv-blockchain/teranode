@@ -1415,6 +1415,37 @@ func ConflictRecoveryReverseThenReadd(t *testing.T, db utxo.Store) {
 	require.Equal(t, winner.TxIDChainHash(), crashSpender(t, ctx, db, parent))
 }
 
+// ConflictRecoveryReverseKeepsForeignLock checks that moving a block back leaves alone a lock on
+// the demoted transaction's parent that the move did not take. Block validation locks a record
+// it creates until the block is mined, and a reorg can move back a block whose winner spends
+// that record. The move must swap the spender and leave the lock to the holder that set it.
+func ConflictRecoveryReverseKeepsForeignLock(t *testing.T, db utxo.Store) {
+	ctx := t.Context()
+	parent := crashParentTx(0xd4)
+	_, _, err := db.SpendAndCreate(ctx, parent, 1, utxo.WithCreateOnly())
+	require.NoError(t, err)
+	loser := crashSpendTx(t, parent, 80000)
+	_, _, err = db.SpendAndCreate(ctx, loser, 2)
+	require.NoError(t, err)
+	winner := crashSpendTx(t, parent, 70000)
+	_, _, err = db.SpendAndCreate(ctx, winner, 2, utxo.WithCreateOnly(), utxo.WithConflicting(true))
+	require.NoError(t, err)
+
+	block := chainhash.HashH([]byte("reverse-keeps-foreign-lock-block"))
+	winners := []chainhash.Hash{*winner.TxIDChainHash()}
+	_, _, err = utxo.ProcessConflicting(ctx, db, 3, block, winners, nil, utxo.NoAncestryGuard)
+	require.NoError(t, err)
+	require.Equal(t, winner.TxIDChainHash(), crashSpender(t, ctx, db, parent))
+
+	require.NoError(t, db.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+	t.Cleanup(func() { _ = db.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, false) })
+
+	_, _, err = utxo.ReverseProcessConflicting(ctx, db, 3, block, winners)
+	require.NoError(t, err)
+	require.Equal(t, loser.TxIDChainHash(), crashSpender(t, ctx, db, parent))
+	require.True(t, crashLocked(t, ctx, db, parent.TxIDChainHash()), "the move back must not release a lock it did not take")
+}
+
 // countPendingScans wraps a real store and counts the scans of the whole WAL.
 type countPendingScans struct {
 	utxo.Store

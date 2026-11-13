@@ -3877,8 +3877,8 @@ func (s *Store) unspendOnce(ctx context.Context, spends []*utxo.Spend, flagAsLoc
 	// so a plain spend-rollback (no flagAsLocked) must leave locked untouched here
 	// too — otherwise an overlapping rollback would clear an independently-set 2PC
 	// locked flag and make a parent's outputs spendable before 2PC completes.
-	// Callers that intend to change locked pass it explicitly: ProcessConflicting
-	// locks affected parents (true) and ReverseProcessConflicting unlocks them (false).
+	// No caller in teranode passes the flag: conflict processing locks and
+	// unlocks parents through SetConflictLocks, which checks the lock's owner.
 	flagLockedProvided := len(flagAsLocked) > 0
 
 	locked := false

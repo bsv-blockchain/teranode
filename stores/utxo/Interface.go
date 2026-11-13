@@ -709,6 +709,12 @@ type Store interface {
 
 	// Unspend reverses a previous spend operation, marking UTXOs as unspent.
 	// This is used during blockchain reorganizations.
+	//
+	// flagAsLocked is optional. Without it the parent's locked flag is left as
+	// it is, which is what every caller in teranode wants. With it, the SQL,
+	// Pebble and utxoset stores set the flag (true), and SQL and Pebble also
+	// clear it (false). The Aerospike store ignores it. Conflict processing
+	// locks and unlocks parents through SetConflictLocks, not through Unspend.
 	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
 
 	// SpendsMadeBy returns the coins this transaction consumed, as records its own
