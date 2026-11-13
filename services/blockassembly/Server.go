@@ -2890,6 +2890,13 @@ func (ba *BlockAssembly) GetBlockAssemblyTxs(ctx context.Context, _ *blockassemb
 			default:
 			}
 		}
+		// The coinbase placeholder is block assembly's own marker for the coinbase
+		// slot at the head of the first subtree. It is not a transaction, so it is
+		// not reported, and TxCount counts only real transactions.
+		if hash.IsEqual(subtreepkg.CoinbasePlaceholderHash) {
+			continue
+		}
+
 		txHashesStrings = append(txHashesStrings, hash.String())
 	}
 

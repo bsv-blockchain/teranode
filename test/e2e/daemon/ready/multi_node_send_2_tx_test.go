@@ -59,10 +59,10 @@ func TestMultiNodeSend2Tx(t *testing.T) {
 	require.Eventually(t, func() bool {
 		var err error
 		txHashes, err = node1.BlockAssemblyClient.GetTransactionHashes(node1.Ctx)
-		return err == nil && len(txHashes) == 2
-	}, 10*time.Second, 100*time.Millisecond, "node1 should have coinbase placeholder + tx0 in block assembly")
+		return err == nil && len(txHashes) == 1
+	}, 10*time.Second, 100*time.Millisecond, "node1 should have tx0 in block assembly")
 
 	txHashes, err = node2.BlockAssemblyClient.GetTransactionHashes(node2.Ctx)
 	require.NoError(t, err)
-	require.Len(t, txHashes, 1, "Node2 should have only the coinbase placeholder")
+	require.Empty(t, txHashes, "Node2 should have no transactions in block assembly")
 }
