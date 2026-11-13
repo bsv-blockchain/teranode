@@ -4126,12 +4126,13 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 	//       by the same CheckBlockIsAncestorOfBlock RPC anchored at the
 	//       block's parent.
 	//
-	// CheckBlockIsAncestorOfBlock is a recursive walk down parent links from
-	// the anchor, so a lookup costs time in proportion to how deep the
-	// shallowest matching parent block is.
+	// When the block's parent is on the main chain, the store answers a
+	// main-chain parent block with one indexed probe at any depth. A parent
+	// block on a fork, and every false answer, takes a recursive walk down
+	// parent links that costs one row per block below the anchor.
 	//
-	// The prefetch exists to amortise that walk: most parents are recent, and a
-	// hit in the 10,000-ID set costs no RPC. The in-memory route was added to
+	// The prefetch saves the round trip: most parents are recent, and a hit in
+	// the 10,000-ID set costs no RPC. The in-memory route was added to
 	// drop the prefetch, which live profiling on betfair-pc mainnet showed
 	// holding ~35% of inuse heap (464 MB) and ~16% of CPU on its own, back when
 	// its fallback was an in-memory main-chain lookup.

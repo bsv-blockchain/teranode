@@ -5,9 +5,10 @@
 // This file implements the CheckBlockIsAncestorOfBlock method, which determines whether
 // specified blocks are ancestors of a given block. This is essential for double-spend
 // detection on fork blocks where we need to check against the fork's ancestor chain
-// rather than the main chain. The implementation uses a recursive Common Table Expression
-// (CTE) in SQL to efficiently traverse the blockchain structure from the specified block
-// backward, checking if the specified block IDs are part of this path.
+// rather than the main chain. When the specified block is on the main chain, a main-chain
+// block at or below its height is answered by one indexed probe. Every other answer uses a
+// recursive Common Table Expression (CTE) that walks parent links back from the specified
+// block, checking if the specified block IDs are part of this path.
 package sql
 
 import (
@@ -46,6 +47,19 @@ func (s *SQL) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32
 
 	if len(blockIDs) == 0 {
 		return false, nil
+	}
+
+	if s.mainChainRebuilding.Load() == 0 {
+		found, err := s.ancestorOnMainChainBelowAnchor(ctx, blockIDs, blockHash)
+		if err != nil {
+			return false, err
+		}
+
+		if found {
+			return true, nil
+		}
+		// No match does not mean no ancestor: the anchor may be on a fork, or a flag may be
+		// transiently false. The walk below decides every false answer.
 	}
 
 	// Get the block header for the specified block hash to get its ID
@@ -136,4 +150,57 @@ func (s *SQL) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32
 	}
 
 	return result, nil
+}
+
+// ancestorOnMainChainBelowAnchor is the cheap positive answer for CheckBlockIsAncestorOfBlock.
+// When the anchor is on the main chain, its ancestors are exactly the main-chain blocks at or
+// below its height, so one primary-key probe per id answers it however deep the id sits. The
+// recursive walk costs one row per block between the anchor and the match.
+//
+// It only ever answers true. It finds nothing when the anchor is on a fork, when the anchor is
+// unknown, or when no id is a main-chain block at or below the anchor, and the caller then walks.
+// The anchor's flag and height are read in the same statement as the candidates, not from the
+// header cache, so a reorg cannot slip between them. Callers must check mainChainRebuilding first:
+// it trusts the on_main_chain flag exactly as GetBlockHeaderIDs' fast path does.
+func (s *SQL) ancestorOnMainChainBelowAnchor(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	for start := 0; start < len(blockIDs); start += maxIDsPerCheckBatch {
+		end := start + maxIDsPerCheckBatch
+		if end > len(blockIDs) {
+			end = len(blockIDs)
+		}
+
+		batch := blockIDs[start:end]
+
+		placeholders := make([]string, len(batch))
+		args := make([]interface{}, 0, len(batch)+1)
+
+		for i, id := range batch {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+			args = append(args, id)
+		}
+
+		args = append(args, blockHash[:])
+
+		q := fmt.Sprintf(`
+			SELECT 1 FROM blocks b
+			WHERE b.id IN (%s)
+			  AND b.on_main_chain = true
+			  AND b.height <= (SELECT a.height FROM blocks a WHERE a.hash = $%d AND a.on_main_chain = true)
+			LIMIT 1`, strings.Join(placeholders, ","), len(batch)+1)
+
+		var found int
+
+		err := s.db.QueryRowContext(ctx, q, args...).Scan(&found)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+
+			return false, errors.NewStorageError("failed to check main-chain ancestors of the specified block", err)
+		}
+
+		return true, nil
+	}
+
+	return false, nil
 }

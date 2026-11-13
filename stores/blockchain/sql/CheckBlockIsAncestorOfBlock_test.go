@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
@@ -210,4 +211,88 @@ func TestCheckBlockIsAncestorOfBlock_ClosedDatabase(t *testing.T) {
 	assert.Error(t, err)
 	assert.False(t, result)
 	assert.Contains(t, err.Error(), "sql: database is closed")
+}
+
+// TestCheckBlockIsAncestorOfBlock_MainChainFastPathMatchesWalk checks the on_main_chain fast path
+// against the flag-free walk for every anchor and candidate on a chain with a fork:
+// genesis, block1, block2, block3 on the main chain and blockAlternative2 on block1.
+// The two cases the fast path must not answer true are a main-chain block above a main-chain
+// anchor (block3 asked of block1, the fork-parent case) and a main-chain block asked of a fork
+// anchor (block2 asked of blockAlternative2).
+func TestCheckBlockIsAncestorOfBlock_MainChainFastPathMatchesWalk(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+	defer s.Close(context.Background())
+
+	ctx := context.Background()
+
+	id1, _, err := s.StoreBlock(ctx, block1, "")
+	require.NoError(t, err)
+	id2, _, err := s.StoreBlock(ctx, block2, "")
+	require.NoError(t, err)
+	id3, _, err := s.StoreBlock(ctx, block3, "")
+	require.NoError(t, err)
+	idAlt2, _, err := s.StoreBlock(ctx, blockAlternative2, "")
+	require.NoError(t, err)
+
+	gapID := uint32(id3 + 1000) // no blocks row
+
+	anchors := map[string]*chainhash.Hash{
+		"block1":            block1.Hash(),
+		"block2":            block2.Hash(),
+		"block3":            block3.Hash(),
+		"blockAlternative2": blockAlternative2.Hash(),
+	}
+	candidates := map[string]uint32{
+		"block1":            uint32(id1),
+		"block2":            uint32(id2),
+		"block3":            uint32(id3),
+		"blockAlternative2": uint32(idAlt2),
+		"gap":               gapID,
+	}
+
+	want := map[string]bool{
+		"block1>block1": true, "block2>block1": true, "block3>block1": true, "blockAlternative2>block1": true,
+		"block2>block2": true, "block3>block2": true,
+		"block3>block3":                       true,
+		"blockAlternative2>blockAlternative2": true,
+	}
+
+	for anchorName, anchor := range anchors {
+		for candName, candID := range candidates {
+			key := anchorName + ">" + candName
+
+			fast, err := s.ancestorOnMainChainBelowAnchor(ctx, []uint32{candID}, anchor)
+			require.NoError(t, err, key)
+
+			full, err := s.CheckBlockIsAncestorOfBlock(ctx, []uint32{candID}, anchor)
+			require.NoError(t, err, key)
+
+			s.mainChainRebuilding.Add(1)
+			walk, err := s.CheckBlockIsAncestorOfBlock(ctx, []uint32{candID}, anchor)
+			s.mainChainRebuilding.Add(-1)
+			require.NoError(t, err, key)
+
+			require.Equal(t, want[key], walk, "walk answer for %s", key)
+			require.Equal(t, walk, full, "fast-path answer differs from walk for %s", key)
+
+			if fast {
+				require.True(t, walk, "fast path answered true where the walk says false for %s", key)
+			}
+		}
+	}
+
+	// The fast path is what answers a main-chain ancestor of a main-chain anchor.
+	fast, err := s.ancestorOnMainChainBelowAnchor(ctx, []uint32{uint32(id1)}, block3.Hash())
+	require.NoError(t, err)
+	require.True(t, fast)
+
+	// The fork anchor's own lineage below the fork point is left to the walk.
+	fast, err = s.ancestorOnMainChainBelowAnchor(ctx, []uint32{uint32(id1)}, blockAlternative2.Hash())
+	require.NoError(t, err)
+	require.False(t, fast)
 }
