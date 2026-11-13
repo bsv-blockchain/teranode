@@ -1506,8 +1506,10 @@ func (c *headerCache) HeightOf(hash chainhash.Hash) (int32, bool) {
 // ancestry proof behind every below-checkpoint fast path.
 //
 // A false negative is possible and is deliberately tolerated: a branch dropped
-// while a block is in flight takes the proof with it, and the answer then
-// reverts to full validation, which costs time and nothing else.
+// while a block is in flight takes the proof with it. On the unified route the
+// block is then refused as retry-later until a later header fill proves it
+// again, which costs time and nothing else; with the route off it takes full
+// validation, as every block there does.
 func (c *headerCache) Proven(hash chainhash.Hash) bool {
 	if c == nil {
 		return false

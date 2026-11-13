@@ -315,9 +315,9 @@ func TestHandleConvertedBlock_CommitsWithoutTheBlock(t *testing.T) {
 // checkpointed chain, HandleConvertedBlock never makes the RPC. The failure is a
 // ServiceError, which parkCommitFailure reads as retry-later (blob kept, no
 // rewind, no blame), because the proof arrives from the header walk and the
-// block is right once it does. Block validation would refuse the quick route
-// for such a block anyway and fall to full validation; refusing here is what
-// keeps a restart from paying full validation for every parked record.
+// block is right once it does. Block validation refuses such a block as
+// retry-later too; refusing here first saves the RPC for every parked record
+// after a restart.
 //
 // The fixture is the proven one with the cache discarded afterwards: the same
 // record, the same route, only the proof gone, as it is after a restart.

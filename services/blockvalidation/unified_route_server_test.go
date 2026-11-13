@@ -579,8 +579,10 @@ func TestProcessBlockFound_AnInvalidTransactionOnTheLegacyFullRouteIsAJudgementN
 }
 
 // TestProcessBlockFound_FullRouteRetryAfterAFailedQuickRouteKeepsTheBlockValid drives the
-// one route left on which a below-checkpoint block written with zero fees reaches the coinbase
-// no-inflation check. The quick route's outpoint-only mode writes the block's .subtree file with
+// route on which a below-checkpoint block written with zero fees reached the coinbase
+// no-inflation check while the route flags stay on. (Turning blockvalidation_legacy_unified_below_checkpoint
+// off before such a block commits still sends it to full validation; the setting's description
+// says so.) The quick route's outpoint-only mode writes the block's .subtree file with
 // every fee 0. When that attempt fails after the write (here at AddBlock), the file stays. A
 // retry that arrived without the header proof used to take full validation, where subtree
 // validation reuses an existing .subtree file as it stands, so block.Valid summed the fees from
