@@ -1553,8 +1553,12 @@ func createMayHaveCommittedError(err error) error {
 // isInDoubt therefore walks the whole chain and answers true for any error
 // marked in doubt, any TIMEOUT, and any client-side code (zero or below:
 // network and connection failures), the codes the client's own in-doubt rule
-// uses. That over-marks a write that timed out before it went out, which only
-// keeps its spends until a repeat of the create, the safe direction.
+// uses. That over-marks a write that never went out: one that timed out before
+// it was sent, and client codes such as MAX_ERROR_RATE and
+// NO_AVAILABLE_CONNECTIONS_TO_NODE, where the client sent nothing. Such a
+// create keeps its spends with no record until a repeat of the create, the safe
+// direction. The rule stays broad rather than listing the never-sent codes,
+// because a code missed from such a list would unspend a stored transaction.
 func isInDoubt(err error) bool {
 	for err != nil {
 		// As reads this one link of the chain, the client's constant errors

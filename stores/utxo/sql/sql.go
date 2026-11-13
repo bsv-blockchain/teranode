@@ -897,8 +897,14 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 		if execErr != nil {
 			return execErr
 		}
-		defer rows.Close()
-		inserted = rows.Next() // true if new_tx returned a row (insert succeeded)
+		inserted = rows.Next() // true if new_tx returned a row
+
+		// The row arrives before the commit: the statement commits after
+		// sending its rows, and only the reply's end confirms it, so the
+		// connection can drop between the row and the commit. Close reads the
+		// reply to its end and records that error, so Err is read after Close.
+		rows.Close()
+
 		return rows.Err()
 	})
 	if err != nil {

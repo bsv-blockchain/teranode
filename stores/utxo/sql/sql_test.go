@@ -41,11 +41,16 @@
 package sql
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
+	"io"
+	"net"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -3860,5 +3865,132 @@ func TestPgCreateError(t *testing.T) {
 			require.Equal(t, tc.wantUnknown, utxo.IsCreateOutcomeUnknown(err))
 			require.True(t, errors.Is(err, errors.ErrStorageError), "the storage error must survive the marking: %v", err)
 		})
+	}
+}
+
+// TestCreateCTE_ConnectionLostAfterRowLeavesOutcomeUnknown checks that the
+// single-statement Postgres create reads its reply to the end before it
+// reports success. The statement sends the new transaction's id and then
+// commits, so a connection lost right after the row may follow the commit or
+// precede it. A proxy between the store and Postgres cuts the connection just
+// after it forwards the row, and Create must return an outcome-unknown error,
+// so utxo.SequentialSpendAndCreate keeps the spends, rather than success for a
+// write nothing has confirmed.
+func TestCreateCTE_ConnectionLostAfterRowLeavesOutcomeUnknown(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	run := func(t *testing.T, batched bool) {
+		ctx := context.Background()
+		dbURL := startPostgresContainer(t, ctx)
+		proxy := newCutAfterRowProxy(t, dbURL.Host)
+		dbURL.Host = proxy.addr
+
+		store := newPostgresTestStore(t, ctx, dbURL)
+		store.settings.UtxoStore.BatchSQLOperations = true
+		require.Equal(t, "postgres", store.engine, "precondition: store is postgres-backed")
+		require.NotNil(t, store.createBatcher, "precondition: the store starts with a create batcher")
+
+		if !batched {
+			store.createBatcher = nil
+		}
+
+		tx := newExtendedTxWithOutputs(t, 2)
+
+		proxy.armed.Store(true)
+		_, err := store.Create(ctx, tx, 1)
+
+		require.False(t, proxy.armed.Load(), "precondition: the proxy cut the connection after a row")
+		require.Error(t, err, "a create whose reply was cut after the row must not report success")
+		require.True(t, utxo.IsCreateOutcomeUnknown(err), "the create may have committed: %v", err)
+		require.True(t, errors.Is(err, errors.ErrStorageError), "the storage error must survive the marking: %v", err)
+	}
+
+	// sendCreateBatch, one statement per create in a pgx batch.
+	t.Run("batched", func(t *testing.T) { run(t, true) })
+
+	// createCTE, the same statement sent on its own when there is no batcher.
+	t.Run("single statement", func(t *testing.T) { run(t, false) })
+}
+
+// cutAfterRowProxy forwards Postgres connections to an upstream server. Once
+// armed, it closes the connection that carries the next row of a single
+// column named id, the create's reply, right after forwarding it, and
+// disarms. Rows of other queries, such as the store's background index
+// checks, pass through.
+type cutAfterRowProxy struct {
+	addr  string
+	armed atomic.Bool
+}
+
+func newCutAfterRowProxy(t *testing.T, upstream string) *cutAfterRowProxy {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	proxy := &cutAfterRowProxy{addr: listener.Addr().String()}
+
+	go func() {
+		for {
+			client, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+
+			server, dialErr := net.Dial("tcp", upstream)
+			if dialErr != nil {
+				_ = client.Close()
+				continue
+			}
+
+			go func() {
+				_, _ = io.Copy(server, client)
+				_ = server.Close()
+			}()
+
+			go proxy.forwardFromServer(server, client)
+		}
+	}()
+
+	return proxy
+}
+
+// forwardFromServer copies server messages to client one at a time. With
+// sslmode=disable every message the server sends is a type byte and a
+// four-byte length that counts itself.
+func (p *cutAfterRowProxy) forwardFromServer(server, client net.Conn) {
+	defer func() {
+		_ = client.Close()
+		_ = server.Close()
+	}()
+
+	header := make([]byte, 5)
+	idColumn := false // the last row description on this connection is one column named id
+
+	for {
+		if _, err := io.ReadFull(server, header); err != nil {
+			return
+		}
+
+		body := make([]byte, binary.BigEndian.Uint32(header[1:])-4)
+		if _, err := io.ReadFull(server, body); err != nil {
+			return
+		}
+
+		if _, err := client.Write(append(header, body...)); err != nil {
+			return
+		}
+
+		if header[0] == 'T' {
+			// A two-byte column count, then each column's name ending in a zero byte.
+			idColumn = bytes.HasPrefix(body, []byte("\x00\x01id\x00"))
+		}
+
+		if header[0] == 'D' && idColumn && p.armed.CompareAndSwap(true, false) {
+			return
+		}
 	}
 }
