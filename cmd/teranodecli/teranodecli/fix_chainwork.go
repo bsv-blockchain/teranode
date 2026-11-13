@@ -43,7 +43,11 @@ type errorRecord struct {
 // Values are quoted with util.QuotePostgresConnValue, the same helper
 // util/sql.go uses, so a value containing a space, quote, backslash or '='
 // cannot truncate the string or inject another keyword (#1877).
-func buildPostgresConnString(storeURL *url.URL) string {
+//
+// A URL without a database name is an error. An empty dbname is not "no value"
+// to Postgres: it means the user name, and it overrides PGDATABASE, so the
+// command would write chainwork into a database the caller never named.
+func buildPostgresConnString(storeURL *url.URL) (string, error) {
 	dbHost := storeURL.Hostname()
 	port := storeURL.Port()
 	dbPort := 5432
@@ -51,8 +55,12 @@ func buildPostgresConnString(storeURL *url.URL) string {
 		dbPort, _ = strconv.Atoi(port)
 	}
 	// TrimPrefix, not Path[1:], so a URL with no path ("postgres://host:5432")
-	// yields an empty dbname instead of panicking on the empty string.
+	// is reported as a missing database name instead of panicking on the empty
+	// string.
 	dbName := strings.TrimPrefix(storeURL.Path, "/")
+	if dbName == "" {
+		return "", errors.NewProcessingError("database URL has no database name, expected postgres://user:password@host:port/dbname")
+	}
 	dbUser := ""
 	dbPassword := ""
 
@@ -85,7 +93,7 @@ func buildPostgresConnString(storeURL *url.URL) string {
 		connStr = fmt.Sprintf("%s password=%s", connStr, util.QuotePostgresConnValue(dbPassword)) // urlsafe: builds the DSN handed to sql.Open; the caller never logs it
 	}
 
-	return connStr
+	return connStr, nil
 }
 
 func fixChainwork(dbURL string, dryRun bool, batchSize int, startHeight, endHeight uint32) error {
@@ -110,7 +118,10 @@ func fixChainwork(dbURL string, dryRun bool, batchSize int, startHeight, endHeig
 	case "postgres", "postgresql":
 		dbType = "postgres"
 		// Use the same connection string building logic as teranode
-		connStr = buildPostgresConnString(parsedURL)
+		connStr, err = buildPostgresConnString(parsedURL)
+		if err != nil {
+			return err
+		}
 	default:
 		return errors.NewProcessingError("unsupported database type: %s", parsedURL.Scheme)
 	}
