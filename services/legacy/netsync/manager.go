@@ -3045,7 +3045,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 //     headerNodeProven.
 //   - weaker, because it is read at delivery rather than stamped at request, so a
 //     branch dropped while a block is on the wire can lose the proof. That
-//     direction costs a wait for the proof and nothing else. See headerCache.Proven.
+//     direction costs full validation and nothing else. See headerCache.Proven.
 //
 // Every route that cannot show the run gets the zero value: peer advertisements,
 // blocks adopted from disk by park recovery, and anything re-requested outside the

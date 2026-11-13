@@ -228,11 +228,12 @@ func (sm *SyncManager) HandleConvertedBlock(ctx context.Context, peer *peer.Peer
 
 	// Refused here, before the block-assembly wait and before any RPC, when the
 	// unified route would take this block but the header cache cannot prove it
-	// is on the checkpointed chain. Block validation refuses such a block too
-	// (Server.processBlockFound), because full validation could reuse the
-	// zero-fee .subtree files a failed quick attempt left and reject a valid
-	// block; refusing here first saves the RPC, and after a restart every parked
-	// record is unproven until the header walk reaches a checkpoint again. A ServiceError, the
+	// is on the checkpointed chain. Block validation would refuse the quick
+	// route for it anyway (Server.legacyUnifiedRoute requires the proof) and
+	// fall to full validation, which is correct for a .subtreeToCheck record and
+	// slow: after a restart every parked record is unproven until the header
+	// walk reaches a checkpoint again, and paying full validation for each of
+	// them would be the restart cost this refusal removes. A ServiceError, the
 	// same shape the parent-not-resolvable case above uses, so parkCommitFailure
 	// reads parkDispositionRetryLater: keep the blob, no rewind, no blame.
 	// parkedBlockFailed stamps the entry so the drain does not spend every turn
@@ -341,8 +342,7 @@ func (sm *SyncManager) waitForPreviousBlockMined(ctx context.Context, prevBlockH
 
 // ProcessBlock hands a block to block validation. origin carries the header
 // cache's ancestry proof for it; block validation requires that proof before it
-// takes the below-checkpoint quick route, and refuses an eligible block that lacks
-// it as retry-later.
+// takes the below-checkpoint quick route, and takes full validation without it.
 func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block, peerID string, origin blockRequestOrigin) (err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "SyncManager:processBlock",
 		tracing.WithDebugLogMessage(

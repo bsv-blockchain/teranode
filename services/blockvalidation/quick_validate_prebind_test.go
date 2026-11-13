@@ -1209,7 +1209,7 @@ func TestQuickValidate_Sequential_HonestBody_WritesSubtreeFiles(t *testing.T) {
 		2)
 
 	require.NotPanics(t, func() {
-		_, err := h.bv.processBlockSubtrees(h.ctx, block, false)
+		_, err := h.bv.processBlockSubtrees(h.ctx, block, false, nil)
 		require.NoError(t, err)
 	})
 

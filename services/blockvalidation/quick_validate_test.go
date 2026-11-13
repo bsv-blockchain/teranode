@@ -198,7 +198,7 @@ func TestProcessBlockSubtrees(t *testing.T) {
 		}
 
 		// Execute processBlockSubtrees (outpointOnly irrelevant here — errors on no subtrees)
-		_, err := suite.Server.blockValidation.processBlockSubtrees(suite.Ctx, block, false)
+		_, err := suite.Server.blockValidation.processBlockSubtrees(suite.Ctx, block, false, nil)
 
 		// Verify error
 		assert.Error(t, err, "Should fail when block has no subtrees")
@@ -515,7 +515,7 @@ func TestProcessSubtreeBatch_SameBlockParentVoutBounds(t *testing.T) {
 
 	// Must return a clean error (not panic) whose chain mentions the out-of-range output.
 	require.NotPanics(t, func() {
-		_, err = suite.Server.blockValidation.processBlockSubtrees(suite.Ctx, block, false)
+		_, err = suite.Server.blockValidation.processBlockSubtrees(suite.Ctx, block, false, nil)
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "non-existent output")

@@ -2126,6 +2126,15 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	// what every consumer downstream reads.
 	unifiedRoute := u.legacyUnifiedRoute(block, baseURL, headerProven)
 
+	// Reaching full validation for an eligible block is meant to be rare: netsync refuses to
+	// commit an unproven eligible record before it makes this call (HandleConvertedBlock), so
+	// this is the cache-replace race, a direct RPC, or a netsync whose route flags disagree
+	// with this service's. It is logged because it is the slow, correct path, and an operator
+	// seeing it at volume has a provenance problem to look at, not a validation one.
+	if !unifiedRoute && !headerProven && u.legacyUnifiedEligible(block, baseURL) {
+		u.logger.Warnf("[processBlockFound][%s] legacy block at height %d is eligible for the unified route but carries no header proof; taking full validation", hash.String(), block.Height)
+	}
+
 	// Wait for block assembly to be ready before processing the block
 	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height, u.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
 		if u.legacyUnifiedEligible(block, baseURL) {
@@ -2184,23 +2193,6 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		}
 
 		return qErr
-	}
-
-	// An eligible legacy block without the header proof waits for the proof instead of taking
-	// full validation. A quick attempt that failed after writing this block's .subtree files
-	// leaves them on disk with every fee 0 (outpoint-only mode never computes fees), subtree
-	// validation reuses an existing .subtree file as it stands, and while the chain has not
-	// reached the checkpoint the coinbase no-inflation check would then sum those zero fees and
-	// mark a valid block invalid. Netsync already refuses to send an unproven eligible record
-	// (HandleConvertedBlock), so this is reached only by the cache-replace race, a direct RPC,
-	// or a netsync whose route flags disagree with this service's. A ServiceError, which
-	// netsync's park reads as retry later: the record is kept and offered again once the header
-	// walk proves it. Logged at Warn because a stream of these is the one sign on this side
-	// that netsync's route flags disagree with this service's.
-	if !headerProven && u.legacyUnifiedEligible(block, baseURL) {
-		u.logger.Warnf("[processBlockFound][%s] legacy block at height %d is eligible for the unified route but carries no header proof; refusing it as retry-later (at volume, check that legacy and block validation agree on the route settings)", hash.String(), block.Height)
-
-		return errors.NewServiceError("[processBlockFound][%s] legacy block at height %d is eligible for the unified route but carries no header proof; retrying once the header walk has proven it", hash.String(), block.Height)
 	}
 
 	if u.blockValidation.mustStayOnQuickValidation(block) {
@@ -2271,12 +2263,13 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 // is the block-validation half of GHSA-gggq-8f59-4jm9; netsync's
 // quickValidationAllowed is the other half.
 //
-// An eligible block without the proof is refused as retry-later by processBlockFound, not
-// sent to ValidateBlockWithOptions. A quick attempt that failed after writing the block's
-// FileTypeSubtree files leaves them with every fee 0, subtree validation reuses an existing
-// FileTypeSubtree as it stands, and the reward check would then reject a valid block. Netsync
-// refuses to commit an unproven eligible record before it makes this RPC and re-offers it once
-// the header walk has proven it.
+// An eligible block without the proof falls to ValidateBlockWithOptions. That is
+// correct for a legacy record because netsync writes its structure files as
+// FileTypeSubtreeToCheck, which full validation treats as unvalidated: subtree
+// validation creates the transactions and rebuilds the fees before the reward
+// check reads them. It is also slow, which is why netsync refuses to commit an
+// unproven eligible record before it makes this RPC and re-offers it once the
+// header walk has proven it.
 func (u *Server) legacyUnifiedRoute(block *model.Block, baseURL string, headerProven bool) bool {
 	return headerProven && u.legacyUnifiedEligible(block, baseURL)
 }

@@ -204,7 +204,7 @@ type ProcessBlockRequest struct {
 	// True only when legacy netsync can show the block's hash sits at or below a pinned
 	// checkpoint hash matched in an internally linked header run (headerCache.Proven).
 	// Absent or false means no proof: block validation must not take the below-checkpoint
-	// quick route for the block, and refuses an eligible legacy block as retry-later instead.
+	// quick route for the block and falls to full validation instead.
 	HeaderProven  bool `protobuf:"varint,6,opt,name=header_proven,json=headerProven,proto3" json:"header_proven,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

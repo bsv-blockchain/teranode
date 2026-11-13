@@ -309,6 +309,33 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		err = u.quarantineSubtreeKeyMismatch(ctx, err)
 	}()
 
+	// A failed attempt removes the .subtree files it wrote itself. Outpoint-only mode writes them
+	// with every fee 0, and full validation reuses an existing .subtree file as it stands, so a
+	// later full validation of this block (a retry without the header proof, the route turned
+	// off, the same block from a p2p peer) would sum zero fees against the coinbase and mark a
+	// valid block invalid. Removing them sends that validation back to the netsync-written
+	// .subtreeToCheck and .subtreeData files, which stay, and from which subtree validation
+	// derives the real fees. Skipped when the block is or may be stored (isBlockCommitted): its
+	// row then says its .subtree files are on disk. Only files this attempt wrote are removed;
+	// one that already existed was not written here, and legacy blocks are applied one at a
+	// time, so no other block is writing the same hash meanwhile.
+	freshness := newSubtreeFreshness()
+
+	defer func() {
+		if err == nil || isBlockCommitted(err) {
+			return
+		}
+
+		// Detached, so a shutdown that cancelled ctx does not leave a zero-fee file behind.
+		delCtx := context.WithoutCancel(ctx)
+
+		for hash := range freshness.snapshot() {
+			if delErr := u.subtreeStore.Del(delCtx, hash[:], fileformat.FileTypeSubtree); delErr != nil && !errors.Is(delErr, errors.ErrNotFound) {
+				u.logger.Errorf("[quickValidateBlock][%s] failed to remove the .subtree file %s this failed attempt wrote: %v", block.Hash().String(), hash.String(), delErr)
+			}
+		}
+	}()
+
 	// Enforce the block-version floor before any body/coinbase inspection (header-first parity
 	// with svnode ContextualCheckBlockHeader). Needs only header version, height, and params.
 	if err := model.CheckBlockVersion(block.Header.Version, block.Height, u.settings.ChainCfgParams); err != nil {
@@ -375,7 +402,7 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 
 		// Process all subtrees in streaming fashion - creates UTXOs, spends, writes files
 		// This function waits for all processing to complete before returning, ensuring block.ID is set
-		_, err = u.processBlockSubtrees(ctx, block, outpointOnly)
+		_, err = u.processBlockSubtrees(ctx, block, outpointOnly, freshness)
 		if err != nil {
 			// Preserve a corrupt-body verdict from validateSubtrees (bitcoin-sv/teranode#4692) instead
 			// of shadowing it with an outer ErrProcessing.
@@ -770,7 +797,10 @@ type subtreeResult struct {
 // Returns:
 //   - uint64: Existing BlockID if retry detected, 0 otherwise
 //   - error: If processing fails
-func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model.Block, outpointOnly bool) (uint64, error) {
+//
+// freshness, when non-nil, records each (hash, FileTypeSubtree) this call writes itself, so a
+// failed attempt can remove exactly those files (quickValidateBlock).
+func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model.Block, outpointOnly bool, freshness *subtreeFreshness) (uint64, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processBlockSubtrees",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[processBlockSubtrees][%s] processing %d subtrees in batches of %d", block.Hash().String(), len(block.Subtrees), u.quickSubtreeBatchSize(block, outpointOnly)),
@@ -783,14 +813,14 @@ func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model
 
 	prefetchDepth := u.settings.BlockValidation.SubtreeBatchPrefetchDepth
 	if prefetchDepth <= 0 {
-		return u.processBlockSubtreesSequential(ctx, block, outpointOnly)
+		return u.processBlockSubtreesSequential(ctx, block, outpointOnly, freshness)
 	}
-	return u.processBlockSubtreesPipeline(ctx, block, prefetchDepth, outpointOnly)
+	return u.processBlockSubtreesPipeline(ctx, block, prefetchDepth, outpointOnly, freshness)
 }
 
 // processBlockSubtreesSequential processes subtrees sequentially, one batch at a time.
 // This is the fallback when SubtreeBatchPrefetchDepth is 0.
-func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, block *model.Block, outpointOnly bool) (uint64, error) {
+func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, block *model.Block, outpointOnly bool, freshness *subtreeFreshness) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
 
@@ -847,7 +877,7 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 			}
 
 			// Phase 7: Write subtree files (shared with normal validation)
-			return u.writeSubtreeFilesForBatch(ctx, block, batch)
+			return u.writeSubtreeFilesForBatch(ctx, block, batch, freshness)
 		}(); err != nil {
 			return 0, err
 		}
@@ -976,7 +1006,7 @@ func (u *BlockValidation) startPrefetchAndExtendStages(gCtx context.Context, g *
 //     created unlocked, so this lock-based rollback barrier does not apply; recovery instead relies on
 //     retry convergence below.
 //   - On retry, Create() returns ErrTxExists, and SetMinedMulti() updates the correct BlockID.
-func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, block *model.Block, prefetchDepth int, outpointOnly bool) (uint64, error) {
+func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, block *model.Block, prefetchDepth int, outpointOnly bool, freshness *subtreeFreshness) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
 	blockIDSet := false
@@ -1056,7 +1086,7 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 				batchG.Go(func() (err error) {
 					defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[pipeline:process][%s] write batch %d-%d", block.Hash().String(), batch.batchStart, batch.batchEnd)
 					writeStart := time.Now()
-					err = u.writeSubtreeFilesForBatch(batchCtx, block, batch)
+					err = u.writeSubtreeFilesForBatch(batchCtx, block, batch, freshness)
 					writeDuration = time.Since(writeStart)
 					return err
 				})
@@ -3080,7 +3110,7 @@ func sleepUnlessDone(ctx context.Context, d time.Duration) {
 //
 // Returns:
 //   - error: If file writing fails
-func (u *BlockValidation) writeSubtreeFilesForBatch(ctx context.Context, block *model.Block, batch *SubtreeProcessingBatch) error {
+func (u *BlockValidation) writeSubtreeFilesForBatch(ctx context.Context, block *model.Block, batch *SubtreeProcessingBatch, freshness *subtreeFreshness) error {
 	writeG, writeCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(u.logger, writeG, u.settings.BlockValidation.SubtreeBatchWriteConcurrency)
 
@@ -3098,6 +3128,13 @@ func (u *BlockValidation) writeSubtreeFilesForBatch(ctx context.Context, block *
 		// holding for the merkle check.
 		carriedFullSubtree := batch.fullSubtrees[localIdx]
 		batch.fullSubtrees[localIdx] = nil
+
+		// No carried blob means no .subtree file existed when the batch was read, so this
+		// attempt writes it. Marked before the write, as the async route does: a write that
+		// never lands leaves nothing on disk, and the cleanup tolerates ErrNotFound.
+		if carriedFullSubtree == nil {
+			freshness.markFresh(subtreeHash, fileformat.FileTypeSubtree)
+		}
 
 		writeG.Go(func() (err error) {
 			defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[writeSubtreeFilesForBatch][%s] subtree %d", block.Hash().String(), globalIdx)
