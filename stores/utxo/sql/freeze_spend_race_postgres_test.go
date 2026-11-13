@@ -459,9 +459,15 @@ func TestBulkSpendDuplicateSharesRefusal_Postgres(t *testing.T) {
 
 				require.NoError(t, <-retryDone)
 
+				entryErrs := make([]error, len(batch))
 				for i, b := range batch {
-					require.ErrorIs(t, <-b.errCh, refusal.wantErr, "batch entry %d", i)
+					entryErrs[i] = <-b.errCh
+					require.ErrorIs(t, entryErrs[i], refusal.wantErr, "batch entry %d", i)
 				}
+
+				// Spend() joins a tx's input errors in place, so the two entries must not
+				// share one error value.
+				require.NotSame(t, entryErrs[0], entryErrs[1])
 
 				frozen, spendingData := readFreezeRaceRow(ctx, t, store)
 				require.Equal(t, refusal.frozen, frozen)
@@ -469,4 +475,46 @@ func TestBulkSpendDuplicateSharesRefusal_Postgres(t *testing.T) {
 			})
 		}
 	}
+}
+
+// An output deleted after the per-row spend read it, and before the re-read that follows
+// a missed write, fails only that item with a not-found error. It must not abort the batch.
+func TestSpendRecheckOfDeletedOutputFailsOnlyThatItem_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, ctx := setupFreezeRaceStore(t, freezeRacePaths[0])
+	outpoint := freezeRaceOutpoint(t)
+	hash := tests.Tx.TxIDChainHash()
+
+	writeReached, releaseWrite := pauseOnce(t, &spendBeforeWrite)
+	recheckReached, releaseRecheck := pauseOnce(t, &spendBeforeRecheck)
+
+	var spends []*utxo.Spend
+
+	spendDone := make(chan error, 1)
+
+	go func() {
+		var err error
+		spends, err = store.Spend(ctx, freezeRaceSpendTx(t), freezeRaceSpendHeight+1)
+		spendDone <- err
+	}()
+
+	waitReached(t, writeReached, spendDone, "spend")
+	require.NoError(t, store.FreezeUTXOs(ctx, outpoint, store.settings))
+	releaseWrite()
+
+	waitReached(t, recheckReached, spendDone, "spend re-check")
+
+	_, err := store.db.ExecContext(ctx, `
+		DELETE FROM outputs
+		WHERE idx = 0 AND transaction_id = (SELECT id FROM transactions WHERE hash = $1)`, hash[:])
+	require.NoError(t, err)
+
+	releaseRecheck()
+
+	require.Error(t, <-spendDone)
+	require.Len(t, spends, 1)
+	require.ErrorIs(t, spends[0].Err, errors.ErrTxNotFound)
 }

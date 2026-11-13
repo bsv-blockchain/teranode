@@ -3176,7 +3176,9 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		// Mark idempotent duplicate batch entries as successful (same UTXO, same spending data).
 		// Double-spend duplicates (different spending data) are already in validationErrors — skip them.
 		// A duplicate whose first entry was refused (frozen, or spent by another tx) gets
-		// the same error, so it is not reported as a spend that never happened.
+		// the same kind of error, so it is not reported as a spend that never happened.
+		// It gets its own error value: Spend() joins a tx's input errors in place, so a
+		// shared value would chain two callers' errors together.
 		for _, u := range toUpdate {
 			key := utxoKey{u.transactionID, u.vout}
 			if entry, ok := seenKeys[key]; ok && entry.batchIdx != u.batchIdx {
@@ -3185,8 +3187,13 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				}
 				if updatedSet[entry.batchIdx] {
 					updatedSet[u.batchIdx] = true
-				} else if entryErr, refused := validationErrors[entry.batchIdx]; refused {
-					validationErrors[u.batchIdx] = entryErr
+				} else if _, refused := validationErrors[entry.batchIdx]; refused {
+					spend := batch[u.batchIdx].spend
+					if frozenSet[entry.batchIdx] {
+						validationErrors[u.batchIdx] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
+					} else {
+						validationErrors[u.batchIdx] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
+					}
 				}
 			}
 		}
@@ -3464,6 +3471,11 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 			)
 
 			if err = txn.QueryRowContext(ctx, q3, transactionID, spend.Vout).Scan(&currentSpendingData, &currentFrozen); err != nil {
+				// The output was deleted after q1 read it: fail this item only, as q1 does.
+				if errors.Is(err, sql.ErrNoRows) {
+					validationErrors[i] = errors.NewTxNotFoundError(errOutputNotFound, spend.TxID, spend.Vout)
+					continue
+				}
 				if isDeadlock(err) {
 					return true // retryable
 				}
