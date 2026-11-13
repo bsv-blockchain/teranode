@@ -4286,16 +4286,16 @@ func buildBlockWithReservedID(ctx context.Context, t *testing.T, tSettings *sett
 		Satoshis:      coinbaseTx.Outputs[0].Satoshis,
 	})
 	_ = childTx.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000)
-	_ = childTx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
+	_ = childTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 
 	// Store both in txMetaStore
-	_, _, err := txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err := txMetaStore.SpendAndCreate(ctx, coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 0,
 		SubtreeIdx:  0,
 	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	_, _, err = txMetaStore.SpendAndCreate(context.Background(), childTx, 0, utxostore.WithCreateOnly())
+	_, _, err = txMetaStore.SpendAndCreate(ctx, childTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Build subtree with coinbase and normalTx
@@ -4313,11 +4313,11 @@ func buildBlockWithReservedID(ctx context.Context, t *testing.T, tSettings *sett
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
+	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
