@@ -637,7 +637,9 @@ func TestSubmitMiningSolution_NTimeFloor(t *testing.T) {
 		require.Equal(t, 0, logger.countMatching("this node served"), "the candidate this node served was at the floor; only the miner's replacement was below it")
 	})
 
-	t.Run("enforces nothing when no floor is known for the parent", func(t *testing.T) {
+	// The memo guard has nothing to enforce here. The check after the proof of work fetches the
+	// median instead; TestSubmitMiningSolution_MedianTimePast covers it.
+	t.Run("the memo guard enforces nothing when no floor is known for the parent", func(t *testing.T) {
 		s, idBytes := setup(t)
 		s.blockAssembler.mtpFloorMemo[0].Store(nil)
 
