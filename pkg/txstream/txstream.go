@@ -75,8 +75,12 @@ type Reader struct {
 	sum     [sha256.Size]byte
 	hashing bool
 	// size counts the bytes hashed, which is the transaction's standard size.
-	size    int64
-	out     io.Writer
+	size int64
+	out  io.Writer
+	// werr is the output writer's first failure. It is kept because io.ReadFull drops an error
+	// that comes with the read that filled its buffer, and every later Read returns it without
+	// touching the source, so a failed write ends the read rather than waiting on more input.
+	werr    error
 	scratch [32 * 1024]byte
 }
 
@@ -93,6 +97,10 @@ func NewReader(r io.Reader) *Reader {
 // Read passes bytes from the source to the hasher while hashing is on, and to the output writer
 // while there is one.
 func (t *Reader) Read(p []byte) (int, error) {
+	if t.werr != nil {
+		return 0, t.werr
+	}
+
 	n, err := t.src.Read(p)
 	if n > 0 {
 		if t.hashing {
@@ -102,6 +110,8 @@ func (t *Reader) Read(p []byte) (int, error) {
 
 		if t.out != nil {
 			if _, werr := t.out.Write(p[:n]); werr != nil {
+				t.werr = werr
+
 				return n, werr
 			}
 		}
@@ -201,6 +211,11 @@ func (t *Reader) Next(opts Options) (*bt.Tx, *chainhash.Hash, int64, error) {
 	}
 
 	tx.LockTime = binary.LittleEndian.Uint32(lockTime[:])
+
+	// The lock time's read can fill its buffer and fail its write in one call.
+	if t.werr != nil {
+		return nil, nil, 0, t.werr
+	}
 
 	first := t.h.Sum(t.sum[:0])
 	id := chainhash.Hash(sha256.Sum256(first))

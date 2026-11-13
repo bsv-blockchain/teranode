@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -224,4 +225,66 @@ func TestAScriptSpanningManyChunksReadsWhole(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, *tx.TxIDChainHash(), *id)
 	require.Equal(t, tx.Outputs[1].LockingScript, got.Outputs[1].LockingScript)
+}
+
+// pieceReader hands out at most piece bytes per Read and counts its calls.
+type pieceReader struct {
+	r     io.Reader
+	piece int
+	calls int
+}
+
+func (p *pieceReader) Read(b []byte) (int, error) {
+	p.calls++
+
+	return p.r.Read(b[:min(len(b), p.piece)])
+}
+
+// failingWriter fails every write larger than the reader's 4 KiB buffer, so only a read straight
+// from the source into a prefix chunk fails, and remembers how many source reads had happened at
+// its first failure.
+type failingWriter struct {
+	src      *pieceReader
+	failedAt int
+}
+
+var errSinkFull = errors.NewStorageError("sink full")
+
+func (w *failingWriter) Write(p []byte) (int, error) {
+	if len(p) <= 4096 {
+		return len(p), nil
+	}
+
+	if w.failedAt == 0 {
+		w.failedAt = w.src.calls
+	}
+
+	return 0, errSinkFull
+}
+
+// A failing output writer stops the read at once, even when the read that failed filled its
+// buffer, which io.ReadFull would otherwise take as success. The script is large enough to be read
+// in prefix chunks, and the source hands out exactly one chunk per read, so every chunk read
+// completes.
+func TestAFailingWriterStopsTheReadBeforeAnotherSourceRead(t *testing.T) {
+	tx := bt.NewTx()
+	tx.Version = 1
+
+	prev := chainhash.Hash{9}
+	in := &bt.Input{SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{0x51})}
+	require.NoError(t, in.PreviousTxIDAdd(&prev))
+	tx.Inputs = append(tx.Inputs, in)
+
+	script := make([]byte, 5*scriptChunk)
+	script[0] = 0x76 // not a data script, so it is read and kept
+	tx.Outputs = append(tx.Outputs, &bt.Output{Satoshis: 1, LockingScript: bscript.NewFromBytes(script)})
+
+	src := &pieceReader{r: bytes.NewReader(tx.Bytes()), piece: scriptChunk}
+	sink := &failingWriter{src: src}
+
+	_, _, _, err := NewReader(src).Next(Options{BeforeOutputs: func(*bt.Tx) (io.Writer, error) { return sink, nil }})
+
+	require.ErrorIs(t, err, errSinkFull)
+	require.NotZero(t, sink.failedAt)
+	require.Equal(t, sink.failedAt, src.calls, "the source was read again after the writer failed")
 }
