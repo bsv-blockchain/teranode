@@ -4126,11 +4126,12 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 	//       by the same CheckBlockIsAncestorOfBlock RPC anchored at the
 	//       block's parent.
 	//
-	// When the block's parent is on the main chain and no on_main_chain
-	// rebuild holds the store's guard, the store answers a main-chain parent
-	// block with one indexed probe at any depth. A parent block on a fork, a
-	// lookup during a rebuild, and every false answer take a recursive walk
-	// down parent links that costs one row per block below the anchor.
+	// When no on_main_chain rebuild holds the store's guard, the store
+	// answers a yes with one indexed probe at any depth. For a block whose
+	// parent is on a fork it first walks from the parent down to the fork
+	// point, one row per fork block. A lookup during a rebuild and every
+	// false answer take a recursive walk down parent links that costs one
+	// row per block below the anchor.
 	//
 	// The prefetch saves the round trip: most parents are recent, and a hit in
 	// the 10,000-ID set costs no RPC. The in-memory route was added to
