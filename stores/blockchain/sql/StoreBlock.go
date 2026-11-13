@@ -664,7 +664,10 @@ func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Blo
 		if err := checkBlockIDAboveParent(block, storeBlockOptions.ID, previousBlockID); err != nil {
 			// The reservation is stale. Drop it so the caller's next AssignBlockID
 			// takes a fresh id above the parent, rather than being refused with the
-			// same id until the age-based sweep removes it.
+			// same id until the age-based sweep removes it. A fallback that reuses
+			// the same *model.Block keeps its block.ID and is refused again; the
+			// fresh id comes on an attempt that decodes the block anew, such as the
+			// legacy park's retry.
 			s.dropBlockIDReservation(ctx, block.Hash(), storeBlockOptions.ID)
 
 			return 0, 0, nil, false, err

@@ -295,7 +295,10 @@ func hashString(b []byte) string {
 // calls it when it refuses a reserved id that is not above the parent's, so the
 // caller's next AssignBlockID takes a fresh id from the sequence, which is above
 // the parent. Without it every retry gets the same refused id until the age-based
-// sweep removes the row.
+// sweep removes the row. Only a caller that asks AssignBlockID again benefits:
+// block validation keeps block.ID on its *model.Block, so a fallback on the same
+// object resends the refused id, and the fresh one comes when the block is
+// decoded again.
 //
 // Transactions already stamped with the old id keep it, and that id ends with no
 // blocks row: the same outcome as a reservation the sweep removes. Another
