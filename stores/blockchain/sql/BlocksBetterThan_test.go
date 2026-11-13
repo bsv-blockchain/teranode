@@ -171,6 +171,60 @@ func TestBlocksBetterThan_TieKeepsFirstStored(t *testing.T) {
 	})
 }
 
+// TestBestTipLowWater_EqualWorkDropKeepsFirstStored: when the tip drops to equal-work siblings,
+// the mark takes the one stored first, and a mark already at a later-stored sibling is kept
+// because it sorts worse. C2 is stored before D2 but from a higher peer id, so a peer-id order
+// would pick D2.
+func TestBestTipLowWater_EqualWorkDropKeepsFirstStored(t *testing.T) {
+	forEachBestTipEngine(t, func(t *testing.T, s *SQL) {
+		ctx := t.Context()
+
+		a1 := createTestBlock(t, 901, s.chainParams.GenesisHash)
+		a2 := createTestBlock(t, 902, a1.Hash())
+		c2 := createTestBlock(t, 912, a1.Hash())
+		d2 := createTestBlock(t, 922, a1.Hash())
+
+		storeOn(t, s, a1, "b")
+		storeOn(t, s, a2, "b")
+		storeOn(t, s, c2, "c")
+		storeOn(t, s, d2, "a")
+		requireBest(t, s, a2)
+
+		// A2 goes; C2 and D2 tie on work and C2 was stored first.
+		_, err := s.InvalidateBlock(ctx, a2.Hash())
+		require.NoError(t, err)
+		requireBest(t, s, c2)
+
+		mark, _, ok := lowWater(t, s)
+		require.True(t, ok)
+		require.Equal(t, keyOf(t, s, c2.Hash()).ID, mark.Key.ID)
+		require.Equal(t, c2.Hash().String(), mark.Key.Hash.String())
+
+		// C2 goes too, so the mark moves down to D2.
+		_, err = s.InvalidateBlock(ctx, c2.Hash())
+		require.NoError(t, err)
+		requireBest(t, s, d2)
+
+		mark, _, ok = lowWater(t, s)
+		require.True(t, ok)
+		require.Equal(t, d2.Hash().String(), mark.Key.Hash.String())
+
+		// Back up to A2, then drop to C2 again: the mark at D2 has equal work and a higher id,
+		// so it sorts worse than C2 and is kept.
+		require.NoError(t, s.RevalidateBlock(ctx, c2.Hash()))
+		require.NoError(t, s.RevalidateBlock(ctx, a2.Hash()))
+		requireBest(t, s, a2)
+
+		_, err = s.InvalidateBlock(ctx, a2.Hash())
+		require.NoError(t, err)
+		requireBest(t, s, c2)
+
+		mark, _, ok = lowWater(t, s)
+		require.True(t, ok)
+		require.Equal(t, d2.Hash().String(), mark.Key.Hash.String(), "the mark keeps the later-stored sibling, which sorts worse")
+	})
+}
+
 // TestBlocksBetterThan_FromIsInclusive: with a from key below after, the read starts at from
 // itself; with one above, it adds nothing.
 func TestBlocksBetterThan_FromIsInclusive(t *testing.T) {

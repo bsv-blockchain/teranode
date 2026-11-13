@@ -203,5 +203,67 @@ func TestSqlGetChainTip(t *testing.T) {
 
 		require.True(t, getOnMainChain(t, s, blockFromLaterPeer.Header.Hash().CloneBytes()))
 		require.False(t, getOnMainChain(t, s, blockFromEarlierPeer.Header.Hash().CloneBytes()))
+
+		ctx := context.Background()
+		wantHash := blockFromLaterPeer.Header.Hash().String()
+
+		// getBestBlockID backs StoreBlock's before-and-after best check.
+		_, bestHash, err := s.getBestBlockID(ctx)
+		require.NoError(t, err)
+		require.Equal(t, wantHash, bestHash.String())
+
+		tips, err := s.GetChainTips(ctx)
+		require.NoError(t, err)
+
+		active := ""
+
+		for _, tip := range tips {
+			if tip.Status == "active" {
+				active = tip.Hash
+			}
+		}
+
+		require.Equal(t, wantHash, active)
+
+		// While on_main_chain is being rebuilt, the height reads walk back from the best tip.
+		s.mainChainRebuilding.Add(1)
+
+		headers, _, err := s.GetBlockHeadersByHeight(ctx, 2, 2)
+		require.NoError(t, err)
+		require.Len(t, headers, 1)
+		require.Equal(t, wantHash, headers[0].Hash().String())
+
+		blocks, err := s.GetBlocksByHeight(ctx, 2, 2)
+		require.NoError(t, err)
+		require.Len(t, blocks, 1)
+		require.Equal(t, wantHash, blocks[0].Header.Hash().String())
+
+		for _, fromHeight := range []uint32{0, 2} {
+			last, err := s.GetLastNBlocks(ctx, 1, false, fromHeight)
+			require.NoError(t, err)
+			require.Len(t, last, 1)
+
+			header, err := model.NewBlockHeaderFromBytes(last[0].BlockHeader)
+			require.NoError(t, err)
+			require.Equal(t, wantHash, header.Hash().String(), "GetLastNBlocks from height %d", fromHeight)
+		}
+
+		containing, err := s.FindBlocksContainingSubtree(ctx, subtree, 0)
+		require.NoError(t, err)
+
+		containingHashes := make([]string, 0, len(containing))
+		for _, b := range containing {
+			containingHashes = append(containingHashes, b.Header.Hash().String())
+		}
+
+		require.Contains(t, containingHashes, wantHash)
+		require.NotContains(t, containingHashes, blockFromEarlierPeer.Header.Hash().String())
+
+		s.mainChainRebuilding.Add(-1)
+
+		// The full rebuild of on_main_chain picks the same tip.
+		require.NoError(t, s.rebuildOnMainChainFlagTx(ctx, true, 0))
+		require.True(t, getOnMainChain(t, s, blockFromLaterPeer.Header.Hash().CloneBytes()))
+		require.False(t, getOnMainChain(t, s, blockFromEarlierPeer.Header.Hash().CloneBytes()))
 	})
 }

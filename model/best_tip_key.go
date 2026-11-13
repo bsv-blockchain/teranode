@@ -16,12 +16,13 @@ const BestTipLowWaterStateKey = "BestTipLowWater"
 const bestTipKeyVersion = 1
 
 // BestTipKey is a block's place in the order the blockchain store picks its best tip by: most
-// chain work first, then the lowest block id. Above the checkpoints a block's id comes from the
-// store's sequence when its row is written, so between blocks of equal work the one this node
-// stored first wins, as SV Node keeps the block it received first. The order is total, and
-// without an invalidation the best tip only ever moves to a block that sorts better, so a reader
-// that keeps the key of the last block it handled finds every later best tip among the valid
-// blocks that sort better than that key.
+// chain work first, then the lowest block id. Above the checkpoints a block's id is taken when
+// StoreBlock writes its row, after validation, so between blocks of equal work the one this node
+// stored first wins. That is close to SV Node's rule of keeping the block it received first, but
+// not the same: a sibling that arrives later and validates faster can take the lower id. The
+// order is total, and without an invalidation the best tip only ever moves to a block that sorts
+// better, so a reader that keeps the key of the last block it handled finds every later best tip
+// among the valid blocks that sort better than that key.
 //
 // ChainWork is the stored cumulative work, 32 bytes big-endian, so comparing it bytewise
 // compares the work. Hash identifies the block and plays no part in the order.
