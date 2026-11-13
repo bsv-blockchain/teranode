@@ -2632,7 +2632,7 @@ func (s *Store) retrySpendBatchContext(ctx context.Context, batch []*batchSpend,
 		}
 
 		backoff := time.Duration(100<<attempt) * time.Millisecond
-		s.logger.Warnf("[Spend] deadlock detected (attempt %d/%d), retrying batch of %d items in %v", attempt+1, maxRetries+1, len(batch), backoff)
+		s.logger.Warnf("[Spend] deadlock or lifted freeze detected (attempt %d/%d), retrying batch of %d items in %v", attempt+1, maxRetries+1, len(batch), backoff)
 
 		select {
 		case <-ctx.Done():
@@ -3078,10 +3078,18 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		// The same re-check finds rows a freeze committed after the bulk
 		// SELECT: the UPDATE's frozen guard skipped them, and they are still
 		// unspent and now frozen. Those get UtxoFrozenError, not UtxoSpentError.
+		//
+		// A row that is unspent and unfrozen at the re-check had a freeze that made
+		// the write miss and was lifted before the re-check. The coin is spendable
+		// again, so the batch is retried rather than reporting it spent.
 		frozenSet := make(map[int]bool)
 		if len(missedIdxs) > 0 {
+			if spendBeforeRecheck != nil {
+				spendBeforeRecheck()
+			}
+
 			var sb strings.Builder
-			sb.WriteString(`SELECT v.batch_idx, o.spending_data = v.spending_data, o.spending_data IS NULL AND o.frozen FROM (VALUES `)
+			sb.WriteString(`SELECT v.batch_idx, o.spending_data = v.spending_data, o.frozen FROM (VALUES `)
 			args := make([]interface{}, 0, len(missedIdxs)*4)
 			pidx := 1
 			for i, bIdx := range missedIdxs {
@@ -3096,7 +3104,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			}
 			sb.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
 			JOIN outputs o ON o.transaction_id = v.transaction_id AND o.idx = v.idx
-			WHERE o.spending_data = v.spending_data OR (o.spending_data IS NULL AND o.frozen)`)
+			WHERE o.spending_data = v.spending_data OR o.spending_data IS NULL`)
 
 			iRows, err := txn.QueryContext(ctx, sb.String(), args...)
 			if err != nil {
@@ -3124,9 +3132,13 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 					}
 					return false
 				}
-				if nowFrozen {
-					frozenSet[bIdx] = true
-					continue
+				if !idem.Valid { // spending_data IS NULL: unspent now
+					if nowFrozen {
+						frozenSet[bIdx] = true
+						continue
+					}
+					iRows.Close()
+					return true
 				}
 				if !idem.Bool {
 					continue
@@ -3442,6 +3454,10 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 			}
 			// Frozen or spent by a different tx between SELECT and UPDATE. Read the
 			// row again, in a fresh statement snapshot, to say which.
+			if spendBeforeRecheck != nil {
+				spendBeforeRecheck()
+			}
+
 			var (
 				currentSpendingData []byte
 				currentFrozen       bool
@@ -3456,9 +3472,16 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 				continue
 			}
 
-			if currentFrozen && len(currentSpendingData) == 0 {
-				validationErrors[i] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
-				continue
+			if len(currentSpendingData) == 0 {
+				if currentFrozen {
+					validationErrors[i] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
+					continue
+				}
+
+				// A freeze made the write miss and was lifted before this read, so the
+				// coin is unspent and spendable again. Reporting it spent would mark the
+				// spending tx as conflicting, so retry the batch instead.
+				return true
 			}
 
 			// spendingDataBytes was NULL from SELECT (WHERE spending_data IS NULL),
@@ -3571,6 +3594,11 @@ var setDAHBeforeWrite func()
 // checked and before the spend is written. It is nil outside tests, which use it to
 // commit a freeze inside that gap.
 var spendBeforeWrite func()
+
+// spendBeforeRecheck runs in both spend paths after a guarded write missed a row and
+// before the row is read again. It is nil outside tests, which use it to undo a freeze
+// inside that gap.
+var spendBeforeRecheck func()
 
 // setDAHAfterLock runs in setDAH right after the Postgres row lock is taken and before
 // the eligibility read. It is nil outside tests, which use it to observe lock order and

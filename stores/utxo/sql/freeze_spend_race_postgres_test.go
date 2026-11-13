@@ -215,6 +215,86 @@ func TestFreezeReportsSpendCommittedBeforeItsWrite_Postgres(t *testing.T) {
 	require.NotNil(t, spendingData)
 }
 
+// A freeze that makes the spend's write miss and is lifted before the spend reads the
+// row again leaves the coin unspent and spendable. The spend must retry and succeed,
+// not report the coin spent: a false spent error marks the spending tx as conflicting.
+func TestSpendRetriesWhenFreezeLiftedBeforeRecheck_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	for _, path := range freezeRacePaths {
+		t.Run(path.name, func(t *testing.T) {
+			store, ctx := setupFreezeRaceStore(t, path)
+			outpoint := freezeRaceOutpoint(t)
+
+			writeReached, releaseWrite := pauseOnce(t, &spendBeforeWrite)
+			recheckReached, releaseRecheck := pauseOnce(t, &spendBeforeRecheck)
+
+			var spends []*utxo.Spend
+
+			spendDone := make(chan error, 1)
+
+			go func() {
+				var err error
+				spends, err = store.Spend(ctx, freezeRaceSpendTx(t), freezeRaceSpendHeight+1)
+				spendDone <- err
+			}()
+
+			waitReached(t, writeReached, spendDone, "spend")
+			require.NoError(t, store.FreezeUTXOs(ctx, outpoint, store.settings))
+			releaseWrite()
+
+			waitReached(t, recheckReached, spendDone, "spend re-check")
+			require.NoError(t, store.UnFreezeUTXOs(ctx, outpoint, store.settings))
+			releaseRecheck()
+
+			require.NoError(t, <-spendDone, "the coin is unspent and unfrozen, so the spend must succeed")
+			require.Len(t, spends, 1)
+			require.NoError(t, spends[0].Err)
+
+			frozen, spendingData := readFreezeRaceRow(ctx, t, store)
+			require.False(t, frozen)
+			require.NotNil(t, spendingData)
+		})
+	}
+}
+
+// A spend that makes the freeze's write miss and is undone by an unspend before the
+// freeze reads the row again leaves the coin unspent. The freeze must try again and
+// freeze it; before, it decoded the absent spending data and failed.
+func TestFreezeRetriesWhenSpendUndoneBeforeRecheck_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, ctx := setupFreezeRaceStore(t, freezeRacePaths[0])
+	outpoint := freezeRaceOutpoint(t)
+
+	writeReached, releaseWrite := pauseOnce(t, &freezeBeforeWrite)
+	recheckReached, releaseRecheck := pauseOnce(t, &freezeBeforeRecheck)
+
+	freezeDone := make(chan error, 1)
+
+	go func() { freezeDone <- store.FreezeUTXOs(ctx, outpoint, store.settings) }()
+
+	waitReached(t, writeReached, freezeDone, "freeze")
+
+	spends, err := store.Spend(ctx, freezeRaceSpendTx(t), freezeRaceSpendHeight+1)
+	require.NoError(t, err)
+	releaseWrite()
+
+	waitReached(t, recheckReached, freezeDone, "freeze re-check")
+	require.NoError(t, store.Unspend(ctx, spends))
+	releaseRecheck()
+
+	require.NoError(t, <-freezeDone, "the coin is unspent again, so the freeze must apply")
+
+	frozen, spendingData := readFreezeRaceRow(ctx, t, store)
+	require.True(t, frozen)
+	require.Nil(t, spendingData)
+}
+
 // Freeze and spend released together, many times over, never both win and never leave
 // the coin frozen and spent.
 func TestFreezeAndSpendNeverBothWin_Postgres(t *testing.T) {
