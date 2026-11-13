@@ -1054,7 +1054,21 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 // other table, so createPostgresSchema runs it ahead of the fast-path probe: a
 // database from before lane_handout gains it without taking the full DDL path,
 // whose peer_id ALTER takes ACCESS EXCLUSIVE on blocks.
+//
+// It reads the catalog first and issues no DDL when the table is there, because
+// CREATE TABLE IF NOT EXISTS checks the CREATE privilege on the schema before it
+// checks for the table: a node role without that privilege would otherwise fail
+// every start, where a current schema on main runs no DDL at all.
 func createPostgresLaneHandoutTable(db *usql.DB) error {
+	var exists bool
+	if err := db.QueryRow(`SELECT to_regclass('lane_handout') IS NOT NULL`).Scan(&exists); err != nil {
+		return errors.NewStorageError("could not check for the lane_handout table", err)
+	}
+
+	if exists {
+		return nil
+	}
+
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS lane_handout (
 			lane       SMALLINT    NOT NULL,
