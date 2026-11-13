@@ -299,6 +299,12 @@ func (t *Reader) readOutput(skipData bool) (*bt.Output, error) {
 			return nil, unexpected(err)
 		}
 
+		// The peek reads the source directly, past Read's check, and the length's own read may
+		// have filled its buffer and failed its write in one call.
+		if t.werr != nil {
+			return nil, t.werr
+		}
+
 		if l >= 2 {
 			if head, err := t.src.Peek(2); err == nil && head[0] == bscript.OpFALSE && head[1] == bscript.OpRETURN {
 				if err = t.pass(uint64(l)); err != nil {

@@ -314,3 +314,57 @@ func TestATrustedSourceAllocatesALargeScriptOnce(t *testing.T) {
 	require.Less(t, allocated(Options{LengthsTrusted: true}), uint64(size)*9/8, "a trusted script is allocated once")
 	require.GreaterOrEqual(t, allocated(Options{}), uint64(size)*5/4, "an untrusted script proves a quarter first")
 }
+
+// nthWriteFails fails its nth write and every one after it, and remembers how many source reads
+// had happened at its first failure.
+type nthWriteFails struct {
+	src      *pieceReader
+	n        int
+	writes   int
+	failedAt int
+}
+
+func (w *nthWriteFails) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes < w.n {
+		return len(p), nil
+	}
+
+	if w.failedAt == 0 {
+		w.failedAt = w.src.calls
+	}
+
+	return 0, errSinkFull
+}
+
+// The peek that spots an OP_FALSE OP_RETURN script reads the source directly, so it must not run
+// once the writer has failed. The writer fails on the one-byte script length, a read io.ReadFull
+// completes and so swallows the failure, and the source holds nothing more until it is read again.
+func TestAFailingWriterStopsTheReadBeforeTheDataScriptPeek(t *testing.T) {
+	tx := bt.NewTx()
+	tx.Version = 1
+
+	prev := chainhash.Hash{10}
+	in := &bt.Input{SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{0x51})}
+	require.NoError(t, in.PreviousTxIDAdd(&prev))
+	tx.Inputs = append(tx.Inputs, in)
+
+	data := []byte{bscript.OpFALSE, bscript.OpRETURN, 0x01}
+	tx.Outputs = append(tx.Outputs, &bt.Output{LockingScript: bscript.NewFromBytes(data)})
+
+	raw := tx.Bytes()
+	throughLength := len(raw) - 4 - len(data) // everything up to and including the script length
+
+	src := &pieceReader{r: bytes.NewReader(raw), piece: throughLength}
+	// The writes are the output count, the satoshis and then the script length.
+	sink := &nthWriteFails{src: src, n: 3}
+
+	_, _, _, err := NewReader(src).Next(Options{
+		BeforeOutputs:   func(*bt.Tx) (io.Writer, error) { return sink, nil },
+		SkipDataScripts: true,
+	})
+
+	require.ErrorIs(t, err, errSinkFull)
+	require.NotZero(t, sink.failedAt)
+	require.Equal(t, sink.failedAt, src.calls, "the source was read again after the writer failed")
+}
