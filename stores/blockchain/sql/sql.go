@@ -537,6 +537,12 @@ func createPostgresSchema(logger ulogger.Logger, db *usql.DB, withIndexes bool) 
 		// blocks, so it cannot be blocked by the rebuild UPDATE. If
 		// everything we expect is already in place we return early and no
 		// blocks-table lock is ever requested.
+		// lane_handout is created here rather than listed in the probe, so a
+		// database from before it does not fall through to the full DDL.
+		if err := createPostgresLaneHandoutTable(db); err != nil {
+			return err
+		}
+
 		current, err := isBlockchainSchemaCurrent(db, withIndexes)
 		if err != nil {
 			logger.Warnf("[blockchain schema] current-schema probe failed, will run full DDL: %v", err)
@@ -555,12 +561,11 @@ func createPostgresSchema(logger ulogger.Logger, db *usql.DB, withIndexes bool) 
 }
 
 // blockchainSchemaExpectedTables lists tables the DDL guarantees, so the
-// fast-path probe notices a database that predates one of them. Add every new
-// table here, or an existing database never gets it.
+// fast-path probe notices a database that predates one of them. A new table
+// goes here, or is created before the probe as lane_handout is.
 var blockchainSchemaExpectedTables = []string{
 	"blocks",
 	"block_id_reservations",
-	"lane_handout",
 }
 
 // blockchainSchemaExpectedColumns is the list of columns createPostgresSchemaUnlocked
@@ -652,8 +657,8 @@ func dropRetiredIndexes(db *usql.DB) error {
 // Returns (false, nil) if anything is missing. Returns (false, err) only for
 // transport errors — a missing column / table / index is not an error.
 func isBlockchainSchemaCurrent(db *usql.DB, withIndexes bool) (bool, error) {
-	// Every table in blockchainSchemaExpectedTables (blocks, block_id_reservations
-	// and lane_handout) must be present. A deployment that predates one of them
+	// Every table in blockchainSchemaExpectedTables (blocks and
+	// block_id_reservations) must be present. A deployment that predates one of them
 	// must re-run the DDL (CREATE TABLE IF NOT EXISTS) to gain it, so a missing
 	// table means "not current".
 	for _, table := range blockchainSchemaExpectedTables {
@@ -1037,6 +1042,19 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 		return errors.NewStorageError("could not create idx_scheduled_blob_deletions_height index", err)
 	}
 
+	if err := createPostgresLaneHandoutTable(db); err != nil {
+		_ = db.Close()
+		return err
+	}
+
+	return nil
+}
+
+// createPostgresLaneHandoutTable creates the lane_handout table. It touches no
+// other table, so createPostgresSchema runs it ahead of the fast-path probe: a
+// database from before lane_handout gains it without taking the full DDL path,
+// whose peer_id ALTER takes ACCESS EXCLUSIVE on blocks.
+func createPostgresLaneHandoutTable(db *usql.DB) error {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS lane_handout (
 			lane       SMALLINT    NOT NULL,
@@ -1048,7 +1066,6 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 			PRIMARY KEY (lane, first)
 		);
 	`); err != nil {
-		_ = db.Close()
 		return errors.NewStorageError("could not create lane_handout table", err)
 	}
 

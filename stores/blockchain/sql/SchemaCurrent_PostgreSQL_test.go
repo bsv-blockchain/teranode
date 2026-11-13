@@ -308,7 +308,7 @@ func TestCreatePostgresSchema_RetiredIndexDropFails(t *testing.T) {
 	require.Contains(t, err.Error(), "could not drop idx_inserted_at index")
 }
 
-func TestIsBlockchainSchemaCurrent_MissingLaneHandoutTable(t *testing.T) {
+func TestCreatePostgresSchema_MissingLaneHandoutTableTakesFastPath(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -320,20 +320,20 @@ func TestIsBlockchainSchemaCurrent_MissingLaneHandoutTable(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close(context.Background()) })
 
-	// A database created before lane_handout existed must not take the DDL
-	// fast path, or it would never gain the table.
+	// A database created before lane_handout existed must still take the fast
+	// path, so its first start does not run the peer_id ALTER on blocks.
 	_, err = db.Exec(`DROP TABLE lane_handout`)
 	require.NoError(t, err)
 
 	current, err := isBlockchainSchemaCurrent(db, true)
 	require.NoError(t, err)
-	require.False(t, current, "schema must not be current when lane_handout is missing")
+	require.True(t, current, "a missing lane_handout must not send the schema down the full DDL path")
 
-	s2, err := New(ulogger.TestLogger{}, dbURL, tSettings)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s2.Close(context.Background()) })
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true))
 
-	current, err = isBlockchainSchemaCurrent(db, true)
-	require.NoError(t, err)
-	require.True(t, current, "reopening the store must re-create lane_handout")
+	var exists bool
+	require.NoError(t, db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'lane_handout')`,
+	).Scan(&exists))
+	require.True(t, exists, "createPostgresSchema must create lane_handout before the probe")
 }
