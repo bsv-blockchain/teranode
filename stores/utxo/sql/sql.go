@@ -617,10 +617,44 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 	}
 
 	if err = txn.Commit(); err != nil {
+		if s.engine == string(util.Postgres) && pgCreateMayHaveCommitted(err) {
+			return nil, utxo.MarkCreateOutcomeUnknown(errors.NewStorageError("failed to commit the create", err))
+		}
+
 		return nil, err
 	}
 
 	return txMeta, nil
+}
+
+// pgCreateMayHaveCommitted reports whether a Postgres create write that failed
+// with cause may still have committed. A pgx batch runs as one implicit
+// transaction, and only br.Close, reading the batch to its end, confirms the
+// commit, so a create that reported its row inserted is not known committed
+// before then. Two
+// failures are certain: an error the server reported, which rolls the
+// transaction back, and one pgconn says happened before anything was sent. Any
+// other failure, a dropped connection or a lost reply, can come after the
+// commit. utxo.SequentialSpendAndCreate unspends the inputs of a create that
+// failed for certain, and doing that for a create that committed leaves a
+// stored transaction with live inputs that nothing heals.
+func pgCreateMayHaveCommitted(cause error) bool {
+	var pgErr *pgconn.PgError
+
+	return !errors.As(cause, &pgErr) && !pgconn.SafeToRetry(cause)
+}
+
+// pgCreateError wraps cause, the failure of a batched Postgres create, as a
+// storage error, marked outcome-unknown when pgCreateMayHaveCommitted says the
+// create may have committed, so the spends stay, as for a context error, until
+// a repeat of the write finds the record or creates it.
+func pgCreateError(msg string, cause error) error {
+	err := errors.NewStorageError(msg, cause)
+	if pgCreateMayHaveCommitted(cause) {
+		return utxo.MarkCreateOutcomeUnknown(err)
+	}
+
+	return err
 }
 
 // unspendableMinedTxDAH returns the delete_at_height to assign at creation time
@@ -863,12 +897,20 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 		if execErr != nil {
 			return execErr
 		}
-		defer rows.Close()
-		inserted = rows.Next() // true if new_tx returned a row (insert succeeded)
+		inserted = rows.Next() // true if new_tx returned a row
+
+		// The row arrives before the commit: the statement commits after
+		// sending its rows, and only the reply's end confirms it, so the
+		// connection can drop between the row and the commit. Close reads the
+		// reply to its end and records that error, so Err is read after Close.
+		rows.Close()
+
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, errors.NewStorageError("Failed to create UTXO", err)
+		// The statement auto-commits, so a connection lost after it was sent
+		// can follow the commit.
+		return nil, pgCreateError("Failed to create UTXO", err)
 	}
 	if !inserted {
 		return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", isCoinbase)
@@ -1177,9 +1219,9 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 		br := pgxConn.SendBatch(s.ctx, pgxBatch)
 
 		// Read results — collect but don't send to callers yet.
-		// We must call br.Close() before signalling callers, because
-		// pipelined auto-committed statements may not be fully visible
-		// to other connections until the batch reader is closed.
+		// We must call br.Close() before signalling callers: the batch
+		// runs as one implicit transaction, and only br.Close(), reading
+		// the batch to its end, confirms that the transaction committed.
 		type batchResult struct {
 			idx      int
 			result   batchCreateResult
@@ -1200,7 +1242,7 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 			}
 			if queryErr != nil {
 				results = append(results, batchResult{idx: idx, result: batchCreateResult{
-					Err: errors.NewStorageError("Failed to create UTXO", queryErr),
+					Err: pgCreateError("Failed to create UTXO", queryErr),
 				}, logError: true})
 			} else if !inserted {
 				// ON CONFLICT (hash) DO NOTHING — new_tx returned 0 rows, tx already exists
@@ -1224,7 +1266,7 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 		for _, r := range results {
 			if closeErr != nil && r.result.Err == nil {
 				batch[r.idx].done <- batchCreateResult{
-					Err: errors.NewStorageError("batch close failed, results may not be visible", closeErr),
+					Err: pgCreateError("batch close failed, results may not be visible", closeErr),
 				}
 				continue
 			}
