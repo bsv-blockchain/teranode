@@ -199,10 +199,16 @@ func RemoveListener(settingsContext string, serviceName string, schema string) {
 // CleanupListeners closes and removes all listeners associated with a settings context.
 // Returns the keys of the listeners that were cleaned up.
 // Used during shutdown to ensure all listeners for a context are properly closed.
+//
+// It matches the context exactly, not as a substring: test daemons in one
+// process have contexts such as "x-testdaemon-1" and "x-testdaemon-10", and
+// stopping the first must not close the second's listeners.
 func CleanupListeners(settingsContext string) []string {
+	prefix := settingsContext + "!"
+
 	var keys []string
 	listeners.Range(func(k, v interface{}) bool {
-		if !strings.Contains(k.(string), settingsContext) {
+		if !strings.HasPrefix(k.(string), prefix) {
 			return true
 		}
 

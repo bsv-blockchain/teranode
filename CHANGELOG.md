@@ -31,6 +31,13 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
+  `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
+  now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,
+  `_fork_resolution_depth_blocks` and `_fork_orphaned_total`, which nothing ever updated, and
+  `teranode_blockchain_get_latest_block_header_from_block_locator` and
+  `_get_block_headers_from_oldest`, which recorded only calls to the two removed RPCs; drop any
+  panel or alert on them. (#2185)
 - **`blockassembly_storeTxInpointsForSubtreeMeta=false` now only skips the subtree meta files.**
   Block assembly keeps every unmined tx's parent links in memory in both modes. With it off, the
   restart reload and a block move-back now read each tx's inputs from the UTXO store (an external tx
@@ -90,6 +97,9 @@ read every section between yours and the target.
 - **PostgreSQL UTXO store: stop previous-release processes before upgrading.** One that starts while
   the new `px_transactions_conflicting` index builds blocks all `transactions` reads and writes until
   the build ends. Out-of-tree `utxo.Store` implementations add `ConflictingTxHashes`. (#2110)
+- **The Aerospike UTXO store adds a `<set>_conflictwal_startedAt` index, at least 16 MiB per node.**
+  Check `indexes-memory-budget` has room first, or the namespace can stop writes. Without
+  index-create rights, create it by hand ([conflict recovery](docs/topics/conflict-recovery.md)). (#2151)
 - **Script-number overflow is a consensus failure.** Earlier builds accept transactions and blocks
   this one rejects: upgrade all your nodes together. These transactions are no longer published to
   the `kafka_txPolicyRejectedConfig` topic. (#1911)

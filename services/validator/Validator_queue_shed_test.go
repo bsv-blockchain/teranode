@@ -2662,6 +2662,10 @@ func TestValidate_FailedRecoveryResetIsRetried(t *testing.T) {
 		"a failed reset puts the ids back and the check runs again")
 }
 
+// atLimitGate returns a gate that reports block assembly at its in-memory limit for the whole test.
+// Its clock is frozen and no background poller runs. On the real clock the reading would go stale
+// 25 ms after observe (5 polls of 5 ms), and a test that builds a server or a Kafka message first
+// can take longer than that under load, so the gate would stop shedding.
 func atLimitGate(t *testing.T) *heldLimitGate {
 	t.Helper()
 
@@ -2670,6 +2674,11 @@ func atLimitGate(t *testing.T) *heldLimitGate {
 
 	gate := newHeldLimitGate(t.Context(), testBackpressureConfig(), reader)
 	t.Cleanup(gate.stop)
+
+	gate.once.Do(func() {}) // the clock is frozen, so a poller has nothing to add
+
+	frozen := time.Now()
+	gate.now = func() time.Time { return frozen }
 
 	stats, err := reader.GetBlockAssemblyQueueStats(t.Context())
 	require.NoError(t, err)

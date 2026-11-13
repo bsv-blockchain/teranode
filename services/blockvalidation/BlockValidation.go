@@ -1916,30 +1916,32 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 //
 // Returns an error if validation fails or nil on success.
 
-// buildAddBlockOpts returns AddBlock options for the block.
+// buildAddBlockOpts returns AddBlock options for a block stored by full validation.
 //
-// When block.ID is pre-assigned (set by legacy netsync for blocks at/below the highest
-// hard-coded checkpoint), it uses that ID and sets mined_set=true upfront. This causes
-// the setMinedChan worker to skip setTxMinedStatus via its existing MinedSet guard
-// (BlockValidation.go setMinedChan worker, MinedSet check), eliminating redundant
-// SetMinedMulti calls for every UTXO.
+// A block can reach full validation already holding an id: catch-up's quick validation
+// reserves one through AssignBlockID before it can fail locally and fall through here, and a
+// ProcessBlock caller can send one. The block is stored under that id, because its
+// transactions may already carry it and the store refuses any other id for a reserved hash.
 //
-// Trade-off: skipping setTxMinedStatus also skips its post-storage double-spend cross-check
-// (UpdateTxMinedStatus → SetMinedMulti). This is safe for checkpoint-covered blocks because:
-//  1. block.Valid() performs pre-storage double-spend detection via checkParentExistsOnChain
-//     before AddBlock is called.
-//  2. Checkpoint-anchored chain linkage plus PoW makes the block canonical regardless of
-//     the FSM state that drove the catch-up.
+// mined_set is never set here. Full validation does not tag the block's transactions as
+// mined; the setMinedChan worker does, and it skips any block already marked mined_set.
+// Setting it up front left the transactions untagged and skipped the post-storage
+// double-spend cross-check in setTxMinedStatus. Quick validation sets mined_set itself in
+// commitBlock, after it has stamped every transaction. Tagging a transaction that quick
+// validation already stamped with the same id adds no second block entry in any UTXO store.
+// The rest of setMined (clearing the locked and unmined markers, stamping the
+// delete-at-height) runs as it does for any fully validated block, except on Aerospike with
+// aerospike_enable_setmined_filter_expressions on: that path filters out a record already
+// holding the id and only unlocks it.
 //
-// For any block arriving without a pre-assigned ID (block.ID == 0), this function returns nil
-// and AddBlock behaves exactly as before — setTxMinedStatus runs normally.
+// For a block with no id (block.ID == 0) this returns nil and the store assigns one.
 func (u *BlockValidation) buildAddBlockOpts(block *model.Block) []blockchainoptions.StoreBlockOption {
 	if block.ID == 0 {
 		return nil
 	}
+
 	return []blockchainoptions.StoreBlockOption{
 		blockchainoptions.WithID(uint64(block.ID)),
-		blockchainoptions.WithMinedSet(true),
 	}
 }
 
