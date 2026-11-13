@@ -204,51 +204,48 @@ func TestSqlGetChainTip(t *testing.T) {
 		require.True(t, getOnMainChain(t, s, blockFromLaterPeer.Header.Hash().CloneBytes()))
 		require.False(t, getOnMainChain(t, s, blockFromEarlierPeer.Header.Hash().CloneBytes()))
 
-		ctx := context.Background()
-		wantHash := blockFromLaterPeer.Header.Hash().String()
-
-		// getBestBlockID backs StoreBlock's before-and-after best check.
-		_, bestHash, err := s.getBestBlockID(ctx)
+		// StoreBlock and GetChainTips read the tip through getBestBlockID.
+		_, bestHash, err := s.getBestBlockID(context.Background())
 		require.NoError(t, err)
-		require.Equal(t, wantHash, bestHash.String())
+		require.Equal(t, blockFromLaterPeer.Header.Hash().String(), bestHash.String())
 
-		tips, err := s.GetChainTips(ctx)
+		tips, err := s.GetChainTips(context.Background())
 		require.NoError(t, err)
 
-		active := ""
-
-		for _, tip := range tips {
-			if tip.Status == "active" {
-				active = tip.Hash
-			}
+		tipStatus := make(map[string]string, len(tips))
+		for _, chainTip := range tips {
+			tipStatus[chainTip.Hash] = chainTip.Status
 		}
 
-		require.Equal(t, wantHash, active)
+		require.Equal(t, "active", tipStatus[blockFromLaterPeer.Header.Hash().String()])
+		require.NotEqual(t, "active", tipStatus[blockFromEarlierPeer.Header.Hash().String()])
 
-		// While on_main_chain is being rebuilt, the height reads walk back from the best tip.
+		// While on_main_chain is being rebuilt the by-height reads walk back from the best tip
+		// instead of trusting the flag, so they must pick the same tip.
 		s.mainChainRebuilding.Add(1)
 
-		headers, _, err := s.GetBlockHeadersByHeight(ctx, 2, 2)
+		headers, _, err := s.GetBlockHeadersByHeight(context.Background(), 2, 2)
 		require.NoError(t, err)
 		require.Len(t, headers, 1)
-		require.Equal(t, wantHash, headers[0].Hash().String())
+		require.Equal(t, blockFromLaterPeer.Header.Hash().String(), headers[0].Hash().String())
 
-		blocks, err := s.GetBlocksByHeight(ctx, 2, 2)
+		blocks, err := s.GetBlocksByHeight(context.Background(), 2, 2)
 		require.NoError(t, err)
 		require.Len(t, blocks, 1)
-		require.Equal(t, wantHash, blocks[0].Header.Hash().String())
+		require.Equal(t, blockFromLaterPeer.Header.Hash().String(), blocks[0].Header.Hash().String())
 
 		for _, fromHeight := range []uint32{0, 2} {
-			last, err := s.GetLastNBlocks(ctx, 1, false, fromHeight)
+			lastBlocks, err := s.GetLastNBlocks(context.Background(), 1, false, fromHeight)
 			require.NoError(t, err)
-			require.Len(t, last, 1)
+			require.Len(t, lastBlocks, 1)
 
-			header, err := model.NewBlockHeaderFromBytes(last[0].BlockHeader)
+			lastHeader, err := model.NewBlockHeaderFromBytes(lastBlocks[0].BlockHeader)
 			require.NoError(t, err)
-			require.Equal(t, wantHash, header.Hash().String(), "GetLastNBlocks from height %d", fromHeight)
+			require.Equal(t, blockFromLaterPeer.Header.Hash().String(), lastHeader.Hash().String(), "fromHeight %d", fromHeight)
 		}
 
-		containing, err := s.FindBlocksContainingSubtree(ctx, subtree, 0)
+		// Both siblings carry the same subtree; only the one on the best chain is returned.
+		containing, err := s.FindBlocksContainingSubtree(context.Background(), subtree, 0)
 		require.NoError(t, err)
 
 		containingHashes := make([]string, 0, len(containing))
@@ -256,13 +253,13 @@ func TestSqlGetChainTip(t *testing.T) {
 			containingHashes = append(containingHashes, b.Header.Hash().String())
 		}
 
-		require.Contains(t, containingHashes, wantHash)
+		require.Contains(t, containingHashes, blockFromLaterPeer.Header.Hash().String())
 		require.NotContains(t, containingHashes, blockFromEarlierPeer.Header.Hash().String())
 
 		s.mainChainRebuilding.Add(-1)
 
-		// The full rebuild of on_main_chain picks the same tip.
-		require.NoError(t, s.rebuildOnMainChainFlagTx(ctx, true, 0))
+		// Startup rebuilds on_main_chain from the best tip; the flags must not move.
+		require.NoError(t, s.rebuildOnMainChainFlagTx(context.Background(), true, 0))
 		require.True(t, getOnMainChain(t, s, blockFromLaterPeer.Header.Hash().CloneBytes()))
 		require.False(t, getOnMainChain(t, s, blockFromEarlierPeer.Header.Hash().CloneBytes()))
 	})
