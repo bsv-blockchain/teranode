@@ -14,7 +14,7 @@ import (
 
 // forEachBestTipEngine runs fn on a fresh SQLite store and, when a container is available, a
 // fresh PostgreSQL store. The best-tip order and the low-water mark are written in SQL both
-// engines must accept, and the peer id order is the database's own.
+// engines must accept.
 func forEachBestTipEngine(t *testing.T, fn func(t *testing.T, s *SQL)) {
 	t.Run("sqlite", func(t *testing.T) {
 		fn(t, setupTestStore(t))
@@ -145,9 +145,10 @@ func TestBlocksBetterThan_BrieflyBestInOrder(t *testing.T) {
 	})
 }
 
-// TestBlocksBetterThan_PeerTieSwitch: a sibling with the same work and a lower peer id becomes
-// the best tip even though it arrived later with a higher block id, and the read returns it.
-func TestBlocksBetterThan_PeerTieSwitch(t *testing.T) {
+// TestBlocksBetterThan_TieKeepsFirstStored: siblings with the same work sort by block id, so the
+// one stored first stays the best tip even when a later one comes from a lower peer id, and the
+// read returns the later siblings below it, worst first.
+func TestBlocksBetterThan_TieKeepsFirstStored(t *testing.T) {
 	forEachBestTipEngine(t, func(t *testing.T, s *SQL) {
 		a1 := createTestBlock(t, 301, s.chainParams.GenesisHash)
 		storeOn(t, s, a1, "b")
@@ -155,17 +156,18 @@ func TestBlocksBetterThan_PeerTieSwitch(t *testing.T) {
 		a2 := createTestBlock(t, 302, a1.Hash())
 		storeOn(t, s, a2, "b")
 
+		// C2 comes from a lower peer id, D2 from a higher one. Both were stored after A2.
 		c2 := createTestBlock(t, 402, a1.Hash())
 		storeOn(t, s, c2, "a")
-		requireBest(t, s, c2)
+		requireBest(t, s, a2)
 
-		// D2 has the higher peer id: it sorts below A2 and was never the best.
 		d2 := createTestBlock(t, 502, a1.Hash())
 		storeOn(t, s, d2, "c")
-		requireBest(t, s, c2)
+		requireBest(t, s, a2)
 
-		requireBetter(t, s, keyOf(t, s, a2.Hash()), nil, 0, 100, c2)
-		requireBetter(t, s, keyOf(t, s, a1.Hash()), nil, 0, 100, d2, a2, c2)
+		requireBetter(t, s, keyOf(t, s, a2.Hash()), nil, 0, 100)
+		requireBetter(t, s, keyOf(t, s, d2.Hash()), nil, 0, 100, c2, a2)
+		requireBetter(t, s, keyOf(t, s, a1.Hash()), nil, 0, 100, d2, c2, a2)
 	})
 }
 
@@ -332,9 +334,10 @@ func TestBestTipLowWater_UnreadableMarkResets(t *testing.T) {
 }
 
 // TestBlocksBetterThan_PostgresUsesTheBestTipIndex checks the plan of both read queries on
-// PostgreSQL. Left to itself on a tiny table the planner picks a bitmap scan of
-// idx_chain_work_valid bounded by chain_work, then sorts the few rows it finds; the test logs
-// that plan and checks the index bound. With sequential and bitmap scans disabled it must find
+// PostgreSQL. On a table this small the planner would rather scan the table, so with only
+// sequential scans disabled it picks a scan of idx_chain_work_id_valid bounded by chain_work and
+// sorts the few rows it finds; the test logs that plan and checks the index bound. With bitmap
+// scans disabled too it must find
 // the index scan read backwards with no sort, which shows the index serves both the bound and
 // the order, so the read stays a bounded index range on a table of a million blocks.
 func TestBlocksBetterThan_PostgresUsesTheBestTipIndex(t *testing.T) {
@@ -352,16 +355,16 @@ func TestBlocksBetterThan_PostgresUsesTheBestTipIndex(t *testing.T) {
 
 	key := keyOf(t, s, a1.Hash())
 
-	plan := func(forceIndex bool, query string, args ...any) string {
+	plan := func(noBitmap bool, query string, args ...any) string {
 		tx, err := s.db.BeginTx(t.Context(), nil)
 		require.NoError(t, err)
 
 		defer func() { _ = tx.Rollback() }()
 
-		if forceIndex {
-			_, err = tx.ExecContext(t.Context(), `SET LOCAL enable_seqscan = off`)
-			require.NoError(t, err)
+		_, err = tx.ExecContext(t.Context(), `SET LOCAL enable_seqscan = off`)
+		require.NoError(t, err)
 
+		if noBitmap {
 			_, err = tx.ExecContext(t.Context(), `SET LOCAL enable_bitmapscan = off`)
 			require.NoError(t, err)
 		}
@@ -384,8 +387,8 @@ func TestBlocksBetterThan_PostgresUsesTheBestTipIndex(t *testing.T) {
 		return strings.Join(lines, "\n")
 	}
 
-	afterArgs := []any{key.ChainWork, key.ChainWork, key.PeerID, int64(key.ID), 0, 100}
-	fromArgs := []any{key.ChainWork, key.ChainWork, key.PeerID, int64(key.ID), key.ChainWork, key.PeerID, int64(key.ID), 0, 100}
+	afterArgs := []any{key.ChainWork, key.ChainWork, int64(key.ID), 0, 100}
+	fromArgs := []any{key.ChainWork, key.ChainWork, int64(key.ID), key.ChainWork, int64(key.ID), 0, 100}
 
 	for name, q := range map[string]struct {
 		query string
@@ -395,13 +398,13 @@ func TestBlocksBetterThan_PostgresUsesTheBestTipIndex(t *testing.T) {
 		"from":  {blocksBetterThanOrFromQuery, fromArgs},
 	} {
 		free := plan(false, q.query, q.args...)
-		t.Logf("%s plan, planner's choice:\n%s", name, free)
-		require.Contains(t, free, "idx_chain_work_valid", name)
+		t.Logf("%s plan, planner's choice without a table scan:\n%s", name, free)
+		require.Contains(t, free, "idx_chain_work_id_valid", name)
 		require.Contains(t, free, "Index Cond: (chain_work >= ", name)
 
 		forced := plan(true, q.query, q.args...)
 		t.Logf("%s plan, index scan:\n%s", name, forced)
-		require.Contains(t, forced, "Index Scan Backward using idx_chain_work_valid", name)
+		require.Contains(t, forced, "Index Scan Backward using idx_chain_work_id_valid", name)
 		require.Contains(t, forced, "Index Cond: (chain_work >= ", name)
 		require.NotContains(t, forced, "Sort", name)
 	}

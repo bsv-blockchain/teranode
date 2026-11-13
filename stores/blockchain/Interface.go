@@ -268,7 +268,7 @@ type Store interface {
 	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
 	// BlocksBetterThan returns the valid blocks that sort better than after in the order the
-	// best tip is picked by (chain_work DESC, peer_id ASC, id ASC), worst first. When from is not
+	// best tip is picked by (chain_work DESC, id ASC), worst first. When from is not
 	// nil it also returns the valid blocks that sort better than or level with from.
 	// Parameters:
 	//   - ctx: Context for the operation

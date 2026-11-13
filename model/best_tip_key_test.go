@@ -12,7 +12,6 @@ import (
 func TestBestTipKey_RoundTrip(t *testing.T) {
 	key := BestTipKey{
 		ChainWork: bytes.Repeat([]byte{0x01}, 32),
-		PeerID:    "12D3KooWpeer",
 		ID:        123456,
 		Hash:      chainhash.Hash{1, 2, 3},
 	}
@@ -33,8 +32,33 @@ func TestBestTipKey_RoundTrip(t *testing.T) {
 	require.Empty(t, empty.ChainWork)
 }
 
+// A key an older binary saved carries a peer id. It still parses, and keeps its place by chain
+// work and id, so a position block assembly saved before the upgrade is read, not refused.
+func TestBestTipKey_ReadsKeyWithPeerID(t *testing.T) {
+	work := bytes.Repeat([]byte{0x01}, 32)
+	hash := chainhash.Hash{4, 5, 6}
+	peer := []byte("12D3KooWpeer")
+
+	old := []byte{bestTipKeyVersion}
+	old = binary.LittleEndian.AppendUint32(old, uint32(len(work)))
+	old = append(old, work...)
+	old = binary.LittleEndian.AppendUint32(old, uint32(len(peer)))
+	old = append(old, peer...)
+	old = binary.LittleEndian.AppendUint32(old, 77)
+	old = append(old, hash[:]...)
+
+	got, err := NewBestTipKeyFromBytes(old)
+	require.NoError(t, err)
+	require.Equal(t, BestTipKey{ChainWork: work, ID: 77, Hash: hash}, got)
+
+	mark, err := NewBestTipLowWaterFromBytes(binary.LittleEndian.AppendUint64(old, 3))
+	require.NoError(t, err)
+	require.Equal(t, got, mark.Key)
+	require.Equal(t, uint64(3), mark.Generation)
+}
+
 func TestBestTipKey_RejectsOtherBytes(t *testing.T) {
-	key := BestTipKey{ChainWork: bytes.Repeat([]byte{0x01}, 32), PeerID: "p", ID: 1}
+	key := BestTipKey{ChainWork: bytes.Repeat([]byte{0x01}, 32), ID: 1}
 	encoded := key.Bytes()
 
 	// The 8-byte sequence number an unreleased build persisted.
@@ -56,7 +80,7 @@ func TestBestTipKey_RejectsOtherBytes(t *testing.T) {
 }
 
 func TestBestTipLowWater_DroppedTips(t *testing.T) {
-	key := BestTipKey{ChainWork: bytes.Repeat([]byte{0x01}, 32), PeerID: "p", ID: 9}
+	key := BestTipKey{ChainWork: bytes.Repeat([]byte{0x01}, 32), ID: 9}
 
 	mark := BestTipLowWater{Key: key, Generation: 3}
 	mark.AddDroppedTip(chainhash.Hash{1})

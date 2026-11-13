@@ -103,7 +103,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 			SELECT id, parent_id, height
 			FROM blocks
 			WHERE invalid = false
-			ORDER BY chain_work DESC, peer_id ASC, id ASC
+			ORDER BY chain_work DESC, id ASC
 			LIMIT 1
 		),
 		ChainBlocks AS (
@@ -164,7 +164,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 			SELECT id, parent_id, height
 			FROM blocks
 			WHERE invalid = false
-			ORDER BY chain_work DESC, peer_id ASC, id ASC
+			ORDER BY chain_work DESC, id ASC
 			LIMIT 1
 		),
 		ChainBlocks AS (

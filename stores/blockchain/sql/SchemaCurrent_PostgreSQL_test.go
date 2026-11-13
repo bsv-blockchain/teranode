@@ -285,6 +285,55 @@ func TestCreatePostgresSchema_DropsRetiredIndex(t *testing.T) {
 	require.True(t, current, "schema must be current once the retired index is gone")
 }
 
+// A database created before the best-tip order dropped peer_id carries idx_chain_work_peer_id and
+// idx_chain_work_valid, both ordered by peer_id, and lacks the indexes ordered by id. Running the
+// schema setup against it must swap them and leave the schema current.
+func TestCreatePostgresSchema_ReplacesPeerIDBestTipIndexes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	for _, stmt := range []string{
+		`DROP INDEX idx_chain_work_id`,
+		`DROP INDEX idx_chain_work_id_valid`,
+		`CREATE INDEX idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC)`,
+		`CREATE INDEX idx_chain_work_valid ON blocks (chain_work DESC, peer_id ASC, id ASC) WHERE invalid = false`,
+	} {
+		_, err = db.Exec(stmt)
+		require.NoError(t, err, stmt)
+	}
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.False(t, current, "a schema with the peer_id indexes is not current")
+
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true))
+
+	for name, want := range map[string]bool{
+		"idx_chain_work_peer_id":  false,
+		"idx_chain_work_valid":    false,
+		"idx_chain_work_id":       true,
+		"idx_chain_work_id_valid": true,
+	} {
+		var exists bool
+		require.NoError(t, db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = $1 AND relkind = 'i')`, name,
+		).Scan(&exists))
+		require.Equal(t, want, exists, name)
+	}
+
+	current, err = isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.True(t, current, "schema must be current once the indexes are swapped")
+}
+
 // A failed DROP INDEX on the retired index must stop the schema setup with an
 // error rather than carry on. A table with the index's name makes Postgres refuse
 // the drop, because the name is not an index.
