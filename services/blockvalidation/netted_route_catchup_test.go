@@ -394,7 +394,7 @@ func newNettedForkCatchup(t *testing.T, ancestor, tip uint32, forkLen int) *nett
 
 	// Every block above the fork point is marked mined, so a mined_set clear shows in the store.
 	for _, b := range local[ancestor+1:] {
-		require.NoError(t, client.SetBlockMinedSet(t.Context(), b.Header.Hash()))
+		require.NoError(t, client.SetBlockMinedSet(t.Context(), b.Header.Hash(), 0))
 	}
 
 	server.blockchainClient = client

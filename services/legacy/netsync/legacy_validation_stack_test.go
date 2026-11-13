@@ -118,7 +118,7 @@ func newLegacyValidationStack(t *testing.T, s *settings.Settings) *legacyValidat
 
 	chain, err := blockchain.NewLocalClient(logger, s, chainStore, subtrees, utxos)
 	require.NoError(t, err)
-	require.NoError(t, chain.SetBlockMinedSet(ctx, s.ChainCfgParams.GenesisHash))
+	require.NoError(t, chain.SetBlockMinedSet(ctx, s.ChainCfgParams.GenesisHash, 0))
 
 	validate, err := validator.New(ctx, logger, s, utxos, nil, nil, nil, nil, chain)
 	require.NoError(t, err)
