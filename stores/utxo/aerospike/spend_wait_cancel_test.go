@@ -218,3 +218,47 @@ func TestIncrementSpentRecords_TimeoutIsNotRelabelledByACancelledStoreContext(t 
 	require.Equal(t, before+1, batchTimeoutCounter("IncrementSpentRecords"),
 		"a genuine timeout must still bump BatchTimeout exactly once")
 }
+
+// cancelledWhenCtx reports Canceled once cancelled returns true, and never
+// closes Done, so only a caller that asks Err sees the cancellation.
+type cancelledWhenCtx struct {
+	context.Context
+	cancelled func() bool
+}
+
+func (c *cancelledWhenCtx) Done() <-chan struct{} { return nil }
+
+func (c *cancelledWhenCtx) Err() error {
+	if c.cancelled() {
+		return context.Canceled
+	}
+
+	return nil
+}
+
+func TestSpend_TimeoutIsNotRelabelledByACancellationDuringRollback(t *testing.T) {
+	s := newTestStoreForSpendEnqueue(t)
+	s.settings.UtxoStore.SpendWaitTimeout = 20 * time.Millisecond
+	s.spendBatcher = &silentSpendBatcher{}
+
+	cb := halfOpenBreaker(t)
+	s.spendCircuitBreaker = cb
+
+	abandoned := func() bool {
+		cb.mu.Lock()
+		defer cb.mu.Unlock()
+
+		return cb.halfOpenAttempts == 0
+	}
+
+	before := batchTimeoutCounter("Spend")
+
+	_, err := s.Spend(&cancelledWhenCtx{Context: context.Background(), cancelled: abandoned}, txWithInputs(t, 1), 100)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timed out after")
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.NotErrorIs(t, err, errors.ErrContextCanceled,
+		"a timeout whose caller cancels during rollback must stay a timeout")
+	require.Equal(t, before+1, batchTimeoutCounter("Spend"),
+		"the timeout must bump BatchTimeout exactly once")
+}

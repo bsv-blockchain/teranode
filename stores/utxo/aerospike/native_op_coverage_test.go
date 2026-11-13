@@ -5,6 +5,7 @@ import (
 
 	aerospike "github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
@@ -223,4 +224,19 @@ func TestCreateSpendErrorHandlesNilBatchItem(t *testing.T) {
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "nil batch item")
+}
+
+// An INVALID_SPEND whose spending data does not parse is a plain utxo error: it
+// carries no invalid-spend data, so no caller treats it as a replay verdict.
+func TestCreateSpendErrorInvalidSpendWithMalformedSpendingData(t *testing.T) {
+	s := &Store{}
+	txID := &chainhash.Hash{0x02}
+	item := &batchSpend{spend: &utxo.Spend{TxID: txID, Vout: 1, UTXOHash: &chainhash.Hash{0x03}}}
+
+	err := s.createSpendError(LuaErrorInfo{ErrorCode: LuaErrorCodeInvalidSpend, Message: "detail", SpendingData: "not-spending-data"}, item, txID)
+
+	require.ErrorIs(t, err, errors.ErrUtxoError)
+
+	var data *errors.UtxoInvalidSpendErrData
+	require.False(t, errors.AsData(err, &data), "malformed spending data must not produce invalid-spend error data")
 }

@@ -25,7 +25,7 @@
 //
 // It WILL trigger on:
 //   - Aerospike connection failures
-//   - Batch operation errors
+//   - Batch operation errors, whether they fail the whole batch or one record
 //   - Timeout errors at the database level
 //
 // Data-state result codes (KEY_NOT_FOUND_ERROR, FILTERED_OUT, etc.) are
@@ -164,6 +164,17 @@ type circuitBreaker struct {
 	halfOpenAttempts    int
 	consecutiveSuccess  int
 	nextAttempt         time.Time
+
+	// halfOpenEpoch advances on every entry to half-open and every trip, so a
+	// slot handed out in one half-open epoch cannot be released into another.
+	halfOpenEpoch uint64
+}
+
+// breakerSlot records whether an admission took a half-open probe slot and the
+// half-open epoch it took it in. The zero value took no slot.
+type breakerSlot struct {
+	epoch uint64
+	taken bool
 }
 
 func newCircuitBreaker(failureThreshold, halfOpenMax int, cooldown time.Duration) *circuitBreaker {
@@ -185,9 +196,12 @@ func newCircuitBreaker(failureThreshold, halfOpenMax int, cooldown time.Duration
 	}
 }
 
-func (cb *circuitBreaker) Allow() bool {
+// Admit reports whether a request may proceed. The slot is taken only when the
+// admission consumed a half-open probe slot. Pass it to RecordSuccess or
+// RecordFailure when the request reports an outcome, or to Release when it never will.
+func (cb *circuitBreaker) Admit() (bool, breakerSlot) {
 	if cb == nil {
-		return true
+		return true, breakerSlot{}
 	}
 
 	cb.mu.Lock()
@@ -197,27 +211,69 @@ func (cb *circuitBreaker) Allow() bool {
 
 	switch cb.state {
 	case cbStateClosed:
-		return true
+		return true, breakerSlot{}
 	case cbStateOpen:
 		if now.After(cb.nextAttempt) {
-			cb.state = cbStateHalfOpen
-			cb.halfOpenAttempts = 1
-			cb.consecutiveSuccess = 0
-			return true
+			cb.enterHalfOpen(now)
+			return true, breakerSlot{epoch: cb.halfOpenEpoch, taken: true}
 		}
-		return false
+		return false, breakerSlot{}
 	case cbStateHalfOpen:
 		if cb.halfOpenAttempts >= cb.halfOpenMax {
-			return false
+			// Backstop: a probe that never reports must not hold half-open
+			// shut for ever. One cooldown after entry, probe again.
+			if now.After(cb.nextAttempt.Add(cb.cooldown)) {
+				cb.enterHalfOpen(now)
+				return true, breakerSlot{epoch: cb.halfOpenEpoch, taken: true}
+			}
+			return false, breakerSlot{}
 		}
 		cb.halfOpenAttempts++
-		return true
+		return true, breakerSlot{epoch: cb.halfOpenEpoch, taken: true}
 	default:
-		return true
+		return true, breakerSlot{}
 	}
 }
 
-func (cb *circuitBreaker) RecordSuccess() {
+// enterHalfOpen starts a new probe epoch. consecutiveSuccess is kept: one epoch
+// admits halfOpenMax inputs but a probe that gets no usable answer is released
+// rather than counted, and a probe that never completes holds its slot until the
+// backstop, so an epoch can report fewer successes than slots. Only a trip or a
+// reset zeroes the count, so the successes of several epochs add up and the
+// breaker closes.
+func (cb *circuitBreaker) enterHalfOpen(now time.Time) {
+	cb.state = cbStateHalfOpen
+	cb.halfOpenEpoch++
+	// Probes of the previous epoch may still be in flight, so more than halfOpenMax
+	// probes can reach an unhealthy backend at once. The overlap is bounded by the
+	// request timeout. Accepted: this is a backstop, and the outcomes of those
+	// probes no longer apply here.
+	cb.halfOpenAttempts = 1
+	cb.nextAttempt = now
+}
+
+// Release gives back a half-open probe slot taken by Admit for a request that
+// will never report an outcome. It does nothing for a slot that was not taken
+// or that belongs to an earlier half-open epoch.
+func (cb *circuitBreaker) Release(slot breakerSlot) {
+	if cb == nil || !slot.taken {
+		return
+	}
+
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	if cb.state == cbStateHalfOpen && slot.epoch == cb.halfOpenEpoch && cb.halfOpenAttempts > 0 {
+		cb.halfOpenAttempts--
+	}
+}
+
+// RecordSuccess reports a successful outcome of the request admitted with slot.
+// In the closed state it resets the failure count. In the half-open state it
+// counts toward closing only when slot is a probe slot of the current half-open
+// epoch; an outcome of a request admitted while closed, or in an earlier epoch,
+// is ignored.
+func (cb *circuitBreaker) RecordSuccess(slot breakerSlot) {
 	if cb == nil {
 		return
 	}
@@ -229,6 +285,10 @@ func (cb *circuitBreaker) RecordSuccess() {
 	case cbStateClosed:
 		cb.consecutiveFailures = 0
 	case cbStateHalfOpen:
+		if !cb.currentProbe(slot) {
+			return
+		}
+
 		cb.consecutiveSuccess++
 		if cb.consecutiveSuccess >= cb.halfOpenMax {
 			cb.reset()
@@ -236,15 +296,25 @@ func (cb *circuitBreaker) RecordSuccess() {
 	}
 }
 
-func (cb *circuitBreaker) RecordFailure() {
+// RecordFailure reports an infrastructure failure of the request admitted with
+// slot. See RecordBatchFailure.
+func (cb *circuitBreaker) RecordFailure(slot breakerSlot) {
+	cb.RecordBatchFailure([]breakerSlot{slot})
+}
+
+// RecordBatchFailure reports one infrastructure failure that covers the requests
+// admitted with slots, for example the batch they travelled in. In the closed
+// state it counts once toward tripping, whatever the slots. In the half-open
+// state it trips the breaker when any slot is a probe slot of the current epoch,
+// and is ignored otherwise. The success count is zeroed only when the breaker
+// trips or resets, never by an ignored or closed-state failure.
+func (cb *circuitBreaker) RecordBatchFailure(slots []breakerSlot) {
 	if cb == nil {
 		return
 	}
 
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-
-	cb.consecutiveSuccess = 0
 
 	switch cb.state {
 	case cbStateClosed:
@@ -253,15 +323,27 @@ func (cb *circuitBreaker) RecordFailure() {
 			cb.trip()
 		}
 	case cbStateHalfOpen:
-		cb.trip()
+		for _, slot := range slots {
+			if cb.currentProbe(slot) {
+				cb.trip()
+				return
+			}
+		}
 	}
+}
+
+// currentProbe reports whether slot is a probe slot of the current half-open epoch.
+func (cb *circuitBreaker) currentProbe(slot breakerSlot) bool {
+	return slot.taken && slot.epoch == cb.halfOpenEpoch
 }
 
 func (cb *circuitBreaker) trip() {
 	cb.state = cbStateOpen
+	cb.halfOpenEpoch++
 	cb.nextAttempt = time.Now().Add(cb.cooldown)
 	cb.consecutiveFailures = 0
 	cb.halfOpenAttempts = 0
+	cb.consecutiveSuccess = 0
 }
 
 func (cb *circuitBreaker) reset() {
@@ -269,4 +351,83 @@ func (cb *circuitBreaker) reset() {
 	cb.consecutiveFailures = 0
 	cb.halfOpenAttempts = 0
 	cb.consecutiveSuccess = 0
+}
+
+// spendBreakerOutcome coalesces repeated expression outcomes across parts until
+// an opposite outcome is recorded. An uninterrupted run of expression timeouts
+// counts once per batcher batch, but a success re-arms failure recording so a
+// later timeout cannot disappear after the breaker was reset. Outcomes are
+// recorded before Lua retries, preserving their processing order.
+// Lua records always count, even when a later part reuses the same record key.
+// An outcome that carries half-open probe slots is never coalesced, because
+// each probe must report.
+type spendBreakerOutcome struct {
+	success bool
+	failure bool
+}
+
+func (o *spendBreakerOutcome) recordExpressions(cb *circuitBreaker, success, failure bool, successSlots, failureSlots []breakerSlot) {
+	if success && (!o.success || len(successSlots) > 0) {
+		o.record(cb, true, successSlots...)
+		o.success = true
+	}
+
+	if failure && (!o.failure || len(failureSlots) > 0) {
+		o.record(cb, false, failureSlots...)
+		o.failure = true
+	}
+}
+
+// record also re-arms the opposite expression outcome: a Lua success resets
+// the breaker, so a subsequent expression failure must count again (and vice versa).
+// A success reports once per slot, or once without a slot when none is given. A
+// failure reports once for the whole batch, with all its slots; in half-open it
+// trips if any slot is a current-epoch probe.
+func (o *spendBreakerOutcome) record(cb *circuitBreaker, success bool, slots ...breakerSlot) {
+	if success {
+		o.failure = false
+
+		if len(slots) == 0 {
+			cb.RecordSuccess(breakerSlot{})
+		}
+
+		for _, slot := range slots {
+			cb.RecordSuccess(slot)
+		}
+
+		return
+	}
+
+	o.success = false
+
+	cb.RecordBatchFailure(slots)
+}
+
+// serverAnswerResultCodes are the ResultCodes that prove the server evaluated
+// the request and answered with data state. A half-open probe that gets one of
+// them counts as a success. Any other non-infrastructure error is weak evidence
+// of health: DEVICE_OVERLOAD is owned by the overload-retry layer, and client
+// side errors (PARAMETER_ERROR, SERIALIZE_ERROR, a canceled context) never
+// reached a healthy server, so those probes release their slot instead.
+var serverAnswerResultCodes = []types.ResultCode{
+	types.KEY_NOT_FOUND_ERROR,
+	types.KEY_EXISTS_ERROR,
+	types.GENERATION_ERROR,
+	types.BIN_EXISTS_ERROR,
+	types.BIN_TYPE_ERROR,
+	types.BIN_NOT_FOUND,
+	types.RECORD_TOO_BIG,
+	types.OP_NOT_APPLICABLE,
+	types.FAIL_ELEMENT_NOT_FOUND,
+	types.FAIL_ELEMENT_EXISTS,
+	types.FILTERED_OUT,
+	types.LOST_CONFLICT,
+	types.UDF_BAD_RESPONSE,
+}
+
+// isServerAnswer reports whether err is a data-state answer from the server.
+func isServerAnswer(err error) bool {
+	var aErr aerospike.Error
+
+	return errors.As(err, &aErr) && aErr.Matches(serverAnswerResultCodes...)
 }

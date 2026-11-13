@@ -50,6 +50,16 @@ read every section between yours and the target.
   `teranode_validator_held_limit_shed_transactions` does. A new validator setting,
   `validator_kafkaBackpressureResumeHeldPercent` (default 80), sets where a held-count pause
   resumes. (#1593)
+- **Go integrations: `FilterConflictingDuplicateSpendClaims` is replaced by `ProcessSpendBatch`
+  with a `SpendBatchHandler`.** Out-of-tree callers must migrate; omit `SameChecks` to disable
+  local result reuse. The `teranode_aerospike_utxo_spend_batch` and `..._size` histograms now
+  count one batcher batch, however many backend parts it needs, and
+  `teranode_{aerospike,sql}_utxo_spend_abort_in_flight` counts started inputs handed to the
+  orphan rollback, no longer dangling ones. A `Spend` of a transaction now waits, within
+  `utxostore_spendWaitTimeout`, for an earlier attempt at that transaction in the same process
+  and for that attempt's unresolved late spends. Concurrent `Spend` calls for one transaction
+  therefore run one after another. It fails with `SERVICE_UNAVAILABLE` if the wait runs out.
+  Retry it. (#2036)
 - **`grpc_admin_api_key` is required.** Blockchain refuses to start if it is empty, a placeholder
   or under 16 characters, and every RPC but `HealthGRPC` needs it. Give every client service the
   same key and upgrade Blockchain last, or restart them together. (#1755)
