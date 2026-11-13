@@ -525,9 +525,9 @@ func finishPrune(txn *sql.Tx, result sql.Result) (int64, error) {
 // bytes of txid and vin.
 //
 // The clause gates the marker INSERT and the DELETE alike on both pruning paths,
-// so a held-back child gets no marker anywhere: the spend path answers a marker
-// ahead of everything else, and a marker on a child that stays would refuse
-// that live child's own re-spend.
+// so a held-back child gets no marker anywhere: the spend path refuses an
+// idempotent re-spend by a marked child, so a marker on a child that stays
+// would refuse that live child's own re-spend.
 //
 // A conflicting row never matches. ProcessConflicting releases every input of
 // a loser and of each descendant it cascades to, the uncontested ones too, so a
