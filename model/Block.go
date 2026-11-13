@@ -2219,9 +2219,11 @@ func (b *Block) checkParentsExistOnChain(ctx context.Context, logger ulogger.Log
 
 			// there are old blocks we need to return to the validator
 			if err == nil && len(oldParentBlockIDs) > 0 {
-				// insert tx id and old parent block ids (i.e. tx's parent block ids) into the map.
-				// Each tx id and its block ids will be checked by the validator separately.
-				deps.oldBlockIDsMap.Set(parentTxStruct.txHash, oldParentBlockIDs)
+				// Key by the PARENT tx: the validator checks each entry on its own, and every
+				// parent must be mined in the block's history. Keyed by the child, a tx with two
+				// deep parents kept only whichever goroutine wrote last, so a parent mined off
+				// the block's chain could pass on scheduling alone.
+				deps.oldBlockIDsMap.Set(parentTxStruct.parentTxHash, oldParentBlockIDs)
 			}
 
 			return err
@@ -2306,7 +2308,7 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 		// This can happen when the parent block is older than the cached range or when
 		// block IDs are non-contiguous (orphan/invalid blocks consume IDs, creating gaps).
 		// In both cases, defer to checkOldBlockIDs in the validator which uses a larger
-		// lookup (10,000 IDs) plus a CheckBlockIsInCurrentChain slow path.
+		// lookup (10,000 IDs) plus a CheckBlockIsAncestorOfBlock slow path.
 		logger.Debugf("[BLOCK][%s] parent transaction %s of tx %s block ID %d not in cached %d IDs - checking later in validator", b.String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), minBlockID, len(currentBlockHeaderIDsMap))
 
 		// we need to return parentTxMeta.BlockIDs back to validator, which can check if those blocks are part of our chain

@@ -5,9 +5,12 @@
 // This file implements the CheckBlockIsAncestorOfBlock method, which determines whether
 // specified blocks are ancestors of a given block. This is essential for double-spend
 // detection on fork blocks where we need to check against the fork's ancestor chain
-// rather than the main chain. The implementation uses a recursive Common Table Expression
-// (CTE) in SQL to efficiently traverse the blockchain structure from the specified block
-// backward, checking if the specified block IDs are part of this path.
+// rather than the main chain. A yes is answered by a short walk from the specified block down to
+// its first main-chain ancestor (the fork point) plus one indexed probe: a block is an ancestor
+// if it is on that fork segment, or on the main chain at or below the fork point's height. Every
+// no, and every call while the main chain is being rebuilt, uses a recursive Common Table
+// Expression (CTE) that walks parent links back from the specified block, checking if the
+// specified block IDs are part of this path.
 package sql
 
 import (
@@ -46,6 +49,28 @@ func (s *SQL) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32
 
 	if len(blockIDs) == 0 {
 		return false, nil
+	}
+
+	if s.mainChainRebuilding.Load() == 0 {
+		// The main-chain probe first: it is the common case and costs about a quarter of the
+		// fork-point statement, which only a fork anchor needs.
+		found, err := s.ancestorOnMainChainBelowAnchor(ctx, blockIDs, blockHash)
+		if err != nil {
+			return false, err
+		}
+
+		if !found {
+			found, err = s.ancestorViaForkPoint(ctx, blockIDs, blockHash)
+			if err != nil {
+				return false, err
+			}
+		}
+
+		if found {
+			return true, nil
+		}
+		// No match does not mean no ancestor: a flag may be transiently false, and a false
+		// answer invalidates a block. The walk below decides every false answer.
 	}
 
 	// Get the block header for the specified block hash to get its ID
@@ -136,4 +161,124 @@ func (s *SQL) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32
 	}
 
 	return result, nil
+}
+
+// ancestorOnMainChainBelowAnchor is the cheapest positive answer for CheckBlockIsAncestorOfBlock.
+// When the anchor is on the main chain, its ancestors are exactly the main-chain blocks at or
+// below its height, so one primary-key probe per id answers it however deep the id sits. A fork
+// anchor finds nothing here and is left to ancestorViaForkPoint. It only ever answers true, and
+// callers must check mainChainRebuilding first, as for ancestorViaForkPoint.
+func (s *SQL) ancestorOnMainChainBelowAnchor(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	for start := 0; start < len(blockIDs); start += maxIDsPerCheckBatch {
+		end := start + maxIDsPerCheckBatch
+		if end > len(blockIDs) {
+			end = len(blockIDs)
+		}
+
+		batch := blockIDs[start:end]
+
+		placeholders := make([]string, len(batch))
+		args := make([]interface{}, 0, len(batch)+1)
+
+		for i, id := range batch {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+			args = append(args, id)
+		}
+
+		args = append(args, blockHash[:])
+
+		q := fmt.Sprintf(`
+			SELECT 1 FROM blocks b
+			WHERE b.id IN (%s)
+			  AND b.on_main_chain = true
+			  AND b.height <= (SELECT a.height FROM blocks a WHERE a.hash = $%d AND a.on_main_chain = true)
+			LIMIT 1`, strings.Join(placeholders, ","), len(batch)+1)
+
+		var found int
+
+		err := s.db.QueryRowContext(ctx, q, args...).Scan(&found)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+
+			return false, errors.NewStorageError("failed to check main-chain ancestors of the specified block", err)
+		}
+
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// ancestorViaForkPoint is the cheap positive answer for CheckBlockIsAncestorOfBlock. It walks
+// from the anchor down parent links only while the blocks are off the main chain, and stops at the
+// first main-chain block, the fork point. The anchor's ancestors are then exactly the blocks on
+// that fork segment plus the main-chain blocks at or below the fork point's height, so one
+// primary-key probe per id answers it however deep the id sits. For a main-chain anchor the
+// segment is empty and the fork point is the anchor itself. The full walk costs one row per block
+// between the anchor and the match; this costs one row per block of fork segment.
+//
+// Take block F on a one-block fork from main-chain block 999, with the main chain at 1,000. The
+// walk reads F, then 999, which is on the main chain, and stops. A main-chain block at height 10
+// is an ancestor of F; block 1,000, above the fork point, is not.
+//
+// It only ever answers true. It finds nothing when the anchor is unknown, or when no id is on the
+// fork segment or on the main chain at or below the fork point, and the caller then walks. The
+// flags and heights are read in the same statement as the candidates, not from the header cache,
+// so a reorg cannot slip between them. Callers must check mainChainRebuilding first: it trusts
+// the on_main_chain flag exactly as GetBlockHeaderIDs' fast path does.
+func (s *SQL) ancestorViaForkPoint(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	for start := 0; start < len(blockIDs); start += maxIDsPerCheckBatch {
+		end := start + maxIDsPerCheckBatch
+		if end > len(blockIDs) {
+			end = len(blockIDs)
+		}
+
+		batch := blockIDs[start:end]
+
+		placeholders := make([]string, len(batch))
+		args := make([]interface{}, 0, len(batch)+1)
+
+		for i, id := range batch {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+			args = append(args, id)
+		}
+
+		args = append(args, blockHash[:])
+
+		// The b.id <> f.id guard stops the walk at a block that is its own parent.
+		q := fmt.Sprintf(`
+			WITH RECURSIVE fork_segment(id, parent_id, on_main_chain, height) AS (
+				SELECT a.id, a.parent_id, a.on_main_chain, a.height FROM blocks a WHERE a.hash = $%d
+				UNION ALL
+				SELECT b.id, b.parent_id, b.on_main_chain, b.height
+				FROM blocks b
+				INNER JOIN fork_segment f ON b.id = f.parent_id
+				WHERE f.on_main_chain = false AND b.id <> f.id
+			)
+			SELECT 1 FROM blocks c
+			WHERE c.id IN (%s)
+			  AND (
+				c.id IN (SELECT id FROM fork_segment WHERE on_main_chain = false)
+				OR (c.on_main_chain = true
+					AND c.height <= (SELECT MAX(height) FROM fork_segment WHERE on_main_chain = true))
+			  )
+			LIMIT 1`, len(batch)+1, strings.Join(placeholders, ","))
+
+		var found int
+
+		err := s.db.QueryRowContext(ctx, q, args...).Scan(&found)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+
+			return false, errors.NewStorageError("failed to check ancestors of the specified block via its fork point", err)
+		}
+
+		return true, nil
+	}
+
+	return false, nil
 }

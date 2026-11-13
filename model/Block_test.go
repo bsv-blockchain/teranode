@@ -4731,9 +4731,61 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 
 		// Block 5 is oldParentTx's; the fixture's fallback parent sits at block 1. Asserting
 		// the exact IDs is what makes this sensitive to nodeIndex dropping the parent list.
-		oldBlockIDs, ok := deps.oldBlockIDsMap.Get(*tx1Hash)
-		require.True(t, ok, "expected oldBlockIDsMap to be populated for the child tx")
+		oldBlockIDs, ok := deps.oldBlockIDsMap.Get(oldParentHash)
+		require.True(t, ok, "expected oldBlockIDsMap to be populated for the parent tx")
 		require.Equal(t, []uint32{5}, oldBlockIDs)
+	})
+
+	t.Run("oldBlockIDsMap keeps every old parent of one tx", func(t *testing.T) {
+		// One child spending two parents, each mined outside the cached {10, 11} set, in
+		// different blocks. The validator must see both sets: if they shared the child's key,
+		// whichever parent goroutine wrote last would hide the other parent from the check.
+		secondOldParentTx := newTx(97)
+		secondOldParentHash := *secondOldParentTx.TxIDChainHash()
+
+		subtree, err := subtreepkg.NewTreeByLeafCount(1)
+		require.NoError(t, err)
+		require.NoError(t, subtree.AddNode(*tx1Hash, 1, 100))
+
+		require.NoError(t, block.txMap.Put(*tx1Hash, 1))
+
+		defer func() { block.txMap = txmap.NewSplitSwissMapUint64(10) }()
+
+		subtreeMetaSlice, err := createSubtreeMetadataWithParents(subtree, 0, []chainhash.Hash{oldParentHash, secondOldParentHash})
+		require.NoError(t, err)
+
+		mockStore.data[string(subtree.RootHash()[:])] = subtreeMetaSlice
+
+		utxoStore := createTestUTXOStore(t)
+		seedDummyParent(t, utxoStore)
+		seedParent(t, utxoStore, oldParentTx, 5)
+		seedParent(t, utxoStore, secondOldParentTx, 7)
+
+		deps := &validationDependencies{
+			txMetaStore:           utxoStore,
+			subtreeStore:          mockStore,
+			currentChain:          []*BlockHeader{},
+			currentBlockHeaderIDs: []uint32{10, 11},
+			oldBlockIDsMap:        txmap.NewSyncedMap[chainhash.Hash, []uint32](),
+		}
+
+		validationCtx := &validationContext{
+			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
+			currentBlockHeaderIDsMap:    map[uint32]struct{}{10: {}, 11: {}},
+			parentSpendsMap:             newTestParentSpendsMap(4),
+		}
+
+		require.NoError(t, block.validateSubtree(ctx, ulogger.TestLogger{}, deps, validationCtx, subtree, 0))
+
+		require.Equal(t, 2, deps.oldBlockIDsMap.Length(), "each old parent needs its own entry")
+
+		firstIDs, ok := deps.oldBlockIDsMap.Get(oldParentHash)
+		require.True(t, ok)
+		require.Equal(t, []uint32{5}, firstIDs)
+
+		secondIDs, ok := deps.oldBlockIDsMap.Get(secondOldParentHash)
+		require.True(t, ok)
+		require.Equal(t, []uint32{7}, secondIDs)
 	})
 }
 
