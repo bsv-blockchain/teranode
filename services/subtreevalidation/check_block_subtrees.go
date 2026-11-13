@@ -1721,12 +1721,30 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 	// Track validation results. firstErr keeps the first swallowed per-tx error so
 	// the summary error below can chain a cause instead of only reporting counts.
+	// failures tallies every swallowed error by cause, so the summary names each
+	// cause with a count and an example txid instead of one ERROR line per tx.
 	var (
 		errorsFound         atomic.Uint64
 		missingParentErrors atomic.Uint64
+		failures            txFailureTally
 		firstErrMu          sync.Mutex
 		firstErr            error
 	)
+
+	// One summary line per call, however the call ends. This function runs once per
+	// load batch of the block, or on the batch path's fallback transactions, so the
+	// denominator is this call's input, not the block. A store-side cause (circuit
+	// breaker open, context canceled) is this node's problem and still needs to be
+	// seen, so it stays at ERROR, once, with the counts per cause and an example
+	// txid each. The caller's all-missing-parent deferral logs at Info and does not
+	// use this.
+	logFailureSummary := func() {
+		if failures.count() == 0 {
+			return
+		}
+
+		u.logger.Errorf("[processTransactionsInLevels][%s] %d of %d txs in this batch failed (%d missing-parent): %s", blockHash.String(), errorsFound.Load(), totalTxCount, missingParentErrors.Load(), failures.String())
+	}
 
 	// Transactions accepted whose two-phase-commit unlock failed. This path validates with
 	// WithIgnoreLocked(true), so a locked parent never answers a child in the next level
@@ -1787,6 +1805,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		// and the existing missing-parent handling is preserved.
 		prefetchedParents, prefetchErr := u.prefetchLevelParents(ctx, levelTxs)
 		if prefetchErr != nil {
+			logFailureSummary()
+
 			return prefetchErr
 		}
 
@@ -1800,6 +1820,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		for _, mTx := range levelTxs {
 			tx := mTx.tx
 			if tx == nil {
+				logFailureSummary()
+
 				return errors.NewProcessingError("[processTransactionsInLevels] transaction is nil at level %d", level)
 			}
 
@@ -1842,6 +1864,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 					// Count all other errors
 					errorsFound.Add(1)
+					failures.add(*tx.TxIDChainHash(), err)
 
 					if errors.Is(err, errors.ErrTxMissingParent) {
 						// missingParentErrors drives the all-missing-parent deferral below;
@@ -1860,8 +1883,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 						u.logger.Errorf("[processTransactionsInLevels] Conflicting-walk limit exceeded for transaction %s: %v", tx.TxIDChainHash().String(), err)
 						return err
 					} else {
-						u.logger.Errorf("[processTransactionsInLevels] Processing error for transaction %s: %v", tx.TxIDChainHash().String(), err)
-
+						// Already logged at Debug above; the cause is tallied and reported once
+						// per block below, with counts and an example per cause (issue 2108).
 						firstErrMu.Lock()
 						if firstErr == nil {
 							firstErr = err
@@ -1882,8 +1905,12 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 			})
 		}
 
-		// Fail early if we get an actual tx error thrown
+		// Fail early if we get an actual tx error thrown. The failures tallied before
+		// it (a store fault on a sibling, say) had their own ERROR lines before the
+		// tally and still need to be seen.
 		if err = g.Wait(); err != nil {
+			logFailureSummary()
+
 			return errors.NewProcessingError("[processTransactionsInLevels] Failed to process level %d", level+1, err)
 		}
 
@@ -1912,11 +1939,14 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 			u.logger.Infof("[processTransactionsInLevels] %d missing-parent errors (deferred to sequential revalidation)", errorsFound.Load())
 			return nil
 		}
+
+		logFailureSummary()
+
 		if firstErr != nil {
-			return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent)", errorsFound.Load(), missingParentErrors.Load(), firstErr)
+			return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent): %s", errorsFound.Load(), missingParentErrors.Load(), failures.String(), firstErr)
 		}
 
-		return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent)", errorsFound.Load(), missingParentErrors.Load())
+		return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent): %s", errorsFound.Load(), missingParentErrors.Load(), failures.String())
 	}
 
 	u.logger.Debugf("[processTransactionsInLevels] Successfully processed all %d transactions", totalTxCount)
