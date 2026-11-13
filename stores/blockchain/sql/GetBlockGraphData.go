@@ -75,7 +75,7 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 	defer deferFn()
 
 	// Query to get block graph data from the main chain.
-	// Uses idx_chain_work_valid to quickly find the best block, then traverses
+	// Uses idx_chain_work_id to quickly find the best block, then traverses
 	// back through the chain using idx_parent_id.
 	//
 	// The query starts from both genesis (id=0) and the best block, walking back

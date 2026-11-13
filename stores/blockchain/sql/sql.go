@@ -573,8 +573,8 @@ var (
 		"ux_blocks_hash",
 	}
 	blockchainSchemaExpectedFullIndexes = []string{
-		"idx_chain_work_peer_id",
-		"idx_chain_work_valid",
+		"idx_chain_work_id",
+		"idx_chain_work_id_valid",
 		"idx_subtrees_mined_height",
 		"idx_subtrees_set_height",
 		"idx_not_persisted_height",
@@ -593,6 +593,11 @@ var (
 	blockchainSchemaRetiredIndexes = []retiredIndex{
 		// idx_inserted_at served only GetBlocksByTime, which has been removed
 		{name: "idx_inserted_at", dropSQL: `DROP INDEX IF EXISTS idx_inserted_at;`},
+		// idx_chain_work_peer_id and idx_chain_work_valid ordered equal-work blocks by peer_id,
+		// which the best-tip order no longer uses; idx_chain_work_id and
+		// idx_chain_work_id_valid, ordered by id, replace them
+		{name: "idx_chain_work_peer_id", dropSQL: `DROP INDEX IF EXISTS idx_chain_work_peer_id;`},
+		{name: "idx_chain_work_valid", dropSQL: `DROP INDEX IF EXISTS idx_chain_work_valid;`},
 	}
 )
 
@@ -873,11 +878,6 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 			_ = db.Close()
 			return errors.NewStorageError("could not drop pux_blocks_height index", err)
 		}
-		// idx_chain_work_id is superseded by idx_chain_work_peer_id (same prefix)
-		if _, err := db.Exec(`DROP INDEX IF EXISTS idx_chain_work_id;`); err != nil {
-			_ = db.Close()
-			return errors.NewStorageError("could not drop idx_chain_work_id index", err)
-		}
 		// idx_mined_set is superseded by idx_subtrees_mined_height
 		if _, err := db.Exec(`DROP INDEX IF EXISTS idx_mined_set;`); err != nil {
 			_ = db.Close()
@@ -900,16 +900,16 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 		// === CHAIN WORK INDEXES ===
 		// Primary index for best block queries without invalid filter
 		// Used by: GetBlockStats, recursive CTEs that don't filter by invalid
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
 			_ = db.Close()
-			return errors.NewStorageError("could not create idx_chain_work_peer_id index", err)
+			return errors.NewStorageError("could not create idx_chain_work_id index", err)
 		}
 
 		// Partial index for valid blocks - most common query pattern (GetBestBlockHeader, etc.)
 		// This is the primary index for finding the best valid block
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_valid ON blocks (chain_work DESC, peer_id ASC, id ASC) WHERE invalid = false;`); err != nil {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id_valid ON blocks (chain_work DESC, id ASC) WHERE invalid = false;`); err != nil {
 			_ = db.Close()
-			return errors.NewStorageError("could not create idx_chain_work_valid index", err)
+			return errors.NewStorageError("could not create idx_chain_work_id_valid index", err)
 		}
 
 		// === BLOCK STATUS INDEXES ===
@@ -1180,11 +1180,6 @@ func createSqliteSchema(db *usql.DB) error {
 		_ = db.Close()
 		return errors.NewStorageError("could not drop pux_blocks_height index", err)
 	}
-	// idx_chain_work_id is superseded by idx_chain_work_peer_id (same prefix)
-	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_chain_work_id;`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not drop idx_chain_work_id index", err)
-	}
 	// idx_mined_set is superseded by idx_subtrees_mined_height
 	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_mined_set;`); err != nil {
 		_ = db.Close()
@@ -1207,16 +1202,16 @@ func createSqliteSchema(db *usql.DB) error {
 	// === CHAIN WORK INDEXES ===
 	// Primary index for best block queries without invalid filter
 	// Used by: GetBlockStats, recursive CTEs that don't filter by invalid
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not create idx_chain_work_peer_id index", err)
+		return errors.NewStorageError("could not create idx_chain_work_id index", err)
 	}
 
 	// Partial index for valid blocks - most common query pattern (GetBestBlockHeader, etc.)
 	// This is the primary index for finding the best valid block
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_valid ON blocks (chain_work DESC, peer_id ASC, id ASC) WHERE invalid = false;`); err != nil {
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id_valid ON blocks (chain_work DESC, id ASC) WHERE invalid = false;`); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not create idx_chain_work_valid index", err)
+		return errors.NewStorageError("could not create idx_chain_work_id_valid index", err)
 	}
 
 	// === BLOCK STATUS INDEXES ===
@@ -1702,7 +1697,7 @@ func (s *SQL) reconcileOnMainChainRows(ctx context.Context, exec execQuerier) (i
 		WITH RECURSIVE
 		best_block(id) AS (
 			SELECT id FROM blocks WHERE invalid = false
-			ORDER BY chain_work DESC, peer_id ASC, id ASC
+			ORDER BY chain_work DESC, id ASC
 			LIMIT 1
 		),
 		new_path(id, parent_id, height, depth) AS (
@@ -1853,7 +1848,7 @@ func (s *SQL) startupRebuildOnMainChain(ctx context.Context, full bool, floor in
 func (s *SQL) startupRepairFloor(ctx context.Context) int64 {
 	var bestHeight int64
 
-	err := s.db.QueryRowContext(ctx, `SELECT height FROM blocks WHERE invalid = false ORDER BY chain_work DESC, peer_id ASC, id ASC LIMIT 1`).Scan(&bestHeight)
+	err := s.db.QueryRowContext(ctx, `SELECT height FROM blocks WHERE invalid = false ORDER BY chain_work DESC, id ASC LIMIT 1`).Scan(&bestHeight)
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			s.logger.Warnf("startup: reading the best height for the on_main_chain repair floor failed, a failed startup rebuild will be owed a full walk: %v", err)
@@ -1973,7 +1968,7 @@ func (s *SQL) rebuildOnMainChainFlagTx(ctx context.Context, full bool, floor int
 	// Fetch best block ID and height inside the transaction for a consistent snapshot.
 	var bestBlockID uint32
 	var bestHeight int64
-	bestQ := `SELECT id, height FROM blocks WHERE invalid = false ORDER BY chain_work DESC, peer_id ASC, id ASC LIMIT 1`
+	bestQ := `SELECT id, height FROM blocks WHERE invalid = false ORDER BY chain_work DESC, id ASC LIMIT 1`
 	if err = tx.QueryRowContext(ctx, bestQ).Scan(&bestBlockID, &bestHeight); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // empty DB — nothing to rebuild

@@ -102,9 +102,6 @@ func TestSqlGetChainTip(t *testing.T) {
 		assert.Equal(t, "test_peer", meta.PeerID)
 	})
 
-	// TestEqualChainworkTiebreaker verifies that when two chains have equal chainwork,
-	// the tiebreaker uses peer_id ASC (lower peer_id wins, representing "first-seen").
-	// This tests the ORDER BY clause: chain_work DESC, peer_id ASC, id ASC
 	// TestMalformedNBits verifies that a corrupted n_bits column (wrong byte length,
 	// e.g. ASCII-encoded hex stored as bytea) makes GetBestBlockHeader return a clean
 	// storage error instead of panicking with a nil-pointer dereference. See issue #884.
@@ -136,25 +133,25 @@ func TestSqlGetChainTip(t *testing.T) {
 		require.Contains(t, err.Error(), "n_bits")
 	})
 
-	t.Run("equal chainwork prefers lower peer_id (first-seen rule)", func(t *testing.T) {
+	// Two blocks with equal chain work: the one stored first stays the tip, even when the second
+	// comes from a peer whose id sorts lower. The relay chooses its own peer id, so it must play
+	// no part in which of two equal blocks this node follows.
+	t.Run("equal chainwork keeps the block stored first", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
-		// Store block1 to establish the chain
 		_, _, err = s.StoreBlock(context.Background(), block1, "test_peer")
 		require.NoError(t, err)
 
-		// Create two competing blocks at height 2, both building on block1
-		// They will have the same chainwork but different peer_ids
-		// Block from peer "zzz_peer" (alphabetically later)
+		// Two siblings at height 2 on block1, so equal chain work. Only the nonce differs.
 		blockFromLaterPeer := &model.Block{
 			Header: &model.BlockHeader{
 				Version:        1,
 				Timestamp:      1729259727,
-				Nonce:          100, // Different nonce to get different hash
+				Nonce:          100,
 				HashPrevBlock:  block1.Header.Hash(),
 				HashMerkleRoot: block2MerkleRootHash,
 				Bits:           *bits,
@@ -165,12 +162,11 @@ func TestSqlGetChainTip(t *testing.T) {
 			Subtrees:         []*chainhash.Hash{subtree},
 		}
 
-		// Block from peer "aaa_peer" (alphabetically earlier)
 		blockFromEarlierPeer := &model.Block{
 			Header: &model.BlockHeader{
 				Version:        1,
 				Timestamp:      1729259727,
-				Nonce:          200, // Different nonce to get different hash
+				Nonce:          200,
 				HashPrevBlock:  block1.Header.Hash(),
 				HashMerkleRoot: block2MerkleRootHash,
 				Bits:           *bits,
@@ -181,29 +177,90 @@ func TestSqlGetChainTip(t *testing.T) {
 			Subtrees:         []*chainhash.Hash{subtree},
 		}
 
-		// Store the block from the LATER peer first (zzz_peer)
+		// The block from zzz_peer is stored first.
 		_, _, err = s.StoreBlock(context.Background(), blockFromLaterPeer, "zzz_peer")
 		require.NoError(t, err)
 
-		// Check tip - should be from zzz_peer since it's the only block at height 2
 		tip, meta, err := s.GetBestBlockHeader(context.Background())
 		require.NoError(t, err)
-		assert.Equal(t, uint32(2), meta.Height)
-		assert.Equal(t, "zzz_peer", meta.PeerID)
-		assert.Equal(t, blockFromLaterPeer.Header.Hash().String(), tip.Hash().String())
+		require.Equal(t, uint32(2), meta.Height)
+		require.Equal(t, blockFromLaterPeer.Header.Hash().String(), tip.Hash().String())
 
-		// Now store the block from the EARLIER peer (aaa_peer)
-		// This block has equal chainwork but lower peer_id
+		// The sibling arrives second, from aaa_peer, whose id sorts before zzz_peer.
 		_, _, err = s.StoreBlock(context.Background(), blockFromEarlierPeer, "aaa_peer")
 		require.NoError(t, err)
 
-		// Check tip again - should now be from aaa_peer due to peer_id ASC tiebreaker
 		tip, meta, err = s.GetBestBlockHeader(context.Background())
 		require.NoError(t, err)
-		assert.Equal(t, uint32(2), meta.Height, "Height should still be 2")
-		assert.Equal(t, "aaa_peer", meta.PeerID,
-			"With equal chainwork, the block from the peer with lower peer_id (aaa_peer) should be preferred")
-		assert.Equal(t, blockFromEarlierPeer.Header.Hash().String(), tip.Hash().String(),
-			"Best block should be the one from the earlier peer")
+		require.Equal(t, uint32(2), meta.Height)
+		require.Equal(t, "zzz_peer", meta.PeerID, "a later block from a lower-sorting peer id must not take the tip")
+		require.Equal(t, blockFromLaterPeer.Header.Hash().String(), tip.Hash().String())
+
+		// The main-chain flags and the best-height reads agree with the tip.
+		atHeight, err := s.GetBlockByHeight(context.Background(), 2)
+		require.NoError(t, err)
+		require.Equal(t, blockFromLaterPeer.Header.Hash().String(), atHeight.Header.Hash().String())
+
+		require.True(t, getOnMainChain(t, s, blockFromLaterPeer.Header.Hash().CloneBytes()))
+		require.False(t, getOnMainChain(t, s, blockFromEarlierPeer.Header.Hash().CloneBytes()))
+
+		// StoreBlock and GetChainTips read the tip through getBestBlockID.
+		_, bestHash, err := s.getBestBlockID(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, blockFromLaterPeer.Header.Hash().String(), bestHash.String())
+
+		tips, err := s.GetChainTips(context.Background())
+		require.NoError(t, err)
+
+		tipStatus := make(map[string]string, len(tips))
+		for _, chainTip := range tips {
+			tipStatus[chainTip.Hash] = chainTip.Status
+		}
+
+		require.Equal(t, "active", tipStatus[blockFromLaterPeer.Header.Hash().String()])
+		require.NotEqual(t, "active", tipStatus[blockFromEarlierPeer.Header.Hash().String()])
+
+		// While on_main_chain is being rebuilt the by-height reads walk back from the best tip
+		// instead of trusting the flag, so they must pick the same tip.
+		s.mainChainRebuilding.Add(1)
+
+		headers, _, err := s.GetBlockHeadersByHeight(context.Background(), 2, 2)
+		require.NoError(t, err)
+		require.Len(t, headers, 1)
+		require.Equal(t, blockFromLaterPeer.Header.Hash().String(), headers[0].Hash().String())
+
+		blocks, err := s.GetBlocksByHeight(context.Background(), 2, 2)
+		require.NoError(t, err)
+		require.Len(t, blocks, 1)
+		require.Equal(t, blockFromLaterPeer.Header.Hash().String(), blocks[0].Header.Hash().String())
+
+		for _, fromHeight := range []uint32{0, 2} {
+			lastBlocks, err := s.GetLastNBlocks(context.Background(), 1, false, fromHeight)
+			require.NoError(t, err)
+			require.Len(t, lastBlocks, 1)
+
+			lastHeader, err := model.NewBlockHeaderFromBytes(lastBlocks[0].BlockHeader)
+			require.NoError(t, err)
+			require.Equal(t, blockFromLaterPeer.Header.Hash().String(), lastHeader.Hash().String(), "fromHeight %d", fromHeight)
+		}
+
+		// Both siblings carry the same subtree; only the one on the best chain is returned.
+		containing, err := s.FindBlocksContainingSubtree(context.Background(), subtree, 0)
+		require.NoError(t, err)
+
+		containingHashes := make([]string, 0, len(containing))
+		for _, b := range containing {
+			containingHashes = append(containingHashes, b.Header.Hash().String())
+		}
+
+		require.Contains(t, containingHashes, blockFromLaterPeer.Header.Hash().String())
+		require.NotContains(t, containingHashes, blockFromEarlierPeer.Header.Hash().String())
+
+		s.mainChainRebuilding.Add(-1)
+
+		// Startup rebuilds on_main_chain from the best tip; the flags must not move.
+		require.NoError(t, s.rebuildOnMainChainFlagTx(context.Background(), true, 0))
+		require.True(t, getOnMainChain(t, s, blockFromLaterPeer.Header.Hash().CloneBytes()))
+		require.False(t, getOnMainChain(t, s, blockFromEarlierPeer.Header.Hash().CloneBytes()))
 	})
 }

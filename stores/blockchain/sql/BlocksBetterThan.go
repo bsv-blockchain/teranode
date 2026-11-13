@@ -37,24 +37,22 @@ const blocksBetterThanColumns = `
 		,b.median_time_past
 `
 
-// sortsBetterThanAfter is "sorts better than ($2, $3, $4)" in the best-tip order, chain_work
-// DESC, peer_id ASC, id ASC. It is written as ORs rather than a row comparison because the
-// order mixes directions, which a row comparison cannot express.
+// sortsBetterThanAfter is "sorts better than ($2, $3)" in the best-tip order, chain_work DESC,
+// id ASC. It is written as ORs rather than a row comparison because the order mixes directions,
+// which a row comparison cannot express.
 const sortsBetterThanAfter = `(
 			b.chain_work > $2
-			OR (b.chain_work = $2 AND b.peer_id < $3)
-			OR (b.chain_work = $2 AND b.peer_id = $3 AND b.id < $4)
+			OR (b.chain_work = $2 AND b.id < $3)
 		)`
 
-// sortsAtLeastFrom is "sorts better than or level with ($5, $6, $7)".
+// sortsAtLeastFrom is "sorts better than or level with ($4, $5)".
 const sortsAtLeastFrom = `(
-			b.chain_work > $5
-			OR (b.chain_work = $5 AND b.peer_id < $6)
-			OR (b.chain_work = $5 AND b.peer_id = $6 AND b.id <= $7)
+			b.chain_work > $4
+			OR (b.chain_work = $4 AND b.id <= $5)
 		)`
 
 // blocksBetterThanQuery reads the valid blocks that sort better than a key, worst first. The
-// redundant b.chain_work >= $1 bounds the scan of idx_chain_work_valid, which the planner
+// redundant b.chain_work >= $1 bounds the scan of idx_chain_work_id_valid, which the planner
 // cannot derive from the ORs; the ORDER BY is that index read backwards, so no sort is needed.
 // $1 is the lower of the two chain works when a from key is given.
 const blocksBetterThanQuery = `
@@ -63,9 +61,9 @@ const blocksBetterThanQuery = `
 		WHERE b.invalid = false
 		AND b.chain_work >= $1
 		AND ` + sortsBetterThanAfter + `
-		AND b.height >= $5
-		ORDER BY b.chain_work ASC, b.peer_id DESC, b.id DESC
-		LIMIT $6
+		AND b.height >= $4
+		ORDER BY b.chain_work ASC, b.id DESC
+		LIMIT $5
 `
 
 // blocksBetterThanOrFromQuery is blocksBetterThanQuery that also returns the blocks at or above
@@ -76,26 +74,25 @@ const blocksBetterThanOrFromQuery = `
 		WHERE b.invalid = false
 		AND b.chain_work >= $1
 		AND (` + sortsBetterThanAfter + ` OR ` + sortsAtLeastFrom + `)
-		AND b.height >= $8
-		ORDER BY b.chain_work ASC, b.peer_id DESC, b.id DESC
-		LIMIT $9
+		AND b.height >= $6
+		ORDER BY b.chain_work ASC, b.id DESC
+		LIMIT $7
 `
 
 // bestTipKeyQuery reads the key of the best tip, by the order GetBestBlockHeader uses.
 const bestTipKeyQuery = `
-		SELECT id, hash, chain_work, peer_id
+		SELECT id, hash, chain_work
 		FROM blocks
 		WHERE invalid = false
-		ORDER BY chain_work DESC, peer_id ASC, id ASC
+		ORDER BY chain_work DESC, id ASC
 		LIMIT 1
 `
 
 // BlocksBetterThan returns the valid blocks that sort better than after in the order the store
-// picks its best tip by (chain_work DESC, peer_id ASC, id ASC), worst first, at or above
+// picks its best tip by (chain_work DESC, id ASC), worst first, at or above
 // minHeight, at most limit of them. When from is given it also returns the blocks that sort
 // better than or level with from, so a reader can move its position down to a low-water mark
-// without comparing keys itself: peer ids compare by the database's collation, which the reader
-// does not know.
+// without comparing keys itself.
 //
 // Without an invalidation the best tip only ever moves to a block that sorts better, so every
 // block that was the best tip after after is in the result, in the order it could have become
@@ -111,7 +108,7 @@ func (s *SQL) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from
 
 	if from == nil {
 		rows, err = s.db.QueryContext(ctx, blocksBetterThanQuery,
-			after.ChainWork, after.ChainWork, after.PeerID, int64(after.ID), minHeight, limit)
+			after.ChainWork, after.ChainWork, int64(after.ID), minHeight, limit)
 	} else {
 		lowest := after.ChainWork
 		if bytes.Compare(from.ChainWork, lowest) < 0 {
@@ -119,8 +116,8 @@ func (s *SQL) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from
 		}
 
 		rows, err = s.db.QueryContext(ctx, blocksBetterThanOrFromQuery,
-			lowest, after.ChainWork, after.PeerID, int64(after.ID),
-			from.ChainWork, from.PeerID, int64(from.ID), minHeight, limit)
+			lowest, after.ChainWork, int64(after.ID),
+			from.ChainWork, int64(from.ID), minHeight, limit)
 	}
 
 	if err != nil {
@@ -231,7 +228,7 @@ func bestTipKey(ctx context.Context, q execQuerier) (key model.BestTipKey, ok bo
 		hash []byte
 	)
 
-	if err = q.QueryRowContext(ctx, bestTipKeyQuery).Scan(&id, &hash, &key.ChainWork, &key.PeerID); err != nil {
+	if err = q.QueryRowContext(ctx, bestTipKeyQuery).Scan(&id, &hash, &key.ChainWork); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.BestTipKey{}, false, nil
 		}
@@ -257,8 +254,7 @@ func bestTipKey(ctx context.Context, q execQuerier) (key model.BestTipKey, ok bo
 //
 // The mark keeps the lower of its key and the new best's, and adds the block that was the best
 // tip before to its dropped tips. It gets a new generation either way, so a reader that read the
-// old mark does not clear this drop with it. The keys are compared by the database, under the
-// same collation the best-tip order uses.
+// old mark does not clear this drop with it.
 func (s *SQL) recordBestTipDrop(ctx context.Context, tx *sql.Tx, before model.BestTipKey, hadBefore bool) error {
 	after, ok, err := bestTipKey(ctx, tx)
 	if err != nil || !ok || (hadBefore && after.ID == before.ID) {
@@ -316,17 +312,17 @@ func (s *SQL) recordBestTipDrop(ctx context.Context, tx *sql.Tx, before model.Be
 }
 
 // sortsWorse reports whether a sorts worse than b in the best-tip order. The database compares
-// them, so peer ids compare under the collation the blocks index uses.
+// them, so chain work compares exactly as the blocks index orders it.
 func (s *SQL) sortsWorse(ctx context.Context, q execQuerier, a, b model.BestTipKey) (bool, error) {
 	// The placeholders first appear in order, which SQLite needs to bind them by position.
-	query := `SELECT ($1 < $2) OR ($1 = $2 AND ($3 > $4 OR ($3 = $4 AND $5 > $6)))`
+	query := `SELECT ($1 < $2) OR ($1 = $2 AND $3 > $4)`
 	if s.engine == util.Postgres {
-		query = `SELECT ($1::bytea < $2::bytea) OR ($1::bytea = $2::bytea AND ($3::text > $4::text OR ($3::text = $4::text AND $5::bigint > $6::bigint)))`
+		query = `SELECT ($1::bytea < $2::bytea) OR ($1::bytea = $2::bytea AND $3::bigint > $4::bigint)`
 	}
 
 	var worse bool
 
-	if err := q.QueryRowContext(ctx, query, a.ChainWork, b.ChainWork, a.PeerID, b.PeerID, int64(a.ID), int64(b.ID)).Scan(&worse); err != nil {
+	if err := q.QueryRowContext(ctx, query, a.ChainWork, b.ChainWork, int64(a.ID), int64(b.ID)).Scan(&worse); err != nil {
 		return false, err
 	}
 

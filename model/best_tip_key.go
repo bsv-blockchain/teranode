@@ -16,16 +16,18 @@ const BestTipLowWaterStateKey = "BestTipLowWater"
 const bestTipKeyVersion = 1
 
 // BestTipKey is a block's place in the order the blockchain store picks its best tip by: most
-// chain work first, then the lowest peer id, then the lowest block id. The order is total, and
-// without an invalidation the best tip only ever moves to a block that sorts better, so a reader
-// that keeps the key of the last block it handled finds every later best tip among the valid
-// blocks that sort better than that key.
+// chain work first, then the lowest block id. Above the checkpoints a block's id is taken when
+// StoreBlock writes its row, after validation, so between blocks of equal work the one this node
+// stored first wins. That is close to SV Node's rule of keeping the block it received first, but
+// not the same: a sibling that arrives later and validates faster can take the lower id. The
+// order is total, and without an invalidation the best tip only ever moves to a block that sorts
+// better, so a reader that keeps the key of the last block it handled finds every later best tip
+// among the valid blocks that sort better than that key.
 //
 // ChainWork is the stored cumulative work, 32 bytes big-endian, so comparing it bytewise
 // compares the work. Hash identifies the block and plays no part in the order.
 type BestTipKey struct {
 	ChainWork []byte
-	PeerID    string
 	ID        uint32
 	Hash      chainhash.Hash
 }
@@ -34,19 +36,19 @@ type BestTipKey struct {
 func NewBestTipKey(header *BlockHeader, meta *BlockHeaderMeta) BestTipKey {
 	return BestTipKey{
 		ChainWork: append([]byte(nil), meta.ChainWork...),
-		PeerID:    meta.PeerID,
 		ID:        meta.ID,
 		Hash:      *header.Hash(),
 	}
 }
 
-// Bytes serialises the key: a version byte, the chain work and the peer id each behind a 4-byte
-// length, the id, and the hash.
+// Bytes serialises the key: a version byte, the chain work behind a 4-byte length, an empty
+// length-prefixed slot where the peer id was, the id, and the hash. The peer id is no longer part
+// of the order, but the slot stays so a key written by this binary still parses in an older one.
 func (k BestTipKey) Bytes() []byte {
-	b := make([]byte, 0, 1+4+len(k.ChainWork)+4+len(k.PeerID)+4+chainhash.HashSize)
+	b := make([]byte, 0, 1+4+len(k.ChainWork)+4+4+chainhash.HashSize)
 	b = append(b, bestTipKeyVersion)
 	b = appendBestTipBytes(b, k.ChainWork)
-	b = appendBestTipBytes(b, []byte(k.PeerID))
+	b = appendBestTipBytes(b, nil)
 	b = binary.LittleEndian.AppendUint32(b, k.ID)
 
 	return append(b, k.Hash[:]...)
@@ -213,9 +215,8 @@ func readBestTipKey(b []byte) (BestTipKey, []byte, error) {
 	}
 
 	var (
-		k    BestTipKey
-		peer []byte
-		err  error
+		k   BestTipKey
+		err error
 	)
 
 	rest := b[1:]
@@ -224,11 +225,11 @@ func readBestTipKey(b []byte) (BestTipKey, []byte, error) {
 		return BestTipKey{}, nil, err
 	}
 
-	if peer, rest, err = readBestTipBytes(rest); err != nil {
+	// The peer id slot. A key written before the peer id left the order carries one; it is
+	// skipped, and the key keeps its place by chain work and id.
+	if _, rest, err = readBestTipBytes(rest); err != nil {
 		return BestTipKey{}, nil, err
 	}
-
-	k.PeerID = string(peer)
 
 	if len(rest) < 4+chainhash.HashSize {
 		return BestTipKey{}, nil, errors.NewProcessingError("invalid best tip key: truncated id or hash")

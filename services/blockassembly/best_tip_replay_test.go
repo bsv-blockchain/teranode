@@ -471,13 +471,13 @@ func TestReplayBestTipChanges_RepeatedFailureFollowsBestHeader(t *testing.T) {
 	}
 
 	require.True(t, ba.followBestTipChanges(t.Context()))
-	require.Equal(t, model.NewBestTipKey(best, bestMeta), *ba.bestTipPos.Load(), "the position jumps to the best tip, with its id and peer id")
+	require.Equal(t, model.NewBestTipKey(best, bestMeta), *ba.bestTipPos.Load(), "the position jumps to the best tip, with its id")
 	require.True(t, ba.skippedForkMarkPending, "the mark the history owes is pending")
 	m.AssertExpectations(t)
 }
 
 // withoutBestTipIdentity returns a copy of meta as GetBestBlockHeader returns it over gRPC: without
-// the block id and peer id, which place a block among others of equal work.
+// the block id, which places a block among others of equal work, and the peer id.
 func withoutBestTipIdentity(meta *model.BlockHeaderMeta) *model.BlockHeaderMeta {
 	stripped := *meta
 	stripped.ID = 0
@@ -512,7 +512,7 @@ func TestReturnToRunning_SavesAfterLeavingProcessingState(t *testing.T) {
 
 	var stateAtSave State
 
-	pos := model.BestTipKey{ChainWork: []byte{7}, PeerID: "p", ID: 7}
+	pos := model.BestTipKey{ChainWork: []byte{7}, ID: 7}
 
 	m.On("SetState", mock.Anything, BestTipPositionStateKey, pos.Bytes()).
 		Run(func(mock.Arguments) { stateAtSave = ba.GetCurrentRunningState() }).
@@ -534,7 +534,7 @@ func TestReturnToRunning_SavesAfterLeavingProcessingState(t *testing.T) {
 
 	// A moved position waits for bestTipPositionSaveInterval, so a pass per block during
 	// initial sync does not cost a write per block.
-	moved := model.BestTipKey{ChainWork: []byte{8}, PeerID: "p", ID: 8}
+	moved := model.BestTipKey{ChainWork: []byte{8}, ID: 8}
 	m.On("SetState", mock.Anything, BestTipPositionStateKey, moved.Bytes()).Return(nil).Once()
 	ba.setBestTipPos(moved)
 	ba.returnToRunning(t.Context())
