@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -4259,32 +4260,25 @@ func TestDeriveBlockHeight(t *testing.T) {
 	}
 }
 
-// TestBlockValidation_SetMined_UpdatesTxMeta ensures that after block validation, calling setTxMined marks all block transactions as mined in the txMetaStore.
-func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
-	initPrometheusMetrics()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
-	defer deferFunc()
-
-	tSettings := test.CreateBaseTestSettings(t)
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
-	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
-	require.NoError(t, err)
+// buildBlockWithReservedID builds a valid block at height 1 holding a coinbase and one
+// child transaction, stores both transactions unmined in txMetaStore and the subtree in
+// subtreeStore, and reserves the block's id the way quick validation does before it can
+// fall through to full validation. The returned block carries that reserved id (1 on a
+// fresh store).
+func buildBlockWithReservedID(ctx context.Context, t *testing.T, tSettings *settings.Settings, blockchainClient blockchain.ClientI, txMetaStore utxostore.Store, subtreeStore blob.Store) (block *model.Block, coinbaseTx, childTx *bt.Tx) {
+	t.Helper()
 
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	// Coinbase
-	coinbaseTx := bt.NewTx()
+	coinbaseTx = bt.NewTx()
 	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
 	// Child tx spending coinbase
-	childTx := bt.NewTx()
+	childTx = bt.NewTx()
 	_ = childTx.FromUTXOs(&bt.UTXO{
 		TxIDHash:      coinbaseTx.TxIDChainHash(),
 		Vout:          0,
@@ -4292,16 +4286,16 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 		Satoshis:      coinbaseTx.Outputs[0].Satoshis,
 	})
 	_ = childTx.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000)
-	_ = childTx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
+	_ = childTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 
 	// Store both in txMetaStore
-	_, _, err = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err := txMetaStore.SpendAndCreate(ctx, coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 0,
 		SubtreeIdx:  0,
 	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	_, _, err = txMetaStore.SpendAndCreate(context.Background(), childTx, 0, utxostore.WithCreateOnly())
+	_, _, err = txMetaStore.SpendAndCreate(ctx, childTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Build subtree with coinbase and normalTx
@@ -4319,11 +4313,11 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
+	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
@@ -4353,7 +4347,7 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 
 	totalSize := int64(coinbaseTx.Size()) + int64(childTx.Size()) //nolint:gosec
 
-	block, err := model.NewBlock(
+	block, err = model.NewBlock(
 		blockHeader,
 		coinbaseTx,
 		subtreeHashes,
@@ -4368,6 +4362,26 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	reservedID, err := blockchainClient.AssignBlockID(ctx, block.Hash())
 	require.NoError(t, err)
 	require.Equal(t, uint64(block.ID), reservedID)
+
+	return block, coinbaseTx, childTx
+}
+
+// TestBlockValidation_SetMined_UpdatesTxMeta ensures that after block validation, calling setTxMined marks all block transactions as mined in the txMetaStore.
+func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	block, coinbaseTx, childTx := buildBlockWithReservedID(ctx, t, tSettings, blockchainClient, txMetaStore, subtreeStore)
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test")
@@ -4391,6 +4405,77 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	require.Equal(t, metaChildTx.BlockIDs[0], uint32(0x1))
 	require.Equal(t, metaChildTx.BlockHeights[0], uint32(0x1))
 	require.Equal(t, metaChildTx.SubtreeIdxs[0], 0)
+}
+
+// TestBlockValidation_ReservedBlockIDStillTagsTransactions covers a block that reaches full
+// validation already holding a block id: catch-up's quick validation reserves one and then
+// falls through to full validation on a local failure, and a ProcessBlock caller can send
+// one. Full validation must store the block under that id but leave mined_set false, so the
+// setMinedChan worker tags its transactions and runs the post-storage double-spend check.
+// Storing it with mined_set true made the worker skip the block, and the child transaction
+// was never tagged. The test makes no direct setTxMinedStatus call: the worker has to do it.
+// It runs once per AddBlock call site: the normal path and the optimistic-mining path.
+func TestBlockValidation_ReservedBlockIDStillTagsTransactions(t *testing.T) {
+	t.Run("normal", func(t *testing.T) {
+		testReservedBlockIDStillTagsTransactions(t, false)
+	})
+
+	t.Run("optimistic mining", func(t *testing.T) {
+		testReservedBlockIDStillTagsTransactions(t, true)
+	})
+}
+
+func testReservedBlockIDStillTagsTransactions(t *testing.T, optimisticMining bool) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = optimisticMining
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = optimisticMining
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	// The blockchain server sends BlockSubtreesSet once a block's subtrees are processed, and
+	// that is what wakes the setMinedChan worker. LocalClient does not send it, so the test does.
+	tracker := newTrackingBlockchainClient(blockchainClient).withNotificationChannel()
+	notificationCh := tracker.subscriptionChannel()
+
+	block, _, childTx := buildBlockWithReservedID(ctx, t, tSettings, blockchainClient, txMetaStore, subtreeStore)
+	reservedID := block.ID
+
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, tracker, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+	require.NoError(t, blockValidation.ValidateBlock(ctx, block, "test", !optimisticMining))
+
+	_, headerMeta, err := blockchainClient.GetBlockHeader(ctx, block.Hash())
+	require.NoError(t, err)
+	require.Equal(t, reservedID, headerMeta.ID, "the block must be stored under the id reserved for it")
+
+	blockHash := block.Hash()
+	notificationCh <- &blockchain_api.Notification{
+		Type: model.NotificationType_BlockSubtreesSet,
+		Hash: blockHash[:],
+	}
+
+	require.Eventually(t, func() bool {
+		meta, getErr := txMetaStore.Get(ctx, childTx.TxIDChainHash())
+		if getErr != nil {
+			return false
+		}
+
+		return slices.Contains(meta.BlockIDs, reservedID)
+	}, 10*time.Second, 20*time.Millisecond, "the setMinedChan worker must tag the child transaction with the block's id")
+
+	require.Eventually(t, func() bool {
+		mined, minedErr := blockchainClient.GetBlockIsMined(ctx, block.Hash())
+
+		return minedErr == nil && mined
+	}, 10*time.Second, 20*time.Millisecond, "mined_set must be set once the transactions are tagged")
 }
 
 // TestBlockValidation_SetMinedChan_TriggersSetTxMined ensures that sending a block hash into setMinedChan triggers setTxMined in the background goroutine.
