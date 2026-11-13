@@ -1387,9 +1387,12 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	if !peerAheadByValidatedWork(peerInfo, localChainWork) {
 		sc.logger.Infof("[SyncCoordinator] Caught up to sync peer %s by validated work", currentPeer)
 		// Don't clear peer yet, but look for better peer.
-		// The incumbent has not failed — we simply caught up to it — so it stays in
-		// the candidate set and selector hysteresis returns it unless a challenger is
-		// materially better. Only a different peer causes a switch.
+		// The incumbent has not failed — we simply caught up to it — so it is not
+		// excluded. It is also not ahead of the local tip by validated work, so
+		// filterEligiblePeersWithTip drops it whenever a validated peer is ahead; a
+		// switch here therefore means a peer with work to offer exists, not that a
+		// near-equal peer displaced a healthy incumbent. With no such peer the call
+		// returns "" and the incumbent stays.
 		if betterPeer := sc.selectNewSyncPeer(false); betterPeer != currentPeer && betterPeer != "" {
 			sc.logger.Infof("[SyncCoordinator] Found better sync peer %s", betterPeer)
 			sc.clearSyncPeerIfCurrent("")

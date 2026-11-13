@@ -352,10 +352,12 @@ func TestSyncCoordinator_SelectNewSyncPeer_PrefersFullNode(t *testing.T) {
 	require.Equal(t, "full", sc.selectNewSyncPeer(false))
 }
 
-// Hysteresis through the real coordinator path: an incumbent sync peer that is
-// still merit-tied with its rivals keeps the slot cycle after cycle (no A<->B
+// Hysteresis through the coordinator's selection path while the incumbent is
+// still ahead of the local tip by validated work: an incumbent that is
+// merit-tied with its rivals keeps the slot cycle after cycle (no A<->B
 // oscillation and no fresh Kafka catchup trigger per switch), while an actual
-// failure signal rotates it off.
+// failure signal rotates it off. A caught-up incumbent is not a candidate at
+// all; that path is covered by the EvaluateSyncPeer caught-up tests.
 func TestSyncCoordinator_SelectNewSyncPeer_KeepsIncumbentUntilChallengerMateriallyBetter(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
@@ -856,6 +858,40 @@ func TestSyncCoordinator_EvaluateSyncPeer_ValidatedWorkCaughtUp(t *testing.T) {
 	sc.evaluateSyncPeer()
 
 	require.Equal(t, "better", sc.GetCurrentSyncPeer())
+}
+
+func TestSyncCoordinator_EvaluateSyncPeer_ValidatedWorkCaughtUpWithoutRivalKeepsPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x04})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "current",
+		DataHubURL:         "http://current",
+		Height:             1_000,
+		BlockHash:          syncCoordinatorTestHash(t),
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x03},
+		LastMessageTime:    time.Now(),
+	})
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "level",
+		DataHubURL:         "http://level",
+		Height:             1_000,
+		BlockHash:          syncCoordinatorTestHash(t),
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x03},
+		LastMessageTime:    time.Now(),
+	})
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = "current"
+	sc.syncStartTime = time.Now()
+	sc.mu.Unlock()
+
+	for range 20 {
+		sc.evaluateSyncPeer()
+		require.Equal(t, "current", sc.GetCurrentSyncPeer(), "a caught-up incumbent must not rotate onto an equally caught-up peer")
+	}
 }
 
 func TestSyncCoordinator_HandleFSMTransition_DoesNotUseAdvertisedHeightAsFailureProof(t *testing.T) {
