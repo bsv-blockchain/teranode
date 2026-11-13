@@ -8,7 +8,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/bsv-blockchain/teranode/services/legacy/txscript"
+	"github.com/bsv-blockchain/teranode/compat/txscript"
 )
 
 // go test -v -tags test_txscript ./test/...

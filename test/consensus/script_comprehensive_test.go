@@ -5,7 +5,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/sighash"
-	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
+	hash "github.com/bsv-blockchain/go-sdk/primitives/hash"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,7 +82,7 @@ func TestComprehensiveScripts(t *testing.T) {
 			script := &bscript.Script{}
 			_ = script.AppendOpcodes(bscript.OpDUP)
 			_ = script.AppendOpcodes(bscript.OpHASH160)
-			_ = script.AppendPushData(bsvutil.Hash160(keyData.Pubkey0))
+			_ = script.AppendPushData(hash.Hash160(keyData.Pubkey0))
 			_ = script.AppendOpcodes(bscript.OpEQUALVERIFY)
 			_ = script.AppendOpcodes(bscript.OpCHECKSIG)
 
@@ -107,7 +107,7 @@ func TestComprehensiveScripts(t *testing.T) {
 			script := &bscript.Script{}
 			_ = script.AppendOpcodes(bscript.OpDUP)
 			_ = script.AppendOpcodes(bscript.OpHASH160)
-			_ = script.AppendPushData(bsvutil.Hash160(keyData.Pubkey0))
+			_ = script.AppendPushData(hash.Hash160(keyData.Pubkey0))
 			_ = script.AppendOpcodes(bscript.OpEQUALVERIFY)
 			_ = script.AppendOpcodes(bscript.OpCHECKSIG)
 

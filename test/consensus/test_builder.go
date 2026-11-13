@@ -10,8 +10,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/sighash"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+	hash "github.com/bsv-blockchain/go-sdk/primitives/hash"
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 )
 
 // TestBuilder builds test cases programmatically, similar to C++ implementation
@@ -49,7 +49,7 @@ func NewTestBuilder(script *bscript.Script, comment string, flags uint32, p2sh b
 		// For P2SH, we need to create the script manually
 		// OP_HASH160 <20 bytes script hash> OP_EQUAL
 		scriptBytes := scriptPubKey.Bytes()
-		scriptHash := bsvutil.Hash160(scriptBytes)
+		scriptHash := hash.Hash160(scriptBytes)
 		p2shScript := &bscript.Script{}
 		_ = p2shScript.AppendOpcodes(bscript.OpHASH160)
 		_ = p2shScript.AppendPushData(scriptHash)
