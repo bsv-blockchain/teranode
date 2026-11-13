@@ -1814,7 +1814,7 @@ func TestResolveStores_BlockStoreDeletesTheMarkerThePersisterWrote(t *testing.T)
 
 	// Marker 123 is above the target; with the opt-in flag it is deleted.
 	e := &env{logger: logger(), blockStore: stores.Block, opts: Options{ResetUTXOPersister: true}}
-	pf := &preflightResult{target: 4}
+	pf := &preflightResult{target: 4, utxoMarkerStale: true, utxoMarkerRaw: "123"}
 	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, pf))
 	require.NoFileExists(t, markerPath)
 
@@ -1859,7 +1859,7 @@ func TestResolveStores_CleanupStaleUTXOSetDeletesTheShardedFiles(t *testing.T) {
 	})
 
 	e := &env{logger: logger(), blockStore: stores.Block, opts: Options{ResetUTXOPersister: true}}
-	pf := &preflightResult{target: 4, utxoMarkerStale: true, utxoMarkerHash: &markerHash}
+	pf := &preflightResult{target: 4, utxoMarkerStale: true, utxoMarkerRaw: "123", utxoMarkerHash: &markerHash}
 	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, pf))
 
 	// Check with an independent store at the known-correct -2 prefix: if the tool
@@ -1891,8 +1891,9 @@ func TestReportUTXOPersisterPlan_ResolvesMainChainHashAndStaleFlag(t *testing.T)
 
 	t.Run("above target resolves the main-chain hash and is stale", func(t *testing.T) {
 		writeLastProcessed(t, ctx, blockStore, "7")
-		stale, hash := e.reportUTXOPersisterPlan(ctx, 4)
+		stale, hash, raw := e.reportUTXOPersisterPlan(ctx, 4)
 		require.True(t, stale)
+		require.Equal(t, "7", raw, "Phase 3 checks the marker still holds this value")
 		require.NotNil(t, hash)
 		require.Equal(t, blocks[6].Hash().String(), hash.String(),
 			"marker height 7 must resolve to the height-7 block on the main chain")
@@ -1900,15 +1901,17 @@ func TestReportUTXOPersisterPlan_ResolvesMainChainHashAndStaleFlag(t *testing.T)
 
 	t.Run("unparseable marker is stale with no hash", func(t *testing.T) {
 		writeLastProcessed(t, ctx, blockStore, "banana")
-		stale, hash := e.reportUTXOPersisterPlan(ctx, 4)
+		stale, hash, raw := e.reportUTXOPersisterPlan(ctx, 4)
 		require.True(t, stale)
+		require.Equal(t, "banana", raw)
 		require.Nil(t, hash)
 	})
 
 	t.Run("marker at or below target is not stale", func(t *testing.T) {
 		writeLastProcessed(t, ctx, blockStore, "3")
-		stale, hash := e.reportUTXOPersisterPlan(ctx, 4)
+		stale, hash, raw := e.reportUTXOPersisterPlan(ctx, 4)
 		require.False(t, stale)
+		require.Empty(t, raw)
 		require.Nil(t, hash)
 	})
 }
@@ -1959,9 +1962,13 @@ func TestDeleteUTXOPersisterLastProcessed_LogsWhatHappened(t *testing.T) {
 	writeLastProcessed(t, ctx, blockStore, "7")
 	log = &capturingLogger{}
 	e = &env{logger: log, blockStore: blockStore}
-	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, &preflightResult{target: 4}))
+	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, &preflightResult{target: 4, utxoMarkerStale: true, utxoMarkerRaw: "7"}))
 	require.True(t, lastProcessedExists(t, ctx, blockStore), "default: a marker above target is left until --reset-utxo-persister")
 	require.Contains(t, log.warnText(), "--reset-utxo-persister")
+	// The marker recovers by itself when the same blocks come back, so the
+	// warning must not tell the operator it will stall.
+	require.Contains(t, log.warnText(), "recovers by itself")
+	require.NotContains(t, log.warnText(), "will stall on a marker above the rewound chain")
 	require.NotContains(t, log.infoText(), "deleted the utxo-persister lastProcessed marker")
 
 	// Marker above the target WITH --reset-utxo-persister: deleted, reported at
@@ -1969,10 +1976,105 @@ func TestDeleteUTXOPersisterLastProcessed_LogsWhatHappened(t *testing.T) {
 	// operator is told it means a rebuild from genesis.
 	log = &capturingLogger{}
 	e = &env{logger: log, blockStore: blockStore, opts: Options{ResetUTXOPersister: true}}
-	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, &preflightResult{target: 4}))
+	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, &preflightResult{target: 4, utxoMarkerStale: true, utxoMarkerRaw: "7"}))
 	require.False(t, lastProcessedExists(t, ctx, blockStore))
 	require.Contains(t, log.infoText(), "deleted the utxo-persister lastProcessed marker")
 	require.Contains(t, log.infoText(), "genesis")
+}
+
+// #1864: Phase 3 acts on what preflight reported and the operator confirmed, not
+// on a fresh read of its own. A transient read failure in preflight reports
+// "nothing to reset" (and the prompt shows no reset line); Phase 3 must not then
+// find the marker above target and delete it, forcing a genesis rebuild nobody
+// confirmed.
+func TestDeleteUTXOPersisterLastProcessed_ActsOnPreflightResult(t *testing.T) {
+	ctx := context.Background()
+	reset := Options{ResetUTXOPersister: true}
+
+	t.Run("preflight saw no stale marker: a marker above target is left alone", func(t *testing.T) {
+		blockStore := memory.New()
+		writeLastProcessed(t, ctx, blockStore, "7")
+		log := &capturingLogger{}
+		e := &env{logger: log, blockStore: blockStore, opts: reset}
+
+		require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, &preflightResult{target: 4}))
+
+		require.True(t, lastProcessedExists(t, ctx, blockStore), "an unconfirmed marker must not be deleted")
+		require.Contains(t, log.infoText(), "preflight found no stale")
+		require.NotContains(t, log.infoText(), "deleted the utxo-persister lastProcessed marker")
+	})
+
+	t.Run("marker changed after the confirmation: not deleted", func(t *testing.T) {
+		blockStore := memory.New()
+		writeLastProcessed(t, ctx, blockStore, "9")
+		log := &capturingLogger{}
+		e := &env{logger: log, blockStore: blockStore, opts: reset}
+
+		require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, &preflightResult{target: 4, utxoMarkerStale: true, utxoMarkerRaw: "7"}))
+
+		require.True(t, lastProcessedExists(t, ctx, blockStore))
+		require.Contains(t, log.warnText(), "changed after preflight")
+		require.NotContains(t, log.infoText(), "deleted the utxo-persister lastProcessed marker")
+	})
+
+	t.Run("marker gone after the confirmation: nothing to do", func(t *testing.T) {
+		blockStore := memory.New()
+		log := &capturingLogger{}
+		e := &env{logger: log, blockStore: blockStore, opts: reset}
+
+		require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, &preflightResult{target: 4, utxoMarkerStale: true, utxoMarkerRaw: "7"}))
+
+		require.Contains(t, log.infoText(), "is gone")
+		require.Empty(t, log.warnText())
+	})
+
+	t.Run("marker still as confirmed: deleted", func(t *testing.T) {
+		blockStore := memory.New()
+		writeLastProcessed(t, ctx, blockStore, "7")
+		e := &env{logger: &capturingLogger{}, blockStore: blockStore, opts: reset}
+
+		require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, &preflightResult{target: 4, utxoMarkerStale: true, utxoMarkerRaw: "7"}))
+
+		require.False(t, lastProcessedExists(t, ctx, blockStore))
+	})
+}
+
+// #1864: the file store's Del returns nil for a missing file, so the tool used
+// to log "deleted stale utxo-set" when nothing was on disk (wrong hash, set
+// already gone, prefix mismatch). A miss is now logged as a miss.
+func TestCleanupStaleUTXOSet_ReportsAMissAsAMiss(t *testing.T) {
+	ctx := context.Background()
+	var hash chainhash.Hash
+	hash[0], hash[31] = 0x11, 0x22
+
+	t.Run("nothing on disk", func(t *testing.T) {
+		log := &capturingLogger{}
+		e := &env{logger: log, blockStore: memory.New()}
+
+		e.cleanupStaleUTXOSet(ctx, &hash)
+
+		require.NotContains(t, log.infoText(), "deleted stale")
+		require.Contains(t, log.infoText(), "nothing to delete")
+	})
+
+	t.Run("files present are deleted and reported", func(t *testing.T) {
+		store := memory.New()
+		for _, ft := range []fileformat.FileType{fileformat.FileTypeUtxoSet, fileformat.FileTypeUtxoSetHash, fileformat.FileTypeUtxoHeaders} {
+			require.NoError(t, store.Set(ctx, hash[:], ft, []byte("payload")))
+		}
+		log := &capturingLogger{}
+		e := &env{logger: log, blockStore: store}
+
+		e.cleanupStaleUTXOSet(ctx, &hash)
+
+		require.Equal(t, 3, strings.Count(log.infoText(), "deleted stale"))
+		require.NotContains(t, log.infoText(), "nothing to delete")
+		for _, ft := range []fileformat.FileType{fileformat.FileTypeUtxoSet, fileformat.FileTypeUtxoSetHash, fileformat.FileTypeUtxoHeaders} {
+			exists, err := store.Exists(ctx, hash[:], ft)
+			require.NoError(t, err)
+			require.False(t, exists)
+		}
+	})
 }
 
 // stampedUTXOStore stands in for a UTXO store that writes blocks permanently at a fixed depth,

@@ -687,6 +687,7 @@ type rewindFlags struct {
 	assumeYes    *bool
 	forceNotIdle *bool
 	forceDeep    *bool
+	resetUTXOPer *bool
 	verify       *bool
 	concurrency  *int
 }
@@ -701,6 +702,7 @@ func registerRewindFlags(fs *flag.FlagSet) *rewindFlags {
 		assumeYes:    fs.Bool("assume-yes", false, "Skip interactive confirmation prompt"),
 		forceNotIdle: fs.Bool("force-not-idle", false, "Proceed even if FSM is not IDLE (DANGEROUS)"),
 		forceDeep:    fs.Bool("force-deep", false, "Allow rewind deeper than 100 blocks (coinbase-maturity risk)"),
+		resetUTXOPer: fs.Bool("reset-utxo-persister", false, "Delete the UTXO persister's lastProcessed marker if above target, forcing a rebuild from genesis (only safe with full delta history to genesis; a seeded node will stall)"),
 		verify:       fs.Bool("verify", false, "Run post-rewind consistency checks"),
 		concurrency:  fs.Int("concurrency", 0, "Subtree-load concurrency (0 = settings.BlockAssembly.MoveBackBlockConcurrency or 4)"),
 	}
@@ -734,14 +736,15 @@ func rewindExecute(logger ulogger.Logger, tSettings *settings.Settings, rewind *
 // under `kubectl exec -it` / `docker compose run`.
 func (f *rewindFlags) options() rewindblockchain.Options {
 	return rewindblockchain.Options{
-		TargetHeight: *f.targetHeight,
-		DryRun:       *f.dryRun,
-		AssumeYes:    *f.assumeYes,
-		ForceNotIdle: *f.forceNotIdle,
-		ForceDeep:    *f.forceDeep,
-		Verify:       *f.verify,
-		Concurrency:  *f.concurrency,
-		Stdin:        os.Stdin,
-		Stdout:       os.Stdout,
+		TargetHeight:       *f.targetHeight,
+		DryRun:             *f.dryRun,
+		AssumeYes:          *f.assumeYes,
+		ForceNotIdle:       *f.forceNotIdle,
+		ForceDeep:          *f.forceDeep,
+		ResetUTXOPersister: *f.resetUTXOPer,
+		Verify:             *f.verify,
+		Concurrency:        *f.concurrency,
+		Stdin:              os.Stdin,
+		Stdout:             os.Stdout,
 	}
 }

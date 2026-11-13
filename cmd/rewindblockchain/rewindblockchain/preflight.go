@@ -34,6 +34,11 @@ type preflightResult struct {
 	// unparseable and unresolved cases reset the persister with no hash to show.
 	utxoMarkerStale bool
 
+	// utxoMarkerRaw is the marker's trimmed contents as preflight read them when
+	// utxoMarkerStale is true. Phase 3 deletes only a marker that still holds
+	// exactly this value, so it acts on what the operator confirmed.
+	utxoMarkerRaw string
+
 	// utxoMarkerHash is the hash of the main-chain block at the marker's height,
 	// resolved via GetBlockHeadersByHeight while that block is still on the main
 	// chain (nil when the marker is at/below target, unreadable, unparseable, or
@@ -139,7 +144,7 @@ func (e *env) preflight(ctx context.Context) (*preflightResult, error) {
 	// any destructive phase — the operator needs the plan before confirming, not
 	// after Phase 2. Resolve the marker block's hash through the main chain while
 	// it is still there, so Phase 3 can clean up its stale utxo-set files.
-	utxoMarkerStale, utxoMarkerHash := e.reportUTXOPersisterPlan(ctx, target)
+	utxoMarkerStale, utxoMarkerHash, utxoMarkerRaw := e.reportUTXOPersisterPlan(ctx, target)
 
 	res := &preflightResult{
 		target:               target,
@@ -151,6 +156,7 @@ func (e *env) preflight(ctx context.Context) (*preflightResult, error) {
 		persisterHeight:      persisterHeight,
 		persisterHeightKnown: persisterHeightKnown,
 		utxoMarkerStale:      utxoMarkerStale,
+		utxoMarkerRaw:        utxoMarkerRaw,
 		utxoMarkerHash:       utxoMarkerHash,
 	}
 
@@ -234,13 +240,15 @@ func (e *env) warnOnPersisterAnomalies(ctx context.Context, target, persisterHei
 //     the block is still on the main chain, so Phase 3 can clean up its stale
 //     utxo-set files; nil when the marker is at/below target, unreadable,
 //     unparseable, or its height can't be resolved (e.g. above the tip).
+//   - raw: the marker's trimmed contents when it is stale, so Phase 3 can check
+//     it still holds the value the operator confirmed; empty otherwise.
 //
 // Resolving through the main chain rather than deleteList matters: deleteList
 // spans all branches ordered by (height DESC, id DESC), so a fork block sharing
 // the marker height could be picked and the cleanup would target the wrong
 // hash, leaving the real set behind. Diagnostics only — never fatal.
-func (e *env) reportUTXOPersisterPlan(ctx context.Context, target uint32) (bool, *chainhash.Hash) {
-	height, known, parseErr := e.readUTXOPersisterMarker(ctx)
+func (e *env) reportUTXOPersisterPlan(ctx context.Context, target uint32) (bool, *chainhash.Hash, string) {
+	height, raw, known, parseErr := e.readUTXOPersisterMarker(ctx)
 
 	switch {
 	case parseErr:
@@ -249,13 +257,13 @@ func (e *env) reportUTXOPersisterPlan(ctx context.Context, target uint32) (bool,
 		} else {
 			e.logger.Warnf("utxo-persister lastProcessed marker is present but unparseable and will block the persister's next start; re-run with --reset-utxo-persister to delete it (safe only with full delta history to genesis)")
 		}
-		return true, nil
+		return true, nil, raw
 	case !known:
 		e.logger.Infof("no readable utxo-persister lastProcessed marker; nothing to reset")
-		return false, nil
+		return false, nil, ""
 	case height <= uint64(target):
 		e.logger.Infof("utxo-persister lastProcessed marker is %d, at/below target %d; it will be left untouched", height, target)
-		return false, nil
+		return false, nil, ""
 	}
 
 	// Marker above target: resolve its block on the main chain for cleanup.
@@ -264,9 +272,9 @@ func (e *env) reportUTXOPersisterPlan(ctx context.Context, target uint32) (bool,
 	if e.opts.ResetUTXOPersister {
 		e.logger.Infof("utxo-persister lastProcessed marker is %d, above target %d; --reset-utxo-persister given, Phase 3 will delete it (and its stale utxo-set files) and the persister will rebuild from genesis on next start", height, target)
 	} else {
-		e.logger.Warnf("utxo-persister lastProcessed marker is %d, above target %d; it will be LEFT as-is. The persister will stall on a marker above the rewound chain. Deleting it forces a rebuild from genesis, safe ONLY with full per-block delta history to genesis (a seeded node has none below its seed height and will stall). Re-run with --reset-utxo-persister if you have full history; otherwise reset the persister by hand.", height, target)
+		e.logger.Warnf("utxo-persister lastProcessed marker is %d, above target %d; it will be LEFT as-is. If this node re-syncs the same blocks the marker recovers by itself once the tip passes it; a reset is needed only if the chain at that height changes. Deleting it forces a rebuild from genesis, safe ONLY with full per-block delta history to genesis (a seeded node has none below its seed height and will stall), so re-run with --reset-utxo-persister only in that case; otherwise reset the persister by hand.", height, target)
 	}
-	return true, hash
+	return true, hash, raw
 }
 
 // resolveMainChainHashAtHeight returns the hash of the main-chain block at the

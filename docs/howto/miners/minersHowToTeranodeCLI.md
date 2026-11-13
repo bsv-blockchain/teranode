@@ -111,6 +111,7 @@ Usage: teranode-cli <command> [options]
 |                      | (DESTRUCTIVE - node must be stopped)           | `--assume-yes` - Skip the interactive confirmation               |
 |                      |                                                | `--force-not-idle` - Proceed when FSM is not IDLE (DANGEROUS)    |
 |                      |                                                | `--force-deep` - Allow a rewind deeper than 100 blocks           |
+|                      |                                                | `--reset-utxo-persister` - Delete a stale UTXO persister marker (see below) |
 |                      |                                                | `--verify` - Run post-rewind consistency checks                  |
 |                      |                                                | `--concurrency` - Subtree-load concurrency (default: 0 = auto)   |
 
@@ -339,6 +340,7 @@ Options:
 - `--assume-yes`: Skip the interactive confirmation prompt (required when there is no TTY)
 - `--force-not-idle`: Proceed even when the FSM state is not `IDLE` (DANGEROUS — only to recover from a crashed partial run)
 - `--force-deep`: Allow a rewind deeper than 100 blocks, past coinbase maturity (DANGEROUS)
+- `--reset-utxo-persister`: Delete the UTXO persister's `lastProcessed` marker when it sits above the target (or is unparseable), so the persister rebuilds from genesis. A marker above the target recovers by itself if the node re-syncs the same blocks, so you need this only if the chain at that height changes. The rebuild is safe only on a node with full per-block delta history back to genesis: a UTXO-seeded node has none below its seed height and the persister will stall. The deletion applies to exactly the marker value shown in the confirmation prompt; if the file changes after that, nothing is deleted. The stale utxo-set files for the old marker block are removed too.
 - `--verify`: Run post-rewind consistency checks
 - `--concurrency`: Subtree-load concurrency (default: `0`, meaning use `blockassembly_moveBackBlockConcurrency`, which defaults to 375)
 
