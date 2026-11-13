@@ -31,6 +31,16 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **Upgrade every txmeta receiver before the validator.** A new validator writes its cache bucket
+  count into bytes 2:4 of the v2 txmeta header. An old subtree-validation or legacy pod reads the
+  batch as v1 and drops it, so its cache warms more slowly until it upgrades. (#1966)
+- **The Aerospike UTXO store refuses to open under a different `utxostore_utxoBatchSize`.** The
+  first open records the value in set `utxo_layout`. Restore the original value for the namespace
+  (check `SETTINGS_CONTEXT`); the shipped contexts disagree (128, 50, 512). (#1966)
+- **Confiscation reassignment that changes the owner is refused by default.** The coin store does
+  not persist the replacement script, so applying it strands the output (issue 1725). The refused
+  fund reports `NotProcessed`. Set `alert_confiscationAllowReassignWithoutScript=true` to keep the
+  old behaviour. (#1966)
 - **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
   `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
   now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,
