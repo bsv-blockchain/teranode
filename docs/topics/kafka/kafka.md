@@ -193,15 +193,17 @@ A record can arrive more than once:
 
 - The consumer commits an offset only after the handler for that record returns. A crash, a kill or a consumer-group rebalance between the handler and the commit re-delivers the record.
     - Auto-commit consumers: franz-go commits the marked records every 5 seconds.
-    - Manual-commit consumers: the consumer commits every minute and at graceful shutdown. A crash can re-deliver up to one minute of records.
+    - Manual-commit consumers: the consumer commits at most once a minute and at graceful shutdown. It checks the one-minute timer only after a fetch returns, and a fetch blocks while the topic is idle. On a quiet topic a crash can therefore re-deliver every record handled since the last commit, however long ago that was.
 - Idempotent producer writes are disabled (`kgo.DisableIdempotentWrite()` in `util/kafka/kafka_producer_async.go`). A produce retry after a lost broker acknowledgement can write the same record twice.
 
 #### Loss
 
 A record can be lost on the producer side:
 
-- The async producer logs a record that franz-go cannot deliver (`Failed to deliver message to topic ...`). It does not retry the record.
-- `TryPublish` drops the record when the publish channel is full. The P2P service uses it for `blocks` and `subtrees`, and the Validator uses it for `tx-policy-rejected`.
+- The async producer logs a record that franz-go cannot deliver (`Failed to deliver message to topic ...`). It does not retry the record after franz-go gives up.
+- A crash or kill loses every record that is still in the publish channel, the batch buffer or the franz-go buffer. No log line records the loss.
+- A slow graceful shutdown can lose the same records. `StopProducerCtx` returns when its context expires, and the stop is then unfinished.
+- `TryPublish` drops the record when the publish channel is full. The P2P service uses it for `blocks` and `subtrees`. The Validator and Subtree Validation use it for `tx-policy-rejected`. Block Assembly uses it for the txmeta DELETE hints on `txmeta`; the counter `teranode_subtreeprocessor_txmeta_delete_dropped_total` records those drops.
 - `Publish` and `TryPublish` drop the record when the producer is shutting down.
 
 A record can be lost on the consumer side:
@@ -541,7 +543,7 @@ kafka://localhost:9092/blocks?offsetReset=earliest
 The `autoCommit` flag selects how the consumer commits offsets. It does not change the delivery guarantee. In both modes the consumer commits a record only after its handler returns, so both modes give at-least-once delivery for records that a handler processes without error. Neither mode gives exactly-once delivery. See [Delivery Guarantees](#delivery-guarantees).
 
 - `autoCommit=true` (`kgo.AutoCommitMarks()`): the consumer marks each record after its handler returns. franz-go commits the marked offsets every 5 seconds.
-- `autoCommit=false` (`kgo.DisableAutoCommit()`): the consumer collects the processed records and commits them every minute and at graceful shutdown. The re-delivery window after a crash is therefore longer.
+- `autoCommit=false` (`kgo.DisableAutoCommit()`): the consumer collects the processed records and commits them at most once a minute, after the next fetch returns, and at graceful shutdown. The re-delivery window after a crash is therefore longer, and on a quiet topic it has no fixed bound.
 
 | Consumer | Topic | `autoCommit` | Error option |
 |---|---|---|---|
