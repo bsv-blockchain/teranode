@@ -712,6 +712,62 @@ func TestGetBlockAssemblyTxsCoverage(t *testing.T) {
 	})
 }
 
+// TestGetBlockAssemblyTxsOmitsCoinbasePlaceholder: the subtree processor holds a
+// coinbase placeholder at the head of the first subtree, but it is not a
+// transaction, so GetBlockAssemblyTxs must not report it and TxCount must match
+// the transactions returned (#1819).
+func TestGetBlockAssemblyTxsOmitsCoinbasePlaceholder(t *testing.T) {
+	server, _, _, _ := setup(t)
+	ctx := t.Context()
+
+	require.NoError(t, server.blockAssembler.Start(ctx))
+
+	// Guard: the processor itself does hold the placeholder, so the assertions
+	// below are not vacuous.
+	require.Contains(t, server.blockAssembler.subtreeProcessor.GetTransactionHashes(ctx),
+		*subtreepkg.CoinbasePlaceholderHash)
+
+	t.Run("empty assembler returns no transactions", func(t *testing.T) {
+		resp, err := server.GetBlockAssemblyTxs(ctx, &blockassembly_api.EmptyMessage{})
+		require.NoError(t, err)
+		require.Empty(t, resp.Txs)
+		require.Equal(t, uint64(0), resp.TxCount)
+	})
+
+	t.Run("one transaction returns exactly that hash", func(t *testing.T) {
+		txHash := chainhash.HashH([]byte("placeholder-test-tx"))
+		parent := chainhash.HashH([]byte("placeholder-test-parent"))
+
+		in := &bt.Input{PreviousTxOutIndex: 0}
+		require.NoError(t, in.PreviousTxIDAdd(&parent))
+		inpoints, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{in})
+		require.NoError(t, err)
+		inpointsBytes, err := inpoints.Serialize()
+		require.NoError(t, err)
+
+		_, err = server.AddTx(ctx, &blockassembly_api.AddTxRequest{
+			Txid:       txHash[:],
+			Fee:        100,
+			Size:       250,
+			TxInpoints: inpointsBytes,
+		})
+		require.NoError(t, err)
+
+		var resp *blockassembly_api.GetBlockAssemblyTxsResponse
+		require.Eventually(t, func() bool {
+			r, err := server.GetBlockAssemblyTxs(ctx, &blockassembly_api.EmptyMessage{})
+			if err != nil {
+				return false
+			}
+			resp = r
+			return len(r.Txs) > 0
+		}, 10*time.Second, 20*time.Millisecond)
+
+		require.Equal(t, []string{txHash.String()}, resp.Txs)
+		require.Equal(t, uint64(1), resp.TxCount)
+	})
+}
+
 func TestGetBlockAssemblyTxsReturnsWhenContextCancelled(t *testing.T) {
 	server, _, _, _ := setup(t)
 
