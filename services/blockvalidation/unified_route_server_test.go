@@ -51,10 +51,21 @@ type recordingBlockchainClient struct {
 
 	mu    sync.Mutex
 	added []chainhash.Hash
+
+	// failNextAddBlock, when set, is returned by the next AddBlock instead of storing the
+	// block, and then cleared.
+	failNextAddBlock error
 }
 
 func (c *recordingBlockchainClient) AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) error {
 	c.mu.Lock()
+	if failErr := c.failNextAddBlock; failErr != nil {
+		c.failNextAddBlock = nil
+		c.mu.Unlock()
+
+		return failErr
+	}
+
 	c.added = append(c.added, *block.Hash())
 	c.mu.Unlock()
 
@@ -145,6 +156,14 @@ func newUnifiedRouteServer(t *testing.T, name string) *unifiedRouteServer {
 func unifiedRouteSpendingBlock(t *testing.T, us *unifiedRouteServer, seed byte) (block *model.Block, parent, child *bt.Tx) {
 	t.Helper()
 
+	return unifiedRouteSpendingBlockPaying(t, us, seed, 0)
+}
+
+// unifiedRouteSpendingBlockPaying is unifiedRouteSpendingBlock with the coinbase paying
+// coinbaseSatoshis instead of preBindCoinbase's 50 BTC; 0 keeps the 50 BTC.
+func unifiedRouteSpendingBlockPaying(t *testing.T, us *unifiedRouteServer, seed byte, coinbaseSatoshis uint64) (block *model.Block, parent, child *bt.Tx) {
+	t.Helper()
+
 	ctx := context.Background()
 
 	parent = genuineParentTx(t, seed)
@@ -154,6 +173,9 @@ func unifiedRouteSpendingBlock(t *testing.T, us *unifiedRouteServer, seed byte) 
 
 	child = preBindSpendOf(t, parent, 9_000)
 	coinbase := preBindCoinbase(t, seed)
+	if coinbaseSatoshis != 0 {
+		coinbase.Outputs[0].Satoshis = coinbaseSatoshis
+	}
 
 	st := buildSubtreeOver(t, true, []*bt.Tx{child})
 
@@ -310,40 +332,33 @@ func TestProcessBlockFound_UnifiedRouteBlockWithNoStoredParentIsALocalFault(t *t
 	}
 }
 
-// TestProcessBlockFound_UnprovenBelowCheckpointBlockNeverReachesSpendAndCreate is the
+// TestProcessBlockFound_UnprovenBelowCheckpointBlockIsRefusedBeforeAnyValidation is the
 // block-validation half of GHSA-gggq-8f59-4jm9. A legacy block below the checkpoint whose
 // parent is stored, served with headerProven false, must not take the quick route: the
 // route spends by outpoint with no script or value check, so a block nobody has tied to a
 // pinned checkpoint hash must never reach SpendAndCreate.
 //
-// With the proof absent the block takes full validation instead, which is the correct
-// slow path for a .subtreeToCheck record (subtree validation creates the transactions and
-// rebuilds the fees before the reward check) and the defence in depth behind netsync's own
-// refusal. Full validation is where subtree validation is called, so the mock expects
-// exactly one CheckBlockSubtrees and answers with a ServiceError, which
-// ValidateBlockWithOptions returns as it stands (no revalidation, no invalid mark). That
-// one expected call is the proof the full route was taken; the quick route makes none and
-// would panic the expectation-free mock. The end state is read off the real stores: the
-// block is not in the chain, nothing reached AddBlock, the parent output is unspent and
-// the child has no record.
+// It must not take full validation either. A failed quick attempt leaves the block's .subtree
+// file with every fee 0, which full validation would reuse and sum against the coinbase (see
+// TestProcessBlockFound_FullRouteRetryAfterAFailedQuickRouteKeepsTheBlockValid). So the block is
+// refused as retry-later, which netsync's park reads as keep the record and offer it again once
+// the header walk proves it. The subtree validation mock has no expectations, so any call to it
+// panics: neither route ran. The end state is read off the real stores: the block is not in the
+// chain, nothing reached AddBlock, the parent output is unspent and the child has no record.
 //
 // Reverting the `headerProven &&` conjunct in Server.legacyUnifiedRoute sends the block
-// down the quick route: the parent is spent, the child is created, the block is added, and
-// the mock is never called.
-func TestProcessBlockFound_UnprovenBelowCheckpointBlockNeverReachesSpendAndCreate(t *testing.T) {
+// down the quick route: the parent is spent, the child is created and the block is added.
+func TestProcessBlockFound_UnprovenBelowCheckpointBlockIsRefusedBeforeAnyValidation(t *testing.T) {
 	us := newUnifiedRouteServer(t, "unified_route_unproven")
 
 	block, parent, child := unifiedRouteSpendingBlock(t, us, 0x11)
 
-	us.subtreeValidation.On("CheckBlockSubtrees", mock.Anything, mock.Anything, "peer-1", "legacy").
-		Return(errors.NewServiceError("no subtree validation in this harness")).Once()
-
 	err := us.s.processBlockFound(context.Background(), block.Hash(), "peer-1", "legacy", false, block)
-	require.Error(t, err, "an unproven eligible block must not commit through this harness")
-	require.True(t, errors.IsTransientLocalError(err), "the full route's ServiceError comes back as retry-later: %v", err)
+	require.Error(t, err, "an unproven eligible block must not commit")
+	require.True(t, errors.IsTransientLocalError(err), "the refusal comes back as retry-later: %v", err)
+	require.Contains(t, err.Error(), "carries no header proof")
 
-	us.subtreeValidation.AssertExpectations(t)
-	require.Len(t, us.subtreeValidation.Calls, 1, "exactly one subtree validation call: the full route, never the quick route")
+	require.Empty(t, us.subtreeValidation.Calls, "neither route ran")
 
 	requireNothingApplied(t, us, block, parent, child)
 }
@@ -388,12 +403,9 @@ func TestServer_ProcessBlock_ForwardsHeaderProvenToTheRoute(t *testing.T) {
 		require.Equal(t, []chainhash.Hash{*block.Hash()}, us.client.addedBlocks())
 	})
 
-	t.Run("unproven takes full validation", func(t *testing.T) {
+	t.Run("unproven is refused", func(t *testing.T) {
 		us := newUnifiedRouteServer(t, "unified_route_rpc_unproven")
 		block, parent, child := unifiedRouteSpendingBlock(t, us, 0x14)
-
-		us.subtreeValidation.On("CheckBlockSubtrees", mock.Anything, mock.Anything, "peer-1", "legacy").
-			Return(errors.NewServiceError("no subtree validation in this harness")).Once()
 
 		blockBytes, err := block.Bytes()
 		require.NoError(t, err)
@@ -403,7 +415,7 @@ func TestServer_ProcessBlock_ForwardsHeaderProvenToTheRoute(t *testing.T) {
 		})
 		require.Error(t, err)
 
-		us.subtreeValidation.AssertExpectations(t)
+		require.Empty(t, us.subtreeValidation.Calls, "neither route ran")
 		requireNothingApplied(t, us, block, parent, child)
 	})
 }
@@ -514,8 +526,10 @@ func TestProcessBlockFound_AKeyMismatchingLocalSubtreeFileIsACorruptRecordOnTheL
 // back as one: ErrBlockInvalid, which the caller's BlockRejected row marks and rejects.
 //
 // The control drives the same verdict with a p2p baseURL and requires corrupt, so the gate
-// is proven to be the route and not the fixture. headerProven is false so the block takes
-// full validation, which is where subtree validation is called.
+// is proven to be the route and not the fixture. The legacy row turns the unified route off, so
+// the block takes full validation, which is where subtree validation is called. An eligible block
+// without the header proof no longer reaches full validation at all (see
+// TestProcessBlockFound_UnprovenBelowCheckpointBlockIsRefusedBeforeAnyValidation).
 func TestProcessBlockFound_AnInvalidTransactionOnTheLegacyFullRouteIsAJudgementNotACorruptRecord(t *testing.T) {
 	txInvalid := func() error {
 		// The shape processTransactionsInLevels raises: the per-transaction invalid under
@@ -526,6 +540,7 @@ func TestProcessBlockFound_AnInvalidTransactionOnTheLegacyFullRouteIsAJudgementN
 
 	t.Run("legacy route", func(t *testing.T) {
 		us := newUnifiedRouteServer(t, "unified_route_legacy_tx_invalid")
+		us.s.settings.BlockValidation.LegacyUnifiedBelowCheckpoint = false
 
 		block, parent, child := unifiedRouteSpendingBlock(t, us, 0x14)
 
@@ -561,4 +576,109 @@ func TestProcessBlockFound_AnInvalidTransactionOnTheLegacyFullRouteIsAJudgementN
 		us.subtreeValidation.AssertExpectations(t)
 		requireNothingApplied(t, us, block, parent, child)
 	})
+}
+
+// TestProcessBlockFound_FullRouteRetryAfterAFailedQuickRouteKeepsTheBlockValid drives the
+// one route left on which a below-checkpoint block written with zero fees reaches the coinbase
+// no-inflation check. The quick route's outpoint-only mode writes the block's .subtree file with
+// every fee 0. When that attempt fails after the write (here at AddBlock), the file stays. A
+// retry that arrived without the header proof used to take full validation, where subtree
+// validation reuses an existing .subtree file as it stands, so block.Valid summed the fees from
+// that file: 0. The coinbase claims the subsidy plus the child's real fee of 1,000 satoshis, and
+// with the checkpoint block not stored the ancestry check cannot let the block skip the
+// comparison, so the valid block was marked invalid. The retry is now refused as retry-later
+// before any validation runs.
+func TestProcessBlockFound_FullRouteRetryAfterAFailedQuickRouteKeepsTheBlockValid(t *testing.T) {
+	us := newUnifiedRouteServer(t, "unified_route_fee_zero_retry")
+
+	ctx := context.Background()
+
+	// The child pays 1,000 satoshis of fee (10,000 in, 9,000 out); the coinbase collects it.
+	subsidy := util.GetBlockSubsidyForHeight(1, us.s.settings.ChainCfgParams)
+	block, _, _ := unifiedRouteSpendingBlockPaying(t, us, 0x16, subsidy+1_000)
+
+	us.client.failNextAddBlock = errors.NewServiceError("injected AddBlock failure")
+
+	err := us.s.processBlockFound(ctx, block.Hash(), "peer-1", "legacy", true, block)
+	require.Error(t, err, "the first, proven attempt fails at AddBlock")
+
+	exists, err := us.subtreeStore.Exists(ctx, block.Subtrees[0][:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.True(t, exists, "the failed quick attempt leaves its .subtree file behind")
+
+	err = us.s.processBlockFound(ctx, block.Hash(), "peer-1", "legacy", false, block)
+	require.Error(t, err, "the unproven retry must not commit")
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a valid block must not be judged invalid on the retry: %v", err)
+	require.True(t, errors.IsTransientLocalError(err), "the unproven retry waits for the proof: %v", err)
+
+	require.Empty(t, us.subtreeValidation.Calls, "full validation must not run on the leftover zero-fee file")
+
+	// With the proof the block takes the quick route again and commits.
+	require.NoError(t, us.s.processBlockFound(ctx, block.Hash(), "peer-1", "legacy", true, block))
+	require.Equal(t, []chainhash.Hash{*block.Hash()}, us.client.addedBlocks())
+}
+
+// TestRevalidateBlock_ReconsideredFastPathBlockLinkedToTheCheckpointIsValid pins reconsiderblock
+// for a block the outpoint-only quick route committed with zero fees in its .subtree file. Two
+// blocks are committed that way and the checkpoint is pinned at the second. Invalidating the first
+// rolls the main chain back to genesis. Revalidating the first must still accept it: its stored
+// headers lead to the pinned checkpoint hash, which vouches for its coinbase, so the zero fees must
+// not be summed against the coinbase.
+func TestRevalidateBlock_ReconsideredFastPathBlockLinkedToTheCheckpointIsValid(t *testing.T) {
+	us := newUnifiedRouteServer(t, "unified_route_reconsider_linked")
+
+	ctx := context.Background()
+
+	subsidy := util.GetBlockSubsidyForHeight(1, us.s.settings.ChainCfgParams)
+	first, _, _ := unifiedRouteSpendingBlockPaying(t, us, 0x17, subsidy+1_000)
+	second := unifiedRouteCoinbaseOnlyBlock(t, us, *first.Hash(), 2)
+
+	us.s.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 2, Hash: second.Hash()}}
+
+	require.NoError(t, us.s.processBlockFound(ctx, first.Hash(), "peer-1", "legacy", true, first))
+	require.NoError(t, us.s.processBlockFound(ctx, second.Hash(), "peer-1", "legacy", true, second))
+
+	_, err := us.client.InvalidateBlock(ctx, first.Hash())
+	require.NoError(t, err)
+
+	// The .subtree files exist, so subtree validation has nothing to do.
+	us.subtreeValidation.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	_, err = us.s.RevalidateBlock(ctx, &blockvalidation_api.RevalidateBlockRequest{Hash: first.Hash()[:]})
+	require.NoError(t, err, "a reconsidered block linked to the pinned checkpoint must be accepted")
+
+	_, meta, err := us.client.GetBlockHeader(ctx, first.Hash())
+	require.NoError(t, err)
+	require.False(t, meta.Invalid, "the reconsidered block must no longer be marked invalid")
+}
+
+// TestRevalidateBlock_ReconsideredFastPathBlockWithAForkAtItsHeightIsValid is the same reconsider
+// as above with a second block stored at the reconsidered block's height first. The ancestry
+// check must follow the stored headers back from the pinned checkpoint, not take whichever block
+// the store lists first at that height: here the first one listed is the fork, and reading it
+// would sum the reconsidered block's zero fees against its coinbase.
+func TestRevalidateBlock_ReconsideredFastPathBlockWithAForkAtItsHeightIsValid(t *testing.T) {
+	us := newUnifiedRouteServer(t, "unified_route_reconsider_fork")
+
+	ctx := context.Background()
+
+	fork := unifiedRouteCoinbaseOnlyBlock(t, us, us.genesis, 1)
+
+	subsidy := util.GetBlockSubsidyForHeight(1, us.s.settings.ChainCfgParams)
+	first, _, _ := unifiedRouteSpendingBlockPaying(t, us, 0x18, subsidy+1_000)
+	second := unifiedRouteCoinbaseOnlyBlock(t, us, *first.Hash(), 2)
+
+	us.s.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 2, Hash: second.Hash()}}
+
+	require.NoError(t, us.s.processBlockFound(ctx, first.Hash(), "peer-1", "legacy", true, first))
+	require.NoError(t, us.s.processBlockFound(ctx, second.Hash(), "peer-1", "legacy", true, second))
+	require.NoError(t, us.s.processBlockFound(ctx, fork.Hash(), "peer-1", "legacy", true, fork))
+
+	_, err := us.client.InvalidateBlock(ctx, first.Hash())
+	require.NoError(t, err)
+
+	us.subtreeValidation.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	_, err = us.s.RevalidateBlock(ctx, &blockvalidation_api.RevalidateBlockRequest{Hash: first.Hash()[:]})
+	require.NoError(t, err, "a reconsidered block linked to the pinned checkpoint must be accepted whatever else is stored at its height")
 }
