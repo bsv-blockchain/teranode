@@ -296,3 +296,42 @@ func TestCheckBlockIsAncestorOfBlock_MainChainFastPathMatchesWalk(t *testing.T) 
 	require.NoError(t, err)
 	require.False(t, fast)
 }
+
+// TestCheckBlockIsAncestorOfBlock_RebuildGuardSkipsFastPath pins the mainChainRebuilding guard on
+// the fast path. While a rebuild or a fork-clear repair holds the guard, a fork row can still carry
+// on_main_chain = true. Here blockAlternative2, on the fork from block1, is flagged true by hand and
+// asked of block3. The probe alone is fooled, so the guard is what keeps the answer false.
+func TestCheckBlockIsAncestorOfBlock_RebuildGuardSkipsFastPath(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+	defer s.Close(context.Background())
+
+	ctx := context.Background()
+
+	_, _, err = s.StoreBlock(ctx, block1, "")
+	require.NoError(t, err)
+	_, _, err = s.StoreBlock(ctx, block2, "")
+	require.NoError(t, err)
+	_, _, err = s.StoreBlock(ctx, block3, "")
+	require.NoError(t, err)
+	idAlt2, _, err := s.StoreBlock(ctx, blockAlternative2, "")
+	require.NoError(t, err)
+
+	_, err = s.db.ExecContext(ctx, `UPDATE blocks SET on_main_chain = true WHERE id = $1`, idAlt2)
+	require.NoError(t, err)
+
+	fooled, err := s.ancestorOnMainChainBelowAnchor(ctx, []uint32{uint32(idAlt2)}, block3.Hash())
+	require.NoError(t, err)
+	require.True(t, fooled, "precondition: the stale flag makes the probe answer true")
+
+	s.mainChainRebuilding.Add(1)
+	defer s.mainChainRebuilding.Add(-1)
+
+	isAncestor, err := s.CheckBlockIsAncestorOfBlock(ctx, []uint32{uint32(idAlt2)}, block3.Hash())
+	require.NoError(t, err)
+	require.False(t, isAncestor, "a fork block was answered as an ancestor of block3 while the rebuild guard was held")
+}
