@@ -392,6 +392,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaxBlocksByHeightRange:     getInt("blockchain_maxBlocksByHeightRange", 2000, alternativeContext...),
 			GenerationalCacheCapacity:  getInt("blockchain_generationalCacheCapacity", 100000, alternativeContext...),
 			MaxInvalidBlocksPerRequest: getInt("blockchain_maxInvalidBlocksPerRequest", 10000, alternativeContext...),
+			LaneRangeSize:              getUint64AtLeast("blockchain_laneRangeSize", 10_000_000, 1, alternativeContext...),
+			LaneFreeAfter:              getDuration("blockchain_laneFreeAfter", 24*time.Hour, alternativeContext...),
 		},
 		BlockValidation: BlockValidationSettings{
 			MaxRetries:                                getInt("blockValidationMaxRetries", 3, alternativeContext...),
@@ -585,6 +587,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			IncrementBatcherTickerIntervalMillis:    getInt("utxostore_incrementBatcherTickerIntervalMillis", 0, alternativeContext...),
 			SetDAHBatcherTickerIntervalMillis:       getInt("utxostore_setDAHBatcherTickerIntervalMillis", 0, alternativeContext...),
 			LockedBatcherTickerIntervalMillis:       getInt("utxostore_lockedBatcherTickerIntervalMillis", 0, alternativeContext...),
+			LanePositions:                           getBool("utxostore_lanePositions", false, alternativeContext...),
 		},
 		P2P: P2PSettings{
 			BlockTopic:          getString("p2p_block_topic", "", alternativeContext...),

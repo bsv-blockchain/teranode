@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/health"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 const errNotImplemented = "not implemented"
@@ -174,6 +175,10 @@ func (c *LocalClient) GetNextBlockID(ctx context.Context) (uint64, error) {
 
 func (c *LocalClient) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
 	return c.store.AssignBlockID(ctx, blockHash)
+}
+
+func (c *LocalClient) ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (lane.Range, error) {
+	return reserveLaneRange(ctx, c.store, c.settings, holder, wantLane, hasLane)
 }
 
 func (c *LocalClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {

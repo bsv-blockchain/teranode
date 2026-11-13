@@ -289,17 +289,23 @@ type CreateOptions struct {
 	TxID               *chainhash.Hash
 	TxIDs              []chainhash.Hash // SpendAndCreateMulti only: one txid per transaction of the list
 	SubtreeIdxs        []int            // SpendAndCreateMulti only: one subtree index per transaction of the list
-	BelowCheckpoint    bool             // SpendAndCreateMulti only: the list is from a block the caller already knows is valid
 	IsCoinbase         *bool
+	BelowCheckpoint    bool // SpendAndCreateMulti only: the list is from a block the caller already knows is valid
 	Frozen             bool
 	Conflicting        bool
 	Locked             bool
 	SkipExtendedInputs bool
 
 	// SpendAndCreate-specific options.
-	IgnoreFlags IgnoreFlags // spend-phase flags (ignored with CreateOnly)
 	CreateOnly  bool        // skip the spend phase
 	SpendOnly   bool        // skip the create phase
+	IgnoreFlags IgnoreFlags // spend-phase flags (ignored with CreateOnly)
+
+	// LanePosition is a lane position (util/lane) the caller names for this one record, which
+	// takes the place of the one the store's source would give it. It is 8 bytes of what was
+	// padding, so this struct, which every create allocates, stays the size it was: the bools above
+	// are grouped for that reason, and TestCreateOptionsSize holds it.
+	LanePosition uint64
 }
 
 // WithMinedBlockInfo returns a CreateOption that sets the block IDs for a UTXO.
@@ -354,7 +360,6 @@ func (o *CreateOptions) ItemOptions(i int) *CreateOptions {
 	c.TxIDs = nil
 	c.SubtreeIdxs = nil
 	c.BelowCheckpoint = false
-
 	if o.SubtreeIdxs != nil && i < len(o.SubtreeIdxs) && len(o.MinedBlockInfos) > 0 {
 		c.MinedBlockInfos = make([]MinedBlockInfo, len(o.MinedBlockInfos))
 		copy(c.MinedBlockInfos, o.MinedBlockInfos)
@@ -419,6 +424,14 @@ var (
 func WithTXIDs(txIDs []chainhash.Hash) CreateOption {
 	return func(o *CreateOptions) {
 		o.TxIDs = txIDs
+	}
+}
+
+// WithLanePosition names the lane position (util/lane) of the record SpendAndCreate creates, in
+// place of the next one from the store's source. A list refuses it, because it describes one record.
+func WithLanePosition(position uint64) CreateOption {
+	return func(o *CreateOptions) {
+		o.LanePosition = position
 	}
 }
 

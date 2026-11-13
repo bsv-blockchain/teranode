@@ -123,6 +123,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		opt(options)
 	}
 
+	// Before any transaction: the create path below takes its position with one open.
+	s.PrimeLanePositions()
+
 	// Batched when configured, which is the normal path. The batcher collects calls arriving
 	// from many goroutines and sends them as one round trip, which is what the other two
 	// implementations of this interface do and what this store was missing.
@@ -395,6 +398,12 @@ func (s *Store) appendCreate(p *createPlan, item int, tx *bt.Tx, blockHeight uin
 	p.locktimes = append(p.locktimes, int32(tx.LockTime))
 	p.createdAt = append(p.createdAt, time.Now().UnixMilli())
 	p.txFlags = append(p.txFlags, flags)
+	// With no column there is nowhere to write it. The daemon only gives a store a source with the
+	// flag on, and the flag adds the column at open, so this is a caller naming a position on a
+	// store opened with the flag off.
+	if s.laneColumn {
+		p.addLane(s.Take(options))
+	}
 	p.bodies = append(p.bodies, body)
 	p.minedRows = append(p.minedRows, atBirth)
 	p.seedRows = append(p.seedRows, s.seedingCreate(options))

@@ -53,6 +53,9 @@ func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeig
 		return []utxo.SpendAndCreateMultiResult{}, nil
 	}
 
+	// Before any transaction: the writers below take their positions with one open.
+	s.PrimeLanePositions()
+
 	if below, err := s.nettedBelowGate(list.Options); below {
 		if err != nil {
 			return nil, err

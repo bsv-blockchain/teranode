@@ -307,3 +307,72 @@ func TestCreatePostgresSchema_RetiredIndexDropFails(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "could not drop idx_inserted_at index")
 }
+
+func TestCreatePostgresSchema_MissingLaneHandoutTableTakesFastPath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	// A database created before lane_handout existed must still take the fast
+	// path, so its first start does not run the peer_id ALTER on blocks.
+	_, err = db.Exec(`DROP TABLE lane_handout`)
+	require.NoError(t, err)
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.True(t, current, "a missing lane_handout must not send the schema down the full DDL path")
+
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true))
+
+	var exists bool
+	require.NoError(t, db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'lane_handout')`,
+	).Scan(&exists))
+	require.True(t, exists, "createPostgresSchema must create lane_handout before the probe")
+}
+
+func TestCreatePostgresSchema_CurrentSchemaNeedsNoCreatePrivilege(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	// A node role that can read and write the tables but has no CREATE on the
+	// schema, as when a separate owner role runs the migrations.
+	for _, stmt := range []string{
+		`CREATE ROLE node_no_ddl LOGIN PASSWORD 'node_no_ddl'`,
+		`REVOKE CREATE ON SCHEMA public FROM PUBLIC`,
+		`GRANT USAGE ON SCHEMA public TO node_no_ddl`,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO node_no_ddl`,
+	} {
+		_, err = db.Exec(stmt)
+		require.NoError(t, err, stmt)
+	}
+
+	nodeURL := *dbURL
+	nodeURL.User = url.UserPassword("node_no_ddl", "node_no_ddl")
+
+	nodeDB, err := usql.Open("postgres", nodeURL.String())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = nodeDB.Close() })
+
+	// CREATE TABLE IF NOT EXISTS is refused for this role even though the
+	// table exists, so the schema setup must not issue it.
+	_, err = nodeDB.Exec(`CREATE TABLE IF NOT EXISTS lane_handout (lane SMALLINT)`)
+	require.Error(t, err, "the role must lack CREATE on the schema for this test to mean anything")
+
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, nodeDB, true))
+}

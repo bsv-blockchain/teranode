@@ -2,6 +2,7 @@ package utxoset
 
 import (
 	"context"
+	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -9,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -264,6 +266,13 @@ type lookupResult struct {
 	// whole parent bodies there held gigabytes live on mainnet on 2026-10-15. Get, the get
 	// batcher and BatchDecorate set it when the caller names no field held in the body.
 	noBody bool
+
+	// wantLane sends the reads to the statements that also select lane_position, and lanes holds
+	// what they found. A batch with no such read runs the statements it always did, scans what it
+	// always did and pays nothing. Only Get, the get batcher and BatchDecorate set it, when a caller
+	// names fields.LanePosition, and one such read turns it on for its whole get batch.
+	wantLane bool
+	lanes    map[chainhash.Hash]uint64
 }
 
 func newLookupResult(n int) lookupResult {
@@ -325,8 +334,17 @@ func (s *Store) lookupFloor() int32 {
 // tx_body_carry. See lookupResult.noBody.
 func (s *Store) lookupMany(ctx context.Context, hashes []chainhash.Hash,
 	wantChildren, noBody bool) (lookupResult, error) {
+	return s.lookupManyLane(ctx, hashes, wantChildren, noBody, false)
+}
+
+// lookupManyLane is lookupMany with the lane position optionally returned. See
+// lookupResult.wantLane.
+func (s *Store) lookupManyLane(ctx context.Context, hashes []chainhash.Hash,
+	wantChildren, noBody, wantLane bool) (lookupResult, error) {
 	res := newLookupResult(len(hashes))
 	res.noBody = noBody
+	// With no column there is no position to read, and the lane forms would fail.
+	res.wantLane = wantLane && s.laneColumn
 	if len(hashes) == 0 {
 		return res, nil
 	}
@@ -442,8 +460,105 @@ func (s *Store) lookupMany(ctx context.Context, hashes []chainhash.Hash,
 		}
 	}
 
+	res.applyLanes()
+
 	return res, nil
 }
+
+// laneForm picks the form of a statement that copies a record's payload, by whether the database has
+// lane_position.
+func (s *Store) laneForm(plain, withLane string) string {
+	if s.laneColumn {
+		return withLane
+	}
+
+	return plain
+}
+
+// statement picks the form of a read: the one that also selects lane_position only if asked.
+func (r *lookupResult) statement(plain, withLane string) string {
+	if r.wantLane {
+		return withLane
+	}
+
+	return plain
+}
+
+// withLaneDest adds a destination for the lane column when the read selects it. The destination is
+// allocated only then, so a read that does not ask allocates what it always did.
+func (r *lookupResult) withLaneDest(dest []any) ([]any, **int64) {
+	if !r.wantLane {
+		return dest, nil
+	}
+
+	position := new(*int64)
+
+	return append(dest, position), position
+}
+
+// noteLane keeps the first lane position a read finds for a record. Reads run identity row first and
+// mined rows lowest height first, so a read that sees more rows cannot change the answer. A row with
+// none leaves a position another copy gave alone, because a thin copy can have none.
+func (r *lookupResult) noteLane(txid []byte, position **int64) {
+	if position == nil || *position == nil {
+		return
+	}
+
+	var hash chainhash.Hash
+
+	copy(hash[:], txid)
+
+	if r.lanes == nil {
+		r.lanes = make(map[chainhash.Hash]uint64)
+	}
+
+	if _, seen := r.lanes[hash]; !seen {
+		r.lanes[hash] = lane.FromSigned(**position)
+	}
+}
+
+// applyLanes puts what the reads found on the records they answered.
+func (r *lookupResult) applyLanes() {
+	for hash, position := range r.lanes {
+		if data, ok := r.found[hash]; ok {
+			data.LanePosition = position
+		}
+	}
+}
+
+// laneStatement returns a read with the lane column added, one replacement per pair. It panics at
+// package init if a read's text has changed shape, because the plain form must stay what it is and
+// a silently unchanged lane form would read no column at all.
+func laneStatement(stmt string, oldNew ...string) string {
+	for i := 0; i < len(oldNew); i += 2 {
+		if strings.Count(stmt, oldNew[i]) != 1 {
+			panic("utxoset: cannot add lane_position to a read: " + oldNew[i])
+		}
+
+		stmt = strings.Replace(stmt, oldNew[i], oldNew[i+1], 1)
+	}
+
+	return stmt
+}
+
+// The reads with lane_position added. Only a caller naming fields.LanePosition runs one.
+var (
+	identByTxidLaneSQL = laneStatement(identByTxidSQL,
+		"i.flags, b.raw_tx\n  FROM tx_ident i", "i.flags, b.raw_tx, i.lane_position\n  FROM tx_ident i")
+
+	minedByTxidLaneSQL = laneStatement(minedByTxidSQL,
+		"m.flags, b.raw_tx\n  FROM unnest", "m.flags, b.raw_tx, m.lane_position\n  FROM unnest",
+		"m.created_at, m.flags\n     FROM tx_mined m", "m.created_at, m.flags, m.lane_position\n     FROM tx_mined m")
+
+	preservedByTxidLaneSQL = laneStatement(preservedByTxidSQL,
+		"p.flags, b.raw_tx\n  FROM unnest", "p.flags, b.raw_tx, p.lane_position\n  FROM unnest",
+		"p.created_at, p.flags\n     FROM preserved_parent p", "p.created_at, p.flags, p.lane_position\n     FROM preserved_parent p")
+
+	tier2LaneSQL = laneStatement(tier2SQL,
+		"m.flags & ~$6::smallint AS flags\n  FROM unnest", "m.flags & ~$6::smallint AS flags,\n       COALESCE(i.lane_position, m.lane_position)\n  FROM unnest",
+		"i.flags, b.raw_tx\n      FROM tx_ident i", "i.flags, b.raw_tx, i.lane_position\n      FROM tx_ident i",
+		"m.created_at, m.flags\n      FROM tx_mined m", "m.created_at, m.flags, m.lane_position\n      FROM tx_mined m")
+)
 
 // without returns hashes with every member of drop removed, order kept.
 func without(hashes, drop []chainhash.Hash) []chainhash.Hash {
@@ -726,7 +841,7 @@ func (s *Store) readIdentRows(ctx context.Context, txids [][]byte, res *lookupRe
 
 // readIdentGroup is one leaf's worth of readIdentRows.
 func (s *Store) readIdentGroup(ctx context.Context, g leafBatch, res *lookupResult) error {
-	rows, err := s.pool.Query(ctx, identByTxidSQL, g.leaf, g.txids, !res.noBody)
+	rows, err := s.pool.Query(ctx, res.statement(identByTxidSQL, identByTxidLaneSQL), g.leaf, g.txids, !res.noBody)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][lookup] identity rows", err)
 	}
@@ -739,11 +854,15 @@ func (s *Store) readIdentGroup(ctx context.Context, g leafBatch, res *lookupResu
 			r    metaRow
 		)
 
-		if err := rows.Scan(&txid, &r.createdHeight, &r.offChainSince,
+		dest, lanePosition := res.withLaneDest([]any{&txid, &r.createdHeight, &r.offChainSince,
 			&r.fee, &r.sizeInBytes, &r.txInpoints, &r.locktime, &r.createdAt,
-			&r.flags, &r.rawTx); err != nil {
+			&r.flags, &r.rawTx})
+
+		if err := rows.Scan(dest...); err != nil {
 			return errors.NewStorageError("[utxoset][lookup] identity scan", err)
 		}
+
+		res.noteLane(txid, lanePosition)
 
 		var h chainhash.Hash
 
@@ -783,7 +902,7 @@ func (s *Store) readMinedInto(ctx context.Context, hashes []chainhash.Hash,
 		txids = append(txids, hashes[i][:])
 	}
 
-	rows, err := s.pool.Query(ctx, minedByTxidSQL, txids, floor, !res.noBody)
+	rows, err := s.pool.Query(ctx, res.statement(minedByTxidSQL, minedByTxidLaneSQL), txids, floor, !res.noBody)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][lookup] membership rows", err)
 	}
@@ -796,11 +915,15 @@ func (s *Store) readMinedInto(ctx context.Context, hashes []chainhash.Hash,
 			r    minedRow
 		)
 
-		if err := rows.Scan(&txid, &r.minedHeight, &r.blockID, &r.subtreeIdx,
+		dest, lanePosition := res.withLaneDest([]any{&txid, &r.minedHeight, &r.blockID, &r.subtreeIdx,
 			&r.sizeInBytes, &r.fee, &r.txInpoints, &r.locktime, &r.createdAt,
-			&r.flags, &r.rawTx); err != nil {
+			&r.flags, &r.rawTx})
+
+		if err := rows.Scan(dest...); err != nil {
 			return errors.NewStorageError("[utxoset][lookup] membership scan", err)
 		}
+
+		res.noteLane(txid, lanePosition)
 
 		var h chainhash.Hash
 
@@ -953,7 +1076,7 @@ func (s *Store) readPreserved(ctx context.Context, hashes []chainhash.Hash,
 		txids = append(txids, hashes[i][:])
 	}
 
-	rows, err := s.pool.Query(ctx, preservedByTxidSQL, txids, !res.noBody)
+	rows, err := s.pool.Query(ctx, res.statement(preservedByTxidSQL, preservedByTxidLaneSQL), txids, !res.noBody)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][lookup] preserved parents", err)
 	}
@@ -966,11 +1089,15 @@ func (s *Store) readPreserved(ctx context.Context, hashes []chainhash.Hash,
 			r    minedRow
 		)
 
-		if err := rows.Scan(&txid, &r.minedHeight, &r.blockID, &r.subtreeIdx,
+		dest, lanePosition := res.withLaneDest([]any{&txid, &r.minedHeight, &r.blockID, &r.subtreeIdx,
 			&r.sizeInBytes, &r.fee, &r.txInpoints, &r.locktime, &r.createdAt,
-			&r.flags, &r.rawTx); err != nil {
+			&r.flags, &r.rawTx})
+
+		if err := rows.Scan(dest...); err != nil {
 			return errors.NewStorageError("[utxoset][lookup] preserved parent scan", err)
 		}
+
+		res.noteLane(txid, lanePosition)
 
 		var h chainhash.Hash
 
@@ -1278,7 +1405,7 @@ type tier2Row struct {
 func (s *Store) readTier2Group(ctx context.Context, g leafBatch, droppedFloor int32, res *lookupResult) error {
 	_, ids, los, his := liveUTXOArgs(g.txids)
 
-	rows, err := s.pool.Query(ctx, tier2SQL, g.leaf, ids, los, his, droppedFloor, FlagLocked, !res.noBody)
+	rows, err := s.pool.Query(ctx, res.statement(tier2SQL, tier2LaneSQL), g.leaf, ids, los, his, droppedFloor, FlagLocked, !res.noBody)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][lookup] second tier", err)
 	}
@@ -1308,14 +1435,18 @@ func (s *Store) readTier2Group(ctx context.Context, g leafBatch, droppedFloor in
 
 		// Every identity column is NULL when there is no identity row, so the two NOT NULL
 		// columns of that table are scanned through pointers here.
-		if err := rows.Scan(&txid, &r.identFound, &identCreatedAt, &r.ident.offChainSince, &r.ident.fee,
+		dest, lanePosition := res.withLaneDest([]any{&txid, &r.identFound, &identCreatedAt, &r.ident.offChainSince, &r.ident.fee,
 			&r.ident.sizeInBytes, &r.ident.txInpoints, &r.ident.locktime, &r.ident.createdAt, &identFlags,
 			&r.ident.rawTx,
 			&r.utxoZero, &r.undoZero,
 			&minedHeight, &blockID, &subtreeIdx, &createdHeight, &sizeInBytes, &fee, &txInpoints,
-			&locktime, &createdAt, &flags); err != nil {
+			&locktime, &createdAt, &flags})
+
+		if err := rows.Scan(dest...); err != nil {
 			return errors.NewStorageError("[utxoset][lookup] second tier scan", err)
 		}
+
+		res.noteLane(txid, lanePosition)
 
 		if identCreatedAt != nil {
 			r.ident.createdHeight = *identCreatedAt

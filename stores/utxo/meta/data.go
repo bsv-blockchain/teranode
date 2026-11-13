@@ -70,14 +70,36 @@ type Data struct {
 	// canonical spender that an earlier ProcessConflicting demoted.
 	CreatedAt int64 `json:"createdAt,omitempty"`
 
+	// LanePosition is the record's lane position (util/lane), written once at
+	// create and never updated. It fits in the padding that grouping the bools
+	// below freed, so this struct, allocated per record read, stays the size it
+	// was. TestDataSize holds it. Zero (lane.None) means this read has no position:
+	// the field was not named, or the record was created with none (lane positions
+	// off, before they existed, no range in hand at the create, or a tool that opens
+	// its own store rather than going through the daemon), or the store no longer
+	// holds it. On utxoset that last case is a read answered from a live UTXO, an
+	// undo copy or a thin preserved row, once the row is below the lookup floor or
+	// its tx_mined partition has dropped.
+	//
+	// It is deliberately NOT carried by any of the binary encodings on this type
+	// (Bytes/NewDataFromBytes, MetaBytes/MetaBytesInto/NewMetaDataFromBytes).
+	// Bytes ends with an unlengthed run of 4-byte block IDs read to EOF, and the
+	// Meta pair has a fixed header with no version, so eight more bytes would
+	// decode as block IDs or shift fields rather than fail. Carrying it needs a
+	// versioned encoding. The consequence: the txmeta cache does not keep it, and
+	// utxo.MetaFields does not name it, so GetMeta returns zero, from the cache or
+	// from the store. The one exception is on utxoset, where a GetMeta that shares
+	// a get batch with a read that named the field can get the position, because
+	// the batch reads the column if any item asked, so a non-zero value on a read
+	// that did not name the field is not an answer to it. Nothing reads the field
+	// yet; a reader must ask the store with fields.LanePosition.
+	LanePosition uint64 `json:"lanePosition,omitempty"`
+
 	// Frozen is a flag indicating if the transaction is frozen
 	Frozen bool `json:"frozen"`
 
 	// Conflicting is a flag indicating if the transaction is conflicting
 	Conflicting bool `json:"conflicting"`
-
-	// ConflictingChildren contains the transaction IDs of all transactions that tried to spend this conflicting transaction
-	ConflictingChildren []chainhash.Hash `json:"conflictingChildren"`
 
 	// Locked is a flag indicating if the transaction is locked and not spendable
 	Locked bool `json:"locked"`
@@ -92,6 +114,9 @@ type Data struct {
 	// Creating indicates the transaction is still being created (multi-record 2-phase commit)
 	// When true, the transaction is incomplete and should trigger re-processing for auto-recovery
 	Creating bool `json:"creating"`
+
+	// ConflictingChildren contains the transaction IDs of all transactions that tried to spend this conflicting transaction
+	ConflictingChildren []chainhash.Hash `json:"conflictingChildren"`
 
 	// SpendingDatas is the transaction ID of the transaction that spent the given tx output idx
 	SpendingDatas []*spendpkg.SpendingData `json:"spendingDatas"`

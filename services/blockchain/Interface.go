@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 // Subscriber source identifiers passed to Subscribe(). Services use these
@@ -97,6 +98,12 @@ type ClientI interface {
 
 	// AssignBlockID returns a stable block ID for a given block hash (idempotent per hash).
 	AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error)
+
+	// ReserveLaneRange hands the holder the next range of positions in a lane and records it.
+	// With hasLane true the holder gets wantLane, unless that lane is exhausted. With hasLane false,
+	// or an exhausted lane, the service assigns a free lane; the returned range names the lane given.
+	// It returns an error when no lane is free.
+	ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (lane.Range, error)
 
 	// SendNotification broadcasts a notification to subscribers.
 	//

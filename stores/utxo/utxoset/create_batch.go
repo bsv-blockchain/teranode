@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/go-batcher/v2"
@@ -14,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -347,7 +349,11 @@ type createPlan struct {
 	locktimes []int32
 	createdAt []int64
 	txFlags   []int16
-	bodies    [][]byte
+	// lanes is the lane position of each transaction in its signed form (util/lane), 0 for none.
+	// It stays nil until a transaction in the plan has one, so a plan with none allocates nothing
+	// for it.
+	lanes  []int64
+	bodies [][]byte
 	// minedRows is true for a transaction that carries a block at or below the highest
 	// checkpoint, which is what sends it to createMinedPlanSQL instead of createIdentPlanSQL.
 	// The three fields below carry the block for every transaction that carries one, whichever
@@ -462,6 +468,10 @@ func (p *createPlan) sortRows() {
 	p.locktimes = permute(p.locktimes, order)
 	p.createdAt = permute(p.createdAt, order)
 	p.txFlags = permute(p.txFlags, order)
+	if p.lanes != nil {
+		p.lanes = permute(p.lanes, order)
+	}
+
 	p.bodies = permute(p.bodies, order)
 	p.minedRows = permute(p.minedRows, order)
 	p.seedRows = permute(p.seedRows, order)
@@ -475,6 +485,65 @@ func (p *createPlan) sortRows() {
 
 	for k := range p.idx {
 		p.idx[k] = int32(k) //nolint:gosec // bounded by batch size
+	}
+}
+
+// existingContainmentRow is the lane statements' probe for a mined row of the same transaction, for
+// a create with no identity row to copy from. It is the second arm of recordMinedSQL, so a refused
+// create cannot give a record a second position: a coinbase seen again in a second block, or one
+// whose identity row the stamp has deleted, keeps the position its first row has. Only a database
+// with the column runs it, and only for block-carrying rows. The floor keeps it to the same
+// partitions as the claim's probe of tx_mined.
+const existingContainmentRow = `
+      LEFT JOIN LATERAL (
+        SELECT TRUE AS found, m.lane_position
+          FROM tx_mined m
+         WHERE m.txid = t.txid
+           AND m.mined_height >= FLOOR::int
+         ORDER BY (m.tx_inpoints IS NULL), m.mined_height, m.block_id
+         LIMIT 1 OFFSET 0 ) AS e ON TRUE`
+
+// minedLaneValue is the position a mined row gets on a database with the column, whether or not this
+// plan took a position or this process has the flag on: the identity row's when there is one, NULL
+// included, then an existing mined row's, and the create's own only for a record new to the store.
+const minedLaneValue = `CASE WHEN i.created_height IS NOT NULL THEN i.lane_position
+                WHEN e.found THEN e.lane_position
+                ELSE NULLIF(t.lane_position, 0) END`
+
+// The create statements with lane_position added. A database without the column runs the plain
+// statement, so with lane positions off a create sends exactly what main sends. A plan with no
+// position sends SQL NULL for the array, which a multi-array unnest pads with NULLs.
+var (
+	createIdentPlanLaneSQL = laneStatement(createIdentPlanSQL,
+		"$14::int[], $15::int[], $16::int[], $26::bigint[])", "$14::int[], $15::int[], $16::int[], $26::bigint[], $27::bigint[])",
+		"mined_height, block_id, subtree_idx, fee)", "mined_height, block_id, subtree_idx, fee, lane_position)",
+		"fee, size_in_bytes, tx_inpoints, locktime, created_at, flags)\n    SELECT t.leaf, t.txid, t.created_height, t.off_chain_since,\n           t.fee, t.size_in_bytes, t.tx_inpoints, t.locktime, t.created_at, t.flags\n",
+		"fee, size_in_bytes, tx_inpoints, locktime, created_at, flags, lane_position)\n    SELECT t.leaf, t.txid, t.created_height, t.off_chain_since,\n           t.fee, t.size_in_bytes, t.tx_inpoints, t.locktime, t.created_at, t.flags,\n           NULLIF(t.lane_position, 0)\n",
+		"size_in_bytes, fee, tx_inpoints, locktime, created_at, flags)\n    SELECT t.txid, t.mined_height", "size_in_bytes, fee, tx_inpoints, locktime, created_at, flags, lane_position)\n    SELECT t.txid, t.mined_height",
+		"COALESCE(i.flags, t.flags)\n      FROM t", "COALESCE(i.flags, t.flags),\n           "+minedLaneValue+"\n      FROM t",
+		"SELECT i.created_height, i.fee, i.tx_inpoints, i.locktime, i.created_at, i.flags\n", "SELECT i.created_height, i.fee, i.tx_inpoints, i.locktime, i.created_at, i.flags, i.lane_position\n",
+		"        OFFSET 0 ) AS i ON TRUE\n     WHERE t.mined_height > 0", "        OFFSET 0 ) AS i ON TRUE"+strings.ReplaceAll(existingContainmentRow, "FLOOR", "$25")+"\n     WHERE t.mined_height > 0",
+	)
+
+	createMinedPlanLaneSQL = laneStatement(createMinedPlanSQL,
+		"$11::bytea[], $12::uuid[], $13::uuid[], $25::bigint[])", "$11::bytea[], $12::uuid[], $13::uuid[], $25::bigint[], $26::bigint[])",
+		"size_in_bytes, created_at, flags, raw_tx, lo, hi, fee)", "size_in_bytes, created_at, flags, raw_tx, lo, hi, fee, lane_position)",
+		"size_in_bytes, fee, tx_inpoints, locktime, created_at, flags)\n    SELECT t.txid, t.mined_height", "size_in_bytes, fee, tx_inpoints, locktime, created_at, flags, lane_position)\n    SELECT t.txid, t.mined_height",
+		"COALESCE(i.flags, t.flags)\n      FROM t", "COALESCE(i.flags, t.flags),\n           "+minedLaneValue+"\n      FROM t",
+		"SELECT i.created_height, i.fee, i.tx_inpoints, i.locktime, i.created_at, i.flags\n", "SELECT i.created_height, i.fee, i.tx_inpoints, i.locktime, i.created_at, i.flags, i.lane_position\n",
+		"        OFFSET 0 ) AS i ON TRUE\n", "        OFFSET 0 ) AS i ON TRUE"+strings.ReplaceAll(existingContainmentRow, "FLOOR", "$24")+"\n",
+	)
+)
+
+// addLane records the lane position of the row appendCreate is adding, whose txFlags are already in.
+// Rows before the first position get zeros, which the statements write as NULL.
+func (p *createPlan) addLane(position uint64) {
+	switch {
+	case p.lanes != nil:
+		p.lanes = append(p.lanes, lane.ToSigned(position))
+	case position != lane.None:
+		p.lanes = make([]int64, len(p.txFlags)-1, cap(p.txFlags))
+		p.lanes = append(p.lanes, lane.ToSigned(position))
 	}
 }
 
@@ -506,6 +575,10 @@ func (p *createPlan) subset(idx []int) *createPlan {
 		q.locktimes = append(q.locktimes, p.locktimes[i])
 		q.createdAt = append(q.createdAt, p.createdAt[i])
 		q.txFlags = append(q.txFlags, p.txFlags[i])
+		if p.lanes != nil {
+			q.lanes = append(q.lanes, p.lanes[i])
+		}
+
 		q.bodies = append(q.bodies, p.bodies[i])
 		q.minedRows = append(q.minedRows, p.minedRows[i])
 		q.seedRows = append(q.seedRows, p.seedRows[i])
@@ -637,12 +710,23 @@ func (s *Store) runSeedPlan(ctx context.Context, q querier, p *createPlan) error
 
 // runIdentPlan claims the identity half of a plan on the identity table.
 func (s *Store) runIdentPlan(ctx context.Context, q querier, p *createPlan) error {
-	rows, err := q.Query(ctx, createIdentPlanSQL,
+	stmt, argCount := createIdentPlanSQL, 26
+	if s.laneColumn {
+		stmt, argCount = createIdentPlanLaneSQL, 27
+	}
+
+	// Sized up front: growing a slice this wide for one more argument costs a whole second array.
+	args := append(make([]any, 0, argCount),
 		p.idx, p.leaves, p.txids, p.heights, p.offChain, p.sizes,
 		p.inpoints, p.locktimes, p.createdAt, p.txFlags, p.bodies, p.lo, p.hi,
 		p.minedHeight, p.blockID, p.subtreeIdx,
 		p.utxoSats, p.utxoHeights, p.utxoSpendable, p.utxoLeaves, p.utxoFlags,
 		p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees)
+	if s.laneColumn {
+		args = append(args, p.lanes)
+	}
+
+	rows, err := q.Query(ctx, stmt, args...)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][Create] store", err)
 	}
@@ -676,11 +760,21 @@ func (s *Store) runMinedPlan(ctx context.Context, q querier, p *createPlan) erro
 
 	s.countCreatesAheadOfTip(p)
 
-	rows, err := q.Query(ctx, createMinedPlanSQL,
+	stmt, argCount := createMinedPlanSQL, 25
+	if s.laneColumn {
+		stmt, argCount = createMinedPlanLaneSQL, 26
+	}
+
+	args := append(make([]any, 0, argCount),
 		p.idx, p.leaves, p.txids, p.heights, p.minedHeight, p.blockID, p.subtreeIdx,
 		p.sizes, p.createdAt, p.txFlags, p.bodies, p.lo, p.hi,
 		p.utxoSats, p.utxoHeights, p.utxoSpendable, p.utxoMined, p.utxoBlockIDs,
 		p.utxoLeaves, p.utxoFlags, p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees)
+	if s.laneColumn {
+		args = append(args, p.lanes)
+	}
+
+	rows, err := q.Query(ctx, stmt, args...)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][Create] store mined", err)
 	}

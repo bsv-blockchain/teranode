@@ -31,6 +31,17 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **Blockchain `Store` and `blockchain.ClientI` gain `ReserveLaneRange`.** Out-of-tree blockchain
+  stores and `ClientI` implementations (mocks included) add the method; the blockchain database
+  gains an insert-only `lane_handout` table on startup, and the SQL UTXO store a nullable
+  `lane_position` column, whatever `utxostore_lanePositions` says. The utxoset store gains that
+  column only when opened with the flag on: each `ALTER` then takes `ACCESS EXCLUSIVE`, the store
+  refuses to open if a transaction holds a table for five minutes, and a process already running
+  does not see the column until it restarts, so switch the flag on across a node's processes
+  together. Once the column exists, turning the flag off keeps utxoset on its lane statements and
+  the extra `tx_mined` read on creates that come with a block. To get main's statements back, stop
+  every process, run `ALTER TABLE <t> DROP COLUMN lane_position` on `tx_ident`, `tx_mined` and
+  `preserved_parent`, and start with the flag off; the positions are lost. (#2136)
 - **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
   `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
   now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,

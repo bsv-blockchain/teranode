@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
@@ -23,6 +24,7 @@ import (
 	testutil "github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,7 +39,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 
 	t.Run("TestStore_GetBinsToStore empty", func(t *testing.T) {
 		tx := &bt.Tx{}
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, nil)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, lane.None, nil)
 		require.Error(t, err)
 		require.Nil(t, bins)
 	})
@@ -52,7 +54,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		tx, err := bt.NewTxFromString(string(txHex))
 		require.NoError(t, err)
 
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, nil)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, lane.None, nil)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 
@@ -133,7 +135,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		// external should be set by the aerospike create function for huge txs
 		external := len(tx.ExtendedBytes()) > teranodeaerospike.MaxTxSizeInStoreInBytes
 
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), false, false, false, nil)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), false, false, false, lane.None, nil)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 	})
@@ -151,7 +153,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		// external should be set by the aerospike create function for huge txs
 		external := len(tx.ExtendedBytes()) > teranodeaerospike.MaxTxSizeInStoreInBytes
 
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), true, true, true, nil)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), true, true, true, lane.None, nil)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 
@@ -243,7 +245,7 @@ func TestStore_GetBinsToStore_UnspendableTransactionExpires(t *testing.T) {
 
 		bins, err := s.GetBinsToStore(tx, minedHeight,
 			[]uint32{1}, []uint32{minedHeight}, []int{0},
-			false, tx.TxIDChainHash(), false, false, false, nil)
+			false, tx.TxIDChainHash(), false, false, false, lane.None, nil)
 		require.NoError(t, err)
 
 		dah, ok := findBin(t, bins, fields.DeleteAtHeight.String())
@@ -259,7 +261,7 @@ func TestStore_GetBinsToStore_UnspendableTransactionExpires(t *testing.T) {
 
 		bins, err := s.GetBinsToStore(tx, minedHeight,
 			nil, nil, nil,
-			false, tx.TxIDChainHash(), false, false, false, nil)
+			false, tx.TxIDChainHash(), false, false, false, lane.None, nil)
 		require.NoError(t, err)
 
 		_, ok := findBin(t, bins, fields.DeleteAtHeight.String())
@@ -277,7 +279,7 @@ func TestStore_GetBinsToStore_UnspendableTransactionExpires(t *testing.T) {
 
 		bins, err := s.GetBinsToStore(tx, minedHeight,
 			[]uint32{1}, []uint32{minedHeight}, []int{0},
-			false, tx.TxIDChainHash(), false, false, false, nil)
+			false, tx.TxIDChainHash(), false, false, false, lane.None, nil)
 		require.NoError(t, err)
 
 		_, ok := findBin(t, bins, fields.DeleteAtHeight.String())
@@ -477,6 +479,28 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 }
 
 func BenchmarkStore_Create(b *testing.B) {
+	benchmarkStoreCreate(b, nil)
+}
+
+// BatchStoreItem is allocated once per create, so a new field must not make it bigger.
+func TestBatchStoreItemSize(t *testing.T) {
+	require.Equal(t, uintptr(144), unsafe.Sizeof(teranodeaerospike.BatchStoreItem{}))
+}
+
+// BenchmarkStore_CreateLanePosition is BenchmarkStore_Create with the store taking a position from
+// a source on every create. The batch send is stubbed, so this holds the option parse, Take and the
+// hand-off to the batcher; the bin's own cost is BenchmarkStore_GetBinsToStoreLanePosition.
+func BenchmarkStore_CreateLanePosition(b *testing.B) {
+	benchmarkStoreCreate(b, benchLanePositions{})
+}
+
+type benchLanePositions struct{}
+
+func (benchLanePositions) Next() (uint64, bool) { return lane.Pack(7, 41_000), true }
+
+func (benchLanePositions) Prime() {}
+
+func benchmarkStoreCreate(b *testing.B, source utxo.LanePositionSource) {
 	teranodeaerospike.InitPrometheusMetrics()
 
 	// read a hex file from os
@@ -496,12 +520,42 @@ func BenchmarkStore_Create(b *testing.B) {
 		}
 	}
 	s.SetStoreBatcher(batcher.New(100, 1, sendStoreBatch, true))
+	s.SetLanePositionSource(source)
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
 		_, err = s.Create(context.Background(), tx, 0)
 		require.NoError(b, err)
+	}
+}
+
+// BenchmarkStore_GetBinsToStoreLanePosition builds a record's bins without and
+// with a lane position: the flag-on cost of the one extra bin.
+func BenchmarkStore_GetBinsToStoreLanePosition(b *testing.B) {
+	txHex, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
+	require.NoError(b, err)
+
+	tx, err := bt.NewTxFromString(string(txHex))
+	require.NoError(b, err)
+
+	s := &teranodeaerospike.Store{}
+	s.SetUtxoBatchSize(100)
+	s.SetSettings(test.CreateBaseTestSettings(b))
+
+	for _, c := range []struct {
+		name string
+		pos  uint64
+	}{{"off", lane.None}, {"on", lane.Pack(7, 41_000)}} {
+		b.Run(c.name, func(b *testing.B) {
+			b.ReportAllocs()
+
+			for i := 0; i < b.N; i++ {
+				if _, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, c.pos, nil); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
