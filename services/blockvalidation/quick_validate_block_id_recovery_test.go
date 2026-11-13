@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
@@ -320,6 +321,108 @@ func TestQuickValidate_RestampKeepsSubtreeIndex(t *testing.T) {
 			require.Equal(t, 0, subtreeOf[forkID], "precondition: the fork recorded the transaction at index 0")
 			require.Contains(t, subtreeOf, block.ID)
 			require.Equal(t, 1, subtreeOf[block.ID], "the restamp must record the transaction's own subtree index")
+		})
+	}
+}
+
+// callerBlockIDNotReserved is a block id no reservation names and the sequence has
+// not issued on a fresh store, as a ProcessBlock caller can send.
+const callerBlockIDNotReserved uint32 = 4242
+
+// requireNotStamped asserts the UTXO store holds no record of tx, so quick
+// validation stamped nothing before it refused the block.
+func (h *preBindHarness) requireNotStamped(tx *bt.Tx) {
+	h.t.Helper()
+
+	_, err := h.utxoStore.Get(h.ctx, tx.TxIDChainHash())
+	require.Error(h.t, err, "the refused block's transaction must not have been created or stamped")
+	require.True(h.t, errors.Is(err, errors.ErrTxNotFound), "expected a not-found error, got %v", err)
+}
+
+// requireNotStored asserts the blockchain store holds no row for block.
+func (h *preBindHarness) requireNotStored(block *model.Block) {
+	h.t.Helper()
+
+	exists, err := h.chain.GetBlockExists(h.ctx, block.Hash())
+	require.NoError(h.t, err)
+	require.False(h.t, exists, "the refused block must not be stored")
+}
+
+// TestQuickValidate_CallerBlockIDMismatch_RefusedBeforeStamp: ProcessBlock copies a
+// caller's block_id onto the block, and the unified route quick-validates it. An id
+// that is not the block's reservation must be refused before any transaction is
+// stamped. StoreBlock refuses it too, but only after the transactions were created,
+// locked and tagged with it.
+//
+// Mutation target: keeping a non-zero block.ID in setQuickBlockID without comparing
+// it with AssignBlockID, as the code did before. The child is then created carrying
+// the caller's id, and requireNotStamped fails.
+func TestQuickValidate_CallerBlockIDMismatch_RefusedBeforeStamp(t *testing.T) {
+	for i, d := range quickDrivers {
+		t.Run(d.name, func(t *testing.T) {
+			h := newPreBindHarness(t, nil)
+			seed := byte(0xa0 + 0x10*i)
+
+			child := preBindSpendOf(t, h.storeGenuineParent(seed), 9_000)
+			block := h.forkSharingBlock(child, seed+1)
+			block.ID = callerBlockIDNotReserved
+
+			err := h.quickValidateWith(d, block)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "refusing caller-supplied block id 4242")
+
+			h.requireNotStamped(child)
+			h.requireNotStored(block)
+		})
+	}
+}
+
+// TestQuickValidate_CallerBlockIDMismatch_NoSubtrees: a coinbase-only block has no
+// subtree pipeline, so the id is assigned or checked in quickValidateBlock's and
+// quickValidateBlockAsync's own branch. The synchronous one used to overwrite the
+// caller's id with the reservation, storing the block under an id the caller did
+// not send; the async one kept the caller's id unchecked until StoreBlock.
+func TestQuickValidate_CallerBlockIDMismatch_NoSubtrees(t *testing.T) {
+	for i, d := range quickDrivers {
+		t.Run(d.name, func(t *testing.T) {
+			h := newPreBindHarness(t, nil)
+
+			coinbase := preBindCoinbase(t, byte(0xd0+i))
+			block := h.newPreBindBlock(coinbase, nil, coinbase.TxIDChainHash(), 1)
+			block.ID = callerBlockIDNotReserved
+
+			err := h.quickValidateWith(d, block)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "refusing caller-supplied block id 4242")
+
+			h.requireNotStored(block)
+		})
+	}
+}
+
+// TestQuickValidate_CallerBlockIDMatchesReservation_Commits: a caller-supplied id
+// that is the block's reservation is the id the block is stored under, as the
+// ProcessBlock block_id contract says.
+func TestQuickValidate_CallerBlockIDMatchesReservation_Commits(t *testing.T) {
+	for i, d := range quickDrivers {
+		t.Run(d.name, func(t *testing.T) {
+			h := newPreBindHarness(t, nil)
+			seed := byte(0xe0 + 0x08*i)
+
+			child := preBindSpendOf(t, h.storeGenuineParent(seed), 9_000)
+			block := h.forkSharingBlock(child, seed+1)
+
+			reserved, err := h.chain.AssignBlockID(h.ctx, block.Hash())
+			require.NoError(t, err)
+
+			block.ID = uint32(reserved) //nolint:gosec // a fresh store's first ids fit in uint32
+
+			require.NoError(t, h.quickValidateWith(d, block))
+			h.requireStoredUnder(block, uint32(reserved)) //nolint:gosec // as above
+
+			recorded, err := h.utxoStore.Get(h.ctx, child.TxIDChainHash())
+			require.NoError(t, err)
+			require.Contains(t, recorded.BlockIDs, uint32(reserved)) //nolint:gosec // as above
 		})
 	}
 }

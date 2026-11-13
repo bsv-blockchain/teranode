@@ -199,8 +199,13 @@ type ProcessBlockRequest struct {
 	Block   []byte                 `protobuf:"bytes,1,opt,name=block,proto3" json:"block,omitempty"`
 	Height  uint32                 `protobuf:"varint,2,opt,name=height,proto3" json:"height,omitempty"`
 	BaseUrl string                 `protobuf:"bytes,3,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
-	PeerId  string                 `protobuf:"bytes,4,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`     // P2P peer identifier for peer tracking via P2P service
-	BlockId uint32                 `protobuf:"varint,5,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"` // Pre-assigned block ID from legacy netsync (0 = not pre-assigned, blockchain will auto-assign)
+	PeerId  string                 `protobuf:"bytes,4,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"` // P2P peer identifier for peer tracking via P2P service
+	// Block ID to store the block under; 0 means none, and the blockchain service assigns one.
+	// A non-zero ID should be the one AssignBlockID returns for the block's hash. Quick
+	// validation refuses any other before it touches the UTXO store. On full validation the
+	// blockchain store refuses an ID another block holds or has reserved, or one its ID
+	// sequence has not issued yet. Legacy netsync always sends 0.
+	BlockId uint32 `protobuf:"varint,5,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
 	// True only when legacy netsync can show the block's hash sits at or below a pinned
 	// checkpoint hash matched in an internally linked header run (headerCache.Proven).
 	// Absent or false means no proof: block validation must not take the below-checkpoint
