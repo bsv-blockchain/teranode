@@ -1,9 +1,14 @@
 package aerospike_test
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -564,4 +569,660 @@ func TestIssue1768_ParentPreservedDespiteLateUnminedSince(t *testing.T) {
 		assert.Equal(t, int(lastSafeHeight+tSettings.UtxoStore.ParentPreservationBlocks), bins[fields.PreserveUntil.String()], "parent %d must be preserved", i+1)
 		assert.Nil(t, bins[fields.DeleteAtHeight.String()], "parent %d deleteAtHeight must be cleared", i+1)
 	}
+}
+
+// TestMarkTransactionsOnLongestChain_ReusedBatchSlots checks every bin of every record a mark touches, and
+// of records it must not touch, when each worker sends several batches through the same reused keys and
+// batch writes. 31 hashes with a batch size of 4 and 3 workers give each worker batches of 4, 4 and 3 (the
+// last 4, 4 and 1, which goes through the client's single-record path), so a key or batch write that kept
+// the previous batch's transaction writes the wrong record and leaves the right one as it was.
+func TestMarkTransactionsOnLongestChain_ReusedBatchSlots(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.MaxMinedBatchSize = 4
+	tSettings.UtxoStore.MaxMinedRoutines = 3
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	const (
+		height       = 1000
+		count        = 31
+		missingIndex = 27 // the third worker's second batch
+	)
+
+	require.NoError(t, store.SetBlockHeight(height))
+
+	// The same expectations hold on both write paths; with native ops requested (a mod-teranode fork
+	// image, see container_helper_test.go) this run must actually take native sub-op 14.
+	if os.Getenv("TERANODE_TEST_AEROSPIKE_NATIVE_OPS") == "true" {
+		require.True(t, store.UsesNativeMark(), "native ops requested but the mark is not on sub-op 14")
+	}
+
+	retention := int(tSettings.GetUtxoStoreBlockHeightRetention())
+	require.NotZero(t, retention)
+
+	dahBin := fields.DeleteAtHeight.String()
+	unminedBin := fields.UnminedSince.String()
+	dahVerBin := fields.DAHVersion.String()
+
+	keyOf := func(txID chainhash.Hash, page byte) *aerospike.Key {
+		var k *aerospike.Key
+
+		var err error
+
+		if page == 0 {
+			k, err = aerospike.NewKey(store.GetNamespace(), store.GetName(), txID[:])
+		} else {
+			k, err = aerospike.NewKey(store.GetNamespace(), store.GetName(), append(txID.CloneBytes(), page, 0, 0, 0))
+		}
+
+		require.NoError(t, err)
+
+		return k
+	}
+
+	// master writes a mined record. pages > 0 makes it external with that many pagination records.
+	master := func(txID chainhash.Hash, spent bool, pages int, extra aerospike.BinMap) aerospike.BinMap {
+		spentUtxos := 0
+		if spent {
+			spentUtxos = 1
+		}
+
+		bins := aerospike.BinMap{
+			fields.TxID.String():           txID.CloneBytes(),
+			fields.Conflicting.String():    false,
+			fields.TotalExtraRecs.String(): pages,
+			fields.SpentExtraRecs.String(): 0,
+			fields.SpentUtxos.String():     spentUtxos,
+			fields.RecordUtxos.String():    1,
+			fields.BlockIDs.String():       []interface{}{1},
+			fields.BlockHeights.String():   []interface{}{900},
+		}
+
+		if pages > 0 {
+			bins[fields.External.String()] = true
+			bins[fields.SpentExtraRecs.String()] = pages
+		}
+
+		for k, v := range extra {
+			bins[k] = v
+		}
+
+		require.NoError(t, client.Put(nil, keyOf(txID, 0), bins))
+
+		return bins
+	}
+
+	page := func(txID chainhash.Hash, idx byte, extra aerospike.BinMap) aerospike.BinMap {
+		bins := aerospike.BinMap{fields.TxID.String(): txID.CloneBytes()}
+		for k, v := range extra {
+			bins[k] = v
+		}
+
+		require.NoError(t, client.Put(nil, keyOf(txID, idx), bins))
+
+		return bins
+	}
+
+	// with returns a copy of bins with set applied; a nil value removes the bin.
+	with := func(bins, set aerospike.BinMap) aerospike.BinMap {
+		out := make(aerospike.BinMap, len(bins))
+		for k, v := range bins {
+			out[k] = v
+		}
+
+		for k, v := range set {
+			if v == nil {
+				delete(out, k)
+			} else {
+				out[k] = v
+			}
+		}
+
+		return out
+	}
+
+	requireBins := func(t *testing.T, key *aerospike.Key, want aerospike.BinMap, msg string) {
+		t.Helper()
+
+		rec, err := client.Get(nil, key)
+		require.NoError(t, err, msg)
+		require.Equal(t, want, rec.Bins, msg)
+	}
+
+	hashes := func(prefix string) []chainhash.Hash {
+		out := make([]chainhash.Hash, count)
+		for i := range out {
+			out[i] = chainhash.HashH([]byte(fmt.Sprintf("reused-slots-%s-%d", prefix, i)))
+		}
+
+		return out
+	}
+
+	// controls are records the call is not given; they must come out exactly as they went in.
+	controls := func(t *testing.T, prefix string) func() {
+		t.Helper()
+
+		want := make(map[chainhash.Hash]aerospike.BinMap, 3)
+
+		for i := range 3 {
+			txID := chainhash.HashH([]byte(fmt.Sprintf("reused-slots-%s-control-%d", prefix, i)))
+			want[txID] = master(txID, true, 0, aerospike.BinMap{unminedBin: 77, dahBin: 555})
+		}
+
+		return func() {
+			t.Helper()
+
+			for txID, bins := range want {
+				requireBins(t, keyOf(txID, 0), bins, "control record "+txID.String())
+			}
+		}
+	}
+
+	t.Run("off the longest chain stamps only records without unmined_since", func(t *testing.T) {
+		txIDs := hashes("off")
+		checkControls := controls(t, "off")
+		stamp := int(utxo.BackdatedUnminedSince(height, tSettings.UtxoStore.UnminedTxRetention))
+
+		want := make([]aerospike.BinMap, count)
+
+		for i, txID := range txIDs {
+			if i%2 == 0 {
+				want[i] = master(txID, true, 0, aerospike.BinMap{unminedBin: 50}) // kept
+			} else {
+				want[i] = with(master(txID, true, 0, nil), aerospike.BinMap{unminedBin: stamp})
+			}
+		}
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, txIDs, false))
+
+		for i, txID := range txIDs {
+			requireBins(t, keyOf(txID, 0), want[i], fmt.Sprintf("tx %d", i))
+		}
+
+		checkControls()
+	})
+
+	t.Run("on the longest chain without a DAH restamp clears unmined_since and skips a missing record", func(t *testing.T) {
+		previousGlobal := tSettings.GlobalBlockHeightRetention
+		previousAdjustment := tSettings.UtxoStore.BlockHeightRetentionAdjustment
+
+		tSettings.GlobalBlockHeightRetention = 0
+		tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
+
+		t.Cleanup(func() {
+			tSettings.GlobalBlockHeightRetention = previousGlobal
+			tSettings.UtxoStore.BlockHeightRetentionAdjustment = previousAdjustment
+		})
+
+		require.Zero(t, tSettings.GetUtxoStoreBlockHeightRetention())
+
+		txIDs := hashes("on-no-restamp")
+		checkControls := controls(t, "on-no-restamp")
+
+		want := make([]aerospike.BinMap, count)
+
+		for i, txID := range txIDs {
+			if i == missingIndex {
+				continue
+			}
+
+			want[i] = with(master(txID, true, 0, aerospike.BinMap{unminedBin: 50, dahBin: 555}), aerospike.BinMap{unminedBin: nil})
+		}
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, txIDs, true))
+
+		for i, txID := range txIDs {
+			if i == missingIndex {
+				exists, err := client.Exists(nil, keyOf(txID, 0))
+				require.NoError(t, err)
+				require.False(t, exists, "a missing record must not be created")
+
+				continue
+			}
+
+			requireBins(t, keyOf(txID, 0), want[i], fmt.Sprintf("tx %d", i))
+		}
+
+		checkControls()
+	})
+
+	t.Run("on the longest chain restamps the DAH of masters and their pagination records", func(t *testing.T) {
+		require.Equal(t, uint32(retention), tSettings.GetUtxoStoreBlockHeightRetention())
+
+		txIDs := hashes("on-restamp")
+		checkControls := controls(t, "on-restamp")
+		newDAH := height + 1 + retention
+
+		type record struct {
+			key  *aerospike.Key
+			want aerospike.BinMap
+			name string
+		}
+
+		var records []record
+
+		for i, txID := range txIDs {
+			if i == missingIndex {
+				continue
+			}
+
+			name := fmt.Sprintf("tx %d", i)
+			add := func(idx byte, want aerospike.BinMap, suffix string) {
+				records = append(records, record{key: keyOf(txID, idx), want: want, name: name + suffix})
+			}
+
+			switch i % 4 {
+			case 0: // fully spent: gets a DAH
+				bins := master(txID, true, 0, aerospike.BinMap{unminedBin: 50})
+				add(0, with(bins, aerospike.BinMap{unminedBin: nil, dahBin: newDAH, dahVerBin: 1}), "")
+			case 1: // unspent with a stale DAH: the DAH is cleared
+				bins := master(txID, false, 0, aerospike.BinMap{unminedBin: 50, dahBin: 1002})
+				add(0, with(bins, aerospike.BinMap{unminedBin: nil, dahBin: nil, dahVerBin: 1}), "")
+			case 2: // external, fully spent: master and both pages get the DAH
+				bins := master(txID, true, 2, aerospike.BinMap{unminedBin: 50})
+				add(0, with(bins, aerospike.BinMap{unminedBin: nil, dahBin: newDAH, dahVerBin: 1}), "")
+
+				for idx := byte(1); idx <= 2; idx++ {
+					add(idx, with(page(txID, idx, nil), aerospike.BinMap{dahBin: newDAH, dahVerBin: 1}), fmt.Sprintf(" page %d", idx))
+				}
+			case 3: // external, unspent with a stale DAH: master and both pages lose it
+				bins := master(txID, false, 2, aerospike.BinMap{unminedBin: 50, dahBin: 1002})
+				add(0, with(bins, aerospike.BinMap{unminedBin: nil, dahBin: nil, dahVerBin: 1}), "")
+
+				for idx := byte(1); idx <= 2; idx++ {
+					add(idx, with(page(txID, idx, aerospike.BinMap{dahBin: 1002}), aerospike.BinMap{dahBin: nil, dahVerBin: 1}), fmt.Sprintf(" page %d", idx))
+				}
+			}
+		}
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, txIDs, true))
+
+		for _, r := range records {
+			requireBins(t, r.key, r.want, r.name)
+		}
+
+		exists, err := client.Exists(nil, keyOf(txIDs[missingIndex], 0))
+		require.NoError(t, err)
+		require.False(t, exists, "a missing record must not be created")
+
+		checkControls()
+	})
+}
+
+// TestMarkTransactionsOnLongestChain_NativeResultsAndFallback drives the native sub-op 14 path against a
+// stock server by answering its records through SetBatchOperateFn, and checks that records a node
+// rejects with PARAMETER_ERROR, per record or for the whole batch, are written down the expression path
+// before the call returns, leaving the other native ops on. It also checks the native result handling:
+// missing records, failures, and a DAHSET signal that moves the pagination records.
+func TestMarkTransactionsOnLongestChain_NativeResultsAndFallback(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.MaxMinedBatchSize = 4
+	tSettings.UtxoStore.MaxMinedRoutines = 2
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+
+	const height = 1000
+
+	require.NoError(t, store.SetBlockHeight(height))
+
+	retention := int(tSettings.GetUtxoStoreBlockHeightRetention())
+	require.NotZero(t, retention)
+
+	// isNative: a native record carries one TeranodeModifyOp; the restamping expression write carries ten.
+	isNative := func(r aerospike.BatchRecordIfc) bool {
+		bw, ok := r.(*aerospike.BatchWrite)
+		return ok && len(bw.Ops) == 1
+	}
+
+	seed := func(t *testing.T, prefix string, n int) []chainhash.Hash {
+		t.Helper()
+
+		out := make([]chainhash.Hash, n)
+		for i := range out {
+			out[i] = chainhash.HashH([]byte(fmt.Sprintf("native-fallback-%s-%d", prefix, i)))
+
+			key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), out[i][:])
+			require.NoError(t, err)
+			require.NoError(t, client.Put(nil, key, aerospike.BinMap{
+				fields.TxID.String():           out[i].CloneBytes(),
+				fields.TotalExtraRecs.String(): 0,
+				fields.SpentUtxos.String():     1,
+				fields.RecordUtxos.String():    1,
+				fields.BlockIDs.String():       []interface{}{1},
+				fields.BlockHeights.String():   []interface{}{900},
+				fields.UnminedSince.String():   50,
+			}))
+		}
+
+		return out
+	}
+
+	// requireMarked checks the expression path's on-chain result: unminedSince cleared, DAH stamped.
+	requireMarked := func(t *testing.T, hashes []chainhash.Hash) {
+		t.Helper()
+
+		for i, h := range hashes {
+			key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), h[:])
+			require.NoError(t, err)
+
+			rec, err := client.Get(nil, key)
+			require.NoError(t, err)
+			require.Nil(t, rec.Bins[fields.UnminedSince.String()], "tx %d", i)
+			require.Equal(t, height+1+retention, rec.Bins[fields.DeleteAtHeight.String()], "tx %d", i)
+		}
+	}
+
+	t.Run("records rejected one by one are resent down the expression path", func(t *testing.T) {
+		hashes := seed(t, "per-record", 10)
+		store.SetNativeMarkForTest(true)
+
+		var nativeCalls atomic.Int64
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if len(records) > 0 && isNative(records[0]) {
+				nativeCalls.Add(1)
+
+				for _, r := range records {
+					r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+				}
+
+				return nil
+			}
+
+			return client.BatchOperate(policy, records)
+		})
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, hashes, true))
+		require.Positive(t, nativeCalls.Load())
+		// 10 records, batches of 4, 2 workers: each worker sends one native batch, then switches
+		require.LessOrEqual(t, nativeCalls.Load(), int64(tSettings.UtxoStore.MaxMinedRoutines), "the running call stops sending native after a rejection")
+		require.False(t, store.UsesNativeMark(), "a sub-op 14 rejection turns the native mark off")
+		require.True(t, store.UsesNativeTeranodeOps(), "a sub-op 14 rejection leaves the other native ops on")
+		requireMarked(t, hashes)
+	})
+
+	t.Run("a batch rejected as a whole is resent down the expression path", func(t *testing.T) {
+		hashes := seed(t, "whole-batch", 5)
+		store.SetNativeMarkForTest(true)
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if len(records) > 0 && isNative(records[0]) {
+				return &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+			}
+
+			return client.BatchOperate(policy, records)
+		})
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, hashes, true))
+		require.False(t, store.UsesNativeMark())
+		require.True(t, store.UsesNativeTeranodeOps(), "a sub-op 14 rejection leaves the other native ops on")
+		requireMarked(t, hashes)
+	})
+
+	t.Run("a one-record batch rejected as a whole is resent down the expression path", func(t *testing.T) {
+		hashes := seed(t, "single-record", 1)
+		store.SetNativeMarkForTest(true)
+
+		var nativeCalls atomic.Int64
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if len(records) > 0 && isNative(records[0]) {
+				nativeCalls.Add(1)
+
+				return &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+			}
+
+			return client.BatchOperate(policy, records)
+		})
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, hashes, true))
+		require.Equal(t, int64(1), nativeCalls.Load())
+		require.False(t, store.UsesNativeMark())
+		require.True(t, store.UsesNativeTeranodeOps(), "a sub-op 14 rejection leaves the other native ops on")
+		requireMarked(t, hashes)
+	})
+
+	t.Run("a resent batch that fails is returned", func(t *testing.T) {
+		hashes := seed(t, "resend-fails", 3)
+		store.SetNativeMarkForTest(true)
+
+		store.SetBatchOperateFn(func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			code := types.TIMEOUT
+			if len(records) > 0 && isNative(records[0]) {
+				code = types.PARAMETER_ERROR
+			}
+
+			for _, r := range records {
+				r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: code}
+			}
+
+			return nil
+		})
+
+		require.Error(t, store.MarkTransactionsOnLongestChain(ctx, hashes, true), "a failed resend must not be swallowed")
+	})
+
+	ok := map[interface{}]interface{}{"status": "OK"}
+
+	t.Run("native results: OK and missing succeed", func(t *testing.T) {
+		hashes := seed(t, "results-ok", 2)
+		store.SetNativeMarkForTest(true)
+
+		store.SetBatchOperateFn(func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			for i, r := range records {
+				br := r.BatchRec()
+
+				if i == 0 {
+					br.Record = &aerospike.Record{Bins: aerospike.BinMap{"SUCCESS": ok}}
+				} else {
+					br.Err = &aerospike.AerospikeError{ResultCode: types.KEY_NOT_FOUND_ERROR}
+				}
+			}
+
+			return nil
+		})
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, hashes, true), "a missing record on the longest chain is skipped, not failed")
+		require.True(t, store.UsesNativeMark(), "missing records leave the native mark on")
+	})
+
+	t.Run("native results: a failure is returned", func(t *testing.T) {
+		hashes := seed(t, "results-failed", 1)
+		store.SetNativeMarkForTest(true)
+
+		store.SetBatchOperateFn(func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			for _, r := range records {
+				r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+			}
+
+			return nil
+		})
+
+		require.Error(t, store.MarkTransactionsOnLongestChain(ctx, hashes, true), "the failed record is returned")
+		require.True(t, store.UsesNativeMark(), "a failure leaves the native mark on")
+	})
+
+	t.Run("a DAHSET response moves the pages to the new deleteAtHeight", func(t *testing.T) {
+		const newDAH = 2000
+
+		txID := chainhash.HashH([]byte("native-fallback-dahset-master"))
+		masterKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID[:])
+		require.NoError(t, err)
+		require.NoError(t, client.Put(nil, masterKey, aerospike.BinMap{
+			fields.TxID.String():           txID.CloneBytes(),
+			fields.External.String():       true,
+			fields.TotalExtraRecs.String(): 2,
+			fields.UnminedSince.String():   50,
+		}))
+
+		pageKeys := make([]*aerospike.Key, 2)
+		for i := range pageKeys {
+			pageKeys[i], err = aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(&txID, uint32(i+1))) // nolint: gosec
+			require.NoError(t, err)
+			require.NoError(t, client.Put(nil, pageKeys[i], aerospike.BinMap{fields.TxID.String(): txID.CloneBytes()}))
+		}
+
+		store.SetNativeMarkForTest(true)
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if len(records) == 1 && records[0].BatchRec().Key.Equals(masterKey) {
+				records[0].BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{"SUCCESS": map[interface{}]interface{}{
+					"status":         "OK",
+					"signal":         "DAHSET",
+					"childCount":     2,
+					"deleteAtHeight": newDAH,
+					"dahVer":         1,
+				}}}
+
+				return nil
+			}
+
+			return client.BatchOperate(policy, records) // the page writes
+		})
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID}, true))
+
+		for i, key := range pageKeys {
+			rec, err := client.Get(nil, key)
+			require.NoError(t, err)
+			require.Equal(t, newDAH, rec.Bins[fields.DeleteAtHeight.String()], "page %d", i+1)
+			require.Equal(t, 1, rec.Bins[fields.DAHVersion.String()], "page %d", i+1)
+		}
+	})
+
+	// One node of a mixed-version cluster fails its share of a multi-record batch, so BatchOperate
+	// returns PARAMETER_ERROR while another node has already applied sub-op 14 to its records.
+	t.Run("a batch one node rejects keeps the native results of the other nodes", func(t *testing.T) {
+		const newDAH = 2000
+
+		txID := chainhash.HashH([]byte("native-fallback-mixed-master"))
+		masterKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID[:])
+		require.NoError(t, err)
+		require.NoError(t, client.Put(nil, masterKey, aerospike.BinMap{
+			fields.TxID.String():           txID.CloneBytes(),
+			fields.External.String():       true,
+			fields.TotalExtraRecs.String(): 2,
+			fields.UnminedSince.String():   50,
+		}))
+
+		pageKeys := make([]*aerospike.Key, 2)
+		for i := range pageKeys {
+			pageKeys[i], err = aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(&txID, uint32(i+1))) // nolint: gosec
+			require.NoError(t, err)
+			require.NoError(t, client.Put(nil, pageKeys[i], aerospike.BinMap{fields.TxID.String(): txID.CloneBytes()}))
+		}
+
+		onOldNode := seed(t, "mixed-old-node", 1)
+
+		store.SetNativeMarkForTest(true)
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if len(records) == 0 || !isNative(records[0]) {
+				return client.BatchOperate(policy, records) // the resend and the page writes
+			}
+
+			// The upgraded node answers the master; the old node fails its share, leaving no result.
+			for _, r := range records {
+				if r.BatchRec().Key.Equals(masterKey) {
+					r.BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{"SUCCESS": map[interface{}]interface{}{
+						"status":         "OK",
+						"signal":         "DAHSET",
+						"childCount":     2,
+						"deleteAtHeight": newDAH,
+						"dahVer":         1,
+					}}}
+				}
+			}
+
+			return &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+		})
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID, onOldNode[0]}, true))
+		require.False(t, store.UsesNativeMark())
+
+		for i, key := range pageKeys {
+			rec, err := client.Get(nil, key)
+			require.NoError(t, err)
+			require.Equal(t, newDAH, rec.Bins[fields.DeleteAtHeight.String()], "page %d follows the native DAHSET", i+1)
+		}
+
+		requireMarked(t, onOldNode) // the old node's record is resent down the expression path
+	})
+
+	// One node rejects sub-op 14 while another applies the mark to an external master and then times
+	// out before replying. The master is left unanswered beside a TIMEOUT in the call's error chain,
+	// and its resend reads a DAH that already moved, so the pages must still follow it.
+	t.Run("a master written natively before its node timed out still moves its pages", func(t *testing.T) {
+		txID := chainhash.HashH([]byte("native-fallback-timeout-master"))
+		masterKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID[:])
+		require.NoError(t, err)
+		require.NoError(t, client.Put(nil, masterKey, aerospike.BinMap{
+			fields.TxID.String():           txID.CloneBytes(),
+			fields.External.String():       true,
+			fields.TotalExtraRecs.String(): 2,
+			fields.SpentExtraRecs.String(): 2, // every page spent too, so the master earns a DAH
+			fields.SpentUtxos.String():     1,
+			fields.RecordUtxos.String():    1,
+			fields.BlockIDs.String():       []interface{}{1},
+			fields.BlockHeights.String():   []interface{}{900},
+			fields.UnminedSince.String():   50,
+		}))
+
+		pageKeys := make([]*aerospike.Key, 2)
+		for i := range pageKeys {
+			pageKeys[i], err = aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(&txID, uint32(i+1))) // nolint: gosec
+			require.NoError(t, err)
+			require.NoError(t, client.Put(nil, pageKeys[i], aerospike.BinMap{fields.TxID.String(): txID.CloneBytes()}))
+		}
+
+		onOldNode := seed(t, "timeout-old-node", 1)
+		wantDAH := height + 1 + retention
+
+		store.SetNativeMarkForTest(true)
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if len(records) == 0 || !isNative(records[0]) {
+				return client.BatchOperate(policy, records) // the resend and the page writes
+			}
+
+			// The upgraded node applies the mark to the master, as sub-op 14 would, then times out.
+			require.NoError(t, client.Put(nil, masterKey, aerospike.BinMap{
+				fields.UnminedSince.String():   nil,
+				fields.DeleteAtHeight.String(): wantDAH,
+			}))
+
+			// Both nodes leave their records unanswered. The client would chain the old node's
+			// rejection with the timeout; the mark reads only the rejection, so it stands for both.
+			return &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+		})
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID, onOldNode[0]}, true))
+
+		for i, key := range pageKeys {
+			rec, err := client.Get(nil, key)
+			require.NoError(t, err)
+			require.Equal(t, wantDAH, rec.Bins[fields.DeleteAtHeight.String()], "page %d follows the master the timed-out node wrote", i+1)
+		}
+
+		requireMarked(t, onOldNode)
+	})
+}
+
+// TestMarkTransactionsOnLongestChain_NativeProbe runs the sub-op 14 probe against the server the tests
+// start: a stock server rejects the native op, a mod-teranode fork with sub-op 14 serves it.
+func TestMarkTransactionsOnLongestChain_NativeProbe(t *testing.T) {
+	_, store, ctx, deferFn := initAerospike(t, test.CreateBaseTestSettings(t), ulogger.NewErrorTestLogger(t))
+	t.Cleanup(deferFn)
+
+	want := os.Getenv("TERANODE_TEST_AEROSPIKE_NATIVE_OPS") == "true"
+	require.Equal(t, want, store.DetectNativeMarkForTest(ctx))
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	require.False(t, store.DetectNativeMarkForTest(cancelled), "a cancelled context aborts the probe")
 }

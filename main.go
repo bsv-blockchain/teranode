@@ -72,6 +72,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// If not showing version, run the daemon
-	teranode.RunDaemon(progname, version, commit)
+	// If not showing version, run the daemon. A daemon that stopped because
+	// something failed must exit non-zero so that on-failure restart policies
+	// (Docker, systemd) fire. RunDaemon has already logged the error and run its
+	// deferred teardown by the time it returns.
+	if err := teranode.RunDaemon(progname, version, commit); err != nil {
+		os.Exit(1)
+	}
 }

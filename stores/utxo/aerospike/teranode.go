@@ -289,6 +289,12 @@ type LuaMapResponse struct {
 	HasDAHVersion bool  `json:"-"`
 	// Conflicting is true when a DAHSET signal comes from a conflicting master, which is prunable whatever its spent state.
 	Conflicting bool `json:"conflicting,omitempty"`
+	// OldDeleteAtHeight and OldUnminedSince are the values the native longest-chain mark (sub-op 14)
+	// replaced on an external master whose signal fired, for the master restore after a failed page write.
+	OldDeleteAtHeight    int  `json:"oldDeleteAtHeight,omitempty"`
+	HasOldDeleteAtHeight bool `json:"-"`
+	OldUnminedSince      int  `json:"oldUnminedSince,omitempty"`
+	HasOldUnminedSince   bool `json:"-"`
 	// Debug      string               `json:"debug,omitempty"`
 }
 
@@ -327,6 +333,10 @@ func (r *LuaMapResponse) Reset() {
 	r.DAHVersion = 0
 	r.HasDAHVersion = false
 	r.Conflicting = false
+	r.OldDeleteAtHeight = 0
+	r.HasOldDeleteAtHeight = false
+	r.OldUnminedSince = 0
+	r.HasOldUnminedSince = false
 }
 
 // luaMapResponsePool reuses LuaMapResponse structs across set_mined batch records,
@@ -496,6 +506,20 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 
 	if conflicting, ok := respMap["conflicting"].(bool); ok {
 		result.Conflicting = conflicting
+	}
+
+	if dah, ok := respMap["oldDeleteAtHeight"]; ok {
+		if height, ok := luaResponseInt(dah); ok {
+			result.OldDeleteAtHeight = height
+			result.HasOldDeleteAtHeight = true
+		}
+	}
+
+	if since, ok := respMap["oldUnminedSince"]; ok {
+		if height, ok := luaResponseInt(since); ok {
+			result.OldUnminedSince = height
+			result.HasOldUnminedSince = true
+		}
 	}
 
 	return nil

@@ -14,7 +14,6 @@
 | GRPCRetryBackoff                     | time.Duration | 2s               | blockassembly_grpcRetryBackoff                     | Retry delay timing                                                                   |
 | LivenessStallTimeout                 | time.Duration | 0s               | blockassembly_livenessStallTimeout                 | Liveness reports 503 if the main select stops being serviced for this long; 0 = off  |
 | LocalDAHCache                        | string        | ""               | blockassembly_localDAHCache                        | **UNUSED** - Reserved for future DAH caching                                         |
-| MaxBlockReorgCatchup                 | int           | 100              | blockassembly_maxBlockReorgCatchup                 | Map capacity for current chain tracking                                              |
 | MaxBlockReorgRollback                | int           | 100              | blockassembly_maxBlockReorgRollback                | **UNUSED** - Defined but not referenced in code                                      |
 | MoveBackBlockConcurrency             | int           | 375              | blockassembly_moveBackBlockConcurrency             | Concurrency limit for reorg processing (SubtreeProcessor)                            |
 | ProcessRemainderTxHashesConcurrency  | int           | 375              | blockassembly_processRemainderTxHashesConcurrency  | Concurrency limit for remainder tx hash processing                                   |
@@ -32,6 +31,7 @@
 | DoubleSpendWindow                    | time.Duration | 0                | double_spend_window_millis | Double-spend detection window; 0 disables it                                         |
 | MaxGetReorgHashes                    | int           | 10000            | blockassembly_maxGetReorgHashes                    | **CRITICAL** - Reorganization hash limit                                             |
 | MinerWalletPrivateKeys               | []string      | []               | miner_wallet_private_keys                          | Mining wallet keys                                                                   |
+| EmergencyDifficultyDelay             | time.Duration | 0s               | blockassembly_emergencyDifficultyDelay             | Extra wait before a minimum-difficulty candidate; staggers miners (testnets only)    |
 | DifficultyCache                      | bool          | true             | blockassembly_difficultyCache                      | Enables difficulty calculation caching (Blockchain service)                          |
 | UseDynamicSubtreeSize                | bool          | false            | blockassembly_useDynamicSubtreeSize                | Dynamic subtree sizing                                                               |
 | BlockchainSubscriptionTimeout        | time.Duration | 5m               | blockassembly_blockchainSubscriptionTimeout        | Blockchain event subscription timeout                                                |
@@ -230,7 +230,7 @@ operator that the UTXO state needs manual intervention.
 ### Reorganization Handling
 
 - `MaxGetReorgHashes` prevents excessive memory usage during large reorganizations
-- Works with `MaxBlockReorgCatchup`, `MaxBlockReorgRollback`, `MoveBackBlockConcurrency`
+- Works with `MaxBlockReorgRollback`, `MoveBackBlockConcurrency`
 
 ### Dynamic Subtree Sizing
 

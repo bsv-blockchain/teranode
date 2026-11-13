@@ -58,6 +58,7 @@ const (
 	subOpIncrementSpentExtraRec uint8 = 11
 	subOpSetDeleteAtHeight      uint8 = 12
 	subOpAddDeletedChildren     uint8 = 13
+	subOpMarkLongestChain       uint8 = 14
 )
 
 // nativeOpResultBin is the bin name used by the native-op result message.
@@ -118,6 +119,87 @@ func (s *Store) useNativeForSubOp(subOp uint8) bool {
 // semantics that only probeNativeReplayProtection can vouch for.
 func isReplayProtectionSubOp(subOp uint8) bool {
 	return subOp == subOpSpendMulti || subOp == subOpSpend || subOp == subOpAddDeletedChildren
+}
+
+// useNativeMarkLongestChain reports whether MarkTransactionsOnLongestChain sends native sub-op 14.
+// It needs native ops on and its own probe passed, because a server built before sub-op 14 serves
+// every other native op.
+func (s *Store) useNativeMark() bool {
+	return s.useNativeTeranodeOps.Load() && s.useNativeMarkLongestChain.Load()
+}
+
+// encodeMarkLongestChainPayload builds the sub-op 14 payload
+// [14, [onLongestChain, baseHeight, blockHeightRetention, unminedSinceStamp]]. The arguments do not
+// depend on the transaction, so one payload serves every record of a call.
+func encodeMarkLongestChainPayload(onLongestChain bool, baseHeight, retention, unminedSinceStamp uint32) ([]byte, error) {
+	return encodeNativeOpPayload(subOpMarkLongestChain, []any{onLongestChain, int64(baseHeight), int64(retention), int64(unminedSinceStamp)})
+}
+
+// detectNativeMarkLongestChainSupport proves the server serves sub-op 14: it runs the on-chain mark,
+// with retention 0 so no deleteAtHeight logic runs, on a short-lived probe record carrying
+// unminedSince, and requires an OK response and the bin cleared. A server built before sub-op 14
+// answers PARAMETER_ERROR, which keeps the mark on its expression path and every other op native.
+func (s *Store) detectNativeMarkLongestChainSupport(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+
+	key, err := aerospike.NewKey(s.namespace, s.setName, fmt.Sprintf("_teranode-native-mark-probe-%d-%d", os.Getpid(), time.Now().UnixNano()))
+	if err != nil {
+		s.logger.Warnf("[teranode-native-op] markLongestChain probe key creation failed: %v; the longest-chain mark keeps its expression path", err)
+		return false
+	}
+
+	payload, encErr := encodeMarkLongestChainPayload(true, 1, 0, 1)
+	if encErr != nil {
+		s.logger.Warnf("[teranode-native-op] markLongestChain probe payload encode failed: %v; the longest-chain mark keeps its expression path", encErr)
+		return false
+	}
+
+	policy := aerospike.NewWritePolicy(0, 0)
+	policy.TotalTimeout = 2 * time.Second
+	policy.Expiration = 60
+
+	if err = s.client.PutBins(policy, key, aerospike.NewBin(fields.UnminedSince.String(), 7), aerospike.NewBin(fields.TotalExtraRecs.String(), 0)); err != nil {
+		s.logger.Warnf("[teranode-native-op] markLongestChain probe record setup failed: %v; the longest-chain mark keeps its expression path", err)
+		return false
+	}
+	defer func() {
+		_, _ = s.client.Delete(policy, key)
+	}()
+
+	rec, opErr := s.client.Operate(policy, key, aerospike.TeranodeModifyOp(nativeOpResultBin, payload))
+	if opErr != nil {
+		if hasResultCode(opErr, types.PARAMETER_ERROR) {
+			s.logger.Warnf("[teranode-native-op] server does not serve sub-op 14 (markLongestChain); the longest-chain mark keeps its expression path")
+		} else {
+			s.logger.Warnf("[teranode-native-op] markLongestChain probe failed: %v; the longest-chain mark keeps its expression path", opErr)
+		}
+
+		return false
+	}
+
+	if rec == nil || rec.Bins == nil {
+		s.logger.Warnf("[teranode-native-op] markLongestChain probe returned no record; the longest-chain mark keeps its expression path")
+		return false
+	}
+
+	res, parseErr := s.ParseLuaMapResponse(rec.Bins[nativeOpResultBin])
+	if parseErr != nil || res.Status != LuaStatusOK {
+		s.logger.Warnf("[teranode-native-op] markLongestChain probe returned %+v (%v); the longest-chain mark keeps its expression path", res, parseErr)
+		return false
+	}
+
+	readPolicy := aerospike.NewPolicy()
+	readPolicy.TotalTimeout = 2 * time.Second
+
+	after, err := s.client.Get(readPolicy, key, fields.UnminedSince.String())
+	if err != nil || after == nil || after.Bins[fields.UnminedSince.String()] != nil {
+		s.logger.Warnf("[teranode-native-op] markLongestChain probe did not clear %s (%v); the longest-chain mark keeps its expression path", fields.UnminedSince.String(), err)
+		return false
+	}
+
+	return true
 }
 
 // demoteNativeOnUnsupported permanently demotes the store to the UDF path when
@@ -597,6 +679,7 @@ func (s *Store) probeNativeSpendSemantics(ctx context.Context, policy *aerospike
 func (s *Store) initNativeTeranodeOps(ctx context.Context) {
 	supported := s.detectNativeTeranodeOpSupport(ctx)
 	s.useNativeTeranodeOps.Store(supported)
+	s.useNativeMarkLongestChain.Store(supported && s.detectNativeMarkLongestChainSupport(ctx))
 	s.nativeOpBatchWritePolicy = aerospike.NewBatchWritePolicy()
 	// UPDATE_ONLY: a mod-teranode invocation must never create a record. On
 	// the UDF path a missing key runs the Lua function against no record and

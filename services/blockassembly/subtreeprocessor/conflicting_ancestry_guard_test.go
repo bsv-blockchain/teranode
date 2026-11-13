@@ -124,6 +124,12 @@ func newAncestryGuardHarness(t *testing.T, loserBlockIDs []uint32, loserIsOnAnce
 	return h
 }
 
+// onCurrentChain sets what the current-chain guard is told about the loser's block IDs. The
+// guard asks only for a loser that survives the ancestry check and has block IDs.
+func (h *ancestryGuardHarness) onCurrentChain(answer bool) {
+	h.mockBlockchain.On("CheckBlockIsInCurrentChain", mock.Anything, h.loserBlockIDs).Return(answer, nil)
+}
+
 // TestAncestryGuardRefusesDemotionOfAncestryConfirmedTx is the security
 // regression: a block whose conflict resolution would demote a transaction
 // confirmed on that block's own ancestry must not have that demotion applied,
@@ -159,6 +165,7 @@ func TestAncestryGuardRefusesDemotionOfAncestryConfirmedTx(t *testing.T) {
 // breaks.
 func TestAncestryGuardAllowsDemotionOfSiblingForkTx(t *testing.T) {
 	h := newAncestryGuardHarness(t, []uint32{7}, false)
+	h.onCurrentChain(false) // the abandoned branch
 
 	losing, _, err := h.stp.processConflictingTransactions(
 		context.Background(), h.block, []chainhash.Hash{h.winner}, map[chainhash.Hash]struct{}{})
@@ -171,6 +178,24 @@ func TestAncestryGuardAllowsDemotionOfSiblingForkTx(t *testing.T) {
 
 	require.Empty(t, h.stp.DrainPendingInvalidations(),
 		"a legitimate reorg must not queue any block for invalidation")
+}
+
+// TestCurrentChainGuardKeepsLoserConfirmedAfterTheBlock: a loser mined on the current chain but not
+// on the block's ancestry (a later block, as the winner's own descendants were in #2071) is not
+// demoted. The block itself may be valid, so it is not queued for invalidation, and the rest of
+// the resolution goes ahead without error.
+func TestCurrentChainGuardKeepsLoserConfirmedAfterTheBlock(t *testing.T) {
+	h := newAncestryGuardHarness(t, []uint32{12}, false)
+	h.onCurrentChain(true)
+
+	losing, _, err := h.stp.processConflictingTransactions(
+		context.Background(), h.block, []chainhash.Hash{h.winner}, map[chainhash.Hash]struct{}{})
+
+	require.NoError(t, err, "a refused loser must not fail block movement")
+	require.True(t, h.ancestryQueried)
+	require.False(t, losing.Exists(h.loser), "a loser confirmed on the current chain must not be reported")
+	h.mockUtxoStore.AssertNotCalled(t, "SetConflicting", mock.Anything, []chainhash.Hash{h.loser}, true)
+	require.Empty(t, h.stp.DrainPendingInvalidations(), "a confirmed loser says nothing against the block")
 }
 
 // TestAncestryGuardFailsOpenOnUnresolvableLoser pins the direction of failure.

@@ -54,8 +54,8 @@ func TestPrunerThroughput(t *testing.T) {
 		t.Skip("set TERANODE_PRUNER_BENCH=1 to run the pruner throughput benchmark")
 	}
 
-	children := envInt(t, "TERANODE_PRUNER_BENCH_CHILDREN", 5000)
-	runs := envInt(t, "TERANODE_PRUNER_BENCH_RUNS", 3)
+	children := pruneEnvInt(t, "TERANODE_PRUNER_BENCH_CHILDREN", 5000)
+	runs := pruneEnvInt(t, "TERANODE_PRUNER_BENCH_RUNS", 3)
 
 	for _, w := range []pruneWorkload{
 		// Every child spends one output of its own parent.
@@ -108,7 +108,7 @@ func runPruneWorkload(t *testing.T, w pruneWorkload, children int) pruneResult {
 	s := test.CreateBaseTestSettings(t)
 	s.UtxoStore.DisableDAHCleaner = false
 
-	if chunk := envInt(t, "TERANODE_PRUNER_BENCH_CHUNK", 0); chunk > 0 {
+	if chunk := pruneEnvInt(t, "TERANODE_PRUNER_BENCH_CHUNK", 0); chunk > 0 {
 		s.Pruner.UTXOChunkSize = chunk
 	}
 
@@ -380,7 +380,7 @@ func addNetworkDelay(t *testing.T, client *uaerospike.Client, delay string) {
 	require.NoError(t, err, string(combined))
 }
 
-func envInt(t *testing.T, name string, fallback int) int {
+func pruneEnvInt(t *testing.T, name string, fallback int) int {
 	t.Helper()
 
 	raw := os.Getenv(name)

@@ -257,6 +257,12 @@ type Store struct {
 	// sub-ops that carry them stay on the UDF path; see useNativeForSubOp.
 	nativeReplayProtection atomic.Bool
 
+	// useNativeMarkLongestChain is whether the server also serves native sub-op 14, markLongestChain,
+	// which MarkTransactionsOnLongestChain uses in place of its expression write. Set by its own
+	// start-up probe (detectNativeMarkLongestChainSupport) and cleared on a runtime PARAMETER_ERROR
+	// from that sub-op only, so an older server keeps every other native op.
+	useNativeMarkLongestChain atomic.Bool
+
 	// conflictingIndexState is whether this process trusts the conflicting index
 	// (conflictingIndexUnchecked/Usable/Unusable); see conflicting_index.go.
 	// conflictingIndexCancel and conflictingIndexDone stop and await the
@@ -495,6 +501,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		})
 	}
 
+	// Read by PendingConflictIntents at Block Assembly startup. Not gated on the pruner index:
+	// without it that read walks the whole namespace.
+	s.ensureConflictWALIndex()
+
 	storeBatchSize := tSettings.UtxoStore.StoreBatcherSize
 	storeBatchDuration, deprecatedDuration := storeBatcherDuration(tSettings)
 	if deprecatedDuration {
@@ -680,6 +690,17 @@ func (s *Store) SetLogger(logger ulogger.Logger) {
 // and advanced operations that require direct access to the Aerospike client.
 func (s *Store) GetClient() *uaerospike.Client {
 	return s.client
+}
+
+// CloseClient closes the Aerospike client and evicts it from the per-host
+// connection cache, without draining the store's batchers or closing its
+// external blob store. The test daemon uses it to emulate a crash. Evicting
+// matters: a later store for the same host, such as a restarted daemon, would
+// otherwise reuse the closed client and fail with INVALID_NODE_ERROR.
+func (s *Store) CloseClient() {
+	if s.client != nil {
+		util.CloseAerospikeClient(s.url.Host)
+	}
 }
 
 // GetNamespace returns the Aerospike namespace used by this store.
@@ -1129,6 +1150,11 @@ func (s *Store) waitForIndexReady(ctx context.Context, indexName string) error {
 
 // indexExists checks if an index with the given name exists in the namespace
 func (s *Store) indexExists(indexName string) (bool, error) {
+	return s.indexExistsInSet(indexName, s.setName)
+}
+
+// indexExistsInSet is indexExists for an index over setName.
+func (s *Store) indexExistsInSet(indexName, setName string) (bool, error) {
 	// Get a random node from the cluster
 	node, err := s.client.Client.Cluster().GetRandomNode()
 	if err != nil {
@@ -1146,7 +1172,7 @@ func (s *Store) indexExists(indexName string) (bool, error) {
 
 	// Parse the response to check for the index
 	for _, v := range infoMap {
-		if strings.Contains(v, fmt.Sprintf("ns=%s:indexname=%s:set=%s", s.namespace, indexName, s.setName)) {
+		if strings.Contains(v, fmt.Sprintf("ns=%s:indexname=%s:set=%s", s.namespace, indexName, setName)) {
 			return true, nil
 		}
 	}
