@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/require"
 )
 
@@ -365,6 +366,8 @@ func TestSendStoreBatch_InDoubtWriteLeavesOutcomeUnknown(t *testing.T) {
 		// timeout on the first send comes back unflagged.
 		{name: "per-record timeout not flagged in doubt", perRecord: unflaggedTimeout, wantUnknown: true},
 		{name: "per-record const timeout", perRecord: aerospike.ErrTimeout, wantUnknown: true},
+		// The wrapper's wait for a connection permit ran out before anything was sent.
+		{name: "top-level permit timeout", topLevel: &uaerospike.PermitTimeoutError{AerospikeError: &aerospike.AerospikeError{ResultCode: types.TIMEOUT}}},
 	}
 
 	for _, tc := range cases {

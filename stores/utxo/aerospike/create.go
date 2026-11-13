@@ -1553,14 +1553,22 @@ func createMayHaveCommittedError(err error) error {
 // isInDoubt therefore walks the whole chain and answers true for any error
 // marked in doubt, any TIMEOUT, and any client-side code (zero or below:
 // network and connection failures), the codes the client's own in-doubt rule
-// uses. That over-marks a write that never went out: one that timed out before
-// it was sent, and client codes such as MAX_ERROR_RATE and
-// NO_AVAILABLE_CONNECTIONS_TO_NODE, where the client sent nothing. Such a
-// create keeps its spends with no record until a repeat of the create, the safe
-// direction. The rule stays broad rather than listing the never-sent codes,
-// because a code missed from such a list would unspend a stored transaction.
+// uses. One timeout is told apart: uaerospike.PermitTimeoutError, the wrapper's
+// wait for a connection permit running out, comes back before anything is sent,
+// so it is not in doubt. The rule still over-marks other writes that never went
+// out: client codes such as MAX_ERROR_RATE and
+// NO_AVAILABLE_CONNECTIONS_TO_NODE, where the client sent nothing on its last
+// attempt. Such a create keeps its spends with no record until a repeat of the
+// create, the safe direction. Those codes stay marked because the client can
+// return one after an earlier attempt of the same command did send.
 func isInDoubt(err error) bool {
 	for err != nil {
+		// Nothing was sent: the permit wait ran out before the client was
+		// called, and the permit is taken once for the whole call.
+		if _, ok := err.(*uaerospike.PermitTimeoutError); ok {
+			return false
+		}
+
 		// As reads this one link of the chain, the client's constant errors
 		// included; errors.As would stop at the first link.
 		if link, ok := err.(interface{ As(any) bool }); ok {
