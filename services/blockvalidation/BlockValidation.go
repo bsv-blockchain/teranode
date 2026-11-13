@@ -4071,7 +4071,7 @@ func (u *BlockValidation) liftFinalSubtreeRootForBUMP(ctx context.Context, block
 //
 // Parameters:
 //   - ctx: Context for the operation
-//   - oldBlockIDsMap: Map of transaction IDs to their parent block IDs
+//   - oldBlockIDsMap: Map of parent transaction IDs to the block IDs each is mined in
 //   - block: Block to check IDs for
 //
 // Returns an error if block verification fails.
@@ -4290,13 +4290,14 @@ func (u *BlockValidation) iterateOldBlockIDsWithCachedLookup(
 
 	// The parent block ids are this node's store keys, not block hashes or heights.
 	// They go to the log; the verdict, which crosses to RPC and is stored as the
-	// block's invalid reason, names the transaction.
+	// block's invalid reason, names the parent transaction. The map is keyed by the
+	// parent, so every parent is checked on its own.
 	notOnCurrentChain := func(txID chainhash.Hash, blockIDs []uint32, how string) error {
 		if u.logger != nil {
-			u.logger.Warnf("[Block Validation][checkOldBlockIDs][%s] transaction %s has parents in blocks %v, which are not on the current chain%s", block.String(), txID, blockIDs, how)
+			u.logger.Warnf("[Block Validation][checkOldBlockIDs][%s] parent transaction %s is mined in blocks %v, which are not on the current chain%s", block.String(), txID, blockIDs, how)
 		}
 
-		return errors.NewBlockInvalidError("[Block Validation][checkOldBlockIDs][%s] block is not valid. Transaction's (%v) parent blocks are not from current chain%s", block.String(), txID, how)
+		return errors.NewBlockInvalidError("[Block Validation][checkOldBlockIDs][%s] block is not valid. Parent transaction (%v) is mined in blocks that are not from current chain%s", block.String(), txID, how)
 	}
 
 	oldBlockIDsMap.Iterate(func(txID chainhash.Hash, blockIDs []uint32) bool {

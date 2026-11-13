@@ -193,30 +193,46 @@ func (s *parentCheckStores) buildBlockSpendingFrom(ctx context.Context, t *testi
 ) (*model.Block, chainhash.Hash) {
 	t.Helper()
 
+	return s.buildBlockSpendingFromEach(ctx, t, []*model.BlockHeaderMeta{fundingMeta}, parent, height, timestamp)
+}
+
+// buildBlockSpendingFromEach is buildBlockSpendingFrom with one funding transaction per entry of
+// fundingMetas, each mined only in the block its entry names. C has one input per funding
+// transaction, in the order given.
+func (s *parentCheckStores) buildBlockSpendingFromEach(ctx context.Context, t *testing.T, fundingMetas []*model.BlockHeaderMeta,
+	parent *chainhash.Hash, height uint32, timestamp uint32,
+) (*model.Block, chainhash.Hash) {
+	t.Helper()
+
 	privateKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	require.NoError(t, err)
 
-	fundingTx := bt.NewTx()
-	require.NoError(t, fundingTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
-	fundingTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x65, 0x00, 0x00, 0x00, '/', 'F', 'u', 'n', 'd'})
-	require.NoError(t, fundingTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000))
-
 	childTx := bt.NewTx()
-	require.NoError(t, childTx.FromUTXOs(&bt.UTXO{
-		TxIDHash:      fundingTx.TxIDChainHash(),
-		Vout:          0,
-		LockingScript: fundingTx.Outputs[0].LockingScript,
-		Satoshis:      fundingTx.Outputs[0].Satoshis,
-	}))
+
+	for i, fundingMeta := range fundingMetas {
+		// The index byte keeps each funding transaction's hash distinct.
+		fundingTx := bt.NewTx()
+		require.NoError(t, fundingTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
+		fundingTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x65, 0x00, 0x00, 0x00, '/', 'F', 'u', 'n', 'd', byte(i)})
+		require.NoError(t, fundingTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000))
+
+		require.NoError(t, childTx.FromUTXOs(&bt.UTXO{
+			TxIDHash:      fundingTx.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: fundingTx.Outputs[0].LockingScript,
+			Satoshis:      fundingTx.Outputs[0].Satoshis,
+		}))
+
+		_, _, err = s.utxoStore.SpendAndCreate(ctx, fundingTx, fundingMeta.Height,
+			utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: fundingMeta.ID, BlockHeight: fundingMeta.Height, OnLongestChain: true}),
+			utxostore.WithCreateOnly())
+		require.NoError(t, err)
+	}
+
 	require.NoError(t, childTx.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000))
 	require.NoError(t, childTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey}))
-
-	_, _, err = s.utxoStore.SpendAndCreate(ctx, fundingTx, fundingMeta.Height,
-		utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: fundingMeta.ID, BlockHeight: fundingMeta.Height, OnLongestChain: true}),
-		utxostore.WithCreateOnly())
-	require.NoError(t, err)
 
 	_, _, err = s.utxoStore.SpendAndCreate(ctx, childTx, height, utxostore.WithCreateOnly())
 	require.NoError(t, err)
@@ -494,4 +510,84 @@ func TestValidateBlock_AcceptsMainChainBlockSpendingParentMinedPastThePrefetchWi
 			require.True(t, ancestorCalls[0].answer)
 		})
 	}
+}
+
+// TestValidateBlock_RejectsForkBlockWhoseTxHasOneParentOffItsHistory gives C two inputs, both past
+// the 11-header window (the fewest median-time-past accepts). T1 is mined in B1, deep in F's own
+// history. T2 is mined only in the main-chain tip B14, which is not in F's history because F is
+// built on B13. F must be rejected for T2 however
+// the parent checks are scheduled: every parent is checked on its own.
+func TestValidateBlock_RejectsForkBlockWhoseTxHasOneParentOffItsHistory(t *testing.T) {
+	const (
+		chainLength  = uint32(14)
+		headerWindow = uint64(11)
+	)
+
+	for _, route := range forkParentRoutes {
+		for _, offHistoryFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/off-history input first=%t", route.name, offHistoryFirst), func(t *testing.T) {
+				rejectsForkBlockWithOneParentOffItsHistory(t, route.inMemoryChainCheck, offHistoryFirst, chainLength, headerWindow)
+			})
+		}
+	}
+}
+
+// rejectsForkBlockWithOneParentOffItsHistory runs one case of the test above. offHistoryFirst puts
+// T2's input before T1's. The parent checks run concurrently, so on the old child-keyed map the
+// order decided which parent survived; running both orders keeps the test from passing on luck.
+func rejectsForkBlockWithOneParentOffItsHistory(t *testing.T, inMemoryChainCheck, offHistoryFirst bool, chainLength uint32, headerWindow uint64) {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stores := newParentCheckStores(ctx, t, inMemoryChainCheck)
+	stores.settings.BlockValidation.PreviousBlockHeaderCount = headerWindow
+
+	baseTime := uint32(time.Now().Add(-time.Hour).Unix()) //nolint:gosec
+
+	blocks := make([]*model.Block, 0, chainLength)
+	parent := stores.settings.ChainCfgParams.GenesisHash
+
+	for height := uint32(1); height <= chainLength; height++ {
+		b := ancestorVerdictCoinbaseOnlyBlockAt(t, parent, height, baseTime+height)
+		require.NoError(t, stores.client.AddBlock(ctx, b, "test"))
+		blocks = append(blocks, b)
+		parent = b.Hash()
+	}
+
+	blockB1, blockParentOfF, blockTip := blocks[0], blocks[chainLength-2], blocks[chainLength-1]
+
+	_, b1Meta, err := stores.client.GetBlockHeader(ctx, blockB1.Hash())
+	require.NoError(t, err)
+
+	_, tipMeta, err := stores.client.GetBlockHeader(ctx, blockTip.Hash())
+	require.NoError(t, err)
+
+	fundingMetas := []*model.BlockHeaderMeta{b1Meta, tipMeta}
+	if offHistoryFirst {
+		fundingMetas = []*model.BlockHeaderMeta{tipMeta, b1Meta}
+	}
+
+	// F: the fork block on B13, at the tip's height.
+	blockF, _ := stores.buildBlockSpendingFromEach(ctx, t, fundingMetas, blockParentOfF.Hash(), chainLength, baseTime+chainLength)
+	require.NoError(t, stores.client.SetBlockMinedSet(ctx, blockParentOfF.Hash()))
+
+	historyOfF, err := stores.client.GetBlockHeaderIDs(ctx, blockParentOfF.Hash(), 10_000)
+	require.NoError(t, err)
+	require.Contains(t, historyOfF, b1Meta.ID, "precondition: B1 is in F's history")
+	require.NotContains(t, historyOfF, tipMeta.ID, "precondition: the tip is not in F's history")
+
+	headerWindowOfF, err := stores.client.GetBlockHeaderIDs(ctx, blockParentOfF.Hash(), headerWindow)
+	require.NoError(t, err)
+	require.NotContains(t, headerWindowOfF, b1Meta.ID, "precondition: B1 is past the header window, so checkOldBlockIDs sees it")
+
+	bv := stores.newBlockValidation(ctx, t)
+
+	err = bv.ValidateBlock(ctx, blockF, "test", true)
+
+	require.Error(t, err, "fork block F was accepted although one input spends an output mined only in the tip (block id %d), which is not in F's history; chain calls: %s",
+		tipMeta.ID, describeChainCheckCalls(stores.spy.recorded()))
+	require.ErrorIs(t, err, errors.ErrBlockInvalid)
+	require.Contains(t, err.Error(), "are not from current chain")
 }
