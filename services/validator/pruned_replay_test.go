@@ -175,10 +175,8 @@ func TestValidateReportsPrunedReplayRatherThanConflict(t *testing.T) {
 // links to the marker answer. TestBatchedSpendKeepsReplayPastTheErrorCap pins
 // the Aerospike batched spend, where the errors stand alone.
 //
-// In a block above the checkpoint the replay spends outputs C already spent on
-// this chain, so the tx is invalid and the block with it. Below the checkpoint
-// (script validation skipped, outpoint-only spends) the block is valid by
-// definition and the answer stays a non-verdict error.
+// The answer is never a block verdict: the marker cannot show that C was mined
+// on the chain the block extends.
 func TestValidatePrunedReplayInABlock(t *testing.T) {
 	tracing.SetupMockTracer()
 
@@ -275,33 +273,19 @@ func TestValidatePrunedReplayInABlock(t *testing.T) {
 				stats:       gocore.NewStat("validator"),
 			}
 
-			t.Run("above the checkpoint", func(t *testing.T) {
-				opts := NewDefaultOptions()
-				opts.CreateConflicting = true
-				opts.SkipPolicyChecks = true
-				opts.CandidateParentMedianTime = 1700000000
+			// In a block the replay is refused and reported as one, and it stays
+			// a non-verdict error: the marker records only that this node's pruner
+			// removed C, not on which chain C was mined, so a block that re-includes
+			// C on a competing branch may be valid.
+			opts := NewDefaultOptions()
+			opts.CreateConflicting = true
+			opts.SkipPolicyChecks = true
+			opts.CandidateParentMedianTime = 1700000000
 
-				_, err := v.ValidateWithOptions(ctx, c, 1400, opts)
-				require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is reported as one, past the error cap")
-				require.ErrorIs(t, err, errors.ErrTxInvalid, "a block re-including a pruned transaction is invalid")
-				require.NotErrorIs(t, err, errors.ErrTxConflicting)
-			})
-
-			t.Run("below the checkpoint", func(t *testing.T) {
-				tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 1_000_000}}
-
-				opts := NewDefaultOptions()
-				opts.CreateConflicting = true
-				opts.SkipPolicyChecks = true
-				opts.SkipScriptValidation = true
-				opts.OutpointOnlySpend = true
-				opts.IgnoreLocked = true
-				opts.CandidateParentMedianTime = 1700000000
-
-				_, err := v.ValidateWithOptions(ctx, c, 1400, opts)
-				require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is reported as one, past the error cap")
-				require.NotErrorIs(t, err, errors.ErrTxInvalid, "below the checkpoint a marker answer never condemns the block")
-			})
+			_, err = v.ValidateWithOptions(ctx, c, 1400, opts)
+			require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is reported as one, past the error cap")
+			require.NotErrorIs(t, err, errors.ErrTxInvalid, "a marker answer never condemns the block")
+			require.NotErrorIs(t, err, errors.ErrTxConflicting)
 		})
 	}
 }
