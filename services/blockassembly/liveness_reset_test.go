@@ -179,9 +179,10 @@ func seedSubtree(t *testing.T, items *baTestItems, txHash chainhash.Hash) *chain
 // [h2A, h3A] and moveBack [h3B, h2B] and marks the moved-back transaction
 // unmined.
 //
-// Three beats are pinned, one per assertion:
-//   - the moveForward loop: the second moveForward read
-//   - the moveBack loop: the moveBack read
+// The beats pinned:
+//   - every subtree read after the first: the moveBack block is read once to
+//     number its transactions, the moveForward blocks once to find which of them
+//     are in the new chain, and the moveBack block again to emit the rest
 //   - the beat before the unmined mark: the mark itself
 func TestLivenessResetBeatsPerBlock(t *testing.T) {
 	initPrometheusMetrics()
@@ -248,16 +249,18 @@ func TestLivenessResetBeatsPerBlock(t *testing.T) {
 
 	require.NoError(t, ba.reset(ctx))
 
-	// The fixture must have taken the path under test: three subtree reads (h2A,
-	// h3A, h2B; h3B is invalid and skipped) and one unmined mark.
+	// The fixture must have taken the path under test: four subtree reads (h2B,
+	// h2A, h3A, then h2B again; h3B is invalid and skipped) and one unmined mark.
 	readAges := reads.seen()
-	require.Len(t, readAges, 3, "reset must read subtrees for h2A, h3A and h2B")
+	require.Len(t, readAges, 4, "reset must read subtrees for h2B, h2A, h3A and h2B again")
 	require.Len(t, marks.seen(), 1, "reset must mark the moved-back transaction unmined")
 
 	// readAges[0] follows earlier beats (the block fetch, the mined_set wait) and
 	// pins nothing on its own.
-	require.Less(t, readAges[1], time.Minute, "the moveForward subtree loop must beat per block")
-	require.Less(t, readAges[2], time.Minute, "the moveBack subtree loop must beat per block")
+	for i := 1; i < len(readAges); i++ {
+		require.Less(t, readAges[i], time.Minute, "subtree read %d must follow a beat", i)
+	}
+
 	require.Less(t, marks.seen()[0], time.Minute, "reset must beat before marking moved-back transactions unmined")
 }
 
