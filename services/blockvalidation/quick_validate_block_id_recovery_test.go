@@ -6,7 +6,9 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -320,6 +322,222 @@ func TestQuickValidate_RestampKeepsSubtreeIndex(t *testing.T) {
 			require.Equal(t, 0, subtreeOf[forkID], "precondition: the fork recorded the transaction at index 0")
 			require.Contains(t, subtreeOf, block.ID)
 			require.Equal(t, 1, subtreeOf[block.ID], "the restamp must record the transaction's own subtree index")
+		})
+	}
+}
+
+// callerBlockIDNotReserved is a block id no reservation names and the sequence has
+// not issued on a fresh store, as a ProcessBlock caller can send.
+const callerBlockIDNotReserved uint32 = 4242
+
+// requireNotStamped asserts the UTXO store holds no record of tx, so quick
+// validation stamped nothing before it refused the block.
+func (h *preBindHarness) requireNotStamped(tx *bt.Tx) {
+	h.t.Helper()
+
+	_, err := h.utxoStore.Get(h.ctx, tx.TxIDChainHash())
+	require.Error(h.t, err, "the refused block's transaction must not have been created or stamped")
+	require.True(h.t, errors.Is(err, errors.ErrTxNotFound), "expected a not-found error, got %v", err)
+}
+
+// requireNotStored asserts the blockchain store holds no row for block.
+func (h *preBindHarness) requireNotStored(block *model.Block) {
+	h.t.Helper()
+
+	exists, err := h.chain.GetBlockExists(h.ctx, block.Hash())
+	require.NoError(h.t, err)
+	require.False(h.t, exists, "the refused block must not be stored")
+}
+
+// TestQuickValidate_CallerBlockIDMismatch_RefusedBeforeStamp: ProcessBlock copies a
+// caller's block_id onto the block, and the unified route quick-validates it. An id
+// that is not the block's reservation must be refused before any transaction is
+// stamped. StoreBlock refuses it too, but only after the transactions were created,
+// locked and tagged with it.
+//
+// Mutation target: keeping a non-zero block.ID in setQuickBlockID without comparing
+// it with AssignBlockID, as the code did before. The child is then created carrying
+// the caller's id, and requireNotStamped fails.
+func TestQuickValidate_CallerBlockIDMismatch_RefusedBeforeStamp(t *testing.T) {
+	for i, d := range quickDrivers {
+		t.Run(d.name, func(t *testing.T) {
+			h := newPreBindHarness(t, nil)
+			seed := byte(0xa0 + 0x10*i)
+
+			child := preBindSpendOf(t, h.storeGenuineParent(seed), 9_000)
+			block := h.forkSharingBlock(child, seed+1)
+			block.ID = callerBlockIDNotReserved
+
+			err := h.quickValidateWith(d, block)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "refusing caller-supplied block id 4242")
+
+			h.requireNotStamped(child)
+			h.requireNotStored(block)
+		})
+	}
+}
+
+// TestQuickValidate_CallerBlockIDMismatch_NoSubtrees: a coinbase-only block has no
+// subtree pipeline, so the id is assigned or checked in quickValidateBlock's and
+// quickValidateBlockAsync's own branch. The synchronous one used to overwrite the
+// caller's id with the reservation, storing the block under an id the caller did
+// not send; the async one kept the caller's id unchecked until StoreBlock.
+func TestQuickValidate_CallerBlockIDMismatch_NoSubtrees(t *testing.T) {
+	for i, d := range quickDrivers {
+		t.Run(d.name, func(t *testing.T) {
+			h := newPreBindHarness(t, nil)
+
+			coinbase := preBindCoinbase(t, byte(0xd0+i))
+			block := h.newPreBindBlock(coinbase, nil, coinbase.TxIDChainHash(), 1)
+			block.ID = callerBlockIDNotReserved
+
+			err := h.quickValidateWith(d, block)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "refusing caller-supplied block id 4242")
+			require.NotContains(t, err.Error(), "[StoreBlock]", "the quick route must refuse the id, not StoreBlock")
+
+			h.requireNotStored(block)
+		})
+	}
+}
+
+// TestQuickValidate_CallerBlockIDMatchesReservation_Commits: a caller-supplied id
+// that is the block's reservation is the id the block is stored under, as the
+// ProcessBlock block_id contract says.
+func TestQuickValidate_CallerBlockIDMatchesReservation_Commits(t *testing.T) {
+	for i, d := range quickDrivers {
+		t.Run(d.name, func(t *testing.T) {
+			h := newPreBindHarness(t, nil)
+			seed := byte(0xe0 + 0x08*i)
+
+			child := preBindSpendOf(t, h.storeGenuineParent(seed), 9_000)
+			block := h.forkSharingBlock(child, seed+1)
+
+			reserved, err := h.chain.AssignBlockID(h.ctx, block.Hash())
+			require.NoError(t, err)
+
+			block.ID = uint32(reserved) //nolint:gosec // a fresh store's first ids fit in uint32
+
+			require.NoError(t, h.quickValidateWith(d, block))
+			h.requireStoredUnder(block, uint32(reserved)) //nolint:gosec // as above
+
+			recorded, err := h.utxoStore.Get(h.ctx, child.TxIDChainHash())
+			require.NoError(t, err)
+			require.Contains(t, recorded.BlockIDs, uint32(reserved)) //nolint:gosec // as above
+		})
+	}
+}
+
+// TestQuickValidate_CallerBlockIDSweptReservation_Refused: a caller holds an id that
+// AssignBlockID gave it, and sweepStaleReservations has since deleted the reservation.
+// The quick route asks AssignBlockID again, which reserves a new id, so the caller's id
+// is refused before anything is stamped. The code before this change kept the caller's id
+// and StoreBlock accepted it, because the sequence had issued it and nothing reserved it.
+// The caller recovers by sending 0 or the id AssignBlockID returns now.
+//
+// The sweep is simulated as in TestQuickValidate_RetryAfterSweep_RestampsNewID.
+func TestQuickValidate_CallerBlockIDSweptReservation_Refused(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+	h.bv.settings.DataFolder = t.TempDir()
+	store := h.openFileChain()
+
+	child := preBindSpendOf(t, h.storeGenuineParent(0xc1), 9_000)
+	block := h.forkSharingBlock(child, 0xc2)
+
+	block.ID = h.sweptReservation(store, block)
+
+	err := h.quickValidateWith(quickDrivers[1], block)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "refusing caller-supplied block id")
+
+	h.requireNotStamped(child)
+	h.requireNotStored(block)
+}
+
+// sweptReservation reserves an id for block, deletes the reservation as
+// sweepStaleReservations does, and reopens the store so the in-process reservation
+// cache is empty too. It returns the swept id: one the sequence issued and nothing
+// reserves, which StoreBlock accepts, so only the quick route's own check can refuse it.
+func (h *preBindHarness) sweptReservation(store blockchainstore.Store, block *model.Block) uint32 {
+	h.t.Helper()
+
+	swept, err := h.chain.AssignBlockID(h.ctx, block.Hash())
+	require.NoError(h.t, err)
+
+	res, err := store.GetDB().ExecContext(h.ctx, `DELETE FROM block_id_reservations WHERE hash = $1`, block.Hash()[:])
+	require.NoError(h.t, err)
+
+	deleted, err := res.RowsAffected()
+	require.NoError(h.t, err)
+	require.Equal(h.t, int64(1), deleted, "precondition: the block's reservation must exist before the sweep")
+
+	h.openFileChain()
+
+	return uint32(swept) //nolint:gosec // a fresh store's first ids fit in uint32
+}
+
+// TestQuickValidate_CallerBlockIDSwept_CoinbaseOnlySubtree: the block's one subtree
+// holds only the coinbase placeholder, so no batch carries a transaction and the
+// pipeline never calls setQuickBlockID. checkCallerBlockID is then the only check
+// between the caller's id and commitBlock. The id is a swept reservation, which
+// StoreBlock accepts, so the refusal can only come from the quick route.
+//
+// Mutation target: removing the checkCallerBlockID call in quickValidateBlock or in
+// quickValidateBlockAsync. The block then commits under the unchecked swept id.
+func TestQuickValidate_CallerBlockIDSwept_CoinbaseOnlySubtree(t *testing.T) {
+	for i, d := range quickDrivers {
+		t.Run(d.name, func(t *testing.T) {
+			h := newPreBindHarness(t, nil)
+			h.bv.settings.DataFolder = t.TempDir()
+			store := h.openFileChain()
+
+			coinbase := preBindCoinbase(t, byte(0x60+i))
+
+			st := buildSubtreeOver(t, true, nil)
+			structureBytes, err := st.Serialize()
+			require.NoError(t, err)
+
+			h.storeBlob(st.RootHash(), fileformat.FileTypeSubtreeToCheck, structureBytes)
+			h.storeBlob(st.RootHash(), fileformat.FileTypeSubtreeData, serializeSubtreeData(t, st, true, coinbase, nil))
+
+			root := coinbaseSubstitutedRoot(t, st, coinbase)
+			block := h.newPreBindBlock(coinbase, []*chainhash.Hash{st.RootHash()}, &root, 1)
+			block.ID = h.sweptReservation(store, block)
+
+			err = h.quickValidateWith(d, block)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "refusing caller-supplied block id")
+			require.NotContains(t, err.Error(), "[StoreBlock]", "the quick route must refuse the id, not StoreBlock")
+
+			h.requireNotStored(block)
+		})
+	}
+}
+
+// TestQuickValidate_CallerBlockIDSwept_NoSubtrees: a coinbase-only block with no
+// subtrees, carrying a swept reservation id. StoreBlock accepts that id, so only the
+// no-subtree branch's own setQuickBlockID call can refuse it.
+//
+// Mutation target: narrowing quickValidateBlockAsync's final check back to
+// block.ID == 0. The async driver then commits the block under the swept id.
+func TestQuickValidate_CallerBlockIDSwept_NoSubtrees(t *testing.T) {
+	for i, d := range quickDrivers {
+		t.Run(d.name, func(t *testing.T) {
+			h := newPreBindHarness(t, nil)
+			h.bv.settings.DataFolder = t.TempDir()
+			store := h.openFileChain()
+
+			coinbase := preBindCoinbase(t, byte(0x70+i))
+			block := h.newPreBindBlock(coinbase, nil, coinbase.TxIDChainHash(), 1)
+			block.ID = h.sweptReservation(store, block)
+
+			err := h.quickValidateWith(d, block)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "refusing caller-supplied block id")
+			require.NotContains(t, err.Error(), "[StoreBlock]", "the quick route must refuse the id, not StoreBlock")
+
+			h.requireNotStored(block)
 		})
 	}
 }

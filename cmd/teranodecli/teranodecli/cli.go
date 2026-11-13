@@ -69,6 +69,13 @@ var commandHelp = map[string]string{
 	"monitor":                 "Live TUI dashboard for monitoring node status",
 	"logs":                    "Interactive log viewer with filtering and search",
 	"diagnose":                "Diagnose node health and validate configuration",
+	"audit-mined-set":         "List blocks stored with mined_set true whose transactions lack the block id or are still locked (read-only; remedy is a resync)",
+}
+
+// commandLongHelp is printed by <command> --help above the flags, for a command whose
+// one-line description in commandHelp is not enough to use it safely.
+var commandLongHelp = map[string]string{
+	"audit-mined-set": minedSetAuditLongHelp,
 }
 
 var dangerousCommands = map[string]bool{}
@@ -499,6 +506,8 @@ func Start(args []string, version, commit string) {
 		}
 	case "rewindblockchain":
 		cmd.Execute = rewindExecute(logger, tSettings, registerRewindFlags(cmd.FlagSet))
+	case "audit-mined-set":
+		cmd.Execute = minedSetAuditExecute(logger, tSettings, registerMinedSetAuditFlags(cmd.FlagSet))
 	case "validate-utxo-set":
 		verbose := cmd.FlagSet.Bool("verbose", false, "verbose output showing individual UTXOs")
 
@@ -600,6 +609,11 @@ func Start(args []string, version, commit string) {
 	// Check for help flag
 	if help := cmd.FlagSet.Lookup("help"); help != nil && help.Value.String() == "true" {
 		fmt.Printf("Usage of %s:\n", cmd.Name)
+
+		if long, ok := commandLongHelp[cmd.Name]; ok {
+			fmt.Println(long)
+		}
+
 		cmd.FlagSet.PrintDefaults()
 		os.Exit(0)
 	}
