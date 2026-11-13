@@ -1393,6 +1393,7 @@ func ConflictRecoveryReverseThenReadd(t *testing.T, db utxo.Store) {
 		require.NoError(t, err, "move back %d", round+1)
 		require.Equal(t, loser.TxIDChainHash(), crashSpender(t, ctx, db, parent))
 		require.True(t, crashConflicting(t, ctx, db, winner.TxIDChainHash()))
+		require.False(t, crashLocked(t, ctx, db, parent.TxIDChainHash()), "add and move back must leave no lock on the parent %d", round+1)
 
 		r, err := db.LoadConflictRecovery(ctx, forward.IntentID())
 		require.NoError(t, err)
