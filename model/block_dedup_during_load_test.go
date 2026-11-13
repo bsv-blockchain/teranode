@@ -151,8 +151,12 @@ func TestGetAndValidateSubtreesWithDedup_FillsTxMap(t *testing.T) {
 }
 
 // TestGetAndValidateSubtreesWithDedup_DuplicateAcrossSubtrees pins that a
-// transaction repeated in a later subtree fails the load with the same
-// corrupt (re-download, never poison) classification the separate pass gives.
+// transaction repeated in a later subtree fails the load. The body is bound, and
+// the duplicate is not the CVE-2012-2459 odd-node pattern, so BV-BODY-004
+// requires ERR_BLOCK_INVALID; today it is ERR_BLOCK_CORRUPT (GAP-BV-051). The
+// class is asserted by
+// TestKnownDefect_BoundBodyDuplicateAcrossSubtrees_IsInvalidOnEveryLoadPath
+// (bvgaps), not here, so this test does not pin the gap.
 func TestGetAndValidateSubtreesWithDedup_DuplicateAcrossSubtrees(t *testing.T) {
 	dup := randCorruptTestHash(t)
 
@@ -166,8 +170,6 @@ func TestGetAndValidateSubtreesWithDedup_DuplicateAcrossSubtrees(t *testing.T) {
 	_, err := b.getAndValidateSubtreesWithDedup(ctx, ulogger.TestLogger{}, store, 2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "duplicate transaction")
-	require.True(t, errors.IsBlockCorrupt(err), "a duplicated body is corrupt, got: %v", err)
-	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "must not poison")
 }
 
 // TestGetAndValidateSubtreesWithDedup_AlreadyLoaded pins the fallback signal:
@@ -193,7 +195,11 @@ func TestGetAndValidateSubtreesWithDedup_AlreadyLoaded(t *testing.T) {
 //
 // Both paths bind the body to the header before fetching past the first and
 // last subtree, so they agree: a bound duplicated body is reported as the
-// duplicate, an unbound one as the merkle mismatch, and both are BlockCorrupt.
+// duplicate, an unbound one as the merkle mismatch. An unbound body is
+// BlockCorrupt. The class of the bound one is GAP-BV-051 (BV-BODY-004 requires
+// ERR_BLOCK_INVALID, today it is corrupt) and is asserted by
+// TestKnownDefect_BoundBodyDuplicateAcrossSubtrees_IsInvalidOnEveryLoadPath
+// (bvgaps), not here.
 func TestBlock_Valid_DuplicateAcrossLoadedSubtrees(t *testing.T) {
 	backings := []struct {
 		name string
@@ -243,8 +249,12 @@ func TestBlock_Valid_DuplicateAcrossLoadedSubtrees(t *testing.T) {
 				require.False(t, valid)
 				require.Error(t, err)
 				require.Contains(t, err.Error(), body.message)
-				require.True(t, errors.IsBlockCorrupt(err), "got: %v", err)
-				require.False(t, errors.Is(err, errors.ErrBlockInvalid), "must not poison")
+
+				if body.unbound {
+					require.True(t, errors.IsBlockCorrupt(err), "an unbound body is corrupt, got: %v", err)
+					require.False(t, errors.Is(err, errors.ErrBlockInvalid), "an unbound body must not poison")
+				}
+
 				require.Nil(t, b.txMap, "the txMap must be released on the error path")
 			})
 		}
