@@ -60,3 +60,12 @@ func TestRollbackSetLeavesCallerSliceUntouched(t *testing.T) {
 	require.Equal(t, []*Spend{fresh, idem}, rollback)
 	require.Nil(t, backing[:2][1], "the caller's spare capacity must not receive the idempotent match")
 }
+
+// TestIsReplayAnswerIsTheMarkerOnly: a missing parent is what an ordinary retry
+// sees too, so only the marker rejection marks an idempotent match historical.
+func TestIsReplayAnswerIsTheMarkerOnly(t *testing.T) {
+	require.True(t, IsReplayAnswer(errors.NewUtxoSpendingTxPrunedError("pruned")))
+	require.False(t, IsReplayAnswer(errors.NewTxNotFoundError("parent missing")))
+	require.False(t, IsReplayAnswer(nil))
+	require.False(t, AnyPrunedReplay([]*Spend{{Err: errors.NewTxNotFoundError("parent missing")}}))
+}

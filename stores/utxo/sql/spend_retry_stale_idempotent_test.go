@@ -156,3 +156,73 @@ func TestSpendRetryRollsBackSpendWrittenOnRetry(t *testing.T) {
 			"the retry wrote a fresh spend of P:0 for a call that then failed on Q:0; the rollback must reverse it rather than leave P:0 spent by a transaction that was never created")
 	})
 }
+
+// TestSpendRollbackReversesOrphanWhenASiblingParentIsMissing: C spends P:0, M:0
+// and Q:0, and M is not in the store. An earlier attempt at C wrote P:0 and Q:0
+// and never created C, so P:0 is an orphan spend of a transaction this store
+// does not hold. Q:0 has since gone to D. On the retry P:0 is an idempotent
+// match, M:0 is missing and Q:0 is spent by another transaction, a
+// rollback-class error. A missing parent is not a replay answer, so the
+// rollback must reverse P:0: leaving it spent would refuse P:0's next
+// legitimate spender with a txid this node never stored. The marker case, where
+// the match is a confirmed spend and must stay, is pinned by
+// TestPrunedReplayRollbackPreservesHistoricalSpend.
+func TestSpendRollbackReversesOrphanWhenASiblingParentIsMissing(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+		newParent := func(seed string, create bool) *bt.Tx {
+			parent := bt.NewTx()
+			require.NoError(t, parent.From(strings.Repeat("2", 63)+seed, 0, "51", 30000))
+			parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+			if create {
+				_, err := store.Create(ctx, parent, 1000)
+				require.NoError(t, err)
+			}
+
+			return parent
+		}
+
+		p, m, q := newParent("1", true), newParent("2", false), newParent("3", true)
+
+		spender := func(parents ...*bt.Tx) *bt.Tx {
+			tx := bt.NewTx()
+			for _, parent := range parents {
+				require.NoError(t, tx.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+			}
+
+			for i := range tx.Inputs {
+				tx.Inputs[i].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			}
+
+			require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+
+			return tx
+		}
+
+		child := spender(p, m, q)
+
+		// The earlier attempt's leftover: P:0 records C, and C has no record.
+		// The store reverses such an attempt itself when it can, so the state is
+		// seeded directly, as a crash or a failed rollback would leave it.
+		cSpends, err := utxo.GetSpends(child)
+		require.NoError(t, err)
+
+		_, err = store.db.ExecContext(ctx,
+			"UPDATE outputs SET spending_data = $1 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $2)",
+			cSpends[0].SpendingData.Bytes(), p.TxIDChainHash()[:])
+		require.NoError(t, err)
+		require.Equal(t, cSpends[0].SpendingData.Bytes(), outputSpendingData(t, ctx, store, p, 0), "fixture: P:0 is an orphan spend by C")
+
+		// Q:0 goes to D.
+		_, err = store.Spend(ctx, spender(q), 1000)
+		require.NoError(t, err)
+
+		// The retry: P:0 idempotent, M:0 missing, Q:0 spent by D.
+		_, err = store.Spend(ctx, child, 1000)
+		require.ErrorIs(t, err, errors.ErrSpent, "Q:0 is spent by D")
+
+		require.Empty(t, outputSpendingData(t, ctx, store, p, 0),
+			"the orphan spend of P:0 is reversed: a missing sibling parent is not a pruned-replay answer")
+	})
+}

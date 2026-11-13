@@ -22,13 +22,12 @@ func IsPrunedReplayRejection(err error) bool {
 // the record cannot tell the two apart and the answer has to come from why the
 // call is failing now.
 //
-// Two rejections make the match historical, the two a pruned replay gets
-// (IsReplayAnswer). The marker fires only for a transaction this store pruned,
-// which happens only once that transaction was mined, fully spent and buried,
-// so any output recording it as spender is recording a confirmed spend. A
-// missing parent is the same answer for a chain the pruner removed end to end,
-// marker and all. Reversing either would hand a confirmed output to the next
-// spender, which is the double-spend this exclusion was added to prevent.
+// One rejection makes the match historical: the marker answer a pruned replay
+// gets (IsReplayAnswer). The marker fires only for a transaction this store
+// pruned, which happens only once that transaction was mined, fully spent and
+// buried, so any output recording it as spender is recording a confirmed spend.
+// Reversing it would hand a confirmed output to the next spender, which is the
+// double-spend this exclusion was added to prevent.
 //
 // Every other rejection leaves the match reversible, and reversing it is what
 // keeps the store self-healing. The store leaves partial spends committed when
@@ -110,14 +109,20 @@ func NeedsSpendRollback(spends []*Spend, requireParentOutputs bool) bool {
 	return false
 }
 
-// IsReplayAnswer reports whether a per-input spend error is one of the two
-// answers a replay of a pruned transaction gets: the marker rejection, or a
-// parent record that is gone. The stores use it to decide that an idempotent
-// match in the same call is historical and must not be reversed (RollbackSet).
-// Whether the call really was a replay is the caller's question: the validator
-// answers it with IsPrunedReplayRejection.
+// IsReplayAnswer reports whether a per-input spend error is the answer a
+// replay of a pruned transaction gets: the marker rejection. The stores use it
+// to decide that an idempotent match in the same call is historical and must
+// not be reversed (RollbackSet).
+//
+// A missing parent does not count. Before the quick-validation cleanup was
+// removed it stood in for a chain the pruner removed end to end, but on its own
+// it is also what an ordinary retry sees: an earlier attempt that wrote one
+// input and failed left that input spent by a transaction with no record, and
+// treating the missing sibling parent as a replay kept that orphan spent for
+// good. A pruned replay whose surviving parent still records it meets that
+// parent's marker, so the marker answer alone covers it.
 func IsReplayAnswer(err error) bool {
-	return err != nil && (errors.Is(err, errors.ErrUtxoSpendingTxPruned) || errors.Is(err, errors.ErrTxNotFound))
+	return err != nil && errors.Is(err, errors.ErrUtxoSpendingTxPruned)
 }
 
 // ReplayRejectionsFirst reorders per-input spend errors so the ones that
