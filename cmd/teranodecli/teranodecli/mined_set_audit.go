@@ -187,7 +187,8 @@ func (a *minedSetAuditor) auditBlock(ctx context.Context, hash *chainhash.Hash, 
 
 		// A transaction quick validation stamped is created locked and unlocked only after the
 		// block commits. One that carries the id but is still locked was stamped by an attempt
-		// that fell through to full validation, and nothing unlocked it.
+		// that fell through to full validation, or by a commit whose unlock failed after the
+		// block was stored, and nothing unlocked it.
 		switch {
 		case !slices.Contains(data.BlockIDs, meta.ID):
 			finding.Reason = "does not carry the block id"
@@ -253,14 +254,22 @@ func (a *minedSetAuditor) sampleTxIDs(ctx context.Context, block *model.Block) (
 
 // subtreeNode reads the transaction hash at index from a stored subtree, streaming only the
 // bytes up to it. ok is false when the subtree has no node at index. A non-empty reason means
-// the subtree file is missing or malformed.
+// the subtree file is missing, unreadable or malformed. The file blob store checks the file's
+// own header inside GetIoReader and returns a storage error for a short, bad-magic or
+// wrong-type file, so a storage error is one block's finding too, not a failure of the run.
+// A cancelled or expired context still fails the run.
 func (a *minedSetAuditor) subtreeNode(ctx context.Context, subtreeHash *chainhash.Hash, index uint64) (chainhash.Hash, bool, string, error) {
 	var node chainhash.Hash
 
 	reader, err := a.subtrees.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 	if err != nil {
-		if errors.Is(err, errors.ErrNotFound) {
+		switch {
+		case ctx.Err() != nil:
+			return node, false, "", errors.NewProcessingError("failed to open subtree %s", subtreeHash.String(), err)
+		case errors.Is(err, errors.ErrNotFound):
 			return node, false, fmt.Sprintf("subtree %s is not in the subtree store", subtreeHash.String()), nil
+		case errors.Is(err, errors.ErrStorageError):
+			return node, false, fmt.Sprintf("subtree %s could not be read: %v", subtreeHash.String(), err), nil
 		}
 
 		return node, false, "", errors.NewProcessingError("failed to open subtree %s", subtreeHash.String(), err)
@@ -330,12 +339,13 @@ const minedSetAuditLongHelp = `teranode-cli audit-mined-set --start-height=<h> -
 Lists main-chain blocks stored with mined_set true whose sampled transactions do not carry
 the block's id in the UTXO store, or carry it with their outputs still locked. Releases before PR 2180 could store such a block when a
 catch-up block fell from quick validation to full validation, or when a ProcessBlock caller
-supplied a block_id. Nothing tags those transactions afterwards, and a later block spending
-one of their outputs can fail.
+supplied a block_id. A quick-validated block whose unlock failed after it was stored also
+leaves its transactions tagged but locked. Nothing tags or unlocks those transactions
+afterwards, and a later block spending one of their outputs can fail.
 
 It samples two transactions per block (the first after the coinbase and the first of the
 last subtree), so a block it reports as tagged is not proven clean. A block is UNCHECKED
-when its subtree file is gone or no sampled transaction is in the UTXO store; UNCHECKED is
+when its subtree file is gone, unreadable or malformed, or no sampled transaction is in the UTXO store; UNCHECKED is
 not a pass. Blocks on a netting UTXO store's below-checkpoint route are skipped: full
 validation never stores them.
 

@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"flag"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -16,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	blockchainsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
@@ -205,8 +208,9 @@ func (h *minedSetAuditHarness) createUntagged(tx *bt.Tx) {
 
 // TestMinedSetAudit_ClassifiesBlocks drives one block of each kind through the audit.
 //
-// Mutation targets: comparing the sample against any block id instead of this block's
-// (the partly tagged block then passes), and sampling only the first subtree (the same).
+// Mutation targets: comparing the sample against any block id instead of this block's (the
+// height-8 block carrying another block's id then passes), and sampling only the first
+// subtree (the partly tagged block then passes).
 func TestMinedSetAudit_ClassifiesBlocks(t *testing.T) {
 	h := newMinedSetAuditHarness(t)
 
@@ -349,6 +353,63 @@ func TestMinedSetAudit_MalformedSubtreeIsUnchecked(t *testing.T) {
 			require.Contains(t, result.Unchecked[0].Reason, tc.reason)
 		})
 	}
+}
+
+// TestMinedSetAudit_BadFileHeaderIsUnchecked: the file blob store checks a file's own
+// header inside GetIoReader and returns a storage error for a bad one. That is one block
+// the audit could not check, not a failure of the whole run.
+//
+// Mutation target: returning GetIoReader's storage error as a run failure in subtreeNode.
+// The run then stops with an error.
+func TestMinedSetAudit_BadFileHeaderIsUnchecked(t *testing.T) {
+	h := newMinedSetAuditHarness(t)
+
+	dir := t.TempDir()
+	fileStore, err := blob.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "file", Path: dir})
+	require.NoError(t, err)
+
+	h.auditor.subtrees = fileStore
+
+	block, _ := h.storeBlock(true, true, []*bt.Tx{h.auditTx()})
+	require.NoError(t, fileStore.Set(h.ctx, block.Subtrees[0][:], fileformat.FileTypeSubtree, make([]byte, subtreeHeaderBytes+subtreeNodeBytes*2)))
+
+	// Overwrite the stored file, header and all, so the store's own header check fails.
+	var written []string
+
+	require.NoError(t, filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && filepath.Ext(path) == ".subtree" {
+			written = append(written, path)
+		}
+
+		return err
+	}))
+	require.Len(t, written, 1, "precondition: the file store must hold exactly the one subtree file")
+	require.NoError(t, os.WriteFile(written[0], []byte("not a teranode file"), 0o600))
+
+	result, err := h.auditor.run(h.ctx, 1, 1, 10)
+	require.NoError(t, err, "a bad subtree file must not stop the run")
+	require.Len(t, result.Unchecked, 1)
+	require.Equal(t, *block.Hash(), result.Unchecked[0].Hash)
+	require.Contains(t, result.Unchecked[0].Reason, "could not be read")
+}
+
+// TestMinedSetAudit_NoSubtreesIsCoinbaseOnly: a block stored with no subtrees at all is
+// counted as coinbase only.
+//
+// Mutation target: dropping the len(block.Subtrees) == 0 guard in sampleTxIDs. The audit
+// then indexes Subtrees[0] and panics.
+func TestMinedSetAudit_NoSubtreesIsCoinbaseOnly(t *testing.T) {
+	h := newMinedSetAuditHarness(t)
+
+	block, _ := h.storeBlock(true, false)
+	require.Empty(t, block.Subtrees, "precondition: the block must carry no subtrees")
+
+	result, err := h.auditor.run(h.ctx, 1, 1, 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Scanned)
+	require.Equal(t, 1, result.CoinbaseOnly)
+	require.Empty(t, result.Unchecked)
+	require.Empty(t, result.Affected)
 }
 
 // TestMinedSetAudit_FlagValidation: the command refuses a missing end height and values
