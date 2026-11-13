@@ -67,7 +67,7 @@ func TestUnspendClearsLockWhenAsked(t *testing.T) {
 	spends, err := store.Spend(ctx, spendTx, 101)
 	require.NoError(t, err)
 
-	// Lock on the way in, as ProcessConflicting does.
+	// Lock on the way in.
 	require.NoError(t, store.Unspend(ctx, spends, true))
 
 	m, err := store.getMaster(parent.TxIDChainHash())
@@ -78,7 +78,7 @@ func TestUnspendClearsLockWhenAsked(t *testing.T) {
 	_, err = store.Spend(ctx, newSpendingTx(t, parent, 0), 102)
 	require.Error(t, err)
 
-	// Unlock on the way back out, as ReverseProcessConflicting does.
+	// Unlock on the way back out.
 	spends2, err := store.Spend(ctx, spendTx, 102, utxo.IgnoreFlags{IgnoreLocked: true})
 	require.NoError(t, err)
 
