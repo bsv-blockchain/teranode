@@ -15,6 +15,7 @@
 package subtreeprocessor
 
 import (
+	"bufio"
 	"container/ring"
 	"context"
 	"encoding/binary"
@@ -1698,6 +1699,26 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 	ctx := context.Background()
 
+	// Read the moveBack blocks' conflicting nodes and check them against the
+	// moveForward blocks before anything below changes the UTXO store, so a
+	// subtree read failure aborts the reset with nothing applied. See
+	// findReMinedInMoveForward and checkMoveForwardSubtreesExist.
+	if len(moveBackBlocks) > 0 {
+		if err = stp.checkMoveForwardSubtreesExist(ctx, moveForwardBlocks); err != nil {
+			return errors.NewProcessingError("[SubtreeProcessor][reset] moveForward subtree missing", err)
+		}
+	}
+
+	moveBackConflicting, err := stp.collectMoveBackConflictingNodes(ctx, moveBackBlocks)
+	if err != nil {
+		return errors.NewProcessingError("[SubtreeProcessor][reset] error getting conflicting nodes of moveBack blocks", err)
+	}
+
+	reMined, err := stp.findReMinedInMoveForward(ctx, moveForwardBlocks, slices.Concat(moveBackConflicting...))
+	if err != nil {
+		return errors.NewProcessingError("[SubtreeProcessor][reset] error checking conflicting nodes against moveForward blocks", err)
+	}
+
 	// Mark all currently-in-assembly transactions as NOT on longest chain before clearing state.
 	//
 	// Some assembly transactions may have unmined_since=NULL in the UTXO store if a competing
@@ -1836,17 +1857,6 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	// the map is only used during the reset process and is not stored in the SubtreeProcessor struct
 	processedConflictingHashesMap := make(map[chainhash.Hash]struct{})
 
-	// A reset must undo the same UTXO swaps as an incremental reorg. Its
-	// in-memory pool has already been cleared, so only the store and cache
-	// need updating here; postProcess reloads the surviving transactions.
-	var moveForwardTxSet map[chainhash.Hash]struct{}
-	if len(moveBackBlocks) > 0 {
-		moveForwardTxSet, err = stp.collectMoveForwardTxHashes(ctx, moveForwardBlocks)
-		if err != nil {
-			return errors.NewProcessingError("[Reset] error collecting moveForward tx hashes", err)
-		}
-	}
-
 	// Every per-block step below reports progress, for the same reason Reorg
 	// does: the owner's main loop is blocked on this call for its whole length,
 	// and a reset can move hundreds of blocks (issue 1447). The serial loops beat
@@ -1856,7 +1866,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	// because reset runs on context.Background() and has no cancellation to gate
 	// on. A beat that lands after shutdown is still safe: the installed hook is
 	// BeatIfStarted, which cannot re-arm a heartbeat that Disable has cleared.
-	for _, block := range moveBackBlocks {
+	for i, block := range moveBackBlocks {
 		stp.reportProgress()
 
 		// delete / unspend all transactions spending the coinbase tx
@@ -1873,17 +1883,17 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 			}
 		}
 
-		conflictingHashes, err := stp.getConflictingNodes(ctx, block)
-		if err != nil {
-			return errors.NewProcessingError("[SubtreeProcessor][Reset][%s] error getting conflicting nodes", block.String(), err)
-		}
+		conflictingHashes := moveBackConflicting[i]
 
 		if len(conflictingHashes) > 0 {
+			// A reset must undo the same UTXO swaps as an incremental reorg. Its
+			// in-memory pool has already been cleared, so only the store and cache
+			// need updating here; postProcess reloads the surviving transactions.
 			reverseInputs := make([]chainhash.Hash, 0, len(conflictingHashes))
 			for _, hash := range conflictingHashes {
 				// A winner present on both branches stays canonical: neither
 				// reverse nor forward needs to apply its already-completed swap.
-				if _, inForward := moveForwardTxSet[hash]; !inForward {
+				if _, inForward := reMined[hash]; !inForward {
 					reverseInputs = append(reverseInputs, hash)
 				}
 			}
@@ -2280,18 +2290,53 @@ func (stp *SubtreeProcessor) GetRemoveMapLength() int {
 	return stp.removeMap.Length()
 }
 
-// collectMoveForwardTxHashes loads the tx hashes from every subtree of every
-// moveForward block into a set. Used by reorgBlocks to decide which entries
-// in a moveBack block's subtree.ConflictingNodes are re-mined on the new
-// chain and therefore should not be reversed (their canonical-spender
-// state carries across).
+// findReMinedConcurrency caps how many moveForward subtrees findReMinedInMoveForward
+// reads at once. The scan streams each subtree through a small buffer, so memory
+// is not the constraint; this bounds the burst of subtree-store reads during a
+// reorg, which competes with block fetches for the same storage bandwidth.
+const findReMinedConcurrency = 32
+
+// subtreeHeaderLen and subtreeNodeLen describe the go-subtree serialisation
+// (Subtree.Serialize): root hash, fees, size in bytes and node count, then per
+// node its hash, fee and size in bytes.
+const (
+	subtreeHeaderLen = chainhash.HashSize + 8 + 8 + 8
+	subtreeNodeLen   = chainhash.HashSize + 8 + 8
+)
+
+// collectMoveBackConflictingNodes returns the conflicting nodes of each moveBack
+// block, in block order. It reads only the conflicting section of each subtree.
+func (stp *SubtreeProcessor) collectMoveBackConflictingNodes(ctx context.Context, moveBackBlocks []*model.Block) ([][]chainhash.Hash, error) {
+	perBlock := make([][]chainhash.Hash, len(moveBackBlocks))
+
+	for i, block := range moveBackBlocks {
+		// On a pure rewind every subtree read of a reset or reorg happens here,
+		// before the moveBack loop that otherwise beats once per block.
+		stp.reportProgressUnlessDone(ctx)
+
+		conflicting, err := stp.getConflictingNodes(ctx, block)
+		if err != nil {
+			return nil, errors.NewProcessingError("[collectMoveBackConflictingNodes][%s] error getting conflicting nodes", block.String(), err)
+		}
+
+		perBlock[i] = conflicting
+	}
+
+	return perBlock, nil
+}
+
+// checkMoveForwardSubtreesExist fails if any subtree of any moveForward block is
+// in neither the subtree file nor the subtree-to-check file. Reorg and Reset run
+// it before their moveBack loop changes the UTXO store. findReMinedInMoveForward
+// reads nothing when there are no candidates, so without this check a missing
+// moveForward subtree would first be found by the moveForward step, after the
+// moved-back blocks' coinbases and child spends were already deleted.
 //
-// Returns an empty (non-nil) map when moveForwardBlocks is empty so callers
-// can do a single existence check without nil-guarding. Subtree-load errors
-// are surfaced so the reorg fails loudly instead of silently skipping
-// legitimate carry-over txs.
-func (stp *SubtreeProcessor) collectMoveForwardTxHashes(ctx context.Context, moveForwardBlocks []*model.Block) (map[chainhash.Hash]struct{}, error) {
-	out := make(map[chainhash.Hash]struct{})
+// It only checks that each file exists. A file that exists but is corrupt still
+// fails later, in the moveForward step.
+func (stp *SubtreeProcessor) checkMoveForwardSubtreesExist(ctx context.Context, moveForwardBlocks []*model.Block) error {
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(stp.logger, g, min(stp.settings.BlockAssembly.MoveBackBlockConcurrency, findReMinedConcurrency))
 
 	for _, block := range moveForwardBlocks {
 		if block == nil {
@@ -2303,33 +2348,218 @@ func (stp *SubtreeProcessor) collectMoveForwardTxHashes(ctx context.Context, mov
 				continue
 			}
 
-			subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
-			if err != nil {
-				subtreeReader, err = stp.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
-				if err != nil {
-					return nil, errors.NewServiceError("[collectMoveForwardTxHashes][%s] error getting subtree %s", block.String(), subtreeHash.String(), err)
-				}
-			}
-
-			subtree := &subtreepkg.Subtree{}
-			if err = subtree.DeserializeFromReader(subtreeReader); err != nil {
-				_ = subtreeReader.Close()
-				return nil, errors.NewProcessingError("[collectMoveForwardTxHashes][%s] error deserializing subtree %s", block.String(), subtreeHash.String(), err)
-			}
-
-			_ = subtreeReader.Close()
-
-			for _, node := range subtree.Nodes {
-				if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-					continue
+			g.Go(func() error {
+				exists, err := stp.subtreeStore.Exists(gCtx, subtreeHash[:], fileformat.FileTypeSubtree)
+				if err == nil && exists {
+					return nil
 				}
 
-				out[node.Hash] = struct{}{}
-			}
+				existsToCheck, errToCheck := stp.subtreeStore.Exists(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+				if errToCheck == nil && existsToCheck {
+					return nil
+				}
+
+				if err != nil || errToCheck != nil {
+					return errors.NewServiceError("[checkMoveForwardSubtreesExist][%s] error checking subtree %s exists", block.String(), subtreeHash.String(), errors.Join(err, errToCheck))
+				}
+
+				return errors.NewNotFoundError("[checkMoveForwardSubtreesExist][%s] subtree %s not found", block.String(), subtreeHash.String())
+			})
 		}
 	}
 
-	return out, nil
+	return g.Wait()
+}
+
+// findReMinedInMoveForward returns the subset of candidates that appear in any
+// subtree of any moveForward block. Reorg and Reset use it to decide which
+// entries in a moveBack block's subtree.ConflictingNodes are re-mined on the
+// new chain and therefore should not be reversed (their canonical-spender
+// state carries across).
+//
+// Callers must run it before their moveBack loop changes the UTXO store. A
+// subtree read failure here then aborts the reorg or reset with nothing
+// applied; failing after some blocks' ReverseProcessConflicting has run would
+// leave the store half reversed, and the retry would reverse those blocks a
+// second time.
+//
+// The candidates are the moveBack blocks' conflicting nodes, which are almost
+// always empty and otherwise small. The moveForward blocks can hold billions
+// of txs, so this only tests membership against the candidates: each subtree
+// is streamed node by node without being deserialised, and the scan stops as
+// soon as every candidate has been found. With no candidates it does no store
+// reads at all.
+//
+// Returns an empty (non-nil) map when nothing matches so callers can do a
+// single existence check without nil-guarding. Subtree-load errors are
+// surfaced so the reorg fails loudly instead of silently skipping legitimate
+// carry-over txs.
+func (stp *SubtreeProcessor) findReMinedInMoveForward(ctx context.Context, moveForwardBlocks []*model.Block, candidates []chainhash.Hash) (map[chainhash.Hash]struct{}, error) {
+	found := make(map[chainhash.Hash]struct{})
+
+	if len(candidates) == 0 || len(moveForwardBlocks) == 0 {
+		return found, nil
+	}
+
+	wanted := make(map[chainhash.Hash]struct{}, len(candidates))
+	for _, h := range candidates {
+		if h.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			continue
+		}
+
+		wanted[h] = struct{}{}
+	}
+
+	if len(wanted) == 0 {
+		return found, nil
+	}
+
+	var (
+		foundMu  sync.Mutex
+		allFound atomic.Bool
+	)
+
+	// record adds a matched candidate and reports whether every candidate has
+	// now been found.
+	record := func(hash chainhash.Hash) bool {
+		foundMu.Lock()
+		defer foundMu.Unlock()
+
+		found[hash] = struct{}{}
+
+		if len(found) == len(wanted) {
+			allFound.Store(true)
+			return true
+		}
+
+		return false
+	}
+
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(stp.logger, g, min(stp.settings.BlockAssembly.MoveBackBlockConcurrency, findReMinedConcurrency))
+
+scan:
+	for _, block := range moveForwardBlocks {
+		if block == nil {
+			continue
+		}
+
+		for _, subtreeHash := range block.Subtrees {
+			if subtreeHash == nil {
+				continue
+			}
+
+			if allFound.Load() || gCtx.Err() != nil {
+				break scan
+			}
+
+			g.Go(func() error {
+				if allFound.Load() {
+					return nil
+				}
+
+				subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtree)
+				if err != nil {
+					subtreeReader, err = stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+					if err != nil {
+						return errors.NewServiceError("[findReMinedInMoveForward][%s] error getting subtree %s", block.String(), subtreeHash.String(), err)
+					}
+				}
+
+				defer func() {
+					_ = subtreeReader.Close()
+				}()
+
+				if err = scanSubtreeNodeHashes(gCtx, subtreeReader, func(hash chainhash.Hash) bool {
+					if _, ok := wanted[hash]; !ok {
+						return !allFound.Load()
+					}
+
+					return !record(hash)
+				}); err != nil {
+					return errors.NewProcessingError("[findReMinedInMoveForward][%s] error reading subtree %s", block.String(), subtreeHash.String(), err)
+				}
+
+				return nil
+			})
+		}
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	// The scan loop also stops when the caller's context is cancelled, which
+	// g.Wait does not report if no worker was running at the time.
+	if err := ctx.Err(); err != nil {
+		return nil, errors.NewProcessingError("[findReMinedInMoveForward] cancelled", err)
+	}
+
+	return found, nil
+}
+
+// scanSubtreeNodeHashes streams the node hashes of a serialised subtree to fn
+// without deserialising it, so a multi-million-node subtree costs one small
+// buffer instead of a Nodes slice. It stops early when fn returns false, and
+// checks ctx between batches of nodes.
+func scanSubtreeNodeHashes(ctx context.Context, reader io.Reader, fn func(chainhash.Hash) bool) error {
+	const ctxCheckInterval = 1 << 16
+
+	buf := bufio.NewReaderSize(reader, 256*1024)
+
+	header := make([]byte, subtreeHeaderLen)
+	if _, err := io.ReadFull(buf, header); err != nil {
+		return errors.NewProcessingError("unable to read subtree header", err)
+	}
+
+	numLeaves := binary.LittleEndian.Uint64(header[subtreeHeaderLen-8:])
+	if numLeaves > math.MaxInt64/subtreeNodeLen {
+		return errors.NewProcessingError("subtree node count %d is out of range", numLeaves)
+	}
+
+	node := make([]byte, subtreeNodeLen)
+
+	var hash chainhash.Hash
+
+	for i := uint64(0); i < numLeaves; i++ {
+		if i%ctxCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+
+		if _, err := io.ReadFull(buf, node); err != nil {
+			return errors.NewProcessingError("unable to read subtree node %d of %d", i, numLeaves, err)
+		}
+
+		copy(hash[:], node[:chainhash.HashSize])
+
+		if !fn(hash) {
+			return nil
+		}
+	}
+
+	// A full scan also checks the conflicting-node trailer, the way
+	// DeserializeFromReader and moveForwardBlock's CreateTransactionMap do, so a
+	// subtree that moveForwardBlock would reject fails here instead, before any
+	// store change. A scan that stopped early above never reaches the trailer.
+	var count [8]byte
+	if _, err := io.ReadFull(buf, count[:]); err != nil {
+		return errors.NewProcessingError("unable to read number of conflicting nodes", err)
+	}
+
+	numConflicting := binary.LittleEndian.Uint64(count[:])
+	if numConflicting > numLeaves {
+		return errors.NewProcessingError("subtree trailer claims %d conflicting nodes, exceeds leaf count %d", numConflicting, numLeaves, subtreepkg.ErrConflictingCountExceedsLeaves)
+	}
+
+	// numConflicting <= numLeaves <= MaxInt64/subtreeNodeLen, so this cannot overflow.
+	conflictingBytes := int(numConflicting) * chainhash.HashSize //nolint:gosec // bounded above
+	if n, err := buf.Discard(conflictingBytes); err != nil {
+		return errors.NewProcessingError("unable to read conflicting nodes, got %d of %d bytes", n, conflictingBytes, err)
+	}
+
+	return nil
 }
 
 // cloneReverseCascadedSet returns a copy of the current reorgBlocks-scoped
@@ -5243,6 +5473,28 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		}
 	}
 
+	// Check the moveForward subtrees exist, and the moveBack blocks' conflicting
+	// nodes against the moveForward blocks, before the moveBack loop changes the
+	// UTXO store, so a subtree read failure aborts the reorg with nothing applied.
+	// The rollback below only restores in-memory state. See
+	// findReMinedInMoveForward and checkMoveForwardSubtreesExist.
+	reMined := map[chainhash.Hash]struct{}{}
+
+	if len(moveForwardBlocks) > 0 {
+		if err = stp.checkMoveForwardSubtreesExist(ctx, moveForwardBlocks); err != nil {
+			return errors.NewProcessingError("[reorgBlocks] moveForward subtree missing", err)
+		}
+
+		moveBackConflicting, collectErr := stp.collectMoveBackConflictingNodes(ctx, moveBackBlocks)
+		if collectErr != nil {
+			return errors.NewProcessingError("[reorgBlocks] error getting conflicting nodes of moveBack blocks", collectErr)
+		}
+
+		if reMined, err = stp.findReMinedInMoveForward(ctx, moveForwardBlocks, slices.Concat(moveBackConflicting...)); err != nil {
+			return errors.NewProcessingError("[reorgBlocks] error checking conflicting nodes against moveForward blocks", err)
+		}
+	}
+
 	// dequeueDuringBlockMovement all transactions that are in the queue
 	if err = stp.dequeueDuringBlockMovement(nil, nil, nil, true); err != nil {
 		return errors.NewProcessingError("[reorgBlocks] error dequeueing transactions during block movement", err)
@@ -5301,19 +5553,6 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		stp.reverseCascadedConflictingSet = nil
 	}()
 
-	// Build the set of txs that will be mined in moveForwardBlocks. A tx
-	// that appears in BOTH a moveBackBlock's subtree.ConflictingNodes AND
-	// a moveForward block is one whose canonical-spender status is the
-	// SAME across both forks — moveForward will handle it via its own
-	// ProcessConflicting. Reversing it in moveBack only to re-process in
-	// moveForward (or worse, have the filter skip the re-process) leaves
-	// the UTXO state inconsistent with what moveForward expects. Skip
-	// these in the Reverse call.
-	moveForwardTxSet, err := stp.collectMoveForwardTxHashes(ctx, moveForwardBlocks)
-	if err != nil {
-		return errors.NewProcessingError("[reorgBlocks] error collecting moveForward tx hashes", err)
-	}
-
 	var reversedBlocks []chainhash.Hash
 
 	for _, block := range moveBackBlocks {
@@ -5356,15 +5595,17 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 			// the next mining candidate doesn't include them — collected
 			// into reverseCascadedConflictingSet to feed downstream
 			// dequeueDuringBlockMovement.
-			// Filter out hashes that are re-mined in moveForwardBlocks.
-			// Their canonical-spender status carries across the reorg, so
-			// the moveForward path's ProcessConflicting handles them
-			// natively. Reversing them in moveBack only to either re-
-			// process or filter-skip in moveForward leaves UTXO state
-			// inconsistent with what the new tip expects.
+			// Filter out hashes that are re-mined in moveForwardBlocks. A tx
+			// that appears in BOTH a moveBackBlock's subtree.ConflictingNodes
+			// AND a moveForward block keeps the same canonical-spender
+			// status across both forks, so the moveForward path's
+			// ProcessConflicting handles it natively. Reversing it in
+			// moveBack only to either re-process or filter-skip in
+			// moveForward leaves UTXO state inconsistent with what the new
+			// tip expects.
 			reverseInputs := conflictingHashes[:0:0]
 			for _, h := range conflictingHashes {
-				if _, inForward := moveForwardTxSet[h]; inForward {
+				if _, inForward := reMined[h]; inForward {
 					stp.logger.Debugf("[reorgBlocks][%s] skipping reverse for tx %s — re-mined in a moveForward block", block.String(), h.String())
 					continue
 				}
