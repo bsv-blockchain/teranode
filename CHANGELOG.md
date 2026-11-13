@@ -35,7 +35,7 @@ read every section between yours and the target.
   An external caller that sends a non-zero ID other than what `AssignBlockID` returns for the hash
   now gets an error before any UTXO is written, including an ID whose reservation was swept and a
   coinbase-only block that used to be stored under the reservation instead. Send 0, or call
-  `AssignBlockID` again and send its answer.
+  `AssignBlockID` again and send its answer. (#2191)
 - **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
   `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
   now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,
