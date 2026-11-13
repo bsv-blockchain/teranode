@@ -1928,31 +1928,9 @@
           "legendFormat": "created {{namespace}}: {{reason}}",
           "range": true,
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(teranode_blockvalidation_fork_resolved_total{namespace=~\"$namespace\"}[$grouping_interval])) by (namespace,result)",
-          "legendFormat": "resolved {{namespace}}: {{result}}",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(teranode_blockvalidation_fork_orphaned_total{namespace=~\"$namespace\"}[$grouping_interval])) by (namespace)",
-          "legendFormat": "orphaned - {{namespace}}",
-          "range": true,
-          "refId": "C"
         }
       ],
-      "title": "Fork Created / Resolved / Orphaned /s",
+      "title": "Fork Created /s",
       "type": "timeseries"
     },
     {
@@ -2032,20 +2010,9 @@
           "legendFormat": "fork depth p95 - {{namespace}}",
           "range": true,
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(teranode_blockvalidation_fork_resolution_depth_blocks_bucket{namespace=~\"$namespace\"}[$grouping_interval])) by (le,namespace))",
-          "legendFormat": "resolution depth p95 - {{namespace}}",
-          "range": true,
-          "refId": "B"
         }
       ],
-      "title": "Fork Depth & Resolution Depth p95",
+      "title": "Fork Depth p95",
       "type": "timeseries"
     },
     {

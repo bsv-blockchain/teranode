@@ -31,6 +31,13 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
+  `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
+  now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,
+  `_fork_resolution_depth_blocks` and `_fork_orphaned_total`, which nothing ever updated, and
+  `teranode_blockchain_get_latest_block_header_from_block_locator` and
+  `_get_block_headers_from_oldest`, which recorded only calls to the two removed RPCs; drop any
+  panel or alert on them. (#2185)
 - **A block whose transaction spends an output mined only outside the block's own history is now
   invalid.** Earlier versions accepted it when that output's block was on the main chain, so
   upgrade every block validation pod together; a mixed fleet can disagree on such a fork block. (#2174)

@@ -580,12 +580,60 @@ var (
 		"idx_not_persisted_height",
 		"idx_height",
 		"idx_parent_id",
-		"idx_inserted_at",
 		"idx_invalid_height",
 		"idx_on_main_chain_height",
 		"idx_off_main_chain",
 	}
+
+	// blockchainSchemaRetiredIndexes are indexes the schema setup drops, on
+	// Postgres (withIndexes) and SQLite alike. While one still exists the
+	// Postgres schema is not current, so the DDL sequence runs once on an
+	// existing database and dropRetiredIndexes removes it. Each entry carries
+	// its own constant DROP statement, so no SQL is built from a string.
+	blockchainSchemaRetiredIndexes = []retiredIndex{
+		// idx_inserted_at served only GetBlocksByTime, which has been removed
+		{name: "idx_inserted_at", dropSQL: `DROP INDEX IF EXISTS idx_inserted_at;`},
+	}
 )
+
+// retiredIndex is an index an older schema created and the current one drops.
+type retiredIndex struct {
+	name    string
+	dropSQL string
+}
+
+// retiredIndexPresent reports whether any index in blockchainSchemaRetiredIndexes
+// still exists. It queries pg_class, so it is Postgres only.
+func retiredIndexPresent(db *usql.DB) (bool, error) {
+	for _, idx := range blockchainSchemaRetiredIndexes {
+		var exists bool
+		if err := db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = $1 AND relkind = 'i')`,
+			idx.name,
+		).Scan(&exists); err != nil {
+			return false, err
+		}
+		if exists {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// dropRetiredIndexes drops every index in blockchainSchemaRetiredIndexes. On
+// failure it closes db, as the rest of the schema setup does, and returns a
+// storage error naming the index.
+func dropRetiredIndexes(db *usql.DB) error {
+	for _, idx := range blockchainSchemaRetiredIndexes {
+		if _, err := db.Exec(idx.dropSQL); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not drop %s index", idx.name, err)
+		}
+	}
+
+	return nil
+}
 
 // isBlockchainSchemaCurrent returns true when the blocks table exists with all
 // expected columns and indexes in place. Uses only system-catalog reads
@@ -664,6 +712,13 @@ func isBlockchainSchemaCurrent(db *usql.DB, withIndexes bool) (bool, error) {
 		}
 		if !exists {
 			return false, nil
+		}
+	}
+
+	// Any retired index still present?
+	if withIndexes {
+		if present, err := retiredIndexPresent(db); err != nil || present {
+			return false, err
 		}
 	}
 
@@ -838,6 +893,9 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 			_ = db.Close()
 			return errors.NewStorageError("could not drop idx_persisted_at index", err)
 		}
+		if err := dropRetiredIndexes(db); err != nil {
+			return err
+		}
 
 		// === CHAIN WORK INDEXES ===
 		// Primary index for best block queries without invalid filter
@@ -887,13 +945,6 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_parent_id ON blocks (parent_id);`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not create idx_parent_id index", err)
-		}
-
-		// === TIME-BASED INDEXES ===
-		// Index for GetBlocksByTime query: WHERE inserted_at >= x AND inserted_at <= y
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_inserted_at ON blocks (inserted_at);`); err != nil {
-			_ = db.Close()
-			return errors.NewStorageError("could not create idx_inserted_at index", err)
 		}
 
 		// === INVALID BLOCKS INDEX ===
@@ -1149,6 +1200,9 @@ func createSqliteSchema(db *usql.DB) error {
 		_ = db.Close()
 		return errors.NewStorageError("could not drop idx_persisted_at index", err)
 	}
+	if err := dropRetiredIndexes(db); err != nil {
+		return err
+	}
 
 	// === CHAIN WORK INDEXES ===
 	// Primary index for best block queries without invalid filter
@@ -1198,13 +1252,6 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_parent_id ON blocks (parent_id);`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_parent_id index", err)
-	}
-
-	// === TIME-BASED INDEXES ===
-	// Index for GetBlocksByTime query: WHERE inserted_at >= x AND inserted_at <= y
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_inserted_at ON blocks (inserted_at);`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create idx_inserted_at index", err)
 	}
 
 	// === INVALID BLOCKS INDEX ===
