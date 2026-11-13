@@ -266,7 +266,7 @@ Options:
 
 #### Audit Mined Set
 
-List main-chain blocks stored with `mined_set` true whose transactions do not carry the block's ID in the UTXO store:
+List main-chain blocks stored with `mined_set` true whose transactions do not carry the block's ID in the UTXO store, or carry it with their outputs still locked:
 
 ```bash
 SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli audit-mined-set --start-height=<height> --end-height=<height> [--max-blocks=<n>]
@@ -274,7 +274,9 @@ SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli audit-mined-set --start-heigh
 
 Releases before PR 2180 could store such a block in two ways: a catch-up block fell from quick validation to full validation after quick validation had reserved its ID, or a `ProcessBlock` caller supplied a `block_id` and the block took full validation. The setMined worker skips every block already marked `mined_set`, so nothing tags the rest of those transactions, and a later block spending one of their outputs can fail with empty parent block IDs or a locked output.
 
-The audit only reads. It needs the blockchain service running, and it opens the UTXO store and the subtree store from the node's settings. For each block it samples two transactions: the first after the coinbase, and the first transaction of the last subtree, because a failed quick-validation attempt stamps subtrees in order and leaves the later ones untagged. Each block prints as `AFFECTED` (a sampled transaction lacks the ID) or `UNCHECKED` (the subtree file is gone, or the sampled transactions were spent and pruned), followed by a summary. A block reported as tagged is not proven clean, since only two transactions are read. Blocks on a netting UTXO store's below-checkpoint route are skipped, because full validation never stores them.
+The audit changes no data. It needs the blockchain service running and reads blocks through it. It opens the UTXO store and the subtree store from the node's settings; opening the UTXO store runs that store's normal startup, which creates any missing schema and, on Postgres, can start the index build the node itself runs.
+
+For each block it samples two transactions: the first after the coinbase, and the first transaction of the last subtree, because a failed quick-validation attempt stamps subtrees in order and leaves the later ones untagged. Each block prints as `AFFECTED` or `UNCHECKED`, followed by a summary. `AFFECTED` means a sampled transaction lacks the block's ID, or carries it with its outputs still locked: quick validation creates transactions locked and unlocks them only after the block commits, so an attempt that fell through to full validation left the ones it had stamped locked. `UNCHECKED` means the subtree file is gone or no sampled transaction is in the UTXO store, and it is not a pass. A block reported as tagged is not proven clean either, since only two transactions are read. Blocks on a netting UTXO store's below-checkpoint route are skipped, because full validation never stores them. Quick validation stores a block with `mined_set` true and unlocks its outputs just after, so a block being committed while the audit runs can show as locked; run the audit again for that height before acting on it.
 
 Each audited block costs two blockchain gRPC calls, at most two subtree file reads of under 200 bytes each, and at most two UTXO store reads. `--max-blocks` (default 10,000) refuses a wider range unless raised.
 

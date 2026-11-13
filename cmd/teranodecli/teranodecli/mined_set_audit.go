@@ -80,9 +80,9 @@ type minedSetAuditFinding struct {
 	Height  uint32
 	Hash    chainhash.Hash
 	BlockID uint32
-	TxID    chainhash.Hash // the sampled transaction that lacks the id, for an affected block
+	TxID    chainhash.Hash // the sampled transaction found wrong, for an affected block
 	Locked  bool           // whether that transaction's outputs are still locked
-	Reason  string         // why the block could not be checked, for an unchecked block
+	Reason  string         // what is wrong, or why the block could not be checked
 }
 
 // minedSetAuditResult counts every main-chain block in the range by what the audit found.
@@ -91,7 +91,7 @@ type minedSetAuditResult struct {
 	NotMinedSet  int // mined_set false: the setMined worker still owns them
 	Netted       int // on the netted route, not checkable and not reachable by the old routes
 	CoinbaseOnly int // no transaction besides the coinbase to sample
-	Tagged       int // every sampled transaction found carries the block's id
+	Tagged       int // every sampled transaction found carries the block's id and is unlocked
 	Unchecked    []minedSetAuditFinding
 	Affected     []minedSetAuditFinding
 }
@@ -185,17 +185,27 @@ func (a *minedSetAuditor) auditBlock(ctx context.Context, hash *chainhash.Hash, 
 
 		found++
 
-		if !slices.Contains(data.BlockIDs, meta.ID) {
-			finding.TxID = txID
-			finding.Locked = data.Locked
-			result.Affected = append(result.Affected, finding)
-
-			return nil
+		// A transaction quick validation stamped is created locked and unlocked only after the
+		// block commits. One that carries the id but is still locked was stamped by an attempt
+		// that fell through to full validation, and nothing unlocked it.
+		switch {
+		case !slices.Contains(data.BlockIDs, meta.ID):
+			finding.Reason = "does not carry the block id"
+		case data.Locked:
+			finding.Reason = "carries the block id but its outputs are still locked"
+		default:
+			continue
 		}
+
+		finding.TxID = txID
+		finding.Locked = data.Locked
+		result.Affected = append(result.Affected, finding)
+
+		return nil
 	}
 
 	if found == 0 {
-		finding.Reason = "no sampled transaction is in the UTXO store (spent and pruned)"
+		finding.Reason = "no sampled transaction is in the UTXO store"
 		result.Unchecked = append(result.Unchecked, finding)
 
 		return nil
@@ -282,7 +292,7 @@ func (a *minedSetAuditor) subtreeNode(ctx context.Context, subtreeHash *chainhas
 // non-zero.
 func (r *minedSetAuditResult) report(out io.Writer, startHeight, endHeight uint32) error {
 	for _, f := range r.Affected {
-		_, _ = fmt.Fprintf(out, "AFFECTED  height %d block %s id %d: transaction %s does not carry the block id (locked=%t)\n", f.Height, f.Hash.String(), f.BlockID, f.TxID.String(), f.Locked)
+		_, _ = fmt.Fprintf(out, "AFFECTED  height %d block %s id %d: transaction %s %s (locked=%t)\n", f.Height, f.Hash.String(), f.BlockID, f.TxID.String(), f.Reason, f.Locked)
 	}
 
 	for _, f := range r.Unchecked {
@@ -302,9 +312,9 @@ func (r *minedSetAuditResult) report(out io.Writer, startHeight, endHeight uint3
 		return nil
 	}
 
-	_, _ = fmt.Fprintln(out, "\nThis node stored blocks with mined_set true whose transactions were never tagged with the block id. Nothing repairs them in place: resync the node.")
+	_, _ = fmt.Fprintln(out, "\nThis node stored blocks with mined_set true whose transactions were never tagged with the block id, or never unlocked. Nothing repairs them in place: resync the node.")
 
-	return errors.NewProcessingError("%d block(s) stored with mined_set true carry untagged transactions", len(r.Affected))
+	return errors.NewProcessingError("%d block(s) stored with mined_set true carry untagged or locked transactions", len(r.Affected))
 }
 
 // minedSetAuditFlags are the audit-mined-set command's flags.
@@ -318,21 +328,28 @@ type minedSetAuditFlags struct {
 const minedSetAuditLongHelp = `teranode-cli audit-mined-set --start-height=<h> --end-height=<h> [--max-blocks=<n>]
 
 Lists main-chain blocks stored with mined_set true whose sampled transactions do not carry
-the block's id in the UTXO store. Releases before PR 2180 could store such a block when a
+the block's id in the UTXO store, or carry it with their outputs still locked. Releases before PR 2180 could store such a block when a
 catch-up block fell from quick validation to full validation, or when a ProcessBlock caller
 supplied a block_id. Nothing tags those transactions afterwards, and a later block spending
 one of their outputs can fail.
 
-The audit only reads. It samples two transactions per block (the first after the coinbase
-and the first of the last subtree), so a block it reports as tagged is not proven clean, and
-a transaction that was spent and pruned cannot be checked. Blocks on a netting UTXO store's
-below-checkpoint route are skipped: full validation never stores them.
+It samples two transactions per block (the first after the coinbase and the first of the
+last subtree), so a block it reports as tagged is not proven clean. A block is UNCHECKED
+when its subtree file is gone or no sampled transaction is in the UTXO store; UNCHECKED is
+not a pass. Blocks on a netting UTXO store's below-checkpoint route are skipped: full
+validation never stores them.
+
+Quick validation stores a block with mined_set true and unlocks its outputs just after, so
+a block being committed while the audit runs can show as locked; run it again for that
+height before acting on it.
 
 Remedy: there is no in-place repair. Resync an affected node.
 
-It needs the blockchain service running, and opens the UTXO store and the subtree store from
-this node's settings as the node does. It writes to neither. It exits non-zero when it finds
-an affected block.
+It needs the blockchain service running, and reads blocks through it. It opens the UTXO
+store and the subtree store from this node's settings. It changes no data, but opening the
+UTXO store runs that store's normal startup, which creates any missing schema (and on
+Postgres can start the index build the node itself runs). It exits non-zero when it finds an
+affected block.
 `
 
 func registerMinedSetAuditFlags(fs *flag.FlagSet) *minedSetAuditFlags {

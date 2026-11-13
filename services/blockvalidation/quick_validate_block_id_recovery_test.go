@@ -426,3 +426,41 @@ func TestQuickValidate_CallerBlockIDMatchesReservation_Commits(t *testing.T) {
 		})
 	}
 }
+
+// TestQuickValidate_CallerBlockIDSweptReservation_Refused: a caller holds an id that
+// AssignBlockID gave it, and sweepStaleReservations has since deleted the reservation.
+// The quick route asks AssignBlockID again, which reserves a new id, so the caller's id
+// is refused before anything is stamped. The code before this change kept the caller's id
+// and StoreBlock accepted it, because the sequence had issued it and nothing reserved it.
+// The caller recovers by sending 0 or the id AssignBlockID returns now.
+//
+// The sweep is simulated as in TestQuickValidate_RetryAfterSweep_RestampsNewID.
+func TestQuickValidate_CallerBlockIDSweptReservation_Refused(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+	h.bv.settings.DataFolder = t.TempDir()
+	store := h.openFileChain()
+
+	child := preBindSpendOf(t, h.storeGenuineParent(0xc1), 9_000)
+	block := h.forkSharingBlock(child, 0xc2)
+
+	swept, err := h.chain.AssignBlockID(h.ctx, block.Hash())
+	require.NoError(t, err)
+
+	res, err := store.GetDB().ExecContext(h.ctx, `DELETE FROM block_id_reservations WHERE hash = $1`, block.Hash()[:])
+	require.NoError(t, err)
+
+	deleted, err := res.RowsAffected()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted, "precondition: the block's reservation must exist before the sweep")
+
+	h.openFileChain()
+
+	block.ID = uint32(swept) //nolint:gosec // a fresh store's first ids fit in uint32
+
+	err = h.quickValidateWith(quickDrivers[1], block)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "refusing caller-supplied block id")
+
+	h.requireNotStamped(child)
+	h.requireNotStored(block)
+}

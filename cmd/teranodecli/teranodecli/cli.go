@@ -69,7 +69,7 @@ var commandHelp = map[string]string{
 	"monitor":                 "Live TUI dashboard for monitoring node status",
 	"logs":                    "Interactive log viewer with filtering and search",
 	"diagnose":                "Diagnose node health and validate configuration",
-	"audit-mined-set":         "List blocks stored with mined_set true whose transactions lack the block id (read-only; remedy is a resync)",
+	"audit-mined-set":         "List blocks stored with mined_set true whose transactions lack the block id or are still locked (read-only; remedy is a resync)",
 }
 
 // commandLongHelp is printed by <command> --help above the flags, for a command whose

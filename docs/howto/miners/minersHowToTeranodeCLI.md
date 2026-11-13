@@ -17,7 +17,7 @@ Usage: teranode-cli <command> [options]
     Available Commands:
     aerospikekafkaconnector  Read Aerospike CDC from Kafka and filter by txID bin
     aerospikereader      Aerospike Reader
-    audit-mined-set      List blocks stored with mined_set true whose transactions lack the block id (read-only; remedy is a resync)
+    audit-mined-set      List blocks stored with mined_set true whose transactions lack the block id or are still locked (read-only; remedy is a resync)
     bitcointoutxoset     Bitcoin to Utxoset
     checkblock           Check block - fetches a block and validates it using the block validation service
     checkblockassembly   Check block assembly state by validating unmined transaction inputs (read-only)
@@ -108,8 +108,8 @@ Usage: teranode-cli <command> [options]
 |                      |                                                | `--start-height` - Starting block height (default: 650286)      |
 |                      |                                                | `--end-height` - Ending block height (default: 0 for tip)       |
 | `audit-mined-set`    | List blocks stored with mined_set true whose   | `--start-height` - First height to audit (default: 0)           |
-|                      | sampled transactions lack the block ID         | `--end-height` - Last height to audit (required)                |
-|                      | (read-only; remedy is a resync)                | `--max-blocks` - Refuse a wider range (default: 10000)          |
+|                      | sampled transactions lack the block ID or are  | `--end-height` - Last height to audit (required)                |
+|                      | still locked (read-only; remedy is a resync)   | `--max-blocks` - Refuse a wider range (default: 10000)          |
 | `rewindblockchain`   | Rewind blockchain DB, UTXO store and subtree   | `--target-height` - Height to rewind to (default: Block Assembly's saved height) |
 |                      | blobs to Block Assembly's persisted height     | `--dry-run` - Report the plan without modifying any store        |
 |                      | (DESTRUCTIVE - node must be stopped)           | `--assume-yes` - Skip the interactive confirmation               |

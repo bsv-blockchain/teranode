@@ -258,8 +258,10 @@ func blockIDToUint32(id uint64, blockHash string) (uint32, error) {
 //
 // A block can arrive holding an id: ProcessBlock copies a caller's block_id onto it.
 // That id must be the one AssignBlockID returns, and a mismatch is refused here,
-// before any transaction is stamped. StoreBlock would refuse the same id later, but
-// by then the transactions are locked and tagged with a block that is not theirs.
+// before any transaction is stamped. StoreBlock refuses most wrong ids too, but only
+// after the transactions are locked and tagged with them. An id the sequence issued
+// whose reservation was swept is refused here as well: AssignBlockID reserves a new id
+// for the hash, and the caller recovers by sending 0 or that new id.
 // No internal route reaches quick validation holding an id: catch-up builds a fresh
 // block for each fetch, and ProcessBlock builds one per request. So the refusal can
 // only fire on a caller-supplied id, and adopting the reserved id instead would store

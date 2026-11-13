@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"flag"
 	"net/url"
 	"testing"
 
@@ -236,7 +237,7 @@ func TestMinedSetAudit_ClassifiesBlocks(t *testing.T) {
 	e1 := h.auditTx()
 	missing, _ := h.storeBlock(true, true, []*bt.Tx{e1})
 
-	// Height 6: the sampled transaction was spent and pruned.
+	// Height 6: the sampled transaction is not in the UTXO store, as when it was spent and pruned.
 	pruned, _ := h.storeBlock(true, false, []*bt.Tx{h.auditTx()})
 
 	// Height 7: only the coinbase.
@@ -248,15 +249,23 @@ func TestMinedSetAudit_ClassifiesBlocks(t *testing.T) {
 	otherBlock, _ := h.storeBlock(true, false, []*bt.Tx{f1})
 	h.createTagged(f1, taggedID)
 
-	result, err := h.auditor.run(h.ctx, 1, 8, 10)
+	// Height 9: quick validation stamped the transaction, locked, then fell through; the
+	// stored block never unlocked it.
+	g1 := h.auditTx()
+	stillLocked, stillLockedID := h.storeBlock(true, false, []*bt.Tx{g1})
+	_, err := h.utxo.Create(h.ctx, g1, uint32(h.height), utxo.WithLocked(true),
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: stillLockedID, BlockHeight: uint32(h.height)}))
 	require.NoError(t, err)
 
-	require.Equal(t, 8, result.Scanned)
+	result, err := h.auditor.run(h.ctx, 1, 9, 10)
+	require.NoError(t, err)
+
+	require.Equal(t, 9, result.Scanned)
 	require.Equal(t, 1, result.NotMinedSet)
 	require.Equal(t, 1, result.Tagged)
 	require.Equal(t, 1, result.CoinbaseOnly)
 
-	require.Len(t, result.Affected, 3)
+	require.Len(t, result.Affected, 4)
 	require.Equal(t, *untagged.Hash(), result.Affected[0].Hash)
 	require.Equal(t, untaggedID, result.Affected[0].BlockID)
 	require.Equal(t, *b1.TxIDChainHash(), result.Affected[0].TxID)
@@ -264,15 +273,17 @@ func TestMinedSetAudit_ClassifiesBlocks(t *testing.T) {
 	require.Equal(t, *partial.Hash(), result.Affected[1].Hash)
 	require.Equal(t, *c2.TxIDChainHash(), result.Affected[1].TxID, "the untagged last subtree must be the one reported")
 	require.Equal(t, *otherBlock.Hash(), result.Affected[2].Hash, "another block's id must not count as this block's")
+	require.Equal(t, *stillLocked.Hash(), result.Affected[3].Hash, "a tagged but still locked transaction must be reported")
+	require.Contains(t, result.Affected[3].Reason, "still locked")
 
 	require.Len(t, result.Unchecked, 2)
 	require.Equal(t, *missing.Hash(), result.Unchecked[0].Hash)
 	require.Contains(t, result.Unchecked[0].Reason, "not in the subtree store")
 	require.Equal(t, *pruned.Hash(), result.Unchecked[1].Hash)
-	require.Contains(t, result.Unchecked[1].Reason, "spent and pruned")
+	require.Contains(t, result.Unchecked[1].Reason, "no sampled transaction is in the UTXO store")
 
 	var out bytes.Buffer
-	require.Error(t, result.report(&out, 1, 8), "an affected block must make the command exit non-zero")
+	require.Error(t, result.report(&out, 1, 9), "an affected block must make the command exit non-zero")
 	require.Contains(t, out.String(), "resync the node")
 }
 
@@ -308,4 +319,60 @@ func TestMinedSetAudit_RefusesUnboundedRange(t *testing.T) {
 
 	_, err = h.auditor.run(h.ctx, 5, 4, minedSetAuditDefaultMaxBlocks)
 	require.Error(t, err)
+}
+
+// TestMinedSetAudit_MalformedSubtreeIsUnchecked: a subtree file cut short is reported as
+// unchecked, not as a failure of the whole run.
+func TestMinedSetAudit_MalformedSubtreeIsUnchecked(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		bytes  []byte
+		reason string
+	}{
+		{name: "shorter than its header", bytes: make([]byte, subtreeHeaderBytes-1), reason: "shorter than its header"},
+		{name: "shorter than its node count", bytes: func() []byte {
+			b := make([]byte, subtreeHeaderBytes+subtreeNodeBytes+8)
+			b[subtreeNodeCountOffset] = 2 // two nodes claimed, under one and a bit present
+
+			return b
+		}(), reason: "shorter than its node count"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newMinedSetAuditHarness(t)
+
+			block, _ := h.storeBlock(true, true, []*bt.Tx{h.auditTx()})
+			require.NoError(t, h.subtrees.Set(h.ctx, block.Subtrees[0][:], fileformat.FileTypeSubtree, tc.bytes))
+
+			result, err := h.auditor.run(h.ctx, 1, 1, 10)
+			require.NoError(t, err)
+			require.Len(t, result.Unchecked, 1)
+			require.Contains(t, result.Unchecked[0].Reason, tc.reason)
+		})
+	}
+}
+
+// TestMinedSetAudit_FlagValidation: the command refuses a missing end height and values
+// above uint32 before it connects to anything.
+func TestMinedSetAudit_FlagValidation(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "end height missing", args: nil, want: "--end-height is required"},
+		{name: "end height above uint32", args: []string{"--end-height=4294967296"}, want: "--end-height"},
+		{name: "max blocks above uint32", args: []string{"--end-height=5", "--max-blocks=4294967296"}, want: "--max-blocks"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("audit-mined-set", flag.ContinueOnError)
+			execute := minedSetAuditExecute(ulogger.TestLogger{}, tSettings, registerMinedSetAuditFlags(fs))
+			require.NoError(t, fs.Parse(tc.args))
+
+			err := execute(nil)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
 }
