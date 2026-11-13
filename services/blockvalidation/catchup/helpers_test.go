@@ -96,7 +96,7 @@ func TestParseBlockHeaders(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Failed to decode header hex: %v", err)
 			}
-			got, err := ParseBlockHeaders(headerBytes)
+			got, err := ParseBlockHeaders(headerBytes, nil)
 			if !tt.wantErr(t, err, fmt.Sprintf("ParseBlockHeaders(%x)", tt.args.headerHex)) {
 				return
 			}
@@ -185,7 +185,7 @@ func TestValidateBlockHeaderBytes(t *testing.T) {
 
 func TestParseBlockHeaders_AdditionalCoverage(t *testing.T) {
 	// Test empty bytes - already covered by existing test but adding for completeness
-	headers, err := ParseBlockHeaders([]byte{})
+	headers, err := ParseBlockHeaders([]byte{}, nil)
 	require.NoError(t, err)
 	assert.Nil(t, headers)
 
@@ -199,7 +199,7 @@ func TestParseBlockHeaders_AdditionalCoverage(t *testing.T) {
 	invalidHeaderBytes[3] = 0x00
 	// Leave the rest as zeros, which will fail proof of work validation
 
-	headers, err = ParseBlockHeaders(invalidHeaderBytes)
+	headers, err = ParseBlockHeaders(invalidHeaderBytes, nil)
 	require.Error(t, err)
 	// The error should be related to validation, not parsing
 	assert.Contains(t, err.Error(), "block header fails proof of work")
