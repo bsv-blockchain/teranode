@@ -188,6 +188,12 @@ func TestNetUnminedInOrder_ABackBlockThatCannotBeReadIsLeftOutWhole(t *testing.T
 	forward := makeBlocks(r, []int{200}, 50)
 	overlap(back, forward)
 
+	// The last block overlaps too, so a failed block that did not reserve its
+	// positions would shift this one's bits onto the wrong transactions.
+	for i := 0; i < len(back[2].hashes); i += 4 {
+		forward[0].hashes[i%len(forward[0].hashes)] = back[2].hashes[i]
+	}
+
 	back[1].failAfter = 2 // two subtrees read, then the third is gone
 
 	var got []chainhash.Hash
@@ -374,4 +380,68 @@ func TestNetUnminedRangeOf_UsesTheLeadingBits(t *testing.T) {
 	require.Equal(t, 40, len(rec))
 
 	_ = filepath.Join // keep the import used if the layout test grows
+}
+
+func TestNetUnminedInOrder_DuplicatesGetTheirOwnPositions(t *testing.T) {
+	r := rand.New(rand.NewSource(11))
+	back := makeBlocks(r, []int{60, 40}, 25)
+	forward := makeBlocks(r, []int{30}, 10)
+
+	// back repeats a hash inside a block and across blocks; forward repeats one too
+	back[0].hashes[10] = back[0].hashes[3]
+	back[1].hashes[5] = back[0].hashes[3]
+	back[1].hashes[6] = back[0].hashes[20]
+	forward[0].hashes[0] = back[0].hashes[20]
+	forward[0].hashes[1] = back[0].hashes[20]
+	forward[0].hashes[2] = back[1].hashes[30]
+
+	var got []chainhash.Hash
+
+	_, err := netUnminedInOrder(context.Background(), 2, streamOf(back), 1, streamOf(forward),
+		netUnminedParams{Dir: t.TempDir(), RangeBits: 2, ChunkSize: 9}, collect(&got))
+	require.NoError(t, err)
+	require.Equal(t, referenceNetUnmined(back, forward, nil), got)
+}
+
+func TestNetUnminedInOrder_BeatsInsideALongRange(t *testing.T) {
+	old := netUnminedBeatEvery
+	netUnminedBeatEvery = 1000
+
+	t.Cleanup(func() { netUnminedBeatEvery = old })
+
+	r := rand.New(rand.NewSource(12))
+	back := makeBlocks(r, []int{100_000}, 50_000)
+	forward := makeBlocks(r, []int{100_000}, 50_000)
+
+	beats := 0
+
+	_, err := netUnminedInOrder(context.Background(), 1, streamOf(back), 1, streamOf(forward),
+		netUnminedParams{Dir: t.TempDir(), RangeBits: 0, ChunkSize: 1_000_000, Beat: func() { beats++ }},
+		func([]chainhash.Hash) error { return nil })
+	require.NoError(t, err)
+
+	// One range holds every record. Without a beat inside the loops that is a
+	// handful of beats in total; a liveness probe would see none for the whole range.
+	require.Greater(t, beats, 150)
+}
+
+func TestNetUnminedInOrder_RemovesScratchDirsLeftByAnEarlierRun(t *testing.T) {
+	dir := t.TempDir()
+
+	stale := filepath.Join(dir, netUnminedScratchPrefix+"1111-abc")
+	require.NoError(t, os.MkdirAll(stale, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(stale, "back-0"), []byte("x"), 0o600))
+
+	unrelated := filepath.Join(dir, "ba-txmap-disk0-1-2")
+	require.NoError(t, os.MkdirAll(unrelated, 0o750))
+
+	r := rand.New(rand.NewSource(13))
+	back := makeBlocks(r, []int{10}, 10)
+
+	_, err := netUnminedInOrder(context.Background(), 1, streamOf(back), 0, nil,
+		netUnminedParams{Dir: dir, RangeBits: 0, ChunkSize: 10}, func([]chainhash.Hash) error { return nil })
+	require.NoError(t, err)
+
+	require.NoDirExists(t, stale)
+	require.DirExists(t, unrelated, "only this feature's own scratch directories are swept")
 }

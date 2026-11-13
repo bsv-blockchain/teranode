@@ -12,14 +12,15 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// resetNetUnminedChunkSize is how many net unmined hashes one existence check
+// and one mark call handle, so neither ever sees the whole list. A variable so
+// tests can force several chunks.
+var resetNetUnminedChunkSize = 1_000_000
+
 const (
 	// resetNetUnminedMaxRangeEntries bounds the move-forward hashes held in memory
 	// at once while Reset finds the net unmined transactions: about 1.5 GiB.
 	resetNetUnminedMaxRangeEntries = 32_000_000
-
-	// resetNetUnminedChunkSize is how many net unmined hashes one existence check
-	// and one mark call handle, so neither ever sees the whole list.
-	resetNetUnminedChunkSize = 1_000_000
 
 	// resetNetUnminedReadConcurrency bounds the move-forward subtrees read at once.
 	resetNetUnminedReadConcurrency = 16
@@ -30,10 +31,13 @@ const (
 // chunk at a time.
 //
 // It is best effort, as the in-memory version it replaces was. When a block
-// cannot be read it leaves the rest unmarked and logs it, and the next reconcile
-// retries; a cancelled context is returned. A moveBack block that cannot be read
-// is left out whole. Marked chunks stay marked, which is safe: marking is
-// idempotent and each chunk holds only net unmined transactions.
+// cannot be read, or a mark fails, it stops, leaves the rest unmarked and logs
+// it; a cancelled context is returned. The transactions marked are always a
+// prefix of the moveBack order. A moveBack block that cannot be read the first
+// time is left out whole, as before. One that reads fine and then fails the
+// second read stops the marking there, which the in-memory version, reading each
+// block once, could not hit. Marked chunks stay marked, which is safe: marking
+// is idempotent and each chunk holds only net unmined transactions.
 func (b *BlockAssembler) markNetUnminedMoveBackTxs(ctx context.Context, moveBack, moveForward []blockWithMeta) error {
 	var (
 		backBlocks    []*model.Block
@@ -111,7 +115,10 @@ func (b *BlockAssembler) markNetUnminedMoveBackTxs(ctx context.Context, moveBack
 
 				b.logger.Errorf("[BlockAssembler][Reset] error marking moveBack transactions as unmined: %v", markErr)
 
-				return nil
+				// Stop here. The chunks already marked are a prefix of the moveBack
+				// order; marking later chunks would leave a hole in it that nothing
+				// fills in, because a reconcile only runs another reset when the chain moves.
+				return markErr
 			}
 
 			kept += len(chunk)
@@ -163,8 +170,12 @@ func (b *BlockAssembler) netUnminedBlockStream(blocks []*model.Block, concurrenc
 				continue
 			}
 
+			if gctx.Err() != nil {
+				break
+			}
+
 			if concurrency <= 1 {
-				if err := b.visitSubtreeTxHashes(ctx, subtreeHash, visit); err != nil {
+				if err := b.visitSubtreeTxHashes(gctx, subtreeHash, visit); err != nil {
 					return err
 				}
 

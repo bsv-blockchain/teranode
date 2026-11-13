@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -70,7 +72,9 @@ func netUnminedInOrder(
 		beat = func() {}
 	}
 
-	dir, err := os.MkdirTemp(p.Dir, "ba-reset-netunmined-")
+	removeStaleNetUnminedScratch(p.Dir)
+
+	dir, err := os.MkdirTemp(p.Dir, netUnminedScratchName+"*")
 	if err != nil {
 		return res, errors.NewStorageError("[netUnmined] error creating the scratch directory under %q", p.Dir, err)
 	}
@@ -157,7 +161,10 @@ func netUnminedInOrder(
 
 	var forwardCount uint64
 
-	var forwardCountMu sync.Mutex
+	var (
+		forwardMu         sync.Mutex
+		forwardScratchErr error
+	)
 
 	for i := 0; i < forwardBlocks; i++ {
 		if err = ctx.Err(); err != nil {
@@ -169,17 +176,26 @@ func netUnminedInOrder(
 
 			for _, h := range hashes {
 				if werr := forwardFiles.write(netUnminedRangeOf(h, p.RangeBits), h[:]); werr != nil {
+					forwardMu.Lock()
+					forwardScratchErr = werr
+					forwardMu.Unlock()
+
 					return werr
 				}
 			}
 
-			forwardCountMu.Lock()
+			forwardMu.Lock()
 			forwardCount += uint64(len(hashes))
-			forwardCountMu.Unlock()
+			forwardMu.Unlock()
 
 			return nil
 		}); err != nil {
-			res.ForwardIncomplete = ctx.Err() == nil
+			forwardMu.Lock()
+			scratchFailed := forwardScratchErr != nil
+			forwardMu.Unlock()
+
+			// A full scratch disk is ours, not an unreadable block's.
+			res.ForwardIncomplete = ctx.Err() == nil && !scratchFailed
 
 			return res, errors.NewProcessingError("[netUnmined] error reading move-forward block %d, so the move-forward set is incomplete", i, err)
 		}
@@ -200,7 +216,7 @@ func netUnminedInOrder(
 
 		beat()
 
-		if err = markRangeInForward(dir, r, inForward); err != nil {
+		if err = markRangeInForward(dir, r, inForward, beat); err != nil {
 			return res, err
 		}
 	}
@@ -309,9 +325,42 @@ const (
 	// netUnminedBackRecordSize is a move-back record: position, then hash.
 	netUnminedBackRecordSize = 8 + chainhash.HashSize
 
+	// netUnminedScratchPrefix starts the name of every scratch directory this
+	// feature makes.
+	netUnminedScratchPrefix = "ba-reset-netunmined-"
+
 	netUnminedWriterBuffer = 64 * 1024
 	netUnminedReaderBuffer = 1024 * 1024
 )
+
+// netUnminedBeatEvery is how many records a range pass reads between beats, so
+// a range holding billions of records still shows a liveness probe progress. A
+// variable so a test can shrink it.
+var netUnminedBeatEvery = 1 << 16
+
+// netUnminedScratchName is the name prefix of this process's scratch
+// directories: the feature prefix and the process start time, so a directory
+// left by an earlier run, which a kill mid-reset leaves behind, is told apart
+// from this run's even when a container's process id is the same.
+var netUnminedScratchName = netUnminedScratchPrefix + strconv.FormatInt(time.Now().UnixNano(), 10) + "-"
+
+// removeStaleNetUnminedScratch deletes scratch directories under dir that an
+// earlier run left behind. Best effort: one that cannot be removed is left for
+// the next call. Only directories with this feature's prefix and another run's
+// start time are touched. A reset runs one at a time, so none of them is in use.
+func removeStaleNetUnminedScratch(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() && strings.HasPrefix(name, netUnminedScratchPrefix) && !strings.HasPrefix(name, netUnminedScratchName) {
+			_ = os.RemoveAll(filepath.Join(dir, name))
+		}
+	}
+}
 
 // netUnminedRangeBits returns the fewest range bits for which a forward set of
 // forwardCount hashes, spread evenly over the ranges, has at most maxPerRange
@@ -413,8 +462,8 @@ func (w *rangeWriters) closeAll() error {
 
 // markRangeInForward sets, in inForward, the bit of every move-back position of
 // range r whose hash is among the range's forward hashes.
-func markRangeInForward(dir string, r int, inForward []uint64) error {
-	set, err := loadForwardRange(netUnminedRangePath(dir, "forward", r))
+func markRangeInForward(dir string, r int, inForward []uint64, beat func()) error {
+	set, err := loadForwardRange(netUnminedRangePath(dir, "forward", r), beat)
 	if err != nil {
 		return err
 	}
@@ -434,7 +483,11 @@ func markRangeInForward(dir string, r int, inForward []uint64) error {
 
 	var rec [netUnminedBackRecordSize]byte
 
-	for {
+	for n := 1; ; n++ {
+		if n%netUnminedBeatEvery == 0 {
+			beat()
+		}
+
 		if _, err = io.ReadFull(rd, rec[:]); err != nil {
 			if err == io.EOF { //nolint:errorlint // ReadFull returns io.EOF itself, at a record boundary
 				return nil
@@ -454,7 +507,7 @@ func markRangeInForward(dir string, r int, inForward []uint64) error {
 	}
 }
 
-func loadForwardRange(path string) (map[chainhash.Hash]struct{}, error) {
+func loadForwardRange(path string, beat func()) (map[chainhash.Hash]struct{}, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, errors.NewStorageError("[netUnmined] error opening the move-forward scratch file %s", path, err)
@@ -472,7 +525,11 @@ func loadForwardRange(path string) (map[chainhash.Hash]struct{}, error) {
 
 	var h chainhash.Hash
 
-	for {
+	for n := 1; ; n++ {
+		if n%netUnminedBeatEvery == 0 {
+			beat()
+		}
+
 		if _, err = io.ReadFull(rd, h[:]); err != nil {
 			if err == io.EOF { //nolint:errorlint // ReadFull returns io.EOF itself, at a record boundary
 				return set, nil
