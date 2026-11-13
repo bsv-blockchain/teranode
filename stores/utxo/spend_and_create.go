@@ -30,11 +30,13 @@ type spendRollbackBounded interface {
 // createOutcomeUnknownKey is the error-data key MarkCreateOutcomeUnknown sets.
 const createOutcomeUnknownKey = "createOutcomeUnknown"
 
-// MarkCreateOutcomeUnknown marks err as returned by a Create that stopped
-// waiting for its write while the write could still commit: the store's own
-// wait for its batch ran out, not the batch failing. SequentialSpendAndCreate
-// keeps the spends for such an error, as it does for a context error. It
-// returns err.
+// MarkCreateOutcomeUnknown marks err as returned by a Create whose write may
+// have committed: the store stopped waiting for a write that could still
+// commit, as when its own wait for its batch ran out, or the write failed in a
+// way that leaves its commit unknown, as when a reply was lost after the write
+// was sent. A store marks an error only when the write may exist; a failure the
+// store knows wrote nothing stays unmarked. SequentialSpendAndCreate keeps the
+// spends for a marked error, as it does for a context error. It returns err.
 func MarkCreateOutcomeUnknown(err *errors.Error) *errors.Error {
 	if err != nil {
 		err.SetData(createOutcomeUnknownKey, true)
@@ -113,7 +115,11 @@ type SequentialStore interface {
 // a caller that stops waiting for its item returns at once, while the batch can
 // still commit the record. That happens when the caller's context ends, and on
 // Aerospike also when the store's own batcher wait runs out, which returns a
-// ServiceUnavailable error marked with MarkCreateOutcomeUnknown. Unspending then would leave a record whose
+// ServiceUnavailable error marked with MarkCreateOutcomeUnknown. A write that
+// failed after it was sent can also have committed: an Aerospike write in
+// doubt, timed out or cut by a network error, or a Postgres write whose
+// connection was lost before the commit was confirmed. The stores mark those
+// errors too. Unspending then would leave a record whose
 // inputs are unspent, which a repeat never heals, since a repeat drops a
 // transaction whose record exists. Keeping the spends leaves either a written
 // transaction or a parent naming a spender with no record yet, and a repeat of

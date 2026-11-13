@@ -288,9 +288,13 @@ func storeTestSubtree(t *testing.T, subtreeStore *blob_memory.Memory, conflictin
 	require.NoError(t, subtreeStore.Set(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	// A move back reads the subtree meta too.
+	// Node 0 is the coinbase placeholder, which has no parents; every tx after it
+	// takes its parents from its inputs, as the meta reader requires (issue 1638).
 	meta := subtreepkg.NewSubtreeMeta(st)
-	for i := range st.Nodes {
-		require.NoError(t, meta.SetTxInpoints(i, subtreepkg.NewTxInpoints()))
+	require.NoError(t, meta.SetTxInpoints(0, subtreepkg.NewTxInpoints()))
+
+	for _, tx := range txs {
+		require.NoError(t, meta.SetTxInpointsFromTx(tx))
 	}
 
 	metaBytes, err := meta.Serialize()

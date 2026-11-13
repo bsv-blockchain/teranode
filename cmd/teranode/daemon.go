@@ -48,8 +48,10 @@ func configAdvertisingPayload() interface{} {
 	return urlutil.RedactMapValues(settings.RedactConfigMap(gocore.Config().GetAll()))
 }
 
-// RunDaemon starts the teranode daemon with all necessary initialization
-func RunDaemon(progname, version, commit string) {
+// RunDaemon starts the teranode daemon with all necessary initialization and
+// blocks until it stops. It returns the error that brought the daemon down, or
+// nil after a clean shutdown; the caller turns that into the exit status.
+func RunDaemon(progname, version, commit string) error {
 	// Initialize gocore with version info
 	gocore.SetInfo(progname, version, commit)
 
@@ -63,7 +65,7 @@ func RunDaemon(progname, version, commit string) {
 
 	// Configure GC tuning (GOMEMLIMIT + GOGC) based on cgroup memory limits.
 	// Must happen early, before services allocate significant memory.
-	daemon.ConfigureGCTuning(tSettings.GCTuning)
+	daemon.ConfigureGCTuning(tSettings, os.Args[1:])
 
 	debugflags.Init(debugflags.Flags{
 		All:       tSettings.Debug.All,
@@ -113,7 +115,7 @@ func RunDaemon(progname, version, commit string) {
 	stats := redactedConfigDump()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
-	daemon.New(daemon.WithLoggerFactory(func(serviceName string) ulogger.Logger {
+	return daemon.New(daemon.WithLoggerFactory(func(serviceName string) ulogger.Logger {
 		return ulogger.New(serviceName, ulogger.WithLevel(tSettings.LogLevel))
 	})).Start(logger, os.Args[1:], tSettings)
 }

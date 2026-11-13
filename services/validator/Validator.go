@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-batcher/v2"
@@ -60,6 +61,11 @@ const (
 	// transaction reaches a mining template promptly once the queue drains,
 	// while the loop selects on the request context so shutdown aborts it.
 	kafkaShedRetryBackoff = 5 * time.Millisecond
+
+	// inBlockShedWarnInterval is the shortest gap between warnings that a block transaction was
+	// left outside the template. The state lasts for as long as the queue is full, so one warning
+	// per transaction would flood the log during the very episode it reports.
+	inBlockShedWarnInterval = 10 * time.Second
 
 	// defaultBlockAssemblyShedRetryTimeout bounds the in-place handoff retry when
 	// Validator.BlockAssemblyShedRetryTimeout is unset. It mirrors the setting's
@@ -317,6 +323,31 @@ type Validator struct {
 	// so at most one window is ever published, but this is kept as a collection
 	// so correctness does not depend on that serialization staying single-loader.
 	mtpLoadWindows []mtpLoadWindow
+
+	// inBlockShedWarnedAt is the unix nanosecond instant of the last warning about a block
+	// transaction left outside the template, and inBlockShedSuppressed counts those since. They
+	// keep a sustained shed to one warning per inBlockShedWarnInterval.
+	inBlockShedWarnedAt   atomic.Int64
+	inBlockShedSuppressed atomic.Int64
+
+	// heldShedWarnedAt and heldShedSuppressed do the same for ingest transactions dropped because
+	// block assembly holds its in-memory limit. That state lasts until a block connects and every
+	// transaction reaches it, so a warning per transaction would flood the log at ingest rate.
+	heldShedWarnedAt   atomic.Int64
+	heldShedSuppressed atomic.Int64
+
+	// heldGate is the validator's view of block assembly's in-memory transaction limit, or nil
+	// when there is no block-assembly client that reports queue stats.
+	heldGate *heldLimitGate
+
+	// txLocks serialises the create, hand-off and unwind of one transaction id between a mempool
+	// submission that can be shed and a block's InBlock validation of the same transaction.
+	txLocks txidLocks
+
+	// shedRecovery tracks the transactions an in-block shed kept Locked outside the template, and
+	// inBlockShedRecoveryDelay overrides inBlockShedRecoveryDelay for tests; zero means the default.
+	shedRecovery             shedRecovery
+	inBlockShedRecoveryDelay time.Duration
 }
 
 // mtpLoadWindow is a half-open height range [From, To) that an in-flight
@@ -353,6 +384,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		rejectedTxKafkaProducerClient:       rejectedTxKafkaProducerClient,
 		policyRejectedTxKafkaProducerClient: policyRejectedTxKafkaProducerClient,
 		blockchainClient:                    blockchainClient,
+	}
+
+	if reader, ok := ba.(queueStatsReader); ok {
+		v.heldGate = newHeldLimitGate(ctx, tSettings.Validator.KafkaBackpressure, reader)
 	}
 
 	// The ingest hand-off subtracts the per-attempt floor from the retry window, so a
@@ -395,7 +430,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// so children of a shed parent exhaust their retries many times over and are lost
 	// with no mempool to hold them. Gated on a positive cap because only then can a
 	// shed happen at all. A startup check, no behaviour change.
-	if tSettings.BlockAssembly.MaxQueueItems > 0 {
+	if tSettings.BlockAssembly.MaxQueueItems > 0 || tSettings.BlockAssembly.MaxTransactionsInMemory > 0 {
 		window := v.shedRetryTimeout() - v.handoffFloor()
 		budget := childLockBudget(tSettings.Validator.TxLockedMaxRetries)
 
@@ -476,6 +511,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 // the same bound: a wedged broker flush can't block shutdown, and the outstanding
 // Stop() finishes the flush later if it can.
 func (v *Validator) Close() error {
+	v.heldGate.stop()
+
 	if v.txmetaKafkaBatcher != nil {
 		util.DrainBatcher(v.logger, "validator_txmeta_batcher", util.DefaultBatcherDrainTimeout, v.txmetaKafkaBatcher.Close)
 	}
@@ -1088,6 +1125,22 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	blockAssemblyEnabled := !v.settings.BlockAssembly.Disabled
 	addToBlockAssembly := blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly
 
+	if v.shedAtHeldLimit(decoupledCtx, tx, txID, validationOptions) {
+		err = blockassembly.NewHeldLimitShedError(v.heldGate.held())
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	// A shed unwinds the record this call creates, and a block's InBlock validation of the same
+	// transaction must not read that record in between and take it for its own: it would return
+	// idempotent success and the unwind would then delete it. Both sides hold the per-id lock from
+	// the create to the end of the call, so the block validation waits for the unwind and then
+	// creates the record itself.
+	if addToBlockAssembly || validationOptions.InBlock {
+		defer v.txLocks.lock(tx.TxIDChainHash())()
+	}
+
 	// spend the tx's inputs and create its outputs + metadata in one store
 	// operation; the store reverses the spends if the create fails (except on
 	// ErrTxExists, which leaves the spends in place and is handled below)
@@ -1105,13 +1158,17 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// idempotent success and must not mutate lock state. It does not
 			// re-drive the block-assembly handoff.
 			//
-			// A queue-full shed no longer leaves a record behind (see unwindShed),
-			// so reaching here means a genuine duplicate rather than shed residue.
+			// A shed of a mempool or Kafka submission leaves no record behind (see
+			// unwindShed), but a shed of a block-context transaction does: it stays
+			// Locked and unmined outside the template. Reaching here therefore means
+			// a genuine duplicate, or a resubmit of a record left that way, which
+			// takes the locked-and-unmined branch below and is counted there.
 			// True but incomplete: reaching here DURING another submission's shed
 			// window means the success returned below can later be undone by that
 			// shed's unwind, which deletes the very record this call just read. That
-			// is the residual named in unwindShed's preconditions; it needs per-txid
-			// serialisation to close and is measured by the counter incremented below.
+			// is the residual named in unwindShed's preconditions. The per-id lock held from the
+			// create to the end of the call closes it between the callers that hold it, and the
+			// counter incremented below measures what remains.
 			// A record that IS locked and unmined here belongs to something a
 			// resubmit must not touch: an in-flight conflict resolution, which
 			// locks honest losing parents without marking them conflicting; or a
@@ -1343,7 +1400,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// function exists to prevent.
 	persistedMeta := txMetaData
 	delivered := !addToBlockAssembly
-	defer v.unlockLockedTxOnExit(decoupledCtx, tx, txID, persistedMeta, &err, &delivered)
+	shedInBlock := false
+
+	defer func() {
+		v.unlockLockedTxOnExit(decoupledCtx, tx, txID, persistedMeta, &err, &delivered, &shedInBlock)
+	}()
 
 	if validationOptions.SkipUtxoCreation {
 		// create the tx meta needed for the block assembly
@@ -1384,6 +1445,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		// non-retried error). Retry the handoff in place, then fall through to the
 		// txmeta publish and the 2PC unlock.
 		//
+		// The one shed that is not retried is the in-memory transaction limit. It
+		// clears when a block connects, so a retry for a couple of seconds cannot
+		// succeed and only parks the transaction while it holds spent inputs and a
+		// created record. See isRetryableShed.
+		//
 		// The wait is BOUNDED by BlockAssemblyShedRetryTimeout. Parking here for
 		// the whole duration of a stall relocated the growth the block-assembly
 		// queue cap removed into the validator's Kafka consumer — the puller does
@@ -1412,10 +1478,17 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			retryDeadline = time.Now().Add(v.shedRetryTimeout() - v.handoffFloor())
 		}
 
-		// send the tx to the block assembler
-		err = v.sendToBlockAssembler(decoupledCtx, blockAssemblyData, spentUtxos)
+		// A transaction that arrived inside a block is handed off as such, so the in-memory
+		// transaction limit does not refuse it.
+		handoffCtx := decoupledCtx
+		if validationOptions.InBlock {
+			handoffCtx = blockassembly.ContextWithInBlock(decoupledCtx)
+		}
 
-		if err != nil && validationOptions.WaitForBlockAssembly && errors.Is(err, errors.ErrThresholdExceeded) {
+		// send the tx to the block assembler
+		err = v.sendToBlockAssembler(handoffCtx, blockAssemblyData, spentUtxos)
+
+		if err != nil && validationOptions.WaitForBlockAssembly && isRetryableShed(err) {
 			// One timer for the whole retry, reset per iteration. At the 2s/5ms
 			// defaults this loop runs a few hundred times per shed, on a path that by
 			// definition runs under pressure, and time.After allocates a timer per
@@ -1423,7 +1496,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			backoff := time.NewTimer(kafkaShedRetryBackoff)
 			defer backoff.Stop()
 
-			for err != nil && errors.Is(err, errors.ErrThresholdExceeded) && time.Now().Before(retryDeadline) {
+			for err != nil && isRetryableShed(err) && time.Now().Before(retryDeadline) {
 				select {
 				case <-ctx.Done():
 					// Deliberate asymmetry: the LOOP honours caller cancellation even
@@ -1453,7 +1526,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					break
 				}
 
-				err = v.sendToBlockAssembler(decoupledCtx, blockAssemblyData, spentUtxos)
+				err = v.sendToBlockAssembler(handoffCtx, blockAssemblyData, spentUtxos)
 			}
 		}
 
@@ -1470,14 +1543,30 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					// rather than unwind it. Unwinding here would delete a record whose
 					// outputs a same-block descendant may already have spent through an
 					// ignore-locked spend, and returning the shed would fail an
-					// otherwise valid block on local ingest pressure. Recovery: mined if
-					// the block is accepted; re-added by moveBackBlock from the block's
-					// own subtrees if it is later reorged out; otherwise valid, unlocked
-					// and unmined, but absent from this node's template until the next
-					// block-assembly start or reset, which nothing schedules.
+					// otherwise valid block on local ingest pressure.
+					//
+					// The in-memory transaction limit never reaches this arm: the early shed
+					// skips a block transaction, and block assembly does not refuse one for
+					// it. Only the ingest queue bound does, and that is the pre-existing
+					// behaviour.
+					//
+					// The record stays Locked while it is outside the template, so an
+					// ordinary child cannot spend it and enter the template without its
+					// parent, which peers reject as an invalid block. The lock holds
+					// until the block's setMined runs. That runs for every validated
+					// block, and on a side chain it clears the lock too, so for a block
+					// that validates and never connects the guarantee ends there. A
+					// descendant in the same block spends through IgnoreLocked and is
+					// handed off on its own. The unmined reload recovers a record that
+					// stays outside the template.
+					// prometheusValidatorShedInBlockDroppedTotal counts this. trackInBlockShed schedules
+					// a check that resets block assembly if no block has unlocked the record by
+					// then, and the reset's unmined reload restores it.
 					prometheusValidatorShedInBlockDroppedTotal.Inc()
-					v.logger.Warnf("[Validate][%s] block-assembly queue full on a block-context handoff; accepted without a template entry, not unwound", txID)
+					v.warnInBlockShed(txID)
+					v.trackInBlockShed(tx.TxIDChainHash())
 
+					shedInBlock = true
 					err = nil
 				} else {
 					// A shed leaves no trace: the transaction is either fully accepted
@@ -1506,7 +1595,12 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					// status to its caller.
 					if validationOptions.WaitForBlockAssembly {
 						prometheusValidatorShedDroppedTotal.Inc()
-						v.logger.Warnf("[Validate][%s] dropping transaction after the bounded block-assembly handoff retry (%s); the submitter was already told it was accepted", txID, v.shedRetryTimeout())
+
+						if blockassembly.IsHeldLimitShed(err) {
+							v.warnHeldShedDropped(txID)
+						} else {
+							v.logger.Warnf("[Validate][%s] dropping transaction after the bounded block-assembly handoff retry (%s); the submitter was already told it was accepted", txID, v.shedRetryTimeout())
+						}
 					}
 				}
 			} else {
@@ -1535,16 +1629,31 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			}
 
 			// The block-context arm above clears err deliberately: the transaction
-			// carries on through the txmeta publish and the two-phase commit, so it
-			// ends fully accepted and unlocked, only without a template entry.
+			// carries on through the txmeta publish and the two-phase commit, but it
+			// is not delivered, so it stays Locked and has no template entry.
+			//
+			// InBlock is set by block subtree validation (CheckBlockSubtrees) and legacy
+			// block sync. The peer-announced subtree path (subtreesHandler) passes no
+			// options, so its transactions meet the limit as mempool ingest does. In the
+			// steady state at the limit the early shed (shedAtHeldLimit) refuses them before
+			// any store work, so no record exists for a block's InBlock validation to find
+			// and then lose. This unwind covers only the crossing window, where the limit
+			// was reached between two polls of the gate, and there the subtree fails and
+			// the work is repeated with InBlock set when the block arrives.
+			//
+			// Residual: setMined runs for every validated block, including one on a side
+			// chain, and clears the lock whatever the chain. A block that fails validation
+			// before setMined runs never clears it, so its shed transactions stay Locked
+			// until the next unmined reload, and an ordinary child of one is refused with
+			// TX_LOCKED for that whole time.
 			if err != nil {
 				span.RecordError(err)
 
 				return nil, err
 			}
+		} else {
+			delivered = true
 		}
-
-		delivered = true
 	}
 
 	// Serialize and enqueue txmeta for the subtree validation kafka topic.
@@ -1570,6 +1679,90 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// unlockLockedTxOnExit call registered above, on this and every other return
 	// path from this point in the function.
 	return txMetaData, nil
+}
+
+// isRetryableShed reports whether err is a block assembly shed worth retrying in place: the
+// ingest queue was full, which clears within a few drain passes. The in-memory transaction
+// limit also arrives as ErrThresholdExceeded, marked in its error data (see
+// blockassembly.IsHeldLimitShed). It clears when a block connects, so a retry cannot succeed
+// inside the retry budget and is skipped.
+func isRetryableShed(err error) bool {
+	return errors.Is(err, errors.ErrThresholdExceeded) && !blockassembly.IsHeldLimitShed(err)
+}
+
+// warnInBlockShed warns that a block transaction was accepted without a template entry. While the
+// queue stays full this fires for every transaction, so only the first in each
+// inBlockShedWarnInterval is logged, with the number held back since the last one.
+func (v *Validator) warnInBlockShed(txID string) {
+	if suppressed, ok := warnDue(&v.inBlockShedWarnedAt, &v.inBlockShedSuppressed); ok {
+		v.logger.Warnf("[Validate][%s] block-assembly queue full on a block-context handoff; accepted locked without a template entry, not unwound (%d more since the last warning)",
+			txID, suppressed)
+	}
+}
+
+// observeQueueStats feeds the held-limit gate a reading taken by the Kafka backpressure controller.
+func (v *Validator) observeQueueStats(stats blockassembly.QueueStats) {
+	v.heldGate.observe(stats)
+}
+
+// shedAtHeldLimit reports whether a transaction is shed before any UTXO-store write because block
+// assembly already holds as many transactions in memory as its limit allows. It covers the steady
+// state at the limit, where every ingest transaction would otherwise be spent, created, refused
+// and unwound. It runs after the parent reads and the script validation, so a transaction that
+// fails those keeps its invalid verdict at the limit. A verdict decided in the spend or create, such
+// as a double spend, a frozen or immature output or a conflicting create, is deferred at the limit:
+// the caller gets the retryable held shed, and the rejected-transaction topic is not published. A
+// transaction the store already holds is not shed, so a resubmit keeps its idempotent success. A
+// block transaction is never shed here, because block assembly does not refuse it for that limit.
+// The view is the heldLimitGate poll, so it can lag: a transaction that crosses the limit between
+// two polls still takes the late shed and the unwind.
+//
+// The caller counts the shed once, in the Kafka handler. Here an ingest transaction is counted as
+// dropped and warned at the bounded rate, as the late shed does.
+func (v *Validator) shedAtHeldLimit(ctx context.Context, tx *bt.Tx, txID string, validationOptions *Options) bool {
+	if validationOptions.InBlock || !validationOptions.AddTXToBlockAssembly || v.settings.BlockAssembly.Disabled || !v.heldGate.atLimit() {
+		return false
+	}
+
+	// A transaction the store already holds is not shed. Its resubmit reaches the exists arm
+	// and returns idempotent success without any hand-off to block assembly, as it did before
+	// the limit existed, so a direct caller is not told to retry a transaction this node has
+	// accepted. The read costs one store lookup per ingest transaction at the limit.
+	if v.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), &meta.Data{}) == nil {
+		return false
+	}
+
+	if validationOptions.WaitForBlockAssembly {
+		prometheusValidatorShedDroppedTotal.Inc()
+		v.warnHeldShedDropped(txID)
+	}
+
+	return true
+}
+
+// warnHeldShedDropped warns that an ingest transaction was dropped, without a retry, because block
+// assembly holds its in-memory limit, which clears only when a block connects. It is logged at
+// most once per inBlockShedWarnInterval, with the number dropped since the last warning.
+func (v *Validator) warnHeldShedDropped(txID string) {
+	if suppressed, ok := warnDue(&v.heldShedWarnedAt, &v.heldShedSuppressed); ok {
+		v.logger.Warnf("[Validate][%s] dropping transaction because block assembly holds its in-memory transaction limit, which clears when a block connects or the unmined load ends, so no retry ran; the submitter was already told it was accepted (%d more since the last warning)",
+			txID, suppressed)
+	}
+}
+
+// warnDue reports whether a warning guarded by warnedAt is due, and how many calls were held back
+// since the last one. When it is not due the call is counted in suppressed.
+func warnDue(warnedAt, suppressed *atomic.Int64) (int64, bool) {
+	now := time.Now().UnixNano()
+
+	last := warnedAt.Load()
+	if now-last < int64(inBlockShedWarnInterval) || !warnedAt.CompareAndSwap(last, now) {
+		suppressed.Add(1)
+
+		return 0, false
+	}
+
+	return suppressed.Swap(0), true
 }
 
 // precheckTransaction runs the checks validateInternal makes before it reads any
@@ -1688,6 +1881,10 @@ func (v *Validator) precheckTransaction(tx *bt.Tx, txID string, blockHeight uint
 // route described above (see docs/topics/features/two_phase_commit.md); the signal
 // to watch is the teranode_validator_unlock_failed counter.
 //
+// shedInBlock is true only on the in-block shed, which chose to keep the record Locked outside
+// the template and already warned at a bounded rate. Any other exit without delivery is warned
+// about here, whatever *err holds, so a panic that a caller recovers leaves a log line too.
+//
 // The unlock decision is gated on delivered, not on *err being nil. delivered only
 // becomes true once sendToBlockAssembler has actually returned successfully, so it
 // stays false across a panic unwinding from anywhere in that window - unlike *err,
@@ -1695,7 +1892,7 @@ func (v *Validator) precheckTransaction(tx *bt.Tx, txID string, blockHeight uint
 // *err as the proxy would unlock a tx that was never delivered to block assembly if
 // something panicked in that narrow window, which is the exact state this function
 // exists to prevent.
-func (v *Validator) unlockLockedTxOnExit(ctx context.Context, tx *bt.Tx, txID string, txMetaData *meta.Data, err *error, delivered *bool) {
+func (v *Validator) unlockLockedTxOnExit(ctx context.Context, tx *bt.Tx, txID string, txMetaData *meta.Data, err *error, delivered *bool, shedInBlock *bool) {
 	if txMetaData == nil || !txMetaData.Locked {
 		return
 	}
@@ -1703,9 +1900,12 @@ func (v *Validator) unlockLockedTxOnExit(ctx context.Context, tx *bt.Tx, txID st
 	// Not delivered to block assembly - leave it locked for the unmined-transaction
 	// loader to heal. This covers both ordinary error returns and a panic unwinding
 	// through the window between entering the addToBlockAssembly block and
-	// sendToBlockAssembler returning.
+	// sendToBlockAssembler returning. The in-block shed already warned at a bounded
+	// rate, so it is not warned about again here.
 	if delivered == nil || !*delivered {
-		v.logger.Warnf("[Validate][%s] tx stays locked, it was not delivered to block assembly", txID)
+		if shedInBlock == nil || !*shedInBlock {
+			v.logger.Warnf("[Validate][%s] tx stays locked, it was not delivered to block assembly", txID)
+		}
 
 		return
 	}

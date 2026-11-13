@@ -163,7 +163,7 @@ func TestProcessCatchupChItem(t *testing.T) {
 	testBlock := func() *model.Block {
 		prev := chainhash.HashH([]byte("prev"))
 		mr := chainhash.HashH([]byte("merkle"))
-		return &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prev, HashMerkleRoot: &mr}}
+		return &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prev, HashMerkleRoot: &mr}, TransactionCount: 1}
 	}
 
 	// newServer wires just enough for processCatchupChItem: the three caches, an
@@ -532,7 +532,7 @@ func TestCatchupCap_BoundsReentry(t *testing.T) {
 	testBlock := func() *model.Block {
 		prev := chainhash.HashH([]byte("prev"))
 		mr := chainhash.HashH([]byte("merkle"))
-		return &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prev, HashMerkleRoot: &mr}}
+		return &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prev, HashMerkleRoot: &mr}, TransactionCount: 1}
 	}
 
 	// run drives processCatchupChItem reentries times with a catchup that always

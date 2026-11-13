@@ -49,6 +49,14 @@ import (
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 )
 
+// freezeBeforeWrite runs in FreezeUTXOs between the check and the write. It is nil
+// outside tests, which use it to commit a spend inside that gap.
+var freezeBeforeWrite func()
+
+// freezeBeforeRecheck runs in FreezeUTXOs after the write missed and before the output
+// is read again. It is nil outside tests, which use it to unspend the coin in that gap.
+var freezeBeforeRecheck func()
+
 // FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.
 // Returns an error if any UTXO is already spent or frozen.
 func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSettings *settings.Settings) error {
@@ -91,15 +99,68 @@ func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSet
 
 	// if not, freeze the UTXO
 	for _, spend := range spends {
-		id := txHashIDMap[spend.TxID.String()]
-
-		q := `UPDATE outputs SET frozen = true WHERE transaction_id = $1 AND idx = $2 AND spending_data IS NULL`
-		if _, err := s.db.ExecContext(ctx, q, id, spend.Vout); err != nil {
+		if err := s.freezeOutput(ctx, txHashIDMap[spend.TxID.String()], spend); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// freezeWriteAttempts bounds how often freezeOutput retries a coin that a concurrent
+// spend took and an unspend gave back while the freeze was writing.
+const freezeWriteAttempts = 3
+
+// freezeOutput sets frozen on one unspent output. A spend that commits after the check
+// in FreezeUTXOs makes the write miss; the output is then read again to name the
+// spender, and if an unspend has already cleared that spend the write is tried again.
+func (s *Store) freezeOutput(ctx context.Context, id int, spend *utxostore.Spend) error {
+	q := `UPDATE outputs SET frozen = true WHERE transaction_id = $1 AND idx = $2 AND spending_data IS NULL`
+
+	for attempt := 0; attempt < freezeWriteAttempts; attempt++ {
+		if freezeBeforeWrite != nil {
+			freezeBeforeWrite()
+		}
+
+		result, err := s.db.ExecContext(ctx, q, id, spend.Vout)
+		if err != nil {
+			return err
+		}
+
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+
+		if affected > 0 {
+			return nil
+		}
+
+		if freezeBeforeRecheck != nil {
+			freezeBeforeRecheck()
+		}
+
+		var spendingDataBytes []byte
+
+		if err = s.db.QueryRowContext(ctx, `SELECT spending_data FROM outputs WHERE transaction_id = $1 AND idx = $2`,
+			id, spend.Vout).Scan(&spendingDataBytes); err != nil {
+			return err
+		}
+
+		// An unspend cleared the spend after the write missed: the coin is unspent again.
+		if spendingDataBytes == nil {
+			continue
+		}
+
+		spendingData, err := spendpkg.NewSpendingDataFromBytes(spendingDataBytes)
+		if err != nil {
+			return errors.NewProcessingError("failed to create spending data from bytes", err)
+		}
+
+		return errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spendingData)
+	}
+
+	return errors.NewStorageError("[FreezeUTXOs] %s:%d was spent and unspent again on each of %d freeze attempts", spend.TxID, spend.Vout, freezeWriteAttempts)
 }
 
 // UnFreezeUTXOs removes the frozen status from UTXOs.

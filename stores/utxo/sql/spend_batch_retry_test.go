@@ -92,7 +92,7 @@ func TestRetrySpendBatch_GivesUpAfterThreeRetries(t *testing.T) {
 
 	for i, err := range requireOneAnswerEach(t, batch) {
 		require.ErrorIs(t, err, errors.ErrStorageError, "item %d", i)
-		require.Contains(t, err.Error(), "deadlock persisted after 3 retries", "item %d", i)
+		require.Contains(t, err.Error(), "deadlock or lifted freeze persisted after 3 retries", "item %d", i)
 	}
 }
 

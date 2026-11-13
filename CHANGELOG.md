@@ -31,6 +31,25 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
+  `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
+  now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,
+  `_fork_resolution_depth_blocks` and `_fork_orphaned_total`, which nothing ever updated, and
+  `teranode_blockchain_get_latest_block_header_from_block_locator` and
+  `_get_block_headers_from_oldest`, which recorded only calls to the two removed RPCs; drop any
+  panel or alert on them. (#2185)
+- **`blockassembly_storeTxInpointsForSubtreeMeta=false` now only skips the subtree meta files.**
+  Block assembly keeps every unmined tx's parent links in memory in both modes. With it off, the
+  restart reload and a block move-back now read each tx's inputs from the UTXO store (an external tx
+  from the blob store), and memory per unmined tx rises; nothing to change. (#2128)
+- **Upgrade every validator and subtree-validation pod before you set
+  `blockassembly_maxTransactionsInMemory`, and keep the default 0 until then.** An old validator
+  never sends `inBlock`, so a new block assembly with the limit set refuses its block transactions
+  and the old validator unlocks them without a template entry. With the limit set,
+  `teranode_validator_invalid_transactions` no longer counts a transaction refused at the limit;
+  `teranode_validator_held_limit_shed_transactions` does. A new validator setting,
+  `validator_kafkaBackpressureResumeHeldPercent` (default 80), sets where a held-count pause
+  resumes. (#1593)
 - **`grpc_admin_api_key` is required.** Blockchain refuses to start if it is empty, a placeholder
   or under 16 characters, and every RPC but `HealthGRPC` needs it. Give every client service the
   same key and upgrade Blockchain last, or restart them together. (#1755)
@@ -70,10 +89,17 @@ read every section between yours and the target.
   rejects, so they stop validating. Upgrade Blockchain last or raise the cap above chain height. (#1776)
 - **Conflict recovery adds five `utxo.Store` methods and changes the UTXO WAL.** Upgrade block
   assembly together with the UTXO store and don't downgrade while conflict-recovery records are
-  pending; they block startup. Follow [conflict recovery](docs/topics/conflict-recovery.md). (#2023)
+  pending; they block startup. Follow [conflict recovery](docs/topics/conflict-recovery.md).
+  Before upgrading from v0.16.0, stop block assembly and [check the conflict WAL is
+  empty](docs/topics/conflict-recovery.md#upgrading-from-v0160): a v0.16.0 forward intent left in
+  it keeps block assembly from starting until it is repaired. The v0.16.0 `conflict_intents_pending`
+  gauge can't tell you; it only counts at startup. (#2023)
 - **PostgreSQL UTXO store: stop previous-release processes before upgrading.** One that starts while
   the new `px_transactions_conflicting` index builds blocks all `transactions` reads and writes until
   the build ends. Out-of-tree `utxo.Store` implementations add `ConflictingTxHashes`. (#2110)
+- **The Aerospike UTXO store adds a `<set>_conflictwal_startedAt` index, at least 16 MiB per node.**
+  Check `indexes-memory-budget` has room first, or the namespace can stop writes. Without
+  index-create rights, create it by hand ([conflict recovery](docs/topics/conflict-recovery.md)). (#2151)
 - **Script-number overflow is a consensus failure.** Earlier builds accept transactions and blocks
   this one rejects: upgrade all your nodes together. These transactions are no longer published to
   the `kafka_txPolicyRejectedConfig` topic. (#1911)
@@ -148,6 +174,9 @@ read every section between yours and the target.
 - **Asset block-list endpoints honour `fromHeight` with `includeOrphans`.** They now page down
   instead of returning the chain's top; clients passing both get the blocks at or below
   `fromHeight`. (#2065)
+- **`blockassembly_maxBlockReorgCatchup` is removed.** It never capped a reorg; it only sized two
+  unused maps. A config that still sets it starts as before and the value is ignored, so no
+  action is needed beyond deleting the line. (#2163)
 
 ## [0.16.0] - 2026-10-05
 
