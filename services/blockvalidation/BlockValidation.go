@@ -3603,19 +3603,35 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 // REMOVED (bitcoin-sv/teranode#4844) and the rule must not be made conditional again on height
 // alone; the reasoning is recorded on the expected-nBits block in ValidateBlockWithOptions.
 
-// checkpointConfirmedAncestor reports whether block b is provably part of the main
-// chain that has already reached and matched the highest hardcoded checkpoint hash. It
-// is the ancestry predicate gating the below-checkpoint coinbase no-inflation skip in
-// model.checkBlockRewardAndFees (threaded via Block.SetCheckpointConfirmedAncestor):
-// only a confirmed checkpoint ancestor may skip, because the pinned checkpoint then
-// transitively commits its coinbase.
+// checkpointConfirmedAncestor reports whether block b is an ancestor of the block with the
+// highest hardcoded checkpoint hash, by the stored headers. It is the ancestry predicate gating the
+// below-checkpoint coinbase no-inflation skip in model.checkBlockRewardAndFees (threaded via
+// Block.SetCheckpointConfirmedAncestor): only an ancestor of the pinned checkpoint may skip,
+// because the pinned hash then transitively commits its coinbase.
 //
-// It returns false — forcing full no-inflation enforcement — for any block above the
-// checkpoint (the skip cannot fire there anyway), while the main chain has not yet
-// reached the checkpoint (the forward/optimistic-checkpoint window), or when b is not
-// the main-chain block at its own height (a detached fork reconsidered via
-// reconsiderblock). Fail-safe: any lookup error or ambiguity yields false, so the
-// no-inflation check runs — correct, because non-fast-path blocks carry real fees.
+// The proof is linkage, not arrival. It starts at the stored block with the pinned hash and
+// follows parent links back to b's height, so it holds for b whether b is on the main chain or has
+// been invalidated since (reconsiderblock), and it is false for any other block at b's height: a
+// fork below the checkpoint never leads to the pinned hash. It does not ask the store which block
+// sits at a height, because that answer lists every stored block there, forks and invalidated
+// blocks included, in no defined order.
+//
+// It returns false, forcing full no-inflation enforcement, for any block above the checkpoint
+// (the skip cannot fire there anyway), while the block with the pinned hash is not yet stored (a
+// forward sync that has not reached the checkpoint), and for a block the walk does not land on.
+// Fail-safe: any lookup error yields false, so the no-inflation check runs.
+//
+// It also returns false for a block that is not in the blockchain store yet: the walk only ever
+// lands on a stored block. That case costs one indexed existence lookup, and it covers every block
+// arriving for the first time, a peer-served fork below the checkpoint included.
+//
+// Cost: for a stored block, one recursive query over the stored blocks between the checkpoint and
+// b, up to the checkpoint height in rows; a query for a pinned hash that is not stored returns at
+// once. Only a block already in the blockchain store pays it: revalidation, reconsiderblock, the
+// gRPC ValidateBlock path run on a stored block (cmd/checkblock), and the opt-in optimistic peer
+// path, which stores a block before validating it. The walk grows with the block's age: an early
+// mainnet block walks close to the checkpoint height in rows, where the old check made two
+// indexed lookups.
 func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *model.Block) bool {
 	// The below-checkpoint no-inflation skip requires store fast-path support too, so the
 	// ancestry predicate cannot change the outcome on a store that never produces fee=0
@@ -3637,19 +3653,19 @@ func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *mo
 		return false
 	}
 
-	// 1. The main chain must have reached the highest checkpoint height with the pinned hash.
-	cpHeaders, _, err := u.blockchainClient.GetBlockHeadersFromHeight(ctx, highest, 1)
-	if err != nil || len(cpHeaders) == 0 || !cpHeaders[0].Hash().IsEqual(pinned) {
+	// The walk below can only land on a stored block, and it costs up to the checkpoint height in
+	// rows, so a block that is not stored yet (any block arriving for the first time) stops here.
+	stored, err := u.blockchainClient.GetBlockExists(ctx, b.Header.Hash())
+	if err != nil || !stored {
 		return false
 	}
 
-	// 2. b must be the main-chain block at its own height (i.e. an ancestor of the checkpoint).
-	bHeaders, _, err := u.blockchainClient.GetBlockHeadersFromHeight(ctx, b.Height, 1)
-	if err != nil || len(bHeaders) == 0 {
+	ancestor, err := u.blockchainClient.GetHashOfAncestorBlock(ctx, pinned, int(highest-b.Height))
+	if err != nil || ancestor == nil {
 		return false
 	}
 
-	return bHeaders[0].Hash().IsEqual(b.Header.Hash())
+	return ancestor.IsEqual(b.Header.Hash())
 }
 
 // reValidateBlock performs a full block revalidation.
