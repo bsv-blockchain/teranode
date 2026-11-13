@@ -574,11 +574,11 @@ The Blockchain Service implements sophisticated chain reorganization handling wi
 
 ##### Longest Chain Selection
 
-- **Chainwork, not height**: Each block row stores its cumulative `chain_work` from genesis. The best block is the valid block with the most `chain_work`, with ties broken by `peer_id` and then `id` (`GetBestBlockID`).
+- **Chainwork, not height**: Each block row stores its cumulative `chain_work` from genesis. The best block is the valid block with the most `chain_work`, with ties broken by `peer_id` and then `id` (`getBestBlockID`).
 - **One transaction for a fork insert**: For a block that does not extend the current best, `StoreBlock` writes the row and repairs the `on_main_chain` flags in one SQL transaction.
-- **Response cache**: `StoreBlock` resets the store's response cache after each insert, so the next best-block query reads the new state.
+- **Response cache**: the best block, `GetChainTips` and `GetForkedBlockHeaders` results sit in the store's general response cache. `StoreBlock`, `InvalidateBlock` and `RevalidateBlock` reset it, so the next query reads the new state. Cached chain-tip results expire after 2 minutes.
 
-There is no fork-point cache and no chain-tip cache. For the order in which the Blockchain service, Block Validation, Block Assembly and the UTXO store react to a reorg, see [Reorg Coordination Order](../architecture/teranode-overall-system-design.md#921-reorg-coordination-order).
+There is no dedicated tip-tracking structure and no fork-point index. For the order in which the Blockchain service, Block Validation, Block Assembly and the UTXO store react to a reorg, see [Reorg Coordination Order](../architecture/teranode-overall-system-design.md#921-reorg-coordination-order).
 
 **Configuration Options:**
 
