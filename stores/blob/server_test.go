@@ -4,6 +4,7 @@ package blob
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"math"
@@ -359,6 +360,48 @@ func (s *fileBackedFakeStore) underlying(t *testing.T) Store {
 	store, err := NewStore(ulogger.New("rangereq"), storeURL)
 	require.NoError(t, err)
 	return store
+}
+
+// TestHTTPBlobServer_MarksMissWithHeader pins #1965: the server marks its own miss (404) with
+// MissHeader on every miss path - the Exists/HEAD path and the GET path through writeStoreError -
+// so the client can tell it from a wrong base URL or a proxy 404. A HEAD carries no body, so the
+// header is the only signal there.
+func TestHTTPBlobServer_MarksMissWithHeader(t *testing.T) {
+	srv := &HTTPBlobServer{store: missOnlyStore{}, logger: ulogger.New("miss-header-test")}
+
+	key := []byte("absent-key")
+	path := "/blob/" + base64.URLEncoding.EncodeToString(key) + "." + fileformat.FileTypeTesting.String()
+
+	t.Run("Exists (HEAD) miss carries the header", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		srv.handleExists(rr, httptest.NewRequest(http.MethodHead, path, nil))
+
+		require.Equal(t, http.StatusNotFound, rr.Code)
+		require.Equal(t, "1", rr.Header().Get(blobhttp.MissHeader),
+			"a HEAD miss must carry %s - it has no body to carry NotFoundMsg", blobhttp.MissHeader)
+	})
+
+	t.Run("GET miss carries the header", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		srv.handleGet(rr, httptest.NewRequest(http.MethodGet, path, nil))
+
+		require.Equal(t, http.StatusNotFound, rr.Code)
+		require.Equal(t, "1", rr.Header().Get(blobhttp.MissHeader),
+			"a GET miss must carry %s so a proxy 404 is not read as a miss", blobhttp.MissHeader)
+	})
+}
+
+// missOnlyStore is a Store whose every lookup misses. The embedded nil Store panics if any other
+// method is called, which is deliberate: this fixture is valid only for the read/exists paths the
+// miss-header test drives.
+type missOnlyStore struct{ Store }
+
+func (missOnlyStore) Exists(context.Context, []byte, fileformat.FileType, ...options.FileOption) (bool, error) {
+	return false, nil
+}
+
+func (missOnlyStore) GetIoReader(context.Context, []byte, fileformat.FileType, ...options.FileOption) (io.ReadCloser, error) {
+	return nil, errors.ErrNotFound
 }
 
 // TestHandleRangeRequest_FileStoreReaderIsSeekable is a guard against the
