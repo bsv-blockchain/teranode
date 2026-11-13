@@ -138,8 +138,6 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockchain_get_fsm_current_state`             | Histogram | Histogram of GetFSMCurrentState calls to the blockchain service         |
 | `teranode_blockchain_get_block_locator`                              | Histogram | Histogram of GetBlockLocator calls to the blockchain service                           |
 | `teranode_blockchain_locate_block_headers`                           | Histogram | Histogram of LocateBlockHeaders calls to the blockchain service                        |
-| `teranode_blockchain_get_latest_block_header_from_block_locator`     | Histogram | Histogram of GetLatestBlockHeaderFromBlockLocator calls to the blockchain service      |
-| `teranode_blockchain_get_block_headers_from_oldest`                  | Histogram | Histogram of GetBlockHeadersFromOldest calls to the blockchain service                 |
 | `teranode_blockchain_check_block_is_ancestor_of_block`               | Histogram | Histogram of CheckBlockIsAncestorOfBlock calls to the blockchain service               |
 | `teranode_blockchain_get_blocks_by_height`                           | Histogram | Histogram of GetBlocksByHeight calls to the blockchain service                         |
 | `teranode_blockchain_set_block_persisted_at`                         | Histogram | Histogram of SetBlockPersistedAt calls to the blockchain service                       |
@@ -202,9 +200,6 @@ CounterVec and HistogramVec metrics use labels: `peer_id`, `success`, `error_typ
 | `teranode_blockvalidation_fork_created_total`                | CounterVec   | Total number of forks created                                    |
 | `teranode_blockvalidation_fork_lifetime_seconds`             | Histogram    | Lifetime of forks in seconds                                     |
 | `teranode_blockvalidation_fork_depth_blocks`                 | Histogram    | Depth of forks in blocks                                         |
-| `teranode_blockvalidation_fork_resolved_total`               | CounterVec   | Total number of forks resolved                                   |
-| `teranode_blockvalidation_fork_resolution_depth_blocks`      | Histogram    | Depth at which forks were resolved in blocks                     |
-| `teranode_blockvalidation_fork_orphaned_total`               | Counter      | Total number of forks marked as orphaned                         |
 | `teranode_blockvalidation_processing_blocks_stuck`           | Gauge        | Number of blocks stuck in processing state                       |
 | `teranode_blockvalidation_fork_average_depth`                | Gauge        | Average depth of active forks in blocks                          |
 | `teranode_blockvalidation_fork_longest_depth`                | Gauge        | Longest active fork depth in blocks                              |

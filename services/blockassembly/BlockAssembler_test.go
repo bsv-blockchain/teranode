@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"fmt"
 	"math/big"
 	"net/url"
 	"sync"
@@ -487,23 +488,38 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		completeWg.Wait()
 
-		// need to wait for the txCount to be updated after the subtree notification was fired off
-		time.Sleep(10 * time.Millisecond)
+		// The subtree processor sends each completed subtree on newSubtreeChan before it adds the
+		// dequeued batch to TxCount, so wait for the count rather than sleeping.
+		// It should include the 7 transactions added + the coinbase placeholder of the first subtree.
+		require.Eventually(t, func() bool {
+			return testItems.blockAssembler.subtreeProcessor.TxCount() == 8
+		}, 10*time.Second, 10*time.Millisecond, "TxCount never reached 8")
 
 		// Check the state of the SubtreeProcessor
 		assert.Equal(t, 3, testItems.blockAssembler.subtreeProcessor.SubtreeCount())
 
-		// should include the 7 transactions added + the coinbase placeholder of the first subtree
-		assert.Equal(t, uint64(8), testItems.blockAssembler.subtreeProcessor.TxCount())
+		// Until block assembly has handled its startup reconcile and the blockchain client's initial
+		// block notification, GetMiningCandidate returns an empty block template by design. Ask until
+		// the candidate holds the two completed subtrees, then check that candidate exactly.
+		var (
+			miningCandidate *model.MiningCandidate
+			subtrees        []*subtreepkg.Subtree
+		)
 
-		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
-		require.NoError(t, err)
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			candidate, candidateSubtrees, candidateErr := testItems.blockAssembler.GetMiningCandidate(ctx)
+			require.NoError(c, candidateErr)
+			require.Len(c, candidateSubtrees, 2)
+
+			miningCandidate, subtrees = candidate, candidateSubtrees
+		}, 10*time.Second, 10*time.Millisecond, "GetMiningCandidate never returned the two completed subtrees")
+
 		assert.NotNil(t, miningCandidate)
 		assert.NotNil(t, subtrees)
 		assert.Equal(t, uint64(5000001332), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
 		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", util.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
-		assert.Len(t, subtrees, 2)
+		require.Len(t, subtrees, 2)
 		assert.Len(t, subtrees[0].Nodes, 4)
 		assert.Len(t, subtrees[1].Nodes, 4)
 
@@ -3284,4 +3300,37 @@ func TestStart_TriggersReconcileOnStartup(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return getBestCalls.Load() > 0
 	}, 2*time.Second, 20*time.Millisecond, "expected GetBestBlockHeader to be called via reconcile path after Start")
+}
+
+// With blockassembly_storeTxInpointsForSubtreeMeta off, the unmined reload still gives each tx its
+// parent links, on both the in-memory and the disk-sorted path, so the descendant cascades and the
+// parent chain check can see a removed or missing parent.
+func TestLoadUnminedTransactionsKeepsParentLinksWithSubtreeMetaOff(t *testing.T) {
+	for _, diskSort := range []bool{false, true} {
+		t.Run(fmt.Sprintf("diskSort=%t", diskSort), func(t *testing.T) {
+			initPrometheusMetrics()
+
+			ctx := t.Context()
+			items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+				s.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
+				// the parent is not in the store, and this test reads the links rather than the filter
+				s.BlockAssembly.OnRestartValidateParentChain = false
+				s.BlockAssembly.UnminedTxDiskSortEnabled = diskSort
+				s.BlockAssembly.UnminedTxDiskSortPaths = []string{t.TempDir()}
+			})
+
+			parentHash := chainhash.Hash{0x07}
+			tx := newTx(42)
+			require.NoError(t, tx.Inputs[0].PreviousTxIDAdd(&parentHash))
+
+			_, _, err := items.utxoStore.SpendAndCreate(ctx, tx, 0, utxoStore.WithCreateOnly())
+			require.NoError(t, err)
+
+			require.NoError(t, items.blockAssembler.loadUnminedTransactions(ctx, false))
+
+			inpoints, ok := items.blockAssembler.subtreeProcessor.GetCurrentTxMap().Get(*tx.TxIDChainHash())
+			require.True(t, ok, "the reload must put the tx in block assembly")
+			require.Equal(t, []chainhash.Hash{parentHash}, inpoints.ParentTxHashes, "the reload must keep the tx's parent links")
+		})
+	}
 }

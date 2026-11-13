@@ -87,6 +87,7 @@ const (
 	errOutputNotFound           = "output %s:%d not found"
 	errFailedCreateSpendingData = "failed to create spending data from bytes"
 	errSQLUpdatingTransactions  = "SQL error updating transactions: %v"
+	errSpendUtxoFrozen          = "[Spend] utxo is frozen for %s:%d"
 )
 
 // batchSpend represents a single UTXO spend request in a batch.
@@ -617,10 +618,44 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 	}
 
 	if err = txn.Commit(); err != nil {
+		if s.engine == string(util.Postgres) && pgCreateMayHaveCommitted(err) {
+			return nil, utxo.MarkCreateOutcomeUnknown(errors.NewStorageError("failed to commit the create", err))
+		}
+
 		return nil, err
 	}
 
 	return txMeta, nil
+}
+
+// pgCreateMayHaveCommitted reports whether a Postgres create write that failed
+// with cause may still have committed. A pgx batch runs as one implicit
+// transaction, and only br.Close, reading the batch to its end, confirms the
+// commit, so a create that reported its row inserted is not known committed
+// before then. Two
+// failures are certain: an error the server reported, which rolls the
+// transaction back, and one pgconn says happened before anything was sent. Any
+// other failure, a dropped connection or a lost reply, can come after the
+// commit. utxo.SequentialSpendAndCreate unspends the inputs of a create that
+// failed for certain, and doing that for a create that committed leaves a
+// stored transaction with live inputs that nothing heals.
+func pgCreateMayHaveCommitted(cause error) bool {
+	var pgErr *pgconn.PgError
+
+	return !errors.As(cause, &pgErr) && !pgconn.SafeToRetry(cause)
+}
+
+// pgCreateError wraps cause, the failure of a batched Postgres create, as a
+// storage error, marked outcome-unknown when pgCreateMayHaveCommitted says the
+// create may have committed, so the spends stay, as for a context error, until
+// a repeat of the write finds the record or creates it.
+func pgCreateError(msg string, cause error) error {
+	err := errors.NewStorageError(msg, cause)
+	if pgCreateMayHaveCommitted(cause) {
+		return utxo.MarkCreateOutcomeUnknown(err)
+	}
+
+	return err
 }
 
 // unspendableMinedTxDAH returns the delete_at_height to assign at creation time
@@ -863,12 +898,20 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 		if execErr != nil {
 			return execErr
 		}
-		defer rows.Close()
-		inserted = rows.Next() // true if new_tx returned a row (insert succeeded)
+		inserted = rows.Next() // true if new_tx returned a row
+
+		// The row arrives before the commit: the statement commits after
+		// sending its rows, and only the reply's end confirms it, so the
+		// connection can drop between the row and the commit. Close reads the
+		// reply to its end and records that error, so Err is read after Close.
+		rows.Close()
+
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, errors.NewStorageError("Failed to create UTXO", err)
+		// The statement auto-commits, so a connection lost after it was sent
+		// can follow the commit.
+		return nil, pgCreateError("Failed to create UTXO", err)
 	}
 	if !inserted {
 		return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", isCoinbase)
@@ -1177,9 +1220,9 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 		br := pgxConn.SendBatch(s.ctx, pgxBatch)
 
 		// Read results — collect but don't send to callers yet.
-		// We must call br.Close() before signalling callers, because
-		// pipelined auto-committed statements may not be fully visible
-		// to other connections until the batch reader is closed.
+		// We must call br.Close() before signalling callers: the batch
+		// runs as one implicit transaction, and only br.Close(), reading
+		// the batch to its end, confirms that the transaction committed.
 		type batchResult struct {
 			idx      int
 			result   batchCreateResult
@@ -1200,7 +1243,7 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 			}
 			if queryErr != nil {
 				results = append(results, batchResult{idx: idx, result: batchCreateResult{
-					Err: errors.NewStorageError("Failed to create UTXO", queryErr),
+					Err: pgCreateError("Failed to create UTXO", queryErr),
 				}, logError: true})
 			} else if !inserted {
 				// ON CONFLICT (hash) DO NOTHING — new_tx returned 0 rows, tx already exists
@@ -1224,7 +1267,7 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 		for _, r := range results {
 			if closeErr != nil && r.result.Err == nil {
 				batch[r.idx].done <- batchCreateResult{
-					Err: errors.NewStorageError("batch close failed, results may not be visible", closeErr),
+					Err: pgCreateError("batch close failed, results may not be visible", closeErr),
 				}
 				continue
 			}
@@ -2631,7 +2674,7 @@ func (s *Store) retrySpendBatchContext(ctx context.Context, batch []*batchSpend,
 		}
 
 		backoff := time.Duration(100<<attempt) * time.Millisecond
-		s.logger.Warnf("[Spend] deadlock detected (attempt %d/%d), retrying batch of %d items in %v", attempt+1, maxRetries+1, len(batch), backoff)
+		s.logger.Warnf("[Spend] deadlock or lifted freeze detected (attempt %d/%d), retrying batch of %d items in %v", attempt+1, maxRetries+1, len(batch), backoff)
 
 		select {
 		case <-ctx.Done():
@@ -2645,7 +2688,7 @@ func (s *Store) retrySpendBatchContext(ctx context.Context, batch []*batchSpend,
 	}
 	// Exhausted retries — send error to all items
 	for _, item := range batch {
-		item.errCh <- errors.NewStorageError("[Spend] deadlock persisted after %d retries", maxRetries)
+		item.errCh <- errors.NewStorageError("[Spend] deadlock or lifted freeze persisted after %d retries", maxRetries)
 	}
 }
 
@@ -2793,7 +2836,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		}
 
 		if r.frozen {
-			validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+			validationErrors[i] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
 			continue
 		}
 		if r.conflicting && !item.ignoreConflicting {
@@ -2893,7 +2936,11 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 	// settled first-arrival-wins, so sorting here changes no outcome.
 	sortSpendUpdateRows(dedupedUpdate)
 
-	// Bulk UPDATE with optimistic locking.
+	// Bulk UPDATE with optimistic locking. Every write of a NULL spending_data
+	// also requires frozen = false, so a freeze that commits after the bulk
+	// SELECT stops the spend: Postgres re-checks the WHERE against the newest
+	// committed row under READ COMMITTED. transactions.frozen is only set when
+	// the row is created, so the SELECT's read of it cannot go stale.
 	// When retention > 0, the UPDATE is wrapped in a CTE that also runs a DAH
 	// recompute on any parent tx whose last unspent output was just drained.
 	// Mirrors aerospike's inline setDeleteAtHeight Lua call; without this, mined
@@ -2952,6 +2999,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				UPDATE outputs o SET spending_data = v.spending_data FROM v
 				WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
 				  AND o.spending_data IS NULL
+				  AND o.frozen = false
 				RETURNING v.batch_idx, o.transaction_id
 			),
 			upd_idem AS (
@@ -2999,8 +3047,12 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		} else {
 			ub.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
 			WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
-			AND (o.spending_data IS NULL OR o.spending_data = v.spending_data)
+			AND ((o.spending_data IS NULL AND o.frozen = false) OR o.spending_data = v.spending_data)
 			RETURNING v.batch_idx`)
+		}
+
+		if spendBeforeWrite != nil {
+			spendBeforeWrite()
 		}
 
 		uRows, err := txn.QueryContext(ctx, ub.String(), updateArgs...)
@@ -3064,9 +3116,22 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		// Run a second, fresh-snapshot SELECT over the missed rows to catch
 		// those concurrent idempotent commits. Anything whose current
 		// spending_data matches ours is a successful idempotent spend.
+		//
+		// The same re-check finds rows a freeze committed after the bulk
+		// SELECT: the UPDATE's frozen guard skipped them, and they are still
+		// unspent and now frozen. Those get UtxoFrozenError, not UtxoSpentError.
+		//
+		// A row that is unspent and unfrozen at the re-check had a freeze that made
+		// the write miss and was lifted before the re-check. The coin is spendable
+		// again, so the batch is retried rather than reporting it spent.
+		frozenSet := make(map[int]bool)
 		if len(missedIdxs) > 0 {
+			if spendBeforeRecheck != nil {
+				spendBeforeRecheck()
+			}
+
 			var sb strings.Builder
-			sb.WriteString(`SELECT v.batch_idx FROM (VALUES `)
+			sb.WriteString(`SELECT v.batch_idx, o.spending_data = v.spending_data, o.frozen FROM (VALUES `)
 			args := make([]interface{}, 0, len(missedIdxs)*4)
 			pidx := 1
 			for i, bIdx := range missedIdxs {
@@ -3081,7 +3146,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			}
 			sb.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
 			JOIN outputs o ON o.transaction_id = v.transaction_id AND o.idx = v.idx
-			WHERE o.spending_data = v.spending_data`)
+			WHERE o.spending_data = v.spending_data OR o.spending_data IS NULL`)
 
 			iRows, err := txn.QueryContext(ctx, sb.String(), args...)
 			if err != nil {
@@ -3094,8 +3159,12 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				return false
 			}
 			for iRows.Next() {
-				var bIdx int
-				if err := iRows.Scan(&bIdx); err != nil {
+				var (
+					bIdx      int
+					idem      sql.NullBool
+					nowFrozen bool
+				)
+				if err := iRows.Scan(&bIdx, &idem, &nowFrozen); err != nil {
 					iRows.Close()
 					if isDeadlock(err) {
 						return true
@@ -3104,6 +3173,17 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 						item.errCh <- errors.NewStorageError("[Spend] failed: scanning concurrent-idempotent re-check", err)
 					}
 					return false
+				}
+				if !idem.Valid { // spending_data IS NULL: unspent now
+					if nowFrozen {
+						frozenSet[bIdx] = true
+						continue
+					}
+					iRows.Close()
+					return true
+				}
+				if !idem.Bool {
+					continue
 				}
 				updatedSet[bIdx] = true
 				// Parent has just had its output confirmed-spent by someone
@@ -3122,21 +3202,40 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			}
 		}
 
-		// Anything still not in updatedSet after the re-check is a genuine
-		// UtxoSpentError (row was concurrently spent by a DIFFERENT spender).
+		// Anything still not in updatedSet after the re-check is either frozen
+		// by a concurrent freeze or a genuine UtxoSpentError (row was
+		// concurrently spent by a DIFFERENT spender).
 		for _, u := range dedupedUpdate {
 			if !updatedSet[u.batchIdx] {
 				spend := batch[u.batchIdx].spend
+				if frozenSet[u.batchIdx] {
+					validationErrors[u.batchIdx] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
+					continue
+				}
 				validationErrors[u.batchIdx] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
 			}
 		}
 		// Mark idempotent duplicate batch entries as successful (same UTXO, same spending data).
 		// Double-spend duplicates (different spending data) are already in validationErrors — skip them.
+		// A duplicate whose first entry was refused (frozen, or spent by another tx) gets
+		// the same kind of error, so it is not reported as a spend that never happened.
+		// It gets its own error value: Spend() joins a tx's input errors in place, so a
+		// shared value would chain two callers' errors together.
 		for _, u := range toUpdate {
 			key := utxoKey{u.transactionID, u.vout}
 			if entry, ok := seenKeys[key]; ok && entry.batchIdx != u.batchIdx {
-				if bytes.Equal(entry.spendingData, u.spendingData) && updatedSet[entry.batchIdx] {
+				if !bytes.Equal(entry.spendingData, u.spendingData) {
+					continue
+				}
+				if updatedSet[entry.batchIdx] {
 					updatedSet[u.batchIdx] = true
+				} else if _, refused := validationErrors[entry.batchIdx]; refused {
+					spend := batch[u.batchIdx].spend
+					if frozenSet[entry.batchIdx] {
+						validationErrors[u.batchIdx] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
+					} else {
+						validationErrors[u.batchIdx] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
+					}
 				}
 			}
 		}
@@ -3256,13 +3355,27 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 		AND o.idx = $2
 	`
 
-	// Optimistic locking: spending_data IS NULL guard prevents concurrent double-spend
+	// Optimistic locking: spending_data IS NULL guard prevents concurrent double-spend.
+	// The frozen guard makes the write re-check a freeze that committed after q1 read
+	// the row: under READ COMMITTED Postgres re-evaluates this WHERE against the newest
+	// committed row, so the spend writes nothing instead of spending a frozen coin.
+	// transactions.frozen is only set when the row is created, so q1's read of it
+	// cannot go stale and needs no guard here.
 	q2 := `
 		UPDATE outputs
 		SET spending_data = $1
 		WHERE transaction_id = $2
 		AND idx = $3
 		AND spending_data IS NULL
+		AND frozen = false
+	`
+
+	// q3 reads the row again when q2 wrote nothing, to tell a freeze from a spend.
+	q3 := `
+		SELECT spending_data, frozen
+		FROM outputs
+		WHERE transaction_id = $1
+		AND idx = $2
 	`
 
 	successItems := make([]*batchSpend, 0, len(batch))
@@ -3309,7 +3422,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 
 		// Validate the UTXO state
 		if frozen {
-			validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+			validationErrors[i] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
 			continue
 		}
 
@@ -3357,6 +3470,10 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 			continue
 		}
 
+		if spendBeforeWrite != nil {
+			spendBeforeWrite()
+		}
+
 		// UPDATE outputs with optimistic locking
 		result, err := txn.ExecContext(ctx, q2, spend.SpendingData.Bytes(), transactionID, spend.Vout)
 		if err != nil {
@@ -3384,7 +3501,43 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 				spentParentIDs[transactionID] = struct{}{}
 				continue
 			}
-			// Concurrently spent by a different tx between SELECT and UPDATE.
+			// Frozen or spent by a different tx between SELECT and UPDATE. Read the
+			// row again, in a fresh statement snapshot, to say which.
+			if spendBeforeRecheck != nil {
+				spendBeforeRecheck()
+			}
+
+			var (
+				currentSpendingData []byte
+				currentFrozen       bool
+			)
+
+			if err = txn.QueryRowContext(ctx, q3, transactionID, spend.Vout).Scan(&currentSpendingData, &currentFrozen); err != nil {
+				// The output was deleted after q1 read it: fail this item only, as q1 does.
+				if errors.Is(err, sql.ErrNoRows) {
+					validationErrors[i] = errors.NewTxNotFoundError(errOutputNotFound, spend.TxID, spend.Vout)
+					continue
+				}
+				if isDeadlock(err) {
+					return true // retryable
+				}
+				item.errCh <- errors.NewStorageError("[Spend] failed: re-reading output %s:%d", spend.TxID, spend.Vout, err)
+				aborted = true
+				continue
+			}
+
+			if len(currentSpendingData) == 0 {
+				if currentFrozen {
+					validationErrors[i] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
+					continue
+				}
+
+				// A freeze made the write miss and was lifted before this read, so the
+				// coin is unspent and spendable again. Reporting it spent would mark the
+				// spending tx as conflicting, so retry the batch instead.
+				return true
+			}
+
 			// spendingDataBytes was NULL from SELECT (WHERE spending_data IS NULL),
 			// so we don't have the actual conflicting spender — use current spend data.
 			validationErrors[i] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
@@ -3490,6 +3643,16 @@ func flooredDAHSQL(txIDExpr, newDAHExpr string, retention uint32) string {
 // setDAHBeforeWrite runs between the eligibility read and the write in setDAH. It is nil
 // outside tests, which use it to interleave a competing writer.
 var setDAHBeforeWrite func()
+
+// spendBeforeWrite runs in both spend paths after the outputs have been read and
+// checked and before the spend is written. It is nil outside tests, which use it to
+// commit a freeze inside that gap.
+var spendBeforeWrite func()
+
+// spendBeforeRecheck runs in both spend paths after a guarded write missed a row and
+// before the row is read again. It is nil outside tests, which use it to undo a freeze
+// inside that gap.
+var spendBeforeRecheck func()
 
 // setDAHAfterLock runs in setDAH right after the Postgres row lock is taken and before
 // the eligibility read. It is nil outside tests, which use it to observe lock order and

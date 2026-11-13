@@ -119,7 +119,7 @@ func TestReset_StaleErrorBeforeResetDoesNotRequestReset(t *testing.T) {
 }
 
 // reset's currentTxMap.Clear() + Length()==0 check runs before
-// closeChainedSubtrees and before currentSubtree is replaced: a failed
+// the chained subtrees are retired and before currentSubtree is replaced: a failed
 // rotation must leave STP fully intact - still on the pre-reset header,
 // chainedSubtrees and currentSubtree - rather than committed to an empty
 // template on top of a still-populated, stale map.
@@ -195,7 +195,7 @@ func TestReset_FailedTxMapClearLeavesSTPFullyIntact(t *testing.T) {
 	require.Equal(t, before+1, after, "a rotation failure must be counted distinctly from the generic post-commit path")
 
 	require.Same(t, originalCurrentSubtree, stp.currentSubtree.Load(), "currentSubtree must be untouched: reset must fail before replacing it")
-	require.Equal(t, originalChainedLen, len(stp.chainedSubtrees), "chainedSubtrees must be untouched: closeChainedSubtrees must never run")
+	require.Equal(t, originalChainedLen, len(stp.chainedSubtrees), "chainedSubtrees must be untouched: reset must fail before retiring them")
 	require.Equal(t, originalHeader.Hash(), stp.currentBlockHeader.Load().Hash(), "header must be untouched")
 }
 

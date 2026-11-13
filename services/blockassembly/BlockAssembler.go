@@ -2,6 +2,7 @@
 package blockassembly
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/binary"
@@ -178,6 +179,10 @@ type BlockAssembler struct {
 	// occupies a slot exactly once (see mtpFloor)
 	mtpFloorFlight singleflight.Group
 
+	// heldParents remembers the last parents whose emergency-difficulty hold was logged, so the hold
+	// is logged once per parent whether or not the median-time-past floor was readable
+	heldParents heldParentLatch
+
 	// stateChangeCh notifies listeners of state changes
 	// Protected by stateChangeMu to prevent race conditions
 	stateChangeMu sync.RWMutex
@@ -329,6 +334,10 @@ type BlockAssembler struct {
 	// then handed to subtreeProcessor.DrainQueue. Serialized by
 	// unminedTransactionsLoading; must not be touched concurrently.
 	unminedDropHashes map[chainhash.Hash]struct{}
+
+	// conflictWALRead paces the retries of a failed startup read of the conflict WAL. The zero
+	// value uses the defaults; tests shorten it.
+	conflictWALRead conflictWALReadBackoff
 
 	// wg tracks background goroutines for clean shutdown
 	wg sync.WaitGroup
@@ -1992,6 +2001,60 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	return nil
 }
 
+// Defaults of conflictWALReadBackoff. The read is retried for conflictWALReadBudget: long enough to
+// ride out a storage cluster that is slow while every service starts at once, short enough that a
+// store that keeps failing still stops Block Assembly with the store's error.
+const (
+	conflictWALReadInitialBackoff = time.Second
+	conflictWALReadMaxBackoff     = 30 * time.Second
+	conflictWALReadBudget         = 10 * time.Minute
+)
+
+// conflictWALReadBackoff paces the retries of a startup read of the conflict WAL. A zero field
+// takes its default.
+type conflictWALReadBackoff struct {
+	initial time.Duration
+	max     time.Duration
+	budget  time.Duration
+}
+
+// pendingConflictIntents reads the conflict WAL for startup. A failed read is retried with
+// exponential backoff until the budget runs out or ctx ends, so a transient storage error delays
+// Block Assembly startup instead of failing it. Every error is retried: a permanent one, such as a
+// corrupt record, still fails startup, once the budget is spent. No new attempt starts after the
+// budget, but one already running is bounded only by the store's own timeouts and ctx.
+func (b *BlockAssembler) pendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
+	backoff := cmp.Or(b.conflictWALRead.initial, conflictWALReadInitialBackoff)
+	maxBackoff := cmp.Or(b.conflictWALRead.max, conflictWALReadMaxBackoff)
+	budget := cmp.Or(b.conflictWALRead.budget, conflictWALReadBudget)
+	deadline := time.Now().Add(budget)
+
+	for attempt := 1; ; attempt++ {
+		intents, err := b.utxoStore.PendingConflictIntents(ctx)
+		if err == nil {
+			return intents, nil
+		}
+
+		if ctx.Err() != nil {
+			return nil, err
+		}
+
+		if time.Now().Add(backoff).After(deadline) {
+			return nil, errors.NewStorageError("[BlockAssembler] could not read the conflict WAL in %d attempt(s) over %s", attempt, budget, err)
+		}
+
+		b.logger.Warnf("[BlockAssembler] reading the conflict WAL failed (attempt %d), retrying in %s: %v", attempt, backoff, err)
+
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(backoff):
+		}
+
+		backoff = retry.CappedExponentialBackoff(backoff, 2, maxBackoff)
+	}
+}
+
 // replayPendingConflictIntents drives crash recovery for the conflict-resolution
 // WAL (#861). It loads every intent that a previous process began but never
 // completed (interrupted ProcessConflicting / ReverseProcessConflicting), and
@@ -2014,7 +2077,7 @@ func (b *BlockAssembler) replayPendingConflictIntents(ctx context.Context) (fail
 		return failed
 	}
 
-	intents, err := b.utxoStore.PendingConflictIntents(ctx)
+	intents, err := b.pendingConflictIntents(ctx)
 	if err != nil {
 		// Distinct from per-intent "failure": this is a failure to read the WAL at
 		// all, not a replay attempt — keep the two apart on dashboards/alerts.
@@ -2047,7 +2110,7 @@ func (b *BlockAssembler) replayPendingConflictIntents(ctx context.Context) (fail
 	}
 
 	if len(forwards) > 0 && len(forwards) < len(intents) {
-		pending, err := b.utxoStore.PendingConflictIntents(ctx)
+		pending, err := b.pendingConflictIntents(ctx)
 		if err != nil {
 			prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("load_error").Inc()
 			b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] failed to re-read pending conflict intents after the reverse intents: %v", err)
@@ -2242,6 +2305,18 @@ func (b *BlockAssembler) conflictIntentRefusalHandler(blockHash chainhash.Hash) 
 	)
 }
 
+// conflictIntentConfirmedLoserHandler logs a losing transaction that WAL replay did not demote
+// because it is mined on the current chain. #2071 was this shape: a replay demoted the winner's own
+// mined descendants and the pruner deleted them. The block is not queued for invalidation.
+func (b *BlockAssembler) conflictIntentConfirmedLoserHandler(blockHash chainhash.Hash) utxo.ProcessConflictingOption {
+	return utxo.WithConfirmedLoserHandler(
+		func(loser chainhash.Hash) {
+			b.logger.Errorf("[replayPendingConflictIntents][%s] REFUSED to demote transaction %s during WAL replay: it is mined on the current chain, so it cannot lose to that block",
+				blockHash.String(), loser.String())
+		},
+	)
+}
+
 // drainPendingInvalidations invalidates any block whose conflict resolution was
 // refused because it would have reversed a confirmed spend. Called after block
 // movement has completed, never during it: InvalidateBlock re-enters the
@@ -2316,6 +2391,7 @@ func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.C
 func (b *BlockAssembler) processConflictingAndEvict(ctx context.Context, intent utxo.ConflictIntent, winners []chainhash.Hash) error {
 	_, allMarkedConflicting, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, winners, nil,
 		utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash), utxo.WithDeferredConflictCompletion(), utxo.WithRecoveryChainGuard(b.currentChainGuard()),
+		b.conflictIntentConfirmedLoserHandler(intent.BlockHash),
 		utxo.WithConflictEvictor(b.txMetaEvictor.Evict))
 
 	b.txMetaEvictor.Evict(allMarkedConflicting)
@@ -4364,11 +4440,6 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 						}
 					}
 
-					if !b.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
-						// clear the TxInpoints to save memory if we are not using subtree meta
-						clearUnminedTxInpoints(unminedTransaction)
-					}
-
 					localResult.unminedTxs = append(localResult.unminedTxs, unminedTransaction)
 
 					if unminedTransaction.Locked {
@@ -4626,18 +4697,6 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 	}
 
 	return nil
-}
-
-// clearUnminedTxInpoints empties a reloaded transaction's inpoints in place.
-// Every store iterator allocates inpoints per transaction, so resetting the
-// existing value is safe and avoids retaining a second object per transaction.
-func clearUnminedTxInpoints(tx *utxo.UnminedTransaction) {
-	if tx.TxInpoints == nil {
-		tx.TxInpoints = &subtree.TxInpoints{}
-		return
-	}
-
-	*tx.TxInpoints = subtree.TxInpoints{}
 }
 
 // validateLoadedUnminedTxs checks the inputs of every loaded transaction, with workers
@@ -5289,12 +5348,12 @@ func unminedSortDirs(paths []string) []string {
 // to the subtree processor in batches. isReload is as in
 // loadUnminedTransactionsWithDiskSort.
 func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedTxIterator, bestBlockHeaderIDsMap map[uint32]bool, isReload bool) error {
-	storeTxInpoints := b.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta
-
+	// the inpoints go through the sort in every mode: block assembly keeps each tx's parent links
+	// whatever blockassembly_storeTxInpointsForSubtreeMeta says
 	sorter, err := unminedsort.New(unminedsort.Options{
 		Dirs:          unminedSortDirs(b.settings.BlockAssembly.UnminedTxDiskSortPaths),
 		BufferRecords: b.settings.BlockAssembly.UnminedTxSortBufferRecords,
-		WithInpoints:  storeTxInpoints,
+		WithInpoints:  true,
 	})
 	if err != nil {
 		return errors.NewProcessingError("error creating unmined transaction sorter", err)
@@ -5410,9 +5469,7 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 
 		// Drain never splits an equal-CreatedAt group across batches, so the
 		// parents-first tiebreak sees every member of a group.
-		if storeTxInpoints {
-			orderEqualCreatedAtRunsParentsFirst(batch)
-		}
+		orderEqualCreatedAtRunsParentsFirst(batch)
 
 		var addErr error
 		if isReload {
@@ -5467,7 +5524,7 @@ func (b *BlockAssembler) checkConflictRecoveryReady(ctx context.Context, replayF
 		return nil
 	}
 
-	intents, err := b.utxoStore.PendingConflictIntents(ctx)
+	intents, err := b.pendingConflictIntents(ctx)
 	if err != nil {
 		return err
 	}
@@ -5500,7 +5557,7 @@ func (b *BlockAssembler) prepareRecoveredConflictUpdates(ctx context.Context) ([
 		return nil, nil
 	}
 
-	intents, err := b.utxoStore.PendingConflictIntents(ctx)
+	intents, err := b.pendingConflictIntents(ctx)
 	if err != nil {
 		return nil, err
 	}

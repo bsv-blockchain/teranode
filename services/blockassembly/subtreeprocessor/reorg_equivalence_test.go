@@ -678,13 +678,16 @@ func runPartialFailureReorg(t *testing.T) partialFailureReorg {
 }
 
 // TestReorg_PartialFailureKeepsTipAndMempool: a reorg that fails half way MUST leave
-// the best-block reference unchanged, and the rollback must restore the pre-reorg
-// subtrees: txA and txB back in the current subtree, and txBack (which the move-back
-// rebuild put there) gone from it.
+// the best-block reference unchanged, and MUST leave the tx map consistent with the
+// subtrees it leaves in place.
 //
-// Spec: BA-REORG-007. That the rollback also restores the tx map's content is a
-// separate, still-open gap: TestKnownDefect_PartialFailureRollbackLeavesMovedBackTx
-// (build tag bagaps).
+// A failed fork reorg keeps the state of its last completed step, here the move-back:
+// txA and txB from the pre-reorg mempool, and txBack, which the move-back added to
+// both the subtrees and the map. It no longer puts back the pre-reorg subtrees, whose
+// map the move-back had already written txBack into, so the two now agree. Only a
+// reset may run next (failedForkReorgNeedsReset), and its sweep reads these subtrees.
+//
+// Spec: BA-REORG-007.
 func TestReorg_PartialFailureKeepsTipAndMempool(t *testing.T) {
 	r := runPartialFailureReorg(t)
 
@@ -693,13 +696,12 @@ func TestReorg_PartialFailureKeepsTipAndMempool(t *testing.T) {
 	require.Equal(t, r.preReorgTip, r.stp.GetCurrentBlockHeader().Hash().String(),
 		"best-block reference must roll back to the pre-reorg tip after a partial failure")
 
-	// The move-back adds to the tx map in place and never removes txA or txB, so the
-	// map alone cannot tell a restored rollback from a missing one. The current
-	// subtree can: the move-back rebuild puts txBack in it, the rollback takes it out.
-	require.True(t, currentSubtreeContains(r.stp, r.txA), "pre-reorg tx must be back in the current subtree")
-	require.True(t, currentSubtreeContains(r.stp, r.txB), "pre-reorg tx must be back in the current subtree")
-	require.False(t, currentSubtreeContains(r.stp, r.txBack),
-		"the move-back-only tx must not be in the restored current subtree")
+	require.True(t, currentSubtreeContains(r.stp, r.txA), "the pre-reorg mempool must still be in the subtrees")
+	require.True(t, currentSubtreeContains(r.stp, r.txB), "the pre-reorg mempool must still be in the subtrees")
+	require.True(t, currentSubtreeContains(r.stp, r.txBack), "the move-back's output is kept, with txBack in it")
+	require.True(t, r.stp.GetCurrentTxMap().Exists(r.txBack), "and txBack is in the map as well")
+
+	require.NoError(t, r.stp.CheckSubtreeProcessor(), "the tx map must agree with the subtrees after a partial failure")
 }
 
 // requireFailedAfterMoveBack asserts the reorg failed where runPartialFailureReorg

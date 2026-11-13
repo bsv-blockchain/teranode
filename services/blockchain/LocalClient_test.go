@@ -446,13 +446,6 @@ func TestLocalClient_NilStorePanics(t *testing.T) {
 			},
 		},
 		{
-			name: "GetBlockHeadersFromTill",
-			fn: func() {
-				blockHashTill := chainhash.HashH([]byte("till"))
-				_, _, _ = client.GetBlockHeadersFromTill(ctx, &blockHash, &blockHashTill)
-			},
-		},
-		{
 			name: "CheckBlockIsInCurrentChain",
 			fn: func() {
 				_, _ = client.CheckBlockIsInCurrentChain(ctx, []uint32{1, 2, 3})

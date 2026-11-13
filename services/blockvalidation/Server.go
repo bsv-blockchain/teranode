@@ -454,11 +454,6 @@ func New(
 	fm := NewForkManager(logger, tSettings)
 	fm.SetPriorityQueue(pq)
 
-	// Register fork resolution callback
-	fm.OnForkResolution(func(resolution *ForkResolution) {
-		logger.Infof("Fork %s resolved to %s at height %d with %d blocks", resolution.ForkID, resolution.ResolvedTo, resolution.FinalHeight, resolution.BlocksInFork)
-	})
-
 	// Construct adaptive-fetch state machine. The gate decides whether to
 	// pre-fetch subtreeData during catchup or skip it because the tx
 	// distributor is keeping our UTXO store up to date. Transitions are
@@ -1750,9 +1745,9 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block.Height = height
 
-	// If a block ID was pre-assigned by the caller (e.g. legacy netsync during catch-up),
-	// apply it so the validation path can use AddBlock(WithID, WithMinedSet(true)) and allow
-	// the setMinedChan worker to skip setTxMinedStatus via the existing MinedSet guard.
+	// A caller-supplied block ID is applied so the block is stored under it. It does not
+	// mark the block mined: full validation still has the setMinedChan worker tag the
+	// transactions (buildAddBlockOpts). Legacy netsync sends 0 on every route.
 	if request.BlockId != 0 {
 		block.ID = request.BlockId
 	}

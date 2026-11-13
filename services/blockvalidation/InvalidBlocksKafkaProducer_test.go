@@ -191,21 +191,6 @@ func (m *MockBlockchainClient) GetBlockHeadersFromHeight(ctx context.Context, he
 	return args.Get(0).([]*model.BlockHeader), meta, args.Error(2)
 }
 
-// GetBlockHeadersFromTill implements the blockchain.ClientI interface
-func (m *MockBlockchainClient) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	args := m.Called(ctx, blockHashFrom, blockHashTill)
-	if args.Get(0) == nil {
-		return nil, nil, args.Error(2)
-	}
-
-	var meta []*model.BlockHeaderMeta
-	if args.Get(1) != nil {
-		meta = args.Get(1).([]*model.BlockHeaderMeta)
-	}
-
-	return args.Get(0).([]*model.BlockHeader), meta, args.Error(2)
-}
-
 // GetBlockHeadersToCommonAncestor implements the blockchain.ClientI interface
 func (m *MockBlockchainClient) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	args := m.Called(ctx, hashTarget, blockLocatorHashes, maxHeaders)
