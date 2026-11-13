@@ -3627,8 +3627,11 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 //
 // Cost: for a stored block, one recursive query over the stored blocks between the checkpoint and
 // b, up to the checkpoint height in rows; a query for a pinned hash that is not stored returns at
-// once. Only a block already in the blockchain store pays it: revalidation, reconsiderblock, and
-// the opt-in optimistic peer path, which stores a block before validating it.
+// once. Only a block already in the blockchain store pays it: revalidation, reconsiderblock, the
+// gRPC ValidateBlock path run on a stored block (cmd/checkblock), and the opt-in optimistic peer
+// path, which stores a block before validating it. The walk grows with the block's age: an early
+// mainnet block walks close to the checkpoint height in rows, where the old check made two
+// indexed lookups.
 func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *model.Block) bool {
 	// The below-checkpoint no-inflation skip requires store fast-path support too, so the
 	// ancestry predicate cannot change the outcome on a store that never produces fee=0

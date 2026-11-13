@@ -2195,8 +2195,11 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	// (HandleConvertedBlock), so this is reached only by the cache-replace race, a direct RPC,
 	// or a netsync whose route flags disagree with this service's. A ServiceError, which
 	// netsync's park reads as retry later: the record is kept and offered again once the header
-	// walk proves it.
+	// walk proves it. Logged at Warn because a stream of these is the one sign on this side
+	// that netsync's route flags disagree with this service's.
 	if !headerProven && u.legacyUnifiedEligible(block, baseURL) {
+		u.logger.Warnf("[processBlockFound][%s] legacy block at height %d is eligible for the unified route but carries no header proof; refusing it as retry-later (at volume, check that legacy and block validation agree on the route settings)", hash.String(), block.Height)
+
 		return errors.NewServiceError("[processBlockFound][%s] legacy block at height %d is eligible for the unified route but carries no header proof; retrying once the header walk has proven it", hash.String(), block.Height)
 	}
 
