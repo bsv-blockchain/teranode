@@ -53,11 +53,8 @@ func TestSpendAbsorbsBlessedNotFound(t *testing.T) {
 	require.True(t, errors.Is(err, errors.ErrTxNotFound), "got %v", err)
 }
 
-// TestUnspendClearsLockWhenAsked pins the tri-state flagAsLocked contract.
-// ProcessConflicting locks affected parents with true and
-// ReverseProcessConflicting unlocks them with false; collapsing that to "set or
-// do nothing" left a reorg's demoted parents locked forever, and every later
-// spend of them failed TX_LOCKED.
+// TestUnspendClearsLockWhenAsked pins the tri-state flagAsLocked contract:
+// absent leaves the locked flag alone, true sets it, false clears it.
 func TestUnspendClearsLockWhenAsked(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
@@ -70,7 +67,7 @@ func TestUnspendClearsLockWhenAsked(t *testing.T) {
 	spends, err := store.Spend(ctx, spendTx, 101)
 	require.NoError(t, err)
 
-	// Lock on the way in, as ProcessConflicting does.
+	// Lock on the way in.
 	require.NoError(t, store.Unspend(ctx, spends, true))
 
 	m, err := store.getMaster(parent.TxIDChainHash())
@@ -81,7 +78,7 @@ func TestUnspendClearsLockWhenAsked(t *testing.T) {
 	_, err = store.Spend(ctx, newSpendingTx(t, parent, 0), 102)
 	require.Error(t, err)
 
-	// Unlock on the way back out, as ReverseProcessConflicting does.
+	// Unlock on the way back out.
 	spends2, err := store.Spend(ctx, spendTx, 102, utxo.IgnoreFlags{IgnoreLocked: true})
 	require.NoError(t, err)
 

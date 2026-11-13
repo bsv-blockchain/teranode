@@ -47,6 +47,12 @@ func TestConformance(t *testing.T) {
 	t.Run("conflicting", func(t *testing.T) { tests.Conflicting(t, newTestStore(t)) })
 	t.Run("conflict WAL", func(t *testing.T) { tests.ConflictWAL(t, newTestStore(t)) })
 	t.Run("conflict WAL crash recovery", func(t *testing.T) { tests.ConflictWALCrashRecovery(t, newTestStore(t)) })
+	t.Run("conflict recovery reverse then readd", func(t *testing.T) {
+		tests.ConflictRecoveryReverseThenReadd(t, newTestStore(t))
+	})
+	t.Run("conflict recovery reverse keeps foreign lock", func(t *testing.T) {
+		tests.ConflictRecoveryReverseKeepsForeignLock(t, newTestStore(t))
+	})
 	t.Run("unspend idempotent", func(t *testing.T) { tests.UnspendIdempotent(t, newTestStore(t)) })
 	t.Run("spend error types", func(t *testing.T) { tests.SpendErrorTypes(t, newTestStore(t)) })
 	t.Run("get spend not found", func(t *testing.T) { tests.GetSpendNotFound(t, newTestStore(t)) })

@@ -84,6 +84,8 @@ import (
 // Parameters:
 //   - ctx: Context for cancellation
 //   - spends: Array of UTXOs to unspend
+//   - flagAsLocked: ignored. The unspend UDF never changes the locked flag,
+//     which setMined clears, and no caller in teranode passes it.
 //
 // Returns error if:
 //   - Context is cancelled
