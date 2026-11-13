@@ -203,18 +203,21 @@ func (z *ZLoggerWrapper) New(service string, options ...Option) Logger {
 func (z *ZLoggerWrapper) Duplicate(options ...Option) Logger {
 	newLogger := &ZLoggerWrapper{z.Logger, z.service, z.w, z.skipFrame, z.jsonLogger}
 
-	defaultOpts := DefaultOptions()
-	opts := DefaultOptions()
+	if len(options) == 0 {
+		return newLogger
+	}
+
+	opts := defaultOptions()
 
 	for _, o := range options {
 		o(opts)
 	}
 
-	if opts.logLevel != defaultOpts.logLevel {
+	if opts.logLevel != defaultLogLevel {
 		newLogger.SetLogLevel(opts.logLevel)
 	}
 
-	if opts.skip != defaultOpts.skip {
+	if opts.skip != 0 {
 		newLogger.skipFrame = opts.skip
 	}
 
@@ -259,6 +262,14 @@ func (z *ZLoggerWrapper) LogLevel() int {
 	default:
 		return int(gocore.INFO)
 	}
+}
+
+// DebugEnabled reports whether either output accepts debug messages. Unlike
+// LogLevel, this includes trace-level loggers, the global threshold and JSON output.
+func (z *ZLoggerWrapper) DebugEnabled() bool {
+	return zerolog.GlobalLevel() <= zerolog.DebugLevel &&
+		(z.Logger.GetLevel() <= zerolog.DebugLevel ||
+			(z.jsonLogger != nil && z.jsonLogger.GetLevel() <= zerolog.DebugLevel))
 }
 
 func (z *ZLoggerWrapper) Debugf(format string, args ...interface{}) {

@@ -44,18 +44,21 @@ func (g *GoCoreLogger) New(service string, options ...Option) Logger {
 func (g *GoCoreLogger) Duplicate(options ...Option) Logger {
 	newLogger := &GoCoreLogger{g.Logger, g.skipFrame}
 
-	defaultOpts := DefaultOptions()
-	opts := DefaultOptions()
+	if len(options) == 0 {
+		return newLogger
+	}
+
+	opts := defaultOptions()
 
 	for _, o := range options {
 		o(opts)
 	}
 
-	if opts.logLevel != defaultOpts.logLevel {
+	if opts.logLevel != defaultLogLevel {
 		newLogger.SetLogLevel(opts.logLevel)
 	}
 
-	if opts.skip != defaultOpts.skip {
+	if opts.skip != 0 {
 		newLogger.skipFrame = opts.skip
 	}
 
