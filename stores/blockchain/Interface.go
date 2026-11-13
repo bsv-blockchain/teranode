@@ -30,7 +30,6 @@ package blockchain
 
 import (
 	"context"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
@@ -227,6 +226,13 @@ type Store interface {
 	// Returns: BlockHeader, BlockHeaderMeta, and any error encountered
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 
+	// GetBestBlockHeaderUncached is GetBestBlockHeader with the response cache left out on both
+	// sides: it neither reads the cache nor fills it, and the meta carries the block id. A block
+	// store clears the cache only after its own commit, so the cached call can be one block
+	// stale. The pruner's stamp reads the tip between every store call of a drain and writes
+	// the height into a permanent completion record, so it takes this call.
+	GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
+
 	// GetBlockHeader retrieves a block header by its hash.
 	// Parameters:
 	//   - ctx: Context for the operation
@@ -242,21 +248,16 @@ type Store interface {
 	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error encountered
 	GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
-	// GetBlockHeadersFromTill retrieves block headers between two blocks.
-	// Parameters:
-	//   - ctx: Context for the operation
-	//   - blockHashFrom: Starting block hash
-	//   - blockHashTill: Ending block hash
-	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error encountered
-	GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-
-	// GetForkedBlockHeaders retrieves headers of forked blocks.
+	// GetBlockHeadersByParentLinks retrieves up to numberOfHeaders headers by walking parent links
+	// back from blockHash, newest first. Unlike GetBlockHeaders it never selects rows by the
+	// on_main_chain flag and never consults or fills a cache, so a stale flag cannot change its
+	// answer and a caller that proves the result by hash linkage proves the chain itself.
 	// Parameters:
 	//   - ctx: Context for the operation
 	//   - blockHash: Starting block hash
 	//   - numberOfHeaders: Number of headers to retrieve
 	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error encountered
-	GetForkedBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+	GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
 	// GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
 	// Parameters:
@@ -265,6 +266,23 @@ type Store interface {
 	//   - limit: Maximum number of headers to retrieve
 	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error encountered
 	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+
+	// BlocksBetterThan returns the valid blocks that sort better than after in the order the
+	// best tip is picked by (chain_work DESC, peer_id ASC, id ASC), worst first. When from is not
+	// nil it also returns the valid blocks that sort better than or level with from.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - after: Return blocks that sort better than this
+	//   - from: Optional; also return blocks that sort better than or level with this
+	//   - minHeight: Skip blocks below this height
+	//   - limit: Maximum number of blocks to return
+	// Returns: BlockHeaders and BlockHeaderMetas of the same length, and any error encountered
+	BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+
+	// ClearBestTipLowWater deletes the best tip's low-water mark (state key
+	// model.BestTipLowWaterStateKey) if it still holds expected. A drop recorded after the
+	// caller read the mark changes it, and the delete is then a no-op.
+	ClearBestTipLowWater(ctx context.Context, expected []byte) error
 
 	// GetBlockHeadersByHeight retrieves block headers between two heights.
 	// Parameters:
@@ -404,14 +422,6 @@ type Store interface {
 	//   - ctx: Context for the operation
 	// Returns: Slice of blocks with unprocessed subtrees and any error encountered
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
-
-	// GetBlocksByTime retrieves blocks within a specified time range.
-	// Parameters:
-	//   - ctx: Context for the operation
-	//   - fromTime: Start time
-	//   - toTime: End time
-	// Returns: Slice of block data and any error encountered
-	GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error)
 
 	// CheckBlockIsInCurrentChain checks if blocks are in the current chain.
 	// Parameters:

@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-wire"
+	terrors "github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/legacy"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
@@ -1646,4 +1647,463 @@ func TestPeerRequeueInventory(t *testing.T) {
 
 	outPeer.RequeueInventory(iv)
 	expectInv("second RequeueInventory did not re-send the known inv")
+}
+
+// blockStreamingPair connects two peers with the streaming block path installed
+// and the given gate, and returns the receiving peer plus a channel of pings it
+// receives. The sink accepts everything.
+func blockStreamingPair(t *testing.T, gate func(chainhash.Hash, *wire.BlockHeader, uint64) error) (sender, receiver *peer.Peer, pings chan struct{}) {
+	t.Helper()
+
+	return blockStreamingPairWithSink(t, gate,
+		func(chainhash.Hash, *wire.BlockHeader, io.Reader, int64) (bool, error) { return true, nil },
+		peer.MessageListeners{})
+}
+
+// blockStreamingPairWithSink is blockStreamingPair with the sink chosen by the
+// caller and extra listeners merged into both peers' configs (the two share one
+// config, so a listener set here fires on whichever side the message reaches).
+func blockStreamingPairWithSink(t *testing.T, gate func(chainhash.Hash, *wire.BlockHeader, uint64) error,
+	sink func(chainhash.Hash, *wire.BlockHeader, io.Reader, int64) (bool, error), extra peer.MessageListeners,
+) (sender, receiver *peer.Peer, pings chan struct{}) {
+	t.Helper()
+
+	peer.RegisterStreamingBlockHandler()
+	peer.SetBlockBodyStreaming(sink, gate, func(chainhash.Hash, bool) error { return nil })
+
+	verack := make(chan struct{}, 2)
+	pings = make(chan struct{}, 1)
+
+	extra.OnVerAck = func(*peer.Peer, *wire.MsgVerAck) { verack <- struct{}{} }
+	extra.OnPing = func(*peer.Peer, *wire.MsgPing) { pings <- struct{}{} }
+
+	cfg := &peer.Config{
+		Listeners:              extra,
+		UserAgentName:          "peer",
+		UserAgentVersion:       "1.0",
+		ChainParams:            &chaincfg.MainNetParams,
+		TstAllowSelfConnection: true,
+	}
+
+	inConn, outConn := pipe(
+		&conn{laddr: "10.0.0.1:9108", raddr: "10.0.0.2:9108"},
+		&conn{laddr: "10.0.0.2:9108", raddr: "10.0.0.1:9108"},
+	)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	sender, err := peer.NewOutboundPeer(ulogger.TestLogger{}, tSettings, cfg, inConn.laddr)
+	require.NoError(t, err)
+	sender.AssociateConnection(outConn)
+
+	receiver = peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, cfg)
+	receiver.AssociateConnection(inConn)
+
+	// The streaming hooks are package globals, so they are cleared only once
+	// both peers have stopped reading, or the next test's install races this
+	// test's read loops.
+	t.Cleanup(func() {
+		sender.DisconnectWithInfo("test done")
+		receiver.DisconnectWithInfo("test done")
+		sender.WaitForDisconnect()
+		receiver.WaitForDisconnect()
+		peer.SetBlockBodyStreaming(nil, nil, nil)
+	})
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-verack:
+		case <-time.After(time.Second):
+			t.Fatal("verack timeout")
+		}
+	}
+
+	return sender, receiver, pings
+}
+
+// streamingTestBlock is a one-transaction block, enough for the streaming path
+// to read a header and a body.
+func streamingTestBlock() *wire.MsgBlock {
+	prev := chainhash.Hash{0x01}
+	merkle := chainhash.Hash{0x02}
+	block := wire.NewMsgBlock(wire.NewBlockHeader(1, &prev, &merkle, 0x1d00ffff, 0))
+
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 0xffffffff}, SignatureScript: []byte{0x00}, Sequence: 0xffffffff})
+	tx.AddTxOut(&wire.TxOut{Value: 1, PkScript: []byte{0x51}})
+	_ = block.AddTransaction(tx)
+
+	return block
+}
+
+// TestPeer_AnUnrequestedBlockKeepsTheConnection pins SV Node's rule end to end:
+// a peer that sends a block this node did not ask for stays connected, and the
+// next message on the same connection is read and handled.
+func TestPeer_AnUnrequestedBlockKeepsTheConnection(t *testing.T) {
+	sender, receiver, pings := blockStreamingPair(t, func(hash chainhash.Hash, _ *wire.BlockHeader, _ uint64) error {
+		return &peer.BlockNotRequestedError{Hash: hash}
+	})
+
+	sender.QueueMessage(streamingTestBlock(), nil)
+	sender.QueueMessage(wire.NewMsgPing(42), nil)
+
+	select {
+	case <-pings:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the message after the unrequested block was never handled")
+	}
+
+	require.True(t, receiver.Connected(), "a peer must not be disconnected for a block this node did not ask for")
+}
+
+// TestPeer_AForgedBlockStillDisconnects keeps every other refusal what it was: a
+// header that fails the gate for any reason but "not asked for" is the peer's
+// doing, and the peer is disconnected.
+func TestPeer_AForgedBlockStillDisconnects(t *testing.T) {
+	sender, receiver, _ := blockStreamingPair(t, func(chainhash.Hash, *wire.BlockHeader, uint64) error {
+		return errors.New("declared target is easier than the chain limit")
+	})
+
+	sender.QueueMessage(streamingTestBlock(), nil)
+
+	disconnected := make(chan struct{})
+	go func() {
+		receiver.WaitForDisconnect()
+		close(disconnected)
+	}()
+
+	select {
+	case <-disconnected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a peer sending a forged block must be disconnected")
+	}
+}
+
+// TestPeer_ARejectedBodyAtTheReadLoopDropsTheAssociationPrimary pins the read
+// loop's own half of a sink refusal, with a fake sink returning the real error
+// class (TestPipelineSink_RejectsAWrongMerkleRoot in netsync pins that the real
+// sink returns it): the receiver is a DATA1 sub-peer of an association whose
+// primary is a separate peer, as every block body arrives under the default
+// legacy_allowBlockPriority. End state: the primary is disconnected, so is the
+// sub-peer, the OnBlockBodyRejected listener was handed the block's hash with
+// the sink's error, and the sender received a reject for command block, code
+// invalid, naming the hash, not the "malformed" reject every other read error
+// earns. The second subtest has no listener set and the two disconnects still
+// happen. The end-to-end version over the real sink and a real ledger is
+// TestPeer_ARejectedBodyDropsTheAssociationPrimary in netsync.
+func TestPeer_ARejectedBodyAtTheReadLoopDropsTheAssociationPrimary(t *testing.T) {
+	block := streamingTestBlock()
+	hash := block.BlockHash()
+
+	disconnected := func(p *peer.Peer) bool {
+		done := make(chan struct{})
+
+		go func() {
+			p.WaitForDisconnect()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			return true
+		case <-time.After(2 * time.Second):
+			return false
+		}
+	}
+
+	refusingSink := func(chainhash.Hash, *wire.BlockHeader, io.Reader, int64) (bool, error) {
+		return false, terrors.NewBlockInvalidError("merkle root does not match header's", terrors.ErrBlockBodyMismatch)
+	}
+
+	newPrimary := func(t *testing.T, receiver *peer.Peer) *peer.Peer {
+		t.Helper()
+
+		primary := peer.NewInboundPeer(ulogger.TestLogger{}, test.CreateBaseTestSettings(t), &peer.Config{})
+		assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
+		primary.SetAssociation(assoc)
+		require.True(t, assoc.AddStream(wire.StreamTypeData1, receiver))
+		receiver.SetAssociation(assoc)
+		receiver.SetStreamType(wire.StreamTypeData1)
+
+		return primary
+	}
+
+	t.Run("with the listener set", func(t *testing.T) {
+		rejections := make(chan *peer.BlockBodyRejectedError, 1)
+		rejects := make(chan *wire.MsgReject, 1)
+
+		sender, receiver, _ := blockStreamingPairWithSink(t, func(chainhash.Hash, *wire.BlockHeader, uint64) error { return nil },
+			refusingSink, peer.MessageListeners{
+				OnBlockBodyRejected: func(_ *peer.Peer, rejected *peer.BlockBodyRejectedError) { rejections <- rejected },
+				OnReject:            func(_ *peer.Peer, msg *wire.MsgReject) { rejects <- msg },
+			})
+		primary := newPrimary(t, receiver)
+
+		sender.QueueMessage(block, nil)
+
+		require.True(t, disconnected(primary), "the association's primary must be disconnected, not only the stream the body came in on")
+		require.True(t, disconnected(receiver), "the sub-peer that carried the body must be disconnected")
+
+		select {
+		case rejected := <-rejections:
+			require.Equal(t, hash, rejected.Hash)
+			require.True(t, terrors.Is(rejected.Err, terrors.ErrBlockInvalid))
+			require.False(t, rejected.Truncated, "the whole body arrived")
+			require.True(t, rejected.MismatchInFull())
+			require.False(t, rejected.ProvenBad(), "the streaming path never verifies the wire checksum, so the read loop never hands over a ban")
+		case <-time.After(2 * time.Second):
+			t.Fatal("OnBlockBodyRejected was never invoked")
+		}
+
+		select {
+		case reject := <-rejects:
+			require.Equal(t, wire.CmdBlock, reject.Cmd, "the reject names the block command, not malformed")
+			require.Equal(t, wire.RejectInvalid, reject.Code)
+			require.Equal(t, hash, reject.Hash)
+		case <-time.After(2 * time.Second):
+			t.Fatal("the sender never received the reject")
+		}
+	})
+
+	t.Run("with no listener set", func(t *testing.T) {
+		sender, receiver, _ := blockStreamingPairWithSink(t, func(chainhash.Hash, *wire.BlockHeader, uint64) error { return nil },
+			refusingSink, peer.MessageListeners{})
+		primary := newPrimary(t, receiver)
+
+		sender.QueueMessage(block, nil)
+
+		require.True(t, disconnected(primary), "the primary is dropped whether or not anyone listens for the ban")
+		require.True(t, disconnected(receiver))
+	})
+}
+
+// deadlineConn is a net.Pipe end with fake addresses. Unlike the io.Pipe mock
+// above, net.Pipe honours write deadlines, which the send timeout relies on.
+type deadlineConn struct {
+	net.Conn
+	laddr, raddr string
+}
+
+func (c deadlineConn) LocalAddr() net.Addr  { return &addr{"tcp", c.laddr} }
+func (c deadlineConn) RemoteAddr() net.Addr { return &addr{"tcp", c.raddr} }
+
+// newSendTimeoutTestPeer completes a handshake between an outbound peer with
+// the given legacy_peerSendTimeout and a hand-driven remote, then stops reading
+// on the remote. It returns the peer and the remote end of the pipe; nothing
+// reads from the remote end until the caller does.
+func newSendTimeoutTestPeer(t *testing.T, sendTimeout time.Duration) (*peer.Peer, net.Conn) {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Legacy.PeerSendTimeout = sendTimeout
+
+	peerCfg := &peer.Config{
+		UserAgentName:          "peer",
+		UserAgentVersion:       "1.0",
+		ChainParams:            &chaincfg.MainNetParams,
+		TrickleInterval:        10 * time.Second,
+		TstAllowSelfConnection: true,
+	}
+
+	localEnd, remoteEnd := net.Pipe()
+	localConn := deadlineConn{Conn: localEnd, laddr: "10.0.0.1:8333", raddr: "10.0.0.2:8333"}
+
+	p, err := peer.NewOutboundPeer(ulogger.TestLogger{}, tSettings, peerCfg, "10.0.0.2:8333")
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		p.DisconnectWithInfo("test complete")
+		_ = remoteEnd.Close()
+	})
+
+	// Read until the peer's VERACK, then stop: everything the peer writes
+	// after that sits unread until the test reads it.
+	gotVerAck := make(chan error, 1)
+	go func() {
+		for {
+			_, msg, _, readErr := wire.ReadMessageN(remoteEnd, wire.ProtocolVersion, peerCfg.ChainParams.Net)
+			if readErr != nil {
+				gotVerAck <- readErr
+				return
+			}
+
+			if _, ok := msg.(*wire.MsgVerAck); ok {
+				gotVerAck <- nil
+				return
+			}
+		}
+	}()
+
+	p.AssociateConnection(localConn)
+
+	localNA := wire.NewNetAddressIPPort(net.ParseIP("10.0.0.1"), 8333, wire.SFNodeNetwork)
+	remoteNA := wire.NewNetAddressIPPort(net.ParseIP("10.0.0.2"), 8333, wire.SFNodeNetwork)
+	remoteVer := wire.NewMsgVersion(remoteNA, localNA, 0, 0)
+	remoteVer.ProtocolVersion = int32(wire.ProtocolVersion)
+
+	_, err = wire.WriteMessageN(remoteEnd, remoteVer, wire.ProtocolVersion, peerCfg.ChainParams.Net)
+	require.NoError(t, err)
+	_, err = wire.WriteMessageN(remoteEnd, wire.NewMsgVerAck(), wire.ProtocolVersion, peerCfg.ChainParams.Net)
+	require.NoError(t, err)
+
+	select {
+	case readErr := <-gotVerAck:
+		require.NoError(t, readErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("peer did not send VERACK")
+	}
+
+	return p, remoteEnd
+}
+
+// TestPeerSendTimeoutDisconnectsNonReadingPeer covers a peer that completes
+// the handshake and then never reads. Before the send timeout its socket write
+// blocked forever, so the peer was never dropped and its send queue grew
+// without bound. Now the write fails after legacy_peerSendTimeout and the peer
+// is disconnected, as SV Node does with its "socket sending timeout".
+func TestPeerSendTimeoutDisconnectsNonReadingPeer(t *testing.T) {
+	p, _ := newSendTimeoutTestPeer(t, 200*time.Millisecond)
+
+	p.QueueMessage(wire.NewMsgPing(1), nil)
+
+	disconnected := make(chan struct{})
+	go func() {
+		p.WaitForDisconnect()
+		close(disconnected)
+	}()
+
+	select {
+	case <-disconnected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a peer that stopped reading was not disconnected by the send timeout")
+	}
+
+	require.False(t, p.Connected())
+}
+
+// slowReader hands out at most readSize bytes per Read and sleeps before each
+// one, modelling a peer on a slow link that keeps reading.
+type slowReader struct {
+	r        io.Reader
+	readSize int
+	pause    time.Duration
+}
+
+func (s *slowReader) Read(b []byte) (int, error) {
+	time.Sleep(s.pause)
+
+	if len(b) > s.readSize {
+		b = b[:s.readSize]
+	}
+
+	return s.r.Read(b)
+}
+
+// TestPeerSendTimeoutKeepsSlowReadingPeer checks that the timeout counts
+// progress, not the whole message: a peer reading 16 KiB every 20 ms takes
+// over a second to receive a ~1 MB inv, five times the 200 ms send timeout,
+// yet the socket accepts bytes every 20 ms, so the peer stays up.
+func TestPeerSendTimeoutKeepsSlowReadingPeer(t *testing.T) {
+	const sendTimeout = 200 * time.Millisecond
+
+	p, remoteEnd := newSendTimeoutTestPeer(t, sendTimeout)
+
+	const invCount = 30000 // 30000 * 36 bytes is about 1 MB
+
+	invMsg := wire.NewMsgInvSizeHint(invCount)
+	for i := 0; i < invCount; i++ {
+		var hash chainhash.Hash
+		hash[0], hash[1], hash[2] = byte(i), byte(i>>8), byte(i>>16)
+		require.NoError(t, invMsg.AddInvVect(wire.NewInvVect(wire.InvTypeTx, &hash)))
+	}
+
+	sent := make(chan struct{}, 1)
+	p.QueueMessage(invMsg, sent)
+
+	reader := &slowReader{r: remoteEnd, readSize: 16 * 1024, pause: 20 * time.Millisecond}
+	start := time.Now()
+
+	for {
+		_, msg, _, err := wire.ReadMessageN(reader, wire.ProtocolVersion, chaincfg.MainNetParams.Net)
+		require.NoError(t, err, "peer was cut off while the remote was still reading")
+
+		if got, ok := msg.(*wire.MsgInv); ok && len(got.InvList) == invCount {
+			break
+		}
+	}
+
+	elapsed := time.Since(start)
+
+	select {
+	case <-sent:
+	case <-time.After(5 * time.Second):
+		t.Fatal("peer did not report the inv as sent")
+	}
+
+	require.Greater(t, elapsed, sendTimeout, "the transfer must outlast the timeout for this test to prove anything")
+	require.True(t, p.Connected(), "a slow peer that keeps reading must not be disconnected")
+}
+
+// TestPeerSendTimeoutDisconnectsPeerThatStopsMidMessage covers a peer that
+// reads the start of a large message and then stops. The socket accepted some
+// bytes, so the writer re-arms the deadline, but the next window accepts
+// nothing and the peer must still be disconnected.
+func TestPeerSendTimeoutDisconnectsPeerThatStopsMidMessage(t *testing.T) {
+	p, remoteEnd := newSendTimeoutTestPeer(t, 200*time.Millisecond)
+
+	const invCount = 30000 // 30000 * 36 bytes is about 1 MB, far more than one pipe read
+
+	invMsg := wire.NewMsgInvSizeHint(invCount)
+	for i := 0; i < invCount; i++ {
+		var hash chainhash.Hash
+		hash[0], hash[1], hash[2] = byte(i), byte(i>>8), byte(i>>16)
+		require.NoError(t, invMsg.AddInvVect(wire.NewInvVect(wire.InvTypeTx, &hash)))
+	}
+
+	p.QueueMessage(invMsg, nil)
+
+	// Read the header and a few KiB of the payload, then stop reading.
+	partial := make([]byte, 8*1024)
+	_, err := io.ReadFull(remoteEnd, partial)
+	require.NoError(t, err)
+
+	disconnected := make(chan struct{})
+	go func() {
+		p.WaitForDisconnect()
+		close(disconnected)
+	}()
+
+	select {
+	case <-disconnected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a peer that stopped reading partway through a message was not disconnected")
+	}
+
+	require.False(t, p.Connected())
+}
+
+// TestPeerSendTimeoutNonPositiveFallsBackToDefault checks that a zero or
+// negative legacy_peerSendTimeout means the 20 minute default. Used as is, it
+// would put every write deadline in the past and drop every peer during the
+// handshake.
+func TestPeerSendTimeoutNonPositiveFallsBackToDefault(t *testing.T) {
+	for _, sendTimeout := range []time.Duration{0, -time.Second} {
+		t.Run(sendTimeout.String(), func(t *testing.T) {
+			p, remoteEnd := newSendTimeoutTestPeer(t, sendTimeout)
+
+			go func() {
+				_, _ = io.Copy(io.Discard, remoteEnd)
+			}()
+
+			sent := make(chan struct{}, 1)
+			p.QueueMessage(wire.NewMsgPing(1), sent)
+
+			select {
+			case <-sent:
+			case <-time.After(5 * time.Second):
+				t.Fatal("peer did not send the ping")
+			}
+
+			require.True(t, p.Connected())
+		})
+	}
 }

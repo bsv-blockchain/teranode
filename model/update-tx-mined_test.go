@@ -2,7 +2,10 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,11 +45,10 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 
 		tSettings.UtxoStore = settings.UtxoStoreSettings{
-			SpendBatcherSize:    1,
-			UpdateTxMinedStatus: true,
-			MaxMinedBatchSize:   1024,
-			MaxMinedRoutines:    1,                // SQLite only supports one writer at a time
-			DBTimeout:           30 * time.Second, // Increase timeout for SQLite in-memory operations
+			SpendBatcherSize:  1,
+			MaxMinedBatchSize: 1024,
+			MaxMinedRoutines:  1,                // SQLite only supports one writer at a time
+			DBTimeout:         30 * time.Second, // Increase timeout for SQLite in-memory operations
 		}
 		setWorkerSettings(tSettings)
 
@@ -240,10 +242,9 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   10,
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 10,
+		MaxMinedRoutines:  1,
 	}
 	setWorkerSettings(tSettings)
 
@@ -377,13 +378,17 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 		chainBlockIDs := []uint32{1000, 1100, 1200, 1300, 1400, 1500, 1600}
 
 		// Trying to mine block 1600 which contains a transaction already in block 1000
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 1600, chainBlockIDs, true, nil)
+		warnLogger := &warnCaptureLogger{Logger: ulogger.TestLogger{}}
+		err := UpdateTxMinedStatus(ctx, warnLogger, tSettings, mockStore, block, 1600, chainBlockIDs, true, nil)
 
 		// Should get BlockInvalidError because transaction was already mined in block 1000 (on same chain)
 		// even though it's way outside the old retention*2 window (which would have been ~576 blocks)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "block contains a transaction already on our chain")
-		assert.Contains(t, err.Error(), "1000") // Should mention the conflicting block ID
+		// The conflicting block's store id is logged; the verdict names the transaction.
+		require.NotContains(t, err.Error(), "blockID")
+		require.NotContains(t, err.Error(), "block ID 1000")
+		require.Contains(t, fmt.Sprint(warnLogger.warned()), "block ID 1000")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -395,10 +400,9 @@ func TestUpdateTxMinedStatus_ContextCancellation(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   10,
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 10,
+		MaxMinedRoutines:  1,
 	}
 	setWorkerSettings(tSettings)
 
@@ -441,10 +445,9 @@ func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   10,
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 10,
+		MaxMinedRoutines:  1,
 	}
 
 	testTx := newTx(100)
@@ -541,42 +544,6 @@ func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
 	})
 }
 
-// TestUpdateTxMinedStatus_ConfigurationDisabled tests disabled configuration scenario
-func TestUpdateTxMinedStatus_ConfigurationDisabled(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.NewErrorTestLogger(t)
-
-	testTx := newTx(100)
-	block := &Block{}
-	block.Height = 100
-	block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
-	block.SubtreeSlices = []*subtree.Subtree{
-		{
-			Nodes: []subtree.Node{
-				{Hash: *testTx.TxIDChainHash()},
-			},
-		},
-	}
-
-	// Create a fresh mock for this test to avoid interference from previous tests
-	freshMockStore := &utxo.MockUtxostore{}
-
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: false, // Disabled
-	}
-	setWorkerSettings(tSettings)
-
-	// Should not call SetMinedMulti when disabled
-	err := UpdateTxMinedStatus(ctx, logger, tSettings, freshMockStore, block, 15, []uint32{}, true, nil)
-
-	require.NoError(t, err)
-	// Allow some time for any async processing to complete
-	time.Sleep(10 * time.Millisecond)
-	freshMockStore.AssertNotCalled(t, "SetMinedMulti")
-}
-
 // TestUpdateTxMinedStatus_DifferentBatchSizes tests different batch size configurations
 func TestUpdateTxMinedStatus_DifferentBatchSizes(t *testing.T) {
 	ctx := context.Background()
@@ -587,10 +554,9 @@ func TestUpdateTxMinedStatus_DifferentBatchSizes(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   1, // Very small batch size
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 1, // Very small batch size
+		MaxMinedRoutines:  1,
 	}
 	setWorkerSettings(tSettings)
 
@@ -633,10 +599,9 @@ func TestUpdateTxMinedStatus_CoinbasePlaceholderHandling(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   10,
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 10,
+		MaxMinedRoutines:  1,
 	}
 	setWorkerSettings(tSettings)
 
@@ -713,10 +678,9 @@ func TestUpdateTxMinedStatus_ConcurrentProcessing(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   10,
-		MaxMinedRoutines:    3, // Allow concurrent processing
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 10,
+		MaxMinedRoutines:  3, // Allow concurrent processing
 	}
 	setWorkerSettings(tSettings)
 
@@ -769,10 +733,9 @@ func TestUpdateTxMinedStatus_MissingSubtree(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   10,
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 10,
+		MaxMinedRoutines:  1,
 	}
 	setWorkerSettings(tSettings)
 
@@ -798,10 +761,9 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   2, // Small batch size for testing
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 2, // Small batch size for testing
+		MaxMinedRoutines:  1,
 	}
 	setWorkerSettings(tSettings)
 
@@ -882,35 +844,6 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("should skip processing when UpdateTxMinedStatus disabled", func(t *testing.T) {
-		mockStore := &utxo.MockUtxostore{}
-
-		disabledSettings := test.CreateBaseTestSettings(t)
-		disabledSettings.UtxoStore = settings.UtxoStoreSettings{
-			SpendBatcherSize:    1,
-			UpdateTxMinedStatus: false, // Disabled
-		}
-
-		testTx := newTx(100)
-		block := &Block{}
-		block.Height = 100
-		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
-		block.SubtreeSlices = []*subtree.Subtree{
-			{
-				Nodes: []subtree.Node{
-					{Hash: *testTx.TxIDChainHash()},
-				},
-			},
-		}
-
-		chainBlockIDsMap := map[uint32]bool{}
-
-		err := updateTxMinedStatus(ctx, logger, disabledSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
-
-		require.NoError(t, err)
-		mockStore.AssertNotCalled(t, "SetMinedMulti")
-	})
-
 	t.Run("should handle mixed block ID validation results", func(t *testing.T) {
 		mockStore := &utxo.MockUtxostore{}
 
@@ -946,12 +879,16 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		// Chain contains block ID 5 and 15
 		chainBlockIDsMap := map[uint32]bool{5: true, 15: true}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
+		warnLogger := &warnCaptureLogger{Logger: ulogger.TestLogger{}}
+		err := updateTxMinedStatus(ctx, warnLogger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		// Should fail because tx1 conflicts (block ID 5 is on current chain)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "block contains a transaction already on our chain")
-		assert.Contains(t, err.Error(), "blockID 5")
+		// The conflicting block's store id is logged; the verdict names the transaction.
+		require.NotContains(t, err.Error(), "blockID")
+		require.NotContains(t, err.Error(), "block ID 5")
+		require.Contains(t, fmt.Sprint(warnLogger.warned()), "block ID 5")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -1153,10 +1090,9 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		// trigger.
 		freshSettings := test.CreateBaseTestSettings(t)
 		freshSettings.UtxoStore = settings.UtxoStoreSettings{
-			SpendBatcherSize:    1,
-			UpdateTxMinedStatus: true,
-			MaxMinedBatchSize:   1,
-			MaxMinedRoutines:    1,
+			SpendBatcherSize:  1,
+			MaxMinedBatchSize: 1,
+			MaxMinedRoutines:  1,
 		}
 		setWorkerSettings(freshSettings)
 
@@ -1203,10 +1139,9 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   10,
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 10,
+		MaxMinedRoutines:  1,
 	}
 	setWorkerSettings(tSettings)
 
@@ -1264,10 +1199,9 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		// Create large batch size settings
 		largeBatchSettings := test.CreateBaseTestSettings(t)
 		largeBatchSettings.UtxoStore = settings.UtxoStoreSettings{
-			SpendBatcherSize:    1,
-			UpdateTxMinedStatus: true,
-			MaxMinedBatchSize:   1000, // Very large batch
-			MaxMinedRoutines:    1,
+			SpendBatcherSize:  1,
+			MaxMinedBatchSize: 1000, // Very large batch
+			MaxMinedRoutines:  1,
 		}
 
 		// Create subtree with many transactions
@@ -1303,10 +1237,9 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		boundarySettings := test.CreateBaseTestSettings(t)
 		boundarySettings.UtxoStore = settings.UtxoStoreSettings{
-			SpendBatcherSize:    1,
-			UpdateTxMinedStatus: true,
-			MaxMinedBatchSize:   3, // Exact boundary testing
-			MaxMinedRoutines:    1,
+			SpendBatcherSize:  1,
+			MaxMinedBatchSize: 3, // Exact boundary testing
+			MaxMinedRoutines:  1,
 		}
 
 		// Create exactly 3 transactions (should fit in one batch exactly)
@@ -1382,7 +1315,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("should not return error for invalid blocks when SetMinedMulti errors occur", func(t *testing.T) {
+	t.Run("should return error for invalid blocks when SetMinedMulti errors occur", func(t *testing.T) {
 		mockStore := &utxo.MockUtxostore{}
 
 		testTx := newTx(100)
@@ -1405,11 +1338,12 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		// Call with unsetMined=true (invalid block) - errors should be logged but not returned
+		// Call with unsetMined=true (invalid block). A swallowed error here let the caller
+		// set mined_set with the revert incomplete, so the block was never revisited (GAP-BV-057).
 		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, true)
 
-		// Should NOT return error for invalid blocks - errors are logged only
-		require.NoError(t, err)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to set mined status for 1 batches")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -1432,11 +1366,129 @@ func (m *mockBlockchainClientForSlowPath) CheckBlockIsAncestorOfBlock(ctx contex
 	return m.checkBlockResult, m.checkBlockError
 }
 
+// warnCaptureLogger records Warnf messages so a test can assert what was logged,
+// delegating every other method to an embedded test logger.
+type warnCaptureLogger struct {
+	ulogger.Logger
+
+	mu       sync.Mutex
+	warnings []string
+}
+
+func (l *warnCaptureLogger) Warnf(format string, args ...interface{}) {
+	l.mu.Lock()
+	l.warnings = append(l.warnings, fmt.Sprintf(format, args...))
+	l.mu.Unlock()
+	l.Logger.Warnf(format, args...)
+}
+
+func (l *warnCaptureLogger) warned() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	out := make([]string, len(l.warnings))
+	copy(out, l.warnings)
+
+	return out
+}
+
+// TestUpdateTxMinedStatus_BlockIDsStayOutOfTheVerdict: block ids are this node's
+// store keys, not block hashes or heights, and the verdict crosses to RPC and is
+// stored as the invalid block's reason. The id, and on the slow path the number
+// of ids checked, go to the log. The fast-path verdict names the transaction; the
+// slow-path verdict names none, as before.
+func TestUpdateTxMinedStatus_BlockIDsStayOutOfTheVerdict(t *testing.T) {
+	ctx := context.Background()
+	tSettings := test.CreateBaseTestSettings(t)
+	setWorkerSettings(tSettings)
+
+	minedBlock := func(tx *bt.Tx) *Block {
+		return &Block{
+			Height:        100,
+			Subtrees:      []*chainhash.Hash{tx.TxIDChainHash()},
+			SubtreeSlices: []*subtree.Subtree{{Nodes: []subtree.Node{{Hash: *tx.TxIDChainHash()}}}},
+		}
+	}
+
+	t.Run("fast path", func(t *testing.T) {
+		logger := &warnCaptureLogger{Logger: ulogger.TestLogger{}}
+		testTx := newTx(100)
+		mockStore := &utxo.MockUtxostore{}
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash][]uint32{*testTx.TxIDChainHash(): {77123, 15}}, nil).Once()
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, minedBlock(testTx), 15, map[uint32]bool{77123: true}, true, nil, false)
+		require.ErrorIs(t, err, errors.ErrBlockInvalid)
+		require.Contains(t, err.Error(), "block contains a transaction already on our chain")
+		require.NotContains(t, err.Error(), "77123")
+
+		require.Contains(t, fmt.Sprint(logger.warned()), "77123", "the id is still recorded")
+	})
+
+	t.Run("fast path, two transactions already on our chain", func(t *testing.T) {
+		// The verdict is stored as the block's invalid reason, so the transaction it
+		// names must be the one whose block id was logged: otherwise that
+		// transaction's id is recorded nowhere.
+		logger := &warnCaptureLogger{Logger: ulogger.TestLogger{}}
+		txA, txB := newTx(100), newTx(200)
+		blockIDOf := map[string]string{txA.TxID(): "block ID 77123", txB.TxID(): "block ID 77124"}
+
+		block := minedBlock(txA)
+		block.SubtreeSlices[0].Nodes = append(block.SubtreeSlices[0].Nodes, subtree.Node{Hash: *txB.TxIDChainHash()})
+
+		mockStore := &utxo.MockUtxostore{}
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash][]uint32{
+				*txA.TxIDChainHash(): {77123, 15},
+				*txB.TxIDChainHash(): {77124, 15},
+			}, nil).Once()
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, map[uint32]bool{77123: true, 77124: true}, true, nil, false)
+		require.ErrorIs(t, err, errors.ErrBlockInvalid)
+
+		var logged []string
+		for _, line := range logger.warned() {
+			if strings.Contains(line, "is already on our chain in block ID") {
+				logged = append(logged, line)
+			}
+		}
+
+		require.Len(t, logged, 1, "once per block")
+
+		named := 0
+		for txID, blockID := range blockIDOf {
+			if strings.Contains(err.Error(), txID) {
+				named++
+				require.Contains(t, logged[0], txID, "the logged transaction is the one the verdict names")
+				require.Contains(t, logged[0], blockID)
+			}
+		}
+
+		require.Equal(t, 1, named, "the verdict names exactly one transaction")
+	})
+
+	t.Run("slow path", func(t *testing.T) {
+		logger := &warnCaptureLogger{Logger: ulogger.TestLogger{}}
+		testTx := newTx(100)
+		mockStore := &utxo.MockUtxostore{}
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash][]uint32{*testTx.TxIDChainHash(): {88445, 15}}, nil).Once()
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, minedBlock(testTx), 15, map[uint32]bool{10: true}, true,
+			&mockBlockchainClientForSlowPath{checkBlockResult: true}, false)
+		require.ErrorIs(t, err, errors.ErrBlockInvalid)
+		require.Contains(t, err.Error(), "block contains a transaction already on our chain")
+		require.Contains(t, err.Error(), "slow path")
+		require.NotContains(t, err.Error(), "block IDs", "neither the ids nor how many of them the store holds")
+
+		require.Contains(t, fmt.Sprint(logger.warned()), "1 unique old block IDs", "the count is still recorded")
+	})
+}
+
 func TestUpdateTxMinedStatus_SlowPathDetection(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.UtxoStore.UpdateTxMinedStatus = true
 	setWorkerSettings(tSettings)
 
 	t.Run("should detect collision via slow-path when block ID is not in chainBlockIDsMap", func(t *testing.T) {

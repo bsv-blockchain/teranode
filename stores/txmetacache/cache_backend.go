@@ -50,6 +50,19 @@ type cacheBackend interface {
 	// be treated as read-only.
 	Get(hash chainhash.Hash) (*meta.Data, bool)
 
+	// GetMulti is the batch form of Get: out[i] is the entry for hashes[i], or
+	// nil on a miss. keyHashes, if non-nil, holds KeyHash(&hashes[i]). Same
+	// read-only contract as Get.
+	GetMulti(hashes []chainhash.Hash, keyHashes []uint64, out []*meta.Data)
+
+	// GetRawMulti appends the serialised entry of every found hash to *dst:
+	// entry i is (*dst)[spans[i][0]:spans[i][1]], or spans[i] = {-1, -1} on a
+	// miss. Nothing is decoded or allocated per entry; GetMetaCachedInto
+	// decodes the result into caller-owned storage.
+	// keyHashes, if non-nil, holds KeyHash(&hashes[i]) so a backend that
+	// places entries by it does not hash them again.
+	GetRawMulti(hashes []chainhash.Hash, keyHashes []uint64, dst *[]byte, spans [][2]int)
+
 	// Del removes the entry under key (raw bytes, typically hash[:]).
 	Del(key []byte)
 

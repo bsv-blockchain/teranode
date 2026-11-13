@@ -80,6 +80,10 @@ func TestClient_Execute_AcquiresPermit(t *testing.T) {
 	require.NotNil(t, err, "Execute must fail closed when no permit is available")
 	require.True(t, err.Matches(types.TIMEOUT),
 		"acquirePermit timeout must surface as TIMEOUT, got %v", err)
+
+	var permitTimeout *PermitTimeoutError
+	require.ErrorAs(t, err, &permitTimeout,
+		"acquirePermit timeout must say nothing was sent, got %T", err)
 }
 
 func TestCalculateKeySource(t *testing.T) {

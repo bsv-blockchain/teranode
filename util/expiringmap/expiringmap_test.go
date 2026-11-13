@@ -1,6 +1,8 @@
 package expiringmap
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -196,4 +198,142 @@ func TestExpiringMap_CleanEvictionSendDoesNotBlockUnderLock(t *testing.T) {
 	// notification was dropped.
 	_, ok := m.Get("k")
 	require.False(t, ok, "expired item should be evicted")
+}
+
+// TestExpiringMap_SetIfAbsent pins the one-lock insert the legacy announcement
+// workers use to claim a hash: a present key is left alone, an absent one is
+// written, and an entry past its expiry that the sweeper has not yet removed
+// counts as absent, as it does for Get.
+func TestExpiringMap_SetIfAbsent(t *testing.T) {
+	m := New[string, int](time.Hour)
+	defer m.Stop()
+
+	require.True(t, m.SetIfAbsent("a", 1), "an absent key is inserted")
+	require.False(t, m.SetIfAbsent("a", 2), "a present key is left alone")
+
+	v, ok := m.Get("a")
+	require.True(t, ok)
+	require.Equal(t, 1, v)
+
+	// Expire the entry by hand so the sweeper cannot race the assertion.
+	m.mu.Lock()
+	m.items["a"].expiry = time.Now().Add(-time.Second).UnixNano()
+	m.mu.Unlock()
+
+	require.True(t, m.SetIfAbsent("a", 3), "an expired entry not yet swept counts as absent")
+
+	v, ok = m.Get("a")
+	require.True(t, ok)
+	require.Equal(t, 3, v)
+}
+
+// TestExpiringMap_WithRandomEviction_HoldsTheCap pins the second cap policy:
+// at the cap, an arbitrary entry goes rather than the oldest, so an insert
+// costs one map step rather than a scan of every entry.
+func TestExpiringMap_WithRandomEviction_HoldsTheCap(t *testing.T) {
+	m := New[int, int](time.Hour).WithMaxSize(100).WithRandomEviction()
+	defer m.Stop()
+
+	for i := 0; i < 1000; i++ {
+		m.Set(i, i)
+	}
+
+	require.Equal(t, 100, m.Len())
+
+	require.True(t, m.SetIfAbsent(5000, 1))
+	require.Equal(t, 100, m.Len(), "SetIfAbsent honours the cap")
+
+	before := m.Len()
+	m.Set(5000, 2)
+	require.Equal(t, before, m.Len(), "updating a present key evicts nothing")
+
+	v, ok := m.Get(5000)
+	require.True(t, ok)
+	require.Equal(t, 2, v)
+}
+
+// TestExpiringMap_SetIfAbsent_OneWinnerUnderConcurrency pins what SetIfAbsent
+// is for: of many goroutines claiming one key at once, exactly one is told it
+// wrote. A Get followed by a Set lets several see the key absent and all
+// claim it. Each round releases every goroutine together on a fresh key, and
+// two hundred rounds make an interleaving that splits the check from the
+// write all but certain to show. Run it under -race as well.
+func TestExpiringMap_SetIfAbsent_OneWinnerUnderConcurrency(t *testing.T) {
+	const goroutines, rounds = 64, 200
+
+	m := New[int, int](time.Hour)
+	defer m.Stop()
+
+	for round := 0; round < rounds; round++ {
+		var (
+			wins  atomic.Int32
+			wg    sync.WaitGroup
+			start = make(chan struct{})
+		)
+
+		for g := 0; g < goroutines; g++ {
+			wg.Add(1)
+
+			go func(g int) {
+				defer wg.Done()
+
+				<-start
+
+				if m.SetIfAbsent(round, g) {
+					wins.Add(1)
+				}
+			}(g)
+		}
+
+		close(start)
+		wg.Wait()
+
+		require.Equal(t, int32(1), wins.Load(), "round %d: exactly one claim of a key must succeed", round)
+	}
+}
+
+// TestExpiringMap_WithRandomEviction_DoesNotSeekTheOldest pins the policy
+// WithRandomEviction selects, not only the cap. The oldest-entry policy finds
+// the oldest entry by scanning every entry on each insert at the cap; the
+// random policy takes whichever entry the map yields first. Insertion times
+// are set by hand, oldest first, so the oldest-entry policy has exactly one
+// answer each time, the lowest key still present, and would evict 0, 1, 2 and
+// so on in order. The random policy matching that order for a hundred
+// evictions running has a vanishing probability.
+func TestExpiringMap_WithRandomEviction_DoesNotSeekTheOldest(t *testing.T) {
+	const size = 100
+
+	var evicted []int
+
+	m := New[int, int](time.Hour).WithMaxSize(size).WithRandomEviction().
+		WithEvictionFunction(func(k, _ int) bool {
+			evicted = append(evicted, k)
+
+			return true
+		})
+	defer m.Stop()
+
+	setAt := func(k int) {
+		m.Set(k, k)
+
+		m.mu.Lock()
+		if item, ok := m.items[k]; ok {
+			item.addedAt = int64(k)
+		}
+		m.mu.Unlock()
+	}
+
+	for k := 0; k < 2*size; k++ {
+		setAt(k)
+	}
+
+	require.Equal(t, size, m.Len(), "the cap holds")
+	require.Len(t, evicted, size, "one eviction per insert past the cap")
+
+	oldestFirst := make([]int, size)
+	for i := range oldestFirst {
+		oldestFirst[i] = i
+	}
+
+	require.NotEqual(t, oldestFirst, evicted, "random eviction must not evict oldest first, which costs a scan of every entry per insert")
 }

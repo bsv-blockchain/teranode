@@ -178,7 +178,7 @@ returned as a configuration error.
 3. **DAH Management**: Allows setting and retrieving Delete-At-Height values for blob lifecycle management.
 4. **Streaming**: Supports streaming for both storing and retrieving blobs.
 5. **Metadata Support**: Allows retrieving header and footer metadata from blobs.
-6. **Atomic Writes with Error Recovery**: `SetFromReader` uses temporary files and atomic rename, with automatic cleanup on errors.
+6. **Atomic Writes with Error Recovery**: `SetFromReader` uses temporary files and atomic rename, with automatic cleanup on errors. A write that passes `options.WithExclusivePublish()` is published by hard link instead (see below).
 
 ## Error Handling
 
@@ -230,7 +230,16 @@ The `SetFromReader` method provides safe streaming writes with automatic error r
 The file-based blob store implements atomic writes using temporary files:
 
 1. Data is written to a temporary file (`.tmp` extension)
-2. On success, the temp file is atomically renamed to the final filename
+2. On success, the temp file is atomically renamed to the final filename. Without
+   `WithAllowOverwrite(true)` a key that already exists is refused with
+   `ErrBlobAlreadyExists` by a check made before the body is written; two writers that both
+   pass that check both publish, and the later rename replaces the earlier blob.
+   A write that also passes `options.WithExclusivePublish()` is instead hard-linked to its
+   final name, which fails with `ErrBlobAlreadyExists` if the name exists, so of two writers
+   racing on one key exactly one is told it created the blob. The legacy sync's subtree writer
+   (`services/legacy/netsync/subtree_writer.go`) is the only caller that passes it. A crash
+   between the link and the removal of the temporary name leaves a `.tmp` file that is a second
+   link to the blob, and a filesystem without hard links falls back to the rename.
 3. On error (including reader errors), the temp file is automatically deleted
 
 ### Abort Support via io.Pipe

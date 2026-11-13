@@ -290,7 +290,8 @@ func Start(args []string, version, commit string) {
 		hash := cmd.FlagSet.String("hash", "", "Hash of the UTXO set / headers to process.")
 		skipHeaders := cmd.FlagSet.Bool("skipHeaders", false, "Skip processing headers.")
 		skipUTXOs := cmd.FlagSet.Bool("skipUTXOs", false, "Skip processing UTXOs.")
-		force := cmd.FlagSet.Bool("force", false, "Force processing even if lastProcessed.dat or BlockAssembler state already exists.")
+		force := cmd.FlagSet.Bool("force", false, "Always re-import the UTXO set, even if lastProcessed.dat or BlockAssembler state already exists. Use this after wiping or recreating the UTXO store. Cannot be combined with -skipUTXOs.")
+		recoverCheckpoint := cmd.FlagSet.Bool("recover-checkpoint", false, "Write the missing BlockAssembler checkpoint WITHOUT importing, when lastProcessed.dat proves a completed import of this exact snapshot (tip height and hash). Dangerous: nothing in the UTXO store is checked, so never use it after wiping or recreating the UTXO store; use -force then. Mutually exclusive with -force. Cannot be combined with -skipUTXOs.")
 		skipChecksum := cmd.FlagSet.Bool("skipChecksum", false, "Skip verifying the snapshot files against their .sha256 sidecars (only when the caller already verified them).")
 		cmd.Execute = func(args []string) error {
 			if *inputDir == "" {
@@ -301,7 +302,7 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("Please provide a hash")
 			}
 
-			return seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs, *force, *skipChecksum)
+			return seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs, *force, *recoverCheckpoint, *skipChecksum)
 		}
 	case "bitcointoutxoset":
 		blockchainDir := cmd.FlagSet.String("bitcoinDir", "", "Location of bitcoin data")

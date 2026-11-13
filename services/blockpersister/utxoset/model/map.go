@@ -142,8 +142,13 @@ func (ssm *splitMap[K, V]) Delete(k K) bool {
 }
 
 func (ssm *splitMap[K, V]) Iter(cb func(K, V) (stop bool)) {
-	for i := uint16(0); i <= ssm.nrOfBuckets; i++ {
-		ssm.m[i].Iter(cb)
+	stopped := false
+
+	for i := uint16(0); i <= ssm.nrOfBuckets && !stopped; i++ {
+		ssm.m[i].Iter(func(k K, v V) bool {
+			stopped = cb(k, v)
+			return stopped
+		})
 	}
 }
 
@@ -178,10 +183,10 @@ func (ssm *splitMap[K, V]) IsEqual(other genericMap[K, V], fn ValueCompareFn[V])
 			different = true
 			difference = fmt.Sprintf("Values are different for key %v: %v vs %v", k, v, otherV)
 
-			return false // stop iterating
+			return true // stop iterating
 		}
 
-		return true // continue iterating
+		return false // continue iterating
 	})
 
 	if different {
@@ -275,10 +280,10 @@ func (ssm *swissMap[K, V]) IsEqual(other genericMap[K, V], fn ValueCompareFn[V])
 			different = true
 			difference = fmt.Sprintf("Values are different for key %v: %v vs %v", k, v, otherV)
 
-			return false // stop iterating
+			return true // stop iterating
 		}
 
-		return true // continue iterating
+		return false // continue iterating
 	})
 
 	if different {
@@ -367,10 +372,10 @@ func (ssm *goMap[K, V]) IsEqual(other genericMap[K, V], fn ValueCompareFn[V]) (b
 			different = true
 			difference = fmt.Sprintf("Values are different for key %v: %v vs %v", k, v, otherV)
 
-			return false // stop iterating
+			return true // stop iterating
 		}
 
-		return true // continue iterating
+		return false // continue iterating
 	})
 
 	if different {

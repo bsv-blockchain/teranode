@@ -23,8 +23,10 @@ import (
 
 // FileStorer handles the storage and management of blockchain-related files.
 // It provides buffered writing capabilities for efficient I/O operations.
-// FileStorer streams data through a pipe to the underlying blob storage,
-// which handles temp file creation and atomic rename internally.
+// FileStorer streams data through a pipe to the underlying blob storage, which writes a
+// temporary file and publishes it under the final name: by atomic rename, or, for a
+// no-overwrite write that passes options.WithExclusivePublish, by hard link, refused with
+// ErrBlobAlreadyExists if the name exists.
 type FileStorer struct {
 	// logger provides logging functionality
 	logger ulogger.Logger
@@ -70,7 +72,10 @@ type FileStorer struct {
 
 // NewFileStorer creates a new FileStorer instance with the provided parameters.
 // It creates a pipe and spawns a background goroutine that streams data to the blob storage.
-// The blob storage (SetFromReader) handles temp file creation and atomic rename internally.
+// The blob storage (SetFromReader) writes a temporary file and publishes it under the final
+// name. Without AllowOverwrite a name that exists is refused with ErrBlobAlreadyExists, by
+// the store's pre-write check or, with options.WithExclusivePublish, at the publish too; Write
+// or Close then return it.
 // Returns a pointer to the initialized FileStorer ready for use.
 func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, key []byte, fileType fileformat.FileType, fileOptions ...options.FileOption) (*FileStorer, error) {
 	exists, err := store.Exists(ctx, key, fileType, fileOptions...)
@@ -118,7 +123,8 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 		defer fs.wg.Done()
 		defer close(fs.done)
 
-		// SetFromReader will create its own temp file and handle atomic rename
+		// SetFromReader writes its own temp file and publishes it under the final name (rename,
+		// or a hard link refused if the name exists when the caller asks for an exclusive publish)
 		// Note: Buffered reader is NOT used on the read side despite having a buffered writer
 		// on the write side. This is intentional - adding buffering here causes test hangs
 		// when SetFromReader returns errors without consuming the pipe, as the buffered

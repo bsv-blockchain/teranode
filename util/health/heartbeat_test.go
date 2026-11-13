@@ -1,6 +1,7 @@
 package health
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -109,4 +110,81 @@ func TestDisableReportsHealthyAfterADeliberateStop(t *testing.T) {
 	// BeatIfStarted must not re-arm it: nothing owns the heartbeat any more.
 	h.BeatIfStarted()
 	require.Nil(t, h.lastBeat.Load(), "BeatIfStarted must not re-arm a disabled heartbeat")
+}
+
+// TestBeatIfStartedCannotReArmAcrossADisable pins the race between a beat from
+// a worker goroutine and Disable from the exiting loop (issue 1447). The clock
+// is read after BeatIfStarted has seen a started heartbeat and before it stores
+// the new beat, so a clock that calls Disable lands the Disable in exactly that
+// window. A check-then-store implementation overwrites it and re-arms the
+// heartbeat, which then ages through the shutdown drain.
+func TestBeatIfStartedCannotReArmAcrossADisable(t *testing.T) {
+	now := time.Now()
+	h := &Heartbeat{}
+	h.now = func() time.Time { return now }
+	h.Beat()
+
+	disabled := false
+	h.now = func() time.Time {
+		if !disabled {
+			disabled = true
+
+			h.Disable()
+		}
+
+		return now
+	}
+
+	h.BeatIfStarted()
+
+	require.True(t, disabled, "precondition: the clock must have run the Disable mid-beat")
+	require.Nil(t, h.lastBeat.Load(), "a Disable that lands mid-beat must win")
+
+	now = now.Add(time.Hour)
+	require.False(t, stalled(h, time.Minute), "a heartbeat disabled on shutdown must not age into a stall")
+}
+
+// TestBeatIfStartedStaysDisabledUnderConcurrentBeats is the same guarantee
+// without a staged interleaving: many goroutines beat while one Disable runs,
+// and once every beat has returned the heartbeat must still be disabled.
+func TestBeatIfStartedStaysDisabledUnderConcurrentBeats(t *testing.T) {
+	const (
+		rounds  = 2000
+		beaters = 8
+	)
+
+	reArmed := 0
+
+	for r := 0; r < rounds; r++ {
+		var h Heartbeat
+		h.Beat()
+
+		var wg sync.WaitGroup
+
+		start := make(chan struct{})
+
+		for i := 0; i < beaters; i++ {
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+
+				<-start
+
+				for j := 0; j < 50; j++ {
+					h.BeatIfStarted()
+				}
+			}()
+		}
+
+		close(start)
+		h.Disable()
+		wg.Wait()
+
+		if h.lastBeat.Load() != nil {
+			reArmed++
+		}
+	}
+
+	require.Zero(t, reArmed, "BeatIfStarted re-armed a disabled heartbeat in %d of %d rounds", reArmed, rounds)
 }

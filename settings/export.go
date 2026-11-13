@@ -37,6 +37,15 @@ var sensitiveKeys = extractSensitiveKeys()
 
 const redactedValue = "********"
 
+// keyTagExempt is the sentinel `key` tag value marking a Settings field that is
+// deliberately not a configuration setting — runtime-computed (build info,
+// config context, process topology) or internal. Such a field is skipped by
+// extractFields, so it is never exported via ExportMetadata, and it is skipped
+// by TestNoMissingTags instead of being reported as an untagged field. Keeping
+// the exemption on the declaration means it travels with the field through
+// renames and moves.
+const keyTagExempt = "-"
+
 // ExportMetadata exports all settings with their metadata for the settings portal.
 // It uses reflection to extract struct tags on first call (cached), then combines
 // with current runtime values on each subsequent call.
@@ -103,35 +112,46 @@ func extractMetadataStructure() []metadataEntry {
 	typ := reflect.TypeOf(Settings{})
 
 	// Recursively extract all fields with tags
-	extractFields(typ, nil, &entries)
+	extractFields(typ, nil, "", &entries)
 
 	return entries
 }
 
-// extractFields recursively extracts fields with struct tags.
-func extractFields(typ reflect.Type, path []int, entries *[]metadataEntry) {
+// extractFields recursively extracts fields with struct tags. namePrefix
+// accumulates the dotted field path (e.g. "BlockChain.PostgresPool") purely
+// for the internal FieldName bookkeeping used to disambiguate fields in
+// tests; it has no effect on the exported Key or Name.
+func extractFields(typ reflect.Type, path []int, namePrefix string, entries *[]metadataEntry) {
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
 		fieldPath := append(append([]int{}, path...), i)
+		fieldName := namePrefix + field.Name
 
 		// Check if field has our metadata tags
 		key := field.Tag.Get("key")
+
+		// key:"-" marks a field as deliberately not a setting: emit no
+		// metadata entry and do not recurse into it.
+		if key == keyTagExempt {
+			continue
+		}
+
 		if key == "" {
 			// Check if it's a nested struct to recurse into
 			fieldType := field.Type
 
 			// Handle pointer to struct (e.g., *PolicySettings)
 			if fieldType.Kind() == reflect.Pointer && fieldType.Elem().Kind() == reflect.Struct {
-				extractFields(fieldType.Elem(), fieldPath, entries)
+				extractFields(fieldType.Elem(), fieldPath, fieldName+".", entries)
 			} else if fieldType.Kind() == reflect.Struct {
-				extractFields(fieldType, fieldPath, entries)
+				extractFields(fieldType, fieldPath, fieldName+".", entries)
 			}
 			continue
 		}
 
 		// Extract all metadata from tags
 		entry := metadataEntry{
-			FieldName:       field.Name,
+			FieldName:       fieldName,
 			Key:             key,
 			Name:            field.Tag.Get("name"),
 			Type:            field.Tag.Get("type"),
@@ -195,7 +215,14 @@ func formatValue(val reflect.Value) string {
 	case reflect.String:
 		return redactURLString(val.String())
 	case reflect.Struct:
-		// Special handling for url.URL struct
+		// Special handling for url.URL struct.
+		//
+		// This is the branch every URL setting reaches, even though they are
+		// declared *url.URL: getValueAtPath dereferences every pointer on the
+		// field path, including the last, so formatValue is handed a url.URL
+		// value, and a *url.URL that does arrive is sent here through Elem by
+		// the reflect.Pointer case below. TestExportMetadata_URLUserinfoRedaction
+		// covers this branch and fails if it stops redacting.
 		if val.Type() == reflect.TypeOf(url.URL{}) {
 			u := val.Interface().(url.URL)
 			return redactURL(&u).String()
@@ -208,10 +235,17 @@ func formatValue(val reflect.Value) string {
 		// A *url.URL reaches the url.URL struct case above through Elem, so it is redacted too.
 		return formatValue(val.Elem())
 	case reflect.Slice:
-		if val.Type().Elem().Kind() == reflect.String {
+		switch val.Type().Elem().Kind() {
+		case reflect.String:
 			slice := make([]string, val.Len())
 			for i := 0; i < val.Len(); i++ {
 				slice[i] = redactURLString(val.Index(i).String())
+			}
+			return formatStringSlice(slice)
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			slice := make([]string, val.Len())
+			for i := 0; i < val.Len(); i++ {
+				slice[i] = formatInt(int(val.Index(i).Int()))
 			}
 			return formatStringSlice(slice)
 		}

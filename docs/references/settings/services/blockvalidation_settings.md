@@ -4,13 +4,24 @@
 
 ## Configuration Settings
 
+The Default column is the loader fallback in `settings/settings.go`. A node uses
+it only when no configuration file sets the key. A node that runs on the
+repository configuration uses the base value in the committed `settings.conf`
+when that file sets the key, unless `settings_local.conf` or a context-specific
+key (`key.<context>`) sets another. `settings.conf` sets
+`blockvalidation_quick_validate_create_concurrency`,
+`blockvalidation_outpoint_only_below_checkpoint` and
+`blockvalidation_legacy_unified_below_checkpoint` to the same values as the
+loader (0, false and false), so for these keys the two agree. The
+`blockvalidation_isParentMined_retry_*` keys and
+`blockvalidation_catchup_prefetch_budget_bytes` have no line in `settings.conf`.
+
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
-| MaxRetries | int | 3 | blockValidationMaxRetries | General retry behavior |
+| MaxRetries | int | 3 | blockValidationMaxRetries | Requeues per block after a fetch failure or deadline |
 | RetrySleep | time.Duration | 1s | blockValidationRetrySleep | Retry delay timing |
 | GRPCAddress | string | "localhost:8088" | blockvalidation_grpcAddress | Client connection address |
 | GRPCListenAddress | string | ":8088" | blockvalidation_grpcListenAddress | **CRITICAL** - gRPC server binding (service skipped if empty) |
-| KafkaWorkers | int | 0 | blockvalidation_kafkaWorkers | Kafka consumer parallelism |
 | LocalSetTxMinedConcurrency | int | 8 | blockvalidation_localSetTxMinedConcurrency | Transaction mining concurrency |
 | MaxPreviousBlockHeadersToCheck | uint64 | 100 | blockvalidation_maxPreviousBlockHeadersToCheck | Block header validation depth |
 | MissingTransactionsBatchSize | int | 5000 | blockvalidation_missingTransactionsBatchSize | Missing transaction batch size |
@@ -29,10 +40,10 @@
 | ValidationRetrySleep | time.Duration | 5s | blockvalidation_validation_retry_sleep | Validation retry delay |
 | OptimisticMining | bool | true | blockvalidation_optimistic_mining | Optimistic mining behavior (global; every validation path also requires OptimisticMiningPeerBlocks, and catch-up is never optimistic) |
 | OptimisticMiningPeerBlocks | bool | false | blockvalidation_optimistic_mining_peer_blocks | Opt in to optimistic mining on the peer-served path (accepts the invalidate-route tradeoff) |
-| MaxCorruptAttemptsPerBlock | int | 3 | blockvalidation_max_corrupt_attempts_per_block | Ban-score-independent per-(block hash, serving peerID) cap on corrupt re-downloads; also sizes the separate local-policy decline cap (0 disables, re-opening the DoS) |
-| CorruptAttemptCooldown | time.Duration | 10m | blockvalidation_corrupt_attempt_cooldown | Fixed cooldown window after which a capped (hash, peerID) is admitted again, for both caps |
+| MaxCorruptAttemptsPerBlock | int | 3 | blockvalidation_max_corrupt_attempts_per_block | Ban-score-independent per-(block hash, serving peerID) cap on corrupt re-downloads; also sizes the separate local-policy decline cap and the worker panic cap (0 disables all three, re-opening the DoS) |
+| CorruptAttemptCooldown | time.Duration | 10m | blockvalidation_corrupt_attempt_cooldown | Fixed cooldown window after which a capped (hash, peerID) is admitted again, for the corrupt, local-policy decline and worker panic caps |
 | IsParentMinedRetryMaxRetry | int | 45 | blockvalidation_isParentMined_retry_max_retry | Parent mining check retries |
-| IsParentMinedRetryBackoffMultiplier | int | 4 | blockvalidation_isParentMined_retry_backoff_multiplier | Parent mining retry backoff multiplier |
+| IsParentMinedRetryBackoffMultiplier | int | 4 | blockvalidation_isParentMined_retry_backoff_multiplier | Slope of the linear backoff between parent-mined retries: the wait before retry i, counting from 0, is (multiplier x i + 1) x base |
 | IsParentMinedRetryBackoffDuration | time.Duration | 20ms | blockvalidation_isParentMined_retry_backoff_duration | Parent mining retry backoff base duration |
 | SubtreeGroupConcurrency | int | 1 | blockvalidation_subtreeGroupConcurrency | Subtree group processing concurrency |
 | BlockFoundChBufferSize | int | 1000 | blockvalidation_blockFoundCh_buffer_size | Block discovery pipeline buffer |
@@ -51,7 +62,7 @@
 | CatchupMaxRetries | int | 3 | blockvalidation_catchup_max_retries | Catchup operation retries |
 | CatchupIterationTimeout | int | 30 | blockvalidation_catchup_iteration_timeout | **CRITICAL** - Catchup iteration timeout |
 | CatchupOperationTimeout | int | 300 | blockvalidation_catchup_operation_timeout | **CRITICAL** - Catchup operation timeout |
-| CatchupMaxAccumulatedHeaders | int | 100000 | blockvalidation_max_accumulated_headers | **CRITICAL** - Memory protection during catchup |
+| CatchupMaxAccumulatedHeaders | int | 100000 | blockvalidation_max_accumulated_headers | **CRITICAL** - Memory protection during catchup. Not used on utxoset below the hardcoded checkpoint: each catch-up window there runs from where the node is to the next hardcoded checkpoint (at most one checkpoint gap plus any UTXO-store lag; testnet's largest gap, 100,010 blocks, is about 8 MB of headers). Block validation refuses to start there when `blockvalidation_catchup_checkpoint_hash` and `blockvalidation_catchup_checkpoint_height` are set |
 | CircuitBreakerFailureThreshold | int | 5 | blockvalidation_circuit_breaker_failure_threshold | Circuit breaker failure detection |
 | CircuitBreakerSuccessThreshold | int | 2 | blockvalidation_circuit_breaker_success_threshold | Circuit breaker recovery |
 | CircuitBreakerTimeoutSeconds | int | 30 | blockvalidation_circuit_breaker_timeout_seconds | Circuit breaker timeout |
@@ -74,6 +85,11 @@
 | CatchupMinThroughputKBps | int | 100 | blockvalidation_catchup_min_throughput_kbps | Minimum throughput (KB/s) before switching peers |
 | CatchupParallelFetchEnabled | bool | true | blockvalidation_catchup_parallel_fetch_enabled | Enable parallel fetching from multiple peers |
 | CatchupParallelFetchWorkers | int | 3 | blockvalidation_catchup_parallel_fetch_workers | Number of parallel fetch workers |
+| CatchupKeepBlockAssemblyMaxBlocks | int | 6 | blockvalidation_catchup_keep_block_assembly_max_blocks | Most blocks a catch-up from RUNNING may fetch and still hand transactions to block assembly |
+| QuickValidateCreateConcurrency | int | 0 | blockvalidation_quick_validate_create_concurrency | Callers allowed in flight at once in the first wave of a below-checkpoint list that quick validation hands the SQL and Aerospike UTXO stores; that wave creates every record and also spends the inputs of each transaction with no parent in the list. 0 derives it as max(min(utxostore_storeBatcherSize x utxostore_batcherMaxConcurrent, 16384), utxostore_storeBatcherSize x 8); an explicit value is not capped |
+| OutpointOnlyBelowCheckpoint | bool | false | blockvalidation_outpoint_only_below_checkpoint | Below the hardcoded checkpoint, quick validation spends by outpoint and skips parent reads, fees and the UTXO-hash checksum. Only on stores that support outpoint-only spends (SQL); Aerospike keeps reading parent outputs. No effect on utxoset, which always takes this route below the checkpoint |
+| QuickValidateNetRange | int | 65536 | blockvalidation_quick_validate_net_range | Transactions per list that quick validation hands a store that nets below the checkpoint (utxoset): fixed ranges of transaction positions, the same lists whatever subtree size a block arrives with. Must be a power of two, otherwise the default is used. Do not change it while a block is partly applied |
+| LegacyUnifiedBelowCheckpoint | bool | false | blockvalidation_legacy_unified_below_checkpoint | Legacy below-checkpoint blocks are quick-validated through the native catchup path's machinery instead of fully validated. Requires the setting above, a store that supports outpoint-only spends and a header run proven to end at a pinned checkpoint; legacy and block validation must agree on both settings. Off, every legacy block is fully validated. No effect on utxoset: there legacy and block validation ignore this setting and the one above, and always take the route, because that store takes blocks below the checkpoint only through quick validation |
 
 ## Configuration Dependencies
 
@@ -210,7 +226,7 @@ blockvalidation_useCatchupWhenBehind=false
 
 ```bash
 blockvalidation_validateBlockSubtreesConcurrency=16
-blockvalidation_processTxMetaUsingStoreBatchSize=2048
+blockvalidation_processTxMetaUsingStore_BatchSize=2048
 blockvalidation_catchupConcurrency=8
 blockvalidation_fetch_num_workers=32
 blockvalidation_subtree_batch_size=32

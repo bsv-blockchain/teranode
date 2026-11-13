@@ -12,6 +12,7 @@ import (
 
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
 )
@@ -24,7 +25,7 @@ type ChainCheckResult struct {
 	StoredNet     string // e.g. "mainnet" - reverse-looked-up, or "unknown"
 	StoredHash    string // hex
 	ExpectedHash  string // hex
-	StoreURL      string // the resolved blockchain store URL
+	StoreURL      string // the resolved blockchain store URL, password-redacted for display
 }
 
 var knownNetworks = []string{"mainnet", "testnet", "regtest", "stn", "teratestnet", "tstn"}
@@ -51,7 +52,7 @@ func CheckChain(network string, storeURL *url.URL, dataFolder string) *ChainChec
 		return result
 	}
 
-	result.StoreURL = storeURL.String()
+	result.StoreURL = urlutil.Redact(storeURL)
 
 	var hash []byte
 	var found bool

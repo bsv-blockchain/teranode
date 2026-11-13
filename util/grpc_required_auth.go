@@ -30,6 +30,7 @@ func requiredAuthInterceptors(key string, public map[string]bool) (grpc.UnarySer
 		md, _ := metadata.FromIncomingContext(ctx)
 		keys := md.Get(apiKeyHeader)
 		if key == "" || len(keys) != 1 || subtle.ConstantTimeCompare([]byte(keys[0]), []byte(key)) != 1 {
+			grpcAuthRejectionsTotal.WithLabelValues(method).Inc()
 			return nil, status.Error(codes.Unauthenticated, "a valid x-api-key is required")
 		}
 		return context.WithValue(ctx, authenticatedKey, true), nil

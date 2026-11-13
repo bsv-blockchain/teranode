@@ -97,8 +97,15 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 
 // tryAlternativePeersForCatchup attempts catchup with alternative peers from the P2P service.
 // It skips the excludePeerID and any peers marked as malicious.
-// Returns true if catchup succeeded with any peer.
-func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model.Block, excludePeerID string) bool {
+// succeeded is true if catchup succeeded with any peer.
+//
+// stoppedOnLocalPanic is true if it stopped because an alternative's catchup returned a
+// local-panic error (isLocalPanic, BV-STARTUP-007): the waiter error of a validation that
+// panicked on another goroutine, or the error of an errgroup goroutine that panicked. That is a
+// bug in this node, the same for every peer, so it tries no further peer and charges none. The
+// caller then ends the cycle as the primary path does for that error: it counts the attempt
+// unless the cycle made progress, clears the markers, and walks no cached alternatives.
+func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model.Block, excludePeerID string) (succeeded, stoppedOnLocalPanic bool) {
 	blockHash := block.Hash()
 	bestPeers, peerErr := u.selectBestPeersForCatchup(ctx, block.Height)
 	if peerErr != nil {
@@ -106,7 +113,13 @@ func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model
 	}
 
 	if len(bestPeers) == 0 {
-		return false
+		return false, false
+	}
+
+	// catchupFunc is u.catchup in production. A Server literal in a test may leave it nil.
+	runCatchup := u.catchupFunc
+	if runCatchup == nil {
+		runCatchup = u.catchup
 	}
 
 	u.logger.Infof("[catchup] Trying %d alternative peers for block %s", len(bestPeers), blockHash.String())
@@ -123,17 +136,22 @@ func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model
 
 		u.logger.Debugf("[catchup] Trying peer %s (score: %.2f) for block %s", bestPeer.ID, bestPeer.CatchupReputationScore, blockHash.String())
 
-		altErr := u.catchup(ctx, block, bestPeer.ID, bestPeer.DataHubURL)
+		altErr := runCatchup(ctx, block, bestPeer.ID, bestPeer.DataHubURL)
 		if altErr == nil {
 			u.logger.Debugf("[catchup] Successfully processed block %s from peer %s", blockHash.String(), bestPeer.ID)
 			u.processBlockNotify.Delete(*blockHash)
 			u.catchupAlternatives.Delete(*blockHash)
-			return true
+			return true, false
+		}
+
+		if isLocalPanic(altErr) {
+			u.logger.Warnf("[catchup] Peer %s: a goroutine panicked in this node validating block %s; trying no further peers: %v", bestPeer.ID, blockHash.String(), altErr)
+			return false, true
 		}
 
 		u.logger.Warnf("[catchup] Peer %s failed for block %s: %v", bestPeer.ID, blockHash.String(), altErr)
 		u.reportCatchupFailureForError(ctx, bestPeer.ID, altErr)
 	}
 
-	return false
+	return false, false
 }

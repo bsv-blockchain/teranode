@@ -161,6 +161,7 @@ func TestSensitiveKeysDerivedMatchesExpected(t *testing.T) {
 		"grpc_admin_api_key":           true,
 		"blockpersister_httpAuthToken": true,
 		"blob_httpAuthToken":           true,
+		"asset_legacyPeerPoolToken":    true,
 	}
 
 	got := extractSensitiveKeys()

@@ -24,6 +24,20 @@ var prometheusUtxoConflictingDemotionRefused = promauto.NewCounter(
 	},
 )
 
+// prometheusUtxoConflictingCurrentChainDemotionRefused counts transactions that conflict
+// resolution declined to demote because they are mined in a block on the current chain, outside
+// the applying block's ancestry. The rest of the resolution goes ahead without them. A non-zero
+// value is never routine: it means the loser set held a confirmed transaction, as the winner's own
+// mined descendants were in #2071, so it should alert.
+var prometheusUtxoConflictingCurrentChainDemotionRefused = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Namespace: "teranode",
+		Subsystem: "utxo",
+		Name:      "conflicting_current_chain_demotion_refused_total",
+		Help:      "Demotions refused because the losing transaction is mined on the current chain",
+	},
+)
+
 // AncestryCheck reports whether any of blockIDs is an ancestor of (or is) the
 // block identified by blockHash.
 //
@@ -61,7 +75,21 @@ func (g AncestryGuard) enabled() bool { return g.check != nil }
 type ProcessConflictingOption func(*processConflictingOptions)
 
 type processConflictingOptions struct {
-	onRefused func(loser chainhash.Hash)
+	currentChainGuard CurrentChainGuard
+	deferCompletion   bool
+	onRefused         func(loser chainhash.Hash)
+	onConfirmedLoser  func(loser chainhash.Hash)
+	evict             func(hashes []chainhash.Hash)
+}
+
+// WithConflictEvictor registers a callback for transactions that a successful run may have flipped
+// to Conflicting but does not return in marked: what the rollback of an earlier checklist changed,
+// also when the guard then refuses the demotion. Callers pass their txmeta cache eviction. It must
+// not block.
+func WithConflictEvictor(evict func(hashes []chainhash.Hash)) ProcessConflictingOption {
+	return func(o *processConflictingOptions) {
+		o.evict = evict
+	}
 }
 
 // WithRefusalHandler registers a callback invoked once per losing transaction
@@ -71,6 +99,16 @@ type processConflictingOptions struct {
 func WithRefusalHandler(onRefused func(loser chainhash.Hash)) ProcessConflictingOption {
 	return func(o *processConflictingOptions) {
 		o.onRefused = onRefused
+	}
+}
+
+// WithConfirmedLoserHandler registers a callback invoked once per losing transaction that was not
+// demoted because it is mined on the current chain (see WithRecoveryChainGuard). Unlike
+// WithRefusalHandler this says nothing against the block: the block may well be valid, so the
+// callback must not invalidate it. Callers log the refusal. It must not block or re-enter the store.
+func WithConfirmedLoserHandler(onConfirmedLoser func(loser chainhash.Hash)) ProcessConflictingOption {
+	return func(o *processConflictingOptions) {
+		o.onConfirmedLoser = onConfirmedLoser
 	}
 }
 
@@ -223,4 +261,16 @@ func filterAncestryConfirmedLosers(ctx context.Context, s Store, losers []chainh
 	}
 
 	return kept, refused, nil
+}
+
+// WithDeferredConflictCompletion keeps the checklist until the caller has
+// applied the returned demoted set to subtrees and its transaction queue.
+func WithDeferredConflictCompletion() ProcessConflictingOption {
+	return func(o *processConflictingOptions) { o.deferCompletion = true }
+}
+
+// WithRecoveryChainGuard protects transactions confirmed on the current chain. A rollback refuses
+// to undo them, and a forward operation does not demote them (see ProcessConflicting).
+func WithRecoveryChainGuard(guard CurrentChainGuard) ProcessConflictingOption {
+	return func(o *processConflictingOptions) { o.currentChainGuard = guard }
 }

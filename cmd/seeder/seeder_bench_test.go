@@ -123,8 +123,8 @@ func newBenchAerospikeStore(b *testing.B) (utxo.Store, int) {
 		tSettings.UtxoStore.ExternalStoreConcurrency = n
 	}
 
-	b.Logf("storeBatcherSize=%d storeBatcherDuration=%s batcherMaxConcurrent=%d utxoBatchSize=%d",
-		tSettings.UtxoStore.StoreBatcherSize, tSettings.Aerospike.StoreBatcherDuration,
+	b.Logf("storeBatcherSize=%d storeBatcherDurationMillis=%d batcherMaxConcurrent=%d utxoBatchSize=%d",
+		tSettings.UtxoStore.StoreBatcherSize, tSettings.UtxoStore.StoreBatcherDurationMillis,
 		tSettings.UtxoStore.BatcherMaxConcurrent, tSettings.UtxoStore.UtxoBatchSize)
 
 	store, err := utxofactory.NewStore(context.Background(), ulogger.TestLogger{}, tSettings, "seeder-bench", false)

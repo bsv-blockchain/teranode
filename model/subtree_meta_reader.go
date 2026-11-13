@@ -175,10 +175,191 @@ func NewSubtreeMetaFromValidatedReader(subtreeHash chainhash.Hash, subtree *subt
 		return nil, errors.NewProcessingError("subtree meta entry count mismatch for %s: meta claims %d entries, subtree has %d transactions", subtreeHash.String(), claimedCount, subtreeLength)
 	}
 
-	subtreeMeta, err := subtreepkg.NewSubtreeMetaFromReader(subtree, io.MultiReader(bytes.NewReader(metaHeader[:]), reader))
+	subtreeMeta, err := decodeSubtreeMetaBody(subtree, subtreeLength, bufferedReader)
 	if err != nil {
 		return nil, errors.NewProcessingError("failed to deserialize subtree meta for %s", subtreeHash.String(), err)
 	}
 
+	if err = validateSubtreeMetaHasParents(subtree, subtreeMeta, subtreeLength); err != nil {
+		return nil, errors.NewProcessingError("subtree meta for %s is corrupt", subtreeHash.String(), err)
+	}
+
 	return subtreeMeta, nil
+}
+
+// validateSubtreeMetaHasParents rejects a meta whose entry for an ordinary
+// transaction has no parents (issue 1638).
+//
+// Every real transaction spends at least one input, so it has at least one
+// parent; every producer fills a node's inpoints from its transaction's inputs.
+// A zero parent count is therefore legitimate only for the coinbase placeholder
+// at node 0. Anywhere else it is a corrupted count that passes both header
+// checks, and block validation would read the nil parents as a transaction
+// missing from the meta and persist an invalid verdict on a valid block.
+// Failing the read sends block validation to meta regeneration instead. The
+// other two callers have no regenerator: a block assembly move-back fails the
+// reorg before mutating anything, as it does for a torn file (issue 1425), and
+// cmd/filereader reports the file as rejected, naming the bad entry, dumps its
+// body when run with -verbose, and exits non-zero.
+//
+// Meta.Serialize does not enforce this: it refuses nil parents on any node but
+// the first, yet writes an empty non-nil list as a zero count.
+//
+// The placeholder is exempt by its position and hash, not by whether this is the
+// block's first subtree: the reader is not told which subtree it reads, and a
+// placeholder in a later subtree is rejected by block validation on its own.
+func validateSubtreeMetaHasParents(subtree *subtreepkg.Subtree, meta *subtreepkg.Meta, count uint32) error {
+	if uint64(count) > uint64(len(subtree.Nodes)) || uint64(count) > uint64(len(meta.TxInpoints)) {
+		return errors.NewProcessingError("subtree meta holds %d entries, subtree has %d nodes", count, len(subtree.Nodes))
+	}
+
+	for i := range int(count) {
+		if len(meta.TxInpoints[i].ParentTxHashes) > 0 {
+			continue
+		}
+
+		if i == 0 && subtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			continue
+		}
+
+		return errors.NewProcessingError("subtree meta entry %d for transaction %s has no parents", i, subtree.Nodes[i].Hash.String())
+	}
+
+	return nil
+}
+
+const (
+	// metaHashSlab and metaWordSlab are the most parent hashes and vout words the decoded
+	// txs of a subtree meta share an allocation of.
+	metaHashSlab = 1 << 16
+	metaWordSlab = 1 << 18
+)
+
+// decodeSubtreeMetaBody decodes the count tx entries that follow a .subtreeMeta header, as
+// go-subtree's NewSubtreeMetaFromReader does, into a meta for subtree. Per tx the wire holds
+// the parent count, the parent hashes, then per parent a vout count and the vouts: the
+// count-prefixed vout layout TxInpoints keeps in memory. Entries are parsed straight from the
+// read buffer, and their hashes and vout words are cut from slabs shared by many txs, so the
+// decode costs a few allocations per subtree instead of two per tx. A tx's slices are capped
+// at their length, so an append to one never writes into the next.
+//
+// A tx with no parents gets nil parents, as go-subtree's decoder gives. A tx too large to fit
+// the read buffer is decoded by go-subtree's reader, which grows into a count it cannot trust
+// instead of allocating it up front.
+func decodeSubtreeMetaBody(subtree *subtreepkg.Subtree, count uint32, br *bufio.Reader) (*subtreepkg.Meta, error) {
+	if uint64(count) > uint64(subtree.Size()) { // nolint: gosec
+		return nil, errors.NewProcessingError("subtree meta claims %d entries, subtree has room for %d", count, subtree.Size())
+	}
+
+	meta := &subtreepkg.Meta{
+		Subtree:    subtree,
+		TxInpoints: make([]subtreepkg.TxInpoints, subtree.Size()),
+	}
+
+	var (
+		hashes []chainhash.Hash
+		words  []uint32
+	)
+
+	for i := uint32(0); i < count; {
+		buf, peekErr := br.Peek(br.Size())
+		pos := 0
+
+		for ; i < count; i++ {
+			size, parents, nWords, ok := metaEntryShape(buf[pos:])
+			if !ok {
+				break
+			}
+
+			if parents > 0 {
+				// a new slab holds at most what the rest of the buffer can, so a small meta
+				// allocates about what it holds: a parent takes at least 36 bytes, a word 4
+				rest := len(buf) - pos
+
+				if cap(hashes)-len(hashes) < parents {
+					hashes = make([]chainhash.Hash, 0, max(parents, min(metaHashSlab, rest/(chainhash.HashSize+4))))
+				}
+
+				if cap(words)-len(words) < nWords {
+					words = make([]uint32, 0, max(nWords, min(metaWordSlab, rest/4)))
+				}
+
+				txHashes := hashes[len(hashes) : len(hashes)+parents : len(hashes)+parents]
+				hashes = hashes[:len(hashes)+parents]
+
+				entry := buf[pos+4:]
+				for k := range txHashes {
+					copy(txHashes[k][:], entry[k*chainhash.HashSize:])
+				}
+
+				txWords := words[len(words) : len(words)+nWords : len(words)+nWords]
+				words = words[:len(words)+nWords]
+
+				entry = entry[parents*chainhash.HashSize:]
+				for k := range txWords {
+					txWords[k] = binary.LittleEndian.Uint32(entry[4*k:])
+				}
+
+				meta.TxInpoints[i] = subtreepkg.NewTxInpointsFromPacked(txHashes, txWords)
+			}
+
+			pos += size
+		}
+
+		if _, err := br.Discard(pos); err != nil {
+			return nil, errors.NewProcessingError("failed to advance past subtree meta entries", err)
+		}
+
+		if i == count || pos > 0 {
+			continue
+		}
+
+		// not one whole entry in the buffer
+		if peekErr != nil {
+			return nil, errors.NewProcessingError("failed to read subtree meta entry %d of %d", i, count, peekErr)
+		}
+
+		txInpoints, err := subtreepkg.NewTxInpointsFromReader(br)
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to read subtree meta entry %d of %d", i, count, err)
+		}
+
+		meta.TxInpoints[i] = txInpoints
+		i++
+	}
+
+	return meta, nil
+}
+
+// metaEntryShape measures the tx entry at the start of b: its size in bytes, its parent count
+// and the vout words it holds (one count and the vouts per parent). ok is false if b does not
+// hold all of it.
+func metaEntryShape(b []byte) (size, parents, nWords int, ok bool) {
+	if len(b) < 4 {
+		return 0, 0, 0, false
+	}
+
+	p := uint64(binary.LittleEndian.Uint32(b))
+
+	end := 4 + p*chainhash.HashSize
+	if end > uint64(len(b)) {
+		return 0, 0, 0, false
+	}
+
+	words := uint64(0)
+
+	for k := uint64(0); k < p; k++ {
+		if end+4 > uint64(len(b)) {
+			return 0, 0, 0, false
+		}
+
+		vouts := uint64(binary.LittleEndian.Uint32(b[end:]))
+		words += 1 + vouts
+
+		if end += 4 + 4*vouts; end > uint64(len(b)) {
+			return 0, 0, 0, false
+		}
+	}
+
+	return int(end), int(p), int(words), true // nolint: gosec
 }

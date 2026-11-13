@@ -317,6 +317,57 @@ func TestGetTransactionMeta(t *testing.T) {
 		assert.Equal(t, float64(-1), response["mainChainIndex"])
 	})
 
+	t.Run("Id with no stored block is skipped for mainChainIndex", func(t *testing.T) {
+		// BlockIDs[0]=7 is an id no block is stored under, left by a quick-validation
+		// retry after its reservation was swept. The chain check reports it on chain;
+		// block 9 is the one the transaction is committed in.
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+		retriedMeta := &meta.Data{
+			Tx:           nil,
+			TxInpoints:   transactionMeta.TxInpoints,
+			BlockIDs:     []uint32{7, 9},
+			BlockHeights: []uint32{100, 100},
+			SubtreeIdxs:  []int{0, 0},
+			Fee:          transactionMeta.Fee,
+			SizeInBytes:  transactionMeta.SizeInBytes,
+			IsCoinbase:   false,
+			LockTime:     transactionMeta.LockTime,
+		}
+		mockRepo.On("GetTxMeta", mock.Anything, mock.Anything).Return(retriedMeta, nil)
+
+		subtreeHash1, _ := chainhash.NewHashFromStr("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+		committed := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        testBlockHeader.Version,
+				HashPrevBlock:  testBlockHeader.HashPrevBlock,
+				HashMerkleRoot: testBlockHeader.HashMerkleRoot,
+				Timestamp:      testBlockHeader.Timestamp,
+				Bits:           testBlockHeader.Bits,
+				Nonce:          testBlockHeader.Nonce,
+			},
+			Subtrees: []*chainhash.Hash{subtreeHash1},
+		}
+		mockRepo.On("GetBlockByID", uint64(7)).Return(nil, errors.NewBlockNotFoundError("block 7 not found"))
+		mockRepo.On("GetBlockByID", uint64(9)).Return(committed, nil)
+
+		bcMock := &blockchain.Mock{}
+		bcMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
+		mockRepo.On("GetBlockchainClient").Return(bcMock).Maybe()
+		httpServer.mainChainCache = newMainChainCache(bcMock, ulogger.TestLogger{}, 0)
+
+		echoContext.SetPath("/tx/meta/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
+
+		require.NoError(t, httpServer.GetTransactionMeta(JSON)(echoContext))
+		assert.Equal(t, http.StatusOK, responseRecorder.Code)
+
+		var response map[string]interface{}
+		require.NoError(t, json.Unmarshal(responseRecorder.Body.Bytes(), &response))
+		assert.Equal(t, float64(1), response["mainChainIndex"], "must point at the committed block, not the id with no block")
+	})
+
 	t.Run("Mempool only — mainChainIndex is -1", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 

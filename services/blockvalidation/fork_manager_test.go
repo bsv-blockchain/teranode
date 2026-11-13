@@ -161,24 +161,24 @@ func TestForkManager_BlockProcessing(t *testing.T) {
 		hash2, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000002")
 
 		// Should be able to process first two blocks
-		canProcess, err := fm.CanProcessBlock(ctx, hash1)
+		canProcess, err := fm.CanProcessBlock(ctx, hash1, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.True(t, canProcess)
-		assert.True(t, fm.StartProcessingBlock(hash1))
+		assert.True(t, fm.StartProcessingBlock(hash1, PriorityChainExtending))
 		assert.Equal(t, 1, fm.GetParallelProcessingCount())
 
-		canProcess, err = fm.CanProcessBlock(ctx, hash2)
+		canProcess, err = fm.CanProcessBlock(ctx, hash2, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.True(t, canProcess)
-		assert.True(t, fm.StartProcessingBlock(hash2))
+		assert.True(t, fm.StartProcessingBlock(hash2, PriorityChainExtending))
 		assert.Equal(t, 2, fm.GetParallelProcessingCount())
 
 		// Should not be able to process third block (limit reached)
 		hash3, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000003")
-		canProcess, err = fm.CanProcessBlock(ctx, hash3)
+		canProcess, err = fm.CanProcessBlock(ctx, hash3, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.False(t, canProcess)
-		assert.False(t, fm.StartProcessingBlock(hash3))
+		assert.False(t, fm.StartProcessingBlock(hash3, PriorityChainExtending))
 		assert.Equal(t, 2, fm.GetParallelProcessingCount())
 
 		// Finish processing first block
@@ -186,10 +186,10 @@ func TestForkManager_BlockProcessing(t *testing.T) {
 		assert.Equal(t, 1, fm.GetParallelProcessingCount())
 
 		// Now should be able to process third block
-		canProcess, err = fm.CanProcessBlock(ctx, hash3)
+		canProcess, err = fm.CanProcessBlock(ctx, hash3, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.True(t, canProcess)
-		assert.True(t, fm.StartProcessingBlock(hash3))
+		assert.True(t, fm.StartProcessingBlock(hash3, PriorityChainExtending))
 		assert.Equal(t, 2, fm.GetParallelProcessingCount())
 	})
 
@@ -200,10 +200,10 @@ func TestForkManager_BlockProcessing(t *testing.T) {
 
 		hash1, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
 
-		assert.True(t, fm.StartProcessingBlock(hash1))
+		assert.True(t, fm.StartProcessingBlock(hash1, PriorityChainExtending))
 		// Should not be able to start processing same block again
-		assert.False(t, fm.StartProcessingBlock(hash1))
-		canProcess, err := fm.CanProcessBlock(ctx, hash1)
+		assert.False(t, fm.StartProcessingBlock(hash1, PriorityChainExtending))
+		canProcess, err := fm.CanProcessBlock(ctx, hash1, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.False(t, canProcess)
 	})
@@ -355,9 +355,9 @@ func TestForkManager_ConcurrentAccess(t *testing.T) {
 				case <-ctx.Done():
 					return
 				default:
-					canProcess, err := fm.CanProcessBlock(ctx, &hash)
+					canProcess, err := fm.CanProcessBlock(ctx, &hash, PriorityChainExtending)
 					if err == nil && canProcess {
-						fm.StartProcessingBlock(&hash)
+						fm.StartProcessingBlock(&hash, PriorityChainExtending)
 						time.Sleep(time.Millisecond)
 						fm.FinishProcessingBlock(&hash)
 					}
@@ -584,55 +584,6 @@ func TestForkManager_CleanupRoutine(t *testing.T) {
 
 	finalCount := fm.GetForkCount()
 	assert.Less(t, finalCount, initialCount, "Cleanup should have removed at least one fork")
-}
-
-func TestForkManager_ForkResolution(t *testing.T) {
-	initPrometheusMetrics()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.BlockValidation.MaxParallelForks = 10
-	fm := NewForkManager(logger, tSettings)
-
-	resolutions := make([]*ForkResolution, 0)
-	var resolutionMu sync.Mutex
-
-	fm.OnForkResolution(func(resolution *ForkResolution) {
-		resolutionMu.Lock()
-		resolutions = append(resolutions, resolution)
-		resolutionMu.Unlock()
-	})
-
-	baseHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
-	fm.RegisterFork("fork1", baseHash, 1000)
-
-	merkleRoot, _ := chainhash.NewHashFromStr("1111111111111111111111111111111111111111111111111111111111111111")
-	block := &model.Block{
-		Height: 1001,
-		Header: &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  baseHash,
-			HashMerkleRoot: merkleRoot,
-			Timestamp:      uint32(time.Now().Unix()),
-			Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d},
-			Nonce:          0,
-		},
-	}
-
-	require.NoError(t, fm.AddBlockToFork(block, "fork1"))
-
-	fm.CheckForkResolution(context.Background(), block, block.Hash(), 1001)
-
-	time.Sleep(100 * time.Millisecond)
-
-	resolutionMu.Lock()
-	defer resolutionMu.Unlock()
-
-	require.Len(t, resolutions, 1)
-	resolution := resolutions[0]
-
-	assert.Equal(t, "fork1", resolution.ForkID)
-	assert.Equal(t, "main", resolution.ResolvedTo)
-	assert.Equal(t, uint32(1001), resolution.FinalHeight)
 }
 
 func TestForkManager_MetricsCollection(t *testing.T) {

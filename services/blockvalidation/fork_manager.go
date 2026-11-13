@@ -71,6 +71,7 @@ func (g *BlockProcessingGuard) Release() {
 		// This prevents double-decrement if CleanupFork already removed it
 		if g.fm.processingBlocks[*g.blockHash] {
 			delete(g.fm.processingBlocks, *g.blockHash)
+			delete(g.fm.processingPriority, *g.blockHash)
 			g.fm.processingCount.Add(-1) // Decrement only if we removed it
 		}
 
@@ -111,19 +112,6 @@ type ForkCleanupConfig struct {
 	CheckInterval    time.Duration
 }
 
-// ForkResolution represents a resolved fork
-type ForkResolution struct {
-	ForkID       string
-	ResolvedAt   time.Time
-	ResolvedTo   string
-	FinalBlock   *chainhash.Hash
-	FinalHeight  uint32
-	BlocksInFork int
-}
-
-// ForkResolutionCallback is called when a fork is resolved
-type ForkResolutionCallback func(resolution *ForkResolution)
-
 // DefaultForkCleanupConfig returns default cleanup settings
 func DefaultForkCleanupConfig() ForkCleanupConfig {
 	return ForkCleanupConfig{
@@ -135,20 +123,20 @@ func DefaultForkCleanupConfig() ForkCleanupConfig {
 }
 
 type ForkManager struct {
-	logger              ulogger.Logger
-	settings            *settings.Settings
-	forks               map[string]*ForkBranch
-	blockToFork         map[chainhash.Hash]string
-	processingBlocks    map[chainhash.Hash]bool
-	mu                  sync.RWMutex
-	maxParallelForks    int
-	maxTrackedForks     int
-	priorityQueue       condBroadcaster
-	cleanupConfig       ForkCleanupConfig
-	mainChainTip        *chainhash.Hash
-	mainChainHeight     uint32
-	resolutionCallbacks []ForkResolutionCallback
-	processingCount     atomic.Int32 // Atomic counter for fast-path checking
+	logger             ulogger.Logger
+	forks              map[string]*ForkBranch
+	blockToFork        map[chainhash.Hash]string
+	processingBlocks   map[chainhash.Hash]bool
+	processingPriority map[chainhash.Hash]BlockPriority // class each processing block was queued with
+	mu                 sync.RWMutex
+	maxParallelForks   int
+	maxTrackedForks    int
+	priorityQueue      condBroadcaster
+	cleanupConfig      ForkCleanupConfig
+	processingCount    atomic.Int32 // Atomic counter for fast-path checking
+	// validating reports a block being validated outside the queue (catchup, gRPC, legacy sync),
+	// which never takes a worker slot. Nil until SetValidatingCheck.
+	validating func(*chainhash.Hash) bool
 }
 
 func NewForkManager(logger ulogger.Logger, tSettings *settings.Settings) *ForkManager {
@@ -169,15 +157,14 @@ func NewForkManagerWithConfig(logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	return &ForkManager{
-		logger:              logger,
-		settings:            tSettings,
-		forks:               make(map[string]*ForkBranch),
-		blockToFork:         make(map[chainhash.Hash]string),
-		processingBlocks:    make(map[chainhash.Hash]bool),
-		maxParallelForks:    maxParallelForks,
-		maxTrackedForks:     maxTrackedForks,
-		cleanupConfig:       cleanupConfig,
-		resolutionCallbacks: make([]ForkResolutionCallback, 0),
+		logger:             logger,
+		forks:              make(map[string]*ForkBranch),
+		blockToFork:        make(map[chainhash.Hash]string),
+		processingBlocks:   make(map[chainhash.Hash]bool),
+		processingPriority: make(map[chainhash.Hash]BlockPriority),
+		maxParallelForks:   maxParallelForks,
+		maxTrackedForks:    maxTrackedForks,
+		cleanupConfig:      cleanupConfig,
 	}
 }
 
@@ -253,7 +240,29 @@ func (fm *ForkManager) GetForkForBlock(blockHash *chainhash.Hash) (string, bool)
 	return forkID, exists
 }
 
-func (fm *ForkManager) CanProcessBlock(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+// tipSlotReserved reports whether a block of the given class is kept out of the last free
+// slot. Blocks that do not extend the tip may hold at most maxParallelForks-1 slots, so slow
+// fork blocks can never occupy every worker while a chain-extending block waits. The class
+// is the one recorded at enqueue: a fork block that becomes the tip after a reorg does not
+// get the reserved slot, and two competing blocks at the tip height are both chain-extending.
+// Caller holds fm.mu.
+func (fm *ForkManager) tipSlotReserved(priority BlockPriority) bool {
+	if priority == PriorityChainExtending || fm.maxParallelForks <= 1 {
+		return false
+	}
+
+	nonTip := 0
+
+	for _, p := range fm.processingPriority {
+		if p != PriorityChainExtending {
+			nonTip++
+		}
+	}
+
+	return nonTip >= fm.maxParallelForks-1
+}
+
+func (fm *ForkManager) CanProcessBlock(ctx context.Context, blockHash *chainhash.Hash, priority BlockPriority) (bool, error) {
 	// Fast-path: Check if we've reached max parallel forks without acquiring any locks
 	if int(fm.processingCount.Load()) >= fm.maxParallelForks {
 		return false, nil
@@ -267,6 +276,10 @@ func (fm *ForkManager) CanProcessBlock(ctx context.Context, blockHash *chainhash
 	}
 
 	if len(fm.processingBlocks) >= fm.maxParallelForks {
+		return false, nil
+	}
+
+	if fm.tipSlotReserved(priority) {
 		return false, nil
 	}
 
@@ -327,7 +340,7 @@ func (fm *ForkManager) MarkBlockProcessing(blockHash *chainhash.Hash) (*BlockPro
 }
 
 // StartProcessingBlock marks a block as being processed
-func (fm *ForkManager) StartProcessingBlock(blockHash *chainhash.Hash) bool {
+func (fm *ForkManager) StartProcessingBlock(blockHash *chainhash.Hash, priority BlockPriority) bool {
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
 
@@ -339,7 +352,12 @@ func (fm *ForkManager) StartProcessingBlock(blockHash *chainhash.Hash) bool {
 		return false
 	}
 
+	if fm.tipSlotReserved(priority) {
+		return false
+	}
+
 	fm.processingBlocks[*blockHash] = true
+	fm.processingPriority[*blockHash] = priority
 	fm.processingCount.Add(1) // Increment atomic counter
 
 	if forkID, exists := fm.blockToFork[*blockHash]; exists {
@@ -361,6 +379,7 @@ func (fm *ForkManager) FinishProcessingBlock(blockHash *chainhash.Hash) {
 
 	if fm.processingBlocks[*blockHash] {
 		delete(fm.processingBlocks, *blockHash)
+		delete(fm.processingPriority, *blockHash)
 		fm.processingCount.Add(-1) // Decrement atomic counter
 	}
 
@@ -384,6 +403,50 @@ func (fm *ForkManager) FinishProcessingBlock(blockHash *chainhash.Hash) {
 	}
 
 	fm.logger.Debugf("Finished processing block %s", blockHash)
+}
+
+// IsBlockInFlight reports whether a worker is validating the block or pending reports it queued
+// or being fetched. Both are read under fm.mu, so no slot can be claimed or released in between.
+// A block claims its slot before it leaves the queue and is back on the queue before its slot is
+// released, so with slots held still one of the two reads always sees it. pending takes the
+// queue's lock, which is the same fm.mu → pq.mu order FinishProcessingBlock's Signal uses.
+//
+// A block validated outside the queue (catchup, gRPC, legacy sync) holds no slot, so the
+// validating check set by SetValidatingCheck reports it too. Otherwise a child arriving while
+// such a parent is being stored looks at a parent that is neither in flight nor stored, and goes
+// to catchup to fetch a block this node is about to hold.
+func (fm *ForkManager) IsBlockInFlight(blockHash *chainhash.Hash, pending func(chainhash.Hash) bool) bool {
+	fm.mu.RLock()
+	defer fm.mu.RUnlock()
+
+	return fm.processingBlocks[*blockHash] || pending(*blockHash) || (fm.validating != nil && fm.validating(blockHash))
+}
+
+// SetValidatingCheck sets the check IsBlockInFlight uses for blocks validated outside the queue.
+// The check must not call back into the fork manager.
+func (fm *ForkManager) SetValidatingCheck(validating func(*chainhash.Hash) bool) {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+
+	fm.validating = validating
+}
+
+// IsProcessingBlock reports whether a worker is currently validating the block.
+func (fm *ForkManager) IsProcessingBlock(blockHash *chainhash.Hash) bool {
+	fm.mu.RLock()
+	defer fm.mu.RUnlock()
+
+	return fm.processingBlocks[*blockHash]
+}
+
+// ProcessingPriority returns the class a block being validated was queued with.
+func (fm *ForkManager) ProcessingPriority(blockHash *chainhash.Hash) (BlockPriority, bool) {
+	fm.mu.RLock()
+	defer fm.mu.RUnlock()
+
+	priority, ok := fm.processingPriority[*blockHash]
+
+	return priority, ok
 }
 
 // GetParallelProcessingCount returns the number of blocks currently being processed
@@ -416,6 +479,7 @@ func (fm *ForkManager) CleanupFork(forkID string) {
 		delete(fm.blockToFork, *blockHash)
 		if fm.processingBlocks[*blockHash] {
 			delete(fm.processingBlocks, *blockHash)
+			delete(fm.processingPriority, *blockHash)
 			fm.processingCount.Add(-1) // Decrement counter to prevent drift
 		}
 	}
@@ -469,6 +533,7 @@ func (fm *ForkManager) CleanupOldForks(heightThreshold uint32) {
 			delete(fm.blockToFork, *blockHash)
 			if fm.processingBlocks[*blockHash] {
 				delete(fm.processingBlocks, *blockHash)
+				delete(fm.processingPriority, *blockHash)
 				fm.processingCount.Add(-1) // Decrement counter to prevent drift
 			}
 		}
@@ -699,6 +764,7 @@ func (fm *ForkManager) removeFork(fork *ForkBranch) {
 			// Also check if this block was being processed and decrement counter
 			if fm.processingBlocks[blockHash] {
 				delete(fm.processingBlocks, blockHash)
+				delete(fm.processingPriority, blockHash)
 				fm.processingCount.Add(-1) // Decrement counter to prevent drift
 			}
 		}
@@ -740,69 +806,6 @@ func (fm *ForkManager) applyRetentionPolicy(candidates []*ForkBranch) []*ForkBra
 	}
 
 	return result
-}
-
-// OnForkResolution registers a callback for fork resolution events
-func (fm *ForkManager) OnForkResolution(callback ForkResolutionCallback) {
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-
-	fm.resolutionCallbacks = append(fm.resolutionCallbacks, callback)
-}
-
-// CheckForkResolution checks if a fork has been resolved after block processing
-func (fm *ForkManager) CheckForkResolution(ctx context.Context, processedBlock *model.Block, newMainChainTip *chainhash.Hash, newMainChainHeight uint32) {
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-
-	previousTip := fm.mainChainTip
-	fm.mainChainTip = newMainChainTip
-	fm.mainChainHeight = newMainChainHeight
-
-	forkID, exists := fm.blockToFork[*processedBlock.Hash()]
-	if !exists {
-		return
-	}
-
-	fork, exists := fm.forks[forkID]
-	if !exists {
-		return
-	}
-
-	if processedBlock.Hash().IsEqual(newMainChainTip) {
-		fm.handleForkResolution(fork, "main", processedBlock)
-		fm.checkOrphanedForks(newMainChainHeight)
-	}
-
-	_ = previousTip
-}
-
-// handleForkResolution marks a fork as resolved and notifies callbacks
-func (fm *ForkManager) handleForkResolution(fork *ForkBranch, resolvedTo string, finalBlock *model.Block) {
-	fm.logger.Infof("Fork %s resolved to %s at height %d with %d blocks", fork.ID, resolvedTo, finalBlock.Height, len(fork.Blocks))
-
-	fork.State = ForkStateResolved
-	fork.LastActivity = time.Now()
-
-	resolution := &ForkResolution{
-		ForkID:       fork.ID,
-		ResolvedAt:   time.Now(),
-		ResolvedTo:   resolvedTo,
-		FinalBlock:   finalBlock.Hash(),
-		FinalHeight:  finalBlock.Height,
-		BlocksInFork: len(fork.Blocks),
-	}
-
-	for _, callback := range fm.resolutionCallbacks {
-		go callback(resolution)
-	}
-
-	if prometheusForkResolved != nil {
-		prometheusForkResolved.WithLabelValues(resolvedTo).Inc()
-	}
-	if prometheusForkResolutionDepth != nil {
-		prometheusForkResolutionDepth.Observe(float64(len(fork.Blocks)))
-	}
 }
 
 // updateProcessingBlocksMetrics tracks blocks that may be stuck in processing state
@@ -855,26 +858,4 @@ func (fm *ForkManager) updateAggregateMetrics() {
 	}
 
 	prometheusForkLongestDepth.Set(float64(longestDepth))
-}
-
-// checkOrphanedForks marks forks as orphaned if they're too far behind the main chain
-func (fm *ForkManager) checkOrphanedForks(newMainHeight uint32) {
-	orphanThreshold := uint32(fm.settings.ChainCfgParams.CoinbaseMaturity)
-
-	for _, fork := range fm.forks {
-		if fork.State != ForkStateActive {
-			continue
-		}
-
-		if newMainHeight > fork.BaseHeight+orphanThreshold {
-			fm.logger.Warnf("Fork %s potentially orphaned (base: %d, main: %d)", fork.ID, fork.BaseHeight, newMainHeight)
-
-			fork.State = ForkStateOrphaned
-			fork.LastActivity = time.Now()
-
-			if prometheusOrphanedForks != nil {
-				prometheusOrphanedForks.Inc()
-			}
-		}
-	}
 }

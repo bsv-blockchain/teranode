@@ -36,7 +36,101 @@ const (
 	// announcement flood, short enough that a freshly banned peer is refused
 	// within seconds.
 	peerMaliciousCacheTTL = 5 * time.Second
+
+	// announcedBlockRateLimitAllowance is how many 429s a peer's /block/:hash may answer within
+	// announcedBlockRateLimitWindow before a 429 on an announced-block fetch is charged like any
+	// other failure. See reportAnnouncedBlockFetchFailure.
+	announcedBlockRateLimitAllowance = 3
+	announcedBlockRateLimitWindow    = 10 * time.Minute
+
+	// announcedBlockRateLimitMaxTracked bounds the per-peer 429 counters, so a stream of distinct
+	// peer IDs cannot grow the cache without limit.
+	announcedBlockRateLimitMaxTracked = 10_000
 )
+
+// newAnnouncedBlockRateLimitCache builds the per-peer 429 counter used by
+// spendAnnouncedBlockRateLimitAllowance. The window is fixed from the first 429: reads never extend
+// it, so a peer's allowance comes back once the window lapses.
+func newAnnouncedBlockRateLimitCache() *ttlcache.Cache[string, int] {
+	return ttlcache.New[string, int](
+		ttlcache.WithTTL[string, int](announcedBlockRateLimitWindow),
+		ttlcache.WithDisableTouchOnHit[string, int](),
+		ttlcache.WithCapacity[string, int](announcedBlockRateLimitMaxTracked),
+	)
+}
+
+// spendAnnouncedBlockRateLimitAllowance records one 429 from peerID's /block/:hash and reports
+// whether the peer is now past its allowance, meaning the 429 must be charged. Without the cache
+// (Server literals in tests) every 429 is charged: failing closed costs an honest peer at most
+// some reputation, while failing open makes 429 a free pass.
+//
+// The allowance is per peer ID, so a peer minting fresh IDs gets a fresh allowance each time. That
+// costs it a new libp2p identity per few 429s, and each ID is still charged once past its allowance.
+func (u *Server) spendAnnouncedBlockRateLimitAllowance(peerID string) bool {
+	if u.announcedBlockRateLimits == nil {
+		return true
+	}
+
+	u.announcedBlockRateLimitsMu.Lock()
+	defer u.announcedBlockRateLimitsMu.Unlock()
+
+	n := 1
+
+	// Preserve the original expiry, as recordPolicyDeclineAttempt does: a Set with a full TTL on
+	// every 429 would let a steady trickle keep the window open forever.
+	ttl := ttlcache.DefaultTTL
+	if item := u.announcedBlockRateLimits.Get(peerID); item != nil {
+		n = item.Value() + 1
+
+		if remaining := time.Until(item.ExpiresAt()); remaining > 0 {
+			ttl = remaining
+		}
+	}
+
+	u.announcedBlockRateLimits.Set(peerID, n, ttl)
+
+	return n > announcedBlockRateLimitAllowance
+}
+
+// reportAnnouncedBlockFetchFailure charges peerID for a failed fetch of a block it announced, from
+// the baseURL it announced. Both blockFound fetch sites use it, so whether a peer pays for a broken
+// endpoint does not depend on which of them ran.
+//
+// Every failure is charged, with two exceptions:
+//
+//   - The caller's ctx is done. That is this node shutting down, not the peer failing.
+//   - A 429 within the peer's allowance. The peer's /block/:hash shares its per-IP rate-limit
+//     bucket with the catch-up routes this node's own fan-out drains, so an occasional 429 is our
+//     collision. But the announcer chose the baseURL, so a 429 alone proves nothing: past the
+//     allowance it is charged, or a peer could answer 429 on purpose and announce for free.
+//
+// A fetch deadline is charged. The fetch budget is detached from the caller (or derived from a
+// ctx checked above), so a deadline means the announcer's endpoint used the whole budget, and
+// exempting it would let a peer stall every fetch at no cost.
+//
+// This differs from isLocalCatchupFault, which exempts every 429 and also ErrServiceError (so a
+// 401 or 500). In catch-up this node picked the peer and is hammering it, so 429s there are
+// expected and frequent; on this path the peer picked us, and a 401 or 500 is its misconfiguration.
+//
+// It reports whether the peer was charged.
+func (u *Server) reportAnnouncedBlockFetchFailure(ctx context.Context, peerID string, err error) bool {
+	if peerID == "" || err == nil || ctx.Err() != nil {
+		return false
+	}
+
+	if errors.Is(err, errors.ErrServiceRateLimited) && !u.spendAnnouncedBlockRateLimitAllowance(peerID) {
+		return false
+	}
+
+	if isLocalProcessingFault(err) {
+		return false
+	}
+
+	u.reportCatchupFailure(ctx, peerID)
+	u.reportCatchupError(ctx, peerID, err.Error())
+
+	return true
+}
 
 // isLegacyPeerID reports whether peerID was namespaced by the legacy netsync path rather than
 // being a real p2p identity.
@@ -56,10 +150,15 @@ const (
 // the real p2p announcer of the same hash. It would also add a gRPC round-trip and double-charge
 // the peer for one corrupt body.
 //
-// Legacy misbehaviour is attributed where it IS enforceable: strikeIfCorruptBlockBody's transient
-// ban score on the serving connection (services/legacy/peer_server.go) and sync-peer rotation via
-// shouldDisconnectOnBlockErr. The three sites implementing the policy are penalizeCorruptBlockPeer,
-// isPeerMalicious and kafkaNotifyBlockInvalid's peerID clearing.
+// Legacy misbehaviour is attributed where it IS enforceable, in the legacy peer server: a body the
+// pipeline sink refuses as the peer's fault is rejected and its association dropped at the read
+// loop, and the host is to be banned when the refusal is one of the three ErrBlockBodyMismatch
+// sites and the wire checksum was verified, which the streaming path cannot do yet, so today no
+// ban is raised (serverPeer.OnBlockBodyRejected, services/legacy/peer_server.go); a legacy block judged invalid
+// at commit drops the delivering association through the park table (netsync
+// applyParkDisposition). So the legacy: prefix only has to keep these IDs out of the p2p ban
+// machinery. The three sites implementing that are penalizeCorruptBlockPeer, isPeerMalicious and
+// kafkaNotifyBlockInvalid's peerID clearing.
 func isLegacyPeerID(peerID string) bool {
 	return strings.HasPrefix(peerID, LegacyPeerIDPrefix)
 }
@@ -166,6 +265,10 @@ func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string
 		return
 	}
 
+	if isLocalProcessingFault(err) {
+		return
+	}
+
 	if errors.Is(err, errors.ErrBlockPolicyDeclined) {
 		// A local policy decline (excessiveblocksize) is OUR configuration, so no peer may be charged
 		// for it (bitcoin-sv/teranode#4692). Exempting HERE rather than only at the terminal branch in
@@ -176,6 +279,17 @@ func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string
 		// identically, because the limit is ours and not theirs. Charging each of them would push
 		// honest peers toward the reputation floor that GetPeersAtMaxHeight/SelectAlternativePeer
 		// filter on, which is the self-isolation this work exists to remove.
+		return
+	}
+
+	if isLocalPanic(err) {
+		// An errgroup goroutine in this catchup panicked (issue 4993), or a validation in this
+		// catchup waited in runOncePerBlock on a validation of the same block that panicked on
+		// another goroutine (BV-STARTUP-007). The panic is a bug in this node, so
+		// no peer may be charged for it. releaseCatchupLock already scored the cycle local_panic.
+		// The exemption is here, and not only in processCatchupChItem's isLocalCatchupFault branch,
+		// for the reason the policy-decline exemption above gives: tryAlternativePeersForCatchup and
+		// the cached-alternatives loop charge each alternative through this helper.
 		return
 	}
 
@@ -200,42 +314,25 @@ const catchupFailureReportedKey = "catchup_failure_reported"
 // types into message-only links (breaking code matching downstream), so the
 // marker must live in error data on a native link, which keeps the wrapped
 // chain fully intact for errors.Is dispatch. Nil-safe.
+//
+// The wrapper is a NetworkError, not a ProcessingError: every marked failure was
+// charged to the peer at its source, so the wrapper must keep that attribution. A
+// ProcessingError wrapper would make an uncoded peer error read as a local fault
+// (isLocalProcessingFault). A local cause such as a ServiceError stays local.
 func markCatchupFailureReported(err error) error {
 	if err == nil {
 		return nil
 	}
-	wrapped := errors.NewProcessingError("catchup failure reported at source", err)
+	wrapped := errors.NewNetworkError("catchup failure reported at source", err)
 	wrapped.SetData(catchupFailureReportedKey, true)
 	return wrapped
 }
 
 // catchupFailureAlreadyReported reports whether err carries the
-// markCatchupFailureReported marker anywhere in its wrapped chain. The walk is
-// depth-bounded defensively, mirroring the errors package's own chain walks.
+// markCatchupFailureReported marker in its wrapped chain, within hasErrorMarker's
+// depth bound.
 func catchupFailureAlreadyReported(err error) bool {
-	var e *errors.Error
-	if !errors.As(err, &e) {
-		return false
-	}
-
-	for depth := 0; e != nil && depth < 32; depth++ {
-		if v, ok := e.GetData(catchupFailureReportedKey).(bool); ok && v {
-			return true
-		}
-
-		next := e.WrappedErr()
-		if next == nil {
-			return false
-		}
-
-		var nextErr *errors.Error
-		if !errors.As(next, &nextErr) {
-			return false
-		}
-		e = nextErr
-	}
-
-	return false
+	return hasErrorMarker(err, catchupFailureReportedKey)
 }
 
 func (u *Server) reportCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) {
@@ -337,8 +434,9 @@ func isUnboundTxInvalidVerdict(err error) bool {
 // isLocalCatchupFault reports whether a catchup failure is this node's own doing
 // rather than anything the serving peer did, so no reputation charge is warranted.
 //
-// The predicate is the union of two errors-package helpers because neither covers
-// this on its own, and they are disjoint on exactly the cases that matter here.
+// The predicate is the union of two errors-package helpers and one error code. The
+// two helpers are both needed because neither covers this on its own, and they are
+// disjoint on exactly the cases that matter here; the code is explained below.
 // IsLocalError - what recordCatchupPeerFailure uses - is context errors plus
 // ErrStorageError, and misses the *Unavailable codes. IsTransientLocalError is
 // {ServiceError, StorageError, ServiceUnavailable, StorageUnavailable}, and misses
@@ -355,10 +453,68 @@ func isUnboundTxInvalidVerdict(err error) bool {
 // wrapped case whatever the wrapper says. That chain is the one this predicate
 // exists for, since shouldReportConsensusMalicious is only ever asked about errors
 // that already carry a consensus code on the outside.
+//
+// ErrServiceRateLimited (an HTTP 429 from the serving peer) is local here too. The
+// peer's per-IP bucket is shared with this node's own subtree fan-out, so a 429 on
+// /blocks is our collision, not the peer's fault; before the dedicated code existed
+// a 429 was ErrServiceError and already landed in this set. It is deliberately NOT
+// added to IsTransientLocalError, which legacy netsync uses to decide whether to keep
+// a delivering peer.
+//
+// This covers a 429 only as a catch-up run's TERMINAL error. Mid-run, a peer whose
+// subtree fetch runs out of 429 retries is still recorded by recordCatchupPeerFailure,
+// and the releaseCatchupLock drain charges it if the run fails. That charge is kept on
+// purpose as the rotation signal: the peer advertises its own DataHubURL, so a peer
+// answering 429 deliberately must not be able to dodge every charge. The announced-block
+// fetch has its own, bounded rule; see reportAnnouncedBlockFetchFailure.
+//
+// A local-panic error (isLocalPanic, BV-STARTUP-007) is local too: a validation that waited in
+// runOncePerBlock on a validation that panicked on another goroutine, or an errgroup goroutine
+// that panicked (issue 4993). The panic is a bug in this node. Without this the
+// waiter's ERR_PROCESSING error reached processCatchupChItem's peer-failure report and charged
+// the primary.
 func isLocalCatchupFault(err error) bool {
 	return errors.IsTransientLocalError(err) ||
+		errors.Is(err, errors.ErrServiceRateLimited) ||
 		errors.IsContextError(err) ||
-		errors.Is(err, errors.ErrContextCanceled)
+		errors.Is(err, errors.ErrContextCanceled) ||
+		isLocalPanic(err) ||
+		isLocalProcessingFault(err)
+}
+
+// isLocalProcessingFault reports whether err is a ProcessingError that carries no
+// peer-attributable code. Such an error is this node's own fault, so it is never
+// charged to a peer: conflict resolution reading a counter-spend record the pruner
+// already removed, the conflicting-walk budget, an internal invariant.
+//
+// The peer codes take precedence because errors.Is matches a code anywhere in the
+// chain and ProcessingError is the common wrapper: blessMissingTransaction wraps a
+// counter-spend already mined in the block's own ancestry, a TxInvalid, in one. A
+// chain carrying both is the peer's. ErrNotFound is a peer code because it is what a
+// peer's HTTP 404 becomes (util.buildHTTPError); ErrTxNotFound is a different code.
+// A block spend rule violation (errors.IsBlockSpendRuleViolation) is a peer code too:
+// subtree validation re-codes it as TxInvalid on the block path, and this keeps it
+// charged on any path that does not. A frozen UTXO and a UTXO hash mismatch are not,
+// so they stay local.
+//
+// A peer fault must therefore be coded as one of these, not as a bare ProcessingError.
+func isLocalProcessingFault(err error) bool {
+	return errors.Is(err, errors.ErrProcessing) && !carriesPeerFaultCode(err)
+}
+
+func carriesPeerFaultCode(err error) bool {
+	return errors.Is(err, errors.ErrTxInvalid) ||
+		errors.Is(err, errors.ErrBlockInvalid) ||
+		errors.IsBlockCorrupt(err) ||
+		errors.Is(err, errors.ErrBlockIncomplete) ||
+		errors.Is(err, errors.ErrExternal) ||
+		errors.Is(err, errors.ErrNotFound) ||
+		errors.Is(err, errors.ErrNetworkError) ||
+		errors.Is(err, errors.ErrNetworkTimeout) ||
+		errors.Is(err, errors.ErrNetworkConnectionRefused) ||
+		errors.Is(err, errors.ErrNetworkInvalidResponse) ||
+		errors.Is(err, errors.ErrNetworkPeerMalicious) ||
+		errors.IsBlockSpendRuleViolation(err)
 }
 
 // reportCatchupMalicious reports malicious behavior to the P2P service.

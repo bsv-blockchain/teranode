@@ -84,7 +84,7 @@ func TestProcessBlockFound_ExcessiveBlockSize_DeclineIsBounded(t *testing.T) {
 	// the capped suppression below can be asserted to carry the IDENTICAL classification.
 	var uncappedDecline error
 	for i := 0; i < 3; i++ {
-		err := s.processBlockFound(ctx, block.Hash(), peerA, "legacy", block)
+		err := s.processBlockFound(ctx, block.Hash(), peerA, "legacy", false, block)
 		require.Error(t, err, "delivery %d must be declined on policy", i+1)
 		require.Contains(t, err.Error(), "excessiveblocksize")
 		require.True(t, errors.Is(err, errors.ErrBlockPolicyDeclined), "a policy decline is classified ERR_BLOCK_POLICY_DECLINED")
@@ -106,7 +106,7 @@ func TestProcessBlockFound_ExcessiveBlockSize_DeclineIsBounded(t *testing.T) {
 	// INDISTINGUISHABLE in classification from the uncapped decline it rate-limits (bitcoin-sv/teranode#4692):
 	// same ERR_BLOCK_POLICY_DECLINED sentinel, NOT corrupt (so no corrupt-body strike lands for our
 	// local policy choice), never ErrBlockInvalid, and never nil (no false accept).
-	capErr := s.processBlockFound(ctx, block.Hash(), peerA, "legacy", block)
+	capErr := s.processBlockFound(ctx, block.Hash(), peerA, "legacy", false, block)
 	require.Error(t, capErr, "a capped delivery must be suppressed with an error, never reported as accepted")
 	require.Equal(t, errors.IsBlockCorrupt(uncappedDecline), errors.IsBlockCorrupt(capErr),
 		"capped and uncapped declines must share the corrupt-classification (both false)")
@@ -121,7 +121,7 @@ func TestProcessBlockFound_ExcessiveBlockSize_DeclineIsBounded(t *testing.T) {
 	// request against the "legacy" base URL fails and surfaces a ProcessingError. An
 	// ERR_BLOCK_POLICY_DECLINED cap-suppression (not a ProcessingError fetch failure) is only possible
 	// if the gate ran first.
-	capErr = s.processBlockFound(ctx, block.Hash(), peerA, "legacy")
+	capErr = s.processBlockFound(ctx, block.Hash(), peerA, "legacy", false)
 	require.Error(t, capErr, "a capped delivery must be suppressed before fetchSingleBlock is ever reached")
 	require.True(t, errors.Is(capErr, errors.ErrBlockPolicyDeclined), "the pre-fetch suppression is the policy-decline class, got: %v", capErr)
 	require.False(t, errors.Is(capErr, errors.ErrProcessing), "must be the cap suppression, not a fetch ProcessingError")
@@ -134,7 +134,7 @@ func TestProcessBlockFound_ExcessiveBlockSize_DeclineIsBounded(t *testing.T) {
 
 	// The honest-tip-wedge property: a different serving identity keeps a full, independent budget,
 	// so the same hash is judged again rather than suppressed.
-	err := s.processBlockFound(ctx, block.Hash(), peerB, "legacy", block)
+	err := s.processBlockFound(ctx, block.Hash(), peerB, "legacy", false, block)
 	require.Error(t, err, "a different peer must not be suppressed by the first peer's declines")
 	require.Contains(t, err.Error(), "excessiveblocksize")
 

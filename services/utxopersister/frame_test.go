@@ -105,6 +105,30 @@ func TestReadUTXOWrapperFrame_FooterBoundary(t *testing.T) {
 	require.Equal(t, footer, boundary.FooterBytes[:])
 }
 
+// Only a tail of exactly FooterSize bytes after the last record is the footer.
+// A reader of a pipe cannot seek to check, so this gate is all that stops a
+// partly written footer, padded with zeros, decoding as plausible counts.
+func TestReadUTXOWrapperFrame_ShortTailIsNotFooter(t *testing.T) {
+	record := frameTestWrappers()[1].Bytes()
+
+	for tail := 1; tail < 32; tail++ {
+		if tail == FooterSize {
+			continue
+		}
+
+		r := bytes.NewReader(append(append([]byte{}, record...), make([]byte, tail)...))
+
+		_, _, err := ReadUTXOWrapperFrame(r, nil)
+		require.NoError(t, err)
+
+		_, _, err = ReadUTXOWrapperFrame(r, nil)
+		require.Error(t, err, "tail of %d bytes", tail)
+
+		var boundary *ErrRecordBoundary
+		require.False(t, errors.As(err, &boundary), "a %d-byte tail must not be taken for the %d-byte footer", tail, FooterSize)
+	}
+}
+
 // A record cut anywhere inside must fail rather than yield a short frame.
 func TestReadUTXOWrapperFrame_TruncatedRecordFails(t *testing.T) {
 	full := frameTestWrappers()[1].Bytes()
