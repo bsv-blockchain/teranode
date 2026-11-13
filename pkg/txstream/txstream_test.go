@@ -219,7 +219,9 @@ func TestADeclaredScriptLengthIsNotAllocatedBeforeItsBytesArrive(t *testing.T) {
 // A script larger than several growth steps, read partly as a proof prefix and partly straight into
 // its final buffer, comes back byte for byte.
 func TestAScriptSpanningManyChunksReadsWhole(t *testing.T) {
-	tx := sampleTx(t, 7, 5*scriptChunk+123)
+	// 3 MiB: its 768 KiB proof is read as chunks of 64, 128, 256 and 320 KiB, so the doubling and
+	// the copy offsets are both under a byte-for-byte check.
+	tx := sampleTx(t, 7, 3<<20)
 
 	got, id, _, err := NewReader(bytes.NewReader(tx.Bytes())).Next(Options{})
 	require.NoError(t, err)
@@ -287,4 +289,28 @@ func TestAFailingWriterStopsTheReadBeforeAnotherSourceRead(t *testing.T) {
 	require.ErrorIs(t, err, errSinkFull)
 	require.NotZero(t, sink.failedAt)
 	require.Equal(t, sink.failedAt, src.calls, "the source was read again after the writer failed")
+}
+
+// A trusted source reads a large script with one allocation of its length and no proof prefix.
+// The same script from an untrusted source costs a quarter more.
+func TestATrustedSourceAllocatesALargeScriptOnce(t *testing.T) {
+	const size = 4 << 20
+
+	raw := sampleTx(t, 8, size).Bytes()
+
+	allocated := func(opts Options) uint64 {
+		var before, after runtime.MemStats
+
+		runtime.ReadMemStats(&before)
+		got, _, _, err := NewReader(bytes.NewReader(raw)).Next(opts)
+		runtime.ReadMemStats(&after)
+
+		require.NoError(t, err)
+		require.Equal(t, raw, got.Bytes())
+
+		return after.TotalAlloc - before.TotalAlloc
+	}
+
+	require.Less(t, allocated(Options{LengthsTrusted: true}), uint64(size)*9/8, "a trusted script is allocated once")
+	require.GreaterOrEqual(t, allocated(Options{}), uint64(size)*5/4, "an untrusted script proves a quarter first")
 }

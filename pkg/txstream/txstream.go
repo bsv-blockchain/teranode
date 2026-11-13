@@ -66,6 +66,11 @@ type Options struct {
 	// its marker is read. A block on the wire carries the standard form only: SV Node reads the
 	// marker as an input count of zero and rejects the transaction.
 	StandardOnly bool
+	// LengthsTrusted reads every script with one allocation of its declared length, without first
+	// proving a quarter of it has arrived. Set it only for a source this node wrote itself, such as
+	// a subtree data file, whose script lengths were read and checked against real bytes before it
+	// was written. Never set it for bytes from a peer.
+	LengthsTrusted bool
 }
 
 // Reader reads transactions one after another from one stream.
@@ -74,6 +79,8 @@ type Reader struct {
 	h       hash.Hash
 	sum     [sha256.Size]byte
 	hashing bool
+	// trusted is Options.LengthsTrusted for the transaction being read.
+	trusted bool
 	// size counts the bytes hashed, which is the transaction's standard size.
 	size int64
 	out  io.Writer
@@ -129,6 +136,7 @@ func (t *Reader) Next(opts Options) (*bt.Tx, *chainhash.Hash, int64, error) {
 	t.h.Reset()
 	t.size = 0
 	t.hashing = true
+	t.trusted = opts.LengthsTrusted
 	t.out = nil
 
 	defer func() {
@@ -336,7 +344,7 @@ func (t *Reader) readScriptBody(l uint64) ([]byte, error) {
 		return nil, errors.NewTxInvalidError("[txstream] script length %d exceeds %d", l, maxScriptAlloc)
 	}
 
-	if l <= scriptChunk {
+	if l <= scriptChunk || t.trusted {
 		script := make([]byte, l)
 		if _, err := io.ReadFull(t, script); err != nil {
 			return nil, unexpected(err)
