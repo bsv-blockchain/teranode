@@ -93,9 +93,16 @@ func (b *Blockchain) GetMedianTimePastForHeights(ctx context.Context, heights []
 		}
 	}
 
-	_, metas, err := b.store.GetBlockHeadersByHeight(ctx, minHeight, maxHeight)
+	// computeMTPForMissingHeight needs the eleven predecessors of maxHeight to compute
+	// its MTP when maxHeight is not yet persisted. Read back that far below minHeight
+	// so the result does not depend on how many other heights the caller happened to
+	// request alongside maxHeight (a narrow request must return the same value as a
+	// wide one for the same top height).
+	readFrom := readFromForMTP(minHeight)
+
+	_, metas, err := b.store.GetBlockHeadersByHeight(ctx, readFrom, maxHeight)
 	if err != nil {
-		return nil, errors.NewProcessingError("[Blockchain][GetMedianTimePastForHeights] failed to get block headers from %d to %d", minHeight, maxHeight, err)
+		return nil, errors.NewProcessingError("[Blockchain][GetMedianTimePastForHeights] failed to get block headers from %d to %d", readFrom, maxHeight, err)
 	}
 
 	mtpByHeight := make(map[uint32]uint32, len(metas))
@@ -166,14 +173,16 @@ func (b *Blockchain) GetMedianTimePastRange(ctx context.Context, fromHeight, toH
 		}
 	}
 
-	_, metas, err := b.store.GetBlockHeadersByHeight(ctx, fromHeight, toHeight)
+	_, metas, err := b.store.GetBlockHeadersByHeight(ctx, readFromForMTP(fromHeight), toHeight)
 	if err != nil {
 		return nil, errors.NewProcessingError("[Blockchain][GetMedianTimePastRange] failed to get block headers from %d to %d", fromHeight, toHeight, err)
 	}
 
 	result := make([]uint32, toHeight-fromHeight+1)
 	for _, meta := range metas {
-		result[meta.Height-fromHeight] = meta.MedianTimePast
+		if meta.Height >= fromHeight && meta.Height <= toHeight {
+			result[meta.Height-fromHeight] = meta.MedianTimePast
+		}
 	}
 
 	// If the top height is not in the database (block not yet persisted), compute its MTP
@@ -202,4 +211,12 @@ func (b *Blockchain) GetMedianTimePastRange(ctx context.Context, fromHeight, toH
 	}
 
 	return result, nil
+}
+
+// readFromForMTP includes enough predecessors to compute an unpersisted tip.
+func readFromForMTP(height uint32) uint32 {
+	if height >= uint32(MedianTimeBlocks) {
+		return height - uint32(MedianTimeBlocks)
+	}
+	return 0
 }

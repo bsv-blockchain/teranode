@@ -36,11 +36,14 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	blobhttp "github.com/bsv-blockchain/teranode/stores/blob/http"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
-const NotFoundMsg = "Not found"
+// NotFoundMsg is the body a miss is answered with. The HTTP client owns it: it reads a 404 as a
+// miss only with this body.
+const NotFoundMsg = blobhttp.NotFoundMsg
 
 // HTTPBlobServer provides an HTTP interface to a blob storage backend.
 // It implements the http.Handler interface and exposes blob operations as RESTful endpoints.
@@ -268,7 +271,7 @@ func (s *HTTPBlobServer) handleExists(w http.ResponseWriter, r *http.Request, op
 // The function handles errors by returning appropriate HTTP status codes:
 // - 200 OK for successful retrievals
 // - 404 Not Found if the blob doesn't exist
-// - 500 Internal Server Error for other errors
+// - 500 Internal Server Error for other errors, a storage error wrapping a not-found included
 //
 // For large blobs, the function uses streaming to minimize memory usage by not
 // loading the entire blob into memory at once.
@@ -296,12 +299,7 @@ func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts 
 
 	rc, err := s.store.GetIoReader(r.Context(), key, fileType, opts...)
 	if err != nil {
-		if errors.Is(err, errors.ErrNotFound) {
-			http.Error(w, NotFoundMsg, http.StatusNotFound)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-
+		writeStoreError(w, err)
 		return
 	}
 	defer rc.Close()
@@ -356,12 +354,7 @@ func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Reque
 
 	dataReader, err := s.store.GetIoReader(r.Context(), key, fileType, opts...)
 	if err != nil {
-		if errors.Is(err, errors.ErrNotFound) {
-			http.Error(w, NotFoundMsg, http.StatusNotFound)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-
+		writeStoreError(w, err)
 		return
 	}
 	// Close on every return path - the underlying file-store reader holds
@@ -623,7 +616,7 @@ func (s *HTTPBlobServer) handleSet(w http.ResponseWriter, r *http.Request, opts 
 // - 204 No Content for successful DAH updates
 // - 400 Bad Request if the key cannot be extracted or the DAH value is invalid
 // - 404 Not Found if the blob doesn't exist
-// - 500 Internal Server Error for other failures
+// - 500 Internal Server Error for other failures, a storage error wrapping a not-found included
 //
 // Parameters:
 //   - w: HTTP response writer for sending the DAH update response
@@ -646,12 +639,7 @@ func (s *HTTPBlobServer) handleSetDAH(w http.ResponseWriter, r *http.Request, op
 
 	err = s.store.SetDAH(r.Context(), key, fileType, uint32(dah), opts...)
 	if err != nil {
-		if err == errors.ErrNotFound {
-			http.Error(w, NotFoundMsg, http.StatusNotFound)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-
+		writeStoreError(w, err)
 		return
 	}
 
@@ -691,6 +679,19 @@ func (s *HTTPBlobServer) handleDelete(w http.ResponseWriter, r *http.Request, op
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeStoreError answers a failed store call: 404 with NotFoundMsg for a miss, 500 for
+// anything else. A miss is a not-found with no storage error in its chain. A storage error is
+// the store failing while it looked, whatever it wraps, and the HTTP client reports a 404 to
+// its caller as a miss, so a fault answered 404 would reach that caller as an absent blob.
+func writeStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errors.ErrNotFound) && !errors.Is(err, errors.ErrStorageError) {
+		http.Error(w, NotFoundMsg, http.StatusNotFound)
+		return
+	}
+
+	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 
 // getKeyFromPath extracts the blob key and file type from the request path.

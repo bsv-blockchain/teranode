@@ -20,15 +20,17 @@ import (
 // constants so that callers of GetSubscribers() can reliably detect which
 // services are currently connected.
 const (
-	SubscriberLegacy            = "legacy/manager"
-	SubscriberP2P               = "p2pServer"
-	SubscriberUTXOStore         = "UTXOStore"
-	SubscriberBlockAssembler    = "BlockAssembler"
-	SubscriberBlockValidation   = "blockvalidation"
-	SubscriberSubtreeValidation = "subtreevalidation"
-	SubscriberPruner            = "Pruner"
-	SubscriberAssetService      = "AssetService"
-	SubscriberUTXOPersister     = "utxo-persister"
+	SubscriberLegacy              = "legacy/manager"
+	SubscriberP2P                 = "p2pServer"
+	SubscriberUTXOStore           = "UTXOStore"
+	SubscriberBlockAssembler      = "BlockAssembler"
+	SubscriberBlockValidation     = "blockvalidation"
+	SubscriberSubtreeValidation   = "subtreevalidation"
+	SubscriberPruner              = "Pruner"
+	SubscriberAssetService        = "AssetService"
+	SubscriberUTXOPersister       = "utxo-persister"
+	SubscriberFileBlockHeight     = "File BlockHeight"
+	SubscriberAssetMainChainCache = "asset-mainchain-cache"
 )
 
 // ClientI defines the interface for blockchain client operations.
@@ -308,6 +310,14 @@ type ClientI interface {
 	// - Error if the retrieval fails
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 
+	// GetBestBlockHeaderUncached is GetBestBlockHeader with the blockchain store's response cache
+	// left out on both sides, and with the block id filled in on the meta. The cached call can
+	// be one block stale in the moment between a block's commit and the cache clear that
+	// follows it. The pruner's stamp reads the tip between every store call of a drain, hands
+	// the height to a permanent completion record, and asks whether its anchor is still an
+	// ancestor of the tip by id, so it takes this call.
+	GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
+
 	// GetBlockHeader retrieves a specific block header.
 	//
 	// This method fetches just the header portion of a block identified by its hash, without
@@ -340,6 +350,12 @@ type ClientI interface {
 	// - Array of corresponding BlockHeaderMeta objects with additional metadata
 	// - Error if the header retrieval fails
 	GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+
+	// GetBlockHeadersByParentLinks retrieves up to numberOfHeaders headers by walking parent links
+	// back from blockHash, newest first. It never selects rows by the main-chain flag and never
+	// reads or fills a cache. It is the fetch the pruner's stamp builds its chain answer from,
+	// because a stale flag must not be able to stall or steer a pass that writes permanent facts.
+	GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
 	// GetBlockHeadersToCommonAncestor retrieves headers from target hash back to a common ancestor.
 	//
@@ -376,58 +392,6 @@ type ClientI interface {
 	// - Error if the header retrieval or ancestor finding fails
 	GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
-	// GetLatestBlockHeaderFromBlockLocator retrieves the latest block header from a block locator.
-	//
-	// This method finds the latest block header that can be reached from a given block locator,
-	// starting from the best block hash. It traverses the blockchain using the provided locator
-	// hashes to find the most recent header that is part of the main chain.
-	//
-	// Parameters:
-	// - ctx: Context for the operation with timeout and cancellation support
-	// - bestBlockHash: Hash of the current best block to start the search from
-	// - blockLocator: Array of hashes representing the block locator to traverse
-	//
-	// Returns:
-	// - BlockHeader containing the latest header found
-	// - BlockHeaderMeta containing additional metadata about the header
-	// - Error if the header retrieval fails or if no valid header is found in the locator
-	GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
-
-	// GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
-	//
-	// This method fetches a sequence of block headers starting from the specified hash,
-	// moving forward in the chain order. This is useful for retrieving headers in ascending
-	// order, such as when processing blocks from the genesis block onward.
-	//
-	// Parameters:
-	// - ctx: Context for the operation with timeout and cancellation support
-	// - chainTipHash: Hash of the current chain tip to ensure the blocks are on the same chain
-	// - targetHash: Hash of the starting block (inclusive)
-	// - numberOfHeaders: Maximum number of headers to retrieve
-	//
-	// Returns:
-	// - Array of BlockHeader objects in ascending order
-	// - Array of corresponding BlockHeaderMeta objects with additional metadata
-	// - Error if the header retrieval fails or if the blocks aren't on the same chain
-	GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-
-	// GetBlockHeadersFromTill retrieves block headers between two blocks.
-	//
-	// This method fetches a sequence of block headers starting from one specified hash
-	// and ending at another hash, inclusive of both endpoints. This allows efficient
-	// retrieval of a specific section of the blockchain's headers.
-	//
-	// Parameters:
-	// - ctx: Context for the operation with timeout and cancellation support
-	// - blockHashFrom: Hash of the starting block (inclusive)
-	// - blockHashTill: Hash of the ending block (inclusive)
-	//
-	// Returns:
-	// - Array of BlockHeader objects in chain order
-	// - Array of corresponding BlockHeaderMeta objects with additional metadata
-	// - Error if the header retrieval fails or if the blocks aren't on the same chain
-	GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-
 	// GetBlockHeadersFromHeight retrieves block headers from a specific height.
 	//
 	// This method fetches a sequence of block headers starting from the specified height
@@ -444,6 +408,27 @@ type ClientI interface {
 	// - Array of corresponding BlockHeaderMeta objects with additional metadata
 	// - Error if the header retrieval fails
 	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+
+	// BlocksBetterThan returns the valid blocks that sort better than after in the order the
+	// store picks its best tip by (most chain work, then lowest peer id, then lowest block id),
+	// worst first, at or above minHeight, at most limit of them. When from is not nil it also
+	// returns the valid blocks that sort better than or level with from.
+	//
+	// Without an invalidation the best tip only ever moves to a block that sorts better, so a
+	// reader that keeps the key of the last block it handled finds every later best tip here,
+	// even one that lost again before it looked. A drop of the tip is recorded in the low-water
+	// mark under state key model.BestTipLowWaterStateKey, which the reader passes as from.
+	//
+	// Returns headers and metadata as slices of the same length, and whether more blocks sort
+	// better than the last one returned. Without more, the last block is the best tip at the
+	// time of the read, so the reader needs no separate read of the best block header. A page
+	// that comes back full reports more, also from a server too old to say.
+	BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error)
+
+	// ClearBestTipLowWater deletes the best tip's low-water mark if it still holds expected, the
+	// bytes the caller read with GetState. A drop recorded since changes the mark, and the delete
+	// is then a no-op.
+	ClearBestTipLowWater(ctx context.Context, expected []byte) error
 
 	// GetBlockHeadersByHeight retrieves block headers between two heights.
 	//

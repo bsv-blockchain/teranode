@@ -423,3 +423,54 @@ func TestLivenessCatchUpFetchBeats(t *testing.T) {
 	require.Less(t, ageInsideReorg, time.Minute,
 		"the per-block catch-up fetch must beat, or a node restarting behind the tip reports itself wedged")
 }
+
+// TestLivenessSubtreeProcessorBeatsForTheLoop pins the wiring between the
+// assembler and its subtree processor. MoveForwardBlock and Reorg block the main
+// loop for the whole call, so the processor must beat on the loop's behalf at
+// each step, and it can only do that if NewBlockAssembler installed the
+// heartbeat as its progress hook. The processor's own tests pin WHERE it
+// reports progress; this one pins that the reports reach the heartbeat the
+// probe reads (issue 1447).
+//
+// WaitForPendingBlocks is the driver because it reaches the hook with nothing
+// else to stub, on the real processor Init built.
+//
+// It also pins the startup half. Start calls WaitForPendingBlocks before the
+// loop owns the heartbeat, so the hook must be BeatIfStarted: a plain Beat there
+// would start the clock mid-startup and let the probe report a still-starting
+// node as wedged.
+func TestLivenessSubtreeProcessorBeatsForTheLoop(t *testing.T) {
+	server, _ := setupServer(t)
+	ba := server.blockAssembler
+
+	require.NoError(t, ba.subtreeProcessor.WaitForPendingBlocks(t.Context()))
+	require.Zero(t, ba.heartbeat.Age(), "progress before the loop owns the heartbeat must not arm it")
+
+	const staleBy = time.Hour
+
+	ba.heartbeat.SetLastBeatForTest(time.Now().Add(-staleBy))
+	require.Greater(t, ba.heartbeat.Age(), staleBy/2, "precondition: the heartbeat must start stale")
+
+	require.NoError(t, ba.subtreeProcessor.WaitForPendingBlocks(t.Context()))
+	require.Less(t, ba.heartbeat.Age(), time.Minute, "subtree processor progress must reach the main loop's heartbeat")
+}
+
+// TestLivenessWaitForBlockMinedSetBeats pins the one wait on block validation
+// that lives in the assembler rather than the subtree processor: reset waits on
+// each invalid moved-back block, up to about 78s apiece. Each attempt must beat,
+// like every other wait on block validation, because a slow dependency is a
+// readiness failure and not a wedge (issue 1447).
+func TestLivenessWaitForBlockMinedSetBeats(t *testing.T) {
+	initPrometheusMetrics()
+
+	items := setupBlockAssemblyTest(t)
+	genesis := genesisHeader(t, items)
+
+	const staleBy = time.Hour
+
+	items.blockAssembler.heartbeat.SetLastBeatForTest(time.Now().Add(-staleBy))
+	require.Greater(t, items.blockAssembler.heartbeat.Age(), staleBy/2, "precondition: the heartbeat must start stale")
+
+	require.NoError(t, items.blockAssembler.waitForBlockMinedSet(t.Context(), genesis.Hash()))
+	require.Less(t, items.blockAssembler.heartbeat.Age(), time.Minute, "an attempt of the mined_set wait must beat")
+}

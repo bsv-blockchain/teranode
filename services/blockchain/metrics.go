@@ -23,45 +23,43 @@ import (
 )
 
 var (
-	prometheusBlockchainHealth                               prometheus.Counter
-	prometheusBlockchainAddBlock                             prometheus.Histogram
-	prometheusBlockchainGetBlock                             prometheus.Histogram
-	prometheusBlockchainGetBlockStats                        prometheus.Histogram
-	prometheusBlockchainGetBlockGraphData                    prometheus.Histogram
-	prometheusBlockchainGetLastNBlocks                       prometheus.Histogram
-	prometheusBlockchainGetSuitableBlock                     prometheus.Histogram
-	prometheusBlockchainGetHashOfAncestorBlock               prometheus.Histogram
-	prometheusBlockchainGetLatestBlockHeaderFromBlockLocator prometheus.Histogram
-	prometheusBlockchainGetBlockHeadersFromOldest            prometheus.Histogram
-	prometheusBlockchainGetNextWorkRequired                  prometheus.Histogram
-	prometheusBlockchainGetBlockExists                       prometheus.Histogram
-	prometheusBlockchainGetBestBlockHeader                   prometheus.Histogram
-	prometheusBlockchainCheckBlockIsInCurrentChain           prometheus.Histogram
-	prometheusBlockchainCheckBlockIsAncestorOfBlock          prometheus.Histogram
-	prometheusBlockchainGetChainTips                         prometheus.Histogram
-	prometheusBlockchainGetBlockHeader                       prometheus.Histogram
-	prometheusBlockchainGetBlockHeaders                      prometheus.Histogram
-	prometheusBlockchainGetBlockHeadersFromHeight            prometheus.Histogram
-	prometheusBlockchainGetBlockHeadersByHeight              prometheus.Histogram
-	prometheusBlockchainGetBlocksByHeight                    prometheus.Histogram
-	prometheusBlockchainSubscribe                            prometheus.Histogram
-	prometheusBlockchainGetState                             prometheus.Histogram
-	prometheusBlockchainSetState                             prometheus.Histogram
-	prometheusBlockchainGetBlockHeaderIDs                    prometheus.Histogram
-	prometheusBlockchainInvalidateBlock                      prometheus.Histogram
-	prometheusBlockchainRevalidateBlock                      prometheus.Histogram
-	prometheusBlockchainSendNotification                     prometheus.Histogram
-	prometheusBlockchainGetBlockIsMined                      prometheus.Histogram
-	prometheusBlockchainSetBlockMinedSet                     prometheus.Histogram
-	prometheusBlockchainGetBlocksMinedNotSet                 prometheus.Histogram
-	prometheusBlockchainSetBlockPersistedAt                  prometheus.Histogram
-	prometheusBlockchainGetBlocksNotPersisted                prometheus.Histogram
-	prometheusBlockchainSetBlockSubtreesSet                  prometheus.Histogram
-	prometheusBlockchainGetBlocksSubtreesNotSet              prometheus.Histogram
-	prometheusBlockchainFSMCurrentState                      prometheus.Gauge
-	prometheusBlockchainGetFSMCurrentState                   prometheus.Histogram
-	prometheusBlockchainGetBlockLocator                      prometheus.Histogram
-	prometheusBlockchainLocateBlockHeaders                   prometheus.Histogram
+	prometheusBlockchainHealth                      prometheus.Counter
+	prometheusBlockchainAddBlock                    prometheus.Histogram
+	prometheusBlockchainGetBlock                    prometheus.Histogram
+	prometheusBlockchainGetBlockStats               prometheus.Histogram
+	prometheusBlockchainGetBlockGraphData           prometheus.Histogram
+	prometheusBlockchainGetLastNBlocks              prometheus.Histogram
+	prometheusBlockchainGetSuitableBlock            prometheus.Histogram
+	prometheusBlockchainGetHashOfAncestorBlock      prometheus.Histogram
+	prometheusBlockchainGetNextWorkRequired         prometheus.Histogram
+	prometheusBlockchainGetBlockExists              prometheus.Histogram
+	prometheusBlockchainGetBestBlockHeader          prometheus.Histogram
+	prometheusBlockchainCheckBlockIsInCurrentChain  prometheus.Histogram
+	prometheusBlockchainCheckBlockIsAncestorOfBlock prometheus.Histogram
+	prometheusBlockchainGetChainTips                prometheus.Histogram
+	prometheusBlockchainGetBlockHeader              prometheus.Histogram
+	prometheusBlockchainGetBlockHeaders             prometheus.Histogram
+	prometheusBlockchainGetBlockHeadersFromHeight   prometheus.Histogram
+	prometheusBlockchainGetBlockHeadersByHeight     prometheus.Histogram
+	prometheusBlockchainGetBlocksByHeight           prometheus.Histogram
+	prometheusBlockchainSubscribe                   prometheus.Histogram
+	prometheusBlockchainGetState                    prometheus.Histogram
+	prometheusBlockchainSetState                    prometheus.Histogram
+	prometheusBlockchainGetBlockHeaderIDs           prometheus.Histogram
+	prometheusBlockchainInvalidateBlock             prometheus.Histogram
+	prometheusBlockchainRevalidateBlock             prometheus.Histogram
+	prometheusBlockchainSendNotification            prometheus.Histogram
+	prometheusBlockchainGetBlockIsMined             prometheus.Histogram
+	prometheusBlockchainSetBlockMinedSet            prometheus.Histogram
+	prometheusBlockchainGetBlocksMinedNotSet        prometheus.Histogram
+	prometheusBlockchainSetBlockPersistedAt         prometheus.Histogram
+	prometheusBlockchainGetBlocksNotPersisted       prometheus.Histogram
+	prometheusBlockchainSetBlockSubtreesSet         prometheus.Histogram
+	prometheusBlockchainGetBlocksSubtreesNotSet     prometheus.Histogram
+	prometheusBlockchainFSMCurrentState             prometheus.Gauge
+	prometheusBlockchainGetFSMCurrentState          prometheus.Histogram
+	prometheusBlockchainGetBlockLocator             prometheus.Histogram
+	prometheusBlockchainLocateBlockHeaders          prometheus.Histogram
 	// prometheusExportBlockDb                        prometheus.Histogram
 
 	prometheusBlockchainMTPCacheHits        prometheus.Counter
@@ -73,6 +71,11 @@ var (
 	prometheusBlockchainSubscriberPendingFull *prometheus.CounterVec
 	prometheusBlockchainSubscriberSendErrors  *prometheus.CounterVec
 	prometheusBlockchainWatchdogFires         *prometheus.CounterVec
+
+	// Notifications dropped because the notification channel was full. A drop
+	// means the RPC returned success while the event never reached any
+	// subscriber, so it needs to be alertable rather than only logged.
+	prometheusBlockchainNotificationsDropped *prometheus.CounterVec
 )
 
 var (
@@ -162,24 +165,6 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockchain",
 			Name:      "get_hash_of_ancestor_block",
 			Help:      "Histogram of GetHashOfAncestorBlock calls to the blockchain service",
-			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
-	prometheusBlockchainGetLatestBlockHeaderFromBlockLocator = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockchain",
-			Name:      "get_latest_block_header_from_block_locator",
-			Help:      "Histogram of GetLatestBlockHeaderFromBlockLocator calls to the blockchain service",
-			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
-	prometheusBlockchainGetBlockHeadersFromOldest = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockchain",
-			Name:      "get_block_headers_from_oldest",
-			Help:      "Histogram of GetBlockHeadersFromOldest calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
@@ -516,6 +501,16 @@ func _initPrometheusMetrics() {
 			Help:      "Number of times a subscriber was evicted from the broadcast loop because its pending buffer was full (issue #872 backpressure indicator).",
 		},
 		[]string{"source"},
+	)
+
+	prometheusBlockchainNotificationsDropped = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "notifications_dropped_total",
+			Help:      "Number of replaceable PING notifications discarded because the notification channel was full. Delivery-critical notifications apply backpressure instead.",
+		},
+		[]string{"type"},
 	)
 
 	prometheusBlockchainSubscriberSendErrors = promauto.NewCounterVec(

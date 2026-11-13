@@ -530,7 +530,7 @@ require.NoError(t, err)
 
 // Process block
 // Do not add block after process operation
-err = td.BlockValidationClient.ProcessBlock(td.Ctx, block, block.Height)
+err = td.BlockValidationClient.ProcessBlock(td.Ctx, block, block.Height, "", "legacy", 0, false)
 require.NoError(t, err)
 
 // Validate block
@@ -1673,7 +1673,7 @@ func createConflictingExternalBlock(t *testing.T, td *daemon.TestDaemon, origina
 
 	newBlockSubtree, newBlock := td.CreateTestBlock(t, previousBlock, nonce, blockTxs...)
 
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, newBlock, newBlock.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, newBlock, newBlock.Height, "", "legacy", 0, false))
 
 	// Verify original block is still winning
 	td.WaitForBlockHeight(t, originalBlock, blockWait, true)
@@ -1886,7 +1886,7 @@ blockA, _ := td.BlockchainClient.GetBlockByHeight(td.Ctx, forkHeight+1)
 
 // Create block on chain B (fork via CreateTestBlock)
 _, blockB := td.CreateTestBlock(t, forkPoint, nonce, txB)
-require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, blockB, blockB.Height, "", "legacy"))
+require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, blockB, blockB.Height, "", "legacy", 0, false))
 ```
 
 #### Pattern 4: Making a Fork Win (Trigger Reorg)
@@ -1896,10 +1896,10 @@ require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, blockB, blockB.
 // Add empty blocks to Chain B to make it longer
 
 _, block5b := td.CreateTestBlock(t, block4b, 10502)
-require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy"))
+require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy", 0, false))
 
 _, block6b := td.CreateTestBlock(t, block5b, 10602)
-require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy"))
+require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy", 0, false))
 
 // Wait for reorg to complete
 td.WaitForBlockHeight(t, block6b, blockWait, true)
@@ -1960,7 +1960,7 @@ err = td.PropagationClient.ProcessTransaction(td.Ctx, invalidTx)
 require.Error(t, err, "Expected transaction to be rejected")
 
 // Or for blocks:
-err = td.BlockValidationClient.ProcessBlock(td.Ctx, invalidBlock, invalidBlock.Height, "", "legacy")
+err = td.BlockValidationClient.ProcessBlock(td.Ctx, invalidBlock, invalidBlock.Height, "", "legacy", 0, false)
 require.Error(t, err, "Expected block to be rejected")
 ```
 
@@ -1970,7 +1970,7 @@ forkPoint, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, N)
 require.NoError(t, err)
 
 _, forkBlock := td.CreateTestBlock(t, forkPoint, nonce, txs...)
-require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, forkBlock, forkBlock.Height, "", "legacy"))
+require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, forkBlock, forkBlock.Height, "", "legacy", 0, false))
 ```
 
 #### "Make chain B win / longer"
@@ -1978,7 +1978,7 @@ require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, forkBlock, fork
 // Add enough empty blocks to make chain B longer than chain A
 for i := 0; i < numBlocksNeeded; i++ {
 	_, nextBlock := td.CreateTestBlock(t, previousBlock, nonce+uint32(i))
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, nextBlock, nextBlock.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, nextBlock, nextBlock.Height, "", "legacy", 0, false))
 	previousBlock = nextBlock
 }
 td.WaitForBlockHeight(t, previousBlock, blockWait, true)
@@ -2077,17 +2077,17 @@ func testComplexForkGrandparentConflict(t *testing.T, utxoStore string) {
 
 	// Create fork from block 3 (grandparent block)
 	_, block4b := td.CreateTestBlock(t, block3gp, 10302, parentB)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy", 0, false))
 
 	// Verify parentB is conflicting (losing chain)
 	td.VerifyConflictingInUtxoStore(t, true, parentB)
 
 	// Make Chain B longer to trigger reorg
 	_, block5b := td.CreateTestBlock(t, block4b, 10402)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy", 0, false))
 
 	_, block6b := td.CreateTestBlock(t, block5b, 10502)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy", 0, false))
 
 	td.WaitForBlockHeight(t, block6b, blockWait, true)
 
@@ -2152,7 +2152,7 @@ func testSameChainGrandparentDoubleSpend(t *testing.T, utxoStore string) {
 	// Should also be rejected as a block
 	block4, _ := td.BlockchainClient.GetBlockByHeight(td.Ctx, 4)
 	_, invalidBlock := td.CreateTestBlock(t, block4, 10501, invalidChild)
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, invalidBlock, invalidBlock.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, invalidBlock, invalidBlock.Height, "", "legacy", 0, false)
 	require.Error(t, err, "Expected block rejection - contains double spend")
 }
 ```

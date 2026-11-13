@@ -108,7 +108,7 @@ func newBenchParentSpendsMap(b *testing.B, n, disks int) (ParentSpendsMap, func(
 	b.Helper()
 
 	if disks == 0 {
-		return NewSplitSyncedParentMap(parentSpendsBuckets, uint64(n)), func() {}
+		return newTestParentSpendsMap(0), func() {}
 	}
 
 	dirs := make([]string, disks)
@@ -255,9 +255,11 @@ func BenchmarkTxMapGetFrozen_MemoryVsDisk(b *testing.B) {
 }
 
 // BenchmarkParentSpendsSetIfNotExists_MemoryVsDisk is the duplicate-input
-// check in validOrderAndBlessed: one SetIfNotExists per input into a fresh
-// map, at two inputs per transaction (the block_parentSpendsCapacityMultiplier
-// default the map is sized with).
+// check in validOrderAndBlessed with block_diskMapDirs set: one SetIfNotExists
+// per input into a fresh disk map, at two inputs per transaction (the
+// block_parentSpendsCapacityMultiplier default the map is sized with). Without
+// disk dirs the check is the sort-based inpointDedup, which BenchmarkInpointDedup
+// measures; there is no in-memory map to compare, so the memory variant is skipped.
 func BenchmarkParentSpendsSetIfNotExists_MemoryVsDisk(b *testing.B) {
 	for _, txs := range mapBenchSizes() {
 		n := 2 * txs
@@ -269,6 +271,10 @@ func BenchmarkParentSpendsSetIfNotExists_MemoryVsDisk(b *testing.B) {
 		}
 
 		for _, impl := range mapBenchImpls {
+			if impl.disks == 0 {
+				continue
+			}
+
 			b.Run(fmt.Sprintf("inputs=%d/%s", n, impl.name), func(b *testing.B) {
 				var heapMB float64
 

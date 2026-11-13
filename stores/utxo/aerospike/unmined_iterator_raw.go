@@ -10,6 +10,7 @@ import (
 
 	as "github.com/bsv-blockchain/aerospike-client-go/v8"
 	particle_type "github.com/bsv-blockchain/aerospike-client-go/v8/types/particle_type"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -57,9 +58,11 @@ type rawUnminedRecord struct {
 
 	conflicting, locked, coinbase, external bool
 
-	// blockIDs and inputs are decoded with the client's generic decoder: they
-	// are lists and are rare on this scan (partly-mined records, and inputs
-	// only when inpoints are stored).
+	// fastInputs is set when the inputs bin was read straight into the
+	// handler's inpoints buffer. Otherwise inputs holds it decoded by the
+	// client's generic decoder, as blockIDs always does.
+	fastInputs bool
+
 	blockIDs any
 	inputs   any
 
@@ -78,6 +81,13 @@ type rawUnminedHandler struct {
 	ctx context.Context
 	cur rawUnminedRecord
 	buf []*utxo.UnminedTransaction
+
+	// inpoints holds the current record's parent hash and output index per
+	// input; inputs and inputPtrs carry them into subtree.NewTxInpointsFromInputs.
+	// All three are reused from record to record.
+	inpoints  []rawInpoint
+	inputs    []bt.Input
+	inputPtrs []*bt.Input
 
 	// progress counts records delivered; busy is set while the handler is
 	// blocked on something other than Aerospike (handing a batch to the
@@ -152,6 +162,12 @@ func (h *rawUnminedHandler) Bin(name []byte, particleType int, value []byte) err
 	case rawBinBlockIDs:
 		r.blockIDs, r.blockIDsErr = as.DecodeParticle(particleType, value)
 	case rawBinInputs:
+		if particleType == particle_type.LIST {
+			if h.inpoints, r.fastInputs = appendRawInpoints(h.inpoints[:0], value); r.fastInputs {
+				break
+			}
+		}
+
 		r.inputs, r.inputsErr = as.DecodeParticle(particleType, value)
 	}
 
@@ -250,23 +266,25 @@ func (h *rawUnminedHandler) buildTx() (*utxo.UnminedTransaction, error) {
 	// pointer in its tx map for as long as the tx is held.
 	txInpoints := &subtree.TxInpoints{}
 
-	if h.it.store.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
-		var err error
+	// read in every mode: block assembly keeps each tx's parent links whatever
+	// blockassembly_storeTxInpointsForSubtreeMeta says
+	var err error
 
-		switch {
-		case r.external:
-			h.busy.Store(true)
-			*txInpoints, err = h.it.processExternalTransactionInpoints(h.ctx, &r.txid)
-			h.busy.Store(false)
-		case r.inputsErr != nil:
-			err = r.inputsErr
-		default:
-			*txInpoints, err = h.it.processInternalTransactionInpoints(as.BinMap{rawBinInputs: r.inputs})
-		}
+	switch {
+	case r.external:
+		h.busy.Store(true)
+		*txInpoints, err = h.it.processExternalTransactionInpoints(h.ctx, &r.txid)
+		h.busy.Store(false)
+	case r.fastInputs:
+		*txInpoints, err = h.txInpointsFromBuffer()
+	case r.inputsErr != nil:
+		err = r.inputsErr
+	default:
+		*txInpoints, err = h.it.processInternalTransactionInpoints(as.BinMap{rawBinInputs: r.inputs})
+	}
 
-		if err != nil {
-			return nil, errors.NewProcessingError("failed to process transaction inpoints for %s", r.txid.String(), err)
-		}
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to process transaction inpoints for %s", r.txid.String(), err)
 	}
 
 	if r.createdAtErr != nil {
@@ -505,4 +523,165 @@ func (s *rawHandlerSet) progress() (total uint64, blocked bool) {
 	}
 
 	return total, blocked
+}
+
+// rawInpoint is one input's parent tx hash and the output index it spends.
+type rawInpoint struct {
+	hash chainhash.Hash
+	vout uint32
+}
+
+// appendRawInpoints reads the parent hash and output index of every input in
+// a LIST particle of extended inputs, the shape the store writes: a msgpack
+// array of BLOB-typed byte strings. Nothing else is decoded and nothing is
+// allocated once dst has grown. It reports false for any other shape (an
+// ordered list's extension header, a non-BLOB element, an input shorter than
+// its own lengths say), and the caller then falls back to the generic decoder,
+// which reports the error the full parse always did.
+func appendRawInpoints(dst []rawInpoint, b []byte) ([]rawInpoint, bool) {
+	if len(b) == 0 {
+		return dst, false
+	}
+
+	var (
+		count int
+		pos   int
+	)
+
+	switch t := b[0]; {
+	case t >= 0x90 && t <= 0x9f:
+		count, pos = int(t&0x0f), 1
+	case t == 0xdc && len(b) >= 3:
+		count, pos = int(binary.BigEndian.Uint16(b[1:3])), 3
+	case t == 0xdd && len(b) >= 5:
+		count, pos = int(binary.BigEndian.Uint32(b[1:5])), 5
+	default:
+		return dst, false
+	}
+
+	for i := 0; i < count; i++ {
+		if pos >= len(b) {
+			return dst, false
+		}
+
+		var size int
+
+		switch t := b[pos]; {
+		case t >= 0xa0 && t <= 0xbf:
+			size, pos = int(t&0x1f), pos+1
+		case t == 0xd9 && pos+2 <= len(b):
+			size, pos = int(b[pos+1]), pos+2
+		case t == 0xda && pos+3 <= len(b):
+			size, pos = int(binary.BigEndian.Uint16(b[pos+1:pos+3])), pos+3
+		case t == 0xdb && pos+5 <= len(b):
+			size, pos = int(binary.BigEndian.Uint32(b[pos+1:pos+5])), pos+5
+		default:
+			return dst, false
+		}
+
+		if size < 1 || pos+size > len(b) || b[pos] != particle_type.BLOB {
+			return dst, false
+		}
+
+		input := b[pos+1 : pos+size]
+		pos += size
+
+		if !extendedInputFits(input) {
+			return dst, false
+		}
+
+		var in rawInpoint
+
+		copy(in.hash[:], input[:32])
+		in.vout = binary.LittleEndian.Uint32(input[32:36])
+		dst = append(dst, in)
+	}
+
+	return dst, pos == len(b)
+}
+
+// extendedInputFits reports whether input holds a whole extended input:
+// previous txid (32), output index (4), unlocking script with its varint
+// length, sequence (4), previous satoshis (8) and the previous locking script
+// with its varint length. These are the reads bt.Input.ReadFromExtended makes.
+func extendedInputFits(input []byte) bool {
+	pos := 36
+
+	for _, fixedAfter := range [2]int{4 + 8, 0} {
+		scriptLen, n, ok := rawVarInt(input, pos)
+		if !ok {
+			return false
+		}
+
+		pos += n
+
+		if scriptLen > uint64(len(input)-pos) {
+			return false
+		}
+
+		pos += int(scriptLen) + fixedAfter
+		if pos > len(input) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// rawVarInt reads the Bitcoin varint at b[pos:], returning its value and width.
+func rawVarInt(b []byte, pos int) (uint64, int, bool) {
+	if pos >= len(b) {
+		return 0, 0, false
+	}
+
+	switch b[pos] {
+	case 0xfd:
+		if pos+3 > len(b) {
+			return 0, 0, false
+		}
+
+		return uint64(binary.LittleEndian.Uint16(b[pos+1:])), 3, true
+	case 0xfe:
+		if pos+5 > len(b) {
+			return 0, 0, false
+		}
+
+		return uint64(binary.LittleEndian.Uint32(b[pos+1:])), 5, true
+	case 0xff:
+		if pos+9 > len(b) {
+			return 0, 0, false
+		}
+
+		return binary.LittleEndian.Uint64(b[pos+1:]), 9, true
+	default:
+		return uint64(b[pos]), 1, true
+	}
+}
+
+// txInpointsFromBuffer builds the current record's parent links from the
+// inpoints buffer through subtree.NewTxInpointsFromInputs, so parents are
+// deduplicated exactly as on every other path. The inputs it passes are
+// scratch: the constructor copies the hashes out, and allocates only the
+// returned slices.
+func (h *rawUnminedHandler) txInpointsFromBuffer() (subtree.TxInpoints, error) {
+	n := len(h.inpoints)
+
+	if cap(h.inputs) < n {
+		h.inputs = make([]bt.Input, n)
+		h.inputPtrs = make([]*bt.Input, n)
+	}
+
+	inputs := h.inputs[:n]
+	ptrs := h.inputPtrs[:n]
+
+	for i := range h.inpoints {
+		inputs[i] = bt.Input{PreviousTxOutIndex: h.inpoints[i].vout}
+		if err := inputs[i].PreviousTxIDAdd(&h.inpoints[i].hash); err != nil {
+			return subtree.TxInpoints{}, err
+		}
+
+		ptrs[i] = &inputs[i]
+	}
+
+	return subtree.NewTxInpointsFromInputs(ptrs)
 }

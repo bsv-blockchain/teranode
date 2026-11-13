@@ -222,6 +222,39 @@ func (c *PointerCache) Get(hash chainhash.Hash) (*meta.Data, bool) {
 	return d, ok
 }
 
+// GetMulti is Get for each hash, one bucket lock per key: pointer mode does not
+// batch its locks (it is not the deployed bucket type). Implements
+// cacheBackend.
+func (c *PointerCache) GetMulti(hashes []chainhash.Hash, _ []uint64, out []*meta.Data) {
+	for i, h := range hashes {
+		out[i], _ = c.Get(h)
+	}
+}
+
+// GetRawMulti serialises each found entry into *dst. Pointer mode stores
+// decoded entries, so this re-encodes them; it is not the deployed bucket
+// type. Implements cacheBackend.
+func (c *PointerCache) GetRawMulti(hashes []chainhash.Hash, _ []uint64, dst *[]byte, spans [][2]int) {
+	for i, h := range hashes {
+		d, ok := c.Get(h)
+		if !ok {
+			spans[i] = [2]int{-1, -1}
+			continue
+		}
+
+		start := len(*dst)
+
+		out, err := d.MetaBytesInto((*dst)[start:])
+		if err != nil {
+			spans[i] = [2]int{-1, -1}
+			continue
+		}
+
+		*dst = append((*dst)[:start], out...)
+		spans[i] = [2]int{start, len(*dst)}
+	}
+}
+
 // SetFromBytes is the byte-oriented bridge: deserialises value into a fresh
 // *meta.Data and inserts it. Implements cacheBackend.
 //

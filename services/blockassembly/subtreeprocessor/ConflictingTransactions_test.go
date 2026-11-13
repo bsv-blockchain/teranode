@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	bt "github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -19,7 +20,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -68,6 +68,8 @@ func TestProcessConflictingTransactions(t *testing.T) {
 	conflictingTx1 := chainhash.HashH([]byte("conflicting-tx-1"))
 	conflictingTx2 := chainhash.HashH([]byte("conflicting-tx-2"))
 	conflictingNodes := []chainhash.Hash{conflictingTx1, conflictingTx2}
+	loserTx1 := chainhash.HashH([]byte("losing-tx-1"))
+	loserTx2 := chainhash.HashH([]byte("losing-tx-2"))
 
 	// Setup mock expectations
 	mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
@@ -78,12 +80,12 @@ func TestProcessConflictingTransactions(t *testing.T) {
 	// Create a TxMap for the losing transactions - using the same implementation as in ProcessConflicting
 	losingTxMap := txmap.NewSplitSwissMap(2)
 	// Put calls require both hash and a value (using 1 as in the actual code)
-	_ = losingTxMap.Put(conflictingTx1, 1)
-	_ = losingTxMap.Put(conflictingTx2, 1)
+	_ = losingTxMap.Put(loserTx1, 1)
+	_ = losingTxMap.Put(loserTx2, 1)
 
 	mockUtxoStore.On("ProcessConflicting", mock.Anything, conflictingNodes).Return(losingTxMap, nil)
-	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Conflicting: true}, nil)
-	mockUtxoStore.On("GetCounterConflicting", mock.Anything, mock.Anything).Return([]chainhash.Hash{conflictingTx1, conflictingTx2}, nil)
+	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Conflicting: true, Tx: bt.NewTx()}, nil)
+	mockUtxoStore.On("GetCounterConflicting", mock.Anything, mock.Anything).Return([]chainhash.Hash{loserTx1, loserTx2}, nil)
 	mockUtxoStore.On("SetConflicting", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, []chainhash.Hash{}, nil)
 	mockUtxoStore.On("Unspend", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockUtxoStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, nil)
@@ -105,9 +107,11 @@ func TestProcessConflictingTransactions(t *testing.T) {
 
 	// Verify results
 	require.NoError(t, err)
-	assert.Equal(t, 2, result.Length(), "Expected 2 losing transactions")
-	assert.True(t, result.Exists(conflictingTx1), "Expected conflictingTx1 to be in the result")
-	assert.True(t, result.Exists(conflictingTx2), "Expected conflictingTx2 to be in the result")
+	require.Equal(t, 2, result.Length(), "Expected 2 losing transactions")
+	require.True(t, result.Exists(loserTx1), "Expected loserTx1 to be in the result")
+	require.True(t, result.Exists(loserTx2), "Expected loserTx2 to be in the result")
+	require.False(t, result.Exists(conflictingTx1), "A winner must not be in the result")
+	require.False(t, result.Exists(conflictingTx2), "A winner must not be in the result")
 }
 
 func TestWaitForBlockBeingMined(t *testing.T) {
@@ -154,7 +158,7 @@ func TestWaitForBlockBeingMined(t *testing.T) {
 
 		// Verify results
 		require.NoError(t, err)
-		assert.True(t, mined, "Expected block to be mined")
+		require.True(t, mined, "Expected block to be mined")
 
 		// Verify mock expectations
 		mockBlockchainClient.AssertExpectations(t)
@@ -174,7 +178,7 @@ func TestWaitForBlockBeingMined(t *testing.T) {
 
 		// Verify results
 		require.NoError(t, err)
-		assert.True(t, mined, "Expected block to be mined")
+		require.True(t, mined, "Expected block to be mined")
 
 		// Verify mock expectations
 		mockBlockchainClient.AssertExpectations(t)
@@ -193,7 +197,7 @@ func TestWaitForBlockBeingMined(t *testing.T) {
 
 		// Verify results
 		require.Error(t, err, "Expected error due to context timeout")
-		assert.Contains(t, err.Error(), "block not mined within")
+		require.Contains(t, err.Error(), "block not mined within")
 	})
 }
 
@@ -247,20 +251,20 @@ func TestGetBlockIDsMap(t *testing.T) {
 
 	// Verify results
 	require.NoError(t, err)
-	assert.Equal(t, 3, len(result), "Expected 3 block IDs in the map")
+	require.Equal(t, 3, len(result), "Expected 3 block IDs in the map")
 
 	// Check block 100 contains tx1
-	assert.Contains(t, result, uint32(100))
-	assert.Contains(t, result[100], tx1Hash)
+	require.Contains(t, result, uint32(100))
+	require.Contains(t, result[100], tx1Hash)
 
 	// Check block 101 contains both tx1 and tx2
-	assert.Contains(t, result, uint32(101))
-	assert.Contains(t, result[101], tx1Hash)
-	assert.Contains(t, result[101], tx2Hash)
+	require.Contains(t, result, uint32(101))
+	require.Contains(t, result[101], tx1Hash)
+	require.Contains(t, result[101], tx2Hash)
 
 	// Check block 102 contains tx2
-	assert.Contains(t, result, uint32(102))
-	assert.Contains(t, result[102], tx2Hash)
+	require.Contains(t, result, uint32(102))
+	require.Contains(t, result[102], tx2Hash)
 
 	// Verify mock expectations
 	mockUtxoStore.AssertExpectations(t)
@@ -324,16 +328,16 @@ func TestGetSubtreeAndConflictingTransactionsMap(t *testing.T) {
 
 	// Verify results
 	require.NoError(t, err)
-	assert.NotNil(t, resultSubtree, "Expected subtree to be returned")
-	assert.Equal(t, 2, len(conflictingMap), "Expected 2 conflicting transactions")
+	require.NotNil(t, resultSubtree, "Expected subtree to be returned")
+	require.Equal(t, 2, len(conflictingMap), "Expected 2 conflicting transactions")
 
 	// Check that tx1 and tx3 are in the conflicting map with correct indices
-	assert.Equal(t, 0, conflictingMap[tx1Hash], "Expected tx1 to be at index 0")
-	assert.Equal(t, 2, conflictingMap[tx3Hash], "Expected tx3 to be at index 2")
+	require.Equal(t, 0, conflictingMap[tx1Hash], "Expected tx1 to be at index 0")
+	require.Equal(t, 2, conflictingMap[tx3Hash], "Expected tx3 to be at index 2")
 
 	// tx2 should not be in the conflicting map
 	_, exists := conflictingMap[tx2Hash]
-	assert.False(t, exists, "tx2 should not be in the conflicting map")
+	require.False(t, exists, "tx2 should not be in the conflicting map")
 }
 
 func TestMarkConflictingTxsInSubtrees(t *testing.T) {

@@ -99,6 +99,31 @@ func TestDiskTxMap_Clear(t *testing.T) {
 	require.Equal(t, 0, m.Length())
 }
 
+// TestDiskTxMap_ClearEmptiesEveryShard pins that Clear empties all 4096
+// index shards, with at least one entry in each.
+func TestDiskTxMap_ClearEmptiesEveryShard(t *testing.T) {
+	m := newTestDiskTxMap(t)
+
+	filled := make(map[uint16]bool, numIndexShards)
+
+	for i := 0; len(filled) < numIndexShards; i++ {
+		hash := chainhash.HashH([]byte{byte(i), byte(i >> 8), byte(i >> 16)})
+		if filled[shardOf(hash)] {
+			continue
+		}
+
+		filled[shardOf(hash)] = true
+		m.SetIfNotExists(hash, makeInpoints(-1))
+	}
+
+	require.Equal(t, numIndexShards, m.Length())
+
+	m.Clear()
+
+	require.NoError(t, m.TakeErr())
+	require.Zero(t, m.Length())
+}
+
 func TestDiskTxMap_Set(t *testing.T) {
 	m := newTestDiskTxMap(t)
 

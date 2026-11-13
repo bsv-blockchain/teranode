@@ -60,6 +60,12 @@ type Result struct {
 	StoppedEarly      bool    // Catchup stopped before reaching target
 	StopReason        string  // Reason for early stop
 
+	// StoppedOnCap is true when the header fetch ended because this node stopped asking, on its
+	// accumulated-header cap or its iteration limit, rather than because the peer's list ended or
+	// the target was reached. The list is then a prefix the peer would have continued, so a list
+	// that ends below our tip says nothing about whether the peer's chain diverges from ours.
+	StoppedOnCap bool
+
 	// Timing
 	StartTime time.Time // When catchup started
 	EndTime   time.Time // When catchup ended

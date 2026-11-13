@@ -279,7 +279,7 @@ The Legacy Service converts standard BSV blocks (which don't have subtrees) into
     - **Subtree Metadata:** Parent transaction references are stored to maintain the transaction dependency structure
 
 4. **Validation:**
-    - For blocks at or below the highest hard-coded checkpoint, a quick validation path is used: subtree re-validation through the Subtree Validation service is skipped and per-UTXO `SetMinedMulti` is bypassed via a pre-assigned block ID. This is safe regardless of FSM state (CATCHINGBLOCKS) because PoW plus checkpoint-anchored chain linkage make the block canonical.
+    - For blocks at or below the highest hard-coded checkpoint, a quick validation path is used: subtree re-validation through the Subtree Validation service is skipped and per-UTXO `SetMinedMulti` is bypassed because quick validation creates each UTXO already stamped with the block's ID and stores the block with `mined_set` true. This is safe regardless of FSM state (CATCHINGBLOCKS) because PoW plus checkpoint-anchored chain linkage make the block canonical.
     - For blocks above the highest checkpoint, more thorough validation is performed via the Teranode validation services.
 
 5. **Storage:**
@@ -349,6 +349,14 @@ The Legacy Service converts Teranode subtree container abstractions back to "fla
 This process effectively bridges the gap between Teranode's subtree-based architecture and the BSV network's traditional transaction model, ensuring that data originating in Teranode can be properly propagated to the BSV network.
 
 #### 4.2.2. Transaction rebroadcast retry
+
+New txs reach the Legacy Service on the txmeta Kafka topic. That topic is
+spread over partitions, so a child tx can be read before its parent. SV Node
+only accepts a child once it has the parent, so each announce batch is sorted
+parents first, using the parent hashes the txmeta message carries, and sent
+to peers as one ordered batch. A child whose parent arrives in a later batch
+is not held back; the peer's orphan pool and the rebroadcast retry below
+cover it.
 
 The immediate INV dispatch for a newly-announced tx is best-effort: a peer
 that has not finished its version handshake at the instant of relay, or

@@ -530,7 +530,6 @@ For complete settings reference, see [Pruner Settings Reference](../../reference
 |---------|------|---------|-------------|
 | `startPruner` | bool | `true` | Enable/disable Pruner service |
 | `pruner_grpcPort` | int | `8096` | gRPC server port |
-| `pruner_jobTimeout` | duration | `10m` | Timeout for pruning operation completion |
 
 ### Chunk Processing Settings
 

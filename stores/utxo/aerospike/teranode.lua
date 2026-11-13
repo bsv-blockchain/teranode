@@ -9,6 +9,7 @@ local BIN_BLOCK_HEIGHTS = "blockHeights"
 local BIN_BLOCK_IDS = "blockIDs"
 local BIN_CONFLICTING = "conflicting"
 local BIN_DELETE_AT_HEIGHT = "deleteAtHeight"
+local BIN_DAH_VERSION = "dahVer"
 local BIN_EXTERNAL = "external"
 local BIN_UNMINED_SINCE = "unminedSince"
 local BIN_PRESERVE_UNTIL = "preserveUntil"
@@ -85,7 +86,26 @@ local FIELD_SIGNAL = "signal"
 local FIELD_BLOCK_IDS = "blockIDs"
 local FIELD_ERRORS = "errors"
 local FIELD_CHILD_COUNT = "childCount"
+local FIELD_DELETE_AT_HEIGHT = "deleteAtHeight"
+local FIELD_DAH_VERSION = "dahVer"
+local FIELD_CONFLICTING = "conflicting"
 local FIELD_SPENDING_DATA = "spendingData"
+
+-- Assigns the record's deleteAtHeight and bumps the master's version. Every writer of the bin
+-- goes through here so the version orders the writes; a nil height clears the bin. A pagination
+-- record carries the version its master reported and never counts its own.
+local function assignDeleteAtHeight(rec, height)
+    rec[BIN_DELETE_AT_HEIGHT] = height
+
+    if rec[BIN_TOTAL_EXTRA_RECS] ~= nil then
+        rec[BIN_DAH_VERSION] = (rec[BIN_DAH_VERSION] or 0) + 1
+    end
+end
+
+-- Reports the master's deleteAtHeight version so the caller can order its page writes.
+local function reportDAHVersion(response, rec)
+    response[FIELD_DAH_VERSION] = rec[BIN_DAH_VERSION] or 0
+end
 -- local FIELD_DEBUG = "debug"
 
 -- Helper functions
@@ -439,7 +459,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
     rec[BIN_UTXOS] = utxos
     rec[BIN_SPENT_UTXOS] = spentUtxos
 
-    local signal, childCount = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
+    local signal, childCount, conflicting = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
     aerospike:update(rec)
 
@@ -457,12 +477,34 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 
     if signal and signal ~= "" then
         response[FIELD_SIGNAL] = signal
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
+            response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET or signal == SIGNAL_DELETE_AT_HEIGHT_UNSET then
+            reportDAHVersion(response, rec)
+        end
+        if conflicting then
+            response[FIELD_CONFLICTING] = true
+        end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
         end
     end
 
     return response
+end
+
+-- Reports a paginated master's page state and deleteAtHeight version so the caller can bring
+-- its pages in line with the master on the retry of a call whose page write failed.
+local function reportPageState(response, rec)
+    local totalExtraRecs = rec[BIN_TOTAL_EXTRA_RECS]
+    if totalExtraRecs and totalExtraRecs > 0 then
+        response[FIELD_CHILD_COUNT] = totalExtraRecs
+        if rec[BIN_DELETE_AT_HEIGHT] then
+            response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
+        reportDAHVersion(response, rec)
+    end
 end
 
 -- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on
@@ -539,17 +581,28 @@ function unspend(rec, offset, utxoHash, expectedSpendingData, currentBlockHeight
         rec[BIN_SPENT_UTXOS] = spentUtxos - 1
     end
 
-    local signal, childCount = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
+    local signal, childCount, conflicting = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
     aerospike:update(rec)
 
     response[FIELD_STATUS] = STATUS_OK
     if signal and signal ~= "" then
         response[FIELD_SIGNAL] = signal
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
+            response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET or signal == SIGNAL_DELETE_AT_HEIGHT_UNSET then
+            reportDAHVersion(response, rec)
+        end
+        if conflicting then
+            response[FIELD_CONFLICTING] = true
+        end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
         end
     end
+
+    reportPageState(response, rec)
 
     return response
 end
@@ -639,7 +692,11 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
         if onLongestChain then
             rec[BIN_UNMINED_SINCE] = nil
         end
-    else
+    elseif rec[BIN_UNMINED_SINCE] == nil then
+        -- Mined -> unmined (the last block was removed): stamp only when absent, keeping an
+        -- earlier unmined_since. For unsetMined the caller passes a backdated currentBlockHeight
+        -- (utxo.BackdatedUnminedSince, issue 1768) so the pruner's parent-preservation scan
+        -- picks the tx up on its next cycle.
         rec[BIN_UNMINED_SINCE] = currentBlockHeight
     end
 
@@ -659,8 +716,8 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
     -- cached tip lags behind the block being validated during catchup/sync; using
     -- it stamped the DAH too low and let the pruner delete the record before the
     -- retention window elapsed. currentBlockHeight is still used above for the
-    -- unmined_since marker, which legitimately wants the current height.
-    local signal, childCount = setDeleteAtHeight(rec, blockHeight, blockHeightRetention)
+    -- unmined_since marker only.
+    local signal, childCount, conflicting = setDeleteAtHeight(rec, blockHeight, blockHeightRetention)
 
     -- Update the record to save changes
     aerospike:update(rec)
@@ -668,6 +725,15 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
     response[FIELD_STATUS] = STATUS_OK
     if signal and signal ~= "" then
         response[FIELD_SIGNAL] = signal
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
+            response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET or signal == SIGNAL_DELETE_AT_HEIGHT_UNSET then
+            reportDAHVersion(response, rec)
+        end
+        if conflicting then
+            response[FIELD_CONFLICTING] = true
+        end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
         end
@@ -964,6 +1030,8 @@ end
 --   blockHeightRetention: number - The number of blocks to retain the record for
 -- Returns:
 --   string - A signal indicating the action taken
+--   number - The number of extra records, when the signal concerns a paginated master
+--   boolean - true when the signal comes from a conflicting record, which is prunable whatever its spent state
 
 --           _   ____       _      _          _   _   _   _      _       _     _
 --  ___  ___| |_|  _ \  ___| | ___| |_ ___   / \ | |_| | | | ___(_) __ _| |__ | |_
@@ -987,20 +1055,28 @@ function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
     local existingDeleteAtHeight = rec[BIN_DELETE_AT_HEIGHT]
     local newDeleteHeight = currentBlockHeight + blockHeightRetention
 
-    -- Handle conflicting transactions first
-    if rec[BIN_CONFLICTING] then
-        if not existingDeleteAtHeight then
-            -- Set the deleteAtHeight for the record
-            rec[BIN_DELETE_AT_HEIGHT] = newDeleteHeight
-            if rec[BIN_EXTERNAL] then
-                return SIGNAL_DELETE_AT_HEIGHT_SET, totalExtraRecs
+    -- A record that was mined must outlive its highest block by the retention window,
+    -- whatever height the caller passes. The caller's height can be the node's cached
+    -- tip, which lags the block being processed, and the pruner deletes purely on the
+    -- stamp. minedFloor is that lower bound; it only ever raises a stamp.
+    local minedFloor = nil
+    local heights = rec[BIN_BLOCK_HEIGHTS]
+    if heights then
+        for i = 1, #heights do
+            local f = heights[i] + blockHeightRetention
+            if not minedFloor or f > minedFloor then
+                minedFloor = f
             end
         end
-
-        return "", nil
     end
 
-    -- Handle pagination records
+    if minedFloor and minedFloor > newDeleteHeight then
+        newDeleteHeight = minedFloor
+    end
+
+    -- A pagination record (no totalExtraRecs bin) only reports its own spent state. Its deleteAtHeight
+    -- is written by the caller from the master, so it never takes the conflicting branch below, whatever
+    -- conflicting flag it was created with.
     if totalExtraRecs == nil then
         -- Default nil to NOTALLSPENT (initial state when record is created with unspent UTXOs)
         local lastState = rec[BIN_LAST_SPENT_STATE] or SIGNAL_NOT_ALL_SPENT
@@ -1024,6 +1100,25 @@ function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
         end
     end
 
+    -- Handle conflicting transactions first
+    if rec[BIN_CONFLICTING] then
+        if not existingDeleteAtHeight then
+            -- Set the deleteAtHeight for the record
+            assignDeleteAtHeight(rec, newDeleteHeight)
+            if rec[BIN_EXTERNAL] then
+                return SIGNAL_DELETE_AT_HEIGHT_SET, totalExtraRecs, true
+            end
+        elseif minedFloor and existingDeleteAtHeight < minedFloor then
+            -- stamped earlier from a lagging tip, before the record was mined: raise it
+            assignDeleteAtHeight(rec, minedFloor)
+            if rec[BIN_EXTERNAL] then
+                return SIGNAL_DELETE_AT_HEIGHT_SET, totalExtraRecs, true
+            end
+        end
+
+        return "", nil
+    end
+
     if spentExtraRecs == nil then
         spentExtraRecs = 0
     end
@@ -1038,14 +1133,14 @@ function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
     -- Set or update deleteAtHeight if all UTXOs are spent, transaction is in at least one block, AND on longest chain
     if allSpent and hasBlockIDs and isOnLongestChain then
         if not existingDeleteAtHeight or existingDeleteAtHeight < newDeleteHeight then
-            rec[BIN_DELETE_AT_HEIGHT] = newDeleteHeight
+            assignDeleteAtHeight(rec, newDeleteHeight)
             if rec[BIN_EXTERNAL] then
                 return SIGNAL_DELETE_AT_HEIGHT_SET, totalExtraRecs
             end
         end
     -- Clear deleteAtHeight if conditions are no longer met
     elseif existingDeleteAtHeight then
-        rec[BIN_DELETE_AT_HEIGHT] = nil
+        assignDeleteAtHeight(rec, nil)
         if rec[BIN_EXTERNAL] then
             return SIGNAL_DELETE_AT_HEIGHT_UNSET, totalExtraRecs
         end
@@ -1082,17 +1177,28 @@ function setConflicting(rec, setValue, currentBlockHeight, blockHeightRetention)
 
     rec[BIN_CONFLICTING] = setValue
 
-    local signal, childCount = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
+    local signal, childCount, conflicting = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
     aerospike:update(rec)
 
     response[FIELD_STATUS] = STATUS_OK
     if signal and signal ~= "" then
         response[FIELD_SIGNAL] = signal
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
+            response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET or signal == SIGNAL_DELETE_AT_HEIGHT_UNSET then
+            reportDAHVersion(response, rec)
+        end
+        if conflicting then
+            response[FIELD_CONFLICTING] = true
+        end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
         end
     end
+
+    reportPageState(response, rec)
 
     return response
 end
@@ -1123,7 +1229,7 @@ function preserveUntil(rec, blockHeight)
     end
 
     -- Remove deleteAtHeight if it exists
-    rec[BIN_DELETE_AT_HEIGHT] = nil
+    assignDeleteAtHeight(rec, nil)
 
     -- Set preserveUntil
     rec[BIN_PRESERVE_UNTIL] = blockHeight
@@ -1132,6 +1238,7 @@ function preserveUntil(rec, blockHeight)
     aerospike:update(rec)
 
     response[FIELD_STATUS] = STATUS_OK
+    reportDAHVersion(response, rec)
 
     -- Check if we need to signal external file handling
     if rec[BIN_EXTERNAL] then
@@ -1210,13 +1317,18 @@ function setLocked(rec, setValue)
 
     -- Remove any existing deleteAtHeight when locking
     if setValue and rec[BIN_DELETE_AT_HEIGHT] then
-        rec[BIN_DELETE_AT_HEIGHT] = nil
+        assignDeleteAtHeight(rec, nil)
     end
 
     aerospike:update(rec)
 
     response[FIELD_STATUS] = STATUS_OK
     response[FIELD_CHILD_COUNT] = totalExtraRecs
+
+    -- the caller clears the pages of a locked master with this version, from the master's response
+    if rec[BIN_TOTAL_EXTRA_RECS] ~= nil then
+        reportDAHVersion(response, rec)
+    end
 
     return response
 end
@@ -1270,13 +1382,22 @@ function incrementSpentExtraRecs(rec, inc, currentBlockHeight, blockHeightRetent
 
     rec[BIN_SPENT_EXTRA_RECS] = spentExtraRecs
 
-    local signal, childCount = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
+    local signal, childCount, conflicting = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
     aerospike:update(rec)
 
     response[FIELD_STATUS] = STATUS_OK
     if signal and signal ~= "" then
         response[FIELD_SIGNAL] = signal
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
+            response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET or signal == SIGNAL_DELETE_AT_HEIGHT_UNSET then
+            reportDAHVersion(response, rec)
+        end
+        if conflicting then
+            response[FIELD_CONFLICTING] = true
+        end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
         end

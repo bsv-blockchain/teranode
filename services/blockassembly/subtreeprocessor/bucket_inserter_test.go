@@ -5,16 +5,15 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/stretchr/testify/require"
 )
 
 // bucketizeForTest groups hashes per bucket the way
 // DeserializeHashesFromReaderIntoBuckets hands them to the insert stage.
-func bucketizeForTest(hashes []chainhash.Hash, nrOfBuckets uint16) map[uint16][]chainhash.Hash {
+func bucketizeForTest(hashes []chainhash.Hash, m *SortedHashSet) map[uint16][]chainhash.Hash {
 	out := make(map[uint16][]chainhash.Hash)
 	for _, h := range hashes {
-		bucket := txmap.Bytes2Uint16Buckets(h, nrOfBuckets)
+		bucket := uint16(m.Partition(h))
 		out[bucket] = append(out[bucket], h)
 	}
 
@@ -30,7 +29,7 @@ func TestBucketInserter_AllHashesInserted(t *testing.T) {
 		perSubtree  = 4096
 	)
 
-	m := NewSplitSwissMap(64, numSubtrees*perSubtree)
+	m := NewSortedHashSet(numSubtrees * perSubtree)
 	ins := newBucketInserter(m, 8)
 
 	all := genBenchHashes(numSubtrees*perSubtree, 60)
@@ -42,7 +41,7 @@ func TestBucketInserter_AllHashesInserted(t *testing.T) {
 		go func(s int) {
 			defer wg.Done()
 
-			buckets := bucketizeForTest(all[s*perSubtree:(s+1)*perSubtree], m.Buckets())
+			buckets := bucketizeForTest(all[s*perSubtree:(s+1)*perSubtree], m)
 			// t.Errorf, not require: this runs in a worker goroutine and
 			// require's FailNow is only safe on the test goroutine.
 			if err := ins.submit(buckets); err != nil {
@@ -53,6 +52,7 @@ func TestBucketInserter_AllHashesInserted(t *testing.T) {
 
 	wg.Wait()
 	require.NoError(t, ins.closeAndWait())
+	require.NoError(t, m.Freeze(4))
 
 	require.Equal(t, numSubtrees*perSubtree, m.Length())
 
@@ -67,11 +67,11 @@ func TestBucketInserter_AllHashesInserted(t *testing.T) {
 func TestBucketInserter_DuplicateHashesIdempotent(t *testing.T) {
 	const total = 2048
 
-	m := NewSplitSwissMap(16, total)
+	m := NewSortedHashSet(total)
 	ins := newBucketInserter(m, 4)
 
 	hashes := genBenchHashes(total, 61)
-	buckets := bucketizeForTest(hashes, m.Buckets())
+	buckets := bucketizeForTest(hashes, m)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 2; i++ {
@@ -87,6 +87,7 @@ func TestBucketInserter_DuplicateHashesIdempotent(t *testing.T) {
 
 	wg.Wait()
 	require.NoError(t, ins.closeAndWait())
+	require.NoError(t, m.Freeze(4))
 	require.Equal(t, total, m.Length())
 }
 
@@ -94,35 +95,37 @@ func TestBucketInserter_DuplicateHashesIdempotent(t *testing.T) {
 // configs: zero/negative worker counts clamp to a working pool, empty submits
 // are no-ops, and immediate closeAndWait succeeds.
 func TestBucketInserter_EmptySubmitAndClampedWorkers(t *testing.T) {
-	m := NewSplitSwissMap(16, 16)
+	m := NewSortedHashSet(16)
 
 	ins := newBucketInserter(m, 0)
 	require.NoError(t, ins.submit(map[uint16][]chainhash.Hash{}))
 	require.NoError(t, ins.submit(nil))
 	require.NoError(t, ins.closeAndWait())
+	require.NoError(t, m.Freeze(1))
 	require.Equal(t, 0, m.Length())
 
 	// More workers than buckets must clamp rather than spawn idle workers
 	// indexing out of range.
-	m2 := NewSplitSwissMap(4, 1024)
+	m2 := NewSortedHashSet(1024)
 	ins2 := newBucketInserter(m2, 1000)
 
 	hashes := genBenchHashes(512, 62)
-	require.NoError(t, ins2.submit(bucketizeForTest(hashes, m2.Buckets())))
+	require.NoError(t, ins2.submit(bucketizeForTest(hashes, m2)))
 	require.NoError(t, ins2.closeAndWait())
+	require.NoError(t, m2.Freeze(1))
 	require.Equal(t, 512, m2.Length())
 }
 
 // TestBucketInserter_SubmitAfterCloseErrors verifies misuse fails loudly
 // instead of panicking on a closed channel.
 func TestBucketInserter_SubmitAfterCloseErrors(t *testing.T) {
-	m := NewSplitSwissMap(16, 16)
+	m := NewSortedHashSet(16)
 	ins := newBucketInserter(m, 2)
 
 	require.NoError(t, ins.closeAndWait())
 
 	hashes := genBenchHashes(16, 63)
-	err := ins.submit(bucketizeForTest(hashes, m.Buckets()))
+	err := ins.submit(bucketizeForTest(hashes, m))
 	require.Error(t, err)
 }
 
@@ -132,13 +135,13 @@ func TestBucketInserter_SubmitAfterCloseErrors(t *testing.T) {
 func TestBucketInserter_FrozenMapSurfacesError(t *testing.T) {
 	const total = 64 * 1024
 
-	m := NewSplitSwissMap(16, total)
-	m.Freeze()
+	m := NewSortedHashSet(total)
+	require.NoError(t, m.Freeze(1))
 
 	ins := newBucketInserter(m, 2)
 
 	hashes := genBenchHashes(total, 64)
-	buckets := bucketizeForTest(hashes, m.Buckets())
+	buckets := bucketizeForTest(hashes, m)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {

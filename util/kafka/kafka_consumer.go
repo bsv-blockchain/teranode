@@ -97,8 +97,12 @@ type KafkaConsumerGroup struct {
 	client   *kgo.Client
 	cancelMu sync.Mutex
 	cancel   context.CancelFunc
-	closeMu  sync.Mutex
-	closed   bool
+	// drained is closed by the consume loop once its final offset commit is
+	// done. The client must not be closed before that, or the commit is lost
+	// and the next consumer in the group re-processes those records.
+	drained chan struct{}
+	closeMu sync.Mutex
+	closed  bool
 
 	// For in-memory support
 	inMemoryConsumer *inmemorykafka.InMemoryConsumerGroup
@@ -220,10 +224,36 @@ func (k *KafkaConsumerGroup) Close() error {
 			}
 		}
 	} else {
+		k.awaitDrained()
 		k.closeClient()
 	}
 
 	return nil
+}
+
+// drainTimeout bounds how long closing waits for the consume loop to drain
+// in-flight handlers and make its final commit; the commit shares the same
+// deadline. A handler that never returns (or calls Close itself) must not
+// block shutdown forever, and services close several consumers in a row
+// within one pod termination grace period.
+const drainTimeout = 10 * time.Second
+
+// awaitDrained waits until the consume loop has made its final offset commit,
+// so the client is not closed underneath it.
+func (k *KafkaConsumerGroup) awaitDrained() {
+	k.cancelMu.Lock()
+	drained := k.drained
+	k.cancelMu.Unlock()
+
+	if drained == nil {
+		return // Start was never called
+	}
+
+	select {
+	case <-drained:
+	case <-time.After(drainTimeout):
+		k.Config.Logger.Warnf("[Kafka] %s: consume loop for topic %s did not drain within %s, closing anyway", k.Config.ConsumerGroupID, k.Config.Topic, drainTimeout)
+	}
 }
 
 func (k *KafkaConsumerGroup) closeClient() {
@@ -361,6 +391,11 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error)
 	} else if cfg.Replay {
 		opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
 		cfg.Logger.Infof("[Kafka] %s: replay enabled, configured to consume from earliest offset", cfg.Topic)
+	} else {
+		// franz-go resets to the start by default, which would make replay=0
+		// replay the whole retained topic for a new consumer group.
+		opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()))
+		cfg.Logger.Infof("[Kafka] %s: replay disabled, configured to consume from latest offset", cfg.Topic)
 	}
 
 	// Configure auto-commit
@@ -482,8 +517,10 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 	// Create internal context and store cancel func before spawning goroutines.
 	// Protected by cancelMu to avoid a data race with Close().
 	internalCtx, cancel := context.WithCancel(ctx)
+	drained := make(chan struct{})
 	k.cancelMu.Lock()
 	k.cancel = cancel
+	k.drained = drained
 	k.cancelMu.Unlock()
 
 	// Apply retry/error handling wrappers, bound to internalCtx so both caller
@@ -493,41 +530,37 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 	go func() {
 		defer cancel()
 
-		// Main consume loop — fire-and-forget per-partition fan-out, no barrier.
+		// Main consume loop — per-partition workers, no barrier.
 		//
 		//   [franz-go background fetcher → local record buffer]
 		//             ↓
 		//   [puller goroutine: tight PollFetches loop]
 		//             ↓                ↓                ↓
-		//   [partition 0 goroutine] [partition 1 goroutine] [partition N goroutine]
+		//   [partition 0 queue]   [partition 1 queue]   [partition N queue]
 		//             ↓                ↓                ↓
-		//                consumerFn (sequential within each goroutine)
+		//   [partition 0 worker]  [partition 1 worker]  [partition N worker]
+		//             ↓                ↓                ↓
+		//                consumerFn (sequential within each worker)
 		//
 		// franz-go's EachPartition is dumb-serial — three nested for-loops
-		// calling fn synchronously. To recover the cross-partition parallelism
-		// that c2402191f intended, we spawn a goroutine per partition per
-		// fetch. The puller does NOT wait for those goroutines (no
-		// partitionWg.Wait), so PollFetches is called again immediately and
-		// franz-go's local buffer keeps draining.
+		// calling fn synchronously. To keep cross-partition parallelism the
+		// puller appends each partition's batch to that partition's FIFO queue
+		// (see partitionQueues) and polls again immediately. Enqueueing never
+		// blocks and fetching is never paused, so franz-go's local buffer keeps
+		// draining no matter how far a handler falls behind.
 		//
-		// Trade-off: per-partition ordering is preserved within a single
-		// fetch's batch, but NOT across fetches — two consecutive fetches for
-		// the same partition can dispatch two goroutines that run concurrently.
-		// Handlers that depend on strict cross-fetch ordering must enforce it
-		// themselves. txmeta entries are independent (and DELETE is sync inside
-		// txmetaHandler) so the txmeta hot path is fine.
+		// Ordering: within a partition, records are processed and marked in
+		// offset order across fetches; across partitions there is no ordering.
 		//
-		// HANDLER CONTRACT — handlers MUST bound their own blocking. Because the
-		// puller does not wait, every parked per-partition goroutine keeps holding
-		// the []*kgo.Record it was dispatched with while PollFetches keeps
-		// returning more. A handler that blocks for an unbounded time therefore
-		// reintroduces unbounded goroutine and record retention here, no matter what
-		// bound the downstream service enforces on itself: retention becomes
-		// proportional to the stall duration rather than to anything this process
-		// controls. Nothing in this loop enforces the contract — it is the handler's
-		// job (see the validator's bounded block-assembly handoff retry,
-		// validator_blockAssemblyShedRetryTimeout, for the shape).
+		// HANDLER CONTRACT — handlers MUST bound their own blocking. A handler
+		// that stalls makes its partition's queue grow with every fetch: memory
+		// retention is proportional to the stall duration. Goroutines stay at
+		// one per partition. Nothing in this loop enforces the contract — it is
+		// the handler's job (see the validator's bounded block-assembly handoff
+		// retry, validator_blockAssemblyShedRetryTimeout, for the shape).
 		go func() {
+			defer close(drained)
+
 			k.Config.Logger.Debugf("[kafka] starting consumer for group %s on topic %s", k.Config.ConsumerGroupID, k.Config.Topic)
 
 			commitTicker := time.NewTicker(time.Minute)
@@ -536,27 +569,65 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 			uncommittedRecords := make([]*kgo.Record, 0)
 			var uncommittedMu sync.Mutex
 
-			// partitionWg tracks the per-partition goroutines spawned below.
+			// partitionWg tracks the per-partition workers started below.
 			// We deliberately do NOT wait on it between fetches (that was the
 			// barrier #868bdbb06 removed for steady-state throughput). It is
 			// waited on EXACTLY ONCE at shutdown so the final commitRecords
 			// captures everything that finished processing — without it, a
-			// goroutine mid-consumerFn appends to uncommittedRecords AFTER the
+			// worker mid-consumerFn appends to uncommittedRecords AFTER the
 			// final commit has run, leaving its records uncommitted on disk
 			// even though they were successfully processed.
 			var partitionWg sync.WaitGroup
 
-			// partitionLocks serialises processing within a single partition
-			// across consecutive fetches. PollFetches returns immediately and
-			// can hand us a second batch from partition P before the goroutine
-			// processing the first batch has finished. Without a per-partition
-			// lock, batch B could mark/append a later offset while batch A is
-			// mid-way; a subsequent commitRecords would then advance the
-			// partition past records A had not yet processed, and if A later
-			// fails on an earlier offset the broker never re-delivers them.
-			// One mutex per partition is allocated lazily on first use; the
-			// number of partitions is bounded by the topic config.
-			var partitionLocks sync.Map // map[int32]*sync.Mutex
+			// processBatch runs on the partition's worker (see partitionQueues):
+			// one worker per partition, batches strictly in fetch order, so a
+			// later batch can never mark/commit offsets past an earlier batch
+			// that is still being processed. A handler error abandons the rest
+			// of its batch, but the partition's next batch is still processed
+			// and marked, which commits past the abandoned records (as before
+			// per-partition workers); consumers that must not skip records use
+			// a retry option.
+			processBatch := func(records []*kgo.Record, hwm int64) {
+				for _, record := range records {
+					select {
+					case <-internalCtx.Done():
+						return
+					default:
+					}
+
+					kafkaMsg := &KafkaMessage{
+						Key:           record.Key,
+						Value:         record.Value,
+						Topic:         record.Topic,
+						Partition:     record.Partition,
+						Offset:        record.Offset,
+						Timestamp:     record.Timestamp,
+						HighWaterMark: hwm,
+					}
+
+					if err := consumerFn(kafkaMsg); err != nil {
+						k.Config.Logger.Errorf("[kafka_consumer] failed to process message (topic: %s, partition: %d, offset: %d): %v",
+							record.Topic, record.Partition, record.Offset, err)
+						// Don't mark this or any later record in this
+						// batch — leave them uncommitted so rebalance/
+						// restart re-delivers.
+						return
+					}
+
+					if k.Config.AutoCommitEnabled {
+						// MarkCommitRecords locks internal commit state
+						// in franz-go, so concurrent calls from many
+						// per-partition workers are safe.
+						k.client.MarkCommitRecords(record)
+					} else {
+						uncommittedMu.Lock()
+						uncommittedRecords = append(uncommittedRecords, record)
+						uncommittedMu.Unlock()
+					}
+				}
+			}
+
+			partitions := newPartitionQueues(internalCtx, &partitionWg, processBatch)
 
 			// shutdownDrain captures everything in flight on every exit path.
 			// Must run for context cancellation AND for fetch errors that
@@ -564,9 +635,14 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 			// otherwise records processed after the last ticker commit are
 			// lost despite successful processing.
 			shutdownDrain := func() {
+				// One deadline for draining and the final commit, matching
+				// awaitDrained, so the commit is not cut off by closeClient.
+				deadline := time.Now().Add(drainTimeout)
+
+				partitions.close()
 				partitionWg.Wait()
 				uncommittedMu.Lock()
-				k.commitRecords(uncommittedRecords)
+				k.commitRecordsSync(uncommittedRecords, deadline)
 				uncommittedMu.Unlock()
 			}
 
@@ -578,80 +654,10 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 				default:
 				}
 
-				fetches := k.client.PollFetches(internalCtx)
-
-				if errs := fetches.Errors(); len(errs) > 0 {
-					for _, err := range errs {
-						if errors.Is(err.Err, context.Canceled) || errors.Is(err.Err, kgo.ErrClientClosed) {
-							k.Config.Logger.Debugf("Kafka consumer shutdown: %v", err.Err)
-							shutdownDrain()
-							return
-						}
-						k.Config.Logger.Errorf("Kafka consumer error on topic %s partition %d: %v", err.Topic, err.Partition, err.Err)
-					}
-					continue
+				if k.dispatchFetches(k.client.PollFetches(internalCtx), partitions) {
+					shutdownDrain()
+					return
 				}
-
-				fetches.EachPartition(func(p kgo.FetchTopicPartition) {
-					if len(p.Records) == 0 {
-						return
-					}
-
-					// Capture HighWatermark in the outer scope: the kgo.FetchTopicPartition
-					// value `p` is only valid for the duration of this synchronous callback,
-					// and the goroutine below outlives it.
-					hwm := p.HighWatermark
-
-					muIface, _ := partitionLocks.LoadOrStore(p.Partition, &sync.Mutex{})
-					mu := muIface.(*sync.Mutex)
-
-					partitionWg.Add(1)
-					go func(records []*kgo.Record, hwm int64, mu *sync.Mutex) {
-						defer partitionWg.Done()
-						// Serialise processing within this partition. Different
-						// partitions remain parallel; cross-partition ordering is
-						// not preserved (and was never claimed).
-						mu.Lock()
-						defer mu.Unlock()
-						for _, record := range records {
-							select {
-							case <-internalCtx.Done():
-								return
-							default:
-							}
-
-							kafkaMsg := &KafkaMessage{
-								Key:           record.Key,
-								Value:         record.Value,
-								Topic:         record.Topic,
-								Partition:     record.Partition,
-								Offset:        record.Offset,
-								Timestamp:     record.Timestamp,
-								HighWaterMark: hwm,
-							}
-
-							if err := consumerFn(kafkaMsg); err != nil {
-								k.Config.Logger.Errorf("[kafka_consumer] failed to process message (topic: %s, partition: %d, offset: %d): %v",
-									record.Topic, record.Partition, record.Offset, err)
-								// Don't mark this or any later record in this
-								// batch — leave them uncommitted so rebalance/
-								// restart re-delivers.
-								return
-							}
-
-							if k.Config.AutoCommitEnabled {
-								// MarkCommitRecords locks internal commit state
-								// in franz-go, so concurrent calls from many
-								// per-partition goroutines are safe.
-								k.client.MarkCommitRecords(record)
-							} else {
-								uncommittedMu.Lock()
-								uncommittedRecords = append(uncommittedRecords, record)
-								uncommittedMu.Unlock()
-							}
-						}
-					}(p.Records, hwm, mu)
-				})
 
 				select {
 				case <-commitTicker.C:
@@ -677,6 +683,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 			k.Config.Logger.Infof("[kafka] Context done, shutting down consumer for %s", k.Config.ConsumerGroupID)
 		}
 
+		k.awaitDrained()
 		k.closeClient()
 	}()
 }
@@ -761,12 +768,71 @@ func (k *KafkaConsumerGroup) startInMemory(ctx context.Context, consumerFn func(
 	}()
 }
 
+// dispatchFetches hands every partition's fetched records to its worker and
+// reports whether the client is shutting down (in which case nothing is
+// dispatched: unmarked records stay uncommitted and are re-delivered).
+//
+// A fetch error on one partition is logged and does not stop the others being
+// dispatched: franz-go has already advanced past the records it returned, so
+// skipping them would lose them for good once later offsets are committed.
+func (k *KafkaConsumerGroup) dispatchFetches(fetches kgo.Fetches, partitions *partitionQueues) bool {
+	errs := fetches.Errors()
+
+	for _, err := range errs {
+		if errors.Is(err.Err, context.Canceled) || errors.Is(err.Err, kgo.ErrClientClosed) {
+			k.Config.Logger.Debugf("Kafka consumer shutdown: %v", err.Err)
+			return true
+		}
+	}
+
+	for _, err := range errs {
+		k.Config.Logger.Errorf("Kafka consumer error on topic %s partition %d: %v", err.Topic, err.Partition, err.Err)
+	}
+
+	fetches.EachPartition(func(p kgo.FetchTopicPartition) {
+		if len(p.Records) == 0 {
+			return
+		}
+
+		// Never blocks: fetching continues at full speed while the
+		// partition's worker catches up.
+		partitions.enqueue(p.Partition, p.Records, p.HighWatermark)
+	})
+
+	return false
+}
+
 // commitRecords commits the offsets for the given records
 func (k *KafkaConsumerGroup) commitRecords(records []*kgo.Record) {
 	if len(records) == 0 || k.client == nil {
 		return
 	}
 
+	k.client.CommitOffsets(context.Background(), recordOffsets(records), k.logCommitError)
+}
+
+// commitRecordsSync is commitRecords for shutdown: it returns only once the
+// commit has completed, so the client can be closed right after it.
+func (k *KafkaConsumerGroup) commitRecordsSync(records []*kgo.Record, deadline time.Time) {
+	if len(records) == 0 || k.client == nil {
+		return
+	}
+
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+
+	k.client.CommitOffsetsSync(ctx, recordOffsets(records), k.logCommitError)
+}
+
+func (k *KafkaConsumerGroup) logCommitError(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+	if err != nil {
+		k.Config.Logger.Errorf("[kafka] Failed to commit offsets: %v", err)
+	}
+}
+
+// recordOffsets returns, per topic and partition, the offset after the last of
+// the given records (records must be in offset order per partition).
+func recordOffsets(records []*kgo.Record) map[string]map[int32]kgo.EpochOffset {
 	offsets := make(map[string]map[int32]kgo.EpochOffset)
 	for _, r := range records {
 		if _, ok := offsets[r.Topic]; !ok {
@@ -778,11 +844,7 @@ func (k *KafkaConsumerGroup) commitRecords(records []*kgo.Record) {
 		}
 	}
 
-	k.client.CommitOffsets(context.Background(), offsets, func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
-		if err != nil {
-			k.Config.Logger.Errorf("[kafka] Failed to commit offsets: %v", err)
-		}
-	})
+	return offsets
 }
 
 // BrokersURL returns the list of Kafka broker URLs.

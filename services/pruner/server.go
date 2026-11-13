@@ -76,6 +76,13 @@ type Server struct {
 	blobStores           map[storetypes.BlobStoreType]blob.Store
 	blobNotify           chan pruneSignal
 	blobDeletionObserver BlobDeletionObserver
+
+	// The stamp worker. stamper is nil for a store that does not stamp, and then no worker
+	// runs. stampNotify holds one signal, the latest. stampRetry is the retry timer's
+	// interval, a constant in production and short in tests.
+	stamper     pruner.Stamper
+	stampNotify chan pruneSignal
+	stampRetry  time.Duration
 }
 
 // New creates a new Pruner server instance with the provided dependencies.
@@ -99,6 +106,8 @@ func New(
 		blobStores:          make(map[storetypes.BlobStoreType]blob.Store),
 		pruneNotify:         make(chan pruneSignal, 1),
 		blobNotify:          make(chan pruneSignal, 1),
+		stampNotify:         make(chan pruneSignal, 1),
+		stampRetry:          stampRetryInterval,
 		stats:               gocore.NewStat("pruner"),
 	}
 }
@@ -113,7 +122,9 @@ func (s *Server) Init(ctx context.Context) error {
 	initPrometheusMetrics()
 
 	// Initialize pruner service from UTXO store
-	prunerProvider, ok := s.utxoStore.(pruner.PrunerServiceProvider)
+	// utxo.As looks through wrappers such as the logging store, which would
+	// otherwise hide the wrapped store's pruner.
+	prunerProvider, ok := utxo.As[pruner.PrunerServiceProvider](s.utxoStore)
 	if !ok {
 		return errors.NewServiceError("UTXO store does not provide pruner service")
 	}
@@ -125,6 +136,12 @@ func (s *Server) Init(ctx context.Context) error {
 	}
 	if s.prunerService == nil {
 		return errors.NewServiceError("pruner service not available from UTXO store")
+	}
+
+	// The stamp worker, for a store whose UTXOs get their block from a deep pass.
+	s.stamper = s.findStamper()
+	if s.stamper != nil && s.settings.Pruner.SkipDuringCatchup {
+		s.logger.Errorf("[pruner] pruner_skipDuringCatchup is true on a store that stamps: the stamp, and with it every tx_mined partition drop, will stall for the whole catch-up")
 	}
 
 	// Validate block trigger mode
@@ -289,6 +306,11 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start blob deletion worker
 	go s.blobDeletionWorker()
+
+	// Start the stamp worker, beside the pruner processor and never in front of it
+	if s.stamper != nil {
+		go s.stampWorker(ctx)
+	}
 
 	// Start blob deletion metrics updater
 	go s.updateBlobDeletionMetrics()

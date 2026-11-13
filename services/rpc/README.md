@@ -8,7 +8,7 @@ The RPC service provides a Bitcoin-compatible JSON-RPC interface for interacting
 
 ## Authentication
 
-The service uses HTTP Basic Authentication. The default credentials are `bitcoin:bitcoin`. Pass them with `--user bitcoin:bitcoin` in curl, or configure them via settings.
+The service uses HTTP Basic Authentication against `rpc_user`/`rpc_pass`. No credentials ship with Teranode: set both in `settings_local.conf` before the RPC service will authenticate anyone. The examples below use `bitcoin:bitcoin`, which is what the throwaway compose rigs configure — never use it anywhere reachable.
 
 ## Running the Service
 

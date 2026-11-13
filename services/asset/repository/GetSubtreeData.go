@@ -50,6 +50,34 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// raceTolerantStoreWriter sits between the generator and the file storer. When the store
+// refuses this write with ErrBlobAlreadyExists, another writer (block validation or the block
+// persister) has published the same subtreeData first. The refusal comes from the store's
+// background goroutine, so it reaches whichever storer.Write runs next, usually long before
+// Close. Returning it would stop io.MultiWriter before the HTTP pipe and cut the peer's body
+// short, so it latches the refusal and swallows every later file write instead: the peer still
+// gets the complete body and the store keeps the other writer's file. Any other error passes
+// through. Only the single generator goroutine uses it.
+type raceTolerantStoreWriter struct {
+	w       io.Writer
+	lostErr error
+}
+
+func (r *raceTolerantStoreWriter) Write(p []byte) (int, error) {
+	if r.lostErr != nil {
+		return len(p), nil
+	}
+
+	n, err := r.w.Write(p)
+	if err != nil && errors.Is(err, errors.ErrBlobAlreadyExists) {
+		r.lostErr = err
+
+		return len(p), nil
+	}
+
+	return n, err
+}
+
 // semaphoreReadCloser wraps an io.ReadCloser and releases a semaphore permit when closed.
 type semaphoreReadCloser struct {
 	io.ReadCloser
@@ -77,20 +105,36 @@ func (sr *semaphoreReadCloser) Close() error {
 // - *io.PipeReader: A PipeReader that can be used to read the subtree data.
 // - error: An error if the retrieval fails, or nil if successful.
 func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (io.ReadCloser, error) {
-	if err := acquireSemaphorePermit(ctx, repo.semGetSubtreeDataReader, "GetSubtreeDataReader"); err != nil {
-		return nil, err
-	}
-	// Note: semaphore will be released when the returned reader is closed
-
+	// The existence checks come before the reader permit. The permit is held for
+	// the whole client-paced response, so taking it first let requests for hashes
+	// this node does not have queue behind live streams — up to the 30s acquire
+	// deadline — and then 404 anyway. Nothing below this point is expensive, and a
+	// request that cannot be served must not consume streaming budget.
 	subtreeDataExists, err := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 	if err != nil {
 		// Surface storage errors instead of falling through to the NotFound /
 		// on-demand path — otherwise an IO failure here would be silently
 		// reclassified as 404 or trigger an unnecessary regeneration attempt.
-		releaseSemaphorePermit(repo.semGetSubtreeDataReader)
 		return nil, err
 	}
+	// An existing FileTypeSubtreeData is served without asking whether the subtree has been
+	// validated, unlike the subtree routes, which refuse the pending FileTypeSubtreeToCheck copy
+	// (see openValidatedSubtree). Two writers store this file before the block is validated:
+	// catch-up (fetchAndStoreSubtreeData in services/blockvalidation/get_blocks.go) and
+	// CheckBlockSubtrees (processSubtreeDataStream in
+	// services/subtreevalidation/check_block_subtrees.go). Both parse the peer's stream against
+	// a subtree whose root they have already checked, and reject any transaction whose txid
+	// differs from the leaf at its index, so the file can only hold the transactions the subtree
+	// commits to. What it may hold early is transactions this node has not script-validated yet.
+	// Whether this route should also wait for FileTypeSubtree is tracked separately; gating it
+	// naively would 404 data served today, because the two files carry different delete-at
+	// heights and the data file can outlive the subtree file.
 	if subtreeDataExists {
+		if err = acquireSemaphorePermit(ctx, repo.semGetSubtreeDataReader, "GetSubtreeDataReader"); err != nil {
+			return nil, err
+		}
+		// Note: semaphore will be released when the returned reader is closed
+
 		reader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 		if err != nil {
 			releaseSemaphorePermit(repo.semGetSubtreeDataReader)
@@ -105,26 +149,31 @@ func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *c
 
 	// SubtreeData doesn't exist. The on-demand fallback (dualStreamWithFileCreation)
 	// regenerates the data from the underlying subtree file in a goroutine *after* the
-	// HTTP handler has committed to 200 OK. If neither the subtree nor the
-	// subtreeToCheck file is present we cannot regenerate, and the handler would
-	// otherwise emit "200 OK + empty body", which peers report as
-	// ErrSubtreeLengthMismatch. Surface a NotFound instead so the handler returns 404
-	// and callers can attempt another peer.
+	// HTTP handler has committed to 200 OK. If the subtree file is not present we cannot
+	// regenerate, and the handler would otherwise emit "200 OK + empty body", which peers
+	// report as ErrSubtreeLengthMismatch. Surface a NotFound instead so the handler
+	// returns 404 and callers can attempt another peer.
+	//
+	// Only FileTypeSubtree counts, never FileTypeSubtreeToCheck, because regeneration can
+	// only read FileTypeSubtree: it goes through writeTransactionsViaSubtreeStoreStreaming
+	// to GetSubtreeTxIDsReader, which reads through openValidatedSubtree. Checking for the
+	// pending file here would commit the handler to 200 OK for a regeneration that is then
+	// certain to fail, which is the "200 OK + empty body" this check exists to prevent. If
+	// someone re-adds a FileTypeSubtreeToCheck fallback here, it must be re-added on
+	// openValidatedSubtree too, and that would reopen bitcoin-sv/teranode#4842.
 	subtreeExists, existsErr := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 	if existsErr != nil {
-		releaseSemaphorePermit(repo.semGetSubtreeDataReader)
 		return nil, existsErr
 	}
 	if !subtreeExists {
-		toCheckExists, toCheckErr := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
-		if toCheckErr != nil {
-			releaseSemaphorePermit(repo.semGetSubtreeDataReader)
-			return nil, toCheckErr
-		}
-		if !toCheckExists {
-			releaseSemaphorePermit(repo.semGetSubtreeDataReader)
-			return nil, errors.NewNotFoundError("subtree %s not found", subtreeHash.String())
-		}
+		return nil, errors.NewNotFoundError("subtree %s not found", subtreeHash.String())
+	}
+
+	// Only now, with a regeneration actually on the cards, take the reader permit.
+	// It is released by dualStreamWithFileCreation's producer goroutine, or here on
+	// the failure paths below.
+	if err = acquireSemaphorePermit(ctx, repo.semGetSubtreeDataReader, "GetSubtreeDataReader"); err != nil {
+		return nil, err
 	}
 
 	// File doesn't exist — on-demand creation path. Apply non-blocking admission
@@ -255,7 +304,9 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 
 	// Use MultiWriter to write to both file storage and HTTP pipe simultaneously.
 	// Counted so an empty generation can be rejected before the blob is finalised.
-	counted := &countingWriter{w: io.MultiWriter(storer, httpWriter)}
+	// The store side tolerates a lost publish race so the peer's stream survives it.
+	storeSide := &raceTolerantStoreWriter{w: storer}
+	counted := &countingWriter{w: io.MultiWriter(storeSide, httpWriter)}
 
 	// Background goroutine: generate data and write to both destinations
 	g, gCtx := errgroup.WithContext(ctx)
@@ -313,8 +364,32 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 			return err
 		}
 
+		// Another writer (block validation's processSubtreeDataStream or the block persister's
+		// CreateSubtreeDataFileStreaming) published this subtreeData first and the store
+		// refused ours mid-stream. storeSide kept the peer's stream going, so the peer has the
+		// complete body: this request succeeded and the store holds the other writer's file.
+		// Abort only reaps the storer's goroutine and buffer; nothing of ours was published.
+		if storeSide.lostErr != nil {
+			storer.Abort(storeSide.lostErr)
+			repo.logger.Debugf("[GetSubtreeDataReader] subtreeData for %s was published by another writer while this one streamed; keeping theirs", subtreeHash.String())
+			_ = httpWriter.Close()
+			prometheusAssetSubtreeDataCreated.WithLabelValues("success", "lost_publish_race").Inc()
+			return nil
+		}
+
 		// Close the file storer successfully
 		if closeErr := storer.Close(gCtx); closeErr != nil {
+			// The same lost race, when the refusal arrives only after the last Write: the
+			// store's pre-write check had not finished by then, or an exclusive publish was
+			// refused at the link. Every byte had gone to both destinations, so this is a
+			// success for the peer too.
+			if errors.Is(closeErr, errors.ErrBlobAlreadyExists) {
+				repo.logger.Debugf("[GetSubtreeDataReader] subtreeData for %s was published by another writer while this one streamed; keeping theirs", subtreeHash.String())
+				_ = httpWriter.Close()
+				prometheusAssetSubtreeDataCreated.WithLabelValues("success", "lost_publish_race").Inc()
+				return nil
+			}
+
 			repo.logger.Warnf("[GetSubtreeDataReader] Error closing subtreeData file for %s: %v", subtreeHash.String(), closeErr)
 			_ = httpWriter.CloseWithError(closeErr)
 			prometheusAssetSubtreeDataCreated.WithLabelValues("error", "close_failed").Inc()
