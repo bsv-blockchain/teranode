@@ -2646,7 +2646,7 @@ func (s *Store) retrySpendBatchContext(ctx context.Context, batch []*batchSpend,
 	}
 	// Exhausted retries — send error to all items
 	for _, item := range batch {
-		item.errCh <- errors.NewStorageError("[Spend] deadlock persisted after %d retries", maxRetries)
+		item.errCh <- errors.NewStorageError("[Spend] deadlock or lifted freeze persisted after %d retries", maxRetries)
 	}
 }
 
