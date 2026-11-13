@@ -2073,6 +2073,41 @@ func (ba *BlockAssembly) checkCoinbaseTimeLockFinality(ctx context.Context, jobI
 	return nil
 }
 
+// checkSubmittedTimeMedianTimePast applies the median-time-past rule to the block's timestamp:
+// it must be strictly after the median time of the 11 headers ending at the parent, or every
+// peer rejects the block. block.Valid is called here without the parent chain, so it skips
+// this rule, and the memo-only nTime guard in submitMiningSolution has nothing to enforce when
+// no floor is memoized for the parent (the candidate was served on the wall-clock path because
+// the floor lookup failed, or the memo entry has since been evicted). This check closes that
+// gap by fetching the median on a memo miss.
+//
+// It fails closed: a failed lookup refuses the submission. AddBlock goes to the same blockchain
+// service, so a lookup that fails would most likely see AddBlock fail too, and the job is kept
+// so the miner can resubmit. A lookup failure is this node's problem and stays a processing
+// error; a timestamp at or below the median is a consensus verdict on the miner's data, the
+// class block.Valid gives it. Neither resets block assembly.
+//
+// On a chain with GenerateSupported the rule is advisory, as in Block.checkHeaderContextual,
+// so nothing is enforced.
+func (ba *BlockAssembly) checkSubmittedTimeMedianTimePast(ctx context.Context, jobID string, block *model.Block) error {
+	if ba.blockAssembler.generateSupported() {
+		return nil
+	}
+
+	parentMedianTimePast, err := ba.blockAssembler.ParentMedianTimePast(ctx, block.Header.HashPrevBlock)
+	if err != nil {
+		return errors.NewProcessingError("[BlockAssembly][%s][%s] cannot check the block timestamp against the parent's median time past", jobID, block.Hash().String(), err)
+	}
+
+	if block.Header.Timestamp <= parentMedianTimePast {
+		ba.logger.Warnf("[BlockAssembly][%s][%s] rejected mining solution, block timestamp %d is not after the parent's median time past %d", jobID, block.Hash().String(), block.Header.Timestamp, parentMedianTimePast)
+
+		return errors.NewBlockInvalidError("[BlockAssembly][%s][%s] block timestamp %d is not after the parent's median time past %d, so every peer would reject the block", jobID, block.Hash().String(), block.Header.Timestamp, parentMedianTimePast)
+	}
+
+	return nil
+}
+
 func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSubmissionRequest) (*blockassembly_api.OKResponse, error) {
 	jobID := util.ReverseAndHexEncodeSlice(req.SubmitMiningSolutionRequest.Id)
 
@@ -2127,7 +2162,8 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	// back a few seconds within a job is normal pool behaviour and must stay
 	// legal. The
 	// floor is the memoized value the candidate was built from, so this costs no
-	// round-trip, and when it is unknown there is nothing to enforce.
+	// round-trip. When it is unknown, checkSubmittedTimeMedianTimePast fetches
+	// the median once the proof of work has been checked.
 	if minTime, ok := ba.blockAssembler.MinCandidateTime(hashPrevBlock); ok && int64(nTime) < minTime {
 		// Distinguish the two ways to arrive here, because they are different
 		// operator problems. Usually the miner replaced the timestamp and the
@@ -2327,6 +2363,12 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		ba.logger.Warnf("[BlockAssembly][%s][%s] rejected mining solution, block hash does not meet the target", jobID, block.Hash().String())
 
 		return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] rejected mining solution, block hash does not meet the target", jobID, block.Hash().String())
+	}
+
+	// Only after the proof of work, so a solution without valid work cannot make this node read
+	// the blockchain service, and before block.Valid, so a doomed timestamp does not load subtrees.
+	if err = ba.checkSubmittedTimeMedianTimePast(ctx, jobID, block); err != nil {
+		return nil, err
 	}
 
 	// check fully valid
