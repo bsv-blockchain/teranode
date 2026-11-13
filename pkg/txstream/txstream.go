@@ -40,7 +40,8 @@ const maxScriptAlloc = bt.MaxArenaAlloc
 
 // scriptChunk is the most readScriptBody allocates for a script before any of its bytes arrive,
 // the same reserve go-wire uses. Nearly every real script fits, so it is read with one allocation.
-// A larger one is allocated whole once a quarter of it has arrived (see readScriptBody).
+// A larger one is allocated whole once a quarter of it has arrived (see readScriptBody), unless
+// Options.LengthsTrusted is set, when every script is allocated whole at once.
 const scriptChunk = 64 * 1024
 
 // DataOutputScript stands in for the locking script of an output whose script was passed through
