@@ -217,6 +217,13 @@ func newSubtreeStore(logger ulogger.Logger, s *settings.Settings) (blob.Store, e
 	return subtreeStore, nil
 }
 
+// NewSubtreeStore opens the subtree blob store the way the node does, for other teranode-cli
+// commands that read it. It passes only the hash prefix, so the store manages no
+// delete-at-height lifecycle of its own (see newSubtreeStore).
+func NewSubtreeStore(logger ulogger.Logger, s *settings.Settings) (blob.Store, error) {
+	return newSubtreeStore(logger, s)
+}
+
 // env bundles the resolved stores and counters shared across phases.
 type env struct {
 	logger          ulogger.Logger
