@@ -1,7 +1,9 @@
 package subtreeprocessor
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"net/url"
 	"testing"
 
@@ -518,6 +520,52 @@ func TestCheckMoveForwardSubtreesExist(t *testing.T) {
 		})
 		require.Error(t, err)
 		require.False(t, errors.Is(err, errors.ErrNotFound))
+	})
+}
+
+// TestScanSubtreeNodeHashesMatchesDeserialize checks that a scan that reads every node rejects a
+// damaged conflicting-node trailer exactly when go-subtree's DeserializeFromReader does, which is
+// what moveForwardBlock's own read rejects too.
+func TestScanSubtreeNodeHashesMatchesDeserialize(t *testing.T) {
+	s, txs := buildSubtreeWithTxs(t, "trailer-parity", 3)
+	require.NoError(t, s.AddConflictingNode(txs[0]))
+	require.NoError(t, s.AddConflictingNode(txs[1]))
+
+	intact := mustSerialize(t, s)
+	trailer := len(intact) - 8 - 2*chainhash.HashSize
+
+	withCount := func(count uint64) []byte {
+		b := append([]byte(nil), intact...)
+		binary.LittleEndian.PutUint64(b[trailer:], count)
+
+		return b
+	}
+
+	cases := []struct {
+		name    string
+		data    []byte
+		wantErr bool
+	}{
+		{"intact", intact, false},
+		{"trailer count missing", intact[:trailer], true},
+		{"trailer count cut short", intact[:trailer+4], true},
+		{"count above leaf count", withCount(uint64(len(s.Nodes)) + 1), true},
+		{"count above the hashes present", withCount(3), true},
+		{"conflicting hashes cut short", intact[:len(intact)-10], true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			deserializeErr := (&subtreepkg.Subtree{}).DeserializeFromReader(bytes.NewReader(tc.data))
+			scanErr := scanSubtreeNodeHashes(t.Context(), bytes.NewReader(tc.data), func(chainhash.Hash) bool { return true })
+
+			require.Equal(t, tc.wantErr, deserializeErr != nil, "DeserializeFromReader: %v", deserializeErr)
+			require.Equal(t, tc.wantErr, scanErr != nil, "scanSubtreeNodeHashes: %v", scanErr)
+		})
+	}
+
+	t.Run("a scan that stops early does not read the trailer", func(t *testing.T) {
+		require.NoError(t, scanSubtreeNodeHashes(t.Context(), bytes.NewReader(intact[:trailer]), func(chainhash.Hash) bool { return false }))
 	})
 }
 

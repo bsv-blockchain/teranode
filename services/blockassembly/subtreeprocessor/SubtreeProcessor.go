@@ -2535,6 +2535,26 @@ func scanSubtreeNodeHashes(ctx context.Context, reader io.Reader, fn func(chainh
 		}
 	}
 
+	// A full scan also checks the conflicting-node trailer, the way
+	// DeserializeFromReader and moveForwardBlock's CreateTransactionMap do, so a
+	// subtree that moveForwardBlock would reject fails here instead, before any
+	// store change. A scan that stopped early above never reaches the trailer.
+	var count [8]byte
+	if _, err := io.ReadFull(buf, count[:]); err != nil {
+		return errors.NewProcessingError("unable to read number of conflicting nodes", err)
+	}
+
+	numConflicting := binary.LittleEndian.Uint64(count[:])
+	if numConflicting > numLeaves {
+		return errors.NewProcessingError("subtree trailer claims %d conflicting nodes, exceeds leaf count %d", numConflicting, numLeaves, subtreepkg.ErrConflictingCountExceedsLeaves)
+	}
+
+	// numConflicting <= numLeaves <= MaxInt64/subtreeNodeLen, so this cannot overflow.
+	conflictingBytes := int(numConflicting) * chainhash.HashSize //nolint:gosec // bounded above
+	if n, err := buf.Discard(conflictingBytes); err != nil {
+		return errors.NewProcessingError("unable to read conflicting nodes, got %d of %d bytes", n, conflictingBytes, err)
+	}
+
 	return nil
 }
 
