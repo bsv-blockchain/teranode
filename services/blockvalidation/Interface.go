@@ -39,8 +39,8 @@ type Interface interface {
 	// blockID is the pre-assigned block ID from the caller (0 = not pre-assigned, blockchain will auto-assign).
 	// headerProven is the caller's ancestry proof for a below-checkpoint block: true only when
 	// the caller can show the block's hash sits at or below a pinned checkpoint hash matched in
-	// an internally linked header run. False denies the below-checkpoint quick route and
-	// nothing else; the block then takes full validation.
+	// an internally linked header run. False denies the below-checkpoint quick route, and a
+	// legacy block eligible for that route is refused as retry-later rather than fully validated.
 	ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32, headerProven bool) error
 
 	// ValidateBlock validates a block using the provided request, but does not update any state or database tables.
