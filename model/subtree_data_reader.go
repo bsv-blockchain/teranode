@@ -45,7 +45,9 @@ func readSubtreeData(subtree *subtreepkg.Subtree, r io.Reader) (*subtreepkg.Data
 	txs := txstream.NewReader(r)
 
 	for {
-		tx, id, _, err := txs.Next(txstream.Options{})
+		// The file is this node's own: every script length in it was checked against real bytes
+		// before it was written, so no length needs proving before its script is allocated.
+		tx, id, _, err := txs.Next(txstream.Options{LengthsTrusted: true})
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return data, nil

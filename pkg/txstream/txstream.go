@@ -38,6 +38,12 @@ func (ExtendedFormError) Error() string { return "transaction is in the extended
 // maxScriptAlloc is the largest script this reader will allocate, the same bound go-bt applies.
 const maxScriptAlloc = bt.MaxArenaAlloc
 
+// scriptChunk is the most readScriptBody allocates for a script before any of its bytes arrive,
+// the same reserve go-wire uses. Nearly every real script fits, so it is read with one allocation.
+// A larger one is allocated whole once a quarter of it has arrived (see readScriptBody), unless
+// Options.LengthsTrusted is set, when every script is allocated whole at once.
+const scriptChunk = 64 * 1024
+
 // DataOutputScript stands in for the locking script of an output whose script was passed through
 // without being kept (see Options.SkipDataScripts). It is OP_FALSE OP_RETURN, so anything checking
 // whether the output can be spent sees that it cannot. It is shared: never modify it.
@@ -61,6 +67,11 @@ type Options struct {
 	// its marker is read. A block on the wire carries the standard form only: SV Node reads the
 	// marker as an input count of zero and rejects the transaction.
 	StandardOnly bool
+	// LengthsTrusted reads every script with one allocation of its declared length, without first
+	// proving a quarter of it has arrived. Set it only for a source this node wrote itself, such as
+	// a subtree data file, whose script lengths were read and checked against real bytes before it
+	// was written. Never set it for bytes from a peer.
+	LengthsTrusted bool
 }
 
 // Reader reads transactions one after another from one stream.
@@ -69,9 +80,15 @@ type Reader struct {
 	h       hash.Hash
 	sum     [sha256.Size]byte
 	hashing bool
+	// trusted is Options.LengthsTrusted for the transaction being read.
+	trusted bool
 	// size counts the bytes hashed, which is the transaction's standard size.
-	size    int64
-	out     io.Writer
+	size int64
+	out  io.Writer
+	// werr is the output writer's first failure. It is kept because io.ReadFull drops an error
+	// that comes with the read that filled its buffer, and every later Read returns it without
+	// touching the source, so a failed write ends the read rather than waiting on more input.
+	werr    error
 	scratch [32 * 1024]byte
 }
 
@@ -88,6 +105,10 @@ func NewReader(r io.Reader) *Reader {
 // Read passes bytes from the source to the hasher while hashing is on, and to the output writer
 // while there is one.
 func (t *Reader) Read(p []byte) (int, error) {
+	if t.werr != nil {
+		return 0, t.werr
+	}
+
 	n, err := t.src.Read(p)
 	if n > 0 {
 		if t.hashing {
@@ -97,6 +118,8 @@ func (t *Reader) Read(p []byte) (int, error) {
 
 		if t.out != nil {
 			if _, werr := t.out.Write(p[:n]); werr != nil {
+				t.werr = werr
+
 				return n, werr
 			}
 		}
@@ -114,6 +137,7 @@ func (t *Reader) Next(opts Options) (*bt.Tx, *chainhash.Hash, int64, error) {
 	t.h.Reset()
 	t.size = 0
 	t.hashing = true
+	t.trusted = opts.LengthsTrusted
 	t.out = nil
 
 	defer func() {
@@ -197,6 +221,11 @@ func (t *Reader) Next(opts Options) (*bt.Tx, *chainhash.Hash, int64, error) {
 
 	tx.LockTime = binary.LittleEndian.Uint32(lockTime[:])
 
+	// The lock time's read can fill its buffer and fail its write in one call.
+	if t.werr != nil {
+		return nil, nil, 0, t.werr
+	}
+
 	first := t.h.Sum(t.sum[:0])
 	id := chainhash.Hash(sha256.Sum256(first))
 	tx.SetTxHash(&id)
@@ -270,6 +299,12 @@ func (t *Reader) readOutput(skipData bool) (*bt.Output, error) {
 			return nil, unexpected(err)
 		}
 
+		// The peek reads the source directly, past Read's check, and the length's own read may
+		// have filled its buffer and failed its write in one call.
+		if t.werr != nil {
+			return nil, t.werr
+		}
+
 		if l >= 2 {
 			if head, err := t.src.Peek(2); err == nil && head[0] == bscript.OpFALSE && head[1] == bscript.OpRETURN {
 				if err = t.pass(uint64(l)); err != nil {
@@ -316,8 +351,42 @@ func (t *Reader) readScriptBody(l uint64) ([]byte, error) {
 		return nil, errors.NewTxInvalidError("[txstream] script length %d exceeds %d", l, maxScriptAlloc)
 	}
 
+	if l <= scriptChunk || t.trusted {
+		script := make([]byte, l)
+		if _, err := io.ReadFull(t, script); err != nil {
+			return nil, unexpected(err)
+		}
+
+		return script, nil
+	}
+
+	// The length is the sender's claim, not proof the bytes exist. A quarter of the script is read
+	// first, in chunks that double as the bytes arrive, and only then is the whole script allocated
+	// and the rest read straight into it. A sender must therefore deliver a quarter of what it makes
+	// this reader allocate, and an honest script costs about 1.25 times its size, with one copy.
+	var (
+		prefix   [][]byte
+		received uint64
+	)
+
+	for size, proof := uint64(scriptChunk), l/4; received < proof; size *= 2 {
+		chunk := make([]byte, min(size, proof-received))
+		if _, err := io.ReadFull(t, chunk); err != nil {
+			return nil, unexpected(err)
+		}
+
+		prefix = append(prefix, chunk)
+		received += uint64(len(chunk))
+	}
+
 	script := make([]byte, l)
-	if _, err := io.ReadFull(t, script); err != nil {
+
+	at := 0
+	for _, chunk := range prefix {
+		at += copy(script[at:], chunk)
+	}
+
+	if _, err := io.ReadFull(t, script[at:]); err != nil {
 		return nil, unexpected(err)
 	}
 
