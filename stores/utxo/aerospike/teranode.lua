@@ -90,6 +90,7 @@ local FIELD_DELETE_AT_HEIGHT = "deleteAtHeight"
 local FIELD_DAH_VERSION = "dahVer"
 local FIELD_CONFLICTING = "conflicting"
 local FIELD_SPENDING_DATA = "spendingData"
+local FIELD_IDEMPOTENT = "idempotent"      -- spend: indexes whose utxo already recorded exactly this spend (nothing written)
 
 -- Assigns the record's deleteAtHeight and bumps the master's version. Every writer of the bin
 -- goes through here so the version orders the writes; a nil height clears the bin. A pagination
@@ -285,6 +286,10 @@ function spend(rec, offset, utxoHash, spendingData, ignoreConflicting, ignoreLoc
     spend['offset'] = offset
     spend['utxoHash'] = utxoHash
     spend['spendingData'] = spendingData
+    -- spendMulti keys everything it reports back (errors, idempotent matches) by
+    -- this index, so the single-spend wrapper has to carry one too. Without it
+    -- spendMulti appends a nil and the response no longer parses.
+    spend['idx'] = 0
 
     local spends = list()
 
@@ -362,6 +367,10 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 
     local blockIDs = rec[BIN_BLOCK_IDS]
     local errors = map()
+    -- Indexes whose utxo already recorded exactly this spend. Nothing is written
+    -- for them, and the caller must not roll them back on a later failure: the
+    -- spend they matched is the confirmed, historical one.
+    local idempotent = list()
     local deletedChildren = rec[BIN_DELETED_CHILDREN]
     local spendableIn = rec[BIN_UTXO_SPENDABLE_IN]
     local spendCount = #spends
@@ -406,22 +415,21 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         if existingSpendingData then
 
             if bytes_equal(existingSpendingData, spendingData) then
-                -- Already spent with same data
+                -- Already spent with same data. A marker for this spender is a
+                -- replay of a transaction the pruner removed.
+                if deletedChildren ~= nil and deletedChildren[spendingDataBytesToTxHex(existingSpendingData)] then
+                    local error = map()
 
-                if deletedChildren ~= nil then
-                    -- Check whether this child tx (by txid) exists in the deletedChildren map, if yes, error out
-                    local childTxID = spendingDataBytesToTxHex(existingSpendingData)
-                    if deletedChildren[childTxID] then
-                        local error = map()
+                    error[FIELD_ERROR_CODE] = ERROR_CODE_INVALID_SPEND
+                    error[FIELD_MESSAGE] = MSG_INVALID_SPEND
+                    error[FIELD_SPENDING_DATA] = spendingDataBytesToHex(existingSpendingData)
 
-                        error[FIELD_ERROR_CODE] = ERROR_CODE_INVALID_SPEND
-                        error[FIELD_MESSAGE] = MSG_INVALID_SPEND
-                        error[FIELD_SPENDING_DATA] = spendingDataBytesToHex(existingSpendingData)
+                    errors[idx] = error
 
-                        errors[idx] = error
-                    end
+                    goto continue
                 end
 
+                list.append(idempotent, idx)
                 goto continue
             elseif isFrozen(existingSpendingData) then
                 local error = map()
@@ -469,6 +477,10 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         response[FIELD_ERRORS] = errors
     else
         response[FIELD_STATUS] = STATUS_OK
+    end
+
+    if list.size(idempotent) > 0 then
+        response[FIELD_IDEMPOTENT] = idempotent
     end
 
     if blockIDs then

@@ -1197,6 +1197,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// count; an uncapped chain makes every subsequent errors.Is on it
 			// walk the full chain (mainnet IBD stall, block 820116).
 			failedSpends := make([]error, 0, 8)
+			prunedReplay := false
 
 			// the capped aggregate cannot tell a double spend from a tx that also spends a
 			// frozen or mismatched output, so it is decided here over every failed spend
@@ -1213,6 +1214,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 					if immatureSpend == nil && spendsImmatureCoinbase(spend.Err) {
 						immatureSpend = spend.Err
+					}
+
+					// The validator never wrote the spender's record itself, so
+					// only the marker identifies a replay here
+					// (utxo.IsPrunedReplayRejection).
+					if utxo.IsPrunedReplayRejection(spend.Err) {
+						prunedReplay = true
 					}
 
 					failedSpends = append(failedSpends, spend.Err)
@@ -1262,9 +1270,19 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// makes it invalid, and creating it as conflicting would drop that failure.
 			saveAsConflicting := validationOptions.CreateConflicting && len(failedSpends) > 0 && everyFailedSpendConflicts
 
+			// A replay of a transaction the pruner removed is never a conflict to
+			// reconcile, even when a sibling input answered ErrSpent. Taking the
+			// conflicting-create branch returned ErrTxConflicting with the marker
+			// rejection dropped from the chain, which the legacy block path
+			// swallows, so the block committed with the replay back in the store.
+			// The rejection must reach the caller as it is.
+			if prunedReplay {
+				saveAsConflicting = false
+			}
+
 			if len(failedSpends) > 0 {
 				if errors.As(err, &tErr) {
-					tErr.SetWrappedErr(errors.JoinCapped(maxAggregatedSpendErrs, failedSpends...))
+					tErr.SetWrappedErr(errors.JoinCapped(maxAggregatedSpendErrs, utxo.ReplayRejectionsFirst(failedSpends)...))
 				}
 			}
 
@@ -1346,6 +1364,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 				return nil, err
 			}
+
 		} else if errors.Is(err, errors.ErrTxNotFound) {
 			// PHASE ASSUMPTION: this branch (and the ErrUtxoError branch above) assumes the
 			// error originated in the SPEND phase of SpendAndCreate — today no create path

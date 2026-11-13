@@ -69,6 +69,22 @@ func TestNativeTeranodeOpProbe_Container(t *testing.T) {
 			"spend probe must accept the fork dispatcher and reject a stock server")
 	})
 
+	// The replay marker and the idempotent report are enforced in teranode.lua
+	// and are invisible to the client, so the gate asks the server rather than
+	// assuming. Against a stock server this must answer false, which is what
+	// keeps spendMulti on the UDF path where both are enforced in-repo.
+	t.Run("replay_protection_probe_direct", func(t *testing.T) {
+		require.Equal(t, expectNative, store.probeNativeReplayProtection(ctx, probePolicy()),
+			"replay-protection probe must accept a dispatcher that enforces deletedChildren and reports idempotent matches, and reject one that does not")
+	})
+
+	t.Run("replay_protection_probe_honours_cancelled_context", func(t *testing.T) {
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		require.False(t, store.probeNativeReplayProtection(cancelled, probePolicy()),
+			"a cancelled probe must demote rather than pass by default")
+	})
+
 	t.Run("probe_honours_cancelled_context", func(t *testing.T) {
 		cancelled, cancel := context.WithCancel(ctx)
 		cancel()

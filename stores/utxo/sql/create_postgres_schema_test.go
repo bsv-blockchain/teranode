@@ -251,6 +251,20 @@ func TestCreatePostgresSchema_ErrorAtConflictIntentsTable(t *testing.T) {
 	assert.Contains(t, err.Error(), "could not create conflict_intents table")
 }
 
+func TestCreatePostgresSchema_ErrorAtDeletedChildrenTable(t *testing.T) {
+	mockDB := CreateMockDBForSchema()
+	defer mockDB.AssertExpectations(t)
+
+	// Setup error at step 16 (deleted_children table, the replay-marker table)
+	SetupCreatePostgresSchemaErrorMocks(mockDB, 16)
+
+	udb := &usql.DB{DB: nil}
+	err := createPostgresSchemaWithMockDB(udb, mockDB)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "could not create deleted_children table")
+}
+
 // The ACTUAL solution to get coverage: Create a testable interface version
 // and temporarily modify the original function to be testable
 

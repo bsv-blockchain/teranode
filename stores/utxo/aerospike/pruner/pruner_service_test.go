@@ -350,9 +350,12 @@ func TestDeleteAtHeight(t *testing.T) {
 	}
 	_ = input2.PreviousTxIDAdd(&txID2Parent)
 
-	// create parent record that should be marked before deletion of child
+	// create parent record that should be marked before deletion of child. Its
+	// output 0 records child 1 as the spender: a marker is only written for the
+	// child an output really names (keepSpendHolders).
 	err = client.Put(writePolicy, keyParent, aerospike.BinMap{
 		fields.TxID.String():           txIDParent.CloneBytes(),
+		fields.Utxos.String():          []interface{}{spentUtxoElement(&txID1)},
 		fields.DeleteAtHeight.String(): 0,
 	})
 	require.NoError(t, err)
@@ -547,4 +550,187 @@ func TestServiceSimple(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, service)
 	})
+}
+
+// TestCollectDeletedChildren: a parent's deletedChildren bin adds every child it
+// names to the chunk-wide set, and a bin of the wrong shape, or a key that is
+// not a string, adds nothing rather than failing the chunk.
+func TestCollectDeletedChildren(t *testing.T) {
+	s := &Service{fieldDeletedChildren: "deletedChildren", logger: ulogger.TestLogger{}}
+
+	for _, tc := range []struct {
+		name string
+		bins aerospike.BinMap
+		want map[string]bool
+	}{
+		{"no bin", aerospike.BinMap{}, map[string]bool{}},
+		{"wrong type", aerospike.BinMap{"deletedChildren": []interface{}{"a"}}, map[string]bool{}},
+		{"string and non-string keys", aerospike.BinMap{"deletedChildren": map[interface{}]interface{}{"a": true, 7: true}}, map[string]bool{"a": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			into := map[string]bool{}
+			s.collectDeletedChildren(tc.bins, into)
+			require.Equal(t, tc.want, into)
+		})
+	}
+}
+
+// TestExtractSpendingChildren: only a spent utxo entry, 32 bytes of utxo hash
+// and 36 of spending data with a non-zero txid, names a child. A bin that is
+// not a list, an entry that is not bytes or is short, and an unspent entry name
+// none.
+func TestExtractSpendingChildren(t *testing.T) {
+	child := chainhash.HashH([]byte("extract-child"))
+
+	spent := make([]byte, 68)
+	copy(spent[32:64], child[:])
+
+	unspent := make([]byte, 68)
+
+	require.Nil(t, extractSpendingChildren("not a list", map[string][]byte{}))
+
+	unique := map[string][]byte{}
+	got := extractSpendingChildren([]interface{}{spent, unspent, spent[:40], "x"}, unique)
+
+	require.Equal(t, []string{child.String()}, got)
+	require.Equal(t, child[:], unique[child.String()])
+	require.True(t, isZeroBytes(unspent[32:64]))
+	require.False(t, isZeroBytes(spent[32:64]))
+}
+
+// TestAddParentUpdatesForInput covers what the pruner asks Aerospike to write for
+// one spent outpoint: which parent records get a marker, and how many copies of
+// the child hash each one receives.
+func TestAddParentUpdatesForInput(t *testing.T) {
+	var parent chainhash.Hash
+
+	parent[0] = 0xAA
+
+	var child chainhash.Hash
+
+	child[0] = 0xBB
+
+	newService := func(defensive bool) *Service {
+		return &Service{namespace: "test", set: "utxo", utxoBatchSize: 128, defensiveEnabled: defensive}
+	}
+
+	masterKey := string(parent.CloneBytes())
+	pageKey := string(uaerospike.CalculateKeySource(&parent, 300, 128))
+
+	require.NotEqual(t, masterKey, pageKey, "fixture must use a vout past the first page")
+
+	t.Run("either mode writes only the page the spend path reads", func(t *testing.T) {
+		for _, defensive := range []bool{false, true} {
+			updates := map[string]*parentUpdateInfo{}
+			require.NoError(t, newService(defensive).addParentUpdatesForInput(updates, &parent, 300, &child))
+			require.Len(t, updates, 1)
+			require.Contains(t, updates, pageKey)
+			require.NotContains(t, updates, masterKey,
+				"the master holds outputs 0..batchSize-1 only, so a marker for a higher output is read by nothing there and grows the record without bound")
+		}
+	})
+
+	t.Run("first page needs one write in either mode", func(t *testing.T) {
+		for _, defensive := range []bool{false, true} {
+			updates := map[string]*parentUpdateInfo{}
+			require.NoError(t, newService(defensive).addParentUpdatesForInput(updates, &parent, 7, &child))
+			require.Len(t, updates, 1)
+			require.Contains(t, updates, masterKey, "vout 0..127 lives on the master record")
+		}
+	})
+
+	t.Run("a consolidation spend queues one child hash, not one per input", func(t *testing.T) {
+		// 10k outputs of the same paginated parent, spread across pages: every
+		// input asks for the same (parent, child) marker. Without dedup this
+		// produced a 10,000-element list of the identical 64-char hex string in
+		// one batch record.
+		s := newService(true)
+		updates := map[string]*parentUpdateInfo{}
+
+		for vout := uint32(0); vout < 10_000; vout++ {
+			require.NoError(t, s.addParentUpdatesForInput(updates, &parent, vout, &child))
+		}
+
+		require.Len(t, updates, 79, "one entry per output page (page 0 is the master)")
+
+		for source, info := range updates {
+			require.Lenf(t, info.childHashes, 1, "parent record %x queued %d copies of the same child", source, len(info.childHashes))
+		}
+	})
+}
+
+// TestPartitionWorker_CancelledWorkerStillDrainsTheCarry: each chunk's deletes
+// ride the next chunk's batch, so when the worker stops the carry still holds
+// children whose markers have landed. The worker's deferred drain runs detached
+// from ctx. Here ctx is cancelled straight after the first batch, which writes
+// the first chunk's marker. A drain that ran on ctx would send nothing, and the
+// child would stay present behind its own marker, so its next re-spend would be
+// refused as a pruned replay. The end state required: no child is both marked
+// and still present, and at least one marker landed.
+func TestPartitionWorker_CancelledWorkerStillDrainsTheCarry(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	s.chunkSize = 1
+	s.chunkGroupLimit = 1
+
+	require.NoError(t, s.indexWaiter.WaitForIndexReady(context.Background(), IndexName))
+
+	type pair struct {
+		child               chainhash.Hash
+		parentKey, childKey *aerospike.Key
+	}
+
+	pairs := make([]pair, 0, 2)
+
+	for n := byte(1); n <= 2; n++ {
+		parent := chainhash.HashH([]byte{0xD0, n, 1})
+		child := chainhash.HashH([]byte{0xD0, n, 2})
+
+		input := &bt.Input{PreviousTxOutIndex: 0, PreviousTxSatoshis: 100}
+		require.NoError(t, input.PreviousTxIDAdd(&parent))
+
+		parentKey := putRecord(t, client, &parent, spentBy(&child))
+		childKey := putRecord(t, client, &child, aerospike.BinMap{
+			fields.TxID.String():           child.CloneBytes(),
+			fields.Inputs.String():         []interface{}{input.Bytes(true)},
+			fields.DeleteAtHeight.String(): 5,
+		})
+
+		pairs = append(pairs, pair{child: child, parentKey: parentKey, childKey: childKey})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	calls := 0
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		err := client.BatchOperate(policy, records)
+
+		calls++
+		if calls == 1 {
+			cancel()
+		}
+
+		return err
+	}
+
+	_, _, _ = s.partitionWorker(ctx, 10, 0, 4096)
+
+	require.NotZero(t, calls, "precondition: the first chunk's marker batch was sent")
+
+	marked := 0
+
+	for _, p := range pairs {
+		if !hasMarker(t, client, p.parentKey, &p.child) {
+			continue
+		}
+
+		marked++
+
+		exists, err := client.Exists(nil, p.childKey)
+		require.NoError(t, err)
+		require.False(t, exists, "child %s carries a marker and must have been deleted by the detached drain", p.child.String())
+	}
+
+	require.NotZero(t, marked, "precondition: a marker landed before the cancel")
 }
