@@ -455,12 +455,19 @@ func TestOutboundDialerMarksAttemptOnFailedDial(t *testing.T) {
 	h := newOutboundHarness(t, outboundHarnessOptions{target: 8, extraSeeded: []Address{dead}})
 	h.start(t)
 
-	require.Eventually(t, func() bool { return h.dials.Load() > 0 }, 15*time.Second, 20*time.Millisecond)
-
+	// One wait, not two. openNetworkConnection calls Attempt on the line after
+	// dialTCP returns, so the dial counter and nLastTry are two readings of one
+	// indivisible step. Waiting for the counter first and then giving nLastTry
+	// its own short budget splits that step across two clocks, and on a loaded
+	// runner the second clock can run out while the dial goroutine is still
+	// waiting to be scheduled. Waiting for nLastTry alone covers both: it is
+	// stamped only from the dial path, so a stamp proves the dial happened.
 	require.Eventually(t, func() bool {
 		nLastTry, _ := attemptsOf(h.addrMan, dead)
 		return nLastTry > 0
-	}, 5*time.Second, 20*time.Millisecond)
+	}, 30*time.Second, 20*time.Millisecond)
+
+	require.Positive(t, h.dials.Load())
 
 	_, nAttempts := attemptsOf(h.addrMan, dead)
 	require.Equal(t, 0, nAttempts)
