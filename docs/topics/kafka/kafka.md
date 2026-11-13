@@ -59,14 +59,14 @@ The table below enumerates every Kafka topic actually wired into Teranode's Go c
 | `subtrees` (`KAFKA_SUBTREES` → `subtrees`) | P2P service | Subtree Validation service (`subtreevalidation.<client>`) | Subtree hash, DataHub base URL, originating peer ID | 1,800,000 ms |
 | `txmeta` (`KAFKA_TXMETA` → `txmeta`) | Validator service | Subtree Validation service (`subtreevalidation.<client>.<random>`) **and** Legacy P2P service (`txmeta.legacy.<client>`, replay disabled) | Raw-byte batch of up to `validator_txmeta_kafka_batchSize` entries (default 1024), each `[tx hash][ADD/DELETE action][content length][tx meta bytes]`. Two layouts selected by `validator_txmeta_wireFormat`: v1 (default, one record per batch) and v2 (0xFF/0x02 header, per-entry xxhash prefix, one record per partition with the partition set explicitly). Not a protobuf message — `KafkaTxMetaTopicMessage` in the `.proto` is generated but unused by any producer or consumer | 60,000 ms |
 | `validatortxs` (`KAFKA_VALIDATORTXS` → `validatortxs`) | Propagation service | Validator service (`validator.<client>`) | New transaction (raw/extended tx bytes) | 60,000 ms (only when `kafka_validatortxsConfig` is set — empty by default, non-empty in the `.operator` context; otherwise Propagation invokes the Validator directly in-process — a local validator, or a gRPC client, depending on configuration) |
-| `tx-policy-rejected` (`KAFKA_TX_POLICY_REJECTED` → `tx-policy-rejected`) | Validator service | Subtree Validation service (`subtreevalidation.<client>.<random>`) | Full raw transaction bytes for txs that are consensus-valid but fail local mining policy (e.g. zero-fee) — cached but not "blessed", still fully validated on use | Not set by default (`kafka_txPolicyRejectedConfig` has no default URL, so the topic is disabled unless explicitly configured); recommended 10-30 min when enabled |
+| `tx-policy-rejected` (`KAFKA_TX_POLICY_REJECTED` → `tx-policy-rejected`) | Validator service **and** Subtree Validation service | Subtree Validation service (`subtreevalidation.<client>.<random>`) | Full raw transaction bytes for txs that fail local mining policy (e.g. zero-fee), usually but not always consensus-valid, txs the validator rejected as conflicting (`conflicting` set), and txs subtree validation kept aside from a peer subtree after context-free checks only (`keptAside` set) — cached but not "blessed", still fully validated on use | Not set by default (`kafka_txPolicyRejectedConfig` has no default URL, so the topic is disabled unless explicitly configured); recommended 10-30 min when enabled |
 | `unittest` (`KAFKA_UNITTEST` → `unittest`) | Test code only | Test code only | Arbitrary test payloads | 600,000 ms — **not used in production** |
 
 Notes on the table:
 
 - The `blocks-final` topic is **not** consumed via the `getKafkaBlocksFinalConsumerGroup` helper in `daemon/daemon_kafka.go` — that function exists but is commented out/unused. Its only real Kafka consumer is the Legacy P2P service. The Block Persister does **not** consume this topic either — it polls the Blockchain service over gRPC (`GetBlocksNotPersisted`) on a `blockpersister_persistSleep` interval (default 10s); see the Blockchain section below. Block Assembly gets finalized-block notifications via a direct gRPC subscription (`blockchainClient.Subscribe`) to the Blockchain service, not Kafka.
 - `invalid-blocks` and `invalid-subtrees` are both produced and consumed for peer reputation/banning purposes in P2P — Block Validation and Subtree Validation are the producers, P2P is the sole consumer of each.
-- `tx-policy-rejected` was previously undocumented; it is real and wired in `daemon/daemon_kafka.go` (`getKafkaTxPolicyRejectedAsyncProducer` / `getKafkaTxPolicyRejectedConsumerGroup`), `services/validator/Validator.go` (producer), and `services/subtreevalidation/Server.go` (consumer).
+- `tx-policy-rejected` was previously undocumented; it is real and wired in `daemon/daemon_kafka.go` (`getKafkaTxPolicyRejectedAsyncProducer` / `getKafkaTxPolicyRejectedConsumerGroup`), `services/validator/Validator.go` (producer), and `services/subtreevalidation/Server.go` (consumer, and producer of kept-aside txs). With topic ACLs, Subtree Validation needs write access to it too.
 
 ### Propagation Service
 
@@ -134,9 +134,9 @@ Beyond the main processing topics described above, Teranode uses additional Kafk
 
 #### Policy-Rejected Transactions
 
-- **kafka_tx_policy_rejected** (`KAFKA_TX_POLICY_REJECTED` in settings, topic `tx-policy-rejected`): Distributes raw bytes for transactions that are consensus-valid but rejected by local mining policy (e.g. zero-fee)
-    - **Purpose**: Lets Subtree Validation resolve a missing transaction referenced by a subtree from a policy-rejected cache instead of re-fetching it from the originating peer; cached transactions still undergo full validation before use
-    - **Producer**: Validator service
+- **kafka_tx_policy_rejected** (`KAFKA_TX_POLICY_REJECTED` in settings, topic `tx-policy-rejected`): Distributes raw bytes for transactions rejected by local mining policy (e.g. zero-fee), usually but not always consensus-valid, rejected as conflicting, or kept aside from a peer subtree
+    - **Purpose**: Lets Subtree Validation resolve a missing transaction referenced by a subtree from a policy-rejected cache instead of re-fetching it from the originating peer, and keep a conflicting transaction and its descendants aside instead of writing them to the UTXO store; cached transactions still undergo full validation before use
+    - **Producers**: Validator service (policy and conflicting rejections) and Subtree Validation service (kept-aside transactions, flagged `keptAside`; these passed context-free checks only and go to a separate cache)
     - **Consumer**: Subtree Validation service (consumer group `subtreevalidation.<client>.<random>`)
     - **Disabled by default**: `kafka_txPolicyRejectedConfig` has no default URL in `settings.conf` and must be explicitly configured to activate this topic
     - **Also gated by**: `subtreevalidation_txPolicyRejectedCacheEnabled` (default `true`) on the consumer — the consumer only starts when both the Kafka client and the cache are non-nil; on the producer side, `publishPolicyRejectedTx` stays silent while the FSM is `CATCHINGBLOCKS`, skips transactions above `validator_kafka_maxMessageBytes`, and drops the message (non-blocking) rather than stalling validation when its producer buffer is full — all of which fall back to the ordinary HTTP fetch path on a cache miss
@@ -535,7 +535,7 @@ Note: the Block Persister has no Kafka consumer at all — it polls the Blockcha
 
 **There is no `consumer_ratio` parameter.** It appears in older documentation and example URLs but is not read anywhere in the code — no `consumer_ratio`, `ConsumerRatio` or `consumerRatio` identifier exists, and it is not picked up by the generic URL-parameter helpers (`util.GetQueryParam*`) that parse every recognised Kafka URL parameter. Unknown query parameters are silently ignored, so leaving it in a URL is inert rather than harmful — but it does not scale consumers.
 
-Likewise, the service-specific `*_kafkaWorkers` settings (`validator_kafkaWorkers`, `blockvalidation_kafkaWorkers`, `block_kafkaWorkers`) are loaded into the settings structs but are not read by any consumer code path. They do not currently affect consumer concurrency either.
+Likewise, there are no `*_kafkaWorkers` settings (`validator_kafkaWorkers`, `blockvalidation_kafkaWorkers`, `block_kafkaWorkers`): they were loaded into the settings structs but never read by any consumer code path, and have been removed. A leftover key in `settings_local.conf` is silently ignored.
 
 ### Service-Specific Performance Settings
 
@@ -548,9 +548,7 @@ Likewise, the service-specific `*_kafkaWorkers` settings (`validator_kafkaWorker
 
 #### Validator Service Settings
 
-- **`validator_kafkaWorkers`**: declared but inert
-    - **Status**: The setting is defined and loaded (`settings/validator_settings.go`, `settings/settings.go`) but no code reads it, so changing it has no effect. The same applies to `blockvalidation_kafkaWorkers` and `block_kafkaWorkers`.
-    - **Use instead**: raise the topic's `partitions` and/or run more service instances in the same consumer group — see [Kafka Consumer Concurrency](#kafka-consumer-concurrency)
+The validator has no Kafka worker-count setting (`validator_kafkaWorkers` was removed). To raise consumer throughput, raise the topic's `partitions` and/or run more service instances in the same consumer group - see [Kafka Consumer Concurrency](#kafka-consumer-concurrency).
 
 ### Configuration Examples by Service
 

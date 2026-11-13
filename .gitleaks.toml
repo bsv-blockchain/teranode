@@ -42,9 +42,8 @@ regexes = [
   '''postgres://[^@\s"'`]+@(localhost|postgres|postgrest|toxiproxy|127\.0\.0\.1)([:/]|$)''',
   # ${ENV_VAR} placeholders resolved at runtime (not literal secrets).
   '''\$\{[A-Za-z0-9_]+\}''',
-  # Alert genesis keys are public keys, and the p2p shared key is a dev-default
-  # network PSK; neither is a node identity secret.
-  '''(alert_genesis_keys|p2p_shared_key)\b''',
+  # Alert genesis keys are public keys, not a node identity secret.
+  '''alert_genesis_keys\b''',
   # Known public P2P test fixtures, allowlisted by VALUE, not key name, so a
   # real key committed under any *_private_key setting is still caught by the
   # rule above. Per-value provenance is documented on the allowedFixtures map
@@ -60,6 +59,11 @@ regexes = [
   '''1d6a9c8963fdbb86eabc4d10cb1efdf418197cfc3f9779e3c8229663411ae5c8''',
   # Dev test wallet key for the docker blaster stacks (overridden per-deploy).
   '''COINBASE_WALLET_PRIVATE_KEY''',
+  # The x-coordinate of the secp256k1 generator point G, published in SEC 2
+  # v2.0 section 2.4.1. It is a public constant, not a key anyone holds, and
+  # tests use it (02/03/04-prefixed) wherever they need any valid public key.
+  # generic-api-key flags it when it is assigned to a name containing "key".
+  '''79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798''',
 ]
 paths = [
   # Generated dev libp2p peer keys for local multi-node docker setups, and the

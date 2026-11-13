@@ -68,6 +68,13 @@ func newMoveForwardCommitBoundaryProcessor(t *testing.T) (*SubtreeProcessor, *mo
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
+		// A started processor finishes a moveForwardBlock (its queue drain and
+		// retired-half clear) after MoveForwardBlock has returned; a round trip
+		// through its loop waits for that before the maps are closed.
+		if stp.processorCtx.Load() != nil {
+			_ = stp.GetCurrentLength()
+		}
+
 		halves := make([]*DiskTxMap, 0, 3+len(stp.diskTxMapRetired))
 		halves = append(halves, stp.diskTxMap, stp.diskTxMapShadow, stp.diskTxMapAnchor)
 		halves = append(halves, stp.diskTxMapRetired...)
@@ -279,8 +286,11 @@ func TestMoveForwardBlock_Started_PostCommitMapErrorIsLoggedAndCountedButSucceed
 
 	require.Equal(t, block.Header.Hash(), stp.GetCurrentBlockHeader().Hash(), "STP must have advanced to the new block")
 
-	after := testutil.ToFloat64(prometheusSubtreeProcessorDiskTxMapErrors.WithLabelValues("moveForwardBlock_commit"))
-	require.Equal(t, before+1, after, "the post-commit error must be logged and counted by the dispatcher's own drain")
+	// The retired half is cleared after MoveForwardBlock has answered (see
+	// handleMoveForwardRequest), so its error is counted shortly after.
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(prometheusSubtreeProcessorDiskTxMapErrors.WithLabelValues("moveForwardBlock_commit")) == before+1
+	}, 5*time.Second, 10*time.Millisecond, "the post-commit error must be logged and counted by the dispatcher's own drain")
 }
 
 // The second, cheaper pre-commit check between processRemainderTxHashes and

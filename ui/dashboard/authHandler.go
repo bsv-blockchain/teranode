@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,6 +43,10 @@ type AuthHandler struct {
 	logger   ulogger.Logger
 	settings *settings.Settings
 	authsha  [sha256.Size]byte
+
+	// trustedOrigins are the browser origins, besides the node's own, allowed to
+	// send cookie-authenticated state-changing requests (see SetTrustedOrigins).
+	trustedOrigins map[string]struct{}
 }
 
 func startLoginCleanup() {
@@ -92,10 +97,11 @@ func NewAuthHandler(logger ulogger.Logger, settings *settings.Settings) *AuthHan
 		auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(login))
 		authsha = sha256.Sum256([]byte(auth))
 
-		logger.Debugf("Auth initialized with user: %s", rpcUser)
+		logger.Debugf("Auth initialized")
+	} else if settings.Asset.RequireAuthCredentials {
+		logger.Warnf("rpc_user/rpc_pass are not both set: admin routes (FSM state, block invalidate/revalidate, settings) will reject every request until they are configured")
 	} else {
-		logger.Warnf("RPC authentication not configured properly. User set: %v, Pass set: %v",
-			rpcUser != "", rpcPass != "")
+		logger.Warnf("SECURITY: asset_requireAuthCredentials is false and rpc_user/rpc_pass are not both set, so admin routes (FSM state, block invalidate/revalidate, settings) accept unauthenticated requests - set rpc_user and rpc_pass")
 	}
 
 	return &AuthHandler{
@@ -105,11 +111,106 @@ func NewAuthHandler(logger ulogger.Logger, settings *settings.Settings) *AuthHan
 	}
 }
 
+// SetTrustedOrigins sets the browser origins, in addition to the node's own, that
+// may send cookie-authenticated state-changing requests. Entries must already be
+// normalised (lower-case scheme://host[:port], no default port), as the Asset
+// server's asset_corsAllowOrigins parser produces them. Call it before serving.
+func (h *AuthHandler) SetTrustedOrigins(origins []string) {
+	h.trustedOrigins = make(map[string]struct{}, len(origins))
+
+	for _, o := range origins {
+		h.trustedOrigins[o] = struct{}{}
+	}
+}
+
+// isStateChanging reports whether method can change server state.
+func isStateChanging(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	default:
+		return true
+	}
+}
+
+// stripDefaultPort drops :80 and :443, which browsers omit from Origin.
+func stripDefaultPort(host string) string {
+	return strings.TrimSuffix(strings.TrimSuffix(host, ":80"), ":443")
+}
+
+// firstHeaderValue returns the first comma-separated value of header, as a chain
+// of proxies appends its own.
+func firstHeaderValue(r *http.Request, header string) string {
+	v, _, _ := strings.Cut(r.Header.Get(header), ",")
+
+	return strings.TrimSpace(v)
+}
+
+// requestIsHTTPS reports whether the client reached the node over TLS, directly
+// or through a TLS-terminating proxy.
+func requestIsHTTPS(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(firstHeaderValue(r, "X-Forwarded-Proto"), "https")
+}
+
+// fromForeignOrigin reports whether the browser marks r as sent by a page from a
+// different origin than this node and not in trustedOrigins. The auth cookie is
+// SameSite=Strict, which stops cross-site requests but not a no-cors POST from
+// another origin on the same site, and such a request needs no preflight. A
+// request carrying neither Origin nor Sec-Fetch-Site does not come from a
+// browser, so it cannot be a forged one.
+func (h *AuthHandler) fromForeignOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		switch r.Header.Get("Sec-Fetch-Site") {
+		case "same-site", "cross-site":
+			return true
+		default:
+			return false
+		}
+	}
+
+	u, err := url.Parse(strings.ToLower(origin))
+	if err != nil || u.Host == "" {
+		return true // "null" and malformed origins
+	}
+
+	// A plain-http page must not drive an https node: an active network attacker
+	// can inject one on the node's own hostname.
+	if u.Scheme == "http" && requestIsHTTPS(r) {
+		return true
+	}
+
+	// Same host as the request, or as the public host a reverse proxy forwarded
+	// (nginx and Apache rewrite Host by default). Neither a no-cors request nor a
+	// preflighted credentialed one can carry a page-set X-Forwarded-Host, so
+	// trusting it here gives a hostile page nothing.
+	originHost := stripDefaultPort(u.Host)
+
+	if originHost == stripDefaultPort(strings.ToLower(r.Host)) {
+		return false
+	}
+
+	if fwd := firstHeaderValue(r, "X-Forwarded-Host"); fwd != "" && originHost == stripDefaultPort(strings.ToLower(fwd)) {
+		return false
+	}
+
+	_, trusted := h.trustedOrigins[u.Scheme+"://"+originHost]
+
+	return !trusted
+}
+
 // CheckAuth checks if the request has valid authentication credentials
 func (h *AuthHandler) CheckAuth(r *http.Request) bool {
-	// If no auth is configured, allow all requests
+	// No usable credential pair is configured. Fail closed when asked to, otherwise
+	// keep the historic fail-open behaviour (the startup warning names the risk).
 	if h.settings.RPC.RPCUser == "" || h.settings.RPC.RPCPass == "" {
-		h.logger.Infof("No auth configured, allowing request")
+		if h.settings.Asset.RequireAuthCredentials {
+			h.logger.Debugf("Rejecting admin request: rpc_user/rpc_pass are not both set")
+			return false
+		}
+
+		h.logger.Debugf("SECURITY: allowing an unauthenticated admin request because rpc_user/rpc_pass are unset and asset_requireAuthCredentials is false")
+
 		return true
 	}
 
@@ -120,6 +221,13 @@ func (h *AuthHandler) CheckAuth(r *http.Request) bool {
 		cookie, err := r.Cookie(cookieName)
 		if err != nil || cookie.Value == "" {
 			h.logger.Debugf("No auth header or cookie found")
+			return false
+		}
+
+		// The browser attaches the cookie on its own, so a state-changing request
+		// authenticated by it must come from this node's own pages.
+		if isStateChanging(r.Method) && h.fromForeignOrigin(r) {
+			h.logger.Debugf("Rejecting cookie-authenticated %s from a foreign origin", r.Method)
 			return false
 		}
 
@@ -249,6 +357,7 @@ func (h *AuthHandler) LoginHandler(c echo.Context) error {
 			cookie.Value = authHeader
 			cookie.Path = "/"
 			cookie.HttpOnly = true
+			cookie.Secure = h.settings.Asset.SecureCookies
 			cookie.SameSite = http.SameSiteStrictMode
 			cookie.Domain = ""    // Use the domain from the request
 			cookie.MaxAge = 86400 // 24 hours
@@ -280,6 +389,7 @@ func (h *AuthHandler) LoginHandler(c echo.Context) error {
 		cookie.Value = authHeader
 		cookie.Path = "/"
 		cookie.HttpOnly = true
+		cookie.Secure = h.settings.Asset.SecureCookies
 		cookie.SameSite = http.SameSiteStrictMode
 		cookie.Domain = ""    // Use the domain from the request
 		cookie.MaxAge = 86400 // 24 hours
@@ -311,6 +421,7 @@ func (h *AuthHandler) LogoutHandler(c echo.Context) error {
 	cookie.Path = "/"
 	cookie.MaxAge = -1
 	cookie.HttpOnly = true
+	cookie.Secure = h.settings.Asset.SecureCookies
 	c.SetCookie(cookie)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
@@ -327,10 +438,9 @@ func (h *AuthHandler) CheckAuthHandler(c echo.Context) error {
 		h.logger.Debugf("Cookie found: %s", cookie.Name)
 	}
 
-	// Log auth header if present
-	authHeader := c.Request().Header.Get("Authorization")
-	if authHeader != "" {
-		h.logger.Debugf("Auth header found: %s", authHeader[:10]+"...")
+	// Log only whether an auth header is present; the value is credential material.
+	if c.Request().Header.Get("Authorization") != "" {
+		h.logger.Debugf("Auth header found")
 	} else {
 		h.logger.Debugf("No auth header found")
 	}

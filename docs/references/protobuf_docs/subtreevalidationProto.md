@@ -38,6 +38,7 @@ swagger:model CheckBlockSubtreesRequest
 | block | [bytes](#bytes) |  | Block containing the subtrees to be checked |
 | base_url | [string](#string) |  | Endpoint for retrieving missing transaction data |
 | peer_id | [string](#string) |  | P2P peer identifier used for peer reputation tracking |
+| keep_block_assembly_handoff | [bool](#bool) |  | Keep handing unseen transactions to block assembly during a short catch-up that started from RUNNING; defaults to false |
 
 
 

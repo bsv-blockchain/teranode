@@ -180,9 +180,9 @@ func (s *SQL) blockIDByHash(ctx context.Context, blockHash *chainhash.Hash) (uin
 //     and the sequence must already have issued it.
 //
 // The last rule exists because sweepStaleReservations deletes reservations older
-// than staleReservationSweepAge. A block retried after a long outage reads its id
-// back from its own transactions in the UTXO store and arrives with no
-// reservation row. Refusing it would leave that block unable to commit at all.
+// than staleReservationSweepAge, so a caller can hold an id the sequence issued
+// whose reservation row is gone. Quick validation no longer does this: it always
+// takes its id from AssignBlockID.
 //
 // The check runs under slowPathMu but outside the INSERT's transaction. That is
 // enough to keep an accepted id free: ids come from a sequence and a reservation

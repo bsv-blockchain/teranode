@@ -6,6 +6,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"os"
+	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -97,6 +99,38 @@ var grpcClientRetriesTotal = prometheusgolang.NewCounterVec(
 		Help:      "Total number of gRPC client retry attempts by caller service and status code",
 	},
 	[]string{"grpc_caller", "grpc_code"},
+)
+
+// grpcPanicsRecoveredTotal counts handler panics recovered by
+// CreatePanicRecoveryUnaryInterceptor / CreatePanicRecoveryStreamInterceptor.
+// The caller already gets an Internal error for these, so the counter is not
+// about the caller - it is what makes a recovered panic observable by an
+// operator instead of only appearing as a log line among many.
+var grpcPanicsRecoveredTotal = prometheusgolang.NewCounterVec(
+	prometheusgolang.CounterOpts{
+		Namespace: "teranode",
+		Name:      "grpc_panics_recovered_total",
+		Help:      "Total number of gRPC handler panics recovered by the panic recovery interceptor, by service and method",
+	},
+	[]string{"grpc_service", "grpc_method"},
+)
+
+// grpcAuthRejectionsTotal counts requests rejected by either admin API key
+// auth path: CreateAuthInterceptor (protected-method list, unary) and the
+// RequireAuthByDefault interceptors (every method except the public list,
+// unary and stream). A rejection means missing metadata, a missing API key,
+// or an API key that does not match. The two paths are mutually exclusive in
+// StartGRPCServer, so a request is counted at most once.
+// A misconfigured/mismatched admin API key across services makes every
+// protected RPC fail while HealthGRPC and Health stay green, so this counter
+// is the signal an operator watches during a rollout to notice that case.
+var grpcAuthRejectionsTotal = prometheusgolang.NewCounterVec(
+	prometheusgolang.CounterOpts{
+		Namespace: "teranode",
+		Name:      "grpc_auth_rejections_total",
+		Help:      "Total number of gRPC requests rejected by the admin API key auth interceptors (protected-method and require-by-default paths, unary and stream), by method",
+	},
+	[]string{"grpc_method"},
 )
 
 // ---------------------------------------------------------------------
@@ -335,6 +369,8 @@ func RegisterPrometheusMetrics() {
 	prometheusRegisterServerOnce.Do(func() {
 		prometheusgolang.MustRegister(prometheusMetrics)
 		prometheusgolang.MustRegister(grpcClientRetriesTotal)
+		prometheusgolang.MustRegister(grpcPanicsRecoveredTotal)
+		prometheusgolang.MustRegister(grpcAuthRejectionsTotal)
 	})
 }
 
@@ -541,6 +577,7 @@ func InitGRPCResolver(logger ulogger.Logger, grpcResolver string) {
 // It validates API keys in request metadata and only applies authentication to specified methods.
 // Non-protected methods bypass authentication entirely.
 func CreateAuthInterceptor(apiKey string, protectedMethods map[string]bool) grpc.UnaryServerInterceptor {
+	apiKeyBytes := []byte(apiKey)
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		// Skip authentication for non-protected methods
 		if !protectedMethods[info.FullMethod] {
@@ -550,17 +587,21 @@ func CreateAuthInterceptor(apiKey string, protectedMethods map[string]bool) grpc
 		// Extract metadata from context
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
+			grpcAuthRejectionsTotal.WithLabelValues(info.FullMethod).Inc()
 			return nil, status.Error(codes.Unauthenticated, "missing metadata")
 		}
 
 		// Get API key from metadata
 		keys := md.Get(apiKeyHeader)
 		if len(keys) == 0 {
+			grpcAuthRejectionsTotal.WithLabelValues(info.FullMethod).Inc()
 			return nil, status.Error(codes.Unauthenticated, "missing API key")
 		}
 
-		// Validate API key
-		if subtle.ConstantTimeCompare([]byte(keys[0]), []byte(apiKey)) != 1 {
+		// Compare equal-length keys in constant time. Different lengths are
+		// rejected immediately, so this does not hide the configured key length.
+		if subtle.ConstantTimeCompare([]byte(keys[0]), apiKeyBytes) != 1 {
+			grpcAuthRejectionsTotal.WithLabelValues(info.FullMethod).Inc()
 			return nil, status.Error(codes.Unauthenticated, "invalid API key")
 		}
 
@@ -570,4 +611,54 @@ func CreateAuthInterceptor(apiKey string, protectedMethods map[string]bool) grpc
 		// Proceed with the handler
 		return handler(newCtx, req)
 	}
+}
+
+// CreatePanicRecoveryUnaryInterceptor returns a unary server interceptor that
+// turns a panicking handler into an Internal gRPC error instead of letting the
+// panic unwind through grpc-go, which does not recover handler panics and would
+// take the whole process down. A malformed request that trips a bug in a single
+// handler must not be able to kill a service that owns chain state.
+func CreatePanicRecoveryUnaryInterceptor(logger ulogger.Logger, serviceName string) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				grpcPanicsRecoveredTotal.WithLabelValues(serviceName, info.FullMethod).Inc()
+
+				if logger != nil {
+					logger.Errorf("[%s] panic recovered in %s: %v - %s", serviceName, info.FullMethod, r, singleLineStack())
+				}
+
+				resp = nil
+				err = status.Error(codes.Internal, "internal error")
+			}
+		}()
+
+		return handler(ctx, req)
+	}
+}
+
+// CreatePanicRecoveryStreamInterceptor is the streaming counterpart of
+// CreatePanicRecoveryUnaryInterceptor.
+func CreatePanicRecoveryStreamInterceptor(logger ulogger.Logger, serviceName string) grpc.StreamServerInterceptor {
+	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				grpcPanicsRecoveredTotal.WithLabelValues(serviceName, info.FullMethod).Inc()
+
+				if logger != nil {
+					logger.Errorf("[%s] panic recovered in %s: %v - %s", serviceName, info.FullMethod, r, singleLineStack())
+				}
+
+				err = status.Error(codes.Internal, "internal error")
+			}
+		}()
+
+		return handler(srv, ss)
+	}
+}
+
+// singleLineStack renders the current stack trace on one line, so a recovered
+// panic still produces a single-line log message per the logging convention.
+func singleLineStack() string {
+	return strings.ReplaceAll(string(debug.Stack()), "\n", " | ")
 }

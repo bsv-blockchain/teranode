@@ -88,9 +88,7 @@ func TestBlockHandlerWithMaliciousPeer(t *testing.T) {
 			assert.Equal(t, "malicious_peer_123", blockFound.peerID)
 
 			// Send success response
-			if blockFound.errCh != nil {
-				blockFound.errCh <- nil
-			}
+			blockFound.reply.answer(nil)
 			handled <- true
 		case <-time.After(2 * time.Second):
 			t.Error("Timeout waiting for blockFound message")
@@ -99,7 +97,7 @@ func TestBlockHandlerWithMaliciousPeer(t *testing.T) {
 	}()
 
 	// Process the message
-	err = server.blockHandler(kafkaMsg)
+	err = server.blockHandler(context.Background(), kafkaMsg)
 	require.NoError(t, err)
 
 	// Verify block was handled
@@ -257,12 +255,17 @@ func TestKafkaConsumerMessageHandling(t *testing.T) {
 			Value: msgBytes,
 		}
 
-		handler := server.consumerMessageHandler(ctx)
+		retryCtx, cancelRetry := context.WithCancel(ctx)
+		defer cancelRetry()
+
+		handler := server.consumerMessageHandler(retryCtx)
 		err = handler(kafkaMessage)
 
-		// Should return error for retry
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "temporary failure")
+		// Committed (a returned error would not be redelivered once a later message on
+		// the partition succeeds) and retried in-process instead.
+		require.NoError(t, err)
+		assert.True(t, server.blockMessageRetries.isPending(recoverableHash.String()), "a retry should be pending for the block")
+		mockBlockchain.AssertNotCalled(t, "ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 }
 
@@ -417,12 +420,12 @@ func TestBlockFoundChannelErrorHandling(t *testing.T) {
 	}
 
 	t.Run("Error_Channel_Response", func(t *testing.T) {
-		errCh := make(chan error, 1)
+		reply := newBlockFoundReply()
 		blockFound := processBlockFound{
 			hash:    &chainhash.Hash{0x0a},
 			baseURL: "invalid://url",
 			peerID:  "test",
-			errCh:   errCh,
+			reply:   reply,
 		}
 
 		// Process should send error to channel
@@ -431,7 +434,7 @@ func TestBlockFoundChannelErrorHandling(t *testing.T) {
 
 		// Should receive error on channel
 		select {
-		case receivedErr := <-errCh:
+		case receivedErr := <-reply.ch:
 			require.Error(t, receivedErr)
 			assert.Contains(t, receivedErr.Error(), "invalid baseURL")
 		case <-time.After(1 * time.Second):

@@ -118,7 +118,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	// Load the raw block bytes from the database.
 	b, err := s.blockchainClient.GetBlock(ctx, ch)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	result, err := s.blockToJSON(ctx, b, *c.Verbosity)
@@ -189,7 +189,7 @@ func handleGetBlockByHeight(ctx context.Context, s *RPCServer, cmd interface{}, 
 	// Load the raw block bytes from the database.
 	b, err := s.blockchainClient.GetBlockByHeight(ctx, c.Height)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcHeightLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	return s.blockToJSON(ctx, b, *c.Verbosity)
@@ -229,7 +229,7 @@ func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 
 	indexUint32, err := safeconversion.Int64ToUint32(c.Index)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
 	}
 
 	// Load the raw block bytes from the database.
@@ -266,7 +266,7 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 	// Load the raw block bytes from the database.
 	b, meta, err := s.blockchainClient.GetBlockHeader(ctx, ch)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	if !*c.Verbose {
@@ -572,7 +572,27 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 		return nil, errors.NewConfigurationError("asset_httpURL is not set")
 	}
 
-	fullURL := s.assetHTTPURL.ResolveReference(&url.URL{Path: fmt.Sprintf("/api/v1/tx/%s/hex", c.Txid)})
+	// Parse the txid before it goes anywhere, as svnode's ParseHashV does. It is
+	// interpolated into the asset service URL, where an unchecked value addresses
+	// other routes ("../block/<hash>"), and a malformed one came back as the asset
+	// service's 400, answered as an internal error for the caller's own typo.
+	// Hex first and then length, in svnode's order, so its texts match.
+	if _, err := hex.DecodeString(c.Txid); err != nil {
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidParameter,
+			fmt.Sprintf("parameter 1 must be hexadecimal string (not '%s')", c.Txid))
+	}
+
+	if len(c.Txid) != chainhash.MaxHashStringSize {
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidParameter,
+			fmt.Sprintf("parameter 1 must be of length %d (not %d)", chainhash.MaxHashStringSize, len(c.Txid)))
+	}
+
+	txHash, err := chainhash.NewHashFromStr(c.Txid)
+	if err != nil {
+		return nil, rpcDecodeHexError(c.Txid)
+	}
+
+	fullURL := s.assetHTTPURL.ResolveReference(&url.URL{Path: fmt.Sprintf("/api/v1/tx/%s/hex", txHash.String())})
 
 	// Set up HTTP client with timeouts
 	client := &http.Client{
@@ -586,9 +606,26 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 	}
 	defer resp.Body.Close()
 
-	// Check the response status code
+	// A 404 the asset handler marks as its own is the asset service saying it does
+	// not hold this transaction, which bitcoind reports as -5 with this text, not
+	// as an internal error. A wallet polling for a transaction that is not mined
+	// yet needs to tell that apart from the asset service being down.
+	//
+	// Only a marked one. -5 is the strongest answer this API has, and an unmarked
+	// 404 is a route that did not match: the path below is an absolute reference,
+	// so it replaces any path on assetHTTPURL, and a misconfigured URL 404s every
+	// request. That falls through to the non-200 branch, which answers it as the
+	// node fault it is and logs it, with the URL, at error.
+	if resp.StatusCode == http.StatusNotFound && resp.Header.Get(util.AssetNotFoundHeader) == util.AssetNotFoundTx {
+		return nil, s.rpcTxLookupError(
+			errors.NewTxNotFoundError("tx %s not found in asset service", txHash.String()),
+			bsvjson.ErrRPCInvalidAddressOrKey, "")
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.NewServiceError(fmt.Sprintf("Error: Unexpected status code %d", resp.StatusCode))
+		return nil, s.rpcError(
+			errors.NewServiceError("unexpected status code %d from asset service at %s", resp.StatusCode, fullURL.Redacted()),
+			bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -732,10 +769,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 		// Decode the provided address.
 		addr, err := bsvutil.DecodeAddress(encodedAddr, s.settings.ChainCfgParams)
 		if err != nil {
-			return nil, &bsvjson.RPCError{
-				Code:    bsvjson.ErrRPCInvalidAddressOrKey,
-				Message: "Invalid address or key: " + err.Error(),
-			}
+			return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidAddressOrKey, "Invalid address or key: ")
 		}
 
 		// Ensure the address is one of the supported types and that
@@ -782,7 +816,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 	if c.LockTime != nil {
 		lockTimeUint32, err := safeconversion.Int64ToUint32(*c.LockTime)
 		if err != nil {
-			return nil, err
+			return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
 		}
 
 		mtx.LockTime = lockTimeUint32
@@ -853,22 +887,26 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// Use 0 for the tag to represent local node.
 	tx, err := bt.NewTxFromBytes(serializedTx)
 	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCDeserialization,
-			Message: txRejectedPrefix + err.Error(),
-		}
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCDeserialization, txRejectedPrefix)
 	}
 
 	s.logger.Debugf("tx to send: %v", tx)
+
+	// A syncing node stores no unmined transaction, not even the blob (issue
+	// 2003). -10 is the code bitcoind uses for a call it refuses during initial
+	// block download, so a client already handling that one needs no change.
+	if s.unminedTxGate.Refuses(ctx, tx.TxIDChainHash()) {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCClientInInitialDownload,
+			Message: "node is syncing and accepts no unmined transactions until it reaches the chain tip",
+		}
+	}
 
 	// Store the transaction in blob store first (following the pattern from propagation service)
 	if s.txStore != nil {
 		err = s.txStore.Set(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, tx.SerializeBytes())
 		if err != nil {
-			return nil, &bsvjson.RPCError{
-				Code:    bsvjson.ErrRPCInternal.Code,
-				Message: "Failed to store transaction: " + err.Error(),
-			}
+			return nil, s.rpcError(err, bsvjson.ErrRPCInternal.Code, "Failed to store transaction: ")
 		}
 	}
 
@@ -899,10 +937,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 		tx.SetExtended(false)
 
 		if err = s.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
-			return nil, &bsvjson.RPCError{
-				Code:    bsvjson.ErrRPCVerify,
-				Message: txRejectedPrefix + err.Error(),
-			}
+			return nil, s.rpcSubmitError(err, bsvjson.ErrRPCVerify, txRejectedPrefix)
 		}
 
 		tx.SetExtended(true)
@@ -925,11 +960,8 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// Validate the transaction synchronously
 	// This will validate scripts, check UTXOs, spend them, create new UTXOs, and send to block assembly
 	_, err = s.validatorClient.Validate(ctx, tx, 0)
-	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCVerify,
-			Message: txRejectedPrefix + err.Error(),
-		}
+	if err != nil && !errors.Is(err, errors.ErrTxUnlockFailed) {
+		return nil, s.rpcSubmitError(err, bsvjson.ErrRPCVerify, txRejectedPrefix)
 	}
 
 	// Return the transaction ID as a hex string per Bitcoin RPC spec
@@ -995,7 +1027,7 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	numblocksInt32, err := safeconversion.Uint32ToInt32(c.NumBlocks)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
 	}
 
 	// Generate blocks and return their hashes
@@ -1062,10 +1094,17 @@ func handleGenerateToAddress(ctx context.Context, s *RPCServer, cmd interface{},
 	// check address
 	_, err := bsvutil.DecodeAddress(c.Address, s.settings.ChainCfgParams)
 	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInvalidAddressOrKey,
-			Message: err.Error(),
-		}
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidAddressOrKey, "")
+	}
+
+	// DecodeAddress also takes a CashAddr or a bare public key, but block
+	// assembly builds the coinbase with AddressToScript, which reads base58 only,
+	// and its refusal would come back as a node fault. Refused here instead, with
+	// svnode's answer to an address it cannot pay.
+	if _, err = model.AddressToScript(c.Address); err != nil {
+		s.logger.Debugf("[handleGenerateToAddress] %q: %v", c.Address, err)
+
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidAddressOrKey, "Error: Invalid address")
 	}
 
 	// Generate blocks and return their hashes
@@ -1153,12 +1192,15 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 	}
 
 	if c.ProvideCoinbaseTx != nil && *c.ProvideCoinbaseTx {
-		coinbaseTx, err := mc.CreateCoinbaseTxCandidate(s.settings, true)
-		if err != nil {
-			return nil, err
+		// The coinbase block assembly keeps on the candidate's job, as bitcoin-sv returns the
+		// candidate block's own coinbase. A solution submitted without a coinbase is mined with
+		// this one, so a miner that hashes it and omits it from submitminingsolution gets the block
+		// it hashed. A coinbase built here instead would be one block assembly never sees.
+		if len(mc.CoinbaseTx) == 0 {
+			return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInternal.Code, "block assembly returned the candidate without its coinbase: it could not build one from miner_wallet_private_keys, or it is an older or other implementation that does not set coinbase_tx")
 		}
 
-		jsonMap["coinbase"] = hex.EncodeToString(coinbaseTx.Bytes())
+		jsonMap["coinbase"] = hex.EncodeToString(mc.CoinbaseTx)
 	}
 
 	if *c.Verbosity == uint32(1) {
@@ -1320,12 +1362,14 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 			}
 
 			for _, p := range newResult.resp {
+				displayHeight := p.DisplayHeight()
+
 				info := &bsvjson.GetPeerInfoResult{
 					PeerID:         p.ID.String(),
 					Addr:           p.DataHubURL, // Use DataHub URL as address
 					SubVer:         p.ClientName,
-					CurrentHeight:  int32(p.Height),
-					StartingHeight: int32(p.Height), // Use current height as starting height
+					CurrentHeight:  int32(displayHeight),
+					StartingHeight: int32(displayHeight), // Use current height as starting height
 					BanScore:       int32(p.BanScore),
 					BytesRecv:      p.BytesReceived,
 					BytesSent:      0, // P2P doesn't track bytes sent currently
@@ -1368,10 +1412,7 @@ func handleGetRawMempool(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 
 	txs, err := s.blockAssemblyClient.GetTransactionHashes(ctx)
 	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: "Error retrieving raw mempool: " + err.Error(),
-		}
+		return nil, s.rpcError(err, bsvjson.ErrRPCInternal.Code, "Error retrieving raw mempool: ")
 	}
 
 	// Block assembly lists every subtree node, including the coinbase
@@ -1383,10 +1424,7 @@ func handleGetRawMempool(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 	if verbose != nil && *verbose {
 		miningCandidate, err := s.blockAssemblyClient.GetMiningCandidate(ctx)
 		if err != nil {
-			return nil, &bsvjson.RPCError{
-				Code:    bsvjson.ErrRPCInternal.Code,
-				Message: "Error retrieving mining candidate: " + err.Error(),
-			}
+			return nil, s.rpcError(err, bsvjson.ErrRPCInternal.Code, "Error retrieving mining candidate: ")
 		}
 
 		result := bsvjson.GetRawMempoolVerboseResult{
@@ -1814,6 +1852,14 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 		return nil, rpcDecodeHexError(c.MiningSolution.ID)
 	}
 
+	// Jobs are keyed by a 32-byte hash. Any other length names no job, and
+	// blockassembly refused it with chainhash's bare error, which reads as a node
+	// fault once it crosses back.
+	if len(id) != chainhash.HashSize {
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidParameter,
+			fmt.Sprintf("id must be of length %d (not %d)", chainhash.MaxHashStringSize, len(c.MiningSolution.ID)))
+	}
+
 	coinbase, err := hex.DecodeString(c.MiningSolution.Coinbase)
 	if err != nil {
 		return nil, rpcDecodeHexError(c.MiningSolution.Coinbase)
@@ -1833,9 +1879,13 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 		// Handle "job not found" as an expected condition - miners often submit stale solutions
 		if terr, ok := err.(*errors.Error); ok && terr.Code() == errors.ERR_NOT_FOUND {
 			s.logger.Infof("Mining solution rejected: %s (job expired or block already found)", err.Error())
-			return nil, bsvjson.NewRPCError(bsvjson.ErrRPCMisc, err.Error())
+
+			// A fixed text: the error renders its code and blockassembly's own
+			// breadcrumb, and this is a limited-tier path miners hit routinely.
+			return nil, bsvjson.NewRPCError(bsvjson.ErrRPCMisc, "job not found")
 		}
-		return nil, err
+
+		return nil, s.rpcMiningSubmissionError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	return true, nil
@@ -1891,7 +1941,7 @@ func handleInvalidateBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 
 	_, err = s.blockchainClient.InvalidateBlock(ctx, ch)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	return nil, nil
@@ -1952,27 +2002,38 @@ func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 		}
 	}
 
-	// Revalidate the block - this will fetch it, validate it, and update its status
-	s.logger.Infof("[handleReconsiderBlock] revalidating block %s", ch)
-	err = s.blockValidationClient.RevalidateBlock(ctx, *ch)
+	// Resolve the named block before revalidating anything, as svnode does. This is
+	// the only lookup on this path that is about the block the caller named, so it
+	// is the only one allowed to answer "Block not found": a not-found inside a
+	// revalidation failure is about an ancestor or a descendant.
+	_, meta, err := s.blockchainClient.GetBlockHeader(ctx, ch)
 	if err != nil {
-		s.logger.Errorf("[handleReconsiderBlock] block revalidation failed for %s: %v", ch, err)
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCVerify,
-			Message: "Block failed revalidation: " + err.Error(),
-		}
+		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
-	s.logger.Infof("[handleReconsiderBlock] block %s successfully reconsidered and validated", ch)
+	if meta == nil || meta.Invalid {
+		// Revalidate the block - this will fetch it, validate it, and update its status
+		s.logger.Infof("[handleReconsiderBlock] revalidating block %s", ch)
+
+		err = s.blockValidationClient.RevalidateBlock(ctx, *ch)
+		if err != nil {
+			return nil, s.rpcRevalidationError(err, bsvjson.ErrRPCVerify, "Block failed revalidation: ")
+		}
+
+		s.logger.Infof("[handleReconsiderBlock] block %s successfully reconsidered and validated", ch)
+	} else {
+		// Not marked invalid, so there is nothing to clear on the block itself and
+		// BlockValidation would refuse to revalidate it. bitcoind answers success
+		// here, and its ResetBlockFailureFlags still clears every descendant, so the
+		// children are reconsidered below either way.
+		s.logger.Infof("[handleReconsiderBlock] block %s is not marked invalid, reconsidering its invalid descendants only", ch)
+	}
 
 	// Now recursively clear invalid status for all invalid child blocks
 	err = s.reconsiderInvalidChildren(ctx, ch)
 	if err != nil {
-		s.logger.Errorf("[handleReconsiderBlock] failed to reconsider child blocks: %v", err)
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: fmt.Sprintf("Block %s was reconsidered but failed to reconsider children: %v", ch, err),
-		}
+		return nil, s.rpcRevalidationError(err, bsvjson.ErrRPCInternal.Code,
+			fmt.Sprintf("Block %s was reconsidered but failed to reconsider children: ", ch))
 	}
 
 	return nil, nil
@@ -2731,7 +2792,7 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 
 	h, err := chainhash.NewHashFromStr(c.TxID)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.TxID)
 	}
 
 	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
@@ -2780,7 +2841,7 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	h, err := chainhash.NewHashFromStr(c.TxID)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.TxID)
 	}
 
 	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
@@ -2830,17 +2891,17 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	oldTXIDHash, err := chainhash.NewHashFromStr(c.OldTxID)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.OldTxID)
 	}
 
 	oldUTXOHash, err := chainhash.NewHashFromStr(c.OldUTXOHash)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.OldUTXOHash)
 	}
 
 	newUTXOHash, err := chainhash.NewHashFromStr(c.NewUTXOHash)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.NewUTXOHash)
 	}
 
 	if err = s.utxoStore.ReAssignUTXO(ctx,
@@ -2996,10 +3057,7 @@ func (s *RPCServer) generateBlocksAndReturnHashes(ctx context.Context, count int
 	// Get the current best block hash before generation
 	_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: errors.NewServiceError("RPC blockchain client", err).Error(),
-		}
+		return nil, s.rpcError(errors.NewServiceError("RPC blockchain client", err), bsvjson.ErrRPCInternal.Code, "")
 	}
 	startHeight := bestBlockMeta.Height
 
@@ -3010,10 +3068,7 @@ func (s *RPCServer) generateBlocksAndReturnHashes(ctx context.Context, count int
 		MaxTries: maxTries,
 	})
 	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: errors.NewServiceError("RPC blockassembly client", err).Error(),
-		}
+		return nil, s.rpcError(errors.NewServiceError("RPC blockassembly client", err), bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	// Collect the block hashes of the generated blocks
@@ -3025,10 +3080,7 @@ func (s *RPCServer) generateBlocksAndReturnHashes(ctx context.Context, count int
 		// Get the block at the target height
 		block, err := s.blockchainClient.GetBlockByHeight(ctx, targetHeight)
 		if err != nil {
-			return nil, &bsvjson.RPCError{
-				Code:    bsvjson.ErrRPCInternal.Code,
-				Message: errors.NewServiceError("RPC blockchain client", err).Error(),
-			}
+			return nil, s.rpcError(errors.NewServiceError("RPC blockchain client", err), bsvjson.ErrRPCInternal.Code, "")
 		}
 
 		blockHashes = append(blockHashes, block.Header.Hash().String())

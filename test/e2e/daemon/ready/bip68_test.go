@@ -318,7 +318,7 @@ func TestBIP68_HeightBased_Reject(t *testing.T) {
 	// subtree store for validation to reach the transaction.
 	td.StoreSubtreeForBlock(t, []*bt.Tx{tx}, modelBlock.Height+1000)
 
-	err = td.BlockValidationClient.ProcessBlock(ctx, modelBlock, modelBlock.Height, "test", "", 0)
+	err = td.BlockValidationClient.ProcessBlock(ctx, modelBlock, modelBlock.Height, "test", "", 0, false)
 	require.Error(t, err, "Teranode should reject block with unsatisfied height-based sequence lock (sequence=%d, UTXO age=1 block)", sequence)
 	// Assert the rejection is the height-based sequence-lock failure specifically, so the
 	// test cannot pass on an unrelated error (missing subtree data, merkle mismatch, fees).
@@ -488,7 +488,7 @@ func TestBIP68_TimeBased_Reject(t *testing.T) {
 	// subtree store for validation to reach the transaction.
 	td.StoreSubtreeForBlock(t, []*bt.Tx{tx}, modelBlock.Height+1000)
 
-	err = td.BlockValidationClient.ProcessBlock(ctx, modelBlock, modelBlock.Height, "test", "", 0)
+	err = td.BlockValidationClient.ProcessBlock(ctx, modelBlock, modelBlock.Height, "test", "", 0, false)
 	require.Error(t, err, "Teranode should reject block with unsatisfied time-based sequence lock (1000 × 512 seconds not elapsed)")
 	// Assert the rejection is the time-based sequence-lock failure specifically, so the
 	// test cannot pass on an unrelated error (missing subtree data, merkle mismatch, fees).

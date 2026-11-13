@@ -1,9 +1,11 @@
 package aerospike
 
 import (
+	"context"
 	"sync"
 
-	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	aeropruner "github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 )
@@ -26,6 +28,12 @@ func ResetPrunerServiceForTests() {
 
 	prunerServiceInstance = nil
 	prunerServiceError = nil
+}
+
+// Stamper returns pruner.NoStamp: an aerospike store writes each UTXO's block when it is mined,
+// so it has nothing to stamp.
+func (s *Store) Stamper() pruner.Stamper {
+	return pruner.NoStamp
 }
 
 // GetPrunerService returns a pruner service for the Aerospike store.
@@ -63,23 +71,17 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 	// never reclaim and extractTxHash would fail on. The miss therefore reaches
 	// the pruner as KEY_NOT_FOUND, which it counts as a skipped parent.
 	opts := aeropruner.Options{
-		Logger:        s.logger,
-		Ctx:           s.ctx,
-		Client:        s.client,
-		ExternalStore: s.externalStore,
-		Namespace:     s.namespace,
-		Set:           s.setName,
-		IndexWaiter:   s,
-		LuaPackage:    LuaPackage,
-		BuildAddDeletedChildrenRecord: func(policy *aerospike.BatchUDFPolicy, key *aerospike.Key, childHashes []interface{}) aerospike.BatchRecordIfc {
-			return s.teranodeBatchRecord(
-				policy,
-				LuaPackage,
-				key,
-				subOpAddDeletedChildren,
-				"addDeletedChildren",
-				childHashes,
-			)
+		Logger:                        s.logger,
+		Ctx:                           s.ctx,
+		Client:                        s.client,
+		ExternalStore:                 s.externalStore,
+		Namespace:                     s.namespace,
+		Set:                           s.setName,
+		IndexWaiter:                   s,
+		LuaPackage:                    LuaPackage,
+		BuildAddDeletedChildrenRecord: s.prunerAddDeletedChildrenRecord,
+		ClearParentRefs: func(ctx context.Context, txHash *chainhash.Hash) error {
+			return utxo.ClearParentRefs(ctx, s, txHash)
 		},
 
 		// Give the pruner the same runtime demotion every other native call site

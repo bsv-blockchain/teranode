@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -24,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/status"
 )
 
 func Test_storeSubtreeData(t *testing.T) {
@@ -178,7 +180,7 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		require.NotNil(t, block.Header)
 
 		assert.Equal(t, uint32(1), block.Height)
-		assert.Equal(t, uint64(0), block.TransactionCount)
+		require.Equal(t, uint64(1), block.TransactionCount, "the coinbase alone")
 		assert.Equal(t, uint64(5000000000), block.CoinbaseTx.Outputs[0].Satoshis)
 	})
 
@@ -231,7 +233,7 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		require.NotNil(t, block)
 		require.NotNil(t, block.Header)
 		assert.Equal(t, uint32(251), block.Height)
-		assert.Equal(t, uint64(0), block.TransactionCount)
+		require.Equal(t, uint64(1), block.TransactionCount, "the coinbase alone")
 		assert.Equal(t, uint64(2500000000), block.CoinbaseTx.Outputs[0].Satoshis)
 	})
 
@@ -244,11 +246,11 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		genesisHash := chainhash.HashH([]byte("genesis"))
 		for i := uint64(0); i < 10; i++ {
 			// Different output index for each tx
-			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
+			require.Equal(t, subtreeprocessor.Admitted, server.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{
 				Hash:        chainhash.HashH([]byte(fmt.Sprintf("%d", i))),
 				Fee:         i,
 				SizeInBytes: i,
-			}}, []*subtreepkg.TxInpoints{singleParentInpointsPtr(genesisHash, uint32(i))}))
+			}}, []*subtreepkg.TxInpoints{singleParentInpointsPtr(genesisHash, uint32(i))}, false))
 		}
 
 		require.Eventually(t, func() bool {
@@ -281,7 +283,7 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		require.NotNil(t, block.Header)
 
 		assert.Equal(t, uint32(1), block.Height)
-		assert.Equal(t, uint64(10), block.TransactionCount)
+		require.Equal(t, uint64(11), block.TransactionCount, "ten transactions plus the coinbase")
 		assert.Equal(t, uint64(5000000045), block.CoinbaseTx.Outputs[0].Satoshis)
 	})
 }
@@ -316,7 +318,13 @@ func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *subtreepkg.Subtree, s
 }
 
 func setupServer(t *testing.T) (*BlockAssembly, *memory.Memory) {
+	return setupServerWithSettings(t, func(*settings.Settings) {})
+}
+
+func setupServerWithSettings(t *testing.T, configure func(*settings.Settings)) (*BlockAssembly, *memory.Memory) {
 	common := testutil.NewCommonTestSetup(t)
+	configure(common.Settings)
+
 	subtreeStore := testutil.NewMemoryBlobStore()
 
 	// Create a cancellable context for proper cleanup
@@ -554,11 +562,11 @@ func TestTxCount(t *testing.T) {
 		// to avoid TxInpoints serialization issues
 		for i := 0; i < 3; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i)))
-			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
+			require.Equal(t, subtreeprocessor.Admitted, server.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}}))
+			}}, []*subtreepkg.TxInpoints{{}}, false))
 		}
 
 		// Wait for processing - expect initial count + 3 added transactions
@@ -577,11 +585,11 @@ func TestSubmitMiningSolution_InvalidBlock_HandlesReset(t *testing.T) {
 		// Add some transactions to create a mining candidate
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx%d", i)))
-			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
+			require.Equal(t, subtreeprocessor.Admitted, server.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}}))
+			}}, []*subtreepkg.TxInpoints{{}}, false))
 		}
 
 		// Wait for transactions to be processed
@@ -1400,11 +1408,11 @@ func TestRemoveTxIntensive(t *testing.T) {
 
 		// First add a transaction
 		txHash := chainhash.HashH([]byte("test-tx-to-remove"))
-		require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
+		require.Equal(t, subtreeprocessor.Admitted, server.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}}, []*subtreepkg.TxInpoints{{}}))
+		}}, []*subtreepkg.TxInpoints{{}}, false))
 
 		// Wait for it to be added
 		time.Sleep(10 * time.Millisecond)
@@ -1548,11 +1556,11 @@ func TestGetMiningCandidateIntensive(t *testing.T) {
 		// Add some transactions to create subtrees
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("mining-tx-%d", i)))
-			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
+			require.Equal(t, subtreeprocessor.Admitted, server.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}}))
+			}}, []*subtreepkg.TxInpoints{{}}, false))
 		}
 
 		time.Sleep(50 * time.Millisecond) // Allow processing
@@ -1586,6 +1594,53 @@ func TestGetMiningCandidateIntensive(t *testing.T) {
 		_ = server.jobStore.Get(*id)
 		// Job may or may not exist depending on implementation, but getting candidate should work
 	})
+}
+
+// TestUnminedLoading_RefusesAsNotReady: while unmined transactions are loading,
+// every method that refuses work answers SERVICE_NOT_READY inside a gRPC status,
+// so a client gets the class back through UnwrapGRPC rather than a bare status
+// whose only content is the text.
+func TestUnminedLoading_RefusesAsNotReady(t *testing.T) {
+	server, _ := setupServer(t)
+	server.blockAssembler.unminedTransactionsLoading.Store(true)
+
+	ctx := context.Background()
+
+	for name, call := range map[string]func() error{
+		"SubmitMiningSolution": func() error {
+			_, err := server.SubmitMiningSolution(ctx, &blockassembly_api.SubmitMiningSolutionRequest{Id: make([]byte, 32)})
+			return err
+		},
+		"ResetBlockAssembly": func() error {
+			_, err := server.ResetBlockAssembly(ctx, &blockassembly_api.EmptyMessage{})
+			return err
+		},
+		"ResetBlockAssemblyFully": func() error {
+			_, err := server.ResetBlockAssemblyFully(ctx, &blockassembly_api.EmptyMessage{})
+			return err
+		},
+		"ResetBlockAssemblyValidateInputs": func() error {
+			_, err := server.ResetBlockAssemblyValidateInputs(ctx, &blockassembly_api.EmptyMessage{})
+			return err
+		},
+		"CheckBlockAssemblyValidateInputs": func() error {
+			_, err := server.CheckBlockAssemblyValidateInputs(ctx, &blockassembly_api.EmptyMessage{})
+			return err
+		},
+		"GenerateBlocks": func() error {
+			_, err := server.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: 1})
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := call()
+
+			_, isStatus := status.FromError(err)
+			require.True(t, isStatus, "a gRPC status, so the class crosses: %v", err)
+			require.ErrorIs(t, errors.UnwrapGRPC(err), errors.ErrServiceNotReady)
+			require.Contains(t, err.Error(), "service not ready - unmined transactions are still being loaded")
+		})
+	}
 }
 
 // TestSubmitMiningSolutionIntensive tests SubmitMiningSolution comprehensively
@@ -2057,11 +2112,11 @@ func TestRemoveTxEdgeCases(t *testing.T) {
 
 		// Add a transaction first
 		txHash := chainhash.HashH([]byte("test-tx-remove"))
-		require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
+		require.Equal(t, subtreeprocessor.Admitted, server.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}}, []*subtreepkg.TxInpoints{{}}))
+		}}, []*subtreepkg.TxInpoints{{}}, false))
 
 		// Now remove it to cover the success path
 		req := &blockassembly_api.RemoveTxRequest{
@@ -2497,5 +2552,70 @@ func TestMoreCoveragePaths(t *testing.T) {
 
 		// Give time for background notification goroutine to complete
 		time.Sleep(50 * time.Millisecond)
+	})
+}
+
+// With blockassembly_storeTxInpointsForSubtreeMeta off, every ingest path still hands the tx's parent
+// links to the subtree processor: the descendant cascades read them to take a removed tx's children
+// out of block assembly, and nothing else supplies them in this mode.
+func TestIngestKeepsParentLinksWithSubtreeMetaOff(t *testing.T) {
+	parentHash := chainhash.Hash{0x05}
+	parentLinks := inpointsForParents(t, []chainhash.Hash{parentHash}, [][]uint32{{0}})
+
+	txid := make([]byte, 32)
+	txid[0] = 0x01
+
+	captureParents := func(t *testing.T, add func(ba *BlockAssembly) error) []chainhash.Hash {
+		t.Helper()
+
+		var handed []*subtreepkg.TxInpoints
+
+		stp := &subtreeprocessor.MockSubtreeProcessor{}
+		stp.On("AddBatchBounded", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			handed = args.Get(1).([]*subtreepkg.TxInpoints)
+		}).Return(subtreeprocessor.Admitted)
+
+		ba := baWithProcessor(t, func(s *settings.Settings) {
+			s.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
+		}, stp)
+
+		require.NoError(t, add(ba))
+		require.Len(t, handed, 1)
+
+		return handed[0].ParentTxHashes
+	}
+
+	t.Run("AddTx", func(t *testing.T) {
+		parents := captureParents(t, func(ba *BlockAssembly) error {
+			_, err := ba.AddTx(context.Background(), &blockassembly_api.AddTxRequest{Txid: txid, Fee: 1, Size: 100, TxInpoints: parentLinks})
+			return err
+		})
+		require.Equal(t, []chainhash.Hash{parentHash}, parents)
+	})
+
+	t.Run("AddTxBatch", func(t *testing.T) {
+		parents := captureParents(t, func(ba *BlockAssembly) error {
+			_, err := ba.AddTxBatch(context.Background(), &blockassembly_api.AddTxBatchRequest{
+				TxRequests: []*blockassembly_api.AddTxRequest{{Txid: txid, Fee: 1, Size: 100, TxInpoints: parentLinks}},
+			})
+			return err
+		})
+		require.Equal(t, []chainhash.Hash{parentHash}, parents)
+	})
+
+	t.Run("AddTxBatchColumnar", func(t *testing.T) {
+		parents := captureParents(t, func(ba *BlockAssembly) error {
+			_, err := ba.AddTxBatchColumnar(context.Background(), &blockassembly_api.AddTxBatchColumnarRequest{
+				TxidsPacked:          txid,
+				Fees:                 []uint64{1},
+				Sizes:                []uint64{100},
+				ParentTxHashesPacked: parentHash[:],
+				ParentTxOffsets:      []uint32{0, 1},
+				VoutIdxsPacked:       []uint32{1, 0},
+				VoutIdxsTxOffsets:    []uint32{0, 2},
+			})
+			return err
+		})
+		require.Equal(t, []chainhash.Hash{parentHash}, parents)
 	})
 }

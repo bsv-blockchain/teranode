@@ -187,8 +187,11 @@ teranode-cli checkblock 000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b6
 ### File Reader
 
 ```bash
-teranode-cli filereader [path] [options]
+teranode-cli filereader [options] [path]
 ```
+
+Flags must come before the path: anything after the first positional argument is not parsed as a flag, so
+`teranode-cli` rejects it.
 
 Options:
 

@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
@@ -65,6 +66,8 @@ func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
 		MedianTime: m.GetMedianBlockTime(),
 	}
 }
+
+func (m *MockUTXOStore) Stamper() pruner.Stamper { return pruner.NoStamp }
 
 // Implement remaining interface methods as no-ops for testing
 func (m *MockUTXOStore) SupportsOutpointOnlySpend() bool { return false }
@@ -124,6 +127,9 @@ func (m *MockUTXOStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (
 func (m *MockUTXOStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 	return nil, nil
 }
+func (m *MockUTXOStore) ConflictingTxHashes(_ context.Context) ([]chainhash.Hash, bool, error) {
+	return nil, true, nil
+}
 
 func (m *MockUTXOStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
 	return nil
@@ -151,6 +157,14 @@ func (m *MockUTXOStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSli
 
 func (m *MockUTXOStore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	return nil
+}
+
+func (m *MockUTXOStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	return nil, nil
+}
+
+func (m *MockUTXOStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, opts ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	return nil, nil
 }
 
 func (m *MockUTXOStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
@@ -458,4 +472,27 @@ func TestAvailableDatabases_GlobalVariable(t *testing.T) {
 	// Clean up
 	delete(availableDatabases, "test")
 	assert.Equal(t, initialLen, len(availableDatabases))
+}
+
+// SpendsMadeBy returns nothing: no test here drives the conflict-undo path.
+func (m *MockUTXOStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
+}
+
+func (m *MockUTXOStore) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return nil
+}
+func (m *MockUTXOStore) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return nil
+}
+
+func (m *MockUTXOStore) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return nil
+}
+
+func (m *MockUTXOStore) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
+	return nil
 }

@@ -321,8 +321,8 @@ const DefaultPeerFetchTimeout = 10 * time.Minute
 
 // getSubtreeDataFromPeer fetches subtree data from a peer via HTTP. The peer's
 // base URL already carries its API prefix, so only the resource path is
-// appended. Retries on 503 — the peer's asset service may reject under
-// admission control while it generates the file on-demand.
+// appended. Retries on 429 and 503 — the peer's asset service may rate limit
+// us, or reject under admission control while it generates the file on-demand.
 //
 // With bypassCache set the URL carries a cache-busting query parameter, so a
 // proxy cache in front of the peer cannot replay the answer the first attempt

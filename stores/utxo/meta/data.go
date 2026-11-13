@@ -220,7 +220,10 @@ func NewDataFromBytes(dataBytes []byte) (d *Data, err error) {
 // nil outputs at every index that was not a live UTXO at snapshot time, and the
 // UTXO store hands that shape straight back out — from the external .outputs
 // blob (stores/utxo/aerospike/get.go getExternalTransaction) or from the inline
-// bins (getTxFromBins). Serializing it panics inside go-bt, whose Output.Size()
+// bins (getTxFromBins), symmetrically: a seeded parent above
+// MaxTxSizeInStoreInBytes arrives by the first route and one below it by the
+// second, and both reach the caller as this same shape.
+// Serializing it panics inside go-bt, whose Output.Size()
 // and Output.appendTo() dereference the nil *Output; Tx.TxIDChainHash() and
 // Tx.MarshalJSON() reach the same fault.
 //

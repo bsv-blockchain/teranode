@@ -91,43 +91,9 @@ func TestCheckBlockSubtrees(t *testing.T) {
 			mock.Anything).
 			Return(testHeaders[0], &model.BlockHeaderMeta{}, nil)
 
-		// Create test transactions
-		tx1, err := createTestTransaction("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
-		require.NoError(t, err)
-
-		tx2, err := createTestTransaction("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
-		require.NoError(t, err)
-
-		// Create subtree with test transactions
-		subtreeHash := chainhash.Hash{}
-		copy(subtreeHash[:], []byte("test_subtree_hash_32_bytes_long!"))
-
-		// Store subtreeData containing the transactions
-		subtreeData := bytes.Buffer{}
-		// Write transactions in the format expected by readTransactionsFromSubtreeDataStream
-		subtreeData.Write(tx1.Bytes())
-		subtreeData.Write(tx2.Bytes())
-
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtreeData, subtreeData.Bytes())
-		require.NoError(t, err)
-
-		// Mark the subtree as already validated to avoid calling ValidateSubtreeInternal
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
-		require.NoError(t, err)
-
-		// Create a block with subtrees using proper model construction
-		header := &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      uint32(time.Now().Unix()),
-			Bits:           model.NBit{},
-			Nonce:          0,
-		}
-
-		coinbaseTx := &bt.Tx{Version: 1}
-		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 2, 500, 0, 0)
-		require.NoError(t, err)
+		// A validated subtree in a block the header commits to: a cached subtree is
+		// only probed once the body is bound.
+		block := storeBoundCachedBlock(t, server, 1)
 
 		blockBytes, err := block.Bytes()
 		require.NoError(t, err)
@@ -173,7 +139,11 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		response, err := server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
 		assert.Nil(t, response)
-		assert.Contains(t, err.Error(), "Failed to get block from blockchain client")
+		// The message must name the thing that actually failed. This site parses the
+		// block bytes off the request; it never touches the blockchain client, and the
+		// gRPC wrap puts this message on the status line a caller logs.
+		require.Contains(t, err.Error(), "failed to deserialise block from request bytes")
+		require.NotContains(t, err.Error(), "blockchain client")
 	})
 
 	t.Run("BlockchainClientError", func(t *testing.T) {
@@ -241,7 +211,10 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		response, err := server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
 		assert.Nil(t, response)
-		assert.Contains(t, err.Error(), "Failed to get block headers from blockchain client")
+		// Tag included on purpose. Server.go carries the same message under
+		// [CheckSubtree], and the gRPC wrap puts this line in front of a caller, so
+		// the tag is the only thing telling the two call sites apart in a log.
+		require.Contains(t, err.Error(), "[CheckBlockSubtrees] Failed to get block headers from blockchain client")
 	})
 
 	t.Run("HTTPFetchingPath", func(t *testing.T) {
@@ -424,7 +397,10 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		response, err := server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
 		assert.Nil(t, response)
-		assert.Contains(t, err.Error(), "failed to load subtree transactions")
+		// The handler now returns a gRPC-wrapped error, whose Error() renders only the
+		// outermost message; the chain lives in the status details. Unwrap the way the
+		// production client does before asserting on the nested reason.
+		require.Contains(t, errors.UnwrapGRPC(err).Error(), "failed to load subtree transactions")
 	})
 }
 
@@ -757,6 +733,68 @@ func TestCheckBlockSubtrees_OversizedBody(t *testing.T) {
 	assert.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal in chain, got %v", err)
 }
 
+// TestCheckBlockSubtrees_RetriesSubtreeFetchOn429 — a peer that rate-limits the GET /subtree
+// fetch on the block-validation path is retried instead of failing the block. The retried
+// response is the oversized body from TestCheckBlockSubtrees_OversizedBody, so reaching
+// ErrExternal on the second attempt proves the retry happened and the size bound still holds.
+func TestCheckBlockSubtrees_RetriesSubtreeFetchOn429(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	server.settings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap
+
+	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+		mock.Anything, mock.Anything, mock.Anything).
+		Return([]uint32{1, 2, 3}, nil)
+
+	// Hash that doesn't exist in subtreeStore — forces the peer HTTP-fetch fallback.
+	subtreeHash := chainhash.HashH([]byte("test-429-checkblock-subtree"))
+
+	var attempts atomic.Int32
+
+	baseURL := testPeerURL
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	oversized := bytes.Repeat([]byte{0xab}, 4*1024)
+	httpmock.RegisterResponder("GET", subtreeURL,
+		func(req *http.Request) (*http.Response, error) {
+			if attempts.Add(1) == 1 {
+				return httpmock.NewStringResponse(http.StatusTooManyRequests, "rate limit exceeded"), nil
+			}
+
+			return httpmock.NewBytesResponse(http.StatusOK, oversized), nil
+		})
+
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+
+	coinbaseTx := &bt.Tx{Version: 1}
+	block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 400, 0, 0)
+	require.NoError(t, err)
+
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+		Block:   blockBytes,
+		BaseUrl: baseURL,
+	}
+
+	_, err = server.CheckBlockSubtrees(context.Background(), request)
+	require.Error(t, err)
+	require.Equal(t, int32(2), attempts.Load(), "the 429 must have been retried")
+	require.True(t, errors.Is(err, errors.ErrExternal), "expected the retried over-cap body to fail as ErrExternal, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrServiceRateLimited), "the 429 must not have been the final answer")
+}
+
 // TestCheckBlockSubtrees_LocalAssemblyPolicyIgnored is a regression test for issue #905.
 // The peer-fetch fallback in CheckBlockSubtrees gates the response twice: first by the
 // HTTP body size, then by the derived leaf count. Pre-fix both gates used the local
@@ -841,25 +879,9 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 			mock.Anything).
 			Return(testHeaders[0], &model.BlockHeaderMeta{}, nil)
 
-		// Create a subtree hash and store it so it "exists"
-		subtreeHash := chainhash.Hash{}
-		copy(subtreeHash[:], []byte("quorum_test_subtree_exists__"))
-
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
-		require.NoError(t, err)
-
-		header := &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      uint32(time.Now().Unix()),
-			Bits:           model.NBit{},
-			Nonce:          0,
-		}
-
-		coinbaseTx := &bt.Tx{Version: 1}
-		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 2, 500, 0, 0)
-		require.NoError(t, err)
+		// Store a subtree so it "exists", in a block the header commits to: a
+		// cached subtree is only probed once the body is bound.
+		block := storeBoundCachedBlock(t, server, 1)
 
 		blockBytes, err := block.Bytes()
 		require.NoError(t, err)
@@ -924,7 +946,7 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		// from http://127.0.0.1:0, which fails deterministically because nothing listens there. The important thing is it detected missing via quorum.
 		_, err = server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to load subtree transactions")
+		require.Contains(t, errors.UnwrapGRPC(err).Error(), "failed to load subtree transactions")
 	})
 
 	t.Run("QuorumTimeout_TreatsAsMissing", func(t *testing.T) {
@@ -998,8 +1020,8 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		_, err = server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
 		// The error should be from the HTTP fetch, not from quorum timeout
-		assert.Contains(t, err.Error(), "failed to load subtree transactions")
-		assert.NotContains(t, err.Error(), "quorum lock")
+		require.Contains(t, errors.UnwrapGRPC(err).Error(), "failed to load subtree transactions")
+		require.NotContains(t, errors.UnwrapGRPC(err).Error(), "quorum lock")
 	})
 
 	t.Run("QuorumContextCancelled_ReturnsError", func(t *testing.T) {
@@ -1083,8 +1105,17 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 			mock.Anything).
 			Return(testHeaders[0], &model.BlockHeaderMeta{}, nil)
 
-		subtreeHash := chainhash.Hash{}
-		copy(subtreeHash[:], []byte("quorum_test_inflight_race___"))
+		// A real subtree the header commits to: a cached subtree is only probed
+		// once the body is bound.
+		st, err := subtreepkg.NewTreeByLeafCount(2)
+		require.NoError(t, err)
+		require.NoError(t, st.AddCoinbaseNode())
+		require.NoError(t, st.AddNode(chainhash.HashH([]byte("inflight-tx")), 1, 1))
+
+		stBytes, err := st.Serialize()
+		require.NoError(t, err)
+
+		subtreeHash := *st.RootHash()
 
 		// Pre-create lock file to simulate in-flight handler
 		lockFilePath := filepath.Join(quorumDir, subtreeHash.String()+".lock")
@@ -1094,24 +1125,11 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		// and release the lock file. TryLockIfNotExistsWithTimeout will retry and see exists=true.
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
+			_ = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, stBytes)
 			os.Remove(lockFilePath)
 		}()
 
-		header := &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      uint32(time.Now().Unix()),
-			Bits:           model.NBit{},
-			Nonce:          0,
-		}
-
-		coinbaseTx := &bt.Tx{Version: 1}
-		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 2, 500, 0, 0)
-		require.NoError(t, err)
-
-		blockBytes, err := block.Bytes()
+		blockBytes, err := boundBlock(t, st, &subtreeHash).Bytes()
 		require.NoError(t, err)
 
 		request := &subtreevalidation_api.CheckBlockSubtreesRequest{
@@ -1289,6 +1307,7 @@ func TestProcessSubtreeDataStream(t *testing.T) {
 		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to store subtree data")
+		require.True(t, errors.IsLocalError(err), "a store that fails first is this node's fault, not the peer's")
 		// With streaming approach, if storage fails, no transactions are collected
 		assert.Len(t, allTransactions, 0)
 	})
@@ -2108,41 +2127,9 @@ func TestCheckBlockSubtrees_ConcurrentProcessing(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	// Create multiple subtrees that don't exist in store
-	var subtreeHashes []*chainhash.Hash
-	for i := 0; i < 5; i++ {
-		subtreeHash := chainhash.Hash{}
-		copy(subtreeHash[:], []byte(fmt.Sprintf("subtree_hash_%d_32_bytes_long__!", i)))
-		subtreeHashes = append(subtreeHashes, &subtreeHash)
-
-		// Store subtree data for each
-		tx, err := createTestTransaction(fmt.Sprintf("tx%d", i))
-		require.NoError(t, err)
-
-		subtreeData := bytes.Buffer{}
-		subtreeData.Write(tx.Bytes())
-
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtreeData, subtreeData.Bytes())
-		require.NoError(t, err)
-
-		// Mark as validated to avoid HTTP calls
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
-		require.NoError(t, err)
-	}
-
-	// Create a block with multiple subtrees
-	header := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  &chainhash.Hash{},
-		HashMerkleRoot: &chainhash.Hash{},
-		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{},
-		Nonce:          0,
-	}
-
-	coinbaseTx := &bt.Tx{Version: 1}
-	block, err := model.NewBlock(header, coinbaseTx, subtreeHashes, 5, 1000, 0, 0)
-	require.NoError(t, err)
+	// Multiple validated subtrees, in a block the header commits to: a cached
+	// subtree is only probed once the body is bound.
+	block := storeBoundCachedBlock(t, server, 5)
 
 	blockBytes, err := block.Bytes()
 	require.NoError(t, err)
@@ -2369,6 +2356,10 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 		mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Maybe()
 	// Set up default mock for GetBlockHeight method
+	// No conflicting index: cached subtrees take the per-transaction path these
+	// tests were written against. Tests of the index path wrap the store.
+	mockUtxoStore.On("ConflictingTxHashes", mock.Anything).
+		Return(nil, false, nil).Maybe()
 	mockUtxoStore.On("GetBlockHeight").
 		Return(uint32(100)).Maybe()
 	// Set up default mock for GetMeta method
@@ -2714,9 +2705,13 @@ func TestCheckBlockSubtrees_LargeBlock_MemoryConsumption(t *testing.T) {
 			tx, err := createTestTransaction(baseTxStr)
 			require.NoError(t, err)
 
-			// Add to subtree
-			err = subtree.AddNode(*tx.TxIDChainHash(), 1, uint64(j+1))
-			require.NoError(t, err)
+			// Add to subtree. Leaf hashes are unique so every subtree is distinct:
+			// a repeated subtree list is rejected before the cached-subtree probe.
+			if i == 0 && j == 0 {
+				require.NoError(t, subtree.AddCoinbaseNode())
+			} else {
+				require.NoError(t, subtree.AddNode(chainhash.HashH([]byte(fmt.Sprintf("large-%d-%d", i, j))), 1, uint64(j+1)))
+			}
 
 			// Add to subtreeData
 			subtreeData.Write(tx.Bytes())
@@ -2729,7 +2724,10 @@ func TestCheckBlockSubtrees_LargeBlock_MemoryConsumption(t *testing.T) {
 			require.NoError(t, err)
 
 			// Mark the subtree as already validated to avoid HTTP fetching
-			err = server.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
+			serialized, err := subtree.Serialize()
+			require.NoError(t, err)
+
+			err = server.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, serialized)
 			require.NoError(t, err)
 		}
 
@@ -2737,19 +2735,8 @@ func TestCheckBlockSubtrees_LargeBlock_MemoryConsumption(t *testing.T) {
 		allSubtrees = append(allSubtrees, subtree)
 	}
 
-	// Create block with all subtrees
-	header := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  &chainhash.Hash{},
-		HashMerkleRoot: &chainhash.Hash{},
-		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{},
-		Nonce:          0,
-	}
-
-	coinbaseTx := &bt.Tx{Version: 1}
-	block, err := model.NewBlock(header, coinbaseTx, allSubtreeHashes, 1, 250, 0, 0)
-	require.NoError(t, err)
+	// Create block with all subtrees, committed to by its header
+	block := boundBlock(t, allSubtrees[0], allSubtreeHashes...)
 
 	blockBytes, err := block.Bytes()
 	require.NoError(t, err)
@@ -2874,7 +2861,7 @@ func TestValidateSubtreeLeafCount(t *testing.T) {
 	t.Run("OverCap", func(t *testing.T) {
 		err := validateSubtreeLeafCount(subtreeHash, 5, 4)
 		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrProcessing))
+		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse))
 		require.Contains(t, err.Error(), subtreeHash.String())
 		require.Contains(t, err.Error(), "exceeds policy max")
 	})
@@ -2884,7 +2871,7 @@ func TestValidateSubtreeLeafCount(t *testing.T) {
 		// (bitcoin-sv/teranode#4692) rather than left to the downstream constructor's incidental error.
 		err := validateSubtreeLeafCount(subtreeHash, 0, 4)
 		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrProcessing))
+		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse))
 		require.Contains(t, err.Error(), subtreeHash.String())
 		require.Contains(t, err.Error(), "subtree has zero nodes")
 	})
@@ -2892,6 +2879,6 @@ func TestValidateSubtreeLeafCount(t *testing.T) {
 	t.Run("LargeOverflow", func(t *testing.T) {
 		err := validateSubtreeLeafCount(subtreeHash, 1<<30, 1<<20)
 		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrProcessing))
+		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse))
 	})
 }

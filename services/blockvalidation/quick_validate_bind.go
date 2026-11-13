@@ -31,6 +31,18 @@ const subtreeKeyMismatchKey = "subtree_key_mismatch"
 // claimed root and therefore cannot detect the blob this route just rejected.
 const subtreeKeyMismatchUnquarantinedKey = "subtree_key_mismatch_unquarantined"
 
+// subtreeWritesNotLandedKey marks a quick-validated block whose queued .subtree writes did
+// not all land, so it was not committed. tryQuickValidation aborts on it: the failing write
+// has already cancelled the catch-up run's shared context, so normal validation cannot
+// succeed and falling through would only bury the cause (bitcoin-sv/teranode#4978).
+const subtreeWritesNotLandedKey = "subtree_writes_not_landed"
+
+// blockCommittedKey marks an error raised when commitBlock's AddBlock stored the block with
+// subtrees_set and mined_set, or may have stored it: AddBlock returned an error and commitBlock
+// could not prove the block absent. tryQuickValidation must neither delete the attempt's .subtree
+// files nor fall through to normal validation on it (bitcoin-sv/teranode#4987).
+const blockCommittedKey = "block_committed"
+
 // markerChainDepth bounds the walk over a wrapped error chain, matching
 // isCacheBypassRetryable.
 const markerChainDepth = 32
@@ -120,13 +132,40 @@ func markUnquarantinedLocalSubtree(err error) error {
 // isUnquarantinedLocalSubtree reports whether err names a key-mismatching blob that
 // could not be confirmed removed from the local store.
 func isUnquarantinedLocalSubtree(err error) bool {
+	return hasErrorMarker(err, subtreeKeyMismatchUnquarantinedKey)
+}
+
+// markSubtreeWritesNotLanded tags err with subtreeWritesNotLandedKey. err must be non-nil.
+func markSubtreeWritesNotLanded(err *errors.Error) error {
+	err.SetData(subtreeWritesNotLandedKey, true)
+	return err
+}
+
+// isSubtreeWritesNotLanded reports whether err carries subtreeWritesNotLandedKey.
+func isSubtreeWritesNotLanded(err error) bool {
+	return hasErrorMarker(err, subtreeWritesNotLandedKey)
+}
+
+// markBlockCommitted tags err with blockCommittedKey. err must be non-nil.
+func markBlockCommitted(err *errors.Error) error {
+	err.SetData(blockCommittedKey, true)
+	return err
+}
+
+// isBlockCommitted reports whether err carries blockCommittedKey.
+func isBlockCommitted(err error) bool {
+	return hasErrorMarker(err, blockCommittedKey)
+}
+
+// hasErrorMarker walks err's wrapped chain, up to markerChainDepth, for a true bool under key.
+func hasErrorMarker(err error, key string) bool {
 	var e *errors.Error
 	if !errors.As(err, &e) {
 		return false
 	}
 
 	for depth := 0; e != nil && depth < markerChainDepth; depth++ {
-		if v, ok := e.GetData(subtreeKeyMismatchUnquarantinedKey).(bool); ok && v {
+		if v, ok := e.GetData(key).(bool); ok && v {
 			return true
 		}
 
@@ -270,7 +309,14 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 			local := i - chunkStart
 			hash := block.Subtrees[i]
 
-			g.Go(func() error {
+			g.Go(func() (err error) {
+				// A panic is recorded as a verdict like any failed read. Without that the
+				// chunk's error would only skip the checks, the roots would be composed with
+				// this slot unset, and the block would be called corrupt: a bug in this node
+				// scored against the peer.
+				defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, verdicts.record,
+					"[bindSubtreeBodyToHeader][%s] subtree %d", block.Hash().String(), i)
+
 				// Anchor only: this pass never reads a promoted blob's node list, so
 				// readSubtreeStructure anchors it and releases it rather than handing it
 				// back. The anchor itself must stay — with both file types present
@@ -496,7 +542,8 @@ func bindDeduperHint(numSubtrees, targetLength int) int {
 // first-error slot, and that is the whole point rather than tidiness. A single slot is
 // order-dependent: whichever class lost the race is recorded nowhere, so a mismatch
 // arriving before an ErrNotFound discards the ErrNotFound. With one slot per class, the
-// join in err() fires whenever both classes occurred, in either order.
+// join in err() fires whenever both classes occurred, in either order. Within the
+// firstOtherErr slot a local panic wins over an ordinary failure; see record.
 type subtreeReadVerdicts struct {
 	mu               sync.Mutex
 	mismatches       []subtreeBlobRef
@@ -531,7 +578,13 @@ func (v *subtreeReadVerdicts) record(err error) {
 		return
 	}
 
-	if v.firstOtherErr == nil {
+	// A local panic (a recovered read goroutine, issue 4993) takes the slot from an
+	// ordinary failure that got there first. Its marker is what tells every caller the
+	// failure is a bug in this node and no peer may be charged, and the marker is found
+	// by type, so it must be in the error err() returns, whichever read finished first.
+	// The ordinary failure it displaces is dropped: a local panic is retried as a local
+	// fault, and the retry reads that subtree again.
+	if v.firstOtherErr == nil || (isLocalPanic(err) && !isLocalPanic(v.firstOtherErr)) {
 		v.firstOtherErr = err
 	}
 }
@@ -650,6 +703,14 @@ func (u *BlockValidation) sweepSubtreeDataMismatches(ctx context.Context, block 
 			}
 
 			g.Go(func() error {
+				// This group's error is discarded, so a panic is passed on as a subtree that
+				// could not be audited, the same as a read that prevents a verdict.
+				defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, nil, func(error) {
+					unauditedMu.Lock()
+					unaudited = true
+					unauditedMu.Unlock()
+				}, "[sweepSubtreeDataMismatches][%s] subtree %d", block.Hash().String(), idx)
+
 				result := u.readSubtree(ctx, block, idx, hash, subtreeReadAnchorOnly, "sweep")
 				if result.err == nil {
 					releaseSubtreeStructure(result.subtree)

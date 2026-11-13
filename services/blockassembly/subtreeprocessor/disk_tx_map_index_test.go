@@ -3,6 +3,7 @@ package subtreeprocessor
 import (
 	"fmt"
 	"io"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -576,8 +577,8 @@ func TestDiskTxMap_PartialWriteReadsAsError(t *testing.T) {
 	require.Equal(t, []chainhash.Hash{batchTestHash(502)}, got.GetParentTxHashes())
 }
 
-// Bytes written keep counting across Clear, and the index memory gauge keeps
-// the capacity a cleared generation left behind.
+// Bytes written keep counting across Clear, and the index memory gauge drops
+// with the entries: Clear releases the index instead of keeping its capacity.
 func TestDiskTxMap_StatsSurviveClear(t *testing.T) {
 	m := newErrTestDiskTxMap(t)
 	defer m.Close()
@@ -598,7 +599,43 @@ func TestDiskTxMap_StatsSurviveClear(t *testing.T) {
 	after := m.Stats()
 	require.Equal(t, int64(0), after.Entries)
 	require.Equal(t, before.DiskBytesWritten, after.DiskBytesWritten, "bytes written must not reset on Clear")
-	require.Equal(t, before.IndexMemBytes, after.IndexMemBytes, "cleared maps keep their capacity")
+	require.Zero(t, after.IndexMemBytes, "a cleared index holds no entries and no retained capacity")
+}
+
+// Clear must give the index memory back. The retired half of the subtree
+// processor's double buffer sits empty for a whole block interval; holding the
+// high-water capacity there doubled the index RAM of a busy node.
+func TestDiskTxMap_ClearReleasesIndexMemory(t *testing.T) {
+	m := newErrTestDiskTxMap(t)
+	defer m.Close()
+
+	const n = 1 << 20
+
+	for _, h := range genBenchHashes(n, 7) {
+		s := &m.shards[shardOf(h)]
+		s.index[h] = packEntry(0, 0)
+	}
+
+	heapInuse := func() uint64 {
+		runtime.GC()
+		runtime.GC()
+
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+
+		return ms.HeapInuse
+	}
+
+	before := heapInuse()
+
+	m.Clear()
+
+	after := heapInuse()
+
+	require.Zero(t, m.Length())
+	// 1M entries take ~40-90 MB of map; require at least 32 MB back.
+	require.Greaterf(t, int64(before)-int64(after), int64(32<<20),
+		"Clear released only %d bytes of heap", int64(before)-int64(after))
 }
 
 // MoveFrom moves a whole set of hashes like one Get + SetIfNotExists per hash:

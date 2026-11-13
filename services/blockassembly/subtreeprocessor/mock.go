@@ -43,6 +43,9 @@ type MockSubtreeProcessor struct {
 	// so tests set it directly. TakeResetRequested reads and clears, like the
 	// real code.
 	ResetRequested atomic.Bool
+
+	// DrainResetRequested backs TakeDrainResetRequested the same way.
+	DrainResetRequested atomic.Bool
 }
 
 func (m *MockSubtreeProcessor) GetCurrentTxMap() TxInpointsMap {
@@ -89,6 +92,11 @@ func (m *MockSubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlo
 // ResetRequested.
 func (m *MockSubtreeProcessor) TakeResetRequested() bool {
 	return m.ResetRequested.Swap(false)
+}
+
+// TakeDrainResetRequested implements Interface.TakeDrainResetRequested.
+func (m *MockSubtreeProcessor) TakeDrainResetRequested() bool {
+	return m.DrainResetRequested.Swap(false)
 }
 
 func (m *MockSubtreeProcessor) GetCurrentBlockHeader() *model.BlockHeader {
@@ -176,6 +184,13 @@ func (m *MockSubtreeProcessor) QueueMaxItems() int64 {
 	return args.Get(0).(int64)
 }
 
+// MaxTransactionsInMemory implements Interface.MaxTransactionsInMemory. It reports no
+// limit without consulting the mock expectations, so tests that stub only the queue
+// values keep working.
+func (m *MockSubtreeProcessor) MaxTransactionsInMemory() int64 {
+	return 0
+}
+
 // QueueHeadAge implements Interface.QueueHeadAge
 func (m *MockSubtreeProcessor) QueueHeadAge() time.Duration {
 	args := m.Called()
@@ -210,16 +225,34 @@ func (m *MockSubtreeProcessor) GetIncompleteSubtreeMiningData(_ context.Context)
 	return args.Get(0).(*PrecomputedMiningData)
 }
 
+// DrainingAfterBlock implements Interface.DrainingAfterBlock. The mock never
+// defers a drain, so it is never draining.
+func (m *MockSubtreeProcessor) DrainingAfterBlock() bool {
+	return false
+}
+
 // AddBatch implements Interface.AddBatch
 func (m *MockSubtreeProcessor) AddBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
 	m.Called(nodes, txInpoints)
 }
 
-// AddBatchIfRoom implements Interface.AddBatchIfRoom
-func (m *MockSubtreeProcessor) AddBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
-	args := m.Called(nodes, txInpoints)
-	return args.Bool(0)
+// AddBatchBounded implements Interface.AddBatchBounded
+func (m *MockSubtreeProcessor) AddBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, inBlock bool) Admission {
+	args := m.Called(nodes, txInpoints, inBlock)
+	return args.Get(0).(Admission)
 }
+
+// HeldCount implements Interface.HeldCount. It reports nothing held without consulting the
+// mock expectations, like MaxTransactionsInMemory.
+func (m *MockSubtreeProcessor) HeldCount() int64 {
+	return 0
+}
+
+// SetUnminedLoading implements Interface.SetUnminedLoading. It records nothing, like HeldCount.
+func (m *MockSubtreeProcessor) SetUnminedLoading(_ bool) {}
+
+// UnminedLoading implements Interface.UnminedLoading. It reports no hold, like HeldCount.
+func (m *MockSubtreeProcessor) UnminedLoading() bool { return false }
 
 func (m *MockSubtreeProcessor) AddDirectly(node *subtree.Node, txInpoints *subtree.TxInpoints, skipNotification bool) error {
 	args := m.Called(node, txInpoints, skipNotification)
@@ -287,6 +320,10 @@ func (m *MockSubtreeProcessor) MoveForwardBlock(block *model.Block) error {
 	return args.Error(0)
 }
 
+func (m *MockSubtreeProcessor) PrepareBlock(block *model.Block) {
+	m.Called(block)
+}
+
 // DrainPendingInvalidations and QueueInvalidation implement the invalidation
 // side of Interface.
 //
@@ -340,6 +377,11 @@ func (m *MockSubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
 	return args.Error(0)
 }
 
+// RequestBlockMaxSizeCheck implements Interface.RequestBlockMaxSizeCheck
+func (m *MockSubtreeProcessor) RequestBlockMaxSizeCheck() {
+	m.Called()
+}
+
 // Stop implements Interface.Stop
 func (m *MockSubtreeProcessor) Stop(ctx context.Context) {
 	m.Called(ctx)
@@ -349,4 +391,8 @@ func (m *MockSubtreeProcessor) Stop(ctx context.Context) {
 func (m *MockSubtreeProcessor) ReconcileCoinbases(ctx context.Context, gapBlocks []*model.Block) error {
 	args := m.Called(ctx, gapBlocks)
 	return args.Error(0)
+}
+
+func (m *MockSubtreeProcessor) MarkRecoveredConflicts(ctx context.Context, hashes []chainhash.Hash) error {
+	return m.Called(ctx, hashes).Error(0)
 }

@@ -79,7 +79,7 @@ func TestScriptVerifierGoBDK(t *testing.T) {
 			params, err := chaincfg.GetChainParams(tt.args.network)
 			require.NoError(t, err)
 
-			bdkValidator := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
+			bdkValidator := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), params, 1)
 			tt.wantErr(t, bdkValidator.ValidateTransaction(tt.args.tx, tt.args.blockHeight, true, tt.args.utxoHeights))
 		})
 	}
@@ -423,7 +423,7 @@ func TestSkipPath_MoneyChecks_MatchBDKPath(t *testing.T) {
 	mainnetParams, err := chaincfg.GetChainParams("mainnet")
 	require.NoError(t, err)
 
-	bdkValidator := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), mainnetParams)
+	bdkValidator := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), mainnetParams, 1)
 
 	const bdkBlockHeight = uint32(110300)
 
@@ -718,6 +718,8 @@ func TestMaxScriptNumLengthPolicy(t *testing.T) {
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 		err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
 		assert.Error(t, err)
+		// The number is within consensus limits, so the consensus re-run passes and
+		// the rejection is policy only.
 		assert.ErrorIs(t, err, errors.ErrTxPolicy)
 	})
 

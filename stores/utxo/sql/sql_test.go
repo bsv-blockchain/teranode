@@ -41,11 +41,16 @@
 package sql
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
+	"io"
+	"net"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,6 +67,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -641,7 +647,7 @@ func TestSetMinedMulti(t *testing.T) {
 		assert.Zero(t, txMeta.UnminedSince)
 	})
 
-	t.Run("unset last block_id sets unmined_since to current block height", func(t *testing.T) {
+	t.Run("unset last block_id keeps the existing unmined_since", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -680,12 +686,14 @@ func TestSetMinedMulti(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Verify: tx should have zero block_ids and unmined_since set to current block height (501 = 500+1)
+		// Verify: tx should have zero block_ids and keep the unmined_since it was created with. A
+		// mined -> unmined transition (no prior unmined_since) is covered by
+		// TestUnsetMinedBackdatesUnminedSince.
 		txMeta, err = utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
 		require.NoError(t, err)
 		assert.Len(t, txMeta.BlockIDs, 0, "tx should have no block_ids after unsetting the only one")
-		assert.Equal(t, uint32(501), txMeta.UnminedSince,
-			"unmined_since should be set to current block height (store height + 1), not the invalidated block's height")
+		assert.Equal(t, uint32(100), txMeta.UnminedSince,
+			"an existing unmined_since must not be overwritten")
 		assert.False(t, txMeta.Locked, "tx should be unlocked after unset mined")
 	})
 
@@ -1023,6 +1031,24 @@ func Test_SmokeTests(t *testing.T) {
 		tests.SpendErrorTypes(t, db)
 	})
 
+	t.Run("set conflicting after create", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SetConflictingAfterCreate(t, db)
+	})
+
+	t.Run("partial spend rollback", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.PartialSpendRollback(t, db)
+	})
+
 	t.Run("get spend not found", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 
@@ -1117,6 +1143,12 @@ func Test_SmokeTests(t *testing.T) {
 		require.NoError(t, err)
 
 		tests.SpendAndCreateCreateOnly(t, db)
+	})
+
+	t.Run("create returns written state", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.CreateReturnsWrittenState(t, db)
 	})
 
 	t.Run("spend and create spend only", func(t *testing.T) {
@@ -1248,10 +1280,12 @@ func TestSetTTL(t *testing.T) {
 	// Now DAH should be set: all outputs spent AND mined AND on longest chain
 	assert.NotNil(t, tombstoneMillis)
 
-	// Verify the exact DAH value: blockHeight + 1 + retention (mirrors aerospike set_mined.go:162)
+	// The tx is mined at height 100 while the cached tip is still 0, so the stamp is floored at
+	// the mined height + retention rather than the lagging tip + 1 + retention.
 	retention := store.settings.GetUtxoStoreBlockHeightRetention()
-	expectedDAH := int64(store.GetBlockHeight() + 1 + retention)
-	require.Equal(t, expectedDAH, *tombstoneMillis, "DAH should be blockHeight + 1 + retention")
+	expectedDAH := int64(100 + retention)
+	require.Greater(t, expectedDAH, int64(store.GetBlockHeight()+1+retention), "setup: the mined height must be above the cached tip")
+	require.Equal(t, expectedDAH, *tombstoneMillis, "DAH should be mined height + retention when the cached tip lags")
 
 	// Verify DAH bump: advance block height, re-run setDAH — DAH should increase
 	oldDAH := *tombstoneMillis
@@ -3763,4 +3797,200 @@ func TestGetBlockPlacementFieldsIndependently(t *testing.T) {
 		require.Equal(t, []uint32{99}, data.BlockHeights)
 		require.Equal(t, []int{3}, data.SubtreeIdxs)
 	})
+}
+
+// TestPreviousOutputsDecorate_MissingParentIsTxNotFound pins the class a missing
+// parent output is reported as. Aerospike reports it as TX_NOT_FOUND, and the
+// JSON-RPC boundary turns that into sendrawtransaction's "Missing inputs"; this
+// store reported PROCESSING, which the boundary can only answer as "internal
+// error". TX_NOT_FOUND also keeps legacy sync's per-transaction fallback
+// (services/legacy/netsync, extendPerTxFallback) taking the same branch, since it
+// keys on ErrProcessing or ErrTxNotFound.
+func TestPreviousOutputsDecorate_MissingParentIsTxNotFound(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, tx := setup(ctx, t)
+
+	// setup's transaction arrives extended, and the decorator only fills what is
+	// missing. Clear the supplied previous outputs, as sendrawtransaction does, so
+	// the store has to resolve a parent that was never created.
+	for _, input := range tx.Inputs {
+		input.PreviousTxScript = nil
+		input.PreviousTxSatoshis = 0
+	}
+
+	err := store.PreviousOutputsDecorate(ctx, tx)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, errors.ErrTxNotFound)
+}
+
+// sentBeforeWriteErr is an error pgconn.SafeToRetry accepts: one returned
+// before any bytes of the write reached the server.
+type sentBeforeWriteErr struct{}
+
+func (sentBeforeWriteErr) Error() string     { return "failed before sending" }
+func (sentBeforeWriteErr) SafeToRetry() bool { return true }
+
+// wrappedErr wraps a driver error the way pgx wraps the errors it returns.
+type wrappedErr struct{ cause error }
+
+func (w wrappedErr) Error() string { return "batch: " + w.cause.Error() }
+func (w wrappedErr) Unwrap() error { return w.cause }
+
+// TestPgCreateError checks which Postgres create failures leave the create's
+// outcome unknown. A lost connection or reply can come after the batch's
+// implicit transaction committed, and utxo.SequentialSpendAndCreate must then
+// keep the spends rather than unspend the inputs of a stored transaction. An
+// error the server reported rolled the transaction back, and one returned
+// before anything was sent wrote nothing, so for those the unspend stays right.
+func TestPgCreateError(t *testing.T) {
+	cases := []struct {
+		name        string
+		cause       error
+		wantUnknown bool
+	}{
+		{name: "server reported error", cause: &pgconn.PgError{Code: "23505"}},
+		{name: "server error wrapped", cause: wrappedErr{&pgconn.PgError{Code: "40001"}}},
+		{name: "failed before sending", cause: sentBeforeWriteErr{}},
+		{name: "connection lost after sending", cause: errors.NewStorageError("unexpected EOF"), wantUnknown: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.wantUnknown, pgCreateMayHaveCommitted(tc.cause))
+
+			err := pgCreateError("batch close failed, results may not be visible", tc.cause)
+			require.Equal(t, tc.wantUnknown, utxo.IsCreateOutcomeUnknown(err))
+			require.True(t, errors.Is(err, errors.ErrStorageError), "the storage error must survive the marking: %v", err)
+		})
+	}
+}
+
+// TestCreateCTE_ConnectionLostAfterRowLeavesOutcomeUnknown checks that the
+// single-statement Postgres create reads its reply to the end before it
+// reports success. The statement sends the new transaction's id and then
+// commits, so a connection lost right after the row may follow the commit or
+// precede it. A proxy between the store and Postgres cuts the connection just
+// after it forwards the row, and Create must return an outcome-unknown error,
+// so utxo.SequentialSpendAndCreate keeps the spends, rather than success for a
+// write nothing has confirmed.
+func TestCreateCTE_ConnectionLostAfterRowLeavesOutcomeUnknown(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	run := func(t *testing.T, batched bool) {
+		ctx := context.Background()
+		dbURL := startPostgresContainer(t, ctx)
+		proxy := newCutAfterRowProxy(t, dbURL.Host)
+		dbURL.Host = proxy.addr
+
+		store := newPostgresTestStore(t, ctx, dbURL)
+		store.settings.UtxoStore.BatchSQLOperations = true
+		require.Equal(t, "postgres", store.engine, "precondition: store is postgres-backed")
+		require.NotNil(t, store.createBatcher, "precondition: the store starts with a create batcher")
+
+		if !batched {
+			store.createBatcher = nil
+		}
+
+		tx := newExtendedTxWithOutputs(t, 2)
+
+		proxy.armed.Store(true)
+		_, err := store.Create(ctx, tx, 1)
+
+		require.False(t, proxy.armed.Load(), "precondition: the proxy cut the connection after a row")
+		require.Error(t, err, "a create whose reply was cut after the row must not report success")
+		require.True(t, utxo.IsCreateOutcomeUnknown(err), "the create may have committed: %v", err)
+		require.True(t, errors.Is(err, errors.ErrStorageError), "the storage error must survive the marking: %v", err)
+	}
+
+	// sendCreateBatch, one statement per create in a pgx batch.
+	t.Run("batched", func(t *testing.T) { run(t, true) })
+
+	// createCTE, the same statement sent on its own when there is no batcher.
+	t.Run("single statement", func(t *testing.T) { run(t, false) })
+}
+
+// cutAfterRowProxy forwards Postgres connections to an upstream server. Once
+// armed, it closes the connection that carries the next row of a single
+// column named id, the create's reply, right after forwarding it, and
+// disarms. Rows of other queries, such as the store's background index
+// checks, pass through.
+type cutAfterRowProxy struct {
+	addr  string
+	armed atomic.Bool
+}
+
+func newCutAfterRowProxy(t *testing.T, upstream string) *cutAfterRowProxy {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	proxy := &cutAfterRowProxy{addr: listener.Addr().String()}
+
+	go func() {
+		for {
+			client, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+
+			server, dialErr := net.Dial("tcp", upstream)
+			if dialErr != nil {
+				_ = client.Close()
+				continue
+			}
+
+			go func() {
+				_, _ = io.Copy(server, client)
+				_ = server.Close()
+			}()
+
+			go proxy.forwardFromServer(server, client)
+		}
+	}()
+
+	return proxy
+}
+
+// forwardFromServer copies server messages to client one at a time. With
+// sslmode=disable every message the server sends is a type byte and a
+// four-byte length that counts itself.
+func (p *cutAfterRowProxy) forwardFromServer(server, client net.Conn) {
+	defer func() {
+		_ = client.Close()
+		_ = server.Close()
+	}()
+
+	header := make([]byte, 5)
+	idColumn := false // the last row description on this connection is one column named id
+
+	for {
+		if _, err := io.ReadFull(server, header); err != nil {
+			return
+		}
+
+		body := make([]byte, binary.BigEndian.Uint32(header[1:])-4)
+		if _, err := io.ReadFull(server, body); err != nil {
+			return
+		}
+
+		if _, err := client.Write(append(header, body...)); err != nil {
+			return
+		}
+
+		if header[0] == 'T' {
+			// A two-byte column count, then each column's name ending in a zero byte.
+			idColumn = bytes.HasPrefix(body, []byte("\x00\x01id\x00"))
+		}
+
+		if header[0] == 'D' && idColumn && p.armed.CompareAndSwap(true, false) {
+			return
+		}
+	}
 }

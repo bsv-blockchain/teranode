@@ -71,9 +71,9 @@ func sumNamespaceStat(t *testing.T, db *Store, stat string) int64 {
 // NATIVE batch write (zero batch_sub_udf), correctly mutates the parent's
 // deletedChildren map, and answers with a response the pruner can actually read.
 //
-// It builds the record via exactly the call GetPrunerService's
-// BuildAddDeletedChildrenRecord uses, so it exercises the shared native path the
-// pruner relies on. Skips cleanly on a stock Aerospike image (native-op probe
+// It builds the record via prunerAddDeletedChildrenRecord, the function
+// GetPrunerService installs as BuildAddDeletedChildrenRecord, so the server sees
+// the hand-encoded payload the pruner actually sends. Skips cleanly on a stock Aerospike image (native-op probe
 // fails); point at a Teraspike build with AEROSPIKE_CONTAINER_IMAGE to run it.
 func TestNativeOp_AddDeletedChildren_Integration(t *testing.T) {
 	InitPrometheusMetrics()
@@ -112,21 +112,13 @@ func TestNativeOp_AddDeletedChildren_Integration(t *testing.T) {
 	var childHash chainhash.Hash
 	childHash[0] = 0xCD
 
-	childList := []interface{}{childHash.String()}
-
-	// buildRecord mirrors GetPrunerService.BuildAddDeletedChildrenRecord exactly,
-	// so the test exercises the record the pruner actually emits rather than a
-	// lookalike — including the shared UPDATE_ONLY policy initNativeTeranodeOps
-	// installs, which is what stops a missing parent from being created.
+	// buildRecord calls the pruner's own builder, so the test exercises the
+	// record the pruner actually emits rather than a lookalike: the hand-encoded
+	// payload from encodeAddDeletedChildrenPayload, and the shared UPDATE_ONLY
+	// policy initNativeTeranodeOps installs, which is what stops a missing parent
+	// from being created.
 	buildRecord := func(key *aerospike.Key) aerospike.BatchRecordIfc {
-		return db.teranodeBatchRecord(
-			aerospike.NewBatchUDFPolicy(),
-			LuaPackage,
-			key,
-			subOpAddDeletedChildren,
-			"addDeletedChildren",
-			childList,
-		)
+		return db.prunerAddDeletedChildrenRecord(aerospike.NewBatchUDFPolicy(), key, []*chainhash.Hash{&childHash})
 	}
 
 	t.Run("existing parent is mutated natively", func(t *testing.T) {

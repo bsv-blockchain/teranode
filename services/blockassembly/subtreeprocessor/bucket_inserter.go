@@ -15,7 +15,7 @@ type bucketBatch struct {
 	hashes []chainhash.Hash
 }
 
-// bucketInserter inserts pre-bucketed hash batches into a SplitSwissMap with
+// bucketInserter inserts pre-bucketed hash batches into a SortedHashSet with
 // exactly one writer per bucket. Worker w exclusively owns the bucket set
 // {b : b % numWorkers == w} and is fed by its own channel, so the per-bucket
 // mutex inside PutMultiBucket is taken but never contended — unlike the
@@ -27,7 +27,7 @@ type bucketBatch struct {
 // before closeAndWait(), which closes the channels, joins the workers and
 // returns the first insert error.
 type bucketInserter struct {
-	m *SplitSwissMap
+	m *SortedHashSet
 	// Each channel carries one message per submit() call holding ALL of that
 	// submit's batches for the worker — one send per (submitter, worker)
 	// instead of one per (submitter, bucket). The per-bucket variant produced
@@ -44,14 +44,14 @@ type bucketInserter struct {
 }
 
 // newBucketInserter starts numWorkers insert workers for m. numWorkers is
-// clamped to [1, m.Buckets()].
-func newBucketInserter(m *SplitSwissMap, numWorkers int) *bucketInserter {
+// clamped to [1, m.Partitions()].
+func newBucketInserter(m *SortedHashSet, numWorkers int) *bucketInserter {
 	if numWorkers < 1 {
 		numWorkers = 1
 	}
 
-	if numWorkers > int(m.Buckets()) {
-		numWorkers = int(m.Buckets())
+	if numWorkers > m.Partitions() {
+		numWorkers = m.Partitions()
 	}
 
 	ins := &bucketInserter{
@@ -72,7 +72,7 @@ func newBucketInserter(m *SplitSwissMap, numWorkers int) *bucketInserter {
 
 			for batches := range ch {
 				for _, batch := range batches {
-					if err := ins.m.PutMultiBucket(batch.bucket, batch.hashes); err != nil {
+					if err := ins.m.PutMultiBucket(int(batch.bucket), batch.hashes); err != nil {
 						ins.recordErr(err)
 						// Keep draining so submitters never block on a full
 						// channel after an error.

@@ -110,7 +110,7 @@ func TestProcessUTXO_CoinbaseFallbackWhenPartiallySpent(t *testing.T) {
 // seeded coinbases were stored without their input.
 func TestLoadCoinbaseTxs_RealSeedFile(t *testing.T) {
 	headersFile := filepath.Join("..", "..", "seeds", "tstn",
-		"000000007816d70ab70ef0c70cfedec376acbe9a633927bdd3ad283224bf1a88.utxo-headers")
+		"000000000c130c0bdbb5177ff69b7cc160a74401ec30f874ea7321a708de387a.utxo-headers")
 
 	if _, err := os.Stat(headersFile); os.IsNotExist(err) {
 		t.Skipf("seed file %s not present", headersFile)
@@ -127,10 +127,9 @@ func TestLoadCoinbaseTxs_RealSeedFile(t *testing.T) {
 			"recovered coinbase does not hash to its key")
 	}
 
-	// The block-300 coinbase that rendered as a blank screen must be present with
-	// its input intact.
+	// The block-300 coinbase must be present with its input intact.
 	txid, err := chainhash.NewHashFromStr(
-		"829a24ee083b972fa7288d219d4231d2bc20ad1b701d6d1583f3724386da3e2a")
+		"a9300f7dfc84dd1a146c9afaf2f2ddb94d816c2304fdc860fe66096ab0611465")
 	require.NoError(t, err)
 
 	cb, ok := coinbaseTxs[*txid]
