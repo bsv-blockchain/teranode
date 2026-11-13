@@ -73,9 +73,6 @@ var (
 	prometheusForkCreated           *prometheus.CounterVec
 	prometheusForkLifetime          prometheus.Histogram
 	prometheusForkDepth             prometheus.Histogram
-	prometheusForkResolved          *prometheus.CounterVec
-	prometheusForkResolutionDepth   prometheus.Histogram
-	prometheusOrphanedForks         prometheus.Counter
 	prometheusProcessingBlocksStuck prometheus.Gauge
 	prometheusForkAverageDepth      prometheus.Gauge
 	prometheusForkLongestDepth      prometheus.Gauge
@@ -498,35 +495,6 @@ func _initPrometheusMetrics() {
 			Name:      "fork_depth_blocks",
 			Help:      "Depth of forks in blocks",
 			Buckets:   prometheus.LinearBuckets(1, 1, 20),
-		},
-	)
-
-	prometheusForkResolved = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "fork_resolved_total",
-			Help:      "Total number of forks resolved",
-		},
-		[]string{"result"},
-	)
-
-	prometheusForkResolutionDepth = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "fork_resolution_depth_blocks",
-			Help:      "Depth of forks when resolved",
-			Buckets:   prometheus.LinearBuckets(1, 1, 20),
-		},
-	)
-
-	prometheusOrphanedForks = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "fork_orphaned_total",
-			Help:      "Total number of forks marked as orphaned",
 		},
 	)
 

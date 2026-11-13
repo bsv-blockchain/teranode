@@ -28,7 +28,7 @@ type spendRetryHook struct {
 }
 
 func (h *spendRetryHook) Warnf(format string, args ...interface{}) {
-	if strings.Contains(format, "[Spend] deadlock detected") {
+	if strings.Contains(format, "[Spend] deadlock or lifted freeze detected") {
 		h.once.Do(h.onRetry)
 	}
 

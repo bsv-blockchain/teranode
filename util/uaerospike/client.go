@@ -663,8 +663,27 @@ func (c *Client) acquirePermit(policy any) aerospike.Error {
 	case c.connSemaphore <- struct{}{}:
 		return nil
 	case <-timer.C:
-		return aerospike.ErrTimeout
+		return newPermitTimeoutError()
 	}
+}
+
+// PermitTimeoutError is the error a wrapper method returns when it waited too
+// long for a connection permit. It comes back before the embedded client is
+// called, so nothing was sent. It carries the TIMEOUT result code, as
+// aerospike.ErrTimeout does, so code that reads the result code treats it the
+// same, and its own type lets a caller tell that nothing was sent: a create
+// that fails with it wrote nothing.
+type PermitTimeoutError struct {
+	*aerospike.AerospikeError
+}
+
+func newPermitTimeoutError() *PermitTimeoutError {
+	return &PermitTimeoutError{AerospikeError: &aerospike.AerospikeError{ResultCode: types.TIMEOUT}}
+}
+
+// Error returns the message, which says the command was never sent.
+func (e *PermitTimeoutError) Error() string {
+	return "ResultCode: TIMEOUT, timed out waiting for a connection permit; the command was not sent"
 }
 
 // releasePermit releases a permit back to the connection semaphore. No-op
