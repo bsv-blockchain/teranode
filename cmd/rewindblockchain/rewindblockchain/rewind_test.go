@@ -1866,6 +1866,41 @@ func TestRewind_ClearsBlockIDReservationsBeforeAFailure(t *testing.T) {
 	require.Zero(t, countBlockIDReservations(t, ctx, bcStore), "phase 2 must clear the reservations before it deletes any block")
 }
 
+// TestClearBlockIDReservations_StoreAndForceNotIdle covers the two edges of the
+// clear: a store that keeps no reservations is refused rather than skipped, and
+// with --force-not-idle the operator is warned that a running node's in-memory
+// reservations are out of the tool's reach.
+func TestClearBlockIDReservations_StoreAndForceNotIdle(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a store that cannot clear is refused", func(t *testing.T) {
+		bcStore, _, _, _ := newTestStores(t, ctx)
+		wrapped := &errOnGetStateStore{Store: bcStore}
+
+		e := &env{logger: logger(), blockchainStore: wrapped}
+
+		err := e.clearBlockIDReservations(ctx)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cannot clear block id reservations")
+	})
+
+	t.Run("force-not-idle warns about the running node's memory", func(t *testing.T) {
+		bcStore, _, _, _ := newTestStores(t, ctx)
+
+		pending := chainhash.HashH([]byte("reserved while the node runs"))
+		_, err := bcStore.AssignBlockID(ctx, &pending)
+		require.NoError(t, err)
+
+		log := &capturingLogger{}
+		e := &env{logger: log, blockchainStore: bcStore, opts: Options{ForceNotIdle: true}}
+
+		require.NoError(t, e.clearBlockIDReservations(ctx))
+		require.Zero(t, countBlockIDReservations(t, ctx, bcStore))
+		require.Contains(t, log.warnText(), "--force-not-idle")
+		require.Contains(t, log.infoText(), "cleared 1 block id reservations")
+	})
+}
+
 // storeChainWithPendingChild stores four blocks on genesis and reserves an id for
 // a child of the tip that is never stored. Only the tip may name a subtree, and
 // that subtree has no blob unless the caller writes one; the others name none, so

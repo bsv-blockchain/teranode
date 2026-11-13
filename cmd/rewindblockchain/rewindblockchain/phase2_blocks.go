@@ -28,6 +28,13 @@ func (e *env) phase2Blocks(ctx context.Context, pf *preflightResult) error {
 	return nil
 }
 
+// blockIDReservationClearer is the store method clearBlockIDReservations needs.
+// It is asserted rather than added to blockchain.Store, because only the SQL store
+// keeps reservations.
+type blockIDReservationClearer interface {
+	ClearBlockIDReservations(ctx context.Context) (int64, error)
+}
+
 // clearBlockIDReservations deletes every durable block-id reservation before the
 // first block is deleted. A deleted block that is stored again gets a new, higher
 // id, while a child reserved before the rewind would keep its older, lower id and
@@ -39,19 +46,21 @@ func (e *env) phase2Blocks(ctx context.Context, pf *preflightResult) error {
 // a fresh id when it is validated again, which leaves the old id with no blocks
 // row: the same outcome as a reservation swept by age.
 func (e *env) clearBlockIDReservations(ctx context.Context) error {
-	db := e.blockchainStore.GetDB()
-	if db == nil {
-		return errors.NewStorageError("blockchain store has no SQL database to clear block id reservations from")
+	clearer, ok := e.blockchainStore.(blockIDReservationClearer)
+	if !ok {
+		return errors.NewStorageError("blockchain store %T cannot clear block id reservations", e.blockchainStore)
 	}
 
-	res, err := db.ExecContext(ctx, `DELETE FROM block_id_reservations`)
+	if e.opts.ForceNotIdle {
+		e.logger.Warnf("--force-not-idle was given: a running node keeps block id reservations in memory too, and this tool cannot clear those; restart the node after the rewind so it does not hand out an id reserved before it")
+	}
+
+	cleared, err := clearer.ClearBlockIDReservations(ctx)
 	if err != nil {
-		return errors.NewStorageError("failed to clear block id reservations", err)
+		return err
 	}
 
-	if cleared, rowsErr := res.RowsAffected(); rowsErr == nil {
-		e.logger.Infof("cleared %d block id reservations before deleting blocks", cleared)
-	}
+	e.logger.Infof("cleared %d block id reservations before deleting blocks", cleared)
 
 	return nil
 }

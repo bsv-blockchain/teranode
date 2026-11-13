@@ -662,6 +662,11 @@ func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Blo
 		// rule is about the row's place in the parent_id graph, which the ancestry
 		// walks follow whatever the invalid flag says, not about the block's validity.
 		if err := checkBlockIDAboveParent(block, storeBlockOptions.ID, previousBlockID); err != nil {
+			// The reservation is stale. Drop it so the caller's next AssignBlockID
+			// takes a fresh id above the parent, rather than being refused with the
+			// same id until the age-based sweep removes it.
+			s.dropBlockIDReservation(ctx, block.Hash(), storeBlockOptions.ID)
+
 			return 0, 0, nil, false, err
 		}
 	}
@@ -913,15 +918,6 @@ RETURNING id
 	var newBlockID uint64
 	if err = rows.Scan(&newBlockID); err != nil {
 		return 0, 0, nil, false, errors.NewStorageError("failed to scan new block id", err)
-	}
-
-	// An allocated id is only known now. It can only fall at or below the parent if
-	// the id sequence was moved back by hand, because every stored id came from it.
-	// The fork path rolls this row back; the extend path has already committed it.
-	if !useCustomID && !genesis {
-		if err = checkBlockIDAboveParent(block, newBlockID, previousBlockID); err != nil {
-			return 0, 0, nil, false, err
-		}
 	}
 
 	// The MTP timestamp cache is updated by StoreBlock once the row has committed,

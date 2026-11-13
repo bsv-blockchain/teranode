@@ -289,3 +289,54 @@ func hashString(b []byte) string {
 
 	return h.String()
 }
+
+// dropBlockIDReservation removes this process's in-memory reservation and the
+// durable one for blockHash, but only while either still names id. StoreBlock
+// calls it when it refuses a reserved id that is not above the parent's, so the
+// caller's next AssignBlockID takes a fresh id from the sequence, which is above
+// the parent. Without it every retry gets the same refused id until the age-based
+// sweep removes the row.
+//
+// Transactions already stamped with the old id keep it, and that id ends with no
+// blocks row: the same outcome as a reservation the sweep removes. Another
+// process's in-memory copy cannot be reached from here and lapses after
+// blockIDReservationTTL. Best-effort: a failure is logged, and the sweep still
+// removes the durable row later.
+func (s *SQL) dropBlockIDReservation(ctx context.Context, blockHash *chainhash.Hash, id uint64) {
+	s.blockIDReservationMu.Lock()
+	defer s.blockIDReservationMu.Unlock()
+
+	if item := s.blockIDReservations.Get(*blockHash); item != nil && item.Value() == id {
+		s.blockIDReservations.Delete(*blockHash)
+	}
+
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM block_id_reservations WHERE hash = $1 AND block_id = $2`, blockHash[:], id); err != nil {
+		s.logger.Warnf("[StoreBlock][%s] failed to drop stale block-id reservation %d, the sweep will remove it: %v", blockHash.String(), id, err)
+	}
+}
+
+// ClearBlockIDReservations deletes every durable block-id reservation and every
+// reservation in this process's memory, and returns how many durable rows it
+// removed. The offline rewind tool calls it before deleting blocks: a deleted
+// block stored again gets a new, higher id, so a child reserved before the
+// rewind would keep a lower id and be refused by StoreBlock. A running node's
+// in-memory reservations are in another process and cannot be cleared from
+// here; they lapse after blockIDReservationTTL.
+func (s *SQL) ClearBlockIDReservations(ctx context.Context) (int64, error) {
+	s.blockIDReservationMu.Lock()
+	defer s.blockIDReservationMu.Unlock()
+
+	res, err := s.db.ExecContext(ctx, `DELETE FROM block_id_reservations`)
+	if err != nil {
+		return 0, errors.NewStorageError("failed to clear block id reservations", err)
+	}
+
+	s.blockIDReservations.DeleteAll()
+
+	cleared, err := res.RowsAffected()
+	if err != nil {
+		return 0, errors.NewStorageError("failed to count cleared block id reservations", err)
+	}
+
+	return cleared, nil
+}
