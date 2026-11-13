@@ -430,9 +430,11 @@ func TestMoveBackSubtreeMissingChangesNothing(t *testing.T) {
 
 			err := f.run(t, viaReset)
 			require.Error(t, err)
-			require.Contains(t, err.Error(), "error getting conflicting nodes of moveBack blocks")
 
+			// End state first: the error text alone cannot tell a failure before the
+			// move-back from one after it.
 			f.requireNothingChanged(t)
+			require.Contains(t, err.Error(), "error getting conflicting nodes of moveBack blocks")
 		})
 	}
 }
