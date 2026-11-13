@@ -3281,19 +3281,36 @@ func stripChildren(updates map[string]*parentUpdateInfo, blocked map[chainhash.H
 	}
 }
 
+// withdrawMarkerAttempts bounds how many times withdrawMarkers sends a
+// withdrawal that failed, and withdrawMarkerBackoff is the pause before each
+// resend. A withdrawal fails on a transient fault (a timeout, a busy record) far
+// more often than on a lasting one, and a resend in the same call is the only
+// retry some children get: see withdrawMarkers.
+const (
+	withdrawMarkerAttempts = 3
+	withdrawMarkerBackoff  = 100 * time.Millisecond
+)
+
 // withdrawMarkers removes the markers of the given children from every queued
 // parent that lists them. It is the compensation for a marker set that landed
-// on some parents of a child and not on others: that child is held back, so it
-// stays present, and a marker naming a present transaction would refuse its
-// own re-spend.
+// on some parents of a child and not on others, or for a child whose delete was
+// refused: that child stays present, and a marker naming a present transaction
+// would refuse its own re-spend.
 //
 // It uses a plain map remove rather than the Lua module, so it works the same
 // on every marking path, and UPDATE_ONLY so it never creates a record. It does
 // not take the cycle's context: it runs precisely when that context may have
 // failed the write, and a cancelled compensation leaves the poison in place. A
-// parent that is gone has lost its markers with it. Any other failure is
-// counted and logged, never returned: the child is already held back, and the
-// next cycle reconsiders it and withdraws again.
+// parent that is gone has lost its markers with it.
+//
+// A write that fails is sent again, up to withdrawMarkerAttempts in all, and
+// only then counted and logged; it is never returned, since the child is
+// already kept. The resend matters because a later cycle does not always come
+// back: a child whose delete was refused because a reorg took it off the chain
+// has lost its deletion height, so no scan finds it again, and a marker left
+// behind would refuse that child's idempotent re-spend once it is mined again.
+// A withdrawal that still fails after every attempt leaves that marker in
+// place until the child is pruned for real.
 func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children map[chainhash.Hash]struct{}) {
 	if len(children) == 0 {
 		return
@@ -3305,8 +3322,12 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 	// so it cannot revive a parent that is expiring in TTL mode.
 	policy.Expiration = aerospike.TTLDontUpdate
 
-	records := make([]aerospike.BatchRecordIfc, 0, len(updates))
-	ownWriteFailed := make([]bool, 0, len(updates))
+	type withdrawal struct {
+		key  *aerospike.Key
+		keys []interface{}
+	}
+
+	pending := make([]withdrawal, 0, len(updates))
 
 	for _, info := range updates {
 		keys := make([]interface{}, 0, len(info.childHashes))
@@ -3321,29 +3342,82 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 			continue
 		}
 
-		op := aerospike.MapRemoveByKeyListOp(s.fieldDeletedChildren, keys, aerospike.MapReturnType.NONE)
-		records = append(records, aerospike.NewBatchWrite(policy, info.key, op))
-		ownWriteFailed = append(ownWriteFailed, info.markerFailed)
-	}
-
-	if len(records) == 0 {
-		return
-	}
-
-	if err := s.batchOperate(records); err != nil && isBatchTransportError(err) {
-		if prometheusUtxoMarkerWithdrawFailures != nil {
-			prometheusUtxoMarkerWithdrawFailures.Add(float64(len(records)))
+		// A parent whose own marker write failed usually cannot take this write
+		// either (a bin that is not a map, a record too big), and its marker did
+		// not land there, so it is sent once and a refusal is not a failure.
+		if info.markerFailed {
+			_, _, _ = s.sendWithdrawals(policy, []*aerospike.Key{info.key}, [][]interface{}{keys})
+			continue
 		}
 
-		s.logger.Errorf("Withdrawing replay markers of %d held-back children from %d parents failed at the transport; the next cycle withdraws again: %v",
-			len(children), len(records), err)
-
-		return
+		pending = append(pending, withdrawal{key: info.key, keys: keys})
 	}
 
-	failures := 0
+	var (
+		lastErr error
+		lasting int
+	)
 
-	var firstErr error
+	for attempt := 1; len(pending) > 0; attempt++ {
+		keys := make([]*aerospike.Key, len(pending))
+		childKeys := make([][]interface{}, len(pending))
+
+		for i, w := range pending {
+			keys[i], childKeys[i] = w.key, w.keys
+		}
+
+		retry, refused, err := s.sendWithdrawals(policy, keys, childKeys)
+		lasting += refused
+
+		next := pending[:0]
+		for _, i := range retry {
+			next = append(next, pending[i])
+		}
+
+		pending = next
+
+		if err != nil {
+			lastErr = err
+		}
+
+		if len(pending) == 0 || attempt == withdrawMarkerAttempts {
+			break
+		}
+
+		time.Sleep(withdrawMarkerBackoff * time.Duration(attempt))
+	}
+
+	if failed := len(pending) + lasting; failed > 0 {
+		if prometheusUtxoMarkerWithdrawFailures != nil {
+			prometheusUtxoMarkerWithdrawFailures.Add(float64(failed))
+		}
+
+		s.logger.Errorf("Withdrawing replay markers of kept children failed on %d parents (%d after %d attempts); each marker stays until its child is pruned (last: %v)",
+			failed, len(pending), withdrawMarkerAttempts, lastErr)
+	}
+}
+
+// sendWithdrawals sends one batch of marker removals. It returns the indexes of
+// the writes that failed on a transient fault and may land if sent again, the
+// number that were refused for good, and an error that describes a failure. A
+// transport failure is transient for every write. A parent that is gone is not
+// a failure.
+func (s *Service) sendWithdrawals(policy *aerospike.BatchWritePolicy, keys []*aerospike.Key, childKeys [][]interface{}) (retry []int, refused int, err error) {
+	records := make([]aerospike.BatchRecordIfc, len(keys))
+
+	for i, key := range keys {
+		op := aerospike.MapRemoveByKeyListOp(s.fieldDeletedChildren, childKeys[i], aerospike.MapReturnType.NONE)
+		records[i] = aerospike.NewBatchWrite(policy, key, op)
+	}
+
+	if batchErr := s.batchOperate(records); batchErr != nil && isBatchTransportError(batchErr) {
+		retry = make([]int, len(records))
+		for i := range retry {
+			retry[i] = i
+		}
+
+		return retry, 0, batchErr
+	}
 
 	for i, rec := range records {
 		batchRec := rec.BatchRec()
@@ -3355,27 +3429,40 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 			continue
 		}
 
-		// A parent whose own marker write failed usually cannot take this write
-		// either (a bin that is not a map, a record too big), and its marker did
-		// not land there, so there is nothing to withdraw.
-		if ownWriteFailed[i] {
+		if err == nil {
+			err = batchRec.Err
+		}
+
+		if isTransientWriteFailure(batchRec) {
+			retry = append(retry, i)
 			continue
 		}
 
-		failures++
-
-		if firstErr == nil {
-			firstErr = batchRec.Err
-		}
+		refused++
 	}
 
-	if failures > 0 {
-		if prometheusUtxoMarkerWithdrawFailures != nil {
-			prometheusUtxoMarkerWithdrawFailures.Add(float64(failures))
-		}
+	return retry, refused, err
+}
 
-		s.logger.Errorf("Withdrawing replay markers of held-back children failed on %d of %d parents; the next cycle withdraws again (first: %v)",
-			failures, len(records), firstErr)
+// isTransientWriteFailure reports whether a failed batch write may land if it
+// is sent again: a timeout, a busy key or device, a lost connection, or a write
+// whose outcome is in doubt. A refusal such as a wrong bin type or an unknown
+// namespace answers the same way every time.
+func isTransientWriteFailure(batchRec *aerospike.BatchRecord) bool {
+	if batchRec.InDoubt {
+		return true
+	}
+
+	if batchRec.Err != nil {
+		return batchRec.Err.Matches(types.TIMEOUT, types.KEY_BUSY, types.DEVICE_OVERLOAD,
+			types.NETWORK_ERROR, types.NO_RESPONSE, types.SERVER_NOT_AVAILABLE)
+	}
+
+	switch batchRec.ResultCode {
+	case types.TIMEOUT, types.KEY_BUSY, types.DEVICE_OVERLOAD:
+		return true
+	default:
+		return false
 	}
 }
 

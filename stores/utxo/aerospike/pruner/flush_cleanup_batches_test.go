@@ -974,3 +974,70 @@ func TestFlushChunk_CarriedDeleteSparesAChildThatLeftTheChain(t *testing.T) {
 		})
 	}
 }
+
+// TestWithdrawMarkers_ResendsAFailedWithdrawal: a child kept after a refused
+// delete may never be scanned again (a reorg cleared its deletion height), so a
+// withdrawal that fails once is sent again in the same call. A marker left
+// behind would refuse the child's idempotent re-spend once it is mined again.
+func TestWithdrawMarkers_ResendsAFailedWithdrawal(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	parent := chainhash.HashH([]byte{0xF2, 1})
+	child := chainhash.HashH([]byte{0xF2, 2})
+	parentKey := putRecord(t, client, &parent, spentBy(&child))
+
+	updates := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
+
+	_, err := s.markParents(context.Background(), updates)
+	require.NoError(t, err)
+	require.True(t, hasMarker(t, client, parentKey, &child), "fixture: the marker landed")
+
+	calls := 0
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		calls++
+
+		if calls == 1 {
+			for _, rec := range records {
+				br := rec.BatchRec()
+				br.ResultCode = types.TIMEOUT
+				br.Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+			}
+
+			return nil
+		}
+
+		return client.BatchOperate(policy, records)
+	}
+
+	s.withdrawMarkers(updates, map[chainhash.Hash]struct{}{child: {}})
+	require.Equal(t, 2, calls, "the failed withdrawal is sent once more")
+	require.False(t, hasMarker(t, client, parentKey, &child), "the resend removed the marker")
+}
+
+// TestWithdrawMarkers_StopsAfterTheLastAttempt: a withdrawal that keeps failing
+// is sent withdrawMarkerAttempts times and then left, counted and logged.
+func TestWithdrawMarkers_StopsAfterTheLastAttempt(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	parent := chainhash.HashH([]byte{0xF3, 1})
+	child := chainhash.HashH([]byte{0xF3, 2})
+	parentKey := putRecord(t, client, &parent, spentBy(&child))
+
+	updates := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
+
+	_, err := s.markParents(context.Background(), updates)
+	require.NoError(t, err)
+
+	calls := 0
+	s.batchOperateFn = func(_ *aerospike.BatchPolicy, _ []aerospike.BatchRecordIfc) error {
+		calls++
+
+		return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+	}
+
+	s.withdrawMarkers(updates, map[chainhash.Hash]struct{}{child: {}})
+	require.Equal(t, withdrawMarkerAttempts, calls)
+	require.True(t, hasMarker(t, client, parentKey, &child), "a withdrawal that never lands leaves the marker")
+}
