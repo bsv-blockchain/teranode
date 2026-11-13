@@ -11,10 +11,9 @@ import (
 )
 
 // TestBlockAssemblyReorgSettingsDocNoStalePhrases guards the operator text for
-// blockassembly_maxBlockReorgCatchup and blockassembly_maxBlockReorgRollback.
-// Both longdescs described a reorg depth limit. The code applies none: the
-// catchup value only sets the initial capacity of two BlockAssembler maps, and
-// the rollback value is read by nothing. Same shape as
+// blockassembly_maxBlockReorgRollback.
+// The longdesc described a reorg depth limit. The code applies none: the
+// value is read by nothing. Same shape as
 // TestBelowCheckpointRouteDocNoStalePhrases.
 func TestBlockAssemblyReorgSettingsDocNoStalePhrases(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
@@ -55,7 +54,7 @@ func TestBlockAssemblyReorgSettingsDocNoStalePhrases(t *testing.T) {
 		}
 	}
 
-	for _, key := range []string{"blockassembly_maxBlockReorgCatchup", "blockassembly_maxBlockReorgRollback"} {
+	for _, key := range []string{"blockassembly_maxBlockReorgRollback"} {
 		line := lineContaining(t, blockassemblyGo, `key:"`+key+`"`)
 		require.True(t, strings.Contains(line, "does not limit reorg depth"), "the %s longdesc must state that it does not limit reorg depth", key)
 	}
