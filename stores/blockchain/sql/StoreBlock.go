@@ -656,6 +656,22 @@ func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Blo
 		if err := s.checkCallerSuppliedBlockID(ctx, block.Hash(), storeBlockOptions.ID); err != nil {
 			return 0, 0, nil, false, err
 		}
+
+		// Checked before the INSERT, because the extend path auto-commits it. This
+		// runs for a block stored invalid too, unlike the BIP34 guard above: the
+		// rule is about the row's place in the parent_id graph, which the ancestry
+		// walks follow whatever the invalid flag says, not about the block's validity.
+		if err := checkBlockIDAboveParent(block, storeBlockOptions.ID, previousBlockID); err != nil {
+			// The reservation is stale. Drop it so the caller's next AssignBlockID
+			// takes a fresh id above the parent, rather than being refused with the
+			// same id until the age-based sweep removes it. A fallback that reuses
+			// the same *model.Block keeps its block.ID and is refused again; the
+			// fresh id comes on an attempt that decodes the block anew, such as the
+			// legacy park's retry.
+			s.dropBlockIDReservation(ctx, block.Hash(), storeBlockOptions.ID)
+
+			return 0, 0, nil, false, err
+		}
 	}
 
 	if genesis {
@@ -912,6 +928,24 @@ RETURNING id
 	// roll back.
 
 	return newBlockID, height, cumulativeChainWorkBytes, storeAsInvalid, nil
+}
+
+// checkBlockIDAboveParent refuses a block whose id is not above its parent's id.
+//
+// Ids come from one sequence that only grows, and a child's id is reserved only
+// after its parent is stored, so a child always sits above its parent. The ancestry
+// queries depend on that: CheckBlockIsAncestorOfBlock and CheckBlockIsInCurrentChain
+// bound their parent_id walk by the gap between two ids, so a child stored below its
+// parent would make them answer "not an ancestor" for a true ancestor. The one known
+// way to break the rule is a reservation that outlives a rewind: the parent is
+// deleted and stored again under a new, higher id, while the child keeps the lower
+// id it reserved before. Genesis has no parent and is never checked.
+func checkBlockIDAboveParent(block *model.Block, id, parentID uint64) error {
+	if id > parentID {
+		return nil
+	}
+
+	return errors.NewBlockIDOrderError("[StoreBlock][%s] refusing block id %d: its parent %s is stored under id %d, and a block's id must be above its parent's", block.Hash().String(), id, block.Header.HashPrevBlock.String(), parentID)
 }
 
 // typedStoreBlockError turns an error from storeBlock, or from the BEGIN and COMMIT

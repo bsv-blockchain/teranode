@@ -18,6 +18,7 @@ var (
 	ErrBlockPolicyDeclined        = New(ERR_BLOCK_POLICY_DECLINED, "block declined by local policy")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
+	ErrBlockIDOrder               = New(ERR_BLOCK_ID_ORDER, "block id is not above its parent's id")
 	ErrBlockHeaderContext         = New(ERR_BLOCK_HEADER_CONTEXT, "block header context invalid")
 	ErrBlockIncomplete            = New(ERR_BLOCK_INCOMPLETE, "block incomplete")
 	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")
@@ -288,6 +289,14 @@ func sanitizeCorruptParams(params []interface{}) []interface{} {
 // the trap ERR_BLOCK_CORRUPT fell into and needed an early-out for.
 func NewBlockPolicyDeclinedError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_POLICY_DECLINED, message, params...)
+}
+
+// NewBlockIDOrderError creates a new error for a block whose id is not above its parent's id.
+// StoreBlock refuses such a block: the ancestry queries bound their walk by the gap between two
+// ids, so a child stored below its parent would make them answer "not an ancestor" for a true
+// ancestor. Callers match it with Is(err, ErrBlockIDOrder).
+func NewBlockIDOrderError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_ID_ORDER, message, params...)
 }
 
 // IsBlockBodyMismatch reports whether err carries ERR_BLOCK_BODY_MISMATCH anywhere

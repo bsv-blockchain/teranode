@@ -454,6 +454,14 @@ func parkCommitFailure(err error) parkDisposition {
 	case errors.IsContextError(err), errors.IsTransientLocalError(err):
 		return parkDispositionRetryLater
 
+	case errors.Is(err, errors.ErrBlockIDOrder):
+		// The blockchain store refused an id that is not above the parent's.
+		// That is a stale id reservation in this node's own database, left by
+		// a rewind or a restore, and says nothing about the block. The sibling
+		// reservation refusals in checkCallerSuppliedBlockID are StorageErrors
+		// and land on the arm above.
+		return parkDispositionRetryLater
+
 	case errors.IsBlockCorrupt(err):
 		return parkDispositionRecordCorrupt
 
