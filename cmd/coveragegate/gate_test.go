@@ -86,6 +86,25 @@ func TestEvaluate(t *testing.T) {
 	require.False(t, failed, "coverage exactly at the threshold passes")
 }
 
+func TestEvaluateComparesTheValuesItPrints(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		min     float64
+		covered int
+		total   int
+	}{
+		{"minimum tie rounds with the print", 80.125, 8012, 10000},
+		{"coverage tie rounds with the print", 83.99, 8399, 10000},
+		{"whole percent", 84, 84, 100},
+	} {
+		lines, failed := evaluate([]threshold{{pkg: "services/a", min: tc.min}}, map[string]counts{"services/a": {covered: tc.covered, total: tc.total}})
+		require.False(t, failed, "%s: %v", tc.name, lines)
+	}
+
+	lines, failed := evaluate([]threshold{{pkg: "services/a", min: 80.13}}, map[string]counts{"services/a": {covered: 8012, total: 10000}})
+	require.True(t, failed, "a package printed below the minimum fails: %v", lines)
+}
+
 func TestPackageCoverageRejectsALineWithoutSeparators(t *testing.T) {
 	for _, line := range []string{"example.com/mod/a/x.go", "example.com/mod/a/x.go 1", "example.com/mod/a/x.go 1 1"} {
 		_, err := packageCoverage(strings.NewReader("mode: atomic\n"+line+"\n"), testModule, map[string]bool{"a": true})

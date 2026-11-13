@@ -170,6 +170,17 @@ func packageCoverage(r io.Reader, modulePath string, pkgs map[string]bool) (map[
 	return coverage, nil
 }
 
+// reported returns a percentage in hundredths, rounded exactly as the report
+// prints it.
+func reported(percent float64) int {
+	printed, err := strconv.ParseFloat(fmt.Sprintf("%.2f", percent), 64)
+	if err != nil {
+		return 0
+	}
+
+	return int(math.Round(printed * 100))
+}
+
 // evaluate returns one report line per threshold, and whether any package is
 // below its threshold. A package with no statements in the profile fails, so a
 // renamed or untested package cannot pass unmeasured.
@@ -181,9 +192,9 @@ func evaluate(thresholds []threshold, coverage map[string]counts) ([]string, boo
 		c := coverage[t.pkg]
 		percent := c.percent()
 
-		// Compare at the precision the report prints, so a package shown at the
-		// threshold passes.
-		ok := c.total > 0 && math.Round(percent*100) >= math.Round(t.min*100)
+		// Compare the values the report prints, formatted by the same operation,
+		// so a package shown at the threshold passes.
+		ok := c.total > 0 && reported(percent) >= reported(t.min)
 
 		status := "ok"
 		if !ok {
