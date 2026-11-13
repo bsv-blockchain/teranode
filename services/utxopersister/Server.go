@@ -245,6 +245,13 @@ func (s *Server) Init(ctx context.Context) (err error) {
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	close(readyCh)
 
+	// The consolidation ceiling sits this many blocks behind the best tip and is
+	// fixed in code, so the coin archive always trails the node's own chain view
+	// by at least that much and only catches up after the tip advances again.
+	// Name the coupling at start-up so an operator sizing recovery sees it there
+	// rather than inferring it from a stale archive after downtime.
+	s.logger.Infof("[UTXOPersister Service] coin archive consolidates to best tip minus %d blocks (compile-time ceiling)", confirmations)
+
 	var (
 		err error
 		ch  chan *blockchain.Notification

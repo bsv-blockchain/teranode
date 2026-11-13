@@ -1,16 +1,14 @@
-// //go:build aerospike
-
 // Package factory provides a factory for creating UTXO store implementations.
-// It supports multiple database backends through build tags and connection URLs.
+// It supports multiple database backends through connection URLs.
 //
 // # Supported Backends
 //
 // The following storage backends are available:
-//   - Aerospike (build tag: aerospike): "aerospike://host:port/namespace/set"
+//   - Aerospike (always compiled): "aerospike://host:port/namespace/set"
 //   - PostgreSQL: "postgres://user:pass@host:port/dbname"
 //   - SQLite: "sqlite://path/to/file.db"
 //   - SQLite Memory: "sqlitememory://"
-//   - In-Memory (build tag: memory): "memory://" (for testing)
+//   - In-Memory (always compiled): "memory://" (for testing)
 //
 // # Usage
 //

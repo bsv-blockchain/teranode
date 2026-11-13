@@ -632,6 +632,16 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		checksum:              parsedChecksum,
 	}
 
+	// Say out loud what the default retention state is. With BlockHeightRetention
+	// unset (the default) a Put without an explicit delete-at-height is permanent:
+	// the global retention setting does not reach files written through this store,
+	// and only writers that pass their own DAH get scheduled deletion. Permanent-
+	// by-default may be exactly what an archive wants, but it should be a state an
+	// operator can read at start-up, not infer from disk usage later.
+	if !storeOpts.DisableDAH && storeOpts.BlockHeightRetention == 0 {
+		logger.Infof("[File] store %s: no default retention is in force - writes without an explicit delete-at-height are kept forever", path)
+	}
+
 	// Check if longterm storage options are provided
 	if storeOpts.PersistSubDir != "" {
 		// Validate PersistSubDir doesn't contain path traversal sequences

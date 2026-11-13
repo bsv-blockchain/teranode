@@ -1,3 +1,10 @@
+# Development fixture for kind (locally built images, pull policy Never).
+# Services switched off here on purpose: validator, legacy, propagation, coinbase,
+# blockPersister, utxoPersister, bootstrap. With the validator off, the transaction
+# path is NOT exercised even though blockAssembly, blockValidator and
+# subtreeValidator run - transactions have no source, and money is neither created
+# (coinbase) nor persisted. This fixture proves cluster shape, discovery and
+# ingress wiring; for the money path use the production-shaped teranode-cr-mainnet.yaml.
 apiVersion: teranode.bsvblockchain.org/v1alpha1
 kind: Cluster
 metadata:
@@ -49,6 +56,11 @@ spec:
           requests:
             cpu: 100m
             memory: 256Mi
+  # The blob Pruner has no entry in this topology, and the operator examples carry no
+  # pruner service: delete-at-height queues that Blockchain grows for the blockstore
+  # and subtreestore are never drained, so shared storage grows with the chain rather
+  # than being bounded by the retention settings their names suggest. The Docker
+  # examples are where pruning actually runs today (see deploy/docker/mainnet).
   blockPersister:
     enabled: false
     spec: {}
@@ -161,3 +173,20 @@ spec:
   validator:
     enabled: false
     spec: {}
+
+# The Secret referenced by spec.envFrom above is intentionally not committed here.
+# The cluster will NOT come up until it exists: Blockchain refuses startup without
+# grpc_admin_api_key. Create it first - the canonical copy lives in
+# docs/howto/miners/kubernetes/minersHowToInstallation.md ("Create the Teranode
+# Secret"); shape of the manifest, with placeholders:
+#
+#   apiVersion: v1
+#   kind: Secret
+#   metadata:
+#     name: teranode-operator-secrets
+#     namespace: teranode-operator
+#   type: Opaque
+#   stringData:
+#     blockchain_store: "postgres://POSTGRES_EXAMPLE_URI_CHANGE_ME"
+#     utxostore: "aerospike://AEROSPIKE_EXAMPLE_URI_CHANGE_ME"
+#     grpc_admin_api_key: ""  # REQUIRED: openssl rand -hex 32, paste before applying

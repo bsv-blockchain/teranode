@@ -247,7 +247,7 @@ func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *ut
 			oldUtxo.UTXOHash[:],
 			newUtxo.UTXOHash[:],
 			int(s.GetBlockHeight()),
-			utxo.ReAssignedUtxoSpendableAfterBlocks,
+			utxo.ReassignedSpendableBlocks(tSettings),
 		),
 	}
 

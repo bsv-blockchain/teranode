@@ -224,6 +224,29 @@ func (u *Server) sleepUnlessDone(ctx context.Context) {
 	}
 }
 
+// sleepFor waits exactly d, or until ctx is done.
+func (u *Server) sleepFor(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
+// pacedSleep records one same-block failure, waits the escalated interval, and
+// once the failure stops looking transient, says so once: the block is not
+// going to file itself and an operator is the only way out (pruned source data
+// behind the retention window being the shipped instance).
+func (u *Server) pacedSleep(ctx context.Context, pacer *failurePacer) {
+	d := pacer.next()
+	if pacer.announce() {
+		u.logger.Errorf("[BlockPersister] Same block failing repeatedly (%d consecutive failures, next wait %v): this block will not file without operator action - if it trails the retention window its source transactions may already be pruned", pacer.consecutive(), d)
+	}
+	u.sleepFor(ctx, d)
+}
+
 // Start initializes and begins the block persister service operations.
 //
 // This method starts the main processing loop and sets up HTTP services if configured.
@@ -356,6 +379,12 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start the processing loop in a goroutine
 	go func() {
+		// Paces retries that target the same block. Transient failures recover
+		// by retrying promptly; a block that cannot succeed (pruned source data,
+		// see reconciliation notes §36) escalates its wait and announces itself
+		// instead of emitting one flat error forever. Reset on every filed block.
+		pacer := &failurePacer{base: u.settings.BlockPersister.PersistSleep, max: pacerMaxSleep}
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -364,8 +393,13 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			default:
 				block, err := u.getNextBlockToProcess(ctx)
 				if err != nil {
+					// The tip query is cheap and its failures are transient (connection
+					// blips, FSM churn). Retrying promptly is the recovery behaviour, so
+					// this branch does not take the failure pacer or the long idle sleep -
+					// a short beat that keeps the loop hot enough to catch up the moment
+					// the query interface returns, while still bounding log rate.
 					u.logger.Errorf("[BlockPersister] Error getting next block to process: %v", err)
-					u.sleepUnlessDone(ctx) // Sleep after error
+					u.sleepFor(ctx, time.Second)
 
 					continue
 				}
@@ -384,7 +418,7 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 				blockBytes, err := block.Bytes()
 				if err != nil {
 					u.logger.Errorf("[BlockPersister] Failed to get block bytes: %v", err)
-					u.sleepUnlessDone(ctx)
+					u.pacedSleep(ctx, pacer)
 
 					continue
 				}
@@ -396,7 +430,10 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 						u.logger.Infof("[BlockPersister] Block %s already exists, skipping...", block.String())
 					} else {
 						u.logger.Errorf("[BlockPersister] Failed to persist block %s: %v", block.String(), err)
-						u.sleepUnlessDone(ctx) // The next attempt is the same block
+						// The next attempt is the same block: pace it. This is the branch a
+						// pruned-source block lives in forever (§36), and the only signal
+						// that it needs an operator rather than another retry.
+						u.pacedSleep(ctx, pacer)
 
 						continue
 					}
@@ -405,10 +442,11 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 				// Mark block as persisted in database
 				if err = u.blockchainClient.SetBlockPersistedAt(ctx, block.Hash()); err != nil {
 					u.logger.Errorf("[BlockPersister] Failed to mark block %s as persisted: %v", block.String(), err)
-					u.sleepUnlessDone(ctx)
+					u.pacedSleep(ctx, pacer)
 
 					continue
 				}
+				pacer.reset()
 
 				// RUNTIME COORDINATION: Notify subscribers that block has been persisted
 				//
