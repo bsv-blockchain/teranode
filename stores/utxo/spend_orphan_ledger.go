@@ -3,27 +3,31 @@ package utxo
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 )
 
-// OrphanLedger lists the spends of a spending transaction whose caller gave up
-// while the backend had started them, until each one is resolved. A resolved
-// orphan either failed or had its spend rolled back.
+const orphanLedgerShards = 64
+
+// OrphanLedger orders the attempts at one spending transaction inside a
+// process. An attempt holds its transaction from the start of Spend until it
+// returns and every late spend it left behind is resolved. A late spend is one
+// the backend had started when its caller gave up.
 //
 // Storage keeps no attempt identity: two attempts at one transaction store
-// identical spending data. An orphan rollback that runs after a retry spent the
-// same inputs would therefore clear the retry's spend. A new Spend of the
-// transaction waits in the ledger until the earlier attempts are resolved, so
-// the rollback never overlaps a retry in the same process. It does not order
-// attempts made through other processes.
+// identical spending data. A rollback of a late spend that runs beside another
+// attempt would clear that attempt's spend. A new Spend of the transaction
+// therefore waits until the earlier attempt and its late spends are resolved.
+// The ledger does not order attempts made through other processes.
 type OrphanLedger struct {
-	pending atomic.Int64
-	mu      sync.Mutex
-	byTx    map[chainhash.Hash]*orphanGroup
+	shards [orphanLedgerShards]orphanShard
+}
+
+type orphanShard struct {
+	mu   sync.Mutex
+	byTx map[chainhash.Hash]*orphanGroup
 }
 
 type orphanGroup struct {
@@ -31,81 +35,98 @@ type orphanGroup struct {
 	done  chan struct{}
 }
 
-// Begin records an unresolved orphan of spender.
-func (l *OrphanLedger) Begin(spender *chainhash.Hash) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.byTx == nil {
-		l.byTx = make(map[chainhash.Hash]*orphanGroup)
-	}
-
-	group := l.byTx[*spender]
-	if group == nil {
-		group = &orphanGroup{done: make(chan struct{})}
-		l.byTx[*spender] = group
-	}
-
-	group.count++
-
-	l.pending.Add(1)
+func (l *OrphanLedger) shard(spender *chainhash.Hash) *orphanShard {
+	return &l.shards[int(spender[0])%orphanLedgerShards]
 }
 
-// End resolves one orphan of spender recorded by Begin.
-func (l *OrphanLedger) End(spender *chainhash.Hash) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+// Begin adds one hold on spender. The caller must already own a hold on it, so
+// the transaction stays held without a gap.
+func (l *OrphanLedger) Begin(spender *chainhash.Hash) {
+	s := l.shard(spender)
 
-	group := l.byTx[*spender]
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if group := s.byTx[*spender]; group != nil {
+		group.count++
+
+		return
+	}
+
+	s.add(spender)
+}
+
+// End releases one hold on spender.
+func (l *OrphanLedger) End(spender *chainhash.Hash) {
+	s := l.shard(spender)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	group := s.byTx[*spender]
 	if group == nil {
 		return
 	}
 
 	group.count--
 
-	l.pending.Add(-1)
-
 	if group.count == 0 {
-		delete(l.byTx, *spender)
+		delete(s.byTx, *spender)
 		close(group.done)
 	}
 }
 
-// Wait blocks until spender has no unresolved orphan, or until ctx ends. It
-// returns the error of ctx in that case. Without any orphan it takes no lock.
-func (l *OrphanLedger) Wait(ctx context.Context, spender *chainhash.Hash) error {
-	for l.pending.Load() > 0 {
-		l.mu.Lock()
-		group := l.byTx[*spender]
-		l.mu.Unlock()
+func (s *orphanShard) add(spender *chainhash.Hash) {
+	if s.byTx == nil {
+		s.byTx = make(map[chainhash.Hash]*orphanGroup)
+	}
 
+	s.byTx[*spender] = &orphanGroup{count: 1, done: make(chan struct{})}
+}
+
+// Acquire takes the first hold on spender once no other attempt holds it. It
+// returns the error of ctx when ctx ends first. The caller releases the hold
+// with End.
+func (l *OrphanLedger) Acquire(ctx context.Context, spender *chainhash.Hash) error {
+	s := l.shard(spender)
+
+	for {
+		s.mu.Lock()
+
+		group := s.byTx[*spender]
 		if group == nil {
+			s.add(spender)
+			s.mu.Unlock()
+
 			return nil
 		}
 
+		done := group.done
+
+		s.mu.Unlock()
+
 		select {
-		case <-group.done:
+		case <-done:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
-
-	return nil
 }
 
-// AwaitSpend holds a Spend of spender until its earlier attempts have no
-// unresolved orphan, for at most timeout. It returns a context error when ctx
-// ends, and a service unavailable error when the wait budget ends first.
+// AwaitSpend takes the hold on spender for a Spend, waiting for earlier
+// attempts for at most timeout. It returns a context error when ctx ends, and
+// a service unavailable error when the wait budget ends first. The caller
+// releases the hold with End.
 func (l *OrphanLedger) AwaitSpend(ctx context.Context, spender *chainhash.Hash, timeout time.Duration) error {
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if err := l.Wait(waitCtx, spender); err != nil {
+	if err := l.Acquire(waitCtx, spender); err != nil {
 		if ctx.Err() != nil {
-			return errors.NewContextCanceledError("[SPEND][%s] context canceled while an earlier attempt's late spend is rolled back", spender)
+			return errors.NewContextCanceledError("[SPEND][%s] context canceled while an earlier attempt is unresolved", spender)
 		}
 
-		return errors.NewServiceUnavailableError("[SPEND][%s] an earlier attempt's late spend was not resolved after %s", spender, timeout)
+		return errors.NewServiceUnavailableError("[SPEND][%s] an earlier attempt was not resolved after %s", spender, timeout)
 	}
 
 	return nil

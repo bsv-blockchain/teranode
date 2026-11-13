@@ -850,3 +850,146 @@ func TestRetryFailsAtWaitBudgetWhileEarlierLateSpendIsUnresolved(t *testing.T) {
 	close(held.release)
 	<-held.done
 }
+
+// A retry that enters Spend while the earlier attempt is still inside its wait
+// budget must not run beside it. The earlier attempt is not yet an orphan then,
+// but its late success is rolled back once it is, and that rollback would clear
+// the spend the retry owns.
+func TestOrphanRollbackDoesNotClearRetryThatStartsBeforeAttemptGivesUp(t *testing.T) {
+	ctx := context.Background()
+	held := startHeldClaim(t, "orphan-vs-early-retry", 300*time.Millisecond, 4*time.Second)
+
+	held.store.settings.UtxoStore.SpendWaitTimeout = 10 * time.Second
+
+	retryResult := make(chan error, 1)
+
+	go func() { _, err := held.store.Spend(ctx, spendOf(t, held.parent, 2, 0), 2); retryResult <- err }()
+
+	process := func(item *batchSpend) { held.store.sendSpendBatch([]*batchSpend{item}) }
+
+	var retryItem *batchSpend
+
+	select {
+	case retryItem = <-held.queued:
+		process(retryItem)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	select {
+	case err := <-held.result:
+		require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	case <-time.After(5 * time.Second):
+		t.Fatal("caller did not return while its started claim was held")
+	}
+
+	close(held.release)
+
+	select {
+	case <-held.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("held batch did not complete")
+	}
+
+	if retryItem == nil {
+		select {
+		case retryItem = <-held.queued:
+			process(retryItem)
+		case <-time.After(10 * time.Second):
+			t.Fatal("retry was never queued")
+		}
+	}
+
+	select {
+	case err := <-retryResult:
+		require.NoError(t, err, "the retry must succeed")
+	case <-time.After(10 * time.Second):
+		t.Fatal("retry did not return")
+	}
+
+	require.Never(t, func() bool { return outputIsUnspent(ctx, held.store, held.later.spend) }, time.Second, 20*time.Millisecond,
+		"the orphan rollback of an earlier attempt cleared the spend of a retry that started before it gave up")
+}
+
+// A late ErrTxLocked from one input of a transaction must reach the rollback
+// gate, so a sibling input's late success is not rolled back while a concurrent
+// attempt at the same transaction may own it.
+func TestSpendDoesNotRollBackLateClaimWhenLateTransientLockSuppressesRollback(t *testing.T) {
+	ctx := context.Background()
+	store := setupSharedBatch(ctx, t, "late-transient-lock")
+	require.NoError(t, store.SetBlockHeight(2))
+
+	parent := twoOutParent(ctx, t, store, "late-transient-lock")
+
+	lockedParent := bt.NewTx()
+	prev := chainhash.DoubleHashH([]byte("late-transient-lock-parent"))
+	require.NoError(t, lockedParent.From(prev.String(), 0, "76a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac", 1e8))
+	lockedParent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{bscript.OpTRUE})
+	require.NoError(t, lockedParent.PayToAddress("1BUBHgpCBWCsD2Ajbeu7ZgCgvMHsoYHm3W", 1000))
+	_, err := store.Create(ctx, lockedParent, 1, utxo.WithLocked(true))
+	require.NoError(t, err)
+
+	twoInputs := bt.NewTx()
+	require.NoError(t, twoInputs.From(lockedParent.TxIDChainHash().String(), 0, lockedParent.Outputs[0].LockingScript.String(), lockedParent.Outputs[0].Satoshis))
+	require.NoError(t, twoInputs.From(parent.TxIDChainHash().String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	require.NoError(t, twoInputs.PayToAddress("1BUBHgpCBWCsD2Ajbeu7ZgCgvMHsoYHm3W", 1))
+	twoInputs.LockTime = 2
+
+	store.spendBatcher.Close()
+	queued := make(chan *batchSpend, 2)
+	store.spendBatcher = batcher.NewWithPool(1, time.Millisecond, func(items []*batchSpend) { queued <- items[0] }, false)
+	store.settings.UtxoStore.SpendWaitTimeout = 300 * time.Millisecond
+	store.settings.UtxoStore.SpendRollbackTimeout = 4 * time.Second
+
+	result := make(chan error, 1)
+	go func() { _, err := store.Spend(ctx, twoInputs, 2); result <- err }()
+
+	var lockedItem, claim *batchSpend
+
+	for i := 0; i < 2; i++ {
+		select {
+		case item := <-queued:
+			if item.spend.TxID.IsEqual(lockedParent.TxIDChainHash()) {
+				lockedItem = item
+			} else {
+				claim = item
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("claims not queued")
+		}
+	}
+
+	require.NotNil(t, lockedItem)
+	require.NotNil(t, claim)
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	store.beforeSpendPart = func(part []*batchSpend) {
+		close(entered)
+		<-release
+	}
+
+	done := make(chan struct{})
+	go func() { defer close(done); store.sendSpendBatch([]*batchSpend{lockedItem, claim}) }()
+
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("claim part did not start")
+	}
+
+	time.Sleep(500 * time.Millisecond)
+	close(release)
+
+	select {
+	case err := <-result:
+		require.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("caller did not return")
+	}
+
+	<-done
+	require.ErrorIs(t, lockedItem.err, errors.ErrTxLocked)
+	require.NoError(t, claim.err)
+
+	require.Never(t, func() bool { return outputIsUnspent(ctx, store, claim.spend) }, 2*time.Second, 20*time.Millisecond,
+		"the late claim was rolled back although a late ErrTxLocked marks a concurrent attempt")
+}

@@ -2294,6 +2294,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		return nil, waitErr
 	}
 
+	defer s.orphans.End(tx.TxIDChainHash())
+
 	// Mirrors aerospike spend.go:287-420 — enqueue each spend into the batcher,
 	// wait for batch callback to signal completion via errCh.
 	var (
@@ -2398,11 +2400,15 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 				select {
 				case lateErr := <-errCh:
+					mu.Lock()
+
 					if lateErr == nil {
-						mu.Lock()
 						spentSpends = append(spentSpends, spend)
-						mu.Unlock()
+					} else {
+						spends[idx].Err = lateErr
 					}
+
+					mu.Unlock()
 				case <-lateCtx.Done():
 					prometheusUtxoSpendAbortInFlight.Inc()
 

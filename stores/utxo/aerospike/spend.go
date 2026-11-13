@@ -594,6 +594,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		return nil, waitErr
 	}
 
+	defer s.orphans.End(tx.TxIDChainHash())
+
 	requestCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 

@@ -438,3 +438,61 @@ func TestOrphanRollbackDoesNotClearRetryOfSameTransaction(t *testing.T) {
 	require.Never(t, func() bool { return outpointIsUnspent(storeCtx, store, laterTx) }, time.Second, 50*time.Millisecond,
 		"the orphan rollback of an earlier attempt cleared the spend a retry of the same transaction owns")
 }
+
+// A retry that enters Spend while the earlier attempt is still inside its wait
+// budget must not run beside it: the late success of the earlier attempt is
+// rolled back once its caller gives up, and that rollback would clear the spend
+// the retry owns.
+func TestOrphanRollbackDoesNotClearRetryThatStartsBeforeAttemptGivesUp(t *testing.T) {
+	store, storeCtx, laterTx, before := prepareHeldSpend(t, "orphan-vs-early-retry", 300*time.Millisecond, 4*time.Second)
+	entered, release := make(chan struct{}), make(chan struct{})
+
+	result, done, err := store.SpendHeldForTest(storeCtx, laterTx, 2, before, entered, release)
+	require.NoError(t, err)
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("claim part did not start")
+	}
+
+	retryResult := store.SpendRetryForTest(storeCtx, laterTx, 2, 10*time.Second)
+
+	var retryErr error
+
+	retryReturned := false
+
+	select {
+	case retryErr = <-retryResult:
+		retryReturned = true
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	case <-time.After(5 * time.Second):
+		t.Fatal("caller did not return while its started claim was held")
+	}
+
+	close(release)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("held batch did not complete")
+	}
+
+	if !retryReturned {
+		select {
+		case retryErr = <-retryResult:
+		case <-time.After(15 * time.Second):
+			t.Fatal("retry did not return")
+		}
+	}
+
+	require.NoError(t, retryErr, "the retry must succeed")
+
+	require.Never(t, func() bool { return outpointIsUnspent(storeCtx, store, laterTx) }, time.Second, 50*time.Millisecond,
+		"the orphan rollback of an earlier attempt cleared the spend of a retry that started before it gave up")
+}

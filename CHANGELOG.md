@@ -56,8 +56,9 @@ read every section between yours and the target.
   count one batcher batch, however many backend parts it needs, and
   `teranode_{aerospike,sql}_utxo_spend_abort_in_flight` counts started inputs handed to the
   orphan rollback, no longer dangling ones. A `Spend` of a transaction now waits, within
-  `utxostore_spendWaitTimeout`, for the unresolved late spends of an earlier attempt at that
-  transaction in the same process, and fails with `SERVICE_UNAVAILABLE` if they do not resolve.
+  `utxostore_spendWaitTimeout`, for an earlier attempt at that transaction in the same process
+  and for that attempt's unresolved late spends. Concurrent `Spend` calls for one transaction
+  therefore run one after another. It fails with `SERVICE_UNAVAILABLE` if the wait runs out.
   Retry it. (#2036)
 - **`grpc_admin_api_key` is required.** Blockchain refuses to start if it is empty, a placeholder
   or under 16 characters, and every RPC but `HealthGRPC` needs it. Give every client service the
