@@ -606,6 +606,11 @@ func TestProcessBlockFound_FullRouteRetryAfterAFailedQuickRouteKeepsTheBlockVali
 	require.NoError(t, err)
 	require.True(t, exists, "the failed quick attempt leaves its .subtree file behind")
 
+	// Subtree validation answers as it would with the .subtree file in place, so that with the
+	// refusal removed the retry reaches block.Valid and shows the BLOCK_INVALID this test guards
+	// against, instead of panicking in the mock first.
+	us.subtreeValidation.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
 	err = us.s.processBlockFound(ctx, block.Hash(), "peer-1", "legacy", false, block)
 	require.Error(t, err, "the unproven retry must not commit")
 	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a valid block must not be judged invalid on the retry: %v", err)
@@ -677,8 +682,17 @@ func TestRevalidateBlock_ReconsideredFastPathBlockWithAForkAtItsHeightIsValid(t 
 	_, err := us.client.InvalidateBlock(ctx, first.Hash())
 	require.NoError(t, err)
 
+	hdrs, _, err := us.client.GetBlockHeadersFromHeight(ctx, 1, 1)
+	require.NoError(t, err)
+	require.NotEmpty(t, hdrs)
+	require.Equal(t, fork.Hash(), hdrs[0].Hash(), "precondition: the store lists the fork first at height 1")
+
 	us.subtreeValidation.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	_, err = us.s.RevalidateBlock(ctx, &blockvalidation_api.RevalidateBlockRequest{Hash: first.Hash()[:]})
 	require.NoError(t, err, "a reconsidered block linked to the pinned checkpoint must be accepted whatever else is stored at its height")
+
+	_, meta, err := us.client.GetBlockHeader(ctx, first.Hash())
+	require.NoError(t, err)
+	require.False(t, meta.Invalid, "the reconsidered block must no longer be marked invalid")
 }

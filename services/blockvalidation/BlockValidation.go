@@ -3621,10 +3621,14 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 // forward sync that has not reached the checkpoint), and for a block the walk does not land on.
 // Fail-safe: any lookup error yields false, so the no-inflation check runs.
 //
-// Cost: one recursive query over the stored blocks between the checkpoint and b, up to the
-// checkpoint height in rows. A query for a pinned hash that is not stored returns at once. Full
-// validation reaches this below the checkpoint on a store that supports the fast path, which after
-// the checkpoint is stored means revalidation and reconsiderblock, not the forward sync.
+// It also returns false for a block that is not in the blockchain store yet: the walk only ever
+// lands on a stored block. That case costs one indexed existence lookup, and it covers every block
+// arriving for the first time, a peer-served fork below the checkpoint included.
+//
+// Cost: for a stored block, one recursive query over the stored blocks between the checkpoint and
+// b, up to the checkpoint height in rows; a query for a pinned hash that is not stored returns at
+// once. Only a block already in the blockchain store pays it: revalidation, reconsiderblock, and
+// the opt-in optimistic peer path, which stores a block before validating it.
 func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *model.Block) bool {
 	// The below-checkpoint no-inflation skip requires store fast-path support too, so the
 	// ancestry predicate cannot change the outcome on a store that never produces fee=0
@@ -3643,6 +3647,13 @@ func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *mo
 
 	pinned := model.HighestCheckpointHash(checkpoints)
 	if pinned == nil {
+		return false
+	}
+
+	// The walk below can only land on a stored block, and it costs up to the checkpoint height in
+	// rows, so a block that is not stored yet (any block arriving for the first time) stops here.
+	stored, err := u.blockchainClient.GetBlockExists(ctx, b.Header.Hash())
+	if err != nil || !stored {
 		return false
 	}
 

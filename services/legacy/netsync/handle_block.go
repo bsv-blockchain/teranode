@@ -341,7 +341,8 @@ func (sm *SyncManager) waitForPreviousBlockMined(ctx context.Context, prevBlockH
 
 // ProcessBlock hands a block to block validation. origin carries the header
 // cache's ancestry proof for it; block validation requires that proof before it
-// takes the below-checkpoint quick route, and takes full validation without it.
+// takes the below-checkpoint quick route, and refuses an eligible block that lacks
+// it as retry-later.
 func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block, peerID string, origin blockRequestOrigin) (err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "SyncManager:processBlock",
 		tracing.WithDebugLogMessage(
