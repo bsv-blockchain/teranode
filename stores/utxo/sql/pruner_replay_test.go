@@ -262,13 +262,13 @@ func TestPrunedReplayRollsBackSiblingSpends(t *testing.T) {
 	}
 }
 
-// TestPrunedReplayRejectedAfterUnspend pins the marker's lifetime against the
-// rollback path. Unspend clears the parent output's spending_data and
-// deliberately leaves deleted_children alone, so a check nested inside "still
-// spent by exactly this child" would silently stop firing at the moment a
-// compensating rollback depends on it. The check keys on the incoming spender
-// instead, so it survives.
-func TestPrunedReplayRejectedAfterUnspend(t *testing.T) {
+// TestPrunedReplayAcceptedAfterUnspend pins the rule both stores share: a
+// marker refuses a spender only while the parent output still records it.
+// Unspend clears spending_data and leaves deleted_children alone, so after an
+// Unspend the replay is an ordinary spend of a free output and the pruned child
+// is written again. Reaching this on a node needs a reorg deeper than the
+// pruning retention; the PR lists it as a limit.
+func TestPrunedReplayAcceptedAfterUnspend(t *testing.T) {
 	for _, backend := range []string{"sqlite", "postgres"} {
 		t.Run(backend, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -344,24 +344,21 @@ func TestPrunedReplayRejectedAfterUnspend(t *testing.T) {
 			require.Equal(t, 1, markers, "Unspend must leave the replay marker in place")
 
 			_, _, err = store.SpendAndCreate(ctx, child, 1200)
-			require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned,
-				"the marker must still reject the pruned child once its spend has been rolled back")
+			require.NoError(t, err, "with the output no longer recording the child, its marker refuses nothing")
 
 			var exists bool
 			require.NoError(t, store.db.QueryRowContext(ctx,
 				"SELECT EXISTS(SELECT 1 FROM transactions WHERE hash = $1)", child.TxIDChainHash()[:]).Scan(&exists))
-			require.False(t, exists)
+			require.True(t, exists, "the replay writes the child again, as on Aerospike")
 		})
 	}
 }
 
-// TestPrunedReplayRejectedAfterReplacementSpend: the parent output was rolled
-// back and then taken by a replacement transaction. The marker has to take
-// precedence over the conflicting-spender answer, because the block paths only
-// compensate the record their create phase wrote when the store names the
-// replay as such; ErrSpent looks like an ordinary double spend to them and the
-// recreated record would survive.
-func TestPrunedReplayRejectedAfterReplacementSpend(t *testing.T) {
+// TestPrunedReplaySpentAfterReplacementSpend: the parent output was rolled back
+// and then taken by a replacement transaction. The output records the
+// replacement, not the pruned child, so the replay is answered as a double
+// spend, as the Lua spend answers it.
+func TestPrunedReplaySpentAfterReplacementSpend(t *testing.T) {
 	for _, backend := range []string{"sqlite", "postgres"} {
 		t.Run(backend, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -432,9 +429,8 @@ func TestPrunedReplayRejectedAfterReplacementSpend(t *testing.T) {
 			require.NoError(t, err, "fixture: the replacement takes the output")
 
 			_, _, err = store.SpendAndCreate(ctx, child, 1200)
-			require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned,
-				"the marker must win over the conflicting-spender answer")
-			require.NotErrorIs(t, err, errors.ErrSpent)
+			require.ErrorIs(t, err, errors.ErrSpent, "the output records the replacement, so the replay is a double spend")
+			require.NotErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
 
 			var exists bool
 			require.NoError(t, store.db.QueryRowContext(ctx,
@@ -573,14 +569,13 @@ func TestPrunedReplayRollbackPreservesHistoricalSpend(t *testing.T) {
 	})
 }
 
-// TestPrunedReplayRejectedBeforeFrozen: the marker takes precedence over every
-// other answer about the output. Here the rolled-back output has been frozen;
-// without precedence the replay is answered ErrFrozen, which the block paths
-// cannot tell from an ordinary failure, and the record their create phase wrote
-// for the replay is never compensated.
-func TestPrunedReplayRejectedBeforeFrozen(t *testing.T) {
+// TestPrunedReplayFrozenAfterUnspend: the rolled-back output has been frozen.
+// It no longer records the pruned child, so its marker refuses nothing and the
+// replay gets the freeze's answer on that input, as on Aerospike. Q:0 still
+// records the child, so that input is still refused as a pruned replay.
+func TestPrunedReplayFrozenAfterUnspend(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
-		p, _, child := twoParentPrunedChild(t, ctx, store)
+		p, q, child := twoParentPrunedChild(t, ctx, store)
 
 		utxoHash, err := util.UTXOHashFromOutput(p.TxIDChainHash(), p.Outputs[0], 0)
 		require.NoError(t, err)
@@ -589,9 +584,19 @@ func TestPrunedReplayRejectedBeforeFrozen(t *testing.T) {
 		require.NoError(t, store.Unspend(ctx, []*utxo.Spend{spend}))
 		require.NoError(t, store.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: p.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash}}, test.CreateBaseTestSettings(t)))
 
-		_, err = store.Spend(ctx, child, 1200)
-		require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the marker must win over the frozen answer")
-		require.NotErrorIs(t, err, errors.ErrFrozen)
+		spends, err := store.Spend(ctx, child, 1200)
+		require.Error(t, err)
+
+		byParent := make(map[chainhash.Hash]error, len(spends))
+		for _, s := range spends {
+			byParent[*s.TxID] = s.Err
+		}
+
+		require.Len(t, byParent, 2)
+		// Spend chains a transaction's input errors together, so P's error also
+		// carries Q's refusal; under the old rule P answered only as pruned.
+		require.ErrorIs(t, byParent[*p.TxIDChainHash()], errors.ErrFrozen, "P:0 is frozen and no longer records the pruned child")
+		require.ErrorIs(t, byParent[*q.TxIDChainHash()], errors.ErrUtxoSpendingTxPruned, "Q:0 still records the pruned child")
 	})
 }
 
@@ -631,14 +636,9 @@ func TestSpendDoesNotBlessWithRequireParentOutputs(t *testing.T) {
 }
 
 // TestPrunerMarksOnlyTheChildThatHeldTheSpend: a conflicting loser names the
-// same outpoint in its inputs as the winner but never held it. Marking
-// (parent, loser) used to be inert, because the spend path compared the marker
-// against the output's stored spender. This PR keys the check on the incoming
-// spender and runs it before every other answer, which makes a stale marker
-// load-bearing: the loser's genuinely fresh spend of that output, once the
-// winner's spend is released, would be rejected forever on the live
-// above-checkpoint path. Only the child the output records as its spender may
-// be marked.
+// same outpoint in its inputs as the winner but never held it. Only the child
+// the output records as its spender may be marked, as on Aerospike: a marker
+// for the loser would refuse the loser's own spend if it ever won the output.
 func TestPrunerMarksOnlyTheChildThatHeldTheSpend(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		parent := bt.NewTx()

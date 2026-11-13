@@ -541,13 +541,11 @@ func (s *Service) pruneWithoutDefensiveCheck(ctx context.Context, blockHeight ui
 	// The join to outputs is load-bearing, not a tidier way to reach the parent.
 	// An input naming a parent outpoint proves only that this child ASKED for it;
 	// a conflicting loser references the same outpoint and never won it, and
-	// losers are pruning candidates like anything else. Marking (parent, loser)
-	// used to be inert because the spend path compared the marker against the
-	// output's stored spender, which is the winner. The check is now keyed on the
-	// incoming spender and runs ahead of every other answer, so a stale marker
-	// would reject that loser's genuinely fresh spend of the output forever, once
-	// the winner's spend is released. Only the child the output actually records
-	// as its spender gets a marker.
+	// losers are pruning candidates like anything else. The spend path refuses a
+	// spender only while the output records it, so a marker for a loser is inert
+	// today, but it would refuse that loser's own spend if it ever won the output
+	// after an Unspend. Only the child the output actually records as its spender
+	// gets a marker, the rule the Aerospike pruner's filter applies.
 	const markerQuery = `INSERT INTO deleted_children (parent_id, child_hash)
   SELECT DISTINCT parent.id, child.hash
   FROM transactions child

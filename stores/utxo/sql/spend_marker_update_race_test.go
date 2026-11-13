@@ -16,10 +16,13 @@ import (
 
 // TestSpendRefusesMarkerCommittedAfterSelect: the spend path reads the replay
 // marker in its SELECT, at READ COMMITTED, and the pruner commits the marker and
-// the child's delete together. A marker committed after that SELECT and before
-// the UPDATE used to be invisible to the spend, so the write went through and a
-// pruned transaction was re-spent. The UPDATE now re-checks the marker, and the
-// row it refuses must be answered as a pruned replay with the output untouched.
+// the child's delete together. A marker committed after that SELECT, on an
+// output that records exactly this spend, used to be invisible to the spend, so
+// the replay was answered as an idempotent success. Each later read re-checks
+// the marker, and the replay must be answered as a pruned replay.
+//
+// The pruner marks only a child the output records as its spender, so every
+// case has the output recording this spend by the time the marker lands.
 //
 // Postgres only. SQLite serialises writers, so the pruner cannot commit inside
 // an open spend transaction there, and the hook's insert would block on it.
@@ -41,8 +44,6 @@ func TestSpendRefusesMarkerCommittedAfterSelect(t *testing.T) {
 		// sends the row to the UPDATE; only the marker lands in the window.
 		spentBefore bool
 	}{
-		{name: "bulk", bulk: true},
-		{name: "per_row"},
 		{name: "bulk_idempotent", bulk: true, alsoSpent: true},
 		{name: "per_row_idempotent", alsoSpent: true},
 		{name: "bulk_idempotent_at_select", bulk: true, spentBefore: true},
@@ -102,10 +103,6 @@ func TestSpendRefusesMarkerCommittedAfterSelect(t *testing.T) {
 			require.Len(t, spends, 1)
 			require.ErrorIs(t, spends[0].Err, errors.ErrUtxoSpendingTxPruned,
 				"the refusal must be answered as a pruned replay, so the block paths can compensate")
-			if !tc.alsoSpent && !tc.spentBefore {
-				require.Nil(t, outputSpendingData(t, ctx, store, parent, 0),
-					"the parent output must not record the pruned transaction's spend")
-			}
 		})
 	}
 }
@@ -114,7 +111,8 @@ func TestSpendRefusesMarkerCommittedAfterSelect(t *testing.T) {
 // same replayed transaction can land in one bulk batch. The dedup sends only
 // the first (the representative) to the UPDATE; the duplicate takes its answer
 // afterwards. When the representative is refused, here as a pruned replay by
-// the missed-row re-check because the marker lands after the SELECT, the
+// the missed-row re-check because the spend and its marker land after the
+// SELECT, the
 // duplicate must be refused too. It used to receive nil, and its caller went on
 // to recreate the pruned transaction.
 //
@@ -166,6 +164,11 @@ func TestBulkSpendDuplicateTakesRepresentativesRefusal(t *testing.T) {
 				`INSERT INTO deleted_children (parent_id, child_hash) SELECT id, $2 FROM transactions WHERE hash = $1`,
 				parent.TxIDChainHash()[:], child.TxIDChainHash()[:])
 			require.NoError(t, insertErr)
+
+			_, spendErr := store.db.ExecContext(context.Background(),
+				"UPDATE outputs SET spending_data = $2 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
+				parent.TxIDChainHash()[:], spendpkg.NewSpendingData(child.TxIDChainHash(), 0).Bytes())
+			require.NoError(t, spendErr)
 		})
 	}
 	t.Cleanup(func() { store.afterSpendSelect = nil })

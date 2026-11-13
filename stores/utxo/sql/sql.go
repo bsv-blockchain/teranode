@@ -2880,37 +2880,31 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 	// Phase 1: Bulk SELECT — fetch all output states in one query
 	// Build VALUES list: (hash, idx, batch_idx)
 	var sb strings.Builder
-	// The pruned-child marker is matched against v.spender, the txid of the
-	// transaction ASKING to spend, not against the output's stored
-	// spending_data. Keying it on spending_data made Unspend disarm it: Unspend
-	// sets spending_data to NULL and deliberately leaves deleted_children alone,
-	// so the marker would still be there and match nothing. Matching the
-	// incoming spender means the rejection survives any rollback of the spend it
-	// protects, which is what the compensating delete in blockvalidation relies
-	// on.
+	// The pruned-child marker is matched against the spender the output records,
+	// the rule the Lua spend uses: a marker refuses a spender only while the
+	// output still names it. Phase 2 reads it only when that recorded spend is
+	// exactly the incoming one. Unspend clears spending_data and leaves
+	// deleted_children alone, so a replay after an Unspend is not refused, on
+	// either store.
 	sb.WriteString(`
 		SELECT v.batch_idx,
 		       o.transaction_id, o.coinbase_spending_height, o.utxo_hash,
 		       o.spending_data, o.frozen OR t.frozen AS frozen, t.conflicting, t.locked, o.spendableIn,
-		       EXISTS (SELECT 1 FROM deleted_children d WHERE d.parent_id = t.id AND d.child_hash = v.spender)
+		       EXISTS (SELECT 1 FROM deleted_children d
+		               WHERE d.parent_id = t.id AND d.child_hash = substring(o.spending_data from 1 for 32))
 		FROM (VALUES `)
-	args := make([]interface{}, 0, len(batch)*4)
+	args := make([]interface{}, 0, len(batch)*3)
 	paramIdx := 1
 	for i, item := range batch {
 		if i > 0 {
 			sb.WriteByte(',')
 		}
-		sb.WriteString(fmt.Sprintf("($%d::bytea,$%d::int,$%d::int,$%d::bytea)", paramIdx, paramIdx+1, paramIdx+2, paramIdx+3))
+		sb.WriteString(fmt.Sprintf("($%d::bytea,$%d::int,$%d::int)", paramIdx, paramIdx+1, paramIdx+2))
 
-		var spender interface{}
-		if item.spend.SpendingData != nil {
-			spender = item.spend.SpendingData.TxID[:]
-		}
-
-		args = append(args, item.spend.TxID[:], item.spend.Vout, i, spender)
-		paramIdx += 4
+		args = append(args, item.spend.TxID[:], item.spend.Vout, i)
+		paramIdx += 3
 	}
-	sb.WriteString(`) AS v(hash,idx,batch_idx,spender)
+	sb.WriteString(`) AS v(hash,idx,batch_idx)
 		JOIN transactions t ON t.hash = v.hash
 		JOIN outputs o ON o.transaction_id = t.id AND o.idx = v.idx`)
 
@@ -2987,24 +2981,6 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			continue
 		}
 
-		// Replay of a transaction the pruner already removed. The marker names
-		// this spender, so it fires whether the output still records the spend,
-		// has been unspent by a rollback, or was never spent by anyone, and it is
-		// checked before every other answer about the output (frozen, conflicting,
-		// locked, height-gated, spent by someone else, hash mismatch) on purpose:
-		// each of those is something the block paths cannot tell from an ordinary
-		// failure, so the record their create phase wrote for the replay would
-		// never be compensated. The marker says what the spender IS, whatever the
-		// output's state. The Lua spend uses the same order: it decides the
-		// record-level answers (conflicting, locked, coinbase immaturity, no
-		// utxos) first but returns none of them until the marker has been checked
-		// for every spend in the call (teranode.lua spendMulti), so the two stores
-		// agree on the order, not only on the reachable states.
-		if r.childPruned {
-			validationErrors[i] = errors.NewUtxoSpendingTxPrunedError(errSpendTxPruned, spend.TxID, spend.Vout)
-			continue
-		}
-
 		if r.frozen {
 			validationErrors[i] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
 			continue
@@ -3038,6 +3014,14 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		}
 
 		if len(r.spendingDataBytes) > 0 {
+			// The output records exactly this spend. A marker for its spender
+			// means the pruner removed this transaction: a replay, refused as in
+			// the Lua spend, which checks the marker at the same point.
+			if r.childPruned {
+				validationErrors[i] = errors.NewUtxoSpendingTxPrunedError(errSpendTxPruned, spend.TxID, spend.Vout)
+				continue
+			}
+
 			// Idempotent re-spend: same spending data — treat as success without UPDATE.
 			// Record the parent so DAH can still be (re)evaluated and heal NULL DAHs
 			// left by spends that happened before the DAH-on-spend fix landed.
@@ -3116,14 +3100,11 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 	// committed row under READ COMMITTED. transactions.frozen is only set when
 	// the row is created, so the SELECT's read of it cannot go stale.
 	//
-	// The UPDATE also re-checks the replay marker itself. The SELECT above ran on
-	// its own READ COMMITTED snapshot, and the pruner commits a marker and deletes
-	// the child together, so a marker committed between that SELECT and this
-	// statement was invisible to the check above and nothing else stopped the
-	// write: the pruned transaction would be re-spent and, after its create,
-	// fully reinserted. Each statement takes a fresh snapshot, so the predicate
-	// sees any marker committed before this statement began. A row it refuses is
-	// answered as a pruned replay by the re-check below.
+	// A write to an unspent output needs no marker guard: a marker refuses only
+	// the spender the output records, and the pruner marks only that spender.
+	// upd_idem, the arm for an output that already records this spend, does
+	// re-read the marker on its own snapshot, so a marker the pruner committed
+	// after the SELECT is still answered, by the re-check below.
 	//
 	// When retention > 0, the UPDATE is wrapped in a CTE that also runs a DAH
 	// recompute on any parent tx whose last unspent output was just drained.
@@ -3184,9 +3165,6 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
 				  AND o.spending_data IS NULL
 				  AND o.frozen = false
-				  AND NOT EXISTS (SELECT 1 FROM deleted_children d
-				                  WHERE d.parent_id = o.transaction_id
-				                    AND d.child_hash = substring(v.spending_data from 1 for 32))
 				RETURNING v.batch_idx, o.transaction_id
 			),
 			upd_idem AS (
@@ -3251,9 +3229,6 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
 				  AND o.spending_data IS NULL
 				  AND o.frozen = false
-				  AND NOT EXISTS (SELECT 1 FROM deleted_children d
-				                  WHERE d.parent_id = o.transaction_id
-				                    AND d.child_hash = substring(v.spending_data from 1 for 32))
 				RETURNING v.batch_idx
 			),
 			upd_idem AS (
@@ -3351,14 +3326,14 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			}
 
 			var sb strings.Builder
-			// The marker is answered first here too, as in the SELECT phase: a
-			// row the UPDATE refused because a marker for this spender landed
-			// after the SELECT is a pruned replay, not a concurrent spend, a
-			// freeze, or a lifted freeze to retry.
+			// A row that now records exactly this spend, under a marker for this
+			// spender, is a pruned replay, as in the SELECT phase. Any other row
+			// is a concurrent spend, a freeze, or a lifted freeze to retry.
 			sb.WriteString(`SELECT v.batch_idx,
-			       EXISTS (SELECT 1 FROM deleted_children d
-			               WHERE d.parent_id = v.transaction_id
-			                 AND d.child_hash = substring(v.spending_data from 1 for 32)),
+			       COALESCE(o.spending_data = v.spending_data, false)
+			       AND EXISTS (SELECT 1 FROM deleted_children d
+			                   WHERE d.parent_id = v.transaction_id
+			                     AND d.child_hash = substring(v.spending_data from 1 for 32)),
 			       o.spending_data = v.spending_data, o.frozen
 			FROM (VALUES `)
 			args := make([]interface{}, 0, len(missedIdxs)*4)
@@ -3376,10 +3351,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			sb.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
 			JOIN outputs o ON o.transaction_id = v.transaction_id AND o.idx = v.idx
 			WHERE o.spending_data = v.spending_data
-			   OR o.spending_data IS NULL
-			   OR EXISTS (SELECT 1 FROM deleted_children d
-			              WHERE d.parent_id = v.transaction_id
-			                AND d.child_hash = substring(v.spending_data from 1 for 32))`)
+			   OR o.spending_data IS NULL`)
 
 			iRows, err := txn.QueryContext(ctx, sb.String(), args...)
 			if err != nil {
@@ -3491,10 +3463,10 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		}
 	}
 
-	// Marker re-check for the idempotent-at-SELECT items. Every other outcome of
-	// this batch reads the marker after the SELECT too (the UPDATE's NOT EXISTS
-	// guard, the missed-row re-check above), and the per-row path re-checks an
-	// idempotent row with q3. Without this, a pruner commit landing between the
+	// Marker re-check for the idempotent-at-SELECT items. The other idempotent
+	// outcomes of this batch read the marker after the SELECT too (upd_idem's NOT
+	// EXISTS guard, the missed-row re-check above), and the per-row path re-checks
+	// an idempotent row with q3. Without this, a pruner commit landing between the
 	// SELECT and here let a replay through on this arm alone: the output already
 	// recorded the pruned transaction's spend, so the replay was answered as a
 	// success and its create was blessed. This statement takes a fresh snapshot.
@@ -3694,7 +3666,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 		,t.conflicting
 		,t.locked
 		,o.spendableIn
-		,EXISTS (SELECT 1 FROM deleted_children d WHERE d.parent_id = t.id AND d.child_hash = $3)
+		,EXISTS (SELECT 1 FROM deleted_children d WHERE d.parent_id = t.id AND d.child_hash = substr(o.spending_data, 1, 32))
 		FROM outputs o
 		JOIN transactions t ON o.transaction_id = t.id
 		WHERE t.hash = $1
@@ -3706,12 +3678,9 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 	// the row: under READ COMMITTED Postgres re-evaluates this WHERE against the newest
 	// committed row, so the spend writes nothing instead of spending a frozen coin.
 	// transactions.frozen is only set when the row is created, so q1's read of it
-	// cannot go stale and needs no guard here.
-	//
-	// The replay marker is re-checked in the UPDATE for the same reason as on the
-	// bulk path: q1 read it on an earlier snapshot, and on Postgres at READ
-	// COMMITTED a marker the pruner committed after q1 would otherwise not stop
-	// this write.
+	// cannot go stale and needs no guard here. A write to an unspent output needs
+	// no marker guard either, as on the bulk path: a marker refuses only the
+	// spender the output records.
 	q2 := `
 		UPDATE outputs
 		SET spending_data = $1
@@ -3719,7 +3688,6 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 		AND idx = $3
 		AND spending_data IS NULL
 		AND frozen = false
-		AND NOT EXISTS (SELECT 1 FROM deleted_children d WHERE d.parent_id = $2 AND d.child_hash = $4)
 	`
 
 	// qRow reads the row again when q2 wrote nothing and no marker answers, to
@@ -3731,9 +3699,12 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 		AND idx = $2
 	`
 
-	// Asked only when q2 changed nothing, to tell a marker that landed after q1
-	// apart from an idempotent match or a concurrent spend.
-	q3 := `SELECT EXISTS (SELECT 1 FROM deleted_children d WHERE d.parent_id = $1 AND d.child_hash = $2)`
+	// Asked only when q2 changed nothing: true when the output records exactly
+	// this spend under a marker for its spender, which a marker that landed after
+	// q1 makes a pruned replay rather than an idempotent match.
+	q3 := `SELECT EXISTS (SELECT 1 FROM outputs o
+		JOIN deleted_children d ON d.parent_id = o.transaction_id AND d.child_hash = substr(o.spending_data, 1, 32)
+		WHERE o.transaction_id = $1 AND o.idx = $2 AND o.spending_data = $3)`
 
 	successItems := make([]*batchSpend, 0, len(batch))
 	spentParentIDs := make(map[int]struct{}, len(batch)) // distinct parent tx ids whose outputs were just spent
@@ -3761,12 +3732,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 			spendableIn            *uint32
 		)
 
-		var spender interface{}
-		if spend.SpendingData != nil {
-			spender = spend.SpendingData.TxID[:]
-		}
-
-		err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout, spender).Scan(
+		err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(
 			&transactionID, &coinbaseSpendingHeight, &utxoHash,
 			&spendingDataBytes, &frozen, &conflicting, &locked, &spendableIn, &childPruned,
 		)
@@ -3783,14 +3749,6 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 			}
 			item.errCh <- errors.NewStorageError("[Spend] failed: SELECT output %s:%d - %v", spend.TxID, spend.Vout, err)
 			aborted = true
-			continue
-		}
-
-		// See the bulk path: the marker names this spender and takes precedence
-		// over every other answer about the output, so a replay is always
-		// identifiable.
-		if childPruned {
-			validationErrors[i] = errors.NewUtxoSpendingTxPrunedError(errSpendTxPruned, spend.TxID, spend.Vout)
 			continue
 		}
 
@@ -3830,6 +3788,13 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 			continue
 		}
 
+		// The output records exactly this spend, under a marker for its spender:
+		// a replay of a transaction the pruner removed. See the bulk path.
+		if childPruned && len(spendingDataBytes) > 0 && spend.SpendingData != nil {
+			validationErrors[i] = errors.NewUtxoSpendingTxPrunedError(errSpendTxPruned, spend.TxID, spend.Vout)
+			continue
+		}
+
 		// Check UTXO hash matches
 		if !item.skipUTXOHashCheck && !bytes.Equal(utxoHash, spend.UTXOHash[:]) {
 			validationErrors[i] = errors.NewUtxoHashMismatchError("[Spend] utxo hash mismatch for %s:%d", spend.TxID, spend.Vout)
@@ -3847,7 +3812,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 		}
 
 		// UPDATE outputs with optimistic locking
-		result, err := txn.ExecContext(ctx, q2, spend.SpendingData.Bytes(), transactionID, spend.Vout, spender)
+		result, err := txn.ExecContext(ctx, q2, spend.SpendingData.Bytes(), transactionID, spend.Vout)
 		if err != nil {
 			if isDeadlock(err) {
 				return true // retryable
@@ -3866,7 +3831,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 
 		if affected == 0 {
 			var prunedSince bool
-			if err := txn.QueryRowContext(ctx, q3, transactionID, spender).Scan(&prunedSince); err != nil {
+			if err := txn.QueryRowContext(ctx, q3, transactionID, spend.Vout, spend.SpendingData.Bytes()).Scan(&prunedSince); err != nil {
 				if isDeadlock(err) {
 					return true
 				}
