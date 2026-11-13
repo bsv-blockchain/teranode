@@ -14,7 +14,7 @@
 | GRPCRetryBackoff                     | time.Duration | 2s               | blockassembly_grpcRetryBackoff                     | Retry delay timing                                                                   |
 | LivenessStallTimeout                 | time.Duration | 0s               | blockassembly_livenessStallTimeout                 | Liveness reports 503 if the main select stops being serviced for this long; 0 = off  |
 | LocalDAHCache                        | string        | ""               | blockassembly_localDAHCache                        | **UNUSED** - Reserved for future DAH caching                                         |
-| MaxBlockReorgRollback                | int           | 100              | blockassembly_maxBlockReorgRollback                | **UNUSED** - Defined but not referenced in code                                      |
+| MaxBlockReorgRollback                | int           | 100              | blockassembly_maxBlockReorgRollback                | **UNUSED** - Not read by any code; does not limit reorg depth                        |
 | MoveBackBlockConcurrency             | int           | 375              | blockassembly_moveBackBlockConcurrency             | Concurrency limit for reorg processing (SubtreeProcessor)                            |
 | ProcessRemainderTxHashesConcurrency  | int           | 375              | blockassembly_processRemainderTxHashesConcurrency  | Concurrency limit for remainder tx hash processing                                   |
 | ReconcileInterval                    | time.Duration | 30s              | blockassembly_reconcileInterval                    | Idle polling interval, and how often a pass re-reads the low-water mark without a BlockMinedUnset; 0 disables both (a lost BlockMinedUnset then leaves block assembly on an invalidated tip until the next invalidation or a restart), unfinished reset recovery still retries, at most three passes before the history is given up |
@@ -29,7 +29,7 @@
 | MinimumMerkleItemsPerSubtree         | int           | 1024             | minimum_merkle_items_per_subtree                   | Minimum subtree size                                                                 |
 | MaximumMerkleItemsPerSubtree         | int           | 1048576          | maximum_merkle_items_per_subtree                   | Maximum subtree size                                                                 |
 | DoubleSpendWindow                    | time.Duration | 0                | double_spend_window_millis | Double-spend detection window; 0 disables it                                         |
-| MaxGetReorgHashes                    | int           | 10000            | blockassembly_maxGetReorgHashes                    | **CRITICAL** - Reorganization hash limit                                             |
+| MaxGetReorgHashes                    | int           | 10000            | blockassembly_maxGetReorgHashes                    | **CRITICAL** - Hard reorg depth limit: a reorg that moves back more blocks than this is refused |
 | MinerWalletPrivateKeys               | []string      | []               | miner_wallet_private_keys                          | Mining wallet keys                                                                   |
 | EmergencyDifficultyDelay             | time.Duration | 0s               | blockassembly_emergencyDifficultyDelay             | Extra wait before a minimum-difficulty candidate; staggers miners (testnets only)    |
 | DifficultyCache                      | bool          | true             | blockassembly_difficultyCache                      | Enables difficulty calculation caching (Blockchain service)                          |
@@ -229,8 +229,9 @@ operator that the UTXO state needs manual intervention.
 
 ### Reorganization Handling
 
-- `MaxGetReorgHashes` prevents excessive memory usage during large reorganizations
-- Works with `MaxBlockReorgRollback`, `MoveBackBlockConcurrency`
+- `MaxGetReorgHashes` is the one reorg depth limit. A reorg that moves back more blocks than this value is refused: Block Assembly logs "reorg is too big", stays on the old tip, and does not reset
+- `MoveBackBlockConcurrency` bounds the concurrency of subtree processing during a reorg
+- `MaxBlockReorgRollback` does not limit reorg depth
 
 ### Dynamic Subtree Sizing
 
@@ -259,7 +260,7 @@ operator that the UTXO state needs manual intervention.
 | Setting | Validation | Impact | When Checked |
 |---------|------------|--------|-------------|
 | GRPCListenAddress | Must not be empty | Service skipped if empty | During daemon startup |
-| MaxGetReorgHashes | Limits reorganization processing | Memory protection during reorgs | During reorg processing |
+| MaxGetReorgHashes | Limits reorganization depth | Refuses a reorg that moves back too many blocks | During reorg processing |
 | Channel Buffers | Must accommodate processing loads | Pipeline performance and backpressure | During Init() |
 
 ## Configuration Examples
