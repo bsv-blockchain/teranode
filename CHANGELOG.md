@@ -35,7 +35,7 @@ read every section between yours and the target.
   to switch to the block relayed by the lowest-sorting peer id, and a block this node mined, stored
   with an empty peer id, won every tie. Upgrade the blockchain service and block assembly
   together: a new block assembly on an old blockchain service can miss a switch between equal-work
-  tips. Startup replaces the `idx_chain_work_peer_id` and `idx_chain_work_valid` indexes. (#PR)
+  tips. Startup replaces the `idx_chain_work_peer_id` and `idx_chain_work_valid` indexes. (#2193)
 - **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
   `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
   now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,
