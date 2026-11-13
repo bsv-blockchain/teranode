@@ -1,0 +1,21 @@
+# Minimum statement coverage for the consensus-critical packages, checked by
+# cmd/coveragegate on the coverage.out that `make test` writes in the PR test job.
+#
+# Each minimum is the coverage these packages had in CI on 2026-10-18, rounded
+# down to a whole percent, so coverage can rise but not fall. Raise a minimum when
+# coverage rises. Lower one only in the pull request that causes the drop, and say
+# why in that pull request.
+#
+# The values are CI values. A local `make test` profile reports different
+# statement counts and percentages, so check a minimum against the CI
+# coverage-report artifact, not against a local run.
+
+services/blockvalidation                 88
+services/validator                       92
+services/subtreevalidation               91
+services/blockchain                      89
+services/blockassembly                   92
+services/blockassembly/subtreeprocessor  84
+stores/utxo                              93
+stores/utxo/aerospike                    84
+stores/utxo/sql                          83
