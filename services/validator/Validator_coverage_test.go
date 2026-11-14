@@ -26,6 +26,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -936,6 +937,52 @@ func TestValidate_SpendStepTxNotFoundNotBlessed(t *testing.T) {
 			chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
 		})
 	}
+}
+
+// TestValidateInternalRecordsHistogramPastDecoupling pins that the
+// validateInternal span still ends, and records its histogram sample, on a
+// return after the post-decision context is detached.
+func TestValidateInternalRecordsHistogramPastDecoupling(t *testing.T) {
+	ctx := context.Background()
+	mockStore := &utxo.MockUtxostore{}
+
+	validator, err := New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), mockStore, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	v := validator.(*Validator)
+
+	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	coinbaseTx := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/Test miner/"),
+		transactions.WithP2PKHOutputs(1, 50e8, publicKey),
+	)
+	tx := transactions.Create(t,
+		transactions.WithPrivateKey(privateKey),
+		transactions.WithInput(coinbaseTx, 0),
+		transactions.WithP2PKHOutputs(1, 1000),
+		transactions.WithChangeOutput(),
+	)
+
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
+	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
+	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, errors.NewStorageError("spend failed"))
+
+	before := validateHistogramCount(t)
+
+	_, err = v.validateInternal(ctx, tx, 100, &Options{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "error spending utxos")
+
+	require.Equal(t, before+1, validateHistogramCount(t), "validateInternal must record exactly one histogram sample")
+}
+
+func validateHistogramCount(t *testing.T) uint64 {
+	t.Helper()
+
+	m := &dto.Metric{}
+	require.NoError(t, prometheusTransactionValidateTotal.Write(m))
+
+	return m.GetHistogram().GetSampleCount()
 }
 
 func TestValidator_ValidateInternal_GeneralSpendError(t *testing.T) {

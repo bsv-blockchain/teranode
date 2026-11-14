@@ -46,7 +46,8 @@ type Options struct {
 	// rather than via mempool submission. Published on the txmeta topic so
 	// relay consumers never announce such transactions. Explicit by design —
 	// not inferred from SkipPolicyChecks, which external submitters may set
-	// on genuinely fresh transactions.
+	// on genuinely fresh transactions. It also gates one check: the
+	// DAH-evicted-parent grace runs only when InBlock is false.
 	InBlock bool
 
 	// SkipScriptValidation determines whether BDK transaction/script validation should be skipped.

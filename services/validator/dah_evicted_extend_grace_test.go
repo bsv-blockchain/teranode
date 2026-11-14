@@ -242,7 +242,7 @@ func TestValidate_ExtendStepDAHEvictedParentGrace(t *testing.T) {
 		chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
 	})
 
-	t.Run("chain-check fault aborts as a node fault instead of missing parent", func(t *testing.T) {
+	t.Run("chain-check fault keeps missing parent and adds a node fault", func(t *testing.T) {
 		tx := makeExtendGraceTx(t)
 		minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
 		v, mockStore, _ := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, chainErr: errors.NewServiceError("blockchain unavailable")})
@@ -250,22 +250,26 @@ func TestValidate_ExtendStepDAHEvictedParentGrace(t *testing.T) {
 		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
 		require.Error(t, err)
-		require.False(t, errors.Is(err, errors.ErrTxMissingParent), "fault must not be reported as missing parent, got: %v", err)
+		// Missing parent stays in the chain: the counters, the legacy orphan pool and
+		// the HTTP 422 mapping all key on it as "deferrable".
+		require.True(t, errors.Is(err, errors.ErrTxMissingParent), "a fault must stay deferrable, got: %v", err)
 		// SERVICE_UNAVAILABLE is on the RPC layer's node-fault list; SERVICE_ERROR is not,
 		// and would be reported to the submitter as a verdict on the transaction.
 		require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "the fault must surface as a node-fault class, got: %v", err)
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("store fault on meta read aborts instead of reclassifying", func(t *testing.T) {
+	t.Run("store fault on meta read keeps missing parent and adds a node fault", func(t *testing.T) {
 		tx := makeExtendGraceTx(t)
-		v, mockStore, _ := setupExtendGraceValidator(t, tx, extendGraceSetup{childMetaErr: errors.NewStorageError("aerospike timeout")})
+		// Inject a class that is not itself a node fault, so only the grace's own
+		// classification can satisfy the STORAGE_ERROR assertion.
+		v, mockStore, _ := setupExtendGraceValidator(t, tx, extendGraceSetup{childMetaErr: errors.NewProcessingError("aerospike timeout")})
 
 		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
 		require.Error(t, err)
-		require.False(t, errors.Is(err, errors.ErrTxMissingParent), "fault must not be reported as missing parent, got: %v", err)
-		require.True(t, errors.Is(err, errors.ErrStorageError), "the store fault must surface, got: %v", err)
+		require.True(t, errors.Is(err, errors.ErrTxMissingParent), "a fault must stay deferrable, got: %v", err)
+		require.True(t, errors.Is(err, errors.ErrStorageError), "the grace must classify the read fault as a node fault, got: %v", err)
 		mockStore.AssertExpectations(t)
 	})
 

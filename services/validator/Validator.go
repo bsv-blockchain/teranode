@@ -1037,9 +1037,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				// done context denies the grace and the missing-parent error surfaces.
 				txMeta, graceErr := v.dahEvictedParentGrace(ctx, tx, txID)
 				if graceErr != nil {
-					span.RecordError(graceErr)
+					// Keep missing-parent outermost: the counters, the legacy orphan
+					// pool and the HTTP 422 mapping treat it as deferrable. The wrapped
+					// node fault still marks it as ours at the RPC boundary.
+					err = errors.NewTxMissingParentError("[Validate][%s] parent missing and DAH grace undecided", txID, graceErr)
+					span.RecordError(err)
 
-					return nil, graceErr
+					return nil, err
 				}
 
 				if txMeta != nil {
@@ -1123,8 +1127,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	//
 	// The Kafka retry loop below still honours caller cancellation, deliberately and
 	// explicitly, through its own select on ctx.
-	decoupledCtx, _, deferFn := tracing.DecoupleTracingSpan(context.WithoutCancel(ctx), "validator", "decoupledSpan")
-	defer deferFn()
+	decoupledCtx, _, decoupledDeferFn := tracing.DecoupleTracingSpan(context.WithoutCancel(ctx), "validator", "decoupledSpan")
+	defer decoupledDeferFn()
 
 	/*
 		Scenario where store is done before adding to assembly:
@@ -1998,9 +2002,11 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 // at or below the tip and maturity only grows with height.
 //
 // A nil record and nil error deny the grace, as does a clean not-found of the
-// child. A store or blockchain fault returns an error with a node-fault class (STORAGE_ERROR, SERVICE_UNAVAILABLE),
-// so the RPC layer does not report it as a verdict on the transaction. A done ctx
-// is the caller giving up, not a fault: it denies the grace.
+// child. A store or blockchain fault returns an error with a node-fault class
+// (STORAGE_ERROR, SERVICE_UNAVAILABLE). The caller wraps it in ErrTxMissingParent,
+// so consumers that defer on missing parent still do, and the RPC layer does not
+// report it as a verdict on the transaction. A done ctx is the caller giving up,
+// not a fault: it denies the grace.
 func (v *Validator) dahEvictedParentGrace(ctx context.Context, tx *bt.Tx, txID string) (*meta.Data, error) {
 	if v.blockchainClient == nil {
 		return nil, nil
