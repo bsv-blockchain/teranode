@@ -122,11 +122,11 @@ func requireBoundNonFinal(t *testing.T, valid bool, err error) {
 	require.Contains(t, err.Error(), "bad-txns-nonfinal")
 }
 
-// TestBlock_Valid_NonFinalCoinbaseRejected is bitcoin-sv/teranode#4981 (GAP-BV-045, BV-BODY-019):
-// bitcoin-sv applies IsFinalTx to the coinbase in ContextualCheckBlock, and Teranode's only finality
-// check was in the validator, which never sees a coinbase. A bound block at height H whose coinbase
-// has nLockTime = H and input sequence 0 is non-final and must be rejected; with sequence 0xFFFFFFFF
-// the same coinbase is final.
+// TestBlock_Valid_NonFinalCoinbaseRejected is bitcoin-sv/teranode#4981 (GAP-BV-045, BV-BODY-019,
+// AC-BV-BODY-019.1): bitcoin-sv applies IsFinalTx to the coinbase in ContextualCheckBlock, and
+// Teranode's only finality check was in the validator, which never sees a coinbase. A bound block at
+// height H whose coinbase has nLockTime = H and input sequence 0 is non-final and must be rejected;
+// with sequence 0xFFFFFFFF the same coinbase is final.
 func TestBlock_Valid_NonFinalCoinbaseRejected(t *testing.T) {
 	tSettings := finalitySettings(t, chaincfg.RegressionNetParams.CSVHeight)
 	chain := []*BlockHeader{regtestGenesisHeader(t)}
@@ -153,6 +153,71 @@ func TestBlock_Valid_NonFinalCoinbaseRejected(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, valid)
 	})
+
+	// The height threshold is the block's height, so any height lock at or above it is non-final,
+	// not only the one equal to it.
+	t.Run("nLockTime == height+1 with sequence 0 is non-final and INVALID", func(t *testing.T) {
+		// Given a block at height 100 whose coinbase is locked until height 101
+		lockedUntilNextHeight := finalityTestHeight + 1
+		block := finalityBlock(t, finalityCoinbase(t, finalityTestHeight, lockedUntilNextHeight, nonFinalSequence), regtestGenesisTimestamp)
+
+		// When
+		valid, err := validateFinalityBlock(t, block, tSettings, chain)
+
+		// Then
+		requireBoundNonFinal(t, valid, err)
+	})
+}
+
+// TestBlock_Valid_CoinbaseLockTimeThresholdSwitch checks, through Block.Valid on a bound body, the
+// switch between the two kinds of coinbase lock threshold.
+//
+// Spec: BV-BODY-019 and BV-BODY-015.
+//
+// Scenario: Given a block at height 100 on the regtest genesis, stamped 1,000s after genesis, with
+// CSV activating either just above it (pre-CSV, CSVHeight 101) or at it (post-CSV, CSVHeight 100).
+// When its coinbase has input sequence 0 and nLockTime 499,999,999, Then the lock is read as a
+// height (below 500,000,000) that no realistic block reaches, so the block is rejected INVALID as
+// non-final. When the nLockTime is 500,000,000, Then the lock is read as a time (a 1985 timestamp,
+// below every regtest block's header time and parent median time past), so the block is valid.
+func TestBlock_Valid_CoinbaseLockTimeThresholdSwitch(t *testing.T) {
+	const (
+		highestHeightLock = lockTimeThreshold - 1 // 499,999,999
+		lowestTimeLock    = lockTimeThreshold     // 500,000,000
+	)
+
+	chain := []*BlockHeader{regtestGenesisHeader(t)}
+
+	for _, csvActivation := range []struct {
+		name      string
+		csvHeight uint32
+	}{
+		{"pre-CSV", finalityTestHeight + 1},
+		{"post-CSV", finalityTestHeight},
+	} {
+		t.Run(csvActivation.name+": nLockTime 499,999,999 is a height lock and non-final", func(t *testing.T) {
+			// Given
+			block := finalityBlock(t, finalityCoinbase(t, finalityTestHeight, highestHeightLock, nonFinalSequence), finalityTestHeaderTime)
+
+			// When
+			valid, err := validateFinalityBlock(t, block, finalitySettings(t, csvActivation.csvHeight), chain)
+
+			// Then
+			requireBoundNonFinal(t, valid, err)
+		})
+
+		t.Run(csvActivation.name+": nLockTime 500,000,000 is a time lock and final", func(t *testing.T) {
+			// Given
+			block := finalityBlock(t, finalityCoinbase(t, finalityTestHeight, lowestTimeLock, nonFinalSequence), finalityTestHeaderTime)
+
+			// When
+			valid, err := validateFinalityBlock(t, block, finalitySettings(t, csvActivation.csvHeight), chain)
+
+			// Then
+			require.NoError(t, err, "a 500,000,000 time lock is below the cutoff, so the coinbase is final")
+			require.True(t, valid)
+		})
+	}
 }
 
 // TestBlock_Valid_CoinbaseTimeLockCutoff pins which time a time-based coinbase nLockTime is compared
