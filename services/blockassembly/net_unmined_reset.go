@@ -64,9 +64,12 @@ func (b *BlockAssembler) markNetUnminedMoveBackTxs(ctx context.Context, moveBack
 		return nil
 	}
 
-	scratchDir := os.TempDir()
+	// The configured tx map directory is this node's own fast disk, so a scratch
+	// directory in it that this run did not make is an earlier run's. The OS temp
+	// directory may be shared with other processes, so nothing is swept there.
+	scratchDir, sweepStale := os.TempDir(), false
 	if dirs := b.settings.BlockAssembly.TxMapDirs; len(dirs) > 0 {
-		scratchDir = dirs[0]
+		scratchDir, sweepStale = dirs[0], true
 	}
 
 	var kept, pruned int
@@ -75,10 +78,11 @@ func (b *BlockAssembler) markNetUnminedMoveBackTxs(ctx context.Context, moveBack
 		len(backBlocks), b.netUnminedBlockStream(backBlocks, 1),
 		len(forwardBlocks), b.netUnminedBlockStream(forwardBlocks, resetNetUnminedReadConcurrency),
 		netUnminedParams{
-			Dir:       scratchDir,
-			RangeBits: netUnminedRangeBits(forwardTxs, resetNetUnminedMaxRangeEntries),
-			ChunkSize: resetNetUnminedChunkSize,
-			Beat:      b.heartbeat.BeatIfStarted,
+			Dir:        scratchDir,
+			RangeBits:  netUnminedRangeBits(forwardTxs, resetNetUnminedMaxRangeEntries),
+			ChunkSize:  resetNetUnminedChunkSize,
+			Beat:       b.heartbeat.BeatIfStarted,
+			SweepStale: sweepStale,
 		},
 		func(chunk []chainhash.Hash) error {
 			// Leave out moveBack txs the UTXO store has already pruned. A moveBack block can
@@ -136,12 +140,12 @@ func (b *BlockAssembler) markNetUnminedMoveBackTxs(ctx context.Context, moveBack
 			// unmined_since for them) races with that write, so the corruption could
 			// persist for a full reconcile cycle. Skip the marker entirely; the next
 			// reconcile usually succeeds.
-			b.logger.Warnf("[BlockAssembler][Reset] error reading a moveForward block: %v (skipping moveBack unmined_since marker for this reset cycle; next reconcile will retry)", err)
+			b.logger.Warnf("[BlockAssembler][Reset] error reading a moveForward block: %v (skipping moveBack unmined_since marker for this reset cycle)", err)
 
 			return nil
 		}
 
-		b.logger.Warnf("[BlockAssembler][Reset] error computing the net unmined moveBack transactions: %v (%d marked so far; next reconcile will retry)", err, kept)
+		b.logger.Warnf("[BlockAssembler][Reset] stopped marking the net unmined moveBack transactions after %d: %v (the rest stay unmarked until a later reset)", kept, err)
 
 		return nil
 	}
@@ -185,7 +189,13 @@ func (b *BlockAssembler) netUnminedBlockStream(blocks []*model.Block, concurrenc
 			g.Go(func() error { return b.visitSubtreeTxHashes(gctx, subtreeHash, visit) })
 		}
 
-		return g.Wait()
+		if err := g.Wait(); err != nil {
+			return err
+		}
+
+		// A cancelled parent stops the loop above without any visit failing, which
+		// would otherwise look like a block with fewer transactions.
+		return ctx.Err()
 	}
 }
 

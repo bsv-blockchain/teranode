@@ -72,7 +72,12 @@ func netUnminedInOrder(
 		beat = func() {}
 	}
 
-	removeStaleNetUnminedScratch(p.Dir)
+	if p.SweepStale {
+		// Removing a large directory left by a killed run can take a while.
+		beat()
+		removeStaleNetUnminedScratch(p.Dir)
+		beat()
+	}
 
 	dir, err := os.MkdirTemp(p.Dir, netUnminedScratchName+"*")
 	if err != nil {
@@ -303,6 +308,10 @@ type netUnminedParams struct {
 	ChunkSize int
 	// Beat is called regularly, so a liveness probe sees progress.
 	Beat func()
+	// SweepStale removes scratch directories an earlier run left under Dir. Set it
+	// only when Dir is used by this process alone: a directory another live
+	// process is working in would be deleted under it.
+	SweepStale bool
 }
 
 type netUnminedResult struct {

@@ -435,13 +435,25 @@ func TestNetUnminedInOrder_RemovesScratchDirsLeftByAnEarlierRun(t *testing.T) {
 	unrelated := filepath.Join(dir, "ba-txmap-disk0-1-2")
 	require.NoError(t, os.MkdirAll(unrelated, 0o750))
 
+	// A directory carrying this process's own start time is another reset's in
+	// this process, so it stays.
+	ours := filepath.Join(dir, netUnminedScratchName+"inuse")
+	require.NoError(t, os.MkdirAll(ours, 0o750))
+
+	// Without SweepStale nothing is touched: the directory may be shared.
+	_, err := netUnminedInOrder(context.Background(), 1, streamOf(makeBlocks(rand.New(rand.NewSource(14)), []int{5}, 5)), 0, nil,
+		netUnminedParams{Dir: dir, ChunkSize: 5}, func([]chainhash.Hash) error { return nil })
+	require.NoError(t, err)
+	require.DirExists(t, stale)
+
 	r := rand.New(rand.NewSource(13))
 	back := makeBlocks(r, []int{10}, 10)
 
-	_, err := netUnminedInOrder(context.Background(), 1, streamOf(back), 0, nil,
-		netUnminedParams{Dir: dir, RangeBits: 0, ChunkSize: 10}, func([]chainhash.Hash) error { return nil })
+	_, err = netUnminedInOrder(context.Background(), 1, streamOf(back), 0, nil,
+		netUnminedParams{Dir: dir, RangeBits: 0, ChunkSize: 10, SweepStale: true}, func([]chainhash.Hash) error { return nil })
 	require.NoError(t, err)
 
 	require.NoDirExists(t, stale)
 	require.DirExists(t, unrelated, "only this feature's own scratch directories are swept")
+	require.DirExists(t, ours, "a directory of this process is never swept")
 }
