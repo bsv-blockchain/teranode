@@ -1,12 +1,13 @@
 package blockassembly
 
 import (
+	"bufio"
 	"context"
-	"encoding/binary"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -44,35 +45,69 @@ func makeBlocks(r *rand.Rand, sizes []int, subtreeLen int) []blockHashes {
 }
 
 func streamOf(blocks []blockHashes) txHashStream {
-	return func(ctx context.Context, block int, visit func([]chainhash.Hash) error) error {
+	return func(ctx context.Context, block int, visit func([]chainhash.Hash) error) (error, error) {
 		b := blocks[block]
 		sent := 0
 
 		for start := 0; start < len(b.hashes); start += b.subtreeLen {
 			if b.failAfter > 0 && sent == b.failAfter {
-				return errors.NewStorageError("subtree %d of block %d is gone", sent, block)
+				return errors.NewStorageError("subtree %d of block %d is gone", sent, block), nil
 			}
 
 			if err := ctx.Err(); err != nil {
-				return err
+				return nil, err
 			}
 
 			// A fresh copy each call: the visitor must not retain the slice, and
 			// a stream that reuses its buffer must not be relied on either.
 			chunk := append([]chainhash.Hash(nil), b.hashes[start:min(start+b.subtreeLen, len(b.hashes))]...)
 			if err := visit(chunk); err != nil {
-				return err
+				return nil, err
 			}
 
 			sent++
 		}
 
-		return nil
+		return nil, nil
+	}
+}
+
+// concurrentStreamOf calls visit for every subtree of a block from its own
+// goroutine, the way the reset reads a block's subtrees.
+func concurrentStreamOf(blocks []blockHashes) txHashStream {
+	return func(_ context.Context, block int, visit func([]chainhash.Hash) error) (error, error) {
+		b := blocks[block]
+
+		var (
+			wg    sync.WaitGroup
+			mu    sync.Mutex
+			first error
+		)
+
+		for start := 0; start < len(b.hashes); start += b.subtreeLen {
+			wg.Add(1)
+
+			go func(chunk []chainhash.Hash) {
+				defer wg.Done()
+
+				if err := visit(chunk); err != nil {
+					mu.Lock()
+					if first == nil {
+						first = err
+					}
+					mu.Unlock()
+				}
+			}(append([]chainhash.Hash(nil), b.hashes[start:min(start+b.subtreeLen, len(b.hashes))]...))
+		}
+
+		wg.Wait()
+
+		return nil, first
 	}
 }
 
 // referenceNetUnmined is the map the Reset used to build: every forward hash in
-// one set, every back hash kept if it is not in it, in back order.
+// one set, every back hash kept if it is not in it.
 func referenceNetUnmined(back, forward []blockHashes, skippedBack map[int]bool) []chainhash.Hash {
 	inForward := make(map[chainhash.Hash]struct{})
 
@@ -99,6 +134,8 @@ func referenceNetUnmined(back, forward []blockHashes, skippedBack map[int]bool) 
 	return out
 }
 
+// collect appends without a lock: emit is never called concurrently, which the
+// race detector checks here.
 func collect(out *[]chainhash.Hash) func([]chainhash.Hash) error {
 	return func(chunk []chainhash.Hash) error {
 		*out = append(*out, chunk...)
@@ -119,18 +156,41 @@ func overlap(back, forward []blockHashes) {
 	}
 }
 
-func TestNetUnminedInOrder_MatchesTheMapAndKeepsBackOrder(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		rangeBits uint
-		chunk     int
-	}{
-		{"one range", 0, 7},
-		{"few ranges, small chunks", 3, 5},
-		{"many ranges, chunk larger than the input", 8, 100_000},
-		{"max ranges", 10, 64},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+func countHashes(blocks []blockHashes) uint64 {
+	var n uint64
+	for _, b := range blocks {
+		n += uint64(len(b.hashes))
+	}
+
+	return n
+}
+
+// netUnminedModes runs a test in memory and on disk. maxInMemory is the most
+// forward hashes held in memory at once: at or above the forward count the whole
+// set is in memory and no scratch file is made.
+var netUnminedModes = []struct {
+	name        string
+	maxInMemory uint64
+}{
+	{"in memory", 1 << 40},
+	{"on disk, two ranges", 0}, // filled in per test: half the forward count
+	{"on disk, max ranges", 1},
+}
+
+func paramsFor(t *testing.T, maxInMemory uint64, forward []blockHashes, chunk int) netUnminedParams {
+	t.Helper()
+
+	n := countHashes(forward)
+	if maxInMemory == 0 {
+		maxInMemory = max(n/2, 1)
+	}
+
+	return netUnminedParams{Dir: t.TempDir(), ForwardCount: n, MaxForwardInMemory: maxInMemory, ChunkSize: chunk}
+}
+
+func TestNetUnmined_MatchesTheMap(t *testing.T) {
+	for _, mode := range netUnminedModes {
+		t.Run(mode.name, func(t *testing.T) {
 			r := rand.New(rand.NewSource(1))
 			back := makeBlocks(r, []int{1000, 777, 1}, 100)
 			forward := makeBlocks(r, []int{2500, 31, 900}, 64)
@@ -138,153 +198,215 @@ func TestNetUnminedInOrder_MatchesTheMapAndKeepsBackOrder(t *testing.T) {
 
 			var got []chainhash.Hash
 
-			res, err := netUnminedInOrder(context.Background(), len(back), streamOf(back), len(forward), streamOf(forward),
-				netUnminedParams{Dir: t.TempDir(), RangeBits: tc.rangeBits, ChunkSize: tc.chunk}, collect(&got))
+			res, err := netUnmined(context.Background(), len(back), streamOf(back), len(forward), streamOf(forward),
+				paramsFor(t, mode.maxInMemory, forward, 7), collect(&got))
 			require.NoError(t, err)
 
 			want := referenceNetUnmined(back, forward, nil)
 			require.NotEmpty(t, want)
 			require.Less(t, len(want), 1000+777+1, "some back hashes must be dropped for the test to mean anything")
-			require.Equal(t, want, got, "same hashes, same order as the map")
+			require.ElementsMatch(t, want, got, "the same hashes as the map")
 			require.EqualValues(t, len(want), res.Emitted)
 			require.EqualValues(t, 1000+777+1, res.Back)
 			require.EqualValues(t, 2500+31+900, res.Forward)
+			require.Empty(t, res.SkippedBackBlocks)
+			require.NoError(t, res.ScratchLeft)
+		})
+	}
+}
+
+func TestNetUnmined_ChunksAreBounded(t *testing.T) {
+	for _, mode := range netUnminedModes {
+		t.Run(mode.name, func(t *testing.T) {
+			r := rand.New(rand.NewSource(2))
+			back := makeBlocks(r, []int{500}, 50)
+			forward := makeBlocks(r, []int{10}, 10)
+
+			var sizes []int
+
+			var got []chainhash.Hash
+
+			_, err := netUnmined(context.Background(), 1, streamOf(back), 1, streamOf(forward),
+				paramsFor(t, mode.maxInMemory, forward, 64), func(chunk []chainhash.Hash) error {
+					sizes = append(sizes, len(chunk))
+					got = append(got, chunk...)
+
+					return nil
+				})
+			require.NoError(t, err)
+			require.ElementsMatch(t, back[0].hashes, got)
+
+			for i, n := range sizes {
+				require.LessOrEqual(t, n, 64)
+
+				if i < len(sizes)-1 {
+					require.Equal(t, 64, n, "only the last chunk may be short")
+				}
+			}
+		})
+	}
+}
+
+// A move-back block that cannot be read in full still gives what was read of it:
+// every one of those is a move-back transaction, so marking it is right.
+func TestNetUnmined_ABackBlockThatCannotBeReadKeepsWhatWasRead(t *testing.T) {
+	for _, mode := range netUnminedModes {
+		t.Run(mode.name, func(t *testing.T) {
+			r := rand.New(rand.NewSource(3))
+			back := makeBlocks(r, []int{300, 300, 300}, 50)
+			forward := makeBlocks(r, []int{200}, 50)
+			overlap(back, forward)
+
+			back[1].failAfter = 2 // two subtrees read, then the third is gone
+
+			var got []chainhash.Hash
+
+			res, err := netUnmined(context.Background(), len(back), streamOf(back), len(forward), streamOf(forward),
+				paramsFor(t, mode.maxInMemory, forward, 40), collect(&got))
+			require.NoError(t, err)
+			require.Len(t, res.SkippedBackBlocks, 1)
+			require.Equal(t, 1, res.SkippedBackBlocks[0].Block)
+			require.Error(t, res.SkippedBackBlocks[0].Err, "the cause is kept for the log")
+
+			back[1].failAfter = 0
+			others := referenceNetUnmined(back, forward, map[int]bool{1: true})
+			all := referenceNetUnmined(back, forward, nil)
+
+			require.Subset(t, got, others, "the readable blocks are complete")
+			require.Subset(t, all, got, "nothing that is not net unmined")
+			require.Len(t, got, len(others)+len(referenceNetUnmined([]blockHashes{{hashes: back[1].hashes[:100]}}, forward, nil)),
+				"the two subtrees read of the failed block are kept")
+		})
+	}
+}
+
+func TestNetUnmined_AForwardBlockThatCannotBeReadEmitsNothing(t *testing.T) {
+	for _, mode := range netUnminedModes {
+		t.Run(mode.name, func(t *testing.T) {
+			r := rand.New(rand.NewSource(4))
+			back := makeBlocks(r, []int{100}, 50)
+			forward := makeBlocks(r, []int{100, 100}, 50)
+			p := paramsFor(t, mode.maxInMemory, forward, 10)
+			forward[1].failAfter = 1
+
+			emitted := 0
+
+			res, err := netUnmined(context.Background(), 1, streamOf(back), 2, streamOf(forward), p,
+				func(chunk []chainhash.Hash) error {
+					emitted += len(chunk)
+
+					return nil
+				})
+			require.Error(t, err)
+			require.True(t, res.ForwardIncomplete)
+			require.Zero(t, emitted, "an incomplete forward set must emit nothing: every back hash would look net unmined")
+		})
+	}
+}
+
+func TestNetUnmined_EmitErrorStopsAndIsReturned(t *testing.T) {
+	for _, mode := range netUnminedModes {
+		for _, stream := range []struct {
+			name string
+			of   func([]blockHashes) txHashStream
+		}{{"sequential", streamOf}, {"concurrent", concurrentStreamOf}} {
+			t.Run(mode.name+", "+stream.name, func(t *testing.T) {
+				r := rand.New(rand.NewSource(6))
+				back := makeBlocks(r, []int{100, 100}, 10)
+				forward := makeBlocks(r, []int{5}, 5)
+
+				markFailed := errors.NewStorageError("mark failed")
+				calls := 0
+
+				res, err := netUnmined(context.Background(), 2, stream.of(back), 1, stream.of(forward),
+					paramsFor(t, mode.maxInMemory, forward, 10), func([]chainhash.Hash) error {
+						calls++
+
+						return markFailed
+					})
+				require.ErrorIs(t, err, markFailed, "the emit error is the one returned, not a read it cancelled")
+				require.Equal(t, 1, calls, "no chunk after a failed one")
+				require.False(t, res.ForwardIncomplete)
+				require.Empty(t, res.SkippedBackBlocks, "a failed emit is not an unreadable block")
+			})
+		}
+	}
+}
+
+func TestNetUnmined_CancelledContextStops(t *testing.T) {
+	for _, mode := range netUnminedModes {
+		t.Run(mode.name, func(t *testing.T) {
+			r := rand.New(rand.NewSource(7))
+			back := makeBlocks(r, []int{100}, 10)
+			forward := makeBlocks(r, []int{100}, 10)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			res, err := netUnmined(ctx, 1, streamOf(back), 1, streamOf(forward),
+				paramsFor(t, mode.maxInMemory, forward, 10), func([]chainhash.Hash) error { return nil })
+			require.ErrorIs(t, err, context.Canceled)
+			require.False(t, res.ForwardIncomplete, "a cancelled read is not an unreadable block")
 			require.Empty(t, res.SkippedBackBlocks)
 		})
 	}
 }
 
-func TestNetUnminedInOrder_ChunksAreBoundedAndContiguous(t *testing.T) {
-	r := rand.New(rand.NewSource(2))
-	back := makeBlocks(r, []int{500}, 50)
-	forward := makeBlocks(r, []int{10}, 10)
-
-	var sizes []int
-
-	var got []chainhash.Hash
-
-	_, err := netUnminedInOrder(context.Background(), 1, streamOf(back), 1, streamOf(forward),
-		netUnminedParams{Dir: t.TempDir(), RangeBits: 2, ChunkSize: 64}, func(chunk []chainhash.Hash) error {
-			sizes = append(sizes, len(chunk))
-			got = append(got, chunk...)
-
-			return nil
-		})
-	require.NoError(t, err)
-	require.Equal(t, back[0].hashes, got)
-
-	for i, n := range sizes {
-		require.LessOrEqual(t, n, 64)
-
-		if i < len(sizes)-1 {
-			require.Equal(t, 64, n, "only the last chunk may be short")
-		}
-	}
-}
-
-func TestNetUnminedInOrder_ABackBlockThatCannotBeReadIsLeftOutWhole(t *testing.T) {
-	r := rand.New(rand.NewSource(3))
-	back := makeBlocks(r, []int{300, 300, 300}, 50)
-	forward := makeBlocks(r, []int{200}, 50)
-	overlap(back, forward)
-
-	// The last block overlaps too, so a failed block that did not reserve its
-	// positions would shift this one's bits onto the wrong transactions.
-	for i := 0; i < len(back[2].hashes); i += 4 {
-		forward[0].hashes[i%len(forward[0].hashes)] = back[2].hashes[i]
-	}
-
-	back[1].failAfter = 2 // two subtrees read, then the third is gone
-
-	var got []chainhash.Hash
-
-	res, err := netUnminedInOrder(context.Background(), len(back), streamOf(back), len(forward), streamOf(forward),
-		netUnminedParams{Dir: t.TempDir(), RangeBits: 3, ChunkSize: 40}, collect(&got))
-	require.NoError(t, err)
-	require.Equal(t, []int{1}, res.SkippedBackBlocks)
-
-	// Block 1 contributes nothing, not even its first two subtrees.
-	back[1].failAfter = 0
-	require.Equal(t, referenceNetUnmined(back, forward, map[int]bool{1: true}), got)
-}
-
-func TestNetUnminedInOrder_AForwardBlockThatCannotBeReadFailsTheWholeComputation(t *testing.T) {
-	r := rand.New(rand.NewSource(4))
-	back := makeBlocks(r, []int{100}, 50)
-	forward := makeBlocks(r, []int{100, 100}, 50)
-	forward[1].failAfter = 1
-
-	emitted := 0
-
-	res, err := netUnminedInOrder(context.Background(), 1, streamOf(back), 2, streamOf(forward),
-		netUnminedParams{Dir: t.TempDir(), RangeBits: 2, ChunkSize: 10}, func(chunk []chainhash.Hash) error {
-			emitted += len(chunk)
-
-			return nil
-		})
-	require.Error(t, err)
-	require.True(t, res.ForwardIncomplete)
-	require.Zero(t, emitted, "an incomplete forward set must emit nothing: every back hash would look net unmined")
-}
-
-func TestNetUnminedInOrder_BackStreamFailingOnTheSecondReadFails(t *testing.T) {
-	r := rand.New(rand.NewSource(5))
-	back := makeBlocks(r, []int{200}, 50)
-	forward := makeBlocks(r, []int{50}, 50)
-
-	calls := 0
-	flaky := func(ctx context.Context, block int, visit func([]chainhash.Hash) error) error {
-		calls++
-		if calls == 2 {
-			return errors.NewStorageError("gone on the second read")
-		}
-
-		return streamOf(back)(ctx, block, visit)
-	}
-
-	_, err := netUnminedInOrder(context.Background(), 1, flaky, 1, streamOf(forward),
-		netUnminedParams{Dir: t.TempDir(), RangeBits: 1, ChunkSize: 10}, func([]chainhash.Hash) error { return nil })
-	require.Error(t, err, "positions are only valid if both reads of a block agree")
-}
-
-func TestNetUnminedInOrder_EmitErrorStops(t *testing.T) {
-	r := rand.New(rand.NewSource(6))
-	back := makeBlocks(r, []int{100}, 50)
-	forward := makeBlocks(r, []int{5}, 5)
-
-	calls := 0
-
-	_, err := netUnminedInOrder(context.Background(), 1, streamOf(back), 1, streamOf(forward),
-		netUnminedParams{Dir: t.TempDir(), RangeBits: 1, ChunkSize: 10}, func([]chainhash.Hash) error {
-			calls++
-
-			return errors.NewStorageError("mark failed")
-		})
-	require.Error(t, err)
-	require.Equal(t, 1, calls, "no chunk after a failed one")
-}
-
-func TestNetUnminedInOrder_CancelledContextStops(t *testing.T) {
-	r := rand.New(rand.NewSource(7))
+// A forward set that fits in memory needs no disk at all, so a reset of ordinary
+// size works where no scratch directory can be made.
+func TestNetUnmined_InMemoryTouchesNoDisk(t *testing.T) {
+	r := rand.New(rand.NewSource(15))
 	back := makeBlocks(r, []int{100}, 10)
 	forward := makeBlocks(r, []int{100}, 10)
+	overlap(append(back, back[0]), forward)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	nowhere := filepath.Join(t.TempDir(), "not", "there")
 
-	_, err := netUnminedInOrder(ctx, 1, streamOf(back), 1, streamOf(forward),
-		netUnminedParams{Dir: t.TempDir(), RangeBits: 1, ChunkSize: 10}, func([]chainhash.Hash) error { return nil })
+	var got []chainhash.Hash
+
+	_, err := netUnmined(context.Background(), 1, streamOf(back), 1, streamOf(forward),
+		netUnminedParams{Dir: nowhere, ForwardCount: 100, MaxForwardInMemory: 100, ChunkSize: 10}, collect(&got))
+	require.NoError(t, err)
+	require.ElementsMatch(t, referenceNetUnmined(back, forward, nil), got)
+
+	// One hash more than fits and the scratch directory is needed.
+	got = nil
+
+	res, err := netUnmined(context.Background(), 1, streamOf(back), 1, streamOf(forward),
+		netUnminedParams{Dir: nowhere, ForwardCount: 101, MaxForwardInMemory: 100, ChunkSize: 10}, collect(&got))
 	require.Error(t, err)
+	require.Empty(t, got)
+	require.False(t, res.ForwardIncomplete, "a scratch directory that cannot be made is not an unreadable block")
 }
 
-func TestNetUnminedInOrder_RemovesItsScratchFiles(t *testing.T) {
+func TestNetUnmined_OnDiskSplitsTheForwardSetIntoRanges(t *testing.T) {
+	r := rand.New(rand.NewSource(16))
+	back := makeBlocks(r, []int{50}, 10)
+	forward := makeBlocks(r, []int{100}, 10)
+	dir := t.TempDir()
+
+	var files []string
+
+	_, err := netUnmined(context.Background(), 1, streamOf(back), 1, streamOf(forward),
+		netUnminedParams{Dir: dir, ForwardCount: 100, MaxForwardInMemory: 30, ChunkSize: 100}, func([]chainhash.Hash) error {
+			if files == nil {
+				files, _ = filepath.Glob(filepath.Join(dir, netUnminedScratchPrefix+"*", "forward-*"))
+			}
+
+			return nil
+		})
+	require.NoError(t, err)
+	require.Len(t, files, 4, "100 forward hashes at 30 a range need 4 ranges")
+}
+
+func TestNetUnmined_RemovesItsScratchFiles(t *testing.T) {
 	r := rand.New(rand.NewSource(8))
 	back := makeBlocks(r, []int{100}, 10)
 	forward := makeBlocks(r, []int{100}, 10)
 	dir := t.TempDir()
+	p := netUnminedParams{Dir: dir, ForwardCount: 100, MaxForwardInMemory: 25, ChunkSize: 10}
 
-	_, err := netUnminedInOrder(context.Background(), 1, streamOf(back), 1, streamOf(forward),
-		netUnminedParams{Dir: dir, RangeBits: 2, ChunkSize: 10}, func([]chainhash.Hash) error { return nil })
+	_, err := netUnmined(context.Background(), 1, streamOf(back), 1, streamOf(forward), p, func([]chainhash.Hash) error { return nil })
 	require.NoError(t, err)
 
 	entries, err := os.ReadDir(dir)
@@ -293,8 +415,7 @@ func TestNetUnminedInOrder_RemovesItsScratchFiles(t *testing.T) {
 
 	// And on failure too.
 	forward[0].failAfter = 1
-	_, err = netUnminedInOrder(context.Background(), 1, streamOf(back), 1, streamOf(forward),
-		netUnminedParams{Dir: dir, RangeBits: 2, ChunkSize: 10}, func([]chainhash.Hash) error { return nil })
+	_, err = netUnmined(context.Background(), 1, streamOf(back), 1, streamOf(forward), p, func([]chainhash.Hash) error { return nil })
 	require.Error(t, err)
 
 	entries, err = os.ReadDir(dir)
@@ -302,58 +423,60 @@ func TestNetUnminedInOrder_RemovesItsScratchFiles(t *testing.T) {
 	require.Empty(t, entries)
 }
 
-func TestNetUnminedInOrder_ForwardMayBeStreamedConcurrently(t *testing.T) {
-	r := rand.New(rand.NewSource(9))
-	back := makeBlocks(r, []int{400}, 40)
-	forward := makeBlocks(r, []int{600}, 20)
+// The scratch files are only a means: once every chunk is emitted, a directory
+// that cannot be removed is reported, and does not fail a finished computation.
+func TestNetUnmined_ScratchThatCannotBeRemovedDoesNotFail(t *testing.T) {
+	old := netUnminedRemoveAll
+	netUnminedRemoveAll = func(string) error { return errors.NewStorageError("device busy") }
 
-	for i := 0; i < len(back[0].hashes); i += 2 {
-		forward[0].hashes[i%600] = back[0].hashes[i]
-	}
+	t.Cleanup(func() { netUnminedRemoveAll = old })
 
-	concurrent := func(ctx context.Context, block int, visit func([]chainhash.Hash) error) error {
-		b := forward[block]
-
-		var wg sync.WaitGroup
-
-		errs := make(chan error, len(b.hashes))
-
-		for start := 0; start < len(b.hashes); start += b.subtreeLen {
-			wg.Add(1)
-
-			go func(chunk []chainhash.Hash) {
-				defer wg.Done()
-
-				if err := visit(chunk); err != nil {
-					errs <- err
-				}
-			}(append([]chainhash.Hash(nil), b.hashes[start:min(start+b.subtreeLen, len(b.hashes))]...))
-		}
-
-		wg.Wait()
-		close(errs)
-
-		return <-errs
-	}
+	r := rand.New(rand.NewSource(17))
+	back := makeBlocks(r, []int{40}, 10)
+	forward := makeBlocks(r, []int{40}, 10)
 
 	var got []chainhash.Hash
 
-	_, err := netUnminedInOrder(context.Background(), 1, streamOf(back), 1, concurrent,
-		netUnminedParams{Dir: t.TempDir(), RangeBits: 3, ChunkSize: 33}, collect(&got))
+	res, err := netUnmined(context.Background(), 1, streamOf(back), 1, streamOf(forward),
+		netUnminedParams{Dir: t.TempDir(), ForwardCount: 40, MaxForwardInMemory: 10, ChunkSize: 10}, collect(&got))
 	require.NoError(t, err)
-	require.Equal(t, referenceNetUnmined(back, forward, nil), got)
+	require.Len(t, got, 40)
+	require.Error(t, res.ScratchLeft)
 }
 
-func TestNetUnminedInOrder_NoForwardBlocksEmitsEveryBackHashInOrder(t *testing.T) {
+func TestNetUnmined_BothSidesMayBeStreamedConcurrently(t *testing.T) {
+	for _, mode := range netUnminedModes {
+		t.Run(mode.name, func(t *testing.T) {
+			r := rand.New(rand.NewSource(9))
+			back := makeBlocks(r, []int{400, 400}, 40)
+			forward := makeBlocks(r, []int{600}, 20)
+
+			for i := 0; i < len(back[0].hashes); i += 2 {
+				forward[0].hashes[i%600] = back[0].hashes[i]
+			}
+
+			var got []chainhash.Hash
+
+			res, err := netUnmined(context.Background(), 2, concurrentStreamOf(back), 1, concurrentStreamOf(forward),
+				paramsFor(t, mode.maxInMemory, forward, 33), collect(&got))
+			require.NoError(t, err)
+			require.ElementsMatch(t, referenceNetUnmined(back, forward, nil), got)
+			require.EqualValues(t, 800, res.Back)
+			require.EqualValues(t, 600, res.Forward)
+		})
+	}
+}
+
+func TestNetUnmined_NoForwardBlocksEmitsEveryBackHash(t *testing.T) {
 	r := rand.New(rand.NewSource(10))
 	back := makeBlocks(r, []int{120, 80}, 30)
 
 	var got []chainhash.Hash
 
-	_, err := netUnminedInOrder(context.Background(), 2, streamOf(back), 0, nil,
-		netUnminedParams{Dir: t.TempDir(), RangeBits: 2, ChunkSize: 25}, collect(&got))
+	_, err := netUnmined(context.Background(), 2, streamOf(back), 0, nil,
+		netUnminedParams{Dir: filepath.Join(t.TempDir(), "unused"), ChunkSize: 25}, collect(&got))
 	require.NoError(t, err)
-	require.Equal(t, append(append([]chainhash.Hash{}, back[0].hashes...), back[1].hashes...), got)
+	require.ElementsMatch(t, append(append([]chainhash.Hash{}, back[0].hashes...), back[1].hashes...), got)
 }
 
 func TestNetUnminedRangeBits(t *testing.T) {
@@ -372,38 +495,34 @@ func TestNetUnminedRangeOf_UsesTheLeadingBits(t *testing.T) {
 	require.EqualValues(t, 1, netUnminedRangeOf(h, 1))
 	require.EqualValues(t, 0b101, netUnminedRangeOf(h, 3))
 	require.EqualValues(t, 0b1010_0000_11, netUnminedRangeOf(h, 10))
-
-	// The record layout is part of the contract with the pass that reads it back.
-	var rec [netUnminedBackRecordSize]byte
-
-	binary.LittleEndian.PutUint64(rec[:8], 42)
-	require.Equal(t, 40, len(rec))
-
-	_ = filepath.Join // keep the import used if the layout test grows
 }
 
-func TestNetUnminedInOrder_DuplicatesGetTheirOwnPositions(t *testing.T) {
-	r := rand.New(rand.NewSource(11))
-	back := makeBlocks(r, []int{60, 40}, 25)
-	forward := makeBlocks(r, []int{30}, 10)
+func TestNetUnmined_DuplicatesAreEmittedAsOftenAsTheyAppear(t *testing.T) {
+	for _, mode := range netUnminedModes {
+		t.Run(mode.name, func(t *testing.T) {
+			r := rand.New(rand.NewSource(11))
+			back := makeBlocks(r, []int{60, 40}, 25)
+			forward := makeBlocks(r, []int{30}, 10)
 
-	// back repeats a hash inside a block and across blocks; forward repeats one too
-	back[0].hashes[10] = back[0].hashes[3]
-	back[1].hashes[5] = back[0].hashes[3]
-	back[1].hashes[6] = back[0].hashes[20]
-	forward[0].hashes[0] = back[0].hashes[20]
-	forward[0].hashes[1] = back[0].hashes[20]
-	forward[0].hashes[2] = back[1].hashes[30]
+			// back repeats a hash inside a block and across blocks; forward repeats one too
+			back[0].hashes[10] = back[0].hashes[3]
+			back[1].hashes[5] = back[0].hashes[3]
+			back[1].hashes[6] = back[0].hashes[20]
+			forward[0].hashes[0] = back[0].hashes[20]
+			forward[0].hashes[1] = back[0].hashes[20]
+			forward[0].hashes[2] = back[1].hashes[30]
 
-	var got []chainhash.Hash
+			var got []chainhash.Hash
 
-	_, err := netUnminedInOrder(context.Background(), 2, streamOf(back), 1, streamOf(forward),
-		netUnminedParams{Dir: t.TempDir(), RangeBits: 2, ChunkSize: 9}, collect(&got))
-	require.NoError(t, err)
-	require.Equal(t, referenceNetUnmined(back, forward, nil), got)
+			_, err := netUnmined(context.Background(), 2, streamOf(back), 1, streamOf(forward),
+				paramsFor(t, mode.maxInMemory, forward, 9), collect(&got))
+			require.NoError(t, err)
+			require.ElementsMatch(t, referenceNetUnmined(back, forward, nil), got)
+		})
+	}
 }
 
-func TestNetUnminedInOrder_BeatsInsideALongRange(t *testing.T) {
+func TestNetUnmined_BeatsInsideALongRange(t *testing.T) {
 	old := netUnminedBeatEvery
 	netUnminedBeatEvery = 1000
 
@@ -415,17 +534,17 @@ func TestNetUnminedInOrder_BeatsInsideALongRange(t *testing.T) {
 
 	beats := 0
 
-	_, err := netUnminedInOrder(context.Background(), 1, streamOf(back), 1, streamOf(forward),
-		netUnminedParams{Dir: t.TempDir(), RangeBits: 0, ChunkSize: 1_000_000, Beat: func() { beats++ }},
+	_, err := netUnmined(context.Background(), 1, streamOf(back), 1, streamOf(forward),
+		netUnminedParams{Dir: t.TempDir(), ForwardCount: 100_000, MaxForwardInMemory: 50_000, ChunkSize: 1_000_000, Beat: func() { beats++ }},
 		func([]chainhash.Hash) error { return nil })
 	require.NoError(t, err)
 
-	// One range holds every record. Without a beat inside the loops that is a
-	// handful of beats in total; a liveness probe would see none for the whole range.
+	// Two ranges hold every record. Without a beat inside the loops that is a
+	// handful of beats in total; a liveness probe would see none for a whole range.
 	require.Greater(t, beats, 150)
 }
 
-func TestNetUnminedInOrder_RemovesScratchDirsLeftByAnEarlierRun(t *testing.T) {
+func TestNetUnmined_RemovesScratchDirsLeftByAnEarlierRun(t *testing.T) {
 	dir := t.TempDir()
 
 	stale := filepath.Join(dir, netUnminedScratchPrefix+"1111-abc")
@@ -440,20 +559,119 @@ func TestNetUnminedInOrder_RemovesScratchDirsLeftByAnEarlierRun(t *testing.T) {
 	ours := filepath.Join(dir, netUnminedScratchName+"inuse")
 	require.NoError(t, os.MkdirAll(ours, 0o750))
 
+	back := makeBlocks(rand.New(rand.NewSource(14)), []int{5}, 5)
+
 	// Without SweepStale nothing is touched: the directory may be shared.
-	_, err := netUnminedInOrder(context.Background(), 1, streamOf(makeBlocks(rand.New(rand.NewSource(14)), []int{5}, 5)), 0, nil,
+	_, err := netUnmined(context.Background(), 1, streamOf(back), 0, nil,
 		netUnminedParams{Dir: dir, ChunkSize: 5}, func([]chainhash.Hash) error { return nil })
 	require.NoError(t, err)
 	require.DirExists(t, stale)
 
-	r := rand.New(rand.NewSource(13))
-	back := makeBlocks(r, []int{10}, 10)
+	// With it, a reset of any size sweeps, including one that needs no scratch
+	// itself: what an earlier, larger reset left is not held until the next large one.
+	beats := 0
 
-	_, err = netUnminedInOrder(context.Background(), 1, streamOf(back), 0, nil,
-		netUnminedParams{Dir: dir, RangeBits: 0, ChunkSize: 10, SweepStale: true}, func([]chainhash.Hash) error { return nil })
+	_, err = netUnmined(context.Background(), 0, nil, 0, nil,
+		netUnminedParams{Dir: dir, ChunkSize: 10, SweepStale: true, Beat: func() { beats++ }}, func([]chainhash.Hash) error { return nil })
 	require.NoError(t, err)
 
 	require.NoDirExists(t, stale)
 	require.DirExists(t, unrelated, "only this feature's own scratch directories are swept")
 	require.DirExists(t, ours, "a directory of this process is never swept")
+	require.Equal(t, 2, beats, "the sweep, the only work here, has a beat before and after")
+}
+
+// A scratch file that cannot be written is ours, not a block that cannot be
+// read: it must not look like an incomplete forward set, which skips the marker,
+// nor like a move-back block to leave out.
+func TestNetUnmined_AScratchWriteThatFailsIsReturned(t *testing.T) {
+	for _, side := range []string{"forward", "back"} {
+		for _, stream := range []struct {
+			name string
+			of   func([]blockHashes) txHashStream
+		}{{"sequential", streamOf}, {"concurrent", concurrentStreamOf}} {
+			t.Run(side+", "+stream.name, func(t *testing.T) {
+				r := rand.New(rand.NewSource(18))
+				back := makeBlocks(r, []int{40}, 10)
+				forward := makeBlocks(r, []int{40}, 10)
+
+				diskFull := errors.NewStorageError("no space left on device")
+				var writes atomic.Int64
+
+				old := netUnminedWriteScratch
+				netUnminedWriteScratch = func(w *bufio.Writer, rec []byte) (int, error) {
+					// The first 40 writes are the forward side's.
+					if n := writes.Add(1); side == "forward" || n > 40 {
+						return 0, diskFull
+					}
+
+					return w.Write(rec)
+				}
+
+				t.Cleanup(func() { netUnminedWriteScratch = old })
+
+				emitted := 0
+
+				res, err := netUnmined(context.Background(), 1, stream.of(back), 1, stream.of(forward),
+					netUnminedParams{Dir: t.TempDir(), ForwardCount: 40, MaxForwardInMemory: 39, ChunkSize: 10},
+					func(chunk []chainhash.Hash) error {
+						emitted += len(chunk)
+						return nil
+					})
+				require.ErrorIs(t, err, diskFull)
+				require.False(t, res.ForwardIncomplete)
+				require.Empty(t, res.SkippedBackBlocks)
+				require.Zero(t, emitted)
+			})
+		}
+	}
+}
+
+func TestForEachScratchHash_ATruncatedRecordIsAnError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "back-0")
+	require.NoError(t, os.WriteFile(path, make([]byte, chainhash.HashSize+8), 0o600))
+
+	seen := 0
+	err := forEachScratchHash(path, func() {}, nil, func(h []chainhash.Hash) error {
+		seen += len(h)
+		return nil
+	})
+	require.Error(t, err)
+	require.Zero(t, seen, "nothing of a file that cannot be read in full is used")
+}
+
+// An error a stream returns is not an unreadable block: a store that failed to
+// answer must not skip the marker or leave a block out.
+func TestNetUnmined_AStreamErrorIsReturned(t *testing.T) {
+	for _, mode := range netUnminedModes {
+		for _, side := range []string{"forward", "back"} {
+			t.Run(mode.name+", "+side, func(t *testing.T) {
+				r := rand.New(rand.NewSource(19))
+				back := makeBlocks(r, []int{40}, 10)
+				forward := makeBlocks(r, []int{40}, 10)
+
+				storeDown := errors.NewServiceError("subtree store unreachable")
+				failing := func(context.Context, int, func([]chainhash.Hash) error) (error, error) { return nil, storeDown }
+
+				backStream, forwardStream := streamOf(back), streamOf(forward)
+				if side == "back" {
+					backStream = failing
+				} else {
+					forwardStream = failing
+				}
+
+				emitted := 0
+
+				res, err := netUnmined(context.Background(), 1, backStream, 1, forwardStream,
+					paramsFor(t, mode.maxInMemory, forward, 100), func(chunk []chainhash.Hash) error {
+						emitted += len(chunk)
+						return nil
+					})
+				require.ErrorIs(t, err, storeDown)
+				require.False(t, res.ForwardIncomplete)
+				require.Empty(t, res.SkippedBackBlocks)
+				require.Zero(t, emitted)
+			})
+		}
+	}
 }

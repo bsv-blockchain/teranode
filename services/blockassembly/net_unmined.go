@@ -3,7 +3,6 @@ package blockassembly
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"io"
 	mathbits "math/bits"
 	"os"
@@ -17,42 +16,39 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 )
 
-// netUnminedInOrder computes the transactions of the move-back blocks that are
-// in none of the move-forward blocks, and hands them to emit in move-back order:
-// block by block, subtree by subtree, position by position, exactly as the
-// blocks list them. It is the set difference Reset used to compute with one
+// netUnmined computes the transactions of the move-back blocks that are in none
+// of the move-forward blocks, and hands them to emit, p.ChunkSize at a time, in
+// no particular order. It is the set difference Reset used to compute with one
 // in-memory map holding every move-forward hash and one slice holding every
 // result, which does not fit in memory when a reset spans billions of
 // transactions.
 //
-// Memory is bounded by the size of one hash range of the forward set, one bit
-// per move-back transaction, and one chunk; everything else lives in scratch
-// files under p.Dir, removed on return.
+// A forward set of at most p.MaxForwardInMemory hashes is held in one map, the
+// move-back blocks are streamed against it, and no file is written: a reset of
+// ordinary size needs no disk.
 //
-//  1. Stream the move-back blocks in order. Each hash gets its position in that
-//     order and is written, with the position, to the scratch file of its hash
-//     range.
-//  2. Stream the move-forward blocks, in any order, writing each hash to the
-//     scratch file of its range.
+// A larger one is split by hash range into scratch files under p.Dir, removed on
+// return. Memory is then bounded by one range of the forward set, one chunk, and
+// the subtrees the streams have read and not yet handed over:
+//
+//  1. Stream the move-forward blocks, writing each hash to the scratch file of
+//     its range.
+//  2. Stream the move-back blocks the same way.
 //  3. For each range: load its forward hashes into a set, read its move-back
-//     records, and set the bit of every position whose hash is in the set.
-//  4. Stream the move-back blocks in order a second time, counting positions the
-//     same way, and emit the hashes whose bit is clear, p.ChunkSize at a time.
+//     hashes, and emit the ones the set does not have.
 //
-// The order never depends on the ranges: they only decide which hashes are
-// compared in which pass. Positions are only valid if both reads of a block
-// agree, so a move-back block that fails the second read fails the whole
-// computation.
+// A move-forward block a stream reports unreadable fails the whole computation
+// before anything is emitted, with ForwardIncomplete set, because an incomplete
+// forward set would report move-forward transactions as net unmined. An
+// unreadable move-back block is listed in the result; what was read of it is
+// still emitted, since every hash read is a move-back transaction. An error from
+// a stream, from emit, from a scratch file or from the context is returned and
+// is neither of those.
 //
-// A move-back block that cannot be read in step 1 is left out whole, and listed
-// in the result: its positions are reserved but never emitted. A move-forward
-// block that cannot be read fails the whole computation before anything is
-// emitted, because an incomplete forward set would report move-forward
-// transactions as net unmined.
-//
-// forward may call visit from several goroutines; back may not. Neither may
-// retain the slice passed to visit, and emit may not retain its chunk.
-func netUnminedInOrder(
+// Both streams may call visit from several goroutines, and neither may retain
+// the slice passed to it. emit is never called concurrently and may not retain
+// its chunk.
+func netUnmined(
 	ctx context.Context,
 	backBlocks int, back txHashStream,
 	forwardBlocks int, forward txHashStream,
@@ -61,10 +57,6 @@ func netUnminedInOrder(
 ) (res netUnminedResult, err error) {
 	if p.ChunkSize <= 0 {
 		return res, errors.NewProcessingError("[netUnmined] chunk size must be positive, got %d", p.ChunkSize)
-	}
-
-	if p.RangeBits > maxNetUnminedRangeBits {
-		return res, errors.NewProcessingError("[netUnmined] range bits %d above the maximum %d", p.RangeBits, maxNetUnminedRangeBits)
 	}
 
 	beat := p.Beat
@@ -79,231 +71,353 @@ func netUnminedInOrder(
 		beat()
 	}
 
+	out := &netUnminedEmitter{chunk: make([]chainhash.Hash, 0, p.ChunkSize), size: p.ChunkSize, emit: emit, beat: beat}
+
+	if p.ForwardCount <= p.MaxForwardInMemory {
+		err = netUnminedInMemory(ctx, backBlocks, back, forwardBlocks, forward, beat, out, &res)
+	} else {
+		err = netUnminedOnDisk(ctx, backBlocks, back, forwardBlocks, forward, p, beat, out, &res)
+	}
+
+	res.Emitted = out.emitted
+
+	return res, err
+}
+
+// netUnminedEmitter gathers hashes into chunks and hands each full one to emit,
+// one at a time. After emit fails it takes nothing more.
+type netUnminedEmitter struct {
+	mu      sync.Mutex
+	chunk   []chainhash.Hash
+	size    int
+	emit    func([]chainhash.Hash) error
+	beat    func()
+	emitted uint64
+	err     error
+}
+
+func (e *netUnminedEmitter) add(hashes []chainhash.Hash) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	for len(hashes) > 0 && e.err == nil {
+		n := min(e.size-len(e.chunk), len(hashes))
+		e.chunk = append(e.chunk, hashes[:n]...)
+		hashes = hashes[n:]
+
+		if len(e.chunk) == e.size {
+			e.flushLocked()
+		}
+	}
+
+	return e.err
+}
+
+func (e *netUnminedEmitter) flush() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.err == nil {
+		e.flushLocked()
+	}
+
+	return e.err
+}
+
+func (e *netUnminedEmitter) flushLocked() {
+	if len(e.chunk) == 0 {
+		return
+	}
+
+	e.beat()
+
+	if e.err = e.emit(e.chunk); e.err != nil {
+		return
+	}
+
+	e.emitted += uint64(len(e.chunk))
+	e.chunk = e.chunk[:0]
+}
+
+// netUnminedSink is where a stream's hashes go. Its err is an error of ours, a
+// failed emit or scratch write, as opposed to a block that cannot be read.
+type netUnminedSink struct {
+	mu    sync.Mutex
+	count uint64
+	err   error
+}
+
+func (s *netUnminedSink) add(n int) {
+	s.mu.Lock()
+	s.count += uint64(n)
+	s.mu.Unlock()
+}
+
+func (s *netUnminedSink) fail(err error) error {
+	s.mu.Lock()
+	if s.err == nil {
+		s.err = err
+	}
+	s.mu.Unlock()
+
+	return err
+}
+
+func (s *netUnminedSink) failed() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.err
+}
+
+// readForward streams every move-forward block into visit. A block that cannot
+// be read sets ForwardIncomplete; a failure of visit itself or of the context
+// does not.
+func readForward(ctx context.Context, blocks int, forward txHashStream, sink *netUnminedSink, beat func(), visit func([]chainhash.Hash) error, res *netUnminedResult) error {
+	for i := 0; i < blocks; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		// Per block, read or not: visit only beats for a subtree that was read.
+		beat()
+
+		unreadable, err := forward(ctx, i, visit)
+
+		// Ours first: a failed write cancels the block's other reads, and the
+		// stream may report one of those instead.
+		if ours := sink.failed(); ours != nil {
+			return ours
+		}
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if err != nil {
+			return err
+		}
+
+		if unreadable != nil {
+			res.ForwardIncomplete = true
+
+			return errors.NewProcessingError("[netUnmined] error reading move-forward block %d, so the move-forward set is incomplete", i, unreadable)
+		}
+	}
+
+	res.Forward = sink.count
+
+	return nil
+}
+
+// readBack streams every move-back block into visit. A block that cannot be read
+// is listed in the result and the next one is read.
+func readBack(ctx context.Context, blocks int, back txHashStream, sink *netUnminedSink, beat func(), visit func([]chainhash.Hash) error, res *netUnminedResult) error {
+	for i := 0; i < blocks; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		beat()
+
+		unreadable, err := back(ctx, i, visit)
+
+		if ours := sink.failed(); ours != nil {
+			return ours
+		}
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if err != nil {
+			return err
+		}
+
+		if unreadable != nil {
+			res.SkippedBackBlocks = append(res.SkippedBackBlocks, netUnminedSkippedBlock{Block: i, Err: unreadable})
+		}
+	}
+
+	res.Back = sink.count
+
+	return nil
+}
+
+func netUnminedInMemory(
+	ctx context.Context,
+	backBlocks int, back txHashStream,
+	forwardBlocks int, forward txHashStream,
+	beat func(), out *netUnminedEmitter, res *netUnminedResult,
+) error {
+	var (
+		inForward   = make(map[chainhash.Hash]struct{})
+		forwardSink netUnminedSink
+	)
+
+	if err := readForward(ctx, forwardBlocks, forward, &forwardSink, beat, func(hashes []chainhash.Hash) error {
+		beat()
+
+		forwardSink.mu.Lock()
+		for _, h := range hashes {
+			inForward[h] = struct{}{}
+		}
+
+		forwardSink.count += uint64(len(hashes))
+		forwardSink.mu.Unlock()
+
+		return nil
+	}, res); err != nil {
+		return err
+	}
+
+	// The set is complete and only read from here on.
+	var backSink netUnminedSink
+
+	if err := readBack(ctx, backBlocks, back, &backSink, beat, func(hashes []chainhash.Hash) error {
+		beat()
+		backSink.add(len(hashes))
+
+		kept := make([]chainhash.Hash, 0, len(hashes))
+
+		for _, h := range hashes {
+			if _, ok := inForward[h]; !ok {
+				kept = append(kept, h)
+			}
+		}
+
+		if err := out.add(kept); err != nil {
+			return backSink.fail(err)
+		}
+
+		return nil
+	}, res); err != nil {
+		return err
+	}
+
+	return out.flush()
+}
+
+func netUnminedOnDisk(
+	ctx context.Context,
+	backBlocks int, back txHashStream,
+	forwardBlocks int, forward txHashStream,
+	p netUnminedParams,
+	beat func(), out *netUnminedEmitter, res *netUnminedResult,
+) (err error) {
+	rangeBits := netUnminedRangeBits(p.ForwardCount, p.MaxForwardInMemory)
+	ranges := 1 << rangeBits
+
 	dir, err := os.MkdirTemp(p.Dir, netUnminedScratchName+"*")
 	if err != nil {
-		return res, errors.NewStorageError("[netUnmined] error creating the scratch directory under %q", p.Dir, err)
+		return errors.NewStorageError("[netUnmined] error creating the scratch directory under %q", p.Dir, err)
 	}
 
 	defer func() {
-		if rmErr := os.RemoveAll(dir); rmErr != nil && err == nil {
-			err = errors.NewStorageError("[netUnmined] error removing the scratch directory %s", dir, rmErr)
+		// Removing billions of records can take a while. A directory that stays is
+		// reported, not an error: by now every chunk is emitted, or err says why not.
+		beat()
+
+		if rmErr := netUnminedRemoveAll(dir); rmErr != nil {
+			res.ScratchLeft = errors.NewStorageError("[netUnmined] error removing the scratch directory %s", dir, rmErr)
 		}
+
+		beat()
 	}()
 
-	ranges := 1 << p.RangeBits
-
-	backFiles, err := newRangeWriters(dir, "back", ranges)
-	if err != nil {
-		return res, err
+	// Forward first: a forward block that cannot be read ends the computation,
+	// and then the move-back blocks need not be read at all.
+	if err = netUnminedToRangeFiles(dir, "forward", ranges, rangeBits, beat, func(sink *netUnminedSink, visit func([]chainhash.Hash) error) error {
+		return readForward(ctx, forwardBlocks, forward, sink, beat, visit, res)
+	}); err != nil {
+		return err
 	}
 
-	defer func() { _ = backFiles.closeAll() }() // the explicit close below reports the error; this one covers early returns
-
-	blockStart := make([]uint64, backBlocks)
-	blockEnd := make([]uint64, backBlocks)
-	failed := make([]bool, backBlocks)
-
-	var pos uint64
-
-	for i := 0; i < backBlocks; i++ {
-		if err = ctx.Err(); err != nil {
-			return res, err
-		}
-
-		blockStart[i] = pos
-
-		var scratchErr error
-
-		blockErr := back(ctx, i, func(hashes []chainhash.Hash) error {
-			beat()
-
-			var rec [netUnminedBackRecordSize]byte
-
-			for _, h := range hashes {
-				binary.LittleEndian.PutUint64(rec[:8], pos)
-				copy(rec[8:], h[:])
-
-				if scratchErr = backFiles.write(netUnminedRangeOf(h, p.RangeBits), rec[:]); scratchErr != nil {
-					return scratchErr
-				}
-
-				pos++
-			}
-
-			return nil
-		})
-
-		blockEnd[i] = pos
-
-		if blockErr != nil {
-			// A cancelled context or a scratch-file write failure is ours, not the
-			// block's: it stops the computation instead of leaving the block out.
-			if ctx.Err() != nil {
-				return res, ctx.Err()
-			}
-
-			if scratchErr != nil {
-				return res, scratchErr
-			}
-
-			failed[i] = true
-			res.SkippedBackBlocks = append(res.SkippedBackBlocks, i)
-		}
+	if err = netUnminedToRangeFiles(dir, "back", ranges, rangeBits, beat, func(sink *netUnminedSink, visit func([]chainhash.Hash) error) error {
+		return readBack(ctx, backBlocks, back, sink, beat, visit, res)
+	}); err != nil {
+		return err
 	}
 
-	res.Back = pos
-
-	if err = backFiles.closeAll(); err != nil {
-		return res, err
-	}
-
-	forwardFiles, err := newRangeWriters(dir, "forward", ranges)
-	if err != nil {
-		return res, err
-	}
-
-	defer func() { _ = forwardFiles.closeAll() }()
-
-	var forwardCount uint64
-
-	var (
-		forwardMu         sync.Mutex
-		forwardScratchErr error
-	)
-
-	for i := 0; i < forwardBlocks; i++ {
-		if err = ctx.Err(); err != nil {
-			return res, err
-		}
-
-		if err = forward(ctx, i, func(hashes []chainhash.Hash) error {
-			beat()
-
-			for _, h := range hashes {
-				if werr := forwardFiles.write(netUnminedRangeOf(h, p.RangeBits), h[:]); werr != nil {
-					forwardMu.Lock()
-					forwardScratchErr = werr
-					forwardMu.Unlock()
-
-					return werr
-				}
-			}
-
-			forwardMu.Lock()
-			forwardCount += uint64(len(hashes))
-			forwardMu.Unlock()
-
-			return nil
-		}); err != nil {
-			forwardMu.Lock()
-			scratchFailed := forwardScratchErr != nil
-			forwardMu.Unlock()
-
-			// A full scratch disk is ours, not an unreadable block's.
-			res.ForwardIncomplete = ctx.Err() == nil && !scratchFailed
-
-			return res, errors.NewProcessingError("[netUnmined] error reading move-forward block %d, so the move-forward set is incomplete", i, err)
-		}
-	}
-
-	res.Forward = forwardCount
-
-	if err = forwardFiles.closeAll(); err != nil {
-		return res, err
-	}
-
-	inForward := make([]uint64, (pos+63)/64)
+	// One set, cleared between ranges: a new one per range would leave the last
+	// one for the collector while the next is filled.
+	inForward := make(map[chainhash.Hash]struct{})
 
 	for r := 0; r < ranges; r++ {
 		if err = ctx.Err(); err != nil {
-			return res, err
+			return err
 		}
 
 		beat()
+		clear(inForward)
 
-		if err = markRangeInForward(dir, r, inForward, beat); err != nil {
-			return res, err
-		}
-	}
-
-	// Second ordered read of the move-back blocks: emit what no forward block has.
-	chunk := make([]chainhash.Hash, 0, p.ChunkSize)
-
-	flush := func() error {
-		if len(chunk) == 0 {
-			return nil
-		}
-
-		beat()
-
-		if eerr := emit(chunk); eerr != nil {
-			return eerr
-		}
-
-		res.Emitted += uint64(len(chunk))
-		chunk = chunk[:0]
-
-		return nil
-	}
-
-	for i := 0; i < backBlocks; i++ {
-		if failed[i] {
-			continue
-		}
-
-		if err = ctx.Err(); err != nil {
-			return res, err
-		}
-
-		at := blockStart[i]
-
-		if err = back(ctx, i, func(hashes []chainhash.Hash) error {
-			beat()
-
-			for _, h := range hashes {
-				if at >= blockEnd[i] {
-					return errors.NewProcessingError("[netUnmined] move-back block %d has more transactions on the second read than on the first", i)
-				}
-
-				if inForward[at>>6]&(1<<(at&63)) == 0 {
-					chunk = append(chunk, h)
-
-					if len(chunk) == p.ChunkSize {
-						if ferr := flush(); ferr != nil {
-							return ferr
-						}
-					}
-				}
-
-				at++
+		if err = forEachScratchHash(netUnminedRangePath(dir, "forward", r), beat, nil, func(h []chainhash.Hash) error {
+			for i := range h {
+				inForward[h[i]] = struct{}{}
 			}
 
 			return nil
 		}); err != nil {
-			return res, err
+			return err
 		}
 
-		if at != blockEnd[i] {
-			return res, errors.NewProcessingError("[netUnmined] move-back block %d has %d transactions on the second read, %d on the first", i, at-blockStart[i], blockEnd[i]-blockStart[i])
+		if err = forEachScratchHash(netUnminedRangePath(dir, "back", r), beat, inForward, out.add); err != nil {
+			return err
 		}
 	}
 
-	if err = flush(); err != nil {
-		return res, err
+	// The last chunk, before the scratch files go.
+	return out.flush()
+}
+
+// netUnminedToRangeFiles runs read with a visitor that writes every hash to the
+// scratch file of its range, and closes the files.
+func netUnminedToRangeFiles(dir, side string, ranges int, rangeBits uint, beat func(),
+	read func(sink *netUnminedSink, visit func([]chainhash.Hash) error) error) error {
+	files, err := newRangeWriters(dir, side, ranges)
+	if err != nil {
+		return err
 	}
 
-	return res, nil
+	defer func() { _ = files.closeAll() }() // the explicit close below reports the error; this one covers early returns
+
+	var sink netUnminedSink
+
+	if err = read(&sink, func(hashes []chainhash.Hash) error {
+		beat()
+
+		for i := range hashes {
+			if werr := files.write(netUnminedRangeOf(hashes[i], rangeBits), hashes[i][:]); werr != nil {
+				return sink.fail(werr)
+			}
+		}
+
+		sink.add(len(hashes))
+
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	return files.closeAll()
 }
 
 // txHashStream calls visit with the transaction hashes of one block, one subtree
-// per call, in the block's order, leaving out the coinbase placeholder.
-type txHashStream func(ctx context.Context, block int, visit func(hashes []chainhash.Hash) error) error
+// per call, leaving out the coinbase placeholder. It may call visit from several
+// goroutines. unreadable says the block could not be read in full, and why: a
+// file of it is gone or is not what its key says. err is everything else: an
+// error visit returned, a store that failed, a cancelled context.
+type txHashStream func(ctx context.Context, block int, visit func(hashes []chainhash.Hash) error) (unreadable, err error)
 
 type netUnminedParams struct {
-	// Dir holds the scratch files; a unique subdirectory is made inside it.
+	// Dir holds the scratch files of a forward set too large for memory; a unique
+	// subdirectory is made inside it.
 	Dir string
-	// RangeBits splits the hash space into 1<<RangeBits ranges by leading bits.
-	RangeBits uint
+	// ForwardCount is how many transactions the move-forward blocks hold.
+	ForwardCount uint64
+	// MaxForwardInMemory is the most move-forward hashes held in memory at once:
+	// the whole set when it has no more than that, otherwise one range of it.
+	MaxForwardInMemory uint64
 	// ChunkSize is the most hashes handed to emit at once.
 	ChunkSize int
 	// Beat is called regularly, so a liveness probe sees progress.
@@ -314,25 +428,29 @@ type netUnminedParams struct {
 	SweepStale bool
 }
 
+type netUnminedSkippedBlock struct {
+	Block int
+	Err   error
+}
+
 type netUnminedResult struct {
 	// Back and Forward count the transactions streamed from each side.
 	Back, Forward uint64
 	// Emitted counts the net unmined transactions handed to emit.
 	Emitted uint64
-	// SkippedBackBlocks lists the move-back blocks that could not be read.
-	SkippedBackBlocks []int
+	// SkippedBackBlocks lists the move-back blocks that could not be read in full.
+	SkippedBackBlocks []netUnminedSkippedBlock
 	// ForwardIncomplete is set when a move-forward block could not be read, so
 	// nothing was emitted.
 	ForwardIncomplete bool
+	// ScratchLeft is set when the scratch directory could not be removed.
+	ScratchLeft error
 }
 
 const (
 	// maxNetUnminedRangeBits caps the number of ranges, and with it the open
-	// scratch files, at 1024 per side.
+	// scratch files, at 1024.
 	maxNetUnminedRangeBits = 10
-
-	// netUnminedBackRecordSize is a move-back record: position, then hash.
-	netUnminedBackRecordSize = 8 + chainhash.HashSize
 
 	// netUnminedScratchPrefix starts the name of every scratch directory this
 	// feature makes.
@@ -340,7 +458,19 @@ const (
 
 	netUnminedWriterBuffer = 64 * 1024
 	netUnminedReaderBuffer = 1024 * 1024
+
+	// netUnminedReadBatch is how many hashes a range pass reads from a scratch
+	// file at a time.
+	netUnminedReadBatch = 4096
 )
+
+// netUnminedRemoveAll removes a scratch directory. A variable so a test can make
+// it fail.
+var netUnminedRemoveAll = os.RemoveAll
+
+// netUnminedWriteScratch appends a record to a scratch file. A variable so a
+// test can make it fail.
+var netUnminedWriteScratch = func(w *bufio.Writer, rec []byte) (int, error) { return w.Write(rec) }
 
 // netUnminedBeatEvery is how many records a range pass reads between beats, so
 // a range holding billions of records still shows a liveness probe progress. A
@@ -435,7 +565,7 @@ func (w *rangeWriters) write(r int, rec []byte) error {
 	w.locks[r].Lock()
 	defer w.locks[r].Unlock()
 
-	if _, err := w.writers[r].Write(rec); err != nil {
+	if _, err := netUnminedWriteScratch(w.writers[r], rec); err != nil {
 		return errors.NewStorageError("[netUnmined] error writing a scratch file for range %d", r, err)
 	}
 
@@ -469,68 +599,18 @@ func (w *rangeWriters) closeAll() error {
 	return first
 }
 
-// markRangeInForward sets, in inForward, the bit of every move-back position of
-// range r whose hash is among the range's forward hashes.
-func markRangeInForward(dir string, r int, inForward []uint64, beat func()) error {
-	set, err := loadForwardRange(netUnminedRangePath(dir, "forward", r), beat)
-	if err != nil {
-		return err
-	}
-
-	if len(set) == 0 {
-		return nil
-	}
-
-	f, err := os.Open(netUnminedRangePath(dir, "back", r))
-	if err != nil {
-		return errors.NewStorageError("[netUnmined] error opening the move-back scratch file for range %d", r, err)
-	}
-
-	defer f.Close()
-
-	rd := bufio.NewReaderSize(f, netUnminedReaderBuffer)
-
-	var rec [netUnminedBackRecordSize]byte
-
-	for n := 1; ; n++ {
-		if n%netUnminedBeatEvery == 0 {
-			beat()
-		}
-
-		if _, err = io.ReadFull(rd, rec[:]); err != nil {
-			if err == io.EOF { //nolint:errorlint // ReadFull returns io.EOF itself, at a record boundary
-				return nil
-			}
-
-			return errors.NewStorageError("[netUnmined] error reading the move-back scratch file for range %d", r, err)
-		}
-
-		var h chainhash.Hash
-
-		copy(h[:], rec[8:])
-
-		if _, ok := set[h]; ok {
-			at := binary.LittleEndian.Uint64(rec[:8])
-			inForward[at>>6] |= 1 << (at & 63)
-		}
-	}
-}
-
-func loadForwardRange(path string, beat func()) (map[chainhash.Hash]struct{}, error) {
+// forEachScratchHash reads the hashes of a scratch file and hands them to visit,
+// a batch at a time, leaving out the ones in skip.
+func forEachScratchHash(path string, beat func(), skip map[chainhash.Hash]struct{}, visit func([]chainhash.Hash) error) error {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, errors.NewStorageError("[netUnmined] error opening the move-forward scratch file %s", path, err)
+		return errors.NewStorageError("[netUnmined] error opening the scratch file %s", path, err)
 	}
 
 	defer f.Close()
 
-	info, err := f.Stat()
-	if err != nil {
-		return nil, errors.NewStorageError("[netUnmined] error sizing the move-forward scratch file %s", path, err)
-	}
-
-	set := make(map[chainhash.Hash]struct{}, info.Size()/chainhash.HashSize)
 	rd := bufio.NewReaderSize(f, netUnminedReaderBuffer)
+	batch := make([]chainhash.Hash, 0, netUnminedReadBatch)
 
 	var h chainhash.Hash
 
@@ -539,14 +619,27 @@ func loadForwardRange(path string, beat func()) (map[chainhash.Hash]struct{}, er
 			beat()
 		}
 
-		if _, err = io.ReadFull(rd, h[:]); err != nil {
-			if err == io.EOF { //nolint:errorlint // ReadFull returns io.EOF itself, at a record boundary
-				return set, nil
-			}
-
-			return nil, errors.NewStorageError("[netUnmined] error reading the move-forward scratch file %s", path, err)
+		_, err = io.ReadFull(rd, h[:])
+		if err != nil && err != io.EOF { //nolint:errorlint // ReadFull returns io.EOF itself, at a record boundary
+			return errors.NewStorageError("[netUnmined] error reading the scratch file %s", path, err)
 		}
 
-		set[h] = struct{}{}
+		if err == nil {
+			if _, ok := skip[h]; !ok {
+				batch = append(batch, h)
+			}
+		}
+
+		if len(batch) == cap(batch) || (err != nil && len(batch) > 0) {
+			if verr := visit(batch); verr != nil {
+				return verr
+			}
+
+			batch = batch[:0]
+		}
+
+		if err != nil {
+			return nil
+		}
 	}
 }

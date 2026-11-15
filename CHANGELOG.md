@@ -31,6 +31,9 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **A block assembly reset over more than 32M moveForward transactions needs scratch disk.** About
+  32 bytes per transaction moved go to the first `blockassembly_txMapDirs` path, or the OS temp
+  directory when unset; leave room. A failed mark or scratch write now fails the reset. (#2196)
 - **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
   `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
   now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,

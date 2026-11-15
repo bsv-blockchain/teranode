@@ -170,28 +170,26 @@ func TestReset_PrunedMoveBackTxIsNotMarked(t *testing.T) {
 	require.NotZero(t, unminedSinceOf(t, items, existingHash), "surviving moveBack tx must have unmined_since set")
 }
 
-// If the existence lookup fails outright, reset cannot tell pruned from live. It
-// marks them all, as it did before the lookup existed: dropping them would leave
-// live txs flagged mined while their block is off the chain, and nothing would
-// repair that. A pruned tx among them still hits the store's fatal, as before.
-func TestReset_MoveBackExistenceLookupFailureMarksAll(t *testing.T) {
-	ba, rec, items, existingHash, prunedHash := setupPrunedMoveBackReset(t)
+// If the existence lookup fails outright, reset cannot tell pruned from live.
+// Marking them all would hit the store's fatal for a pruned one, and leaving
+// them out would leave live txs flagged mined while their block is off the
+// chain. A failed read of the store fails the reset, before the tx map rotation,
+// so it is run again.
+func TestReset_MoveBackExistenceLookupFailureFailsTheReset(t *testing.T) {
+	ba, rec, _, _, _ := setupPrunedMoveBackReset(t)
 	rec.decorateErr = tErrors.NewStorageError("store unavailable")
 
-	require.NoError(t, ba.reset(t.Context()))
-	require.Contains(t, rec.markedFalse, existingHash)
-	require.Contains(t, rec.markedFalse, prunedHash)
-	require.NotZero(t, unminedSinceOf(t, items, existingHash))
+	require.Error(t, ba.reset(t.Context()))
+	require.Empty(t, rec.markedFalse, "nothing is marked on a lookup that failed")
 }
 
 // A per-tx lookup error other than not found (a transient Aerospike record error)
-// is no evidence the record is gone: that tx is still marked.
-func TestReset_MoveBackTransientLookupErrorStillMarks(t *testing.T) {
-	ba, rec, items, existingHash, prunedHash := setupPrunedMoveBackReset(t)
+// is no evidence the record is gone, and no answer either. It fails the reset
+// before anything is marked, as a lookup that failed outright does.
+func TestReset_MoveBackTransientLookupErrorFailsTheReset(t *testing.T) {
+	ba, rec, _, existingHash, _ := setupPrunedMoveBackReset(t)
 	rec.itemErrs = map[chainhash.Hash]error{existingHash: tErrors.NewStorageError("record timeout")}
 
-	require.NoError(t, ba.reset(t.Context()))
-	require.Contains(t, rec.markedFalse, existingHash, "a tx whose lookup failed transiently is still marked")
-	require.NotContains(t, rec.markedFalse, prunedHash)
-	require.NotZero(t, unminedSinceOf(t, items, existingHash))
+	require.Error(t, ba.reset(t.Context()))
+	require.Empty(t, rec.markedFalse)
 }

@@ -1057,12 +1057,13 @@ const resetExistenceChunkSize = 10_000
 
 // dropPrunedTxs returns hashes without the ones the UTXO store reports as not
 // found (pruned), in order. Any other per-tx error is no evidence the record is
-// gone, so that hash is kept: dropping a live tx would leave it flagged mined while
-// its block is off the chain, and nothing repairs that later. A failing lookup
-// call, or a cancelled ctx, returns an error.
+// gone, and no answer either: it is returned, as a failing lookup call or a
+// cancelled ctx is. Keeping such a hash would mark a transaction the check
+// against the best chain cannot read back, and dropping it would leave a live tx
+// flagged mined while its block is off the chain.
 func (b *BlockAssembler) dropPrunedTxs(ctx context.Context, hashes []chainhash.Hash) ([]chainhash.Hash, error) {
 	kept := make([]chainhash.Hash, 0, len(hashes))
-	pruned, unverified := 0, 0
+	pruned := 0
 
 	for start := 0; start < len(hashes); start += resetExistenceChunkSize {
 		if err := ctx.Err(); err != nil {
@@ -1089,15 +1090,13 @@ func (b *BlockAssembler) dropPrunedTxs(ctx context.Context, hashes []chainhash.H
 			case errors.Is(u.Err, errors.ErrTxNotFound):
 				pruned++
 			default:
-				unverified++
-
-				kept = append(kept, chunk[i])
+				return nil, errors.NewProcessingError("[Reset] error looking up moveBack transaction %s", chunk[i], u.Err)
 			}
 		}
 	}
 
-	if pruned > 0 || unverified > 0 {
-		b.logger.Warnf("[BlockAssembler][Reset] moveBack transactions before the unmined mark: %d pruned (no record) left out, %d with a lookup error kept", pruned, unverified)
+	if pruned > 0 {
+		b.logger.Warnf("[BlockAssembler][Reset] moveBack transactions before the unmined mark: %d pruned (no record) left out", pruned)
 	}
 
 	return kept, nil
@@ -1214,10 +1213,11 @@ func (b *BlockAssembler) resetToBlockWithResponse(ctx context.Context, bestBlock
 	// - No action needed from reset()
 	if len(moveBackBlocksWithMeta) > 0 {
 		// Net unmined = the transactions of the moveBack blocks that no moveForward
-		// block has, in moveBack order. They are ALSO in the new main chain when a
-		// moveForward block has them, and BlockValidation handles those. The set is
-		// computed on disk in bounded memory: a reset can span billions of
-		// transactions.
+		// block has. They are ALSO in the new main chain when a moveForward block has
+		// them, and BlockValidation handles those. The set is computed in bounded
+		// memory, on disk when the moveForward blocks are too large to hold: a reset
+		// can span billions of transactions. A failed mark fails the reset here,
+		// before the tx map rotation.
 		if err = b.markNetUnminedMoveBackTxs(ctx, moveBackBlocksWithMeta, moveForwardBlocksWithMeta); err != nil {
 			return resp, err
 		}
