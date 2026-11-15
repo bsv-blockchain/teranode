@@ -51,10 +51,21 @@ type recordingBlockchainClient struct {
 
 	mu    sync.Mutex
 	added []chainhash.Hash
+
+	// failNextAddBlock, when set, is returned by the next AddBlock instead of storing the
+	// block, and then cleared.
+	failNextAddBlock error
 }
 
 func (c *recordingBlockchainClient) AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) error {
 	c.mu.Lock()
+	if failErr := c.failNextAddBlock; failErr != nil {
+		c.failNextAddBlock = nil
+		c.mu.Unlock()
+
+		return failErr
+	}
+
 	c.added = append(c.added, *block.Hash())
 	c.mu.Unlock()
 
@@ -145,6 +156,14 @@ func newUnifiedRouteServer(t *testing.T, name string) *unifiedRouteServer {
 func unifiedRouteSpendingBlock(t *testing.T, us *unifiedRouteServer, seed byte) (block *model.Block, parent, child *bt.Tx) {
 	t.Helper()
 
+	return unifiedRouteSpendingBlockPaying(t, us, seed, 0)
+}
+
+// unifiedRouteSpendingBlockPaying is unifiedRouteSpendingBlock with the coinbase paying
+// coinbaseSatoshis instead of preBindCoinbase's 50 BTC; 0 keeps the 50 BTC.
+func unifiedRouteSpendingBlockPaying(t *testing.T, us *unifiedRouteServer, seed byte, coinbaseSatoshis uint64) (block *model.Block, parent, child *bt.Tx) {
+	t.Helper()
+
 	ctx := context.Background()
 
 	parent = genuineParentTx(t, seed)
@@ -154,6 +173,9 @@ func unifiedRouteSpendingBlock(t *testing.T, us *unifiedRouteServer, seed byte) 
 
 	child = preBindSpendOf(t, parent, 9_000)
 	coinbase := preBindCoinbase(t, seed)
+	if coinbaseSatoshis != 0 {
+		coinbase.Outputs[0].Satoshis = coinbaseSatoshis
+	}
 
 	st := buildSubtreeOver(t, true, []*bt.Tx{child})
 
@@ -561,4 +583,121 @@ func TestProcessBlockFound_AnInvalidTransactionOnTheLegacyFullRouteIsAJudgementN
 		us.subtreeValidation.AssertExpectations(t)
 		requireNothingApplied(t, us, block, parent, child)
 	})
+}
+
+// TestRevalidateBlock_ReconsideredFastPathBlockLinkedToTheCheckpointIsValid pins reconsiderblock
+// for a block the outpoint-only quick route committed with zero fees in its .subtree file. Two
+// blocks are committed that way and the checkpoint is pinned at the second. Invalidating the first
+// rolls the main chain back to genesis. Revalidating the first must still accept it: its stored
+// headers lead to the pinned checkpoint hash, which vouches for its coinbase, so the zero fees must
+// not be summed against the coinbase.
+func TestRevalidateBlock_ReconsideredFastPathBlockLinkedToTheCheckpointIsValid(t *testing.T) {
+	us := newUnifiedRouteServer(t, "unified_route_reconsider_linked")
+
+	ctx := context.Background()
+
+	subsidy := util.GetBlockSubsidyForHeight(1, us.s.settings.ChainCfgParams)
+	first, _, _ := unifiedRouteSpendingBlockPaying(t, us, 0x17, subsidy+1_000)
+	second := unifiedRouteCoinbaseOnlyBlock(t, us, *first.Hash(), 2)
+
+	us.s.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 2, Hash: second.Hash()}}
+
+	require.NoError(t, us.s.processBlockFound(ctx, first.Hash(), "peer-1", "legacy", true, first))
+	require.NoError(t, us.s.processBlockFound(ctx, second.Hash(), "peer-1", "legacy", true, second))
+
+	_, err := us.client.InvalidateBlock(ctx, first.Hash())
+	require.NoError(t, err)
+
+	// The .subtree files exist, so subtree validation has nothing to do.
+	us.subtreeValidation.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	_, err = us.s.RevalidateBlock(ctx, &blockvalidation_api.RevalidateBlockRequest{Hash: first.Hash()[:]})
+	require.NoError(t, err, "a reconsidered block linked to the pinned checkpoint must be accepted")
+
+	_, meta, err := us.client.GetBlockHeader(ctx, first.Hash())
+	require.NoError(t, err)
+	require.False(t, meta.Invalid, "the reconsidered block must no longer be marked invalid")
+}
+
+// TestRevalidateBlock_ReconsideredFastPathBlockWithAForkAtItsHeightIsValid is the same reconsider
+// as above with a second block stored at the reconsidered block's height first. The ancestry
+// check must follow the stored headers back from the pinned checkpoint, not take whichever block
+// the store lists first at that height: here the first one listed is the fork, and reading it
+// would sum the reconsidered block's zero fees against its coinbase.
+func TestRevalidateBlock_ReconsideredFastPathBlockWithAForkAtItsHeightIsValid(t *testing.T) {
+	us := newUnifiedRouteServer(t, "unified_route_reconsider_fork")
+
+	ctx := context.Background()
+
+	fork := unifiedRouteCoinbaseOnlyBlock(t, us, us.genesis, 1)
+
+	subsidy := util.GetBlockSubsidyForHeight(1, us.s.settings.ChainCfgParams)
+	first, _, _ := unifiedRouteSpendingBlockPaying(t, us, 0x18, subsidy+1_000)
+	second := unifiedRouteCoinbaseOnlyBlock(t, us, *first.Hash(), 2)
+
+	us.s.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 2, Hash: second.Hash()}}
+
+	require.NoError(t, us.s.processBlockFound(ctx, first.Hash(), "peer-1", "legacy", true, first))
+	require.NoError(t, us.s.processBlockFound(ctx, second.Hash(), "peer-1", "legacy", true, second))
+	require.NoError(t, us.s.processBlockFound(ctx, fork.Hash(), "peer-1", "legacy", true, fork))
+
+	_, err := us.client.InvalidateBlock(ctx, first.Hash())
+	require.NoError(t, err)
+
+	hdrs, _, err := us.client.GetBlockHeadersFromHeight(ctx, 1, 1)
+	require.NoError(t, err)
+	require.NotEmpty(t, hdrs)
+	require.Equal(t, fork.Hash(), hdrs[0].Hash(), "precondition: the store lists the fork first at height 1")
+
+	us.subtreeValidation.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	_, err = us.s.RevalidateBlock(ctx, &blockvalidation_api.RevalidateBlockRequest{Hash: first.Hash()[:]})
+	require.NoError(t, err, "a reconsidered block linked to the pinned checkpoint must be accepted whatever else is stored at its height")
+
+	_, meta, err := us.client.GetBlockHeader(ctx, first.Hash())
+	require.NoError(t, err)
+	require.False(t, meta.Invalid, "the reconsidered block must no longer be marked invalid")
+}
+
+// TestQuickValidateBlock_AFailedAttemptRemovesTheZeroFeeSubtreeFileItWrote pins the cleanup in
+// quickValidateBlock. The outpoint-only quick route writes the block's .subtree file with every fee
+// 0. When the attempt then fails with the block not stored (here at AddBlock), that file must not
+// stay: full validation reuses an existing .subtree file as it stands, so any later full validation
+// of the block (a retry without the header proof, the route turned off, the same block from a p2p
+// peer) would sum zero fees against a coinbase that collects 1,000 satoshis and mark the valid block
+// invalid. Netsync's .subtreeToCheck and .subtreeData files must stay, because every retry reads
+// them. A proven retry then commits the block.
+//
+// Removing the cleanup leaves the .subtree file in place, and the first require.False fails.
+func TestQuickValidateBlock_AFailedAttemptRemovesTheZeroFeeSubtreeFileItWrote(t *testing.T) {
+	us := newUnifiedRouteServer(t, "unified_route_fee_zero_cleanup")
+
+	ctx := context.Background()
+
+	subsidy := util.GetBlockSubsidyForHeight(1, us.s.settings.ChainCfgParams)
+	block, _, _ := unifiedRouteSpendingBlockPaying(t, us, 0x16, subsidy+1_000)
+	key := block.Subtrees[0]
+
+	us.client.failNextAddBlock = errors.NewServiceError("injected AddBlock failure")
+
+	err := us.s.processBlockFound(ctx, block.Hash(), "peer-1", "legacy", true, block)
+	require.Error(t, err, "the first, proven attempt fails at AddBlock")
+	require.Empty(t, us.client.addedBlocks())
+
+	exists, err := us.subtreeStore.Exists(ctx, key[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.False(t, exists, "the failed attempt must remove the zero-fee .subtree file it wrote")
+
+	for _, fileType := range []fileformat.FileType{fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData} {
+		exists, err = us.subtreeStore.Exists(ctx, key[:], fileType)
+		require.NoError(t, err)
+		require.True(t, exists, "netsync's %s file must stay for the retry", fileType)
+	}
+
+	require.NoError(t, us.s.processBlockFound(ctx, block.Hash(), "peer-1", "legacy", true, block))
+	require.Equal(t, []chainhash.Hash{*block.Hash()}, us.client.addedBlocks())
+
+	exists, err = us.subtreeStore.Exists(ctx, key[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.True(t, exists, "a committed block keeps its .subtree file")
 }
