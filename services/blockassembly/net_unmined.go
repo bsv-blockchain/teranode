@@ -61,7 +61,7 @@ func netUnmined(
 
 	beat := p.Beat
 	if beat == nil {
-		beat = func() {}
+		beat = func() { /* no liveness probe to tell */ }
 	}
 
 	if p.SweepStale {

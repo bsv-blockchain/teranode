@@ -170,6 +170,20 @@ func TestReset_PrunedMoveBackTxIsNotMarked(t *testing.T) {
 	require.NotZero(t, unminedSinceOf(t, items, existingHash), "surviving moveBack tx must have unmined_since set")
 }
 
+// requireResetFailedBeforeItChangedAnything checks that a failed reset never
+// reached the subtree processor's reset, which rotates the tx map, and left block
+// assembly on the block it was on.
+func requireResetFailedBeforeItChangedAnything(t *testing.T, ba *BlockAssembler, before *model.BlockHeader) {
+	t.Helper()
+
+	mockStp, ok := ba.subtreeProcessor.(*subtreeprocessor.MockSubtreeProcessor)
+	require.True(t, ok)
+	mockStp.AssertNotCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+	after, _ := ba.CurrentBlock()
+	require.Equal(t, before.Hash(), after.Hash(), "block assembly stays on the block it was on")
+}
+
 // If the existence lookup fails outright, reset cannot tell pruned from live.
 // Marking them all would hit the store's fatal for a pruned one, and leaving
 // them out would leave live txs flagged mined while their block is off the
@@ -179,8 +193,11 @@ func TestReset_MoveBackExistenceLookupFailureFailsTheReset(t *testing.T) {
 	ba, rec, _, _, _ := setupPrunedMoveBackReset(t)
 	rec.decorateErr = tErrors.NewStorageError("store unavailable")
 
+	before, _ := ba.CurrentBlock()
+
 	require.Error(t, ba.reset(t.Context()))
 	require.Empty(t, rec.markedFalse, "nothing is marked on a lookup that failed")
+	requireResetFailedBeforeItChangedAnything(t, ba, before)
 }
 
 // A per-tx lookup error other than not found (a transient Aerospike record error)
@@ -190,6 +207,9 @@ func TestReset_MoveBackTransientLookupErrorFailsTheReset(t *testing.T) {
 	ba, rec, _, existingHash, _ := setupPrunedMoveBackReset(t)
 	rec.itemErrs = map[chainhash.Hash]error{existingHash: tErrors.NewStorageError("record timeout")}
 
+	before, _ := ba.CurrentBlock()
+
 	require.Error(t, ba.reset(t.Context()))
 	require.Empty(t, rec.markedFalse)
+	requireResetFailedBeforeItChangedAnything(t, ba, before)
 }
