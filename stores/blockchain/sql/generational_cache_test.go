@@ -1,16 +1,19 @@
 package sql
 
 import (
+	"encoding/binary"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGenerationalCache_PreventStaleWrites(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -34,7 +37,7 @@ func TestGenerationalCache_PreventStaleWrites(t *testing.T) {
 }
 
 func TestGenerationalCache_AllowFreshWrites(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -54,7 +57,7 @@ func TestGenerationalCache_AllowFreshWrites(t *testing.T) {
 }
 
 func TestGenerationalCache_MultipleInvalidations(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -79,7 +82,7 @@ func TestGenerationalCache_MultipleInvalidations(t *testing.T) {
 }
 
 func TestGenerationalCache_ConcurrentOperations(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -118,7 +121,7 @@ func TestGenerationalCache_ConcurrentOperations(t *testing.T) {
 }
 
 func TestGenerationalCache_StopMultipleTimes(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 
 	// Should not panic when called multiple times
 	require.NotPanics(t, func() {
@@ -129,7 +132,7 @@ func TestGenerationalCache_StopMultipleTimes(t *testing.T) {
 }
 
 func TestGenerationalCache_GetBeforeSet(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -141,7 +144,7 @@ func TestGenerationalCache_GetBeforeSet(t *testing.T) {
 }
 
 func TestGenerationalCache_TTLExpiration(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -166,7 +169,7 @@ func TestGenerationalCache_TTLExpiration(t *testing.T) {
 }
 
 func TestGenerationalCache_DifferentKeys(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key1 := chainhash.Hash{1}
@@ -191,7 +194,7 @@ func TestGenerationalCache_DifferentKeys(t *testing.T) {
 }
 
 func TestGenerationalCache_SetReturnValue(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -208,4 +211,162 @@ func TestGenerationalCache_SetReturnValue(t *testing.T) {
 		result := op.Set("test", 1*time.Hour)
 		require.False(t, result, "Set should return false when generation changed")
 	})
+}
+
+func TestGenerationalCache_Capacity(t *testing.T) {
+	gc := NewGenerationalCache(2)
+	defer gc.Stop()
+	for i := byte(1); i <= 3; i++ {
+		require.True(t, gc.NewOp(chainhash.Hash{i}).Set(i, time.Hour))
+	}
+	require.Nil(t, gc.NewOp(chainhash.Hash{1}).Get())
+	require.NotNil(t, gc.NewOp(chainhash.Hash{2}).Get())
+	require.NotNil(t, gc.NewOp(chainhash.Hash{3}).Get())
+}
+
+func TestGenerationalCache_HeaderByteBudget(t *testing.T) {
+	gc := NewGenerationalCache(100000)
+	defer gc.Stop()
+	value := [2]interface{}{make([]*model.BlockHeader, 8192), make([]*model.BlockHeaderMeta, 8192)}
+	hotKey := chainhash.Hash{100}
+	require.True(t, gc.NewOp(hotKey).Set(true, time.Hour))
+	for i := byte(1); i <= 16; i++ {
+		require.True(t, gc.NewOp(chainhash.Hash{i}).Set(value, time.Hour))
+	}
+	require.False(t, gc.NewOp(chainhash.Hash{17}).Set(value, time.Hour))
+	require.Nil(t, gc.NewOp(chainhash.Hash{17}).Get())
+	require.NotNil(t, gc.NewOp(chainhash.Hash{1}).Get(), "budget exhaustion must not evict existing responses")
+	require.NotNil(t, gc.NewOp(hotKey).Get(), "header queries must not flush unrelated hot-path entries")
+	require.True(t, gc.NewOp(chainhash.Hash{101}).Set(true, time.Hour), "uncharged values remain cacheable")
+	oversized := [2]interface{}{make([]*model.BlockHeader, 140000), make([]*model.BlockHeaderMeta, 140000)}
+	require.False(t, gc.NewOp(chainhash.Hash{18}).Set(oversized, time.Hour))
+	require.Nil(t, gc.NewOp(chainhash.Hash{18}).Get())
+	gc.DeleteAll()
+	require.True(t, gc.NewOp(chainhash.Hash{19}).Set(value, time.Hour))
+}
+
+func TestGenerationalCache_HeaderBudgetReclaimed(t *testing.T) {
+	value := [2]interface{}{make([]*model.BlockHeader, 8192), make([]*model.BlockHeaderMeta, 8192)}
+
+	t.Run("expiry", func(t *testing.T) {
+		gc := NewGenerationalCache(0)
+		defer gc.Stop()
+		for i := byte(1); i <= 16; i++ {
+			require.True(t, gc.NewOp(chainhash.Hash{i}).Set(value, 50*time.Millisecond))
+		}
+		require.Eventually(t, func() bool { return gc.ttlCache.Len() == 0 }, time.Second, time.Millisecond)
+		require.Eventually(t, func() bool {
+			return gc.NewOp(chainhash.Hash{17}).Set(value, time.Hour)
+		}, time.Second, time.Millisecond, "expired entries must return their header budget without chain invalidation")
+	})
+
+	t.Run("capacity eviction", func(t *testing.T) {
+		gc := NewGenerationalCache(2)
+		defer gc.Stop()
+		for i := byte(1); i <= 32; i++ {
+			require.Eventually(t, func() bool {
+				return gc.NewOp(chainhash.Hash{i}).Set(value, time.Hour)
+			}, time.Second, time.Millisecond, "eviction must return the departed entry's charge")
+		}
+		require.Equal(t, 2, gc.ttlCache.Len())
+		require.NotNil(t, gc.NewOp(chainhash.Hash{32}).Get())
+	})
+
+	t.Run("replacement", func(t *testing.T) {
+		gc := NewGenerationalCache(0)
+		defer gc.Stop()
+		key := chainhash.Hash{1}
+		for i := 0; i < 32; i++ {
+			require.True(t, gc.NewOp(key).Set(value, time.Hour), "replacing one entry must not accumulate charges")
+		}
+	})
+
+	t.Run("replacement with uncharged value", func(t *testing.T) {
+		gc := NewGenerationalCache(0)
+		defer gc.Stop()
+		fullBudget := [2]interface{}{make([]*model.BlockHeader, 131072), make([]*model.BlockHeaderMeta, 131072)}
+		key := chainhash.Hash{1}
+		require.True(t, gc.NewOp(key).Set(fullBudget, time.Hour))
+		require.True(t, gc.NewOp(key).Set(true, time.Hour))
+		require.True(t, gc.NewOp(chainhash.Hash{2}).Set(fullBudget, time.Hour))
+		require.Equal(t, true, gc.NewOp(key).Get().Value())
+	})
+}
+
+func TestGenerationalCache_DeletedEntriesReleaseBudget(t *testing.T) {
+	gc := NewGenerationalCache(0)
+	defer gc.Stop()
+	value := [2]interface{}{make([]*model.BlockHeader, 131072), make([]*model.BlockHeaderMeta, 131072)}
+	key := chainhash.Hash{1}
+	require.True(t, gc.NewOp(key).Set(value, time.Hour))
+	gc.ttlCache.Delete(key)
+	require.True(t, gc.NewOp(chainhash.Hash{2}).Set(value, time.Hour))
+	require.False(t, gc.NewOp(key).Set(value, time.Hour), "live entries still consume the budget")
+}
+
+func TestGenerationalCache_BookkeepingBoundedAfterEviction(t *testing.T) {
+	gc := NewGenerationalCache(2)
+	defer gc.Stop()
+	for i := uint32(0); i < 4096; i++ {
+		var key chainhash.Hash
+		binary.LittleEndian.PutUint32(key[:], i)
+		require.True(t, gc.NewOp(key).Set([]uint32{1}, time.Hour))
+	}
+	require.LessOrEqual(t, len(gc.headerCharges), 1024, "small evicted values must not accumulate unbounded accounting")
+}
+
+func TestGenerationalCache_DeleteAllDoesNotSpawnPerEntryGoroutines(t *testing.T) {
+	gc := NewGenerationalCache(10000)
+	defer gc.Stop()
+	for i := uint32(0); i < 10000; i++ {
+		var key chainhash.Hash
+		binary.LittleEndian.PutUint32(key[:], i)
+		require.True(t, gc.NewOp(key).Set(true, time.Hour))
+	}
+	baseline := runtime.NumGoroutine()
+	stop := make(chan struct{})
+	observed := make(chan int, 1)
+	go func() {
+		peak := baseline
+		for {
+			peak = max(peak, runtime.NumGoroutine())
+			select {
+			case <-stop:
+				observed <- peak
+				return
+			default:
+				runtime.Gosched()
+			}
+		}
+	}()
+	gc.DeleteAll()
+	close(stop)
+	require.Less(t, <-observed-baseline, 1000, "invalidation must not start one callback goroutine per cached entry")
+}
+
+func TestGenerationalCache_ConcurrentHeaderAccounting(t *testing.T) {
+	gc := NewGenerationalCache(4)
+	defer gc.Stop()
+	var wg sync.WaitGroup
+	for worker := byte(0); worker < 8; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := byte(0); i < 64; i++ {
+				op := gc.NewOp(chainhash.Hash{worker, i % 8})
+				op.Set(make([]uint32, int(i)+1), time.Millisecond)
+				if i%11 == 0 {
+					gc.DeleteAll()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	gc.DeleteAll()
+	key := chainhash.Hash{100}
+	require.True(t, gc.NewOp(key).Set(make([]uint32, 10000), time.Hour))
+	gc.writeMu.Lock()
+	headerBytes := gc.headerBytes
+	gc.writeMu.Unlock()
+	require.Equal(t, uint64(40000), headerBytes)
 }

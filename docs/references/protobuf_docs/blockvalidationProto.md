@@ -111,6 +111,8 @@ swagger:model ProcessBlockRequest
 | height | [uint32](#uint32) |  | The height of the block in the blockchain |
 | base_url | [string](#string) |  | Base URL where the block can be retrieved from |
 | peer_id | [string](#string) |  | P2P peer identifier for peerMetrics tracking |
+| block_id | [uint32](#uint32) |  | Pre-assigned block ID from legacy netsync (0 = not pre-assigned, the blockchain service assigns one) |
+| header_proven | [bool](#bool) |  | True only when legacy netsync can show the block's hash sits at or below a pinned checkpoint hash matched in an internally linked header run. False denies the below-checkpoint quick route; the block takes full validation |
 
 <a name="RevalidateBlockRequest"></a>
 

@@ -177,14 +177,32 @@ install-tools:
 .PHONY: test
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
-	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=20m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+
+# run the tests too slow for `make test` under -race and coverage (TERANODE_HEAVY_TESTS), without -race.
+# The PR test job runs it after `make test`.
+.PHONY: test-heavy
+test-heavy:
+	SETTINGS_CONTEXT=test TERANODE_HEAVY_TESTS=1 go test -tags "testtxmetacache" -count=1 -timeout=10m -run '^(TestSortedHashSet_|Test_queueLarge$$|TestDiskTxMap_(ExistenceLayerThroughput|ThroughputTarget|MultiDiskThroughput)$$|TestSubtreeProcessorSizePerformance$$|TestDirectSubtreeCreationPerformance$$|TestOverheadBreakdownDetailed$$)' ./services/blockassembly/subtreeprocessor
 
 # run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest
 longtest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache longtest" -count=1 -timeout=10m -run '^TestLegacyHistoricalTestnetSync$$' ./services/legacy/netsync
+	$(MAKE) test-heavy
 	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
+
+# run the soak test: the in-process daemon under steady tx load for SOAK_DURATION, failing if heap or goroutine
+# counts trend upward. No -race: the detector skews memory and throughput, which is what this test measures.
+# SOAK_TIMEOUT must exceed SOAK_DURATION by at least 10m. Other knobs (SOAK_WARMUP, SOAK_SAMPLE_INTERVAL,
+# SOAK_TXS_PER_CYCLE, SOAK_UTXO_STORE, SOAK_OUTPUT_DIR, SOAK_INJECT_LEAK) are read from the environment.
+# Example: make soaktest SOAK_DURATION=2h SOAK_TIMEOUT=150m
+SOAK_DURATION ?= 30m
+SOAK_TIMEOUT ?= 60m
+.PHONY: soaktest
+soaktest:
+	SETTINGS_CONTEXT=test SOAK_DURATION=$(SOAK_DURATION) go test -v -count=1 -tags "soak testtxmetacache" -timeout=$(SOAK_TIMEOUT) -run '^TestSoakSteadyLoad$$' ./test/soak/...
 
 # run tests in the test/sequentialtest directory in order, one by one
 # Environment variables:
@@ -234,6 +252,7 @@ FUZZ_TARGETS = \
 	model:FuzzNewBlockFromBytes \
 	model:FuzzReadBlockFromReader \
 	model:FuzzDiskParentSpendsMap_Parity \
+	model:FuzzDecodeSubtreeMetaBody \
 	pkg/fileformat:FuzzHeaderParsersAgree \
 	pkg/fileformat:FuzzReadHeaderFromBytes \
 	services/utxopersister:FuzzUTXOWrapperFromBytes \
@@ -556,7 +575,7 @@ lint: lint-tracing-info
 # Change TRACING_INFO_SITES in the same commit as the site, and say why.
 # Only production code counts: test files are excluded so that deleting a test
 # cannot silently free a slot for a new production INFO site.
-TRACING_INFO_SITES := 61
+TRACING_INFO_SITES := 59
 
 .PHONY: lint-tracing-info
 lint-tracing-info:

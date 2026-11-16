@@ -108,12 +108,27 @@ func isRetriableSQLiteCode(code int) bool {
 		return false
 	}
 
+	if IsSQLiteLockCode(code) {
+		return true
+	}
+
 	primary := code & 0xff
 
-	return primary == sqlite3.SQLITE_BUSY ||
-		primary == sqlite3.SQLITE_LOCKED ||
-		primary == sqlite3.SQLITE_IOERR ||
-		primary == sqlite3.SQLITE_CANTOPEN
+	return primary == sqlite3.SQLITE_IOERR || primary == sqlite3.SQLITE_CANTOPEN
+}
+
+// IsSQLiteLockCode reports whether a SQLite result code is a BUSY or LOCKED
+// condition, extended variants included. modernc.org/sqlite enables extended
+// result codes on every connection, so the primary code is the low byte and
+// the detail sits above it: SQLITE_BUSY_SNAPSHOT (517) is SQLITE_BUSY (5),
+// SQLITE_LOCKED_SHAREDCACHE (262) is SQLITE_LOCKED (6). Comparing the whole
+// code against the two primaries drops every extended variant. It is the
+// narrower check for callers that retry lock contention only;
+// isRetriableSQLiteCode adds I/O and open failures on top of it.
+func IsSQLiteLockCode(code int) bool {
+	primary := code & 0xff
+
+	return primary == sqlite3.SQLITE_BUSY || primary == sqlite3.SQLITE_LOCKED
 }
 
 // calculateBackoff calculates the backoff duration with jitter

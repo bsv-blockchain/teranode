@@ -5,6 +5,7 @@
 - [Teranode Microservices Overview](#teranode-microservices-overview)
     - [Index](#index)
     - [1. Introduction](#1-introduction)
+        - [1.1 Scaling Policy](#11-scaling-policy)
     - [2. Core Services](#2-core-services)
         - [2.1 Asset Server](#21-asset-server)
         - [2.2 Propagation Service](#22-propagation-service)
@@ -33,7 +34,7 @@
 
 ## 1. Introduction
 
-Teranode is designed as a collection of microservices that work together to provide a horizontally scalable and highly efficient blockchain network. The microservices architecture enables Teranode to achieve exceptional throughput exceeding 1 million transactions per second by distributing processing across multiple machines and allowing most services to scale independently based on demand.
+Teranode is designed as a collection of microservices that work together to provide a horizontally scalable and highly efficient blockchain network. The microservices architecture is designed to let Teranode reach a throughput above 1 million transactions per second by distributing processing across multiple machines and allowing most services to scale independently based on demand.
 
 This architectural approach provides several key advantages:
 
@@ -43,9 +44,37 @@ This architectural approach provides several key advantages:
 - **Fault Isolation**: Issues in one service are contained and don't cascade to affect the entire system
 - **Technology Flexibility**: Each service can use the most appropriate technology stack and storage backend for its specific requirements
 
-**Scaling caveat:** the first two points above do not apply to every service. Block Assembly and Blockchain run as single stateful instances, and the shipped example Cluster CRs pin every service to one replica except the Validator. See [2.6 Block Assembly Service](#26-block-assembly-service) for why.
+**Scaling caveat:** the first two points above do not apply to every service. Several services must run as one replica per node, and the shipped example Cluster CRs pin every service to one replica except the Validator. See [1.1 Scaling Policy](#11-scaling-policy).
 
 This document provides an overview of each microservice, its responsibilities, and how it interacts with other components in the system.
+
+### 1.1 Scaling Policy
+
+The table gives, for each service the daemon can start, how many replicas one Teranode node (one cluster) can run. **One** means one replica per node; a second replica breaks the node. **Many** means more than one replica is supported. Where more than one replica has not been shown to be safe, the policy is **one** until it is.
+
+| Service | Replicas | Reason |
+|---|---|---|
+| Asset Server | Many | It serves reads. Replicas share one subtree-data lock, which needs `subtree_quorum_path` on storage that every replica can reach. |
+| Propagation | Many | It holds no state that other services depend on, and forwards transactions to the Validator. |
+| Validator | Many | It holds no state of its own. Replicas divide one shared Kafka consumer group, and the shared UTXO store gives double-spend safety. The mainnet example CR runs 8. |
+| Subtree Validation | Many | Replicas divide subtrees through one shared consumer group. Each replica reads every txmeta message through its own group. A file lock in `subtree_quorum_path`, which must be shared, stops two replicas validating the same subtree. |
+| RPC | Many | Its caches are per process and only 10 seconds long. Mining and FSM calls go on to Block Assembly or Blockchain. |
+| Blockchain | One | The FSM state, its lock and the notification subscribers exist only in the memory of one process. Clients of a second replica would not see FSM changes or block notifications made on the first. |
+| Block Assembly | One | Mining jobs exist only in the process that issued the candidate, and all replicas write the same persisted checkpoint. See [2.6 Block Assembly Service](#26-block-assembly-service). |
+| Block Persister | One | Replicas do not claim a block before they work on it, so each one takes the same oldest unpersisted block. A second replica can delete the working files of the first. |
+| UTXO Persister | One | One `lastProcessed.dat` cursor in the shared block store is read at start and then advanced, so two writers race on it. |
+| P2P | One | A node has one libp2p identity. Two replicas either share one key, and so one peer ID, or appear as two peers. |
+| Legacy | One | Each replica is a separate peer with its own sync manager, and the consumer groups are shared. Each block and transaction announcement would reach the peers of one replica only. |
+| Alert | One | Each replica joins the alert network as a separate peer, with its own key and datastore, and applies every alert to the shared node. |
+| Block Validation | One | The shared consumer group divides blocks, but the guards against duplicate catch-up and against validating a child before its parent exist only inside one process. More than one replica has not been shown to be safe. |
+| Pruner | One | Blob deletion claims work across replicas (`SKIP LOCKED`), but the UTXO pruning pass does not: every replica scans every partition on every trigger. More than one replica has not been shown to be safe. |
+
+For a service marked **Many** that reads from Kafka, two more conditions apply:
+
+- Every replica must use the same `clientName`, because the consumer group ID is built from it.
+- The topic needs at least as many partitions as there are replicas. A replica with no partition receives no messages. The example `teranode-configmap.yaml` sets `KAFKA_PARTITIONS_HIGH` to `1`.
+
+The [Teranode operator](https://github.com/bsv-blockchain/teranode-operator) does not enforce this table. Its `deploymentOverrides.replicas` field has no maximum, and the operator copies it to the service's Deployment as given. Whoever deploys the node must keep each **One** service at one replica.
 
 ## 2. Core Services
 
@@ -550,7 +579,7 @@ Kafka serves as the messaging middleware for inter-service communication in Tera
 - `kafka_blocksFinalConfig`: Used for sending finalized blocks from Blockchain to the Legacy P2P service (`netsync.SyncManager`). The Block Persister does **not** consume this topic — it polls the Blockchain service over gRPC (`GetBlocksNotPersisted`) instead
 - `kafka_invalidBlocksConfig`: Used for notifying P2P about blocks that failed validation, for peer reputation management
 - `kafka_invalidSubtreesConfig`: Used for notifying P2P about subtrees that failed validation, for peer quality tracking
-- `kafka_txPolicyRejectedConfig`: Used for sending consensus-valid but policy-rejected transactions from Validator to Subtree Validation
+- `kafka_txPolicyRejectedConfig`: Used for sending policy-rejected transactions (usually, but not always, consensus-valid) from Validator to Subtree Validation
 - `kafka_legacyInvConfig`: Used by the Legacy Sync Manager to bridge legacy Bitcoin wire protocol inventory messages to and from Kafka
 
 **Key Features:**

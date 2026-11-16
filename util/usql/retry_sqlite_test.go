@@ -47,6 +47,37 @@ func TestIsRetriableSQLiteCode(t *testing.T) {
 	}
 }
 
+// TestIsSQLiteLockCode_ExtendedCodesAreStillLocks pins the primary-code
+// comparison shared by isRetriableSQLiteCode and the UTXO SQL store's isDeadlock
+// and isLockError. The store's create path used to compare the whole code
+// against SQLITE_BUSY and SQLITE_LOCKED, so a BUSY_SNAPSHOT (517) from a WAL
+// snapshot conflict or a LOCKED_SHAREDCACHE (262) was not retried while the
+// plain codes were. Reverting IsSQLiteLockCode to a whole-code compare fails
+// the three extended rows below. I/O and open failures are retriable for
+// isRetriableSQLiteCode but are not lock contention, so they are false here.
+func TestIsSQLiteLockCode_ExtendedCodesAreStillLocks(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code int
+		want bool
+	}{
+		{"busy", sqlite3.SQLITE_BUSY, true},
+		{"locked", sqlite3.SQLITE_LOCKED, true},
+		{"busy_snapshot 517", sqlite3.SQLITE_BUSY_SNAPSHOT, true},
+		{"busy_recovery 261", sqlite3.SQLITE_BUSY_RECOVERY, true},
+		{"locked_sharedcache 262", sqlite3.SQLITE_LOCKED_SHAREDCACHE, true},
+		{"ioerr 10", sqlite3.SQLITE_IOERR, false},
+		{"cantopen 14", sqlite3.SQLITE_CANTOPEN, false},
+		{"error 1", sqlite3.SQLITE_ERROR, false},
+		{"constraint 19", sqlite3.SQLITE_CONSTRAINT, false},
+		{"constraint_unique 2067", sqlite3.SQLITE_CONSTRAINT_UNIQUE, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, IsSQLiteLockCode(tc.code))
+		})
+	}
+}
+
 // openWALPair opens two connections to the same file-backed WAL database.
 func openWALPair(t *testing.T) (*sql.DB, *sql.DB) {
 	t.Helper()

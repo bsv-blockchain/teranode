@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -457,6 +458,40 @@ func TestCentralizedPeerRegistry_RecordCatchupError(t *testing.T) {
 	got, _ := r.Get("p")
 	require.Equal(t, "block 0xdead missing", got.LastCatchupError)
 	require.False(t, got.LastCatchupErrorTime.IsZero())
+}
+
+// TestCentralizedPeerRegistry_RecordCatchupError_Sanitizes pins that a stored catchup
+// error carries no IP literal and is capped: it is served by the Asset /peers endpoint,
+// and a dial error would otherwise tell a peer which private address a hostname it
+// chose resolved to (bitcoin-sv/teranode#4855).
+func TestCentralizedPeerRegistry_RecordCatchupError_Sanitizes(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	r.Register(&PeerInfo{ID: "p"})
+
+	t.Run("dial target", func(t *testing.T) {
+		r.RecordCatchupError("p", `Get "http://kafka:9092/headers": dial tcp 10.1.2.3:9092: connect: connection refused`)
+
+		got, _ := r.Get("p")
+		require.NotContains(t, got.LastCatchupError, "10.1.2.3")
+		require.Contains(t, got.LastCatchupError, "connection refused", "the diagnostic must survive")
+	})
+
+	t.Run("ssrf refusal naming an address that ends in ::", func(t *testing.T) {
+		r.RecordCatchupError("p", `SSRF dial check: resolved address fd00:: for host "kafka" is a private address`)
+
+		got, _ := r.Get("p")
+		require.NotContains(t, got.LastCatchupError, "fd00")
+		require.Contains(t, got.LastCatchupError, "<redacted-ip>")
+	})
+
+	t.Run("length cap", func(t *testing.T) {
+		r.RecordCatchupError("p", strings.Repeat("é", maxCatchupErrorLength))
+
+		got, _ := r.Get("p")
+		require.LessOrEqual(t, len(got.LastCatchupError), maxCatchupErrorLength+len("…"))
+		require.True(t, utf8.ValidString(got.LastCatchupError), "the cut must fall on a rune boundary")
+		require.True(t, strings.HasSuffix(got.LastCatchupError, "…"))
+	})
 }
 
 func TestCentralizedPeerRegistry_RecordValidatedPeerProgress_MonotonicChainWork(t *testing.T) {

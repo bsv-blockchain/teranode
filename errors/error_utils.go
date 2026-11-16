@@ -35,6 +35,11 @@ func IsRetryableError(err error) bool {
 		case ERR_NETWORK_TIMEOUT,
 			ERR_NETWORK_ERROR,
 			ERR_SERVICE_UNAVAILABLE,
+			// A remote 429 is the definitional retryable failure: the request was
+			// well formed and the server asked us to come back later. Note it is
+			// deliberately absent from IsTransientLocalError — it is a peer-side
+			// decision, not a fault in this node's stack.
+			ERR_SERVICE_RATE_LIMITED,
 			ERR_STORAGE_UNAVAILABLE,
 			ERR_STORAGE_ERROR:
 			return true
@@ -65,9 +70,11 @@ func IsRetryableError(err error) bool {
 // whether to keep the delivering peer instead of disconnecting it (peer_server).
 //
 // The set is {ErrServiceError, ErrStorageError, ErrServiceUnavailable,
-// ErrStorageUnavailable} and the check walks the wrapped chain. It intentionally
-// differs from IsRetryableError, which omits ErrServiceError (and adds network
-// codes) — these two predicates are not interchangeable.
+// ErrStorageUnavailable} and the check walks the wrapped chain. ErrServiceNotReady
+// is absent: only block assembly produces it, and none of this predicate's callers
+// receives a block-assembly error. It intentionally differs from IsRetryableError,
+// which omits ErrServiceError (and adds network codes) — these two predicates are
+// not interchangeable.
 func IsTransientLocalError(err error) bool {
 	if err == nil {
 		return false
@@ -77,6 +84,25 @@ func IsTransientLocalError(err error) bool {
 		errors.Is(err, ErrStorageError) ||
 		errors.Is(err, ErrServiceUnavailable) ||
 		errors.Is(err, ErrStorageUnavailable)
+}
+
+// IsBlockSpendRuleViolation reports whether err carries a code the validator or UTXO
+// store puts on a spend that breaks a consensus rule: an immature coinbase or a
+// non-final transaction. When a block is validated, maturity is checked at the block's
+// height and finality against its parent, so either is a verdict on the block.
+// Elsewhere maturity is checked at tip+1 and finality against the tip's median time,
+// so neither is.
+//
+// ErrFrozen is absent: it depends on this node's alert-system state. ErrUtxoHashMismatch
+// is absent: the validator re-derives every input's parent output data from this
+// node's store, so a mismatch is the store disagreeing with itself. ErrSpent is absent
+// too: a double spend is a conflict, not a broken rule.
+func IsBlockSpendRuleViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return errors.Is(err, ErrTxCoinbaseImmature) || errors.Is(err, ErrNonFinal)
 }
 
 // IsNetworkError determines if an error is network-related.

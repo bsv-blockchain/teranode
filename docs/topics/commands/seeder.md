@@ -145,7 +145,7 @@ The service reads these structures from input files and converts them to the for
 To run the Seeder command, use the following command:
 
 ```shell
-teranode-cli seeder -inputDir <folder> -hash <hash> [-skipHeaders] [-skipUTXOs] [-force] [-skipChecksum]
+teranode-cli seeder -inputDir <folder> -hash <hash> [-skipHeaders] [-skipUTXOs] [-force | -recover-checkpoint] [-skipChecksum]
 ```
 
 Options:
@@ -154,7 +154,8 @@ Options:
 - `-hash`: Hash of the UTXO set / headers to process.
 - `-skipHeaders`: (Optional) Skip processing of headers.
 - `-skipUTXOs`: (Optional) Skip processing of UTXOs.
-- `-force`: (Optional) Process even if `lastProcessed.dat` or BlockAssembler state already exists.
+- `-force`: (Optional) Always re-import the UTXO set, even if `lastProcessed.dat` or BlockAssembler state already exists. This is the right flag after wiping or recreating the UTXO store, and whenever you are unsure what the UTXO store holds. Cannot be combined with `-skipUTXOs`.
+- `-recover-checkpoint`: (Optional) Write the missing BlockAssembler checkpoint without importing anything, when `lastProcessed.dat` and the seeder's imported-tip record (`seederImportedTip.dat`) prove a completed import of this exact snapshot (same tip height and tip hash). Dangerous: both records live in the block store and say nothing about what the UTXO store currently holds, so never use it after wiping or recreating the UTXO store. If the records do not match the snapshot, the seeder refuses and writes nothing. Mutually exclusive with `-force`. Cannot be combined with `-skipUTXOs`.
 - `-skipChecksum`: (Optional) Skip checksum verification (see below). Only for callers that have already verified the files against their sidecars.
 
 ### Checksum verification

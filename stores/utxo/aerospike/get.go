@@ -59,6 +59,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
+	"math"
 	"slices"
 	"sync/atomic"
 
@@ -234,11 +236,27 @@ func (it *batchGetItem) complete(data batchGetItemData) {
 // batchOutpoint represents a single outpoint in a batch previous output operation.
 // It is used to efficiently retrieve previous output data for transaction inputs
 // by batching multiple requests together to optimize database access.
+//
+// An item is one of two kinds. A decorate item (PreviousOutputsDecorate) sets
+// outpoint, and the batch writes the parent's value and script into that input.
+// A parent-output item (ParentOutputsForValidation) sets parent instead, and the
+// batch writes its answer into answer, touching nothing the caller holds.
 type batchOutpoint struct {
-	outpoint  *bt.Input         // The previous output to retrieve data for
+	outpoint  *bt.Input         // decorate item: the input to fill from its previous output
+	parent    *utxo.Outpoint    // parent-output item: the outpoint to answer
+	answer    utxo.ParentOutput // parent-output item: written before complete, read after the group wait
 	group     *completion.Group // Shared completion group for the submitting decorate call
 	completed atomic.Bool       // guards exactly-once completion
 	result    error             // written by the CAS winner, after the CAS and before group.Done(); see complete
+}
+
+// parentTxID returns the txid of the parent this item reads.
+func (it *batchOutpoint) parentTxID() chainhash.Hash {
+	if it.parent != nil {
+		return it.parent.TxID
+	}
+
+	return *it.outpoint.PreviousTxIDChainHash()
 }
 
 // complete writes err into the item's result slot and marks the shared group's
@@ -1728,7 +1746,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	// this is done by using a map of txHashes
 	uniqueTxHashes := make(map[chainhash.Hash]struct{})
 	for _, item := range batch {
-		uniqueTxHashes[*item.outpoint.PreviousTxIDChainHash()] = struct{}{}
+		uniqueTxHashes[item.parentTxID()] = struct{}{}
 	}
 
 	// Create a batch of records to read from the txHashes
@@ -1742,9 +1760,11 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			return
 		}
 
-		// BlockHeights is read so external parents can be reconstructed with the
-		// era-aware unspendable rule keyed to their creation height.
-		bins := []fields.FieldName{fields.Version, fields.LockTime, fields.Inputs, fields.Outputs, fields.External, fields.BlockHeights}
+		// Only the outputs are ever used. BlockHeights is read so external parents
+		// can be reconstructed with the era-aware unspendable rule keyed to their
+		// creation height, and so parent-output items can report it. The parent's
+		// inputs, version and locktime are not read: nothing on this path uses them.
+		bins := []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights}
 		record := aerospike.NewBatchRead(policy, key, fields.FieldNamesToStrings(bins))
 
 		// Add to batch records
@@ -1764,6 +1784,12 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 	txs := make(map[chainhash.Hash]*bt.Tx, len(batchRecords))
 	txErrors := make(map[chainhash.Hash]error)
+	// Per parent: whether its output list came from an external blob, and the
+	// block heights recorded for it (nil when the bin could not be parsed; see
+	// heightErrors).
+	txExternal := make(map[chainhash.Hash]bool, len(batchRecords))
+	txHeights := make(map[chainhash.Hash][]uint32, len(batchRecords))
+	heightErrors := make(map[chainhash.Hash]error)
 
 	// Process the batch records
 	for idx, batchRecordIfc := range batchRecords {
@@ -1784,13 +1810,21 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		var previousTx *bt.Tx
 
+		blockHeights, heightsErr := processBlockHeights(bins)
+		if heightsErr != nil {
+			heightErrors[previousTxHash] = heightsErr
+		} else {
+			txHeights[previousTxHash] = blockHeights
+		}
+
 		external, ok := bins[fields.External.String()].(bool)
 		if ok && external {
+			txExternal[previousTxHash] = true
+
 			// Resolve the parent's creation-height era so the reconstruction
 			// applies the same unspendable rule create used. A missing/empty
 			// BlockHeights (unmined parent) yields the Genesis activation height
 			// (post-Genesis), which only ever over-retains — never over-excludes.
-			blockHeights, _ := processBlockHeights(bins)
 			creationHeight := creationHeightFromBlockHeights(blockHeights, s.settings.ChainCfgParams.GenesisActivationHeight)
 
 			if previousTx, err = s.GetOutpointsFromExternalStore(s.ctx, previousTxHash, creationHeight); err != nil {
@@ -1799,7 +1833,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 				continue
 			}
 		} else {
-			previousTx, err = s.getTxFromBins(bins)
+			previousTx, err = outputsFromBins(bins)
 			if err != nil {
 				txErrors[previousTxHash] = classifyRecordError("invalid tx", err)
 
@@ -1812,9 +1846,19 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 	// Now we have all the txs, we can decorate the outpoints
 	for _, batchItem := range batch {
-		previousTx := txs[*batchItem.outpoint.PreviousTxIDChainHash()]
+		parentTxID := batchItem.parentTxID()
+
+		if batchItem.parent != nil {
+			batchItem.answer = parentOutputAnswer(batchItem.parent.Vout, txs[parentTxID], txErrors[parentTxID],
+				txExternal[parentTxID], txHeights[parentTxID], heightErrors[parentTxID])
+			batchItem.complete(nil)
+
+			continue
+		}
+
+		previousTx := txs[parentTxID]
 		if previousTx == nil {
-			if err, ok := txErrors[*batchItem.outpoint.PreviousTxIDChainHash()]; ok {
+			if err, ok := txErrors[parentTxID]; ok {
 				batchItem.complete(err)
 			} else {
 				batchItem.complete(errors.NewTxNotFoundError("previous tx not found: %v", batchItem.outpoint.PreviousTxID))
@@ -1941,8 +1985,11 @@ func creationHeightFromBlockHeights(blockHeights []uint32, genesisActivationHeig
 }
 
 func (s *Store) getExternalOutpoints(ctx context.Context, previousTxHash chainhash.Hash, creationHeight uint32) (*bt.Tx, int, error) {
-	// get the full transaction from the external store
-	tx, err := s.getExternalTransaction(ctx, previousTxHash)
+	// get the full transaction from the external store. Not sized to the blob:
+	// this path nils the inputs and the unspendable outputs and caches the rest,
+	// and with one arena slab the surviving scripts would keep the dropped ones
+	// (a large OP_FALSE OP_RETURN payload, typically) alive with them.
+	tx, err := s.readExternalTransaction(ctx, previousTxHash, false)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1990,7 +2037,17 @@ func (s *Store) GetTxFromExternalStore(ctx context.Context, previousTxHash chain
 	return s.getExternalTransaction(ctx, previousTxHash)
 }
 
+// getExternalTransaction reads the full transaction stored externally under
+// previousTxHash, with its scripts in one allocation sized to the blob where the
+// store can say how long the blob is. See decodeOwnTxBlob.
 func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
+	return s.readExternalTransaction(ctx, previousTxHash, true)
+}
+
+// readExternalTransaction reads the transaction stored externally under
+// previousTxHash. sizeToBlob selects decodeOwnTxBlob's exact allocation for a
+// FileTypeTx blob; without it each script is read through go-bt's incremental read.
+func (s *Store) readExternalTransaction(ctx context.Context, previousTxHash chainhash.Hash, sizeToBlob bool) (*bt.Tx, error) {
 	fileType := fileformat.FileTypeTx
 
 	// Stream parse from external store rather than reading the whole blob into a
@@ -2029,6 +2086,14 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 
 	tx := &bt.Tx{}
 
+	// Measured before the buffered reader below consumes anything.
+	blobLen, blobLenKnown := 0, false
+	if sizeToBlob && fileType == fileformat.FileTypeTx {
+		if blobLen, blobLenKnown, err = remainingBlobBytes(reader); err != nil {
+			return nil, errors.NewStorageError("[GetTxFromExternalStore][%s] could not size tx blob", previousTxHash.String(), err)
+		}
+	}
+
 	// Use buffered reader for all file types to reduce syscalls
 	bufferedReader := bufio.NewReader(reader)
 
@@ -2039,7 +2104,7 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 		// truncated or torn — never evidence about the block or the peer that
 		// served it. See the classification note on the re-hash below; a truncated
 		// blob is the more likely corruption mode of the two.
-		if _, err = tx.ReadFrom(bufferedReader); err != nil {
+		if err = decodeOwnTxBlob(tx, bufferedReader, blobLen, blobLenKnown); err != nil {
 			return nil, errors.NewStorageError("[GetTxFromExternalStore][%s] could not read tx from stream", previousTxHash.String(), err)
 		}
 
@@ -2228,6 +2293,125 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 	}
 
 	return tx, nil
+}
+
+// decodeOwnTxBlob decodes a FileTypeTx blob this node wrote under the
+// transaction's own txid. When the blob's length is known, every script is
+// drawn from one arena of exactly that length, so the decode allocates the blob
+// about once (issue 2176).
+//
+// The plain ReadFrom path grows each script buffer in 64KiB steps against the
+// bytes that actually arrive (go-bt v2.7.3, bsv-blockchain/go-bt#187). That
+// guards against a peer that declares a huge script and sends nothing, but
+// costs a large script about five times its size in reallocation and copying:
+// 457MB of allocation for a 91MB data-carrier output. The guard is not needed
+// here. The blob is local, its length comes from the store, and the scripts in
+// it can never add up to more than that length, so the arena never grows on a
+// sound blob. Every other decode in this store keeps the incremental read, and
+// so does a blob whose length is unknown or reported above go-bt's
+// MaxArenaAlloc (1GiB). That cap bounds the up-front allocation; it is
+// not a transaction size limit. The stored form is the extended serialization,
+// which adds each input's previous script, so a valid transaction near the
+// 1GB consensus limit could exceed it and would then just keep the old cost.
+//
+// What a corrupt blob costs. The arena itself is the blob's length B, at most
+// 1GiB. A corrupt script length L that overruns the remaining bytes makes the
+// arena grow once, to max(2B, B + L) with L at most 1GiB (go-bt refuses longer
+// lengths before allocating), while the first slab is still referenced; the
+// short read then fails as a storage fault. So the transient worst case is
+// B + max(2B, B + 1GiB), which for B <= 1GiB is 2B + 1GiB: 3GiB at the cap. The
+// incremental read would hold only the bytes that arrive.
+//
+// The scripts left in the arena share its slab, so any one of them keeps the
+// whole blob alive. A child extends its input by pointing at the parent's
+// output script (the validator's extendInputFromPrefetchedParent, and the other
+// PreviousTxScript extenders), so a 25-byte P2PKH change output left in the slab
+// would let the child pin a 96MB parent for as long as the child lives. A
+// parent's own small input scripts would likewise pin it for as long as the
+// parent is cached. Every script shorter than half the blob, input and output
+// alike, is therefore copied out after the decode. At most one script can be
+// that large, and holding it keeps at most about twice its own size alive; a
+// blob with no such script is garbage once this returns. The usual shape, one
+// data carrier and small scripts, still allocates the blob about once. A blob
+// with no large script (a fan-out of many small outputs, or several mid-sized
+// ones) allocates the blob plus a copy of its scripts, but only the copies stay
+// resident. For a fan-out the per-script read was already exact, so there the
+// sized decode allocates more than it did, transiently.
+// Callers that drop some of the large scripts and keep the rest must still not
+// use this path; see getExternalOutpoints.
+func decodeOwnTxBlob(tx *bt.Tx, r io.Reader, blobLen int, blobLenKnown bool) error {
+	if !blobLenKnown || blobLen <= 0 || blobLen > bt.MaxArenaAlloc {
+		_, err := tx.ReadFrom(r)
+		return err
+	}
+
+	if _, err := tx.ReadFromWithArena(r, bt.NewArena(blobLen)); err != nil {
+		return err
+	}
+
+	for _, input := range tx.Inputs {
+		if input != nil {
+			input.UnlockingScript = detachSmallScript(input.UnlockingScript, blobLen)
+			input.PreviousTxScript = detachSmallScript(input.PreviousTxScript, blobLen)
+		}
+	}
+
+	for _, output := range tx.Outputs {
+		if output != nil {
+			output.LockingScript = detachSmallScript(output.LockingScript, blobLen)
+		}
+	}
+
+	return nil
+}
+
+// detachSmallScript returns a copy of s outside the arena when s is shorter than
+// half of the blobLen-byte blob it was decoded from, and s itself otherwise.
+func detachSmallScript(s *bscript.Script, blobLen int) *bscript.Script {
+	if s == nil || 2*len(*s) >= blobLen {
+		return s
+	}
+
+	detached := bscript.Script(bytes.Clone(*s))
+
+	return &detached
+}
+
+// remainingBlobBytes returns how many bytes r has left to read, when r can say.
+// The file blob store's reader can seek, so it can; the memory store's, and a
+// file store's fallback to a remote long-term store, cannot, and known is then
+// false. It leaves r where it found it, or returns an error.
+func remainingBlobBytes(r io.Reader) (n int, known bool, err error) {
+	seeker, ok := r.(io.Seeker)
+	if !ok {
+		return 0, false, nil
+	}
+
+	cur, err := seeker.Seek(0, io.SeekCurrent)
+	if err != nil {
+		// Some wrappers implement Seek only to report that they cannot.
+		return 0, false, nil
+	}
+
+	end, err := seeker.Seek(0, io.SeekEnd)
+	if err != nil {
+		// Seek may have moved the offset before it failed; put it back.
+		if _, rewindErr := seeker.Seek(cur, io.SeekStart); rewindErr != nil {
+			return 0, false, rewindErr
+		}
+
+		return 0, false, nil
+	}
+
+	if _, err = seeker.Seek(cur, io.SeekStart); err != nil {
+		return 0, false, err
+	}
+
+	if end < cur || end-cur > int64(math.MaxInt) {
+		return 0, false, nil
+	}
+
+	return int(end - cur), true, nil
 }
 
 // GetTxInpointsFromExternalStore efficiently extracts TxInpoints from an external transaction

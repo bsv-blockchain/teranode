@@ -52,8 +52,10 @@ Functional options can be used to configure the daemon during initialization (e.
 Starts the daemon and initializes services based on configuration:
 
 ```go
-func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settings.Settings, readyChannel ...chan struct{})
+func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settings.Settings, readyChannel ...chan struct{}) error
 ```
+
+`Start` blocks until every service has stopped and returns `nil` after a clean shutdown: `Stop()`, or a SIGINT/SIGTERM, including one that cancels a service's startup. It returns an error when the daemon could not start, when a service failed and brought the daemon down, or when a service failed to stop. The `teranode` binary exits 1 on that error, so on-failure restart policies (Docker, systemd) see the failure.
 
 Parameters:
 
@@ -394,7 +396,6 @@ The daemon uses a variety of configuration options to control service behavior a
 |---------|-------------|---------|--------|
 | `Kafka.Brokers` | Kafka broker addresses | - | Required for inter-service communication |
 | `Kafka.ValidatorTxsConfig` | Kafka topic configuration for validator transactions | - | Affects how transaction data flows between services |
-| `Validator.KafkaWorkers` | Number of Kafka workers for validator service | `100` | Affects throughput of Kafka message processing |
 | `ClientName` | Client identifier for Kafka consumer groups | - | Ensures unique consumer group names per instance |
 
 ### PostgreSQL Settings

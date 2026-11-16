@@ -715,6 +715,10 @@ type RPCServer struct {
 	// validatorClient provides access to the transaction validator service
 	// Used for synchronous transaction validation in sendrawtransaction RPC
 	validatorClient validator.Interface
+
+	// unminedTxGate makes sendrawtransaction refuse a transaction while the node
+	// syncs (issue 2003). nil accepts everything.
+	unminedTxGate *blockchain.UnminedTxGate
 }
 
 // httpStatusLine returns a response Status-Line (RFC 2616 Section 6.1)
@@ -1089,7 +1093,16 @@ func (s *RPCServer) createMarshalledReply(id, result interface{}, replyErr error
 		if jErr, ok := replyErr.(*bsvjson.RPCError); ok {
 			jsonErr = jErr
 		} else {
-			jsonErr = s.internalRPCError(replyErr.Error(), "")
+			// A handler returned a bare Go error. Hand the caller the trimmed
+			// form rather than replyErr.Error(), which put internal service
+			// names and the storage layer's own text across the API boundary.
+			// s.rpcError logs the full chain, so nothing diagnostic is lost.
+			//
+			// No not-found mapping here: this site has no idea what the
+			// request asked for, and "the block you asked for does not exist"
+			// is the wrong answer to a request that named no block. Handlers
+			// that do name one opt in with s.rpcLookupError. See rpc_errors.go.
+			jsonErr = s.rpcError(replyErr, bsvjson.ErrRPCInternal.Code, "")
 		}
 	}
 
@@ -1458,6 +1471,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		p2pClient:              p2pClient,
 		txStore:                txStore,
 		validatorClient:        validatorClient,
+		unminedTxGate:          blockchain.NewUnminedTxGate(logger, blockchainClient, blockchain.UnminedTxRouteRPCSendRawTx),
 	}
 
 	rpcUser := tSettings.RPC.RPCUser

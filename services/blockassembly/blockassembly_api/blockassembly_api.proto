@@ -110,6 +110,12 @@ service BlockAssemblyAPI {
   // The response contains everything needed to assemble a standard Bitcoin wire format block.
   // Returns NotFound if the candidate ID has expired or is invalid.
   rpc GetCandidateBlock (GetCandidateBlockRequest) returns (GetCandidateBlockResponse) {}
+
+  // PrepareBlock tells block assembly about a block on its current tip that block validation has
+  // started validating, so it can build the block's transaction map before the block is added.
+  // It is a hint: block assembly binds the subtree list to the header itself, and the map is only
+  // used for a block with that hash and subtree list.
+  rpc PrepareBlock (PrepareBlockRequest) returns (EmptyMessage) {}
 }
 
 // An empty message used as a placeholder or a request with no data.
@@ -136,11 +142,13 @@ message AddTxRequest {
   uint32 locktime = 2; // the earliest time a transaction can be mined into a block
   repeated bytes utxos = 5; // the UTXOs consumed by this transaction
   bytes txInpoints = 6; // a serialized list of input outpoints for this transaction
+  bool inBlock = 7; // the transaction arrived inside a block, so the in-memory transaction limit does not refuse it
 }
 
 // Request for adding a batch of transactions to the mining candidate block.
 message AddTxBatchRequest {
   repeated AddTxRequest txRequests = 1; // a batch of transaction requests
+  bool inBlock = 2; // every transaction in the batch arrived inside a block, so the in-memory transaction limit does not refuse the batch
 }
 
 // Request for adding a batch of transactions using columnar format.
@@ -216,6 +224,11 @@ message AddTxBatchColumnarRequest {
   //
   // Assigned a fresh field number (11) — see note on field 10.
   repeated uint32 vout_idxs_tx_offsets = 11;
+
+  // Every transaction in the batch arrived inside a block, so the in-memory
+  // transaction limit does not refuse the batch. A server that predates this
+  // field ignores it and applies the limit, which is the previous behaviour.
+  bool in_block = 12;
 }
 
 // Request for retrieving a mining candidate block template.
@@ -286,6 +299,14 @@ message QueueStatsMessage {
   // settings for the same reason as doubleSpendWindowMillis: the two settings
   // contexts are independent processes.
   int64 queueMaxItems = 4;
+  // The transactions this producer holds in memory, queued plus already in
+  // subtrees. Reported next to the ingest queue depth because the queue alone
+  // reads near empty while the in-memory limit is the bound that is full.
+  int64 heldCount = 5;
+  // The enforced (normalized) in-memory transaction limit, or <= 0 when there is
+  // none. Reported rather than read from the reader's own settings for the same
+  // reason as queueMaxItems.
+  int64 maxHeld = 6;
 }
 
 // Response containing the difficulty required for the next block (not the
@@ -311,6 +332,11 @@ message GetBlockAssemblyBlockCandidateResponse {
 message GetBlockAssemblyTxsResponse {
   uint64 txCount = 1; // the number of transactions in the block assembly
   repeated string txs = 2; // the transactions currently being assembled in the block assembly
+}
+
+// Request to prepare for a block that is being validated.
+message PrepareBlockRequest {
+  bytes block = 1; // the block in model.Block wire format (header, counts, subtree hashes, coinbase)
 }
 
 // Request for retrieving block data for an existing mining candidate.

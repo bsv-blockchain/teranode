@@ -2,10 +2,14 @@ package sql
 
 import (
 	"context"
+	"database/sql/driver"
+	"fmt"
 	"net/url"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -130,4 +134,29 @@ func TestSQLGetBlockHeaders(t *testing.T) {
 		assert.Equal(t, false, metas[0].SubtreesSet)
 		assert.Equal(t, true, metas[0].Invalid)
 	})
+}
+
+// TestProcessBlockHeadersRows_RowErrorIsReturned: an error part way through the rows is returned,
+// not a short list of headers.
+func TestProcessBlockHeadersRows_RowErrorIsReturned(t *testing.T) {
+	s, mock, err := createMockSQL()
+	require.NoError(t, err)
+	defer s.db.Close()
+
+	columns := make([]string, 19)
+	values := make([]driver.Value, 19)
+
+	for i := range columns {
+		columns[i] = fmt.Sprintf("c%d", i)
+	}
+
+	mock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows(columns).AddRow(values...).RowError(0, errors.NewStorageError("connection reset")))
+
+	rows, err := s.db.QueryContext(context.Background(), "SELECT")
+	require.NoError(t, err)
+
+	defer rows.Close()
+
+	_, _, err = s.processBlockHeadersRows(rows, 10, false)
+	require.ErrorContains(t, err, "connection reset")
 }

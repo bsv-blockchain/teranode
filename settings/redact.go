@@ -205,7 +205,7 @@ func walkSensitiveTags(t reflect.Type, out map[string]bool) {
 		}
 
 		if f.Tag.Get("redact") == "true" {
-			if k := f.Tag.Get("key"); k != "" {
+			if k := f.Tag.Get("key"); k != "" && k != keyTagExempt {
 				out[k] = true
 			}
 

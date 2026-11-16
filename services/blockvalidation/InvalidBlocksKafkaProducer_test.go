@@ -25,6 +25,14 @@ type MockBlockchainClient struct {
 	mock.Mock
 }
 
+func (m *MockBlockchainClient) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return m.GetBestBlockHeader(ctx)
+}
+
+func (m *MockBlockchainClient) GetBlockHeadersByParentLinks(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return m.GetBlockHeaders(ctx, hash, numberOfHeaders)
+}
+
 func (m *MockBlockchainClient) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	args := m.Called(ctx, hash, numberOfHeaders)
 	if args.Get(0) == nil {
@@ -171,21 +179,6 @@ func (m *MockBlockchainClient) GetBlockHeadersByHeight(ctx context.Context, star
 // GetBlockHeadersFromHeight implements the blockchain.ClientI interface
 func (m *MockBlockchainClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	args := m.Called(ctx, height, limit)
-	if args.Get(0) == nil {
-		return nil, nil, args.Error(2)
-	}
-
-	var meta []*model.BlockHeaderMeta
-	if args.Get(1) != nil {
-		meta = args.Get(1).([]*model.BlockHeaderMeta)
-	}
-
-	return args.Get(0).([]*model.BlockHeader), meta, args.Error(2)
-}
-
-// GetBlockHeadersFromTill implements the blockchain.ClientI interface
-func (m *MockBlockchainClient) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	args := m.Called(ctx, blockHashFrom, blockHashTill)
 	if args.Get(0) == nil {
 		return nil, nil, args.Error(2)
 	}

@@ -3,9 +3,7 @@ package subtreevalidation
 import (
 	"context"
 	"testing"
-	"time"
 
-	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
@@ -82,23 +80,13 @@ func TestSubtreeRootIsNotUniqueUnderDuplicateLastMutation(t *testing.T) {
 	require.NoError(t, model.CheckSubtreeSlicesForDuplicateTxs([]*subtreepkg.Subtree{honest}))
 }
 
-// shortCircuitTestBlock builds a one-subtree block request for the gate test below.
-func shortCircuitTestBlock(t *testing.T, subtreeHash *chainhash.Hash) *subtreevalidation_api.CheckBlockSubtreesRequest {
+// shortCircuitTestBlock builds a one-subtree block request for the gate test
+// below. The header commits to the subtree, so the cached path's body binding
+// passes and the gate itself is what the test observes.
+func shortCircuitTestBlock(t *testing.T, subtree *subtreepkg.Subtree) *subtreevalidation_api.CheckBlockSubtreesRequest {
 	t.Helper()
 
-	header := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  &chainhash.Hash{},
-		HashMerkleRoot: &chainhash.Hash{},
-		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
-		Bits:           model.NBit{},
-		Nonce:          0,
-	}
-
-	block, err := model.NewBlock(header, &bt.Tx{Version: 1}, []*chainhash.Hash{subtreeHash}, 2, 500, 0, 0)
-	require.NoError(t, err)
-
-	blockBytes, err := block.Bytes()
+	blockBytes, err := boundBlock(t, subtree, subtree.RootHash()).Bytes()
 	require.NoError(t, err)
 
 	return &subtreevalidation_api.CheckBlockSubtreesRequest{
@@ -142,7 +130,7 @@ func TestCheckBlockSubtrees_ShortCircuitRequiresFileTypeSubtree(t *testing.T) {
 		require.NoError(t, server.subtreeStore.Set(context.Background(), subtreeHash[:],
 			fileformat.FileTypeSubtree, subtreeBytes))
 
-		resp, err := server.CheckBlockSubtrees(context.Background(), shortCircuitTestBlock(t, subtreeHash))
+		resp, err := server.CheckBlockSubtrees(context.Background(), shortCircuitTestBlock(t, subtree))
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		require.True(t, resp.Blessed)
@@ -176,7 +164,7 @@ func TestCheckBlockSubtrees_ShortCircuitRequiresFileTypeSubtree(t *testing.T) {
 		// write-side half of the invariant — that a gate which proceeds leaves FileTypeSubtree behind,
 		// or returns an error to the subtree-validation corrupt branch — is a property of
 		// storeSubtreeFiles and is covered where that runs.
-		_, _ = server.CheckBlockSubtrees(context.Background(), shortCircuitTestBlock(t, subtreeHash))
+		_, _ = server.CheckBlockSubtrees(context.Background(), shortCircuitTestBlock(t, subtree))
 
 		server.blockchainClient.(*blockchain.Mock).AssertCalled(t, "GetFSMCurrentState", mock.Anything)
 	})

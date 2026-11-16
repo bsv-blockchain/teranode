@@ -73,3 +73,36 @@ func TestProcessBlocksFinalMessage(t *testing.T) {
 		})
 	}
 }
+
+// A finalised block raises the known height of every peer that announced it, as btcd's
+// handleBlockMsg does. Nothing called UpdatePeerHeights, so a peer's height moved only when it
+// announced a block whose header this node already had, and at the tip on 2026-10-10 startSync
+// found "0 ahead" for 13 minutes while five children waited for a block nobody re-asked.
+func TestProcessBlocksFinalMessageUpdatesAnnouncerHeights(t *testing.T) {
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{0x01},
+		HashMerkleRoot: &chainhash.Hash{0x02},
+		Timestamp:      1700000000,
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d},
+		Nonce:          42,
+	}
+	hash := header.Hash()
+
+	value, err := proto.Marshal(&kafkamessage.KafkaBlocksFinalTopicMessage{Header: header.Bytes(), Height: 970503})
+	require.NoError(t, err)
+
+	notifier := NewMockPeerNotifier()
+	sm := &SyncManager{logger: ulogger.TestLogger{}, peerNotifier: notifier}
+
+	require.NoError(t, sm.processBlocksFinalMessage(&kafka.KafkaMessage{Key: []byte(hash.String()), Value: value}))
+
+	select {
+	case call := <-notifier.updatePeerHeightsChan:
+		require.Equal(t, *hash, *call.latestBlkHash)
+		require.Equal(t, int32(970503), call.latestHeight)
+		require.Nil(t, call.updateSource, "no origin peer: every announcer is raised")
+	default:
+		t.Fatal("UpdatePeerHeights was not called for a finalised block")
+	}
+}

@@ -186,6 +186,33 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		defer s.mainChainRebuilding.Add(-1)
 	}
 
+	// A non-extend runs reconcileOnMainChain, which can move chain membership. A walk
+	// running without slowPathMu may have read its rows before that commits, so note the
+	// write, before slowPathMu drops, and let the walk run again. Only a reconcile that
+	// changed a row and reached the commit is noted: a fork block that does not take the
+	// tip, and an invalid record, which skips the reconcile, add a row the walk's snapshot
+	// cannot see and change none it can. An extend's INSERT is the same. A transaction that
+	// failed before its commit moved nothing, so a BEGIN failure, a duplicate INSERT, a
+	// SQLITE_BUSY, a failed reconcile or a cancelled context is not noted. A failed commit
+	// is, because a commit error does not prove nothing committed.
+	//
+	// The note carries the lowest height the reconcile can have moved the best chain at:
+	// the bottom of its own walk, maxDepth below this block. A reorg the reconcile can
+	// handle forks within that walk, and a block that does not take the tip moves no
+	// block's membership at all.
+	var (
+		membershipMoved bool
+		movedFloor      int64
+	)
+
+	if !onMainChain {
+		defer func() {
+			if membershipMoved {
+				s.noteOnMainChainWrite(movedFloor)
+			}
+		}()
+	}
+
 	// The fork path writes the row and repairs on_main_chain in ONE transaction, so a
 	// failure between them cannot leave a committed block carrying a flag nothing will
 	// revisit. The reconciliation is a single statement bounded to the recent lineage,
@@ -234,12 +261,26 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 				return nil
 			}
 
-			reconcile := func() error { return s.reconcileOnMainChain(ctx, tx) }
-			if s.reconcileHook != nil {
-				reconcile = s.reconcileHook
+			reconcile := func() (bool, error) {
+				changed, err := s.reconcileOnMainChainRows(ctx, tx)
+
+				return changed > 0, err
 			}
 
-			reconcileErr = reconcile()
+			if s.reconcileHook != nil {
+				// A test's stand-in cannot say what it changed, so count it as a change.
+				reconcile = func() (bool, error) { return true, s.reconcileHook() }
+			}
+
+			var moved bool
+
+			moved, reconcileErr = reconcile()
+			if reconcileErr == nil && moved {
+				// RetryTx commits next. Kept true if that commit fails, and across a retry
+				// whose earlier commit may have landed before it reported the error.
+				membershipMoved = true
+				movedFloor = s.reconcileFloor(height)
+			}
 
 			return reconcileErr
 		})
@@ -348,8 +389,14 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		// and the rebuild does not need the flag: mainChainRebuilding is still held for the
 		// whole call, so rebuildOffChainSet takes its flag-free parent_id CTE branch. A
 		// fork-path insert already reconciled the column inside its own transaction, so
-		// only a raced extend can leave a stale flag here, and that self-heals on the next
-		// reconcile, invalidation or startup rebuild.
+		// only an extend can leave a stale flag here: its INSERT wrote true, and nothing
+		// has confirmed it. Record that, with this block's height as the floor, so the
+		// background repair's bounded walk settles the flag, rather than leaving it to the
+		// next reconcile, invalidation or startup.
+		if onMainChain {
+			s.markOnMainChainDirty(false, int64(height), "store_block_best_lookup", bestErr)
+		}
+
 		s.updateMaxBlockID(newBlockID)
 
 		if s.useInMemoryChainCheck {
@@ -386,8 +433,18 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 				s.mainChainRebuilding.Add(1)
 			}
 
+			// The row is committed with on_main_chain = true on a fork. If the clear fails,
+			// record it before this bracket drops the guard, so readers keep walking and the
+			// background repair clears it; the mark records this block's height, so the
+			// bounded walk reaches it however far the tip moves before the repair lands.
+			//
+			// A clear that committed moves a row a walk without slowPathMu may already have
+			// read, so it is noted. A failed one is marked instead, which owes its own repair.
 			if _, clearErr := s.db.ExecContext(postBestCtx, `UPDATE blocks SET on_main_chain = false WHERE id = $1`, newBlockID); clearErr != nil {
 				s.logger.Errorf("StoreBlock: clear sibling-fork on_main_chain: %v", clearErr)
+				s.markOnMainChainDirty(false, int64(height), "store_block_fork_clear", clearErr)
+			} else {
+				s.noteOnMainChainWrite(int64(height))
 			}
 
 			if !guardWholeCall {

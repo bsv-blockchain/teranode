@@ -14,11 +14,11 @@ import (
 )
 
 // TestQuickValidate_CoinbaseCommonRules pins bitcoin-sv/teranode#4835 on the quick-validation path,
-// which never calls block.Valid and so has to enforce model.CoinbaseCommonRuleViolation itself. By
+// which never calls block.Valid and so has to enforce model.TxCommonRuleViolation itself. By
 // the time the check runs the body is bound on both shapes (see checkQuickValidationCoinbase), so a
 // coinbase with no outputs is genuine invalidity and must never be committed.
 //
-// Mutation proof: removing the CoinbaseCommonRuleViolation call from checkQuickValidationCoinbase
+// Mutation proof: removing the TxCommonRuleViolation call from checkQuickValidationCoinbase
 // lets every subtest commit the block, so its invalid assertion and its "AddBlock not called"
 // assertion both redden.
 func TestQuickValidate_CoinbaseCommonRules(t *testing.T) {

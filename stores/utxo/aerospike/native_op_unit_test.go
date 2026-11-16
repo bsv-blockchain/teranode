@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 func aeroErr(code types.ResultCode) *aerospike.AerospikeError {
@@ -195,4 +196,48 @@ func TestLuaResponseIntSliceRejectsByteSlice(t *testing.T) {
 		"blockIDs": []byte{10, 20},
 	})
 	require.Error(t, err)
+}
+
+// TestEncodeMarkLongestChainPayload pins the sub-op 14 wire payload
+// [14, [onLongestChain, baseHeight, retention, unminedSinceStamp]] the C module reads positionally.
+func TestEncodeMarkLongestChainPayload(t *testing.T) {
+	payload, err := encodeMarkLongestChainPayload(true, 467, 6, 458)
+	require.NoError(t, err)
+
+	var decoded []any
+	require.NoError(t, msgpack.Unmarshal(payload, &decoded))
+	require.Len(t, decoded, 2)
+	require.EqualValues(t, subOpMarkLongestChain, decoded[0])
+	require.EqualValues(t, 14, decoded[0])
+
+	args, ok := decoded[1].([]any)
+	require.True(t, ok)
+	require.Len(t, args, 4)
+	require.Equal(t, true, args[0])
+	require.EqualValues(t, 467, args[1])
+	require.EqualValues(t, 6, args[2])
+	require.EqualValues(t, 458, args[3])
+}
+
+// TestParseLuaMapResponseOldMarkFields checks the two fields only sub-op 14 reports are parsed when
+// present, absent otherwise, and cleared by Reset.
+func TestParseLuaMapResponseOldMarkFields(t *testing.T) {
+	s := &Store{logger: ulogger.TestLogger{}}
+
+	var res LuaMapResponse
+	require.NoError(t, s.parseLuaMapResponseInto(map[interface{}]interface{}{
+		"status": "OK", "signal": "DAHUNSET", "oldDeleteAtHeight": 470, "oldUnminedSince": 450,
+	}, &res))
+	require.True(t, res.HasOldDeleteAtHeight)
+	require.Equal(t, 470, res.OldDeleteAtHeight)
+	require.True(t, res.HasOldUnminedSince)
+	require.Equal(t, 450, res.OldUnminedSince)
+
+	res.Reset()
+	require.False(t, res.HasOldDeleteAtHeight)
+	require.False(t, res.HasOldUnminedSince)
+
+	require.NoError(t, s.parseLuaMapResponseInto(map[interface{}]interface{}{"status": "OK"}, &res))
+	require.False(t, res.HasOldDeleteAtHeight)
+	require.False(t, res.HasOldUnminedSince)
 }

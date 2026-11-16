@@ -92,10 +92,15 @@ func TestValidateBlock_CachedHeadersShortWindowIsRefused(t *testing.T) {
 	require.False(t, cachedHeaders[len(cachedHeaders)-1].HashPrevBlock.IsEqual(&chainhash.Hash{}),
 		"the run must not reach genesis, or the carve-out would legitimately accept it")
 
+	// The header commits to the body, so subtree validation's body binding passes
+	// and the run reaches the header check this test is about.
+	merkleRoot, err := subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size()))
+	require.NoError(t, err)
+
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  parent.Hash(),
-		HashMerkleRoot: subtree.RootHash(),
+		HashMerkleRoot: merkleRoot,
 		Timestamp:      now + 100,
 		Bits:           *nBits,
 	}

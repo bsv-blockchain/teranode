@@ -740,6 +740,12 @@ func (c *Client) GetPeerRegistry(ctx context.Context) ([]*PeerInfo, error) {
 // Returns:
 //   - error: Any error encountered during the operation
 func (c *Client) RecordBytesDownloaded(ctx context.Context, peerID string, bytesDownloaded uint64) error {
+	// Callers detach this call from their own cancellation and make it inline
+	// as a fetch closes, so bound it: a stuck p2p service must not hold block
+	// fetching or subtree checking.
+	ctx, cancel := context.WithTimeout(ctx, recordBytesDownloadedTimeout)
+	defer cancel()
+
 	req := &p2p_api.RecordBytesDownloadedRequest{
 		PeerId:          peerID,
 		BytesDownloaded: bytesDownloaded,
@@ -756,6 +762,10 @@ func (c *Client) RecordBytesDownloaded(ctx context.Context, peerID string, bytes
 
 	return nil
 }
+
+// recordBytesDownloadedTimeout bounds RecordBytesDownloaded. A var so tests
+// can shorten it.
+var recordBytesDownloadedTimeout = 5 * time.Second
 
 // GetPeer retrieves information about a specific peer from the P2P service.
 // Returns nil if the peer is not found in the registry.
@@ -811,10 +821,11 @@ func convertFromAPIPeerInfo(apiPeer interface{}) (*PeerInfo, error) {
 		}
 
 		return &PeerInfo{
-			ID:            peerID,
-			Height:        p.CurrentHeight,
-			BanScore:      int(p.Banscore),
-			BytesReceived: p.BytesReceived,
+			ID:               peerID,
+			Height:           p.CurrentHeight,
+			AdvertisedHeight: p.AdvertisedHeight,
+			BanScore:         int(p.Banscore),
+			BytesReceived:    p.BytesReceived,
 		}, nil
 
 	case *p2p_api.PeerInfoForCatchup:
@@ -854,6 +865,7 @@ func convertFromAPIPeerInfo(apiPeer interface{}) (*PeerInfo, error) {
 			ID:                     peerID,
 			ClientName:             p.ClientName,
 			Height:                 p.Height,
+			AdvertisedHeight:       p.AdvertisedHeight,
 			BlockHash:              blockHash,
 			DataHubURL:             p.DataHubUrl,
 			BanScore:               int(p.BanScore),

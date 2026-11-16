@@ -1381,9 +1381,15 @@ func buildReorgSubtree(t *testing.T, ctx context.Context, blobStore *blob_memory
 	require.NoError(t, err)
 	require.NoError(t, blobStore.Set(ctx, key[:], fileformat.FileTypeSubtree, stBytes))
 
+	// Node 0 is the coinbase placeholder, which has no parents. Every other node
+	// gets one, as every real transaction spends at least one input: the meta
+	// reader rejects a zero parent count anywhere else (issue 1638).
 	meta := subtree.NewSubtreeMeta(st)
-	for i := range st.Nodes {
-		require.NoError(t, meta.SetTxInpoints(i, subtree.NewTxInpoints()))
+	require.NoError(t, meta.SetTxInpoints(0, subtree.NewTxInpoints()))
+
+	for i := 1; i < len(st.Nodes); i++ {
+		parent := chainhash.HashH(st.Nodes[i].Hash[:])
+		require.NoError(t, meta.SetTxInpoints(i, subtree.NewTxInpointsFromPacked([]chainhash.Hash{parent}, []uint32{1, 0})))
 	}
 
 	metaBytes, err := meta.Serialize()
@@ -1423,6 +1429,32 @@ func storeReorgSubtreeWithTornMeta(t *testing.T, ctx context.Context, blobStore 
 	torn = append(torn, extra...)
 
 	require.NoError(t, blobStore.Set(ctx, key[:], fileformat.FileTypeSubtreeMeta, torn))
+
+	return key
+}
+
+// storeReorgSubtreeWithZeroParentMeta stores a real subtree and a meta whose
+// header is correct but whose entry for node 1, an ordinary transaction, has an
+// empty parent list. Meta.Serialize writes that as a zero parent count, which
+// the meta reader rejects (issue 1638). Block validation regenerates the meta
+// after that rejection; this path has no regenerator, so the move-back fails.
+func storeReorgSubtreeWithZeroParentMeta(t *testing.T, ctx context.Context, blobStore *blob_memory.Memory, txs []subtree.Node) *chainhash.Hash {
+	t.Helper()
+
+	st, key, _ := buildReorgSubtree(t, ctx, blobStore, txs)
+
+	meta := subtree.NewSubtreeMeta(st)
+	require.NoError(t, meta.SetTxInpoints(0, subtree.NewTxInpoints()))
+	require.NoError(t, meta.SetTxInpoints(1, subtree.NewTxInpoints()))
+
+	for i := 2; i < len(st.Nodes); i++ {
+		parent := chainhash.HashH(st.Nodes[i].Hash[:])
+		require.NoError(t, meta.SetTxInpoints(i, subtree.NewTxInpointsFromPacked([]chainhash.Hash{parent}, []uint32{1, 0})))
+	}
+
+	metaBytes, err := meta.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, blobStore.Set(ctx, key[:], fileformat.FileTypeSubtreeMeta, metaBytes))
 
 	return key
 }
@@ -1641,15 +1673,16 @@ func TestSubtreeProcessor_ReorgThroughRealSubtrees(t *testing.T) {
 		require.False(t, finalTxMap.Exists(*doubleSpendTx), "a tx mined in the moved-forward block must not be left pending in block assembly")
 	})
 
-	// The three rejection cases share everything but the fixture, one setting and
+	// The rejection cases share everything but the fixture, one setting and
 	// the expected message, so they run from a table: a fourth mock expectation or
-	// a change of teardown has to be made once, not three times and missed once.
+	// a change of teardown has to be made once, not once per case and missed once.
 	//
-	// All of them pin issue 1425 on the SECOND production consumer of the
-	// .subtreeMeta file. Before the header validation an over-long claimed count
-	// panicked inside the raw deserializer, in an errgroup goroutine with no
-	// recover, so a regression crashes the package binary rather than failing an
-	// assertion.
+	// The torn-meta and foreign-key rows pin issue 1425 on the SECOND production
+	// consumer of the .subtreeMeta file. Before the header validation an over-long
+	// claimed count panicked inside the raw deserializer, in an errgroup goroutine
+	// with no recover, so a regression crashes the package binary rather than
+	// failing an assertion. The zero-parent row pins issue 1638: its header is
+	// correct, and the corrupt entry used to decode cleanly into nil parents.
 	//
 	// Note what they do NOT assert: unlike block validation this path has no meta
 	// regenerator behind it, so a bad file is not repaired. A failed reorg is the
@@ -1669,6 +1702,15 @@ func TestSubtreeProcessor_ReorgThroughRealSubtrees(t *testing.T) {
 			store:           storeReorgSubtreeWithTornMeta,
 			storeTxInpoints: true,
 			wantErr:         "error deserializing subtree meta",
+		},
+		{
+			// The header matches, so only the zero-parent check (issue 1638) can
+			// reject this file. The error names that check, so the row cannot pass
+			// on some other rejection.
+			name:            "a zero parent count in subtree meta fails the reorg",
+			store:           storeReorgSubtreeWithZeroParentMeta,
+			storeTxInpoints: true,
+			wantErr:         "has no parents",
 		},
 		{
 			// The committed key holds a real, well-formed subtree — just not the one
