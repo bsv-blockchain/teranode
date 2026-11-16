@@ -19,12 +19,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -379,19 +381,55 @@ type BlockValidation struct {
 	netFailures sync.Map
 }
 
+// heapSubtreeFromBytes is the heap loader subtreeFromBytesWithMmap uses. It is a var so
+// tests can count the heap fallbacks.
+var heapSubtreeFromBytes = subtreepkg.NewSubtreeFromBytes
+
 // subtreeFromBytesWithMmap creates a subtree from bytes, using mmap if dir is non-empty.
-// Falls back to heap allocation on mmap failure.
+// Falls back to heap allocation when isMmapInfraError classifies the mmap error as one
+// worth retrying.
 func subtreeFromBytesWithMmap(b []byte, mmapDir string) (*subtreepkg.Subtree, error) {
 	if mmapDir != "" {
 		st, err := subtreepkg.NewSubtreeFromReaderMmap(bytes.NewReader(b), mmapDir)
-		if err != nil {
+		if err != nil && isMmapInfraError(err) {
 			// mmap failed — fall back to heap. This can happen if the mmap dir is
-			// misconfigured, out of disk, or permissions are wrong.
-			return subtreepkg.NewSubtreeFromBytes(b)
+			// misconfigured or permissions are wrong. Malformed bytes are returned
+			// as-is: the heap loader cannot do better.
+			return heapSubtreeFromBytes(b)
 		}
-		return st, nil
+		return st, err
 	}
-	return subtreepkg.NewSubtreeFromBytes(b)
+	return heapSubtreeFromBytes(b)
+}
+
+// isMmapInfraError reports whether an mmap deserialization error is worth one retry on
+// the heap loader. It matches the error classes go-subtree's mmap setup produces: the
+// *fs.PathError from os.CreateTemp / Truncate, the syscall.Errno from mmap,
+// ErrMmapUnsupported and ErrMmapPanic. Count and short-body errors from the subtree
+// bytes do not match and are returned as-is.
+//
+// The match is by class, not by origin, so two other sources also take the one retry:
+//   - a read error from the source reader (readSubtreeStructure reads a file-backed blob,
+//     whose I/O errors are *fs.PathError), and
+//   - a hostile count: on a non-seekable reader any count up to go-subtree's 1<<28
+//     ceiling sizes the scratch file, so Truncate can fail with ENOSPC or EFBIG and mmap
+//     with ENOMEM, and a hostile conflicting-nodes trailer can come back as ErrMmapPanic.
+//
+// Both cost one extra bounded heap read: go-subtree v1.6.4 bounds the heap loader's count
+// and caps its up-front allocation.
+func isMmapInfraError(err error) bool {
+	if errors.Is(err, subtreepkg.ErrMmapUnsupported) || errors.Is(err, subtreepkg.ErrMmapPanic) {
+		return true
+	}
+
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return true
+	}
+
+	var errno syscall.Errno
+
+	return errors.As(err, &errno)
 }
 
 // newSubtreeFromBytes creates a subtree from bytes, using mmap when configured.
