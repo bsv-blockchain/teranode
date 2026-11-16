@@ -571,10 +571,21 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %v", batchID, err)
 
+		batchInDoubt := isInDoubt(err)
+
 		for idx, bItem := range batch {
 			if resultHandledElsewhere[idx] {
 				continue
 			}
+
+			// A batch spans nodes, and the error names one of them: a record
+			// another node wrote is OK, or KEY_EXISTS from an earlier attempt,
+			// while the call failed.
+			if batchInDoubt || recordMayExist(batchRecords[idx].BatchRec()) {
+				bItem.complete(createMayHaveCommittedError(err))
+				continue
+			}
+
 			bItem.complete(err)
 		}
 
@@ -630,6 +641,11 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			// and KEY_NOT_FOUND_ERROR on a real BatchWrite (which is NOT a NOOP) — must
 			// be surfaced. Previously the SafeSend was nested inside the type-asserted
 			// branch and a non-matching error left the caller hung on <-errCh.
+			if writeMayHaveApplied(batchRecord.BatchRec()) {
+				batch[idx].complete(createMayHaveCommittedError(err))
+				continue
+			}
+
 			batch[idx].complete(errors.NewStorageError("[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d", batch[idx].txHash.String(), idx, batchID, err))
 			continue
 		}
@@ -1189,7 +1205,13 @@ func (s *Store) storeExternallyWithLock(
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
 	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
-		bItem.complete(errors.NewProcessingError("[%s] BatchOperate failed for tx %s", funcName, bItem.txHash, err))
+		failErr := errors.NewProcessingError("[%s] BatchOperate failed for tx %s", funcName, bItem.txHash, err)
+		if isInDoubt(err) || recordMayExist(batchRecords[0].BatchRec()) {
+			bItem.complete(createMayHaveCommittedError(failErr))
+			return
+		}
+
+		bItem.complete(failErr)
 		return
 	}
 
@@ -1208,7 +1230,15 @@ func (s *Store) storeExternallyWithLock(
 		// Do NOT clean up partial records - leave them for the next attempt to complete
 		// The creating bin in each record prevents UTXO spending until all records exist
 		// The defer will release the lock, allowing another process to finish the creation
-		bItem.complete(errors.NewProcessingError("failed to create all records for tx %s - partial records remain for next attempt to complete", bItem.txHash))
+		failErr := errors.NewProcessingError("failed to create all records for tx %s - partial records remain for next attempt to complete", bItem.txHash)
+		if recordMayExist(batchRecords[0].BatchRec()) {
+			// The master record makes the transaction exist, creating, so its
+			// spends must stay for the next attempt to complete it.
+			bItem.complete(createMayHaveCommittedError(failErr))
+			return
+		}
+
+		bItem.complete(failErr)
 		return
 	}
 
@@ -1498,4 +1528,80 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 	}
 
 	return nil
+}
+
+// createMayHaveCommittedError marks err, from a create write that may have
+// committed on the server, as leaving the create's outcome unknown.
+// utxo.SequentialSpendAndCreate unspends the inputs of a create that failed for
+// certain, and doing that for a write that did commit leaves a stored
+// transaction with live inputs, which a repeat never heals because a repeat
+// drops a transaction whose record exists. Marked outcome-unknown, the spends
+// stay, as for a context error, until a repeat finds the record or writes it.
+func createMayHaveCommittedError(err error) error {
+	var tErr *errors.Error
+	if !errors.As(err, &tErr) {
+		tErr = errors.NewStorageError("aerospike create write may have committed", err)
+	}
+
+	return utxo.MarkCreateOutcomeUnknown(tErr)
+}
+
+// isInDoubt reports whether err, from a write, says the write may have been
+// applied. BatchOperate runs one command per node and chains their errors, so
+// the head names only the last node to fail, and a node's in-doubt flag can be
+// lost: the client judges a node's batch a read when its last record is one.
+// isInDoubt therefore walks the whole chain and answers true for any error
+// marked in doubt, any TIMEOUT, and any client-side code (zero or below:
+// network and connection failures), the codes the client's own in-doubt rule
+// uses. One timeout is told apart: uaerospike.PermitTimeoutError, the wrapper's
+// wait for a connection permit running out, comes back before anything is sent,
+// so it is not in doubt. The rule still over-marks other writes that never went
+// out: client codes such as MAX_ERROR_RATE and
+// NO_AVAILABLE_CONNECTIONS_TO_NODE, where the client sent nothing on its last
+// attempt. Such a create keeps its spends with no record until a repeat of the
+// create, the safe direction. Those codes stay marked because the client can
+// return one after an earlier attempt of the same command did send.
+func isInDoubt(err error) bool {
+	for err != nil {
+		// Nothing was sent: the permit wait ran out before the client was
+		// called, and the permit is taken once for the whole call.
+		if _, ok := err.(*uaerospike.PermitTimeoutError); ok {
+			return false
+		}
+
+		// As reads this one link of the chain, the client's constant errors
+		// included; errors.As would stop at the first link.
+		if link, ok := err.(interface{ As(any) bool }); ok {
+			aeErr := &aerospike.AerospikeError{}
+			if link.As(aeErr) && (aeErr.InDoubt || aeErr.ResultCode == types.TIMEOUT || aeErr.ResultCode <= 0) {
+				return true
+			}
+		}
+
+		unwrapper, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+
+		err = unwrapper.Unwrap()
+	}
+
+	return false
+}
+
+// writeMayHaveApplied reports whether a batch write's record may have been
+// written: the server applied it (OK), or the client sent it and lost the
+// answer (in doubt). A record the call never sent keeps NO_RESPONSE. The
+// record's error is read with isInDoubt as well, because the client flags a
+// batch record in doubt only after a retry: a write the server answered with
+// TIMEOUT on the first send, which may have applied on the master, comes back
+// unflagged.
+func writeMayHaveApplied(rec *aerospike.BatchRecord) bool {
+	return rec.InDoubt || isInDoubt(rec.Err) || (rec.Err == nil && rec.ResultCode == types.OK)
+}
+
+// recordMayExist reports whether a create's record may exist after its batch
+// write: written now, in doubt, or left by an earlier attempt (KEY_EXISTS).
+func recordMayExist(rec *aerospike.BatchRecord) bool {
+	return writeMayHaveApplied(rec) || isKeyExists(rec.Err)
 }
