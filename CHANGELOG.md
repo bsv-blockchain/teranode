@@ -33,7 +33,7 @@ read every section between yours and the target.
 
 - **DataHub peer-auth signatures are domain-tagged (v3).** A node that hasn't upgraded drops upgraded
   allowlisted peers to the unverified rate-limit tier; upgrade them together. Upgraded nodes accept v2
-  for one release; `teranode_asset_http_peer_auth_legacy_payload_total{peer_id}` shows who still signs it.
+  for one release; `teranode_asset_http_peer_auth_legacy_payload_total{peer_id}` shows who still signs it. (#2200)
 - **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
   `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
   now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,
