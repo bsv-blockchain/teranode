@@ -43,6 +43,7 @@ func TestAerospikeConflictRecovery(t *testing.T) {
 		{"WinnerWithConflictingChild", func(t *testing.T) { tests.ConflictRecoveryWinnerWithConflictingChild(t, store) }},
 		{"LateWinnerChild", func(t *testing.T) { tests.ConflictRecoveryLateWinnerChild(t, store) }},
 		{"ReverseThenReadd", func(t *testing.T) { tests.ConflictRecoveryReverseThenReadd(t, store) }},
+		{"ReverseKeepsForeignLock", func(t *testing.T) { tests.ConflictRecoveryReverseKeepsForeignLock(t, store) }},
 		{"LegacyIntent", func(t *testing.T) { tests.ConflictRecoveryLegacyIntent(t, store) }},
 		{"CancelledVerify", func(t *testing.T) { tests.ConflictRecoveryCancelledVerify(t, store) }},
 		{"PartialReverseReadd", func(t *testing.T) { tests.ConflictRecoveryPartialReverseReadd(t, store) }},
