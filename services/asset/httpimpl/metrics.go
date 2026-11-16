@@ -68,6 +68,13 @@ var (
 	// peers are reaching the middleware.
 	prometheusAssetHTTPPeerAuthResult *prometheus.CounterVec
 
+	// prometheusAssetHTTPPeerAuthLegacyPayload counts signatures that verified only
+	// against the legacy untagged v2 payload, by peer ID. Only allowlisted peers
+	// reach signature verification, so the label set is bounded by the allowlist.
+	// A peer still counting here has not upgraded; remove the v2 fallback once
+	// every series has stopped growing.
+	prometheusAssetHTTPPeerAuthLegacyPayload *prometheus.CounterVec
+
 	// prometheusAssetHTTPInFlight tracks in-flight HTTP requests
 	prometheusAssetHTTPInFlight prometheus.Gauge
 )
@@ -320,6 +327,16 @@ func _initPrometheusMetrics() {
 			Help:      "Outcome of peer-auth attempts on the asset HTTP API",
 		},
 		[]string{"result"}, // ok | expired | bad_sig | bad_digest | replay | unknown_key | not_allowlisted | body_too_large
+	)
+
+	prometheusAssetHTTPPeerAuthLegacyPayload = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "asset",
+			Name:      "http_peer_auth_legacy_payload_total",
+			Help:      "Peer-auth signatures that verified only against the legacy untagged v2 payload",
+		},
+		[]string{"peer_id"},
 	)
 
 	prometheusAssetHTTPInFlight = promauto.NewGauge(

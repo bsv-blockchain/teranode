@@ -874,7 +874,7 @@ Clients sign each outbound request to a peer's DataHub with their libp2p Ed25519
 teranode-http-peer-auth/v3:<unix_ts>:<host>:<method>:<request_uri>:<sha256_body_hex>
 ```
 
-The `teranode-http-peer-auth` tag separates this payload from everything libp2p signs with the same key (pubsub messages, the noise and TLS handshakes, signed peer records), so an HTTP signature can never be valid for one of those. Verifiers still accept the untagged `v2:<unix_ts>:...` payload for one release so peers that have not upgraded keep their tier.
+The `teranode-http-peer-auth` tag separates this payload from everything libp2p signs with the same key (pubsub messages, the noise and TLS handshakes, signed peer records), so a request signature can never be valid for one of those. Verifiers still accept the untagged `v2:<unix_ts>:...` payload for one release so peers that have not upgraded keep their tier; each request accepted that way is counted per peer in `teranode_asset_http_peer_auth_legacy_payload_total{peer_id}`, which shows who still has to upgrade before the fallback is removed.
 
 Headers required on every signed request:
 

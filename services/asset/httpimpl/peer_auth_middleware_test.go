@@ -23,6 +23,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -244,8 +245,11 @@ func TestPeerAuthMiddleware_RejectV1Payload(t *testing.T) {
 // TestPeerAuthMiddleware_AcceptsLegacyV2Payload — peers still running the
 // signer from before the domain tag sign the bare v2 payload. The verifier keeps
 // accepting it for one release so those peers keep their tier while the network
-// upgrades.
+// upgrades, and counts each such peer so operators can see who still needs to
+// upgrade before the fallback is removed.
 func TestPeerAuthMiddleware_AcceptsLegacyV2Payload(t *testing.T) {
+	initPrometheusMetrics()
+
 	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
 	require.NoError(t, err)
 	peerID, err := peer.IDFromPublicKey(privKey.GetPublic())
@@ -254,6 +258,16 @@ func TestPeerAuthMiddleware_AcceptsLegacyV2Payload(t *testing.T) {
 	cache := &peerTierCache{tiers: map[peer.ID]peerTier{peerID: tierMiner}, logger: ulogger.TestLogger{}}
 	e, captured := newAuthEcho(t, cache, allowAll(cache))
 
+	legacyCount := func() float64 {
+		return testutil.ToFloat64(prometheusAssetHTTPPeerAuthLegacyPayload.WithLabelValues(peerID.String()))
+	}
+
+	current := httptest.NewRequest(http.MethodGet, "/test", nil)
+	signTestRequest(t, current, privKey)
+	e.ServeHTTP(httptest.NewRecorder(), current)
+	require.Equal(t, tierMiner, *captured)
+	require.Zero(t, legacyCount(), "a domain-tagged signature must not be counted as legacy")
+
 	req := httptest.NewRequest(http.MethodPost, "/test?from=1", bytes.NewReader([]byte(`{"x":1}`)))
 	signTestRequestWithPayload(t, req, privKey, util.PeerAuthLegacyV2Payload)
 	rec := httptest.NewRecorder()
@@ -261,6 +275,7 @@ func TestPeerAuthMiddleware_AcceptsLegacyV2Payload(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, tierMiner, *captured, "a legacy v2 signature must still authenticate during the upgrade window")
+	require.Equal(t, float64(1), legacyCount(), "a legacy v2 signature must be counted against the peer that sent it")
 }
 
 // TestPeerAuthMiddleware_RejectsUntaggedV3Payload — the version bump is only

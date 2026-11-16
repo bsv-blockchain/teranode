@@ -432,8 +432,13 @@ func (v *peerAuthVerifier) verifySignedRequest(c echo.Context) (peer.ID, string,
 	// then checked against that same declared digest below.
 	declaredDigest := strings.ToLower(req.Header.Get(util.PeerAuthBodyDigestHeader))
 
-	if !verifyPeerAuthSignature(pubKey, sigBytes, req.Header.Get(peerAuthHeaderTimestamp), req.Host, req.Method, req.URL.RequestURI(), declaredDigest) {
+	verified, legacy := verifyPeerAuthSignature(pubKey, sigBytes, req.Header.Get(peerAuthHeaderTimestamp), req.Host, req.Method, req.URL.RequestURI(), declaredDigest)
+	if !verified {
 		return "", peerAuthResultBadSig, true
+	}
+
+	if legacy && prometheusAssetHTTPPeerAuthLegacyPayload != nil {
+		prometheusAssetHTTPPeerAuthLegacyPayload.WithLabelValues(peerID.String()).Inc()
 	}
 
 	actualDigest, err := v.digestRequestBody(req)
@@ -459,19 +464,16 @@ func (v *peerAuthVerifier) verifySignedRequest(c echo.Context) (peer.ID, string,
 
 // verifyPeerAuthSignature reports whether sig is pubKey's signature over the
 // request's domain-tagged payload, or over the legacy untagged v2 payload that
-// peers which have not upgraded still sign. Drop the v2 fallback in the release
-// after the domain tag ships.
-func verifyPeerAuthSignature(pubKey crypto.PubKey, sig []byte, ts, host, method, requestURI, bodyDigestHex string) bool {
-	for _, payload := range []string{
-		util.PeerAuthSignedPayload(ts, host, method, requestURI, bodyDigestHex),
-		util.PeerAuthLegacyV2Payload(ts, host, method, requestURI, bodyDigestHex),
-	} {
-		if verified, err := pubKey.Verify([]byte(payload), sig); err == nil && verified {
-			return true
-		}
+// peers which have not upgraded still sign; legacy reports the latter. Drop the
+// v2 fallback in the release after the domain tag ships.
+func verifyPeerAuthSignature(pubKey crypto.PubKey, sig []byte, ts, host, method, requestURI, bodyDigestHex string) (verified, legacy bool) {
+	if ok, err := pubKey.Verify([]byte(util.PeerAuthSignedPayload(ts, host, method, requestURI, bodyDigestHex)), sig); err == nil && ok {
+		return true, false
 	}
 
-	return false
+	ok, err := pubKey.Verify([]byte(util.PeerAuthLegacyV2Payload(ts, host, method, requestURI, bodyDigestHex)), sig)
+
+	return err == nil && ok, true
 }
 
 // checkFreshness parses the X-Peer-Timestamp header and verifies it is within
