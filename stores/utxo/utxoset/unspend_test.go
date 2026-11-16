@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/jackc/pgx/v5"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -561,4 +562,70 @@ func TestUnlockOfAContainmentRowRacingAnUnspendWaitsForIt(t *testing.T) {
 
 	restoreWhileChangeRuns(t, s, ctx, setLockedTo(s, parent, false), spends)
 	requireRestoredCoinLock(t, s, ctx, parent, false)
+}
+
+// crossedLockChange holds first's identity row in an open transaction, starts an Unspend of
+// both parents' spends, waits for it to block on first, then takes second's identity row too.
+// When the restore had already share-locked second before it reached first, that last update
+// waits on the restore while the restore waits on it, and PostgreSQL stops the restore, which
+// started waiting first, as the deadlock victim. The Unspend must run again and succeed.
+func crossedLockChange(t *testing.T, s *Store, ctx context.Context, first, second *bt.Tx, spends []*utxo.Spend) {
+	t.Helper()
+
+	holder, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = holder.Rollback(context.Background()) }()
+
+	require.NoError(t, setLockedTo(s, first, false)(ctx, holder))
+
+	done := make(chan error, 1)
+
+	go func() { done <- s.Unspend(ctx, spends) }()
+
+	waitForLockWait(t, s, ctx, "spend_journal")
+
+	require.NoError(t, setLockedTo(s, second, false)(ctx, holder))
+	require.NoError(t, holder.Commit(ctx))
+	require.NoError(t, <-done, "a deadlock is retried, not returned")
+}
+
+// TestUnspendRetriesADeadlockWithALockChange: the restore share-locks each parent's identity
+// row in turn, and a SetLocked naming both parents can hold one and then ask for the other.
+// Whichever row the restore reaches first, one of the two orders crosses it, so across both
+// orders at least one attempt is stopped as a deadlock and run again, and both coins come
+// back with the lock the change left.
+func TestUnspendRetriesADeadlockWithALockChange(t *testing.T) {
+	before := testutil.ToFloat64(deadlockRetried.WithLabelValues("unspend"))
+
+	for _, holdFirst := range []int{0, 1} {
+		s, ctx := newTestStore(t)
+
+		require.NoError(t, s.SetBlockHeight(100))
+
+		parents := make([]*bt.Tx, 2)
+
+		var spends []*utxo.Spend
+
+		for i := range parents {
+			parents[i] = mkTx(t, 2, uint64(10_000+i))
+			_, err := s.Create(ctx, parents[i], 100, utxo.WithLocked(true))
+			require.NoError(t, err)
+
+			spent, err := spendOnly(ctx, s, spendParentTx(t, parents[i], nil, 1_000, 0), 101, utxo.WithIgnoreLocked(true))
+			require.NoError(t, err)
+			require.Len(t, spent, 1)
+
+			spends = append(spends, spent...)
+		}
+
+		crossedLockChange(t, s, ctx, parents[holdFirst], parents[1-holdFirst], spends)
+
+		for _, parent := range parents {
+			requireRestoredCoinLock(t, s, ctx, parent, false)
+		}
+	}
+
+	require.GreaterOrEqual(t, testutil.ToFloat64(deadlockRetried.WithLabelValues("unspend"))-before, 1.0,
+		"one of the two orders must cross the restore's share locks and be retried")
 }
