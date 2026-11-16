@@ -3,11 +3,13 @@ package blockvalidation
 import (
 	"context"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -380,4 +382,246 @@ func loadedSubtrees(t *testing.T) []*subtreepkg.Subtree {
 	require.NoError(t, st.AddNode(chainhash.HashH([]byte("tx")), 1, 0))
 
 	return []*subtreepkg.Subtree{st}
+}
+
+// getBlockCountingClient counts GetBlock calls, which is how a test tells whether
+// setTxMinedStatus used the cached block or fetched a fresh one.
+type getBlockCountingClient struct {
+	blockchain.ClientI
+	getBlockCalls atomic.Int64
+}
+
+func (c *getBlockCountingClient) GetBlock(ctx context.Context, hash *chainhash.Hash) (*model.Block, error) {
+	c.getBlockCalls.Add(1)
+
+	return c.ClientI.GetBlock(ctx, hash)
+}
+
+// cachedBlockHookLogger runs onCachedBlock where setTxMinedStatus logs that it is
+// using the cached block. With a Get followed by a separate Delete, that log line
+// sat between the two, inside the window where both sides could take the block.
+type cachedBlockHookLogger struct {
+	ulogger.TestLogger
+	onCachedBlock func()
+}
+
+func (l *cachedBlockHookLogger) Debugf(format string, _ ...interface{}) {
+	if l.onCachedBlock != nil && strings.HasPrefix(format, "[setTxMined][%s] using cached block with subtrees") {
+		l.onCachedBlock()
+	}
+}
+
+type setMinedOwnershipFixture struct {
+	bv      *BlockValidation
+	client  *getBlockCountingClient
+	store   *parkedSetMinedStore
+	block   *model.Block
+	childTx *bt.Tx
+	logger  *cachedBlockHookLogger
+}
+
+// newSetMinedOwnershipFixture validates a block on a sqlitememory blockchain with
+// the service's background workers stopped, so the only setTxMinedStatus calls are
+// the test's own. SetMinedMulti hashes are recorded without parking.
+func newSetMinedOwnershipFixture(ctx context.Context, t *testing.T) *setMinedOwnershipFixture {
+	t.Helper()
+	initPrometheusMetrics()
+
+	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
+	t.Cleanup(deferFunc)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = false
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	block, _, childTx := buildBlockWithReservedID(ctx, t, tSettings, blockchainClient, txMetaStore, subtreeStore)
+
+	client := &getBlockCountingClient{ClientI: newTrackingBlockchainClient(blockchainClient).withNotificationChannel()}
+
+	store := newParkedSetMinedStore(txMetaStore)
+	store.unpark()
+
+	logger := &cachedBlockHookLogger{}
+
+	workerCtx, stopWorkers := context.WithCancel(ctx)
+	bv := NewBlockValidation(workerCtx, logger, tSettings, client, subtreeStore, txStore, store, nil, subtreeValidationClient)
+	stopWorkers()
+
+	select {
+	case <-bv.revalidateWorkerStopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("revalidation worker did not stop")
+	}
+
+	require.NoError(t, bv.ValidateBlock(ctx, block, "test", true))
+
+	// Record only the test's own setTxMinedStatus calls.
+	store.armed.Store(true)
+
+	return &setMinedOwnershipFixture{bv: bv, client: client, store: store, block: block, childTx: childTx, logger: logger}
+}
+
+// cacheFreshBlock replaces whatever lastValidatedBlocks holds for the block with a
+// new object fetched from the blockchain, its subtrees loaded, the way ValidateBlock
+// leaves it for the setMined worker.
+func (f *setMinedOwnershipFixture) cacheFreshBlock(ctx context.Context, t *testing.T) *model.Block {
+	t.Helper()
+
+	if previous, ok := f.bv.lastValidatedBlocks.GetAndDelete(*f.block.Hash()); ok {
+		releaseBlockNodes(previous)
+	}
+
+	cached, err := f.client.ClientI.GetBlock(ctx, f.block.Hash())
+	require.NoError(t, err)
+
+	_, err = cached.GetSubtrees(ctx, ulogger.TestLogger{}, f.bv.subtreeStore, 1)
+	require.NoError(t, err)
+	require.True(t, cached.SubtreesLoaded())
+
+	f.bv.lastValidatedBlocks.Set(*cached.Hash(), cached)
+
+	return cached
+}
+
+// TestSubtreesSetFailure_SetTxMinedStatusTakesTheBlockOnce covers the setMined
+// worker's half of the handover. setTxMinedStatus and the failure path's reclaim
+// race for the same cache entry, and exactly one of them may own the cached object:
+// if reclaim got it, the worker must have fetched its own copy, and if the worker
+// got it, reclaim must have left it alone.
+func TestSubtreesSetFailure_SetTxMinedStatusTakesTheBlockOnce(t *testing.T) {
+	t.Run("reclaim lands after the worker reads the cache", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		f := newSetMinedOwnershipFixture(ctx, t)
+		cached := f.cacheFreshBlock(ctx, t)
+
+		var reclaimOwned atomic.Bool
+
+		// The hook runs inside setTxMinedStatus, after it has looked the block up
+		// and decided to use it. A worker that had not yet removed the entry by
+		// then would leave reclaim free to take and release the same object.
+		f.logger.onCachedBlock = func() {
+			reclaimOwned.Store(f.bv.reclaimBlockAfterFailedSubtreesSet(cached, true))
+		}
+
+		before := f.client.getBlockCalls.Load()
+		err := f.bv.setTxMinedStatus(ctx, f.block.Hash())
+		f.logger.onCachedBlock = nil
+		require.NoError(t, err)
+
+		require.False(t, reclaimOwned.Load(), "reclaim took a block the setMined worker had already chosen to use")
+		require.Equal(t, before, f.client.getBlockCalls.Load(), "the worker owned the cached block, so it must not fetch another")
+		require.Contains(t, f.store.recordedHashes(), *f.childTx.TxIDChainHash())
+		require.False(t, cached.SubtreesLoaded(), "the worker must release the block it took")
+	})
+
+	t.Run("concurrent", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		f := newSetMinedOwnershipFixture(ctx, t)
+
+		const iterations = 300
+
+		workerWins := 0
+
+		for i := 0; i < iterations; i++ {
+			cached := f.cacheFreshBlock(ctx, t)
+			before := f.client.getBlockCalls.Load()
+			hashesBefore := len(f.store.recordedHashes())
+
+			start := make(chan struct{})
+
+			var (
+				wg           sync.WaitGroup
+				workerErr    error
+				reclaimOwned bool
+			)
+
+			wg.Add(2)
+
+			go func() {
+				defer wg.Done()
+				<-start
+				workerErr = f.bv.setTxMinedStatus(ctx, f.block.Hash())
+			}()
+
+			go func() {
+				defer wg.Done()
+				<-start
+				reclaimOwned = f.bv.reclaimBlockAfterFailedSubtreesSet(cached, true)
+			}()
+
+			close(start)
+			wg.Wait()
+
+			require.NoError(t, workerErr, "iteration %d", i)
+
+			workerFetched := f.client.getBlockCalls.Load() > before
+
+			// Exactly one side owned the cached object: when reclaim had it, the
+			// worker fetched a fresh block, and when the worker had it, it did not.
+			require.Equal(t, reclaimOwned, workerFetched, "iteration %d: reclaim owned=%v, worker fetched a fresh block=%v", i, reclaimOwned, workerFetched)
+
+			if !reclaimOwned {
+				workerWins++
+			}
+
+			hashes := f.store.recordedHashes()[hashesBefore:]
+			require.NotEmpty(t, hashes, "iteration %d", i)
+
+			for _, hash := range hashes {
+				require.Equal(t, *f.childTx.TxIDChainHash(), hash, "iteration %d: the worker tagged a hash that is not this block's", i)
+			}
+
+			require.False(t, cached.SubtreesLoaded(), "iteration %d: whichever side owned the cached block must release it", i)
+		}
+
+		t.Logf("setMined worker took the cached block in %d of %d iterations", workerWins, iterations)
+	})
+}
+
+// TestSetTxMinedStatus_ReleasesACachedBlockWithMissingSubtrees covers the branch
+// where the cached block is taken but cannot be used because a subtree is not
+// loaded. It has left the cache, so the eviction function will never see it, and
+// setTxMinedStatus must release what it does hold before fetching a fresh block.
+func TestSetTxMinedStatus_ReleasesACachedBlockWithMissingSubtrees(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	f := newSetMinedOwnershipFixture(ctx, t)
+
+	if previous, ok := f.bv.lastValidatedBlocks.GetAndDelete(*f.block.Hash()); ok {
+		releaseBlockNodes(previous)
+	}
+
+	partial := &model.Block{
+		Header:        f.block.Header,
+		CoinbaseTx:    f.block.CoinbaseTx,
+		Subtrees:      []*chainhash.Hash{f.block.Subtrees[0], {0x02}},
+		SubtreeSlices: []*subtreepkg.Subtree{loadedSubtrees(t)[0], nil},
+	}
+	require.False(t, partial.SubtreesLoaded())
+
+	f.bv.lastValidatedBlocks.Set(*f.block.Hash(), partial)
+
+	before := f.client.getBlockCalls.Load()
+	require.NoError(t, f.bv.setTxMinedStatus(ctx, f.block.Hash()))
+
+	require.Nil(t, partial.SubtreeSlices[0], "the loaded subtree of the unusable cached block must be released")
+
+	_, stillCached := f.bv.lastValidatedBlocks.Get(*f.block.Hash())
+	require.False(t, stillCached)
+
+	require.Greater(t, f.client.getBlockCalls.Load(), before, "the worker must fetch a fresh block")
+	require.Contains(t, f.store.recordedHashes(), *f.childTx.TxIDChainHash())
+
+	meta, err := f.store.Get(ctx, f.childTx.TxIDChainHash())
+	require.NoError(t, err)
+	require.Contains(t, meta.BlockIDs, f.block.ID)
 }
