@@ -130,6 +130,11 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 	if err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
 		invalidatedHashes = invalidatedHashes[:0]
 
+		// First, so a walk in any process sees this write; see chainWriteStateKey.
+		if lockErr := s.lockChainWrites(ctx, tx); lockErr != nil {
+			return lockErr
+		}
+
 		before, hadBefore, beforeErr := bestTipKey(ctx, tx)
 		if beforeErr != nil {
 			return beforeErr

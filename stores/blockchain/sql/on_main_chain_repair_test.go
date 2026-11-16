@@ -1212,3 +1212,176 @@ func TestLockedRepairAttemptIsNotOverlappedByAWriterItQueuedBehind(t *testing.T)
 
 	require.EqualValues(t, 1, fault.calls.Load(), "one walk: the writer finished before the attempt began")
 }
+
+// newPostgresStorePair opens two stores on one PostgreSQL database, the way a second
+// teranode instance or the rewindblockchain tool shares a node's database. Each store has
+// its own slowPathMu and its own in-process watch, so neither sees the other's chain writes
+// through them.
+func newPostgresStorePair(t *testing.T) (*SQL, *SQL) {
+	t.Helper()
+
+	if testing.Short() {
+		t.Skip("Skipping PostgreSQL tests in short mode")
+	}
+
+	connStr, teardown, err := postgres.SetupTestPostgresContainer()
+	if err != nil {
+		t.Skipf("PostgreSQL container not available: %v", err)
+	}
+
+	t.Cleanup(func() { _ = teardown() })
+
+	storeURL, err := url.Parse(connStr)
+	require.NoError(t, err)
+
+	first, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = first.Close(context.Background()) })
+	waitForStartupRebuild(t, first)
+
+	second, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = second.Close(context.Background()) })
+	waitForStartupRebuild(t, second)
+
+	require.True(t, first.unlockedFullRepair, "a PostgreSQL store runs the full repair without slowPathMu")
+	setRepairBackoff(t, first, time.Millisecond)
+
+	return first, second
+}
+
+// holdFirstRepairWalk makes the first walk s runs after this call stop once it has taken
+// its snapshot, until the returned release is called. started is closed when it stops.
+func holdFirstRepairWalk(s *SQL) (started <-chan struct{}, release func()) {
+	var snapshots atomic.Int32
+
+	startedCh := make(chan struct{})
+	releaseCh := make(chan struct{})
+
+	s.rebuildSnapshotHook = func(bool) {
+		if snapshots.Add(1) != 1 {
+			return
+		}
+
+		close(startedCh)
+		<-releaseCh
+	}
+
+	return startedCh, func() { close(releaseCh) }
+}
+
+func waitForHeldWalk(t *testing.T, started <-chan struct{}) {
+	t.Helper()
+
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the repair's walk did not reach its snapshot")
+	}
+}
+
+// TestOnMainChainRepairRerunsWhenAnotherStoreRevalidates_PostgreSQL is
+// TestOnMainChainRepairRacingRevalidate_PostgreSQL with the RevalidateBlock made by a
+// second store on the same database, as a second instance would make it. The first
+// store's in-process watch never hears of that write, so only the database can tell the
+// held walk that its snapshot is stale.
+func TestOnMainChainRepairRerunsWhenAnotherStoreRevalidates_PostgreSQL(t *testing.T) {
+	s, other := newPostgresStorePair(t)
+	ctx := context.Background()
+
+	alt3 := createBlock3OnFork(blockAlternative2)
+	alt4 := createBlock3OnFork(alt3)
+	storeBlocks(t, s, block1, block2, block3, blockAlternative2, alt3, alt4)
+	_, err := s.InvalidateBlock(ctx, alt4.Hash())
+	require.NoError(t, err)
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+
+	// The stale flag the failed write left behind.
+	_, err = s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`, block3.Hash().CloneBytes())
+	require.NoError(t, err)
+
+	started, release := holdFirstRepairWalk(s)
+
+	s.markOnMainChainDirty(true, noRepairFloor, "test", errors.NewStorageError("injected"))
+	waitForHeldWalk(t, started)
+
+	require.NoError(t, other.RevalidateBlock(ctx, alt4.Hash()))
+
+	release()
+	waitForRepair(t, s)
+
+	var atHeight3 int
+	require.NoError(t, s.db.QueryRow(`SELECT count(*) FROM blocks WHERE height = 3 AND on_main_chain = true`).Scan(&atHeight3))
+	require.Equal(t, 1, atHeight3, "one block per height on the main chain")
+	require.False(t, getOnMainChain(t, s, block3.Hash().CloneBytes()), "the rerun undoes the held walk's write")
+	require.True(t, getOnMainChain(t, s, alt3.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, alt4.Hash().CloneBytes()))
+}
+
+// TestOnMainChainRepairRerunsWhenAnotherStoreDeletesTheTip_PostgreSQL: rewindblockchain
+// deletes blocks through its own store. Deleting block3 while the node's repair walk holds
+// a snapshot with block3 as the best leaves alt3 the best block, on the other branch. The
+// held walk would then commit the old branch's flags, and the repair would land and send
+// readers back to a column that describes a chain whose tip is gone.
+func TestOnMainChainRepairRerunsWhenAnotherStoreDeletesTheTip_PostgreSQL(t *testing.T) {
+	s, other := newPostgresStorePair(t)
+	ctx := context.Background()
+
+	alt3 := createBlock3OnFork(blockAlternative2)
+	storeBlocks(t, s, block1, block2, block3, blockAlternative2, alt3)
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, alt3.Hash().CloneBytes()))
+
+	// A stale flag for the held walk to write back.
+	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`, block2.Hash().CloneBytes())
+	require.NoError(t, err)
+
+	started, release := holdFirstRepairWalk(s)
+
+	s.markOnMainChainDirty(true, noRepairFloor, "test", errors.NewStorageError("injected"))
+	waitForHeldWalk(t, started)
+
+	require.NoError(t, other.DeleteBlock(ctx, block3.Hash()))
+
+	release()
+	waitForRepair(t, s)
+
+	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "block2 is on the branch that lost its tip")
+	require.True(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, alt3.Hash().CloneBytes()))
+}
+
+// TestOnMainChainRepairWaitsOutAnUncommittedChainWrite_PostgreSQL: a chain write from
+// another process takes the shared row first and is still open when the walk reaches its
+// end. The write's later statements may read the rows from before the walk's commit, so
+// the walk cannot commit around it: it must give way and land only after the write ends.
+func TestOnMainChainRepairWaitsOutAnUncommittedChainWrite_PostgreSQL(t *testing.T) {
+	s, other := newPostgresStorePair(t)
+	ctx := context.Background()
+
+	storeBlocks(t, s, block1, block2, block3)
+
+	started, release := holdFirstRepairWalk(s)
+
+	s.markOnMainChainDirty(true, noRepairFloor, "test", errors.NewStorageError("injected"))
+	waitForHeldWalk(t, started)
+
+	tx, err := other.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = tx.Rollback() })
+
+	require.NoError(t, other.lockChainWrites(ctx, tx))
+
+	release()
+
+	require.Never(t, func() bool {
+		return s.mainChainRebuilding.Load() == 0
+	}, time.Second, 10*time.Millisecond, "the repair must not land while a chain write holds the shared row")
+
+	require.NoError(t, tx.Commit())
+	waitForRepair(t, s)
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+}

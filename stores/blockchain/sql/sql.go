@@ -365,6 +365,11 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		return nil, errors.NewStorageError("failed to insert genesis transaction", err)
 	}
 
+	if err = s.ensureChainWriteRow(context.Background()); err != nil {
+		s.blockIDReservations.Stop()
+		return nil, err
+	}
+
 	if useInMemory {
 		// Initialise maxBlockID synchronously, before any query can be served.
 		// maxBlockID is otherwise only set at the end of rebuildOffChainSet, which
@@ -1937,19 +1942,22 @@ func (s *SQL) rebuildOnMainChainFlagFrom(ctx context.Context, full bool, floor i
 }
 
 // isSerializationRetry reports whether err is a Postgres serialization_failure
-// (40001) or deadlock_detected (40P01) — the two codes a REPEATABLE READ
-// transaction can raise on a write-write conflict and which are safe to retry by
-// re-running the whole transaction. SQLite never produces these codes.
+// (40001), deadlock_detected (40P01) or lock_not_available (55P03): the codes a
+// REPEATABLE READ walk can raise on a conflicting write, the last from its NOWAIT
+// check of the chain-write row (see chainWriteStateKey), and which are safe to retry
+// by re-running the whole transaction. SQLite never produces these codes.
 func (*SQL) isSerializationRetry(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		return pgErr.Code == usql.PgErrSerializationFail || pgErr.Code == usql.PgErrDeadlockDetected
+		return pgErr.Code == usql.PgErrSerializationFail || pgErr.Code == usql.PgErrDeadlockDetected ||
+			pgErr.Code == usql.PgErrLockNotAvailable
 	}
 
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) {
 		code := string(pqErr.Code)
-		return code == usql.PgErrSerializationFail || code == usql.PgErrDeadlockDetected
+		return code == usql.PgErrSerializationFail || code == usql.PgErrDeadlockDetected ||
+			code == usql.PgErrLockNotAvailable
 	}
 
 	return false
@@ -2046,6 +2054,16 @@ func (s *SQL) rebuildOnMainChainFlagTx(ctx context.Context, full bool, floor int
 			return err
 		}
 		return errors.NewStorageError("rebuildOnMainChainFlag: failed to set on_main_chain flags", err)
+	}
+
+	// Last, so a chain write from any process that committed after this snapshot, or is
+	// still open, rolls this walk back instead of being written over; see
+	// chainWriteStateKey.
+	if err = s.checkNoChainWriteSinceSnapshot(ctx, tx); err != nil {
+		if s.isSerializationRetry(err) {
+			return err
+		}
+		return errors.NewStorageError("rebuildOnMainChainFlag: failed to check for chain writes since the snapshot", err)
 	}
 
 	if err = tx.Commit(); err != nil {

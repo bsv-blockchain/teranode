@@ -248,6 +248,12 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 
 			reconcileErr = nil
 
+			// First, so a walk in any process sees the reconcile below; see
+			// chainWriteStateKey.
+			if storeErr = s.lockChainWrites(ctx, tx); storeErr != nil {
+				return storeErr
+			}
+
 			newBlockID, height, _, storedInvalid, storeErr = s.storeBlock(ctx, tx, block, peerID, storeBlockOptions, onMainChain)
 			if storeErr != nil {
 				return storeErr
@@ -440,7 +446,16 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			//
 			// A clear that committed moves a row a walk without slowPathMu may already have
 			// read, so it is noted. A failed one is marked instead, which owes its own repair.
-			if _, clearErr := s.db.ExecContext(postBestCtx, `UPDATE blocks SET on_main_chain = false WHERE id = $1`, newBlockID); clearErr != nil {
+			clearErr := s.db.RetryTx(postBestCtx, nil, func(tx *sql.Tx) error {
+				if err := s.lockChainWrites(postBestCtx, tx); err != nil {
+					return err
+				}
+
+				_, err := tx.ExecContext(postBestCtx, `UPDATE blocks SET on_main_chain = false WHERE id = $1`, newBlockID)
+
+				return err
+			})
+			if clearErr != nil {
 				s.logger.Errorf("StoreBlock: clear sibling-fork on_main_chain: %v", clearErr)
 				s.markOnMainChainDirty(false, int64(height), "store_block_fork_clear", clearErr)
 			} else {

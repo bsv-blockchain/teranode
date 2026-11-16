@@ -72,6 +72,13 @@ func (s *SQL) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error 
 	var res sql.Result
 
 	if err := s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+		// First, so a walk in any process sees this delete: rewindblockchain deletes
+		// through its own store, which a node's in-process watch never hears from. See
+		// chainWriteStateKey.
+		if execErr := s.lockChainWrites(ctx, tx); execErr != nil {
+			return execErr
+		}
+
 		before, hadBefore, execErr := bestTipKey(ctx, tx)
 		if execErr != nil {
 			return execErr

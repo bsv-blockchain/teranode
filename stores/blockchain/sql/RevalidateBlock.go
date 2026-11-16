@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -38,7 +39,16 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		SET invalid = false, mined_set = false
 		WHERE hash = $1
 	`
-	if _, err = s.db.ExecContext(ctx, q, blockHash.CloneBytes()); err != nil {
+	// In a transaction so the shared row is locked first; see chainWriteStateKey.
+	if err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+		if lockErr := s.lockChainWrites(ctx, tx); lockErr != nil {
+			return lockErr
+		}
+
+		_, execErr := tx.ExecContext(ctx, q, blockHash.CloneBytes())
+
+		return execErr
+	}); err != nil {
 		return errors.NewStorageError("error updating block to valid", err)
 	}
 
