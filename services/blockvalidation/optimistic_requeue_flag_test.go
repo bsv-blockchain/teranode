@@ -2,6 +2,7 @@ package blockvalidation
 
 import (
 	"context"
+	"math"
 	"net/url"
 	"testing"
 	"time"
@@ -106,7 +107,7 @@ func TestOptimisticAdded_CaughtUpFloaterInvalidateFailure_RequeuesWithOnChainFla
 
 	// LocalClient hardwires FSM=RUNNING (isCaughtUp true); failing InvalidateBlock forces the caught-up
 	// floater rollback to fall through to the requeue.
-	client := &invalidateFailsFirstNClient{ClientI: localClient, failFirst: 999}
+	client, faults := invalidateFailsFirstN(localClient, math.MaxInt)
 
 	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
 	subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
@@ -130,7 +131,7 @@ func TestOptimisticAdded_CaughtUpFloaterInvalidateFailure_RequeuesWithOnChainFla
 		t.Fatal("the optimistically-added floater was not re-queued after markBlockAsInvalid failed")
 	}
 
-	require.Equal(t, 1, client.attempts(), "the caught-up floater route must have attempted the invalidate once")
+	require.Equal(t, 1, faults.Count("InvalidateBlock"), "the caught-up floater route must have attempted the invalidate once")
 }
 
 // TestOptimisticAdded_CatchupFloater_RequeuesWithOnChainFlag pins the transient else route: with the
@@ -200,7 +201,7 @@ func TestOptimisticAdded_InvalidBodyInvalidateFailure_RequeuesWithOnChainFlag(t 
 	localClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	client := &invalidateFailsFirstNClient{ClientI: localClient, failFirst: 999}
+	client, faults := invalidateFailsFirstN(localClient, math.MaxInt)
 
 	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
 	subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
@@ -245,5 +246,5 @@ func TestOptimisticAdded_InvalidBodyInvalidateFailure_RequeuesWithOnChainFlag(t 
 		t.Fatal("the optimistically-added invalid body was not re-queued after markBlockAsInvalid failed")
 	}
 
-	require.Equal(t, 1, client.attempts(), "the ErrBlockInvalid route must have attempted the invalidate once")
+	require.Equal(t, 1, faults.Count("InvalidateBlock"), "the ErrBlockInvalid route must have attempted the invalidate once")
 }
