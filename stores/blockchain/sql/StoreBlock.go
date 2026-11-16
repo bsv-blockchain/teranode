@@ -121,7 +121,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	// sequence — leaving two flagged siblings at the same height. The CAS
 	// only proves "I am at the head of the ID sequence", not "I have the
 	// chain_work tiebreak best": canonical selection is by chain_work DESC,
-	// peer_id ASC, id ASC, so a CAS-winning sibling can still be the loser.
+	// id ASC, so a CAS-winning sibling can still be the loser.
 	// Serializing forces the second writer to observe the first's row as the
 	// new best, which makes its onMainChain calculation false (parent !=
 	// preBestHash anymore), routes it through the slow-path classifier, and
