@@ -1288,6 +1288,264 @@ func TestCentralizedPeerRegistry_StartCleanup_WiredFromSettings(t *testing.T) {
 	r.Close()
 }
 
+// configureInlineCap arms the insert-time cap the way Server.go does, but with
+// the periodic sweep disabled (interval 0), so any bound a test observes comes
+// from Register alone.
+func configureInlineCap(t *testing.T, r *CentralizedPeerRegistry, maxSize int) {
+	t.Helper()
+	r.StartCleanup(context.Background(), 0, 24*time.Hour, maxSize)
+	t.Cleanup(r.Close)
+}
+
+// backdate sets both freshness fields so the peer looks idle since d ago.
+func backdate(r *CentralizedPeerRegistry, id string, d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.peers[id].LastSeen = time.Now().Add(-d)
+	r.peers[id].LastMessageTime = time.Now().Add(-d)
+}
+
+func TestCentralizedPeerRegistry_Register_CapEnforcedAtInsert(t *testing.T) {
+	const maxSize = 100
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	configureInlineCap(t, r, maxSize)
+
+	for i := 0; i < 10*maxSize; i++ {
+		r.Register(&PeerInfo{ID: fmt.Sprintf("flood-%05d", i)})
+		require.LessOrEqual(t, r.Count(), maxSize, "registry exceeded its cap after insert %d without any sweep", i)
+	}
+}
+
+func TestCentralizedPeerRegistry_Register_CapDisabledWhenMaxSizeZero(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	configureInlineCap(t, r, 0)
+
+	for i := 0; i < 50; i++ {
+		r.Register(&PeerInfo{ID: fmt.Sprintf("p-%d", i)})
+	}
+	require.Equal(t, 50, r.Count(), "maxSize 0 is the documented uncapped opt-out")
+}
+
+func TestCentralizedPeerRegistry_Register_UpdateOfKnownPeerDoesNotEvict(t *testing.T) {
+	const maxSize = 10
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	configureInlineCap(t, r, maxSize)
+
+	for i := 0; i < maxSize; i++ {
+		r.Register(&PeerInfo{ID: fmt.Sprintf("p-%d", i)})
+	}
+	require.Equal(t, maxSize, r.Count())
+
+	r.Register(&PeerInfo{ID: "p-0", ClientName: "update"})
+	require.Equal(t, maxSize, r.Count(), "re-registering a known peer must not trigger eviction")
+}
+
+// A rotating-identity flood must only displace entries that look like flood
+// entries. Peers the node has real history with — validated blocks from them,
+// interactions, catchup, penalties — are kept even when they are the oldest
+// and not directly connected.
+func TestCentralizedPeerRegistry_Register_FloodSparesPeersWithHistory(t *testing.T) {
+	const maxSize = 100
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	configureInlineCap(t, r, maxSize)
+
+	r.Register(&PeerInfo{ID: "validated"})
+	require.NoError(t, r.RecordValidatedPeerProgress("validated", 10, mustPeerRegistryHash("v"), []byte{0x01}))
+
+	r.Register(&PeerInfo{ID: "served-block"})
+	r.RecordBlockReceived("served-block", 100)
+
+	r.Register(&PeerInfo{ID: "failed-catchup"})
+	r.RecordCatchupFailure("failed-catchup")
+
+	r.Register(&PeerInfo{ID: "catchup-attempted"})
+	r.RecordCatchupAttempt("catchup-attempted")
+
+	r.Register(&PeerInfo{ID: "storage-penalised", FullStoragePenaltyUntil: time.Now().Add(time.Hour)})
+
+	historied := []string{"validated", "served-block", "failed-catchup", "catchup-attempted", "storage-penalised"}
+	for _, id := range historied {
+		backdate(r, id, 2*time.Hour) // older than every flood entry
+	}
+
+	for i := 0; i < 10*maxSize; i++ {
+		r.Register(&PeerInfo{ID: fmt.Sprintf("flood-%05d", i)})
+	}
+
+	require.LessOrEqual(t, r.Count(), maxSize)
+	for _, id := range historied {
+		_, ok := r.Get(id)
+		require.True(t, ok, "flood displaced %s, a peer with history", id)
+	}
+}
+
+func TestCentralizedPeerRegistry_Register_FloodSparesConnectedActivePeer(t *testing.T) {
+	const maxSize = 50
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	configureInlineCap(t, r, maxSize)
+
+	r.Register(&PeerInfo{ID: "connected"})
+	r.UpdateConnectionState("connected", true)
+	backdate(r, "connected", time.Hour) // oldest, but within the 24h ttl
+
+	for i := 0; i < 10*maxSize; i++ {
+		r.Register(&PeerInfo{ID: fmt.Sprintf("flood-%05d", i)})
+	}
+
+	got, ok := r.Get("connected")
+	require.True(t, ok, "a connected, recently-active peer must never be evicted")
+	require.True(t, got.IsConnected)
+}
+
+// Banned entries are evicted only after every other non-exempt entry, so a
+// flood of fresh IDs does not displace them...
+func TestCentralizedPeerRegistry_Register_FloodSparesBannedPeer(t *testing.T) {
+	const maxSize = 50
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	configureInlineCap(t, r, maxSize)
+
+	r.Register(&PeerInfo{ID: "banned"})
+	r.AddBanScore("banned", "spam", 0)
+	r.AddBanScore("banned", "spam", 0)
+	require.True(t, r.IsBannedPeer("banned"))
+	backdate(r, "banned", 2*time.Hour)
+
+	for i := 0; i < 10*maxSize; i++ {
+		r.Register(&PeerInfo{ID: fmt.Sprintf("flood-%05d", i)})
+	}
+
+	_, ok := r.Get("banned")
+	require.True(t, ok, "banned peers are evicted last, after the flood entries")
+}
+
+// ...but they do count toward the cap and can be evicted once nothing else is
+// left, so a registry full of banned IDs cannot grow past the cap. The ban
+// itself lives in banScores and survives the eviction of the PeerInfo.
+func TestCentralizedPeerRegistry_Register_BannedEntriesDoNotDefeatCap(t *testing.T) {
+	const maxSize = 10
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	configureInlineCap(t, r, maxSize)
+
+	for i := 0; i < maxSize; i++ {
+		id := fmt.Sprintf("banned-%d", i)
+		r.Register(&PeerInfo{ID: id})
+		r.AddBanScore(id, "spam", 0)
+		r.AddBanScore(id, "spam", 0)
+		require.True(t, r.IsBannedPeer(id))
+	}
+
+	for i := 0; i < maxSize; i++ {
+		r.Register(&PeerInfo{ID: fmt.Sprintf("new-%d", i)})
+		require.LessOrEqual(t, r.Count(), maxSize, "banned entries must not make the cap soft")
+	}
+
+	for i := 0; i < maxSize; i++ {
+		id := fmt.Sprintf("banned-%d", i)
+		require.True(t, r.IsBannedPeer(id), "evicting the PeerInfo must not lift the ban on %s", id)
+	}
+
+	// A banned peer whose entry was evicted comes back banned.
+	evicted := ""
+	for i := 0; i < maxSize && evicted == ""; i++ {
+		if _, ok := r.Get(fmt.Sprintf("banned-%d", i)); !ok {
+			evicted = fmt.Sprintf("banned-%d", i)
+		}
+	}
+	require.NotEmpty(t, evicted, "at least one banned entry must have been evicted to hold the cap")
+	r.Register(&PeerInfo{ID: evicted})
+	got, ok := r.Get(evicted)
+	require.True(t, ok)
+	require.True(t, got.IsBanned, "re-registered peer must pick its ban back up from banScores")
+}
+
+// An IsBanned flag whose window has elapsed must not keep an idle peer in the
+// banned (evicted-last) tier: eviction normalises expired bans first.
+func TestCentralizedPeerRegistry_Register_ExpiredBanIsNotProtected(t *testing.T) {
+	cfg := DefaultBanConfig()
+	cfg.Duration = time.Millisecond
+	r := NewCentralizedPeerRegistry(cfg)
+	configureInlineCap(t, r, 2)
+
+	r.Register(&PeerInfo{ID: "expired"})
+	r.AddBanScore("expired", "spam", 0)
+	r.AddBanScore("expired", "spam", 0)
+	backdate(r, "expired", 2*time.Hour)
+
+	r.Register(&PeerInfo{ID: "fresh"})
+	time.Sleep(5 * time.Millisecond)
+
+	r.Register(&PeerInfo{ID: "new"})
+
+	_, ok := r.Get("expired")
+	require.False(t, ok, "the oldest peer, whose ban has expired, must be the one evicted")
+	_, ok = r.Get("fresh")
+	require.True(t, ok, "a stale IsBanned flag must not make a fresher peer the victim")
+}
+
+// Load runs before the cap is armed and does not apply it, so the registry can
+// start far above the cap. A single Register must bring it back under in one
+// bulk trim.
+func TestCentralizedPeerRegistry_Register_TrimsOverCapRegistryInOneCall(t *testing.T) {
+	const maxSize = 100
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	r.mu.Lock()
+	for i := 0; i < 10*maxSize; i++ {
+		id := fmt.Sprintf("loaded-%05d", i)
+		r.peers[id] = &PeerInfo{ID: id, LastSeen: time.Now().Add(-time.Duration(i) * time.Second)}
+	}
+	r.mu.Unlock()
+
+	configureInlineCap(t, r, maxSize)
+	r.Register(&PeerInfo{ID: "new"})
+
+	require.LessOrEqual(t, r.Count(), maxSize)
+	_, ok := r.Get("new")
+	require.True(t, ok, "the new peer must be inserted")
+}
+
+// Cleanup's LRU phase uses the same eviction order as the inline cap.
+func TestCentralizedPeerRegistry_Cleanup_LRUSparesPeersWithHistory(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	r.Register(&PeerInfo{ID: "historied"})
+	r.RecordBlockReceived("historied", 100)
+	backdate(r, "historied", 2*time.Hour)
+
+	for _, id := range []string{"a", "b", "c"} {
+		r.Register(&PeerInfo{ID: id})
+	}
+
+	_, lru := r.Cleanup(1, 24*time.Hour)
+	require.Equal(t, 3, lru)
+	_, ok := r.Get("historied")
+	require.True(t, ok, "LRU must evict history-less peers before a peer with history, regardless of age")
+}
+
+// BenchmarkCentralizedPeerRegistry_RegisterAtCap measures the write-lock cost
+// of inserting a new peer into a registry that is already at the default cap,
+// which is the steady state under a rotating-identity gossip flood.
+func BenchmarkCentralizedPeerRegistry_RegisterAtCap(b *testing.B) {
+	const maxSize = 10000
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	r.StartCleanup(context.Background(), 0, 24*time.Hour, maxSize)
+	defer r.Close()
+
+	for i := 0; i < maxSize; i++ {
+		r.Register(&PeerInfo{ID: fmt.Sprintf("seed-%05d", i)})
+	}
+
+	ids := make([]string, b.N)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("flood-%09d", i)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r.Register(&PeerInfo{ID: ids[i]})
+	}
+}
+
 func TestCentralizedPeerRegistry_List_SortByStorage(t *testing.T) {
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())
 
