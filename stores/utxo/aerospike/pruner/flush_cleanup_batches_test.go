@@ -1015,6 +1015,67 @@ func TestWithdrawMarkers_ResendsAFailedWithdrawal(t *testing.T) {
 	require.False(t, hasMarker(t, client, parentKey, &child), "the resend removed the marker")
 }
 
+// TestWithdrawMarkers_ResendsAfterABatchThatStoppedEarly: a batch-level error
+// that is not a transport failure (MAX_ERROR_RATE) can return before the server
+// answers any record. Those records keep the client's initial NO_RESPONSE
+// result with no per-record error, and must be sent again, not counted refused.
+func TestWithdrawMarkers_ResendsAfterABatchThatStoppedEarly(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	parent := chainhash.HashH([]byte{0xF4, 1})
+	child := chainhash.HashH([]byte{0xF4, 2})
+	parentKey := putRecord(t, client, &parent, spentBy(&child))
+
+	updates := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
+
+	_, err := s.markParents(context.Background(), updates)
+	require.NoError(t, err)
+	require.True(t, hasMarker(t, client, parentKey, &child), "fixture: the marker landed")
+
+	calls := 0
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		calls++
+
+		if calls == 1 {
+			for _, rec := range records {
+				br := rec.BatchRec()
+				require.Equal(t, types.NO_RESPONSE, br.ResultCode, "fixture: an unanswered record")
+				require.Nil(t, br.Err, "fixture: an unanswered record carries no error")
+			}
+
+			return &aerospike.AerospikeError{ResultCode: types.MAX_ERROR_RATE}
+		}
+
+		return client.BatchOperate(policy, records)
+	}
+
+	s.withdrawMarkers(updates, map[chainhash.Hash]struct{}{child: {}})
+	require.Equal(t, 2, calls, "the unanswered withdrawal is sent once more")
+	require.False(t, hasMarker(t, client, parentKey, &child), "the resend removed the marker")
+}
+
+// TestIsTransientWriteFailure_UnansweredRecord: a batch write the server never
+// answered keeps the client's initial result, NO_RESPONSE with no error, and is
+// resent. An answered refusal is not.
+func TestIsTransientWriteFailure_UnansweredRecord(t *testing.T) {
+	key, err := aerospike.NewKey("test", "set", "k")
+	require.NoError(t, err)
+
+	unanswered := aerospike.NewBatchWrite(nil, key).BatchRec()
+	require.Equal(t, types.NO_RESPONSE, unanswered.ResultCode, "fixture: the client's initial result")
+	require.Nil(t, unanswered.Err)
+	require.True(t, isTransientWriteFailure(unanswered))
+
+	refused := aerospike.NewBatchWrite(nil, key).BatchRec()
+	refused.ResultCode = types.BIN_TYPE_ERROR
+	refused.Err = &aerospike.AerospikeError{ResultCode: types.BIN_TYPE_ERROR}
+	require.False(t, isTransientWriteFailure(refused))
+
+	require.False(t, isBatchTransportError(&aerospike.AerospikeError{ResultCode: types.MAX_ERROR_RATE}),
+		"MAX_ERROR_RATE leaves per-record results to read, so it is not resent wholesale")
+}
+
 // TestWithdrawMarkers_StopsAfterTheLastAttempt: a withdrawal that keeps failing
 // is sent withdrawMarkerAttempts times and then left, counted and logged.
 func TestWithdrawMarkers_StopsAfterTheLastAttempt(t *testing.T) {

@@ -3410,7 +3410,8 @@ func (s *Service) sendWithdrawals(policy *aerospike.BatchWritePolicy, keys []*ae
 		records[i] = aerospike.NewBatchWrite(policy, key, op)
 	}
 
-	if batchErr := s.batchOperate(records); batchErr != nil && isBatchTransportError(batchErr) {
+	batchErr := s.batchOperate(records)
+	if batchErr != nil && isBatchTransportError(batchErr) {
 		retry = make([]int, len(records))
 		for i := range retry {
 			retry[i] = i
@@ -3418,6 +3419,12 @@ func (s *Service) sendWithdrawals(policy *aerospike.BatchWritePolicy, keys []*ae
 
 		return retry, 0, batchErr
 	}
+
+	// Any other batch error (MAX_ERROR_RATE, say) can return before the server
+	// answers some records. Those keep the client's initial NO_RESPONSE result,
+	// which isTransientWriteFailure resends, and the batch error is kept so the
+	// log says why.
+	err = batchErr
 
 	for i, rec := range records {
 		batchRec := rec.BatchRec()
@@ -3445,9 +3452,11 @@ func (s *Service) sendWithdrawals(policy *aerospike.BatchWritePolicy, keys []*ae
 }
 
 // isTransientWriteFailure reports whether a failed batch write may land if it
-// is sent again: a timeout, a busy key or device, a lost connection, or a write
-// whose outcome is in doubt. A refusal such as a wrong bin type or an unknown
-// namespace answers the same way every time.
+// is sent again: a timeout, a busy key or device, a lost connection, a write
+// whose outcome is in doubt, or a record the server never answered (the
+// client's initial NO_RESPONSE result, left when the batch stops early). A
+// refusal such as a wrong bin type or an unknown namespace answers the same way
+// every time.
 func isTransientWriteFailure(batchRec *aerospike.BatchRecord) bool {
 	if batchRec.InDoubt {
 		return true
@@ -3459,7 +3468,7 @@ func isTransientWriteFailure(batchRec *aerospike.BatchRecord) bool {
 	}
 
 	switch batchRec.ResultCode {
-	case types.TIMEOUT, types.KEY_BUSY, types.DEVICE_OVERLOAD:
+	case types.TIMEOUT, types.KEY_BUSY, types.DEVICE_OVERLOAD, types.NO_RESPONSE:
 		return true
 	default:
 		return false
