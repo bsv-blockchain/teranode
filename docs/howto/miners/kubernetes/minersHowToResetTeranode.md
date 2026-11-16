@@ -101,7 +101,7 @@ TRUNCATE TABLE bans RESTART IDENTITY CASCADE;
 SELECT COUNT(*) FROM blocks;
 
 -- (Optional) Drop indexes for faster seeding
-DROP INDEX IF EXISTS idx_chain_work_id;
+DROP INDEX IF EXISTS idx_chain_work_id_v2;
 DROP INDEX IF EXISTS idx_chain_work_id_valid;
 
 -- Exit

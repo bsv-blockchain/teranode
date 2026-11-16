@@ -301,10 +301,12 @@ func TestCreatePostgresSchema_ReplacesPeerIDBestTipIndexes(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close(context.Background()) })
 
 	for _, stmt := range []string{
-		`DROP INDEX idx_chain_work_id`,
+		`DROP INDEX idx_chain_work_id_v2`,
 		`DROP INDEX idx_chain_work_id_valid`,
 		`CREATE INDEX idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC)`,
 		`CREATE INDEX idx_chain_work_valid ON blocks (chain_work DESC, peer_id ASC, id ASC) WHERE invalid = false`,
+		// The name an earlier build of the id order used, which an older binary drops on start.
+		`CREATE INDEX idx_chain_work_id ON blocks (chain_work DESC, id ASC)`,
 	} {
 		_, err = db.Exec(stmt)
 		require.NoError(t, err, stmt)
@@ -319,7 +321,8 @@ func TestCreatePostgresSchema_ReplacesPeerIDBestTipIndexes(t *testing.T) {
 	for name, want := range map[string]bool{
 		"idx_chain_work_peer_id":  false,
 		"idx_chain_work_valid":    false,
-		"idx_chain_work_id":       true,
+		"idx_chain_work_id":       false,
+		"idx_chain_work_id_v2":    true,
 		"idx_chain_work_id_valid": true,
 	} {
 		var exists bool

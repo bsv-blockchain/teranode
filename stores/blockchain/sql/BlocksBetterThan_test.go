@@ -2,6 +2,7 @@ package sql
 
 import (
 	"database/sql"
+	"math"
 	"strings"
 	"testing"
 
@@ -168,6 +169,33 @@ func TestBlocksBetterThan_TieKeepsFirstStored(t *testing.T) {
 		requireBetter(t, s, keyOf(t, s, a2.Hash()), nil, 0, 100)
 		requireBetter(t, s, keyOf(t, s, d2.Hash()), nil, 0, 100, c2, a2)
 		requireBetter(t, s, keyOf(t, s, a1.Hash()), nil, 0, 100, d2, c2, a2)
+	})
+}
+
+// TestBlocksBetterThan_LegacyKeyIsLastAmongEqualWork: a version 1 key with a peer id is read with
+// the highest id, so a read from it returns every block of its work, its own block included, and
+// the id binds on both engines although it is past the range of a signed 32-bit integer.
+func TestBlocksBetterThan_LegacyKeyIsLastAmongEqualWork(t *testing.T) {
+	forEachBestTipEngine(t, func(t *testing.T, s *SQL) {
+		a1 := createTestBlock(t, 601, s.chainParams.GenesisHash)
+		storeOn(t, s, a1, "b")
+
+		a2 := createTestBlock(t, 602, a1.Hash())
+		storeOn(t, s, a2, "z")
+
+		b2 := createTestBlock(t, 702, a1.Hash())
+		storeOn(t, s, b2, "a")
+		requireBest(t, s, a2)
+
+		legacy := keyOf(t, s, a2.Hash())
+		legacy.ID = math.MaxUint32
+
+		requireBetter(t, s, legacy, nil, 0, 100, b2, a2)
+		requireBetter(t, s, keyOf(t, s, a1.Hash()), &legacy, 0, 100, b2, a2)
+
+		worse, err := s.sortsWorse(t.Context(), s.db, legacy, keyOf(t, s, b2.Hash()))
+		require.NoError(t, err)
+		require.True(t, worse, "the legacy key sorts below every equal-work block")
 	})
 }
 

@@ -573,7 +573,7 @@ var (
 		"ux_blocks_hash",
 	}
 	blockchainSchemaExpectedFullIndexes = []string{
-		"idx_chain_work_id",
+		"idx_chain_work_id_v2",
 		"idx_chain_work_id_valid",
 		"idx_subtrees_mined_height",
 		"idx_subtrees_set_height",
@@ -594,10 +594,13 @@ var (
 		// idx_inserted_at served only GetBlocksByTime, which has been removed
 		{name: "idx_inserted_at", dropSQL: `DROP INDEX IF EXISTS idx_inserted_at;`},
 		// idx_chain_work_peer_id and idx_chain_work_valid ordered equal-work blocks by peer_id,
-		// which the best-tip order no longer uses; idx_chain_work_id and
+		// which the best-tip order no longer uses; idx_chain_work_id_v2 and
 		// idx_chain_work_id_valid, ordered by id, replace them
 		{name: "idx_chain_work_peer_id", dropSQL: `DROP INDEX IF EXISTS idx_chain_work_peer_id;`},
 		{name: "idx_chain_work_valid", dropSQL: `DROP INDEX IF EXISTS idx_chain_work_valid;`},
+		// idx_chain_work_id is the name an older binary drops on every start, so the full index
+		// takes a fresh name, idx_chain_work_id_v2, that a rollback leaves alone
+		{name: "idx_chain_work_id", dropSQL: `DROP INDEX IF EXISTS idx_chain_work_id;`},
 	}
 )
 
@@ -893,16 +896,13 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 			_ = db.Close()
 			return errors.NewStorageError("could not drop idx_persisted_at index", err)
 		}
-		if err := dropRetiredIndexes(db); err != nil {
-			return err
-		}
 
 		// === CHAIN WORK INDEXES ===
 		// Primary index for best block queries without invalid filter
 		// Used by: GetBlockStats, recursive CTEs that don't filter by invalid
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id_v2 ON blocks (chain_work DESC, id ASC);`); err != nil {
 			_ = db.Close()
-			return errors.NewStorageError("could not create idx_chain_work_id index", err)
+			return errors.NewStorageError("could not create idx_chain_work_id_v2 index", err)
 		}
 
 		// Partial index for valid blocks - most common query pattern (GetBestBlockHeader, etc.)
@@ -910,6 +910,11 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id_valid ON blocks (chain_work DESC, id ASC) WHERE invalid = false;`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not create idx_chain_work_id_valid index", err)
+		}
+		// The retired indexes are dropped only after their replacements exist, so a node still
+		// running the old binary against this database is never left without a chain work index.
+		if err := dropRetiredIndexes(db); err != nil {
+			return err
 		}
 
 		// === BLOCK STATUS INDEXES ===
@@ -1195,16 +1200,13 @@ func createSqliteSchema(db *usql.DB) error {
 		_ = db.Close()
 		return errors.NewStorageError("could not drop idx_persisted_at index", err)
 	}
-	if err := dropRetiredIndexes(db); err != nil {
-		return err
-	}
 
 	// === CHAIN WORK INDEXES ===
 	// Primary index for best block queries without invalid filter
 	// Used by: GetBlockStats, recursive CTEs that don't filter by invalid
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id_v2 ON blocks (chain_work DESC, id ASC);`); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not create idx_chain_work_id index", err)
+		return errors.NewStorageError("could not create idx_chain_work_id_v2 index", err)
 	}
 
 	// Partial index for valid blocks - most common query pattern (GetBestBlockHeader, etc.)
@@ -1212,6 +1214,11 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id_valid ON blocks (chain_work DESC, id ASC) WHERE invalid = false;`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_chain_work_id_valid index", err)
+	}
+	// The retired indexes are dropped only after their replacements exist, so a node still
+	// running the old binary against this database is never left without a chain work index.
+	if err := dropRetiredIndexes(db); err != nil {
+		return err
 	}
 
 	// === BLOCK STATUS INDEXES ===
