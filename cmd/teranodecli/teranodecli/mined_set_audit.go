@@ -228,73 +228,90 @@ func (a *minedSetAuditor) sampleTxIDs(ctx context.Context, block *model.Block) (
 	var samples []chainhash.Hash
 
 	// Node 0 of the first subtree is the coinbase placeholder, so the first real transaction
-	// is node 1.
-	first, ok, reason, err := a.subtreeNode(ctx, block.Subtrees[0], 1)
+	// is node 1. A first subtree with no node 1 is coinbase only, but only when the block
+	// says so: a file whose node count is too small for the block would otherwise hide every
+	// transaction the block holds.
+	first, count, reason, err := a.subtreeNode(ctx, block.Subtrees[0], 1)
 	if err != nil || reason != "" {
 		return nil, reason, err
 	}
 
-	if ok {
+	switch {
+	case count > 1:
 		samples = append(samples, first)
+	case len(block.Subtrees) > 1 || block.TransactionCount > 1:
+		return nil, fmt.Sprintf("subtree %s holds %d node(s), too few for a block of %d transactions in %d subtrees",
+			block.Subtrees[0].String(), count, block.TransactionCount, len(block.Subtrees)), nil
 	}
 
 	if last := len(block.Subtrees) - 1; last > 0 {
-		node, ok, reason, err := a.subtreeNode(ctx, block.Subtrees[last], 0)
+		node, count, reason, err := a.subtreeNode(ctx, block.Subtrees[last], 0)
 		if err != nil || reason != "" {
 			return nil, reason, err
 		}
 
-		if ok {
-			samples = append(samples, node)
+		// Only the first subtree can be the coinbase alone, so an empty later one is malformed.
+		if count == 0 {
+			return nil, fmt.Sprintf("subtree %s holds no nodes, but it is not the block's first subtree", block.Subtrees[last].String()), nil
 		}
+
+		samples = append(samples, node)
 	}
 
 	return samples, "", nil
 }
 
 // subtreeNode reads the transaction hash at index from a stored subtree, streaming only the
-// bytes up to it. ok is false when the subtree has no node at index. A non-empty reason means
-// the subtree file is missing, unreadable or malformed. The file blob store checks the file's
-// own header inside GetIoReader and returns a storage error for a short, bad-magic or
-// wrong-type file, so a storage error is one block's finding too, not a failure of the run.
-// A cancelled or expired context still fails the run.
-func (a *minedSetAuditor) subtreeNode(ctx context.Context, subtreeHash *chainhash.Hash, index uint64) (chainhash.Hash, bool, string, error) {
+// bytes up to it, and returns the subtree's node count. The node is set only when index is
+// below the count. A non-empty reason means the subtree file is missing, unreadable or
+// malformed, including a file whose embedded root is not subtreeHash: the store keys a file
+// by the hash it was asked for, so a different root means the file holds another subtree and
+// its nodes say nothing about this block. The file blob store checks the file's own header
+// inside GetIoReader and returns a storage error for a short, bad-magic or wrong-type file,
+// so a storage error is one block's finding too, not a failure of the run. A cancelled or
+// expired context still fails the run.
+func (a *minedSetAuditor) subtreeNode(ctx context.Context, subtreeHash *chainhash.Hash, index uint64) (chainhash.Hash, uint64, string, error) {
 	var node chainhash.Hash
 
 	reader, err := a.subtrees.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 	if err != nil {
 		switch {
 		case ctx.Err() != nil:
-			return node, false, "", errors.NewProcessingError("failed to open subtree %s", subtreeHash.String(), err)
+			return node, 0, "", errors.NewProcessingError("failed to open subtree %s", subtreeHash.String(), err)
 		case errors.Is(err, errors.ErrNotFound):
-			return node, false, fmt.Sprintf("subtree %s is not in the subtree store", subtreeHash.String()), nil
+			return node, 0, fmt.Sprintf("subtree %s is not in the subtree store", subtreeHash.String()), nil
 		case errors.Is(err, errors.ErrStorageError):
-			return node, false, fmt.Sprintf("subtree %s could not be read: %v", subtreeHash.String(), err), nil
+			return node, 0, fmt.Sprintf("subtree %s could not be read: %v", subtreeHash.String(), err), nil
 		}
 
-		return node, false, "", errors.NewProcessingError("failed to open subtree %s", subtreeHash.String(), err)
+		return node, 0, "", errors.NewProcessingError("failed to open subtree %s", subtreeHash.String(), err)
 	}
 
 	defer func() { _ = reader.Close() }()
 
 	var header [subtreeHeaderBytes]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil {
-		return node, false, fmt.Sprintf("subtree %s is shorter than its header", subtreeHash.String()), nil //nolint:nilerr // a malformed file is a finding, not a failure of the run
+		return node, 0, fmt.Sprintf("subtree %s is shorter than its header", subtreeHash.String()), nil //nolint:nilerr // a malformed file is a finding, not a failure of the run
 	}
 
-	if count := binary.LittleEndian.Uint64(header[subtreeNodeCountOffset:]); index >= count {
-		return node, false, "", nil
+	if root := chainhash.Hash(header[:chainhash.HashSize]); root != *subtreeHash {
+		return node, 0, fmt.Sprintf("subtree file %s holds subtree %s", subtreeHash.String(), root.String()), nil
+	}
+
+	count := binary.LittleEndian.Uint64(header[subtreeNodeCountOffset:])
+	if index >= count {
+		return node, count, "", nil
 	}
 
 	if _, err := io.CopyN(io.Discard, reader, int64(index)*subtreeNodeBytes); err != nil { //nolint:gosec // index is 0 or 1
-		return node, false, fmt.Sprintf("subtree %s is shorter than its node count", subtreeHash.String()), nil //nolint:nilerr // as above
+		return node, 0, fmt.Sprintf("subtree %s is shorter than its node count", subtreeHash.String()), nil //nolint:nilerr // as above
 	}
 
 	if _, err := io.ReadFull(reader, node[:]); err != nil {
-		return node, false, fmt.Sprintf("subtree %s is shorter than its node count", subtreeHash.String()), nil //nolint:nilerr // as above
+		return node, 0, fmt.Sprintf("subtree %s is shorter than its node count", subtreeHash.String()), nil //nolint:nilerr // as above
 	}
 
-	return node, true, "", nil
+	return node, count, "", nil
 }
 
 // report prints result and returns an error when a block is affected, so the command exits
@@ -345,7 +362,9 @@ afterwards, and a later block spending one of their outputs can fail.
 
 It samples two transactions per block (the first after the coinbase and the first of the
 last subtree), so a block it reports as tagged is not proven clean. A block is UNCHECKED
-when its subtree file is gone, unreadable or malformed, or no sampled transaction is in the UTXO store; UNCHECKED is
+when its subtree file is gone, unreadable or malformed (including a file whose root is not
+the subtree's hash, or whose node count is too small for the block), or no sampled
+transaction is in the UTXO store; UNCHECKED is
 not a pass. Blocks on a netting UTXO store's below-checkpoint route are skipped: full
 validation never stores them.
 

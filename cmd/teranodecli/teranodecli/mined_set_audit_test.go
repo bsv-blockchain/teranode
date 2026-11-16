@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	blockchainsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -129,8 +130,11 @@ func (h *minedSetAuditHarness) storeBlock(minedSet, skipFiles bool, subtrees ...
 	h.height++
 
 	roots := make([]*chainhash.Hash, 0, len(subtrees))
+	txCount := uint64(1) // the coinbase
 
 	for i, txs := range subtrees {
+		txCount += uint64(len(txs))
+
 		st, err := gosubtree.NewTreeByLeafCount(4)
 		require.NoError(h.t, err)
 
@@ -163,7 +167,7 @@ func (h *minedSetAuditHarness) storeBlock(minedSet, skipFiles bool, subtrees ...
 			Bits:           mustNBit(h.t),
 		},
 		CoinbaseTx:       coinbase,
-		TransactionCount: 1,
+		TransactionCount: txCount,
 		Subtrees:         roots,
 	}
 
@@ -345,6 +349,12 @@ func TestMinedSetAudit_MalformedSubtreeIsUnchecked(t *testing.T) {
 			h := newMinedSetAuditHarness(t)
 
 			block, _ := h.storeBlock(true, true, []*bt.Tx{h.auditTx()})
+
+			// The root must match, so the file reaches the length check it is cut short for.
+			if len(tc.bytes) >= chainhash.HashSize {
+				copy(tc.bytes, block.Subtrees[0][:])
+			}
+
 			require.NoError(t, h.subtrees.Set(h.ctx, block.Subtrees[0][:], fileformat.FileTypeSubtree, tc.bytes))
 
 			result, err := h.auditor.run(h.ctx, 1, 1, 10)
@@ -353,6 +363,95 @@ func TestMinedSetAudit_MalformedSubtreeIsUnchecked(t *testing.T) {
 			require.Contains(t, result.Unchecked[0].Reason, tc.reason)
 		})
 	}
+}
+
+// TestMinedSetAudit_SubtreeRootMismatchIsUnchecked: a file stored under one subtree's hash
+// that holds another subtree is unchecked. Its nodes belong to some other block, so a
+// sample read from it proves nothing about this one.
+//
+// Mutation target: dropping the root check in subtreeNode. The block's file then holds a
+// transaction tagged with the block's id, and the block counts as tagged although its own
+// transaction is untagged and locked.
+func TestMinedSetAudit_SubtreeRootMismatchIsUnchecked(t *testing.T) {
+	h := newMinedSetAuditHarness(t)
+
+	own := h.auditTx()
+	block, blockID := h.storeBlock(true, false, []*bt.Tx{own})
+	h.createUntagged(own)
+
+	// Another subtree, whose one transaction does carry this block's id.
+	stranger := h.auditTx()
+	h.createTagged(stranger, blockID)
+
+	other, err := gosubtree.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, other.AddCoinbaseNode())
+	require.NoError(t, other.AddNode(*stranger.TxIDChainHash(), 1, uint64(stranger.Size()))) //nolint:gosec // a test tx is small
+	require.NotEqual(t, *other.RootHash(), *block.Subtrees[0], "precondition: the two subtrees must differ")
+
+	b, err := other.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, h.subtrees.Set(h.ctx, block.Subtrees[0][:], fileformat.FileTypeSubtree, b, bloboptions.WithAllowOverwrite(true)))
+
+	result, err := h.auditor.run(h.ctx, 1, 1, 10)
+	require.NoError(t, err)
+	require.Zero(t, result.Tagged)
+	require.Empty(t, result.Affected)
+	require.Len(t, result.Unchecked, 1)
+	require.Equal(t, *block.Hash(), result.Unchecked[0].Hash)
+	require.Contains(t, result.Unchecked[0].Reason, "holds subtree "+other.RootHash().String())
+}
+
+// TestMinedSetAudit_NodeCountTooSmallIsUnchecked: a subtree file whose root matches but whose
+// node count is too small for the block is unchecked, not coinbase only.
+//
+// Mutation targets: treating a first subtree with no node 1 as coinbase only whatever the
+// block says (the first subcase then counts as coinbase only), and skipping an empty last
+// subtree (the second subcase then counts as tagged on the first sample alone).
+func TestMinedSetAudit_NodeCountTooSmallIsUnchecked(t *testing.T) {
+	// headerOnly returns a subtree file for root claiming count nodes, holding count nodes
+	// of zeros.
+	headerOnly := func(root *chainhash.Hash, count byte) []byte {
+		b := make([]byte, subtreeHeaderBytes+int(count)*subtreeNodeBytes)
+		copy(b, root[:])
+		b[subtreeNodeCountOffset] = count
+
+		return b
+	}
+
+	t.Run("first subtree holds only the coinbase", func(t *testing.T) {
+		h := newMinedSetAuditHarness(t)
+
+		own := h.auditTx()
+		block, _ := h.storeBlock(true, false, []*bt.Tx{own})
+		h.createUntagged(own)
+		require.Equal(t, uint64(2), block.TransactionCount, "precondition: the block must hold a transaction besides the coinbase")
+
+		require.NoError(t, h.subtrees.Set(h.ctx, block.Subtrees[0][:], fileformat.FileTypeSubtree, headerOnly(block.Subtrees[0], 1), bloboptions.WithAllowOverwrite(true)))
+
+		result, err := h.auditor.run(h.ctx, 1, 1, 10)
+		require.NoError(t, err)
+		require.Zero(t, result.CoinbaseOnly)
+		require.Len(t, result.Unchecked, 1)
+		require.Contains(t, result.Unchecked[0].Reason, "too few for a block of 2 transactions")
+	})
+
+	t.Run("last subtree holds no nodes", func(t *testing.T) {
+		h := newMinedSetAuditHarness(t)
+
+		first, last := h.auditTx(), h.auditTx()
+		block, blockID := h.storeBlock(true, false, []*bt.Tx{first}, []*bt.Tx{last})
+		h.createTagged(first, blockID)
+		h.createUntagged(last)
+
+		require.NoError(t, h.subtrees.Set(h.ctx, block.Subtrees[1][:], fileformat.FileTypeSubtree, headerOnly(block.Subtrees[1], 0), bloboptions.WithAllowOverwrite(true)))
+
+		result, err := h.auditor.run(h.ctx, 1, 1, 10)
+		require.NoError(t, err)
+		require.Zero(t, result.Tagged)
+		require.Len(t, result.Unchecked, 1)
+		require.Contains(t, result.Unchecked[0].Reason, "holds no nodes")
+	})
 }
 
 // TestMinedSetAudit_BadFileHeaderIsUnchecked: the file blob store checks a file's own
