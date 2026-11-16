@@ -654,7 +654,8 @@ func ConflictRecoveryForeignLock(t *testing.T, db utxo.Store) {
 	_, _, err = db.SpendAndCreate(ctx, winner, 2, utxo.WithCreateOnly(), utxo.WithConflicting(true))
 	require.NoError(t, err)
 	require.NoError(t, db.SetLocked(ctx, []chainhash.Hash{*other.TxIDChainHash()}, true))
-	t.Cleanup(func() { _ = db.SetLocked(ctx, []chainhash.Hash{*other.TxIDChainHash()}, false) })
+	// t.Context() is cancelled before Cleanup runs, so the unlock needs its own context.
+	t.Cleanup(func() { _ = db.SetLocked(context.Background(), []chainhash.Hash{*other.TxIDChainHash()}, false) })
 
 	winners := []chainhash.Hash{*winner.TxIDChainHash()}
 	losers, _, err := utxo.ProcessConflicting(ctx, db, 3, chainhash.Hash{}, winners, nil, utxo.NoAncestryGuard)
@@ -1439,7 +1440,8 @@ func ConflictRecoveryReverseKeepsForeignLock(t *testing.T, db utxo.Store) {
 	require.Equal(t, winner.TxIDChainHash(), crashSpender(t, ctx, db, parent))
 
 	require.NoError(t, db.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
-	t.Cleanup(func() { _ = db.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, false) })
+	// t.Context() is cancelled before Cleanup runs, so the unlock needs its own context.
+	t.Cleanup(func() { _ = db.SetLocked(context.Background(), []chainhash.Hash{*parent.TxIDChainHash()}, false) })
 
 	_, _, err = utxo.ReverseProcessConflicting(ctx, db, 3, block, winners)
 	require.NoError(t, err)
