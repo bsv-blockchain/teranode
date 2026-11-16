@@ -1072,13 +1072,20 @@ func TestIsTransientWriteFailure_UnansweredRecord(t *testing.T) {
 	refused.Err = &aerospike.AerospikeError{ResultCode: types.BIN_TYPE_ERROR}
 	require.False(t, isTransientWriteFailure(refused))
 
+	for _, code := range []types.ResultCode{types.ALWAYS_FORBIDDEN, types.ENTERPRISE_ONLY, types.TYPE_NOT_SUPPORTED, types.NOT_WHITELISTED} {
+		rec := aerospike.NewBatchWrite(nil, key).BatchRec()
+		rec.ResultCode = code
+		rec.Err = &aerospike.AerospikeError{ResultCode: code}
+		require.False(t, isTransientWriteFailure(rec), "code %v is a lasting refusal", code)
+	}
+
 	require.False(t, isBatchTransportError(&aerospike.AerospikeError{ResultCode: types.MAX_ERROR_RATE}),
 		"MAX_ERROR_RATE leaves per-record results to read, so it is not resent wholesale")
 
 	// The client stamps a partition with no live node per record, with a
 	// fresh error and no cause chain. Those, and any code not known to be a
 	// lasting refusal, are resent.
-	for _, code := range []types.ResultCode{types.INVALID_NODE_ERROR, types.PARTITION_UNAVAILABLE, types.QUERY_ABORTED} {
+	for _, code := range []types.ResultCode{types.INVALID_NODE_ERROR, types.PARTITION_UNAVAILABLE, types.FAIL_FORBIDDEN, types.QUERY_ABORTED} {
 		rec := aerospike.NewBatchWrite(nil, key).BatchRec()
 		rec.ResultCode = code
 		rec.Err = &aerospike.AerospikeError{ResultCode: code}
@@ -1125,6 +1132,64 @@ func TestWithdrawMarkers_ResendsToAParentWhoseMarkerOutcomeWasUnread(t *testing.
 	s.withdrawMarkers(updates, map[chainhash.Hash]struct{}{child: {}})
 	require.Equal(t, 2, calls, "the failed withdrawal is sent once more")
 	require.False(t, hasMarker(t, client, parentKey, &child), "the resend removed the marker")
+}
+
+// TestWithdrawMarkers_UnroutableKeyDoesNotBlockTheOthers: the client stamps a
+// key it cannot route to a node INVALID_NODE_ERROR, and with RespondAllKeys on
+// it then returns before sending anything (client.go BatchOperate). The stub
+// models exactly that. The unroutable key is resent, so under RespondAllKeys
+// it would abort every attempt and strand the other parent's marker.
+func TestWithdrawMarkers_UnroutableKeyDoesNotBlockTheOthers(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	down := chainhash.HashH([]byte{0xF6, 1})
+	up := chainhash.HashH([]byte{0xF6, 2})
+	downChild := chainhash.HashH([]byte{0xF6, 3})
+	upChild := chainhash.HashH([]byte{0xF6, 4})
+	downKey := putRecord(t, client, &down, spentBy(&downChild))
+	upKey := putRecord(t, client, &up, spentBy(&upChild))
+
+	updates := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.addParentUpdatesForInput(updates, &down, 0, &downChild))
+	require.NoError(t, s.addParentUpdatesForInput(updates, &up, 0, &upChild))
+
+	_, err := s.markParents(context.Background(), updates)
+	require.NoError(t, err)
+	require.True(t, hasMarker(t, client, upKey, &upChild), "fixture: the marker landed")
+
+	calls := 0
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		calls++
+
+		routable := make([]aerospike.BatchRecordIfc, 0, len(records))
+
+		for _, rec := range records {
+			br := rec.BatchRec()
+			if br.Key.Equals(downKey) {
+				br.ResultCode = types.INVALID_NODE_ERROR
+				br.Err = &aerospike.AerospikeError{ResultCode: types.INVALID_NODE_ERROR}
+
+				continue
+			}
+
+			routable = append(routable, rec)
+		}
+
+		invalidNode := &aerospike.AerospikeError{ResultCode: types.INVALID_NODE_ERROR}
+		if policy.RespondAllKeys {
+			return invalidNode
+		}
+
+		if err := client.BatchOperate(policy, routable); err != nil {
+			return err
+		}
+
+		return invalidNode
+	}
+
+	s.withdrawMarkers(updates, map[chainhash.Hash]struct{}{downChild: {}, upChild: {}})
+	require.Equal(t, withdrawMarkerAttempts, calls, "the unroutable key is resent every attempt")
+	require.False(t, hasMarker(t, client, upKey, &upChild), "the routable parent's marker was withdrawn")
 }
 
 // TestWithdrawMarkers_StopsAfterTheLastAttempt: a withdrawal that keeps failing

@@ -1561,11 +1561,17 @@ func bytesBin(v interface{}) []byte {
 
 // batchOperate runs a batch; batchOperateFn overrides it in tests.
 func (s *Service) batchOperate(records []aerospike.BatchRecordIfc) error {
+	return s.batchOperateWith(s.batchPolicy, records)
+}
+
+// batchOperateWith runs a batch under the given policy; batchOperateFn
+// overrides it in tests.
+func (s *Service) batchOperateWith(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
 	if s.batchOperateFn != nil {
-		return s.batchOperateFn(s.batchPolicy, records)
+		return s.batchOperateFn(policy, records)
 	}
 
-	return s.client.BatchOperate(s.batchPolicy, records)
+	return s.client.BatchOperate(policy, records)
 }
 
 // hadDAH reports whether a clear write found a deleteAtHeight to clear. The write reads the bin
@@ -3323,6 +3329,19 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 	// so it cannot revive a parent that is expiring in TTL mode.
 	policy.Expiration = aerospike.TTLDontUpdate
 
+	// With RespondAllKeys on (the client default), one key the client cannot
+	// route to a node (INVALID_NODE_ERROR, PARTITION_UNAVAILABLE) makes
+	// BatchOperate return before it sends anything. That key is resent, so it
+	// would block every other withdrawal in the call on every attempt. Off,
+	// the routable keys are sent and the unroutable one keeps its error.
+	batchPolicy := aerospike.NewBatchPolicy()
+	if s.batchPolicy != nil {
+		copied := *s.batchPolicy
+		batchPolicy = &copied
+	}
+
+	batchPolicy.RespondAllKeys = false
+
 	type withdrawal struct {
 		key  *aerospike.Key
 		keys []interface{}
@@ -3367,7 +3386,7 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 			keys[i], childKeys[i] = w.key, w.keys
 		}
 
-		retry, refused, err := s.sendWithdrawals(policy, keys, childKeys)
+		retry, refused, err := s.sendWithdrawals(batchPolicy, policy, keys, childKeys)
 
 		for _, i := range refused {
 			if !pending[i].markerFailed {
@@ -3406,8 +3425,9 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 // sendWithdrawals sends one batch of marker removals. It returns the indexes of
 // the writes that may land if sent again, the indexes of those refused for
 // good, and an error that describes a failure. A transport failure is transient
-// for every write. A parent that is gone is not a failure.
-func (s *Service) sendWithdrawals(policy *aerospike.BatchWritePolicy, keys []*aerospike.Key, childKeys [][]interface{}) (retry, refused []int, err error) {
+// for every write. A parent that is gone, or that has no marker bin, has
+// nothing to withdraw and is not a failure.
+func (s *Service) sendWithdrawals(batchPolicy *aerospike.BatchPolicy, policy *aerospike.BatchWritePolicy, keys []*aerospike.Key, childKeys [][]interface{}) (retry, refused []int, err error) {
 	records := make([]aerospike.BatchRecordIfc, len(keys))
 
 	for i, key := range keys {
@@ -3415,7 +3435,7 @@ func (s *Service) sendWithdrawals(policy *aerospike.BatchWritePolicy, keys []*ae
 		records[i] = aerospike.NewBatchWrite(policy, key, op)
 	}
 
-	batchErr := s.batchOperate(records)
+	batchErr := s.batchOperateWith(batchPolicy, records)
 	if batchErr != nil && isBatchTransportError(batchErr) {
 		retry = make([]int, len(records))
 		for i := range retry {
@@ -3437,7 +3457,7 @@ func (s *Service) sendWithdrawals(policy *aerospike.BatchWritePolicy, keys []*ae
 			continue
 		}
 
-		if batchRec.Err != nil && batchRec.Err.Matches(types.KEY_NOT_FOUND_ERROR) {
+		if batchRec.Err != nil && batchRec.Err.Matches(types.KEY_NOT_FOUND_ERROR, types.BIN_NOT_FOUND) {
 			continue
 		}
 
@@ -3458,8 +3478,10 @@ func (s *Service) sendWithdrawals(policy *aerospike.BatchWritePolicy, keys []*ae
 
 // isTransientWriteFailure reports whether a failed batch write may land if it
 // is sent again. Only a refusal that answers the same way every time is final:
-// a bad parameter, a wrong bin type, a record too big, a filter that excludes
-// the record, an unknown namespace, a forbidden or unauthorised write. Every
+// a bad parameter, a wrong bin type or unsupported type, a record too big, a
+// filter that excludes the record, an unknown namespace, a write the server's
+// configuration or edition never allows, an unauthorised sender. FAIL_FORBIDDEN
+// ("not allowed at this time") is not final: it clears by itself. Every
 // other failure is resent: a timeout, a busy key or device, a lost connection,
 // a partition with no live node (INVALID_NODE_ERROR, PARTITION_UNAVAILABLE,
 // stamped by the client without a cause chain), a record the server never
@@ -3481,9 +3503,10 @@ func isTransientWriteFailure(batchRec *aerospike.BatchRecord) bool {
 // lastingWriteRefusals are the result codes isTransientWriteFailure treats as
 // final.
 var lastingWriteRefusals = []types.ResultCode{
-	types.PARAMETER_ERROR, types.BIN_TYPE_ERROR, types.RECORD_TOO_BIG, types.UNSUPPORTED_FEATURE,
-	types.INVALID_NAMESPACE, types.BIN_NAME_TOO_LONG, types.FAIL_FORBIDDEN, types.OP_NOT_APPLICABLE,
-	types.FILTERED_OUT, types.NOT_AUTHENTICATED, types.ROLE_VIOLATION,
+	types.TYPE_NOT_SUPPORTED, types.PARAMETER_ERROR, types.ALWAYS_FORBIDDEN, types.BIN_TYPE_ERROR,
+	types.RECORD_TOO_BIG, types.UNSUPPORTED_FEATURE, types.INVALID_NAMESPACE, types.BIN_NAME_TOO_LONG,
+	types.ENTERPRISE_ONLY, types.OP_NOT_APPLICABLE, types.FILTERED_OUT, types.NOT_AUTHENTICATED,
+	types.ROLE_VIOLATION, types.NOT_WHITELISTED,
 }
 
 // reportParentUpdateTally records the batch's counters and returns the children
