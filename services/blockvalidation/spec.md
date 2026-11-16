@@ -203,14 +203,6 @@ A failure MUST be classified `ERR_BLOCK_CORRUPT`.
 - scripts: verified with the script flags of the candidate block's height, and each input's UTXO era;
 - below `GenesisActivationHeight`, per-transaction sigops ≤ 20,000, counted with P2SH.
 
-**BV-BODY-019.** The coinbase transaction MUST be final: nLockTime = 0, or nLockTime < the threshold, or every input's sequence = 0xFFFFFFFF. The threshold is the block's height when nLockTime < 500,000,000, and otherwise the lock-time cutoff of BV-BODY-015. A violation MUST be classified under BV-BODY-011.
-
-**BV-BODY-020.** Every height- or time-dependent rule in BV-BODY-015 (finality, coinbase maturity, relative lock times, era script flags) MUST be evaluated against the candidate block's own height and its own parent's median-time-past. This holds for transactions previously validated in another context (an earlier tip, a sibling block, or a cached subtree); a prior validation MUST NOT be reused across a change of that context.
-
-**BV-BODY-021.** Below `GenesisActivationHeight`, the total sigops of the block, counted with P2SH, MUST be ≤ 20,000 × ⌈block size in bytes / 1,000,000⌉. A violation MUST be classified `ERR_BLOCK_INVALID`.
-
-**BV-BODY-022.** Below `BIP0034Height`, except for the two historic blocks at heights 91842 and 91880 (identified by height and hash, as bitcoin-sv's `fEnforceBIP30` does: `00000000000a4d0a…0caec` and `00000000000743f1…cd721`), a block MUST NOT contain a transaction whose ID equals that of a transaction in an ancestor with unspent outputs (BIP30). At any height, a coinbase whose ID collides with an earlier coinbase MUST NOT leave the earlier coinbase's unspent outputs in the UTXO set.
-
 **BV-BODY-016.** A transaction-invalid result from Subtree Validation SHALL be classified as follows:
 
 - if it wraps a cancellation, deadline, storage or service error, it is transient and retryable;
@@ -222,6 +214,14 @@ A missing-parent or not-found transaction result SHALL be classified as a transi
 **BV-BODY-017.** A block containing a non-coinbase transaction already mined in one of the block's own ancestors MUST be rejected with `ERR_BLOCK_INVALID`. The check MAY run after the block is added, during mined-tagging (Open Question 3), but the block MUST then be invalidated before any child block is validated on top of it. Mined-tagging MUST NOT be possible to switch off.
 
 **BV-BODY-018.** A block whose size exceeds the local `excessiveblocksize` policy (when > 0) MUST be declined with `ERR_BLOCK_POLICY_DECLINED`. The check MUST be applied to the peer-declared size before fetch. It MUST also be applied to the size recomputed from the loaded body, so that an under-declared size cannot bypass the policy. This deliberately differs from bitcoin-sv, which treats an over-limit block as invalid (`bad-blk-length`): a decline is not persisted, so the block can be accepted after the limit is raised. A configured limit below 1,000,000 bytes MUST be rejected at startup, as in bitcoin-sv.
+
+**BV-BODY-019.** The coinbase transaction MUST be final: nLockTime = 0, or nLockTime < the threshold, or every input's sequence = 0xFFFFFFFF. The threshold is the block's height when nLockTime < 500,000,000, and otherwise the lock-time cutoff of BV-BODY-015. A violation MUST be classified under BV-BODY-011.
+
+**BV-BODY-020.** Every height- or time-dependent rule in BV-BODY-015 (finality, coinbase maturity, relative lock times, era script flags) MUST be evaluated against the candidate block's own height and its own parent's median-time-past. This holds for transactions previously validated in another context (an earlier tip, a sibling block, or a cached subtree); a prior validation MUST NOT be reused across a change of that context.
+
+**BV-BODY-021.** Below `GenesisActivationHeight`, the total sigops of the block, counted with P2SH, MUST be ≤ 20,000 × ⌈block size in bytes / 1,000,000⌉. A violation MUST be classified `ERR_BLOCK_INVALID`.
+
+**BV-BODY-022.** Below `BIP0034Height`, except for the two historic blocks at heights 91842 and 91880 (identified by height and hash, as bitcoin-sv's `fEnforceBIP30` does: `00000000000a4d0a…0caec` and `00000000000743f1…cd721`), a block MUST NOT contain a transaction whose ID equals that of a transaction in an ancestor with unspent outputs (BIP30). At any height, a coinbase whose ID collides with an earlier coinbase MUST NOT leave the earlier coinbase's unspent outputs in the UTXO set.
 
 ### Verdict Classification Contract (`BV-VERDICT-NNN`)
 
@@ -830,12 +830,6 @@ stateDiagram-v2
 
 **AC-BV-BODY-005.1.** Given a bound block whose coinbase has zero inputs, then the outcome MUST be `ERR_BLOCK_INVALID`, not `ERR_BLOCK_INCOMPLETE`.
 
-**AC-BV-BODY-019.1.** Given a block at height H above the highest hardcoded checkpoint whose coinbase has nLockTime = H and input sequence 0, then the outcome MUST be `ERR_BLOCK_INVALID`. Given the same coinbase with sequence 0xFFFFFFFF, the block MUST NOT be rejected on that rule.
-
-**AC-BV-BODY-020.1.** Given transaction T with nLockTime = H was validated while the tip was at height H, when a competing block at height H includes T, then that block MUST be rejected as containing a non-final transaction.
-
-**AC-BV-BODY-021.1.** Given a test chain below `GenesisActivationHeight` and a 900,000-byte block whose transactions total 20,001 sigops, then the outcome MUST be `ERR_BLOCK_INVALID`.
-
 **AC-BV-BODY-010.1.** Given a bound block above the highest hardcoded checkpoint whose coinbase pays subsidy + fees + 1 satoshi, then the outcome MUST be `ERR_BLOCK_INVALID` and an invalid record MUST be persisted.
 
 **AC-BV-BODY-011.1.** Given an unbound body whose coinbase scriptSig is 1 byte, then the outcome MUST be `ERR_BLOCK_CORRUPT`, not `ERR_BLOCK_INVALID`.
@@ -849,6 +843,12 @@ stateDiagram-v2
 **AC-BV-BODY-017.1.** Given transaction T is mined in block N, when block N + 2 on the same chain includes T, then block N + 2 MUST end up invalid, and no block on top of N + 2 MUST be validated before it is.
 
 **AC-BV-BODY-018.1.** Given `excessiveblocksize = 1 MB` and a peer declares 500 KB for a block whose loaded body is 2 MB, then the outcome MUST be `ERR_BLOCK_POLICY_DECLINED`.
+
+**AC-BV-BODY-019.1.** Given a block at height H above the highest hardcoded checkpoint whose coinbase has nLockTime = H and input sequence 0, then the outcome MUST be `ERR_BLOCK_INVALID`. Given the same coinbase with sequence 0xFFFFFFFF, the block MUST NOT be rejected on that rule.
+
+**AC-BV-BODY-020.1.** Given transaction T with nLockTime = H was validated while the tip was at height H, when a competing block at height H includes T, then that block MUST be rejected as containing a non-final transaction.
+
+**AC-BV-BODY-021.1.** Given a test chain below `GenesisActivationHeight` and a 900,000-byte block whose transactions total 20,001 sigops, then the outcome MUST be `ERR_BLOCK_INVALID`.
 
 **AC-BV-VERDICT-003.1.** Given any CORRUPT outcome, then testing the returned error for `ERR_BLOCK_INVALID` MUST be false.
 
@@ -1046,21 +1046,25 @@ sequenceDiagram
 
 ### Verdict classification flow
 
+The checks are shown in the order full validation (`ValidateBlockWithOptions`) runs them: the local `excessiveblocksize` policy and the missing-coinbase check come first, then the header gates, then the checks inside `block.Valid`. A local fault can happen at any step and always classifies as LOCAL.
+
 ```mermaid
 flowchart TD
     A[Validation failure] --> B{Local fault?<br/>storage, service, ctx, 429}
     B -- yes --> LOCAL[LOCAL — retry, no charge]
-    B -- no --> C{Header context too short<br/>or unlinked?}
+    B -- no --> E{Local policy?<br/>excessiveblocksize}
+    E -- yes --> POL[POLICY_DECLINED —<br/>per-peer budget, no strike]
+    E -- no --> F{Coinbase not delivered?}
+    F -- yes --> INC[INCOMPLETE — re-fetch]
+    F -- no --> D{Header gate failed?<br/>PoW, nBits, checkpoint, parent invalid}
+    D -- yes --> HF[INVALID header-final —<br/>notify, never persist]
+    D -- no --> C{Header context too short<br/>or unlinked?}
     C -- yes --> HC[HEADER_CONTEXT — retry once from scratch]
     C -- no --> T{Timestamp more than 2 h<br/>after local clock?}
     T -- yes --> CD[CLOCK_DEFERRED — no notify,<br/>no strike, accept on re-announce]
-    T -- no --> D{Header rule failed?}
-    D -- yes --> HF[INVALID header-final —<br/>notify, never persist]
-    D -- no --> E{Local policy?<br/>excessiveblocksize}
-    E -- yes --> POL[POLICY_DECLINED —<br/>per-peer budget, no strike]
-    E -- no --> F{Data absent?}
-    F -- yes --> INC[INCOMPLETE — re-fetch]
-    F -- no --> G{Body bound to header?}
+    T -- no --> H{Contextual header rule failed?<br/>median time past, version floor}
+    H -- yes --> HF
+    H -- no --> G{Body bound to header?}
     G -- no --> COR[CORRUPT — strike, re-download,<br/>never persist]
     G -- yes --> INV[INVALID — persist invalid record,<br/>notify]
 ```
@@ -1124,7 +1128,7 @@ flowchart TD
 
 ## Conformance Gaps
 
-The following items are **defects**: places where the current implementation does not conform to this spec and work is required. File references are as of commit `bcae9c0d9`.
+The following items are **defects**: places where the current implementation does not conform to this spec and work is required. File references were taken from `main` at commit `350b2ac67` (2026-10-14); entries updated since then name the PR they were checked against. Line numbers (`~`) are approximate and drift as `main` moves, so each reference also names the function or file to search for.
 
 **GAP-BV-001.** `wait_to_complete` returns at enqueue, not at validation. **Resolved** by bsv-blockchain/teranode#2132.
 *Affects:* BV-INGRESS-005, BV-INGRESS-017.

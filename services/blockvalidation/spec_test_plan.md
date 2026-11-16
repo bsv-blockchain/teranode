@@ -514,7 +514,7 @@ A crash point is a moment where the process can stop, or a call can fail, betwee
 
 These hold at any quiescent point: at least two processing intervals after the last event, with no work in flight. They are checkable from the three stores (blockchain, UTXO, subtree). The proposal is to run them as an oracle in the teardown of every e2e, sequential, chaos and fail-point test, so that every existing test also becomes an invariant test.
 
-The chain-reconciliation oracle on branch `test/chain-reconciliation-oracle` (commit bcae9c0d9, unmerged) already checks UTXO and blob state against the best chain. It needs to be extended with block flags, non-best-chain blocks and locks.
+The chain-reconciliation oracle in bsv-blockchain/teranode#1958 (branch `test/chain-reconciliation-oracle`, unmerged) already checks UTXO and blob state against the best chain. It needs to be extended with block flags, non-best-chain blocks and locks.
 
 | # | Invariant | Spec IDs | Violated by |
 |---|---|---|---|
