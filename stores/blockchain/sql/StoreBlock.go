@@ -216,9 +216,10 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 
 	// The fork path writes the row and repairs on_main_chain in ONE transaction, so a
 	// failure between them cannot leave a committed block carrying a flag nothing will
-	// revisit. The reconciliation is a single statement bounded to the recent lineage,
-	// so the transaction stays small however large the blocks are: it touches block
-	// rows only, never transactions or coins.
+	// revisit. The reconciliation walks at least reconcileMaxDepth blocks and on down to
+	// the fork point, and a reorg adds the parent_id walk reorgForkFloor runs, so the
+	// transaction grows with the fork's depth but not with the size of the blocks: it
+	// touches block rows only, never transactions or coins.
 	//
 	// The common extend keeps its single auto-committed INSERT, which already writes
 	// the correct flag and needs no repair.
