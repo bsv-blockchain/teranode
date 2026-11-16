@@ -392,9 +392,9 @@ afterwards, and a later block spending one of their outputs can fail.
 It samples two transactions per block (the first after the coinbase and the first of the
 last subtree), so a block it reports as tagged is not proven clean. A block is UNCHECKED
 when its subtree file is gone, unreadable or malformed (including a file whose root is not
-the subtree's hash, or whose node count is too small for the block), or no sampled
-transaction is in the UTXO store; UNCHECKED is
-not a pass. Blocks on a netting UTXO store's below-checkpoint route are skipped: full
+the subtree's hash, whose node count is too small for the block, or whose first subtree
+does not start with the coinbase placeholder), or no sampled transaction is in the UTXO
+store; UNCHECKED is not a pass. Blocks on a netting UTXO store's below-checkpoint route are skipped: full
 validation never stores them.
 
 Quick validation stores a block with mined_set true and unlocks its outputs just after, so
