@@ -114,3 +114,42 @@ func TestSendSpendBatchLua_NeverOrphans(t *testing.T) {
 		})
 	}
 }
+
+// Recovery must pass its deadline to the client call and wait for completion, rather than
+// returning on a timer while a write can still change ownership in the background.
+func TestRestoreConflictSpendsDispatchDeadline(t *testing.T) {
+	s := newTestStoreForGet(t)
+	s.utxoBatchSize = 2
+	parent, owner, output := chainhash.Hash{1}, chainhash.Hash{2}, chainhash.Hash{3}
+	sp := &utxo.Spend{TxID: &parent, UTXOHash: &output, SpendingData: spendpkg.NewSpendingData(&owner, 0)}
+	called, finished := false, false
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		called = true
+		require.Len(t, records, 1)
+		require.Positive(t, policy.TotalTimeout)
+		require.LessOrEqual(t, policy.TotalTimeout, time.Second)
+		require.LessOrEqual(t, policy.SocketTimeout, time.Second)
+		finished = true
+		return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	require.Error(t, s.RestoreConflictSpends(ctx, []*utxo.Spend{sp}, 100))
+	require.True(t, called)
+	require.True(t, finished, "the dispatch must complete before recovery returns")
+	called = false
+	cancel()
+	require.ErrorIs(t, s.RestoreConflictSpends(ctx, []*utxo.Spend{sp}, 100), context.Canceled)
+	require.False(t, called, "a cancelled restore must not dispatch writes")
+}
+
+func TestRestoreConflictSpendsDispatchPanic(t *testing.T) {
+	s := newTestStoreForGet(t)
+	s.utxoBatchSize = 2
+	s.batchOperateFn = panicOperate()
+	parent, owner, output := chainhash.Hash{1}, chainhash.Hash{2}, chainhash.Hash{3}
+	sp := &utxo.Spend{TxID: &parent, UTXOHash: &output, SpendingData: spendpkg.NewSpendingData(&owner, 0)}
+	require.NotPanics(t, func() {
+		require.Error(t, s.RestoreConflictSpends(t.Context(), []*utxo.Spend{sp}, 100))
+	})
+}

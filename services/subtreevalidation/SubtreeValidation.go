@@ -1112,68 +1112,56 @@ func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtr
 
 	dah := u.utxoStore.GetBlockHeight() + u.settings.GetSubtreeValidationBlockHeightRetention()
 
-	g, gCtx := errgroup.WithContext(ctx)
+	// The meta is written before the subtree, not beside it. The .subtree file is what
+	// every later check reads as "this subtree is done": the quorum lock's file check on
+	// the peer path, subtreeAlreadyHandled on the block path. Written in parallel, a meta
+	// write that failed after the subtree write succeeded left a stored subtree with no
+	// meta, and nothing on this service ever wrote it again. Written in order, a stored
+	// subtree from this path always has its meta, and a failed meta write leaves no
+	// subtree, so the next announcement or block validates it again. The cost is the
+	// meta write's latency, which no longer overlaps the subtree write.
+	u.logger.Debugf("[ValidateSubtreeInternal][%s] serialize subtree meta", subtreeHash.String())
 
-	g.Go(func() error {
-		//
-		// store subtree meta in store
-		//
-		u.logger.Debugf("[ValidateSubtreeInternal][%s] serialize subtree meta", subtreeHash.String())
+	completeSubtreeMetaBytes, err := subtreeMeta.Serialize()
+	if err != nil {
+		return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree meta", subtreeHash.String(), err)
+	}
 
-		completeSubtreeMetaBytes, err := subtreeMeta.Serialize()
-		if err != nil {
-			return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree meta", subtreeHash.String(), err)
+	u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree meta", subtreeHash.String())
+
+	if err = u.subtreeStore.Set(ctx,
+		merkleRoot[:],
+		fileformat.FileTypeSubtreeMeta,
+		completeSubtreeMetaBytes,
+		options.WithDeleteAt(dah),
+	); err != nil {
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree meta already exists in store", subtreeHash.String())
+		} else {
+			return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree meta", subtreeHash.String(), err)
 		}
+	}
 
-		u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree meta", subtreeHash.String())
+	u.logger.Debugf("[ValidateSubtreeInternal][%s] serialize subtree", subtreeHash.String())
 
-		if err = u.subtreeStore.Set(gCtx,
-			merkleRoot[:],
-			fileformat.FileTypeSubtreeMeta,
-			completeSubtreeMetaBytes,
-			options.WithDeleteAt(dah),
-		); err != nil {
-			if errors.Is(err, errors.ErrBlobAlreadyExists) {
-				u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree meta already exists in store", subtreeHash.String())
-			} else {
-				return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree meta", subtreeHash.String(), err)
-			}
+	completeSubtreeBytes, err := subtree.Serialize()
+	if err != nil {
+		return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree", subtreeHash.String(), err)
+	}
+
+	u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree", subtreeHash.String())
+
+	if err = u.subtreeStore.Set(ctx,
+		merkleRoot[:],
+		fileformat.FileTypeSubtree,
+		completeSubtreeBytes,
+		options.WithDeleteAt(dah),
+	); err != nil {
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree already exists in store", subtreeHash.String())
+		} else {
+			return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree", subtreeHash.String(), err)
 		}
-
-		return nil
-	})
-
-	g.Go(func() error {
-		//
-		// store subtree in store
-		//
-		u.logger.Debugf("[ValidateSubtreeInternal][%s] serialize subtree", subtreeHash.String())
-
-		completeSubtreeBytes, err := subtree.Serialize()
-		if err != nil {
-			return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree", subtreeHash.String(), err)
-		}
-
-		u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree", subtreeHash.String())
-
-		if err = u.subtreeStore.Set(gCtx,
-			merkleRoot[:],
-			fileformat.FileTypeSubtree,
-			completeSubtreeBytes,
-			options.WithDeleteAt(dah),
-		); err != nil {
-			if errors.Is(err, errors.ErrBlobAlreadyExists) {
-				u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree already exists in store", subtreeHash.String())
-			} else {
-				return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree", subtreeHash.String(), err)
-			}
-		}
-
-		return nil
-	})
-
-	if err := g.Wait(); err != nil {
-		return err
 	}
 
 	_ = u.SetSubtreeExists(subtreeHash)

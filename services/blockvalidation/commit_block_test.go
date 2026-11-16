@@ -31,6 +31,7 @@ import (
 // The block has no subtrees so unlockSubtreeTransactionsIfNeeded is a no-op.
 func newCommitBlockHarness(t *testing.T) (*BlockValidation, *model.Block, context.Context) {
 	t.Helper()
+	initPrometheusMetrics()
 
 	// commitBlock observes the quick-commit histograms; without this the tests pass only when an
 	// earlier test in the run happened to register the metrics.

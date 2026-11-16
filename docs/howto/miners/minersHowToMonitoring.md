@@ -135,10 +135,8 @@ Also watch:
 
 ### Fork and reorg activity
 
-- `teranode_blockvalidation_fork_count` and
-  `teranode_blockvalidation_fork_orphaned_total` — occasional forks are
-  normal; a rapidly growing fork count or frequent orphaning suggests network
-  or peering issues.
+- `teranode_blockvalidation_fork_count` — occasional forks are normal; a
+  rapidly growing fork count suggests network or peering issues.
 
 ### Cache and store pressure
 

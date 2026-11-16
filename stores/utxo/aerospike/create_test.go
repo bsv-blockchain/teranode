@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
@@ -17,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranodeaerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	testutil "github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -580,4 +583,61 @@ func TestStore_TwoPhaseCommit(t *testing.T) {
 	// require.NoError(t, err)
 
 	t.Logf("%v", txMeta)
+}
+
+// TestSpendAndCreateKeepsSpendsWhenCreateInDoubt runs a create whose write
+// lands on the server while the client reports it in doubt, as a timeout after
+// sending does. SpendAndCreate must keep the parent coin spent: the
+// transaction is stored, and unspending its input would let a second
+// transaction spend the coin while the first stands, which a repeat never
+// heals because a repeat drops a transaction whose record exists.
+func TestSpendAndCreateKeepsSpendsWhenCreateInDoubt(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	_, _, err := store.SpendAndCreate(ctx, tests.Tx, 1000, utxo.WithCreateOnly())
+	require.NoError(t, err)
+
+	in := tests.Tx.Outputs[0]
+
+	child := bt.NewTx()
+	require.NoError(t, child.From(tests.Tx.TxIDChainHash().String(), 0, in.LockingScript.String(), in.Satoshis))
+	child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00, 0x48, 0x30, 0x45})
+	require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", in.Satoshis-1_000))
+
+	// Run every batch for real, then report a batch that writes a record as
+	// in doubt. The spends go through as UDF calls and are left alone.
+	store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		realErr := client.BatchOperate(policy, records)
+
+		for _, rec := range records {
+			if _, isWrite := rec.(*aerospike.BatchWrite); isWrite {
+				return &aerospike.AerospikeError{ResultCode: types.TIMEOUT, InDoubt: true}
+			}
+		}
+
+		return realErr
+	})
+	t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+
+	_, spends, err := store.SpendAndCreate(ctx, child, store.GetBlockHeight()+1)
+	require.Error(t, err)
+	require.True(t, utxo.IsCreateOutcomeUnknown(err), "an in-doubt create must leave the outcome unknown: %v", err)
+	require.Len(t, spends, 1, "the spends stay in effect and are returned")
+
+	store.SetBatchOperateFn(nil)
+
+	_, err = store.Get(ctx, child.TxIDChainHash())
+	require.NoError(t, err, "the write landed, so the transaction is stored")
+
+	utxoHash, err := util.UTXOHashFromOutput(tests.Tx.TxIDChainHash(), in, 0)
+	require.NoError(t, err)
+
+	resp, err := store.GetSpend(ctx, &utxo.Spend{TxID: tests.Tx.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash})
+	require.NoError(t, err)
+	require.NotNil(t, resp.SpendingData, "the parent coin must stay spent by the stored transaction")
+	require.Equal(t, child.TxIDChainHash().String(), resp.SpendingData.TxID.String())
 }

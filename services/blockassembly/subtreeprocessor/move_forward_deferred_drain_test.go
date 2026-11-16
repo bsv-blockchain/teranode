@@ -430,9 +430,9 @@ func TestForEachDrainChunk_DequeuesAsItGoes(t *testing.T) {
 
 	var seen []int64
 
-	require.NoError(t, stp.forEachDrainChunk(2, func(batches []*TxBatch) error {
+	require.NoError(t, stp.forEachDrainChunk(2, func(batches []*TxBatch) (int, error) {
 		seen = append(seen, stp.queue.length())
-		return nil
+		return 0, nil
 	}))
 
 	require.Equal(t, []int64{4, 2, 0}, seen, "each chunk must leave the rest in the queue")

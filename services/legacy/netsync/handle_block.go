@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
+	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/blockassemblyutil"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -450,10 +451,14 @@ func (sm *SyncManager) legacyOutpointOnly(origin blockRequestOrigin, height uint
 // eligible block the cache cannot prove is refused before the RPC, and a parked
 // block-assembly gate is a local condition for every eligible block whether or
 // not it is proven, so the ServiceError wrap there must not depend on the proof.
+//
+// A store that nets below the checkpoint (utxoset) is always on this route, whatever the two
+// route settings say, because it takes those blocks only through quick validation.
 func (sm *SyncManager) unifiedRoute(height uint32) bool {
 	return sm.settings != nil &&
-		sm.settings.BlockValidation.LegacyUnifiedBelowCheckpoint &&
-		sm.settings.BlockValidation.OutpointOnlyBelowCheckpoint &&
+		((sm.settings.BlockValidation.LegacyUnifiedBelowCheckpoint &&
+			sm.settings.BlockValidation.OutpointOnlyBelowCheckpoint) ||
+			utxostore.NetsBelowCheckpoint(sm.utxoStore)) &&
 		sm.utxoStore != nil && sm.utxoStore.SupportsOutpointOnlySpend() &&
 		sm.chainParams != nil &&
 		model.BelowCheckpoint(sm.chainParams.Checkpoints, height)
@@ -466,11 +471,12 @@ func (sm *SyncManager) unifiedRoute(height uint32) bool {
 // BIP68 parent-height lookup, and BIP68 is skipped below the checkpoint;
 // (2) blocks are applied one at a time and a block is dispatched only once its
 // parent has committed, so a parent's outputs are never spent before the
-// parent's create has committed; (3) the legacy
-// path calls AddBlock with WithMinedSet(true)
-// (see buildAddBlockOpts in services/blockvalidation/BlockValidation.go), so
-// GetBlockIsMined is always instantly true and only costs a gRPC round-trip
-// per block.
+// parent's create has committed; (3) below the checkpoint the block goes
+// through quick validation, whose commitBlock (services/blockvalidation/quick_validate.go)
+// stores it with WithMinedSet(true) after stamping its transactions, so
+// GetBlockIsMined is instantly true and only costs a gRPC round-trip per block.
+// A block that falls back to full validation is tagged later by the
+// setMinedChan worker; (1) and (2) still hold for it.
 func (sm *SyncManager) needsParentMinedWait(origin blockRequestOrigin, height uint32) bool {
 	return height > 1 && !sm.legacyOutpointOnly(origin, height)
 }

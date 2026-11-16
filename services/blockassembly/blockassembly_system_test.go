@@ -22,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
@@ -474,17 +475,17 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx1, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}, false))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}, false))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}, false))
 
 	t.Log("Waiting for transactions to be processed...")
 
@@ -611,15 +612,15 @@ func TestShouldHandleReorg(t *testing.T) {
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx1, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}, false))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}, false))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}, false))
 
 	// Add Chain A block (lower difficulty)
 	t.Log("Adding Chain A block...")
@@ -875,15 +876,15 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx1, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}, false))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}, false))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}, false))
 
 	// Add Chain A blocks (lower difficulty)
 	t.Log("Adding Chain A blocks...")

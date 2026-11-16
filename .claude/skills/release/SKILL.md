@@ -108,10 +108,11 @@ Steps:
 If all pass:
 1. **Resolve the beta SHA**: `git rev-parse vX.Y.Z-beta-N`. This is what gets tagged — never the branch tip.
 2. **Verify nothing has landed on top of the beta**: `git rev-parse release/vX.Y` must equal the beta SHA. If they differ, **refuse to tag**: a hotfix landed after the beta soak and that commit hasn't been validated. Tell the user; require a fresh beta cut.
-3. Build release notes from the range `<prev-stable-tag>..<beta-tag>` (never `..HEAD`).
+3. **Build release notes** from `<prev-stable-tag>..<beta-tag>` (never `..HEAD`); see "Release notes format". For "Before you upgrade", select the `## [Unreleased]` entries in `CHANGELOG.md` on `main` whose PRs are all in that range. Match their `(#NNN)` against `git log --format=%s <prev-stable-tag>..<beta-tag>` and only that range: older history reuses PR numbers from the previous repo. If only some of an entry's PRs are in range, split it and select the in-range part.
 4. `gh release create vX.Y.Z --target <beta-sha> --title vX.Y.Z --notes-file <path>`. Explicit SHA target — bypasses branch-tip resolution entirely.
-5. Return tag URL.
-6. Offer to draft an Announcements discussion post (see "Discussion announcement" section below). Don't post automatically — show the draft, let user edit, confirm before publishing.
+5. **Cut the changelog section** (stable only, after the release is published). On a branch from `main`, move the step 3 selection under `## [X.Y.Z] - <YYYY-MM-DD>` / `### Breaking` above the previous version, dated with the published release date (UTC); split entries leave their other part under `[Unreleased]`. Nothing selected: the heading plus `No breaking changes.`. Open it as a docs PR against `main`. Never edit `CHANGELOG.md` on the release branch.
+6. Return tag URL.
+7. Offer to draft an Announcements discussion post (see "Discussion announcement" section below). Don't post automatically — show the draft, let user edit, confirm before publishing.
 
 ### `minor` — propose a minor version bump
 
@@ -136,6 +137,12 @@ Then suggest `release beta vX.(Y+1).0` for the first beta cut.
 GitHub's "Generate release notes" emits an empty body for release branches built via cherry-picks (the cherry-pick commits have no PR association on this branch). Always write notes manually:
 
 ```markdown
+## Before you upgrade
+
+<The `[Unreleased]` entries selected in `stable` step 3, quoted verbatim, or "No breaking changes.">
+
+Upgrading from an earlier version than <prev-stable-tag>? Read every section between yours and this one: https://github.com/bsv-blockchain/teranode/blob/main/CHANGELOG.md
+
 ## What's Changed
 
 * <commit headline> by @<author> in https://github.com/bsv-blockchain/teranode/pull/<PR>
@@ -144,6 +151,7 @@ GitHub's "Generate release notes" emits an empty body for release branches built
 **Full Changelog**: https://github.com/bsv-blockchain/teranode/compare/<prev-tag>...<new-tag>
 ```
 
+- "Before you upgrade" is required on stable releases and quotes the entries selected in `stable` step 3, the same ones step 5 moves to `[X.Y.Z]`; never paraphrase or drop one. Betas omit it.
 - Pull commit headlines from `git log --pretty='%s' <prev-tag>..<new-tag>`.
 - PR numbers come from the `(#NNN)` suffix already present in cherry-pick titles.
 - Author: `gh pr view <NNN> --json author -q .author.login`.
@@ -165,6 +173,7 @@ Use `gh api graphql` to create the discussion if the user approves. The category
 
 ## Upgrade priority
 <Critical | Recommended | Optional> — <one-sentence reason>.
+<"Read the breaking changes before upgrading: <release URL>#before-you-upgrade", or "No breaking changes.">
 
 ## Highlights
 - <Top change> (#PR)

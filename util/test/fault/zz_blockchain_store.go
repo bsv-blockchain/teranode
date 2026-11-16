@@ -4,7 +4,6 @@ package fault
 
 import (
 	"context"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
@@ -42,6 +41,19 @@ func (w *BlockchainStore) AssignBlockID(p0 context.Context, p1 *chainhash.Hash) 
 	return r0, r1
 }
 
+func (w *BlockchainStore) BlocksBetterThan(p0 context.Context, p1 model.BestTipKey, p2 *model.BestTipKey, p3 uint32, p4 uint32) (r0 []*model.BlockHeader, r1 []*model.BlockHeaderMeta, r2 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "BlocksBetterThan", true, p1, p2, p3, p4)
+	if err := c.before(); err != nil {
+		r2 = c.after(err)
+		return r0, r1, r2
+	}
+
+	r0, r1, r2 = w.inner.BlocksBetterThan(p0, p1, p2, p3, p4)
+	r2 = c.after(r2)
+
+	return r0, r1, r2
+}
+
 func (w *BlockchainStore) CheckBlockIsAncestorOfBlock(p0 context.Context, p1 []uint32, p2 *chainhash.Hash) (r0 bool, r1 error) {
 	c := w.plan.enter(p0, StoreBlockchainStore, "CheckBlockIsAncestorOfBlock", true, p1, p2)
 	if err := c.before(); err != nil {
@@ -66,6 +78,19 @@ func (w *BlockchainStore) CheckBlockIsInCurrentChain(p0 context.Context, p1 []ui
 	r1 = c.after(r1)
 
 	return r0, r1
+}
+
+func (w *BlockchainStore) ClearBestTipLowWater(p0 context.Context, p1 []byte) (r0 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "ClearBestTipLowWater", true, p1)
+	if err := c.before(); err != nil {
+		r0 = c.after(err)
+		return r0
+	}
+
+	r0 = w.inner.ClearBestTipLowWater(p0, p1)
+	r0 = c.after(r0)
+
+	return r0
 }
 
 func (w *BlockchainStore) ClearBlockMinedSet(p0 context.Context, p1 *chainhash.Hash) (r0 error) {
@@ -141,6 +166,19 @@ func (w *BlockchainStore) GetBestBlockHeader(p0 context.Context) (r0 *model.Bloc
 	}
 
 	r0, r1, r2 = w.inner.GetBestBlockHeader(p0)
+	r2 = c.after(r2)
+
+	return r0, r1, r2
+}
+
+func (w *BlockchainStore) GetBestBlockHeaderUncached(p0 context.Context) (r0 *model.BlockHeader, r1 *model.BlockHeaderMeta, r2 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "GetBestBlockHeaderUncached", true)
+	if err := c.before(); err != nil {
+		r2 = c.after(err)
+		return r0, r1, r2
+	}
+
+	r0, r1, r2 = w.inner.GetBestBlockHeaderUncached(p0)
 	r2 = c.after(r2)
 
 	return r0, r1, r2
@@ -263,6 +301,19 @@ func (w *BlockchainStore) GetBlockHeadersByHeight(p0 context.Context, p1 uint32,
 	return r0, r1, r2
 }
 
+func (w *BlockchainStore) GetBlockHeadersByParentLinks(p0 context.Context, p1 *chainhash.Hash, p2 uint64) (r0 []*model.BlockHeader, r1 []*model.BlockHeaderMeta, r2 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "GetBlockHeadersByParentLinks", true, p1, p2)
+	if err := c.before(); err != nil {
+		r2 = c.after(err)
+		return r0, r1, r2
+	}
+
+	r0, r1, r2 = w.inner.GetBlockHeadersByParentLinks(p0, p1, p2)
+	r2 = c.after(r2)
+
+	return r0, r1, r2
+}
+
 func (w *BlockchainStore) GetBlockHeadersFromHeight(p0 context.Context, p1 uint32, p2 uint32) (r0 []*model.BlockHeader, r1 []*model.BlockHeaderMeta, r2 error) {
 	c := w.plan.enter(p0, StoreBlockchainStore, "GetBlockHeadersFromHeight", true, p1, p2)
 	if err := c.before(); err != nil {
@@ -284,19 +335,6 @@ func (w *BlockchainStore) GetBlockHeadersFromOldest(p0 context.Context, p1 *chai
 	}
 
 	r0, r1, r2 = w.inner.GetBlockHeadersFromOldest(p0, p1, p2, p3)
-	r2 = c.after(r2)
-
-	return r0, r1, r2
-}
-
-func (w *BlockchainStore) GetBlockHeadersFromTill(p0 context.Context, p1 *chainhash.Hash, p2 *chainhash.Hash) (r0 []*model.BlockHeader, r1 []*model.BlockHeaderMeta, r2 error) {
-	c := w.plan.enter(p0, StoreBlockchainStore, "GetBlockHeadersFromTill", true, p1, p2)
-	if err := c.before(); err != nil {
-		r2 = c.after(err)
-		return r0, r1, r2
-	}
-
-	r0, r1, r2 = w.inner.GetBlockHeadersFromTill(p0, p1, p2)
 	r2 = c.after(r2)
 
 	return r0, r1, r2
@@ -375,19 +413,6 @@ func (w *BlockchainStore) GetBlocksByHeight(p0 context.Context, p1 uint32, p2 ui
 	}
 
 	r0, r1 = w.inner.GetBlocksByHeight(p0, p1, p2)
-	r1 = c.after(r1)
-
-	return r0, r1
-}
-
-func (w *BlockchainStore) GetBlocksByTime(p0 context.Context, p1 time.Time, p2 time.Time) (r0 [][]byte, r1 error) {
-	c := w.plan.enter(p0, StoreBlockchainStore, "GetBlocksByTime", true, p1, p2)
-	if err := c.before(); err != nil {
-		r1 = c.after(err)
-		return r0, r1
-	}
-
-	r0, r1 = w.inner.GetBlocksByTime(p0, p1, p2)
 	r1 = c.after(r1)
 
 	return r0, r1
@@ -476,19 +501,6 @@ func (w *BlockchainStore) GetFSMState(p0 context.Context) (r0 string, r1 error) 
 	r1 = c.after(r1)
 
 	return r0, r1
-}
-
-func (w *BlockchainStore) GetForkedBlockHeaders(p0 context.Context, p1 *chainhash.Hash, p2 uint64) (r0 []*model.BlockHeader, r1 []*model.BlockHeaderMeta, r2 error) {
-	c := w.plan.enter(p0, StoreBlockchainStore, "GetForkedBlockHeaders", true, p1, p2)
-	if err := c.before(); err != nil {
-		r2 = c.after(err)
-		return r0, r1, r2
-	}
-
-	r0, r1, r2 = w.inner.GetForkedBlockHeaders(p0, p1, p2)
-	r2 = c.after(r2)
-
-	return r0, r1, r2
 }
 
 func (w *BlockchainStore) GetHashOfAncestorBlock(p0 context.Context, p1 *chainhash.Hash, p2 int) (r0 *chainhash.Hash, r1 error) {

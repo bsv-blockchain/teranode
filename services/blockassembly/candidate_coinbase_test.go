@@ -120,6 +120,22 @@ func missTarget(t *testing.T, issued *model.MiningCandidate, version uint32) uin
 func searchNonce(t *testing.T, issued *model.MiningCandidate, version uint32, meetsTarget bool) uint32 {
 	t.Helper()
 
+	header := candidateHeader(t, issued, version)
+
+	for {
+		if ok, _, _ := header.HasMetTargetDifficulty(); ok == meetsTarget {
+			return header.Nonce
+		}
+
+		header.Nonce++
+	}
+}
+
+// candidateHeader builds the header a miner hashes for the issued candidate under the given
+// version, starting at nonce zero.
+func candidateHeader(t *testing.T, issued *model.MiningCandidate, version uint32) *model.BlockHeader {
+	t.Helper()
+
 	coinbase, err := bt.NewTxFromBytes(issued.CoinbaseTx)
 	require.NoError(t, err)
 
@@ -129,20 +145,12 @@ func searchNonce(t *testing.T, issued *model.MiningCandidate, version uint32, me
 	nBits, err := model.NewNBitFromSlice(issued.NBits)
 	require.NoError(t, err)
 
-	header := &model.BlockHeader{
+	return &model.BlockHeader{
 		Version:        version,
 		HashPrevBlock:  prev,
 		HashMerkleRoot: coinbase.TxIDChainHash(),
 		Timestamp:      issued.Time,
 		Bits:           *nBits,
-	}
-
-	for {
-		if ok, _, _ := header.HasMetTargetDifficulty(); ok == meetsTarget {
-			return header.Nonce
-		}
-
-		header.Nonce++
 	}
 }
 
@@ -183,11 +191,11 @@ func TestSubmitMiningSolution_CoinbaseLessMinesTheIssuedCoinbase(t *testing.T) {
 // TestSubmitMiningSolution_InvalidSolutionKeepsTheIssuedCoinbase pins that a consensus-invalid
 // solution leaves the job, and so its coinbase, in place, as bitcoin-sv leaves a candidate alone
 // after an invalid submitminingsolution. Deleting the job made the next poll for the same id, which
-// for an empty block is derived from the parent alone, build a coinbase with a new random
-// extranonce, so every other miner still hashing the first one failed the proof-of-work check and
-// deleted the job again. A share that misses the target, the commonest invalid solution, did worse:
-// block.Valid reports a miss as a processing error, so it also reset block assembly. A miner on the
-// original coinbase must still get its block.
+// every poll with the same candidate time shares, build a coinbase with a new random extranonce, so
+// every other miner still hashing the first one failed the proof-of-work check and deleted the job
+// again. A share that misses the target, the commonest invalid solution, did worse: block.Valid
+// reports a miss as a processing error, so it also reset block assembly. A miner on the original
+// coinbase must still get its block.
 func TestSubmitMiningSolution_InvalidSolutionKeepsTheIssuedCoinbase(t *testing.T) {
 	h := newCandidateCoinbaseHarness(t)
 	issued := h.issue(t)
@@ -440,4 +448,144 @@ func TestGenerateBlocks_NoMinerKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, block.CoinbaseTx.Outputs, 1)
 	require.Equal(t, want, block.CoinbaseTx.Outputs[0].LockingScript.Bytes(), "the coinbase must pay the requested address")
+}
+
+// TestGetMiningCandidate_EmptyBlockPollsKeepTheirOwnTime pins that each empty-block candidate keeps
+// the time it was issued with. A solution may omit its time, and the node then builds the header
+// with the job's. The empty-block candidate id used to come from the parent alone, so every poll at
+// one tip shared a job and each poll overwrote its time. A miner still hashing an earlier poll's
+// time got a header rebuilt with a later one, and the block failed the proof-of-work check.
+func TestGetMiningCandidate_EmptyBlockPollsKeepTheirOwnTime(t *testing.T) {
+	server, _ := setupServer(t)
+	require.NoError(t, server.blockAssembler.Start(t.Context()))
+
+	// With no transactions both polls take the empty-block path.
+	first, err := server.GetMiningCandidate(t.Context(), &blockassembly_api.GetMiningCandidateRequest{})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.CoinbaseTx)
+
+	firstTime := first.Time
+
+	var later *model.MiningCandidate
+
+	require.Eventually(t, func() bool {
+		later, err = server.GetMiningCandidate(t.Context(), &blockassembly_api.GetMiningCandidateRequest{})
+
+		return err == nil && later.Time != firstTime
+	}, 5*time.Second, 50*time.Millisecond, "the candidate time should advance with the clock")
+	require.NoError(t, err)
+	require.Equal(t, first.PreviousHash, later.PreviousHash, "both polls must be at the same tip")
+
+	// Mine on the first poll and submit the nonce alone, as a miner that keeps the candidate's
+	// time, version and coinbase may. The nonce meets the target at the first poll's time and misses
+	// it at the later poll's, so a header rebuilt with the later time fails every run, not half of
+	// them as an arbitrary regtest nonce would.
+	nonce := mineMissingAt(t, first, first.Version, later.Time)
+
+	resp, err := server.submitMiningSolution(t.Context(), &BlockSubmissionRequest{
+		SubmitMiningSolutionRequest: &blockassembly_api.SubmitMiningSolutionRequest{
+			Id:    first.Id,
+			Nonce: nonce,
+		},
+	})
+	require.NoError(t, err, "the first poll's job must still hold the time the miner hashed")
+	require.True(t, resp.Ok)
+
+	best, _, err := server.blockchainClient.GetBestBlockHeader(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, first.PreviousHash, best.HashPrevBlock.CloneBytes(), "the block must be stored on the candidate's parent")
+	require.Equal(t, firstTime, best.Timestamp, "the block must carry the time the miner hashed")
+	require.Equal(t, nonce, best.Nonce)
+}
+
+// mineMissingAt finds a nonce whose header, built as in mine, meets the target at the issued
+// candidate's time and misses it at otherTime.
+func mineMissingAt(t *testing.T, issued *model.MiningCandidate, version uint32, otherTime uint32) uint32 {
+	t.Helper()
+
+	header := candidateHeader(t, issued, version)
+	other := *header
+	other.Timestamp = otherTime
+
+	for {
+		other.Nonce = header.Nonce
+
+		ok, _, _ := header.HasMetTargetDifficulty()
+		otherOK, _, _ := other.HasMetTargetDifficulty()
+
+		if ok && !otherOK {
+			return header.Nonce
+		}
+
+		header.Nonce++
+	}
+}
+
+// TestGetMiningCandidate_EmptyBlockIdCoversParentAndTime pins both halves of the empty-block
+// candidate id through the real empty-block path and job store. Two polls with the same parent and
+// candidate time must share one job and one coinbase, so a miner handed the first poll is not moved
+// to a new extranonce by the second. A poll on a different parent with the same candidate time must
+// get a job of its own: a tip that arrives from the network does not clear the job store, so with
+// an id from the time alone the new tip's poll would overwrite the old job, and a nonce-only
+// solution from a miner still on the old tip would be rebuilt on the new parent and fail the
+// proof-of-work check. The median-time-past floor holds the candidate time fixed, since every block
+// here is stamped well ahead of the clock.
+func TestGetMiningCandidate_EmptyBlockIdCoversParentAndTime(t *testing.T) {
+	server, _ := setupServer(t)
+	require.NoError(t, server.blockAssembler.Start(t.Context()))
+
+	ctx := t.Context()
+	baseTime := uint32(time.Now().Add(100 * time.Minute).Unix())
+	tipA := buildFutureChain(t, ctx, server.blockchainClient, baseTime)
+
+	// tipB is a sibling of tipA: same parent, height and time, another nonce. Its ancestors carry
+	// the same timestamps, so its median-time-past, and with it the candidate time, is tipA's.
+	tipABlock, err := server.blockchainClient.GetBlock(ctx, tipA.Hash())
+	require.NoError(t, err)
+
+	tipB := *tipA
+	tipB.Nonce = tipA.Nonce + 1000
+	require.NoError(t, server.blockchainClient.AddBlock(ctx, &model.Block{
+		Header:           &tipB,
+		CoinbaseTx:       tipABlock.CoinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}, ""))
+
+	_, metaA, err := server.blockchainClient.GetBlockHeader(ctx, tipA.Hash())
+	require.NoError(t, err)
+
+	// poll does what GetMiningCandidate does on the empty-block path, at a chosen tip.
+	poll := func(tip *model.BlockHeader) *model.MiningCandidate {
+		candidate, subtrees, err := server.blockAssembler.generateEmptyBlockCandidate(ctx, tip, metaA.Height)
+		require.NoError(t, err)
+
+		id, err := chainhash.NewHash(candidate.Id)
+		require.NoError(t, err)
+
+		server.storeJobWithCoinbase(id, candidate, subtrees)
+
+		return candidate
+	}
+
+	first := poll(tipA)
+	second := poll(tipA)
+	onB := poll(&tipB)
+
+	require.Equal(t, baseTime+6, first.Time, "the median-time-past floor must hold the candidate time")
+	require.Equal(t, first.Time, second.Time)
+	require.Equal(t, first.Time, onB.Time, "both tips must give the same candidate time")
+	require.NotEmpty(t, first.CoinbaseTx)
+
+	require.Equal(t, first.Id, second.Id, "polls with the same parent and time must share a job")
+	require.Equal(t, first.CoinbaseTx, second.CoinbaseTx, "polls sharing a job must share its coinbase")
+
+	require.NotEqual(t, first.Id, onB.Id, "a poll on another parent must get a job of its own")
+
+	firstID, err := chainhash.NewHash(first.Id)
+	require.NoError(t, err)
+
+	held := server.jobStore.Get(*firstID)
+	require.NotNil(t, held, "the first tip's job must still be held")
+	require.Equal(t, tipA.Hash().CloneBytes(), held.Value().MiningCandidate.PreviousHash, "the first tip's job must keep its parent")
 }

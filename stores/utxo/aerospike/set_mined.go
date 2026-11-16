@@ -339,8 +339,9 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 	// tip lags behind the block being validated during catchup/sync, which would
 	// stamp the DAH too low and let the pruner delete the record before the
 	// retention window elapsed. Computed once for the batch (block height and
-	// retention are fixed for the duration of SetMinedMulti) and used for the
-	// child/pagination records; it matches the master DAH set by the setMined UDF.
+	// retention are fixed for the duration of SetMinedMulti). It is only the fallback
+	// for the child/pagination records: the setMined UDF floors the master stamp at its
+	// highest mined height, so the master's reported DAH is used when present.
 	dahHeight, dahEnabled := s.deleteAtHeightFor(minedBlockInfo.BlockHeight)
 
 	// Reuse a single LuaMapResponse across all per-record parses in this batch.
@@ -405,11 +406,16 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 			case LuaSignalDAHSet:
 				// Only set DAH if retention is configured
 				if dahEnabled {
-					childDAH.addSet(hashes[idx], res.ChildCount, dahHeight)
+					childDAHHeight := dahHeight
+					if reported, ok := reportedDeleteAtHeight(res); ok {
+						childDAHHeight = reported
+					}
+
+					childDAH.addSet(hashes[idx], res.ChildCount, childDAHHeight, reportedDAHVersion(res))
 					// External store DAH is disabled - lifecycle managed by pruner service
 				}
 			case LuaSignalDAHUnset:
-				childDAH.addUnset(hashes[idx], res.ChildCount)
+				childDAH.addUnset(hashes[idx], res.ChildCount, reportedDAHVersion(res))
 				// External store DAH is disabled - lifecycle managed by pruner service
 			}
 		}
@@ -423,7 +429,7 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 	var postErr error
 
 	if len(extraRecords) > 0 {
-		if err := s.IncrementSpentRecordsMulti(extraRecords, 1, minedBlockInfo.BlockHeight); err != nil {
+		if err := s.IncrementSpentRecordsMulti(ctx, extraRecords, 1, minedBlockInfo.BlockHeight); err != nil {
 			postErr = errors.Join(postErr, err)
 		}
 	}

@@ -2,6 +2,7 @@ package validator
 
 import (
 	"context"
+	"math"
 	"net/url"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	inmemorykafka "github.com/bsv-blockchain/teranode/util/kafka/in_memory_kafka"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -59,6 +61,8 @@ type fakeReader struct {
 	windowMillis int64
 	count        int64
 	maxItems     int64
+	heldCount    int64
+	maxHeld      int64
 	err          error
 }
 
@@ -89,6 +93,19 @@ func (f *fakeReader) setFill(count, maxItems, ageMillis int64) {
 	f.mu.Unlock()
 }
 
+// setHeld sets the reported held count, the reported in-memory limit and the reported head age
+// together, with the ingest queue empty and unbounded: the regime the held predicate is for.
+func (f *fakeReader) setHeld(held, maxHeld, ageMillis int64) {
+	f.mu.Lock()
+	f.count = 0
+	f.maxItems = 0
+	f.heldCount = held
+	f.maxHeld = maxHeld
+	f.ageMillis = ageMillis
+	f.err = nil
+	f.mu.Unlock()
+}
+
 func (f *fakeReader) GetBlockAssemblyQueueStats(_ context.Context) (blockassembly.QueueStats, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -100,6 +117,8 @@ func (f *fakeReader) GetBlockAssemblyQueueStats(_ context.Context) (blockassembl
 	return blockassembly.QueueStats{
 		Count:             f.count,
 		MaxItems:          f.maxItems,
+		HeldCount:         f.heldCount,
+		MaxHeld:           f.maxHeld,
 		HeadAge:           time.Duration(f.ageMillis) * time.Millisecond,
 		DoubleSpendWindow: time.Duration(f.windowMillis) * time.Millisecond,
 	}, nil
@@ -115,6 +134,7 @@ func testBackpressureConfig() settings.ValidatorKafkaBackpressureSettings {
 		MaxPause:            30 * time.Second,
 		MaxFailOpenCooldown: time.Second,
 		StaleErrorLimit:     3,
+		ResumeHeldPercent:   80,
 	}
 }
 
@@ -1233,4 +1253,473 @@ func TestBackpressure_OneItemPauseThresholdRequiresDrainToEmpty(t *testing.T) {
 	c.tick(ctx)
 	require.Equal(t, 1, consumer.resumeCount(), "an empty queue is cool by fill")
 	require.False(t, c.paused.Load())
+}
+
+// The ingest queue reads near empty while the in-memory limit is the bound that is full: nothing
+// is admitted, so nothing queues and the head age is 0. Without a held predicate the controller
+// has no signal and Kafka transactions are validated, written and dropped one by one.
+func TestBackpressure_PausesWhenInMemoryLimitIsFillingAndQueueIsEmpty(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	reader.setHeld(950, 1000, 0)
+	c.tick(ctx)
+
+	require.Equal(t, 1, consumer.pauseCount(), "a node near its in-memory limit must pause Kafka consumption")
+	require.True(t, c.paused.Load())
+
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount(), "and it does not flap")
+}
+
+func TestBackpressure_HeldOnlyPauseOutlastsMaxPauseAndReportsItsDuration(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	base := time.Unix(5000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	reader.setHeld(950, 1000, 0)
+	c.tick(ctx)
+	require.True(t, c.paused.Load())
+
+	now = base.Add(31 * time.Second)
+	c.tick(ctx)
+
+	require.True(t, c.paused.Load(), "a held-only pause is exempt from MaxPause")
+	require.Equal(t, 0, consumer.resumeCount())
+	require.Equal(t, 31.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("held")), "the gauge reports the elapsed pause under the held cause")
+
+	now = base.Add(10 * time.Minute)
+	c.tick(ctx)
+
+	require.True(t, c.paused.Load())
+	require.Equal(t, 600.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("held")), "there is no cap, so the gauge keeps growing")
+
+	reader.setHeld(400, 1000, 0)
+	c.tick(ctx)
+
+	require.False(t, c.paused.Load())
+	require.Equal(t, 0.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("held")), "the gauge returns to 0 on resume")
+}
+
+func TestBackpressure_HeldOnlyPauseFailsOpenAtTheTopicRetention(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+	c.heldMaxPause = 10 * time.Minute
+
+	base := time.Unix(5000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	reader.setHeld(950, 1000, 0)
+	c.tick(ctx)
+	require.True(t, c.paused.Load())
+
+	now = base.Add(10*time.Minute - time.Second)
+	c.tick(ctx)
+
+	require.True(t, c.paused.Load(), "a held-only pause holds until the topic retention")
+	require.Equal(t, 0, consumer.resumeCount())
+
+	now = base.Add(10 * time.Minute)
+	c.tick(ctx)
+
+	require.False(t, c.paused.Load(), "at the topic retention the broker has dropped the backlog, so the pause ends")
+	require.Equal(t, 1, consumer.resumeCount())
+	require.False(t, c.failOpenResumeAt.IsZero(), "the forced resume arms the cooldown so the next tick does not re-pause")
+}
+
+func TestKafkaTopicRetention(t *testing.T) {
+	tSettings := settings.NewSettings()
+	v := &Server{settings: tSettings}
+
+	tSettings.Kafka.ValidatorTxsConfig = nil
+	require.Equal(t, 10*time.Minute, v.kafkaTopicRetention(), "no topic URL uses the producer default")
+
+	for raw, want := range map[string]time.Duration{
+		"kafka://localhost:9092/txs?partitions=1":                 10 * time.Minute,
+		"kafka://localhost:9092/txs?partitions=1&retention=60000": time.Minute,
+		"kafka://localhost:9092/txs?retention=abc":                0,
+		"kafka://localhost:9092/txs?retention=-5":                 0,
+	} {
+		u, err := url.Parse(raw)
+		require.NoError(t, err)
+
+		tSettings.Kafka.ValidatorTxsConfig = u
+		require.Equal(t, want, v.kafkaTopicRetention(), raw)
+	}
+}
+
+func TestBackpressure_HeldPredicateInertWithoutALimit(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	reader.setHeld(10_000_000, 0, 0)
+	c.tick(ctx)
+
+	require.Equal(t, 0, consumer.pauseCount(), "no reported limit means no held signal, so the default behaves as before")
+}
+
+func TestBackpressure_HeldPredicateOffAtZeroPercent(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 0)
+
+	reader.setHeld(1000, 1000, 0)
+	c.tick(ctx)
+
+	require.Equal(t, 0, consumer.pauseCount(), "zero percent opts out of both fill predicates")
+}
+
+func TestBackpressure_HeldResumeNeedsTheHeldCountToFall(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	reader.setHeld(950, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+
+	reader.setHeld(900, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.resumeCount(), "a young head and an empty queue alone must not resume while the node is still held full")
+	require.True(t, c.paused.Load())
+
+	reader.setHeld(400, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "a block cleared the subtrees and the held count fell to half the pause threshold")
+	require.False(t, c.paused.Load())
+}
+
+func TestBackpressure_HeldAndQueueFillBothMustCoolToResume(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	reader.setFill(950, 1000, 10)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+
+	reader.mu.Lock()
+	reader.count = 0
+	reader.heldCount = 900
+	reader.maxHeld = 1000
+	reader.mu.Unlock()
+
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.resumeCount(), "the queue cooled but the held count has not")
+
+	reader.mu.Lock()
+	reader.heldCount = 100
+	reader.mu.Unlock()
+
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount())
+}
+
+func TestBackpressure_HeldSmallLimitPausesAtTwoAndResumesAtOne(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	c.maxHeld = 2
+	pause, resume := c.heldThresholds()
+	require.Equal(t, int64(2), pause, "the pause threshold is at least 2 at a tiny limit")
+	require.Equal(t, int64(1), resume, "the resume count is one below it, so it is reachable with the coinbase placeholder held")
+
+	reader.setHeld(1, 2, 0)
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.pauseCount(), "the placeholder alone is not a pause")
+
+	reader.setHeld(2, 2, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+	require.True(t, c.paused.Load())
+
+	reader.setHeld(1, 2, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "the held count fell below the pause threshold")
+	require.False(t, c.paused.Load())
+}
+
+func TestBackpressure_HeldResumesOnlyOnceTheCountReachesTheResumeBand(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	c.maxHeld = 1000
+	pause, resume := c.heldThresholds()
+	require.Equal(t, int64(900), pause)
+	require.Equal(t, int64(800), resume)
+
+	reader.setHeld(900, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount(), "the held count at the pause threshold pauses")
+
+	reader.setHeld(899, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.resumeCount(), "one below the pause threshold is inside the band, so a small block does not resume")
+
+	reader.setHeld(801, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.resumeCount(), "one above the resume threshold is still inside the band")
+
+	reader.setHeld(800, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "the held count at the resume threshold resumes")
+	require.False(t, c.paused.Load())
+}
+
+func TestBackpressure_HeldResumeThresholdStaysBelowPauseAndAboveZero(t *testing.T) {
+	c := newFillController(&fakeReader{}, &fakeConsumer{}, 90)
+
+	c.cfg.ResumeHeldPercent = 100
+	c.maxHeld = 1000
+	pause, resume := c.heldThresholds()
+	require.Equal(t, int64(900), pause)
+	require.Equal(t, int64(899), resume, "a resume percentage at or above the pause percentage still leaves a gap")
+
+	c.cfg.ResumeHeldPercent = 0
+	_, resume = c.heldThresholds()
+	require.Equal(t, int64(1), resume, "the coinbase placeholder keeps the held count at 1 or more, so 0 would never be reached")
+}
+
+func TestBackpressure_HeldPauseLogsTheHeldNumbers(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	logger := &capturingLogger{}
+
+	initPrometheusMetrics()
+
+	cfg := testBackpressureConfig()
+	cfg.PauseQueueFillPercent = 90
+	c := newKafkaBackpressureController(logger, cfg, 0, reader, consumer)
+
+	reader.setHeld(950, 1000, 0)
+	c.tick(ctx)
+
+	require.Equal(t, 1, consumer.pauseCount())
+	require.Contains(t, logger.joined(), "held 950/1000 >= 900 transactions", "a pause caused by the held count names the held numbers")
+	require.NotContains(t, logger.joined(), "queue fill 0/0 >= ", "and not queue-fill numbers that did not fire")
+}
+
+func TestBackpressure_HeldAndAgeBothHotNamesTheAge(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	logger := &capturingLogger{}
+
+	initPrometheusMetrics()
+
+	cfg := testBackpressureConfig()
+	cfg.PauseQueueFillPercent = 90
+	c := newKafkaBackpressureController(logger, cfg, 0, reader, consumer)
+
+	reader.setHeld(950, 1000, 600)
+	c.tick(ctx)
+
+	require.Equal(t, 1, consumer.pauseCount())
+	require.Contains(t, logger.joined(), "queue-head age 600ms >= pause watermark 500ms", "age fired, so the log names the age")
+	require.NotContains(t, logger.joined(), "still below pause watermark", "and does not claim the age is below its watermark")
+}
+
+func TestBackpressure_HeldPauseIsExemptFromMaxPause(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	base := time.Unix(1000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	reader.setHeld(950, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+
+	now = base.Add(31 * time.Second)
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.resumeCount(), "the held count clears only on a block, so resuming at the cap only drops every transaction")
+	require.True(t, c.paused.Load())
+
+	now = base.Add(10 * time.Minute)
+	c.tick(ctx)
+	require.True(t, c.paused.Load(), "and it holds for as long as the held count does")
+
+	reader.setHeld(100, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "a block connected and the held count fell")
+}
+
+func TestBackpressure_HeldAndAgeHotStillFailsOpenAtMaxPause(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	base := time.Unix(1000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	reader.setHeld(950, 1000, 600)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+
+	now = base.Add(31 * time.Second)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "an age-hot pause keeps the cap even while the held count is also hot")
+	require.False(t, c.paused.Load())
+}
+
+func TestBackpressure_HeldAndQueueFillHotStillFailsOpenAtMaxPause(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	base := time.Unix(1000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	reader.setFill(950, 1000, 10)
+	reader.mu.Lock()
+	reader.heldCount = 950
+	reader.maxHeld = 1000
+	reader.mu.Unlock()
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+
+	now = base.Add(31 * time.Second)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "a queue-fill-hot pause keeps the cap even while the held count is also hot")
+}
+
+func TestBackpressure_HeldThresholdsDoNotOverflowAtAnUnlimitedLimit(t *testing.T) {
+	c := newFillController(&fakeReader{}, &fakeConsumer{}, 90)
+	c.maxHeld = math.MaxInt64
+
+	pause, resume := c.heldThresholds()
+
+	require.Greater(t, pause, int64(8_000_000_000_000_000_000), "90 percent of the saturated limit, not the 2 an overflowed product floors to")
+	require.Less(t, pause, int64(math.MaxInt64))
+	require.Greater(t, resume, int64(7_000_000_000_000_000_000), "80 percent of the saturated limit, not the 1 an overflowed product floors to")
+	require.Less(t, resume, pause)
+}
+
+func TestBackpressure_PauseThatBecomesHeldOnlyIsRelabelledHeld(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	base := time.Unix(7000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	reader.setFill(950, 1000, 10)
+	reader.mu.Lock()
+	reader.heldCount = 950
+	reader.maxHeld = 1000
+	reader.mu.Unlock()
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+	require.Equal(t, "fill", c.pauseCause, "the queue fill fired first, so the pause starts under that cause")
+
+	now = base.Add(5 * time.Second)
+	c.tick(ctx)
+	require.Equal(t, 5.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("fill")))
+
+	reader.setHeld(950, 1000, 0)
+	now = base.Add(31 * time.Second)
+	c.tick(ctx)
+
+	require.True(t, c.paused.Load(), "the queue cooled and only the held count is hot, so the pause is exempt from MaxPause")
+	require.Equal(t, 0, consumer.resumeCount())
+	require.Equal(t, "held", c.pauseCause)
+	require.Equal(t, 31.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("held")), "the held series reports the elapsed time, so the recommended alert fires")
+	require.Equal(t, 0.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("fill")), "the old cause no longer reports a pause")
+
+	reader.setHeld(800, 1000, 0)
+	c.tick(ctx)
+
+	require.False(t, c.paused.Load())
+	require.Equal(t, 0.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("held")), "the resume clears the series it relabelled")
+}
+
+func TestBackpressure_WarnsOnceWhenOffWithInMemoryLimit(t *testing.T) {
+	ctx := context.Background()
+
+	newServer := func(enabled bool, maxHeld int64) (*Server, *capturingLogger, *blockassembly.Mock) {
+		tSettings := settings.NewSettings()
+		tSettings.Validator.KafkaBackpressure.Enabled = enabled
+
+		logger := &capturingLogger{}
+		baMock := blockassembly.NewMock()
+		baMock.On("GetBlockAssemblyQueueStats", mock.Anything).Return(blockassembly.QueueStats{MaxHeld: maxHeld}, nil)
+
+		return &Server{logger: logger, settings: tSettings, blockAssemblyClient: baMock}, logger, baMock
+	}
+
+	t.Run("off with a limit warns once", func(t *testing.T) {
+		v, logger, baMock := newServer(false, 1000)
+
+		v.warnBackpressureOffWithLimit(ctx)
+		v.warnBackpressureOffWithLimit(ctx)
+
+		require.Len(t, logger.lines, 1)
+		require.Contains(t, logger.lines[0], "validator_kafkaBackpressureEnabled=true")
+		require.Contains(t, logger.lines[0], "blockassembly_maxTransactionsInMemory=1000")
+		require.Len(t, baMock.Calls, 1, "the limit is read once")
+	})
+
+	t.Run("off without a limit stays quiet", func(t *testing.T) {
+		v, logger, _ := newServer(false, 0)
+
+		v.warnBackpressureOffWithLimit(ctx)
+
+		require.Empty(t, logger.lines)
+	})
+
+	t.Run("enabled stays quiet and reads nothing", func(t *testing.T) {
+		v, logger, baMock := newServer(true, 1000)
+
+		v.warnBackpressureOffWithLimit(ctx)
+
+		require.Empty(t, logger.lines)
+		require.Empty(t, baMock.Calls)
+	})
+
+	t.Run("a failed read retries on the next call", func(t *testing.T) {
+		tSettings := settings.NewSettings()
+		tSettings.Validator.KafkaBackpressure.Enabled = false
+
+		logger := &capturingLogger{}
+		baMock := blockassembly.NewMock()
+		baMock.On("GetBlockAssemblyQueueStats", mock.Anything).Return(blockassembly.QueueStats{}, errors.NewProcessingError("down")).Once()
+		baMock.On("GetBlockAssemblyQueueStats", mock.Anything).Return(blockassembly.QueueStats{MaxHeld: 5}, nil)
+
+		v := &Server{logger: logger, settings: tSettings, blockAssemblyClient: baMock}
+
+		v.warnBackpressureOffWithLimit(ctx)
+		require.Empty(t, logger.lines)
+
+		v.warnBackpressureOffWithLimit(ctx)
+		require.Len(t, logger.lines, 1)
+	})
 }

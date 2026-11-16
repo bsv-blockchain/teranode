@@ -32,6 +32,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
@@ -41,6 +42,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	teranodetestutil "github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/jarcoal/httpmock"
+	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1882,4 +1884,58 @@ func TestBlessMissing_AlreadyMinedNamesNoStoreID(t *testing.T) {
 	require.NotContains(t, err.Error(), "77123")
 
 	require.Contains(t, fmt.Sprint(logger.warned()), "77123", "the id is still recorded")
+}
+
+// metaRefusingStore fails every .subtreeMeta write and passes everything else through.
+type metaRefusingStore struct {
+	blob.Store
+}
+
+func (s *metaRefusingStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...bloboptions.FileOption) error {
+	if fileType == fileformat.FileTypeSubtreeMeta {
+		return errors.NewStorageError("meta write refused for the test")
+	}
+
+	return s.Store.Set(ctx, key, fileType, value, opts...)
+}
+
+// TestStoreSubtreeFiles_FailedMetaWriteStoresNoSubtree pins the write order in
+// storeSubtreeFiles. The .subtree file is what every later check reads as "this subtree
+// is done", so a failed meta write must not leave one behind: written in parallel, it
+// did, and the subtree stayed without a meta for good.
+func TestStoreSubtreeFiles_FailedMetaWriteStoresNoSubtree(t *testing.T) {
+	ctx := context.Background()
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(chainhash.HashH([]byte{0x01}), 1, 100))
+	require.NoError(t, subtree.AddNode(chainhash.HashH([]byte{0x02}), 1, 100))
+
+	subtreeHash := subtree.RootHash()
+
+	memStore := blobmemory.New()
+
+	utxoStore := &utxo.MockUtxostore{}
+	utxoStore.On("GetBlockHeight").Return(uint32(100)).Maybe()
+
+	server := &Server{
+		logger:       ulogger.TestLogger{},
+		settings:     test.CreateBaseTestSettings(t),
+		subtreeStore: &metaRefusingStore{Store: memStore},
+		utxoStore:    utxoStore,
+	}
+
+	meta := subtreepkg.NewSubtreeMeta(subtree)
+	for i := range subtree.Nodes {
+		parent := chainhash.HashH([]byte{byte(i), 0xbb})
+		require.NoError(t, meta.SetTxInpoints(i, subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{parent}, []uint32{1, 0})))
+	}
+
+	err = server.storeSubtreeFiles(ctx, gocore.NewStat("test"), subtreeHash, subtree, meta)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to store subtree meta")
+
+	exists, err := memStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.False(t, exists, "a subtree whose meta write failed must not be stored, or nothing writes the meta again")
 }

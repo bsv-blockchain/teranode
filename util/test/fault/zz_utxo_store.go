@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 )
 
 // UTXOStore decorates utxo.Store with the rules of a Plan. Every method is delegated explicitly, so a
@@ -90,6 +91,19 @@ func (w *UTXOStore) CompleteConflictIntent(p0 context.Context, p1 chainhash.Hash
 	r0 = c.after(r0)
 
 	return r0
+}
+
+func (w *UTXOStore) ConflictingTxHashes(p0 context.Context) (r0 []chainhash.Hash, r1 bool, r2 error) {
+	c := w.plan.enter(p0, StoreUTXO, "ConflictingTxHashes", true)
+	if err := c.before(); err != nil {
+		r2 = c.after(err)
+		return r0, r1, r2
+	}
+
+	r0, r1, r2 = w.inner.ConflictingTxHashes(p0)
+	r2 = c.after(r2)
+
+	return r0, r1, r2
 }
 
 func (w *UTXOStore) Delete(p0 context.Context, p1 *chainhash.Hash) (r0 error) {
@@ -278,6 +292,19 @@ func (w *UTXOStore) Health(p0 context.Context, p1 bool) (r0 int, r1 string, r2 e
 	return r0, r1, r2
 }
 
+func (w *UTXOStore) LoadConflictRecovery(p0 context.Context, p1 chainhash.Hash) (r0 *utxo.ConflictRecovery, r1 error) {
+	c := w.plan.enter(p0, StoreUTXO, "LoadConflictRecovery", true, p1)
+	if err := c.before(); err != nil {
+		r1 = c.after(err)
+		return r0, r1
+	}
+
+	r0, r1 = w.inner.LoadConflictRecovery(p0, p1)
+	r1 = c.after(r1)
+
+	return r0, r1
+}
+
 func (w *UTXOStore) MarkTransactionsOnLongestChain(p0 context.Context, p1 []chainhash.Hash, p2 bool) (r0 error) {
 	c := w.plan.enter(p0, StoreUTXO, "MarkTransactionsOnLongestChain", true, p1, p2)
 	if err := c.before(); err != nil {
@@ -382,6 +409,19 @@ func (w *UTXOStore) ReAssignUTXO(p0 context.Context, p1 *utxo.Spend, p2 *utxo.Sp
 	return r0
 }
 
+func (w *UTXOStore) ReleaseConflictLocks(p0 context.Context, p1 chainhash.Hash, p2 []chainhash.Hash) (r0 error) {
+	c := w.plan.enter(p0, StoreUTXO, "ReleaseConflictLocks", true, p1, p2)
+	if err := c.before(); err != nil {
+		r0 = c.after(err)
+		return r0
+	}
+
+	r0 = w.inner.ReleaseConflictLocks(p0, p1, p2)
+	r0 = c.after(r0)
+
+	return r0
+}
+
 func (w *UTXOStore) RemoveBlockIDs(p0 context.Context, p1 []utxo.BlockIDsRemoval) (r0 error) {
 	c := w.plan.enter(p0, StoreUTXO, "RemoveBlockIDs", true, p1)
 	if err := c.before(); err != nil {
@@ -403,6 +443,32 @@ func (w *UTXOStore) RemoveFromConflictingChildren(p0 context.Context, p1 []utxo.
 	}
 
 	r0 = w.inner.RemoveFromConflictingChildren(p0, p1)
+	r0 = c.after(r0)
+
+	return r0
+}
+
+func (w *UTXOStore) RestoreConflictSpends(p0 context.Context, p1 []*utxo.Spend, p2 uint32) (r0 error) {
+	c := w.plan.enter(p0, StoreUTXO, "RestoreConflictSpends", true, p1, p2)
+	if err := c.before(); err != nil {
+		r0 = c.after(err)
+		return r0
+	}
+
+	r0 = w.inner.RestoreConflictSpends(p0, p1, p2)
+	r0 = c.after(r0)
+
+	return r0
+}
+
+func (w *UTXOStore) SaveConflictRecovery(p0 context.Context, p1 chainhash.Hash, p2 *utxo.ConflictRecovery) (r0 error) {
+	c := w.plan.enter(p0, StoreUTXO, "SaveConflictRecovery", true, p1, p2)
+	if err := c.before(); err != nil {
+		r0 = c.after(err)
+		return r0
+	}
+
+	r0 = w.inner.SaveConflictRecovery(p0, p1, p2)
 	r0 = c.after(r0)
 
 	return r0
@@ -442,6 +508,19 @@ func (w *UTXOStore) SetBlockState(p0 uint32, p1 uint32) (r0 error) {
 	}
 
 	r0 = w.inner.SetBlockState(p0, p1)
+	r0 = c.after(r0)
+
+	return r0
+}
+
+func (w *UTXOStore) SetConflictLocks(p0 context.Context, p1 chainhash.Hash, p2 []chainhash.Hash, p3 bool) (r0 error) {
+	c := w.plan.enter(p0, StoreUTXO, "SetConflictLocks", true, p1, p2, p3)
+	if err := c.before(); err != nil {
+		r0 = c.after(err)
+		return r0
+	}
+
+	r0 = w.inner.SetConflictLocks(p0, p1, p2, p3)
 	r0 = c.after(r0)
 
 	return r0
@@ -523,6 +602,29 @@ func (w *UTXOStore) SpendAndCreateMulti(p0 context.Context, p1 []*bt.Tx, p2 uint
 	r1 = c.after(r1)
 
 	return r0, r1
+}
+
+func (w *UTXOStore) SpendsMadeBy(p0 context.Context, p1 chainhash.Hash) (r0 []*utxo.Spend, r1 error) {
+	c := w.plan.enter(p0, StoreUTXO, "SpendsMadeBy", true, p1)
+	if err := c.before(); err != nil {
+		r1 = c.after(err)
+		return r0, r1
+	}
+
+	r0, r1 = w.inner.SpendsMadeBy(p0, p1)
+	r1 = c.after(r1)
+
+	return r0, r1
+}
+
+func (w *UTXOStore) Stamper() (r0 pruner.Stamper) {
+	c := w.plan.enter(nil, StoreUTXO, "Stamper", false)
+	_ = c.before()
+
+	r0 = w.inner.Stamper()
+	c.after(nil)
+
+	return r0
 }
 
 func (w *UTXOStore) SupportsOutpointOnlySpend() (r0 bool) {

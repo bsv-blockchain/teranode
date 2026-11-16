@@ -66,6 +66,19 @@ func (w *BlockchainClient) AssignBlockID(p0 context.Context, p1 *chainhash.Hash)
 	return r0, r1
 }
 
+func (w *BlockchainClient) BlocksBetterThan(p0 context.Context, p1 model.BestTipKey, p2 *model.BestTipKey, p3 uint32, p4 uint32) (r0 []*model.BlockHeader, r1 []*model.BlockHeaderMeta, r2 bool, r3 error) {
+	c := w.plan.enter(p0, StoreBlockchain, "BlocksBetterThan", true, p1, p2, p3, p4)
+	if err := c.before(); err != nil {
+		r3 = c.after(err)
+		return r0, r1, r2, r3
+	}
+
+	r0, r1, r2, r3 = w.inner.BlocksBetterThan(p0, p1, p2, p3, p4)
+	r3 = c.after(r3)
+
+	return r0, r1, r2, r3
+}
+
 func (w *BlockchainClient) CancelBlobDeletion(p0 context.Context, p1 []byte, p2 string, p3 storetypes.BlobStoreType) (r0 bool, r1 error) {
 	c := w.plan.enter(p0, StoreBlockchain, "CancelBlobDeletion", true, p1, p2, p3)
 	if err := c.before(); err != nil {
@@ -116,6 +129,19 @@ func (w *BlockchainClient) CheckBlockIsInCurrentChain(p0 context.Context, p1 []u
 	r1 = c.after(r1)
 
 	return r0, r1
+}
+
+func (w *BlockchainClient) ClearBestTipLowWater(p0 context.Context, p1 []byte) (r0 error) {
+	c := w.plan.enter(p0, StoreBlockchain, "ClearBestTipLowWater", true, p1)
+	if err := c.before(); err != nil {
+		r0 = c.after(err)
+		return r0
+	}
+
+	r0 = w.inner.ClearBestTipLowWater(p0, p1)
+	r0 = c.after(r0)
+
+	return r0
 }
 
 func (w *BlockchainClient) ClearBlockMinedSet(p0 context.Context, p1 *chainhash.Hash) (r0 error) {
@@ -178,6 +204,19 @@ func (w *BlockchainClient) GetBestBlockHeader(p0 context.Context) (r0 *model.Blo
 	}
 
 	r0, r1, r2 = w.inner.GetBestBlockHeader(p0)
+	r2 = c.after(r2)
+
+	return r0, r1, r2
+}
+
+func (w *BlockchainClient) GetBestBlockHeaderUncached(p0 context.Context) (r0 *model.BlockHeader, r1 *model.BlockHeaderMeta, r2 error) {
+	c := w.plan.enter(p0, StoreBlockchain, "GetBestBlockHeaderUncached", true)
+	if err := c.before(); err != nil {
+		r2 = c.after(err)
+		return r0, r1, r2
+	}
+
+	r0, r1, r2 = w.inner.GetBestBlockHeaderUncached(p0)
 	r2 = c.after(r2)
 
 	return r0, r1, r2
@@ -313,6 +352,19 @@ func (w *BlockchainClient) GetBlockHeadersByHeight(p0 context.Context, p1 uint32
 	return r0, r1, r2
 }
 
+func (w *BlockchainClient) GetBlockHeadersByParentLinks(p0 context.Context, p1 *chainhash.Hash, p2 uint64) (r0 []*model.BlockHeader, r1 []*model.BlockHeaderMeta, r2 error) {
+	c := w.plan.enter(p0, StoreBlockchain, "GetBlockHeadersByParentLinks", true, p1, p2)
+	if err := c.before(); err != nil {
+		r2 = c.after(err)
+		return r0, r1, r2
+	}
+
+	r0, r1, r2 = w.inner.GetBlockHeadersByParentLinks(p0, p1, p2)
+	r2 = c.after(r2)
+
+	return r0, r1, r2
+}
+
 func (w *BlockchainClient) GetBlockHeadersFromCommonAncestor(p0 context.Context, p1 *chainhash.Hash, p2 []chainhash.Hash, p3 uint32) (r0 []*model.BlockHeader, r1 []*model.BlockHeaderMeta, r2 error) {
 	c := w.plan.enter(p0, StoreBlockchain, "GetBlockHeadersFromCommonAncestor", true, p1, p2, p3)
 	if err := c.before(); err != nil {
@@ -334,32 +386,6 @@ func (w *BlockchainClient) GetBlockHeadersFromHeight(p0 context.Context, p1 uint
 	}
 
 	r0, r1, r2 = w.inner.GetBlockHeadersFromHeight(p0, p1, p2)
-	r2 = c.after(r2)
-
-	return r0, r1, r2
-}
-
-func (w *BlockchainClient) GetBlockHeadersFromOldest(p0 context.Context, p1 *chainhash.Hash, p2 *chainhash.Hash, p3 uint64) (r0 []*model.BlockHeader, r1 []*model.BlockHeaderMeta, r2 error) {
-	c := w.plan.enter(p0, StoreBlockchain, "GetBlockHeadersFromOldest", true, p1, p2, p3)
-	if err := c.before(); err != nil {
-		r2 = c.after(err)
-		return r0, r1, r2
-	}
-
-	r0, r1, r2 = w.inner.GetBlockHeadersFromOldest(p0, p1, p2, p3)
-	r2 = c.after(r2)
-
-	return r0, r1, r2
-}
-
-func (w *BlockchainClient) GetBlockHeadersFromTill(p0 context.Context, p1 *chainhash.Hash, p2 *chainhash.Hash) (r0 []*model.BlockHeader, r1 []*model.BlockHeaderMeta, r2 error) {
-	c := w.plan.enter(p0, StoreBlockchain, "GetBlockHeadersFromTill", true, p1, p2)
-	if err := c.before(); err != nil {
-		r2 = c.after(err)
-		return r0, r1, r2
-	}
-
-	r0, r1, r2 = w.inner.GetBlockHeadersFromTill(p0, p1, p2)
 	r2 = c.after(r2)
 
 	return r0, r1, r2
@@ -555,19 +581,6 @@ func (w *BlockchainClient) GetLastNInvalidBlocks(p0 context.Context, p1 int64) (
 	r1 = c.after(r1)
 
 	return r0, r1
-}
-
-func (w *BlockchainClient) GetLatestBlockHeaderFromBlockLocator(p0 context.Context, p1 *chainhash.Hash, p2 []chainhash.Hash) (r0 *model.BlockHeader, r1 *model.BlockHeaderMeta, r2 error) {
-	c := w.plan.enter(p0, StoreBlockchain, "GetLatestBlockHeaderFromBlockLocator", true, p1, p2)
-	if err := c.before(); err != nil {
-		r2 = c.after(err)
-		return r0, r1, r2
-	}
-
-	r0, r1, r2 = w.inner.GetLatestBlockHeaderFromBlockLocator(p0, p1, p2)
-	r2 = c.after(r2)
-
-	return r0, r1, r2
 }
 
 func (w *BlockchainClient) GetMedianTimePastForHeights(p0 context.Context, p1 []uint32) (r0 []uint32, r1 error) {

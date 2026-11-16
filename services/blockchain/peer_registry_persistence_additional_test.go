@@ -223,6 +223,29 @@ func TestCentralizedPeerRegistry_Persistence_LoadReplacesExistingState(t *testin
 	require.False(t, ok)
 }
 
+// TestCentralizedPeerRegistry_Persistence_LoadSanitizesCatchupError pins that a blob
+// saved by a binary that stored catchup errors unsanitized cannot bring an IP literal
+// back into the served registry.
+func TestCentralizedPeerRegistry_Persistence_LoadSanitizesCatchupError(t *testing.T) {
+	store := newTestBlobStore(t)
+	ctx := context.Background()
+
+	peers := []*PeerInfo{{
+		ID:               "old-peer",
+		LastSeen:         time.Now(),
+		LastCatchupError: "dial tcp 192.168.7.9:8090: connect: connection refused",
+	}}
+	require.NoError(t, savePeerRegistry(ctx, store, peers, nil))
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	require.NoError(t, r.Load(ctx, store, 24*time.Hour))
+
+	got, ok := r.Get("old-peer")
+	require.True(t, ok)
+	require.NotContains(t, got.LastCatchupError, "192.168.7.9")
+	require.Contains(t, got.LastCatchupError, "connection refused")
+}
+
 func TestSavePeerRegistry_EnvelopeShape(t *testing.T) {
 	store := newTestBlobStore(t)
 	ctx := context.Background()

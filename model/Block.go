@@ -138,8 +138,8 @@ type Block struct {
 	// blockvalidation service sets this (via SetNodeAllocator); model-internal
 	// callers leave it nil and behaviour matches legacy make() allocation.
 	nodeAllocator subtreepkg.NodeAllocator
-	// checkpointConfirmedAncestor records whether this block is provably on the main
-	// chain that has already reached and matched the highest hardcoded checkpoint. It is
+	// checkpointConfirmedAncestor records whether this block is provably an ancestor of the
+	// stored block with the highest hardcoded checkpoint hash, by its stored headers. It is
 	// the caller-supplied ancestry predicate that, together with store fast-path support,
 	// gates the below-checkpoint coinbase no-inflation skip in checkBlockRewardAndFees.
 	// Only the blockvalidation service sets it (via SetCheckpointConfirmedAncestor); it
@@ -166,8 +166,8 @@ func (b *Block) NodeAllocator() subtreepkg.NodeAllocator {
 	return b.nodeAllocator
 }
 
-// SetCheckpointConfirmedAncestor records whether this block is provably part of the
-// main chain that has already reached and matched the highest hardcoded checkpoint.
+// SetCheckpointConfirmedAncestor records whether this block is provably an ancestor of the
+// stored block with the highest hardcoded checkpoint hash, by its stored headers.
 // Only the blockvalidation service sets this (from BlockValidation.checkpointConfirmed-
 // Ancestor); it is the caller-supplied ancestry predicate that gates the below-checkpoint
 // coinbase no-inflation skip in checkBlockRewardAndFees. Leaving it unset (false) forces
@@ -1144,6 +1144,10 @@ func (b *Block) ValidWithBinding(ctx context.Context, logger ulogger.Logger, sub
 		}
 	}
 
+	if err = b.CheckCoinbaseOnlyBodyCount(); err != nil {
+		return false, merkleRootChecked, err
+	}
+
 	return true, merkleRootChecked, nil
 }
 
@@ -1195,7 +1199,7 @@ func IsConsensusCoinbase(tx *bt.Tx) bool {
 // length is within the consensus bound: parity with bitcoin-sv CheckCoinbase (bad-cb-length),
 // inclusive 2 <= size <= params.MaxCoinbaseScriptSigSize. The caller must guarantee coinbaseTx has
 // at least one input before calling (Valid's step 4b above relies on IsCoinbase() for that; the
-// quick-validation path's own nil/empty check gives the same guarantee) — Inputs[0] is indexed
+// quick-validation path relies on its own post-binding IsConsensusCoinbase checks) — Inputs[0] is indexed
 // unconditionally. A nil UnlockingScript is treated as length 0 and fails the lower bound,
 // matching an empty scriptSig.
 //
@@ -1230,8 +1234,8 @@ func CoinbaseScriptSigLengthInBounds(coinbaseTx *bt.Tx, params *chaincfg.Params)
 // quick-validation path (services/blockvalidation/quick_validate.go), which never calls Valid, calls
 // it at both of its entry points — so the three routes cannot drift.
 //
-// The caller must guarantee a non-nil CoinbaseTx: Valid's step 4 and quick validation's own
-// nil/empty coinbase precheck both do.
+// The caller must guarantee a non-nil CoinbaseTx: Valid's step 4 and blockvalidation's
+// coinbaseNotDelivered precheck both do.
 func (b *Block) CheckCoinbaseOnlyBodyBound() error {
 	if len(b.Subtrees) != 0 {
 		return nil
@@ -1241,16 +1245,45 @@ func (b *Block) CheckCoinbaseOnlyBodyBound() error {
 		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but the header merkle root is not the coinbase txid", b.String())
 	}
 
-	// Defence in depth: a self-contradictory body (no subtrees but a transaction count above one).
-	// This is NOT the bound — TransactionCount is the same untrusted wire varint the emptied subtree
-	// list came from, so an attacker can simply set it to 1 — but it is a free consistency check on
-	// a shape that can never be honest.
-	if b.TransactionCount > 1 {
+	// A 64-byte transaction can be an inner merkle node instead of a leaf. An honest block's merkle
+	// root is the double SHA-256 of its two 32-byte child hashes, and those 64 bytes parse as a
+	// transaction once three of them take the right values: with no inputs, bytes 4, 5 and 14; with
+	// one input and no outputs, bytes 4, 41 and 59. In a two-transaction block both child hashes are
+	// transaction ids the miner chooses, so about 2^24 hashes of grinding finds such a block. Served
+	// as a coinbase-only body, those bytes match the honest header here, and every shape check after
+	// the binding would then condemn a valid block's hash. So a 64-byte coinbase does not bind.
+	//
+	// Except a consensus coinbase. Its null prevout fixes bytes 5 to 40, which spans 27 bytes of the
+	// left child hash, and no miner can grind a hash into that. A 64-byte consensus coinbase (a
+	// four-byte height push and an empty output script is exactly 64 bytes) is the miner's own
+	// single-transaction block, and SV Node has no 64-byte rule, so it must stay acceptable.
+	if b.CoinbaseTx.Size() == innerMerkleNodeSize && !IsConsensusCoinbase(b.CoinbaseTx) {
+		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees and its only transaction is 64 bytes and not a coinbase, so it may be an inner merkle node rather than the committed body", b.String())
+	}
+
+	return nil
+}
+
+// CheckCoinbaseOnlyBodyCount rejects a body with no subtrees that does not claim exactly one
+// transaction. Such a body holds the coinbase and nothing else, so zero is as false as two. It is a
+// no-op for a body that carries subtrees.
+//
+// This is a consistency check, not part of the binding. TransactionCount is untrusted wire data the
+// header does not commit to, so it says nothing about what the miner committed. Callers run it last,
+// after every consensus check, so a peer cannot spare an invalid block by writing a false count.
+// It only stops a body that is otherwise valid from being stored with a false count. Corrupt, so the
+// block is fetched again and the serving peer takes a strike.
+func (b *Block) CheckCoinbaseOnlyBodyCount() error {
+	if len(b.Subtrees) == 0 && b.TransactionCount != 1 {
 		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but claims %d transactions", b.String(), b.TransactionCount)
 	}
 
 	return nil
 }
+
+// innerMerkleNodeSize is the length of two concatenated 32-byte hashes, the preimage of an inner
+// merkle node. A transaction of exactly this length can hash to an honest block's merkle root.
+const innerMerkleNodeSize = 64
 
 // releaseTxMap closes the disk-backed map if that is what b.txMap is, then nils
 // b.txMap so the in-memory map can be collected. Closing the in-memory node
@@ -1345,8 +1378,8 @@ func (b *Block) closeDeferredLocked() error {
 //     replaced the old SQL-store restriction;
 //   - the block is a confirmed ancestor of the pinned checkpoint
 //     (b.checkpointConfirmedAncestor, set only by the blockvalidation service via
-//     SetCheckpointConfirmedAncestor; defaults false). This closes the forward /
-//     optimistic-checkpoint window and the detached-fork-reconsider window that a
+//     SetCheckpointConfirmedAncestor; defaults false). This closes the window before the
+//     checkpoint block is stored and the fork-below-the-checkpoint window that a
 //     height-only gate would leave open;
 //   - the network defines a hardcoded checkpoint and 0 < b.Height <= that
 //     checkpoint.
@@ -1416,13 +1449,15 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, storeSupportsOu
 	//     on nodes where the feature is a documented no-op. Computed at the Block.Valid call
 	//     site, which holds the store; model cannot see the store type directly.
 	//  3. GATED on confirmed ancestry (checkpointConfirmedAncestor). The skip fires only for a
-	//     block PROVEN to be on the main chain that has already reached and matched the pinned
-	//     checkpoint hash — so the checkpoint transitively commits its coinbase, making the
-	//     arithmetic redundant. This closes the two windows a height-only skip leaves open:
-	//     (a) the forward/optimistic-checkpoint window (a below-checkpoint block validated
-	//     before the chain has reached the pinned hash) and (b) a detached fork block below the
-	//     checkpoint reconsidered via reconsiderblock. In both the predicate is false, so the
-	//     check runs — correctly, because non-fast-path blocks carry real fees. The predicate is
+	//     block PROVEN to be an ancestor of the stored block with the pinned checkpoint hash,
+	//     by following parent links back from it — so the checkpoint transitively commits its
+	//     coinbase, making the arithmetic redundant. This closes the two windows a height-only
+	//     skip leaves open: (a) a below-checkpoint block validated before the block with the
+	//     pinned hash is stored, and (b) a fork block below the checkpoint, which the walk from
+	//     the pinned hash never reaches. In both the predicate is false, so the check runs —
+	//     correctly, because non-fast-path blocks carry real fees. A fast-path block that was
+	//     invalidated and is reconsidered still passes, because the walk follows stored parent
+	//     links whatever their validity. The predicate is
 	//     caller-supplied (BlockValidation.checkpointConfirmedAncestor, threaded via
 	//     SetCheckpointConfirmedAncestor) because it needs blockchain state model cannot see; it
 	//     is fail-safe (any lookup error or ambiguity yields false → the check runs).
@@ -2186,9 +2221,11 @@ func (b *Block) checkParentsExistOnChain(ctx context.Context, logger ulogger.Log
 
 			// there are old blocks we need to return to the validator
 			if err == nil && len(oldParentBlockIDs) > 0 {
-				// insert tx id and old parent block ids (i.e. tx's parent block ids) into the map.
-				// Each tx id and its block ids will be checked by the validator separately.
-				deps.oldBlockIDsMap.Set(parentTxStruct.txHash, oldParentBlockIDs)
+				// Key by the PARENT tx: the validator checks each entry on its own, and every
+				// parent must be mined in the block's history. Keyed by the child, a tx with two
+				// deep parents kept only whichever goroutine wrote last, so a parent mined off
+				// the block's chain could pass on scheduling alone.
+				deps.oldBlockIDsMap.Set(parentTxStruct.parentTxHash, oldParentBlockIDs)
 			}
 
 			return err
@@ -2273,7 +2310,7 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 		// This can happen when the parent block is older than the cached range or when
 		// block IDs are non-contiguous (orphan/invalid blocks consume IDs, creating gaps).
 		// In both cases, defer to checkOldBlockIDs in the validator which uses a larger
-		// lookup (10,000 IDs) plus a CheckBlockIsInCurrentChain slow path.
+		// lookup (10,000 IDs) plus a CheckBlockIsAncestorOfBlock slow path.
 		logger.Debugf("[BLOCK][%s] parent transaction %s of tx %s block ID %d not in cached %d IDs - checking later in validator", b.String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), minBlockID, len(currentBlockHeaderIDsMap))
 
 		// we need to return parentTxMeta.BlockIDs back to validator, which can check if those blocks are part of our chain

@@ -329,7 +329,7 @@ func (u *Server) replaySubtree(ctx context.Context, entry skippedSubtree) (strin
 	}
 
 	result, err := u.validateAdmittedPeerSubtree(ctx, &entry.hash, entry.baseURL, entry.peerID)
-	if err != nil || result == peerSubtreeLocked {
+	if err != nil || result == peerSubtreeLocked || result == peerSubtreeRecentlyFailed {
 		return "", err
 	}
 

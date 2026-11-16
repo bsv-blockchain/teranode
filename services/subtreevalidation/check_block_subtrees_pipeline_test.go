@@ -112,8 +112,10 @@ func TestCheckBlockSubtrees_MultiBatch_BalancesArenas(t *testing.T) {
 
 	wireMultiBatchMocks(server)
 
-	mockValidator := server.validatorClient.(*validator.MockValidator)
-	mockValidator.UtxoStore = server.utxoStore
+	// The mock validator derives each tx's meta from the tx itself, parents
+	// included. Pointed at the mocked utxo store it would get an empty meta back,
+	// whose subtree meta cannot be serialized; the subtree is written only after
+	// its meta, so validation would fail.
 
 	const numSubtrees = 5
 	block := buildMultiBatchBlock(t, server, numSubtrees)
