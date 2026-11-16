@@ -81,6 +81,195 @@ def seconds(r):
         return 0.0
 
 
+def orchestrator_runs(out):
+    """Orchestrator run records (step by step, with outputs), keyed by run id."""
+    found = {}
+    for f in glob.glob(os.path.join(out, "orchestrator-runs", "*.json")):
+        r = json.load(open(f))
+        found[r.get("id")] = r
+    return found
+
+
+def clock(seconds_):
+    s = int(round(seconds_))
+    return "%d:%02d" % (s // 60, s % 60)
+
+
+def node_name(roles, x):
+    return roles.get(x, x) if isinstance(x, str) else ", ".join(roles.get(n, n) for n in x or [])
+
+
+def step_result(step, roles):
+    """One short, plain line for what a step did."""
+    a, o, w = step.get("action"), step.get("output"), step.get("resolved") or {}
+    if not isinstance(o, dict):
+        return "" if a in ("wait", "note") else str(o or "")[:120]
+    if a == "mine":
+        return "%s block(s) on %s" % (o.get("count", "?"), o.get("node", "?"))
+    if a == "automine":
+        if not o.get("enabled"):
+            return "auto-mining off"
+        return "%s auto-mines a block every %ss" % (o.get("node", "?"), o.get("intervalSeconds", "?"))
+    if a == "wallet_topup":
+        return "wallet funded with %s coins" % o.get("coins", "?")
+    if a == "wallet_send_start":
+        return "wallet starts sending, %s tx/s" % o.get("tps", "?")
+    if a == "wallet_send_stop":
+        return "%s sends, %s returned an error, %.1f tx/s" % (o.get("attempted", "?"), o.get("failed", "?"), o.get("measuredTps") or 0)
+    if a == "partition":
+        who = node_name(roles, w.get("nodes"))
+        return ("%s cut off the %s network" if o.get("on") else "%s back on the %s network") % (who, o.get("plane", "p2p"))
+    if a == "chaos":
+        return "%s %sd" % (node_name(roles, w.get("node")), w.get("action", "chaos"))
+    if a == "proof_audit":
+        return "%s checked: %s proven, %s unproven, %s mismatched" % (o.get("checked", "?"), o.get("proven", "?"), o.get("unproven", "?"), o.get("mismatched", "?"))
+    if "summary" in o:
+        return str(o["summary"]).split(": ", 1)[0][:200]
+    return ""
+
+
+def mined_by_node(steps):
+    """Blocks each node mined during a run, from the mine and automine steps. Blocks mined by a
+    node while it was partitioned are counted apart: they were a fork the node had to drop."""
+    mined, fork = {}, {}
+    auto_node, auto_count = None, 0
+    cut = set()
+    for s in steps:
+        a, o, w = s.get("action"), s.get("output"), s.get("resolved") or {}
+        if not isinstance(o, dict):
+            continue
+        if a == "partition":
+            nodes = set(w.get("nodes") or [])
+            cut = cut | nodes if o.get("on") else cut - nodes
+        elif a == "mine":
+            node = o.get("node")
+            target = fork if (w.get("node") in cut) else mined
+            target[node] = target.get(node, 0) + int(o.get("count") or 0)
+        elif a == "automine":
+            count = int(o.get("blocksMined") or 0)
+            if auto_node:
+                mined[auto_node] = mined.get(auto_node, 0) + max(0, count - auto_count)
+            auto_node, auto_count = (o.get("node") if o.get("enabled") else None), count
+    return mined, fork
+
+
+def scenario_story(r, roles_run):
+    """A details block telling what happened in one orchestrator run."""
+    steps = roles_run.get("steps") or []
+    roles = roles_run.get("roles") or {}
+    try:
+        t0 = parse_time(roles_run["startedAt"])
+    except (KeyError, ValueError):
+        return []
+    md = ["<details><summary><b>%s</b>: what happened</summary>" % r["scenario"], ""]
+    send = next((s.get("output") for s in steps if s.get("action") == "wallet_send_stop" and isinstance(s.get("output"), dict)), None)
+    if send:
+        md.append("- **Load:** the wallet sent %s transactions through the broadcaster over %d min (%.1f tx/s); %s of the send calls returned an error to the sender. The proof audit below checks every transaction the wallet holds." % (
+            send.get("attempted", "?"), int((send.get("elapsedSeconds") or 0) // 60), send.get("measuredTps") or 0, send.get("failed", "?")))
+    mined, fork = mined_by_node(steps)
+    if mined:
+        line = ", ".join("%s %d" % (n, c) for n, c in sorted(mined.items()))
+        if fork:
+            line += "; on a fork while cut off, then dropped: " + ", ".join("%s %d" % (n, c) for n, c in sorted(fork.items()))
+        md.append("- **Mining:** blocks mined by " + line + ". The SV nodes only follow.")
+    md += ["", "| At | Step | Took | Result |", "|---|---|---|---|"]
+    for s in steps:
+        try:
+            start, end = parse_time(s["startedAt"]), parse_time(s["finishedAt"])
+        except (KeyError, ValueError):
+            continue
+        status = s.get("status", "")
+        result = step_result(s, roles)
+        if status not in ("passed", ""):
+            result = ("**%s** %s" % (status, result)).strip()
+        md.append("| +%s | %s | %s | %s |" % (clock((start - t0).total_seconds()), s.get("name", ""), clock((end - start).total_seconds()), result.replace("|", "\\|")))
+    md += ["", "</details>", ""]
+    return md
+
+
+ROLES = [
+    ("teranode", "Teranode, all-in-one, built from this commit. Mines, validates and serves blocks."),
+    ("aerospike", "Aerospike UTXO store, one per teranode."),
+    ("postgres", "PostgreSQL: each teranode's blockchain store."),
+    ("kafka", "Kafka (Redpanda), shared by the teranodes and merkle-service."),
+    ("svnode", "Bitcoin SV node following the teranodes over the legacy p2p protocol; never mines."),
+    ("alert-svnode", "Alert sidecar of an SV node."),
+    ("alert-system", "Alert hub (alert-system network)."),
+    ("arcade", "BSV Broadcaster: takes the wallet's transactions, broadcasts them to the teranodes, tracks their status and keeps the merkle proofs."),
+    ("merkle-service", "merkle-service: follows the teranodes' blocks and subtrees and sends the broadcaster a merkle proof for every transaction it tracks."),
+    ("wallet-infra", "Wallet storage server (go-wallet-toolbox), broadcasting through the broadcaster."),
+    ("wallet-db", "Wallet storage database."),
+    ("walletd", "BRC-100 wallet that the scenarios drive to send transactions."),
+    ("chaos-orchestrator", "chaos-test orchestrator: runs the scenarios, injects the faults and runs the audits."),
+    ("jaeger", "Tracing."),
+]
+
+
+def stack_table(out):
+    path = os.path.join(out, "containers.tsv")
+    if not os.path.exists(path):
+        return []
+    groups = {}
+    for line in open(path):
+        name, _, image = line.rstrip("\n").partition("\t")
+        base = name[: -len("-multinode")] if name.endswith("-multinode") else name
+        role = next((r for r in ROLES if base.startswith(r[0])), (base, ""))
+        g = groups.setdefault(role[0], {"names": [], "images": set(), "what": role[1]})
+        g["names"].append(base)
+        g["images"].add(image)
+    md = ["| Component | Containers | Image | Role |", "|---|---|---|---|"]
+    order = [r[0] for r in ROLES]
+    for key in sorted(groups, key=lambda k: order.index(k) if k in order else len(order)):
+        g = groups[key]
+        md.append("| %s | %s | `%s` | %s |" % (key, ", ".join(sorted(g["names"])), "`, `".join(sorted(g["images"])), g["what"]))
+    return md
+
+
+ABOUT = """\
+<details><summary>What this run does</summary>
+
+1. **Builds** teranode from the commit above, and pulls the latest BSV Broadcaster. merkle-service and the wallet are pinned.
+2. **Starts Stack A** on a new regtest chain: 3 teranodes and 2 Bitcoin SV nodes on a p2p network that can be partitioned, plus the broadcaster, merkle-service, a wallet and the chaos-test orchestrator (see *The stack* below).
+3. **Phase 1, chain integrity.** Each scenario starts from a fresh chain. The wallet sends about 3 transactions a second through the broadcaster while the teranodes mine:
+   - **steady** hands mining from teranode1 to teranode2 to teranode3, 8 minutes each, with no faults.
+   - **chaos** keeps teranode1 mining, cuts teranode3 off the p2p network while it mines a fork of its own, pauses teranode2, then pauses merkle-service.
+
+   Each scenario ends with two audits. `chain_audit` compares the block hash and merkle root at every height on every node, SV nodes included. `proof_audit` checks each wallet transaction's merkle proof, built independently by merkle-service, against every teranode's block at that height.
+4. **Phase 2** (if run): the broadcaster's end-to-end suite. **Phase 3** (if run): chaos-test's scenario library.
+5. **Verdict.** The night fails on any chain divergence or wrong proof, any failed scenario not listed in `suites/known-failures.txt`, or a phase that runs out of time. *Findings* (such as wallet send calls that returned an error) are recorded but do not fail the night.
+
+</details>
+"""
+
+GLOSSARY = """\
+<details><summary>Reading the numbers</summary>
+
+- **Heights / Divergences**: how many block heights were compared across the nodes, and at how many of them any two nodes held a different block. Any divergence fails the night.
+- **Stale tips (deepest)**: competing blocks that lost (for example two nodes mining at the same moment, or a partitioned node's fork) and the longest such branch. Expected when mining moves between nodes or a node is cut off; the audit checks they were all abandoned.
+- **Proofs checked / Proven / Unproven / Mismatched**: wallet transactions sent during the scenario; those with a merkle proof; those still without one at the end; those whose proof does not match the block every node holds at that height. Mismatched fails the night.
+- **Latency p50 / p95**: time from the broadcaster accepting a transaction to it holding the merkle proof. Pausing merkle-service in the chaos scenario raises the p95 on purpose.
+- **Finding**: a check marked "should" in the scenario that did not hold. Recorded, not a failure. The usual one, "no send failed", counts wallet send calls that returned an error; those transactions still reach the chain and are covered by the proof audit.
+
+</details>
+"""
+
+DATA = """\
+<details><summary>What is in the artifact</summary>
+
+| File | Contents |
+|---|---|
+| `summary.md`, `junit.xml` | this summary; per-scenario results for test reporting |
+| `meta.json`, `images.txt`, `containers.tsv` | commits, runner, image digests, the stack's containers |
+| `runs/phaseN/*.json` | each scenario's result: status, failed steps, findings |
+| `orchestrator-runs/*.json` | each scenario step by step, with every step's output, including the full audit reports |
+| `phaseN.log`, `stack-up.log`, `build.log`, `pull.log`, `teardown.log` | console output of each stage |
+| `logs/` | every container's log for the night |
+| `diagnostics.txt`, `merkle-groups.txt` | node state at the end; merkle-service's Kafka consumer groups |
+
+</details>
+"""
+
+
 def main(argv):
     error = ""
     if "--error" in argv:
@@ -154,9 +343,28 @@ def main(argv):
     # summary.md
     ok = failures == 0
     md = ["## Chain integrity on the multinode stack: %s" % ("passed" if ok else "FAILED"), ""]
-    md.append("Run `%s`, teranode `%s`, chaos-test `%s`, blaster %s%s." % (
-        meta.get("run", "?"), (meta.get("teranode") or "?")[:12], (meta.get("chaosTest") or "?")[:12],
+    if integrity and not error:
+        heights = sum((c or {}).get("heights", 0) for _, c, _, _ in integrity)
+        divergences = sum((c or {}).get("divergences", 0) + (v or {}).get("divergences", 0) for _, c, _, v in integrity)
+        checked = sum((p or {}).get("checked", 0) for _, _, p, _ in integrity)
+        proven = sum((p or {}).get("proven", 0) for _, _, p, _ in integrity)
+        mismatched = sum((p or {}).get("mismatched", 0) for _, _, p, _ in integrity)
+        nodes = max(len((v or c or {}).get("nodes") or []) for _, c, _, v in integrity)
+        md.append(("**In short:** %s %s %s" % (
+            "all %d nodes agreed on every block (%d heights compared across %d scenarios)." % (nodes, heights, len(integrity)) if divergences == 0
+            else "**%d height(s) where nodes held different blocks.**" % divergences,
+            "%d of %d wallet transactions got a merkle proof%s." % (proven, checked, ", all of them correct" if mismatched == 0 else ""),
+            "" if mismatched == 0 else "**%d proof(s) did not match the chain.**" % mismatched)).rstrip())
+        if new_failures or timed_out:
+            md.append("Failed: %s." % ", ".join([r["scenario"] for r in new_failures] + ["phase %s time box" % n for n in timed_out]))
+        md.append("")
+    md.append("Run `%s` on %s. teranode `%s`%s, chaos-test `%s`, blaster %s%s." % (
+        meta.get("run", "?"), meta.get("host") or "?", (meta.get("teranode") or "?")[:12],
+        (" (%s)" % meta["teranodeSubject"]) if meta.get("teranodeSubject") else "",
+        (meta.get("chaosTest") or "?")[:12],
         "on" if meta.get("blaster") else "off (wallet load only)", ", quick" if meta.get("quick") else ""))
+    if previous and prev_status:
+        md.append("Compared with the last successful night, `%s`." % os.path.basename(os.path.normpath(previous)))
     if error:
         md += ["", "**Setup failed:** " + error]
     if integrity:
@@ -180,6 +388,15 @@ def main(argv):
         md.append("| phase%s | (time box) | FAILED | | ran out of its time box | |" % n)
     if recovered:
         md += ["", "Listed in known-failures.txt but passed: " + ", ".join(sorted(set(recovered))) + ". Remove them from the list."]
+    md += ["", ABOUT]
+    orch = orchestrator_runs(out)
+    for r, _, _, _ in integrity:
+        if r.get("run") in orch:
+            md += scenario_story(r, orch[r["run"]])
+    stack = stack_table(out)
+    if stack:
+        md += ["<details><summary>The stack</summary>", ""] + stack + ["", "</details>", ""]
+    md += [GLOSSARY, DATA]
     text = "\n".join(md) + "\n"
     open(os.path.join(out, "summary.md"), "w").write(text)
     if os.environ.get("GITHUB_STEP_SUMMARY"):

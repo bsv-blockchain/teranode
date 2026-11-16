@@ -144,6 +144,8 @@ phase() {
   echo "{"
   echo "  \"run\": \"$run_id\", \"startedAt\": \"$started_at\", \"quick\": $quick, \"phases\": \"$phases\","
   echo "  \"teranode\": \"$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)\","
+  echo "  \"teranodeSubject\": $(git -C "$REPO_ROOT" log -1 --format=%s 2>/dev/null | python3 -I -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))'),"
+  echo "  \"host\": \"$(uname -s) $(uname -m), $(getconf _NPROCESSORS_ONLN) CPUs, $(( $(sysctl -n hw.memsize 2>/dev/null || awk '/MemTotal/{print $2 * 1024}' /proc/meminfo) / 1073741824 )) GB\","
   echo "  \"chaosTest\": \"$(git -C "${CHAOS_TEST_DIR:-$REPO_ROOT/../chaos-test}" rev-parse HEAD 2>/dev/null)\","
   echo "  \"blaster\": $blaster"
   echo "}"
@@ -179,6 +181,8 @@ for img in "$broadcaster_image" teranode:latest chaos-orchestrator:multinode; do
   echo "$img $(docker image inspect -f '{{.Id}}' "$img" 2>/dev/null)"
 done >"$OUT/images.txt"
 docker inspect -f '{{.Config.Image}} {{.Image}}' merkle-service-multinode >>"$OUT/images.txt" 2>/dev/null || true
+# Every container of the stack and its image, for the summary's stack table.
+docker ps --format '{{.Names}}\t{{.Image}}' | grep -E -- '-multinode$' | sort >"$OUT/containers.tsv" || true
 
 # --- phases ---------------------------------------------------------------------------------------
 if has_phase 1; then

@@ -147,6 +147,9 @@ jobs:
           set -eu
           id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow nightly_chain_integrity_stack.yaml --status success --limit 1 --json databaseId -q '.[0].databaseId')
           [ -n "$id" ] || exit 0
+          # A self-hosted runner keeps the workspace between runs; a stale copy makes the
+          # download fail with "file exists".
+          rm -rf previous
           gh run download "$id" -R "$GITHUB_REPOSITORY" -D previous
           summary=$(find "$PWD/previous" -name summary.md | head -1)
           [ -n "$summary" ] && echo "dir=$(dirname "$summary")" >> "$GITHUB_OUTPUT"
