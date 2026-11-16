@@ -1254,7 +1254,7 @@ func TestRetryInterceptorFinalAttemptReturnsContextError(t *testing.T) {
 		// Create a context with a very short deadline
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 		defer cancel()
-		
+
 		callCount := 0
 		mockInvoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
 			callCount++
