@@ -292,7 +292,16 @@ A reorg changes state in three places: the chain tip in the Blockchain service, 
 ##### What Is Not Atomic
 
 - **The UTXO rollback to the fork point is not one atomic operation.** Steps 6 to 8 write to the UTXO store block by block. Each `ProcessConflicting` and `ReverseProcessConflicting` call records a write-ahead intent before its first write (`BeginConflictIntent`). `ProcessConflicting` undoes its partial writes on a failure before commit (`RollbackConflictIntent`). `ReverseProcessConflicting` has no rollback. It returns on the first error, and a replay completes the work (`isReverseFullyApplied`). Replay runs at Block Assembly start. `MarkTransactionsOnLongestChain` has no write-ahead intent. If the in-place reorg fails, Block Assembly restores its in-memory state and falls back to a reset. The UTXO writes for blocks that the failed reorg already processed stay. The reset also writes to the UTXO store: `MarkTransactionsOnLongestChain`, `ProcessConflicting` for each replayed block, and the marking in `loadUnminedTransactions`.
-- **The services disagree on the tip for a period.** From step 2 to the end of step 8, the Blockchain service and legacy peers have the new tip, but Block Assembly still has the old tip. `GetMiningCandidate` does not build a candidate on the Block Assembly tip during this period. In the `blockchainSubscription`, `movingUp`, `reorging`, `reconciling` and `resetting` states, it returns an empty candidate on the Blockchain service tip. It does the same while a best-tip reset replay is pending, and while the Block Assembly tip stays behind the Blockchain service tip. A reset stores the new tip before it rebuilds block assembly. During the rebuild, the precomputed data is stale, and `GetMiningCandidate` returns an empty candidate on the new tip. A reset that follows a failed in-place reorg stays in the `reorging` state, not `resetting`.
+- **The services disagree on the tip for a period.** From step 2 to the end of step 8, the Blockchain service and legacy peers have the new tip, but Block Assembly still has the old tip. `GetMiningCandidate` returns an empty candidate on the Blockchain service tip in these cases:
+    - Block Assembly is in the `blockchainSubscription`, `movingUp`, `reorging`, `reconciling` or `resetting` state.
+    - A best-tip reset replay is pending.
+    - Block Assembly is idle, its tip differs from the Blockchain service tip, and the Blockchain service tip is at the same or a higher height (`staleTipTracker.check`).
+
+    In two idle cases, `GetMiningCandidate` builds a candidate on the old Block Assembly tip:
+    - The Blockchain service tip is at a lower height than the Block Assembly tip, for example after `InvalidateBlock` moves the tip back. A request that arrives before Block Assembly reads the notification gets a candidate on the old tip.
+    - The read of the Blockchain service tip fails. This is deliberate, so that a transient error does not stop mining.
+
+    A reset stores the new tip before it rebuilds block assembly. During the rebuild, the precomputed data is stale, and `GetMiningCandidate` returns an empty candidate on the new tip. A reset that follows a failed in-place reorg stays in the `reorging` state, not `resetting`.
 
 ##### Restart After a Crash in a Reorg
 
