@@ -212,7 +212,11 @@ variable `NIGHTLY_RUNNER` to that label (or a JSON list, `["self-hosted","chaos-
 runner needs Docker, about 16 GB of RAM for the stack, and amd64 or amd64 emulation (Docker
 Desktop on Apple silicon works, more slowly). Bring any local stack down first: the run checks
 that the stack's host ports are free. Without a `TERANODE_COINBASE_TOKEN` secret the run uses
-wallet load only.
+wallet load only. Scheduled runs only happen from the fork's default branch, so the workflow has
+to be on its `main`. The variable `NIGHTLY_PHASES` (for example `1`) limits which phases the
+scheduled run takes; a manual run (Actions → nightly-chain-integrity-stack → Run workflow)
+chooses its own. Install the runner as a service (`./svc.sh install && ./svc.sh start` in the
+runner directory) so it survives a restart.
 
 ## Split topology
 

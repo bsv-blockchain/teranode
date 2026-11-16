@@ -8,12 +8,6 @@ name: nightly-chain-integrity-stack
 on:
   schedule:
     - cron: '0 5 * * *'  # after nightly_tests (02:00) and fuzz (04:00), which share the runner pool
-  # TEMPORARY: proves the nightly on the self-hosted runners before the workflow reaches the
-  # default branch (workflow_dispatch only lists workflows that are on it). Runs --quick; a
-  # commit message containing [nightly-integrity] runs phase 1 at full length, and
-  # [nightly-full] the full nightly. Remove before merging.
-  push:
-    branches: [chaostest-nightly-proof]
   workflow_dispatch:
     inputs:
       quick:
@@ -53,7 +47,7 @@ jobs:
     # also works). The SV node, merkle-service and wallet-infra images are amd64-only: the
     # runner must be amd64 or run them under emulation (Docker Desktop on Apple silicon).
     runs-on: ${{ vars.NIGHTLY_RUNNER && (startsWith(vars.NIGHTLY_RUNNER, '[') && fromJSON(vars.NIGHTLY_RUNNER) || vars.NIGHTLY_RUNNER) || 'teranode-runner-16-core' }}
-    timeout-minutes: 150
+    timeout-minutes: 180  # the phase time boxes (70 + 35 + 45 min) plus build and stack start
     env:
       CHAOS_TEST_DIR: ${{ github.workspace }}/chaos-test
       HAS_COINBASE_TOKEN: ${{ secrets.TERANODE_COINBASE_TOKEN != '' }}
@@ -157,15 +151,10 @@ jobs:
       - name: Run the nightly
         working-directory: teranode
         run: |
-          args=(--phases "${{ inputs.phases || '1,2,3' }}")
+          # Scheduled runs take the repository variable NIGHTLY_PHASES when it is set (a fork can
+          # run phase 1 only while it proves the rest), and every phase otherwise.
+          args=(--phases "${{ inputs.phases || vars.NIGHTLY_PHASES || '1,2,3' }}")
           [ "${{ inputs.quick }}" = true ] && args=(--quick)
-          if [ "${{ github.event_name }}" = push ]; then
-            if [ "${{ contains(github.event.head_commit.message, '[nightly-integrity]') }}" = true ]; then
-              args=(--phases 1)
-            elif [ "${{ contains(github.event.head_commit.message, '[nightly-full]') }}" != true ]; then
-              args=(--quick)
-            fi
-          fi
           [ -n "${{ steps.previous.outputs.dir }}" ] && args+=(--previous "${{ steps.previous.outputs.dir }}")
           compose/chaostest/nightly.sh "${args[@]}"
 
