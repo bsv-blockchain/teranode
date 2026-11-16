@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -1354,27 +1355,37 @@ type sweepChunkStore struct {
 
 	mu    sync.Mutex
 	calls [][]chainhash.Hash
+	// failOn fails the failOn-th call, counting from 1, and only that one.
+	failOn   int
+	attempts int
 }
 
 func (s *sweepChunkStore) MarkTransactionsOnLongestChain(_ context.Context, hashes []chainhash.Hash, onLongestChain bool) error {
 	if !onLongestChain {
 		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		s.attempts++
+		if s.attempts == s.failOn {
+			return errors.NewStorageError("mark failed on call %d", s.failOn)
+		}
+
 		s.calls = append(s.calls, append([]chainhash.Hash(nil), hashes...))
-		s.mu.Unlock()
 	}
 
 	return nil
 }
 
-// reset marks every transaction in block assembly as not on the longest chain
-// before it clears its state. Block assembly can hold billions of transactions,
-// so the sweep must hand them to the store a bounded chunk at a time and never
-// build one list of them all.
-func TestResetMarksAssemblyTxsInBoundedChunks(t *testing.T) {
-	const chunkSize = 3
+// newSweepFixture returns a processor holding 13 transactions, with a store that
+// records the sweep's calls and marks sweepChunk transactions a call. With four
+// items a subtree and the coinbase placeholder in the first, 13 fill three
+// chained subtrees and leave two in the current one, so a chunk crosses from the
+// chained subtrees into the current one.
+func newSweepFixture(t *testing.T) (*SubtreeProcessor, *sweepChunkStore, []chainhash.Hash) {
+	t.Helper()
 
 	old := resetSweepChunkSize
-	resetSweepChunkSize = chunkSize
+	resetSweepChunkSize = sweepChunk
 
 	t.Cleanup(func() { resetSweepChunkSize = old })
 
@@ -1408,9 +1419,6 @@ func TestResetMarksAssemblyTxsInBoundedChunks(t *testing.T) {
 	stp.Start(ctx)
 	t.Cleanup(func() { stp.Stop(context.Background()) })
 
-	// With four items a subtree and the coinbase placeholder in the first, 13 fill
-	// three chained subtrees and leave two in the current one, so a chunk crosses
-	// from the chained subtrees into the current one.
 	const txCount = 13
 
 	want := make([]chainhash.Hash, txCount)
@@ -1429,6 +1437,19 @@ func TestResetMarksAssemblyTxsInBoundedChunks(t *testing.T) {
 		return stp.GetCurrentTxMap().Exists(want[txCount-1])
 	}, 5*time.Second, 10*time.Millisecond)
 
+	return stp, store, want
+}
+
+// sweepChunk is how many transactions newSweepFixture's sweep marks in one call.
+const sweepChunk = 3
+
+// reset marks every transaction in block assembly as not on the longest chain
+// before it clears its state. Block assembly can hold billions of transactions,
+// so the sweep must hand them to the store a bounded chunk at a time and never
+// build one list of them all.
+func TestResetMarksAssemblyTxsInBoundedChunks(t *testing.T) {
+	stp, store, want := newSweepFixture(t)
+
 	response := stp.Reset(resetTestHeader(4242), nil, nil, false, nil)
 	require.NoError(t, response.Err)
 
@@ -1438,12 +1459,31 @@ func TestResetMarksAssemblyTxsInBoundedChunks(t *testing.T) {
 	defer store.mu.Unlock()
 
 	for _, call := range store.calls {
-		require.LessOrEqual(t, len(call), chunkSize, "one store call must never carry more than a chunk")
+		require.LessOrEqual(t, len(call), sweepChunk, "one store call must never carry more than a chunk")
 		got = append(got, call...)
 	}
 
-	require.Len(t, store.calls, (txCount+chunkSize-1)/chunkSize, "full chunks, then the rest")
+	require.Len(t, store.calls, (len(want)+sweepChunk-1)/sweepChunk, "full chunks, then the rest")
 	require.ElementsMatch(t, want, got, "every assembly transaction is marked exactly once")
+}
+
+// A chunk the store fails to mark fails the reset there, before it has cleared
+// anything: block assembly keeps its transactions, and the error says how many
+// were marked.
+func TestResetFailsOnAChunkTheStoreCannotMark(t *testing.T) {
+	stp, store, want := newSweepFixture(t)
+	store.failOn = 2
+
+	response := stp.Reset(resetTestHeader(4243), nil, nil, false, nil)
+	require.ErrorContains(t, response.Err, "error marking assembly txs as not on longest chain before reset, 3 marked before it")
+
+	store.mu.Lock()
+	require.Len(t, store.calls, 1, "the sweep stops at the chunk that failed")
+	store.mu.Unlock()
+
+	for _, h := range want {
+		require.True(t, stp.GetCurrentTxMap().Exists(h), "a reset that failed in the sweep has cleared nothing")
+	}
 }
 
 // storeReorgSubtree builds a real subtree (coinbase placeholder + the given
