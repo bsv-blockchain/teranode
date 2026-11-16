@@ -47,7 +47,7 @@ func (h *preBindHarness) stampWithoutCommit(d quickDriver, block *model.Block) {
 	h.bv.settings.BlockValidation.SubtreeBatchPrefetchDepth = d.prefetchDepth
 
 	if !d.async {
-		_, err := h.bv.processBlockSubtrees(h.ctx, block, false)
+		_, err := h.bv.processBlockSubtrees(h.ctx, block, false, nil)
 		require.NoError(h.t, err)
 
 		return

@@ -1830,9 +1830,9 @@ func (b *BlockAssembler) branchOnlyMeta(ctx context.Context, hashes []chainhash.
 }
 
 // bestBlockKey returns the best block and its place in the best-tip order. The place is read from
-// the block's own header metadata: over gRPC, GetBestBlockHeader's metadata carries no block id or
-// peer id, and a key without them sorts better than the best block itself, so the replay would
-// miss a block of equal work that becomes the best tip on a lower peer id.
+// the block's own header metadata: over gRPC, GetBestBlockHeader's metadata carries no block id,
+// and a key without it sorts better than the best block itself, so the replay would miss a block
+// of equal work that becomes the best tip on a lower id.
 func (b *BlockAssembler) bestBlockKey(ctx context.Context) (*model.BlockHeader, model.BestTipKey, error) {
 	best, _, err := b.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {

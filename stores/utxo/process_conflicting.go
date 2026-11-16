@@ -697,7 +697,12 @@ func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32,
 			return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] error building unspend records", demotedHash.String(), buildErr)
 		}
 
-		if unspendErr := s.Unspend(ctx, demotedSpends, false); unspendErr != nil {
+		// No lock flag: this move takes no lock on D's parents, so it has none to release. A
+		// parent can be locked by another holder, such as block validation waiting for its
+		// block to be mined, and passing false would clear that holder's lock on the SQL and
+		// Pebble stores. ProcessConflicting releases its own parent locks through
+		// SetConflictLocks.
+		if unspendErr := s.Unspend(ctx, demotedSpends); unspendErr != nil {
 			return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] error unspending demoted tx inputs", demotedHash.String(), unspendErr)
 		}
 
