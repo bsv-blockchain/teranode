@@ -3816,13 +3816,10 @@ func (u *BlockValidation) reValidateBlock(ctx context.Context, blockData revalid
 	// worker's retries ran out (bitcoin-sv/teranode#4980).
 	//
 	// checkOldBlockIDs answers "is a parent's block an ancestor of this block", so its verdict holds
-	// whichever chain this block's parent is on. ancestorVerdictIsSound dates from when it answered
-	// "is it on the MAIN chain" instead, and still acts only when the parent is on the main chain,
-	// otherwise returning the verdict unacted for the worker to retry. That is the direction that
-	// never invalidates. The verdict also relies on the parent txs' BlockIDs being complete, which
-	// the isParentMined check above guarantees.
+	// whichever chain this block's parent is on, the main chain or a fork. The verdict relies on the
+	// parent txs' BlockIDs being complete, which the isParentMined check above guarantees.
 	err = u.checkOldBlockIDs(ctx, oldBlockIDsMap, blockData.block)
-	if errors.Is(err, errors.ErrBlockInvalid) && u.ancestorVerdictIsSound(ctx, blockData.block, blockHeadersMeta) {
+	if errors.Is(err, errors.ErrBlockInvalid) {
 		reason := p2pconstants.ReasonInvalidBlock.String()
 		if markErr := u.markBlockAsInvalid(ctx, blockData.block, reason, blockData.peerID, blockData.baseURL); markErr != nil {
 			u.logger.Errorf("[ReValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), markErr)
@@ -3830,34 +3827,6 @@ func (u *BlockValidation) reValidateBlock(ctx context.Context, blockData revalid
 	}
 
 	return err
-}
-
-// ancestorVerdictIsSound reports whether checkOldBlockIDs's INVALID verdict for block can be acted
-// on. It needs block's parent, blockHeadersMeta[0] as parentHeaderRun returns it, to be on the
-// current main chain. Then the main chain below block is block's own ancestor chain, so the
-// main-chain verdict is also an ancestor verdict.
-//
-// It does not check the parent's mined flag: reValidateBlock has already checked it through
-// isParentMined, and blockHeadersMeta[0].MinedSet can be a stale cached value.
-//
-// A lookup error or a missing parent reads as false, the direction that never invalidates.
-func (u *BlockValidation) ancestorVerdictIsSound(ctx context.Context, block *model.Block, blockHeadersMeta []*model.BlockHeaderMeta) bool {
-	if len(blockHeadersMeta) == 0 || blockHeadersMeta[0] == nil {
-		u.logger.Warnf("[ReValidateBlock][%s] no parent header meta, not acting on the INVALID ancestor verdict", block.String())
-		return false
-	}
-
-	onMainChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{blockHeadersMeta[0].ID})
-	if err != nil {
-		u.logger.Errorf("[ReValidateBlock][%s] failed to check whether parent %s is on the main chain, not acting on the INVALID ancestor verdict: %s", block.String(), block.Header.HashPrevBlock.String(), err)
-		return false
-	}
-
-	if !onMainChain {
-		u.logger.Warnf("[ReValidateBlock][%s] parent %s is not on the main chain, so the INVALID ancestor verdict may be a main-chain artefact; not acting on it", block.String(), block.Header.HashPrevBlock.String())
-	}
-
-	return onMainChain
 }
 
 // quickValidateSkipsUtxoLock reports whether quick validation should create UTXOs
