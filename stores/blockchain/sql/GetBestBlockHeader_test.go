@@ -143,6 +143,12 @@ func TestSqlGetChainTip(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
+		// The startup rebuild holds mainChainRebuilding in the background, and while it does the
+		// by-height reads take the walk-back query instead of the on_main_chain flag. Waiting for
+		// it makes the reads below take the flag path; the walk-back path is raised on purpose
+		// further down.
+		waitForStartupRebuild(t, s)
+
 		_, _, err = s.StoreBlock(context.Background(), block1, "test_peer")
 		require.NoError(t, err)
 
@@ -221,8 +227,16 @@ func TestSqlGetChainTip(t *testing.T) {
 		require.NotEqual(t, "active", tipStatus[blockFromEarlierPeer.Header.Hash().String()])
 
 		// While on_main_chain is being rebuilt the by-height reads walk back from the best tip
-		// instead of trusting the flag, so they must pick the same tip.
+		// instead of trusting the flag, so they must pick the same tip. The flag is raised here
+		// rather than left to the startup rebuild, which runs in the background and may already
+		// have finished, and the response cache is cleared so the GetBlockByHeight answer cached
+		// above cannot stand in for the rebuild-path query.
 		s.mainChainRebuilding.Add(1)
+		s.responseCache.DeleteAll()
+
+		atHeightRebuilding, err := s.GetBlockByHeight(context.Background(), 2)
+		require.NoError(t, err)
+		require.Equal(t, blockFromLaterPeer.Header.Hash().String(), atHeightRebuilding.Header.Hash().String())
 
 		headers, _, err := s.GetBlockHeadersByHeight(context.Background(), 2, 2)
 		require.NoError(t, err)
