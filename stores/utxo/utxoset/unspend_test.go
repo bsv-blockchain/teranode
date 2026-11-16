@@ -351,3 +351,130 @@ func TestUnspendIgnoresALockOnAContainmentRowBelowTheLookupFloor(t *testing.T) {
 	_, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 2_000, 0), tipAboveFloor+1)
 	require.NoError(t, err, "a lock below the lookup floor must not be copied onto the restored UTXO")
 }
+
+// lockedMempoolParentSpent is the fixture for the restore-against-SetLocked race on a
+// transaction whose lock lives on its identity row: a parent created locked, its output 0 spent
+// through IgnoreLocked by an unmined loser, as block validation spends a locked parent. It
+// returns the parent and the loser's spends.
+func lockedMempoolParentSpent(t *testing.T, s *Store, ctx context.Context) (*bt.Tx, []*utxo.Spend) {
+	t.Helper()
+
+	require.NoError(t, s.SetBlockHeight(100))
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100, utxo.WithLocked(true))
+	require.NoError(t, err)
+
+	spends, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 1_000, 0), 101, utxo.WithIgnoreLocked(true))
+	require.NoError(t, err)
+	require.Len(t, spends, 1)
+
+	return parent, spends
+}
+
+// unlockWhileRestoreRuns is the race with the release first. The release has run every
+// statement and is not yet committed when the restore starts, so its UTXO update cannot have
+// seen the coin the restore is about to insert. The restore must wait for the release's commit
+// and read the lock it leaves, or the coin comes back locked under an unlocked transaction, and
+// nothing unlocks it after that.
+func unlockWhileRestoreRuns(t *testing.T, s *Store, ctx context.Context, parent *bt.Tx, spends []*utxo.Spend) {
+	t.Helper()
+
+	release, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = release.Rollback(ctx) }()
+
+	require.NoError(t, s.setLockedIn(ctx, release, []chainhash.Hash{*parent.TxIDChainHash()}, false))
+
+	done := make(chan error, 1)
+
+	go func() { done <- s.Unspend(ctx, spends) }()
+
+	waitForLockWait(t, s, ctx, "spend_journal")
+	require.NoError(t, release.Commit(ctx))
+	require.NoError(t, <-done)
+}
+
+// restoreWhileUnlockRuns is the race with the restore first. The restore has run and is not yet
+// committed when the release starts, so the release cannot see the coin yet. The release must
+// wait for the restore's commit and then unlock the coin it finds.
+func restoreWhileUnlockRuns(t *testing.T, s *Store, ctx context.Context, parent *bt.Tx, spends []*utxo.Spend) {
+	t.Helper()
+
+	req, err := newUnspendRequest(spends, false)
+	require.NoError(t, err)
+
+	restore, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = restore.Rollback(ctx) }()
+
+	res, err := s.restoreIn(ctx, restore, req)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.restored)
+
+	done := make(chan error, 1)
+
+	go func() { done <- s.setLockedDirect(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, false) }()
+
+	waitForLockWait(t, s, ctx, "UPDATE tx_")
+	require.NoError(t, restore.Commit(ctx))
+	require.NoError(t, <-done)
+}
+
+// requireRestoredCoinUnlocked checks the coin agrees with its transaction, which the release
+// left unlocked.
+func requireRestoredCoinUnlocked(t *testing.T, s *Store, ctx context.Context, parent *bt.Tx) {
+	t.Helper()
+
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+	require.Zero(t, utxoFlagsOf(t, s, ctx, parent, 0)&FlagLocked,
+		"the restored coin must carry its transaction's lock as the release left it")
+}
+
+// TestUnspendRacingAnUnlockOfTheIdentityRowWaitsForIt: a mempool transaction, unlocked while
+// its coin is being restored, release first.
+func TestUnspendRacingAnUnlockOfTheIdentityRowWaitsForIt(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends := lockedMempoolParentSpent(t, s, ctx)
+
+	unlockWhileRestoreRuns(t, s, ctx, parent, spends)
+	requireRestoredCoinUnlocked(t, s, ctx, parent)
+}
+
+// TestUnlockOfTheIdentityRowRacingAnUnspendWaitsForIt: the same race, restore first.
+func TestUnlockOfTheIdentityRowRacingAnUnspendWaitsForIt(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends := lockedMempoolParentSpent(t, s, ctx)
+
+	restoreWhileUnlockRuns(t, s, ctx, parent, spends)
+	requireRestoredCoinUnlocked(t, s, ctx, parent)
+}
+
+// TestUnspendRacingAnUnlockOfAContainmentRowWaitsForIt: a stamped transaction, whose lock lives
+// only on its containment row in tx_mined, unlocked while its coin is being restored, release
+// first.
+func TestUnspendRacingAnUnlockOfAContainmentRowWaitsForIt(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends, _ := lockedStampedParentSpent(t, s, ctx)
+
+	unlockWhileRestoreRuns(t, s, ctx, parent, spends)
+	requireRestoredCoinUnlocked(t, s, ctx, parent)
+}
+
+// TestUnlockOfAContainmentRowRacingAnUnspendWaitsForIt: the stamped case, restore first. The
+// release's containment-row update waits on the restore's share lock. When that update shared
+// a statement with the UTXO update, the UTXO update still read the snapshot taken before the
+// wait, missed the coin, and left it locked.
+func TestUnlockOfAContainmentRowRacingAnUnspendWaitsForIt(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends, _ := lockedStampedParentSpent(t, s, ctx)
+
+	restoreWhileUnlockRuns(t, s, ctx, parent, spends)
+	requireRestoredCoinUnlocked(t, s, ctx, parent)
+}
