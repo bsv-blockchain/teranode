@@ -282,13 +282,11 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			if reconcileErr == nil && moved {
 				// RetryTx commits next. Kept true if that commit fails, and across a retry
 				// whose earlier commit may have landed before it reported the error. A retry
-				// keeps the lowest floor any attempt reported, since the earlier commit may
-				// be the one that landed.
-				if !membershipMoved || floor == noRepairFloor || (movedFloor != noRepairFloor && floor < movedFloor) {
-					movedFloor = floor
-				}
-
+				// reaches this line only when the earlier attempt did not commit: if it had,
+				// the retry's INSERT would fail on ux_blocks_hash first. So the latest floor
+				// is the one that describes the committed rows.
 				membershipMoved = true
+				movedFloor = floor
 			}
 
 			return reconcileErr

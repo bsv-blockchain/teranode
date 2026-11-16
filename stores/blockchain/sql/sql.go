@@ -1650,14 +1650,15 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 // block ends at genesis, which is a full repair of the lineage.
 //
 // The rows this reconcile visits are the new chain's blocks from the fork
-// point up, plus maxDepth, so it remains the cheap path. It does not repair
+// point up, or the top maxDepth blocks when the fork point is higher, so it
+// remains the cheap path. It does not repair
 // a flag that is wrong below the first flagged block it meets, because
 // nothing tells it the chain is broken there: the count of
 // on_main_chain=true against bestHeight+1 still matches when a stale flag
 // at one height is replaced by a wrongly-flagged sibling at the same
-// height. InvalidateBlock and RevalidateBlock, which can move membership at
-// any depth without flagging their new chain first, use
-// rebuildOnMainChainFlag instead.
+// height. InvalidateBlock and RevalidateBlock are rare admin operations and
+// use rebuildOnMainChainFlag(full) instead, which trusts no existing flag and
+// so also repairs one that was already wrong below the fork point.
 //
 // The caller must hold s.mainChainRebuilding (Add(1)/Add(-1)) so concurrent
 // readers take the CTE fallback during the brief commit window, and

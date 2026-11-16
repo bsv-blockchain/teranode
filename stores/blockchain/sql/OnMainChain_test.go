@@ -1279,7 +1279,8 @@ func TestStoreBlock_ReorgForkingBelowTheReconcileWindow(t *testing.T) {
 }
 
 // TestStoreBlock_ReorgForkingBelowTheReconcileWindow_PostgreSQL runs the same reorg on
-// PostgreSQL, whose recursive walk and UPDATE ... RETURNING are separate SQL from SQLite's.
+// PostgreSQL, which evaluates the same recursive walk and UPDATE ... RETURNING under its
+// own planner and snapshot rules.
 func TestStoreBlock_ReorgForkingBelowTheReconcileWindow_PostgreSQL(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping PostgreSQL tests in short mode")
@@ -1373,4 +1374,64 @@ func requireReorgBelowTheReconcileWindowIsRepaired(t *testing.T, s *SQL) {
 	moved, floor := s.closeOnMainChainWatch(watch)
 	require.True(t, moved, "the reorg is noted")
 	require.Equal(t, int64(block2.Height), floor, "the noted floor is the lowest height the reorg moved, just above the fork point")
+}
+
+// TestReconcileOnMainChain_WalkStopsAtTheFirstFlaggedBlockPastTheWindow: past
+// reconcileMaxDepth the walk goes on only while the block it is on is flagged false, and
+// stops at the first flagged one. A walk that kept going would visit every block to genesis
+// on each reorg. The chain is 130 blocks on one lineage, so the window's bottom is height
+// 30. Heights 29 and 30 are flagged false, height 28 stays flagged, and height 5 is flagged
+// false as a marker below the stop. The walk must repair 29 and 30, stop at 28, and never
+// reach 5.
+func TestReconcileOnMainChain_WalkStopsAtTheFirstFlaggedBlockPastTheWindow(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	ctx := context.Background()
+
+	const chainLength = 130
+
+	maxDepth := s.reconcileMaxDepth()
+	require.Less(t, maxDepth+2, int64(chainLength), "the chain must reach past the window")
+
+	chain := []*model.Block{block1, block2}
+	for len(chain) < chainLength {
+		chain = append(chain, createBlock3OnFork(chain[len(chain)-1]))
+	}
+
+	storeBlocks(t, s, chain...)
+
+	var tipHeight int64
+	require.NoError(t, s.db.QueryRow(`SELECT height FROM blocks WHERE hash = $1`, chain[len(chain)-1].Hash().CloneBytes()).Scan(&tipHeight))
+	require.Equal(t, int64(chainLength), tipHeight)
+
+	windowBottom := tipHeight - maxDepth
+
+	setFlag := func(height int64, onMainChain bool) {
+		t.Helper()
+
+		_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = $1 WHERE height = $2`, onMainChain, height)
+		require.NoError(t, err)
+	}
+
+	setFlag(windowBottom, false)
+	setFlag(windowBottom-1, false)
+	setFlag(5, false)
+
+	changed, floor, err := s.reconcileOnMainChainRows(ctx, s.db)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), changed, "only the two unflagged blocks the walk reached are changed")
+	require.Equal(t, windowBottom-1, floor, "the walk went past the window to the first flagged block")
+
+	flagAt := func(height int64) bool {
+		t.Helper()
+
+		var v bool
+		require.NoError(t, s.db.QueryRow(`SELECT on_main_chain FROM blocks WHERE height = $1`, height).Scan(&v))
+
+		return v
+	}
+
+	require.True(t, flagAt(windowBottom), "the window's bottom block is repaired")
+	require.True(t, flagAt(windowBottom-1), "the walk continues past the window while blocks are unflagged")
+	require.True(t, flagAt(windowBottom-2), "the first flagged block past the window keeps its flag")
+	require.False(t, flagAt(5), "the walk stops at the first flagged block and never reaches height 5")
 }
