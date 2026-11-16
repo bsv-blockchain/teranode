@@ -1654,20 +1654,25 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		ids             []uint32
 	)
 
-	cachedBlock, blockWasAlreadyCached := u.lastValidatedBlocks.Get(*blockHash)
+	// Take the block out of the cache in one step. Whoever removes a block from
+	// lastValidatedBlocks owns it from then on and is the only one that may release
+	// its subtrees. ValidateBlock's updateSubtreesDAH failure path races this worker
+	// for the same entry when SetBlockSubtreesSet commits but reports an error; a
+	// Get followed by a separate Delete let both sides believe they had it.
+	cachedBlock, blockWasAlreadyCached := u.lastValidatedBlocks.GetAndDelete(*blockHash)
 
 	if blockWasAlreadyCached && cachedBlock != nil {
 		// Verify the cached block has subtrees loaded
 		if u.hasValidSubtrees(cachedBlock) {
 			u.logger.Debugf("[setTxMined][%s] using cached block with subtrees", blockHash.String())
 			block = cachedBlock
-
-			// Remove from cache immediately - we're about to use it and don't need it cached anymore
-			// This frees memory sooner than waiting for cache expiry or the delete at line 894
-			u.lastValidatedBlocks.Delete(*blockHash)
 		} else {
 			u.logger.Warnf("[setTxMined][%s] cached block has invalid subtrees, fetching from blockchain", blockHash.String())
 			blockWasAlreadyCached = false
+
+			// Taken out of the cache, so the eviction function will never see it:
+			// release whatever subtrees it still holds before dropping it.
+			releaseBlockNodes(cachedBlock)
 		}
 	}
 
@@ -1771,8 +1776,8 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 
 	// Close mmap-backed subtrees and clear to free memory. Routed through
 	// ReleaseSubtreeNodes so the entries are nil-ed under the block's subtree
-	// mutex: this block may still be reachable via lastValidatedBlocks, whose
-	// TTL cleaner runs the same release concurrently. Nodes are not pooled here
+	// mutex. A block taken from lastValidatedBlocks is no longer reachable there
+	// (GetAndDelete above), so nothing else releases it. Nodes are not pooled here
 	// (put is nil): a block fetched fresh from the blockchain has no node
 	// allocator, so its slices never came from the pool. A block taken from
 	// lastValidatedBlocks does carry pool-allocated slices — recycling those is
@@ -2780,14 +2785,18 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// This sends the BlockSubtreesSet notification which triggers setMined
 				if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
 					u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees DAH [%s]", block.Hash().String(), err)
-					// Clean up cache since DAH update failed. Delete bypasses the
-					// eviction function so we must release pooled []Node slices
-					// explicitly here.
-					u.lastValidatedBlocks.Delete(*block.Hash())
-					releaseBlockNodes(block)
-					// Trigger revalidation to ensure block is retried
-					// This is consistent with other error handling in this goroutine
-					u.ReValidateBlock(block, baseURL)
+
+					// Trigger revalidation to ensure block is retried. This is
+					// consistent with other error handling in this goroutine.
+					// When the setMined worker took the block first, this
+					// goroutine no longer owns it and must not hand the same
+					// object to a revalidation that reloads its subtrees.
+					if u.reclaimBlockAfterFailedSubtreesSet(block, true) {
+						u.ReValidateBlock(block, baseURL)
+					} else {
+						u.ReValidateBlock(detachedBlockCopy(block), baseURL)
+					}
+
 					return
 				}
 			}()
@@ -3004,9 +3013,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// caches the block once Valid returns, which is the only Set on this
 		// path with a lifetime that outlives its reader.
 		if !useOptimisticMining {
+			blockCached := false
+
 			if u.hasValidSubtrees(block) {
 				u.logger.Debugf("[ValidateBlock][%s] caching block with %d subtrees loaded", block.Hash().String(), block.GetSubtreeSlicesCount())
 				u.lastValidatedBlocks.Set(*block.Hash(), block)
+				blockCached = true
 			} else {
 				u.logger.Warnf("[ValidateBlock][%s] not caching block - subtrees not loaded (%d slices, %d hashes)", block.Hash().String(), block.GetSubtreeSlicesCount(), len(block.Subtrees))
 			}
@@ -3014,17 +3026,73 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// it's critical that we call updateSubtreesDAH() only when we know the block is valid
 			// This sends the BlockSubtreesSet notification which triggers setMined
 			if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
-				// Clean up cache since DAH update failed. Delete bypasses the
-				// eviction function so we must release pooled []Node slices
-				// explicitly here.
-				u.lastValidatedBlocks.Delete(*block.Hash())
-				releaseBlockNodes(block)
+				u.reclaimBlockAfterFailedSubtreesSet(block, blockCached)
 				return errors.NewProcessingError("[ValidateBlock][%s] failed to update subtrees DAH", block.Hash().String(), err)
 			}
 		}
 
 		return nil
 	})
+}
+
+// reclaimBlockAfterFailedSubtreesSet is the updateSubtreesDAH failure path's half
+// of the lastValidatedBlocks handover, and reports whether ValidateBlock still owns
+// block afterwards.
+//
+// The failure is ambiguous. SetBlockSubtreesSet can commit on the blockchain server
+// and still return an error (a deadline, or a connection reset during a blockchain
+// restart). The server has then already sent BlockSubtreesSet, and the setMined
+// worker may have taken the block out of the cache and be reading its subtrees.
+// Releasing it here would return node arrays to the pool under that worker, so the
+// hashes it tags as mined could come from another block's subtree.
+//
+// So the block goes to whichever side removes it from the cache. If this call
+// removes it, it releases it, as the old Delete-then-release did. If the entry is
+// already gone, the setMined worker or the cache's eviction function has it and
+// releases it, and the caller must not touch the block's subtrees again. A block
+// that was never cached (cached false) is still only ValidateBlock's, so it is
+// released directly.
+func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block, cached bool) bool {
+	if !cached {
+		releaseBlockNodes(block)
+		return true
+	}
+
+	taken, removed := u.lastValidatedBlocks.GetAndDelete(*block.Hash())
+	if !removed {
+		u.logger.Warnf("[ValidateBlock][%s] block already taken from the validated-blocks cache after a failed subtrees_set, leaving its release to the taker", block.Hash().String())
+		return false
+	}
+
+	releaseBlockNodes(taken)
+
+	// Another Set for the same hash replaced our entry: ours left the cache without
+	// an owner, so it is still ours to release.
+	if taken != block {
+		releaseBlockNodes(block)
+	}
+
+	return true
+}
+
+// detachedBlockCopy returns a new *model.Block with block's header, coinbase and
+// subtree list but none of its loaded subtrees, for a caller that has given up the
+// original object and still needs to queue the block for another attempt. The
+// header and coinbase are shared and read-only on every path that takes them.
+func detachedBlockCopy(block *model.Block) *model.Block {
+	copied := &model.Block{
+		Header:           block.Header,
+		CoinbaseTx:       block.CoinbaseTx,
+		TransactionCount: block.TransactionCount,
+		SizeInBytes:      block.SizeInBytes,
+		Subtrees:         slices.Clone(block.Subtrees),
+		Height:           block.Height,
+		ID:               block.ID,
+		CoinbaseBUMP:     slices.Clone(block.CoinbaseBUMP),
+	}
+	copied.SetNodeAllocator(block.NodeAllocator())
+
+	return copied
 }
 
 // prepareBlockAssembly hands a block whose header checks passed and whose subtrees are in the
