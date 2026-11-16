@@ -17,7 +17,8 @@ const (
 	TxID FieldName = "txID"
 	// Inputs represents the transaction inputs data
 	Inputs FieldName = "inputs"
-	// Outputs represents the transaction outputs data
+	// Outputs populates Data.Tx with the parent outputs. Data.Tx may be a partial
+	// projection: do not hash or serialize it as a complete transaction.
 	Outputs FieldName = "outputs"
 	// External indicates external data associated with the transaction
 	External FieldName = "external"
@@ -69,6 +70,9 @@ const (
 	Reassignments FieldName = "reassignments"
 	// DeleteAtHeight specifies the block height at which the record should be deleted
 	DeleteAtHeight FieldName = "deleteAtHeight"
+	// DAHVersion counts the writes of DeleteAtHeight on a master record. Every writer bumps it with the write,
+	// so a child page write that carries an older version can be refused.
+	DAHVersion FieldName = "dahVer"
 	// CreatedAt is the timestamp when the unmined transaction was first added to the store
 	CreatedAt FieldName = "createdAt"
 	// UnminedSince is the block height when an unmined transaction was first stored.

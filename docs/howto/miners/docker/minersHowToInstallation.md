@@ -49,6 +49,33 @@ Read the quickstart network notes before choosing a network:
 less docs/NETWORKS.md
 ```
 
+### Set the gRPC admin API key
+
+Blockchain refuses to start without `grpc_admin_api_key`, and every other
+service needs the **same** value to call it. The compose files read the key from
+the environment and pass it to every service. Generate a strong random value:
+
+```bash
+openssl rand -hex 32
+```
+
+Put it in the quickstart `.env` file (never commit it):
+
+```bash
+# .env
+grpc_admin_api_key=<the generated value>
+```
+
+If it is missing, `docker compose` refuses to render the stack. If it is empty,
+a known placeholder, or shorter than 16 characters, Blockchain exits with a
+`grpc_admin_api_key is required` configuration error. A service started with a
+different key fails at startup, and turns its readiness check red if the key
+stops matching later.
+
+If you previously set `grpc_admin_api_key.docker.m` in `settings_local.conf`,
+move that same value into `.env` and delete the line. The environment value
+takes precedence, so the old line becomes dead config.
+
 ## Start
 
 Start the stack from the quickstart repository root:

@@ -198,6 +198,43 @@ func NewUTXOWrapperFromReader(ctx context.Context, r io.Reader) (*UTXOWrapper, e
 	return uw, nil
 }
 
+// ErrRecordBoundary is returned by FromReader (and, via
+// NewUTXOWrapperFromReader, its callers) when a read of the next record's
+// leading 32-byte TxID field comes up exactly FooterSize (16) bytes short
+// before the underlying reader reports end-of-stream.
+//
+// Every writer in this package (UTXOSet.CreateUTXOSet, cmd/bitcointoutxoset)
+// unconditionally appends a FooterSize-byte footer (txCount||utxoCount,
+// little-endian) immediately after the final record, with no marker byte in
+// front of it - so this short read is consistent with having reached that
+// footer. It is equally consistent with an unrelated truncation that happens
+// to land at the same 16-byte offset, which looks identical at this level.
+// Callers that care about truncation MUST decode FooterBytes
+// (utxopersister.DecodeFooter) and compare the result against the counts
+// they actually processed before treating the record stream as complete; do
+// not treat this error as success on its own.
+//
+// Callers that have not been updated to do that validation keep their
+// existing "any EOF-shaped signal is a clean end" behaviour unchanged: Is
+// reports this error as equivalent to io.EOF and io.ErrUnexpectedEOF.
+type ErrRecordBoundary struct {
+	// FooterBytes holds the exact FooterSize bytes read before the
+	// underlying reader reported end-of-stream.
+	FooterBytes [FooterSize]byte
+}
+
+// Error implements the error interface.
+func (e *ErrRecordBoundary) Error() string {
+	return "record stream ended exactly at the footer boundary; decode FooterBytes and validate against processed counts before treating this as a clean end"
+}
+
+// Is reports ErrRecordBoundary as equivalent to io.EOF and io.ErrUnexpectedEOF
+// for errors.Is, preserving existing behaviour for callers that do not
+// specifically check for *ErrRecordBoundary (see the type doc comment).
+func (e *ErrRecordBoundary) Is(target error) bool {
+	return target == io.EOF || target == io.ErrUnexpectedEOF
+}
+
 func (uw *UTXOWrapper) FromReader(ctx context.Context, r io.Reader, readUtxos ...bool) error {
 	useReadUtxos := true
 	if len(readUtxos) > 0 {
@@ -212,6 +249,20 @@ func (uw *UTXOWrapper) FromReader(ctx context.Context, r io.Reader, readUtxos ..
 		if err != nil {
 			if err == io.EOF {
 				return io.EOF
+			}
+
+			// A short read that stopped at exactly FooterSize bytes is
+			// consistent with having reached the trailing footer every
+			// writer in this package appends after the last record (see
+			// ErrRecordBoundary), but is not proof of it - a truncation
+			// that happens to land at the same offset looks identical at
+			// this level. Hand the candidate bytes back to the caller
+			// instead of guessing.
+			if n == FooterSize && err == io.ErrUnexpectedEOF {
+				boundary := &ErrRecordBoundary{}
+				copy(boundary.FooterBytes[:], uw.TxID[:FooterSize])
+
+				return boundary
 			}
 
 			return errors.NewStorageError("failed to read txid, expected 32 bytes got %d", n, err)
@@ -319,6 +370,10 @@ func (uw *UTXOWrapper) String() string {
 	return s.String()
 }
 
+// maxExactScriptAlloc is the largest script length NewUTXOFromReader trusts
+// enough to allocate up front; longer scripts use a bounded, growing read.
+const maxExactScriptAlloc = 64 * 1024
+
 // NewUTXOFromReader creates a new UTXO from the provided reader.
 // It deserializes a UTXO by reading the index, value, script length, and script bytes.
 // Returns the UTXO and any error encountered during deserialization.
@@ -349,7 +404,21 @@ func (uw *UTXOWrapper) NewUTXOFromReader(r io.Reader, utxo *UTXO) error {
 	// Read the script length
 	l := uint32(uw.b16[12]) | uint32(uw.b16[13])<<8 | uint32(uw.b16[14])<<16 | uint32(uw.b16[15])<<24
 
-	// l is an untrusted length from the file, so do NOT do make([]byte, l).
+	// Almost every script is small, so read those into an exactly-sized slice:
+	// one allocation, no over-sized backing array retained by the UTXO. The
+	// bound keeps a bogus length from forcing more than a small allocation.
+	if l <= maxExactScriptAlloc {
+		script := make([]byte, l)
+		if _, err := io.ReadFull(r, script); err != nil {
+			return errors.NewStorageError("failed to read utxo script (%d bytes)", l, err)
+		}
+
+		utxo.Script = script
+
+		return nil
+	}
+
+	// Above the bound, l is an untrusted length from the file, so do NOT do make([]byte, l).
 	// io.CopyN here resolves to bytes.Buffer.ReadFrom(io.LimitReader(r, l)),
 	// and ReadFrom grows the buffer in fixed-size (512-byte) increments sized
 	// to the bytes actually read, stopping at the underlying EOF — it never

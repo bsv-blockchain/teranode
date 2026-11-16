@@ -12,12 +12,11 @@ concurrency:
 permissions:
   contents: read
   pull-requests: read
-  id-token: write
 
 env:
   REPO: teranode
   SETTINGS_CONTEXT_DEFAULT: test
-  GO_VERSION: "1.26.0"
+  GO_VERSION: "1.27.0"
 
 jobs:
   smoketest:

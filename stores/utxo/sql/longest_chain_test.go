@@ -75,14 +75,16 @@ func TestMarkTransactionsOnLongestChain(t *testing.T) {
 		err = utxoStore.MarkTransactionsOnLongestChain(ctx, txHashes, false)
 		require.NoError(t, err)
 
-		// Verify unminedSince field is set to current block height
+		// Verify unmined_since was stamped (backdated so the pruner scan sees it at once)
+		expected := utxo.BackdatedUnminedSince(newBlockHeight, utxoStore.settings.UtxoStore.UnminedTxRetention)
+
 		meta1, err := utxoStore.Get(ctx, tx1Hash, fields.UnminedSince)
 		require.NoError(t, err)
-		assert.Equal(t, newBlockHeight, meta1.UnminedSince)
+		assert.Equal(t, expected, meta1.UnminedSince)
 
 		meta2, err := utxoStore.Get(ctx, tx2Hash, fields.UnminedSince)
 		require.NoError(t, err)
-		assert.Equal(t, newBlockHeight, meta2.UnminedSince)
+		assert.Equal(t, expected, meta2.UnminedSince)
 	})
 
 	t.Run("switch back to longest chain", func(t *testing.T) {
@@ -122,7 +124,7 @@ func TestMarkTransactionsOnLongestChain(t *testing.T) {
 		// Verify only tx1 has updated unminedSince
 		meta1, err := utxoStore.Get(ctx, tx1Hash, fields.UnminedSince)
 		require.NoError(t, err)
-		assert.Equal(t, testBlockHeight, meta1.UnminedSince)
+		assert.Equal(t, utxo.BackdatedUnminedSince(testBlockHeight, utxoStore.settings.UtxoStore.UnminedTxRetention), meta1.UnminedSince)
 
 		// tx2 should still have unminedSince = 0 from previous test
 		meta2, err := utxoStore.Get(ctx, tx2Hash, fields.UnminedSince)
@@ -162,4 +164,50 @@ func TestMarkTransactionsOnLongestChain_NonExistent(t *testing.T) {
 		err = utxoStore.MarkTransactionsOnLongestChain(ctx, nonExistentHashes, false)
 		require.NoError(t, err)
 	})
+}
+
+// TestMarkTransactionsOnLongestChain_KeepsEarlierUnminedSince mirrors the Aerospike test
+// for issue 1768: an existing unmined_since must survive a not-on-longest-chain mark, and
+// only a NULL unmined_since is stamped with the current height.
+func TestMarkTransactionsOnLongestChain_KeepsEarlierUnminedSince(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, tx := setup(ctx, t)
+
+	const createdAt = uint32(100)
+	const muchLater = uint32(1305)
+
+	retention := utxoStore.settings.UtxoStore.UnminedTxRetention
+	require.Greater(t, muchLater, retention+createdAt, "test needs headroom above the retention window")
+	require.NoError(t, utxoStore.SetBlockHeight(createdAt))
+
+	txHash := tx.TxIDChainHash()
+
+	_, err := utxoStore.Create(ctx, tx, createdAt)
+	require.NoError(t, err)
+
+	meta, err := utxoStore.Get(ctx, txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Equal(t, createdAt, meta.UnminedSince)
+
+	require.NoError(t, utxoStore.SetBlockHeight(muchLater))
+
+	require.NoError(t, utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*txHash}, false))
+
+	meta, err = utxoStore.Get(ctx, txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	assert.Equal(t, createdAt, meta.UnminedSince, "existing unmined_since must not be pushed forward")
+
+	require.NoError(t, utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*txHash}, true))
+
+	meta, err = utxoStore.Get(ctx, txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Zero(t, meta.UnminedSince)
+
+	require.NoError(t, utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*txHash}, false))
+
+	meta, err = utxoStore.Get(ctx, txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	assert.Equal(t, muchLater-retention, meta.UnminedSince, "NULL unmined_since is stamped backdated by unminedTxRetention")
 }

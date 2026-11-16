@@ -68,8 +68,8 @@ func buildSnapshotWrappers(t *testing.T) (metadata []byte, wrapperBytes [][]byte
 
 // openForReading opens path and positions a bufio.Reader past the per-file
 // header/hash/height/prevHash metadata, exactly as processUTXOs does before
-// handing off to readUTXOWrapperFile.
-func openForReading(t *testing.T, path string) (*os.File, *bufio.Reader) {
+// handing off to readUTXOFrames.
+func openForReading(t testing.TB, path string) (*os.File, *bufio.Reader) {
 	t.Helper()
 
 	f, err := os.Open(path)
@@ -86,6 +86,55 @@ func openForReading(t *testing.T, path string) (*os.File, *bufio.Reader) {
 	require.NoError(t, err)
 
 	return f, reader
+}
+
+// TestReadUTXOWrapperFile_CompleteFile_Succeeds is the happy-path companion
+// to the truncation regression test below: a well-formed snapshot file - the
+// two records built by buildSnapshotWrappers, followed by a real 16-byte
+// footer matching the actual counts - must be accepted, and the drained
+// channel must yield exactly txCount wrappers. This guards against a future
+// change to the footer-count comparison, the skip-empty-wrapper gate, or the
+// footer layout silently making the seeder reject every valid snapshot.
+func TestReadUTXOWrapperFile_CompleteFile_Succeeds(t *testing.T) {
+	metadata, wrapperBytes, txCount, utxoCount := buildSnapshotWrappers(t)
+	require.Len(t, wrapperBytes, 2)
+
+	header := fileformat.NewHeader(fileformat.FileTypeUtxoSet)
+
+	var footer [16]byte
+	binary.LittleEndian.PutUint64(footer[0:8], txCount)
+	binary.LittleEndian.PutUint64(footer[8:16], utxoCount)
+
+	data := make([]byte, 0, len(header.Bytes())+len(metadata)+len(wrapperBytes[0])+len(wrapperBytes[1])+len(footer))
+	data = append(data, header.Bytes()...)
+	data = append(data, metadata...)
+	data = append(data, wrapperBytes[0]...)
+	data = append(data, wrapperBytes[1]...)
+	data = append(data, footer[:]...)
+
+	path := filepath.Join(t.TempDir(), "utxo-set-complete.dat")
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	f, reader := openForReading(t, path)
+
+	frameCh := make(chan []byte, 10)
+
+	var received [][]byte
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		for frame := range frameCh {
+			received = append(received, frame)
+		}
+	}()
+
+	err := readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil)
+	<-done
+
+	require.NoError(t, err, "a complete, well-formed snapshot file must not be rejected")
+	require.Len(t, received, int(txCount), "the drained channel must yield exactly txCount wrappers")
 }
 
 // TestReadUTXOWrapperFile_TruncatedFile_ReturnsError is the regression test
@@ -119,13 +168,13 @@ func TestReadUTXOWrapperFile_TruncatedFile_ReturnsError(t *testing.T) {
 
 	f, reader := openForReading(t, path)
 
-	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, 10)
+	frameCh := make(chan []byte, 10)
 
 	go func() {
-		for range utxoWrapperCh { //nolint:revive // drain channel
+		for range frameCh { //nolint:revive // drain channel
 		}
 	}()
 
-	err := readUTXOWrapperFile(context.Background(), ulogger.TestLogger{}, f, reader, utxoWrapperCh)
+	err := readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil)
 	require.Error(t, err, "a truncated snapshot file must not be reported as a successful import")
 }

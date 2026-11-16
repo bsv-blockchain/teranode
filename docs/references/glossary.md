@@ -2,6 +2,9 @@
 
 **Alert Service**: A system that provides network alert functionality, allowing for UTXO freezing/unfreezing, UTXO reassignment, peer management, and block invalidation for network security and compliance purposes.
 
+Ownership-changing reassignment currently strands the output for both owners;
+see the [Alert Service limitation](../topics/services/alert.md#24-utxo-reassignment).
+
 **Aerospike**: A high-performance, distributed NoSQL database used in Teranode as the primary storage backend for the UTXO Store, providing low-latency access to unspent transaction outputs.
 
 **Asset Service**: Provides HTTP and WebSocket APIs for blockchain data access, serving transactions, subtrees, blocks, block headers, and UTXOs.

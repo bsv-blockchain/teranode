@@ -38,7 +38,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
         - Optional object containing:
 
-            - `provideCoinbaseTx` (boolean, optional, default=false): If true, includes the coinbase transaction in the response
+            - `provideCoinbaseTx` (boolean, optional, default=false): If true, includes the coinbase transaction in the response. This is the coinbase block assembly keeps on the candidate's job, paying the configured `miner_wallet_private_keys` addresses, and the one a solution without its own coinbase is mined with. The call fails if block assembly could not build one, for example because no miner wallet keys are configured
             - `verbosity` (numeric, optional, default=0): 0 for standard response, 1 to include subtree hashes
 
     - Returns: Object containing candidate ID, previous block hash, coinbase value, and merkle proof
@@ -90,7 +90,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
         - `id` (string, required): Mining candidate ID
         - `nonce` (hexadecimal string, required): Nonce value found
-        - `coinbase` (hexadecimal string, required): Complete coinbase transaction
+        - `coinbase` (hexadecimal string, optional): Complete coinbase transaction. If omitted, the block is mined with the coinbase block assembly kept on the candidate's job, the one `getminingcandidate` returns with `provideCoinbaseTx`, as in bitcoin-sv. The miner must then have hashed that coinbase. Omitting it fails if block assembly could not build one, for example because no miner wallet keys are configured
         - `time` (numeric, required): Block time
         - `version` (numeric, optional): Block version
 
@@ -193,15 +193,17 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
     - Returns: Boolean `true` if successful
 
-6. `reassign`: Reassigns ownership of a specific UTXO to a new Bitcoin address
-    - Parameters:
+6. `reassign`: Replaces a frozen UTXO's commitment using its outpoint and the old and new hashes
+    - **Known regression:** do not reassign to a different owner. A successful result can leave the output unspendable by both owners, even after maturity. See the [reassignment limitation](../../topics/services/alert.md#24-utxo-reassignment) and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
+    - Parameters (positional, in this order):
 
-        - `txid` (string, required): The transaction ID of the UTXO
-        - `vout` (numeric, required): The output index
-        - `destination` (string, required): The Bitcoin address to reassign to
+        - `oldtxid` (string, required): Transaction ID of the frozen output, as a hex hash
+        - `oldvout` (numeric, required): Output index
+        - `oldutxohash` (string, required): Current UTXO commitment, as a hex hash
+        - `newutxohash` (string, required): Replacement UTXO commitment, as a hex hash
 
-    - Returns: Boolean `true` if successful
-    - Note: The UTXO must be frozen before it can be reassigned
+    - Returns: JSON `null` on success; an error if hash parsing or the store operation fails
+    - Note: The output must be frozen. The command accepts no destination address and does not store a replacement locking script. Success does not establish spendability.
 
 7. `getrawmempool`: Returns transaction IDs being processed for block assembly
     - Parameters:
@@ -389,7 +391,7 @@ Responses are JSON objects containing the following fields:
 
 ## Example Request
 
-The default credentials are `bitcoin:bitcoin`. The default credentials can be changed via settings.
+Credentials come from the `rpc_user` and `rpc_pass` settings. Teranode ships with both unset, so set them in `settings_local.conf` before using the RPC service. The example below uses `bitcoin:bitcoin`, the pair the throwaway compose rigs configure; substitute your own.
 
 ```bash
 curl --user bitcoin:bitcoin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"version","params":[]}' -H 'content-type: text/plain;' http://localhost:9292/

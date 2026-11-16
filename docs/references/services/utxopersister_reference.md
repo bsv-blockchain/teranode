@@ -146,9 +146,9 @@ type UTXOSet struct {
 
 - `NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, error)`: Creates a new UTXOSet instance for managing UTXOs. It initializes the additions and deletions storers and writes their headers. This constructor prepares the storage for a new block's UTXO additions and deletions.
 
-- `GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error)`: Creates a new UTXOSet instance for an existing block. It's used for reading existing UTXO data rather than creating new data. This method doesn't check if the UTXO set actually exists.
+- `GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, error)`: Creates a new UTXOSet instance for an existing block. It's used for reading existing UTXO data rather than creating new data. This method doesn't check if the UTXO set actually exists. The height is required: the additions and deletions readers check each file's header against the block hash and height.
 
-- `GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, bool, error)`: Creates a new UTXOSet instance and checks if it exists. Unlike GetUTXOSet, this method also verifies if the UTXO set for the specified block exists in storage. Returns the UTXOSet, a boolean indicating existence, and any error encountered.
+- `GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, bool, error)`: Creates a new UTXOSet instance and checks if it exists. Unlike GetUTXOSet, this method also verifies if the UTXO set for the specified block exists in storage. Returns the UTXOSet, a boolean indicating existence, and any error encountered.
 
 #### Methods
 
@@ -369,7 +369,9 @@ Each file type has a specific header format and contains serialized UTXO data.
 - `GetUTXOSetHeaderFromReader(reader io.Reader) (string, *chainhash.Hash, uint32, *chainhash.Hash, error)`: Reads and parses the UTXO set header from a reader.
 - `GetFooter(r io.Reader) (uint64, uint64, error)`: Retrieves transaction and UTXO counts from the footer of a UTXO file. Requires a seekable reader and reads the last 16 bytes containing transaction count and UTXO count.
 - `filterUTXOs(utxos []*UTXO, deletions map[UTXODeletion]struct{}, txID *chainhash.Hash) []*UTXO`: Filters out UTXOs that are present in the deletions map. It removes any UTXOs that have been spent (present in the deletions map) from the provided list.
-- `PadUTXOsWithNil(utxos []*UTXO) []*UTXO`: Pads a slice of UTXOs with nil values to match their indices. It creates a new slice with nil values at positions where no UTXO exists, ensuring that UTXOs are at positions matching their output index.
+- `PadUTXOsWithNil(utxos []*UTXO) ([]*UTXO, error)`: Pads a slice of UTXOs with nil values to match their indices. It creates a new slice with nil values at positions where no UTXO exists, ensuring that UTXOs are at positions matching their output index. Returns an error for an index above `MaxOutputIndex` (111,111,110, the highest output index a consensus-valid transaction can have), since the slice is sized from the highest index.
+- `ReadUTXOWrapperFrame(r io.Reader, buf []byte) ([]byte, uint32, error)`: Reads the next UTXOWrapper record as its raw bytes into `buf` (the returned frame aliases it) and returns the record's highest output index. Same end-of-stream contract as `UTXOWrapper.FromReader`: `io.EOF` at a clean end, `*ErrRecordBoundary` when exactly the 16-byte footer remains.
+- `DecodeUTXOWrapperFrame(frame []byte) (*UTXOWrapper, error)`: Decodes one frame; scripts are views into the frame, so the caller must not modify it afterwards.
 - `UnpadSlice[T any](padded []*T) []*T`: Removes nil values from a padded slice. It creates a new slice containing only the non-nil elements from the input slice.
 - `checkMagic(r io.Reader, magic string) error`: Verifies the magic number in a file header. It reads and validates that the magic identifier in the header matches the expected value.
 

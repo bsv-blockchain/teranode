@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -45,7 +46,8 @@ type Memory struct {
 	options            *options.Options
 	Counters           map[string]int
 	countersMu         sync.Mutex
-	currentBlockHeight uint32
+	currentBlockHeight atomic.Uint32
+	stopCleaner        context.CancelFunc
 }
 
 // New creates a new in-memory blob store with the specified options.
@@ -65,7 +67,14 @@ func New(opts ...options.StoreOption) *Memory {
 		Counters: make(map[string]int),
 	}
 
-	go m.ttlCleaner(context.Background(), 1*time.Minute)
+	// The cleaner is owned by the store, not by the process: Close stops it. Handing
+	// it a background context instead would leak one goroutine per store for the life
+	// of the process, which a goroutine-leak gate reports against whichever package
+	// happens to construct the store.
+	ctx, cancel := context.WithCancel(context.Background())
+	m.stopCleaner = cancel
+
+	go m.ttlCleaner(ctx, 1*time.Minute)
 
 	return m
 }
@@ -77,7 +86,7 @@ func New(opts ...options.StoreOption) *Memory {
 // Parameters:
 //   - blockHeight: The current blockchain height
 func (m *Memory) SetBlockHeight(blockHeight uint32) {
-	m.currentBlockHeight = blockHeight
+	m.currentBlockHeight.Store(blockHeight)
 }
 
 // ttlCleaner runs a periodic cleanup process to remove expired blobs.
@@ -93,7 +102,7 @@ func (m *Memory) ttlCleaner(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-time.After(interval):
-			cleanExpiredFiles(m, m.currentBlockHeight)
+			cleanExpiredFiles(m, m.currentBlockHeight.Load())
 		}
 	}
 }
@@ -141,10 +150,10 @@ func (m *Memory) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return http.StatusOK, "Memory Store", nil
 }
 
-// Close releases resources associated with the memory store.
-// For the memory implementation, this is a no-op operation since there are no
-// external resources to release, but it does increment an internal counter.
-// The method acquires a lock to ensure thread safety with concurrent operations.
+// Close stops the background TTL cleaner and increments an internal counter.
+// The stored blobs stay readable afterwards; what Close ends is the periodic
+// DAH sweep, so a closed store no longer expires anything on its own.
+// Calling it more than once is safe.
 //
 // Parameters:
 //   - ctx: Context for the operation (unused in memory implementation)
@@ -152,6 +161,12 @@ func (m *Memory) Health(ctx context.Context, checkLiveness bool) (int, string, e
 // Returns:
 //   - error: Any error that occurred (always nil for memory store)
 func (m *Memory) Close(_ context.Context) error {
+	// Cancel before taking the lock: the cleaner takes the same lock, so signalling
+	// it first lets it exit rather than block behind us for a sweep it will discard.
+	if m.stopCleaner != nil {
+		m.stopCleaner()
+	}
+
 	// The lock is to ensure that no other operations are happening while we close the store
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -160,7 +175,6 @@ func (m *Memory) Close(_ context.Context) error {
 	m.Counters["close"]++
 	m.countersMu.Unlock()
 
-	// noop
 	return nil
 }
 
@@ -209,7 +223,7 @@ func (m *Memory) Set(ctx context.Context, key []byte, fileType fileformat.FileTy
 	dah := merged.DAH
 
 	if dah == 0 && merged.BlockHeightRetention > 0 {
-		dah = m.currentBlockHeight + merged.BlockHeightRetention
+		dah = m.currentBlockHeight.Load() + merged.BlockHeightRetention
 	}
 
 	var data []byte
@@ -331,5 +345,5 @@ func (m *Memory) ListKeys() [][]byte {
 }
 
 func (m *Memory) SetCurrentBlockHeight(height uint32) {
-	m.currentBlockHeight = height
+	m.currentBlockHeight.Store(height)
 }

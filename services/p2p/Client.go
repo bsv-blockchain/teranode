@@ -368,6 +368,11 @@ func (c *Client) RecordCatchupSuccess(ctx context.Context, peerID string, durati
 	req := &p2p_api.RecordCatchupSuccessRequest{
 		PeerId:     peerID,
 		DurationMs: durationMs,
+		// Every current caller reports a whole completed catchup operation
+		// (header batches moved to ReportValidBlockHeaders), so the receiver may
+		// settle the sync slot. Older senders leave this false, and their
+		// header-batch credits must not settle the sync.
+		CatchupCompleted: true,
 	}
 
 	resp, err := c.client.RecordCatchupSuccess(ctx, req)
@@ -466,32 +471,6 @@ func (c *Client) UpdateCatchupError(ctx context.Context, peerID string, errorMsg
 
 	if resp != nil && !resp.Ok {
 		return errors.NewServiceError("failed to update catchup error")
-	}
-
-	return nil
-}
-
-// UpdateCatchupReputation updates the reputation score for a peer.
-// Parameters:
-//   - ctx: Context for the operation
-//   - peerID: The peer ID to update reputation for
-//   - score: Reputation score between 0 and 100
-//
-// Returns:
-//   - error: Any error encountered during the operation
-func (c *Client) UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error {
-	req := &p2p_api.UpdateCatchupReputationRequest{
-		PeerId: peerID,
-		Score:  score,
-	}
-
-	resp, err := c.client.UpdateCatchupReputation(ctx, req)
-	if err != nil {
-		return err
-	}
-
-	if resp != nil && !resp.Ok {
-		return errors.NewServiceError("failed to update catchup reputation")
 	}
 
 	return nil
@@ -715,18 +694,19 @@ func (c *Client) IsPeerMalicious(ctx context.Context, peerID string) (bool, stri
 //   - bool: True if the peer is considered unhealthy
 //   - string: Reason why the peer is considered unhealthy (if applicable)
 //   - float32: The peer's current reputation score
+//   - bool: True if the peer is absent from the registry (no information, not a verdict)
 //   - error: Any error encountered during the operation
-func (c *Client) IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, error) {
+func (c *Client) IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, bool, error) {
 	req := &p2p_api.IsPeerUnhealthyRequest{
 		PeerId: peerID,
 	}
 
 	resp, err := c.client.IsPeerUnhealthy(ctx, req)
 	if err != nil {
-		return false, "", 0, err
+		return false, "", 0, false, err
 	}
 
-	return resp.IsUnhealthy, resp.Reason, resp.ReputationScore, nil
+	return resp.IsUnhealthy, resp.Reason, resp.ReputationScore, resp.Unknown, nil
 }
 
 // GetPeerRegistry retrieves the comprehensive peer registry data from the P2P service.
@@ -760,6 +740,12 @@ func (c *Client) GetPeerRegistry(ctx context.Context) ([]*PeerInfo, error) {
 // Returns:
 //   - error: Any error encountered during the operation
 func (c *Client) RecordBytesDownloaded(ctx context.Context, peerID string, bytesDownloaded uint64) error {
+	// Callers detach this call from their own cancellation and make it inline
+	// as a fetch closes, so bound it: a stuck p2p service must not hold block
+	// fetching or subtree checking.
+	ctx, cancel := context.WithTimeout(ctx, recordBytesDownloadedTimeout)
+	defer cancel()
+
 	req := &p2p_api.RecordBytesDownloadedRequest{
 		PeerId:          peerID,
 		BytesDownloaded: bytesDownloaded,
@@ -776,6 +762,10 @@ func (c *Client) RecordBytesDownloaded(ctx context.Context, peerID string, bytes
 
 	return nil
 }
+
+// recordBytesDownloadedTimeout bounds RecordBytesDownloaded. A var so tests
+// can shorten it.
+var recordBytesDownloadedTimeout = 5 * time.Second
 
 // GetPeer retrieves information about a specific peer from the P2P service.
 // Returns nil if the peer is not found in the registry.
@@ -831,10 +821,11 @@ func convertFromAPIPeerInfo(apiPeer interface{}) (*PeerInfo, error) {
 		}
 
 		return &PeerInfo{
-			ID:            peerID,
-			Height:        p.CurrentHeight,
-			BanScore:      int(p.Banscore),
-			BytesReceived: p.BytesReceived,
+			ID:               peerID,
+			Height:           p.CurrentHeight,
+			AdvertisedHeight: p.AdvertisedHeight,
+			BanScore:         int(p.Banscore),
+			BytesReceived:    p.BytesReceived,
 		}, nil
 
 	case *p2p_api.PeerInfoForCatchup:
@@ -874,6 +865,7 @@ func convertFromAPIPeerInfo(apiPeer interface{}) (*PeerInfo, error) {
 			ID:                     peerID,
 			ClientName:             p.ClientName,
 			Height:                 p.Height,
+			AdvertisedHeight:       p.AdvertisedHeight,
 			BlockHash:              blockHash,
 			DataHubURL:             p.DataHubUrl,
 			BanScore:               int(p.BanScore),
@@ -898,6 +890,9 @@ func convertFromAPIPeerInfo(apiPeer interface{}) (*PeerInfo, error) {
 			CatchupAttempts:        p.CatchupAttempts,
 			CatchupSuccesses:       p.CatchupSuccesses,
 			CatchupFailures:        p.CatchupFailures,
+			BlocksReceived:         p.BlocksReceived,
+			SubtreesReceived:       p.SubtreesReceived,
+			TransactionsReceived:   p.TransactionsReceived,
 		}, nil
 
 	default:

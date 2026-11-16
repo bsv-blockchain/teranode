@@ -2,6 +2,8 @@ package tests
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
@@ -546,6 +549,15 @@ func crashSpender(t *testing.T, ctx context.Context, db utxostore.Store, parent 
 // Runs against a bare store (no BlockAssembler), so it covers SQLite, Postgres
 // and Aerospike via the shared backend test suites.
 func ConflictWALCrashRecovery(t *testing.T, db utxostore.Store) {
+	t.Run("journal_confirmed_winner", func(t *testing.T) { ConflictRecoveryConfirmedWinner(t, db) })
+	t.Run("journal_related_winners", func(t *testing.T) { ConflictRecoveryRelatedWinners(t, db) })
+	t.Run("journal_unexpected_owner", func(t *testing.T) { ConflictRecoveryUnexpectedOwner(t, db) })
+	t.Run("journal_persistence", func(t *testing.T) { ConflictRecoveryPersistence(t, db) })
+	t.Run("journal_descendant_retry", func(t *testing.T) { ConflictRecoveryDescendants(t, db) })
+	t.Run("journal_failure_boundaries", func(t *testing.T) { ConflictRecoveryFailures(t, db) })
+	t.Run("journal_forward_own_block", func(t *testing.T) { ConflictRecoveryForwardOwnBlock(t, db) })
+	t.Run("journal_foreign_lock", func(t *testing.T) { ConflictRecoveryForeignLock(t, db) })
+
 	ctx := context.Background()
 	require.NoError(t, db.SetBlockHeight(20))
 
@@ -620,17 +632,14 @@ func ConflictWALCrashRecovery(t *testing.T, db utxostore.Store) {
 			intent := utxostore.ConflictIntent{Kind: utxostore.ConflictIntentForward, BlockHeight: 20, TxHashes: []chainhash.Hash{*txW.TxIDChainHash()}, StartedAt: 1}
 			require.NoError(t, db.BeginConflictIntent(ctx, intent))
 
-			// Replay: seed the processed-hashes map exactly as BlockAssembler does.
-			seeded := map[chainhash.Hash]struct{}{*txW.TxIDChainHash(): {}}
-			_, _, err = utxostore.ProcessConflicting(ctx, db, 20, chainhash.Hash{}, []chainhash.Hash{*txW.TxIDChainHash()}, seeded)
+			// Legacy intents have no before-image. Do not guess spend or lock
+			// ownership from the partial state; preserve the record for repair.
+			_, _, err = utxostore.ProcessConflicting(ctx, db, 20, chainhash.Hash{}, []chainhash.Hash{*txW.TxIDChainHash()}, nil, utxostore.NoAncestryGuard)
+			require.ErrorContains(t, err, "no recovery checklist")
+			pending, err := db.PendingConflictIntents(ctx)
 			require.NoError(t, err)
+			require.NotEmpty(t, pending)
 			require.NoError(t, db.CompleteConflictIntent(ctx, intent.IntentID()))
-
-			require.False(t, crashConflicting(t, ctx, db, txW.TxIDChainHash()), "winner must not be conflicting after replay")
-			require.True(t, crashConflicting(t, ctx, db, txL.TxIDChainHash()), "loser must remain conflicting after replay")
-			require.NotNil(t, crashSpender(t, ctx, db, parent))
-			require.Equal(t, txW.TxIDChainHash().String(), crashSpender(t, ctx, db, parent).String(), "parent[0] must be spent by the winner")
-			require.False(t, crashLocked(t, ctx, db, parent.TxIDChainHash()), "parent must be unlocked after replay")
 		})
 	}
 
@@ -736,7 +745,7 @@ func Sanity(t *testing.T, db utxostore.Store) {
 		spentTx := bt.NewTx()
 		require.NoError(t, spentTx.From(stx.TxIDChainHash().String(), 0, stx.Outputs[0].LockingScript.String(), stx.Outputs[0].Satoshis))
 		require.NoError(t, spentTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", i))
-		require.NoError(t, spentTx.ChangeToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", &bt.FeeQuote{}))
+		require.NoError(t, spentTx.ChangeToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", bt.NewFeeQuote()))
 
 		_, _, err = db.SpendAndCreate(ctx, spentTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 		require.NoError(t, err)
@@ -772,7 +781,9 @@ func Benchmark(b *testing.B, db utxostore.Store) {
 	spentTx := bt.NewTx()
 	_ = spentTx.From(Tx.TxIDChainHash().String(), 0, Tx.Outputs[0].LockingScript.String(), Tx.Outputs[0].Satoshis)
 	_ = spentTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1)
-	_ = spentTx.ChangeToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", &bt.FeeQuote{})
+	if err := spentTx.ChangeToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", bt.NewFeeQuote()); err != nil {
+		b.Fatal(err)
+	}
 
 	for i := 0; i < b.N; i++ {
 		_, _, err := db.SpendAndCreate(ctx, Tx, 100, utxostore.WithCreateOnly())
@@ -1497,6 +1508,33 @@ func newSpendAndCreateTx(t *testing.T, vout uint32, satoshis uint64) *bt.Tx {
 	return tx
 }
 
+// newSpendAndCreateTxWithOutputs builds an extended transaction spending output
+// `vout` of Tx and paying to `numOutputs` addresses. The satoshi amount on the
+// first output makes the txid unique per test case; the remaining outputs each
+// carry one satoshi. A transaction with more outputs than utxostore_utxoBatchSize
+// paginates on the Aerospike backend, which is what the paginated store-contract
+// case exercises.
+func newSpendAndCreateTxWithOutputs(t *testing.T, vout uint32, satoshis uint64, numOutputs int) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+	require.NoError(t, tx.FromUTXOs(&bt.UTXO{
+		TxIDHash:      Tx.TxIDChainHash(),
+		Vout:          vout,
+		LockingScript: Tx.Outputs[vout].LockingScript,
+		Satoshis:      Tx.Outputs[vout].Satoshis,
+	}))
+	tx.Inputs[0].UnlockingScript = dummyUnlockingScript
+
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", satoshis))
+
+	for i := 1; i < numOutputs; i++ {
+		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1))
+	}
+
+	return tx
+}
+
 // SpendAndCreate proves the combined call spends the tx's inputs and creates its
 // outputs in one operation.
 func SpendAndCreate(t *testing.T, db utxostore.Store) {
@@ -1524,6 +1562,55 @@ func SpendAndCreate(t *testing.T, db utxostore.Store) {
 	created, err := db.Get(ctx, spendingTx.TxIDChainHash())
 	require.NoError(t, err)
 	require.Equal(t, spendingTx.TxIDChainHash().String(), created.Tx.TxID())
+}
+
+// CreateReturnsWrittenState proves the record a create hands back says what was written: the
+// Locked and Conflicting state the options asked for, and the parent inpoints.
+//
+// Callers act on that record without reading the row back. The validator unlocks a
+// transaction after delivering it to block assembly only when the returned record says
+// Locked; a store that locked the row but returned Locked=false left it locked, and the next
+// child spending it was refused with ErrTxLocked. Subtree validation reads Conflicting from
+// the same record, and the txmeta cache treats a non-coinbase entry with no parents as a miss.
+//
+// SpendAndCreate with WithCreateOnly is the create entry point of the Store interface. Each case
+// deletes its transaction first so the function also runs against a store shared between
+// subtests.
+func CreateReturnsWrittenState(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	// The parent has to exist: a conflicting create notes itself on its parents, and the sql
+	// store refuses that note for a parent it does not hold.
+	if _, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly()); err != nil {
+		require.ErrorIs(t, err, errors.ErrTxExists)
+	}
+
+	for i, tc := range []struct {
+		name        string
+		opts        []utxostore.CreateOption
+		locked      bool
+		conflicting bool
+	}{
+		{"plain", nil, false, false},
+		{"locked", []utxostore.CreateOption{utxostore.WithLocked(true)}, true, false},
+		{"conflicting", []utxostore.CreateOption{utxostore.WithConflicting(true)}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A distinct satoshi amount gives each case its own txid.
+			tx := newSpendAndCreateTx(t, 0, uint64(3000+i)) //nolint:gosec // small test index
+			_ = db.Delete(ctx, tx.TxIDChainHash())
+
+			md, _, err := db.SpendAndCreate(ctx, tx, db.GetBlockHeight()+1,
+				append([]utxostore.CreateOption{utxostore.WithCreateOnly()}, tc.opts...)...)
+			require.NoError(t, err)
+			require.NotNil(t, md)
+
+			require.Equal(t, tc.locked, md.Locked, "returned Locked must match what was written")
+			require.Equal(t, tc.conflicting, md.Conflicting, "returned Conflicting must match what was written")
+			require.Equal(t, []chainhash.Hash{*Tx.TxIDChainHash()}, md.TxInpoints.ParentTxHashes,
+				"returned record must carry the parent inpoints")
+		})
+	}
 }
 
 // SpendAndCreateCreateOnly proves WithCreateOnly skips the spend phase entirely.
@@ -1636,4 +1723,1098 @@ func SpendAndCreateSpendErrorSurfacesPerInput(t *testing.T, db utxostore.Store) 
 func SpendAndCreateInvalidOptions(t *testing.T, db utxostore.Store) {
 	_, _, err := db.SpendAndCreate(context.Background(), Tx, 1000, utxostore.WithCreateOnly(), utxostore.WithSpendOnly())
 	require.ErrorIs(t, err, errors.ErrInvalidArgument)
+}
+
+// SetConflictingAfterCreate exercises SetConflicting(true) on a stored tx that has
+// both inputs and outputs — the shape that used to self-deadlock the SQL store on
+// SQLite.
+//
+// The store's SetConflicting opened a write transaction and then, inside the loop,
+// called s.Get and per-output s.GetSpend, both of which query the connection pool
+// rather than that transaction. On SQLite's single writer lock those reads waited
+// for a connection blocked on the very lock this call stack held, so Commit was
+// never reached. It stayed latent precisely because no dual-backend test covered
+// this path: the only other caller of SetConflicting(..., true) runs against
+// Aerospike and Postgres only. This test is that missing coverage, so the reads
+// cannot drift back inside the transaction unnoticed.
+//
+// The bounded wait is deliberate, with a caveat worth knowing: on regression the
+// store deadlocks holding SQLite's writer lock, so this test's own cleanup blocks
+// too and the package still ends in a test-binary timeout — verified against the
+// pre-fix store, versus ~10ms once the reads are outside the transaction.
+//
+// The diagnosis is written to stderr rather than t.Log because CI runs without -v
+// (`gotestsum --format pkgname -- -race ...`), and without -v the testing package
+// buffers a hanging test's output, so a t.Log/require.Fail message never appears —
+// only "panic: test timed out". Stderr is unbuffered, so the line survives; the
+// panic's goroutine dump naming SetConflicting is the backstop.
+func SetConflictingAfterCreate(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	// newTestTx's input references the shared Tx fixture, and marking a tx
+	// conflicting walks its inputs to update the parent's bookkeeping, so the
+	// parent has to exist.
+	createdFixture := true
+
+	if _, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly()); err != nil {
+		require.ErrorIs(t, err, errors.ErrTxExists, "parent fixture must either be created here or already present")
+
+		createdFixture = false
+	}
+
+	// Only clean up the shared fixture if this call is what created it. Deleting it
+	// unconditionally would remove a fixture an earlier subtest owns — the aerospike
+	// suite shares one store across subtests — and break whatever runs next.
+	defer func() {
+		if createdFixture {
+			_ = db.Delete(ctx, Tx.TxIDChainHash())
+		}
+	}()
+
+	child := newTestTx(t, 8_400_000)
+
+	_, _, err := db.SpendAndCreate(ctx, child, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	defer func() { _ = db.Delete(ctx, child.TxIDChainHash()) }()
+
+	// Bound the call's own context, not just the wait, so the goroutine cannot
+	// outlive this test indefinitely.
+	//
+	// Measured caveat, so nobody reads more into this than it delivers: it does NOT
+	// make a regression local. Re-running this test against the pre-fix store with
+	// this deadline in place still ends in "panic: test timed out" — SQLite's
+	// writer-lock wait is not interruptible by context cancellation, and this
+	// test's own cleanup blocks on the same lock. What does survive is the stderr
+	// line below (verified present in that run) plus the panic's goroutine dump
+	// naming SetConflicting. The deadline is hygiene, not the diagnostic.
+	setCtx, cancelSet := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelSet()
+
+	done := make(chan error, 1)
+
+	go func() {
+		_, _, setErr := db.SetConflicting(setCtx, []chainhash.Hash{*child.TxIDChainHash()}, true)
+		done <- setErr
+	}()
+
+	select {
+	case setErr := <-done:
+		require.NoError(t, setErr)
+	case <-time.After(15 * time.Second):
+		fmt.Fprintf(os.Stderr, "\nSetConflictingAfterCreate: SetConflicting did not return within 15s — the store is deadlocking, reads have moved back inside the write transaction\n")
+		require.Fail(t, "SetConflicting did not return within 15s — the store is deadlocking, reads have moved back inside the write transaction")
+	}
+
+	md, err := db.Get(ctx, child.TxIDChainHash())
+	require.NoError(t, err)
+	require.True(t, md.Conflicting, "conflicting flag must be set after SetConflicting(true)")
+}
+
+// PartialSpendRollback asserts the store's spend atomicity contract: when Spend
+// returns an error, none of the spends that succeeded in that batch may remain
+// applied.
+//
+// Why this is a hard contract and not an optimisation: Validate spends the
+// parents BEFORE it creates the spending tx's own record (Validator.go
+// spendUtxos → CreateInUtxoStore). A surviving partial spend therefore leaves a
+// parent whose spendingData names a tx that has no record and never will —
+// a dangling spender ref. Every reader that walks that ref
+// (GetCounterConflictingTxHashes → GetConflictingChildren) fails with
+// TX_NOT_FOUND, which permanently wedges block validation on any later block
+// that legitimately spends the same output (#1214).
+//
+// The two failure classes covered here are the ones observed in the field: a
+// locked parent and a missing parent. Both are handed to callers that park the
+// tx and never guarantee a retry (legacy netsync's orphan pool is an expiring
+// map), so "the retry will re-apply the spends" does not hold.
+//
+// The sql and aerospike stores run this through PartialSpendRollback, which is
+// PerInputSpends. The utxoset store runs it as AtomicSpends. SpendModel says why
+// the two are held to different assertions in three subtests.
+func PartialSpendRollback(t *testing.T, db utxostore.Store) {
+	PartialSpendRollbackFor(t, db, PerInputSpends)
+}
+
+// SpendModel says how a store applies the spends of ONE transaction's inputs. It
+// decides what PartialSpendRollbackFor asserts in the three subtests where the
+// stores differ. Everywhere else the contract is the same for every store.
+//
+// The difference is real, not a tolerance. Read this before "aligning" one model
+// with the other.
+type SpendModel int
+
+const (
+	// PerInputSpends is the sql and aerospike model. Each parent's spend is its own
+	// write, so when one input fails, the inputs before it are already spent and the
+	// store must undo them afterwards.
+	//
+	// That undo cannot always be done safely. A spend records only {TxID, Vin}, with
+	// no identity for the attempt that wrote it, so the undo cannot tell its own
+	// spend from a concurrent attempt at the same txid that is winning right now.
+	// When the failure is transient (ErrTxLocked: the parent is between its create
+	// and its block-assembly acknowledgement), such a winner is possible, and
+	// clearing its spend lets the node mine a double spend. So these stores keep
+	// the partial spend on a locked parent on purpose, and accept the dangling
+	// spender ref of #1214 as the smaller harm; create-first ordering (#1355)
+	// covers it. The "locked parent" subtest pins that trade.
+	//
+	// These stores also check a parent's flags before they check whether the
+	// same spender already spent it. So a transaction that is validated again
+	// after one of its parents was locked or marked conflicting gets ErrTxLocked or
+	// ErrTxConflicting, although its spends were already made.
+	PerInputSpends SpendModel = iota
+
+	// AtomicSpends is the utxoset model. All the inputs of one transaction are
+	// spent in one PostgreSQL transaction: every input is spent, or none is. The
+	// unit is one transaction, not a batch. A batch that carries many callers'
+	// transactions rejects only the failing transaction and commits the others,
+	// and when a batch as a whole fails, each transaction is run again alone
+	// (stores/utxo/utxoset/spend_and_create_batch.go).
+	//
+	// Two consequences, and they are why this model has its own assertions:
+	//
+	//   - A failed spend leaves nothing behind. When one parent is locked, the
+	//     spend of the good parent is never committed, so there is no dangling
+	//     ref and nothing to undo. The race that stops the per-input stores from
+	//     undoing cannot occur, because no other attempt ever sees the partial
+	//     spend. Asserting the per-input outcome here would require this store to
+	//     commit a partial spend on purpose, which is the #1214 defect.
+	//
+	//   - A transaction validated again after its spends were made is a replay.
+	//     The store sees that this spender already spent each input, and answers
+	//     success without testing the parent's flags again. Success is the
+	//     accurate answer: the spends exist and nothing changed. Callers read
+	//     ErrTxLocked as "try again later" (the validator retries, propagation
+	//     answers HTTP 409, legacy netsync parks the transaction), which is wrong
+	//     for a transaction the store already holds.
+	AtomicSpends
+)
+
+// PartialSpendRollbackFor is PartialSpendRollback for a store with the given
+// SpendModel.
+func PartialSpendRollbackFor(t *testing.T, db utxostore.Store, model SpendModel) {
+	ctx := context.Background()
+
+	// requireUnspent asserts that parent's output 0 carries no spendingData.
+	requireUnspent := func(t *testing.T, parent *bt.Tx, msg string) {
+		t.Helper()
+
+		utxoHash, err := util.UTXOHashFromOutput(parent.TxIDChainHash(), parent.Outputs[0], 0)
+		require.NoError(t, err)
+
+		resp, err := db.GetSpend(ctx, &utxostore.Spend{
+			TxID:     parent.TxIDChainHash(),
+			Vout:     0,
+			UTXOHash: utxoHash,
+		})
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore.Status_OK), resp.Status, msg)
+		require.Nil(t, resp.SpendingData, msg)
+	}
+
+	// childSpending builds a tx spending output 0 of each given parent.
+	childSpending := func(t *testing.T, payTo uint64, parents ...*bt.Tx) *bt.Tx {
+		t.Helper()
+
+		child := bt.NewTx()
+		for _, parent := range parents {
+			require.NoError(t, child.From(
+				parent.TxIDChainHash().String(), 0,
+				parent.Outputs[0].LockingScript.String(),
+				parent.Outputs[0].Satoshis,
+			))
+		}
+
+		require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", payTo))
+
+		return child
+	}
+
+	// The locked case is deliberately NOT rolled back, and this subtest pins that
+	// so nobody "fixes" it back. ErrTxLocked is transient — the parent's record is
+	// locked only for the two-phase-commit window between its create and its
+	// block-assembly ack — so a concurrent attempt at the same txid may be spending
+	// these very inputs successfully right now. spendingData is {TxID, Vin} with no
+	// attempt identity, so a rollback cannot tell that winner's slots from its own
+	// and would clear them, leaving a live or mined tx whose input reads unspent:
+	// the inverse of #1214 and worse, because the node would then mine a
+	// double-spend. That failure was reproduced (0/10 pre-PR vs 1/10-2/5 with an
+	// unconditional rollback), which is why this class is excluded.
+	//
+	// The consequence, stated plainly: the ErrTxLocked flavour of the #1214
+	// dangling ref survives this rollback. Create-first ordering (#1355) is what
+	// covers it, by making the record exist before any spend.
+	lockedParentName := "locked parent does not roll back, leaving the known uncovered ref"
+	if model == AtomicSpends {
+		lockedParentName = "locked parent leaves nothing spent, because the spend is atomic"
+	}
+
+	t.Run(lockedParentName, func(t *testing.T) {
+		good := newTestTx(t, 7_100_000)
+		locked := newTestTx(t, 7_200_000)
+
+		_, _, err := db.SpendAndCreate(ctx, good, 1000, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		defer func() { _ = db.Delete(ctx, good.TxIDChainHash()) }()
+
+		_, _, err = db.SpendAndCreate(ctx, locked, 1000, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		defer func() { _ = db.Delete(ctx, locked.TxIDChainHash()) }()
+
+		require.NoError(t, db.SetLocked(ctx, []chainhash.Hash{*locked.TxIDChainHash()}, true))
+
+		child := childSpending(t, 1100, good, locked)
+
+		_, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
+		require.Error(t, err, "spend must fail while one parent is locked")
+		require.ErrorIs(t, err, errors.ErrUtxoError)
+		require.Len(t, spends, 2)
+		require.NoError(t, spends[0].Err, "the unlocked parent's spend is expected to succeed")
+		require.ErrorIs(t, spends[1].Err, errors.ErrTxLocked)
+
+		// The sql batch path can attach one item's error to another item's slot, and
+		// both rollback predicates scan per-item errors with errors.Is — so pin that
+		// this pure-lock batch stays free of an unwinnable class. Contamination is
+		// benign for a whole-batch predicate (it can only surface a class genuinely
+		// present somewhere in the batch, which is what the predicate asks anyway),
+		// but these predicates now gate a corruption invariant, so the pure case is
+		// worth asserting rather than assuming.
+		require.False(t, errors.Is(spends[1].Err, errors.ErrSpent),
+			"transient-lock-only batch must not carry an unwinnable class, or the rollback gate flips")
+
+		// AtomicSpends: the good parent's spend was in the same database transaction as
+		// the failed one, so it was never committed. No ref, dangling or otherwise.
+		if model == AtomicSpends {
+			requireUnspent(t, good, "an atomic store must not commit any input of a failed spend")
+
+			_, err = db.Get(ctx, child.TxIDChainHash())
+			require.ErrorIs(t, err, errors.ErrTxNotFound, "a spend-only call creates no record")
+
+			return
+		}
+
+		// Still spent by the child, whose record does not exist: this IS the #1214
+		// shape, left in place on purpose. Asserting it keeps the trade explicit.
+		utxoHash, err := util.UTXOHashFromOutput(good.TxIDChainHash(), good.Outputs[0], 0)
+		require.NoError(t, err)
+
+		resp, err := db.GetSpend(ctx, &utxostore.Spend{
+			TxID:     good.TxIDChainHash(),
+			Vout:     0,
+			UTXOHash: utxoHash,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, resp.SpendingData,
+			"a transient-lock failure must NOT be rolled back: clearing a slot a concurrent winner may own is worse than the ref")
+		require.Equal(t, child.TxIDChainHash().String(), resp.SpendingData.TxID.String())
+
+		_, err = db.Get(ctx, child.TxIDChainHash())
+		require.ErrorIs(t, err, errors.ErrTxNotFound, "the spender's record was never created — this is the ref #1355 covers")
+	})
+
+	t.Run("missing parent rolls back the spend on the good parent", func(t *testing.T) {
+		good := newTestTx(t, 7_300_000)
+		missing := newTestTx(t, 7_400_000) // deliberately never Created
+
+		_, _, err := db.SpendAndCreate(ctx, good, 1000, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		defer func() { _ = db.Delete(ctx, good.TxIDChainHash()) }()
+
+		child := childSpending(t, 1200, good, missing)
+
+		_, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
+		require.Error(t, err, "spend must fail while one parent is absent")
+		require.ErrorIs(t, err, errors.ErrUtxoError)
+		require.Len(t, spends, 2)
+		require.NoError(t, spends[0].Err, "the present parent's spend is expected to succeed")
+		require.ErrorIs(t, spends[1].Err, errors.ErrTxNotFound)
+
+		requireUnspent(t, good, "partial spend survived a missing-parent failure: parent now names a spender whose record was never created")
+	})
+
+	// Regression guard for a behaviour main HAS and this branch briefly lost: a
+	// batch containing BOTH a transient lock and an "unwinnable" failure must still
+	// roll back.
+	//
+	// The transient-lock exclusion above rests on "a concurrent attempt at this same
+	// txid may be winning right now". That premise dies the moment anything in the
+	// batch proves the tx unwinnable — ErrSpent here, since a rival already owns
+	// taken:0. A concurrent attempt at the same txid sees the same outpoint, hits the
+	// same ErrSpent, and can never reach Create either, so nobody can be a legitimate
+	// owner and the rollback is both safe and required.
+	//
+	// Pre-PR code rolled back here (ErrSpent was in the old error-class allowlist), so
+	// a batch-level lock exclusion is a regression rather than merely an uncovered
+	// case. Verified in both directions: this fails with a batch-level exclusion and
+	// passes on main.
+	t.Run("transient lock plus an unwinnable failure still rolls back", func(t *testing.T) {
+		good := newTestTx(t, 8_100_000)
+		locked := newTestTx(t, 8_200_000)
+		taken := newTestTx(t, 8_300_000)
+
+		for _, parent := range []*bt.Tx{good, locked, taken} {
+			_, _, err := db.SpendAndCreate(ctx, parent, 1000, utxostore.WithCreateOnly())
+			require.NoError(t, err)
+
+			hash := parent.TxIDChainHash()
+
+			defer func() { _ = db.Delete(ctx, hash) }()
+		}
+
+		// A rival takes taken:0, so our child's spend of it comes back ErrSpent and
+		// the child can never be valid.
+		rival := childSpending(t, 1400, taken)
+		rival.Inputs[0].UnlockingScript = dummyUnlockingScript
+
+		_, _, err := db.SpendAndCreate(ctx, rival, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
+		require.NoError(t, err)
+
+		require.NoError(t, db.SetLocked(ctx, []chainhash.Hash{*locked.TxIDChainHash()}, true))
+
+		child := childSpending(t, 1450, good, locked, taken)
+		for _, in := range child.Inputs {
+			in.UnlockingScript = dummyUnlockingScript
+		}
+
+		_, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
+		require.Error(t, err)
+		require.Len(t, spends, 3)
+		require.NoError(t, spends[0].Err, "the free parent's spend is expected to succeed")
+		require.ErrorIs(t, spends[1].Err, errors.ErrTxLocked)
+		require.ErrorIs(t, spends[2].Err, errors.ErrSpent)
+
+		requireUnspent(t, good, "a transient lock must not suppress the rollback when the batch also proves the tx unwinnable: the child can never exist, so this parent is left naming a record-less spender")
+	})
+
+	// The rollback is scoped to its purpose: it exists to stop a parent naming a
+	// spender that has no record. When the spender DOES have a record the ref is
+	// not dangling, and rolling back would be the harmful move — it would clear a
+	// slot a live (possibly mined) tx legitimately owns. This is reachable because
+	// the store checks the parent record's locked/conflicting flags BEFORE the
+	// per-UTXO "already spent by the same spender" idempotency check, so
+	// re-validating an existing tx can fail on one parent while succeeding on
+	// another.
+	//
+	// Two failure classes are exercised below, deliberately. The old (pre-#1214)
+	// rollback gate matched an error-class allowlist (ErrSpent | ErrTxConflicting
+	// | ErrFrozen | ErrUtxoHashMismatch) with no existence check at all. ErrTxLocked
+	// was never in that allowlist, so a locked-only variant of this scenario passes
+	// on old code too — for the wrong reason, since the old code never even asked
+	// whether "child" had a record; it simply never rolled back on that error class.
+	// ErrTxConflicting WAS in the old allowlist, so the conflicting variant is the
+	// one that actually discriminates: on pre-fix code it wrongly clears "good"'s
+	// spend here, because the old gate rolls back on ErrTxConflicting unconditionally.
+	t.Run("failure does not roll back when the spending tx already has a record (locked parent)", func(t *testing.T) {
+		good := newTestTx(t, 7_500_000)
+		lockedLater := newTestTx(t, 7_600_000)
+
+		_, _, err := db.SpendAndCreate(ctx, good, 1000, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		defer func() { _ = db.Delete(ctx, good.TxIDChainHash()) }()
+
+		_, _, err = db.SpendAndCreate(ctx, lockedLater, 1000, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		defer func() { _ = db.Delete(ctx, lockedLater.TxIDChainHash()) }()
+
+		child := childSpending(t, 1300, good, lockedLater)
+		child.Inputs[0].UnlockingScript = dummyUnlockingScript
+		child.Inputs[1].UnlockingScript = dummyUnlockingScript
+
+		// The child is fully accepted: both parents spent, own record created.
+		_, _, err = db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1)
+		require.NoError(t, err)
+
+		defer func() { _ = db.Delete(ctx, child.TxIDChainHash()) }()
+
+		// One parent then gets locked, and the child is re-validated (duplicate
+		// relay, re-processing of a block, ...). ErrTxLocked was NOT in the old
+		// gate's allowlist, so this variant alone would also pass on pre-fix
+		// code -- it is kept for coverage of this failure class under the
+		// current existence-based gate, not as the discriminating case.
+		require.NoError(t, db.SetLocked(ctx, []chainhash.Hash{*lockedLater.TxIDChainHash()}, true))
+
+		_, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
+		require.Len(t, spends, 2)
+
+		if model == AtomicSpends {
+			// A replay of spends this spender already made: success, flags not tested
+			// again. See AtomicSpends.
+			require.NoError(t, err, "a replay of spends the same spender already made is not a failure")
+			require.NoError(t, spends[0].Err)
+			require.NoError(t, spends[1].Err)
+		} else {
+			require.Error(t, err)
+			require.NoError(t, spends[0].Err, "the unlocked parent's spend is idempotent for the same spender")
+			require.ErrorIs(t, spends[1].Err, errors.ErrTxLocked)
+		}
+
+		utxoHash, err := util.UTXOHashFromOutput(good.TxIDChainHash(), good.Outputs[0], 0)
+		require.NoError(t, err)
+
+		resp, err := db.GetSpend(ctx, &utxostore.Spend{
+			TxID:     good.TxIDChainHash(),
+			Vout:     0,
+			UTXOHash: utxoHash,
+		})
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore.Status_SPENT), resp.Status,
+			"rollback cleared a slot owned by a spender that has a record — the ref was not dangling")
+		require.NotNil(t, resp.SpendingData)
+		require.Equal(t, child.TxIDChainHash().String(), resp.SpendingData.TxID.String())
+	})
+
+	t.Run("failure does not roll back when the spending tx already has a record (conflicting parent)", func(t *testing.T) {
+		// Unlike SetLocked, SetConflicting cannot be used to flip the flag
+		// AFTER the initial spend here: the store's SetConflicting walks the
+		// tx's own outputs via GetSpend while holding the write transaction
+		// it just used to set the flag open, and on SQLite (a single
+		// physical connection) that GetSpend blocks forever waiting for a
+		// write lock that only this same call stack can release -- a
+		// self-deadlock in the store that has nothing to do with the
+		// existence-gated rollback under test here. So this variant marks
+		// the parent conflicting AT CREATION instead, and ignores the flag
+		// for the one call that must succeed despite it -- reaching the same
+		// "flag check happens before the same-spender idempotency check"
+		// ordering without ever calling SetConflicting.
+		//
+		// newTestTx's outputs carry a dummy input pointing at the shared
+		// "Tx" fixture as their (fake, never-validated) previous tx.
+		// Creating a tx with WithConflicting(true) walks its own inputs to
+		// update the referenced parent's conflicting_children bookkeeping,
+		// so "Tx" must actually exist in the store for that update to
+		// succeed -- mirrors the same requirement documented on
+		// SetConflictingBehavior above.
+		_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		defer func() { _ = db.Delete(ctx, Tx.TxIDChainHash()) }()
+
+		good := newTestTx(t, 7_800_000)
+		conflictingParent := newTestTx(t, 7_900_000)
+
+		_, _, err = db.SpendAndCreate(ctx, good, 1000, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		defer func() { _ = db.Delete(ctx, good.TxIDChainHash()) }()
+
+		_, _, err = db.SpendAndCreate(ctx, conflictingParent, 1000, utxostore.WithConflicting(true), utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		defer func() { _ = db.Delete(ctx, conflictingParent.TxIDChainHash()) }()
+
+		child := childSpending(t, 1350, good, conflictingParent)
+		child.Inputs[0].UnlockingScript = dummyUnlockingScript
+		child.Inputs[1].UnlockingScript = dummyUnlockingScript
+
+		// The child is fully accepted despite the conflicting parent: ignore
+		// the flag for this one call so both parents spend and the child's
+		// own record gets created.
+		_, _, err = db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithIgnoreConflicting(true))
+		require.NoError(t, err)
+
+		defer func() { _ = db.Delete(ctx, child.TxIDChainHash()) }()
+
+		// The child is re-validated (duplicate relay, re-processing of a
+		// block, ...) WITHOUT ignoring conflicting this time -- the parent's
+		// flag was never cleared. ErrTxConflicting IS in the old gate's
+		// allowlist, so unlike the locked variant above, this is the
+		// negative control: on pre-fix code the old gate rolls back
+		// unconditionally on this error class, wrongly clearing "good"'s
+		// spend even though "child" already has a record and the ref is not
+		// dangling.
+		_, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
+		require.Len(t, spends, 2)
+
+		if model == AtomicSpends {
+			// A replay of spends this spender already made: success, flags not tested
+			// again. See AtomicSpends.
+			require.NoError(t, err, "a replay of spends the same spender already made is not a failure")
+			require.NoError(t, spends[0].Err)
+			require.NoError(t, spends[1].Err)
+		} else {
+			require.Error(t, err)
+			require.NoError(t, spends[0].Err, "the unconflicted parent's spend is idempotent for the same spender")
+			require.ErrorIs(t, spends[1].Err, errors.ErrTxConflicting)
+		}
+
+		utxoHash, err := util.UTXOHashFromOutput(good.TxIDChainHash(), good.Outputs[0], 0)
+		require.NoError(t, err)
+
+		resp, err := db.GetSpend(ctx, &utxostore.Spend{
+			TxID:     good.TxIDChainHash(),
+			Vout:     0,
+			UTXOHash: utxoHash,
+		})
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore.Status_SPENT), resp.Status,
+			"rollback cleared a slot owned by a spender that has a record — the ref was not dangling")
+		require.NotNil(t, resp.SpendingData)
+		require.Equal(t, child.TxIDChainHash().String(), resp.SpendingData.TxID.String())
+	})
+
+	// This is the concurrent counterpart of the two subtests above: instead of
+	// a sequential "create record, then fail, then re-validate" ordering (which
+	// deterministically lands the create before the failing re-validation),
+	// two attempts at the exact same spending tx race a third goroutine that
+	// locks one of the parents. Depending on scheduling, either attempt may be
+	// the one whose Spend() call completes fully (and goes on to create the
+	// tx's own record) while the other fails partway on the now-locked parent
+	// and runs the rollback's "does the spender have a record?" probe.
+	//
+	// The residual bug class this documents (see rollbackPartialSpends in
+	// aerospike/spend.go, and the equivalent probe in sql.go's Spend): the
+	// probe and the subsequent Unspend are two separate round trips with
+	// nothing holding a lock across them. If the OTHER attempt's Create()
+	// lands in that gap, the probe's "no record yet" answer is stale by the
+	// time Unspend actually runs -- and Unspend cannot tell the two attempts
+	// apart, because SpendingData is just {TxID, Vin}, with no attempt
+	// identity. So it clears a slot the winning attempt legitimately owns.
+	//
+	// #1214's fix narrows this window (an existence check replaces a blind
+	// error-class allowlist) but does not close it -- the store implementations
+	// call this out explicitly as a known residual (#1291). This loop does
+	// NOT assert the race can never happen; it asserts the outcome contract
+	// that must hold whenever the child's record does exist, and it is
+	// written to fail loudly (not skip, not weaken) if that contract is ever
+	// observed to break, so a real reproduction is reported rather than
+	// silently tolerated.
+	t.Run("concurrent duplicate SpendAndCreate races the rollback's existence probe", func(t *testing.T) {
+		const iterations = 20
+
+		violations := 0
+
+		for i := 0; i < iterations; i++ {
+			good := newTestTx(t, 8_000_000+uint64(i)*100)
+			flaky := newTestTx(t, 8_000_050+uint64(i)*100)
+
+			_, _, err := db.SpendAndCreate(ctx, good, 1000, utxostore.WithCreateOnly())
+			require.NoError(t, err)
+
+			_, _, err = db.SpendAndCreate(ctx, flaky, 1000, utxostore.WithCreateOnly())
+			require.NoError(t, err)
+
+			buildChild := func() *bt.Tx {
+				c := childSpending(t, 1400, good, flaky)
+				c.Inputs[0].UnlockingScript = dummyUnlockingScript
+				c.Inputs[1].UnlockingScript = dummyUnlockingScript
+
+				return c
+			}
+
+			// Two independently-built but byte-identical tx objects, so
+			// neither goroutine mutates state the other reads.
+			childA := buildChild()
+			childB := buildChild()
+			require.Equal(t, childA.TxIDChainHash().String(), childB.TxIDChainHash().String(),
+				"both attempts must target the exact same spending tx for this race to be meaningful")
+
+			height := db.GetBlockHeight() + 1
+
+			var wg sync.WaitGroup
+
+			wg.Add(3)
+
+			go func() {
+				defer wg.Done()
+				_, _, _ = db.SpendAndCreate(ctx, childA, height)
+			}()
+
+			go func() {
+				defer wg.Done()
+				_, _, _ = db.SpendAndCreate(ctx, childB, height)
+			}()
+
+			go func() {
+				defer wg.Done()
+				_ = db.SetLocked(ctx, []chainhash.Hash{*flaky.TxIDChainHash()}, true)
+			}()
+
+			wg.Wait()
+
+			// Whichever attempt won the create, Spend() only reaches Create()
+			// once every parent in the batch succeeded -- so if the record
+			// exists, the winning attempt must have spent BOTH parents, and
+			// neither the loser's rollback nor the two attempts racing each
+			// other may have cleared either of them.
+			if _, getErr := db.Get(ctx, childA.TxIDChainHash()); getErr == nil {
+				for _, parent := range []*bt.Tx{good, flaky} {
+					utxoHash, err := util.UTXOHashFromOutput(parent.TxIDChainHash(), parent.Outputs[0], 0)
+					require.NoError(t, err)
+
+					resp, err := db.GetSpend(ctx, &utxostore.Spend{
+						TxID:     parent.TxIDChainHash(),
+						Vout:     0,
+						UTXOHash: utxoHash,
+					})
+					require.NoError(t, err)
+
+					// The parent's own Locked flag can independently override the
+					// reported Status to Status_LOCKED even when its spendingData is
+					// intact (see sql.go/aerospike GetSpend: locked/frozen/conflicting
+					// override the computed spend status for display purposes), so the
+					// invariant that matters is checked directly against SpendingData,
+					// not against Status.
+					if resp.SpendingData == nil || resp.SpendingData.TxID.String() != childA.TxIDChainHash().String() {
+						violations++
+
+						t.Logf("iteration %d: parent %s not owned by child %s after race (status=%d, spendingData=%v)",
+							i, parent.TxIDChainHash(), childA.TxIDChainHash(), resp.Status, resp.SpendingData)
+					}
+				}
+			}
+
+			_ = db.SetLocked(ctx, []chainhash.Hash{*flaky.TxIDChainHash()}, false)
+			_ = db.Delete(ctx, childA.TxIDChainHash())
+			_ = db.Delete(ctx, good.TxIDChainHash())
+			_ = db.Delete(ctx, flaky.TxIDChainHash())
+		}
+
+		require.Zero(t, violations,
+			"rollback of a losing concurrent attempt cleared a slot the winning attempt owns -- "+
+				"see the test comment above for the known residual window (#1291)")
+	})
+}
+
+// DeleteThenUnspendRestoresParent proves the store-level contract the validator's
+// shed unwind depends on, in the exact order the unwind performs it.
+//
+// The unwind's correctness is a STORE property, not a validator one, so it is
+// proved here — once per backend — rather than only through validator spies. The
+// ordering (Delete the record first, THEN Unspend its inputs) is deliberate: the
+// reverse order has an intermediate state in which the inputs are free while the
+// record still exists and is Locked, so a partial failure lets a competing spend
+// take those inputs while the surviving record can still be lifted into a mining
+// template by the unmined reload. The order proved here has an intermediate state
+// that is merely inconvenient — inputs temporarily unspendable, no record able to
+// re-enter a template.
+//
+// Asserted, in order:
+//   - SpendAndCreate: parent outpoint reads spent, child record present and Locked;
+//   - while the child is Locked its OWN outputs cannot be spent — the precondition the
+//     whole safety argument rests on (see below);
+//   - Delete(child): child GetMeta returns ErrTxNotFound while the parent outpoint
+//     STILL reads spent — the safe intermediate state;
+//   - Unspend: the parent outpoint is spendable again and a different spender wins;
+//   - a second Unspend is a no-op and a second Delete does not error — both are
+//     relied on by the best-effort retry semantics of the unwind;
+//   - Unspend(nil) is a no-op — the SkipUtxoCreation / spend-only shape.
+//
+// Intended for REAL store backends. Cache decorators whose Delete is documented as
+// cache-only cannot satisfy it by design; the validator guards against those with
+// a read-back after Delete rather than by trusting the returned nil.
+func DeleteThenUnspendRestoresParent(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	// The parent whose output the child will spend.
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	child := newSpendAndCreateTx(t, 4, 5001)
+	_ = db.Delete(ctx, child.TxIDChainHash())
+
+	utxoHash4, err := util.UTXOHashFromOutput(Tx.TxIDChainHash(), Tx.Outputs[4], 4)
+	require.NoError(t, err)
+
+	parentOutpoint := &utxostore.Spend{TxID: Tx.TxIDChainHash(), Vout: 4, UTXOHash: utxoHash4}
+
+	// Step 0 — the shape the validator creates on the block-assembly path: spend
+	// the inputs, create the record, marked Locked.
+	md, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithLocked(true))
+	require.NoError(t, err)
+	require.NotNil(t, md)
+	require.Len(t, spends, 1)
+
+	resp, err := db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status, "precondition: the parent output is spent by the child")
+
+	childMeta := &meta.Data{}
+	require.NoError(t, db.GetMeta(ctx, child.TxIDChainHash(), childMeta))
+	require.True(t, childMeta.Locked, "precondition: the child record is created Locked")
+
+	// Step 0b — the precondition the whole unwind safety argument rests on: while the
+	// child record is Locked, its OWN outputs cannot be spent. The unwind is only safe
+	// to delete the child because no descendant can have spent its outputs, and that
+	// claim is a STORE property rather than validator logic. Asserting it here turns
+	// the assumption into a proof, once per backend.
+	grandchild := bt.NewTx()
+	require.NoError(t, grandchild.FromUTXOs(&bt.UTXO{
+		TxIDHash:      child.TxIDChainHash(),
+		Vout:          0,
+		LockingScript: child.Outputs[0].LockingScript,
+		Satoshis:      child.Outputs[0].Satoshis,
+	}))
+	grandchild.Inputs[0].UnlockingScript = dummyUnlockingScript
+	require.NoError(t, grandchild.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+	_ = db.Delete(ctx, grandchild.TxIDChainHash())
+
+	_, lockedSpends, err := db.SpendAndCreate(ctx, grandchild, db.GetBlockHeight()+1)
+	require.Error(t, err,
+		"a Locked transaction's outputs must not be spendable - this is what makes deleting the child in the unwind safe")
+
+	// The rejection may be reported on the returned spend rather than only on the
+	// aggregate error, and that differs between backends, so accept either. What must
+	// not happen is a rejection for some unrelated reason.
+	lockedReported := errors.Is(err, errors.ErrTxLocked)
+
+	for _, s := range lockedSpends {
+		if s != nil && s.Err != nil && errors.Is(s.Err, errors.ErrTxLocked) {
+			lockedReported = true
+		}
+	}
+
+	require.True(t, lockedReported, "spending a Locked transaction's output must be refused as TX_LOCKED, got: %v", err)
+
+	// Leave no residue from the rejected attempt, so the unwind steps below start from
+	// the state step 0 established.
+	_ = db.Delete(ctx, grandchild.TxIDChainHash())
+
+	// The failed spend must leave the child's output untouched, so the unwind's
+	// starting state is unchanged by having asserted this.
+	childOutHash, err := util.UTXOHashFromOutput(child.TxIDChainHash(), child.Outputs[0], 0)
+	require.NoError(t, err)
+
+	childOutResp, err := db.GetSpend(ctx, &utxostore.Spend{TxID: child.TxIDChainHash(), Vout: 0, UTXOHash: childOutHash})
+	require.NoError(t, err)
+	require.NotEqual(t, int(utxostore.Status_SPENT), childOutResp.Status,
+		"a rejected spend of a locked output must not have marked it spent")
+
+	// Step 1 — Delete the record. The parent output must STILL read spent: that is
+	// the safe intermediate state the ordering exists to guarantee.
+	require.NoError(t, db.Delete(ctx, child.TxIDChainHash()))
+
+	require.ErrorIs(t, db.GetMeta(ctx, child.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound,
+		"after Delete the child record must be gone")
+
+	resp, err = db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status,
+		"between Delete and Unspend the parent output must still read spent - no record may re-enter a template while its inputs are free")
+
+	// Step 2 — Unspend restores the parent output.
+	require.NoError(t, db.Unspend(ctx, spends))
+
+	resp, err = db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.NotEqual(t, int(utxostore.Status_SPENT), resp.Status, "after Unspend the parent output is spendable again")
+
+	// Step 3 — idempotency of both primitives, relied on by the best-effort retry.
+	require.NoError(t, db.Unspend(ctx, spends), "re-unspending an already-unspent output must be a no-op")
+	require.NoError(t, db.Delete(ctx, child.TxIDChainHash()), "deleting an already-deleted record must not error")
+
+	// Step 4 — Unspend(nil) is a no-op: the spend-only / coinbase unwind shape
+	// passes no spends at all.
+	require.NoError(t, db.Unspend(ctx, nil))
+
+	// Step 5 — the restored output is genuinely reusable: a different spender wins
+	// it, which is what makes a resubmit an ordinary first submission.
+	other := newSpendAndCreateTx(t, 4, 5002)
+	_ = db.Delete(ctx, other.TxIDChainHash())
+
+	_, otherSpends, err := db.SpendAndCreate(ctx, other, db.GetBlockHeight()+1)
+	require.NoError(t, err, "a fresh spender must be able to take the restored output")
+	require.Len(t, otherSpends, 1)
+
+	resp, err = db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status)
+	require.NotNil(t, resp.SpendingData)
+	require.Equal(t, other.TxIDChainHash().String(), resp.SpendingData.TxID.String())
+}
+
+// spendChildOutputReportsLocked attempts to spend output `vout` of `child` and
+// reports whether the store refused it as TX_LOCKED. Backends surface the refusal
+// differently — on the aggregate error or on a per-spend Err — so both are
+// checked. It leaves no residue whether the spend was refused or accepted.
+func spendChildOutputReportsLocked(t *testing.T, ctx context.Context, db utxostore.Store, child *bt.Tx, vout uint32) bool {
+	t.Helper()
+
+	gc := bt.NewTx()
+	require.NoError(t, gc.FromUTXOs(&bt.UTXO{
+		TxIDHash:      child.TxIDChainHash(),
+		Vout:          vout,
+		LockingScript: child.Outputs[vout].LockingScript,
+		Satoshis:      child.Outputs[vout].Satoshis,
+	}))
+	gc.Inputs[0].UnlockingScript = dummyUnlockingScript
+	require.NoError(t, gc.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", child.Outputs[vout].Satoshis))
+
+	_ = db.DeleteComplete(ctx, gc.TxIDChainHash())
+
+	_, spends, err := db.SpendAndCreate(ctx, gc, db.GetBlockHeight()+1)
+
+	locked := errors.Is(err, errors.ErrTxLocked)
+
+	for _, s := range spends {
+		if s != nil && s.Err != nil && errors.Is(s.Err, errors.ErrTxLocked) {
+			locked = true
+		}
+	}
+
+	_ = db.DeleteComplete(ctx, gc.TxIDChainHash())
+
+	return locked
+}
+
+// DeleteThenUnspendRestoresParentPaginated is the paginated sibling of
+// DeleteThenUnspendRestoresParent. It proves the store contract the shed unwind
+// depends on for a transaction whose record spans more than one pagination
+// record — the case a one-output child cannot exercise.
+//
+// The regression it gates (issue 4694 / PR 1502): on a paginated backend a plain
+// Delete removes only the master record, leaving the pagination children with
+// locked=true, so a descendant spending a high-numbered output still gets
+// TX_LOCKED. DeleteComplete removes the children (and any external blob) too, so
+// that spend reaches the missing-parent path instead. Because the store interface
+// does not expose the configured batch size, the caller supplies utxoBatchSize:
+// the child is built with utxoBatchSize + margin outputs so at least one
+// pagination child exists, and the probed vout is chosen to land on one. SQL
+// never paginates, so it satisfies the gate trivially and the case doubles as a
+// plain contract there.
+func DeleteThenUnspendRestoresParentPaginated(t *testing.T, db utxostore.Store, utxoBatchSize int) {
+	ctx := context.Background()
+
+	require.Positive(t, utxoBatchSize, "utxoBatchSize must be positive")
+
+	numOutputs := utxoBatchSize + 72       // ceil(numOutputs/utxoBatchSize) >= 2, so at least one pagination child
+	highVout := uint32(utxoBatchSize + 20) // guaranteed to land on a pagination child
+
+	// The parent whose output the child will spend.
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	child := newSpendAndCreateTxWithOutputs(t, 4, 6001, numOutputs)
+	_ = db.DeleteComplete(ctx, child.TxIDChainHash())
+
+	utxoHash4, err := util.UTXOHashFromOutput(Tx.TxIDChainHash(), Tx.Outputs[4], 4)
+	require.NoError(t, err)
+
+	parentOutpoint := &utxostore.Spend{TxID: Tx.TxIDChainHash(), Vout: 4, UTXOHash: utxoHash4}
+
+	// Step 0 — the block-assembly shape: spend the input, create the paginated
+	// record, marked Locked.
+	md, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithLocked(true))
+	require.NoError(t, err)
+	require.NotNil(t, md)
+	require.Len(t, spends, 1)
+
+	resp, err := db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status, "precondition: the parent output is spent by the child")
+
+	childMeta := &meta.Data{}
+	require.NoError(t, db.GetMeta(ctx, child.TxIDChainHash(), childMeta))
+	require.True(t, childMeta.Locked, "precondition: the child record is created Locked")
+
+	// Step 1 — precondition on a HIGH-numbered output (one that lives on a
+	// pagination record): while the child is Locked, spending it is refused
+	// TX_LOCKED. This is the assertion the one-output sibling cannot make.
+	require.True(t, spendChildOutputReportsLocked(t, ctx, db, child, highVout),
+		"precondition: spending a high-numbered output of a Locked paginated child must be refused as TX_LOCKED")
+
+	// Step 2 — the complete delete. On a paginated backend this must remove the
+	// pagination children too, not just the master record.
+	require.NoError(t, db.DeleteComplete(ctx, child.TxIDChainHash()))
+
+	require.ErrorIs(t, db.GetMeta(ctx, child.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound,
+		"after DeleteComplete the child master record must be gone")
+
+	// Step 3 — the gate assertion: a spend of the SAME high-numbered output must no
+	// longer answer TX_LOCKED. Before the cascade fix the surviving locked
+	// pagination record kept answering TX_LOCKED here on Aerospike.
+	require.False(t, spendChildOutputReportsLocked(t, ctx, db, child, highVout),
+		"after DeleteComplete a spend of a high-numbered output must not answer TX_LOCKED")
+
+	// Step 4 — the parent-restore tail, as in the one-output case: the parent
+	// output must still read spent between delete and unspend, then be restored.
+	resp, err = db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status,
+		"between DeleteComplete and Unspend the parent output must still read spent")
+
+	require.NoError(t, db.Unspend(ctx, spends))
+
+	resp, err = db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.NotEqual(t, int(utxostore.Status_SPENT), resp.Status, "after Unspend the parent output is spendable again")
+
+	// Step 5 — idempotency of both primitives, relied on by the best-effort retry.
+	require.NoError(t, db.Unspend(ctx, spends), "re-unspending an already-unspent output must be a no-op")
+	require.NoError(t, db.DeleteComplete(ctx, child.TxIDChainHash()), "re-completing an already-deleted record must not error")
+}
+
+// QuickPathCreateSpendMinedSemantics pins the exact create/spend/mined state machine
+// the quick-validation route drives, so both backends are known to agree on it
+// (bitcoin-sv/teranode#4838).
+//
+// That route creates a transaction with WithCreateOnly + WithMinedBlockInfo +
+// WithLocked, then spends its parent's output with WithSpendOnly +
+// WithIgnoreLocked(true). The finding turns on two properties of that sequence: the
+// spend lands even though the record is locked, and the later mined transition
+// CLEARS the lock. A lock that survived would make the route's partial state
+// unusable by anything else; it does not, which is why "the UTXOs stay locked" is
+// not a rollback.
+func QuickPathCreateSpendMinedSemantics(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	const (
+		candidateBlockID = uint32(9911)
+		acceptedBlockID  = uint32(9912)
+	)
+
+	parent := newTestTx(t, 7_100_000)
+
+	_, _, err := db.SpendAndCreate(ctx, parent, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	defer func() { _ = db.Delete(ctx, parent.TxIDChainHash()) }()
+
+	child := bt.NewTx()
+	require.NoError(t, child.From(
+		parent.TxIDChainHash().String(), 0,
+		parent.Outputs[0].LockingScript.String(),
+		parent.Outputs[0].Satoshis,
+	))
+	child.Inputs[0].UnlockingScript = dummyUnlockingScript
+	require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+
+	_ = db.Delete(ctx, child.TxIDChainHash())
+
+	defer func() { _ = db.Delete(ctx, child.TxIDChainHash()) }()
+
+	// Create the child the way the quick path does: locked, and already stamped with
+	// the candidate block's id.
+	_, _, err = db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1,
+		utxostore.WithCreateOnly(),
+		utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: candidateBlockID, BlockHeight: 101, SubtreeIdx: 0}),
+		utxostore.WithLocked(true),
+	)
+	require.NoError(t, err)
+
+	md, err := db.Get(ctx, child.TxIDChainHash(), fields.Locked, fields.BlockIDs)
+	require.NoError(t, err)
+	require.True(t, md.Locked, "the quick path creates its records locked")
+	require.Equal(t, []uint32{candidateBlockID}, md.BlockIDs)
+
+	// Spend the parent output on the child's behalf. The lock does not stop it.
+	_, resultSpends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1,
+		utxostore.WithSpendOnly(), utxostore.WithIgnoreLocked(true))
+	require.NoError(t, err)
+	require.Len(t, resultSpends, 1)
+
+	parentUTXOHash, err := util.UTXOHashFromOutput(parent.TxIDChainHash(), parent.Outputs[0], 0)
+	require.NoError(t, err)
+
+	resp, err := db.GetSpend(ctx, &utxostore.Spend{TxID: parent.TxIDChainHash(), Vout: 0, UTXOHash: parentUTXOHash})
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status, "the genuine parent output is spent by the candidate's child")
+
+	// The mined transition clears the lock: the flag is not a rollback barrier.
+	_, err = db.SetMinedMulti(ctx, []*chainhash.Hash{child.TxIDChainHash()},
+		utxostore.MinedBlockInfo{BlockID: acceptedBlockID, BlockHeight: 102, SubtreeIdx: 1, OnLongestChain: true})
+	require.NoError(t, err)
+
+	md, err = db.Get(ctx, child.TxIDChainHash(), fields.Locked, fields.BlockIDs, fields.Tx)
+	require.NoError(t, err)
+	require.False(t, md.Locked, "the mined transition unlocks the record")
+	require.Contains(t, md.BlockIDs, acceptedBlockID)
+	require.NotNil(t, md.Tx)
+	require.Len(t, md.Tx.Outputs, len(child.Outputs), "the outputs survive the mined transition intact")
+}
+
+// AbsentRecordObservables pins what "no record, no spend" MEANS on a store, so the
+// no-mutation assertions the quick-validation regression makes are the same claim on
+// both backends rather than an SQL-only one (bitcoin-sv/teranode#4838):
+//
+//   - Get for a transaction that was never created reports not-found, not an empty
+//     record;
+//   - GetSpend for an output nobody spent reports it spendable.
+func AbsentRecordObservables(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	absent := newTestTx(t, 7_200_000)
+	_ = db.Delete(ctx, absent.TxIDChainHash())
+
+	_, err := db.Get(ctx, absent.TxIDChainHash())
+	require.Error(t, err)
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "an absent transaction must be not-found, never an empty record")
+
+	unspentParent := newTestTx(t, 7_210_000)
+
+	_, _, err = db.SpendAndCreate(ctx, unspentParent, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	defer func() { _ = db.Delete(ctx, unspentParent.TxIDChainHash()) }()
+
+	utxoHash, err := util.UTXOHashFromOutput(unspentParent.TxIDChainHash(), unspentParent.Outputs[0], 0)
+	require.NoError(t, err)
+
+	resp, err := db.GetSpend(ctx, &utxostore.Spend{TxID: unspentParent.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash})
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_OK), resp.Status, "an output nobody spent must report spendable")
+}
+
+// counterBodyHidingStore answers Get as the wrapped store does, but without the body of one
+// transaction. That is the record a store gives for a transaction whose body has aged out, or
+// was never kept below the checkpoint.
+type counterBodyHidingStore struct {
+	utxostore.Store
+
+	hide chainhash.Hash
+}
+
+func (s *counterBodyHidingStore) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
+	data, err := s.Store.Get(ctx, hash, f...)
+	if err != nil || data == nil || hash == nil || !hash.IsEqual(&s.hide) {
+		return data, err
+	}
+
+	stripped := *data
+	stripped.Tx = nil
+
+	return &stripped, nil
+}
+
+// ReverseKeepsTheWinnerWhenTheCounterHasNoBody is icellan's review point on PR 1663. When a
+// block that promoted D over the counter C is moved back, ReverseProcessConflicting demotes D and
+// re-spends C. Re-spending C needs C's body. When C has none, D must not be demoted: demoting it
+// marked D conflicting and freed its input while C stayed conflicting, so a valid transaction
+// left the mempool with no winner in its place. D keeps its input and stays the winner.
+func ReverseKeepsTheWinnerWhenTheCounterHasNoBody(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+	require.NoError(t, db.SetBlockHeight(20))
+
+	parent := crashParentTx(0x51)
+	_, _, err := db.SpendAndCreate(ctx, parent, 1, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+	require.NoError(t, db.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+
+	// C: the counter, conflicting and recorded against the parent.
+	txC := crashSpendTx(t, parent, 80000)
+	_, _, err = db.SpendAndCreate(ctx, txC, db.GetBlockHeight(), utxostore.WithConflicting(true), utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	// D: the winner the block promoted, spending parent[0].
+	txD := crashSpendTx(t, parent, 90000)
+	_, _, err = db.SpendAndCreate(ctx, txD, db.GetBlockHeight(), utxostore.WithCreateOnly())
+	require.NoError(t, err)
+	_, _, err = db.SpendAndCreate(ctx, txD, db.GetBlockHeight()+1, utxostore.WithSpendOnly(), utxostore.WithIgnoreLocked(true))
+	require.NoError(t, err)
+
+	hiding := &counterBodyHidingStore{Store: db, hide: *txC.TxIDChainHash()}
+
+	_, _, err = utxostore.ReverseProcessConflicting(ctx, hiding, 20, chainhash.Hash{}, []chainhash.Hash{*txD.TxIDChainHash()})
+	require.NoError(t, err)
+
+	require.False(t, crashConflicting(t, ctx, db, txD.TxIDChainHash()), "D was demoted although C could not be promoted")
+	require.NotNil(t, crashSpender(t, ctx, db, parent), "parent[0] was freed and nothing spends it")
+	require.Equal(t, txD.TxIDChainHash().String(), crashSpender(t, ctx, db, parent).String())
+	require.True(t, crashConflicting(t, ctx, db, txC.TxIDChainHash()), "C stays the loser")
 }

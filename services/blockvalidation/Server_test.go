@@ -386,9 +386,10 @@ func newProcessBlockFoundHarness(ctx context.Context, t *testing.T) (*Server, *b
 	t.Helper()
 
 	tSettings := test.CreateBaseTestSettings(t)
-	// regtest SubsidyReductionInterval is 150
-	// so use mainnet params
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	// regtest SubsidyReductionInterval is 150, so use mainnet params — but with the
+	// proof-of-work limit relaxed, because the fixture and the re-grind below use an
+	// easy target that real mainnet params correctly reject (HasMetPowLimit).
+	tSettings.ChainCfgParams = test.MainNetParamsForSyntheticPoW()
 
 	blockBytes, err := hex.DecodeString(processBlockFoundBlockHex)
 	require.NoError(t, err)
@@ -437,10 +438,18 @@ func newProcessBlockFoundHarness(ctx context.Context, t *testing.T) (*Server, *b
 	// be resolvable at parent height = block.Height - 1 (deriveBlockHeight). The MockStore's
 	// GetBlockHeaders walk chases HashPrevBlock until a hash is absent from the Blocks map,
 	// so it terminates at the parent (its own parent, the zero hash, is absent).
-	blockchainStore.Blocks[*block.Header.HashPrevBlock] = &model.Block{
+	parentOnChain := &model.Block{
 		Header: parentHeader,
 		Height: block.Height - 1,
 	}
+	blockchainStore.Blocks[*block.Header.HashPrevBlock] = parentOnChain
+
+	// A node ingesting this block has the parent as its tip. Without a best block the
+	// store reports "no best block set", and the below-checkpoint difficulty skip
+	// fails closed (correctly — it cannot show the node is still building the
+	// certified prefix), which sends the test down the expected-nBits path the mock
+	// cannot serve 144-deep ancestors for.
+	blockchainStore.BestBlock = parentOnChain
 
 	logger := ulogger.NewErrorTestLogger(t)
 
@@ -472,8 +481,57 @@ func Test_Server_processBlockFound(t *testing.T) {
 
 	s, _, block := newProcessBlockFoundHarness(ctx, t)
 
-	err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", block)
+	err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", false, block)
 	require.NoError(t, err)
+}
+
+// Test_Server_processBlockFound_BoundsPeerFetchDeadline covers ChiR2 from the #1741 review:
+// processBlockFound's fetch path runs on the block-processing worker's service-lifetime
+// context, which carries no deadline of its own. Before wrapping the fetchSingleBlock call in
+// an explicit context.WithTimeout, DoHTTPRequestBodyReader's own default-timeout fallback
+// (used since bitcoin-sv/teranode#4742 in place of the old io.ReadAll-based DoHTTPRequest)
+// would silently apply http_streaming_timeout (600 s in settings.conf) instead of the 30 s budget every
+// sibling fetchSingleBlock call site sets explicitly - a 20x wider window for a hostile or
+// slow peer. Assert the peer HTTP request actually carries a deadline no wider than that
+// budget, not just that the fetch succeeds.
+func Test_Server_processBlockFound_BoundsPeerFetchDeadline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, _, block := newProcessBlockFoundHarness(ctx, t)
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	var sawDeadline bool
+	var remaining time.Duration
+
+	httpmock.RegisterResponder(
+		"GET",
+		"http://test-peer/block/"+block.Hash().String(),
+		func(req *http.Request) (*http.Response, error) {
+			deadline, ok := req.Context().Deadline()
+			sawDeadline = ok
+
+			if ok {
+				remaining = time.Until(deadline)
+			}
+
+			blockBytes, err := block.Bytes()
+			require.NoError(t, err)
+
+			return httpmock.NewBytesResponse(200, blockBytes), nil
+		},
+	)
+
+	// No useBlock argument here, unlike every other processBlockFound test in this file: this
+	// is the one exercising the actual fetchSingleBlock HTTP path rather than bypassing it.
+	err := s.processBlockFound(context.Background(), block.Hash(), "peerA", "http://test-peer", false)
+	require.NoError(t, err)
+
+	require.True(t, sawDeadline, "peer block fetch must run under a bounded context deadline, not an unbounded one")
+	require.Greater(t, remaining, time.Duration(0))
+	require.LessOrEqual(t, remaining, peerBlockFetchTimeout+time.Second, "peer fetch deadline must not silently widen to the http_streaming_timeout fallback")
 }
 
 // Test_Server_processBlockFound_SettlesPeerSuppliedHeight pins the height settlement at the
@@ -498,7 +556,7 @@ func Test_Server_processBlockFound_SettlesPeerSuppliedHeight(t *testing.T) {
 		// checkpoint ever matches.
 		block.Height = 0
 
-		err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", block)
+		err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", false, block)
 		require.NoError(t, err)
 		require.Equal(t, honestHeight, block.Height, "settled height must be written back onto the block")
 	})
@@ -511,7 +569,7 @@ func Test_Server_processBlockFound_SettlesPeerSuppliedHeight(t *testing.T) {
 		// difficulty skip claiming a height it does not hold.
 		block.Height = 11111
 
-		err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", block)
+		err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", false, block)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
 		require.Contains(t, err.Error(), "peer-inconsistent height")
@@ -687,7 +745,6 @@ func TestServer_catchup(t *testing.T) {
 			logger:              logger,
 			settings:            tSettings,
 			blockchainClient:    mockBlockchainClient,
-			blockValidation:     NewBlockValidation(testCtx, logger, tSettings, mockBlockchainClient, subtreeStore, nil, nil, nil, nil),
 			utxoStore:           utxoStore,
 			processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 			catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
@@ -714,6 +771,8 @@ func TestServer_catchup(t *testing.T) {
 
 		// Set the best block to the last stored block (block 49)
 		mockBlockchainStore.BestBlock = blocks[49]
+		// Start subscription readers only after the mock's best block is set.
+		server.blockValidation = NewBlockValidation(testCtx, logger, tSettings, mockBlockchainClient, subtreeStore, nil, nil, nil, nil)
 
 		// Build headers response - should include common ancestor (block 49) and new blocks (50-99)
 		// Headers should be in order from oldest to newest
@@ -928,10 +987,10 @@ func TestServer_blockHandler_processBlockFound_happyPath(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, hash.String(), found.hash.String())
 		assert.Equal(t, url, found.baseURL)
-		assert.Nil(t, found.errCh) // errCh should be nil to avoid blocking Kafka consumer
+		assert.Nil(t, found.reply) // no reply: the Kafka consumer must not wait for validation
 	}()
 
-	err := server.blockHandler(kafkaMsg)
+	err := server.blockHandler(context.Background(), kafkaMsg)
 	assert.NoError(t, err)
 }
 
@@ -1366,7 +1425,7 @@ func Test_BlockFound(t *testing.T) {
 		blockFound := <-server.blockFoundCh
 		require.Equal(t, hash.String(), blockFound.hash.String())
 		require.Equal(t, "http://test.com", blockFound.baseURL)
-		require.Nil(t, blockFound.errCh)
+		require.Nil(t, blockFound.reply)
 	})
 
 	t.Run("new block with wait - success", func(t *testing.T) {
@@ -1401,8 +1460,8 @@ func Test_BlockFound(t *testing.T) {
 		go func() {
 			time.Sleep(10 * time.Millisecond) // Small delay
 			blockFound := <-server.blockFoundCh
-			require.NotNil(t, blockFound.errCh)
-			blockFound.errCh <- nil // Signal success
+			require.NotNil(t, blockFound.reply)
+			blockFound.reply.answer(nil) // Signal success
 		}()
 
 		resp, err := server.BlockFound(ctx, req)
@@ -1442,8 +1501,8 @@ func Test_BlockFound(t *testing.T) {
 		go func() {
 			time.Sleep(10 * time.Millisecond) // Small delay
 			blockFound := <-server.blockFoundCh
-			require.NotNil(t, blockFound.errCh)
-			blockFound.errCh <- errors.New(errors.ERR_BLOCK_NOT_FOUND, "validation failed")
+			require.NotNil(t, blockFound.reply)
+			blockFound.reply.answer(errors.New(errors.ERR_BLOCK_NOT_FOUND, "validation failed"))
 		}()
 
 		resp, err := server.BlockFound(ctx, req)
@@ -1483,7 +1542,9 @@ func Test_ProcessBlock(t *testing.T) {
 	blockBytes, err := block.Bytes()
 	require.NoError(t, err)
 
-	t.Run("success with height provided", func(t *testing.T) {
+	// The mock reports no block as stored, so the parent is missing and the default "legacy"
+	// baseURL is refused rather than diverted to catch-up (bitcoin-sv/teranode#4973).
+	t.Run("legacy block with height provided and missing parent is refused", func(t *testing.T) {
 		// Use actual in-memory stores
 		utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
 		defer deferFunc()
@@ -1523,11 +1584,15 @@ func Test_ProcessBlock(t *testing.T) {
 		}
 
 		resp, err := server.ProcessBlock(ctx, req)
-		require.NoError(t, err)
-		require.NotNil(t, resp)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.True(t, errors.Is(errors.UnwrapGRPC(err), errors.ErrServiceError), "got: %v", err)
+		require.Contains(t, err.Error(), "has no stored parent")
 	})
 
-	t.Run("success with height from previous block", func(t *testing.T) {
+	// The height comes from the previous block's header; the parent itself is reported
+	// missing, so the call gets past the height check and is refused at the parent check.
+	t.Run("height from previous block, missing parent is refused", func(t *testing.T) {
 		// Use actual in-memory stores
 		utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
 		defer deferFunc()
@@ -1570,8 +1635,10 @@ func Test_ProcessBlock(t *testing.T) {
 		}
 
 		resp, err := server.ProcessBlock(ctx, req)
-		require.NoError(t, err)
-		require.NotNil(t, resp)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.True(t, errors.Is(errors.UnwrapGRPC(err), errors.ErrServiceError), "got: %v", err)
+		require.Contains(t, err.Error(), "has no stored parent")
 	})
 
 	t.Run("invalid block bytes", func(t *testing.T) {
@@ -1951,9 +2018,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 		go func() {
 			blockFound := <-server.blockFoundCh
 			require.NotNil(t, blockFound)
-			if blockFound.errCh != nil {
-				blockFound.errCh <- nil
-			}
+			blockFound.reply.answer(nil)
 		}()
 
 		err = handler(msg)
@@ -2016,7 +2081,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 			// Unbuffered: the inner blockHandler goroutine blocks on this send
 			// (no reader in the test), so the handler's select can only fire
 			// ctx.Done(). Without this, the buffered send returned immediately
-			// and racy select could pick errCh=nil.
+			// and racy select could pick the nil error.
 			blockFoundCh:        make(chan processBlockFound),
 			blockValidation:     bv,
 			stats:               gocore.NewStat("test"),

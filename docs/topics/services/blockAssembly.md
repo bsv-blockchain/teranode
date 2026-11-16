@@ -35,6 +35,8 @@ The Block Assembly Service is responsible for assembling new blocks and adding t
 
 **No Mempool Design**: Unlike traditional Bitcoin nodes that maintain a mempool (memory pool) to store unconfirmed transactions, Teranode's Block Assembly service processes transactions directly through a validation and subtree assembly pipeline. Transactions are immediately validated and organized into subtrees for efficient block creation, rather than being held in an intermediate memory pool. This design enables higher throughput and more efficient resource utilization for large-scale transaction processing.
 
+**Deployment Model**: Block Assembly does not scale horizontally. It runs as a single stateful instance per Teranode node, with no leader election or standby — every replica that starts is fully active and will serve mining traffic. Its in-memory mining-candidate and subtree-assembler state, and the outstanding mining jobs handed to miners, live in that one process: a mining job exists only where its candidate was issued, so a solution routed anywhere else is rejected with "job not found". A second replica would also write the same persisted `BlockAssembler` checkpoint, overwriting the first's view of the chain tip. See the [Teranode Microservices Overview](../architecture/teranode-microservices-overview.md#26-block-assembly-service) for how this fits the rest of the architecture, and the [Kubernetes miners installation guide](../../howto/miners/kubernetes/minersHowToInstallation.md#scaling-the-propagation-service) for why every example Cluster CR pins its replica count to 1, the Validator excepted.
+
 The block assembly process involves the following steps:
 
 1. **Receiving Transactions from the TX Validator Service**:
@@ -381,10 +383,10 @@ The Block Assembly service implements real-time fork detection through the follo
 
 3. **Reorganization Size Protection**:
 
-    - Monitors the size of potential chain reorganizations
-    - If a reorganization would require moving more than the coinbase maturity threshold (typically 100 blocks, configured via `Settings.ChainCfgParams.CoinbaseMaturity`) either backwards or forwards
-    - AND the current chain height is greater than 1000 blocks
-    - Triggers a full reset of the block assembler as a safety measure against deep reorganizations
+    - Monitors the size of potential chain reorganizations, by the deeper of the two sides (blocks moved back and blocks moved forward)
+    - Triggers a full reset of the block assembler instead of an in-place reorganization when either rule holds:
+        - the depth is at least the effective UTXO store block height retention (`GetUtxoStoreBlockHeightRetention()`: global retention plus the UTXO store adjustment), at any height. Spent transactions of a side chain are deleted at their height plus that retention, so the blocks being moved forward may already have lost them. A retention of 0 (pruning disabled) turns this rule off.
+        - the depth is at least the coinbase maturity threshold (typically 100 blocks, `Settings.ChainCfgParams.CoinbaseMaturity`) and the current chain height is greater than 1000 blocks
 
 The `BlockAssembler` keeps the node synchronized with the network by identifying and switching to the strongest chain (the one with the most accumulated proof of work), ensuring all nodes in the network converge on the same transaction history.
 
@@ -408,9 +410,7 @@ The service automatically manages chain selection through:
     - Accepts the chain with the most accumulated proof of work
     - Performs a safety check on reorganization depth:
 
-        - If the reorganization involves more than the coinbase maturity threshold (typically 100 blocks, configured via `Settings.ChainCfgParams.CoinbaseMaturity`) in either direction
-        - And the current chain height is greater than 1000
-        - The block assembler will reset rather than attempt the reorganization
+        - The block assembler resets rather than attempt the reorganization when the deeper side reaches the effective UTXO store block height retention at any height, or reaches the coinbase maturity threshold above height 1000 (see Reorganization Size Protection above)
 
     - Block validation and transaction verification are handled by other services, not the Block Assembly
 
@@ -516,7 +516,23 @@ The Block Assembly service implements robust error handling across multiple laye
 
 - **Conflicting Transaction Detection**: During reorgs, the service identifies and marks conflicting transactions in affected subtrees
 - **Transaction Recovery**: Non-conflicting transactions are automatically re-added to new subtrees
-- **Deep Reorg Protection**: Reorganizations affecting more than the coinbase maturity threshold (typically 100 blocks) trigger a full service reset for safety
+- **Deep Reorg Protection**: Block Assembly does a full reset, not an in-place reorg, when the deeper side of the reorg reaches the UTXO retention at any height, or reaches coinbase maturity (100 blocks on mainnet) above height 1000 (`reorgNeedsReset`). It also resets when a moved-back block is invalid, or when the in-place reorg fails. A catch-up with no blocks to move back never resets because of its depth, however many blocks it moves forward.
+- **Reset After a Failed Fork Reorg**: A fork reorg that fails or panics keeps the subtrees and transaction map of its last completed step. On a failure the header goes back to the losing tip. It does not hold the pre-reorg map and subtrees for a rollback: each step puts back only its own input if it fails part way. The subtree processor then serves no mining data, and refuses every later reorg, catch-up and single move-forward with a `ResetRequiredError` until a reset has emptied the map. Block Assembly answers a refused catch-up or move-forward with a reset onto the target block (`resetAfterRefusedMove`), which moves the tip. If that reset fails, the processor keeps refusing and the next pass resets again. A failed catch-up does not set the refusal: its rollback is complete.
+
+##### Regression Tests
+
+`TestProcessNewBlockAnnouncement_CatchupVsReorg` (`services/blockassembly/block_assembler_catchup_test.go`) is the regression test for this routing. It checks which path `processNewBlockAnnouncement` takes:
+
+- no action when Block Assembly is already at the tip
+- a single `MoveForwardBlock` for a one-block gap
+- catch-up for a gap of two or more blocks with nothing to move back, with no reset for a 150-block catch-up
+- an in-place reorg for a one-block fork
+- a reset for a reorg at coinbase-maturity depth above height 1000, and for a reorg at the UTXO retention below height 1000. These two subtests call `handleReorg` directly.
+- no tip change when an ordinary catch-up fails: Block Assembly stays at its tip from before the catch-up
+
+The reset after a failed fork reorg has its own tests, with a real subtree processor: `services/blockassembly/failed_fork_reorg_reset_test.go` drives it through `moveToBlock`, and `services/blockassembly/subtreeprocessor/failed_fork_reorg_reset_test.go` covers the refusal in the processor.
+
+`TestProcessNewBlockAnnouncement_CatchupVsReorg` replaces the subtree processor with a mock, so it covers the routing decision only. It does not cover reorg handling in `services/blockchain`, `services/blockvalidation` or `stores/utxo`, which need their own regression tests. `make test` runs it, in the `test` job of `teranode_pr_tests.yaml` on every pull request, and in the `go-test` job of `teranode_main_tests.yaml` on every push to `main`, `staging` or `release/*` and on every `v*` tag.
 
 #### Clock Skew Stopping Block Production
 
@@ -541,6 +557,7 @@ The service integrates comprehensive Prometheus metrics for operational monitori
 
 - `teranode_subtreeprocessor_add_tx`: Counter for transaction additions
 - `teranode_subtreeprocessor_dynamic_subtree_size`: Current dynamic subtree size
+- `teranode_subtreeprocessor_blockmaxsize_resizes`: Re-chunks of the queued subtrees because the first one exceeded `blockmaxsize`; rising every block means the resize repeats under sustained load
 - `teranode_subtreeprocessor_move_forward_block`: Block processing operations
 - `teranode_subtreeprocessor_move_back_block`: Block rollback operations
 

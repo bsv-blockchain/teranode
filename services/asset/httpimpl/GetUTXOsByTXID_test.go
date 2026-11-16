@@ -143,3 +143,57 @@ func TestGetUTXOsByTxID(t *testing.T) {
 		assert.Equal(t, "STORAGE_ERROR (69): error getting transaction", echoErr.Message)
 	})
 }
+
+// TestGetUTXOsByTxIDOutputBudget covers asset_maxUTXOsPerTx. The output count of
+// the requested transaction drives one store lookup and one retained item each,
+// so a transaction with an extreme output count makes a single request
+// disproportionately expensive. The setting defaults to 0 (unlimited).
+func TestGetUTXOsByTxIDOutputBudget(t *testing.T) {
+	initPrometheusMetrics()
+
+	tx := bt.NewTx()
+	for i := 0; i < 3; i++ {
+		require.NoError(t, tx.AddP2PKHOutputFromAddress("1BitcoinEaterAddressDontSendf59kuE", 1000))
+	}
+
+	txBytes := tx.Bytes()
+	txHash := tx.TxIDChainHash()
+
+	t.Run("unset serves every output", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(txBytes, nil).Once()
+		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{Status: int(utxo.Status_OK)}, nil)
+
+		echoContext.SetPath("/utxos/:hash/json")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues(txHash.String())
+
+		require.NoError(t, httpServer.GetUTXOsByTxID(JSON)(echoContext))
+		require.Equal(t, http.StatusOK, responseRecorder.Code)
+
+		var response []map[string]interface{}
+		require.NoError(t, json.Unmarshal(responseRecorder.Body.Bytes(), &response))
+		require.Len(t, response, 3)
+	})
+
+	t.Run("set rejects before any lookup", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
+		httpServer.settings.Asset.MaxUTXOsPerTx = 2
+
+		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(txBytes, nil).Once()
+		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{Status: int(utxo.Status_OK)}, nil)
+
+		echoContext.SetPath("/utxos/:hash/json")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues(txHash.String())
+
+		err := httpServer.GetUTXOsByTxID(JSON)(echoContext)
+
+		echoErr := &echo.HTTPError{}
+		require.True(t, errors.As(err, &echoErr))
+		require.Equal(t, http.StatusRequestEntityTooLarge, echoErr.Code)
+
+		mockRepo.AssertNotCalled(t, "GetUtxo", mock.Anything, mock.Anything)
+	})
+}

@@ -59,6 +59,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
+	"math"
 	"slices"
 	"sync/atomic"
 
@@ -72,6 +74,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -90,6 +93,109 @@ var (
 )
 
 const errCouldNotReadInput = "could not read input"
+const errCouldNotReadOutput = "could not read output"
+
+// classifyRecordError picks the error class for a failure to assemble a
+// transaction's metadata out of its Aerospike bins.
+//
+// The bins were written from our own validated bytes, so failing to read them
+// back means this node's stored copy is wrong. That is a storage fault, not
+// evidence that the transaction is consensus-invalid — the same reasoning that
+// applies to the external blob in getExternalTransaction (issue 1439).
+//
+// Every processor reached through this helper already codes its store-attributable
+// failures — a missing or wrong-typed bin, an input that will not parse back — as
+// either a StorageError or a ProcessingError. (fields.Utxos, whose paginated
+// extra-record read is a live Aerospike client.Get and so fails on any transient
+// store problem, has its own classifier: classifyUTXOReadError.) The callers used
+// to re-wrap all of them in TxInvalid regardless. Because errors.Is walks the whole chain and
+// every downstream switch tests ErrTxInvalid first, that wrap presented a
+// transient store read as a proven consensus violation: the block persisted
+// invalid, its descendants poisoned through the parent-invalid cascade, and the
+// serving peer flagged malicious. Preserving the inner class keeps TxInvalid for
+// the case it is meant for — bins that were read successfully but do not make a
+// valid transaction.
+//
+// Context errors and local service faults are treated the same way for the same
+// reason: neither is evidence about the block. ErrProcessing is included because
+// every producer of it on these paths is unambiguously ours rather than the
+// block's: processInputsToTxInpoints failing to read back an input it wrote, and
+// getAllExtraUTXOs failing to build an Aerospike key.
+func classifyRecordError(message string, err error) error {
+	if errors.IsTransientLocalError(err) || errors.IsContextError(err) || errors.Is(err, errors.ErrProcessing) {
+		return errors.NewStorageError(message, err)
+	}
+
+	return errors.NewTxInvalidError(message, err)
+}
+
+const (
+	// minSerializedOutputSize is the smallest an output can be on the wire: eight
+	// bytes of satoshis plus a one-byte varint length for an empty locking script.
+	minSerializedOutputSize = 9
+
+	// defaultExcessiveBlockSize mirrors the documented default of the
+	// excessiveblocksize policy setting (4 GB). Used only when the setting is
+	// unset or explicitly 0, which for block acceptance means "no limit" but here
+	// would mean "no bound on an allocation sized from local storage".
+	// Typed uint64 rather than left untyped, so it cannot silently overflow the
+	// int it would otherwise be inferred as on a 32-bit build.
+	defaultExcessiveBlockSize uint64 = 4 * 1024 * 1024 * 1024
+
+	// maxExternalOutputSlots is the absolute ceiling on the reconstructed output
+	// slice: ~16.7M entries, 128 MB of pointers.
+	//
+	// The policy-derived count below is a correctness ceiling — it never rejects
+	// a parent the node could have accepted — but it is not a resource ceiling.
+	// At the shipped excessiveblocksize of 10 GB it permits ~1.19e9 slots, 8.9 GB
+	// of pointers, so a single flipped bit still OOMs a 32 GB node instead of
+	// producing the storage fault this function exists to produce. Bounding the
+	// allocation is worth the theoretical rejection: a parent above this needs
+	// >144 MB of standard serialization just for its outputs.
+	maxExternalOutputSlots uint64 = 1 << 24
+)
+
+// maxExternalOutputCount bounds the number of outputs this node will reconstruct
+// from an externally stored outputs-only blob.
+//
+// Two ceilings apply and the lower wins.
+//
+// The derived one: a transaction cannot be larger than the largest block this
+// node would accept, and each of its outputs costs at least
+// minSerializedOutputSize bytes, so no acceptable transaction can carry an
+// output index at or above excessiveBlockSize/minSerializedOutputSize. That is a
+// correctness ceiling — it never rejects a parent that could legitimately exist.
+//
+// The absolute one, maxExternalOutputSlots: a resource ceiling, because the
+// derived value is not one. It is what actually bounds the allocation.
+//
+// The derived value is floored at defaultExcessiveBlockSize so the bound is
+// monotonic in the setting. Without that floor, lowering excessiveblocksize
+// would retroactively reject an outputs blob written under a higher value, and
+// since both writers swallow ErrBlobAlreadyExists nothing would ever rewrite it:
+// a config edit would become a permanent read failure presenting as a rotted
+// blob. Historic BSV values such as 128 MB are low enough to reach that band.
+// With the floor in place the absolute ceiling binds for every documented policy
+// value, and the derivation only matters if that ceiling is ever raised.
+func maxExternalOutputCount(tSettings *settings.Settings) uint64 {
+	excessiveBlockSize := defaultExcessiveBlockSize
+
+	if tSettings != nil && tSettings.Policy != nil && tSettings.Policy.ExcessiveBlockSize > 0 {
+		excessiveBlockSize = uint64(tSettings.Policy.ExcessiveBlockSize) //nolint:gosec // guarded > 0 on the line above
+	}
+
+	if excessiveBlockSize < defaultExcessiveBlockSize {
+		excessiveBlockSize = defaultExcessiveBlockSize
+	}
+
+	count := excessiveBlockSize / minSerializedOutputSize
+
+	if count > maxExternalOutputSlots {
+		count = maxExternalOutputSlots
+	}
+
+	return count
+}
 
 // batchGetItemData holds the result of a batch get operation
 type batchGetItemData struct {
@@ -130,11 +236,27 @@ func (it *batchGetItem) complete(data batchGetItemData) {
 // batchOutpoint represents a single outpoint in a batch previous output operation.
 // It is used to efficiently retrieve previous output data for transaction inputs
 // by batching multiple requests together to optimize database access.
+//
+// An item is one of two kinds. A decorate item (PreviousOutputsDecorate) sets
+// outpoint, and the batch writes the parent's value and script into that input.
+// A parent-output item (ParentOutputsForValidation) sets parent instead, and the
+// batch writes its answer into answer, touching nothing the caller holds.
 type batchOutpoint struct {
-	outpoint  *bt.Input         // The previous output to retrieve data for
+	outpoint  *bt.Input         // decorate item: the input to fill from its previous output
+	parent    *utxo.Outpoint    // parent-output item: the outpoint to answer
+	answer    utxo.ParentOutput // parent-output item: written before complete, read after the group wait
 	group     *completion.Group // Shared completion group for the submitting decorate call
 	completed atomic.Bool       // guards exactly-once completion
 	result    error             // written by the CAS winner, after the CAS and before group.Done(); see complete
+}
+
+// parentTxID returns the txid of the parent this item reads.
+func (it *batchOutpoint) parentTxID() chainhash.Hash {
+	if it.parent != nil {
+		return it.parent.TxID
+	}
+
+	return *it.outpoint.PreviousTxIDChainHash()
 }
 
 // complete writes err into the item's result slot and marks the shared group's
@@ -498,12 +620,12 @@ func (s *Store) putGetBatch(ctx context.Context, item *batchGetItem) error {
 func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 	versionUint32, err := safeconversion.IntToUint32(bins[fields.Version.String()].(int))
 	if err != nil {
-		return nil, err
+		return nil, errors.NewStorageError("invalid version", err)
 	}
 
 	locktimeUint32, err := safeconversion.IntToUint32(bins[fields.LockTime.String()].(int))
 	if err != nil {
-		return nil, err
+		return nil, errors.NewStorageError("invalid locktime", err)
 	}
 
 	tx = &bt.Tx{
@@ -521,7 +643,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 
 			_, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 			if err != nil {
-				return nil, errors.NewTxInvalidError(errCouldNotReadInput, err)
+				return nil, errors.NewStorageError(errCouldNotReadInput, err)
 			}
 		}
 	}
@@ -539,7 +661,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 
 			_, err = tx.Outputs[i].ReadFrom(bytes.NewReader(outputInterface.([]byte)))
 			if err != nil {
-				return nil, errors.NewTxInvalidError("could not read output", err)
+				return nil, errors.NewStorageError(errCouldNotReadOutput, err)
 			}
 		}
 	}
@@ -593,6 +715,12 @@ func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 			newBins = append(newBins, fields.LockTime)
 		}
 
+		if !slices.Contains(newBins, fields.External) {
+			newBins = append(newBins, fields.External)
+		}
+	}
+
+	if slices.Contains(newBins, fields.Outputs) {
 		if !slices.Contains(newBins, fields.External) {
 			newBins = append(newBins, fields.External)
 		}
@@ -743,7 +871,7 @@ NEXT_BATCH_RECORD:
 		// TxInpoints can be computed without scripts using optimized parser
 		needsFullExternalTx := false
 		for _, field := range items[idx].Fields {
-			if field == fields.Tx || field == fields.Inputs {
+			if field == fields.Tx || field == fields.Inputs || field == fields.Outputs {
 				needsFullExternalTx = true
 				break
 			}
@@ -772,7 +900,7 @@ NEXT_BATCH_RECORD:
 				} else {
 					tx, txErr := s.getTxFromBins(bins)
 					if txErr != nil {
-						items[idx].Err = errors.NewTxInvalidError("invalid tx", txErr)
+						items[idx].Err = classifyRecordError("invalid tx", txErr)
 
 						continue NEXT_BATCH_RECORD // because there was an error building the transaction from the store.
 					}
@@ -790,7 +918,14 @@ NEXT_BATCH_RECORD:
 				if external {
 					items[idx].Data.Tx = externalTx
 				} else {
-					tx := &bt.Tx{}
+					// Merge into whatever a sibling case already built, for the same
+					// reason the fields.Outputs case below does: each case assigns
+					// Data.Tx, so a caller asking for both without fields.Tx would
+					// otherwise keep only whichever ran last.
+					tx := items[idx].Data.Tx
+					if tx == nil {
+						tx = &bt.Tx{}
+					}
 
 					if inputInterfaces, ok := bins[fields.Inputs.String()].([]interface{}); ok {
 						tx.Inputs = make([]*bt.Input, len(inputInterfaces))
@@ -801,7 +936,7 @@ NEXT_BATCH_RECORD:
 
 							_, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 							if err != nil {
-								return errors.NewTxInvalidError(errCouldNotReadInput, err)
+								return errors.NewStorageError(errCouldNotReadInput, err)
 							}
 						}
 					}
@@ -809,10 +944,80 @@ NEXT_BATCH_RECORD:
 					items[idx].Data.Tx = tx
 				}
 
+			case fields.Outputs:
+				// check that we are not also getting the tx, as this will be handled above
+				if slices.Contains(items[idx].Fields, fields.Tx) {
+					continue
+				}
+
+				// If the tx is external, we already have it, otherwise we need to build it from the bins.
+				if external {
+					items[idx].Data.Tx = externalTx
+				} else {
+					// Merge into whatever a sibling case already built rather than
+					// replacing it. A caller asking for both fields.Inputs and
+					// fields.Outputs without fields.Tx would otherwise get only
+					// whichever case ran last, since each assigns Data.Tx. The
+					// fields.Inputs case above merges for the same reason, so
+					// neither order loses the other's work. No caller asks for both
+					// today; this keeps it from being a trap.
+					tx := items[idx].Data.Tx
+					if tx == nil {
+						tx = &bt.Tx{}
+					}
+
+					if outputInterfaces, ok := bins[fields.Outputs.String()].([]interface{}); ok {
+						tx.Outputs = make([]*bt.Output, len(outputInterfaces))
+
+						for i, outputInterface := range outputInterfaces {
+							if outputInterface == nil {
+								continue
+							}
+
+							// Record the failure against this item and move on, rather
+							// than returning a function-level error. sendGetBatch fails
+							// every waiter on a function-level error, so one corrupt
+							// outputs bin would reject every unrelated parent in the
+							// batch. This projection is read once per parent per input
+							// of every transaction, so that blast radius is live.
+							//
+							// The fields.Inputs case above still aborts the batch. Left
+							// alone deliberately: widening the blast-radius fix to a
+							// pre-existing path is not this change's business, but it is
+							// the same shape and worth a follow-up.
+							outputBytes, isBytes := outputInterface.([]byte)
+							if !isBytes {
+								items[idx].Err = classifyRecordError(errCouldNotReadOutput,
+									errors.NewProcessingError("output %d has type %T, want []byte", i, outputInterface))
+
+								continue NEXT_BATCH_RECORD // because the stored outputs bin is malformed.
+							}
+
+							tx.Outputs[i] = &bt.Output{}
+
+							if _, err = tx.Outputs[i].ReadFrom(bytes.NewReader(outputBytes)); err != nil {
+								// A decode failure concerns our stored bytes, not consensus.
+								// Preserve that class before classifyRecordError sees it.
+								items[idx].Err = classifyRecordError(errCouldNotReadOutput,
+									errors.NewStorageError(errCouldNotReadOutput, err))
+
+								continue NEXT_BATCH_RECORD // because there was an error reading an output from the store.
+							}
+						}
+					}
+
+					// Version and LockTime are deliberately not set: this store's
+					// fields.Outputs projection returns outputs only, where SQL's
+					// also carries them. Nothing reads either off a prefetched
+					// parent, and requesting the extra bins would defeat the point
+					// of the narrow projection.
+					items[idx].Data.Tx = tx
+				}
+
 			case fields.Fee:
 				fee, ok := bins[key.String()].(int)
 				if !ok {
-					items[idx].Err = errors.NewTxInvalidError("missing fee")
+					items[idx].Err = errors.NewStorageError("missing fee")
 
 					continue NEXT_BATCH_RECORD // because there was an error reading the fee from the store.
 				}
@@ -822,7 +1027,7 @@ NEXT_BATCH_RECORD:
 			case fields.SizeInBytes:
 				sizeInBytes, ok := bins[key.String()].(int)
 				if !ok {
-					items[idx].Err = errors.NewTxInvalidError("missing size in bytes")
+					items[idx].Err = errors.NewStorageError("missing size in bytes")
 
 					continue NEXT_BATCH_RECORD // because there was an error reading the size in bytes from the store.
 				}
@@ -839,14 +1044,21 @@ NEXT_BATCH_RECORD:
 						items[idx].Data.TxInpoints, err = s.GetTxInpointsFromExternalStore(ctx, items[idx].Hash)
 					}
 					if err != nil {
-						items[idx].Err = errors.NewTxInvalidError("could not process tx inpoints", err)
+						// Preserve a storage fault instead of laundering it into a
+						// consensus violation. errors.Is walks the whole wrap chain and
+						// every downstream switch tests ErrTxInvalid first, so wrapping a
+						// local blob-store failure in TxInvalid presents this node's own
+						// bad disk as a proven invalid transaction — the misclassification
+						// getExternalTransaction was fixed for. Only a genuine failure to
+						// build inpoints from well-formed data is a transaction fault.
+						items[idx].Err = classifyRecordError("could not process tx inpoints", err)
 
 						continue NEXT_BATCH_RECORD // because there was an error processing the tx inpoints.
 					}
 				} else {
 					txInpoints, err := processInputsToTxInpoints(bins)
 					if err != nil {
-						items[idx].Err = errors.NewTxInvalidError("could not process input interfaces", err)
+						items[idx].Err = classifyRecordError("could not process input interfaces", err)
 
 						continue NEXT_BATCH_RECORD // because there was an error reading the tx inpoints from the store.
 					}
@@ -857,7 +1069,7 @@ NEXT_BATCH_RECORD:
 			case fields.BlockIDs:
 				res, err := processBlockIDs(bins)
 				if err != nil {
-					items[idx].Err = errors.NewTxInvalidError("could not process block IDs", err)
+					items[idx].Err = classifyRecordError("could not process block IDs", err)
 
 					continue NEXT_BATCH_RECORD // because there was an error processing the block IDs.
 				}
@@ -867,7 +1079,7 @@ NEXT_BATCH_RECORD:
 			case fields.BlockHeights:
 				res, err := processBlockHeights(bins)
 				if err != nil {
-					items[idx].Err = errors.NewTxInvalidError("could not process block heights", err)
+					items[idx].Err = classifyRecordError("could not process block heights", err)
 
 					continue NEXT_BATCH_RECORD // because there was an error processing the block heights.
 				}
@@ -877,7 +1089,7 @@ NEXT_BATCH_RECORD:
 			case fields.SubtreeIdxs:
 				res, err := processSubtreeIdxs(bins)
 				if err != nil {
-					items[idx].Err = errors.NewTxInvalidError("could not process subtree idxs", err)
+					items[idx].Err = classifyRecordError("could not process subtree idxs", err)
 
 					continue NEXT_BATCH_RECORD // because there was an error processing the subtree idxs.
 				}
@@ -887,7 +1099,7 @@ NEXT_BATCH_RECORD:
 			case fields.IsCoinbase:
 				coinbaseBool, ok := bins[key.String()].(bool)
 				if !ok {
-					items[idx].Err = errors.NewTxInvalidError("missing is coinbase")
+					items[idx].Err = errors.NewStorageError("missing is coinbase")
 
 					continue NEXT_BATCH_RECORD // because there was an error reading the is coinbase from the store.
 				}
@@ -930,7 +1142,7 @@ NEXT_BATCH_RECORD:
 			case fields.ConflictingChildren:
 				res, err := processConflictingChildren(bins)
 				if err != nil {
-					items[idx].Err = errors.NewTxInvalidError("could not process conflicting children", err)
+					items[idx].Err = classifyRecordError("could not process conflicting children", err)
 
 					continue NEXT_BATCH_RECORD // because there was an error processing the conflicting children.
 				}
@@ -942,7 +1154,7 @@ NEXT_BATCH_RECORD:
 				if ok {
 					unminedSinceUint32, err := safeconversion.IntToUint32(unminedSince)
 					if err != nil {
-						items[idx].Err = errors.NewTxInvalidError("invalid unmined since", err)
+						items[idx].Err = errors.NewStorageError("invalid unmined since", err)
 
 						continue NEXT_BATCH_RECORD // because there was an error processing the unmined since.
 					}
@@ -1056,7 +1268,7 @@ func processBlockIDs(bins aerospike.BinMap) ([]uint32, error) {
 
 		blockIDUint32, err := safeconversion.IntToUint32(blockIDInt)
 		if err != nil {
-			return nil, errors.NewTxInvalidError("invalid block ID")
+			return nil, errors.NewStorageError("invalid block ID")
 		}
 
 		res[i] = blockIDUint32
@@ -1085,7 +1297,7 @@ func processBlockIDs(bins aerospike.BinMap) ([]uint32, error) {
 func processBlockHeights(bins aerospike.BinMap) ([]uint32, error) {
 	blockHeights, ok := bins[fields.BlockHeights.String()].([]interface{})
 	if !ok {
-		return nil, errors.NewTxInvalidError("missing block heights")
+		return nil, errors.NewStorageError("missing block heights")
 	}
 
 	if len(blockHeights) == 0 {
@@ -1102,7 +1314,7 @@ func processBlockHeights(bins aerospike.BinMap) ([]uint32, error) {
 
 		blockHeightUint32, err := safeconversion.IntToUint32(blockHeightInt)
 		if err != nil {
-			return nil, errors.NewTxInvalidError("invalid block height")
+			return nil, errors.NewStorageError("invalid block height")
 		}
 
 		res[i] = blockHeightUint32
@@ -1131,7 +1343,7 @@ func processBlockHeights(bins aerospike.BinMap) ([]uint32, error) {
 func processSubtreeIdxs(bins aerospike.BinMap) ([]int, error) {
 	subtreeIdxs, ok := bins[fields.SubtreeIdxs.String()].([]interface{})
 	if !ok {
-		return nil, errors.NewTxInvalidError("missing subtree idxs")
+		return nil, errors.NewStorageError("missing subtree idxs")
 	}
 
 	if len(subtreeIdxs) == 0 {
@@ -1534,7 +1746,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	// this is done by using a map of txHashes
 	uniqueTxHashes := make(map[chainhash.Hash]struct{})
 	for _, item := range batch {
-		uniqueTxHashes[*item.outpoint.PreviousTxIDChainHash()] = struct{}{}
+		uniqueTxHashes[item.parentTxID()] = struct{}{}
 	}
 
 	// Create a batch of records to read from the txHashes
@@ -1548,9 +1760,11 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			return
 		}
 
-		// BlockHeights is read so external parents can be reconstructed with the
-		// era-aware unspendable rule keyed to their creation height.
-		bins := []fields.FieldName{fields.Version, fields.LockTime, fields.Inputs, fields.Outputs, fields.External, fields.BlockHeights}
+		// Only the outputs are ever used. BlockHeights is read so external parents
+		// can be reconstructed with the era-aware unspendable rule keyed to their
+		// creation height, and so parent-output items can report it. The parent's
+		// inputs, version and locktime are not read: nothing on this path uses them.
+		bins := []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights}
 		record := aerospike.NewBatchRead(policy, key, fields.FieldNamesToStrings(bins))
 
 		// Add to batch records
@@ -1570,6 +1784,12 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 	txs := make(map[chainhash.Hash]*bt.Tx, len(batchRecords))
 	txErrors := make(map[chainhash.Hash]error)
+	// Per parent: whether its output list came from an external blob, and the
+	// block heights recorded for it (nil when the bin could not be parsed; see
+	// heightErrors).
+	txExternal := make(map[chainhash.Hash]bool, len(batchRecords))
+	txHeights := make(map[chainhash.Hash][]uint32, len(batchRecords))
+	heightErrors := make(map[chainhash.Hash]error)
 
 	// Process the batch records
 	for idx, batchRecordIfc := range batchRecords {
@@ -1590,13 +1810,21 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		var previousTx *bt.Tx
 
+		blockHeights, heightsErr := processBlockHeights(bins)
+		if heightsErr != nil {
+			heightErrors[previousTxHash] = heightsErr
+		} else {
+			txHeights[previousTxHash] = blockHeights
+		}
+
 		external, ok := bins[fields.External.String()].(bool)
 		if ok && external {
+			txExternal[previousTxHash] = true
+
 			// Resolve the parent's creation-height era so the reconstruction
 			// applies the same unspendable rule create used. A missing/empty
 			// BlockHeights (unmined parent) yields the Genesis activation height
 			// (post-Genesis), which only ever over-retains — never over-excludes.
-			blockHeights, _ := processBlockHeights(bins)
 			creationHeight := creationHeightFromBlockHeights(blockHeights, s.settings.ChainCfgParams.GenesisActivationHeight)
 
 			if previousTx, err = s.GetOutpointsFromExternalStore(s.ctx, previousTxHash, creationHeight); err != nil {
@@ -1605,9 +1833,9 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 				continue
 			}
 		} else {
-			previousTx, err = s.getTxFromBins(bins)
+			previousTx, err = outputsFromBins(bins)
 			if err != nil {
-				txErrors[previousTxHash] = errors.NewTxInvalidError("invalid tx", err)
+				txErrors[previousTxHash] = classifyRecordError("invalid tx", err)
 
 				continue
 			}
@@ -1618,9 +1846,19 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 	// Now we have all the txs, we can decorate the outpoints
 	for _, batchItem := range batch {
-		previousTx := txs[*batchItem.outpoint.PreviousTxIDChainHash()]
+		parentTxID := batchItem.parentTxID()
+
+		if batchItem.parent != nil {
+			batchItem.answer = parentOutputAnswer(batchItem.parent.Vout, txs[parentTxID], txErrors[parentTxID],
+				txExternal[parentTxID], txHeights[parentTxID], heightErrors[parentTxID])
+			batchItem.complete(nil)
+
+			continue
+		}
+
+		previousTx := txs[parentTxID]
 		if previousTx == nil {
-			if err, ok := txErrors[*batchItem.outpoint.PreviousTxIDChainHash()]; ok {
+			if err, ok := txErrors[parentTxID]; ok {
 				batchItem.complete(err)
 			} else {
 				batchItem.complete(errors.NewTxNotFoundError("previous tx not found: %v", batchItem.outpoint.PreviousTxID))
@@ -1632,6 +1870,23 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		// Guard the output index: a corrupt/short Outputs slice (or a nil-padded
 		// entry from OP_RETURN removal) would otherwise panic here and, because
 		// go-batcher recovers the panic, orphan every remaining item in the batch.
+		//
+		// This is deliberately the one TxInvalid left on this read path, and the
+		// only one that can be. Every other failure above is this node failing to
+		// read back its own stored bytes, which says nothing about the block; this
+		// one compares the child's claim against the parent and so can genuinely
+		// establish that the child is invalid. Reclassifying it would leave the
+		// store unable to report a real consensus violation at all, and a
+		// genuinely invalid spend would stall catchup indefinitely instead of
+		// being rejected.
+		//
+		// The caveat is that it is only as trustworthy as the parent read beneath
+		// it. Reached via the fully re-hashed FileTypeTx path it is sound. Reached
+		// via the outputs-only blob (self-declared txid only) or the inline bins
+		// (not re-hashed at all), corruption that yields a short output list still
+		// arrives here and is reported as a proven violation. That is the residual
+		// hazard the scope note in getExternalTransaction describes, and the
+		// strongest argument for extending the re-hash inline.
 		outIdx := batchItem.outpoint.PreviousTxOutIndex
 		if int(outIdx) >= len(previousTx.Outputs) || previousTx.Outputs[outIdx] == nil {
 			batchItem.complete(errors.NewTxInvalidError("previous tx %s has no output at index %d", batchItem.outpoint.PreviousTxID, outIdx))
@@ -1730,8 +1985,11 @@ func creationHeightFromBlockHeights(blockHeights []uint32, genesisActivationHeig
 }
 
 func (s *Store) getExternalOutpoints(ctx context.Context, previousTxHash chainhash.Hash, creationHeight uint32) (*bt.Tx, int, error) {
-	// get the full transaction from the external store
-	tx, err := s.getExternalTransaction(ctx, previousTxHash)
+	// get the full transaction from the external store. Not sized to the blob:
+	// this path nils the inputs and the unspendable outputs and caches the rest,
+	// and with one arena slab the surviving scripts would keep the dropped ones
+	// (a large OP_FALSE OP_RETURN payload, typically) alive with them.
+	tx, err := s.readExternalTransaction(ctx, previousTxHash, false)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1779,14 +2037,44 @@ func (s *Store) GetTxFromExternalStore(ctx context.Context, previousTxHash chain
 	return s.getExternalTransaction(ctx, previousTxHash)
 }
 
+// getExternalTransaction reads the full transaction stored externally under
+// previousTxHash, with its scripts in one allocation sized to the blob where the
+// store can say how long the blob is. See decodeOwnTxBlob.
 func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
+	return s.readExternalTransaction(ctx, previousTxHash, true)
+}
+
+// readExternalTransaction reads the transaction stored externally under
+// previousTxHash. sizeToBlob selects decodeOwnTxBlob's exact allocation for a
+// FileTypeTx blob; without it each script is read through go-bt's incremental read.
+func (s *Store) readExternalTransaction(ctx context.Context, previousTxHash chainhash.Hash, sizeToBlob bool) (*bt.Tx, error) {
 	fileType := fileformat.FileTypeTx
 
-	// Stream parse from external store to avoid double memory allocation (raw bytes + parsed tx)
-	// This saves ~50% memory by eliminating the intermediate txBytes buffer
+	// Stream parse from external store rather than reading the whole blob into a
+	// byte slice first, so the raw bytes are not held alongside the parsed tx for
+	// the duration of the parse. Note that the FileTypeTx branch below transiently
+	// re-creates a buffer the size of the standard serialization when it re-hashes
+	// the parsed tx (TxIDChainHash goes via tx.Bytes(), which is smaller than the
+	// extended form the blob is stored in), so the peak-memory saving does not
+	// hold for that branch.
 	reader, err := s.externalStore.GetIoReader(ctx, previousTxHash[:], fileType)
 	if err != nil {
-		// Try to get the data from an output file instead
+		// Fall back to the outputs-only blob only when the full transaction is
+		// genuinely absent. Falling back on ANY error sent real read failures — a
+		// permission or I/O error, a context deadline, an S3 throttle, and the
+		// pruner's delete-then-write window that motivates the re-hash below — down
+		// the weaker path, where the only key check is a self-declared txid rather
+		// than a re-hash. It did so silently: a present-but-unreadable tx blob
+		// alongside a valid outputs blob returned a zero-input transaction whose
+		// txid is not the key, with no error at all, which BatchDecorate then
+		// handed to fields.Tx and fields.Inputs consumers. Absence is the only
+		// condition the outputs blob legitimately covers. Every blob backend
+		// distinguishes the two: memory, s3 and file all return ErrNotFound for a
+		// missing blob and a StorageError for a failed read.
+		if !errors.Is(err, errors.ErrNotFound) {
+			return nil, errors.NewStorageError("[GetTxFromExternalStore][%s] could not read tx from external store", previousTxHash.String(), err)
+		}
+
 		fileType = fileformat.FileTypeOutputs
 
 		reader, err = s.externalStore.GetIoReader(ctx, previousTxHash[:], fileType)
@@ -1798,23 +2086,194 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 
 	tx := &bt.Tx{}
 
+	// Measured before the buffered reader below consumes anything.
+	blobLen, blobLenKnown := 0, false
+	if sizeToBlob && fileType == fileformat.FileTypeTx {
+		if blobLen, blobLenKnown, err = remainingBlobBytes(reader); err != nil {
+			return nil, errors.NewStorageError("[GetTxFromExternalStore][%s] could not size tx blob", previousTxHash.String(), err)
+		}
+	}
+
 	// Use buffered reader for all file types to reduce syscalls
 	bufferedReader := bufio.NewReader(reader)
 
 	if fileType == fileformat.FileTypeTx {
-		// Stream parse directly from buffered reader
-		if _, err = tx.ReadFrom(bufferedReader); err != nil {
-			return nil, errors.NewTxInvalidError("[GetTxFromExternalStore][%s] could not read tx from stream", previousTxHash.String(), err)
+		// Stream parse directly from buffered reader. A parse failure here is a
+		// storage fault, not a transaction fault: the blob was written from our
+		// own bytes, so bytes that no longer parse mean this node's stored copy is
+		// truncated or torn — never evidence about the block or the peer that
+		// served it. See the classification note on the re-hash below; a truncated
+		// blob is the more likely corruption mode of the two.
+		if err = decodeOwnTxBlob(tx, bufferedReader, blobLen, blobLenKnown); err != nil {
+			return nil, errors.NewStorageError("[GetTxFromExternalStore][%s] could not read tx from stream", previousTxHash.String(), err)
+		}
+
+		// Re-hash the reconstructed parent against the key it was fetched under
+		// (issue 1439). The parent's outputs are consensus inputs to spend
+		// validation: bytes that are the wrong bytes but still parse as a valid
+		// transaction — a rotted or torn blob, a stale file from the pruner's
+		// delete-then-write race, a mis-keyed return — would have the child's
+		// signature checked against the wrong locking script and its value against
+		// the wrong satoshis, silently. A body checksum cannot catch a
+		// stale-but-intact file; only re-hashing against the requested outpoint
+		// can. It must fail here rather than be cached: the caller memoizes by
+		// txid, so one bad read would be re-served to every later spend of this
+		// parent, and again after a restart because the source is on disk.
+		//
+		// What the check does NOT cover, stated plainly because the txid is a
+		// narrower guarantee than "the blob is verified": the blob is written as
+		// tx.ExtendedBytes(), but TxIDChainHash() hashes tx.Bytes(), the standard
+		// serialization. Every input's PreviousTxSatoshis and PreviousTxScript
+		// therefore sits outside the hash preimage, and no stored digest covers
+		// those bytes, so corruption confined to them passes this check. What spend
+		// validation reads here — this parent's own outputs — is covered. The
+		// uncovered fields are consumed only by legacy netsync's
+		// extendPerTxFallback, which reads a transaction back by its own txid and
+		// copies them onto the in-block transaction.
+		//
+		// That used to be exploitable: the transaction was then IsExtended(), and
+		// the validator's `extend := !tx.IsExtended()` skipped re-fetching the real
+		// parent output, so both the script and fee checks ran against the
+		// uncovered bytes. The validator now re-extends every transaction from the
+		// store unconditionally, and block validation discards supplied
+		// previous-output metadata before extending (GHSA-v76m-6vc7-g7c7), so
+		// corruption confined to those fields no longer reaches either check — it
+		// is overwritten before use. A digest over the stored form would still be
+		// the complete answer, and remains a storage-format change out of scope
+		// here. Legacy netsync still uses those fields to stamp subtree fees before
+		// validation; that stamp is not a consensus check and may reflect corruption.
+		//
+		// A storage fault, never a transaction fault. The blob is written from our
+		// own bytes under our own computed hash, so a mismatch can only mean this
+		// node's stored bytes are wrong. TxInvalid would be read downstream as a
+		// proven consensus violation — the block persisted invalid, its
+		// descendants poisoned via the parent-invalid cascade, and the serving
+		// peer flagged malicious — so a single flipped bit on local disk would
+		// fork this node off the honest chain until someone manually revalidated.
+		// The sibling failures in this function are classified the same way, for
+		// the same reason.
+		//
+		// Deliberately no fallback to FileTypeOutputs on mismatch, even where that
+		// blob exists and carries the same satoshis and locking script: it cannot
+		// be re-hashed either, so trusting it here would reintroduce the
+		// unverified-parent-outputs hazard in precisely the case where we have
+		// positive evidence this node's stored bytes are wrong.
+		//
+		// Scope, and why each other read path is left alone. None of them can take
+		// this check as it stands:
+		//
+		//   - FileTypeOutputs (below) reconstructs outputs only, with no inputs,
+		//     version or locktime, so there is no body to hash. It gets the weaker
+		//     self-declared-txid check documented there.
+		//   - GetTxInpointsFromExternalStore reads the same FileTypeTx blob, so
+		//     unlike the outputs file it does have a full body to hash. It is
+		//     excluded on cost, not impossibility: the function exists to stream
+		//     past every script and output and keep only the input references
+		//     (a ~99% memory saving on a blob that is external precisely because
+		//     it is large), and re-hashing means parsing the whole transaction,
+		//     which is the thing it is built to avoid. The residual exposure is
+		//     real and named here rather than implied: TxMetaFieldsForDecorate
+		//     routes through this path, so a stale or mis-keyed blob yields the
+		//     wrong parent set for that transaction. What that set drives is
+		//     dependency bookkeeping — subtree parent-presence and ordering
+		//     checks, and block assembly's ordering (Validator.go's
+		//     sendToBlockAssembler) — never a script or value check, so it is a
+		//     lower priority than the outputs rather than unreachable.
+		//   - getTxFromBins (the inline path, for transactions small enough to live
+		//     inside the Aerospike record) re-hashes correctly only for a record
+		//     created from a complete transaction. For those the bins do round-trip
+		//     faithfully: inputs and outputs are written once at create and never
+		//     mutated afterwards, because spending touches the utxos/spentUtxos
+		//     bins, not these. But a record seeded from a UTXO-set snapshot
+		//     (cmd/seeder, cmd/seedimport) keeps no inputs and a nil hole at every
+		//     output index already spent at snapshot time, so it cannot hash back to
+		//     its key — and TxIDChainHash() panics on the nil output rather than
+		//     returning a mismatch. (cmd/seeder's restoreCoinbaseInput is the one
+		//     exception: it keeps a rebuilt coinbase input only when the result does
+		//     hash to the key, and only when no output is missing.) See
+		//     meta.Data.TxIsSerializable, which documents
+		//     that shape and which the existing txid comparisons (e.g.
+		//     services/asset/repository) gate on. So extending the re-hash inline is
+		//     not a straight cost/benefit trade: it needs that predicate in front of
+		//     it, and a benchmark, since inline parents are the common case and
+		//     would take a double-SHA256 plus a full re-serialization on essentially
+		//     every spend validation, whereas external parents are a size-gated
+		//     minority sitting behind a ten-second cache.
+		//
+		// (The pruner reads FileTypeTx too, in pruner/pruner_service.go, but only to
+		// collect input references for deletion bookkeeping — it never feeds
+		// consensus. A stale or mis-keyed blob there would mis-target that
+		// bookkeeping, which is a separate problem this check does not cover.)
+		if actual := tx.TxIDChainHash(); !actual.Equal(previousTxHash) {
+			return nil, errors.NewStorageError("[GetTxFromExternalStore][%s] external tx does not hash to the key it was stored under (got %s) — stale, rotted or mis-keyed blob", previousTxHash.String(), actual.String())
 		}
 	} else {
+		// As with the FileTypeTx branch, a parse failure is a storage fault: these
+		// bytes were written from our own outputs, so bytes that no longer parse
+		// mean this node's stored copy is wrong, not that the block or peer is.
 		uw, err := utxopersister.NewUTXOWrapperFromReader(ctx, bufferedReader)
 		if err != nil {
-			return nil, errors.NewTxInvalidError("[GetTxFromExternalStore][%s] could not read outputs from reader", previousTxHash.String(), err)
+			return nil, errors.NewStorageError("[GetTxFromExternalStore][%s] could not read outputs from reader", previousTxHash.String(), err)
 		}
 
-		utxos := utxopersister.PadUTXOsWithNil(uw.UTXOs)
+		// This blob cannot be re-hashed — it holds outputs only, so there is no
+		// body to hash back to a txid — but it does carry a self-declared txid,
+		// written from the same hash it is keyed under (see
+		// StorePartialTransactionExternally). Comparing it is not cryptographic
+		// and a rotted blob could carry a matching txid with corrupt outputs, so
+		// this is strictly weaker than the FileTypeTx re-hash above. It does
+		// however catch the stale-file and mis-keyed cases — the pruner's
+		// delete-then-write race being the motivating one — which would otherwise
+		// surface further downstream as "previous tx has no output at index N",
+		// i.e. a consensus violation manufactured from a local fault.
+		if !uw.TxID.Equal(previousTxHash) {
+			return nil, errors.NewStorageError("[GetTxFromExternalStore][%s] external outputs blob declares a different txid (got %s) — stale, rotted or mis-keyed blob", previousTxHash.String(), uw.TxID.String())
+		}
 
-		tx.Outputs = make([]*bt.Output, len(utxos))
+		// Size the output slice from the highest index in the blob, bounded.
+		//
+		// u.Index is a raw uint32 read straight out of local storage with no
+		// bound of its own (utxopersister.UTXOWrapper.NewUTXOFromReader), and the
+		// slice below is sized to maxIndex+1. A single flipped bit in that field
+		// therefore allocates up to 2^32 pointers, ~34 GB, and OOMs the node
+		// instead of producing the storage fault this whole function exists to
+		// produce. The neighbouring untrusted fields in this format are already
+		// capped this way — the UTXO count and each script length both refuse to
+		// pre-size from the claim — so the index was the gap.
+		//
+		// maxExternalOutputCount is the lower of a policy-derived correctness
+		// ceiling and a fixed resource ceiling; see its doc comment. The resource
+		// ceiling is the one that binds in practice, so unlike the derivation
+		// alone this CAN reject a parent the node would otherwise accept: one
+		// carrying an output index at or above ~16.7M. Such a parent needs
+		// >144 MB of outputs on the wire and none is known to exist, but the
+		// rejection is permanent if one ever does, because neither writer rewrites
+		// an existing blob. That is the deliberate trade: a diagnosable stall on a
+		// parent nobody has seen, against an OOM kill on a single flipped bit,
+		// which is not diagnosable because the node is gone before it can report.
+		//
+		// This replaces a utxopersister.PadUTXOsWithNil call whose padded slice was
+		// discarded after its length was read, so it also drops one full-size
+		// throwaway allocation per external outputs read.
+		var maxIndex uint32
+		for _, u := range uw.UTXOs {
+			if u.Index > maxIndex {
+				maxIndex = u.Index
+			}
+		}
+
+		if bound := maxExternalOutputCount(s.settings); uint64(maxIndex) >= bound {
+			return nil, errors.NewStorageError("[GetTxFromExternalStore][%s] external outputs blob declares output index %d, at or beyond the %d-slot reconstruction bound — rotted blob, or a parent larger than this node will rebuild", previousTxHash.String(), maxIndex, bound)
+		}
+
+		// maxIndex+1 unconditionally, including for an empty UTXO list: that is
+		// what PadUTXOsWithNil returned for the same input (it starts maxIndex at
+		// zero too), so an outputs blob with every output already pruned still
+		// yields one nil slot rather than an empty slice. Downstream both read the
+		// same — the outpoint decorator bounds-checks and nil-checks before use —
+		// but keeping it identical means the bound is the only behaviour this
+		// change introduces.
+		tx.Outputs = make([]*bt.Output, int(maxIndex)+1)
 
 		for _, u := range uw.UTXOs {
 			lockingScript := bscript.NewFromBytes(u.Script)
@@ -1836,6 +2295,125 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 	return tx, nil
 }
 
+// decodeOwnTxBlob decodes a FileTypeTx blob this node wrote under the
+// transaction's own txid. When the blob's length is known, every script is
+// drawn from one arena of exactly that length, so the decode allocates the blob
+// about once (issue 2176).
+//
+// The plain ReadFrom path grows each script buffer in 64KiB steps against the
+// bytes that actually arrive (go-bt v2.7.3, bsv-blockchain/go-bt#187). That
+// guards against a peer that declares a huge script and sends nothing, but
+// costs a large script about five times its size in reallocation and copying:
+// 457MB of allocation for a 91MB data-carrier output. The guard is not needed
+// here. The blob is local, its length comes from the store, and the scripts in
+// it can never add up to more than that length, so the arena never grows on a
+// sound blob. Every other decode in this store keeps the incremental read, and
+// so does a blob whose length is unknown or reported above go-bt's
+// MaxArenaAlloc (1GiB). That cap bounds the up-front allocation; it is
+// not a transaction size limit. The stored form is the extended serialization,
+// which adds each input's previous script, so a valid transaction near the
+// 1GB consensus limit could exceed it and would then just keep the old cost.
+//
+// What a corrupt blob costs. The arena itself is the blob's length B, at most
+// 1GiB. A corrupt script length L that overruns the remaining bytes makes the
+// arena grow once, to max(2B, B + L) with L at most 1GiB (go-bt refuses longer
+// lengths before allocating), while the first slab is still referenced; the
+// short read then fails as a storage fault. So the transient worst case is
+// B + max(2B, B + 1GiB), which for B <= 1GiB is 2B + 1GiB: 3GiB at the cap. The
+// incremental read would hold only the bytes that arrive.
+//
+// The scripts left in the arena share its slab, so any one of them keeps the
+// whole blob alive. A child extends its input by pointing at the parent's
+// output script (the validator's extendInputFromPrefetchedParent, and the other
+// PreviousTxScript extenders), so a 25-byte P2PKH change output left in the slab
+// would let the child pin a 96MB parent for as long as the child lives. A
+// parent's own small input scripts would likewise pin it for as long as the
+// parent is cached. Every script shorter than half the blob, input and output
+// alike, is therefore copied out after the decode. At most one script can be
+// that large, and holding it keeps at most about twice its own size alive; a
+// blob with no such script is garbage once this returns. The usual shape, one
+// data carrier and small scripts, still allocates the blob about once. A blob
+// with no large script (a fan-out of many small outputs, or several mid-sized
+// ones) allocates the blob plus a copy of its scripts, but only the copies stay
+// resident. For a fan-out the per-script read was already exact, so there the
+// sized decode allocates more than it did, transiently.
+// Callers that drop some of the large scripts and keep the rest must still not
+// use this path; see getExternalOutpoints.
+func decodeOwnTxBlob(tx *bt.Tx, r io.Reader, blobLen int, blobLenKnown bool) error {
+	if !blobLenKnown || blobLen <= 0 || blobLen > bt.MaxArenaAlloc {
+		_, err := tx.ReadFrom(r)
+		return err
+	}
+
+	if _, err := tx.ReadFromWithArena(r, bt.NewArena(blobLen)); err != nil {
+		return err
+	}
+
+	for _, input := range tx.Inputs {
+		if input != nil {
+			input.UnlockingScript = detachSmallScript(input.UnlockingScript, blobLen)
+			input.PreviousTxScript = detachSmallScript(input.PreviousTxScript, blobLen)
+		}
+	}
+
+	for _, output := range tx.Outputs {
+		if output != nil {
+			output.LockingScript = detachSmallScript(output.LockingScript, blobLen)
+		}
+	}
+
+	return nil
+}
+
+// detachSmallScript returns a copy of s outside the arena when s is shorter than
+// half of the blobLen-byte blob it was decoded from, and s itself otherwise.
+func detachSmallScript(s *bscript.Script, blobLen int) *bscript.Script {
+	if s == nil || 2*len(*s) >= blobLen {
+		return s
+	}
+
+	detached := bscript.Script(bytes.Clone(*s))
+
+	return &detached
+}
+
+// remainingBlobBytes returns how many bytes r has left to read, when r can say.
+// The file blob store's reader can seek, so it can; the memory store's, and a
+// file store's fallback to a remote long-term store, cannot, and known is then
+// false. It leaves r where it found it, or returns an error.
+func remainingBlobBytes(r io.Reader) (n int, known bool, err error) {
+	seeker, ok := r.(io.Seeker)
+	if !ok {
+		return 0, false, nil
+	}
+
+	cur, err := seeker.Seek(0, io.SeekCurrent)
+	if err != nil {
+		// Some wrappers implement Seek only to report that they cannot.
+		return 0, false, nil
+	}
+
+	end, err := seeker.Seek(0, io.SeekEnd)
+	if err != nil {
+		// Seek may have moved the offset before it failed; put it back.
+		if _, rewindErr := seeker.Seek(cur, io.SeekStart); rewindErr != nil {
+			return 0, false, rewindErr
+		}
+
+		return 0, false, nil
+	}
+
+	if _, err = seeker.Seek(cur, io.SeekStart); err != nil {
+		return 0, false, err
+	}
+
+	if end < cur || end-cur > int64(math.MaxInt) {
+		return 0, false, nil
+	}
+
+	return int(end - cur), true, nil
+}
+
 // GetTxInpointsFromExternalStore efficiently extracts TxInpoints from an external transaction
 // by streaming and parsing only the input references (prevTxID + index), skipping all scripts and outputs.
 // This provides massive memory savings (99%+) by avoiding loading potentially large output scripts into memory.
@@ -1852,9 +2430,13 @@ func (s *Store) GetTxInpointsFromExternalStore(ctx context.Context, txHash chain
 	defer reader.Close()
 
 	// Parse only input references from stream, skipping all scripts and outputs
+	// A storage fault, not a transaction fault, for the same reason as the parse
+	// failures in getExternalTransaction above: this blob was written from our own
+	// bytes, so bytes that no longer parse mean this node's stored copy is torn or
+	// truncated — never evidence about the block or the peer that served it.
 	inputs, err := txparse.ParseInputReferencesFromExtendedTx(reader)
 	if err != nil {
-		return subtree.TxInpoints{}, errors.NewTxInvalidError("[GetTxInpointsFromExternalStore][%s] could not parse input references", txHash.String(), err)
+		return subtree.TxInpoints{}, errors.NewStorageError("[GetTxInpointsFromExternalStore][%s] could not parse input references", txHash.String(), err)
 	}
 
 	s.logger.Debugf("[GetTxInpointsFromExternalStore] Streamed and parsed %d input references from external tx %s, skipped all scripts", len(inputs), txHash.String())

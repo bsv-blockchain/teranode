@@ -192,8 +192,8 @@ func TestEnqueueSetMined_DoesNotBlockWhenChannelFull(t *testing.T) {
 	require.Nil(t, nextHashWithTimeout(t, ctx, bv))
 }
 
-// TestEnqueueSetMined_OverflowDedups locks in the bound freemans13 asked for: overflow
-// is a set keyed by block hash, so repeated enqueues of the same block while the channel
+// TestEnqueueSetMined_OverflowDedups locks in the overflow bound (bitcoin-sv/teranode#4692):
+// overflow is a set keyed by block hash, so repeated enqueues of the same block while the channel
 // is full cost one entry, not one parked goroutine each.
 func TestEnqueueSetMined_OverflowDedups(t *testing.T) {
 	initPrometheusMetrics()

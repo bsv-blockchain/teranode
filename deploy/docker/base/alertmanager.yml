@@ -1,0 +1,25 @@
+# Alertmanager config for the local docker stack.
+#
+# The default receiver deliberately has no notifier attached: this stack is for
+# development, and shipping a hard-coded Slack/PagerDuty/webhook target would
+# either leak a secret or silently drop alerts. Firing alerts are visible in the
+# Alertmanager UI on http://localhost:9094 (and in Prometheus on
+# http://localhost:9090/alerts).
+#
+# To actually notify somewhere, add a receiver config, e.g.:
+#
+#   receivers:
+#     - name: default
+#       slack_configs:
+#         - api_url: <webhook url from a secret, not committed>
+#           channel: '#teranode-alerts'
+#
+route:
+  receiver: default
+  group_by: ['alertname']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: default

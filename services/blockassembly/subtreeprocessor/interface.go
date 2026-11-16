@@ -41,12 +41,51 @@ import (
 type Interface interface {
 	// AddBatch adds a batch of transaction nodes to the subtree processor for processing.
 	// The transactions will be organized into appropriate subtrees based on
-	// their dependencies and relationships with other transactions.
+	// their dependencies and relationships with other transactions. This path is
+	// unconditional: it bypasses any configured capacity bound and does not
+	// uphold the queueLength >= published-outstanding invariant.
 	//
 	// Parameters:
 	//   - nodes: The transaction nodes to add to processing
 	//   - txInpoints: Transaction input points for each node for dependency tracking
 	AddBatch(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints)
+
+	// AddBatchBounded offers a batch under the configured capacity bounds and reports which
+	// bound refused it, if one did. When no bound is configured it never refuses and behaves
+	// identically to AddBatch. inBlock marks transactions that arrived inside a block: the
+	// in-memory transaction limit does not refuse them; the ingest queue bound still does.
+	//
+	// Parameters:
+	//   - nodes: The transaction nodes to add to processing
+	//   - txInpoints: Transaction input points for each node for dependency tracking
+	//   - inBlock: Whether the transactions arrived inside a block
+	//
+	// Returns:
+	//   - Admission: Admitted, or the bound that refused the batch
+	AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) Admission
+
+	// HeldCount returns the transactions held in memory: queued, dequeued but not yet counted,
+	// and already in subtrees.
+	//
+	// Returns:
+	//   - int64: Transactions held in memory
+	HeldCount() int64
+
+	// SetUnminedLoading marks the start (true) or end (false) of a load or reload of the unmined
+	// transactions. While any is in progress the held count reads at least the in-memory limit,
+	// because the transactions being loaded raise the subtree count one at a time and a partial
+	// count would admit mempool ingest that the load then adds to. Calls nest.
+	//
+	// Parameters:
+	//   - loading: true when a load starts, false when it ends
+	SetUnminedLoading(loading bool)
+
+	// UnminedLoading reports whether a load or reload of the unmined transactions holds the held
+	// count full, see SetUnminedLoading.
+	//
+	// Returns:
+	//   - bool: true while the hold is active
+	UnminedLoading() bool
 
 	// Start starts the main processing goroutine for the SubtreeProcessor.
 	// This should be called after loading unmined transactions at startup to avoid race conditions.
@@ -71,6 +110,14 @@ type Interface interface {
 	// Note: This method bypasses the normal queue processing and should be used
 	AddDirectly(node *subtreepkg.Node, txInpoints *subtreepkg.TxInpoints, skipNotification bool) error
 
+	// AddDirectlyReportOnly behaves like AddDirectly, except a disk tx map
+	// error pending after the node has otherwise been placed successfully is
+	// logged and counted rather than failing the call. Use this instead of
+	// AddDirectly when the caller runs after a commit that cannot be rolled
+	// back (e.g. reset's postProcess reload), where failing on a pending map
+	// error would incorrectly report an already-committed operation as failed.
+	AddDirectlyReportOnly(node *subtreepkg.Node, txInpoints *subtreepkg.TxInpoints, skipNotification bool) error
+
 	// AddNodesDirectly adds a batch of unmined transactions directly to the processor without going through the queue.
 	// It performs parallel filtering/insertion into currentTxMap and sequential insertion into subtrees.
 	// This bypasses the queue and is useful for bulk loading transactions at startup.
@@ -82,6 +129,23 @@ type Interface interface {
 	// Returns:
 	//   - error: Any error encountered during addition
 	AddNodesDirectly(txs []*utxostore.UnminedTransaction, skipNotification bool) error
+
+	// AddNodesDirectlyReportOnly is the batch counterpart of
+	// AddDirectlyReportOnly: same load, but a pending disk tx map error is
+	// logged and counted instead of failing the call.
+	AddNodesDirectlyReportOnly(txs []*utxostore.UnminedTransaction, skipNotification bool) error
+
+	// FlushDiskTxMapForLoad flushes the disk tx map writers and reports any
+	// pending storage error. Callers doing a bulk load (loadUnminedTransactions,
+	// loadUnminedTransactionsWithDiskSort) must call this once after the whole
+	// load has finished: AddDirectly/AddNodesDirectly's own per-call boundary
+	// check only sees errors an earlier automatic flush already surfaced, so
+	// writes still below the writer's flush threshold - which every load's
+	// tail leaves unflushed - are otherwise never checked.
+	//
+	// isReload has the same meaning as elsewhere: false fails the call (the
+	// startup load); true only logs and counts (reset's report-only reload).
+	FlushDiskTxMapForLoad(where string, isReload bool) error
 
 	// GetCurrentRunningState returns the current operational state of the processor.
 	// This provides visibility into whether the processor is running, stopped,
@@ -117,6 +181,26 @@ type Interface interface {
 	//   - error: Any error encountered during block processing
 	MoveForwardBlock(block *model.Block) error
 
+	// PrepareBlock starts building the transaction map of a block on the current tip that is
+	// still being validated, for MoveForwardBlock to use once that block is added.
+	//
+	// Parameters:
+	//   - block: The block being validated; nothing about it is trusted
+	PrepareBlock(block *model.Block)
+
+	// DrainPendingInvalidations returns and clears the blocks whose conflict
+	// resolution was refused because demoting a losing transaction would have
+	// reversed a spend confirmed on that block's own ancestry. Such a block is
+	// an ancestor double spend and must be invalidated — but only after block
+	// movement has completed, which is why the hashes are parked rather than
+	// acted on inline.
+	DrainPendingInvalidations() []chainhash.Hash
+
+	// QueueInvalidation records a block that must be invalidated because its
+	// conflict resolution would have reversed a spend confirmed in its own
+	// ancestry, or re-queues one whose invalidation attempt failed.
+	QueueInvalidation(blockHash chainhash.Hash)
+
 	// Reorg handles blockchain reorganization by processing blocks that need
 	// to be removed and added during the reorganization process.
 	//
@@ -140,6 +224,25 @@ type Interface interface {
 	// Returns:
 	//   - ResetResponse: Response containing reset operation results
 	Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, useFastForwardReset bool, postProcess func() error) ResetResponse
+
+	// TakeResetRequested reports, and clears, whether a post-commit disk tx
+	// map storage error requested a reset since the last call. A post-commit
+	// storage error cannot fail the operation that observed it (the write is
+	// already applied), but it may have left the filter claiming an entry
+	// whose data never reached disk (a phantom); a reset reloads from the
+	// UTXO store, the source of truth, curing it. BlockAssembler polls this
+	// once per heartbeat tick of its main loop, rather than after any single
+	// call, since any operation (MoveForwardBlock, Reorg, an async removeTx
+	// or Stop) can be the one that observes the error.
+	TakeResetRequested() bool
+
+	// TakeDrainResetRequested reports, and clears, whether the queue drain the
+	// processor runs after answering MoveForwardBlock failed part-way. The txs
+	// it had taken off the queue are then in no subtree, and only a reset,
+	// which reloads unmined transactions from the UTXO store, brings them
+	// back. Unlike TakeResetRequested this is not a storage fault, so it is
+	// acted on even while the disk tx map is degraded.
+	TakeDrainResetRequested() bool
 
 	// Remove removes a specific transaction from the processor by its hash.
 	// This is used when transactions become invalid or need to be excluded.
@@ -294,10 +397,38 @@ type Interface interface {
 
 	// QueueLength returns the number of transactions currently queued, not
 	// the number of batches. This indicates the processor's current workload.
+	// For items added through the bounded AddBatchBounded path it counts
+	// reserved-or-published items and never reads below the published-outstanding
+	// count; the unbounded AddBatch path now reserves before publishing too, so it
+	// upholds that same guarantee and additionally does not participate in the cap.
 	//
 	// Returns:
 	//   - int64: Current queue length, in transactions
 	QueueLength() int64
+
+	// QueueMaxItems returns the enforced (normalized) ingest-queue item cap, or
+	// a value <= 0 when the queue is unbounded. It is the cap the reservation
+	// path actually enforces, reported in the queue-full shed message.
+	//
+	// Returns:
+	//   - int64: The enforced item cap (<= 0 when unbounded)
+	QueueMaxItems() int64
+
+	// MaxTransactionsInMemory returns the enforced (normalized) limit on
+	// transactions held in memory, queued plus already in subtrees, or a value
+	// <= 0 when there is no limit. It is reported in the shed message.
+	//
+	// Returns:
+	//   - int64: The enforced limit (<= 0 when unlimited)
+	MaxTransactionsInMemory() int64
+
+	// QueueHeadAge returns how long the oldest queued batch has been waiting.
+	// It is a diagnostic gauge for dispatcher-stall visibility and returns 0
+	// when the queue is empty.
+	//
+	// Returns:
+	//   - time.Duration: Age of the oldest queued batch, or 0 if empty
+	QueueHeadAge() time.Duration
 
 	// LastDequeueTime returns the wall-clock time the consumer goroutine last
 	// passed through the queue's dequeue branch. Combined with QueueLength,
@@ -352,12 +483,23 @@ type Interface interface {
 	// The context is used for cancellation/timeout to prevent blocking indefinitely.
 	GetIncompleteSubtreeMiningData(ctx context.Context) *PrecomputedMiningData
 
+	// DrainingAfterBlock reports whether the processor is still running the
+	// work it deferred past a MoveForwardBlock response: the drain of the
+	// queue that built up while the block was applied. Mining data taken
+	// while it is true misses those transactions.
+	DrainingAfterBlock() bool
+
 	// WaitForPendingBlocks waits for any pending block operations to complete.
 	// This ensures that all block-related processing is finalized before proceeding.
 	//
 	// Returns:
 	//   - error: Any error encountered while waiting
 	WaitForPendingBlocks(ctx context.Context) error
+
+	// RequestBlockMaxSizeCheck asks the processing goroutine to check the first queued
+	// subtree against blockmaxsize on its next iteration, resizing the queued subtrees if
+	// it no longer fits. Used after subtrees were built outside the processing loop.
+	RequestBlockMaxSizeCheck()
 
 	// Stop gracefully shuts down the SubtreeProcessor.
 	// This method cancels the processor's internal context, which triggers the main
@@ -382,6 +524,19 @@ type Interface interface {
 	// Returns:
 	//   - error: The first error encountered creating a gap block's coinbase, if any
 	ReconcileCoinbases(ctx context.Context, gapBlocks []*model.Block) error
+
+	// MarkRecoveredConflicts marks the given transactions as conflicting nodes in
+	// the stored subtrees of the blocks that mined them, and saves those subtrees
+	// again. Block assembly calls it at startup for the losers of a recovered
+	// conflict intent, before it drains its input queue and completes the intent.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation of the block and subtree store calls
+	//   - hashes: Hashes of the losing transactions to mark as conflicting
+	//
+	// Returns:
+	//   - error: Any error encountered while reading or saving a subtree
+	MarkRecoveredConflicts(ctx context.Context, hashes []chainhash.Hash) error
 }
 
 // TxInpointsMap defines the interface for transaction inpoints storage with hash keys.

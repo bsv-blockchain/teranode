@@ -18,7 +18,11 @@
 6. [Scalability and Performance](#6-scalability-and-performance)
 7. [Impact on End-Users and Developers](#7-impact-on-end-users-and-developers)
 8. [Glossary of Terms](#8-glossary-of-terms)
-9. [Related Resources](#9-related-resources)
+9. [End-to-End Architecture Reference](#9-end-to-end-architecture-reference)
+    - [9.1 The Transaction and Block Journey](#91-the-transaction-and-block-journey)
+    - [9.2 Reorganization, Conflicts and Catchup](#92-reorganization-conflicts-and-catchup)
+    - [9.3 Synchronous vs Asynchronous Boundaries](#93-synchronous-vs-asynchronous-boundaries)
+10. [Related Resources](#10-related-resources)
 
 ## 1. Introduction
 
@@ -26,7 +30,7 @@ In the early stages of Bitcoin's development, a block size limit of 1 megabyte p
 
 Teranode, the next evolution of the BSV node software, and developed by the BSV Association, addresses the challenges of vertical scaling by instead spreading the workload across multiple machines. This horizontal scaling approach, coupled with an unbound block size, enables network capacity to grow with increasing demand through the addition of cluster nodes, allowing for Bitcoin scaling to be truly unbounded.
 
-Teranode provides a robust node processing system for Bitcoin that can consistently handle over 1M transactions per second, while strictly adhering to the Bitcoin whitepaper.
+Teranode provides a robust node processing system for Bitcoin designed to handle over 1M transactions per second, while strictly adhering to the Bitcoin whitepaper.
 
 Teranode is responsible for:
 
@@ -54,7 +58,7 @@ While BTC relies on vertical scaling—increasing the power of individual nodes�
 2. **Transaction Processing**:
 
     - BTC: Limited to ~7 transactions per second due to 1MB block size and 10-minute block time.
-    - Teranode: Capable of processing over 1 million transactions per second, with potential for further increase.
+    - Teranode: Designed to process over 1 million transactions per second, with potential for further increase.
 
 3. **Resource Utilization**:
 
@@ -64,7 +68,7 @@ While BTC relies on vertical scaling—increasing the power of individual nodes�
 4. **Flexibility**:
 
     - BTC: Monolithic architecture makes updates and improvements challenging.
-    - Teranode: Microservices allow independent scaling and updating of specific functions (e.g., transaction validation, block assembly).
+    - Teranode: Microservices allow independent scaling and updating of specific functions (e.g., transaction validation, transaction propagation).
 
 5. **Network Resilience**:
 
@@ -96,8 +100,8 @@ Unlike the fixed 1MB block size in the original Bitcoin implementation, Teranode
 | **SubTrees**                          | Not used.                                                                                                                                                                                      | A novel concept in Teranode, serving as an intermediary for holding transaction IDs and their Merkle roots.  <br/><br/> Each subtree contains 1 million transactions. Subtrees are broadcast every second. <br/><br/>Broadcast frequently for faster and continuous data propagation. |
 | **Blocks**                            | Transactions are grouped into blocks. Direct transaction data is stored in the block. Each block is linked to the previous one by a cryptographic hash, forming a secure, chronological chain. | In the BSV blockchain, Bitcoin blocks are stored and propagated using an abstraction using subtrees of transaction IDs. This method significantly streamlines the validation process and synchronization among miners, optimizing the overall efficiency of the network.              |
 | **Block Size**                        | Originally capped at 1MB (1 Megabyte), restricting transactions per block.                                                                                                                     | Current BSV expands to 4GB (4 Gigabytes), increasing transaction capacity. <br/><br/>Teranode removes the size limit, enabling limitless transactions per block.                                                                                                                      |
-| **Processed Transactions per second** | 3.3 to 7 transactions per second.                                                                                                                                                              | Guarantees a minimum of **1 million transactions per second** (100,000 x faster than BTC).                                                                                                                                                                                           |
-| **Scalability Approach**              | Vertical scaling: Increases processing power of individual nodes. Limited by hardware capabilities of single machines. Monolithic architecture makes updates challenging.                      | Horizontal scaling: Distributes workload across multiple machines using a microservices architecture. Allows independent scaling of specific functions (e.g., transaction validation, block assembly). More cost-effective and flexible, with higher resilience to node failures.     |
+| **Processed Transactions per second** | 3.3 to 7 transactions per second.                                                                                                                                                              | Designed for a minimum of **1 million transactions per second** (100,000 x faster than BTC).                                                                                                                                                                                           |
+| **Scalability Approach**              | Vertical scaling: Increases processing power of individual nodes. Limited by hardware capabilities of single machines. Monolithic architecture makes updates challenging.                      | Horizontal scaling: Distributes workload across multiple machines using a microservices architecture. Allows independent scaling of specific functions (e.g., transaction validation, transaction propagation). More cost-effective and flexible, with higher resilience to node failures.     |
 
 ## 3. System Architecture Overview
 
@@ -166,7 +170,7 @@ The main differences can be seen in the table below:
 | **SubTrees** | Not used. | Not used. Traditional block propagation. | A novel concept in Teranode, serving as an intermediary for holding transaction IDs and their Merkle roots. <br/><br/> Each subtree contains 1 million transactions. Subtrees are broadcast every second. <br/><br/>Broadcast frequently for faster and continuous data propagation. |
 | **Blocks** | Transactions are grouped into blocks. Direct transaction data is stored in the block. Each block is linked to the previous one by a cryptographic hash, forming a secure, chronological chain. | Same as BTC, with increased block size capacity. | In the BSV blockchain, Bitcoin blocks are stored and propagated using an abstraction using subtrees of transaction IDs. This method significantly streamlines the validation process and synchronization among miners, optimizing the overall efficiency of the network. |
 | **Block Size** | Originally capped at 1MB (1 Megabyte), restricting transactions per block. | Increased to 2GB, then to 4GB block size limit. | Current BSV expands to 4GB (4 Gigabytes), increasing transaction capacity. <br/><br/>Teranode removes the size limit, enabling limitless transactions per block. |
-| **Processed Transactions per second** | 3.3 to 7 transactions per second. | Up to several thousand transactions per second. | Guarantees a minimum of **1 million transactions per second** (100,000 x faster than BTC). |
+| **Processed Transactions per second** | 3.3 to 7 transactions per second. | Up to several thousand transactions per second. | Designed for a minimum of **1 million transactions per second** (100,000 x faster than BTC). |
 | **Mempool** | Maintains a memory pool of unconfirmed transactions waiting to be included in blocks. Size limited by node memory. | Similar to BTC, but with larger capacity due to increased memory limits. | No traditional mempool. Transactions are immediately processed and organized into subtrees. Continuous validation and subtree creation replaces mempool functionality. |
 
 &nbsp;
@@ -215,7 +219,54 @@ The Teranode architecture offers several benefits:
 
 Please check the [Teranode BSV Glossary](../../references/glossary.md) for more terms and definitions.
 
-## 9. Related Resources
+## 9. End-to-End Architecture Reference
+
+The sections above, the [Teranode Microservices Overview](teranode-microservices-overview.md), and the individual service docs each cover part of the system in detail. None of them, on its own, walks the full path a transaction or block takes from ingress to long-term storage, or says which document to open for a given stage. This section is that index — connective tissue, not a replacement for the detailed docs it links to.
+
+### 9.1 The Transaction and Block Journey
+
+| Stage | Primary service(s) | Detail doc(s) |
+|---|---|---|
+| Transaction ingress (gRPC/HTTP/UDP) | Propagation Service | [Propagation](../services/propagation.md) |
+| Consensus validation, UTXO create/spend | Validator Service | [Validator](../services/validator.md) |
+| Subtree assembly and announcement, block template, mining candidates | Block Assembly Service | [Block Assembly](../services/blockAssembly.md) |
+| Subtree validation (subtrees received from peers) | Subtree Validation Service | [Subtree Validation](../services/subtreeValidation.md) |
+| Block and subtree ingress from peers (Kafka hand-off to validation) | P2P Service | [P2P](../services/p2p.md) |
+| Peer discovery, connection management, message transport | P2P Service | [P2P](../services/p2p.md) |
+| Block validation | Block Validation Service | [Block Validation](../services/blockValidation.md) |
+| Chain state, FSM, reorg coordination | Blockchain Service | [Blockchain](../services/blockchain.md), [State Management](stateManagement.md) |
+| Long-term block/tx persistence | Block Persister Service | [Block Persister](../services/blockPersister.md) |
+| UTXO set snapshotting | UTXO Persister Service | [UTXO Persister](../services/utxoPersister.md) |
+| UTXO pruning (bounding store growth) | Pruner Service | [Pruner](../services/pruner.md) |
+| Bridging to pre-Teranode BSV nodes | Legacy Service | [Legacy](../services/legacy.md) |
+| External data access (HTTP/WebSocket, Bitcoin RPC) | Asset Server, RPC Service | [Asset Server](../services/assetServer.md), [RPC](../services/rpc.md) |
+| Network-wide alerts, freeze/unfreeze, ban/invalidate | Alert Service | [Alert](../services/alert.md) |
+| Service startup/dependency ordering | Daemon | [Daemon Reference](../../references/teranodeDaemonReference.md) |
+
+Blocks and subtrees announced by peers enter through the P2P Service, which hands them to Block Validation and Subtree Validation asynchronously over Kafka (`kafka_blocksConfig`, `kafka_subtreesConfig`). Blocks also enter through the Legacy Service from pre-Teranode peers; that path calls Block Validation directly rather than going through Kafka, but joins the same validation stage.
+
+Transactions normally enter via the Propagation Service, but the RPC Service's `sendrawtransaction` calls the Validator directly, bypassing Propagation and its Kafka hand-off, and applies its own absurd-fee ceiling that no other ingress path enforces. The Legacy Service is a third transaction ingress.
+
+For the storage layer underneath these services, see the [Blob Store](../stores/blob.md) and [UTXO Store](../stores/utxo.md) docs, and for the messaging layer see [Kafka](../kafka/kafka.md).
+
+### 9.2 Reorganization, Conflicts and Catchup
+
+Chain reorganization and double-spend/conflict handling are cross-cutting: they involve Block Validation, the Blockchain Service's FSM, Subtree Validation, and the UTXO Store together, rather than a single service. Rather than duplicate that detail here:
+
+- [Understanding Double Spends and Conflict Resolution](understandingDoubleSpends.md) covers first-seen detection, conflicting-transaction tracking, and the five reorg phases (mark original as conflicting → unspend original → process double spend → update double-spend status → cleanup).
+- [State Management in Teranode](stateManagement.md) covers the FSM states (`Idle`, `Running`, `CatchingBlocks`) that drive catchup after a missing parent block, and how services wait on state transitions.
+
+### 9.3 Synchronous vs Asynchronous Boundaries
+
+Services communicate through a mix of synchronous gRPC calls and asynchronous Kafka topics; the [Interaction Patterns](teranode-microservices-overview.md#6-interaction-patterns) and [Kafka Message Broker](teranode-microservices-overview.md#51-kafka-message-broker) sections describe which hops use which mechanism.
+
+One open documentation gap: there is no stated **maximum** synchronous call-chain length across services — a guardrail against runaway synchronous fan-out during a single protocol operation. This document deliberately does not invent one; a maximum like that is an architectural decision the team should make and justify explicitly, not a number a doc should assert unilaterally.
+
+As an observation only (not a policy): tracing the current pipeline, the longest synchronous, in-request chain occurs when Block Validation checks a block's subtrees and encounters transactions it hasn't validated yet — Block Validation → Subtree Validation → Validator → Block Assembly — four services deep before the outermost call returns. The last hop exists because validated transactions are added to block assembly while the FSM is `Running` (`services/subtreevalidation/check_block_subtrees.go` computes `addTXToBlockAssembly` from the FSM state and the request's `keep_block_assembly_handoff` flag, and the Validator's `Store` call into Block Assembly blocks on the batch completing). A short catch-up that started from `Running` keeps this hop while `CatchingBlocks`, within `blockvalidation_catchup_keep_block_assembly_max_blocks` (default 6); other catch-up runs skip it and the chain is three deep. The Validator also reaches the Blockchain Service synchronously on this path, for median-time-past.
+
+The Subtree Validation → Validator boundary is an in-process call rather than a network hop under `useLocalValidator`, which the committed `settings.conf` enables by default: with that default, the daemon's `GetValidatorClient` hands every consumer — Propagation, the shared Subtree-Validation/Block-Validation startup path, and Legacy — an in-process `*Validator` wired directly to the shared UTXO store instead of a gRPC stub. The logical dependency chain is unchanged either way, and the Validator → Block Assembly hop stays a network call regardless. This is noted here as a data point for that future decision, not as an established rule or limit.
+
+## 10. Related Resources
 
 - [Teranode Microservices Overview](teranode-microservices-overview.md)
 - [Extended Transactions](../datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.

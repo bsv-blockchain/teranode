@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
@@ -72,7 +73,7 @@ func TestUnconfirmedParentsOptionDoesNotLeakToPeerPaths(t *testing.T) {
 		nilConsumer := &kafka.KafkaConsumerGroup{}
 		tSettings := test.CreateBaseTestSettings(t)
 
-		server, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, recordingClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+		server, err := New(newCancelCtx(t), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, recordingClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 		require.NoError(t, err)
 
 		return server, recordingClient, childSubtree
@@ -126,7 +127,7 @@ func TestUnconfirmedParentsOptionDoesNotLeakToPeerPaths(t *testing.T) {
 		baseURL, err := url.Parse("http://peer.invalid:8090")
 		require.NoError(t, err)
 
-		require.NoError(t, server.subtreesHandler(context.Background(), childSubtree.RootHash(), baseURL, "peer-1"))
+		require.NoError(t, server.subtreesHandler(context.Background(), time.Now(), childSubtree.RootHash(), baseURL, "peer-1"))
 
 		requireFlagNeverSet(t, recordingClient, "Kafka subtreesHandler")
 	})

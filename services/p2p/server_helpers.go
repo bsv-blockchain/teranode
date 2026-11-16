@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -31,6 +32,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	var (
 		blockMessage BlockMessage
 		hash         *chainhash.Hash
+		heights      peerHeightClaim
 		err          error
 	)
 
@@ -90,7 +92,9 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	// The spoof check above proved fromID == blockMessage.PeerID, so the
 	// sender comparison alone decides self.
 	isSelf := fromID == s.P2PClient.GetID()
-	advertisedHeight := blockMessage.Height
+
+	// heights is only ever produced by sanitizeAdvertisedTip: the isSelf branch
+	// returns before addPeer, so its zero value never reaches the registry.
 	if isSelf {
 		hash, err = s.parseHash(blockMessage.Hash, "handleBlockTopic")
 		if err != nil {
@@ -98,7 +102,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 		}
 	} else {
 		var ok bool
-		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight(ctx))
+		heights, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight(ctx))
 		if !ok {
 			return
 		}
@@ -109,12 +113,13 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 		Timestamp:  time.Now().UTC().Format(isoFormat),
 		Type:       "block",
 		Hash:       hash.String(),
-		Height:     advertisedHeight,
+		Height:     blockMessage.Height, // what the peer advertised; only the registry copy is capped
 		BaseURL:    blockMessage.DataHubURL,
 		PeerID:     blockMessage.PeerID,
 		ClientName: blockMessage.ClientName,
 	}:
 	default:
+		notificationDropped("block")
 		s.logger.Warnf("[handleBlockTopic] notification channel full, dropped block notification for %s", blockMessage.Hash)
 	}
 
@@ -137,7 +142,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 
 	// Store using the originator's peer ID
 	if peerID, err := peer.Decode(blockMessage.PeerID); err == nil {
-		s.addPeer(peerID, blockMessage.ClientName, advertisedHeight, hash, blockMessage.DataHubURL)
+		s.addPeer(peerID, blockMessage.ClientName, heights, hash, blockMessage.DataHubURL)
 		s.logger.Debugf("[handleBlockTopic] Stored latest block hash %s for peer %s", blockMessage.Hash, peerID)
 	}
 
@@ -155,6 +160,27 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	// their subtrees directly over HTTP (not via the gossip subtree handler), so
 	// the reputation filter retained in handleSubtreeTopic does not affect catchup.
 
+	// Suppress replayed announcements before the Kafka publish (issue: gossip
+	// ingest amplification). GossipSub only dedups on message ID (sender +
+	// seqno), so byte-identical announcements with fresh seqnos arrive as new
+	// messages, and each publish below is amplified downstream into gRPC
+	// round-trips, a store lookup and a peer-controlled HTTP fetch. Only the
+	// first few DISTINCT announcers per hash are published per window, keeping
+	// block validation's alternative-source failover fed; the peer bookkeeping
+	// above still ran, so registry state and ban attribution stay fresh for
+	// suppressed announcements. A peer that keeps re-announcing the same hash
+	// is surfaced to the operator once per threshold-multiple of repeats —
+	// deliberately not auto-scored, see seenHashRepeatWarnThreshold.
+	publish, peerRepeats := s.blockSeenHashes.Check(hash.String(), fromID, now)
+	if peerRepeats > 0 && peerRepeats%seenHashRepeatWarnThreshold == 0 {
+		s.logger.Warnf("[handleBlockTopic] peer %s re-announced block %s %d times within the seen-hash TTL", fromID, hash.String(), peerRepeats)
+	}
+
+	if !publish {
+		s.logger.Debugf("[handleBlockTopic] suppressing duplicate announcement of block %s from peer %s", hash.String(), fromID)
+		return
+	}
+
 	// Always send block to kafka - let block validation service decide what to do based on sync state
 	// send block to kafka, if configured
 	if s.blocksKafkaProducerClient != nil {
@@ -168,14 +194,26 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 
 		value, err := proto.Marshal(msg)
 		if err != nil {
+			s.blockSeenHashes.PublishFailed(hash.String(), fromID)
 			s.logger.Errorf("[handleBlockTopic] error marshaling KafkaBlockTopicMessage: %v", err)
 			return
 		}
 
-		s.blocksKafkaProducerClient.Publish(&kafka.Message{
+		// Non-blocking publish: a blocking send here would let broker
+		// backpressure stall the whole gossip worker pool. On a drop, return
+		// the publish grant so a later announcement of the hash can retry.
+		if !s.blocksKafkaProducerClient.TryPublish(&kafka.Message{
 			Key:   []byte(hash.String()),
 			Value: value,
-		})
+		}) {
+			s.blockSeenHashes.PublishFailed(hash.String(), fromID)
+			gossipPublishDropped("block")
+			s.logger.Debugf("[handleBlockTopic] kafka blocks producer backlogged, dropped announcement of block %s from peer %s", hash.String(), fromID)
+		}
+	} else {
+		// No producer configured: nothing was published, so return the grant
+		// to keep the accounting honest.
+		s.blockSeenHashes.PublishFailed(hash.String(), fromID)
 	}
 }
 
@@ -256,6 +294,7 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		ClientName: subtreeMessage.ClientName,
 	}:
 	default:
+		notificationDropped("subtree")
 		s.logger.Warnf("[handleSubtreeTopic] notification channel full, dropped subtree notification for %s", subtreeMessage.Hash)
 	}
 
@@ -284,6 +323,20 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	s.storePeerMapEntry(&s.subtreePeerMap, hash.String(), fromID, now)
 	s.logger.Debugf("[handleSubtreeTopic] storing peer %s for subtree %s", fromID, subtreeMessage.Hash)
 
+	// Suppress replayed announcements before the Kafka publish, mirroring
+	// handleBlockTopic. The check sits AFTER the unhealthy-peer gate above so
+	// an announcement that gate drops does not mark the hash seen and thereby
+	// suppress a later, healthy announcement of the same subtree.
+	publish, peerRepeats := s.subtreeSeenHashes.Check(hash.String(), fromID, now)
+	if peerRepeats > 0 && peerRepeats%seenHashRepeatWarnThreshold == 0 {
+		s.logger.Warnf("[handleSubtreeTopic] peer %s re-announced subtree %s %d times within the seen-hash TTL", fromID, hash.String(), peerRepeats)
+	}
+
+	if !publish {
+		s.logger.Debugf("[handleSubtreeTopic] suppressing duplicate announcement of subtree %s from peer %s", hash.String(), fromID)
+		return
+	}
+
 	if s.subtreeKafkaProducerClient != nil { // tests may not set this
 		msg := &kafkamessage.KafkaSubtreeTopicMessage{
 			Hash:   hash.String(),
@@ -293,20 +346,31 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 
 		value, err := proto.Marshal(msg)
 		if err != nil {
+			s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
 			s.logger.Errorf("[handleSubtreeTopic] error marshaling KafkaSubtreeTopicMessage: %v", err)
 			return
 		}
 
-		s.subtreeKafkaProducerClient.Publish(&kafka.Message{
+		// Non-blocking publish, as in handleBlockTopic: drop under producer
+		// backpressure and return the grant so a later announcement can retry.
+		if !s.subtreeKafkaProducerClient.TryPublish(&kafka.Message{
 			Key:   []byte(hash.String()),
 			Value: value,
-		})
+		}) {
+			s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
+			gossipPublishDropped("subtree")
+			s.logger.Debugf("[handleSubtreeTopic] kafka subtrees producer backlogged, dropped announcement of subtree %s from peer %s", hash.String(), fromID)
+		}
+	} else {
+		// No producer configured (tests): return the grant to keep the
+		// accounting honest.
+		s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
 	}
 }
 
 // addProtocolViolation records a protocol violation against a peer.
 func (s *Server) addProtocolViolation(peerID string) {
-	s.applyBanScore(peerID, ReasonProtocolViolation)
+	_ = s.applyBanScore(peerID, ReasonProtocolViolation)
 }
 
 // isBlacklistedBaseURL checks the given baseURL against the operator-configured
@@ -439,6 +503,13 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 	hostname := strings.ToLower(strings.TrimRight(parsed.Hostname(), "."))
 	if hostname == "" {
 		return errors.NewInvalidArgumentError("DataHubURL has no hostname")
+	}
+
+	// Every fetch joins protocol paths onto this URL, so it must be a clean base: a query
+	// would turn those paths into query data aimed at a path the peer chose (issue 4843).
+	// This is about shape, not address, so it applies even when private IPs are allowed.
+	if err := util.ValidatePeerBaseURL(urlStr); err != nil {
+		return errors.NewInvalidArgumentError("DataHubURL is not a usable base URL", err)
 	}
 
 	// Skip SSRF checks when private/localhost IPs are allowed (e.g. local dev with host networking)
@@ -625,7 +696,29 @@ func (s *Server) getLocalHeight(ctx context.Context) uint32 {
 	return height
 }
 
-func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, advertisedHash string, localHeight uint32) (uint32, *chainhash.Hash, bool) {
+// maxPlausibleAdvertisedHeight is an absolute sanity ceiling on what a peer
+// may advertise — at BSV's ~10-minute block interval it is millennia away.
+// It is not tied to local progress: a catching-up node legitimately sees
+// peers hundreds of thousands of blocks ahead. A claim above it, and above the
+// local+lead window, is a protocol violation: the tip is rejected and the peer
+// is scored. Claims at or below it are reported as advertised.
+const maxPlausibleAdvertisedHeight = 500_000_000
+
+// peerHeightClaim pairs a peer's sync-decision height with its raw advertised
+// claim. registerPeer / addPeer / addConnectedPeer / enqueueRegister take this
+// struct rather than two adjacent positional uint32s so a transposed call
+// cannot silently swap the sync-decision value and the operator-facing one.
+type peerHeightClaim struct {
+	// Height is capped against local progress; it drives sync decisions.
+	Height uint32
+	// AdvertisedHeight is the height the peer actually claimed; it is
+	// reported to operators.
+	AdvertisedHeight uint32
+}
+
+// sanitizeAdvertisedTip validates a peer's advertised tip. On success it
+// returns the claim both capped for sync decisions and as advertised.
+func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, advertisedHash string, localHeight uint32) (peerHeightClaim, *chainhash.Hash, bool) {
 	hash, err := chainhash.NewHashFromStr(advertisedHash)
 	if err != nil {
 		// Log the length, never the value: node_status deliberately feeds the
@@ -633,7 +726,7 @@ func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, a
 		// the peer actually sent), so this is the one place a peer-controlled
 		// string of near-message-cap size could otherwise reach the logs.
 		s.logger.Warnf("[sanitizeAdvertisedTip] rejecting advertised tip from peer %s: invalid block hash (len %d): %v", peerID, len(advertisedHash), err)
-		return 0, nil, false
+		return peerHeightClaim{}, nil, false
 	}
 
 	maxLead := uint32(0)
@@ -646,20 +739,34 @@ func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, a
 		maxAcceptedHeight = uint64(^uint32(0))
 	}
 
-	if uint64(advertisedHeight) > maxAcceptedHeight {
-		cappedHeight := uint32(maxAcceptedHeight)
-		s.logger.Warnf("[sanitizeAdvertisedTip] capped advertised height for peer %s from %d to %d (local height %d, max lead %d)", peerID, advertisedHeight, cappedHeight, localHeight, maxLead)
-		return cappedHeight, hash, true
+	// Debug, not Warn: a peer that lies keeps lying on every message, and
+	// applyBanScore already logs each charge until the peer is banned.
+	if advertisedHeight > maxPlausibleAdvertisedHeight && uint64(advertisedHeight) > maxAcceptedHeight {
+		s.logger.Debugf("[sanitizeAdvertisedTip] rejecting implausible advertised height from peer %s: %d exceeds plausibility ceiling %d (local height %d)", peerID, advertisedHeight, maxPlausibleAdvertisedHeight, localHeight)
+		s.addProtocolViolation(peerID)
+
+		return peerHeightClaim{}, nil, false
 	}
 
-	return advertisedHeight, hash, true
+	heights := peerHeightClaim{Height: advertisedHeight, AdvertisedHeight: advertisedHeight}
+
+	if uint64(advertisedHeight) > maxAcceptedHeight {
+		heights.Height = uint32(maxAcceptedHeight)
+		// Debug, not Warn: the cap is a routine bound on what an unvalidated
+		// claim may influence during catchup, not a statement about the peer.
+		// A node syncing from genesis hits this on nearly every gossip message
+		// for as long as catchup runs.
+		s.logger.Debugf("[sanitizeAdvertisedTip] capped advertised height for peer %s from %d to %d (local height %d, max lead %d)", peerID, advertisedHeight, heights.Height, localHeight, maxLead)
+	}
+
+	return heights, hash, true
 }
 
 // registerPeer is a fire-and-forget shorthand for the centralized registry's
 // RegisterPeer RPC, building the PeerInfo struct from libp2p-source data.
 // Used by addPeer / addConnectedPeer / InjectPeerForTesting which previously
 // shared a single Put helper on the local registry.
-func (s *Server) registerPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+func (s *Server) registerPeer(peerID peer.ID, clientName string, heights peerHeightClaim, blockHash *chainhash.Hash, dataHubURL string) {
 	if s.peerRegistry == nil {
 		return
 	}
@@ -668,7 +775,8 @@ func (s *Server) registerPeer(peerID peer.ID, clientName string, height uint32, 
 		TransportType:    blockchain_api.TransportType_TRANSPORT_HTTP,
 		TransportTypeSet: true,
 		ClientName:       clientName,
-		Height:           height,
+		Height:           heights.Height,
+		AdvertisedHeight: heights.AdvertisedHeight,
 		BlockHash:        blockHash,
 		DataHubURL:       dataHubURL,
 	}
@@ -677,21 +785,21 @@ func (s *Server) registerPeer(peerID peer.ID, clientName string, height uint32, 
 	}
 }
 
-func (s *Server) addPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+func (s *Server) addPeer(peerID peer.ID, clientName string, heights peerHeightClaim, blockHash *chainhash.Hash, dataHubURL string) {
 	if s.registryBatcher != nil {
-		s.registryBatcher.enqueueRegister(peerID.String(), clientName, height, blockHash, dataHubURL, false)
+		s.registryBatcher.enqueueRegister(peerID.String(), clientName, heights, blockHash, dataHubURL, false)
 		return
 	}
-	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
+	s.registerPeer(peerID, clientName, heights, blockHash, dataHubURL)
 }
 
 // addConnectedPeer adds a peer and marks it as directly connected
-func (s *Server) addConnectedPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+func (s *Server) addConnectedPeer(peerID peer.ID, clientName string, heights peerHeightClaim, blockHash *chainhash.Hash, dataHubURL string) {
 	if s.registryBatcher != nil {
-		s.registryBatcher.enqueueRegister(peerID.String(), clientName, height, blockHash, dataHubURL, true)
+		s.registryBatcher.enqueueRegister(peerID.String(), clientName, heights, blockHash, dataHubURL, true)
 		return
 	}
-	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
+	s.registerPeer(peerID, clientName, heights, blockHash, dataHubURL)
 	if s.peerRegistry == nil {
 		return
 	}
@@ -708,7 +816,7 @@ func (s *Server) InjectPeerForTesting(peerID peer.ID, clientName, dataHubURL str
 		return
 	}
 
-	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
+	s.registerPeer(peerID, clientName, peerHeightClaim{Height: height, AdvertisedHeight: height}, blockHash, dataHubURL)
 	if err := s.peerRegistry.UpdateStorage(s.gCtx, peerID.String(), "full"); err != nil {
 		s.logger.Warnf("[InjectPeerForTesting] UpdateStorage %s failed: %v", peerID, err)
 	}
@@ -820,11 +928,43 @@ func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 
 	s.logger.Infof("[processInvalidBlockMessage] processing invalid block %s: %s", blockHash, reason)
 
-	// Look up the peer ID that sent this block
-	peerID, err := s.getPeerFromMap(&s.blockPeerMap, blockHash, "block")
-	if err != nil {
-		s.logger.Warnf("[processInvalidBlockMessage] %v", err)
-		return nil // Not an error, just no peer to ban
+	// Kafka is at-least-once and the revalidation path can republish the same
+	// block, so a block must be scored once, not once per delivery. The old
+	// code got that for free — the ban was gated on a peer-map entry deleted
+	// after scoring — but the message now carries its own attribution, so the
+	// dedupe has to be explicit. The record is TTL-bounded like the peer maps:
+	// a redelivery after the TTL can re-score, which matches the attribution
+	// window the map-gated path always had.
+	if prev, ok := s.reportedInvalidBlocks.Load(blockHash); ok {
+		s.logger.Debugf("[processInvalidBlockMessage] already scored peer %s for invalid block %s, skipping duplicate delivery", prev.peerID, blockHash)
+		return nil
+	}
+
+	// Attribution, strongest source first. The message's peer ID is block
+	// validation's own record of who announced the block (spoof-checked at
+	// gossip time), carried end-to-end so it cannot be washed out: the peer map
+	// is bounded and eviction-prone, so a peer that floods distinct hashes
+	// between serving an invalid block and its verdict — or the offender doing
+	// the same to its own entry — used to erase the only attribution and void
+	// the ban (issue 1433).
+	peerID := invalidBlockMsg.GetPeerId()
+
+	if peerID == "" {
+		// Older producers and paths without provenance (setTxMined): the peer
+		// map entry stored at announcement time.
+		var err error
+		if peerID, err = s.getPeerFromMap(&s.blockPeerMap, blockHash, "block"); err != nil {
+			// Last resort, mirroring ReportInvalidSubtree: resolve the DataHub
+			// URL the block was fetched from back to the peer serving it.
+			if peerURL := invalidBlockMsg.GetPeerUrl(); peerURL != "" {
+				peerID = s.getPeerIDFromDataHubURL(peerURL)
+			}
+
+			if peerID == "" {
+				s.logger.Warnf("[processInvalidBlockMessage] %v", err)
+				return nil // Not an error, just no peer to ban
+			}
+		}
 	}
 
 	// Add ban score to the peer
@@ -840,6 +980,10 @@ func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 		s.logger.Errorf("[processInvalidBlockMessage] error adding ban score to peer %s: %v", peerID, err)
 		return err
 	}
+
+	// Recorded only after a successful score, so the consumer's in-process
+	// retries of a failed AddBanScore are not deduplicated away.
+	s.reportedInvalidBlocks.Store(blockHash, peerMapEntry{peerID: peerID, timestamp: time.Now()})
 
 	// Remove the block from the map to avoid memory leaks
 	s.blockPeerMap.Delete(blockHash)
@@ -888,8 +1032,8 @@ func (s *Server) isBlockchainSyncingOrCatchingUp(ctx context.Context) (bool, err
 		}
 	}
 
-	if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
-		// ignore notifications while syncing or catching up
+	if *state != blockchain_api.FSMStateType_RUNNING {
+		// ignore notifications unless caught up (IDLE can follow a STOP mid-catchup)
 		return true, nil
 	}
 
@@ -914,6 +1058,16 @@ func (s *Server) cleanupPeerMaps() {
 	ttlCutoff := now.Add(-s.peerMapTTLOrDefault())
 	blockExpired := s.blockPeerMap.DeleteExpired(ttlCutoff)
 	subtreeExpired := s.subtreePeerMap.DeleteExpired(ttlCutoff)
+	s.reportedInvalidBlocks.DeleteExpired(ttlCutoff)
+
+	// Sweep the seen-hash caches too. They self-bound at insert and expire
+	// lazily on Check, so this only reclaims memory for hashes that stopped
+	// being announced.
+	seenBlockExpired := s.blockSeenHashes.DeleteExpired(now)
+	seenSubtreeExpired := s.subtreeSeenHashes.DeleteExpired(now)
+	if seenBlockExpired > 0 || seenSubtreeExpired > 0 {
+		s.logger.Infof("[cleanupPeerMaps] removed %d expired seen-block-hash entries, %d expired seen-subtree-hash entries", seenBlockExpired, seenSubtreeExpired)
+	}
 
 	// Evict expired reputationCache entries. shouldSkipUnhealthyPeer only ever
 	// inserts; without this sweep the map would grow once per unique peer ID
@@ -984,20 +1138,22 @@ func (s *Server) cleanupPeerMaps() {
 
 	// Surface how many entries the inline cap evicted since the last sweep
 	// (issue 1409) — flood visibility without a per-insert log line. Sustained
-	// eviction means announcements are arriving faster than the cap can hold,
-	// so attribution for the oldest of them is being aged out early. The
-	// attribution matters as much as the count: pressure spread across peers
-	// is throughput and a larger cap helps, whereas one dominant contributor
-	// is a flood, where a larger cap just hands the attacker more memory and a
-	// longer sweep — ban the peer instead (issue 1503).
+	// eviction means announcements are arriving faster than the cap can hold.
+	// Under the fair-share rule (issue 1503) a dominant contributor's pressure
+	// mostly lands on its own entries once it exceeds its share, so eviction
+	// volume alone no longer implies other peers' attribution is being lost —
+	// which is why the attribution matters as much as the count: pressure
+	// spread across peers is throughput and a larger cap helps, whereas one
+	// dominant contributor is a flood, where a larger cap just hands the
+	// attacker more memory and a longer sweep — ban the peer instead.
 	if blockEvictions, subtreeEvictions := s.blockPeerMap.EvictionsSinceLastRead(), s.subtreePeerMap.EvictionsSinceLastRead(); blockEvictions.total > 0 || subtreeEvictions.total > 0 {
-		s.logger.Warnf("[cleanupPeerMaps] peer maps at capacity since the last sweep: evicted %d oldest block entries (%s) and %d oldest subtree entries (%s)",
+		s.logger.Warnf("[cleanupPeerMaps] peer maps at capacity since the last sweep: evicted %d block entries (%s) and %d subtree entries (%s)",
 			blockEvictions.total, blockEvictions, subtreeEvictions.total, subtreeEvictions)
 	}
 
 	// Log current sizes
-	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d",
-		s.blockPeerMap.Len(), s.subtreePeerMap.Len())
+	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d, seen block hashes: %d, seen subtree hashes: %d",
+		s.blockPeerMap.Len(), s.subtreePeerMap.Len(), s.blockSeenHashes.Len(), s.subtreeSeenHashes.Len())
 }
 
 // startPeerMapCleanup starts the periodic cleanup goroutine
@@ -1161,12 +1317,18 @@ func (s *Server) shouldSkipUnhealthyPeer(from string, messageType string) bool {
 }
 
 // storePeerMapEntry stores a peer entry in the specified map. The map is
-// bounded inline (issue 1409): at capacity the OLDEST entry is evicted, so a
-// distinct-hash flood cannot grow memory without bound between sweeps, and
-// cannot pre-emptively suppress attribution for the announcement arriving
-// next. A flood after an honest announcement can still age it out before
-// validation reports on it (issue 1503), and a peer can age out its own
-// attribution the same way to escape the invalid-block ban path (issue 1433).
+// bounded inline (issue 1409): at capacity an insert from a peer already
+// holding its fair share evicts that peer's own oldest entry, and only a peer
+// below its share evicts the global oldest (issue 1503) — so a distinct-hash
+// flood cannot grow memory without bound between sweeps, and its eviction
+// pressure past that share lands on the flooder's own entries rather than
+// other peers' attribution (up to one share of others' oldest entries can
+// still be displaced while ramping up; see the cappedPeerMap type comment). A
+// peer can still age out its OWN attribution by flooding (issue 1433). For
+// blocks, neither residual voids the ban: the invalid-block Kafka message
+// carries the announcer's peer ID and DataHub URL end-to-end, so
+// processInvalidBlockMessage uses this map only when block validation did not
+// know the block's provenance.
 func (s *Server) storePeerMapEntry(peerMap *cappedPeerMap, hash string, from string, timestamp time.Time) {
 	peerMap.Store(hash, peerMapEntry{
 		peerID:    from,
@@ -1328,7 +1490,12 @@ func (s *Server) reconcileConnectionStates(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, reconcileTimeout)
 	defer cancel()
 
-	peers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+	// libp2p peers only. Liveness comes from P2PClient.GetPeers(), which
+	// reports libp2p IDs, so a wire-protocol peer could never be a member of
+	// live and every one of them would take the "flagged but not live" arm
+	// below. Those entries are owned by the legacy service's own mirror, which
+	// is the only thing that knows whether a Bitcoin p2p connection is open.
+	peers, err := s.peerRegistry.ListPeers(ctx, transportHTTPFilter(), 0, 0, false, false)
 	if err != nil {
 		s.logger.Warnf("[reconcileConnectionStates] ListPeers failed: %v", err)
 		return
@@ -1428,11 +1595,25 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 
 // extractIPFromMultiaddr returns the literal IP component of a libp2p
 // multiaddr string such as "/ip4/1.2.3.4/tcp/9905/p2p/12D3KooW...". It returns
-// "" for addresses without a literal IP (DNS names, relay circuits) and for
-// strings that don't parse as a multiaddr.
+// "" for addresses without a literal IP (DNS names), for relay circuits, and
+// for strings that don't parse as a multiaddr. Relay circuits must be
+// rejected: for a relayed connection the transport address is the RELAY's
+// (e.g. "/ip4/<relay-ip>/tcp/9905/p2p/<relayID>/p2p-circuit"), so treating it
+// as the peer's IP would ban or match the relay and every peer behind it.
+// Peer-ID bans cover peers reached over a circuit.
 func extractIPFromMultiaddr(addrStr string) string {
 	maddr, err := ma.NewMultiaddr(addrStr)
 	if err != nil {
+		return ""
+	}
+
+	return extractIPFromParsedMultiaddr(maddr)
+}
+
+// extractIPFromParsedMultiaddr is extractIPFromMultiaddr for an
+// already-parsed multiaddr; it applies the same relay-circuit rejection.
+func extractIPFromParsedMultiaddr(maddr ma.Multiaddr) string {
+	if isRelayCircuit(maddr) {
 		return ""
 	}
 
@@ -1447,24 +1628,38 @@ func extractIPFromMultiaddr(addrStr string) string {
 	return ""
 }
 
+// isRelayCircuit reports whether the multiaddr contains a libp2p relay
+// circuit component (/p2p-circuit). Every IP/DNS component of such an address
+// names the RELAY, not the peer behind it, so ban logic must never attribute
+// those components to the peer.
+func isRelayCircuit(maddr ma.Multiaddr) bool {
+	_, err := maddr.ValueForProtocol(ma.P_CIRCUIT)
+	return err == nil
+}
+
 // checkMultiaddrBanned reports whether the dial target of a multiaddr is on
 // the IP/subnet ban list. Literal IPs are checked directly; DNS components
 // (/dns, /dns4, /dns6, /dnsaddr) are resolved and every returned address is
 // checked. A parse or resolution failure returns an error so callers can fail
-// closed. Multiaddrs with neither an IP nor a DNS name (e.g. relay circuits)
-// have nothing to check and pass; peer-ID bans cover those.
+// closed. Relay circuits pass without any check: their IP/DNS components name
+// the relay, not the dial target, so checking them would refuse to dial every
+// peer behind a banned relay; peer-ID bans cover circuit peers.
 func (s *Server) checkMultiaddrBanned(ctx context.Context, addrStr string) (bool, error) {
 	if s.banList == nil {
 		return false, nil
 	}
 
-	if ip := extractIPFromMultiaddr(addrStr); ip != "" {
-		return s.banList.IsBanned(ip), nil
-	}
-
 	maddr, err := ma.NewMultiaddr(addrStr)
 	if err != nil {
 		return false, errors.NewInvalidArgumentError("invalid multiaddr %s: %v", addrStr, err)
+	}
+
+	if isRelayCircuit(maddr) {
+		return false, nil
+	}
+
+	if ip := extractIPFromParsedMultiaddr(maddr); ip != "" {
+		return s.banList.IsBanned(ip), nil
 	}
 
 	host := ""
@@ -1529,7 +1724,7 @@ func (s *Server) disconnectPeersOnBanList(ctx context.Context, reason string) {
 
 // networkDisconnector is implemented by P2P clients that can sever the
 // underlying libp2p connection. go-p2p-message-bus does not implement it as of
-// v0.1.17 (nothing up to v0.1.21 exposes the host, a gater, or a disconnect);
+// v0.1.17 (nothing up to v0.1.23 exposes the host, a gater, or a disconnect);
 // once the library gains this capability, network-layer ban enforcement starts
 // working here without further changes.
 type networkDisconnector interface {
@@ -1549,4 +1744,16 @@ func (s *Server) disconnectBannedPeerByID(ctx context.Context, peerID peer.ID, r
 	}
 
 	s.removePeer(peerID)
+}
+
+// transportHTTPFilter returns a ListPeers transport filter that admits libp2p
+// (HTTP DataHub) peers only. Wire-protocol peers registered by the legacy
+// service are visibility-only entries: catchup fetches blocks and subtrees over
+// HTTP from a peer's DataHub, which a wire peer cannot serve. Filtering on
+// transport states that reason directly, rather than relying on a wire peer
+// happening to have an empty DataHubURL.
+func transportHTTPFilter() *blockchain_api.TransportType {
+	transport := blockchain_api.TransportType_TRANSPORT_HTTP
+
+	return &transport
 }

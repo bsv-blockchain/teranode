@@ -2,11 +2,12 @@
 
 <!-- markdownlint-disable MD046 -->
 
-Last modified: 29-October-2025
+Last modified: 7-September-2026
 
 ## Table of Contents
 
 - [Overview](#overview)
+- [Why Seeding Instead of Full IBD](#why-seeding-instead-of-full-ibd)
 - [Synchronization Methods Comparison](#synchronization-methods-comparison)
 - [Method 1: Default Network Sync (P2P)](#method-1-default-network-sync-p2p)
 - [Method 2: Seeding from Legacy SV Node](#method-2-seeding-from-legacy-sv-node)
@@ -21,15 +22,31 @@ This guide covers the different methods available for synchronizing a Teranode i
 
 ---
 
+## Why Seeding Instead of Full IBD
+
+Legacy Bitcoin node implementations bootstrap by performing a full Initial Block Download (IBD): downloading and validating every block and every transaction back to the Genesis block. Teranode still supports this as Method 1 below, for compatibility with existing node implementations, but it does not scale as the primary bootstrap strategy for a Teranode-sized chain.
+
+The chain of block headers alone (80 bytes each) is sufficient to prove a node is following the correct Proof-of-Work chain back to Genesis; it does not require replaying every historical transaction to do so. Because Teranode targets a much higher block size and transaction throughput than legacy implementations, replaying the full transaction history from Genesis takes on the order of days (see the timeline under Method 1) and consumes proportionally more bandwidth and storage as the chain grows.
+
+Seeding instead bootstraps a node's UTXO set directly from a snapshot — exported from a Legacy SV Node or from an existing, already-synchronized Teranode instance — which reconstructs the current UTXO state in hours rather than days (see the per-method Expected Timeline tables under Methods 2 and 3). This is why Methods 2 and 3 are recommended for production deployments, while full P2P sync (Method 1) remains available for cases without an existing data source to seed from.
+
+Note the trust boundary. The export tooling checks its own output against the source node's chainstate tip and writes a `.sha256` sidecar next to each artifact, but the seeder imports whatever it is given: it checks that each header links to a previously stored block, but performs no proof-of-work check on the imported headers, never reads the `.sha256` sidecars, and does not re-derive the UTXO set from the chain. A self-consistent forged chain still passes the linkage check, and nothing in the import path can detect a snapshot whose UTXO set does not match the chain, because a block header commits to the block's transactions, not to the resulting UTXO state. Seed only from artifacts you exported yourself or from an operator you trust, and verify them against the `.sha256` files before importing. Method 1 is the option that requires no such trust.
+
+---
+
 ## Synchronization Methods Comparison
 
 Choose the synchronization method that best fits your situation:
 
-| Method | Use Case | Advantages | Disadvantages | Time Required |
+| Method | Use Case | Advantages | Disadvantages | Estimated Time |
 | -------- | ---------- | ------------ | --------------- | --------------- |
 | **Default Network Sync** | Fresh install, no existing data | • Simple setup<br>• No additional requirements<br>• Complete validation | • Slowest method<br>• High bandwidth usage | 5-8 days |
-| **Legacy SV Node Seeding** | Have existing BSV node | • Faster than P2P<br>• Proven data source<br>• Reduced bandwidth | • Requires SV Node setup<br>• Additional export steps | 1 Hour<br>(assumes SV node<br>already in sync) |
-| **Teranode Data Seeding** | Have existing Teranode | • Fastest method<br>• Direct data transfer<br>• Minimal processing | • Requires access to existing data<br>• Version compatibility needed | 1 Hour |
+| **Legacy SV Node Seeding** | Have existing BSV node | • Faster than P2P<br>• Proven data source<br>• Reduced bandwidth | • Requires SV Node setup<br>• Additional export steps | 6.5-12.5 hours<br>(assumes SV node<br>already in sync)<br>+ tail sync |
+| **Teranode Data Seeding** | Have existing Teranode | • Fastest method<br>• Direct data transfer<br>• Minimal processing | • Requires access to existing data<br>• Version compatibility needed | 3.25-7.25 hours<br>+ tail sync |
+
+All durations in this guide are estimates. None is a measured result on the [reference hardware](../systemRequirements.md). Actual times depend on hardware, bandwidth, peers and the size of recent mainnet blocks.
+
+The seeding times stop when the node starts after the import. The node must then do a tail sync: it downloads and validates the blocks mined after the snapshot height. The tail-sync time depends on how many blocks the snapshot is behind the tip. See [Recovery Options](#recovery-options) for estimates by number of blocks behind.
 
 ![seedingOptions.svg](../img/mermaid/seedingOptions.svg)
 
@@ -48,7 +65,7 @@ This is the standard synchronization method where Teranode downloads the complet
 - ✅ Sufficient storage space (minimum 4TB with default prune settings of 288 blocks)
 - ✅ Stable internet connection with adequate bandwidth
 
-> **⚠️ Important:** This method can take around 14 days depending on your network connection and hardware specifications.
+> **⚠️ Important:** This method takes days. The estimate is 5-8 days (see [Expected Timeline](#expected-timeline)), depending on your network connection and hardware specifications.
 
 ### Process Overview
 
@@ -56,12 +73,17 @@ This is the standard synchronization method where Teranode downloads the complet
 
 ### Step 1: Initialize Sync Process
 
-Upon startup, Teranode begins in IDLE state. You must explicitly set the state to `running` to begin synchronization.
+The operator settings context starts a fresh blockchain store in `IDLE`. Start
+synchronization explicitly after checking the deployment:
 
 ```bash
 # Set FSM state to begin syncing
-kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate running
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate catchingblocks
 ```
+
+The node moves to `RUNNING` automatically after catch-up reaches the active
+network's highest checkpoint. A direct request for `RUNNING` below that
+checkpoint is refused and leaves an IDLE node parked.
 
 ### Step 2: Peer Discovery and Block Download
 
@@ -97,7 +119,7 @@ kubectl port-forward -n teranode-operator service/asset 8090:8090
 
 ### Expected Timeline
 
-| Phase | Duration | Description |
+| Phase | Estimated Duration | Description |
 | ------- | ---------- | ------------- |
 | **Initial Setup** | 5-10 minutes | Peer discovery and connection establishment |
 | **Early Blocks** | 1-2 days | Genesis to block ~500,000 (smaller blocks, faster processing) |
@@ -293,6 +315,11 @@ ls -la /mnt/teranode/seed/export/
 
     **How to find it:** Extract the hash from your exported filenames (the part before `.utxo-headers` or `.utxo-set`)
 
+!!! warning "The hash is not validated against file contents"
+    `-hash` only selects the two files by name. The seeder does not compare it against the tip hash recorded inside either file, and it does not compare the headers file and the UTXO set against each other. It also does not read the `.sha256` sidecars written by the export tooling.
+
+    Confirm both artifacts come from the same export, and verify them against their `.sha256` files, before running the seeder. A mismatched or partially transferred pair has two possible outcomes: it imports with no complaint, or it fails at the final step — after the entire UTXO set has been written and `lastProcessed.dat` created — in which case a re-run needs `-force`.
+
 #### Step 3: Run Seeder
 
 ```bash
@@ -338,7 +365,7 @@ kubectl run teranode-seeder \
 }'
 ```
 
-> **Important:** The seeder pod must have the same configmap (teranode-operator-config), the same secret (teranode-operator-secrets, which holds `blockchain_store` and `utxostore`), and the same volume mounts as the regular Teranode pods to access the correct database and storage configuration.
+> **Important:** The seeder pod must have the same configmap (teranode-operator-config), the same secret (teranode-operator-secrets, which holds `blockchain_store`, `utxostore` and `grpc_admin_api_key`), and the same volume mounts as the regular Teranode pods to access the correct database and storage configuration.
 
 #### Step 4: Monitor Seeding Progress
 
@@ -362,14 +389,37 @@ kubectl wait --for=condition=ready pod -l app=blockchain -n teranode-operator --
 kubectl get pods -n teranode-operator
 ```
 
+#### Step 6: Verify the Seed Before Catch-up
+
+The seeder writes chain data and the Block Assembler checkpoint, but no FSM
+state. Under the `operator` context, the first start therefore parks the node in
+`IDLE` and gives you a verification window:
+
+```bash
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli getfsmstate
+```
+
+Confirm that the seeded tip height/hash and configured network match the
+snapshot, and that all services can reach their stores. Then start catch-up:
+
+```bash
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate catchingblocks
+```
+
+`setfsmstate --fsmstate idle` can park the node again, but it does not stop a
+catchup already in progress, so perform these checks before issuing the command. To skip the verification window on an
+unattended node, set `blockchain_initializeNodeInState: "CATCHINGBLOCKS"` in
+the operator configmap before the first start.
+
 ### Expected Timeline
 
-| Phase | Duration | Description |
+| Phase | Estimated Duration | Description |
 | ------- | ---------- | ------------- |
 | **Export** | 2-4 hours | Extracting UTXO set from SV Node |
 | **Seeding** | 4-8 hours | Importing data into Teranode |
 | **Verification** | 30 minutes | Starting services and verifying sync |
-| **Total** | 1-12 hours | Complete process |
+| **Tail Sync** | See [Recovery Options](#recovery-options) | Blocks mined after the snapshot height, up to the current tip |
+| **Total** | 6.5-12.5 hours + tail sync | Complete process |
 
 > **💾 Storage Note:** The seeder writes directly to Aerospike, PostgreSQL, and the filesystem. Ensure your environment variables and volume mounts are correctly configured.
 
@@ -422,6 +472,11 @@ Ensure the required UTXO files are available in your target Teranode's export di
 
 Use the same seeder process as described in Method 2:
 
+!!! warning "The hash is not validated against file contents"
+    `-hash` only selects the two files by name. The seeder does not compare it against the tip hash recorded inside either file, and it does not compare the headers file and the UTXO set against each other. It also does not read the `.sha256` sidecars written by the export tooling.
+
+    Confirm both artifacts come from the same export, and verify them against their `.sha256` files, before running the seeder. A mismatched or partially transferred pair has two possible outcomes: it imports with no complaint, or it fails at the final step — after the entire UTXO set has been written and `lastProcessed.dat` created — in which case a re-run needs `-force`.
+
 ```bash
 # Scale down services
 kubectl patch cluster teranode-cluster -n teranode-operator --type=merge -p '{"spec":{"enabled":false}}'
@@ -469,12 +524,13 @@ kubectl run teranode-seeder \
 
 ### Expected Timeline
 
-| Phase | Duration | Description |
+| Phase | Estimated Duration | Description |
 | ------- | ---------- | ------------- |
 | **Data Transfer** | 1-3 hours | Copying files between systems |
 | **Seeding** | 2-4 hours | Importing data into target Teranode |
 | **Verification** | 15 minutes | Starting services and verification |
-| **Total** | 1-6 hours | Complete process |
+| **Tail Sync** | See [Recovery Options](#recovery-options) | Blocks mined after the snapshot height, up to the current tip |
+| **Total** | 3.25-7.25 hours + tail sync | Complete process |
 
 > **⚡ Speed Advantage:** This method is typically 2-3x faster than Method 2 since the data is already in Teranode's optimized format.
 
@@ -548,7 +604,7 @@ kubectl port-forward -n teranode-operator service/asset 8090:8090
 
 #### Recovery Options
 
-| Blocks Behind | Recommended Action | Expected Time |
+| Blocks Behind | Recommended Action | Estimated Time |
 | --------------- | ------------------- | --------------- |
 | **< 1,000** | Normal catch-up | 1-4 hours |
 | **1,000 - 10,000** | Monitor catch-up progress | 4-24 hours |
@@ -559,8 +615,8 @@ kubectl port-forward -n teranode-operator service/asset 8090:8090
 ##### Option 1: Force Catch-up
 
 ```bash
-# Reset FSM state and restart sync
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate --fsmstate running
+# From IDLE, restart catch-up
+kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate --fsmstate catchingblocks
 
 # Monitor progress closely
 kubectl logs -n teranode-operator -l app=blockchain -f
@@ -589,8 +645,8 @@ kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getpeerin
 # Restart peer service
 kubectl delete pod -n teranode-operator -l app=peer
 
-# Reset FSM state
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate --fsmstate running
+# If the node is IDLE, restart catch-up
+kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate --fsmstate catchingblocks
 ```
 
 #### Issue: Database Connection Errors

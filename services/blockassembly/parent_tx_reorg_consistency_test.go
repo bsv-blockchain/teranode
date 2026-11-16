@@ -92,12 +92,13 @@ func TestParentTransactionNETCalculationDuringReset(t *testing.T) {
 			return st.RootHash(), stBytes, err
 		}
 
-		// Create moveBack block containing parent
-		_, moveBackSubtreeBytes, err := createSubtreeWithTx(parentTxHash)
-		require.NoError(t, err)
-
-		// Use a unique hash for moveBack subtree storage
-		moveBackSubtreeHash, err := chainhash.NewHashFromStr("1111111111111111111111111111111111111111111111111111111111111111")
+		// One subtree, referenced by both blocks. createSubtreeWithTx returns the
+		// subtree's own root and both blocks carry the same transaction, so both
+		// keys are the same hash — the fixture used to invent two distinct keys,
+		// which GetAndValidateSubtrees now rejects because neither matched the
+		// file stored under it. Sharing the key preserves what this test is
+		// about: the parent appearing in a moveBack and a moveForward block.
+		moveBackSubtreeHash, moveBackSubtreeBytes, err := createSubtreeWithTx(parentTxHash)
 		require.NoError(t, err)
 
 		err = blobStore.Set(ctx, moveBackSubtreeHash[:], fileformat.FileTypeSubtree, moveBackSubtreeBytes)
@@ -119,18 +120,8 @@ func TestParentTransactionNETCalculationDuringReset(t *testing.T) {
 			Subtrees:   []*chainhash.Hash{moveBackSubtreeHash},
 		}
 
-		// Create moveForward block ALSO containing parent (this is the KEY test scenario)
-		_, moveForwardSubtreeBytes, err := createSubtreeWithTx(parentTxHash)
-		require.NoError(t, err)
-
-		// Use a different unique hash for moveForward subtree storage
-		moveForwardSubtreeHash, err := chainhash.NewHashFromStr("2222222222222222222222222222222222222222222222222222222222222222")
-		require.NoError(t, err)
-
-		err = blobStore.Set(ctx, moveForwardSubtreeHash[:], fileformat.FileTypeSubtree, moveForwardSubtreeBytes)
-		require.NoError(t, err)
-		err = blobStore.Set(ctx, moveForwardSubtreeHash[:], fileformat.FileTypeSubtreeMeta, []byte{})
-		require.NoError(t, err)
+		// The moveForward block ALSO contains the parent — the point of this test.
+		moveForwardSubtreeHash := moveBackSubtreeHash
 
 		moveForwardBlock := &model.Block{
 			Height: 1,
@@ -458,8 +449,9 @@ func TestParentTransactionNETCalculationDuringReset(t *testing.T) {
 		stBytes, err := st.Serialize()
 		require.NoError(t, err)
 
-		stHash, err := chainhash.NewHashFromStr("4444444444444444444444444444444444444444444444444444444444444444")
-		require.NoError(t, err)
+		// Key by the subtree's own root: GetAndValidateSubtrees rejects a file
+		// stored under a hash it was not built for.
+		stHash := st.RootHash()
 
 		err = blobStore.Set(ctx, stHash[:], fileformat.FileTypeSubtree, stBytes)
 		require.NoError(t, err)
@@ -580,8 +572,9 @@ func TestParentTransactionNETCalculationDuringReset(t *testing.T) {
 		stBytes, err := st.Serialize()
 		require.NoError(t, err)
 
-		stHash, err := chainhash.NewHashFromStr("5555555555555555555555555555555555555555555555555555555555555555")
-		require.NoError(t, err)
+		// Key by the subtree's own root: GetAndValidateSubtrees rejects a file
+		// stored under a hash it was not built for.
+		stHash := st.RootHash()
 
 		err = blobStore.Set(ctx, stHash[:], fileformat.FileTypeSubtree, stBytes)
 		require.NoError(t, err)
