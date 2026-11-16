@@ -1748,7 +1748,15 @@ func TestBlockValidation_InvalidCoinbaseScriptLength(t *testing.T) {
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test")
-	require.ErrorContains(t, err, "BLOCK_INVALID")
+
+	// Tampering with the coinbase after the header was built leaves a body the header does not
+	// commit to: corrupt, and the block hash must not be stored as invalid.
+	require.True(t, errors.IsBlockCorrupt(err), "expected corrupt, got: %v", err)
+
+	_, meta, lookupErr := blockchainClient.GetBlockHeader(context.Background(), block.Hash())
+	if lookupErr == nil {
+		require.False(t, meta.Invalid, "a tampered coinbase must not mark the block hash invalid")
+	}
 }
 
 func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore utxostore.Store, subtreeValidationClient subtreevalidation.Interface, blockchainClient blockchain.ClientI, txStore blob.Store, subtreeStore blob.Store) *model.Block {
@@ -4258,24 +4266,38 @@ func TestBlockValidation_SubtreeError_Classification(t *testing.T) {
 	tests := []struct {
 		name          string
 		subtreeErr    error
+		baseURL       string
 		wantContains  string // substring expected in ValidateBlock's returned error
 		wantPersisted bool   // whether the block should end up stored (as invalid)
 	}{
 		{
 			name:          "missing parent is transient, not persisted",
 			subtreeErr:    errors.NewTxMissingParentError("parent tx not yet in store"),
+			baseURL:       "http://localhost",
 			wantContains:  "BLOCK_INCOMPLETE",
 			wantPersisted: false,
 		},
 		{
 			name:          "tx not found is transient, not persisted",
 			subtreeErr:    errors.NewTxNotFoundError("tx not yet in store"),
+			baseURL:       "http://localhost",
 			wantContains:  "BLOCK_INCOMPLETE",
 			wantPersisted: false,
 		},
 		{
-			name:          "tx invalid is a consensus violation, persisted",
+			// Subtree validation runs before the subtree list is bound to the header, so on the
+			// peer route the list may have been substituted.
+			name:          "tx invalid from a peer is a corrupt body, not persisted",
 			subtreeErr:    errors.NewTxInvalidError("tx fails script validation"),
+			baseURL:       "http://localhost",
+			wantContains:  "BLOCK_CORRUPT",
+			wantPersisted: false,
+		},
+		{
+			// The legacy route checks the merkle root before it builds the subtree list.
+			name:          "tx invalid on the legacy route is a consensus violation, persisted",
+			subtreeErr:    errors.NewTxInvalidError("tx fails script validation"),
+			baseURL:       "legacy",
 			wantContains:  "BLOCK_INVALID",
 			wantPersisted: true,
 		},
@@ -4304,7 +4326,7 @@ func TestBlockValidation_SubtreeError_Classification(t *testing.T) {
 
 			blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
-			err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost")
+			err = blockValidation.ValidateBlock(context.Background(), block, tc.baseURL)
 			require.Error(t, err)
 			require.ErrorContains(t, err, tc.wantContains)
 

@@ -1137,6 +1137,15 @@ func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, pee
 			hash.String(), len(blockBytes))
 	}
 
+	// The peer chooses the response body, so a well-formed block is not necessarily the
+	// block that was asked for. Callers key the in-flight marker on the requested hash and
+	// every later lookup on the served block, so a substitution would leave that marker
+	// undeletable and suppress later honest announcements of the requested hash.
+	if !block.Hash().IsEqual(hash) {
+		return nil, errors.NewNetworkInvalidResponseError("[catchup:fetchSingleBlock][%s] peer served block %s for a different hash",
+			hash.String(), block.Hash().String())
+	}
+
 	// Reputation is credited post-validation in validateBlocksOnChannel via reportValidBlockForPeers
 
 	return block, nil

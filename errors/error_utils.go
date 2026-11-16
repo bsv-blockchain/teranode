@@ -262,6 +262,12 @@ func GetErrorCategory(err error) string {
 		return "context"
 	}
 
+	// ERR_BLOCK_CORRUPT renders "BLOCK_CORRUPT" into its own message, which the substring
+	// fallback in IsMaliciousResponseError matches on "corrupt", so test the specific code first.
+	if IsBlockCorrupt(err) {
+		return "block"
+	}
+
 	if IsMaliciousResponseError(err) {
 		return "malicious"
 	}
@@ -307,6 +313,9 @@ func errorCodeCategory(code ERR) string {
 		return "state"
 	case code >= 110 && code <= 119:
 		return "network"
+	// The block decade 10-19 is full, so further block errors continue at 120.
+	case code >= 120 && code <= 129:
+		return "block"
 	default:
 		return ""
 	}

@@ -320,9 +320,11 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	subtrees = make([]*chainhash.Hash, 0)
 
 	txCount := len(block.Transactions())
+	// A body that fails these checks is rejected to the legacy peer and never stored as invalid,
+	// so it keeps the invalid classification this path routes on.
 	if txCount <= 1 {
 		if err = commitment.CheckMerkleRoot(ctx); err != nil {
-			return nil, 0, errors.NewBlockInvalidError("block body does not match header", err)
+			return nil, 0, errors.NewBlockInvalidError("block body does not match header", model.CorruptAsInvalid(err))
 		}
 		return subtrees, blockID, nil
 	}
@@ -386,7 +388,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	// Authenticate the body before assigning IDs or writing UTXOs/subtree markers.
 	// Merkle padding can hide duplicate transactions, so both checks are required.
 	if err = model.CheckSubtreeSlicesForDuplicateTxs(subtreeSlices); err != nil {
-		return nil, 0, err
+		return nil, 0, model.CorruptAsInvalid(err)
 	}
 	for _, slice := range subtreeSlices {
 		subtrees = append(subtrees, slice.RootHash())
@@ -394,7 +396,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	commitment.Subtrees = subtrees
 	commitment.SubtreeSlices = subtreeSlices
 	if err = commitment.CheckMerkleRoot(ctx); err != nil {
-		return nil, 0, errors.NewBlockInvalidError("block body does not match header", err)
+		return nil, 0, errors.NewBlockInvalidError("block body does not match header", model.CorruptAsInvalid(err))
 	}
 	commitment.SubtreeSlices = nil
 

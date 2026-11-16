@@ -1,5 +1,9 @@
 package errors
 
+import (
+	stderrors "errors"
+)
+
 // Error type usage guidelines:
 //
 //	storage error -> error returned from processing a file on s3, aerospike.
@@ -11,6 +15,7 @@ var (
 	ErrBlobNotFound               = New(ERR_BLOB_NOT_FOUND, "blob not found")
 	ErrBlockAssemblyReset         = New(ERR_BLOCK_ASSEMBLY_RESET, "block assembly reset")
 	ErrBlockCoinbaseMissingHeight = New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase signature script doesn't have the block height")
+	ErrBlockCorrupt               = New(ERR_BLOCK_CORRUPT, "block corrupt")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
 	ErrBlockIncomplete            = New(ERR_BLOCK_INCOMPLETE, "block incomplete")
@@ -136,6 +141,53 @@ func NewBlockIncompleteError(message string, params ...interface{}) *Error {
 // NewBlockInvalidError creates a new error with the block invalid error code.
 func NewBlockInvalidError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_INVALID, message, params...)
+}
+
+// NewBlockCorruptError creates an error for a block whose received body fails a body-derived
+// check before the body is bound to its header (merkle root, duplicate subtree, duplicate
+// transaction, coinbase placeholder, unbound coinbase). Such a failure cannot tell an honest
+// block corrupted in transit or by a hostile peer apart from a genuinely invalid one, so unlike
+// NewBlockInvalidError it must never persist invalid=true: callers re-download from another
+// peer and charge the peer that served it. It has its own code so that it never matches
+// errors.Is(err, ErrBlockInvalid) on the paths that persist the invalid flag.
+func NewBlockCorruptError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_CORRUPT, message, sanitizeCorruptParams(params)...)
+}
+
+// sanitizeCorruptParams stops a call site from wrapping an invalid-classified cause into a
+// corrupt error. New chains a trailing error as the wrapped error and (*Error).Is walks that
+// chain, so such an error would also satisfy errors.Is(_, ErrBlockInvalid) and could reach a
+// path that persists the invalid flag. The offending argument is replaced by a plain error with
+// the same text. The caller's slice is never mutated.
+func sanitizeCorruptParams(params []interface{}) []interface{} {
+	var sanitized []interface{}
+
+	for i, p := range params {
+		if err, ok := p.(error); ok && Is(err, ErrBlockInvalid) {
+			if sanitized == nil {
+				sanitized = make([]interface{}, len(params))
+				copy(sanitized, params)
+			}
+
+			sanitized[i] = stderrors.New(err.Error())
+		}
+	}
+
+	if sanitized != nil {
+		return sanitized
+	}
+
+	return params
+}
+
+// IsBlockCorrupt reports whether err, or anything it wraps (including across a gRPC boundary),
+// is a block-corrupt error. Callers must check it before any generic ErrBlockInvalid handling.
+func IsBlockCorrupt(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return Is(err, ErrBlockCorrupt)
 }
 
 // NewBlockExistsError creates a new error with the block exists error code.

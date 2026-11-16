@@ -325,6 +325,14 @@ func TestGetErrorCategory(t *testing.T) {
 			expected: "network",
 		},
 		{
+			// ERR_BLOCK_CORRUPT renders "BLOCK_CORRUPT" into its message, which the substring
+			// fallback in IsMaliciousResponseError matches on "corrupt"; the early-out keeps it
+			// in the block category.
+			name:     "corrupt block body is categorised as block, not malicious",
+			err:      NewBlockCorruptError("corrupt body"),
+			expected: "block",
+		},
+		{
 			name:     "block error",
 			err:      NewBlockNotFoundError("block missing"),
 			expected: "block",
