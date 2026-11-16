@@ -365,6 +365,11 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		return nil, errors.NewStorageError("failed to insert genesis transaction", err)
 	}
 
+	if err = s.ensureChainWriteRow(context.Background()); err != nil {
+		s.blockIDReservations.Stop()
+		return nil, err
+	}
+
 	if useInMemory {
 		// Initialise maxBlockID synchronously, before any query can be served.
 		// maxBlockID is otherwise only set at the end of rebuildOffChainSet, which
@@ -563,6 +568,7 @@ var blockchainSchemaExpectedColumns = []string{
 	"median_time_past",
 	"coinbase_bump",
 	"on_main_chain",
+	"mined_set_gen",
 }
 
 // blockchainSchemaExpectedIndexes is the list of indexes on blocks that the
@@ -796,6 +802,7 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 		,median_time_past BIGINT NOT NULL DEFAULT 0
 		,coinbase_bump  BYTEA NULL
 		,on_main_chain  BOOLEAN NOT NULL DEFAULT FALSE
+		,mined_set_gen  BIGINT NOT NULL DEFAULT 0
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -890,6 +897,13 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 			_ = db.Close()
 			return errors.NewStorageError("could not check for on_main_chain column in blocks table", err)
 		}
+	}
+
+	// add the mined_set_gen column to the blocks table if it does not exist. Every write that
+	// clears mined_set bumps it, so SetBlockMinedSet can refuse a tagging run that started
+	// before the clear (see SetBlockMinedSet.go).
+	if err := addMinedSetGenColumn(db, "SELECT column_name FROM information_schema.columns WHERE table_name='blocks' AND column_name='mined_set_gen'"); err != nil {
+		return err
 	}
 
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_blocks_hash ON blocks (hash);`); err != nil {
@@ -1049,6 +1063,28 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 	return nil
 }
 
+// addMinedSetGenColumn adds the mined_set_gen column to blocks when probeQuery, which must
+// select one row naming the column if it exists, finds nothing. It closes db on failure, as
+// the schema builders that call it do on every other error.
+func addMinedSetGenColumn(db *usql.DB, probeQuery string) error {
+	err := db.QueryRow(probeQuery).Scan(new(string))
+	if err == nil {
+		return nil
+	}
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		_ = db.Close()
+		return errors.NewStorageError("could not check for mined_set_gen column in blocks table", err)
+	}
+
+	if _, err = db.Exec(`ALTER TABLE blocks ADD COLUMN mined_set_gen BIGINT NOT NULL DEFAULT 0;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not add mined_set_gen column to blocks table", err)
+	}
+
+	return nil
+}
+
 func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS state (
@@ -1090,6 +1126,7 @@ func createSqliteSchema(db *usql.DB) error {
 		,median_time_past BIGINT NOT NULL DEFAULT 0
 		,coinbase_bump  BLOB NULL
 		,on_main_chain  BOOLEAN NOT NULL DEFAULT FALSE
+		,mined_set_gen  BIGINT NOT NULL DEFAULT 0
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -1179,6 +1216,13 @@ func createSqliteSchema(db *usql.DB) error {
 			_ = db.Close()
 			return errors.NewStorageError("could not check for on_main_chain column in blocks table", err)
 		}
+	}
+
+	// add the mined_set_gen column to the blocks table if it does not exist. Every write that
+	// clears mined_set bumps it, so SetBlockMinedSet can refuse a tagging run that started
+	// before the clear (see SetBlockMinedSet.go).
+	if err := addMinedSetGenColumn(db, "SELECT name FROM pragma_table_info('blocks') WHERE name='mined_set_gen'"); err != nil {
+		return err
 	}
 
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_blocks_hash ON blocks (hash);`); err != nil {
@@ -1878,14 +1922,16 @@ func (s *SQL) rebuildOnMainChainFlagFrom(ctx context.Context, full bool, floor i
 	// writes. Two callers run without slowPathMu held: the startup goroutine (see
 	// New) and, on PostgreSQL, the background repair's full walk (see
 	// attemptOnMainChainRepair); Invalidate/Revalidate hold slowPathMu and StoreBlock
-	// holds it for its whole duration, so they cannot conflict. Those two can,
-	// however, race a slow-path write to the same rows — so retry the whole
+	// holds it for its whole duration, so in this process they cannot conflict. Those
+	// two can, however, race a slow-path write to the same rows, and any walk can race a
+	// chain write from another process, which the check of the shared chain-write row
+	// turns into 40001 or 55P03 (see chainWriteStateKey) — so retry the whole
 	// transaction (begin → reads → UPDATEs → commit) as a unit on those codes.
 	// tx.ExecContext / tx.QueryRowContext are stdlib *sql.Tx methods and do NOT
 	// go through usql's per-statement retry, so the retry has to live here.
 	//
 	// On SQLite the modernc driver ignores the isolation option and never returns
-	// 40001/40P01, so isSerializationRetry is always false and the loop runs once.
+	// 40001/40P01/55P03, so isSerializationRetry is always false and the loop runs once.
 	const (
 		maxRebuildAttempts = 3
 		retryBaseDelay     = 100 * time.Millisecond
@@ -1929,19 +1975,22 @@ func (s *SQL) rebuildOnMainChainFlagFrom(ctx context.Context, full bool, floor i
 }
 
 // isSerializationRetry reports whether err is a Postgres serialization_failure
-// (40001) or deadlock_detected (40P01) — the two codes a REPEATABLE READ
-// transaction can raise on a write-write conflict and which are safe to retry by
-// re-running the whole transaction. SQLite never produces these codes.
+// (40001), deadlock_detected (40P01) or lock_not_available (55P03): the codes a
+// REPEATABLE READ walk can raise on a conflicting write, the last from its NOWAIT
+// check of the chain-write row (see chainWriteStateKey), and which are safe to retry
+// by re-running the whole transaction. SQLite never produces these codes.
 func (*SQL) isSerializationRetry(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		return pgErr.Code == usql.PgErrSerializationFail || pgErr.Code == usql.PgErrDeadlockDetected
+		return pgErr.Code == usql.PgErrSerializationFail || pgErr.Code == usql.PgErrDeadlockDetected ||
+			pgErr.Code == usql.PgErrLockNotAvailable
 	}
 
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) {
 		code := string(pqErr.Code)
-		return code == usql.PgErrSerializationFail || code == usql.PgErrDeadlockDetected
+		return code == usql.PgErrSerializationFail || code == usql.PgErrDeadlockDetected ||
+			code == usql.PgErrLockNotAvailable
 	}
 
 	return false
@@ -2038,6 +2087,16 @@ func (s *SQL) rebuildOnMainChainFlagTx(ctx context.Context, full bool, floor int
 			return err
 		}
 		return errors.NewStorageError("rebuildOnMainChainFlag: failed to set on_main_chain flags", err)
+	}
+
+	// Last, so a chain write from any process that committed after this snapshot, or is
+	// still open, rolls this walk back instead of being written over; see
+	// chainWriteStateKey.
+	if err = s.checkNoChainWriteSinceSnapshot(ctx, tx); err != nil {
+		if s.isSerializationRetry(err) {
+			return err
+		}
+		return errors.NewStorageError("rebuildOnMainChainFlag: failed to check for chain writes since the snapshot", err)
 	}
 
 	if err = tx.Commit(); err != nil {
