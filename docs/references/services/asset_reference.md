@@ -552,8 +552,9 @@ Error responses include a JSON object with an error message:
 
 - **POST `/api/v1/subtree/:hash/txs`**
     - Purpose: Batch retrieve multiple transactions for a subtree
-    - Request Body: Concatenated 32-byte transaction hashes
-    - Returns: Concatenated transactions (binary)
+    - Request Body: Concatenated 32-byte transaction hashes, each a transaction of the subtree, none repeated
+    - Returns: Concatenated transactions (binary), in request order
+    - Errors: 400 for a repeated hash, 404 for a hash not in the subtree
 
 - **GET `/api/v1/txmeta/:hash/json`**
     - Purpose: Get transaction metadata

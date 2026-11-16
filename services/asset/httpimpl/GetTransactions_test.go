@@ -2,8 +2,11 @@ package httpimpl
 
 import (
 	"bytes"
+	"context"
+	"encoding/binary"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,8 +14,14 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
+	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -27,13 +36,10 @@ func TestGetTransactions(t *testing.T) {
 
 		subtreeHash := chainhash.HashH([]byte("subtreeHash"))
 
-		emptyTxMap := make(map[chainhash.Hash]*bt.Tx)
-
 		// set mock response
 		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil).Once()
 		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX2RawBytes, nil).Once()
-		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
-		mockRepo.On("GetSubtreeTransactions", mock.Anything, mock.Anything).Return(emptyTxMap, nil)
+		mockSubtreeWithoutData(mockRepo, *testTX1Hash, *testTX2Hash)
 
 		transactionHashes := append(testTX1Hash.CloneBytes(), testTX2Hash.CloneBytes()...)
 
@@ -124,8 +130,7 @@ func TestGetTransactions(t *testing.T) {
 
 		// set mock response
 		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(nil, errors.NewNotFoundError("transaction not found"))
-		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
-		mockRepo.On("GetSubtreeTransactions", mock.Anything, mock.Anything).Return(make(map[chainhash.Hash]*bt.Tx), nil)
+		mockSubtreeWithoutData(mockRepo, *testTX1Hash)
 
 		// set echo context
 		echoContext.Request().Header.Set(echo.HeaderContentType, echo.MIMEOctetStream)
@@ -154,8 +159,7 @@ func TestGetTransactions(t *testing.T) {
 
 		// set mock response
 		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(nil, errors.NewStorageError("error getting transaction"))
-		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
-		mockRepo.On("GetSubtreeTransactions", mock.Anything, mock.Anything).Return(make(map[chainhash.Hash]*bt.Tx), nil)
+		mockSubtreeWithoutData(mockRepo, *testTX1Hash)
 
 		// set echo context
 		echoContext.Request().Header.Set(echo.HeaderContentType, echo.MIMEOctetStream)
@@ -189,19 +193,52 @@ func TestGetTransactions(t *testing.T) {
 	})
 }
 
-// setSubtreeRoute points echoContext at the real POST /subtree/:hash/txs route,
-// and mockGetSubtreeTransactions makes GetSubtreeTransactions return an empty map
-// (falling every hash through to the GetTransaction store lookup below), the same
-// shape most of these tests exercised before GetTransactions was the only route.
+// setSubtreeRoute points echoContext at the real POST /subtree/:hash/txs route.
 func setSubtreeRoute(c echo.Context, hash *chainhash.Hash) {
 	c.SetPath("/subtree/:hash/txs")
 	c.SetParamNames("hash")
 	c.SetParamValues(hash.String())
 }
 
-func mockGetSubtreeTransactions(mockRepo *repository.Mock) {
+// mockSubtreeWithoutData models a subtree whose .subtreeData is not stored yet,
+// which is what peer catchup meets on a live subtree: GetSubtreeTransactions
+// fails, so every hash falls through to the GetTransaction store lookup, and
+// members are the node hashes the membership check streams from the subtree.
+func mockSubtreeWithoutData(mockRepo *repository.Mock, members ...chainhash.Hash) {
 	mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
-	mockRepo.On("GetSubtreeTransactions", mock.Anything, mock.Anything).Return(make(map[chainhash.Hash]*bt.Tx), nil)
+	mockRepo.On("GetSubtreeTransactions", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+	mockSubtreeNodeHashes(mockRepo, members...)
+}
+
+// mockSubtreeNodeHashes makes GetSubtreeNodeHashesReader stream members as the
+// subtree's node hashes.
+func mockSubtreeNodeHashes(mockRepo *repository.Mock, members ...chainhash.Hash) {
+	mockRepo.On("GetSubtreeNodeHashesReader", mock.Anything).Return(io.NopCloser(bytes.NewReader(concatHashes(members))), nil)
+}
+
+// distinctHashes returns n different hashes. The store mocks answer any hash, so
+// these stand in for n different transactions of a subtree.
+func distinctHashes(n int) []chainhash.Hash {
+	hashes := make([]chainhash.Hash, n)
+
+	for i := range hashes {
+		var seed [8]byte
+
+		binary.LittleEndian.PutUint64(seed[:], uint64(i))
+		hashes[i] = chainhash.HashH(seed[:])
+	}
+
+	return hashes
+}
+
+func concatHashes(hashes []chainhash.Hash) []byte {
+	b := make([]byte, 0, len(hashes)*chainhash.HashSize)
+
+	for i := range hashes {
+		b = append(b, hashes[i][:]...)
+	}
+
+	return b
 }
 
 // verifyTransactions verifies that the response contains the expected transactions
@@ -256,19 +293,25 @@ func TestGetTransactionsCatchupBatch(t *testing.T) {
 
 	httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
-	tx, err := bt.NewTxFromBytes(testTX1RawBytes)
-	require.NoError(t, err)
-
 	subtreeHash := chainhash.HashH([]byte("catchupSubtree"))
-	txMap := map[chainhash.Hash]*bt.Tx{*testTX1Hash: tx}
+	txMap := make(map[chainhash.Hash]*bt.Tx, catchupBatchSize)
+	body := make([]byte, 0, catchupBatchSize*chainhash.HashSize)
+
+	// A subtree never lists a tx twice, so a real batch is catchupBatchSize
+	// different transactions: vary the lock time to get distinct txids.
+	for i := 0; i < catchupBatchSize; i++ {
+		tx, err := bt.NewTxFromBytes(testTX1RawBytes)
+		require.NoError(t, err)
+
+		tx.LockTime = uint32(i)
+		txMap[*tx.TxIDChainHash()] = tx
+		body = append(body, tx.TxIDChainHash().CloneBytes()...)
+	}
+
+	require.Len(t, txMap, catchupBatchSize)
 
 	mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
 	mockRepo.On("GetSubtreeTransactions", mock.Anything, mock.Anything).Return(txMap, nil).Once()
-
-	body := make([]byte, 0, catchupBatchSize*chainhash.HashSize)
-	for i := 0; i < catchupBatchSize; i++ {
-		body = append(body, testTX1Hash.CloneBytes()...)
-	}
 
 	echoContext.SetPath("/subtree/:hash/txs")
 	echoContext.SetParamNames("hash")
@@ -316,10 +359,11 @@ func TestGetTransactionsRecordBudget(t *testing.T) {
 
 		subtreeHash := chainhash.HashH([]byte("recordBudgetUnset"))
 		setSubtreeRoute(echoContext, &subtreeHash)
-		mockGetSubtreeTransactions(mockRepo)
+		hashes := distinctHashes(8)
+		mockSubtreeWithoutData(mockRepo, hashes...)
 		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil)
 
-		echoContext.Request().Body = io.NopCloser(bytes.NewReader(bytes.Repeat(testTX1Hash.CloneBytes(), 8)))
+		echoContext.Request().Body = io.NopCloser(bytes.NewReader(concatHashes(hashes)))
 
 		require.NoError(t, httpServer.GetTransactions()(echoContext))
 		require.Equal(t, http.StatusOK, responseRecorder.Code)
@@ -331,10 +375,11 @@ func TestGetTransactionsRecordBudget(t *testing.T) {
 
 		subtreeHash := chainhash.HashH([]byte("recordBudgetOverBudget"))
 		setSubtreeRoute(echoContext, &subtreeHash)
-		mockGetSubtreeTransactions(mockRepo)
+		hashes := distinctHashes(5)
+		mockSubtreeWithoutData(mockRepo, hashes...)
 		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil)
 
-		echoContext.Request().Body = io.NopCloser(bytes.NewReader(bytes.Repeat(testTX1Hash.CloneBytes(), 5)))
+		echoContext.Request().Body = io.NopCloser(bytes.NewReader(concatHashes(hashes)))
 
 		err := httpServer.GetTransactions()(echoContext)
 
@@ -352,10 +397,11 @@ func TestGetTransactionsRecordBudget(t *testing.T) {
 
 		subtreeHash := chainhash.HashH([]byte("recordBudgetFloor"))
 		setSubtreeRoute(echoContext, &subtreeHash)
-		mockGetSubtreeTransactions(mockRepo)
+		hashes := distinctHashes(64)
+		mockSubtreeWithoutData(mockRepo, hashes...)
 		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil)
 
-		echoContext.Request().Body = io.NopCloser(bytes.NewReader(bytes.Repeat(testTX1Hash.CloneBytes(), 64)))
+		echoContext.Request().Body = io.NopCloser(bytes.NewReader(concatHashes(hashes)))
 
 		require.NoError(t, httpServer.GetTransactions()(echoContext))
 		require.Equal(t, http.StatusOK, responseRecorder.Code)
@@ -399,10 +445,11 @@ func TestGetTransactionsDefaultRecordCap(t *testing.T) {
 
 		subtreeHash := chainhash.HashH([]byte("defaultCapExact"))
 		setSubtreeRoute(echoContext, &subtreeHash)
-		mockGetSubtreeTransactions(mockRepo)
+		hashes := distinctHashes(shippedDefault)
+		mockSubtreeWithoutData(mockRepo, hashes...)
 		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil)
 
-		echoContext.Request().Body = io.NopCloser(bytes.NewReader(bytes.Repeat(testTX1Hash.CloneBytes(), shippedDefault)))
+		echoContext.Request().Body = io.NopCloser(bytes.NewReader(concatHashes(hashes)))
 
 		require.NoError(t, httpServer.GetTransactions()(echoContext))
 		require.Equal(t, http.StatusOK, responseRecorder.Code)
@@ -410,8 +457,8 @@ func TestGetTransactionsDefaultRecordCap(t *testing.T) {
 }
 
 // TestGetTransactionsResponseByteBudget checks asset_maxBatchResponseBytes. A
-// record cap alone does not bound output: duplicate hashes each expand into a
-// full transaction.
+// record cap alone does not bound output: each record expands into a full
+// transaction.
 func TestGetTransactionsResponseByteBudget(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -420,10 +467,11 @@ func TestGetTransactionsResponseByteBudget(t *testing.T) {
 
 	subtreeHash := chainhash.HashH([]byte("responseByteBudget"))
 	setSubtreeRoute(echoContext, &subtreeHash)
-	mockGetSubtreeTransactions(mockRepo)
+	hashes := distinctHashes(4)
+	mockSubtreeWithoutData(mockRepo, hashes...)
 	mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil)
 
-	echoContext.Request().Body = io.NopCloser(bytes.NewReader(bytes.Repeat(testTX1Hash.CloneBytes(), 4)))
+	echoContext.Request().Body = io.NopCloser(bytes.NewReader(concatHashes(hashes)))
 
 	err := httpServer.GetTransactions()(echoContext)
 
@@ -446,13 +494,238 @@ func TestGetTransactionsResponseByteBudgetFloor(t *testing.T) {
 
 	subtreeHash := chainhash.HashH([]byte("responseByteBudgetFloor"))
 	setSubtreeRoute(echoContext, &subtreeHash)
-	mockGetSubtreeTransactions(mockRepo)
+	hashes := distinctHashes(4)
+	mockSubtreeWithoutData(mockRepo, hashes...)
 	mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil)
 
-	echoContext.Request().Body = io.NopCloser(bytes.NewReader(bytes.Repeat(testTX1Hash.CloneBytes(), 4)))
+	echoContext.Request().Body = io.NopCloser(bytes.NewReader(concatHashes(hashes)))
 
 	require.NoError(t, httpServer.GetTransactions()(echoContext))
 	require.Equal(t, http.StatusOK, responseRecorder.Code)
+}
+
+// TestGetTransactionsRejectsDuplicateTxids covers one txid repeated up to the
+// record cap. Each repeat used to expand into its own copy of the transaction,
+// so a 32-byte record bought a full transaction of response, held in memory.
+// Honest catchup never sends a txid twice in a batch: checkSubtreeDuplicates
+// rejects such a subtree before its missing transactions are fetched.
+func TestGetTransactionsRejectsDuplicateTxids(t *testing.T) {
+	initPrometheusMetrics()
+
+	const shippedDefault = 16384
+
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{"one txid repeated up to the default record cap", bytes.Repeat(testTX1Hash.CloneBytes(), shippedDefault)},
+		{"a repeat that is not adjacent", concatHashes([]chainhash.Hash{*testTX1Hash, *testTX2Hash, *testTX1Hash})},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
+			httpServer.settings.Asset.MaxBatchRecords = shippedDefault
+			httpServer.settings.SubtreeValidation.MissingTransactionsBatchSize = shippedDefault
+
+			subtreeHash := chainhash.HashH([]byte("duplicateTxids"))
+			setSubtreeRoute(echoContext, &subtreeHash)
+			mockSubtreeWithoutData(mockRepo, *testTX1Hash, *testTX2Hash)
+			mockRepo.On("GetTransaction", mock.Anything).Return(testTX1RawBytes, nil)
+
+			echoContext.Request().Body = io.NopCloser(bytes.NewReader(tt.body))
+
+			err := httpServer.GetTransactions()(echoContext)
+
+			echoErr := &echo.HTTPError{}
+			require.ErrorAs(t, err, &echoErr)
+			require.Equal(t, http.StatusBadRequest, echoErr.Code)
+			require.Contains(t, echoErr.Message, "duplicate transaction hash")
+
+			// Rejected from the body alone: no permit, no lookup.
+			mockRepo.AssertNotCalled(t, "GetSubtreeTransactions", mock.Anything, mock.Anything)
+			mockRepo.AssertNotCalled(t, "GetTransaction", mock.Anything)
+		})
+	}
+}
+
+// TestGetTransactionsServesOnlySubtreeMembers covers txids that are not in the
+// subtree the path names. The route used to answer any transaction the node
+// stores, so a batch of distinct large transactions from anywhere bought the
+// same response as one repeated txid.
+func TestGetTransactionsServesOnlySubtreeMembers(t *testing.T) {
+	initPrometheusMetrics()
+
+	requireNotInSubtree := func(t *testing.T, err error) {
+		t.Helper()
+
+		echoErr := &echo.HTTPError{}
+		require.ErrorAs(t, err, &echoErr)
+		require.Equal(t, http.StatusNotFound, echoErr.Code)
+		require.Contains(t, echoErr.Message, "not in subtree")
+	}
+
+	t.Run("without subtree data a non-member is refused before any store lookup", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
+
+		subtreeHash := chainhash.HashH([]byte("nonMemberNoData"))
+		setSubtreeRoute(echoContext, &subtreeHash)
+		mockSubtreeWithoutData(mockRepo, *testTX1Hash)
+		mockRepo.On("GetTransaction", mock.Anything).Return(testTX2RawBytes, nil)
+
+		echoContext.Request().Body = io.NopCloser(bytes.NewReader(concatHashes([]chainhash.Hash{*testTX1Hash, *testTX2Hash})))
+
+		requireNotInSubtree(t, httpServer.GetTransactions()(echoContext))
+		mockRepo.AssertNotCalled(t, "GetTransaction", mock.Anything)
+	})
+
+	t.Run("with subtree data a hash missing from it is checked, not looked up in the store", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
+
+		subtreeHash := chainhash.HashH([]byte("nonMemberWithData"))
+		setSubtreeRoute(echoContext, &subtreeHash)
+		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
+		mockRepo.On("GetSubtreeTransactions", mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash]*bt.Tx{*testTX1Hash: testTx1}, nil)
+		mockSubtreeNodeHashes(mockRepo, *testTX1Hash)
+		mockRepo.On("GetTransaction", mock.Anything).Return(testTX2RawBytes, nil)
+
+		echoContext.Request().Body = io.NopCloser(bytes.NewReader(concatHashes([]chainhash.Hash{*testTX1Hash, *testTX2Hash})))
+
+		requireNotInSubtree(t, httpServer.GetTransactions()(echoContext))
+		mockRepo.AssertNotCalled(t, "GetTransaction", mock.Anything)
+	})
+
+	t.Run("a member missing from the subtree data is served from the store", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+		subtreeHash := chainhash.HashH([]byte("memberMissingFromData"))
+		setSubtreeRoute(echoContext, &subtreeHash)
+		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
+		mockRepo.On("GetSubtreeTransactions", mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash]*bt.Tx{*testTX1Hash: testTx1}, nil)
+		mockSubtreeNodeHashes(mockRepo, *testTX1Hash, *testTX2Hash)
+		mockRepo.On("GetTransaction", mock.Anything).Return(testTX2RawBytes, nil).Once()
+
+		echoContext.Request().Body = io.NopCloser(bytes.NewReader(concatHashes([]chainhash.Hash{*testTX1Hash, *testTX2Hash})))
+
+		require.NoError(t, httpServer.GetTransactions()(echoContext))
+		require.Equal(t, http.StatusOK, responseRecorder.Code)
+
+		expected := append(append([]byte{}, testTX1RawBytes...), testTX2RawBytes...)
+		require.Equal(t, expected, responseRecorder.Body.Bytes())
+	})
+
+	t.Run("a batch the subtree data covers reads no node hashes", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+		subtreeHash := chainhash.HashH([]byte("coveredBySubtreeData"))
+		setSubtreeRoute(echoContext, &subtreeHash)
+		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
+		mockRepo.On("GetSubtreeTransactions", mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash]*bt.Tx{*testTX1Hash: testTx1}, nil)
+
+		echoContext.Request().Body = io.NopCloser(bytes.NewReader(testTX1Hash.CloneBytes()))
+
+		require.NoError(t, httpServer.GetTransactions()(echoContext))
+		require.Equal(t, http.StatusOK, responseRecorder.Code)
+		mockRepo.AssertNotCalled(t, "GetSubtreeNodeHashesReader", mock.Anything)
+	})
+
+	t.Run("a store error reading the node hashes is a server error", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
+
+		subtreeHash := chainhash.HashH([]byte("nodeHashesStoreError"))
+		setSubtreeRoute(echoContext, &subtreeHash)
+		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
+		mockRepo.On("GetSubtreeTransactions", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+		mockRepo.On("GetSubtreeNodeHashesReader", mock.Anything).Return(nil, errors.NewStorageError("subtree store down"))
+		mockRepo.On("GetTransaction", mock.Anything).Return(testTX1RawBytes, nil)
+
+		echoContext.Request().Body = io.NopCloser(bytes.NewReader(testTX1Hash.CloneBytes()))
+
+		err := httpServer.GetTransactions()(echoContext)
+
+		echoErr := &echo.HTTPError{}
+		require.ErrorAs(t, err, &echoErr)
+		require.Equal(t, http.StatusInternalServerError, echoErr.Code)
+		mockRepo.AssertNotCalled(t, "GetTransaction", mock.Anything)
+	})
+
+	// The status each failure to read the node hashes maps to. A 503 is retried by
+	// the catchup client; a 500 is not, and the client blames the serving peer.
+	for _, tc := range []struct {
+		name   string
+		reader func() (io.ReadCloser, error)
+		status int
+	}{
+		{
+			name: "an exhausted stream permit is a retryable 503",
+			reader: func() (io.ReadCloser, error) {
+				return nil, errors.NewServiceUnavailableError("GetSubtreeNodeHashesReader: permit not acquired")
+			},
+			status: http.StatusServiceUnavailable,
+		},
+		{
+			name:   "a subtree gone from the store is a 404",
+			reader: func() (io.ReadCloser, error) { return nil, errors.ErrNotFound },
+			status: http.StatusNotFound,
+		},
+		{
+			// The node-hash reader wraps io.EOF when the file ends before its node
+			// count; only a bare io.EOF is the real end of the list.
+			name: "a subtree file cut short at a node boundary is a 500, not a non-member",
+			reader: func() (io.ReadCloser, error) {
+				return io.NopCloser(&errReader{prefix: testTX1Hash.CloneBytes(), err: errors.NewProcessingError("unable to read subtree node", io.EOF)}), nil
+			},
+			status: http.StatusInternalServerError,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+			subtreeHash := chainhash.HashH([]byte(tc.name))
+			setSubtreeRoute(echoContext, &subtreeHash)
+			mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
+			mockRepo.On("GetSubtreeTransactions", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+
+			reader, readerErr := tc.reader()
+			mockRepo.On("GetSubtreeNodeHashesReader", mock.Anything).Return(reader, readerErr)
+			mockRepo.On("GetTransaction", mock.Anything).Return(testTX2RawBytes, nil)
+
+			echoContext.Request().Body = io.NopCloser(bytes.NewReader(testTX2Hash.CloneBytes()))
+
+			err := httpServer.GetTransactions()(echoContext)
+
+			echoErr := &echo.HTTPError{}
+			require.ErrorAs(t, err, &echoErr)
+			require.Equal(t, tc.status, echoErr.Code)
+			mockRepo.AssertNotCalled(t, "GetTransaction", mock.Anything)
+
+			if tc.status == http.StatusServiceUnavailable {
+				require.Equal(t, "1", responseRecorder.Header().Get("Retry-After"))
+			}
+		})
+	}
+
+	t.Run("the scan stops once every requested hash has been seen", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+		subtreeHash := chainhash.HashH([]byte("scanStopsEarly"))
+		setSubtreeRoute(echoContext, &subtreeHash)
+		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
+		mockRepo.On("GetSubtreeTransactions", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+
+		// Reading past tx1 fails, so the request only succeeds if the scan stops there.
+		mockRepo.On("GetSubtreeNodeHashesReader", mock.Anything).Return(io.NopCloser(
+			&errReader{prefix: testTX1Hash.CloneBytes(), err: errors.NewStorageError("read past the last requested hash")}), nil)
+		mockRepo.On("GetTransaction", mock.Anything).Return(testTX1RawBytes, nil)
+
+		echoContext.Request().Body = io.NopCloser(bytes.NewReader(testTX1Hash.CloneBytes()))
+
+		require.NoError(t, httpServer.GetTransactions()(echoContext))
+		require.Equal(t, http.StatusOK, responseRecorder.Code)
+	})
 }
 
 // TestGetTransactionsPreservesResponseOrder pins the response order to the
@@ -464,7 +737,7 @@ func TestGetTransactionsPreservesResponseOrder(t *testing.T) {
 
 	subtreeHash := chainhash.HashH([]byte("preservesResponseOrder"))
 	setSubtreeRoute(echoContext, &subtreeHash)
-	mockGetSubtreeTransactions(mockRepo)
+	mockSubtreeWithoutData(mockRepo, *testTX1Hash, *testTX2Hash)
 
 	// tx1 is requested second (see body below) but must finish its lookup
 	// first, forcing the two lookups to complete out of request order. A
@@ -511,7 +784,8 @@ func TestGetTransactionsFromSubtreeStopsProcessingAfterAFailure(t *testing.T) {
 
 	subtreeHash := chainhash.HashH([]byte("stopsProcessingAfterFailure"))
 	setSubtreeRoute(echoContext, &subtreeHash)
-	mockGetSubtreeTransactions(mockRepo)
+	hashes := distinctHashes(requestedHashes)
+	mockSubtreeWithoutData(mockRepo, hashes...)
 
 	var calls atomic.Int64
 
@@ -519,8 +793,7 @@ func TestGetTransactionsFromSubtreeStopsProcessingAfterAFailure(t *testing.T) {
 		Run(func(mock.Arguments) { calls.Add(1) }).
 		Return(nil, errors.NewNotFoundError("transaction not found"))
 
-	body := bytes.Repeat(testTX1Hash.CloneBytes(), requestedHashes)
-	echoContext.Request().Body = io.NopCloser(bytes.NewReader(body))
+	echoContext.Request().Body = io.NopCloser(bytes.NewReader(concatHashes(hashes)))
 
 	err := httpServer.GetTransactions()(echoContext)
 
@@ -762,4 +1035,77 @@ func TestTxSizeMatchesResponseBytes(t *testing.T) {
 	require.NoError(t, tx.PayToAddress("1AdZmoAQUw4XCsCihukoHMvNWXcsd8jDN6", 900))
 
 	require.Equal(t, len(tx.Bytes()), tx.Size())
+}
+
+// TestGetTransactionsSubtreeMembershipRealRepository runs the membership check
+// against a real repository: a validated subtree with no .subtreeData (a live
+// subtree), and a UTXO store holding tx1 and tx2, of which only tx1 is in the
+// subtree.
+func TestGetTransactionsSubtreeMembershipRealRepository(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///" + t.Name())
+	require.NoError(t, err)
+
+	utxoStore, err := utxosql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(ctx) })
+
+	tx2, err := bt.NewTxFromBytes(testTX2RawBytes)
+	require.NoError(t, err)
+
+	_, err = utxoStore.Create(ctx, testTx1, 1)
+	require.NoError(t, err)
+	_, err = utxoStore.Create(ctx, tx2, 1)
+	require.NoError(t, err)
+
+	st, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, st.AddNode(chainhash.HashH([]byte("filler")), 1, 100))
+	require.NoError(t, st.AddNode(*testTX1Hash, 1, uint64(testTx1.Size())))
+
+	subtreeBytes, err := st.Serialize()
+	require.NoError(t, err)
+
+	subtreeHash := st.RootHash()
+	subtreeStore := memory.New()
+	require.NoError(t, subtreeStore.Set(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree, subtreeBytes))
+
+	repo, err := repository.NewRepository(logger, tSettings, utxoStore, memory.New(), nil, nil, subtreeStore, nil, nil, nil)
+	require.NoError(t, err)
+
+	request := func(t *testing.T, hashes ...chainhash.Hash) ([]byte, error) {
+		t.Helper()
+
+		httpServer, _, echoContext, responseRecorder := GetMockHTTP(t, nil)
+		httpServer.repository = repo
+		setSubtreeRoute(echoContext, subtreeHash)
+		echoContext.Request().Body = io.NopCloser(bytes.NewReader(concatHashes(hashes)))
+
+		err := httpServer.GetTransactions()(echoContext)
+
+		return responseRecorder.Body.Bytes(), err
+	}
+
+	t.Run("a member is served", func(t *testing.T) {
+		body, err := request(t, *testTX1Hash)
+		require.NoError(t, err)
+
+		tx, err := bt.NewTxFromBytes(body)
+		require.NoError(t, err)
+		require.Equal(t, *testTX1Hash, *tx.TxIDChainHash())
+	})
+
+	t.Run("a stored transaction from another subtree is refused", func(t *testing.T) {
+		_, err := request(t, *testTX1Hash, *tx2.TxIDChainHash())
+
+		echoErr := &echo.HTTPError{}
+		require.ErrorAs(t, err, &echoErr)
+		require.Equal(t, http.StatusNotFound, echoErr.Code)
+		require.Contains(t, echoErr.Message, "not in subtree")
+	})
 }
