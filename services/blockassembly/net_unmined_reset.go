@@ -176,7 +176,7 @@ func (b *BlockAssembler) markNetUnminedMoveBackTxs(ctx context.Context, moveBack
 		return errors.NewProcessingError("[Reset] error marking the net unmined moveBack transactions, %d marked before it", kept, err)
 	}
 
-	b.logger.Infof("[BlockAssembler][Reset] marked %d net unmined transactions (moveBack minus moveForward): %d moveBack, %d moveForward, %d pruned left out, %d mined on the best chain meanwhile", kept, res.Back, res.Forward, pruned, minedMeanwhile)
+	b.logger.Infof("[BlockAssembler][Reset] marked %d net unmined transactions (moveBack minus moveForward): %d moveBack, %d moveForward (at most %d held in memory), %d pruned left out, %d mined on the best chain meanwhile", kept, res.Back, res.Forward, res.PeakForwardInMemory, pruned, minedMeanwhile)
 
 	return nil
 }
@@ -257,10 +257,18 @@ func (b *BlockAssembler) openSubtree(ctx context.Context, subtreeHash *chainhash
 			return r, openErr
 		}
 
-		if r, toCheckErr := b.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck); toCheckErr == nil {
+		r, toCheckErr := b.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+		if toCheckErr == nil {
 			toCheck = true
 
 			return r, nil
+		}
+
+		// A store that failed to open it has not said it is gone: tried again, as
+		// the subtree file is. That includes a file whose header the store rejects,
+		// which the stores report as their own error for either file.
+		if !errors.Is(toCheckErr, errors.ErrNotFound) {
+			return nil, toCheckErr
 		}
 
 		// Not there either: report the subtree file as not found, without a retry.

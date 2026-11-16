@@ -399,6 +399,45 @@ func TestNetUnmined_OnDiskSplitsTheForwardSetIntoRanges(t *testing.T) {
 	require.Len(t, files, 4, "100 forward hashes at 30 a range need 4 ranges")
 }
 
+// What bounds the memory of a large forward set is that only one range of it is
+// held at a time. The result is the same when every range read so far is kept,
+// so the most hashes held at once is reported and checked here.
+func TestNetUnmined_OnDiskHoldsOneRangeOfTheForwardSetAtATime(t *testing.T) {
+	const forwardCount, perRange = 4000, 500
+
+	r := rand.New(rand.NewSource(23))
+	back := makeBlocks(r, []int{600, 400}, 100)
+	forward := makeBlocks(r, []int{forwardCount}, 100)
+	overlap(back, forward)
+
+	var got []chainhash.Hash
+
+	res, err := netUnmined(context.Background(), 2, streamOf(back), 1, streamOf(forward),
+		netUnminedParams{Dir: t.TempDir(), ForwardCount: forwardCount, MaxForwardInMemory: perRange, ChunkSize: 100}, collect(&got))
+	require.NoError(t, err)
+	require.ElementsMatch(t, referenceNetUnmined(back, forward, nil), got)
+
+	// 8 ranges of about 500 random hashes each: none comes near a quarter of the set.
+	require.Positive(t, res.PeakForwardInMemory)
+	require.Less(t, res.PeakForwardInMemory, uint64(forwardCount/4), "a range of the forward set, never several")
+}
+
+// In memory the whole forward set is held, and the result says so.
+func TestNetUnmined_InMemoryReportsTheForwardSetItHeld(t *testing.T) {
+	r := rand.New(rand.NewSource(24))
+	back := makeBlocks(r, []int{50}, 10)
+	forward := makeBlocks(r, []int{120}, 10)
+
+	// One hash twice: the set holds it once, however often it is streamed.
+	forward[0].hashes[1] = forward[0].hashes[0]
+
+	res, err := netUnmined(context.Background(), 1, streamOf(back), 1, streamOf(forward),
+		netUnminedParams{Dir: t.TempDir(), ForwardCount: 120, MaxForwardInMemory: 1000, ChunkSize: 100}, func([]chainhash.Hash) error { return nil })
+	require.NoError(t, err)
+	require.Equal(t, uint64(120), res.Forward)
+	require.Equal(t, uint64(119), res.PeakForwardInMemory)
+}
+
 func TestNetUnmined_RemovesItsScratchFiles(t *testing.T) {
 	r := rand.New(rand.NewSource(8))
 	back := makeBlocks(r, []int{100}, 10)

@@ -272,6 +272,8 @@ func netUnminedInMemory(
 	}
 
 	// The set is complete and only read from here on.
+	res.PeakForwardInMemory = uint64(len(inForward))
+
 	var backSink netUnminedSink
 
 	if err := readBack(ctx, backBlocks, back, &backSink, beat, func(hashes []chainhash.Hash) error {
@@ -361,6 +363,8 @@ func netUnminedOnDisk(
 			return err
 		}
 
+		res.PeakForwardInMemory = max(res.PeakForwardInMemory, uint64(len(inForward)))
+
 		if err = forEachScratchHash(netUnminedRangePath(dir, "back", r), beat, inForward, out.add); err != nil {
 			return err
 		}
@@ -440,6 +444,9 @@ type netUnminedResult struct {
 	Emitted uint64
 	// SkippedBackBlocks lists the move-back blocks that could not be read in full.
 	SkippedBackBlocks []netUnminedSkippedBlock
+	// PeakForwardInMemory is the most move-forward hashes held in memory at once:
+	// the whole set, or the largest range of it.
+	PeakForwardInMemory uint64
 	// ForwardIncomplete is set when a move-forward block could not be read, so
 	// nothing was emitted.
 	ForwardIncomplete bool

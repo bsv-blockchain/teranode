@@ -546,6 +546,59 @@ func TestNetUnminedBlockStream_FallsBackOnlyWhenTheSubtreeFileIsNotFound(t *test
 	require.Zero(t, store.opens[fileformat.FileTypeSubtreeToCheck], "no fallback for an error that is not a missing file")
 }
 
+// failingToCheckStore fails the first failOpens opens of a file still to be
+// checked with a storage error, and counts them.
+type failingToCheckStore struct {
+	blob.Store
+
+	mu        sync.Mutex
+	failOpens int
+	opens     int
+}
+
+func (s *failingToCheckStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...blobopts.FileOption) (io.ReadCloser, error) {
+	if fileType == fileformat.FileTypeSubtreeToCheck {
+		s.mu.Lock()
+		s.opens++
+		fail := s.opens <= s.failOpens
+		s.mu.Unlock()
+
+		if fail {
+			return nil, errors.NewStorageError("subtree store unreachable")
+		}
+	}
+
+	return s.Store.GetIoReader(ctx, key, fileType, opts...)
+}
+
+// A store that fails to open the file still to be checked has not said the file
+// is gone. Taking it for gone would make the block unreadable, and an unreadable
+// moveForward block commits the reset with nothing marked. It is tried again, and
+// a store that keeps failing is an error.
+func TestNetUnminedBlockStream_AFailedOpenOfTheFileToCheckIsNotAMissingFile(t *testing.T) {
+	setSubtreeRetryBackoff(t)
+
+	items := setupBlockAssemblyTest(t)
+	ba := items.blockAssembler
+
+	txs := hashesNamed("q0", "q1")
+	blk := &model.Block{Subtrees: []*chainhash.Hash{storeSubtreeToCheck(t, items, txs...)}}
+
+	store := &failingToCheckStore{Store: items.blobStore, failOpens: 2}
+	ba.subtreeStore = store
+
+	require.Equal(t, txs, collectStream(t, ba.netUnminedBlockStream([]*model.Block{blk}), 0), "a failed open is tried again")
+	require.Equal(t, 3, store.opens, "two failures, then the open that works")
+
+	store = &failingToCheckStore{Store: items.blobStore, failOpens: 100}
+	ba.subtreeStore = store
+
+	unreadable, err := ba.netUnminedBlockStream([]*model.Block{blk})(t.Context(), 0, func([]chainhash.Hash) error { return nil })
+	require.Error(t, err, "a store that keeps failing is a failing store")
+	require.NoError(t, unreadable, "and not a file that is gone")
+	require.Equal(t, 1+netUnminedSubtreeRetries, store.opens)
+}
+
 // A file under a key it does not hash to is the wrong file: its transactions are
 // not this block's.
 func TestNetUnminedBlockStream_RejectsAFileThatDoesNotMatchItsKey(t *testing.T) {

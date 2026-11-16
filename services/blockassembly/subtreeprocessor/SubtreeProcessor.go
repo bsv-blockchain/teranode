@@ -656,6 +656,10 @@ var (
 	// This is calculated based on a subtree being created approximately every second,
 	// and is used for initial capacity allocation to optimize memory usage.
 	ExpectedNumberOfSubtrees = 1024
+
+	// resetSweepChunkSize is how many assembly transactions reset marks as not on
+	// the longest chain in one store call. A variable so tests can force several.
+	resetSweepChunkSize = 1_000_000
 )
 
 // NewSubtreeProcessor creates and initializes a new SubtreeProcessor instance.
@@ -1711,32 +1715,71 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	// drops transactions from block assembly. For transactions that already have
 	// unmined_since set, it is a no-op on the sql and aerospike stores; the utxoset store
 	// restarts their clock.
+	//
+	// Block assembly can hold billions of transactions, so they go to the store a
+	// bounded chunk at a time: one list of them all is 32 bytes a transaction.
 	{
 		currentSubtree := stp.currentSubtree.Load()
-		subtreeNodeCount := len(currentSubtree.Nodes)
+
+		nodeCount := len(currentSubtree.Nodes)
 		for _, st := range stp.chainedSubtrees {
-			subtreeNodeCount += len(st.Nodes)
+			nodeCount += len(st.Nodes)
 		}
 
-		assemblyTxHashes := make([]chainhash.Hash, 0, subtreeNodeCount)
-		for _, st := range stp.chainedSubtrees {
-			for _, node := range st.Nodes {
-				if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-					assemblyTxHashes = append(assemblyTxHashes, node.Hash)
+		var (
+			chunk  = make([]chainhash.Hash, 0, min(nodeCount, resetSweepChunkSize))
+			marked int
+		)
+
+		markChunk := func() error {
+			if len(chunk) == 0 {
+				return nil
+			}
+
+			if err := stp.markNotOnLongestChain(ctx, nil, nil, chunk); err != nil {
+				return errors.NewProcessingError("[SubtreeProcessor][reset] error marking assembly txs as not on longest chain before reset, %d marked before it", marked, err)
+			}
+
+			marked += len(chunk)
+			chunk = chunk[:0]
+
+			return nil
+		}
+
+		sweep := func(nodes []subtreepkg.Node) error {
+			for _, node := range nodes {
+				if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+					continue
+				}
+
+				chunk = append(chunk, node.Hash)
+
+				if len(chunk) == resetSweepChunkSize {
+					if err := markChunk(); err != nil {
+						return err
+					}
 				}
 			}
+
+			return nil
 		}
-		for _, node := range currentSubtree.Nodes {
-			if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-				assemblyTxHashes = append(assemblyTxHashes, node.Hash)
+
+		for _, st := range stp.chainedSubtrees {
+			if err := sweep(st.Nodes); err != nil {
+				return err
 			}
 		}
 
-		if len(assemblyTxHashes) > 0 {
-			stp.logger.Infof("[SubtreeProcessor][reset] marking %d assembly txs as not on longest chain before clearing state", len(assemblyTxHashes))
-			if err := stp.markNotOnLongestChain(ctx, nil, nil, assemblyTxHashes); err != nil {
-				return errors.NewProcessingError("[SubtreeProcessor][reset] error marking assembly txs as not on longest chain before reset", err)
-			}
+		if err := sweep(currentSubtree.Nodes); err != nil {
+			return err
+		}
+
+		if err := markChunk(); err != nil {
+			return err
+		}
+
+		if marked > 0 {
+			stp.logger.Infof("[SubtreeProcessor][reset] marked %d assembly txs as not on longest chain before clearing state", marked)
 		}
 	}
 
