@@ -50,10 +50,18 @@ type mtpFloorEntry struct {
 // clock — or a run of forward-stamped blocks dragging the median above
 // wall-clock time — makes the assembler hand miners a candidate that the
 // network refuses once mined. SV Node applies the same floor in UpdateTime, as
-// max(median-time-past+1, GetAdjustedTime()); note it floors against
-// network-adjusted time where this floors against the raw local clock, so a
-// skewed node here has nothing pulling it back towards its peers. Consulting
-// the MedianTimeSource in services/legacy/blockchain would close that gap.
+// max(median-time-past+1, GetAdjustedTime()). It floors against
+// network-adjusted time where this floors against the raw local clock, and the
+// difference is deliberately left in place. GetAdjustedTime moves the local
+// clock by the median peer offset only when that offset is within 70 minutes,
+// and applies no offset at all beyond it. It stops updating once 200 peers have
+// been sampled, so it corrects startup skew and never tracks later drift. The
+// clock-skew failure below needs the local clock roughly three hours behind the
+// network, since median-time-past trails the tip by about an hour. At that skew
+// SV Node's adjustment is zero too, and its own template build fails the same
+// consensus check. Peer time would only nudge an ordinary candidate by under 70
+// minutes, at the cost of a call into the legacy service and a clock that peers
+// can influence.
 //
 // The two consensus bounds on a block timestamp are a pair, and this function
 // honours both. The median rule is the floor; the two-hours-in-the-future rule
