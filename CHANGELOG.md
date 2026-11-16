@@ -37,6 +37,11 @@ read every section between yours and the target.
   this version, block assembly follows the best header instead of replaying best-tip changes, so
   upgrade them close together. Startup replaces the chain-work indexes on `blocks`, and every move
   to or from an older version rebuilds them. (#2193)
+- **`ProcessBlock` refuses a `block_id` that is not the block's reservation on the quick route.**
+  An external caller that sends a non-zero ID other than what `AssignBlockID` returns for the hash
+  now gets an error before any UTXO is written, including an ID whose reservation was swept and a
+  coinbase-only block that used to be stored under the reservation instead. Send 0, or call
+  `AssignBlockID` again and send its answer. (#2191)
 - **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
   `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
   now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,

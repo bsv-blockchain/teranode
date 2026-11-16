@@ -1745,9 +1745,12 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block.Height = height
 
-	// A caller-supplied block ID is applied so the block is stored under it. It does not
-	// mark the block mined: full validation still has the setMinedChan worker tag the
-	// transactions (buildAddBlockOpts). Legacy netsync sends 0 on every route.
+	// A caller-supplied block ID is applied so the block is stored under it. On full
+	// validation it does not mark the block mined: the setMinedChan worker still tags the
+	// transactions (buildAddBlockOpts). On the quick route the transactions are stamped
+	// with it and commitBlock stores the block with mined_set true, so setQuickBlockID
+	// first refuses an ID that is not the block's reservation. Legacy netsync sends 0 on
+	// every route.
 	if request.BlockId != 0 {
 		block.ID = request.BlockId
 	}
