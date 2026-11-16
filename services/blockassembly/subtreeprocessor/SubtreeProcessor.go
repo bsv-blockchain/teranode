@@ -5525,11 +5525,12 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		// against the block whose step drains it, and once in the subtrees,
 		// by each later block's remainder pass. Draining on the last step
 		// alone filtered those arrivals against the last block, and a tx an
-		// earlier forward block mined went back into block assembly. A failed
-		// step loses nothing drained: a failed fork reorg is followed by a
-		// reset, which sweeps the unmined txs from the store. A tx that
-		// arrives after its own block's step still reaches only later blocks'
-		// filters, as it does outside a reorg.
+		// earlier forward block mined went back into block assembly. A step
+		// that fails after its drain puts back its input, which lacks what it
+		// drained. The reset that follows a failed fork reorg reloads every tx
+		// the store marks unmined, and a queued tx is one, as with the last
+		// step's drain before. A tx that arrives after its own block's step
+		// still reaches only later blocks' filters, as it does outside a reorg.
 		if transactionMap, losingTxHashesMap, err = stp.moveForwardBlock(ctx, block, true, processedConflictingHashesMap, false, lastMoveForwardBlock); err != nil {
 			return err
 		}

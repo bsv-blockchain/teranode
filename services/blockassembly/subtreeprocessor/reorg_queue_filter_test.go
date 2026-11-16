@@ -16,7 +16,15 @@ import (
 // that block, not only against the last one: otherwise a tx the earlier block
 // mined goes back into block assembly and the node mines it again.
 func TestReorgBlocks_Fork_FiltersQueueArrivalsAgainstEachForwardBlock(t *testing.T) {
-	stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false)
+	for name, opts := range catchUpTxMapVariants(t) {
+		t.Run(name, func(t *testing.T) {
+			forkReorgFiltersQueueArrivals(t, opts...)
+		})
+	}
+}
+
+func forkReorgFiltersQueueArrivals(t *testing.T, opts ...Options) {
+	stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false, opts...)
 
 	minedInFirstTx, _ := createResetWALConflict(t, store, 21)
 	minedInLastTx, _ := createResetWALConflict(t, store, 22)
