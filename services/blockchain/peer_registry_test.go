@@ -891,17 +891,27 @@ func TestCentralizedPeerRegistry_Cleanup_LRUExemptsConnectedAndBanned(t *testing
 	r.UpdateConnectionState("connected", true)
 
 	r.Register(&PeerInfo{ID: "banned"})
-	r.AddBanScore("banned", "spam", 200)
+	// "spam" is configured at 50 points, which wins over the default argument,
+	// so two strikes are needed to reach the 100-point threshold.
+	r.AddBanScore("banned", "spam", 0)
+	r.AddBanScore("banned", "spam", 0)
+	require.True(t, r.IsBannedPeer("banned"))
 
 	for _, id := range []string{"a", "b", "c", "d"} {
 		r.Register(&PeerInfo{ID: id})
 	}
 
-	// maxSize=2 and 2 exempt → all 4 non-exempt evicted.
+	// maxSize=2: the connected peer is exempt from the size phase, and the
+	// banned peer is evicted only after peers with no history, so the 4
+	// history-less peers go and both named peers survive.
 	expired, lru := r.Cleanup(2, 24*time.Hour)
 	require.Equal(t, 0, expired)
 	require.Equal(t, 4, lru)
 	require.Equal(t, 2, r.Count())
+	for _, id := range []string{"connected", "banned"} {
+		_, ok := r.Get(id)
+		require.True(t, ok, "%s must survive", id)
+	}
 }
 
 // TestCentralizedPeerRegistry_Cleanup_LRUAtProductionScale exercises the LRU
@@ -1392,8 +1402,8 @@ func TestCentralizedPeerRegistry_Register_FloodSparesConnectedActivePeer(t *test
 	require.True(t, got.IsConnected)
 }
 
-// Banned entries are evicted only after every other non-exempt entry, so a
-// flood of fresh IDs does not displace them...
+// Banned entries are evicted only after entries with no history, so a flood of
+// fresh IDs does not displace them...
 func TestCentralizedPeerRegistry_Register_FloodSparesBannedPeer(t *testing.T) {
 	const maxSize = 50
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())
@@ -1413,8 +1423,8 @@ func TestCentralizedPeerRegistry_Register_FloodSparesBannedPeer(t *testing.T) {
 	require.True(t, ok, "banned peers are evicted last, after the flood entries")
 }
 
-// ...but they do count toward the cap and can be evicted once nothing else is
-// left, so a registry full of banned IDs cannot grow past the cap. The ban
+// ...but they do count toward the cap and are evicted once no history-less
+// entries are left, so a registry full of banned IDs cannot grow past the cap. The ban
 // itself lives in banScores and survives the eviction of the PeerInfo.
 func TestCentralizedPeerRegistry_Register_BannedEntriesDoNotDefeatCap(t *testing.T) {
 	const maxSize = 10
@@ -1515,6 +1525,87 @@ func TestCentralizedPeerRegistry_Cleanup_LRUSparesPeersWithHistory(t *testing.T)
 	require.Equal(t, 3, lru)
 	_, ok := r.Get("historied")
 	require.True(t, ok, "LRU must evict history-less peers before a peer with history, regardless of age")
+}
+
+// The size phase evicts, oldest first within each tier: peers with no
+// history, then banned peers, then peers with only negative history (failures,
+// attempts, penalties, a malicious report even alongside successes), then
+// peers with positive history. Every peer is backdated in reverse of that
+// order, so plain LRU would evict exactly the wrong ones.
+func TestCentralizedPeerRegistry_Cleanup_EvictionTierOrder(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	r.Register(&PeerInfo{ID: "positive"})
+	r.RecordBlockReceived("positive", 100)
+	backdate(r, "positive", 5*time.Hour)
+
+	r.Register(&PeerInfo{ID: "malicious"})
+	r.RecordBlockReceived("malicious", 100)
+	r.UpdateMetrics("malicious", 0, 0, 0, false, false, true, 0)
+	backdate(r, "malicious", 4*time.Hour)
+
+	r.Register(&PeerInfo{ID: "negative"})
+	r.RecordCatchupFailure("negative")
+	backdate(r, "negative", 3*time.Hour)
+
+	r.Register(&PeerInfo{ID: "banned"})
+	r.AddBanScore("banned", "spam", 0)
+	r.AddBanScore("banned", "spam", 0)
+	require.True(t, r.IsBannedPeer("banned"))
+	backdate(r, "banned", 2*time.Hour)
+
+	r.Register(&PeerInfo{ID: "none"})
+	backdate(r, "none", time.Hour)
+
+	// Shrink one at a time down to 1 (0 disables the size phase).
+	evictionOrder := []string{"none", "banned", "malicious", "negative"}
+	for i, id := range evictionOrder {
+		_, lru := r.Cleanup(len(evictionOrder)-i, 24*time.Hour)
+		require.Equal(t, 1, lru)
+		_, ok := r.Get(id)
+		require.False(t, ok, "%s must be the next peer evicted", id)
+	}
+	_, ok := r.Get("positive")
+	require.True(t, ok, "the peer with positive history must be the last one left")
+
+	require.True(t, r.IsBannedPeer("banned"), "evicting a banned PeerInfo must not lift the ban")
+}
+
+// Identities that pick up negative history or a ban through gossip — an
+// announcement that triggers a failed catchup, a bogus block that gets them
+// banned — must still not displace peers that have served valid data.
+func TestCentralizedPeerRegistry_Register_FloodWithEarnedPenaltiesSparesPositivePeers(t *testing.T) {
+	const maxSize = 100
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	configureInlineCap(t, r, maxSize)
+
+	r.Register(&PeerInfo{ID: "validated"})
+	require.NoError(t, r.RecordValidatedPeerProgress("validated", 10, mustPeerRegistryHash("v"), []byte{0x01}))
+	r.Register(&PeerInfo{ID: "served-block"})
+	r.RecordBlockReceived("served-block", 100)
+	for _, id := range []string{"validated", "served-block"} {
+		backdate(r, id, 2*time.Hour)
+	}
+
+	for i := 0; i < 10*maxSize; i++ {
+		id := fmt.Sprintf("flood-%05d", i)
+		r.Register(&PeerInfo{ID: id})
+		switch i % 3 {
+		case 0:
+			r.RecordCatchupAttempt(id)
+		case 1:
+			r.RecordCatchupFailure(id)
+		default:
+			r.AddBanScore(id, "spam", 0)
+			r.AddBanScore(id, "spam", 0)
+		}
+		require.LessOrEqual(t, r.Count(), maxSize)
+	}
+
+	for _, id := range []string{"validated", "served-block"} {
+		_, ok := r.Get(id)
+		require.True(t, ok, "flood displaced %s, a peer with positive history", id)
+	}
 }
 
 // BenchmarkCentralizedPeerRegistry_RegisterAtCap measures the write-lock cost
