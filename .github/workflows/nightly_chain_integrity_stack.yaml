@@ -82,7 +82,14 @@ jobs:
           else
             listening=$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print $9}')
           fi
-          busy=$(echo "$listening" | grep -Eo '[0-9]+$' | awk '($1>=3000&&$1<=3030)||$1==15432||($1>=18080&&$1<=18700)||($1>=20000&&$1<=25999)' | sort -u | tr '\n' ' ')
+          # The host ports Stack A (3 nodes) publishes, not whole ranges: a dev machine has
+          # editors and proxies listening in between. Teranode nodes sit at 20000/22000/24000
+          # plus the offsets gennodes maps (compose/cmd/gennodes, HostBase + container - 8000).
+          want="3010 3020 3030 15432 40300 40332 41300 41332 8600 18080 18081 18082 18083 18090 18100 18700"
+          for base in 20000 22000 24000; do
+            for off in 0 81 83 84 85 87 90 93 99 1091 1292 1905 1906; do want="$want $((base + off))"; done
+          done
+          busy=$(echo "$listening" | grep -Eo '[0-9]+$' | sort -u | grep -Fxf <(tr ' ' '\n' <<<"$want") | tr '\n' ' ' || true)
           [ -z "$busy" ] || { echo "::error::ports the stack needs are in use (another stack running?): $busy"; exit 1; }
 
       - name: Checkout teranode
