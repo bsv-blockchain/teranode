@@ -84,6 +84,8 @@ import (
 // Parameters:
 //   - ctx: Context for cancellation
 //   - spends: Array of UTXOs to unspend
+//   - flagAsLocked: ignored. The unspend UDF never changes the locked flag,
+//     which setMined clears, and no caller in teranode passes it.
 //
 // Returns error if:
 //   - Context is cancelled
@@ -117,14 +119,9 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 // cancelled/expired context stops the loop early, since further Lua calls
 // would just fail too.
 //
-// Note for the OTHER callers, whose contract this changed without their asking:
-// a returned error now means "some, possibly nearly all, spends were reverted",
-// where it used to mean "the first k were". ProcessConflicting's step 2 relied on
-// the old reading — it set step2Committed only on full success and gated its
-// compensating re-spend on that flag, so a partial failure skipped the undo in
-// exactly the case that left the most uncompensated state. It now treats a failed
-// step 2 as partially committed for that reason. Any future caller deciding
-// "did this happen?" from the error alone needs the same treatment.
+// Note for callers: a returned error means "some, possibly nearly all, spends
+// were reverted", not "the first k were". A caller deciding "did this happen?"
+// from the error alone must treat a failed unspend as partially applied.
 // unspend returns how many spends could NOT be reverted alongside the aggregated
 // error, so the partial-spend rollback can count dangling refs rather than failed
 // calls — the sql store's counter of the same name is a ref count, and a fleet

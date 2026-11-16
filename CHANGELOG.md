@@ -31,6 +31,12 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **Between two blocks of equal chain work, the node now keeps the one it stored first.** It used
+  to switch to the block relayed by the lowest-sorting peer id, and a block this node mined, stored
+  with an empty peer id, won every tie. Until the blockchain service and block assembly both run
+  this version, block assembly follows the best header instead of replaying best-tip changes, so
+  upgrade them close together. Startup replaces the chain-work indexes on `blocks`, and every move
+  to or from an older version rebuilds them. (#2193)
 - **`ProcessBlock` refuses a `block_id` that is not the block's reservation on the quick route.**
   An external caller that sends a non-zero ID other than what `AssignBlockID` returns for the hash
   now gets an error before any UTXO is written, including an ID whose reservation was swept and a
@@ -43,6 +49,9 @@ read every section between yours and the target.
   `teranode_blockchain_get_latest_block_header_from_block_locator` and
   `_get_block_headers_from_oldest`, which recorded only calls to the two removed RPCs; drop any
   panel or alert on them. (#2185)
+- **A block whose transaction spends an output mined only outside the block's own history is now
+  invalid.** Earlier versions accepted it when that output's block was on the main chain, so
+  upgrade every block validation pod together; a mixed fleet can disagree on such a fork block. (#2174)
 - **`blockassembly_storeTxInpointsForSubtreeMeta=false` now only skips the subtree meta files.**
   Block assembly keeps every unmined tx's parent links in memory in both modes. With it off, the
   restart reload and a block move-back now read each tx's inputs from the UTXO store (an external tx

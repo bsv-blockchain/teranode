@@ -935,9 +935,9 @@ func (nettingMockStore) SupportsOutpointOnlySpend() bool { return true }
 func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 	t.Run("FollowFirstSeenWithEqualWork", func(t *testing.T) {
 		// This test verifies that the catchup layer can process competing chains
-		// with equal work. The actual "first-seen" tiebreaker (peer_id ASC) is
+		// with equal work. The actual first-stored tiebreaker (chain_work DESC, id ASC) is
 		// implemented in the blockchain store layer - see the test:
-		// TestSqlGetChainTip/equal_chainwork_prefers_lower_peer_id_(first-seen_rule)
+		// TestSqlGetChainTip/equal_chainwork_keeps_the_block_stored_first
 		// in stores/blockchain/sql/GetBestBlockHeader_test.go
 		//
 		// This test tracks which chain's HTTP endpoint was called first during catchup.
