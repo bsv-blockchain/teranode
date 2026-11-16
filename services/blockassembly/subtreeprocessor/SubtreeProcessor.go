@@ -5519,7 +5519,18 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		lastMoveForwardBlock := blockIdx == len(moveForwardBlocks)-1
 		// we skip the notifications for now and do them all at the end
 		// transactionMap is returned so we can check which transactions need to be marked as on the longest chain
-		if transactionMap, losingTxHashesMap, err = stp.moveForwardBlock(ctx, block, true, processedConflictingHashesMap, !lastMoveForwardBlock, lastMoveForwardBlock); err != nil {
+		//
+		// Every step drains the queue, not only the last. The drain above took
+		// the backlog from before the reorg; what arrived since is filtered
+		// against the block whose step drains it, and once in the subtrees,
+		// by each later block's remainder pass. Draining on the last step
+		// alone filtered those arrivals against the last block, and a tx an
+		// earlier forward block mined went back into block assembly. A failed
+		// step loses nothing drained: a failed fork reorg is followed by a
+		// reset, which sweeps the unmined txs from the store. A tx that
+		// arrives after its own block's step still reaches only later blocks'
+		// filters, as it does outside a reorg.
+		if transactionMap, losingTxHashesMap, err = stp.moveForwardBlock(ctx, block, true, processedConflictingHashesMap, false, lastMoveForwardBlock); err != nil {
 			return err
 		}
 
