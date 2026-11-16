@@ -1084,6 +1084,16 @@ After **10 consecutive failures** (total worst-case budget: 111s) the worker emi
 
 These counters are deliberately unlabeled (no `{blockhash}`) to avoid unbounded Prometheus cardinality — a per-block label series would grow without limit and never be reclaimed. Operators alert on the aggregate rate / non-zero total instead, and resolve the specific unrecoverable block from the `manual_intervention_required` log line. Do not attempt to build a per-block alert on these metrics: there is no `blockhash` label, so such an alert would silently never fire.
 
+#### Unusable Subtree Files When Reverting an Invalid Block
+
+When a block is marked invalid, `setTxMinedStatus` removes its tag from its transactions. To find them it reloads each of the block's subtrees, first as `.subtree` and then as `.subtreeToCheck`, and uses the first copy that reads and parses. A subtree with no usable copy is skipped, because no retry can bring one back:
+
+- **Absent** (no copy in the store): skipped with a warning. An invalid block need not have all its subtrees.
+- **Corrupt** (a copy with a missing, truncated or wrong-type header, or a body that does not parse): skipped. The stores write blobs whole, so a retry would read the same bytes, and returning it would leave the block at `mined_set=false` and hold block assembly's `WaitForPendingBlocks` indefinitely. The skip logs an `ERROR` containing `manual_intervention_required` with the block and subtree hashes, and increments `teranode_blockvalidation_revert_subtree_corrupt_total`. That subtree's transactions keep the invalid block's tag, so they are not reloaded into block assembly until repaired.
+- **Any other read failure** (an I/O error, an unreachable store): returned, and the revert is retried.
+
+The corrupt classification comes from the file and S3 stores. A subtree store reached through the blob HTTP server answers every non-miss failure with a 500, so a corrupt header behind it is still retried.
+
 > **For a comprehensive explanation of the two-phase commit process across the entire system, including how Block Validation plays a role in the second phase, see the [Two-Phase Transaction Commit Process](../features/two_phase_commit.md) documentation.**
 >
 ## 3. gRPC Protobuf Definitions

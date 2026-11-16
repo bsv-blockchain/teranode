@@ -1358,14 +1358,26 @@ func (s *File) GetReader(ctx context.Context, key []byte, fileType fileformat.Fi
 }
 
 // validateFileHeader reads and validates the file header.
+//
+// A header that is short, has unknown magic or names another file type is a corrupt file, and
+// the error carries a BlobCorrupt cause beside the StorageError. Writes go to a temp file that is
+// renamed into place, so a reader never sees a half-written file and a retry would read the same
+// bytes. Any other read failure (an I/O error from the disk) is left as a plain StorageError,
+// because the file itself may be fine.
 func (s *File) validateFileHeader(f io.Reader, fileName string, fileType fileformat.FileType) error {
 	header := &fileformat.Header{}
 	if err := header.Read(f); err != nil {
-		return errors.NewStorageError("[File][GetIoReader] [%s] missing or invalid header: %v", fileName, err)
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, fileformat.ErrUnknownMagic) {
+			return errors.NewStorageError("[File][GetIoReader] [%s] missing or invalid header", fileName,
+				errors.NewBlobCorruptError("header unreadable", err))
+		}
+
+		return errors.NewStorageError("[File][GetIoReader] [%s] failed to read header", fileName, err)
 	}
 
 	if header.FileType() != fileType {
-		return errors.NewStorageError("[File][GetIoReader] [%s] header filetype mismatch: got %s, want %s", fileName, header.FileType(), fileType)
+		return errors.NewStorageError("[File][GetIoReader] [%s] header filetype mismatch", fileName,
+			errors.NewBlobCorruptError("got %s, want %s", header.FileType(), fileType))
 	}
 
 	return nil

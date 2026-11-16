@@ -196,6 +196,19 @@ func TestHeader_Read_UnknownMagic(t *testing.T) {
 	assert.Contains(t, err.Error(), "expected to read 8 bytes")
 }
 
+// TestHeader_UnknownMagicIsWrapped pins that both header readers wrap ErrUnknownMagic, which
+// the blob stores use to tell a corrupt header from a failed read.
+func TestHeader_UnknownMagicIsWrapped(t *testing.T) {
+	var header Header
+
+	err := header.Read(bytes.NewReader([]byte("NOTMAGIC")))
+	require.ErrorIs(t, err, ErrUnknownMagic)
+	require.Contains(t, err.Error(), "unknown magic")
+
+	_, err = ReadHeaderFromBytes([]byte("NOTMAGIC"))
+	require.ErrorIs(t, err, ErrUnknownMagic)
+}
+
 // TestHeader_Read_BackwardCompatibility tests Read with trailing nulls
 func TestHeader_Read_BackwardCompatibility(t *testing.T) {
 	var header Header

@@ -3,7 +3,11 @@ package blockvalidation
 import (
 	"bytes"
 	"context"
+	"io/fs"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -14,9 +18,11 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	blobfile "github.com/bsv-blockchain/teranode/stores/blob/file"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -259,4 +265,127 @@ func TestReloadSubtreesForInvalidBlock_ClosesLoadedSubtreesOnReadError(t *testin
 	entries, err := os.ReadDir(mmapDir)
 	require.NoError(t, err)
 	require.Empty(t, entries, "the subtree loaded before the read failure must be closed, removing its mmap backing file")
+}
+
+// TestReloadSubtreesForInvalidBlock_CorruptCopyIsPermanent pins the one rule for a
+// subtree file that is present but unusable, whichever part of it is broken.
+//
+// A bad header (the store's header check fails) and a bad body (the header passes
+// and the subtree does not parse) are the same permanent fault: the store writes
+// whole files, so a retry reads the same bytes. Both now try the
+// FileTypeSubtreeToCheck copy, and when no copy is usable the subtree is skipped
+// with the corrupt-subtree counter raised, rather than returned for a retry that
+// would hold the block at mined_set=false and block assembly with it.
+//
+// It uses a real file store, because only the file and S3 stores check the header;
+// the memory store has none, so it could not show the bad-header case.
+func TestReloadSubtreesForInvalidBlock_CorruptCopyIsPermanent(t *testing.T) {
+	ctx := context.Background()
+
+	initPrometheusMetrics()
+
+	st, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, st.AddNode(chainhash.HashH([]byte("corrupt-copy-0")), 1, 0))
+	require.NoError(t, st.AddNode(chainhash.HashH([]byte("corrupt-copy-1")), 1, 0))
+
+	serialized, err := st.Serialize()
+	require.NoError(t, err)
+
+	nBits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	coinbase, err := bt.NewTxFromString(model.CoinbaseHex)
+	require.NoError(t, err)
+
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      1,
+		Bits:           *nBits,
+	}
+
+	block, err := model.NewBlock(header, coinbase, []*chainhash.Hash{st.RootHash()}, 2, 123, 0, 0)
+	require.NoError(t, err)
+
+	// newStore returns a file store holding the subtree as FileTypeSubtree, rewritten on
+	// disk by corrupt, and as FileTypeSubtreeToCheck when withFallback is set.
+	newStore := func(t *testing.T, corrupt func(raw []byte) []byte, withFallback bool) blob.Store {
+		t.Helper()
+
+		dir := t.TempDir()
+
+		storeURL, err := url.Parse("file://" + dir)
+		require.NoError(t, err)
+
+		store, err := blobfile.New(ulogger.TestLogger{}, storeURL, options.WithBlobDeletionScheduler(noopBlobDeletionScheduler{}))
+		require.NoError(t, err)
+
+		require.NoError(t, store.Set(ctx, st.RootHash()[:], fileformat.FileTypeSubtree, serialized))
+
+		if withFallback {
+			require.NoError(t, store.Set(ctx, st.RootHash()[:], fileformat.FileTypeSubtreeToCheck, serialized))
+		}
+
+		var subtreeFile string
+
+		require.NoError(t, filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && strings.HasSuffix(path, "."+string(fileformat.FileTypeSubtree)) {
+				subtreeFile = path
+			}
+
+			return err
+		}))
+		require.NotEmpty(t, subtreeFile, "the subtree file must be on disk")
+
+		raw, err := os.ReadFile(subtreeFile)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(subtreeFile, corrupt(raw), 0o600))
+
+		return store
+	}
+
+	badHeader := func([]byte) []byte { return []byte("abc") }
+	badBody := func(raw []byte) []byte { return append(append([]byte{}, raw[:8]...), 0xff, 0xff, 0xff) }
+
+	for _, tc := range []struct {
+		name    string
+		corrupt func([]byte) []byte
+	}{
+		{name: "bad header", corrupt: badHeader},
+		{name: "bad body", corrupt: badBody},
+	} {
+		t.Run(tc.name+" falls back to the subtree-to-check copy", func(t *testing.T) {
+			before := promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt)
+			u := &BlockValidation{logger: ulogger.TestLogger{}, subtreeStore: newStore(t, tc.corrupt, true)}
+
+			require.NoError(t, u.reloadSubtreesForInvalidBlock(ctx, block))
+			require.Len(t, block.SubtreeSlices, 1)
+			require.NotNil(t, block.SubtreeSlices[0], "the subtree-to-check copy must be used")
+			require.Equal(t, *st.RootHash(), *block.SubtreeSlices[0].RootHash())
+			require.Equal(t, before, promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt))
+
+			require.NoError(t, block.ReleaseSubtreeNodes(nil))
+		})
+
+		t.Run(tc.name+" with no usable copy is skipped and counted", func(t *testing.T) {
+			before := promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt)
+			u := &BlockValidation{logger: ulogger.TestLogger{}, subtreeStore: newStore(t, tc.corrupt, false)}
+
+			require.NoError(t, u.reloadSubtreesForInvalidBlock(ctx, block), "a corrupt file is permanent, so it must not be returned for a retry")
+			require.Len(t, block.SubtreeSlices, 1)
+			require.Nil(t, block.SubtreeSlices[0])
+			require.Equal(t, before+1, promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt))
+		})
+	}
+
+	t.Run("absent subtree is skipped without the corrupt counter", func(t *testing.T) {
+		before := promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt)
+		u := &BlockValidation{logger: ulogger.TestLogger{}, subtreeStore: blobmemory.New()}
+
+		require.NoError(t, u.reloadSubtreesForInvalidBlock(ctx, block))
+		require.Nil(t, block.SubtreeSlices[0])
+		require.Equal(t, before, promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt))
+	})
 }

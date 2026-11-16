@@ -2124,3 +2124,46 @@ func TestChecksumDisabledSidecarRemovalFailureIsNotFatal(t *testing.T) {
 
 	requireNoTempFilesLeft(t, tempDir)
 }
+
+// errReader fails every Read with err, standing in for a disk that returns an I/O error.
+type errReader struct{ err error }
+
+func (r errReader) Read([]byte) (int, error) { return 0, r.err }
+
+// TestValidateFileHeader_MarksOnlyBadBytesCorrupt pins which header failures carry the
+// BlobCorrupt cause. Writes are temp file then rename, so a header that is short, has
+// unknown magic or names another file type stays that way and a retry reads the same
+// bytes. A read that fails for another reason (a disk I/O error) says nothing about the
+// file, so it must stay a plain StorageError that callers retry.
+func TestValidateFileHeader_MarksOnlyBadBytesCorrupt(t *testing.T) {
+	s := &File{logger: ulogger.TestLogger{}}
+
+	var subtreeHeader bytes.Buffer
+
+	require.NoError(t, fileformat.NewHeader(fileformat.FileTypeSubtree).Write(&subtreeHeader))
+
+	cases := []struct {
+		name    string
+		reader  io.Reader
+		corrupt bool
+	}{
+		{name: "empty file", reader: bytes.NewReader(nil), corrupt: true},
+		{name: "truncated header", reader: bytes.NewReader([]byte("abc")), corrupt: true},
+		{name: "unknown magic", reader: bytes.NewReader([]byte("NOTMAGIC-rest-of-body")), corrupt: true},
+		{name: "wrong file type", reader: bytes.NewReader(subtreeHeader.Bytes()), corrupt: true},
+		{name: "disk read error", reader: errReader{err: io.ErrClosedPipe}, corrupt: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := s.validateFileHeader(tc.reader, "test-file", fileformat.FileTypeSubtreeToCheck)
+			require.Error(t, err)
+			require.ErrorIs(t, err, errors.ErrStorageError, "a header failure stays a StorageError for existing callers")
+			require.Equal(t, tc.corrupt, errors.IsBlobCorrupt(err))
+		})
+	}
+
+	t.Run("matching header is accepted", func(t *testing.T) {
+		require.NoError(t, s.validateFileHeader(bytes.NewReader(subtreeHeader.Bytes()), "test-file", fileformat.FileTypeSubtree))
+	})
+}

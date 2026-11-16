@@ -90,6 +90,11 @@ var (
 	prometheusBlockValidationSetMinedDrops           prometheus.Counter
 	prometheusBlockValidationSetMinedEnqueueOverflow prometheus.Counter
 
+	// unusable-subtree counter: incremented when the invalid-block revert skips a
+	// subtree because every stored copy is corrupt. That subtree's transactions keep
+	// the invalid block's tag, so a non-zero value needs manual repair.
+	prometheusBlockValidationRevertSubtreeCorrupt prometheus.Counter
+
 	// outpoint-only fast-path counter: incremented once per block when the
 	// below-checkpoint outpoint-only path is active (setting on, height ≤ highest
 	// checkpoint). A rising rate indicates the fast path is in use during IBD.
@@ -254,6 +259,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockvalidation",
 			Name:      "setmined_drops_total",
 			Help:      "Total number of blocks dropped from the setTxMined retry loop after exceeding the retry ceiling. Non-zero values are page-worthy and require manual intervention; the specific block hash is recorded in the logs.",
+		},
+	)
+
+	prometheusBlockValidationRevertSubtreeCorrupt = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "revert_subtree_corrupt_total",
+			Help:      "Total number of subtrees the invalid-block revert skipped because every stored copy was corrupt. Their transactions keep the invalid block's tag; non-zero values require manual intervention, and the block and subtree hashes are recorded in the logs.",
 		},
 	)
 
