@@ -884,7 +884,7 @@ func TestCentralizedPeerRegistry_Cleanup_TTL(t *testing.T) {
 	require.Equal(t, 1, r.Count())
 }
 
-func TestCentralizedPeerRegistry_Cleanup_LRUExemptsConnectedAndBanned(t *testing.T) {
+func TestCentralizedPeerRegistry_Cleanup_LRUKeepsConnectedAndBanned(t *testing.T) {
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())
 
 	r.Register(&PeerInfo{ID: "connected"})
@@ -901,9 +901,9 @@ func TestCentralizedPeerRegistry_Cleanup_LRUExemptsConnectedAndBanned(t *testing
 		r.Register(&PeerInfo{ID: id})
 	}
 
-	// maxSize=2: the connected peer is exempt from the size phase, and the
-	// banned peer is evicted only after peers with no history, so the 4
-	// history-less peers go and both named peers survive.
+	// maxSize=2: the connected peer is exempt from the size phase, and a ban
+	// counts as negative history, evicted only after peers with no history, so
+	// the 4 history-less peers go and both named peers survive.
 	expired, lru := r.Cleanup(2, 24*time.Hour)
 	require.Equal(t, 0, expired)
 	require.Equal(t, 4, lru)
@@ -1368,7 +1368,12 @@ func TestCentralizedPeerRegistry_Register_FloodSparesPeersWithHistory(t *testing
 
 	r.Register(&PeerInfo{ID: "storage-penalised", FullStoragePenaltyUntil: time.Now().Add(time.Hour)})
 
-	historied := []string{"validated", "served-block", "failed-catchup", "catchup-attempted", "storage-penalised"}
+	r.Register(&PeerInfo{ID: "banned"})
+	r.AddBanScore("banned", "spam", 0)
+	r.AddBanScore("banned", "spam", 0)
+	require.True(t, r.IsBannedPeer("banned"))
+
+	historied := []string{"validated", "served-block", "failed-catchup", "catchup-attempted", "storage-penalised", "banned"}
 	for _, id := range historied {
 		backdate(r, id, 2*time.Hour) // older than every flood entry
 	}
@@ -1402,30 +1407,10 @@ func TestCentralizedPeerRegistry_Register_FloodSparesConnectedActivePeer(t *test
 	require.True(t, got.IsConnected)
 }
 
-// Banned entries are evicted only after entries with no history, so a flood of
-// fresh IDs does not displace them...
-func TestCentralizedPeerRegistry_Register_FloodSparesBannedPeer(t *testing.T) {
-	const maxSize = 50
-	r := NewCentralizedPeerRegistry(DefaultBanConfig())
-	configureInlineCap(t, r, maxSize)
-
-	r.Register(&PeerInfo{ID: "banned"})
-	r.AddBanScore("banned", "spam", 0)
-	r.AddBanScore("banned", "spam", 0)
-	require.True(t, r.IsBannedPeer("banned"))
-	backdate(r, "banned", 2*time.Hour)
-
-	for i := 0; i < 10*maxSize; i++ {
-		r.Register(&PeerInfo{ID: fmt.Sprintf("flood-%05d", i)})
-	}
-
-	_, ok := r.Get("banned")
-	require.True(t, ok, "banned peers are evicted last, after the flood entries")
-}
-
-// ...but they do count toward the cap and are evicted once no history-less
-// entries are left, so a registry full of banned IDs cannot grow past the cap. The ban
-// itself lives in banScores and survives the eviction of the PeerInfo.
+// Banned entries survive a history-less flood (see FloodSparesPeersWithHistory)
+// but still count toward the cap and are evicted once nothing lower is left,
+// so a registry full of banned IDs cannot grow past the cap. The ban itself
+// lives in banScores and survives the eviction of the PeerInfo.
 func TestCentralizedPeerRegistry_Register_BannedEntriesDoNotDefeatCap(t *testing.T) {
 	const maxSize = 10
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())
@@ -1509,28 +1494,53 @@ func TestCentralizedPeerRegistry_Register_TrimsOverCapRegistryInOneCall(t *testi
 	require.True(t, ok, "the new peer must be inserted")
 }
 
-// Cleanup's LRU phase uses the same eviction order as the inline cap.
-func TestCentralizedPeerRegistry_Cleanup_LRUSparesPeersWithHistory(t *testing.T) {
-	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+func TestEvictionTier(t *testing.T) {
+	now := time.Now()
+	work := []byte{0x01}
 
-	r.Register(&PeerInfo{ID: "historied"})
-	r.RecordBlockReceived("historied", 100)
-	backdate(r, "historied", 2*time.Hour)
+	tests := []struct {
+		name string
+		info PeerInfo
+		want int
+	}{
+		{"registration only", PeerInfo{}, evictionTierNoHistory},
+		{"expired storage penalty only", PeerInfo{FullStoragePenaltyUntil: now.Add(-time.Hour)}, evictionTierNegative},
 
-	for _, id := range []string{"a", "b", "c"} {
-		r.Register(&PeerInfo{ID: id})
+		{"banned", PeerInfo{IsBanned: true}, evictionTierNegative},
+		{"malicious", PeerInfo{MaliciousCount: 1}, evictionTierNegative},
+		{"active storage penalty", PeerInfo{FullStoragePenaltyUntil: now.Add(time.Hour)}, evictionTierNegative},
+		{"interaction attempt", PeerInfo{InteractionAttempts: 1}, evictionTierNegative},
+		{"interaction failure", PeerInfo{InteractionFailures: 1}, evictionTierNegative},
+		{"catchup attempt", PeerInfo{CatchupAttempts: 1}, evictionTierNegative},
+		{"catchup failure", PeerInfo{CatchupFailures: 1}, evictionTierNegative},
+		{"sync bench", PeerInfo{SyncAttemptCount: 1}, evictionTierNegative},
+		{"catchup error", PeerInfo{LastCatchupErrorTime: now}, evictionTierNegative},
+		{"storage contradiction", PeerInfo{FullStorageContradictions: 1}, evictionTierNegative},
+		// The delivery-failure penalty wipes validated work but leaves
+		// LastValidatedAt: revoked credit must not keep the top tier.
+		{"validated work revoked", PeerInfo{LastValidatedAt: now}, evictionTierNegative},
+
+		{"interaction success", PeerInfo{InteractionSuccesses: 1}, evictionTierPositive},
+		{"catchup success", PeerInfo{CatchupSuccesses: 1}, evictionTierPositive},
+		{"validated work", PeerInfo{ValidatedChainWork: work, LastValidatedAt: now}, evictionTierPositive},
+		{"successes outweigh failures", PeerInfo{InteractionSuccesses: 3, InteractionFailures: 1, InteractionAttempts: 4}, evictionTierPositive},
+		{"served data, penalty expired", PeerInfo{InteractionSuccesses: 1, FullStoragePenaltyUntil: now.Add(-time.Hour)}, evictionTierPositive},
+
+		{"served data but banned", PeerInfo{InteractionSuccesses: 1, ValidatedChainWork: work, IsBanned: true}, evictionTierNegative},
+		{"served data but malicious", PeerInfo{InteractionSuccesses: 1, MaliciousCount: 1}, evictionTierNegative},
+		{"served data but storage penalty active", PeerInfo{InteractionSuccesses: 1, FullStoragePenaltyUntil: now.Add(time.Hour)}, evictionTierNegative},
 	}
 
-	_, lru := r.Cleanup(1, 24*time.Hour)
-	require.Equal(t, 3, lru)
-	_, ok := r.Get("historied")
-	require.True(t, ok, "LRU must evict history-less peers before a peer with history, regardless of age")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, evictionTier(&tt.info, now))
+		})
+	}
 }
 
-// The size phase evicts, oldest first within each tier: peers with no
-// history, then banned peers, then peers with only negative history (failures,
-// attempts, penalties, a malicious report even alongside successes), then
-// peers with positive history. Every peer is backdated in reverse of that
+// The size phase evicts peers with no history first, then peers with negative
+// history (including banned and malicious ones), then peers with positive
+// history, oldest first within each tier. Every peer is backdated against that
 // order, so plain LRU would evict exactly the wrong ones.
 func TestCentralizedPeerRegistry_Cleanup_EvictionTierOrder(t *testing.T) {
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())
@@ -1544,21 +1554,21 @@ func TestCentralizedPeerRegistry_Cleanup_EvictionTierOrder(t *testing.T) {
 	r.UpdateMetrics("malicious", 0, 0, 0, false, false, true, 0)
 	backdate(r, "malicious", 4*time.Hour)
 
-	r.Register(&PeerInfo{ID: "negative"})
-	r.RecordCatchupFailure("negative")
-	backdate(r, "negative", 3*time.Hour)
-
 	r.Register(&PeerInfo{ID: "banned"})
 	r.AddBanScore("banned", "spam", 0)
 	r.AddBanScore("banned", "spam", 0)
 	require.True(t, r.IsBannedPeer("banned"))
-	backdate(r, "banned", 2*time.Hour)
+	backdate(r, "banned", 3*time.Hour)
+
+	r.Register(&PeerInfo{ID: "negative"})
+	r.RecordCatchupFailure("negative")
+	backdate(r, "negative", 2*time.Hour)
 
 	r.Register(&PeerInfo{ID: "none"})
 	backdate(r, "none", time.Hour)
 
 	// Shrink one at a time down to 1 (0 disables the size phase).
-	evictionOrder := []string{"none", "banned", "malicious", "negative"}
+	evictionOrder := []string{"none", "malicious", "banned", "negative"}
 	for i, id := range evictionOrder {
 		_, lru := r.Cleanup(len(evictionOrder)-i, 24*time.Hour)
 		require.Equal(t, 1, lru)

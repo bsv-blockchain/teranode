@@ -1486,7 +1486,7 @@ func inlineTrimTarget(maxSize int) int {
 // connected peers active within ttl are left; those are never evicted for
 // size. Returns the number evicted. The caller must hold the write lock and
 // have normalised expired bans (expireBansLocked), so a stale IsBanned flag
-// does not keep an idle peer in the banned tier.
+// does not keep an idle peer in the negative tier.
 //
 // Eviction order is evictionTier first, then least recently active within a
 // tier. The tiers are what keep a rotating-identity flood from washing honest
@@ -1507,7 +1507,7 @@ func (r *CentralizedPeerRegistry) evictToSizeLocked(size int, now time.Time, ttl
 		if isConnectedAndActive(info, now, ttl) {
 			continue
 		}
-		candidates = append(candidates, candidate{id: id, tier: evictionTier(info), last: peerActivity(info)})
+		candidates = append(candidates, candidate{id: id, tier: evictionTier(info, now), last: peerActivity(info)})
 	}
 
 	if toEvict > len(candidates) {
@@ -1531,7 +1531,6 @@ func (r *CentralizedPeerRegistry) evictToSizeLocked(size int, now time.Time, ttl
 // Eviction tiers for evictToSizeLocked, lowest evicted first.
 const (
 	evictionTierNoHistory = iota
-	evictionTierBanned
 	evictionTierNegative
 	evictionTierPositive
 )
@@ -1540,37 +1539,45 @@ const (
 //
 //  1. No history: nothing but a registration, which is all a gossip author
 //     minted offline has. A flood displaces entries like itself first.
-//  2. Banned: the ban lives in banScores, which Register reads back when the
-//     peer returns, so evicting the PeerInfo loses only its dashboard row.
-//     Gossip authors can get banned cheaply, so banned entries must not
-//     outrank peers with history.
-//  3. Negative history only: failures, attempts, penalties, or any malicious
-//     report. A gossip author can earn these (an announcement that triggers a
-//     catchup attempt that then fails), but keeping them above tiers 1 and 2
-//     stops a penalised peer from resetting its record by flooding its own
-//     entry out.
-//  4. Positive history: the peer served data that passed validation. An
-//     attacker can still earn this by relaying real chain data, but only at
-//     the pace of the node's own fetches and catchups, not at gossip rate.
-func evictionTier(info *PeerInfo) int {
+//  2. Negative history: attempts, failures, sync benches, catchup errors,
+//     storage contradictions or penalties, revoked validated work, a malicious
+//     report, or a ban. The record is what keeps a penalised peer from
+//     returning clean (the ban itself also lives in banScores, but malicious
+//     and penalty history live only here), so it is kept above tier 1. Gossip
+//     authors can earn this tier cheaply (an announcement that triggers a
+//     failed catchup, a bogus block that gets them banned), so it must not
+//     outrank tier 3.
+//  3. Positive history: the peer served data that passed validation and is
+//     not currently banned, malicious or under a storage penalty. An attacker
+//     can still earn this by relaying real chain data, but only at the pace of
+//     the node's own fetches and catchups, not at gossip rate.
+//
+// Fields are listed explicitly even where one record path sets several of
+// them, so a future path that sets only one still counts.
+func evictionTier(info *PeerInfo, now time.Time) int {
+	penalised := info.IsBanned ||
+		info.MaliciousCount > 0 ||
+		now.Before(info.FullStoragePenaltyUntil)
+	// Validated work, not LastValidatedAt: a delivery-failure penalty wipes the
+	// work but leaves the timestamp, and revoked credit must not rank here.
 	positive := info.InteractionSuccesses > 0 ||
 		info.CatchupSuccesses > 0 ||
-		!info.LastValidatedAt.IsZero() ||
 		len(info.ValidatedChainWork) > 0
-	negative := info.MaliciousCount > 0 ||
+	negative := penalised ||
 		info.InteractionAttempts > 0 ||
 		info.InteractionFailures > 0 ||
 		info.CatchupAttempts > 0 ||
 		info.CatchupFailures > 0 ||
+		info.SyncAttemptCount > 0 ||
+		!info.LastCatchupErrorTime.IsZero() ||
 		info.FullStorageContradictions > 0 ||
-		!info.FullStoragePenaltyUntil.IsZero()
+		!info.FullStoragePenaltyUntil.IsZero() ||
+		!info.LastValidatedAt.IsZero()
 
 	switch {
-	case info.IsBanned:
-		return evictionTierBanned
-	case positive && info.MaliciousCount == 0:
+	case positive && !penalised:
 		return evictionTierPositive
-	case negative:
+	case positive || negative:
 		return evictionTierNegative
 	default:
 		return evictionTierNoHistory
