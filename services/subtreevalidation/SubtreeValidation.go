@@ -867,7 +867,9 @@ func (u *Server) validateSubtreeInternalImpl(ctx context.Context, v ValidateSubt
 		}
 
 		if _, dup := seen[txHash]; dup {
-			return nil, errors.NewBlockInvalidError("[ValidateSubtreeInternal][%s] duplicate transaction in subtree at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
+			// A duplicate in the received tx set (CVE-2012-2459) is found before the body is bound
+			// to the block header: corrupt, so the block is re-downloaded and never marked invalid.
+			return nil, errors.NewBlockCorruptError("[ValidateSubtreeInternal][%s] duplicate transaction in subtree at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
 		}
 
 		seen[txHash] = struct{}{}

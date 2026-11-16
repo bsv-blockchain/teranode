@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -145,4 +146,27 @@ func TestMaxRawTxFee_EnvZeroDisables(t *testing.T) {
 	t.Setenv("maxrawtxfee", "0")
 	tSettings := NewSettings()
 	require.Equal(t, uint64(0), tSettings.Policy.MaxRawTxFee)
+}
+
+// TestOptimisticMiningPeerBlocks_LoaderReadsKey guards against the field existing with a key tag
+// but no getBool in NewSettings: the default (false) equals the Go zero value, so only a
+// non-default value read back proves the loader wiring.
+func TestOptimisticMiningPeerBlocks_LoaderReadsKey(t *testing.T) {
+	const key = "blockvalidation_optimistic_mining_peer_blocks"
+
+	ctx := gocore.Config().GetContext()
+
+	winKey := key
+	if ctx != "" {
+		winKey = key + "." + ctx
+	}
+
+	if ctx == "" || ctx == "dev" {
+		require.False(t, NewSettings().BlockValidation.OptimisticMiningPeerBlocks, "default must be false")
+	}
+
+	gocore.Config().Set(winKey, "true")
+	t.Cleanup(func() { gocore.Config().Set(winKey, "") })
+
+	require.True(t, NewSettings().BlockValidation.OptimisticMiningPeerBlocks, "loader must read %s", key)
 }

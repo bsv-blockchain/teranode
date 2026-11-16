@@ -95,4 +95,7 @@ enum ERR {
   NETWORK_CONNECTION_REFUSED=114;
   NETWORK_INVALID_RESPONSE=115;
   NETWORK_PEER_MALICIOUS=116;
+  // Block errors continued 120-129. The 10-19 decade is full; errorCodeCategory maps this
+  // range to "block" as well.
+  BLOCK_CORRUPT=120;
 }

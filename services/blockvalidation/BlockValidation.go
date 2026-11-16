@@ -1153,12 +1153,27 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 		u.logger.Debugf("[ValidateBlock][%s] waiting for concurrent validation", blockHash.String())
 		<-existingResult.done
 		existingResult.mu.RLock()
-		defer existingResult.mu.RUnlock()
-		return existingResult.err
+		sharedErr := existingResult.err
+		existingResult.mu.RUnlock()
+
+		// A corrupt verdict is about the body the other caller received, not about this
+		// caller's body for the same hash, so validate this one instead of inheriting it.
+		if errors.IsBlockCorrupt(sharedErr) {
+			return u.runOncePerBlock(blockHash, opts, validate)
+		}
+
+		return sharedErr
 	}
 
 	// We're first - run validation
 	err := validate(opts)
+
+	// A corrupt result is dropped before waiters are released, so a waiter that validates its
+	// own body registers a fresh entry instead of finding this one again.
+	corrupt := errors.IsBlockCorrupt(err)
+	if corrupt {
+		u.blocksCurrentlyValidating.Delete(*blockHash)
+	}
 
 	// Store and broadcast result
 	result.mu.Lock()
@@ -1166,11 +1181,13 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 	result.mu.Unlock()
 	close(result.done)
 
-	// Cleanup after delay
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		u.blocksCurrentlyValidating.Delete(*blockHash)
-	}()
+	if !corrupt {
+		// Cleanup after delay
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			u.blocksCurrentlyValidating.Delete(*blockHash)
+		}()
+	}
 
 	return err
 }
@@ -1308,12 +1325,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				return err
 			}
 
+			// SizeInBytes is the size the serving peer declared for the body, not something the
+			// header commits to (the real size is recomputed when the subtrees are loaded), and
+			// excessiveblocksize is local policy, not consensus. The body is treated as corrupt:
+			// never persisted as invalid, and the caller fetches it from another source.
 			if block.SizeInBytes > excessiveBlockSizeUint64 {
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, fmt.Sprintf("block size %d exceeds excessiveblocksize %d", block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize))
-				}
-
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
+				return errors.NewBlockCorruptError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
 			}
 		}
 
@@ -1322,15 +1339,6 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// doesn't have full block data (e.g. seeded peer). Don't store as invalid so we can
 			// accept the valid version from another peer later.
 			return errors.NewBlockIncompleteError("[ValidateBlock][%s] coinbase tx is nil or empty", block.Header.Hash().String())
-		}
-
-		// check the coinbase length
-		if len(block.CoinbaseTx.Inputs[0].UnlockingScript.Bytes()) < 2 || len(block.CoinbaseTx.Inputs[0].UnlockingScript.Bytes()) > int(u.settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
-			if !opts.IsRevalidation {
-				u.storeInvalidBlock(ctx, block, opts.PeerID, "bad coinbase length")
-			}
-
-			return errors.NewBlockInvalidError("[ValidateBlock][%s] bad coinbase length", block.Header.Hash().String())
 		}
 
 		if err = catchup.ValidateHeaderAgainstCheckpoints(block.Header, block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
@@ -1463,7 +1471,38 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
 
 		if err = u.validateBlockSubtrees(ctx, block, opts.PeerID, baseURL); err != nil {
-			// Genuine consensus violation — a transaction in the block is invalid. Persist invalid.
+			// A corrupt body found during subtree validation (e.g. a duplicate transaction in a
+			// served subtree) is not bound to the header and cannot condemn the block hash.
+			// Checked first so it never reaches the storeInvalidBlock below; the caller
+			// re-downloads and charges the serving peer.
+			if errors.IsBlockCorrupt(err) {
+				ctxLogger.Warnf("[ValidateBlock][%s] corrupt block body from peer %s during subtree validation: %s", block.Hash().String(), opts.PeerID, err)
+				return err
+			}
+
+			// An invalid transaction found by subtree validation. Subtree validation runs before
+			// block.Valid binds the subtree list to the header's merkle root, so on the peer path
+			// the list may be one the serving peer substituted and the verdict cannot condemn the
+			// block hash: it is corrupt and never persisted. Only the cause's text is kept, so the
+			// result does not also match ErrTxInvalid and catchup still tries other peers. Local
+			// failures are returned unchanged for retry. The legacy route builds its subtree list
+			// after checking the merkle root, so there the verdict condemns the block as before.
+			if errors.Is(err, errors.ErrTxInvalid) && baseURL != "legacy" {
+				if errors.Is(err, context.Canceled) ||
+					errors.Is(err, context.DeadlineExceeded) ||
+					errors.Is(err, errors.ErrContextCanceled) ||
+					errors.Is(err, errors.ErrStorageError) ||
+					errors.Is(err, errors.ErrServiceError) {
+					ctxLogger.Warnf("[ValidateBlock][%s] local failure during subtree transaction validation, will retry: %s", block.Hash().String(), err)
+					return err
+				}
+
+				ctxLogger.Warnf("[ValidateBlock][%s] invalid transaction in a subtree list from peer %s that is not yet bound to the header: %s", block.Hash().String(), opts.PeerID, err)
+
+				return errors.NewBlockCorruptError("[ValidateBlock][%s] block contains invalid transactions in an unbound subtree list: %s", block.Hash().String(), err.Error())
+			}
+
+			// Genuine consensus violation on the legacy route — a transaction in the block is invalid. Persist invalid.
 			if errors.Is(err, errors.ErrTxInvalid) {
 				ctxLogger.Warnf("[ValidateBlock][%s] block contains invalid transactions, marking as invalid: %s", block.Hash().String(), err)
 				reason := fmt.Sprintf("block contains invalid transactions: %s", err.Error())
@@ -1553,7 +1592,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					// return pooled []Node slices before re-validation or invalidation.
 					releaseBlockNodes(block)
 
-					if errors.Is(err, errors.ErrBlockInvalid) {
+					// A corrupt body here was already added to the chain before block.Valid ran,
+					// and there is no way to remove it without marking it invalid. Leaving it in
+					// place would keep an unvalidated tip, so it is invalidated like an invalid
+					// body. Peer and catchup blocks only take this path when
+					// blockvalidation_optimistic_mining_peer_blocks is set.
+					if errors.Is(err, errors.ErrBlockInvalid) || errors.IsBlockCorrupt(err) {
 						reason := p2pconstants.ReasonInvalidBlock.String()
 						if err = u.markBlockAsInvalid(decoupledCtx, block, reason); err != nil {
 							u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
@@ -1641,6 +1685,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// Block will not be cached — return pooled []Node slices now so
 				// the next block can reuse the same backing storage.
 				releaseBlockNodes(block)
+
+				// A corrupt body is not bound to the header, so it cannot condemn the block hash.
+				// Checked before the storeInvalidBlock catch-all below: nothing was added on this
+				// path, so the caller re-downloads and charges the serving peer.
+				if errors.IsBlockCorrupt(err) {
+					ctxLogger.Warnf("[ValidateBlock][%s] corrupt block body from peer %s: %s", block.Hash().String(), opts.PeerID, reason)
+					return err
+				}
 
 				// Check if we had an infrastructure error (storage, service, or processing);
 				// if so do not mark the block as invalid - these are transient issues

@@ -1529,17 +1529,37 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 
 	// Create validation options
 	opts := &ValidateBlockOptions{
-		DisableOptimisticMining: baseURL == "legacy",
+		DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings, baseURL),
 		IsRevalidation:          false, // processBlockFound is for new blocks, not revalidation
 		PeerID:                  peerID,
 	}
 
 	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, opts)
 	if err != nil {
+		// The peer served a body that does not belong to the block it announced. The block hash
+		// was not marked invalid; charge the peer, and the caller retries other sources.
+		if errors.IsBlockCorrupt(err) {
+			u.reportCatchupMalicious(ctx, peerID, "corrupt_block_body")
+		}
+
 		return errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err)
 	}
 
 	return nil
+}
+
+// optimisticMiningDisabledForPeerPath reports whether optimistic mining must be disabled for a
+// block served by a peer. Optimistic mining adds the body to the chain before block.Valid runs,
+// and a doctored body can then only be removed with InvalidateBlock, which marks the honest hash
+// invalid. So the peer path is optimistic only when both blockvalidation_optimistic_mining and
+// blockvalidation_optimistic_mining_peer_blocks are set. Legacy blocks are never optimistic. Nil
+// settings report disabled.
+func optimisticMiningDisabledForPeerPath(s *settings.Settings, baseURL string) bool {
+	if s == nil || baseURL == "legacy" {
+		return true
+	}
+
+	return !(s.BlockValidation.OptimisticMining && s.BlockValidation.OptimisticMiningPeerBlocks)
 }
 
 // checkParentProcessingComplete ensures that a block's parent has completed validation
@@ -1701,7 +1721,7 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 				// For now, we'll just re-queue it with deepFork priority to ensure it gets retried eventually
 				// Note: This could lead to blocks being retried indefinitely if they are always failing to fetch
 				// A more robust solution would involve tracking retry counts and eventually giving up after a threshold
-				if errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err) {
+				if isRefetchableBlockError(err) {
 					u.logger.Warnf("[BlockProcessing] Block %s fetch failed, will retry later", blockFound.hash.String())
 					// Re-add the block to the queue for retry
 					// We need to get the block metadata (height and priority) for re-queuing
@@ -1898,8 +1918,8 @@ func (u *Server) processBlockWithPriority(ctx context.Context, blockFound proces
 	// Try to process with the primary source
 	err := u.processBlockFound(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
 
-	// If fetch failed and it's not a validation error, try alternative sources
-	if err != nil && (errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err)) {
+	// If fetch failed, or the peer served a corrupt body, try alternative sources
+	if err != nil && isRefetchableBlockError(err) {
 		u.logger.Warnf("[processBlockWithPriority] Failed to fetch block %s from %s (peer: %s), trying alternative sources: %v", blockFound.hash.String(), blockFound.baseURL, blockFound.peerID, err)
 
 		// Try alternative sources
@@ -1925,6 +1945,13 @@ func (u *Server) processBlockWithPriority(ctx context.Context, blockFound proces
 	}
 
 	return err
+}
+
+// isRefetchableBlockError reports whether a block should be fetched again from another source:
+// the fetch failed, the peer misbehaved, or the peer served a corrupt body for the block hash. A
+// corrupt body never marks the block invalid, so another peer may still serve the real one.
+func isRefetchableBlockError(err error) bool {
+	return errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err) || errors.IsBlockCorrupt(err)
 }
 
 // deriveBlockHeight verifies a supplied height against the stored parent.
