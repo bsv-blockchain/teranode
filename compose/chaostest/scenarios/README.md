@@ -54,7 +54,7 @@ Results (3 Nov 2026, teranode `teranode:latest`, broadcaster `ghcr.io/bsv-blockc
 | `multinode-bcast-node-down` | passed, 1 finding | MINED waits for teranode1: merkle-service keeps fetching block data from its datahub (`10.200.0.11`) and does not fail over to B or C |
 | `multinode-bcast-broadcaster-restart` | fails at "start the broadcaster" | after a clean stop/start the broadcaster answers 404 for a tx it had reported SEEN_ON_NETWORK (pebble WAL replayed; config uses `kafka.backend: memory`) |
 
-`sim up` warms merkle-service by putting a placeholder on its `subtree`, `block` and
-`subtree-work` topics: each of its stages starts only after the one before reads a first
-message, so on a new chain the first tx would otherwise wait for a block with a subtree before
-SEEN_ON_NETWORK, and for a full replay before MINED.
+merkle-service is pinned to its 11 Nov 2026 build. The June build needed `sim up` to put a
+placeholder on its `subtree`, `block` and `subtree-work` topics to start its stages; the new
+build starts them at once and retries an undecodable `block` message forever, so the
+placeholder stopped it building any proofs and was removed.

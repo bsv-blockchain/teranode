@@ -1412,7 +1412,11 @@ ARCADE_PORT="${ARCADE_HOST_PORT:-18080}"
 # and subtrees over p2p and calls arcade back with merkle proofs, which the
 # wallet waits for. sqlite and in-memory blobs; state goes with the container.
 MERKLE_CONTAINER="merkle-service-multinode"
-MERKLE_IMAGE="${MERKLE_IMAGE:-ghcr.io/bsv-blockchain/merkle-service@sha256:ff4ae409df2680c54267c27887dc1744fb3b64e5ddc5636882185ce82b35ced3}"
+# Pinned to the 11 Nov 2026 build: the June build started each stage only after
+# the one before had read a message, which needed a warm-up placeholder on the
+# topics; this one starts them all at once, and retries an undecodable block
+# message forever, so no placeholder may be put on its topics.
+MERKLE_IMAGE="${MERKLE_IMAGE:-ghcr.io/bsv-blockchain/merkle-service@sha256:f0576e2038c984d0ca6d585c7c0d073efd2deca6cd9cbf09e95cf51a7e2667d5}"
 
 # The wallet (chaos-test's 'wallet' profile): go-wallet-toolbox's storage
 # server on postgres, broadcasting through arcade, and walletd, the small
@@ -1554,36 +1558,15 @@ PY
   done
 }
 
-# merkle_warm starts merkle-service's pipeline. Each stage starts only after
-# the one before has read a first message: the block processor waits for a
-# subtree message, the subtree worker for a block message, callback delivery
-# for a subtree-work message. Coinbase-only blocks produce no subtree or
-# subtree-work messages, so on a new chain the first scenario tx gets no
-# SEEN_ON_NETWORK until a block with a subtree is processed, and no MINED
-# until the whole chain is replayed (18 minutes at height 1100). One
-# placeholder on each topic starts every stage. merkle-service logs each as
-# undecodable; the block one stays uncommitted until the next real block,
-# which is processed normally and commits past it.
-merkle_warm() {
-  local port="${MERKLE_HOST_PORT:-18090}" kafka="${KAFKA_CONTAINER:-kafka-shared-multinode}"
+# merkle_ready waits for merkle-service's health endpoint.
+merkle_ready() {
+  local port="${MERKLE_HOST_PORT:-18090}"
   local deadline=$((SECONDS + 60))
   until curl -sf -m 2 "http://localhost:$port/health" >/dev/null 2>&1; do
     if ((SECONDS > deadline)); then
       echo "error: $MERKLE_CONTAINER did not come up; last log lines:" >&2
       docker logs --tail 30 "$MERKLE_CONTAINER" >&2 || true
       exit 1
-    fi
-    sleep 1
-  done
-  local topic
-  for topic in subtree block subtree-work; do
-    echo "multinode.sh warm-up" | docker exec -i "$kafka" rpk topic produce "$topic" >/dev/null
-  done
-  deadline=$((SECONDS + 60))
-  until docker logs "$MERKLE_CONTAINER" 2>&1 | grep -q 'starting callback delivery service'; do
-    if ((SECONDS > deadline)); then
-      echo "warning: $MERKLE_CONTAINER has not started callback delivery; SEEN_ON_NETWORK and MINED may be late" >&2
-      return 0
     fi
     sleep 1
   done
@@ -1694,7 +1677,7 @@ with open(sys.argv[2], "w") as f:
   if $arcade; then
     merkle_up "$inv" "$network"
     arcade_up "$inv" "$network"
-    merkle_warm
+    merkle_ready
     python3 -I - "$cfg/inventory.json" "$ARCADE_CONTAINER" "$ARCADE_PORT" "$MERKLE_CONTAINER" "${MERKLE_HOST_PORT:-18090}" <<'PY'
 import json, sys
 path, name, port, merkle, merkle_port = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
