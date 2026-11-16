@@ -148,6 +148,7 @@ func NewBlockHeaderMetaFromBytes(b []byte) (*BlockHeaderMeta, error) {
 		offset += 4 + len32
 	} else {
 		m.Miner = ""
+		offset += 4
 	}
 
 	// read in the peer ID

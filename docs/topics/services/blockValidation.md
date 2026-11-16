@@ -662,12 +662,9 @@ The Block Validation service implements a sophisticated fork manager to track an
 
 ##### Fork States and Lifecycle
 
-The fork manager tracks forks through four distinct states:
+Every fork starts in the **Active** state. The cleanup routine marks an Active fork **Stale** when it has had no activity for `MaxAge` (default: 1 hour) and no worker is processing one of its blocks, and removes it in the same pass, subject to the retention policy below.
 
-- **Active**: Fork is currently being processed and built upon
-- **Stale**: Fork has had no activity for an extended period (default: 1 hour)
-- **Resolved**: Fork has been resolved to the main chain or abandoned
-- **Orphaned**: Fork is too far behind the main chain (beyond coinbase maturity)
+The `ForkState` type also defines **Resolved** and **Orphaned**, and the cleanup routine still handles them, but no code path sets either state.
 
 ##### Fork Registration and Tracking
 
@@ -698,30 +695,13 @@ defer guard.Release()
 // Process block
 ```
 
-##### Fork Resolution
-
-Forks are resolved when:
-
-1. **Main Chain Updated**: A fork block becomes the new main chain tip
-2. **Checkpoint Verification**: Fork passes through a known checkpoint
-3. **Manual Resolution**: Operator triggers reconsideration
-
-When a fork is resolved, the fork manager:
-
-- Marks fork state as `Resolved`
-- Notifies registered callbacks with resolution details
-- Records resolution metrics (depth, lifetime, outcome)
-- Schedules cleanup after grace period (5 minutes)
-
 ##### Fork Cleanup
 
-The fork manager runs an automatic cleanup routine (configurable interval, default: 5 minutes) that:
+The fork manager runs a cleanup routine every `CheckInterval` (default: 5 minutes) that:
 
-- Removes resolved forks after grace period
-- Abandons stale forks with no activity
-- Orphans forks too far behind main chain
-- Applies retention policy to limit memory usage
-- Updates aggregate metrics (average depth, longest fork, etc.)
+- Marks Active forks with no activity for `MaxAge` and no active worker as Stale, and selects them for removal
+- Applies a retention policy: when more than `MaxInactiveForks` (default: 100) forks are tracked, a pass removes only enough of the selected forks, least recently active first, to bring the count down to that number
+- Records each removed fork's lifetime and depth, then updates the aggregate metrics (average depth, longest fork, and the rest)
 
 ##### Integration with Block Priority Queue
 

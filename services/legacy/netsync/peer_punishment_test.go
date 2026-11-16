@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
@@ -19,7 +18,6 @@ import (
 	blockchain2 "github.com/bsv-blockchain/teranode/services/blockchain"
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
-	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -191,7 +189,6 @@ func TestPeer_ARejectedBodyDropsTheAssociationPrimary(t *testing.T) {
 	sm.peerStates = txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState]()
 	sm.peerStates.Set(primary, &peerSyncState{
 		syncCandidate: true,
-		requestedTxns: expiringmap.New[chainhash.Hash, struct{}](time.Hour),
 	})
 
 	sm.blockDownloads = newBlockDownloadTracker(time.Hour)

@@ -19,7 +19,7 @@ import (
 // conflicting and mined records and paginated child records must not.
 func TestUnminedIterator_RawScanMatchesStore(t *testing.T) {
 	for _, storeInpoints := range []bool{false, true} {
-		t.Run(map[bool]string{false: "without inpoints", true: "with inpoints"}[storeInpoints], func(t *testing.T) {
+		t.Run(map[bool]string{false: "subtree meta off", true: "subtree meta on"}[storeInpoints], func(t *testing.T) {
 			logger := ulogger.NewErrorTestLogger(t)
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.BlockAssembly.StoreTxInpointsForSubtreeMeta = storeInpoints
@@ -110,12 +110,10 @@ func TestUnminedIterator_RawScanMatchesStore(t *testing.T) {
 				require.Positive(t, u.UnminedSince)
 				require.NotNil(t, u.TxInpoints)
 
-				if storeInpoints {
-					require.Equal(t, []chainhash.Hash{*tests.Tx.TxIDChainHash()}, u.TxInpoints.GetParentTxHashes(), "inpoints of %s", hash)
-					require.Equal(t, tx.Inputs[0].PreviousTxOutIndex, u.TxInpoints.GetTxInpoints()[0].Index, "vout of %s", hash)
-				} else {
-					require.Empty(t, u.TxInpoints.GetParentTxHashes())
-				}
+				// parent links come back in both modes: the setting only decides
+				// whether subtree meta files are written
+				require.Equal(t, []chainhash.Hash{*tests.Tx.TxIDChainHash()}, u.TxInpoints.GetParentTxHashes(), "inpoints of %s", hash)
+				require.Equal(t, tx.Inputs[0].PreviousTxOutIndex, u.TxInpoints.GetTxInpoints()[0].Index, "vout of %s", hash)
 			}
 		})
 	}

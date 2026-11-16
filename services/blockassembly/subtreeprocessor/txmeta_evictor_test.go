@@ -1,6 +1,7 @@
 package subtreeprocessor
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net/url"
@@ -9,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -16,7 +19,9 @@ import (
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	inmemkafka "github.com/bsv-blockchain/teranode/util/kafka/in_memory_kafka"
@@ -151,61 +156,103 @@ const (
 	failChildMark
 )
 
-// newConflictTestProcessor builds a processor over a mocked UTXO store whose
-// SetConflicting reports C as L's spending child.
-//
-// The mock is deliberate: the sqlitememory store deadlocks inside SetConflicting
-// (it reads through a second pooled connection on shared-cache SQLite while its
-// own write transaction is open), so ProcessConflicting cannot run end to end on
-// it. The existing TestProcessConflictingTransactions makes the same trade.
-// failure selects where ProcessConflicting fails, if at all.
+// failingConflictStore wraps a real UTXO store and injects one conflictFailure.
+type failingConflictStore struct {
+	utxo.Store
+	failure conflictFailure
+	winner  chainhash.Hash
+	fired   bool
+}
+
+func (s *failingConflictStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
+	if s.failure == failWinnerLookup && *hash == s.winner {
+		return nil, errors.NewStorageError("store down")
+	}
+
+	return s.Store.Get(ctx, hash, fields...)
+}
+
+// SetConflicting fails the first cascade write after the store has applied it, so the loser and
+// its child are already conflicting when ProcessConflicting sees the error.
+func (s *failingConflictStore) SetConflicting(ctx context.Context, hashes []chainhash.Hash, value bool) ([]*utxo.Spend, []chainhash.Hash, error) {
+	spends, children, err := s.Store.SetConflicting(ctx, hashes, value)
+	if err != nil || s.failure != failChildMark || !value || s.fired {
+		return spends, children, err
+	}
+
+	s.fired = true
+
+	return spends, children, errors.NewStorageError("child write failed")
+}
+
+func conflictTestSpendTx(t *testing.T, parent *bt.Tx, satoshis uint64) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+	require.NoError(t, tx.From(parent.TxIDChainHash().String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+	tx.Outputs = []*bt.Output{{Satoshis: satoshis, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
+
+	return tx
+}
+
+// newConflictTestProcessor builds a processor over a real sqlitememory UTXO store that holds a
+// loser L, its child C and a conflicting winner W that double spends L's input. failure selects
+// where ProcessConflicting fails, if at all.
 func newConflictTestProcessor(t *testing.T, evictor *TxMetaEvictor, failure conflictFailure) (*SubtreeProcessor, conflictScenario) {
 	t.Helper()
 
+	ctx := t.Context()
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 32
+
+	storeURL, err := url.Parse("sqlitememory:///txmeta_evictor")
+	require.NoError(t, err)
+
+	sqlStore, err := sql.New(ctx, ulogger.TestLogger{}, tSettings, storeURL)
+	require.NoError(t, err)
+
+	parent := bt.NewTx()
+	parentIn := &bt.Input{PreviousTxOutIndex: 0, PreviousTxSatoshis: 200000, SequenceNumber: 0xFFFFFFFF, UnlockingScript: bscript.NewFromBytes([]byte{})}
+	require.NoError(t, parentIn.PreviousTxIDAdd(&chainhash.Hash{7, 7, 7}))
+	parent.Inputs = []*bt.Input{parentIn}
+	parent.Outputs = []*bt.Output{{Satoshis: 100000, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
+	_, _, err = sqlStore.SpendAndCreate(ctx, parent, 1, utxo.WithCreateOnly())
+	require.NoError(t, err)
+
+	loser := conflictTestSpendTx(t, parent, 90000)
+	_, _, err = sqlStore.SpendAndCreate(ctx, loser, 2)
+	require.NoError(t, err)
+
+	child := conflictTestSpendTx(t, loser, 80000)
+	_, _, err = sqlStore.SpendAndCreate(ctx, child, 2)
+	require.NoError(t, err)
+
+	winner := conflictTestSpendTx(t, parent, 70000)
+	_, _, err = sqlStore.SpendAndCreate(ctx, winner, 2, utxo.WithCreateOnly(), utxo.WithConflicting(true))
+	require.NoError(t, err)
+
 	scenario := conflictScenario{
-		loser:  chainhash.HashH([]byte("loser")),
-		child:  chainhash.HashH([]byte("child-of-loser")),
-		winner: chainhash.HashH([]byte("winner")),
+		loser:  *loser.TxIDChainHash(),
+		child:  *child.TxIDChainHash(),
+		winner: *winner.TxIDChainHash(),
 	}
 
-	store := new(utxo.MockUtxostore)
-
-	if failure == failWinnerLookup {
-		store.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.NewStorageError("store down"))
-	} else {
-		store.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Conflicting: true}, nil)
-	}
-
-	store.On("GetCounterConflicting", mock.Anything, scenario.winner).Return([]chainhash.Hash{scenario.loser}, nil)
-	store.On("SetConflicting", mock.Anything, []chainhash.Hash{scenario.loser}, true).
-		Return([]*utxo.Spend{}, []chainhash.Hash{scenario.child}, nil)
-	if failure == failChildMark {
-		store.On("SetConflicting", mock.Anything, []chainhash.Hash{scenario.child}, true).
-			Return([]*utxo.Spend(nil), []chainhash.Hash(nil), errors.NewStorageError("child write failed"))
-	} else {
-		store.On("SetConflicting", mock.Anything, []chainhash.Hash{scenario.child}, true).
-			Return([]*utxo.Spend{}, []chainhash.Hash{}, nil)
-	}
-	store.On("SetConflicting", mock.Anything, []chainhash.Hash{scenario.winner}, false).
-		Return([]*utxo.Spend{}, []chainhash.Hash{}, nil)
-	store.On("Unspend", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	store.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, nil)
-	store.On("SetLocked", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	store.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	store := &failingConflictStore{Store: sqlStore, failure: failure, winner: scenario.winner}
 
 	bc := new(blockchain.Mock)
 	bc.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 	bc.On("CheckBlockIsAncestorOfBlock", mock.Anything, mock.Anything, mock.Anything).Return(false, nil)
-
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 32
+	// The rollback's chain guard looks these up. None of the scenario's transactions is mined.
+	bc.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, errors.NewBlockNotFoundError("test block is not stored"))
+	bc.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(false, nil)
 
 	var opts []Options
 	if evictor != nil {
 		opts = append(opts, WithTxMetaEvictor(evictor))
 	}
 
-	stp, err := NewSubtreeProcessor(t.Context(), ulogger.TestLogger{}, tSettings, blob_memory.New(), bc, store,
+	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, blob_memory.New(), bc, store,
 		make(chan NewSubtreeRequest, 10), opts...)
 	require.NoError(t, err)
 

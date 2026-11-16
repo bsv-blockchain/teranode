@@ -1424,8 +1424,9 @@ func TestValidator_UnlockLockedTxOnExit_KeepsLockOnError(t *testing.T) {
 	originalErr := errors.NewProcessingError("[Validate][%s] error getting tx inpoints", tx.TxID())
 	deferredErr := error(originalErr)
 	delivered := false
+	shedInBlock := false
 
-	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered)
+	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered, &shedInBlock)
 
 	require.True(t, txMetaData.Locked, "an undelivered tx must stay locked, or a child can be mined without its parent")
 	require.Same(t, originalErr, deferredErr, "the original, more informative error must be preserved")
@@ -1473,8 +1474,9 @@ func TestValidator_UnlockLockedTxOnExit_ClearsLockOnSuccess(t *testing.T) {
 	var deferredErr error
 
 	delivered := true
+	shedInBlock := false
 
-	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered)
+	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered, &shedInBlock)
 
 	require.NoError(t, deferredErr)
 	require.False(t, txMetaData.Locked, "a delivered tx must be unlocked on the success path")
@@ -1512,8 +1514,9 @@ func TestValidator_UnlockLockedTxOnExit_NoopWhenNotLocked(t *testing.T) {
 	var deferredErr error
 
 	delivered := true
+	shedInBlock := false
 
-	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered)
+	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered, &shedInBlock)
 
 	require.NoError(t, deferredErr)
 }
@@ -1551,8 +1554,9 @@ func TestValidator_UnlockLockedTxOnExit_SetsErrOnUnlockFailure(t *testing.T) {
 	var deferredErr error
 
 	delivered := true
+	shedInBlock := false
 
-	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered)
+	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered, &shedInBlock)
 
 	require.Error(t, deferredErr, "the unlock failure must be surfaced via the deferred error")
 	require.ErrorIs(t, deferredErr, errors.ErrTxUnlockFailed)

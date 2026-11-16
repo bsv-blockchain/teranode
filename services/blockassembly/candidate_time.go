@@ -2,10 +2,13 @@ package blockassembly
 
 import (
 	"context"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -86,7 +89,7 @@ func (b *BlockAssembler) candidateTime(ctx context.Context, parentHeader *model.
 	if entry == nil {
 		// mtpFloor has already logged the cause. Serve the wall clock rather
 		// than stopping mining on a blockchain hiccup.
-		return timeNow, nil
+		return b.holdCandidateTime(parentHeader, timeNow, 0), nil
 	}
 
 	// Check the ceiling before applying the floor: when the two cross there is
@@ -135,7 +138,80 @@ func (b *BlockAssembler) candidateTime(ctx context.Context, parentHeader *model.
 		timeNow = entry.minTime
 	}
 
-	return timeNow, nil
+	return b.holdCandidateTime(parentHeader, timeNow, entry.minTime), nil
+}
+
+func (b *BlockAssembler) holdCandidateTime(parentHeader *model.BlockHeader, timeNow, minTime int64) int64 {
+	held := b.delayEmergencyDifficulty(parentHeader, timeNow, minTime)
+	if held == timeNow {
+		return held
+	}
+
+	parentHash := parentHeader.Hash()
+
+	if b.heldParents.firstSight(*parentHash) {
+		b.logger.Infof("[candidateTime] holding candidate time at %d for parent %s to delay the minimum-difficulty rule by %s (blockassembly_emergencyDifficultyDelay)", held, parentHash.String(), b.settings.BlockAssembly.EmergencyDifficultyDelay)
+	}
+
+	return held
+}
+
+const heldParentsRemembered = 16
+
+type heldParentLatch struct {
+	mu   sync.Mutex
+	seen []chainhash.Hash
+}
+
+func (l *heldParentLatch) firstSight(parent chainhash.Hash) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if slices.Contains(l.seen, parent) {
+		return false
+	}
+
+	if len(l.seen) == heldParentsRemembered {
+		l.seen = l.seen[1:]
+	}
+
+	l.seen = append(l.seen, parent)
+
+	return true
+}
+
+func minDifficultyRule(params *chaincfg.Params) bool {
+	return params.ReduceMinDifficulty && !params.NoDifficultyAdjustment
+}
+
+func (b *BlockAssembler) currentDifficultyTime(parentHeader *model.BlockHeader) int64 {
+	var minTime int64
+
+	if entry := b.memoizedMtpFloor(parentHeader.Hash()); entry != nil {
+		minTime = entry.minTime
+	}
+
+	return b.delayEmergencyDifficulty(parentHeader, time.Now().Unix(), minTime)
+}
+
+func (b *BlockAssembler) delayEmergencyDifficulty(parentHeader *model.BlockHeader, timeNow, minTime int64) int64 {
+	if b.settings == nil || b.settings.ChainCfgParams == nil {
+		return timeNow
+	}
+
+	params := b.settings.ChainCfgParams
+	delay := int64(b.settings.BlockAssembly.EmergencyDifficultyDelay / time.Second)
+
+	if delay <= 0 || !minDifficultyRule(params) {
+		return timeNow
+	}
+
+	threshold := int64(parentHeader.Timestamp) + 2*int64(params.TargetTimePerBlock/time.Second)
+	if timeNow <= threshold || timeNow > threshold+delay || minTime > threshold {
+		return timeNow
+	}
+
+	return threshold
 }
 
 // MinCandidateTime returns the median-time-past floor candidateTime computed for

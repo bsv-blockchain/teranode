@@ -715,6 +715,10 @@ type RPCServer struct {
 	// validatorClient provides access to the transaction validator service
 	// Used for synchronous transaction validation in sendrawtransaction RPC
 	validatorClient validator.Interface
+
+	// unminedTxGate makes sendrawtransaction refuse a transaction while the node
+	// syncs (issue 2003). nil accepts everything.
+	unminedTxGate *blockchain.UnminedTxGate
 }
 
 // httpStatusLine returns a response Status-Line (RFC 2616 Section 6.1)
@@ -1467,6 +1471,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		p2pClient:              p2pClient,
 		txStore:                txStore,
 		validatorClient:        validatorClient,
+		unminedTxGate:          blockchain.NewUnminedTxGate(logger, blockchainClient, blockchain.UnminedTxRouteRPCSendRawTx),
 	}
 
 	rpcUser := tSettings.RPC.RPCUser

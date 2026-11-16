@@ -36,11 +36,32 @@ import (
 // each subtree's ConflictingNodes trailer, which records what was true at blessing
 // time and is never rewritten for a loser that was never mined (issue #1742), so
 // the trailer no longer decides anything and these tests must drive the store.
+//
+// It answers ConflictingTxHashes from the same set, the way a store with a
+// conflicting index does, unless unindexed is set, which sends the check down its
+// per-transaction fallback.
 type conflictingFlagStore struct {
 	utxo.Store
 
 	conflicting map[chainhash.Hash]bool
 	notFound    map[chainhash.Hash]bool
+	unindexed   bool
+}
+
+func (c *conflictingFlagStore) ConflictingTxHashes(_ context.Context) ([]chainhash.Hash, bool, error) {
+	if c.unindexed {
+		return nil, false, nil
+	}
+
+	hashes := make([]chainhash.Hash, 0, len(c.conflicting))
+
+	for h, flagged := range c.conflicting {
+		if flagged && !c.notFound[h] {
+			hashes = append(hashes, h)
+		}
+	}
+
+	return hashes, true, nil
 }
 
 func (c *conflictingFlagStore) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
@@ -70,14 +91,16 @@ func flagInStore(server *Server, conflicting ...chainhash.Hash) {
 }
 
 // missingInStore makes the store report the given transactions as absent, the way
-// both production backends do: item.Err set, item.Data nil.
+// both production backends do: item.Err set, item.Data nil. The store is
+// unindexed, so the check takes its per-transaction fallback, which is where an
+// absent record has to be told apart from a read failure.
 func missingInStore(server *Server, missing ...chainhash.Hash) {
 	set := make(map[chainhash.Hash]bool, len(missing))
 	for _, h := range missing {
 		set[h] = true
 	}
 
-	server.utxoStore = &conflictingFlagStore{Store: server.utxoStore, notFound: set}
+	server.utxoStore = &conflictingFlagStore{Store: server.utxoStore, notFound: set, unindexed: true}
 }
 
 // buildCachedSubtree stores a blessed subtree containing txHash and returns the

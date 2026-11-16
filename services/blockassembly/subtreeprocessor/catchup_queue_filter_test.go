@@ -151,6 +151,8 @@ func TestReorgBlocks_CatchUp_FiltersQueueAgainstEveryBlock(t *testing.T) {
 			require.NotContains(t, hashes, f.txA, "queued tx mined in an earlier catch-up block must not re-enter the subtrees")
 			require.NotContains(t, hashes, f.txB, "queued tx mined in the last catch-up block must not re-enter the subtrees")
 			require.Contains(t, hashes, f.txC, "queued tx mined in no block must be kept")
+			require.Equal(t, uint64(len(hashes)), f.stp.txCount.Load(), "the catch-up leaves the transaction count equal to what the subtrees hold") // nolint:gosec
+			require.Equal(t, int64(len(hashes)), f.stp.HeldCount(), "so the held total does not read low")                                           // nolint:gosec
 		})
 	}
 }
@@ -184,4 +186,44 @@ func TestReorgBlocks_CatchUp_RollbackKeepsDrainedBacklog(t *testing.T) {
 			require.Contains(t, hashes, f.txC)
 		})
 	}
+}
+
+type heldProbeTxMap struct {
+	TxInpointsMap
+	probe func()
+}
+
+func (m *heldProbeTxMap) SetIfNotExists(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) (*subtreepkg.TxInpoints, bool) {
+	m.probe()
+
+	return m.TxInpointsMap.SetIfNotExists(hash, inpoints)
+}
+
+func TestReorgBlocks_CatchUp_DrainKeepsTheHeldTotalAtEveryChunkBoundary(t *testing.T) {
+	f := newCatchUpQueueFixture(t, true)
+	f.stp.queue.maxHeld = 1 << 20
+
+	for i := 0; i < 4; i++ {
+		nodes, inpoints := distinctNodes(3, "catchup-held-"+string(rune('a'+i)))
+		f.stp.queue.enqueueBatch(nodes, inpoints)
+	}
+
+	startHeld := f.stp.HeldCount()
+
+	var lowest int64 = startHeld
+
+	f.stp.currentTxMap = &heldProbeTxMap{
+		TxInpointsMap: f.stp.currentTxMap,
+		probe: func() {
+			if held := f.stp.HeldCount(); held < lowest {
+				lowest = held
+			}
+		},
+	}
+
+	require.NoError(t, f.stp.reorgBlocks(t.Context(), []*model.Block{}, []*model.Block{f.block1, f.block2}))
+
+	require.Zero(t, f.stp.queue.length(), "precondition: the catch-up drained the backlog across several chunks")
+	require.GreaterOrEqual(t, lowest, startHeld,
+		"a producer reading the held total between two chunks of the drain must not see the transactions the earlier chunks placed missing")
 }

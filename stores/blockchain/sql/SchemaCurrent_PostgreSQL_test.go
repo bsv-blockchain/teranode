@@ -226,3 +226,84 @@ func TestCreatePostgresSchema_FastPathOnSecondCall(t *testing.T) {
 
 	assert.Equal(t, oidBefore, oidAfter, "fast path must not re-create objects")
 }
+
+// An index the schema has retired must make the probe report not-current, or the
+// fast path would skip the DDL sequence and the DROP INDEX would never run on an
+// existing database.
+func TestIsBlockchainSchemaCurrent_RetiredIndexPresent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	_, err = db.Exec(`CREATE INDEX idx_inserted_at ON blocks (inserted_at)`)
+	require.NoError(t, err)
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.False(t, current, "schema must not be current while a retired index exists")
+
+	// Without indexes the DDL never drops it, so its presence must not force a rerun.
+	current, err = isBlockchainSchemaCurrent(db, false)
+	require.NoError(t, err)
+	require.True(t, current, "the retired-index check applies only with indexes")
+}
+
+// A database created by an older version still carries idx_inserted_at. Running the
+// schema setup against it must drop the index and leave the schema current.
+func TestCreatePostgresSchema_DropsRetiredIndex(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	_, err = db.Exec(`CREATE INDEX idx_inserted_at ON blocks (inserted_at)`)
+	require.NoError(t, err)
+
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true))
+
+	var exists bool
+	require.NoError(t, db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'idx_inserted_at' AND relkind = 'i')`,
+	).Scan(&exists))
+	require.False(t, exists, "idx_inserted_at must be dropped")
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.True(t, current, "schema must be current once the retired index is gone")
+}
+
+// A failed DROP INDEX on the retired index must stop the schema setup with an
+// error rather than carry on. A table with the index's name makes Postgres refuse
+// the drop, because the name is not an index.
+func TestCreatePostgresSchema_RetiredIndexDropFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	_, err = db.Exec(`CREATE TABLE idx_inserted_at (id INTEGER)`)
+	require.NoError(t, err)
+
+	err = createPostgresSchemaUnlocked(db, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "could not drop idx_inserted_at index")
+}

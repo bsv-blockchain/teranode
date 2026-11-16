@@ -154,3 +154,24 @@ func TestSettleStale_FinishesItsWritersOutsideTheSettlingLock(t *testing.T) {
 	require.True(t, ok, "a read loop's settle must not wait while the sweep finishes a stale writer")
 	require.Zero(t, reg.size(), "the stale writer's window is closed")
 }
+
+// panicDelStore is a real in-memory blob store whose Del panics.
+type panicDelStore struct {
+	blob.Store
+}
+
+func (panicDelStore) Del(context.Context, []byte, fileformat.FileType, ...options.FileOption) error {
+	panic("del exploded")
+}
+
+// A Del that panics still ends its delete. Left marked deleting, the key held
+// every later attempt on it for good, and with it the read loop of any peer
+// delivering a block with that subtree; the panic itself is recovered above.
+func TestSubtreeAdoptions_ADelThatPanicsStillEndsTheDelete(t *testing.T) {
+	a := newSubtreeAdoptions()
+	key := writtenSubtree{Hash: chainhash.Hash{0x71}, FileType: fileformat.FileTypeSubtreeToCheck}
+
+	require.Panics(t, func() { _, _ = a.deleteUnlessAdopted(context.Background(), panicDelStore{Store: memory.New()}, key) })
+
+	require.True(t, returnsWithin(time.Second, func() { a.attempt(key) }), "an attempt after the panicked delete must not wait on it")
+}

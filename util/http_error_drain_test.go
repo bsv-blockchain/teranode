@@ -42,68 +42,15 @@ func errorBodyServer(t *testing.T, status, size int) (*httptest.Server, *atomic.
 	return srv, &conns
 }
 
-// TestBuildHTTPError_TruncatesAndMarks pins that an oversized error body is cut at
-// the documented cap and SAYS SO. A silent truncation is a bad diagnostic in exactly
-// the place an operator is trying to diagnose something: the message looked like the
-// peer's complete error.
-func TestBuildHTTPError_TruncatesAndMarks(t *testing.T) {
-	srv, _ := errorBodyServer(t, http.StatusBadGateway, 10*1024)
-
-	_, err := DoHTTPRequest(context.Background(), srv.URL)
-	require.Error(t, err)
-
-	msg := err.Error()
-	require.Contains(t, msg, "(truncated)", "a cut-off peer error must be marked as such")
-	require.Less(t, len(msg), 10*1024, "the error must not retain the whole body")
-}
-
-// TestBuildHTTPError_ExactSizeBodyNotMarkedTruncated pins the boundary on both sides.
-//
-// io.LimitReader(body, max) returns exactly max bytes both for a body of exactly max
-// and for a longer one, so a length-equality test would report a COMPLETE peer error
-// as cut short. Detection therefore reads one byte past the cap and marks truncation
-// only when that byte actually arrives.
-func TestBuildHTTPError_ExactSizeBodyNotMarkedTruncated(t *testing.T) {
-	cases := []struct {
-		name      string
-		size      int
-		truncated bool
-	}{
-		{name: "one below the cap", size: maxHTTPErrorBodyBytes - 1, truncated: false},
-		{name: "exactly the cap", size: maxHTTPErrorBodyBytes, truncated: false},
-		{name: "one above the cap", size: maxHTTPErrorBodyBytes + 1, truncated: true},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv, _ := errorBodyServer(t, http.StatusBadGateway, tc.size)
-
-			_, err := DoHTTPRequest(context.Background(), srv.URL)
-			require.Error(t, err)
-
-			if tc.truncated {
-				require.Contains(t, err.Error(), "(truncated)")
-				return
-			}
-
-			require.NotContains(t, err.Error(), "(truncated)",
-				"a body that fits within the cap must not be reported as cut short")
-			require.Contains(t, err.Error(), strings.Repeat("x", tc.size),
-				"a body that fits must appear in full")
-		})
-	}
-}
-
 // TestBuildHTTPError_DrainsBodyForConnectionReuse pins the regression the drain fixes.
 //
 // http.Transport only returns a connection to the idle pool once its body has been
-// read to EOF. Capping the read at maxHTTPErrorBodyBytes and closing therefore turned
-// every error body larger than the cap into a fresh TCP (and, over TLS, a fresh
-// handshake) per request — on the high-rate failure path, which is precisely when
-// handshakes hurt most.
+// read to EOF. Closing an unread error body therefore turns every error response into
+// a fresh TCP (and, over TLS, a fresh handshake) per request — on the high-rate failure
+// path, which is precisely when handshakes hurt most.
 //
-// The body here is a few KiB: over the snippet cap, well under the drain budget, so
-// the remainder is drained and the connection reused.
+// The body here is a few KiB, well under the drain budget, so it is drained and the
+// connection reused.
 //
 // Reuse only happens because the drain is CALLER-SYNCHRONOUS up to
 // maxHTTPErrorBodyDrainWait. DoHTTPRequest defers cancelFn(), which cancels the request
@@ -135,7 +82,7 @@ func TestBuildHTTPError_DrainsBodyForConnectionReuse(t *testing.T) {
 // and deterministically — no server, no goroutine, no timing.
 //
 // An unbounded io.Copy(io.Discard, body) would restore connection reuse while reopening
-// the hole the snippet cap exists to close: a hostile peer answering with an error
+// the hole the drain cap exists to close: a hostile peer answering with an error
 // status and then streaming forever.
 func TestDrainErrorBody_BoundedAndCloses(t *testing.T) {
 	t.Run("a body larger than the budget is abandoned at the cap", func(t *testing.T) {
@@ -250,20 +197,16 @@ func TestBuildHTTPError_AbandonsUnboundedBody(t *testing.T) {
 	}
 }
 
-// TestBuildHTTPError_RemainderDrainDoesNotBlockCaller pins that the REMAINDER drain is
-// bounded in the caller's TIME, not just in bytes.
+// TestBuildHTTPError_RemainderDrainDoesNotBlockCaller pins that the drain is bounded in
+// the caller's TIME, not just in bytes.
 //
-// Response-body reads honour the request context, so an unbounded-in-time remainder
-// drain let a peer dribbling up to the 64 KiB budget hold the caller for the whole
+// Response-body reads honour the request context, so an unbounded-in-time drain let a peer dribbling up to the 64 KiB budget hold the caller for the whole
 // http_streaming_timeout (5 minutes by default), compounded by up to six 503 retries.
 // The drain now waits at most maxHTTPErrorBodyDrainWait and then abandons the body to a
 // background goroutine.
 //
-// The handler delivers the snippet bytes IMMEDIATELY — so the synchronous snippet read
-// completes — and then stalls. Anything holding the caller past that point is the
-// remainder drain. Note what this does NOT claim: the snippet read itself is bounded in
-// bytes but not in time, and that exposure is pre-existing (it replaced an unbounded
-// io.ReadAll).
+// The handler delivers some bytes IMMEDIATELY and then stalls. Anything holding the
+// caller past that point is the drain.
 //
 // The wall-clock assertion is a hang detector with a very large margin — expected
 // elapsed is the 250ms drain budget against a 10s ceiling — so a loaded runner cannot
@@ -275,15 +218,13 @@ func TestBuildHTTPError_RemainderDrainDoesNotBlockCaller(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 
-		// Enough to satisfy the snippet read (cap + the one detection byte) and to put
-		// the response over the truncation threshold.
-		_, _ = w.Write([]byte(strings.Repeat("x", maxHTTPErrorBodyBytes+1)))
+		_, _ = w.Write([]byte(strings.Repeat("x", 4*1024)))
 
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
 
-		// Now stall with the body still open: only the remainder drain is waiting.
+		// Now stall with the body still open: only the drain is waiting.
 		select {
 		case <-r.Context().Done():
 		case <-stalled:
@@ -305,9 +246,8 @@ func TestBuildHTTPError_RemainderDrainDoesNotBlockCaller(t *testing.T) {
 	select {
 	case err := <-done:
 		require.Error(t, err, "the error status still surfaces")
-		require.Contains(t, err.Error(), "truncated", "the snippet read completed and reported truncation")
 	case <-time.After(10 * time.Second):
-		t.Fatal("buildHTTPError did not return: the caller is being held by the remainder drain")
+		t.Fatal("buildHTTPError did not return: the caller is being held by the drain")
 	}
 }
 
@@ -388,7 +328,7 @@ func TestDoHTTPRequestForStreaming_HTMLResponseClosesBody(t *testing.T) {
 
 // TestBuildHTTPError_StatusClassMapping is the regression guard for the branching
 // callers rely on: the status-to-error-type mapping must be untouched by the drain
-// and truncation-marker changes.
+// change.
 func TestBuildHTTPError_StatusClassMapping(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -401,9 +341,8 @@ func TestBuildHTTPError_StatusClassMapping(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// A body over the snippet cap, so the mapping is asserted on the same path
-			// that now truncates and drains.
-			srv, _ := errorBodyServer(t, tc.status, maxHTTPErrorBodyBytes+512)
+			// A non-empty body, so the mapping is asserted on the path that drains it.
+			srv, _ := errorBodyServer(t, tc.status, 4*1024)
 
 			_, err := DoHTTPRequest(context.Background(), srv.URL)
 			require.Error(t, err)

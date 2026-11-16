@@ -20,7 +20,6 @@ import (
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -252,6 +251,34 @@ func blockIDToUint32(id uint64, blockHash string) (uint32, error) {
 	return v, nil
 }
 
+// setQuickBlockID gives block the id quick validation stamps on its transactions,
+// once per block, from the first batch. The id always comes from block's own
+// reservation through AssignBlockID, which returns the same id for the same hash
+// while the reservation exists, so a retry stamps the id its first attempt used.
+//
+// The id is never read back from the transactions. A transaction's recorded ids
+// can belong to other blocks that hold it too, such as a stored fork, and StoreBlock
+// refuses an id another block holds, so taking one of them wedged the block.
+//
+// If sweepStaleReservations has deleted the reservation, a retry gets a new id.
+// The retry restamps every transaction that already exists with it (SetMinedMulti
+// in createAndSpendUTXOsForBatch), so the transactions carry the id the block is
+// stored under, plus the old id, which no block is stored under.
+func (u *BlockValidation) setQuickBlockID(ctx context.Context, block *model.Block, caller string) error {
+	if block.ID != 0 {
+		return nil
+	}
+
+	assigned, err := u.blockchainClient.AssignBlockID(ctx, block.Hash())
+	if err != nil {
+		return errors.NewProcessingError("[%s][%s] failed to assign block ID", caller, block.Hash().String(), err)
+	}
+
+	block.ID, err = blockIDToUint32(assigned, block.Hash().String())
+
+	return err
+}
+
 // quickValidateBlock performs optimized validation for blocks below checkpoints.
 // This follows the legacy sync approach: create all UTXOs first, then validate later.
 // This is safe because checkpoints guarantee these blocks are valid.
@@ -282,15 +309,44 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		err = u.quarantineSubtreeKeyMismatch(ctx, err)
 	}()
 
+	// A failed attempt removes the .subtree files it wrote itself. Outpoint-only mode writes them
+	// with every fee 0, and full validation reuses an existing .subtree file as it stands, so a
+	// later full validation of this block (a retry without the header proof, the route turned
+	// off, the same block from a p2p peer) would sum zero fees against the coinbase and mark a
+	// valid block invalid. Removing them sends that validation back to the netsync-written
+	// .subtreeToCheck and .subtreeData files, which stay, and from which subtree validation
+	// derives the real fees. Skipped when the block is or may be stored (isBlockCommitted): its
+	// row then says its .subtree files are on disk. Only files this attempt wrote are removed;
+	// one that already existed was not written here, and legacy blocks are applied one at a
+	// time, so no other block is writing the same hash meanwhile.
+	freshness := newSubtreeFreshness()
+
+	defer func() {
+		if err == nil || isBlockCommitted(err) {
+			return
+		}
+
+		// Detached, so a shutdown that cancelled ctx does not leave a zero-fee file behind.
+		delCtx := context.WithoutCancel(ctx)
+
+		for hash := range freshness.snapshot() {
+			if delErr := u.subtreeStore.Del(delCtx, hash[:], fileformat.FileTypeSubtree); delErr != nil && !errors.Is(delErr, errors.ErrNotFound) {
+				u.logger.Errorf("[quickValidateBlock][%s] failed to remove the .subtree file %s this failed attempt wrote: %v", block.Hash().String(), hash.String(), delErr)
+			}
+		}
+	}()
+
 	// Enforce the block-version floor before any body/coinbase inspection (header-first parity
 	// with svnode ContextualCheckBlockHeader). Needs only header version, height, and params.
 	if err := model.CheckBlockVersion(block.Header.Version, block.Height, u.settings.ChainCfgParams); err != nil {
 		return errors.NewBlockInvalidError("[quickValidateBlock][%s] outdated block version", block.Hash().String(), err)
 	}
 
-	// Reject blocks without a valid coinbase (e.g. from seeded peers that don't have full block data)
-	if block.CoinbaseTx == nil || len(block.CoinbaseTx.Inputs) == 0 {
-		return errors.NewBlockIncompleteError("[quickValidateBlock][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
+	// Reject blocks without a coinbase (e.g. from seeded peers that don't have full block data).
+	// A coinbase with no inputs that the header commits to is not missing: the post-binding
+	// IsConsensusCoinbase check below condemns it (see coinbaseNotDelivered).
+	if coinbaseNotDelivered(block) {
+		return errors.NewBlockIncompleteError("[quickValidateBlock][%s] coinbase tx is missing, peer may not have full block data", block.Hash().String())
 	}
 
 	// Bind a no-subtrees body to the header before anything else touches it
@@ -346,7 +402,7 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 
 		// Process all subtrees in streaming fashion - creates UTXOs, spends, writes files
 		// This function waits for all processing to complete before returning, ensuring block.ID is set
-		_, err = u.processBlockSubtrees(ctx, block, outpointOnly)
+		_, err = u.processBlockSubtrees(ctx, block, outpointOnly, freshness)
 		if err != nil {
 			// Preserve a corrupt-body verdict from validateSubtrees (bitcoin-sv/teranode#4692) instead
 			// of shadowing it with an outer ErrProcessing.
@@ -356,6 +412,8 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 
 			return errors.NewProcessingError("[quickValidateBlock][%s] failed to process block subtrees", block.Hash().String(), err)
 		}
+
+		u.clearNetFailures(block)
 
 		// Verify block ID was assigned during processing (sanity check)
 		if block.ID == 0 {
@@ -437,9 +495,11 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		return emptyWG, nil, errors.NewBlockInvalidError("[quickValidateBlockAsync][%s] outdated block version", block.Hash().String(), err)
 	}
 
-	// Reject blocks without a valid coinbase (e.g. from seeded peers that don't have full block data)
-	if block.CoinbaseTx == nil || len(block.CoinbaseTx.Inputs) == 0 {
-		return emptyWG, nil, errors.NewBlockIncompleteError("[quickValidateBlockAsync][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
+	// Reject blocks without a coinbase (e.g. from seeded peers that don't have full block data).
+	// A coinbase with no inputs that the header commits to is not missing: the post-binding
+	// IsConsensusCoinbase check below condemns it (see coinbaseNotDelivered).
+	if coinbaseNotDelivered(block) {
+		return emptyWG, nil, errors.NewBlockIncompleteError("[quickValidateBlockAsync][%s] coinbase tx is missing, peer may not have full block data", block.Hash().String())
 	}
 
 	// Bind a no-subtrees body to the header before anything else touches it
@@ -514,6 +574,8 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 
 			return wg, freshlyWritten, errors.NewProcessingError("[quickValidateBlockAsync][%s] failed to process block subtrees", block.Hash().String(), err)
 		}
+
+		u.clearNetFailures(block)
 	}
 
 	// If no block ID was assigned during processing, assign idempotently
@@ -612,7 +674,8 @@ func (u *BlockValidation) checkQuickValidationCoinbase(block *model.Block, calle
 		return errors.NewBlockInvalidError("[%s][%s] coinbase is not final: %s", caller, block.Hash().String(), reason)
 	}
 
-	return nil
+	// Last, so a claimed count cannot spare a body one of the rules above condemns.
+	return block.CheckCoinbaseOnlyBodyCount()
 }
 
 // commitBlock performs the shared final commit for the quick-validation path:
@@ -734,10 +797,13 @@ type subtreeResult struct {
 // Returns:
 //   - uint64: Existing BlockID if retry detected, 0 otherwise
 //   - error: If processing fails
-func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model.Block, outpointOnly bool) (uint64, error) {
+//
+// freshness, when non-nil, records each (hash, FileTypeSubtree) this call writes itself, so a
+// failed attempt can remove exactly those files (quickValidateBlock).
+func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model.Block, outpointOnly bool, freshness *subtreeFreshness) (uint64, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processBlockSubtrees",
 		tracing.WithParentStat(u.stats),
-		tracing.WithLogMessage(u.logger, "[processBlockSubtrees][%s] processing %d subtrees in batches of %d", block.Hash().String(), len(block.Subtrees), u.settings.BlockValidation.SubtreeBatchSize),
+		tracing.WithLogMessage(u.logger, "[processBlockSubtrees][%s] processing %d subtrees in batches of %d", block.Hash().String(), len(block.Subtrees), u.quickSubtreeBatchSize(block, outpointOnly)),
 	)
 	defer deferFn()
 
@@ -747,17 +813,16 @@ func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model
 
 	prefetchDepth := u.settings.BlockValidation.SubtreeBatchPrefetchDepth
 	if prefetchDepth <= 0 {
-		return u.processBlockSubtreesSequential(ctx, block, outpointOnly)
+		return u.processBlockSubtreesSequential(ctx, block, outpointOnly, freshness)
 	}
-	return u.processBlockSubtreesPipeline(ctx, block, prefetchDepth, outpointOnly)
+	return u.processBlockSubtreesPipeline(ctx, block, prefetchDepth, outpointOnly, freshness)
 }
 
 // processBlockSubtreesSequential processes subtrees sequentially, one batch at a time.
 // This is the fallback when SubtreeBatchPrefetchDepth is 0.
-func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, block *model.Block, outpointOnly bool) (uint64, error) {
+func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, block *model.Block, outpointOnly bool, freshness *subtreeFreshness) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
-	var existingBlockID uint64
 
 	// Get block ID first (check for retry using first tx after reading first batch)
 	blockIDSet := false
@@ -766,7 +831,7 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 	extendedTxs := make(map[chainhash.Hash]*bt.Tx)
 
 	// Process subtrees in batches
-	subtreeBatchSize := u.settings.BlockValidation.SubtreeBatchSize
+	subtreeBatchSize := u.quickSubtreeBatchSize(block, outpointOnly)
 	for batchStart := 0; batchStart < numSubtrees; batchStart += subtreeBatchSize {
 		batchEnd := batchStart + subtreeBatchSize
 		if batchEnd > numSubtrees {
@@ -796,28 +861,12 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 
 			defer batch.Close()
 
-			// Phase 4: Check for retry and get block ID (only on first batch)
-			// This is specific to quick validation to handle retries gracefully.
-			// batchTxs[0] is the first non-coinbase tx; its recorded mined-in id is
-			// this block's. The legacy quick path (netsync reuseBlockIDFromUTXO) keys
-			// the same recovery on its first non-coinbase tx — keep them in sync.
+			// Phase 4: Get the block ID (only on first batch).
 			if !blockIDSet && len(batch.batchTxs) > 0 {
-				existingMeta, err := u.utxoStore.Get(ctx, batch.batchTxs[0].TxIDChainHash(), fields.BlockIDs)
-				if err == nil && existingMeta != nil && len(existingMeta.BlockIDs) > 0 {
-					existingBlockID = uint64(existingMeta.BlockIDs[0])
-					block.ID = existingMeta.BlockIDs[0]
-					u.logger.Debugf("[processBlockSubtreesSequential][%s] reusing BlockID %d from retry", block.Hash().String(), existingBlockID)
-				} else if block.ID == 0 {
-
-					id, err := u.blockchainClient.AssignBlockID(ctx, block.Hash())
-					if err != nil {
-						return errors.NewProcessingError("[processBlockSubtreesSequential][%s] failed to assign block ID", block.Hash().String(), err)
-					}
-					block.ID, err = blockIDToUint32(id, block.Hash().String())
-					if err != nil {
-						return err
-					}
+				if err := u.setQuickBlockID(ctx, block, "processBlockSubtreesSequential"); err != nil {
+					return err
 				}
+
 				blockIDSet = true
 
 			}
@@ -828,13 +877,13 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 			}
 
 			// Phase 7: Write subtree files (shared with normal validation)
-			return u.writeSubtreeFilesForBatch(ctx, block, batch)
+			return u.writeSubtreeFilesForBatch(ctx, block, batch, freshness)
 		}(); err != nil {
 			return 0, err
 		}
 	}
 
-	return u.validateSubtrees(ctx, block, existingBlockID)
+	return u.validateSubtrees(ctx, block, 0)
 }
 
 // startPrefetchAndExtendStages starts the first two stages both pipelined drivers share
@@ -854,7 +903,7 @@ func (u *BlockValidation) startPrefetchAndExtendStages(gCtx context.Context, g *
 	g.Go(func() (err error) {
 		defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[pipeline:prefetch%s][%s]", tagSuffix, block.Hash().String())
 		defer close(prefetchChan)
-		subtreeBatchSize := u.settings.BlockValidation.SubtreeBatchSize
+		subtreeBatchSize := u.quickSubtreeBatchSize(block, outpointOnly)
 		for batchStart := 0; batchStart < numSubtrees; batchStart += subtreeBatchSize {
 			batchEnd := batchStart + subtreeBatchSize
 			if batchEnd > numSubtrees {
@@ -957,10 +1006,9 @@ func (u *BlockValidation) startPrefetchAndExtendStages(gCtx context.Context, g *
 //     created unlocked, so this lock-based rollback barrier does not apply; recovery instead relies on
 //     retry convergence below.
 //   - On retry, Create() returns ErrTxExists, and SetMinedMulti() updates the correct BlockID.
-func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, block *model.Block, prefetchDepth int, outpointOnly bool) (uint64, error) {
+func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, block *model.Block, prefetchDepth int, outpointOnly bool, freshness *subtreeFreshness) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
-	var existingBlockID uint64
 	blockIDSet := false
 
 	// Channel for prefetched batches (subtrees read, txs not extended)
@@ -1016,22 +1064,10 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 
 				// Block ID check (first batch only)
 				if !blockIDSet && len(batch.batchTxs) > 0 {
-					existingMeta, err := u.utxoStore.Get(gCtx, batch.batchTxs[0].TxIDChainHash(), fields.BlockIDs)
-					if err == nil && existingMeta != nil && len(existingMeta.BlockIDs) > 0 {
-						existingBlockID = uint64(existingMeta.BlockIDs[0])
-						block.ID = existingMeta.BlockIDs[0]
-						u.logger.Debugf("[processBlockSubtreesPipeline][%s] reusing BlockID %d from retry", block.Hash().String(), existingBlockID)
-					} else if block.ID == 0 {
-
-						id, err := u.blockchainClient.AssignBlockID(gCtx, block.Hash())
-						if err != nil {
-							return errors.NewProcessingError("[processBlockSubtreesPipeline][%s] failed to assign block ID", block.Hash().String(), err)
-						}
-						block.ID, err = blockIDToUint32(id, block.Hash().String())
-						if err != nil {
-							return err
-						}
+					if err := u.setQuickBlockID(gCtx, block, "processBlockSubtreesPipeline"); err != nil {
+						return err
 					}
+
 					blockIDSet = true
 
 				}
@@ -1050,7 +1086,7 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 				batchG.Go(func() (err error) {
 					defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[pipeline:process][%s] write batch %d-%d", block.Hash().String(), batch.batchStart, batch.batchEnd)
 					writeStart := time.Now()
-					err = u.writeSubtreeFilesForBatch(batchCtx, block, batch)
+					err = u.writeSubtreeFilesForBatch(batchCtx, block, batch, freshness)
 					writeDuration = time.Since(writeStart)
 					return err
 				})
@@ -1071,7 +1107,7 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 		return 0, err
 	}
 
-	return u.validateSubtrees(ctx, block, existingBlockID)
+	return u.validateSubtrees(ctx, block, 0)
 }
 
 // processBlockSubtreesPipelineAsync processes subtrees with async file writes across blocks.
@@ -1101,7 +1137,6 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context, block *model.Block, prefetchDepth int, writeJobsChan chan<- *SubtreeWriteJob, outpointOnly bool) (uint64, *subtreeWriteBarrier, map[chainhash.Hash]map[fileformat.FileType]struct{}, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
-	var existingBlockID uint64
 	blockIDSet := false
 
 	// Scoped to this one block's call (bitcoin-sv/teranode#4692): wg tracks every write job queued
@@ -1156,21 +1191,10 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 
 				// Block ID check (first batch only)
 				if !blockIDSet && len(batch.batchTxs) > 0 {
-					existingMeta, err := u.utxoStore.Get(gCtx, batch.batchTxs[0].TxIDChainHash(), fields.BlockIDs)
-					if err == nil && existingMeta != nil && len(existingMeta.BlockIDs) > 0 {
-						existingBlockID = uint64(existingMeta.BlockIDs[0])
-						block.ID = existingMeta.BlockIDs[0]
-						u.logger.Debugf("[processBlockSubtreesPipelineAsync][%s] reusing BlockID %d from retry", block.Hash().String(), existingBlockID)
-					} else if block.ID == 0 {
-						id, err := u.blockchainClient.AssignBlockID(gCtx, block.Hash())
-						if err != nil {
-							return errors.NewProcessingError("[processBlockSubtreesPipelineAsync][%s] failed to assign block ID", block.Hash().String(), err)
-						}
-						block.ID, err = blockIDToUint32(id, block.Hash().String())
-						if err != nil {
-							return err
-						}
+					if err := u.setQuickBlockID(gCtx, block, "processBlockSubtreesPipelineAsync"); err != nil {
+						return err
 					}
+
 					blockIDSet = true
 				}
 
@@ -1211,7 +1235,7 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 		return 0, wg, freshness.snapshot(), err
 	}
 
-	resultID, err := u.validateSubtrees(ctx, block, existingBlockID)
+	resultID, err := u.validateSubtrees(ctx, block, 0)
 
 	return resultID, wg, freshness.snapshot(), err
 }
@@ -1410,7 +1434,9 @@ func (u *BlockValidation) readSubtreeStructure(ctx context.Context, block *model
 	var subtree *subtreepkg.Subtree
 	if u.mmapDir != "" {
 		subtree, err = subtreepkg.NewSubtreeFromReaderMmap(bufferedReader, u.mmapDir)
-		if err != nil {
+		// Only an mmap infrastructure failure is retried on the heap. Malformed bytes
+		// skip the fallback and reach the deserialize error below.
+		if err != nil && isMmapInfraError(err) {
 			// Fallback to heap on mmap failure. The mmap attempt has already consumed
 			// bytes from subtreeReader, which is not seekable, so resetting the buffered
 			// reader onto it would read from mid-stream and produce a corrupt subtree.
@@ -2432,10 +2458,24 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 	// A transaction whose create is skipped as unspendable stays out of the list and has its
 	// inputs spent afterwards, as before: it has no output anything can spend, so it is nobody's
 	// parent in the list, and the spend-only call it needs is not something a list models.
+	// A store that nets below the checkpoint (utxoset) writes no spend-journal rows there. It
+	// is handed fixed ranges of transaction positions, the same lists on every attempt whatever
+	// subtree size the block arrived with; unspendable transactions stay in the list, because
+	// their spends need the list's claim to be repeatable; and an existing transaction is only
+	// stamped, never spent again. See netsBelowCheckpoint.
+	nets := u.netsBelowCheckpoint(block, outpointOnly)
+
+	var subtreeSize, netRange int
+	if nets {
+		subtreeSize = netSubtreeSize(block)
+		netRange = u.netRange()
+	}
+
 	var (
 		txs            []*bt.Tx
 		txids          []chainhash.Hash
 		subtreeIdxs    []int
+		rangeOf        []int
 		unspendableTxs []*bt.Tx
 	)
 
@@ -2444,10 +2484,24 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 		globalSubtreeIdx := batch.batchStart + i
 		txRange := batch.txRanges[i]
 
+		// Position of the subtree's first transaction in the block. Subtree 0's first
+		// position is the coinbase, which is not in the batch.
+		first := 0
+		if nets {
+			first = globalSubtreeIdx * subtreeSize
+			if globalSubtreeIdx == 0 {
+				first = 1
+			}
+
+			if err := checkNetSubtreeShape(block, globalSubtreeIdx, txRange[1]-txRange[0], subtreeSize); err != nil {
+				return err
+			}
+		}
+
 		for txIdx := txRange[0]; txIdx < txRange[1]; txIdx++ {
 			tx := batch.batchTxs[txIdx]
 
-			if shouldSkipUnspendableCreate(lockUTXOs, u.settings, tx, block.Height) {
+			if !nets && shouldSkipUnspendableCreate(lockUTXOs, u.settings, tx, block.Height) {
 				unspendableTxs = append(unspendableTxs, tx)
 
 				continue
@@ -2456,6 +2510,10 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 			txs = append(txs, tx)
 			txids = append(txids, *tx.TxIDChainHash())
 			subtreeIdxs = append(subtreeIdxs, globalSubtreeIdx)
+
+			if nets {
+				rangeOf = append(rangeOf, (first+txIdx-txRange[0])/netRange)
+			}
 		}
 	}
 
@@ -2465,15 +2523,37 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 	// one-at-a-time fallback's combined call spends before it creates and keeps the spends
 	// when the record is found. Spending them again here would cost a whole extra round of
 	// store calls on every replayed batch for no change.
-	var existingTxHashes []*chainhash.Hash
+	// Grouped by subtree index, since the restamp records the index with the block id and a
+	// batch can span several subtrees.
+	existingTxHashes := make(map[int][]*chainhash.Hash)
+	existingCount := 0
 
-	collectExisting := func(tx *bt.Tx) {
-		existingTxHashes = append(existingTxHashes, tx.TxIDChainHash())
+	collectExisting := func(tx *bt.Tx, subtreeIdx int) {
+		existingTxHashes[subtreeIdx] = append(existingTxHashes[subtreeIdx], tx.TxIDChainHash())
+		existingCount++
 	}
 
 	start := time.Now()
 
-	applyErr := u.applyList(ctx, block, txs, txids, subtreeIdxs, lockUTXOs, outpointOnly, collectExisting)
+	var applyErr error
+
+	if nets {
+		// One list per range, in order. A range never spans two batches: the batch is cut
+		// to whole ranges (quickSubtreeBatchSize).
+		for lo := 0; lo < len(txs) && applyErr == nil; {
+			hi := lo
+			for hi < len(txs) && rangeOf[hi] == rangeOf[lo] {
+				hi++
+			}
+
+			applyErr = u.applyList(ctx, block, txs[lo:hi], txids[lo:hi], subtreeIdxs[lo:hi], lockUTXOs, outpointOnly, collectExisting)
+			lo = hi
+		}
+
+	} else {
+		applyErr = u.applyList(ctx, block, txs, txids, subtreeIdxs, lockUTXOs, outpointOnly, collectExisting)
+	}
+
 	listDuration := time.Since(start)
 
 	// Spend the unspendable transactions' inputs once every create of the batch has committed,
@@ -2487,25 +2567,35 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 	// Logged on the failure path too: how long the list ran for is the first thing anyone
 	// reading the log wants.
 	u.logger.Infof("[createAndSpendUTXOsForBatch][%s] batch %d-%d applied: listed=%d unspendable=%d existing=%d (list=%v, total=%v, err=%v)",
-		block.Hash().String(), batch.batchStart, batch.batchEnd, len(txs), len(unspendableTxs), len(existingTxHashes), listDuration, time.Since(start), applyErr)
+		block.Hash().String(), batch.batchStart, batch.batchEnd, len(txs), len(unspendableTxs), existingCount, listDuration, time.Since(start), applyErr)
 
 	if applyErr != nil {
+		if nets {
+			u.noteNetFailure(block, applyErr)
+		}
+
 		return applyErr
 	}
+
+	// The failure count of the block is NOT cleared here. A later batch of the same block can
+	// still fail, and a retry starts again at the first batch, so a clear per batch would reset
+	// the count on every retry. The count is cleared once the whole block is written: see
+	// clearNetFailures.
 
 	// Update mined info for transactions that already existed. This handles the case where a
 	// previous attempt created UTXOs with a different block ID. Chunked via the shared helper
 	// (issue 936): on a fat-batch retry every tx in the batch already exists, and a single
 	// unchunked SetMinedMulti call would overrun the aerospike client connection pool.
-	if len(existingTxHashes) > 0 {
+	for subtreeIdx, hashes := range existingTxHashes {
 		minedBlockInfo := utxo.MinedBlockInfo{
 			BlockID:     block.ID,
 			BlockHeight: block.Height,
+			SubtreeIdx:  subtreeIdx,
 		}
 
-		if err := utxo.SetMinedMultiChunked(ctx, u.logger, u.utxoStore, existingTxHashes, minedBlockInfo,
+		if err := utxo.SetMinedMultiChunked(ctx, u.logger, u.utxoStore, hashes, minedBlockInfo,
 			u.settings.UtxoStore.MaxMinedBatchSize, u.settings.UtxoStore.MaxMinedRoutines); err != nil {
-			return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to update mined info for %d existing txs", block.Hash().String(), len(existingTxHashes), err)
+			return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to update mined info for %d existing txs in subtree %d", block.Hash().String(), len(hashes), subtreeIdx, err)
 		}
 	}
 
@@ -2736,7 +2826,7 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 // as an error. A batch that gives up after repeating names the retryable failure and, when the
 // latest pass also failed a transaction for good, carries that failure as its cause.
 func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs []*bt.Tx, txids []chainhash.Hash,
-	subtreeIdxs []int, lockUTXOs, outpointOnly bool, collectExisting func(*bt.Tx)) error {
+	subtreeIdxs []int, lockUTXOs, outpointOnly bool, collectExisting func(tx *bt.Tx, subtreeIdx int)) error {
 	const maxRetries = 10
 
 	if len(txs) == 0 {
@@ -2808,6 +2898,13 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 			// meets the same outcome and error class it always did: a duplicate comes back as
 			// existing and the duplicate check condemns the block later, a double spend fails
 			// as a spend.
+			if u.netsBelowCheckpoint(block, outpointOnly) {
+				// Below the checkpoint a netting store writes no spend-journal rows, so a
+				// transaction-at-a-time write could not accept a repeat of a spend the list
+				// already made. A checkpointed block cannot be malformed; this is a fault.
+				return errors.NewProcessingError("[applyList][%s] the store refused a list of %d transactions of a block below the checkpoint, which a checkpointed block cannot cause", block.Hash().String(), len(txs), err)
+			}
+
 			u.logger.Warnf("[applyList][%s] the store refused the list of %d transactions, applying them one at a time: %v", block.Hash().String(), len(txs), err)
 
 			return u.applyOneByOne(ctx, block, txs, subtreeIdxs, lockUTXOs, outpointOnly, collectExisting)
@@ -2831,7 +2928,7 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 			switch {
 			case r.Status == utxo.MultiTxExisted:
 				if carried == nil || !carried[i] {
-					collectExisting(txs[i])
+					collectExisting(txs[i], subtreeIdxs[i])
 				}
 
 				continue
@@ -2938,7 +3035,7 @@ func withParentsInList(txs []*bt.Tx, txids []chainhash.Hash, failed []int) []int
 // store refused as malformed. A transaction that already exists is collected for the mined-info
 // stamp; any other failure fails the batch with the store's own error class.
 func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block, txs []*bt.Tx, subtreeIdxs []int,
-	lockUTXOs, outpointOnly bool, collectExisting func(*bt.Tx)) error {
+	lockUTXOs, outpointOnly bool, collectExisting func(tx *bt.Tx, subtreeIdx int)) error {
 	const maxRetries = 10
 
 	backoff := u.spendRetryBackoff
@@ -2983,7 +3080,7 @@ func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block,
 		switch {
 		case err == nil:
 		case errors.Is(err, errors.ErrTxExists):
-			collectExisting(tx)
+			collectExisting(tx, subtreeIdxs[i])
 		default:
 			return errors.NewProcessingError("[applyOneByOne][%s] failed to apply tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
 		}
@@ -3015,7 +3112,7 @@ func sleepUnlessDone(ctx context.Context, d time.Duration) {
 //
 // Returns:
 //   - error: If file writing fails
-func (u *BlockValidation) writeSubtreeFilesForBatch(ctx context.Context, block *model.Block, batch *SubtreeProcessingBatch) error {
+func (u *BlockValidation) writeSubtreeFilesForBatch(ctx context.Context, block *model.Block, batch *SubtreeProcessingBatch, freshness *subtreeFreshness) error {
 	writeG, writeCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(u.logger, writeG, u.settings.BlockValidation.SubtreeBatchWriteConcurrency)
 
@@ -3033,6 +3130,13 @@ func (u *BlockValidation) writeSubtreeFilesForBatch(ctx context.Context, block *
 		// holding for the merkle check.
 		carriedFullSubtree := batch.fullSubtrees[localIdx]
 		batch.fullSubtrees[localIdx] = nil
+
+		// No carried blob means no .subtree file existed when the batch was read, so this
+		// attempt writes it. Marked before the write, as the async route does: a write that
+		// never lands leaves nothing on disk, and the cleanup tolerates ErrNotFound.
+		if carriedFullSubtree == nil {
+			freshness.markFresh(subtreeHash, fileformat.FileTypeSubtree)
+		}
 
 		writeG.Go(func() (err error) {
 			defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[writeSubtreeFilesForBatch][%s] subtree %d", block.Hash().String(), globalIdx)
@@ -3396,4 +3500,134 @@ func (u *BlockValidation) extendBatch(
 	}
 
 	return nil
+}
+
+// netsBelowCheckpoint reports whether this block's UTXO writes go to a store that nets a
+// below-checkpoint list itself and writes no spend-journal rows there (utxoset). It holds on the
+// outpoint-only fast path, which is already limited to blocks at or below the highest hardcoded
+// checkpoint. It does not depend on the UTXO lock: with blockvalidation_quick_validate_skip_utxo_lock
+// off the store still nets the list, writing its coins locked, and quick validation unlocks them
+// after the block commits. The lists must then be the same fixed ranges on every attempt, and a
+// block must stay on quick validation, exactly as with the lock skipped.
+func (u *BlockValidation) netsBelowCheckpoint(_ *model.Block, outpointOnly bool) bool {
+	return outpointOnly && utxo.NetsBelowCheckpoint(u.utxoStore)
+}
+
+// defaultNetRange is the default of blockvalidation_quick_validate_net_range.
+const defaultNetRange = 65536
+
+// netRange is the number of transaction positions in one list handed to a netting store: the
+// setting when it is a positive power of two, the default otherwise.
+func (u *BlockValidation) netRange() int {
+	r := u.settings.BlockValidation.QuickValidateNetRange
+	if r <= 0 || !subtreepkg.IsPowerOfTwo(r) {
+		return defaultNetRange
+	}
+
+	return r
+}
+
+// netSubtreeSize is the capacity of a block's subtrees, which is the same for every subtree of
+// the block and a power of two. Every subtree but the last is full, so the capacity is the
+// smallest power of two at or above the average subtree size. A block of one subtree returns 0:
+// its positions need no subtree size.
+func netSubtreeSize(block *model.Block) int {
+	k := len(block.Subtrees)
+	if k <= 1 {
+		return 0
+	}
+
+	avg := int((block.TransactionCount + uint64(k) - 1) / uint64(k)) //nolint:gosec // a block's transaction count fits int
+
+	return subtreepkg.CeilPowerOfTwo(avg)
+}
+
+// checkNetSubtreeShape checks the premise of the position arithmetic: every subtree of the block
+// but the last holds exactly the subtree capacity. inBatch is the number of the subtree's
+// transactions in the batch, which leaves out the coinbase of subtree 0.
+func checkNetSubtreeShape(block *model.Block, idx, inBatch, size int) error {
+	if size == 0 {
+		return nil
+	}
+
+	n := inBatch
+	if idx == 0 {
+		n++
+	}
+
+	last := idx == len(block.Subtrees)-1
+	if n == size || (last && n <= size) {
+		return nil
+	}
+
+	return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] subtree %d holds %d transactions, not the block's subtree size %d; the fixed position ranges cannot be computed",
+		block.Hash().String(), idx, n, size)
+}
+
+// quickSubtreeBatchSize is how many subtrees quick validation reads and writes as one batch. For
+// a netting store below the checkpoint it is cut to whole position ranges, so a range never spans
+// two batches: netRange / subtree size subtrees, or one subtree when a subtree is a range or
+// larger. Otherwise it is the setting.
+func (u *BlockValidation) quickSubtreeBatchSize(block *model.Block, outpointOnly bool) int {
+	if !u.netsBelowCheckpoint(block, outpointOnly) {
+		return u.settings.BlockValidation.SubtreeBatchSize
+	}
+
+	size := netSubtreeSize(block)
+	if size == 0 || size >= u.netRange() {
+		return 1
+	}
+
+	return u.netRange() / size
+}
+
+// netFailureLimit is how many failed UTXO writes of one block below the checkpoint, on a netting
+// store, are taken as transient before each further failure is reported as needing an operator.
+const netFailureLimit = 10
+
+// noteNetFailure counts a failed UTXO write of a block that a netting store applies below the
+// checkpoint, and reports a block that keeps failing. Such a block has no other way to be written:
+// normal validation and a transaction-at-a-time write both need spend-journal rows the store did
+// not write. So a fault that repeats every time is a stop, and it says so.
+func (u *BlockValidation) noteNetFailure(block *model.Block, err error) {
+	// One counter per block, made once and then only added to, so two batches of the same
+	// block that fail at the same time both count.
+	v, _ := u.netFailures.LoadOrStore(*block.Hash(), new(atomic.Int64))
+	n := v.(*atomic.Int64).Add(1)
+
+	if n >= netFailureLimit {
+		u.logger.Errorf("[createAndSpendUTXOsForBatch][%s] block %d below the checkpoint has failed its UTXO write %d times; it cannot be applied another way, and an operator must look at it: %v",
+			block.Hash().String(), block.Height, n, err)
+	}
+}
+
+// netFailureCount is how many failed UTXO writes of the block noteNetFailure has counted since
+// the block was last written in full.
+func (u *BlockValidation) netFailureCount(hash chainhash.Hash) int64 {
+	if v, ok := u.netFailures.Load(hash); ok {
+		return v.(*atomic.Int64).Load()
+	}
+
+	return 0
+}
+
+// clearNetFailures forgets the failure count of a block once all its subtrees are written. It
+// runs per block, not per batch: see createAndSpendUTXOsForBatch.
+func (u *BlockValidation) clearNetFailures(block *model.Block) {
+	u.netFailures.Delete(*block.Hash())
+}
+
+// mustStayOnQuickValidation reports whether this block may only be validated through quick
+// validation: a netting store below the checkpoint wrote it, or may have written part of it,
+// without spend-journal rows, and normal validation or a transaction-at-a-time write would read
+// those rows. Callers return an error instead of falling through.
+func (u *BlockValidation) mustStayOnQuickValidation(block *model.Block) bool {
+	return u.mustStayOnQuickValidationAt(block.Height)
+}
+
+// mustStayOnQuickValidationAt is mustStayOnQuickValidation for a block at height. It reads
+// model.NettedRouteAt, the same definition the startup checks in model/netted_route_settings.go
+// read, so the runtime refusal and the startup refusal cannot drift apart.
+func (u *BlockValidation) mustStayOnQuickValidationAt(height uint32) bool {
+	return model.NettedRouteAt(u.settings, u.utxoStore, height)
 }

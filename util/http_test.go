@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -149,81 +150,59 @@ func TestDoHTTPRequestNotFound(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "404")
-	assert.Contains(t, err.Error(), "not found")
+	require.ErrorIs(t, err, errors.ErrNotFound)
+	assert.NotContains(t, err.Error(), "not found", "the response body must not reach the error")
 }
 
-// TestBuildHTTPErrorBodyIsBounded pins the cap on the non-2xx error body.
-//
-// The body of a failed response is peer-supplied and is read on every failure path,
-// including the ones reached from DoHTTPRequestBounded. An unbounded read there lets
-// a hostile peer defeat that function's cap outright: answer with an error status,
-// then stream indefinitely. The bytes never reach the caller, but they are still
-// allocated, and they are interpolated into the error string.
-func TestBuildHTTPErrorBodyIsBounded(t *testing.T) {
-	// Markers at both ends: the head must survive, the tail must be cut. Asserting on
-	// both is what distinguishes a real truncation from a body that merely happened to
-	// be short.
-	const headMarker = "ERRBODYHEAD"
-	const tailMarker = "ERRBODYTAIL"
+// TestBuildHTTPErrorBodyNeverReachesError pins that no byte of a non-2xx body reaches
+// the error, for every status class and caller. The body is whatever answers at a
+// peer-chosen URL — possibly an internal service — and the error is logged, stored as
+// the peer's LastCatchupError and served by the Asset /peers endpoint
+// (bitcoin-sv/teranode#4855). Leaving the body out also removes any way for a peer to
+// forge log lines or plant terminal escapes through it.
+func TestBuildHTTPErrorBodyNeverReachesError(t *testing.T) {
+	const secret = "SECRET-4855"
 
-	oversizedBody := headMarker + strings.Repeat("A", 4*maxHTTPErrorBodyBytes) + tailMarker
+	hostileBody := secret + "\nERROR forged log line\x1b[31m\x00" + strings.Repeat("A", 8*1024)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, err := w.Write([]byte(oversizedBody))
-		require.NoError(t, err)
-	}))
-	defer server.Close()
+	callers := map[string]func(ctx context.Context, url string) error{
+		"unbounded": func(ctx context.Context, url string) error {
+			_, err := DoHTTPRequest(ctx, url)
+			return err
+		},
+		"bounded": func(ctx context.Context, url string) error {
+			_, err := DoHTTPRequestBounded(ctx, url, 1024)
+			return err
+		},
+		"streaming": func(ctx context.Context, url string) error {
+			_, err := DoHTTPRequestBodyReader(ctx, url)
+			return err
+		},
+	}
 
-	ctx := context.Background()
+	for _, status := range []int{http.StatusNotFound, http.StatusTooManyRequests, http.StatusInternalServerError,
+		http.StatusServiceUnavailable} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(hostileBody))
+		}))
+		t.Cleanup(server.Close)
 
-	t.Run("unbounded caller", func(t *testing.T) {
-		_, err := DoHTTPRequest(ctx, server.URL)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), headMarker, "the start of the body should still be diagnosable")
-		require.NotContains(t, err.Error(), tailMarker, "the body must be truncated, not read to completion")
-		require.Less(t, len(err.Error()), len(oversizedBody), "error must not retain the whole body")
-	})
+		for name, call := range callers {
+			t.Run(fmt.Sprintf("%d/%s", status, name), func(t *testing.T) {
+				err := call(context.Background(), server.URL)
+				require.Error(t, err)
 
-	t.Run("bounded caller keeps its cap on an error status", func(t *testing.T) {
-		// The response never reaches the body-cap logic in DoHTTPRequestBounded, because
-		// a non-2xx status short-circuits into buildHTTPError. Without the bound there,
-		// the maxBytes argument below would be meaningless.
-		_, err := DoHTTPRequestBounded(ctx, server.URL, 1024)
-		require.Error(t, err)
-		require.NotContains(t, err.Error(), tailMarker, "an error status must not bypass the allocation cap")
-		require.Less(t, len(err.Error()), len(oversizedBody))
-	})
-}
-
-// TestBuildHTTPErrorBodyIsEscaped pins the companion property to the size bound: the
-// snippet is peer-controlled, and this error string is logged verbatim and forwarded
-// to the peer registry. Bounding the length without escaping the content still lets a
-// peer embed newlines to forge log lines, or terminal escapes, and breaks the
-// project's single-line log convention.
-func TestBuildHTTPErrorBodyIsEscaped(t *testing.T) {
-	// A forged log line, an ANSI escape, and a NUL, in a body well under the cap so
-	// this test can only fail on escaping, never on truncation.
-	hostileBody := "real\nERROR forged log line\x1b[31m\x00tail"
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadGateway)
-		_, err := w.Write([]byte(hostileBody))
-		require.NoError(t, err)
-	}))
-	defer server.Close()
-
-	_, err := DoHTTPRequest(context.Background(), server.URL)
-	require.Error(t, err)
-
-	msg := err.Error()
-	require.NotContains(t, msg, "\n", "a peer must not be able to split the message across log lines")
-	require.NotContains(t, msg, "\x1b", "terminal escapes must not survive into operator logs")
-	require.NotContains(t, msg, "\x00", "control bytes must not survive into operator logs")
-
-	// The content is still present, just escaped, so the message stays diagnosable.
-	require.Contains(t, msg, `\n`, "the newline should appear in escaped form")
-	require.Contains(t, msg, "forged log line")
+				msg := err.Error()
+				require.NotContains(t, msg, secret)
+				require.NotContains(t, msg, "forged log line")
+				require.NotContains(t, msg, "\n")
+				require.NotContains(t, msg, "\x1b")
+				require.NotContains(t, msg, "AAAA")
+				require.Contains(t, msg, fmt.Sprintf("returned status code [%d]", status))
+			})
+		}
+	}
 }
 
 func TestDoHTTPRequestServerError(t *testing.T) {
@@ -239,7 +218,7 @@ func TestDoHTTPRequestServerError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
-	assert.Contains(t, err.Error(), "internal server error")
+	assert.NotContains(t, err.Error(), "internal server error", "the response body must not reach the error")
 }
 
 func TestDoHTTPRequestServerErrorNoBody(t *testing.T) {
@@ -254,8 +233,7 @@ func TestDoHTTPRequestServerErrorNoBody(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "400")
-	// An empty body is %q-escaped to an empty quoted string.
-	assert.Contains(t, err.Error(), `with body ""`)
+	assert.NotContains(t, err.Error(), "with body")
 }
 
 func TestDoHTTPRequestHTMLResponse(t *testing.T) {
@@ -548,8 +526,7 @@ func TestDoHTTPRequestServerErrorWithNilBody(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
-	// An effectively-nil body is %q-escaped to an empty quoted string.
-	assert.Contains(t, err.Error(), `with body ""`)
+	assert.NotContains(t, err.Error(), "with body")
 }
 
 func TestDoHTTPRequestLargeResponse(t *testing.T) {
@@ -825,7 +802,7 @@ func TestDoHTTPRequest_ErrorResponseBodyReadError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
-	assert.Contains(t, err.Error(), "server error")
+	assert.NotContains(t, err.Error(), "server error", "the response body must not reach the error")
 }
 
 func TestDoHTTPRequest_NilFirstRequestBody(t *testing.T) {
@@ -858,8 +835,7 @@ func TestDoHTTPRequest_ErrorResponseNilBody(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "400")
-	// An empty body is %q-escaped to an empty quoted string.
-	assert.Contains(t, err.Error(), `with body ""`)
+	assert.NotContains(t, err.Error(), "with body")
 }
 
 func TestDoHTTPRequest_CreateRequestError(t *testing.T) {
@@ -1747,8 +1723,8 @@ func TestSharedAndSafeClientsShareRedirectRule(t *testing.T) {
 
 // TestBuildHTTPErrorRedactsURLPassword covers the status-code error built for a
 // non-OK response. That message is logged and forwarded, so a URL carrying a
-// password must reach it masked. Every return is exercised: no body, a body, a
-// truncated body, and a body read that fails.
+// password must reach it masked, with or without a body, and when the body read
+// fails.
 func TestBuildHTTPErrorRedactsURLPassword(t *testing.T) {
 	const password = "canary-http-error-password"
 
@@ -1757,8 +1733,8 @@ func TestBuildHTTPErrorRedactsURLPassword(t *testing.T) {
 	bodies := map[string]func() io.ReadCloser{
 		"no body":    func() io.ReadCloser { return nil },
 		"short body": func() io.ReadCloser { return io.NopCloser(strings.NewReader("not found")) },
-		"truncated body": func() io.ReadCloser {
-			return io.NopCloser(strings.NewReader(strings.Repeat("x", maxHTTPErrorBodyBytes+10)))
+		"long body": func() io.ReadCloser {
+			return io.NopCloser(strings.NewReader(strings.Repeat("x", 4*1024)))
 		},
 		"failed read": func() io.ReadCloser { return io.NopCloser(failingReader{}) },
 	}
