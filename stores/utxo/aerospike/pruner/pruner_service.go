@@ -1561,17 +1561,11 @@ func bytesBin(v interface{}) []byte {
 
 // batchOperate runs a batch; batchOperateFn overrides it in tests.
 func (s *Service) batchOperate(records []aerospike.BatchRecordIfc) error {
-	return s.batchOperateWith(s.batchPolicy, records)
-}
-
-// batchOperateWith runs a batch under the given policy; batchOperateFn
-// overrides it in tests.
-func (s *Service) batchOperateWith(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
 	if s.batchOperateFn != nil {
-		return s.batchOperateFn(policy, records)
+		return s.batchOperateFn(s.batchPolicy, records)
 	}
 
-	return s.client.BatchOperate(policy, records)
+	return s.client.BatchOperate(s.batchPolicy, records)
 }
 
 // hadDAH reports whether a clear write found a deleteAtHeight to clear. The write reads the bin
@@ -3329,19 +3323,6 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 	// so it cannot revive a parent that is expiring in TTL mode.
 	policy.Expiration = aerospike.TTLDontUpdate
 
-	// With RespondAllKeys on (the client default), one key the client cannot
-	// route to a node (INVALID_NODE_ERROR, PARTITION_UNAVAILABLE) makes
-	// BatchOperate return before it sends anything. That key is resent, so it
-	// would block every other withdrawal in the call on every attempt. Off,
-	// the routable keys are sent and the unroutable one keeps its error.
-	batchPolicy := aerospike.NewBatchPolicy()
-	if s.batchPolicy != nil {
-		copied := *s.batchPolicy
-		batchPolicy = &copied
-	}
-
-	batchPolicy.RespondAllKeys = false
-
 	type withdrawal struct {
 		key  *aerospike.Key
 		keys []interface{}
@@ -3386,7 +3367,7 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 			keys[i], childKeys[i] = w.key, w.keys
 		}
 
-		retry, refused, err := s.sendWithdrawals(batchPolicy, policy, keys, childKeys)
+		retry, refused, err := s.sendWithdrawals(policy, keys, childKeys)
 
 		for _, i := range refused {
 			if !pending[i].markerFailed {
@@ -3427,7 +3408,14 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 // good, and an error that describes a failure. A transport failure is transient
 // for every write. A parent that is gone, or that has no marker bin, has
 // nothing to withdraw and is not a failure.
-func (s *Service) sendWithdrawals(batchPolicy *aerospike.BatchPolicy, policy *aerospike.BatchWritePolicy, keys []*aerospike.Key, childKeys [][]interface{}) (retry, refused []int, err error) {
+//
+// A key the client cannot route to a node (INVALID_NODE_ERROR,
+// PARTITION_UNAVAILABLE) makes BatchOperate return before it sends anything,
+// under the default RespondAllKeys. That key is resent on the next attempt, so
+// the routable keys are sent again at once, on their own, rather than wait
+// behind it on every attempt. RespondAllKeys stays on: off, the server would
+// stop a node's batch at the first key-level failure instead.
+func (s *Service) sendWithdrawals(policy *aerospike.BatchWritePolicy, keys []*aerospike.Key, childKeys [][]interface{}) (retry, refused []int, err error) {
 	records := make([]aerospike.BatchRecordIfc, len(keys))
 
 	for i, key := range keys {
@@ -3435,7 +3423,7 @@ func (s *Service) sendWithdrawals(batchPolicy *aerospike.BatchPolicy, policy *ae
 		records[i] = aerospike.NewBatchWrite(policy, key, op)
 	}
 
-	batchErr := s.batchOperateWith(batchPolicy, records)
+	batchErr := s.batchOperate(records)
 	if batchErr != nil && isBatchTransportError(batchErr) {
 		retry = make([]int, len(records))
 		for i := range retry {
@@ -3443,6 +3431,34 @@ func (s *Service) sendWithdrawals(batchPolicy *aerospike.BatchPolicy, policy *ae
 		}
 
 		return retry, nil, batchErr
+	}
+
+	if batchErr != nil {
+		if unroutable, routable := splitUnsent(records); len(unroutable) > 0 && len(routable) > 0 {
+			subKeys := make([]*aerospike.Key, len(routable))
+			subChildKeys := make([][]interface{}, len(routable))
+
+			for j, i := range routable {
+				subKeys[j], subChildKeys[j] = keys[i], childKeys[i]
+			}
+
+			subRetry, subRefused, subErr := s.sendWithdrawals(policy, subKeys, subChildKeys)
+
+			retry = unroutable
+			for _, j := range subRetry {
+				retry = append(retry, routable[j])
+			}
+
+			for _, j := range subRefused {
+				refused = append(refused, routable[j])
+			}
+
+			if subErr != nil {
+				return retry, refused, subErr
+			}
+
+			return retry, refused, batchErr
+		}
 	}
 
 	// Any other batch error (MAX_ERROR_RATE, say) can return before the server
@@ -3474,6 +3490,27 @@ func (s *Service) sendWithdrawals(batchPolicy *aerospike.BatchPolicy, policy *ae
 	}
 
 	return retry, refused, err
+}
+
+// splitUnsent recognises a batch the client returned before sending: some
+// records carry a node-selection error and every other record still holds the
+// client's initial NO_RESPONSE with no error. It returns the indexes of each
+// group, or nil when the batch was sent.
+func splitUnsent(records []aerospike.BatchRecordIfc) (unroutable, routable []int) {
+	for i, rec := range records {
+		batchRec := rec.BatchRec()
+
+		switch {
+		case batchRec.ResultCode == types.INVALID_NODE_ERROR || batchRec.ResultCode == types.PARTITION_UNAVAILABLE:
+			unroutable = append(unroutable, i)
+		case batchRec.ResultCode == types.NO_RESPONSE && batchRec.Err == nil:
+			routable = append(routable, i)
+		default:
+			return nil, nil
+		}
+	}
+
+	return unroutable, routable
 }
 
 // isTransientWriteFailure reports whether a failed batch write may land if it

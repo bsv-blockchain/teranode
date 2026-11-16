@@ -1135,10 +1135,10 @@ func TestWithdrawMarkers_ResendsToAParentWhoseMarkerOutcomeWasUnread(t *testing.
 }
 
 // TestWithdrawMarkers_UnroutableKeyDoesNotBlockTheOthers: the client stamps a
-// key it cannot route to a node INVALID_NODE_ERROR, and with RespondAllKeys on
-// it then returns before sending anything (client.go BatchOperate). The stub
-// models exactly that. The unroutable key is resent, so under RespondAllKeys
-// it would abort every attempt and strand the other parent's marker.
+// key it cannot route to a node INVALID_NODE_ERROR, and under the default
+// RespondAllKeys it then returns before sending anything (client.go
+// BatchOperate). The stub models exactly that. The unroutable key is resent,
+// so the other parent's withdrawal must still be sent past it.
 func TestWithdrawMarkers_UnroutableKeyDoesNotBlockTheOthers(t *testing.T) {
 	s, client := newFlushTestService(t)
 
@@ -1157,15 +1157,16 @@ func TestWithdrawMarkers_UnroutableKeyDoesNotBlockTheOthers(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, hasMarker(t, client, upKey, &upChild), "fixture: the marker landed")
 
-	calls := 0
+	downSends := 0
 	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
-		calls++
+		require.True(t, policy == nil || policy.RespondAllKeys, "the withdrawal keeps the default RespondAllKeys")
 
 		routable := make([]aerospike.BatchRecordIfc, 0, len(records))
 
 		for _, rec := range records {
 			br := rec.BatchRec()
 			if br.Key.Equals(downKey) {
+				downSends++
 				br.ResultCode = types.INVALID_NODE_ERROR
 				br.Err = &aerospike.AerospikeError{ResultCode: types.INVALID_NODE_ERROR}
 
@@ -1175,20 +1176,15 @@ func TestWithdrawMarkers_UnroutableKeyDoesNotBlockTheOthers(t *testing.T) {
 			routable = append(routable, rec)
 		}
 
-		invalidNode := &aerospike.AerospikeError{ResultCode: types.INVALID_NODE_ERROR}
-		if policy.RespondAllKeys {
-			return invalidNode
+		if len(routable) < len(records) {
+			return &aerospike.AerospikeError{ResultCode: types.INVALID_NODE_ERROR}
 		}
 
-		if err := client.BatchOperate(policy, routable); err != nil {
-			return err
-		}
-
-		return invalidNode
+		return client.BatchOperate(policy, routable)
 	}
 
 	s.withdrawMarkers(updates, map[chainhash.Hash]struct{}{downChild: {}, upChild: {}})
-	require.Equal(t, withdrawMarkerAttempts, calls, "the unroutable key is resent every attempt")
+	require.Equal(t, withdrawMarkerAttempts, downSends, "the unroutable key is resent every attempt")
 	require.False(t, hasMarker(t, client, upKey, &upChild), "the routable parent's marker was withdrawn")
 }
 
