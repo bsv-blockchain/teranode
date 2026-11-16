@@ -1478,10 +1478,14 @@ print(",".join(n["p2pAddr"] for n in nodes), ",".join(hub(n) for n in nodes))
   docker rm -f "$MERKLE_CONTAINER" >/dev/null 2>&1 || true
   echo "starting $MERKLE_CONTAINER on $network..."
   # Published for amd64 only; arm64 hosts run it under emulation.
+  # busy_timeout and WAL: the default DSN has neither, so under load concurrent
+  # writes fail at once with SQLITE_BUSY, /watch answers 500 and the broadcaster
+  # parks the txs at PENDING_RETRY with no proof.
   docker create --name "$MERKLE_CONTAINER" --network "$network" --platform linux/amd64 --memory 1g \
     --tmpfs /data:mode=1777 \
     -e MODE=all-in-one -e LOG_LEVEL=info -e API_PORT=8080 \
-    -e STORE_BACKEND=sql -e STORE_SQL_DRIVER=sqlite -e STORE_SQL_DSN=file:/data/merkle.db \
+    -e STORE_BACKEND=sql -e STORE_SQL_DRIVER=sqlite \
+    -e STORE_SQL_DSN='file:/data/merkle.db?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)' \
     -e KAFKA_BROKERS=kafka-shared:9092 \
     -e P2P_NETWORK=regtest -e P2P_BOOTSTRAP_PEERS="$peers" -e P2P_DHT_MODE=off \
     -e P2P_ENABLE_NAT=false -e P2P_ENABLE_MDNS=false -e P2P_PORT=9905 -e P2P_STORAGE_PATH=/data/p2p \
