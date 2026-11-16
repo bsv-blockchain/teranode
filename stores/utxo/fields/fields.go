@@ -68,6 +68,10 @@ const (
 	SubtreeIdxs FieldName = "subtreeIdxs"
 	// Reassignments tracks UTXOs that have been reassigned
 	Reassignments FieldName = "reassignments"
+	// ReassignedScripts maps reassigned output offsets to their replacement locking scripts.
+	// The value doubles as an Aerospike bin name, which may be at most 15 bytes
+	// (BIN_NAME_TOO_LONG) - hence "reassignScripts", not "reassignedScripts".
+	ReassignedScripts FieldName = "reassignScripts"
 	// DeleteAtHeight specifies the block height at which the record should be deleted
 	DeleteAtHeight FieldName = "deleteAtHeight"
 	// DAHVersion counts the writes of DeleteAtHeight on a master record. Every writer bumps it with the write,
