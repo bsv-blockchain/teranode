@@ -1764,6 +1764,62 @@ func (s *SQL) reconcileOnMainChainRows(ctx context.Context, exec execQuerier) (c
 	return changed, floor, nil
 }
 
+// reorgForkFloor returns the lowest height at which storing newBlockID can have changed the
+// best chain: one above the fork point of the best block before the store and the best
+// block after it. It reads parent_id alone, never on_main_chain, so stale flags cannot
+// raise it. That matters to a walk of the column running without slowPathMu: it may have
+// read the rows while the old best block was best, and it rewrites every row below the
+// floor this note gives with that older view, so the floor must reach the fork point
+// however the flags stood. The lowest row the reconcile changed is not enough. With flags
+// that already describe the branch retaking the tip, the reconcile changes only the new
+// tip's row, while the best chain changed right down to the fork point.
+//
+// The best block before the store is the best block other than newBlockID. The caller
+// holds slowPathMu and calls it in the transaction that inserted newBlockID, so no other
+// slow-path write sits between the two. It returns noRepairFloor when either best block
+// cannot be found, which owes a full walk.
+//
+// The walk steps the higher of the two blocks, or both at equal heights, until they
+// meet, so it reads about twice the fork's depth in rows.
+func (s *SQL) reorgForkFloor(ctx context.Context, exec execQuerier, newBlockID uint64) (int64, error) {
+	q := `
+		WITH RECURSIVE
+		post_best(id) AS (
+			SELECT id FROM blocks WHERE invalid = false
+			ORDER BY chain_work DESC, peer_id ASC, id ASC
+			LIMIT 1
+		),
+		pre_best(id) AS (
+			SELECT id FROM blocks WHERE invalid = false AND id != $1
+			ORDER BY chain_work DESC, peer_id ASC, id ASC
+			LIMIT 1
+		),
+		walk(a, a_height, a_parent, b, b_height, b_parent) AS (
+			SELECT pa.id, pa.height, pa.parent_id, pb.id, pb.height, pb.parent_id
+			FROM blocks pa, blocks pb
+			WHERE pa.id IN (SELECT id FROM post_best) AND pb.id IN (SELECT id FROM pre_best)
+			UNION ALL
+			SELECT na.id, na.height, na.parent_id, nb.id, nb.height, nb.parent_id
+			FROM walk w
+			INNER JOIN blocks na ON na.id = CASE WHEN w.a_height >= w.b_height THEN w.a_parent ELSE w.a END
+			INNER JOIN blocks nb ON nb.id = CASE WHEN w.b_height >= w.a_height THEN w.b_parent ELSE w.b END
+			WHERE w.a != w.b
+		)
+		SELECT MIN(a_height) FROM walk WHERE a = b
+	`
+
+	var forkHeight sql.NullInt64
+	if err := exec.QueryRowContext(ctx, q, newBlockID).Scan(&forkHeight); err != nil {
+		return noRepairFloor, err
+	}
+
+	if !forkHeight.Valid {
+		return noRepairFloor, nil
+	}
+
+	return forkHeight.Int64 + 1, nil
+}
+
 // rebuildOnMainChainFlag updates the on_main_chain column to accurately reflect the
 // current canonical chain by scanning a height window. It walks the main chain
 // backward from the best block via parent_id.

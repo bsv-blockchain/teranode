@@ -196,10 +196,11 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	// SQLITE_BUSY, a failed reconcile or a cancelled context is not noted. A failed commit
 	// is, because a commit error does not prove nothing committed.
 	//
-	// The note carries the lowest height whose row the reconcile changed. The reconcile
-	// walks down until it meets the old main chain, so that is the height just above the
-	// fork point, however far below this block it lies. A block that does not take the tip
-	// moves no block's membership at all.
+	// The note carries the height just above the fork point of the old and new best
+	// blocks, found by parent_id alone, or the lowest row the reconcile changed when that
+	// is lower. The rows changed are not enough on their own: with stale flags the best
+	// chain can have changed below all of them. A block that does not take the tip moves
+	// no block's membership at all.
 	var (
 		membershipMoved bool
 		movedFloor      int64
@@ -263,8 +264,23 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 
 			reconcile := func() (bool, int64, error) {
 				changed, floor, err := s.reconcileOnMainChainRows(ctx, tx)
+				if err != nil || changed == 0 {
+					return changed > 0, floor, err
+				}
 
-				return changed > 0, floor, err
+				// The rows the reconcile changed are not the whole of what moved: with stale
+				// flags the best chain can have changed below the lowest of them. Note the
+				// fork point too, whichever is lower.
+				forkFloor, err := s.reorgForkFloor(ctx, tx, newBlockID)
+				if err != nil {
+					return true, noRepairFloor, err
+				}
+
+				if forkFloor == noRepairFloor {
+					return true, noRepairFloor, nil
+				}
+
+				return true, lowerRepairFloor(floor, forkFloor), nil
 			}
 
 			if s.reconcileHook != nil {

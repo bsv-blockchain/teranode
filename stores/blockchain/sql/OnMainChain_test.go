@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"math/big"
 	"net/url"
 	"runtime"
 	"sync"
@@ -1282,6 +1283,14 @@ func TestStoreBlock_ReorgForkingBelowTheReconcileWindow(t *testing.T) {
 // PostgreSQL, which evaluates the same recursive walk and UPDATE ... RETURNING under its
 // own planner and snapshot rules.
 func TestStoreBlock_ReorgForkingBelowTheReconcileWindow_PostgreSQL(t *testing.T) {
+	requireReorgBelowTheReconcileWindowIsRepaired(t, newPostgresOnMainChainTestStore(t))
+}
+
+// newPostgresOnMainChainTestStore opens a store on a fresh PostgreSQL container, or skips
+// the test when no container can start.
+func newPostgresOnMainChainTestStore(t *testing.T) *SQL {
+	t.Helper()
+
 	if testing.Short() {
 		t.Skip("Skipping PostgreSQL tests in short mode")
 	}
@@ -1302,7 +1311,7 @@ func TestStoreBlock_ReorgForkingBelowTheReconcileWindow_PostgreSQL(t *testing.T)
 	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	waitForStartupRebuild(t, s)
 
-	requireReorgBelowTheReconcileWindowIsRepaired(t, s)
+	return s
 }
 
 func requireReorgBelowTheReconcileWindowIsRepaired(t *testing.T, s *SQL) {
@@ -1374,6 +1383,57 @@ func requireReorgBelowTheReconcileWindowIsRepaired(t *testing.T, s *SQL) {
 	moved, floor := s.closeOnMainChainWatch(watch)
 	require.True(t, moved, "the reorg is noted")
 	require.Equal(t, int64(block2.Height), floor, "the noted floor is the lowest height the reorg moved, just above the fork point")
+}
+
+// TestStoreBlock_ReorgOverStaleFlagsNotesTheForkPoint: the floor a reorg notes is where the
+// best chain changed, not where the reconcile changed a flag. The two differ when the flags
+// are stale. Here block2 (branch A) and blockAlternative2 (branch B) both sit on block1,
+// B has the most work, and the flags still describe A, as they would while a repair of the
+// column is owed. block3 extends A and retakes the tip. The reconcile finds A already
+// flagged and changes only block3's row, at height 3, but the best chain moved at height 2.
+// A full repair that read the column while B was best writes B's view over every row the
+// reconcile left alone, so a note at height 3 would let it leave height 2 wrong.
+func TestStoreBlock_ReorgOverStaleFlagsNotesTheForkPoint(t *testing.T) {
+	requireReorgOverStaleFlagsNotesTheForkPoint(t, newOnMainChainTestStore(t))
+}
+
+// TestStoreBlock_ReorgOverStaleFlagsNotesTheForkPoint_PostgreSQL runs the same reorg on
+// PostgreSQL, the engine whose full repair runs without slowPathMu and so can overlap it.
+func TestStoreBlock_ReorgOverStaleFlagsNotesTheForkPoint_PostgreSQL(t *testing.T) {
+	requireReorgOverStaleFlagsNotesTheForkPoint(t, newPostgresOnMainChainTestStore(t))
+}
+
+func requireReorgOverStaleFlagsNotesTheForkPoint(t *testing.T, s *SQL) {
+	t.Helper()
+
+	storeBlocks(t, s, block1, block2, blockAlternative2)
+	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "pre-condition: A holds the tip on the tie")
+	require.False(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()), "pre-condition: B is off the main chain")
+
+	// B gains one unit of work over A without its flag moving, so B is the best block and
+	// the column still describes A.
+	var aWork []byte
+	require.NoError(t, s.db.QueryRow(`SELECT chain_work FROM blocks WHERE hash = $1`, block2.Hash().CloneBytes()).Scan(&aWork))
+
+	bWork := new(big.Int).Add(new(big.Int).SetBytes(aWork), big.NewInt(1)).FillBytes(make([]byte, len(aWork)))
+	_, err := s.db.Exec(`UPDATE blocks SET chain_work = $1 WHERE hash = $2`, bWork, blockAlternative2.Hash().CloneBytes())
+	require.NoError(t, err)
+	s.ResetResponseCache()
+
+	watch := s.watchOnMainChainWrites()
+
+	storeBlocks(t, s, block3)
+
+	_, bestHash, err := s.getBestBlockID(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, block3.Hash().String(), bestHash.String(), "pre-condition: block3 retakes the tip for A")
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()), "the new tip is flagged")
+
+	moved, floor := s.closeOnMainChainWatch(watch)
+	require.True(t, moved, "the reorg is noted")
+	require.NotEqual(t, noRepairFloor, floor, "the fork point is known, so the note names a height")
+	require.LessOrEqual(t, floor, int64(block2.Height),
+		"the best chain changed at height 2, above the fork point block1, though the reconcile changed only height 3")
 }
 
 // TestReconcileOnMainChain_WalkStopsAtTheFirstFlaggedBlockPastTheWindow: past
