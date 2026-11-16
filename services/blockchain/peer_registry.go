@@ -1486,17 +1486,11 @@ func inlineTrimTarget(maxSize int) int {
 // connected peers active within ttl are left; those are never evicted for
 // size. Returns the number evicted. The caller must hold the write lock and
 // have normalised expired bans (expireBansLocked), so a stale IsBanned flag
-// does not move an idle peer into the evicted-last tier.
+// does not keep an idle peer in the banned tier.
 //
-// Eviction order is evictionTier first, then least recently active. The tier
-// is what keeps a rotating-identity flood from washing honest peers out: a
-// flood ID has nothing but a registration, so it sits in the first tier, and
-// a flood only displaces entries like itself until none are left. Peers the
-// node has real history with come next. Banned peers go last: the ban itself
-// lives in banScores, which Register reads back when the peer returns, so
-// evicting the PeerInfo loses only its dashboard row. Banned peers still count
-// toward the cap, so getting many identities banned cannot push the registry
-// past it.
+// Eviction order is evictionTier first, then least recently active within a
+// tier. The tiers are what keep a rotating-identity flood from washing honest
+// peers out; see evictionTier for the order and why.
 func (r *CentralizedPeerRegistry) evictToSizeLocked(size int, now time.Time, ttl time.Duration) int {
 	toEvict := len(r.peers) - size
 	if toEvict <= 0 {
@@ -1537,36 +1531,50 @@ func (r *CentralizedPeerRegistry) evictToSizeLocked(size int, now time.Time, ttl
 // Eviction tiers for evictToSizeLocked, lowest evicted first.
 const (
 	evictionTierNoHistory = iota
-	evictionTierHistory
 	evictionTierBanned
+	evictionTierNegative
+	evictionTierPositive
 )
 
+// evictionTier places a peer in the eviction order:
+//
+//  1. No history: nothing but a registration, which is all a gossip author
+//     minted offline has. A flood displaces entries like itself first.
+//  2. Banned: the ban lives in banScores, which Register reads back when the
+//     peer returns, so evicting the PeerInfo loses only its dashboard row.
+//     Gossip authors can get banned cheaply, so banned entries must not
+//     outrank peers with history.
+//  3. Negative history only: failures, attempts, penalties, or any malicious
+//     report. A gossip author can earn these (an announcement that triggers a
+//     catchup attempt that then fails), but keeping them above tiers 1 and 2
+//     stops a penalised peer from resetting its record by flooding its own
+//     entry out.
+//  4. Positive history: the peer served data that passed validation. An
+//     attacker can still earn this by relaying real chain data, but only at
+//     the pace of the node's own fetches and catchups, not at gossip rate.
 func evictionTier(info *PeerInfo) int {
+	positive := info.InteractionSuccesses > 0 ||
+		info.CatchupSuccesses > 0 ||
+		!info.LastValidatedAt.IsZero() ||
+		len(info.ValidatedChainWork) > 0
+	negative := info.MaliciousCount > 0 ||
+		info.InteractionAttempts > 0 ||
+		info.InteractionFailures > 0 ||
+		info.CatchupAttempts > 0 ||
+		info.CatchupFailures > 0 ||
+		info.FullStorageContradictions > 0 ||
+		!info.FullStoragePenaltyUntil.IsZero()
+
 	switch {
 	case info.IsBanned:
 		return evictionTierBanned
-	case hasPeerHistory(info):
-		return evictionTierHistory
+	case positive && info.MaliciousCount == 0:
+		return evictionTierPositive
+	case negative:
+		return evictionTierNegative
 	default:
 		return evictionTierNoHistory
 	}
-}
-
-// hasPeerHistory reports whether the node recorded anything about the peer
-// beyond its registration: validated progress, an interaction (fetch, block or
-// subtree received, catchup success or failure, malicious report), a catchup
-// attempt, or a full-storage contradiction or penalty. None of these can be
-// earned by gossiping alone, which is what makes the evictionTierNoHistory
-// tier safe to sacrifice to a flood. Keeping penalised peers here also stops a
-// peer from resetting a bad record by flooding its own entry out.
-func hasPeerHistory(info *PeerInfo) bool {
-	return info.InteractionAttempts > 0 ||
-		info.InteractionSuccesses > 0 ||
-		info.CatchupAttempts > 0 ||
-		!info.LastValidatedAt.IsZero() ||
-		len(info.ValidatedChainWork) > 0 ||
-		info.FullStorageContradictions > 0 ||
-		!info.FullStoragePenaltyUntil.IsZero()
 }
 
 // isCleanupExempt reports whether a peer must be retained by Cleanup's TTL
