@@ -415,7 +415,7 @@ require (
 	github.com/bsv-blockchain/go-p2p-message-bus v0.3.0
 	github.com/bsv-blockchain/go-safe-conversion v1.2.0
 	github.com/bsv-blockchain/go-sdk v1.7.3
-	github.com/bsv-blockchain/go-subtree v1.6.3
+	github.com/bsv-blockchain/go-subtree v1.6.4
 	github.com/bsv-blockchain/go-tx-map v1.5.1
 	github.com/bsv-blockchain/go-wire v1.5.0
 	github.com/bsv-blockchain/testcontainers-aerospike-go v0.4.0
