@@ -2324,3 +2324,55 @@ func TestDoLocalServiceHTTPRequestBodyReader_DoesNotFollowRedirects(t *testing.T
 	require.Error(t, err, "the redirect response is not a 2xx, so the caller must see an error rather than the followed body")
 	require.False(t, targetReceivedToken.Load(), "the internal token header must never reach the redirect target")
 }
+
+// TestDoLocalServiceHTTPRequestBodyReader_DoesNotSign pins that the node's libp2p identity
+// signs only requests to peers. A read from this node's own services goes to an
+// operator-configured address and gains nothing from a peer signature, so it must carry none
+// of the X-Peer-* headers even while a signer is installed. The peer path is exercised
+// against the same server as a control, so a signer that silently stopped signing cannot
+// pass this test.
+func TestDoLocalServiceHTTPRequestBodyReader_DoesNotSign(t *testing.T) {
+	var sawSignature atomic.Bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawSignature.Store(r.Header.Get("X-Peer-Signature") != "" || r.Header.Get("X-Peer-PubKey") != "")
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	origProtection := SSRFProtectionEnabled()
+	origSigner := loadHTTPRequestSigner()
+
+	t.Cleanup(func() {
+		SetSSRFProtection(origProtection)
+
+		if origSigner != nil {
+			SetHTTPRequestSigner(origSigner)
+			return
+		}
+
+		// atomic.Value cannot be reset to nil; a key-less signer signs nothing.
+		SetHTTPRequestSigner(NewEd25519RequestSigner(nil))
+	})
+
+	// The peer-path control dials loopback, which SSRF protection refuses.
+	SetSSRFProtection(false)
+
+	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	require.NoError(t, err)
+
+	SetHTTPRequestSigner(NewEd25519RequestSigner(privKey))
+
+	peerReader, err := DoHTTPRequestBodyReader(context.Background(), srv.URL+"/peer")
+	require.NoError(t, err)
+	_, _ = io.ReadAll(peerReader)
+	_ = peerReader.Close()
+	require.True(t, sawSignature.Load(), "control: a peer fetch must be signed while the signer is installed")
+
+	localReader, err := DoLocalServiceHTTPRequestBodyReader(context.Background(), srv.URL+"/local")
+	require.NoError(t, err)
+	_, _ = io.ReadAll(localReader)
+	_ = localReader.Close()
+	require.False(t, sawSignature.Load(), "a request to this node's own service must not carry the libp2p identity signature")
+}

@@ -534,7 +534,7 @@ func DoLocalServiceHTTPRequestBodyReader(ctx context.Context, url string, header
 		}
 	}
 
-	bodyReaderCloser, cancelFn, err := executeHTTPRequestWithClient(ctx, cancelFn, localServiceHTTPClient, url, reqHeaders)
+	bodyReaderCloser, cancelFn, err := executeHTTPRequestWithClient(ctx, cancelFn, localServiceHTTPClient, url, reqHeaders, false)
 	if err != nil {
 		cancelFn()
 		return nil, err
@@ -820,12 +820,12 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 		return nil, cancelFn, err
 	}
 
-	return executeHTTPRequestWithClient(ctx, cancelFn, httpClient, rawURL, nil, requestBody...)
+	return executeHTTPRequestWithClient(ctx, cancelFn, httpClient, rawURL, nil, true, requestBody...)
 }
 
 // buildOutboundRequest constructs the http.Request shared by every path that talks to a
 // peer over HTTP: a GET by default, or a POST with an octet-stream body when requestBody
-// is supplied, signed by the configured request signer. Content-Type is
+// is supplied, signed by the configured request signer when signAsPeer is set. Content-Type is
 // application/octet-stream because every internal POST that goes through this helper
 // sends raw bytes (e.g. /api/v1/subtree/{hash}/txs streams packed 32-byte tx hashes).
 // Tagging it as application/json caused a WAF in front of asset (ModSecurity) to run the
@@ -840,7 +840,12 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 //
 // headers, when non-nil, are set after Content-Type (so a caller can override it) and
 // before signing (so a signer that covers headers sees them).
-func buildOutboundRequest(ctx context.Context, rawURL string, headers map[string]string, requestBody ...[]byte) (*http.Request, error) {
+//
+// signAsPeer is true only for requests to a peer's DataHub, the one protocol the signature
+// exists for: it proves this node's libp2p identity so the peer can grant its tier. A request
+// to one of this node's own services passes false, so the identity key signs nothing it has
+// no reason to sign.
+func buildOutboundRequest(ctx context.Context, rawURL string, headers map[string]string, signAsPeer bool, requestBody ...[]byte) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		// A URL that will not parse comes back as a *url.Error that quotes rawURL
@@ -876,9 +881,11 @@ func buildOutboundRequest(ctx context.Context, rawURL string, headers map[string
 		req.Header.Set(k, v)
 	}
 
-	// Sign the request if a signer is configured (silently skip on error)
-	if signer := loadHTTPRequestSigner(); signer != nil {
-		_ = signer.SignRequest(req)
+	// Sign a peer request if a signer is configured (silently skip on error)
+	if signAsPeer {
+		if signer := loadHTTPRequestSigner(); signer != nil {
+			_ = signer.SignRequest(req)
+		}
 	}
 
 	return req, nil
@@ -925,9 +932,9 @@ func waitOutRetrySecond(ctx context.Context, prevSecond int64) error {
 const maxRetrySecondWait = 2 * time.Second
 
 // executeHTTPRequestWithClient performs the request through client, which decides what
-// addresses may be reached.
-func executeHTTPRequestWithClient(ctx context.Context, cancelFn context.CancelFunc, client *http.Client, rawURL string, headers map[string]string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
-	req, err := buildOutboundRequest(ctx, rawURL, headers, requestBody...)
+// addresses may be reached. signAsPeer is passed to buildOutboundRequest.
+func executeHTTPRequestWithClient(ctx context.Context, cancelFn context.CancelFunc, client *http.Client, rawURL string, headers map[string]string, signAsPeer bool, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
+	req, err := buildOutboundRequest(ctx, rawURL, headers, signAsPeer, requestBody...)
 	if err != nil {
 		return nil, cancelFn, err
 	}
@@ -1300,7 +1307,7 @@ func doHTTPRequestWithRetryAfter(ctx context.Context, timeoutMs int, rawURL stri
 		return nil, 0, 0, err
 	}
 
-	req, err := buildOutboundRequest(ctx, rawURL, nil, requestBody...)
+	req, err := buildOutboundRequest(ctx, rawURL, nil, true, requestBody...)
 	if err != nil {
 		cancelFn()
 		return nil, 0, 0, err

@@ -13,14 +13,23 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 )
 
+// PeerAuthDomain opens every payload the HTTP signer signs. The signing key is
+// the node's libp2p identity key, which libp2p protocols also sign with; each of
+// those prefixes what it signs with its own domain string (pubsub, noise, TLS,
+// signed envelopes). This tag keeps an HTTP signature from ever being valid for
+// one of those payloads, or theirs for this one. A new protocol that signs with
+// the identity key needs its own tag, and must not share this one.
+const PeerAuthDomain = "teranode-http-peer-auth"
+
 // PeerAuthVersion is the wire version of the signed-payload format. The payload
 // format is:
 //
-//	v<PeerAuthVersion>:<unix_ts>:<host>:<method>:<request_uri>:<sha256_body_hex>
+//	teranode-http-peer-auth/v<PeerAuthVersion>:<unix_ts>:<host>:<method>:<request_uri>:<sha256_body_hex>
 //
-// Bumping this constant (and the matching verifier prefix) is the upgrade
-// mechanism for any future change to the signed payload.
-const PeerAuthVersion = 2
+// Bumping this constant is the upgrade mechanism for any future change to the
+// signed payload. Verifiers build the payload with PeerAuthSignedPayload, so the
+// signer and the verifier cannot drift apart.
+const PeerAuthVersion = 3
 
 // PeerAuthBodyDigestHeader carries the lowercase hex SHA-256 of the request
 // body. Empty bodies use the SHA-256 of the empty string. Verifiers MUST
@@ -101,7 +110,7 @@ func NewEd25519RequestSigner(privKey crypto.PrivKey) *Ed25519RequestSigner {
 //
 // The signature covers:
 //
-//	v<PeerAuthVersion>:<unix_ts>:<host>:<method>:<request_uri>:<sha256_body_hex>
+//	teranode-http-peer-auth/v<PeerAuthVersion>:<unix_ts>:<host>:<method>:<request_uri>:<sha256_body_hex>
 //
 // where host is req.Host, request_uri is req.URL.RequestURI() (path + raw
 // query), and sha256_body_hex is the lowercase hex SHA-256 of the request
@@ -118,7 +127,7 @@ func (s *Ed25519RequestSigner) SignRequest(req *http.Request) error {
 	}
 
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
-	payload := buildSignedPayload(ts, req.Host, req.Method, req.URL.RequestURI(), bodyDigestHex)
+	payload := PeerAuthSignedPayload(ts, req.Host, req.Method, req.URL.RequestURI(), bodyDigestHex)
 
 	sig, err := s.privKey.Sign([]byte(payload))
 	if err != nil {
@@ -164,8 +173,16 @@ func digestRequestBody(req *http.Request) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// buildSignedPayload is the canonical form covered by the signature. Verifiers
+// PeerAuthSignedPayload is the canonical form covered by the signature. Verifiers
 // MUST construct an identical payload from the request being verified.
-func buildSignedPayload(ts, host, method, requestURI, bodyDigestHex string) string {
-	return "v" + strconv.Itoa(PeerAuthVersion) + ":" + ts + ":" + host + ":" + method + ":" + requestURI + ":" + bodyDigestHex
+func PeerAuthSignedPayload(ts, host, method, requestURI, bodyDigestHex string) string {
+	return PeerAuthDomain + "/v" + strconv.Itoa(PeerAuthVersion) + ":" + ts + ":" + host + ":" + method + ":" + requestURI + ":" + bodyDigestHex
+}
+
+// PeerAuthLegacyV2Payload is the payload signed before PeerAuthDomain was added,
+// with no domain tag. Verifiers accept it for one release so peers that have not
+// upgraded keep their tier; the signer never produces it. Remove it, and the
+// verifier's fallback to it, in the release after the domain tag ships.
+func PeerAuthLegacyV2Payload(ts, host, method, requestURI, bodyDigestHex string) string {
+	return "v2:" + ts + ":" + host + ":" + method + ":" + requestURI + ":" + bodyDigestHex
 }
