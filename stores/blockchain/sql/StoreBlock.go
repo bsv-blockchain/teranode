@@ -196,10 +196,10 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	// SQLITE_BUSY, a failed reconcile or a cancelled context is not noted. A failed commit
 	// is, because a commit error does not prove nothing committed.
 	//
-	// The note carries the lowest height the reconcile can have moved the best chain at:
-	// the bottom of its own walk, maxDepth below this block. A reorg the reconcile can
-	// handle forks within that walk, and a block that does not take the tip moves no
-	// block's membership at all.
+	// The note carries the lowest height whose row the reconcile changed. The reconcile
+	// walks down until it meets the old main chain, so that is the height just above the
+	// fork point, however far below this block it lies. A block that does not take the tip
+	// moves no block's membership at all.
 	var (
 		membershipMoved bool
 		movedFloor      int64
@@ -261,25 +261,34 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 				return nil
 			}
 
-			reconcile := func() (bool, error) {
-				changed, err := s.reconcileOnMainChainRows(ctx, tx)
+			reconcile := func() (bool, int64, error) {
+				changed, floor, err := s.reconcileOnMainChainRows(ctx, tx)
 
-				return changed > 0, err
+				return changed > 0, floor, err
 			}
 
 			if s.reconcileHook != nil {
-				// A test's stand-in cannot say what it changed, so count it as a change.
-				reconcile = func() (bool, error) { return true, s.reconcileHook() }
+				// A test's stand-in cannot say what it changed, so count it as a change that
+				// cannot name a floor.
+				reconcile = func() (bool, int64, error) { return true, noRepairFloor, s.reconcileHook() }
 			}
 
-			var moved bool
+			var (
+				moved bool
+				floor int64
+			)
 
-			moved, reconcileErr = reconcile()
+			moved, floor, reconcileErr = reconcile()
 			if reconcileErr == nil && moved {
 				// RetryTx commits next. Kept true if that commit fails, and across a retry
-				// whose earlier commit may have landed before it reported the error.
+				// whose earlier commit may have landed before it reported the error. A retry
+				// keeps the lowest floor any attempt reported, since the earlier commit may
+				// be the one that landed.
+				if !membershipMoved || floor == noRepairFloor || (movedFloor != noRepairFloor && floor < movedFloor) {
+					movedFloor = floor
+				}
+
 				membershipMoved = true
-				movedFloor = s.reconcileFloor(height)
 			}
 
 			return reconcileErr

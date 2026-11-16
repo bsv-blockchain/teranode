@@ -1579,8 +1579,8 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 // reconcileOnMainChain restores the invariant that on_main_chain is true on
 // exactly the chain from genesis to the chain_work-best valid block. It is
 // the hot-path replacement for rebuildOnMainChainFlag's window scan and is
-// called from StoreBlock's reorg branch — the only chain-mutating path
-// where consensus bounds the divergence between the new chain and the old.
+// called from StoreBlock's reorg branch, where the walk runs down from the new
+// best block to the old main chain.
 //
 // InvalidateBlock and RevalidateBlock are administrative operations whose
 // fork point can lie arbitrarily deep below the current tip; reconciling
@@ -1626,8 +1626,9 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 // Algorithm (single statement):
 //
 //  1. best_block CTE: highest chain_work valid block.
-//  2. new_path CTE: walks best_block's lineage backward via parent_id up
-//     to maxDepth steps.
+//  2. new_path CTE: walks best_block's lineage backward via parent_id at
+//     least maxDepth steps, and on past that until it reaches a block that
+//     is already flagged true, which is where the new chain meets the old.
 //  3. UPDATE in one go:
 //     a. blocks in new_path with on_main_chain=false → true
 //     (covers reorgs and the fast-path-descendant gap).
@@ -1637,15 +1638,26 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 //     flagged sibling, regardless of whether the caller knew the right
 //     "old tip").
 //
-// Bounds: maxDepth = max(2*CoinbaseMaturity, 100). Reorgs deeper than
-// CoinbaseMaturity are consensus-invalid, so the bound is always safe
-// for StoreBlock-driven reorgs; the floor of 100 covers tests with very
-// small CoinbaseMaturity. The function does NOT include a deep-fork
-// fallback because the obvious cheap check (count of on_main_chain=true
-// vs bestHeight+1) is necessary but not sufficient: when a stale flag
+// Bounds: maxDepth = max(2*CoinbaseMaturity, 100) is the least the walk
+// covers, so stray flags that far below the tip are cleared even when the
+// fork point is higher; the floor of 100 covers tests with very small
+// CoinbaseMaturity. maxDepth is not a bound on the fork point. Catch-up
+// bounds a fork's depth from the old tip, and a branch with less work per
+// block can overtake the old tip only far above the fork point, so the walk
+// keeps going down while the block it is on is flagged false. Below the
+// first flagged block it reaches, the old and new chains are the same, and
+// the flags there are left as they were. A walk that never meets a flagged
+// block ends at genesis, which is a full repair of the lineage.
+//
+// The rows this reconcile visits are the new chain's blocks from the fork
+// point up, plus maxDepth, so it remains the cheap path. It does not repair
+// a flag that is wrong below the first flagged block it meets, because
+// nothing tells it the chain is broken there: the count of
+// on_main_chain=true against bestHeight+1 still matches when a stale flag
 // at one height is replaced by a wrongly-flagged sibling at the same
-// height the count still matches. Callers that may produce deep
-// divergences must use rebuildOnMainChainFlag instead.
+// height. InvalidateBlock and RevalidateBlock, which can move membership at
+// any depth without flagging their new chain first, use
+// rebuildOnMainChainFlag instead.
 //
 // The caller must hold s.mainChainRebuilding (Add(1)/Add(-1)) so concurrent
 // readers take the CTE fallback during the brief commit window, and
@@ -1655,16 +1667,20 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 // Idempotent: a no-op when on_main_chain already matches the chain_work
 // best's lineage within the walked window.
 //
+// It reports how many rows it changed and the lowest height among them, or
+// noRepairFloor when it changed none.
+//
 // exec is the pool or an open transaction; StoreBlock passes its transaction so the
 // reconciliation commits or rolls back together with the INSERT. The error is the
 // driver's own, unwrapped, and the caller types it.
 func (s *SQL) reconcileOnMainChain(ctx context.Context, exec execQuerier) error {
-	_, err := s.reconcileOnMainChainRows(ctx, exec)
+	_, _, err := s.reconcileOnMainChainRows(ctx, exec)
 
 	return err
 }
 
-// reconcileMaxDepth is how many blocks below the best block reconcileOnMainChain walks.
+// reconcileMaxDepth is the least number of blocks below the best block reconcileOnMainChain
+// walks. It walks further when the fork point is deeper.
 func (s *SQL) reconcileMaxDepth() int64 {
 	maxDepth := int64(s.chainParams.CoinbaseMaturity) * 2
 	if maxDepth < 100 {
@@ -1674,24 +1690,11 @@ func (s *SQL) reconcileMaxDepth() int64 {
 	return maxDepth
 }
 
-// reconcileFloor is the lowest height at which a reconcile run by StoreBlock for a block
-// at height can have moved the best chain: reconcileMaxDepth below the block, clamped at
-// zero. When the block takes the tip, the reconcile walks that far down its lineage and
-// assumes the fork lies within the walk, as consensus bounds it to. When it does not, the
-// best chain does not move and any height bounds it.
-func (s *SQL) reconcileFloor(height uint32) int64 {
-	floor := int64(height) - s.reconcileMaxDepth()
-	if floor < 0 {
-		floor = 0
-	}
-
-	return floor
-}
-
 // reconcileOnMainChainRows is reconcileOnMainChain returning how many rows the
-// reconciliation changed, so StoreBlock can tell a reorg from a fork block that left the
-// main chain where it was.
-func (s *SQL) reconcileOnMainChainRows(ctx context.Context, exec execQuerier) (int64, error) {
+// reconciliation changed and the lowest height among them, so StoreBlock can tell a reorg
+// from a fork block that left the main chain where it was, and can note how far down the
+// reorg moved membership. floor is noRepairFloor when changed is zero.
+func (s *SQL) reconcileOnMainChainRows(ctx context.Context, exec execQuerier) (changed int64, floor int64, err error) {
 	maxDepth := s.reconcileMaxDepth()
 
 	// best_block, new_path, window_floor and the UPDATE all live in one
@@ -1705,14 +1708,14 @@ func (s *SQL) reconcileOnMainChainRows(ctx context.Context, exec execQuerier) (i
 			ORDER BY chain_work DESC, peer_id ASC, id ASC
 			LIMIT 1
 		),
-		new_path(id, parent_id, height, depth) AS (
-			SELECT id, parent_id, height, 0 FROM blocks
+		new_path(id, parent_id, height, depth, on_main_chain) AS (
+			SELECT id, parent_id, height, 0, on_main_chain FROM blocks
 			WHERE id IN (SELECT id FROM best_block)
 			UNION ALL
-			SELECT b.id, b.parent_id, b.height, np.depth + 1
+			SELECT b.id, b.parent_id, b.height, np.depth + 1, b.on_main_chain
 			FROM blocks b
 			INNER JOIN new_path np ON b.id = np.parent_id
-			WHERE b.id != np.id AND np.depth < $1
+			WHERE b.id != np.id AND (np.depth < $1 OR np.on_main_chain = false)
 		),
 		window_floor(h) AS (
 			SELECT MIN(height) FROM new_path
@@ -1727,21 +1730,37 @@ func (s *SQL) reconcileOnMainChainRows(ctx context.Context, exec execQuerier) (i
 					AND height >= COALESCE((SELECT h FROM window_floor), 0)
 					AND id NOT IN (SELECT id FROM new_path))
 			  )
+		RETURNING height
 	`
-	// The error is returned raw: StoreBlock runs this inside RetryTx, which needs the
-	// driver's concrete type to classify it, and types it once RetryTx returns.
-	res, err := exec.ExecContext(ctx, q, maxDepth)
+	// The errors are returned raw: StoreBlock runs this inside RetryTx, which needs the
+	// driver's concrete type to classify them, and types them once RetryTx returns.
+	rows, err := exec.QueryContext(ctx, q, maxDepth)
 	if err != nil {
-		return 0, err
+		return 0, noRepairFloor, err
 	}
 
-	changed, err := res.RowsAffected()
-	if err != nil {
-		// Both drivers report it; if one ever does not, assume the chain moved.
-		return 1, nil
+	defer rows.Close()
+
+	floor = noRepairFloor
+
+	for rows.Next() {
+		var height int64
+		if err = rows.Scan(&height); err != nil {
+			return 0, noRepairFloor, err
+		}
+
+		if changed == 0 || height < floor {
+			floor = height
+		}
+
+		changed++
 	}
 
-	return changed, nil
+	if err = rows.Err(); err != nil {
+		return 0, noRepairFloor, err
+	}
+
+	return changed, floor, nil
 }
 
 // rebuildOnMainChainFlag updates the on_main_chain column to accurately reflect the

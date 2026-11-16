@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
@@ -1261,4 +1262,109 @@ func TestOnMainChain_MigrationTimeoutExceedsWindowedTimeout(t *testing.T) {
 		"full-migration rebuild must have a more generous timeout than windowed rebuilds")
 	require.GreaterOrEqual(t, migrationFullRebuildTimeout, time.Minute,
 		"migration timeout should be minutes-scale to accommodate multi-million-block chains")
+}
+
+// TestStoreBlock_ReorgForkingBelowTheReconcileWindow: catch-up bounds a fork's depth from
+// the old tip, not from the block that finally takes the tip. A branch with less work per
+// block can fork one block below the old tip and only overtake it more than
+// reconcileMaxDepth blocks above the fork point. The reconcile StoreBlock runs for that
+// block walks down from the new best, so it must keep walking until it reaches the old
+// chain, or the rows between the fork point and its window keep the old chain's flags.
+//
+// The fixture stands in for the lower-work branch by giving the old tip, block2, more
+// chain work than the whole fork, then lowering it just below the fork before the last
+// fork block is stored.
+func TestStoreBlock_ReorgForkingBelowTheReconcileWindow(t *testing.T) {
+	requireReorgBelowTheReconcileWindowIsRepaired(t, newOnMainChainTestStore(t))
+}
+
+// TestStoreBlock_ReorgForkingBelowTheReconcileWindow_PostgreSQL runs the same reorg on
+// PostgreSQL, whose recursive walk and UPDATE ... RETURNING are separate SQL from SQLite's.
+func TestStoreBlock_ReorgForkingBelowTheReconcileWindow_PostgreSQL(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping PostgreSQL tests in short mode")
+	}
+
+	connStr, teardown, err := postgres.SetupTestPostgresContainer()
+	if err != nil {
+		t.Skipf("PostgreSQL container not available: %v", err)
+	}
+
+	t.Cleanup(func() { _ = teardown() })
+
+	storeURL, err := url.Parse(connStr)
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+	waitForStartupRebuild(t, s)
+
+	requireReorgBelowTheReconcileWindowIsRepaired(t, s)
+}
+
+func requireReorgBelowTheReconcileWindowIsRepaired(t *testing.T, s *SQL) {
+	t.Helper()
+
+	ctx := context.Background()
+
+	storeBlocks(t, s, block1, block2)
+
+	var oldTipWork []byte
+	require.NoError(t, s.db.QueryRow(`SELECT chain_work FROM blocks WHERE hash = $1`, block2.Hash().CloneBytes()).Scan(&oldTipWork))
+
+	heavy := make([]byte, len(oldTipWork))
+	for i := range heavy {
+		heavy[i] = 0xff
+	}
+
+	_, err := s.db.Exec(`UPDATE blocks SET chain_work = $1 WHERE hash = $2`, heavy, block2.Hash().CloneBytes())
+	require.NoError(t, err)
+	s.ResetResponseCache()
+
+	// block1 is the fork point. The fork runs from height 2 to forkTipHeight, and its tip
+	// is more than reconcileMaxDepth (100 with these settings) above block1.
+	forkTipHeight := uint32(block1.Height) + uint32(s.reconcileMaxDepth()) + 10
+
+	fork := []*model.Block{blockAlternative2}
+	for fork[len(fork)-1].Height < forkTipHeight {
+		fork = append(fork, createBlock3OnFork(fork[len(fork)-1]))
+	}
+
+	storeBlocks(t, s, fork[:len(fork)-1]...)
+
+	for _, b := range fork[:len(fork)-1] {
+		require.False(t, getOnMainChain(t, s, b.Hash().CloneBytes()), "pre-condition: the fork is below the old tip until its last block, height %d", b.Height)
+	}
+
+	// The old tip now has the work of the fork's second-to-last block, which keeps the tip
+	// on the tie, so the last fork block is the one that overtakes.
+	_, err = s.db.Exec(`UPDATE blocks SET chain_work = (SELECT chain_work FROM blocks WHERE hash = $1) WHERE hash = $2`,
+		fork[len(fork)-2].Hash().CloneBytes(), block2.Hash().CloneBytes())
+	require.NoError(t, err)
+	s.ResetResponseCache()
+
+	watch := s.watchOnMainChainWrites()
+
+	storeBlocks(t, s, fork[len(fork)-1])
+
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "the fork point stays on the main chain")
+	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "the old tip leaves the main chain")
+
+	for _, b := range fork {
+		require.True(t, getOnMainChain(t, s, b.Hash().CloneBytes()), "fork block at height %d is on the main chain", b.Height)
+	}
+
+	byHeight, err := s.GetBlockByHeight(ctx, block2.Height)
+	require.NoError(t, err)
+	require.Equal(t, blockAlternative2.Hash().String(), byHeight.Hash().String(), "the main chain's block at height 2 is the fork's")
+
+	needsRebuild, err := s.needsFullOnMainChainRebuild(ctx)
+	require.NoError(t, err)
+	require.False(t, needsRebuild, "one flagged block per height up to the tip")
+
+	moved, floor := s.closeOnMainChainWatch(watch)
+	require.True(t, moved, "the reorg is noted")
+	require.Equal(t, int64(block2.Height), floor, "the noted floor is the lowest height the reorg moved, just above the fork point")
 }

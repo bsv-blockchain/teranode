@@ -943,7 +943,7 @@ func TestOnMainChainRepairNarrowsAnOverlappedFullWalkToTheWritesFloor(t *testing
 
 	require.Equal(t, []bool{true, false}, fault.walks(), "the overlapped full walk, then one bounded walk")
 	require.Equal(t, []bool{false, true}, fault.lockHeld(), "the full walk runs unlocked, the bounded one under slowPathMu")
-	require.Equal(t, s.reconcileFloor(alt4.Height), fault.floorsSeen()[1], "the bounded walk reaches the reorg's floor")
+	require.Equal(t, int64(block2.Height), fault.floorsSeen()[1], "the bounded walk reaches the reorg's floor")
 
 	requireForkIsTheMainChain(t, s, alt3, alt4)
 	requireRepairSettled(t, s, gaugeBefore)
@@ -992,7 +992,7 @@ func TestOnMainChainRepairRerunsAnOperatorOverlapInFullWithoutTheLock(t *testing
 // chain write is noted during it, so a write that cannot have been overwritten must not be
 // noted. A fork block that leaves the tip where it is, and an invalid record, add a row no
 // older snapshot can see and change none it can. A reorg moves rows and is noted, with the
-// bottom of its reconcile's walk as the height.
+// lowest height its reconcile changed as the height.
 func TestStoreBlockNotesOnlyChainWritesThatMoveMembership(t *testing.T) {
 	s := newOnMainChainTestStore(t)
 	ctx := context.Background()
@@ -1020,7 +1020,7 @@ func TestStoreBlockNotesOnlyChainWritesThatMoveMembership(t *testing.T) {
 
 	moved, floor = s.closeOnMainChainWatch(watch)
 	require.True(t, moved, "the reorg to alt4 is noted")
-	require.Equal(t, s.reconcileFloor(alt4.Height), floor, "with the bottom of its reconcile's walk")
+	require.Equal(t, int64(block2.Height), floor, "with the lowest height its reconcile changed")
 }
 
 // TestChainWritesThatFailBeforeCommitAreNotNoted: a write that failed before it committed
@@ -1125,7 +1125,7 @@ func TestStartupFullRebuildOverlappedByAReorgOwesABoundedWalk(t *testing.T) {
 
 	require.Equal(t, []bool{true, false}, fault.walks(), "the overlapped startup walk, then one bounded repair")
 	require.Equal(t, []bool{false, true}, fault.lockHeld())
-	require.Equal(t, s.reconcileFloor(alt4.Height), fault.floorsSeen()[1])
+	require.Equal(t, int64(block2.Height), fault.floorsSeen()[1])
 
 	requireForkIsTheMainChain(t, s, alt3, alt4)
 	requireRepairSettled(t, s, gaugeBefore)
