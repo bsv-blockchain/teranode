@@ -316,6 +316,61 @@ func TestMinedSetAudit_SkipsNettedRoute(t *testing.T) {
 	require.NoError(t, result.report(&out, 1, 1))
 }
 
+// TestMinedSetAudit_NothingCheckedIsNotAPass: a run whose every audited block is UNCHECKED
+// is flagged, so the command exits 2 rather than 0 and a script does not read a missing
+// subtree store as clean. One checked block, or nothing to audit at all, is not flagged.
+//
+// Mutation target: nothingChecked returning false. The all-unchecked subcase then passes
+// silently.
+func TestMinedSetAudit_NothingCheckedIsNotAPass(t *testing.T) {
+	t.Run("every audited block is unchecked", func(t *testing.T) {
+		h := newMinedSetAuditHarness(t)
+
+		h.storeBlock(true, true, []*bt.Tx{h.auditTx()})
+		h.storeBlock(true, true, []*bt.Tx{h.auditTx()})
+
+		result, err := h.auditor.run(h.ctx, 1, 2, 10)
+		require.NoError(t, err)
+		require.Len(t, result.Unchecked, 2)
+		require.True(t, result.nothingChecked())
+
+		var out bytes.Buffer
+		require.NoError(t, result.report(&out, 1, 2))
+		require.Contains(t, out.String(), "No block in this range could be checked")
+	})
+
+	t.Run("one block is checked", func(t *testing.T) {
+		h := newMinedSetAuditHarness(t)
+
+		h.storeBlock(true, true, []*bt.Tx{h.auditTx()})
+
+		tagged := h.auditTx()
+		_, taggedID := h.storeBlock(true, false, []*bt.Tx{tagged})
+		h.createTagged(tagged, taggedID)
+
+		result, err := h.auditor.run(h.ctx, 1, 2, 10)
+		require.NoError(t, err)
+		require.Len(t, result.Unchecked, 1)
+		require.Equal(t, 1, result.Tagged)
+		require.False(t, result.nothingChecked())
+
+		var out bytes.Buffer
+		require.NoError(t, result.report(&out, 1, 2))
+		require.NotContains(t, out.String(), "No block in this range could be checked")
+	})
+
+	t.Run("nothing to audit", func(t *testing.T) {
+		h := newMinedSetAuditHarness(t)
+
+		h.storeBlock(false, true, []*bt.Tx{h.auditTx()})
+
+		result, err := h.auditor.run(h.ctx, 1, 1, 10)
+		require.NoError(t, err)
+		require.Equal(t, 1, result.NotMinedSet)
+		require.False(t, result.nothingChecked())
+	})
+}
+
 // TestMinedSetAudit_RefusesUnboundedRange: a range above --max-blocks is refused before
 // anything is read.
 func TestMinedSetAudit_RefusesUnboundedRange(t *testing.T) {

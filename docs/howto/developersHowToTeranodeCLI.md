@@ -280,7 +280,9 @@ For each block it samples two transactions: the first after the coinbase, and th
 
 Each audited block costs two blockchain gRPC calls, at most two subtree file reads of under 200 bytes each, and at most two UTXO store reads. `--max-blocks` (default 10,000) refuses a wider range unless raised.
 
-Remedy: there is no in-place repair. If the audit reports an affected block, resync the node. The command exits non-zero when it finds one.
+Remedy: there is no in-place repair. If the audit reports an affected block, resync the node.
+
+Exit codes: 0 when no block is affected and at least one block was checked, or there was nothing to audit; 1 when it finds an affected block or the run fails; 2 when no block is affected but every audited block is `UNCHECKED`, as with a missing subtree store or a fully pruned range. Exit 2 is not a pass.
 
 Options:
 

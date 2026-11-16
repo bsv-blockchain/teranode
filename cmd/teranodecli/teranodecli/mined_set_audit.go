@@ -47,6 +47,12 @@ const (
 	// minedSetAuditDefaultMaxBlocks bounds a run unless the operator raises it.
 	minedSetAuditDefaultMaxBlocks = 10_000
 
+	// minedSetAuditExitNothingChecked is the exit code of a run that found no affected
+	// block but could check none of the blocks it had to audit, so a script does not read
+	// a missing subtree store or a fully pruned range as clean. An affected block exits 1,
+	// as every other command error does.
+	minedSetAuditExitNothingChecked = 2
+
 	// A serialized subtree is a 32-byte root, 8 bytes of fees, 8 bytes of size and an
 	// 8-byte node count, then 48 bytes per node: a 32-byte transaction hash, its fee and
 	// its size (go-subtree Subtree.Serialize).
@@ -335,12 +341,21 @@ func (r *minedSetAuditResult) report(out io.Writer, startHeight, endHeight uint3
 	_, _ = fmt.Fprintf(out, "  affected:                      %d\n", len(r.Affected))
 
 	if len(r.Affected) == 0 {
+		if r.nothingChecked() {
+			_, _ = fmt.Fprintf(out, "\nNo block in this range could be checked: every audited block is UNCHECKED. This is not a pass. Exiting %d.\n", minedSetAuditExitNothingChecked)
+		}
+
 		return nil
 	}
 
 	_, _ = fmt.Fprintln(out, "\nThis node stored blocks with mined_set true whose transactions were never tagged with the block id, or never unlocked. Nothing repairs them in place: resync the node.")
 
 	return errors.NewProcessingError("%d block(s) stored with mined_set true carry untagged or locked transactions", len(r.Affected))
+}
+
+// nothingChecked reports whether the run had blocks to audit and checked none of them.
+func (r *minedSetAuditResult) nothingChecked() bool {
+	return len(r.Unchecked) > 0 && r.Tagged == 0 && len(r.Affected) == 0
 }
 
 // minedSetAuditFlags are the audit-mined-set command's flags.
@@ -377,8 +392,11 @@ Remedy: there is no in-place repair. Resync an affected node.
 It needs the blockchain service running, and reads blocks through it. It opens the UTXO
 store and the subtree store from this node's settings. It changes no data, but opening the
 UTXO store runs that store's normal startup, which creates any missing schema (and on
-Postgres can start the index build the node itself runs). It exits non-zero when it finds an
-affected block.
+Postgres can start the index build the node itself runs).
+
+Exit codes: 0 when no block is affected and at least one block was checked (or there was
+nothing to audit), 1 when it finds an affected block or the run fails, and 2 when no block
+is affected but every audited block is UNCHECKED, which is not a pass.
 `
 
 func registerMinedSetAuditFlags(fs *flag.FlagSet) *minedSetAuditFlags {
@@ -434,6 +452,14 @@ func minedSetAuditExecute(logger ulogger.Logger, tSettings *settings.Settings, f
 			return err
 		}
 
-		return result.report(os.Stdout, startHeight, endHeight)
+		if err := result.report(os.Stdout, startHeight, endHeight); err != nil {
+			return err
+		}
+
+		if result.nothingChecked() {
+			os.Exit(minedSetAuditExitNothingChecked)
+		}
+
+		return nil
 	}
 }

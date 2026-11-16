@@ -570,6 +570,8 @@ The CLI will exit with status code 1 when:
 - Required arguments are missing
 - Command execution fails
 
+`audit-mined-set` also exits 1 when it finds an affected block, and exits 2 when no block is affected but every audited block is `UNCHECKED`. Exit 2 means nothing could be checked, which is not a pass.
+
 ## Environment
 
 The CLI is available in all Teranode containers and automatically configured to work with the local Teranode instance.
