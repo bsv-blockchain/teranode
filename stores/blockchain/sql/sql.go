@@ -1891,14 +1891,16 @@ func (s *SQL) rebuildOnMainChainFlagFrom(ctx context.Context, full bool, floor i
 	// writes. Two callers run without slowPathMu held: the startup goroutine (see
 	// New) and, on PostgreSQL, the background repair's full walk (see
 	// attemptOnMainChainRepair); Invalidate/Revalidate hold slowPathMu and StoreBlock
-	// holds it for its whole duration, so they cannot conflict. Those two can,
-	// however, race a slow-path write to the same rows — so retry the whole
+	// holds it for its whole duration, so in this process they cannot conflict. Those
+	// two can, however, race a slow-path write to the same rows, and any walk can race a
+	// chain write from another process, which the check of the shared chain-write row
+	// turns into 40001 or 55P03 (see chainWriteStateKey) — so retry the whole
 	// transaction (begin → reads → UPDATEs → commit) as a unit on those codes.
 	// tx.ExecContext / tx.QueryRowContext are stdlib *sql.Tx methods and do NOT
 	// go through usql's per-statement retry, so the retry has to live here.
 	//
 	// On SQLite the modernc driver ignores the isolation option and never returns
-	// 40001/40P01, so isSerializationRetry is always false and the loop runs once.
+	// 40001/40P01/55P03, so isSerializationRetry is always false and the loop runs once.
 	const (
 		maxRebuildAttempts = 3
 		retryBaseDelay     = 100 * time.Millisecond

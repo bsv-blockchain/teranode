@@ -31,8 +31,8 @@ import (
 //     the walk holds its own row locks, which the write may be queued on. Either way the
 //     walk rolls back and runs again from a fresh snapshot.
 //
-// SQLite needs none of it: it lets one writer in at a time, and a transaction that read
-// before another writer committed cannot then write.
+// SQLite takes no lock: it lets one writer in at a time, and its unlocked startup rebuild
+// relies on the in-process watch, as before.
 const chainWriteStateKey = "on_main_chain_write"
 
 // chainWriteLocking reports whether this store's engine uses the shared row.
