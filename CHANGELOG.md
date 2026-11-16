@@ -35,7 +35,7 @@ read every section between yours and the target.
   blockchain peer registry no longer exceeds it between sweeps. Setting
   `p2p_peer_registry_cleanup_interval` to 0 no longer leaves the registry uncapped, and the limit
   can now evict banned peers' records (the ban itself is kept). To keep every peer record, set
-  `p2p_peer_registry_max_size` to 0.
+  `p2p_peer_registry_max_size` to 0. (#2202)
 - **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
   `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
   now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,
