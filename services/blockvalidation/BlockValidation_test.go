@@ -423,7 +423,11 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	// This ensures the parent relationship is under our control
 	// Use version 10 to differentiate from tx2 which uses version 1
 	tx1New := newTx(10, parentTx.TxIDChainHash())
-	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx1New, 0, utxostore.WithCreateOnly())
+	// the tip a node validating the block below has, and records validated at the block's
+	// height, so the block takes their stored verdicts
+	require.NoError(t, utxoStore.SetBlockHeight(99))
+
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx1New, 100, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Update hashes to use the new transactions
@@ -437,17 +441,17 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 
 	require.NoError(t, subtreeData.AddTx(tx1New, 1))
 
-	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx2, 0, utxostore.WithCreateOnly())
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx2, 100, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	require.NoError(t, subtreeData.AddTx(tx2, 2))
 
-	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx3, 0, utxostore.WithCreateOnly())
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx3, 100, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	require.NoError(t, subtreeData.AddTx(tx3, 3))
 
-	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx4, 0, utxostore.WithCreateOnly())
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx4, 100, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	nodeBytes, err := subtree.SerializeNodes()
@@ -557,6 +561,10 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
+	// the tip a node validating the block below has, and records validated at the block's
+	// height, so the block takes their stored verdicts
+	require.NoError(t, utxoStore.SetBlockHeight(99))
+
 	subtree, err := subtreepkg.NewTreeByLeafCount(txCount)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
@@ -581,7 +589,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 
 		fees += 100
 
-		_, _, err = utxoStore.SpendAndCreate(context.Background(), tx, 0, utxostore.WithCreateOnly())
+		_, _, err = utxoStore.SpendAndCreate(context.Background(), tx, 100, utxostore.WithCreateOnly())
 		require.NoError(t, err)
 	}
 
@@ -660,7 +668,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 		subtreeHashes,            // should be the subtree with placeholder
 		uint64(subtree.Length()), // nolint:gosec
 		123123,
-		1, 0)
+		100, 0)
 	require.NoError(t, err)
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
@@ -1135,6 +1143,10 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 
 	defer deferFunc()
 
+	// the tip a node validating the block below has, and records validated at the block's
+	// height, so the block takes their stored verdicts
+	require.NoError(t, utxoStore.SetBlockHeight(100))
+
 	// Create a subtree with our transactions
 	subtree, err := subtreepkg.NewTreeByLeafCount(txCount)
 	require.NoError(t, err)
@@ -1160,7 +1172,7 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 
 		fees += 100
 
-		_, _, err = utxoStore.SpendAndCreate(context.Background(), tx, 0, utxostore.WithCreateOnly())
+		_, _, err = utxoStore.SpendAndCreate(context.Background(), tx, 101, utxostore.WithCreateOnly())
 		require.NoError(t, err)
 	}
 
@@ -1301,6 +1313,10 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
+	// the tip a node validating the block below has, and records validated at the block's
+	// height, so the block takes their stored verdicts
+	require.NoError(t, utxoStore.SetBlockHeight(99))
+
 	// Create a chain of transactions
 	txs := transactions.CreateTestTransactionChainWithCount(t, 5) // coinbase + 3 transactions
 	tx0, tx1, tx2, tx3 := txs[0], txs[1], txs[2], txs[3]
@@ -1397,7 +1413,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 
 			return uint64(totalSize)
 		}(),
-		0, 0)
+		100, 0)
 
 	require.NoError(t, err)
 
@@ -2149,9 +2165,13 @@ func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 	_ = tx2.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
 	// Store in txMetaStore
-	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
-	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), tx1, 0, utxostore.WithCreateOnly())
-	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), tx2, 0, utxostore.WithCreateOnly())
+	// the tip a node validating the block below has, and records validated at the block's
+	// height, so the block takes their stored verdicts
+	require.NoError(t, txMetaStore.SetBlockHeight(99))
+
+	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 100, utxostore.WithCreateOnly())
+	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), tx1, 100, utxostore.WithCreateOnly())
+	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), tx2, 100, utxostore.WithCreateOnly())
 
 	// Subtree: coinbase, tx2, tx1 (wrong order: tx2 before tx1)
 	subtree, _ := subtreepkg.NewTreeByLeafCount(4)
@@ -3243,9 +3263,13 @@ func TestBlockValidation_DuplicateTransactionInBlock(t *testing.T) {
 	_ = normalTx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
 	// Store both in txMetaStore
-	_, _, err = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
+	// the tip a node validating the block below has, and records validated at the block's
+	// height, so the block takes their stored verdicts
+	require.NoError(t, txMetaStore.SetBlockHeight(99))
+
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 100, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	_, _, err = txMetaStore.SpendAndCreate(context.Background(), normalTx, 0, utxostore.WithCreateOnly())
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), normalTx, 100, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Build subtree with coinbase and the same normalTx twice

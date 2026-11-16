@@ -1109,6 +1109,15 @@ func Test_SmokeTests(t *testing.T) {
 		tests.AbsentRecordObservables(t, db)
 	})
 
+	t.Run("batch decorate lock time", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.BatchDecorateLockTime(t, db)
+	})
+
 	t.Run("set mined unmined since", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 

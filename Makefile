@@ -213,8 +213,7 @@ test-heavy:
 # Each is a TestKnownDefect_* test behind the bvgaps build tag that asserts spec-correct behaviour
 # and FAILS until its defect is fixed, so this target is not part of `make test`. When a defect is
 # fixed, drop the bvgaps tag and the TestKnownDefect_ prefix so the test becomes a regression test.
-# ./services/subtreevalidation/... has no proofs until bsv-blockchain/teranode#2124 (test task T08)
-# merges; it holds the GAP-BV-047 proofs. Until then `go test` reports no tests to run there.
+# ./services/subtreevalidation/... holds the GAP-BV-047 proof still open.
 .PHONY: test-bvgaps
 test-bvgaps:
 	SETTINGS_CONTEXT=test go test -race -count=1 -tags "bvgaps testtxmetacache" -run '^TestKnownDefect_' ./model/... ./services/blockvalidation/... ./services/subtreevalidation/...

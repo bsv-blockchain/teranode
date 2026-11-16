@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/pkg/txrules"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bsv-blockchain/teranode/services/validator"
@@ -889,28 +890,51 @@ func (u *Server) checkCachedSubtreesAgainstCandidateChain(ctx context.Context, b
 		return err
 	}
 
-	if len(conflictingTxHashes) == 0 {
+	// Anchored on the candidate's parent, so a side-fork candidate is measured against ITS
+	// ancestry rather than the node's current best chain. Same source as the full-validation
+	// path below. Fetched once, and only when a record mined somewhere or a conflicting tx
+	// needs it.
+	candidateChain := sync.OnceValues(func() (map[uint32]bool, error) {
+		blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
+		if err != nil {
+			return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to get block headers for cached-subtree check", block.Hash().String(), err)
+		}
+
+		blockIds := make(map[uint32]bool, len(blockHeaderIDs))
+		for _, blockID := range blockHeaderIDs {
+			blockIds[blockID] = true
+		}
+
+		return blockIds, nil
+	})
+
+	var storedChecks []cachedStoredCheck
+
+	if u.cachedVerdictsNeedReading(block.Height) {
+		onChain := func(blockIDs []uint32) (bool, error) {
+			if len(blockIDs) == 0 {
+				return false, nil
+			}
+
+			blockIds, err := candidateChain()
+			if err != nil {
+				return false, err
+			}
+
+			return inBlockIds(blockIds)(blockIDs)
+		}
+
+		if storedChecks, err = u.cachedSubtreeStoredChecks(ctx, cachedSubtrees, block.Height, onChain); err != nil {
+			return err
+		}
+	}
+
+	if len(conflictingTxHashes) == 0 && len(storedChecks) == 0 {
 		return nil
 	}
 
-	u.logger.Infof("[CheckBlockSubtrees][%s] %d conflicting transaction(s) in cached subtrees, checking against the candidate chain",
-		block.Hash().String(), len(conflictingTxHashes))
-
-	// Anchored on the candidate's parent, so a side-fork candidate is measured
-	// against ITS ancestry rather than the node's current best chain. Same
-	// source as the full-validation path below.
-	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
-	if err != nil {
-		return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to get block headers for cached-subtree check", block.Hash().String(), err)
-	}
-
-	blockIds := make(map[uint32]bool, len(blockHeaderIDs))
-	for _, blockID := range blockHeaderIDs {
-		blockIds[blockID] = true
-	}
-
-	// the block's candidate times, as CheckBlockSubtrees derives them for the validator, for the
-	// finality half of checkStoredTxAtHeight below
+	// the block's candidate times, as CheckBlockSubtrees derives them for the validator, for
+	// checkStoredTxAtHeight below
 	var candidateBlockTime, candidateParentMedianTime uint32
 	if block.Height < uint32(u.settings.ChainCfgParams.CSVHeight) {
 		candidateBlockTime = block.Header.Timestamp
@@ -918,25 +942,95 @@ func (u *Server) checkCachedSubtreesAgainstCandidateChain(ctx context.Context, b
 		return errors.NewProcessingError("[CheckBlockSubtrees][%s] candidate-parent MTP for cached-subtree check", block.Hash().String(), err)
 	}
 
+	// the options CheckBlockSubtrees validates a tx it has not seen with, which a stored tx
+	// checked again gets too
 	atHeightOptions := validator.ProcessOptions(
 		validator.WithSkipPolicyChecks(true),
 		validator.WithCandidateBlockTime(candidateBlockTime),
 		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+		validator.WithUnconfirmedParentsAtCandidateHeight(true),
 	)
 
-	for _, txHash := range conflictingTxHashes {
-		// A conflicting record may have been created by another candidate block at another
-		// height; check it at this block's height, as the full-validation path does
-		// (checkStoredConflictingAtHeight). A record pruned since the probe, the tx or a parent,
-		// fails open, as below.
-		if err = u.checkStoredTxAtHeight(ctx, txHash, nil, block.Height, atHeightOptions); err != nil {
-			if !errors.Is(err, errors.ErrTxNotFound) {
+	// A tx whose stored verdict does not hold at this block's height is checked again in full;
+	// a conflicting record, which another candidate block at another height may have created,
+	// and a tx locked to a time get the height checks, as on the full-validation path
+	// (checkStoredTxsAtHeight). A full check whose tx or parent is no longer in the store fails
+	// without a verdict: the tx is the one whose stored verdict the block cannot take, and this
+	// path has no body to validate it from. A height check whose record was pruned since the
+	// probe fails open, as below.
+	checked := make(map[chainhash.Hash]struct{}, len(storedChecks))
+
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(u.logger, g, u.settings.SubtreeValidation.SpendBatcherSize*2)
+
+	checkAtHeight := func(txHash chainhash.Hash, full bool) {
+		g.Go(func() error {
+			err := u.checkStoredTxAtHeight(gCtx, txHash, nil, block.Height, full, atHeightOptions)
+			if err == nil || full || !errors.Is(err, errors.ErrTxNotFound) {
 				return err
 			}
 
 			u.logger.Warnf("[CheckBlockSubtrees][%s][%s] cannot check cached-subtree tx at the block's height: it or a parent is no longer in the store, skipping",
 				block.Hash().String(), txHash.String())
+
+			return nil
+		})
+	}
+
+	for _, c := range storedChecks {
+		if c.check == storedMinedOnChain {
+			return errMinedOnChain(c.hash)
 		}
+	}
+
+	var maturity []maturityCandidate
+
+	for _, c := range storedChecks {
+		checked[c.hash] = struct{}{}
+
+		if c.check == storedMaturity {
+			maturity = append(maturity, maturityCandidate{hash: c.hash})
+
+			continue
+		}
+
+		checkAtHeight(c.hash, c.check == storedFull)
+	}
+
+	if len(maturity) > 0 {
+		g.Go(func() error {
+			err := u.checkCoinbaseMaturity(gCtx, maturity, block.Height)
+			if err == nil || !errors.Is(err, errors.ErrTxNotFound) {
+				return err
+			}
+
+			u.logger.Warnf("[CheckBlockSubtrees][%s] cannot check the coinbase maturity of %d cached-subtree tx(s): a record is no longer in the store, skipping",
+				block.Hash().String(), len(maturity))
+
+			return nil
+		})
+	}
+
+	for _, txHash := range conflictingTxHashes {
+		if _, ok := checked[txHash]; !ok {
+			checkAtHeight(txHash, false)
+		}
+	}
+
+	if err = g.Wait(); err != nil {
+		return err
+	}
+
+	if len(conflictingTxHashes) == 0 {
+		return nil
+	}
+
+	u.logger.Infof("[CheckBlockSubtrees][%s] %d conflicting transaction(s) in cached subtrees, checking against the candidate chain",
+		block.Hash().String(), len(conflictingTxHashes))
+
+	blockIds, err := candidateChain()
+	if err != nil {
+		return err
 	}
 
 	// Same predicate the full-validation path applies via
@@ -982,6 +1076,94 @@ func (u *Server) checkCachedSubtreesAgainstCandidateChain(ctx context.Context, b
 	}
 
 	return nil
+}
+
+// cachedStoredCheck is what a block does with the stored verdict of one transaction of a
+// cached subtree (storedCheckFor), when it does not take it.
+type cachedStoredCheck struct {
+	hash  chainhash.Hash
+	check storedCheck
+}
+
+// cachedVerdictsNeedReading reports whether a block at blockHeight may reuse, in a cached
+// subtree, a tx whose stored verdict was reached under other rules, so the cached path reads
+// every tx's record (cachedSubtreeStoredChecks) rather than taking the subtree's verdicts. It
+// does within a UTXO retention window of the block's rules taking effect or ending, so
+// verdicts reached under the rules before are likely still in the store, or ones reached
+// under the next rules, on a side branch already past the activation, may be; when the rules
+// change between the block and the tip's next block; and always when the store keeps every
+// record (retention 0). Steady state, far from any activation height, reads nothing.
+//
+// This is a window, not a proof: a tx validated under the rules before and kept unmined
+// beyond it, then included in a subtree a peer announced, is still taken on its stored verdict
+// here. The level path, which every tx of a subtree this node has not validated goes through,
+// checks every stored tx.
+func (u *Server) cachedVerdictsNeedReading(blockHeight uint32) bool {
+	lo, hi, ok := txrules.EraBounds(u.settings.ChainCfgParams, blockHeight)
+	if !ok {
+		return true
+	}
+
+	// 0 keeps every record, so verdicts under other rules never age out
+	window := u.settings.GetUtxoStoreBlockHeightRetention()
+
+	return window == 0 || blockHeight-lo < window || hi-blockHeight < window || hi <= u.utxoStore.GetBlockHeight()
+}
+
+// cachedSubtreeStoredChecks reads the record of every tx of the block's cached subtrees and
+// returns the stored verdicts a block at blockHeight, on the chain onChain tells, does not take
+// as they are (storedChecks). A tx absent from the store is skipped, as
+// cachedSubtreeConflictingNodes skips it.
+func (u *Server) cachedSubtreeStoredChecks(ctx context.Context, cachedSubtrees []chainhash.Hash, blockHeight uint32, onChain onChainFunc) ([]cachedStoredCheck, error) {
+	perSubtree := make([][]cachedStoredCheck, len(cachedSubtrees))
+
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(u.logger, g, u.settings.SubtreeValidation.CheckBlockSubtreesConcurrency)
+
+	for idx, subtreeHash := range cachedSubtrees {
+		g.Go(func() error {
+			nodeBytes, err := u.readCachedSubtreeNodes(gCtx, subtreeHash)
+			if err != nil {
+				return err
+			}
+
+			txHashes := make([]chainhash.Hash, 0, len(nodeBytes)/chainhash.HashSize)
+			for offset := 0; offset+chainhash.HashSize <= len(nodeBytes); offset += chainhash.HashSize {
+				if hash := chainhash.Hash(nodeBytes[offset : offset+chainhash.HashSize]); !hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+					txHashes = append(txHashes, hash)
+				}
+			}
+
+			all := make([]int, len(txHashes))
+			for i := range all {
+				all[i] = i
+			}
+
+			checks, gone, err := u.storedChecks(gCtx, txHashes, all, blockHeight, onChain)
+			if err != nil {
+				return err
+			}
+
+			for i, check := range checks {
+				if !gone[i] && check != storedTake {
+					perSubtree[idx] = append(perSubtree[idx], cachedStoredCheck{hash: txHashes[i], check: check})
+				}
+			}
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	var checks []cachedStoredCheck
+	for _, subtreeChecks := range perSubtree {
+		checks = append(checks, subtreeChecks...)
+	}
+
+	return checks, nil
 }
 
 // cachedSubtreeConflictingNodes reports which transactions of the block's cached
@@ -1665,15 +1847,21 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		}
 	}
 
-	storedConflictingOptions := validator.ProcessOptions(
+	// the options this path validates a tx it has not seen with, which a stored tx checked
+	// again gets too (checkStoredTxsAtHeight)
+	storedTxOptions := validator.ProcessOptions(
 		validator.WithSkipPolicyChecks(true),
 		validator.WithCandidateBlockTime(candidateBlockTime),
 		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+		validator.WithUnconfirmedParentsAtCandidateHeight(true),
 	)
 
-	if err = u.checkStoredConflictingAtHeight(ctx, txHashes, txMetaSlice, allTransactions, blockHeight, storedConflictingOptions); err != nil {
+	cleared, err := u.checkStoredTxsAtHeight(ctx, txHashes, txMetaSlice, allTransactions, blockHeight, blockIds, storedTxOptions)
+	if err != nil {
 		return err
 	}
+
+	missed += cleared
 
 	alreadyValidated := len(txHashes) - missed
 

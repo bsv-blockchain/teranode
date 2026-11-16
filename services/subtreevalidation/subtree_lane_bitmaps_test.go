@@ -574,8 +574,13 @@ func TestValidateSubtreeInternal_BuildsLaneBitmapsAtShadow(t *testing.T) {
 			utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
 			defer deferFunc()
 
+			// the tip a node validating at the block's height has, so the records' unmined_since reads
+			// as the height they were validated at
+			require.NoError(t, utxoStore.SetBlockHeight(chaincfg.GenesisActivationHeight-1))
+
 			for _, tx := range []*bt.Tx{tx1, tx2, tx3, tx4} {
-				_, _, err := utxoStore.SpendAndCreate(context.Background(), tx, 0, utxo.WithCreateOnly())
+				// validated at the height of the block below, so the block takes their stored verdicts
+				_, _, err := utxoStore.SpendAndCreate(context.Background(), tx, chaincfg.GenesisActivationHeight, utxo.WithCreateOnly())
 				require.NoError(t, err)
 			}
 
@@ -662,8 +667,13 @@ func TestValidateSubtreeInternal_AnOwnPositionEntryReachesTheLaneBitmaps(t *test
 			utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
 			defer deferFunc()
 
+			// the tip a node validating at the block's height has, so the records' unmined_since reads
+			// as the height they were validated at
+			require.NoError(t, utxoStore.SetBlockHeight(chaincfg.GenesisActivationHeight-1))
+
 			for _, tx := range []*bt.Tx{tx1, tx2} {
-				_, _, err := utxoStore.SpendAndCreate(context.Background(), tx, 0, utxo.WithCreateOnly())
+				// validated at the height of the block below, so the block takes their stored verdicts
+				_, _, err := utxoStore.SpendAndCreate(context.Background(), tx, chaincfg.GenesisActivationHeight, utxo.WithCreateOnly())
 				require.NoError(t, err)
 			}
 

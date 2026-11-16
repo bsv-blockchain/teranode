@@ -33,7 +33,7 @@ func CheckStoredTxAtHeight(tx *bt.Tx, parents []InputParent, blockHeight uint32,
 	}
 
 	for i, parent := range parents {
-		if err := immatureCoinbase(parent, blockHeight, tSettings); err != nil {
+		if err := ImmatureCoinbase(parent, blockHeight, tSettings); err != nil {
 			return errors.NewTxInvalidError("[CheckStoredTxAtHeight][%s] input %d spends a coinbase output not yet mature at height %d", txID, i, blockHeight, err)
 		}
 	}
@@ -54,10 +54,10 @@ func CheckStoredTxAtHeight(tx *bt.Tx, parents []InputParent, blockHeight uint32,
 	return nil
 }
 
-// immatureCoinbase returns TX_COINBASE_IMMATURE when parent is a coinbase whose outputs are not yet
+// ImmatureCoinbase returns TX_COINBASE_IMMATURE when parent is a coinbase whose outputs are not yet
 // spendable at blockHeight. The stores make a coinbase output spendable from its height plus the
 // maturity.
-func immatureCoinbase(parent InputParent, blockHeight uint32, tSettings *settings.Settings) error {
+func ImmatureCoinbase(parent InputParent, blockHeight uint32, tSettings *settings.Settings) error {
 	maturity := uint32(tSettings.ChainCfgParams.CoinbaseMaturity)
 
 	if parent.IsCoinbase && blockHeight < parent.Height+maturity {
@@ -113,4 +113,40 @@ func readInputParent(ctx context.Context, utxoStore utxo.Store, hash *chainhash.
 	}
 
 	return parent, nil
+}
+
+// RecheckStoredTxAtHeight checks a tx already in the UTXO store again, in full, for a block at
+// blockHeight: the height checks of CheckStoredTxAtHeight, then txValidator's transaction and
+// script checks under the block's rules, as a block that validates the tx itself runs them.
+// A block takes a stored verdict only where it holds at its own height (txrules.Era.Holds);
+// a tx validated below an activation height, for instance, verifies its scripts again above
+// it. Like CheckStoredTxAtHeight it reads the parents and writes nothing, so it never takes a
+// spend, and it extends a copy of tx, never tx itself. BIP68 sequence locks are not checked:
+// they need the median times of the block's branch, which only the validator holds.
+func RecheckStoredTxAtHeight(ctx context.Context, utxoStore utxo.Store, txValidator *TxValidator, tx *bt.Tx, blockHeight uint32,
+	tSettings *settings.Settings, opts *Options) error {
+	parents, err := InputParents(ctx, utxoStore, tx)
+	if err != nil {
+		return err
+	}
+
+	if err = CheckStoredTxAtHeight(tx, parents, blockHeight, tSettings, opts); err != nil {
+		return err
+	}
+
+	extended := tx.Clone()
+
+	utxoHeights, _, err := resolveParentOutputsFrom(ctx, utxoStore, extended, extended.TxIDChainHash().String(), nil, nil)
+	if err != nil {
+		return err
+	}
+
+	extended.SetExtended(true)
+
+	// as Validator.validateTransaction: a block's unconfirmed parent is one in the same block
+	if opts.UnconfirmedParentsAtCandidateHeight {
+		utxoHeights = resolveUnconfirmedParentsAtCandidateHeight(utxoHeights, blockHeight)
+	}
+
+	return txValidator.ValidateTransaction(extended, blockHeight, utxoHeights, opts)
 }

@@ -218,7 +218,7 @@ Status codes: **C** covered, **P** partial, **G** pins a gap, **N** none. Unless
 | BODY-017 | P | `TestUpdateTxMinedStatus_BlockIDCollisionDetection` (detection); `testLongestChainInvalidateBlockWithOldTx` (sequential, invalidated after commit) | no child validated on the block before it is invalidated |
 | BODY-018 | P | `TestValidateBlock_ExcessiveBlockSize_PlainPolicyDecline`, decline-cap tests | error code; under-declared size (GAP-BV-010); 1 MB floor |
 | BODY-019 | N | — | coinbase finality (GAP-BV-045) |
-| BODY-020 | N | — | context reuse (GAP-BV-047) |
+| BODY-020 | P | `TestTxSeenBeforeIsRecheckedForFinalityInALowerBlock`, `TestSiblingBlockAtLockHeight_RejectsTxAcceptedForNextHeight`, `TestForkBlockAtCoinbaseHeight_RejectsAcceptedSpendOfImmatureCoinbase` (`stored_tx_block_context_recheck_test.go`), `TestBlockPathRechecksStoredVerdictUnderOtherRules` (`stored_verdict_rules_test.go`), bsv-blockchain/teranode#2232 | cached subtree outside the read window (GAP-BV-047); BIP68 |
 | BODY-021 | N | — | pre-Genesis block sigops (GAP-BV-048) |
 | BODY-022 | N | — | BIP30 (GAP-BV-049) |
 
@@ -549,7 +549,7 @@ Priorities: **P0** catches a consensus divergence, data loss or state corruption
 | # | P | Type | Test | Asserts | IDs |
 |---|---|---|---|---|---|
 | 1 | P0 | unit | Coinbase finality (fails today, GAP-BV-045) | nLockTime = H with sequence 0 → INVALID; sequence 0xFFFFFFFF passes; time-based lock; boundaries H and H−1 | BODY-019 |
-| 2 | P0 | unit | Context reuse across forks (fails today, GAP-BV-047) | a transaction validated at one tip, re-presented in a sibling block where it is non-final or spends an immature coinbase, is rejected; also a cached subtree re-used across a changed median-time-past | BODY-020 |
+| 2 | P0 | unit | Context reuse across forks (cached-subtree case fails today, GAP-BV-047) | a transaction validated at one tip, re-presented in a sibling block where it is non-final or spends an immature coinbase, is rejected; also a cached subtree re-used across a changed median-time-past | BODY-020 |
 | 3 | P0 | unit | Block sigops and BIP30 (fail today, GAP-BV-048, 049) | 20,001 sigops in a 900 KB pre-Genesis block → INVALID; BIP30 with the 91842/91880 exemptions | BODY-021, 022 |
 | 4 | P0 | property | BIP34 encoding | for sampled heights and every boundary (1–16, 127/128, 255/256, 32767/32768, 8388607/8388608), the checker accepts exactly `CScript() << h` as a prefix and rejects non-minimal pushes | BODY-009 |
 | 5 | P0 | differential | svnode block-vector corpus | blocks recorded from `p2p-fullblocktest.py` and `abc-p2p-fullblocktest.py` with svnode's verdict, replayed through `ValidateBlockWithOptions` on sqlitememory; accept ⇔ accept; known deviations in an allow-list keyed by GAP ID (plan in 9.8) | HEADER-*, BODY-* |

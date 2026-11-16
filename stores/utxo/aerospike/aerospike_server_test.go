@@ -1645,6 +1645,13 @@ func TestSmokeTests(t *testing.T) {
 		tests.SetMined(t, store)
 	})
 
+	t.Run("batch decorate lock time", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.BatchDecorateLockTime(t, store)
+	})
+
 	t.Run("aerospike_conflicting", func(t *testing.T) {
 		err := store.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)

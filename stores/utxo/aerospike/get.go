@@ -1150,6 +1150,23 @@ NEXT_BATCH_RECORD:
 
 				items[idx].Data.ConflictingChildren = res
 
+			case fields.LockTime:
+				lockTime, ok := bins[key.String()].(int)
+				if !ok {
+					items[idx].Err = errors.NewStorageError("missing lock time")
+
+					continue NEXT_BATCH_RECORD // because there was an error reading the lock time from the store.
+				}
+
+				lockTimeUint32, err := safeconversion.IntToUint32(lockTime)
+				if err != nil {
+					items[idx].Err = errors.NewStorageError("invalid lock time", err)
+
+					continue NEXT_BATCH_RECORD // because there was an error processing the lock time.
+				}
+
+				items[idx].Data.LockTime = lockTimeUint32
+
 			case fields.UnminedSince:
 				unminedSince, ok := bins[key.String()].(int)
 				if ok {

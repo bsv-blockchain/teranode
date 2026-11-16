@@ -1398,7 +1398,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 						return nil, err
 					}
 
-					if immatureErr := immatureCoinbase(parent, blockHeight, v.settings); immatureErr != nil {
+					if immatureErr := ImmatureCoinbase(parent, blockHeight, v.settings); immatureErr != nil {
 						immatureSpend = errors.NewTxCoinbaseImmatureError("[Validate][%s] %s:%d", txID, spend.TxID.String(), spend.Vout, immatureErr)
 						everyFailedSpendConflicts = false
 
@@ -2330,6 +2330,12 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 // parent's lane position from the same reads: the store's answer, or the
 // prefetched parent's record. No read is added for it.
 func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID string, prefetched map[chainhash.Hash]*meta.Data, inputLanes []uint64) ([]uint32, bool, error) {
+	return resolveParentOutputsFrom(ctx, v.utxoStore, tx, txID, prefetched, inputLanes)
+}
+
+// resolveParentOutputsFrom is resolveParentOutputs over utxoStore, for a check that runs
+// without a Validator (RecheckStoredTxAtHeight).
+func resolveParentOutputsFrom(ctx context.Context, utxoStore utxo.Store, tx *bt.Tx, txID string, prefetched map[chainhash.Hash]*meta.Data, inputLanes []uint64) ([]uint32, bool, error) {
 	utxoHeights := make([]uint32, len(tx.Inputs))
 
 	var (
@@ -2370,7 +2376,7 @@ func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID st
 		return utxoHeights, false, nil
 	}
 
-	answers, err := v.utxoStore.ParentOutputsForValidation(ctx, outpoints)
+	answers, err := utxoStore.ParentOutputsForValidation(ctx, outpoints)
 	if err != nil {
 		return nil, false, errors.NewProcessingError("[Validate][%s] error getting parent outputs", txID, err)
 	}

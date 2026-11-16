@@ -160,7 +160,9 @@ func newCachedCheckServer(t *testing.T, store utxo.Store, tSettings *settings.Se
 			Bits:           model.NBit{},
 			Nonce:          1,
 		},
-		Height:   200,
+		// under the rules the fixtures' records were validated at (122, 123, mined at 100):
+		// regtest's Chronicle is at 200, and a block there checks every record again in full
+		Height:   150,
 		Subtrees: []*chainhash.Hash{rootHash},
 	}
 
