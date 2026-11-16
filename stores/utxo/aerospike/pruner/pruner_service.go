@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -3325,6 +3326,11 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 	type withdrawal struct {
 		key  *aerospike.Key
 		keys []interface{}
+		// markerFailed: the marker write to this parent failed, or its outcome
+		// could not be read. A lasting refusal of the withdrawal then says the
+		// record cannot take this write at all, so the marker did not land
+		// either, and it is not counted.
+		markerFailed bool
 	}
 
 	pending := make([]withdrawal, 0, len(updates))
@@ -3342,15 +3348,10 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 			continue
 		}
 
-		// A parent whose own marker write failed usually cannot take this write
-		// either (a bin that is not a map, a record too big), and its marker did
-		// not land there, so it is sent once and a refusal is not a failure.
-		if info.markerFailed {
-			_, _, _ = s.sendWithdrawals(policy, []*aerospike.Key{info.key}, [][]interface{}{keys})
-			continue
-		}
-
-		pending = append(pending, withdrawal{key: info.key, keys: keys})
+		// A parent whose marker write failed is resent like any other: the
+		// failure may be an outcome that could not be read, and then the marker
+		// may have landed.
+		pending = append(pending, withdrawal{key: info.key, keys: keys, markerFailed: info.markerFailed})
 	}
 
 	var (
@@ -3367,7 +3368,12 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 		}
 
 		retry, refused, err := s.sendWithdrawals(policy, keys, childKeys)
-		lasting += refused
+
+		for _, i := range refused {
+			if !pending[i].markerFailed {
+				lasting++
+			}
+		}
 
 		next := pending[:0]
 		for _, i := range retry {
@@ -3398,11 +3404,10 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 }
 
 // sendWithdrawals sends one batch of marker removals. It returns the indexes of
-// the writes that failed on a transient fault and may land if sent again, the
-// number that were refused for good, and an error that describes a failure. A
-// transport failure is transient for every write. A parent that is gone is not
-// a failure.
-func (s *Service) sendWithdrawals(policy *aerospike.BatchWritePolicy, keys []*aerospike.Key, childKeys [][]interface{}) (retry []int, refused int, err error) {
+// the writes that may land if sent again, the indexes of those refused for
+// good, and an error that describes a failure. A transport failure is transient
+// for every write. A parent that is gone is not a failure.
+func (s *Service) sendWithdrawals(policy *aerospike.BatchWritePolicy, keys []*aerospike.Key, childKeys [][]interface{}) (retry, refused []int, err error) {
 	records := make([]aerospike.BatchRecordIfc, len(keys))
 
 	for i, key := range keys {
@@ -3417,7 +3422,7 @@ func (s *Service) sendWithdrawals(policy *aerospike.BatchWritePolicy, keys []*ae
 			retry[i] = i
 		}
 
-		return retry, 0, batchErr
+		return retry, nil, batchErr
 	}
 
 	// Any other batch error (MAX_ERROR_RATE, say) can return before the server
@@ -3445,34 +3450,40 @@ func (s *Service) sendWithdrawals(policy *aerospike.BatchWritePolicy, keys []*ae
 			continue
 		}
 
-		refused++
+		refused = append(refused, i)
 	}
 
 	return retry, refused, err
 }
 
 // isTransientWriteFailure reports whether a failed batch write may land if it
-// is sent again: a timeout, a busy key or device, a lost connection, a write
-// whose outcome is in doubt, or a record the server never answered (the
-// client's initial NO_RESPONSE result, left when the batch stops early). A
-// refusal such as a wrong bin type or an unknown namespace answers the same way
-// every time.
+// is sent again. Only a refusal that answers the same way every time is final:
+// a bad parameter, a wrong bin type, a record too big, a filter that excludes
+// the record, an unknown namespace, a forbidden or unauthorised write. Every
+// other failure is resent: a timeout, a busy key or device, a lost connection,
+// a partition with no live node (INVALID_NODE_ERROR, PARTITION_UNAVAILABLE,
+// stamped by the client without a cause chain), a record the server never
+// answered (the client's initial NO_RESPONSE), and any code not listed. A
+// wasted resend costs one batch op; a withdrawal given up too early leaves a
+// marker that refuses a live child's re-spend.
 func isTransientWriteFailure(batchRec *aerospike.BatchRecord) bool {
 	if batchRec.InDoubt {
 		return true
 	}
 
 	if batchRec.Err != nil {
-		return batchRec.Err.Matches(types.TIMEOUT, types.KEY_BUSY, types.DEVICE_OVERLOAD,
-			types.NETWORK_ERROR, types.NO_RESPONSE, types.SERVER_NOT_AVAILABLE)
+		return !batchRec.Err.Matches(lastingWriteRefusals...)
 	}
 
-	switch batchRec.ResultCode {
-	case types.TIMEOUT, types.KEY_BUSY, types.DEVICE_OVERLOAD, types.NO_RESPONSE:
-		return true
-	default:
-		return false
-	}
+	return !slices.Contains(lastingWriteRefusals, batchRec.ResultCode)
+}
+
+// lastingWriteRefusals are the result codes isTransientWriteFailure treats as
+// final.
+var lastingWriteRefusals = []types.ResultCode{
+	types.PARAMETER_ERROR, types.BIN_TYPE_ERROR, types.RECORD_TOO_BIG, types.UNSUPPORTED_FEATURE,
+	types.INVALID_NAMESPACE, types.BIN_NAME_TOO_LONG, types.FAIL_FORBIDDEN, types.OP_NOT_APPLICABLE,
+	types.FILTERED_OUT, types.NOT_AUTHENTICATED, types.ROLE_VIOLATION,
 }
 
 // reportParentUpdateTally records the batch's counters and returns the children

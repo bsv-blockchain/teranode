@@ -1074,6 +1074,57 @@ func TestIsTransientWriteFailure_UnansweredRecord(t *testing.T) {
 
 	require.False(t, isBatchTransportError(&aerospike.AerospikeError{ResultCode: types.MAX_ERROR_RATE}),
 		"MAX_ERROR_RATE leaves per-record results to read, so it is not resent wholesale")
+
+	// The client stamps a partition with no live node per record, with a
+	// fresh error and no cause chain. Those, and any code not known to be a
+	// lasting refusal, are resent.
+	for _, code := range []types.ResultCode{types.INVALID_NODE_ERROR, types.PARTITION_UNAVAILABLE, types.QUERY_ABORTED} {
+		rec := aerospike.NewBatchWrite(nil, key).BatchRec()
+		rec.ResultCode = code
+		rec.Err = &aerospike.AerospikeError{ResultCode: code}
+		require.True(t, isTransientWriteFailure(rec), "code %v", code)
+
+		rec.Err = nil
+		require.True(t, isTransientWriteFailure(rec), "code %v with no error", code)
+	}
+}
+
+// TestWithdrawMarkers_ResendsToAParentWhoseMarkerOutcomeWasUnread: a parent
+// whose marker write was counted failed may still hold the marker, when the
+// failure was an outcome the pruner could not read. Its withdrawal is resent
+// like any other, not sent once.
+func TestWithdrawMarkers_ResendsToAParentWhoseMarkerOutcomeWasUnread(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	parent := chainhash.HashH([]byte{0xF5, 1})
+	child := chainhash.HashH([]byte{0xF5, 2})
+	parentKey := putRecord(t, client, &parent, spentBy(&child))
+
+	updates := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
+
+	_, err := s.markParents(context.Background(), updates)
+	require.NoError(t, err)
+	require.True(t, hasMarker(t, client, parentKey, &child), "fixture: the marker landed")
+
+	for _, info := range updates {
+		info.markerFailed = true // the write landed, but its answer was lost
+	}
+
+	calls := 0
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		calls++
+
+		if calls == 1 {
+			return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+		}
+
+		return client.BatchOperate(policy, records)
+	}
+
+	s.withdrawMarkers(updates, map[chainhash.Hash]struct{}{child: {}})
+	require.Equal(t, 2, calls, "the failed withdrawal is sent once more")
+	require.False(t, hasMarker(t, client, parentKey, &child), "the resend removed the marker")
 }
 
 // TestWithdrawMarkers_StopsAfterTheLastAttempt: a withdrawal that keeps failing
