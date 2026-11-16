@@ -11,6 +11,7 @@ import (
 	"slices"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/cmd/rewindblockchain/rewindblockchain"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -233,25 +234,37 @@ func (a *minedSetAuditor) sampleTxIDs(ctx context.Context, block *model.Block) (
 
 	var samples []chainhash.Hash
 
-	// Node 0 of the first subtree is the coinbase placeholder, so the first real transaction
-	// is node 1. A first subtree with no node 1 is coinbase only, but only when the block
-	// says so: a file whose node count is too small for the block would otherwise hide every
-	// transaction the block holds.
-	first, count, reason, err := a.subtreeNode(ctx, block.Subtrees[0], 1)
+	// Node 0 of the first subtree is the coinbase placeholder and node 1 is the first real
+	// transaction. The placeholder is read and required, so a malformed file cannot pass as
+	// a coinbase-only block.
+	first := block.Subtrees[0]
+
+	nodes, count, reason, err := a.subtreeNodes(ctx, first, 2)
 	if err != nil || reason != "" {
 		return nil, reason, err
 	}
 
+	if count == 0 {
+		return nil, fmt.Sprintf("subtree %s holds no nodes, not even the coinbase placeholder", first.String()), nil
+	}
+
+	if nodes[0] != subtreepkg.CoinbasePlaceholderHashValue {
+		return nil, fmt.Sprintf("subtree %s does not start with the coinbase placeholder", first.String()), nil
+	}
+
+	// A first subtree holding only the placeholder is coinbase only, but only when the block
+	// says so: a node count too small for the block would otherwise hide every transaction
+	// the block holds.
 	switch {
 	case count > 1:
-		samples = append(samples, first)
+		samples = append(samples, nodes[1])
 	case len(block.Subtrees) > 1 || block.TransactionCount > 1:
 		return nil, fmt.Sprintf("subtree %s holds %d node(s), too few for a block of %d transactions in %d subtrees",
-			block.Subtrees[0].String(), count, block.TransactionCount, len(block.Subtrees)), nil
+			first.String(), count, block.TransactionCount, len(block.Subtrees)), nil
 	}
 
 	if last := len(block.Subtrees) - 1; last > 0 {
-		node, count, reason, err := a.subtreeNode(ctx, block.Subtrees[last], 0)
+		nodes, count, reason, err := a.subtreeNodes(ctx, block.Subtrees[last], 1)
 		if err != nil || reason != "" {
 			return nil, reason, err
 		}
@@ -261,63 +274,61 @@ func (a *minedSetAuditor) sampleTxIDs(ctx context.Context, block *model.Block) (
 			return nil, fmt.Sprintf("subtree %s holds no nodes, but it is not the block's first subtree", block.Subtrees[last].String()), nil
 		}
 
-		samples = append(samples, node)
+		samples = append(samples, nodes[0])
 	}
 
 	return samples, "", nil
 }
 
-// subtreeNode reads the transaction hash at index from a stored subtree, streaming only the
-// bytes up to it, and returns the subtree's node count. The node is set only when index is
-// below the count. A non-empty reason means the subtree file is missing, unreadable or
-// malformed, including a file whose embedded root is not subtreeHash: the store keys a file
-// by the hash it was asked for, so a different root means the file holds another subtree and
-// its nodes say nothing about this block. The file blob store checks the file's own header
-// inside GetIoReader and returns a storage error for a short, bad-magic or wrong-type file,
-// so a storage error is one block's finding too, not a failure of the run. A cancelled or
-// expired context still fails the run.
-func (a *minedSetAuditor) subtreeNode(ctx context.Context, subtreeHash *chainhash.Hash, index uint64) (chainhash.Hash, uint64, string, error) {
-	var node chainhash.Hash
-
+// subtreeNodes reads the transaction hashes of the first want nodes of a stored subtree, or
+// of all its nodes when it holds fewer, streaming only those bytes. It also returns the
+// subtree's node count. A non-empty reason means the subtree file is missing, unreadable or
+// malformed, including a file shorter than the nodes it claims and a file whose embedded root
+// is not subtreeHash: the store keys a file by the hash it was asked for, so a different root
+// means the file holds another subtree and its nodes say nothing about this block. The file
+// blob store checks the file's own header inside GetIoReader and returns a storage error for
+// a short, bad-magic or wrong-type file, so a storage error is one block's finding too, not a
+// failure of the run. A cancelled or expired context still fails the run.
+func (a *minedSetAuditor) subtreeNodes(ctx context.Context, subtreeHash *chainhash.Hash, want uint64) ([]chainhash.Hash, uint64, string, error) {
 	reader, err := a.subtrees.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 	if err != nil {
 		switch {
 		case ctx.Err() != nil:
-			return node, 0, "", errors.NewProcessingError("failed to open subtree %s", subtreeHash.String(), err)
+			return nil, 0, "", errors.NewProcessingError("failed to open subtree %s", subtreeHash.String(), err)
 		case errors.Is(err, errors.ErrNotFound):
-			return node, 0, fmt.Sprintf("subtree %s is not in the subtree store", subtreeHash.String()), nil
+			return nil, 0, fmt.Sprintf("subtree %s is not in the subtree store", subtreeHash.String()), nil
 		case errors.Is(err, errors.ErrStorageError):
-			return node, 0, fmt.Sprintf("subtree %s could not be read: %v", subtreeHash.String(), err), nil
+			return nil, 0, fmt.Sprintf("subtree %s could not be read: %v", subtreeHash.String(), err), nil
 		}
 
-		return node, 0, "", errors.NewProcessingError("failed to open subtree %s", subtreeHash.String(), err)
+		return nil, 0, "", errors.NewProcessingError("failed to open subtree %s", subtreeHash.String(), err)
 	}
 
 	defer func() { _ = reader.Close() }()
 
 	var header [subtreeHeaderBytes]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil {
-		return node, 0, fmt.Sprintf("subtree %s is shorter than its header", subtreeHash.String()), nil //nolint:nilerr // a malformed file is a finding, not a failure of the run
+		return nil, 0, fmt.Sprintf("subtree %s is shorter than its header", subtreeHash.String()), nil //nolint:nilerr // a malformed file is a finding, not a failure of the run
 	}
 
 	if root := chainhash.Hash(header[:chainhash.HashSize]); root != *subtreeHash {
-		return node, 0, fmt.Sprintf("subtree file %s holds subtree %s", subtreeHash.String(), root.String()), nil
+		return nil, 0, fmt.Sprintf("subtree file %s holds subtree %s", subtreeHash.String(), root.String()), nil
 	}
 
 	count := binary.LittleEndian.Uint64(header[subtreeNodeCountOffset:])
-	if index >= count {
-		return node, count, "", nil
+	nodes := make([]chainhash.Hash, min(count, want))
+
+	var node [subtreeNodeBytes]byte
+
+	for i := range nodes {
+		if _, err := io.ReadFull(reader, node[:]); err != nil {
+			return nil, 0, fmt.Sprintf("subtree %s is shorter than its node count", subtreeHash.String()), nil //nolint:nilerr // as above
+		}
+
+		nodes[i] = chainhash.Hash(node[:chainhash.HashSize])
 	}
 
-	if _, err := io.CopyN(io.Discard, reader, int64(index)*subtreeNodeBytes); err != nil { //nolint:gosec // index is 0 or 1
-		return node, 0, fmt.Sprintf("subtree %s is shorter than its node count", subtreeHash.String()), nil //nolint:nilerr // as above
-	}
-
-	if _, err := io.ReadFull(reader, node[:]); err != nil {
-		return node, 0, fmt.Sprintf("subtree %s is shorter than its node count", subtreeHash.String()), nil //nolint:nilerr // as above
-	}
-
-	return node, count, "", nil
+	return nodes, count, "", nil
 }
 
 // report prints result and returns an error when a block is affected, so the command exits
@@ -450,19 +461,26 @@ func minedSetAuditExecute(logger ulogger.Logger, tSettings *settings.Settings, f
 			},
 		}
 
-		result, err := auditor.run(ctx, startHeight, endHeight, maxBlocks)
-		if err != nil {
-			return err
-		}
-
-		if err := result.report(os.Stdout, startHeight, endHeight); err != nil {
-			return err
-		}
-
-		if result.nothingChecked() {
-			os.Exit(minedSetAuditExitNothingChecked)
-		}
-
-		return nil
+		return runMinedSetAudit(ctx, auditor, startHeight, endHeight, maxBlocks, os.Stdout)
 	}
+}
+
+// runMinedSetAudit audits the range, prints the report to out and ends the process with
+// minedSetAuditExitNothingChecked when no audited block could be checked. An affected block
+// comes back as an error, which the CLI turns into exit 1.
+func runMinedSetAudit(ctx context.Context, auditor *minedSetAuditor, startHeight, endHeight, maxBlocks uint32, out io.Writer) error {
+	result, err := auditor.run(ctx, startHeight, endHeight, maxBlocks)
+	if err != nil {
+		return err
+	}
+
+	if err := result.report(out, startHeight, endHeight); err != nil {
+		return err
+	}
+
+	if result.nothingChecked() {
+		os.Exit(minedSetAuditExitNothingChecked)
+	}
+
+	return nil
 }

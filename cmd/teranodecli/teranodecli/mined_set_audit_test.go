@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/hex"
 	"flag"
+	"io"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -478,15 +480,7 @@ func TestMinedSetAudit_SubtreeRootMismatchIsUnchecked(t *testing.T) {
 // block says (the first subcase then counts as coinbase only), and skipping an empty last
 // subtree (the second subcase then counts as tagged on the first sample alone).
 func TestMinedSetAudit_NodeCountTooSmallIsUnchecked(t *testing.T) {
-	// headerOnly returns a subtree file for root claiming count nodes, holding count nodes
-	// of zeros.
-	headerOnly := func(root *chainhash.Hash, count byte) []byte {
-		b := make([]byte, subtreeHeaderBytes+int(count)*subtreeNodeBytes)
-		copy(b, root[:])
-		b[subtreeNodeCountOffset] = count
-
-		return b
-	}
+	headerOnly := minedSetAuditSubtreeFile
 
 	t.Run("first subtree holds only the coinbase", func(t *testing.T) {
 		h := newMinedSetAuditHarness(t)
@@ -521,6 +515,132 @@ func TestMinedSetAudit_NodeCountTooSmallIsUnchecked(t *testing.T) {
 		require.Len(t, result.Unchecked, 1)
 		require.Contains(t, result.Unchecked[0].Reason, "holds no nodes")
 	})
+}
+
+// minedSetAuditSubtreeFile returns a subtree file for root claiming count nodes and holding
+// count nodes, the first of them the coinbase placeholder and the rest zeros.
+func minedSetAuditSubtreeFile(root *chainhash.Hash, count byte) []byte {
+	b := make([]byte, subtreeHeaderBytes+int(count)*subtreeNodeBytes)
+	copy(b, root[:])
+	b[subtreeNodeCountOffset] = count
+
+	if count > 0 {
+		copy(b[subtreeHeaderBytes:], gosubtree.CoinbasePlaceholder[:])
+	}
+
+	return b
+}
+
+// TestMinedSetAudit_MalformedCoinbaseOnlyIsUnchecked: a coinbase-only block whose subtree
+// file is malformed is unchecked, not counted as coinbase only. The audit reads the first
+// subtree's node 0 and requires the coinbase placeholder there.
+//
+// Mutation targets: dropping the zero-count check (the first subcase then counts as coinbase
+// only), reading no node when the count is 1 (the second subcase then counts as coinbase
+// only), and dropping the placeholder check (the third subcase then counts as coinbase only).
+func TestMinedSetAudit_MalformedCoinbaseOnlyIsUnchecked(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		file   func(root *chainhash.Hash) []byte
+		reason string
+	}{
+		{name: "zero nodes", file: func(root *chainhash.Hash) []byte {
+			return minedSetAuditSubtreeFile(root, 0)
+		}, reason: "not even the coinbase placeholder"},
+		{name: "one node claimed, its bytes missing", file: func(root *chainhash.Hash) []byte {
+			return minedSetAuditSubtreeFile(root, 1)[:subtreeHeaderBytes]
+		}, reason: "shorter than its node count"},
+		{name: "node 0 is not the coinbase placeholder", file: func(root *chainhash.Hash) []byte {
+			b := minedSetAuditSubtreeFile(root, 1)
+			clear(b[subtreeHeaderBytes:])
+
+			return b
+		}, reason: "does not start with the coinbase placeholder"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newMinedSetAuditHarness(t)
+
+			block, _ := h.storeBlock(true, true, []*bt.Tx{})
+			require.Equal(t, uint64(1), block.TransactionCount, "precondition: the block must hold only its coinbase")
+			require.Len(t, block.Subtrees, 1)
+			require.NoError(t, h.subtrees.Set(h.ctx, block.Subtrees[0][:], fileformat.FileTypeSubtree, tc.file(block.Subtrees[0])))
+
+			result, err := h.auditor.run(h.ctx, 1, 1, 10)
+			require.NoError(t, err)
+			require.Zero(t, result.CoinbaseOnly)
+			require.Len(t, result.Unchecked, 1)
+			require.Contains(t, result.Unchecked[0].Reason, tc.reason)
+			require.True(t, result.nothingChecked())
+		})
+	}
+
+	t.Run("a well-formed coinbase-only file still counts as coinbase only", func(t *testing.T) {
+		h := newMinedSetAuditHarness(t)
+
+		block, _ := h.storeBlock(true, true, []*bt.Tx{})
+		require.NoError(t, h.subtrees.Set(h.ctx, block.Subtrees[0][:], fileformat.FileTypeSubtree, minedSetAuditSubtreeFile(block.Subtrees[0], 1)))
+
+		result, err := h.auditor.run(h.ctx, 1, 1, 10)
+		require.NoError(t, err)
+		require.Equal(t, 1, result.CoinbaseOnly)
+		require.Empty(t, result.Unchecked)
+	})
+}
+
+// minedSetAuditExitHelperEnv makes TestMinedSetAudit_ExitStatus run one audit in a child
+// process and end it the way teranode-cli does.
+const minedSetAuditExitHelperEnv = "TERANODE_MINED_SET_AUDIT_EXIT_HELPER"
+
+// TestMinedSetAudit_ExitStatus runs runMinedSetAudit, the body of the command after the
+// stores are opened, in a child process, and reads the process's real exit status. A range
+// where every audited block is UNCHECKED exits 2, and a range with a checked block exits 0.
+//
+// Mutation target: removing the os.Exit call in runMinedSetAudit. The all-unchecked child
+// then exits 0.
+func TestMinedSetAudit_ExitStatus(t *testing.T) {
+	if mode := os.Getenv(minedSetAuditExitHelperEnv); mode != "" {
+		h := newMinedSetAuditHarness(t)
+
+		switch mode {
+		case "unchecked":
+			h.storeBlock(true, true, []*bt.Tx{h.auditTx()})
+		case "tagged":
+			tx := h.auditTx()
+			_, id := h.storeBlock(true, false, []*bt.Tx{tx})
+			h.createTagged(tx, id)
+		}
+
+		// cli.go ends the process with 1 when a command returns an error.
+		if err := runMinedSetAudit(h.ctx, h.auditor, 1, 1, 10, io.Discard); err != nil {
+			os.Exit(1)
+		}
+
+		os.Exit(0)
+	}
+
+	for _, tc := range []struct {
+		mode string
+		want int
+	}{
+		{mode: "unchecked", want: minedSetAuditExitNothingChecked},
+		{mode: "tagged", want: 0},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestMinedSetAudit_ExitStatus$") //nolint:gosec // re-runs this test binary
+			cmd.Env = append(os.Environ(), minedSetAuditExitHelperEnv+"="+tc.mode)
+
+			out, err := cmd.CombinedOutput()
+
+			code := 0
+			if err != nil {
+				exitErr, ok := err.(*exec.ExitError) //nolint:errorlint // CombinedOutput returns *ExitError unwrapped
+				require.True(t, ok, "the child must run: %v\n%s", err, out)
+				code = exitErr.ExitCode()
+			}
+
+			require.Equal(t, tc.want, code, "child output:\n%s", out)
+		})
+	}
 }
 
 // TestMinedSetAudit_BadFileHeaderIsUnchecked: the file blob store checks a file's own
