@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
 	"net/url"
 	"testing"
 
@@ -362,6 +363,13 @@ func (f *moveBackFixture) run(t *testing.T, viaReset bool) error {
 	return f.stp.reorgBlocks(t.Context(), f.moveBackBlocks(), []*model.Block{f.side})
 }
 
+// rewind moves back both blocks through reorgBlocks with nothing to move forward.
+func (f *moveBackFixture) rewind(t *testing.T) error {
+	t.Helper()
+
+	return f.stp.reorgBlocks(t.Context(), f.moveBackBlocks(), []*model.Block{})
+}
+
 // requireNothingChanged checks that neither moved-back block's coinbase was deleted and, with a
 // conflict, that winner still holds the output and loser is still conflicting.
 func (f *moveBackFixture) requireNothingChanged(t *testing.T) {
@@ -391,26 +399,35 @@ func (f *moveBackFixture) requireNothingChanged(t *testing.T) {
 }
 
 // TestMoveForwardSubtreeMissingChangesNothing checks that a reorg or reset whose moveForward block
-// names a subtree that is not in the store fails before the move-back changes the UTXO store. With
-// no conflicting nodes in the moved-back blocks nothing reads the moveForward subtrees until the
-// moveForward step, so this is what checkMoveForwardSubtreesExist is for: without it both
-// coinbases are deleted before the failure.
+// names a subtree that is not in the store, or that is in the store but cannot be opened, fails
+// before the move-back changes the UTXO store. With no conflicting nodes in the moved-back blocks
+// nothing reads the moveForward subtrees until the moveForward step, so this is what
+// checkMoveForwardSubtreesOpen is for: without it both coinbases are deleted before the failure.
 func TestMoveForwardSubtreeMissingChangesNothing(t *testing.T) {
-	for _, viaReset := range []bool{false, true} {
-		for _, withConflict := range []bool{false, true} {
-			name := map[bool]string{false: "reorg", true: "reset"}[viaReset] + map[bool]string{false: ", no conflicting nodes", true: ", conflicting node"}[withConflict]
+	for _, unreadable := range []bool{false, true} {
+		for _, viaReset := range []bool{false, true} {
+			for _, withConflict := range []bool{false, true} {
+				name := map[bool]string{false: "missing", true: "exists but cannot be opened"}[unreadable] + ", " +
+					map[bool]string{false: "reorg", true: "reset"}[viaReset] +
+					map[bool]string{false: ", no conflicting nodes", true: ", conflicting node"}[withConflict]
 
-			t.Run(name, func(t *testing.T) {
-				f := newMoveBackFixture(t, withConflict, 60)
+				t.Run(name, func(t *testing.T) {
+					f := newMoveBackFixture(t, withConflict, 60)
 
-				missing := chainhash.HashH([]byte("missing-move-forward-subtree"))
-				f.side.Subtrees = []*chainhash.Hash{&missing}
+					forward := chainhash.HashH([]byte("move-forward-subtree"))
+					f.side.Subtrees = []*chainhash.Hash{&forward}
 
-				err := f.run(t, viaReset)
-				require.Error(t, err)
+					if unreadable {
+						require.NoError(t, f.subtreeStore.Set(t.Context(), forward[:], fileformat.FileTypeSubtree, []byte{1}))
+						f.stp.subtreeStore = openFailingStore{Memory: f.subtreeStore, key: forward}
+					}
 
-				f.requireNothingChanged(t)
-			})
+					err := f.run(t, viaReset)
+					require.Error(t, err)
+
+					f.requireNothingChanged(t)
+				})
+			}
 		}
 	}
 }
@@ -420,15 +437,27 @@ func TestMoveForwardSubtreeMissingChangesNothing(t *testing.T) {
 // the move-back loop, so the missing subtree fails the reorg or reset before block 2's coinbase is
 // deleted or its conflict reversed. Reading them inside the loop, as each block is moved back,
 // would reverse block 2 and then fail on block 1.
+//
+// The pure rewind, a reorg with nothing to move forward, runs the same read: before it did, block 2
+// was moved back and its coinbase deleted before block 1's missing subtree was found.
 func TestMoveBackSubtreeMissingChangesNothing(t *testing.T) {
-	for _, viaReset := range []bool{false, true} {
-		t.Run(map[bool]string{false: "reorg", true: "reset"}[viaReset], func(t *testing.T) {
+	runs := []struct {
+		name string
+		run  func(t *testing.T, f *moveBackFixture) error
+	}{
+		{"reorg", func(t *testing.T, f *moveBackFixture) error { return f.run(t, false) }},
+		{"reorg, pure rewind", func(t *testing.T, f *moveBackFixture) error { return f.rewind(t) }},
+		{"reset", func(t *testing.T, f *moveBackFixture) error { return f.run(t, true) }},
+	}
+
+	for _, r := range runs {
+		t.Run(r.name, func(t *testing.T) {
 			f := newMoveBackFixture(t, true, 70)
 
 			block1 := f.chain.moveForward[0]
 			require.NoError(t, f.subtreeStore.Del(t.Context(), block1.Subtrees[0][:], fileformat.FileTypeSubtree))
 
-			err := f.run(t, viaReset)
+			err := r.run(t, f)
 			require.Error(t, err)
 
 			// End state first: the error text alone cannot tell a failure before the
@@ -475,19 +504,24 @@ func TestResetSkipsReverseOfReMinedWinner(t *testing.T) {
 	require.True(t, m.Conflicting)
 }
 
-// existsFailingStore is a blob store whose Exists always fails.
-type existsFailingStore struct {
+// openFailingStore is a blob store that reports key as existing but fails to open it for reading.
+type openFailingStore struct {
 	*blob_memory.Memory
+	key chainhash.Hash
 }
 
-func (s existsFailingStore) Exists(context.Context, []byte, fileformat.FileType, ...options.FileOption) (bool, error) {
-	return false, errors.NewStorageError("exists failed")
+func (s openFailingStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
+	if bytes.Equal(key, s.key[:]) {
+		return nil, errors.NewStorageError("open failed")
+	}
+
+	return s.Memory.GetIoReader(ctx, key, fileType, opts...)
 }
 
-// TestCheckMoveForwardSubtreesExist checks the preflight on its own: a subtree is found under
-// either file type, nil blocks and hashes are skipped, and a missing subtree or a failing store
-// is an error.
-func TestCheckMoveForwardSubtreesExist(t *testing.T) {
+// TestCheckMoveForwardSubtreesOpen checks the preflight on its own: a subtree opens under either
+// file type, nil blocks and hashes are skipped, and a missing subtree or one that exists but
+// cannot be opened is an error.
+func TestCheckMoveForwardSubtreesOpen(t *testing.T) {
 	store := blob_memory.New()
 	stp := newReverseHelpersStp(t, plainBlob{store})
 
@@ -499,29 +533,33 @@ func TestCheckMoveForwardSubtreesExist(t *testing.T) {
 	require.NoError(t, store.Set(t.Context(), asToCheck[:], fileformat.FileTypeSubtreeToCheck, []byte{1}))
 
 	t.Run("present under either file type", func(t *testing.T) {
-		require.NoError(t, stp.checkMoveForwardSubtreesExist(t.Context(), []*model.Block{
+		require.NoError(t, stp.checkMoveForwardSubtreesOpen(t.Context(), []*model.Block{
 			nil,
 			{Header: dummyHeader(), Subtrees: []*chainhash.Hash{&asSubtree, nil, &asToCheck}},
 		}))
 	})
 
 	t.Run("missing", func(t *testing.T) {
-		err := stp.checkMoveForwardSubtreesExist(t.Context(), []*model.Block{
+		err := stp.checkMoveForwardSubtreesOpen(t.Context(), []*model.Block{
 			{Header: dummyHeader(), Subtrees: []*chainhash.Hash{&asSubtree, &missing}},
 		})
 		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrNotFound))
+		require.Contains(t, err.Error(), missing.String())
 	})
 
-	t.Run("store error", func(t *testing.T) {
+	t.Run("exists but cannot be opened", func(t *testing.T) {
 		failing := newReverseHelpersStp(t, plainBlob{store})
-		failing.subtreeStore = existsFailingStore{store}
+		failing.subtreeStore = openFailingStore{Memory: store, key: asSubtree}
 
-		err := failing.checkMoveForwardSubtreesExist(t.Context(), []*model.Block{
+		exists, err := failing.subtreeStore.Exists(t.Context(), asSubtree[:], fileformat.FileTypeSubtree)
+		require.NoError(t, err)
+		require.True(t, exists)
+
+		err = failing.checkMoveForwardSubtreesOpen(t.Context(), []*model.Block{
 			{Header: dummyHeader(), Subtrees: []*chainhash.Hash{&asSubtree}},
 		})
 		require.Error(t, err)
-		require.False(t, errors.Is(err, errors.ErrNotFound))
+		require.Contains(t, err.Error(), "open failed")
 	})
 }
 

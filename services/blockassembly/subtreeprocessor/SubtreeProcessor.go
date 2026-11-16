@@ -1702,10 +1702,10 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	// Read the moveBack blocks' conflicting nodes and check them against the
 	// moveForward blocks before anything below changes the UTXO store, so a
 	// subtree read failure aborts the reset with nothing applied. See
-	// findReMinedInMoveForward and checkMoveForwardSubtreesExist.
+	// findReMinedInMoveForward and checkMoveForwardSubtreesOpen.
 	if len(moveBackBlocks) > 0 {
-		if err = stp.checkMoveForwardSubtreesExist(ctx, moveForwardBlocks); err != nil {
-			return errors.NewProcessingError("[SubtreeProcessor][reset] moveForward subtree missing", err)
+		if err = stp.checkMoveForwardSubtreesOpen(ctx, moveForwardBlocks); err != nil {
+			return errors.NewProcessingError("[SubtreeProcessor][reset] moveForward subtree cannot be opened", err)
 		}
 	}
 
@@ -2325,16 +2325,18 @@ func (stp *SubtreeProcessor) collectMoveBackConflictingNodes(ctx context.Context
 	return perBlock, nil
 }
 
-// checkMoveForwardSubtreesExist fails if any subtree of any moveForward block is
-// in neither the subtree file nor the subtree-to-check file. Reorg and Reset run
-// it before their moveBack loop changes the UTXO store. findReMinedInMoveForward
-// reads nothing when there are no candidates, so without this check a missing
-// moveForward subtree would first be found by the moveForward step, after the
-// moved-back blocks' coinbases and child spends were already deleted.
+// checkMoveForwardSubtreesOpen fails if any subtree of any moveForward block
+// cannot be opened for reading, as the subtree file or else the subtree-to-check
+// file, the same fallback moveForwardBlock reads with. Reorg and Reset run it
+// before their moveBack loop changes the UTXO store. findReMinedInMoveForward
+// reads nothing when there are no candidates, so without this check a missing or
+// unreadable moveForward subtree would first be found by the moveForward step,
+// after the moved-back blocks' coinbases and child spends were already deleted.
 //
-// It only checks that each file exists. A file that exists but is corrupt still
-// fails later, in the moveForward step.
-func (stp *SubtreeProcessor) checkMoveForwardSubtreesExist(ctx context.Context, moveForwardBlocks []*model.Block) error {
+// It opens each file and closes it without reading. A file that opens but whose
+// content is corrupt or truncated, or a read that fails only later, still fails
+// in the moveForward step, after the move-back.
+func (stp *SubtreeProcessor) checkMoveForwardSubtreesOpen(ctx context.Context, moveForwardBlocks []*model.Block) error {
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(stp.logger, g, min(stp.settings.BlockAssembly.MoveBackBlockConcurrency, findReMinedConcurrency))
 
@@ -2349,21 +2351,16 @@ func (stp *SubtreeProcessor) checkMoveForwardSubtreesExist(ctx context.Context, 
 			}
 
 			g.Go(func() error {
-				exists, err := stp.subtreeStore.Exists(gCtx, subtreeHash[:], fileformat.FileTypeSubtree)
-				if err == nil && exists {
-					return nil
+				reader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtree)
+				if err != nil {
+					if reader, err = stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck); err != nil {
+						return errors.NewServiceError("[checkMoveForwardSubtreesOpen][%s] error opening subtree %s", block.String(), subtreeHash.String(), err)
+					}
 				}
 
-				existsToCheck, errToCheck := stp.subtreeStore.Exists(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
-				if errToCheck == nil && existsToCheck {
-					return nil
-				}
+				_ = reader.Close()
 
-				if err != nil || errToCheck != nil {
-					return errors.NewServiceError("[checkMoveForwardSubtreesExist][%s] error checking subtree %s exists", block.String(), subtreeHash.String(), errors.Join(err, errToCheck))
-				}
-
-				return errors.NewNotFoundError("[checkMoveForwardSubtreesExist][%s] subtree %s not found", block.String(), subtreeHash.String())
+				return nil
 			})
 		}
 	}
@@ -5473,26 +5470,26 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		}
 	}
 
-	// Check the moveForward subtrees exist, and the moveBack blocks' conflicting
-	// nodes against the moveForward blocks, before the moveBack loop changes the
-	// UTXO store, so a subtree read failure aborts the reorg with nothing applied.
-	// The rollback below only restores in-memory state. See
-	// findReMinedInMoveForward and checkMoveForwardSubtreesExist.
-	reMined := map[chainhash.Hash]struct{}{}
+	// Check the moveForward subtrees open, read every moveBack block's
+	// conflicting nodes and check them against the moveForward blocks, before
+	// the moveBack loop changes the UTXO store, so a subtree read failure aborts
+	// the reorg with nothing applied. A pure rewind has no moveForward blocks
+	// but still reads the moveBack blocks here: otherwise a missing subtree in
+	// the second moveBack block is found after the first block's coinbase has
+	// been deleted. The rollback below only restores in-memory state. See
+	// findReMinedInMoveForward and checkMoveForwardSubtreesOpen.
+	if err = stp.checkMoveForwardSubtreesOpen(ctx, moveForwardBlocks); err != nil {
+		return errors.NewProcessingError("[reorgBlocks] moveForward subtree cannot be opened", err)
+	}
 
-	if len(moveForwardBlocks) > 0 {
-		if err = stp.checkMoveForwardSubtreesExist(ctx, moveForwardBlocks); err != nil {
-			return errors.NewProcessingError("[reorgBlocks] moveForward subtree missing", err)
-		}
+	moveBackConflicting, err := stp.collectMoveBackConflictingNodes(ctx, moveBackBlocks)
+	if err != nil {
+		return errors.NewProcessingError("[reorgBlocks] error getting conflicting nodes of moveBack blocks", err)
+	}
 
-		moveBackConflicting, collectErr := stp.collectMoveBackConflictingNodes(ctx, moveBackBlocks)
-		if collectErr != nil {
-			return errors.NewProcessingError("[reorgBlocks] error getting conflicting nodes of moveBack blocks", collectErr)
-		}
-
-		if reMined, err = stp.findReMinedInMoveForward(ctx, moveForwardBlocks, slices.Concat(moveBackConflicting...)); err != nil {
-			return errors.NewProcessingError("[reorgBlocks] error checking conflicting nodes against moveForward blocks", err)
-		}
+	reMined, err := stp.findReMinedInMoveForward(ctx, moveForwardBlocks, slices.Concat(moveBackConflicting...))
+	if err != nil {
+		return errors.NewProcessingError("[reorgBlocks] error checking conflicting nodes against moveForward blocks", err)
 	}
 
 	// dequeueDuringBlockMovement all transactions that are in the queue
