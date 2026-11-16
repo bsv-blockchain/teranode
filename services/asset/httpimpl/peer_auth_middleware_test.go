@@ -26,9 +26,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// signTestRequest signs an HTTP request with the v2 payload format and sets
-// all required peer-auth headers. Body (if any) is consumed and replaced.
+// signTestRequest signs an HTTP request with the current domain-tagged payload
+// format and sets all required peer-auth headers. Body (if any) is consumed and
+// replaced.
 func signTestRequest(t *testing.T, req *http.Request, privKey crypto.PrivKey) {
+	t.Helper()
+
+	signTestRequestWithPayload(t, req, privKey, util.PeerAuthSignedPayload)
+}
+
+// signTestRequestWithPayload is signTestRequest with the payload builder chosen
+// by the caller, for tests that sign an older or malformed payload format.
+func signTestRequestWithPayload(t *testing.T, req *http.Request, privKey crypto.PrivKey, buildPayload func(ts, host, method, requestURI, bodyDigestHex string) string) {
 	t.Helper()
 
 	bodyDigest := util.EmptyBodySHA256Hex
@@ -45,7 +54,7 @@ func signTestRequest(t *testing.T, req *http.Request, privKey crypto.PrivKey) {
 	}
 
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
-	payload := "v2:" + ts + ":" + req.Host + ":" + req.Method + ":" + req.URL.RequestURI() + ":" + bodyDigest
+	payload := buildPayload(ts, req.Host, req.Method, req.URL.RequestURI(), bodyDigest)
 
 	sig, err := privKey.Sign([]byte(payload))
 	require.NoError(t, err)
@@ -168,7 +177,7 @@ func TestPeerAuthMiddleware_ExpiredTimestamp(t *testing.T) {
 	// Build headers manually with a timestamp 30s in the past (outside the 10s window).
 	expiredTs := strconv.FormatInt(time.Now().Unix()-30, 10)
 	digest := util.EmptyBodySHA256Hex
-	payload := "v2:" + expiredTs + ":" + req.Host + ":" + req.Method + ":" + req.URL.RequestURI() + ":" + digest
+	payload := util.PeerAuthSignedPayload(expiredTs, req.Host, req.Method, req.URL.RequestURI(), digest)
 	sig, err := privKey.Sign([]byte(payload))
 	require.NoError(t, err)
 	pubBytes, err := privKey.GetPublic().Raw()
@@ -232,6 +241,51 @@ func TestPeerAuthMiddleware_RejectV1Payload(t *testing.T) {
 	require.Equal(t, tierUnverified, *captured, "v1 payload signatures must not be accepted by the v2 verifier")
 }
 
+// TestPeerAuthMiddleware_AcceptsLegacyV2Payload — peers still running the
+// signer from before the domain tag sign the bare v2 payload. The verifier keeps
+// accepting it for one release so those peers keep their tier while the network
+// upgrades.
+func TestPeerAuthMiddleware_AcceptsLegacyV2Payload(t *testing.T) {
+	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	require.NoError(t, err)
+	peerID, err := peer.IDFromPublicKey(privKey.GetPublic())
+	require.NoError(t, err)
+
+	cache := &peerTierCache{tiers: map[peer.ID]peerTier{peerID: tierMiner}, logger: ulogger.TestLogger{}}
+	e, captured := newAuthEcho(t, cache, allowAll(cache))
+
+	req := httptest.NewRequest(http.MethodPost, "/test?from=1", bytes.NewReader([]byte(`{"x":1}`)))
+	signTestRequestWithPayload(t, req, privKey, util.PeerAuthLegacyV2Payload)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, tierMiner, *captured, "a legacy v2 signature must still authenticate during the upgrade window")
+}
+
+// TestPeerAuthMiddleware_RejectsUntaggedV3Payload — the version bump is only
+// half the change; a v3 payload without the domain tag must not verify, or the
+// tag would not be separating anything.
+func TestPeerAuthMiddleware_RejectsUntaggedV3Payload(t *testing.T) {
+	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	require.NoError(t, err)
+	peerID, err := peer.IDFromPublicKey(privKey.GetPublic())
+	require.NoError(t, err)
+
+	cache := &peerTierCache{tiers: map[peer.ID]peerTier{peerID: tierMiner}, logger: ulogger.TestLogger{}}
+	e, captured := newAuthEcho(t, cache, allowAll(cache))
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	signTestRequestWithPayload(t, req, privKey, func(ts, host, method, requestURI, bodyDigestHex string) string {
+		return "v3:" + ts + ":" + host + ":" + method + ":" + requestURI + ":" + bodyDigestHex
+	})
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, tierUnverified, *captured, "a v3 payload without the domain tag must not authenticate")
+}
+
 // TestPeerAuthMiddleware_BodyDigestMismatch — a signature whose digest header
 // disagrees with the actual body must not verify, even if the cryptographic
 // signature over the declared digest is correct.
@@ -252,7 +306,7 @@ func TestPeerAuthMiddleware_BodyDigestMismatch(t *testing.T) {
 	fakeDigest := sha256.Sum256(fakeBody)
 	fakeDigestHex := hex.EncodeToString(fakeDigest[:])
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
-	payload := "v2:" + ts + ":" + req.Host + ":" + req.Method + ":" + req.URL.RequestURI() + ":" + fakeDigestHex
+	payload := util.PeerAuthSignedPayload(ts, req.Host, req.Method, req.URL.RequestURI(), fakeDigestHex)
 	sig, err := privKey.Sign([]byte(payload))
 	require.NoError(t, err)
 	pubBytes, err := privKey.GetPublic().Raw()
@@ -606,7 +660,7 @@ func TestPeerAuthMiddleware_ClaimReleasedOnFailure_AllowsRetryWithSameSignature(
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 
 	failReq := httptest.NewRequest(http.MethodPost, "/test", bytes.NewReader(wrongBody))
-	payload := "v2:" + ts + ":" + failReq.Host + ":" + failReq.Method + ":" + failReq.URL.RequestURI() + ":" + realDigestHex
+	payload := util.PeerAuthSignedPayload(ts, failReq.Host, failReq.Method, failReq.URL.RequestURI(), realDigestHex)
 	sig, err := privKey.Sign([]byte(payload))
 	require.NoError(t, err)
 	pubBytes, err := privKey.GetPublic().Raw()

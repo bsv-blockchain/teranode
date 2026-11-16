@@ -11,7 +11,9 @@ import (
 	"sync"
 	"testing"
 
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,8 +44,8 @@ func TestEd25519RequestSigner_SignsGetRequest(t *testing.T) {
 	pubKey, err := crypto.UnmarshalEd25519PublicKey(pubKeyBytes)
 	require.NoError(t, err)
 
-	expected := buildSignedPayload(tsStr, req.Host, req.Method, req.URL.RequestURI(), digest)
-	require.True(t, strings.HasPrefix(expected, "v2:"), "payload must be versioned")
+	expected := PeerAuthSignedPayload(tsStr, req.Host, req.Method, req.URL.RequestURI(), digest)
+	require.True(t, strings.HasPrefix(expected, "teranode-http-peer-auth/v3:"), "payload must carry the domain tag and version")
 
 	sigBytes, err := hex.DecodeString(sigHex)
 	require.NoError(t, err)
@@ -125,4 +127,43 @@ func TestSetHTTPRequestSigner_ConcurrentRace(t *testing.T) {
 	wg.Wait()
 
 	require.NotNil(t, loadHTTPRequestSigner())
+}
+
+// TestPeerAuthSignedPayload_DomainSeparatedFromLibp2p pins that the bytes the HTTP signer
+// signs with the node's libp2p identity key can never be mistaken for bytes a libp2p
+// protocol signs with that same key. Each libp2p protocol prefixes what it signs with its
+// own domain string; the HTTP payload carries its own tag, and no tag may be a prefix of
+// another, or a signature made for one could be presented as valid for the other.
+//
+// The noise and TLS prefixes are unexported in go-libp2p, so they are written out here
+// (go-libp2p p2p/security/noise/handshake.go payloadSigPrefix, p2p/security/tls/crypto.go
+// certificatePrefix). A signed envelope (peer records) signs uvarint(len(domain)) || domain
+// || ..., so its first bytes are the length byte followed by the domain.
+func TestPeerAuthSignedPayload_DomainSeparatedFromLibp2p(t *testing.T) {
+	payload := PeerAuthSignedPayload("1700000000", "peer.example:8090", http.MethodPost, "/api/v1/subtree/abc/txs?x=1", EmptyBodySHA256Hex)
+
+	require.True(t, strings.HasPrefix(payload, "teranode-http-peer-auth/v3:"), "the signed payload must open with the HTTP peer-auth domain tag")
+
+	envelopeDomain := peer.PeerRecordEnvelopeDomain
+
+	libp2pPrefixes := map[string]string{
+		"pubsub message signing":    pubsub.SignPrefix,
+		"noise static key":          "noise-libp2p-static-key:",
+		"tls handshake certificate": "libp2p-tls-handshake:",
+		"peer record envelope":      string([]byte{byte(len(envelopeDomain))}) + envelopeDomain,
+	}
+
+	for name, prefix := range libp2pPrefixes {
+		require.False(t, strings.HasPrefix(payload, prefix), "HTTP payload must not open with the %s domain", name)
+		require.False(t, strings.HasPrefix(prefix, PeerAuthDomain), "the %s domain must not open with the HTTP peer-auth tag", name)
+	}
+}
+
+// TestPeerAuthLegacyV2Payload pins the pre-domain-tag format byte for byte. Verifiers still
+// accept it so peers running the previous signer keep their tier while the network upgrades,
+// and the verifier's own test signs with this function, so a change here would pass that test
+// while breaking every real v2 peer.
+func TestPeerAuthLegacyV2Payload(t *testing.T) {
+	require.Equal(t, "v2:1700000000:h:GET:/p?q=1:"+EmptyBodySHA256Hex,
+		PeerAuthLegacyV2Payload("1700000000", "h", http.MethodGet, "/p?q=1", EmptyBodySHA256Hex))
 }

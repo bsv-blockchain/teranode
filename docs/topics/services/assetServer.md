@@ -868,11 +868,13 @@ Heavy endpoints (`/subtree*`, `/blocks/:hash`, `/block/:hash`, `/block_legacy/:h
 
 ##### Peer authentication protocol
 
-Clients sign each outbound request with their libp2p Ed25519 private key. The signature covers:
+Clients sign each outbound request to a peer's DataHub with their libp2p Ed25519 private key. Requests to the node's own services are not signed. The signature covers:
 
 ```text
-v2:<unix_ts>:<host>:<method>:<request_uri>:<sha256_body_hex>
+teranode-http-peer-auth/v3:<unix_ts>:<host>:<method>:<request_uri>:<sha256_body_hex>
 ```
+
+The `teranode-http-peer-auth` tag separates this payload from everything libp2p signs with the same key (pubsub messages, the noise and TLS handshakes, signed peer records), so an HTTP signature can never be valid for one of those. Verifiers still accept the untagged `v2:<unix_ts>:...` payload for one release so peers that have not upgraded keep their tier.
 
 Headers required on every signed request:
 

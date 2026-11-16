@@ -295,12 +295,14 @@ func recordAuthResult(result string) {
 }
 
 // Middleware returns Echo middleware that authenticates incoming requests
-// using Ed25519 peer signatures (v2 signed-payload format) and sets the
-// "peer_tier" context value.
+// using Ed25519 peer signatures and sets the "peer_tier" context value.
 //
-// Signed payload format (see util.buildSignedPayload):
+// Signed payload format (see util.PeerAuthSignedPayload):
 //
-//	v2:<unix_ts>:<host>:<method>:<request_uri>:<sha256_body_hex>
+//	teranode-http-peer-auth/v3:<unix_ts>:<host>:<method>:<request_uri>:<sha256_body_hex>
+//
+// The untagged v2 payload (util.PeerAuthLegacyV2Payload) is still accepted for
+// one release so peers that have not upgraded keep their tier.
 //
 // Headers required:
 //   - X-Peer-PubKey      — hex-encoded Ed25519 public key
@@ -430,9 +432,7 @@ func (v *peerAuthVerifier) verifySignedRequest(c echo.Context) (peer.ID, string,
 	// then checked against that same declared digest below.
 	declaredDigest := strings.ToLower(req.Header.Get(util.PeerAuthBodyDigestHeader))
 
-	payload := "v2:" + req.Header.Get(peerAuthHeaderTimestamp) + ":" + req.Host + ":" + req.Method + ":" + req.URL.RequestURI() + ":" + declaredDigest
-	verified, err := pubKey.Verify([]byte(payload), sigBytes)
-	if err != nil || !verified {
+	if !verifyPeerAuthSignature(pubKey, sigBytes, req.Header.Get(peerAuthHeaderTimestamp), req.Host, req.Method, req.URL.RequestURI(), declaredDigest) {
 		return "", peerAuthResultBadSig, true
 	}
 
@@ -455,6 +455,23 @@ func (v *peerAuthVerifier) verifySignedRequest(c echo.Context) (peer.ID, string,
 	authenticated = true
 
 	return peerID, peerAuthResultOK, true
+}
+
+// verifyPeerAuthSignature reports whether sig is pubKey's signature over the
+// request's domain-tagged payload, or over the legacy untagged v2 payload that
+// peers which have not upgraded still sign. Drop the v2 fallback in the release
+// after the domain tag ships.
+func verifyPeerAuthSignature(pubKey crypto.PubKey, sig []byte, ts, host, method, requestURI, bodyDigestHex string) bool {
+	for _, payload := range []string{
+		util.PeerAuthSignedPayload(ts, host, method, requestURI, bodyDigestHex),
+		util.PeerAuthLegacyV2Payload(ts, host, method, requestURI, bodyDigestHex),
+	} {
+		if verified, err := pubKey.Verify([]byte(payload), sig); err == nil && verified {
+			return true
+		}
+	}
+
+	return false
 }
 
 // checkFreshness parses the X-Peer-Timestamp header and verifies it is within
