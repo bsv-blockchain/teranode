@@ -238,6 +238,12 @@ type CentralizedPeerRegistry struct {
 	banScores map[string]*banEntry
 	banConfig BanConfig
 
+	// maxSize and sizeTTL bound r.peers at insert time (see Register). Both are
+	// set by StartCleanup and guarded by mu. A maxSize of 0 leaves the registry
+	// uncapped.
+	maxSize int
+	sizeTTL time.Duration
+
 	// saveMu serializes Save() so concurrent callers (periodic ticker +
 	// shutdown) cannot persist an older snapshot over a newer one. Without
 	// it, two saves can each take their own consistent state-snapshot, then
@@ -333,6 +339,15 @@ func (r *CentralizedPeerRegistry) SaveDisabled() bool {
 // Register adds a new peer or updates non-zero fields of an existing peer.
 // For new peers, ConnectedAt and LastSeen are initialised and reputation starts
 // at the neutral value of 50.
+//
+// The size cap is enforced here, not only by the periodic Cleanup: gossip
+// registers the author of every accepted message, and authors are identities
+// minted offline for free, so between sweeps the map would otherwise grow as
+// fast as a flooder can sign messages. A new peer arriving at the cap evicts
+// rather than being refused, because refusing would let a flooder pre-fill the
+// map and lock honest peers out. Eviction trims to inlineTrimTarget in one
+// sorted pass (see evictToSizeLocked), so the cost is paid once per
+// maxSize/inlineTrimDivisor inserts instead of on every insert.
 func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -341,6 +356,11 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 
 	existing, exists := r.peers[info.ID]
 	if !exists {
+		if r.maxSize > 0 && len(r.peers) >= r.maxSize {
+			r.expireBansLocked()
+			r.evictToSizeLocked(inlineTrimTarget(r.maxSize), now, r.sizeTTL)
+		}
+
 		entry := clonePeerInfo(info)
 		// Strip dangerous characters out of the peer-supplied client name so
 		// it can't break logs / dashboards / JSON consumers.
@@ -1023,8 +1043,15 @@ func (r *CentralizedPeerRegistry) StartPeriodicSave(ctx context.Context, interva
 // OR Close().
 //
 // A zero or negative interval disables the loop (caller's choice — useful
-// when the operator only wants TTL-on-load semantics).
+// when the operator only wants TTL-on-load semantics). maxSize and ttl are
+// stored either way, because Register enforces the size cap at insert
+// independently of the loop.
 func (r *CentralizedPeerRegistry) StartCleanup(ctx context.Context, interval, ttl time.Duration, maxSize int) {
+	r.mu.Lock()
+	r.maxSize = maxSize
+	r.sizeTTL = ttl
+	r.mu.Unlock()
+
 	if interval <= 0 {
 		return
 	}
@@ -1404,11 +1431,11 @@ func (r *CentralizedPeerRegistry) RecordCatchupError(peerID string, errMsg strin
 }
 
 // Cleanup evicts stale peers to bound memory and lookup cost. Phase 1 (TTL)
-// drops peers whose recency timestamp is older than ttl. Phase 2 (LRU) then
-// drops oldest-first until the non-exempt portion of the registry fits under
-// maxSize. Banned peers are exempt from both phases; connected peers are
-// exempt only while their activity is within ttl (see isCleanupExempt).
-// A maxSize of 0 disables the LRU phase. Returns (expired, lru) counts.
+// drops peers whose recency timestamp is older than ttl; banned peers and
+// connected peers active within ttl are exempt (see isCleanupExempt). Phase 2
+// (size) then trims the registry to maxSize in evictToSizeLocked's order, the
+// same order Register uses at insert. A maxSize of 0 disables the size phase.
+// Returns (expired, lru) counts.
 //
 // Recency is taken from peerActivity(info), which uses LastSeen as the canonical
 // freshness signal (every successful interaction refreshes it) and falls back
@@ -1440,30 +1467,57 @@ func (r *CentralizedPeerRegistry) Cleanup(maxSize int, ttl time.Duration) (int, 
 		return expired, 0
 	}
 
+	return expired, r.evictToSizeLocked(maxSize, now, ttl)
+}
+
+// inlineTrimDivisor sets how far below the cap Register trims once the cap is
+// reached: to maxSize - maxSize/inlineTrimDivisor. Trimming in bulk amortises
+// the sorted pass over that many inserts, so a flood at the cap does not pay a
+// full scan under the write lock per new peer.
+const inlineTrimDivisor = 10
+
+// inlineTrimTarget is the size Register trims the registry to when a new peer
+// arrives at the cap. It always leaves room for at least the one new peer.
+func inlineTrimTarget(maxSize int) int {
+	return maxSize - max(1, maxSize/inlineTrimDivisor)
+}
+
+// evictToSizeLocked evicts peers until at most size remain, or until only
+// connected peers active within ttl are left; those are never evicted for
+// size. Returns the number evicted. The caller must hold the write lock and
+// have normalised expired bans (expireBansLocked), so a stale IsBanned flag
+// does not keep an idle peer in the negative tier.
+//
+// Eviction order is evictionTier first, then least recently active within a
+// tier. The tiers are what keep a rotating-identity flood from washing honest
+// peers out; see evictionTier for the order and why.
+func (r *CentralizedPeerRegistry) evictToSizeLocked(size int, now time.Time, ttl time.Duration) int {
+	toEvict := len(r.peers) - size
+	if toEvict <= 0 {
+		return 0
+	}
+
 	type candidate struct {
 		id   string
+		tier int
 		last time.Time
 	}
 	candidates := make([]candidate, 0, len(r.peers))
-	exemptCount := 0
 	for id, info := range r.peers {
-		if isCleanupExempt(info, now, ttl) {
-			exemptCount++
+		if isConnectedAndActive(info, now, ttl) {
 			continue
 		}
-		candidates = append(candidates, candidate{id: id, last: peerActivity(info)})
+		candidates = append(candidates, candidate{id: id, tier: evictionTier(info, now), last: peerActivity(info)})
 	}
 
-	target := maxSize - exemptCount
-	if target < 0 {
-		target = 0
-	}
-	toEvict := len(candidates) - target
-	if toEvict <= 0 {
-		return expired, 0
+	if toEvict > len(candidates) {
+		toEvict = len(candidates)
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].tier != candidates[j].tier {
+			return candidates[i].tier < candidates[j].tier
+		}
 		return candidates[i].last.Before(candidates[j].last)
 	})
 
@@ -1471,19 +1525,79 @@ func (r *CentralizedPeerRegistry) Cleanup(maxSize int, ttl time.Duration) (int, 
 		delete(r.peers, candidates[i].id)
 	}
 
-	return expired, toEvict
+	return toEvict
 }
 
-// isCleanupExempt reports whether a peer must be retained regardless of TTL or
-// size pressure. Banned peers are always retained. IsConnected only exempts a
-// peer whose activity is still within ttl: the flag is asserted by the p2p
+// Eviction tiers for evictToSizeLocked, lowest evicted first.
+const (
+	evictionTierNoHistory = iota
+	evictionTierNegative
+	evictionTierPositive
+)
+
+// evictionTier places a peer in the eviction order:
+//
+//  1. No history: nothing but a registration, which is all a gossip author
+//     minted offline has. A flood displaces entries like itself first.
+//  2. Negative history: attempts, failures, sync benches, catchup errors,
+//     storage contradictions or penalties, revoked validated work, a malicious
+//     report, or a ban. The record is what keeps a penalised peer from
+//     returning clean (the ban itself also lives in banScores, but malicious
+//     and penalty history live only here), so it is kept above tier 1. Gossip
+//     authors can earn this tier cheaply (an announcement that triggers a
+//     failed catchup, a bogus block that gets them banned), so it must not
+//     outrank tier 3.
+//  3. Positive history: the peer served data that passed validation and is
+//     not currently banned, malicious or under a storage penalty. An attacker
+//     can still earn this by relaying real chain data, but only at the pace of
+//     the node's own fetches and catchups, not at gossip rate.
+//
+// Fields are listed explicitly even where one record path sets several of
+// them, so a future path that sets only one still counts.
+func evictionTier(info *PeerInfo, now time.Time) int {
+	penalised := info.IsBanned ||
+		info.MaliciousCount > 0 ||
+		now.Before(info.FullStoragePenaltyUntil)
+	// Validated work, not LastValidatedAt: a delivery-failure penalty wipes the
+	// work but leaves the timestamp, and revoked credit must not rank here.
+	positive := info.InteractionSuccesses > 0 ||
+		info.CatchupSuccesses > 0 ||
+		len(info.ValidatedChainWork) > 0
+	negative := penalised ||
+		info.InteractionAttempts > 0 ||
+		info.InteractionFailures > 0 ||
+		info.CatchupAttempts > 0 ||
+		info.CatchupFailures > 0 ||
+		info.SyncAttemptCount > 0 ||
+		!info.LastCatchupErrorTime.IsZero() ||
+		info.FullStorageContradictions > 0 ||
+		!info.FullStoragePenaltyUntil.IsZero() ||
+		!info.LastValidatedAt.IsZero()
+
+	switch {
+	case positive && !penalised:
+		return evictionTierPositive
+	case positive || negative:
+		return evictionTierNegative
+	default:
+		return evictionTierNoHistory
+	}
+}
+
+// isCleanupExempt reports whether a peer must be retained by Cleanup's TTL
+// phase. Banned peers are always retained there. Connected peers are retained
+// while active within ttl (see isConnectedAndActive). Caller must hold the
+// registry lock.
+func isCleanupExempt(info *PeerInfo, now time.Time, ttl time.Duration) bool {
+	return info.IsBanned || isConnectedAndActive(info, now, ttl)
+}
+
+// isConnectedAndActive reports whether a peer is connected and active within
+// ttl. IsConnected alone is not enough: the flag is asserted by the p2p
 // service on every gossip message but there is no libp2p disconnect signal to
 // clear it, so a stale flag must not pin an entry in the registry forever.
 // Caller must hold the registry lock.
-func isCleanupExempt(info *PeerInfo, now time.Time, ttl time.Duration) bool {
-	if info.IsBanned {
-		return true
-	}
+func isConnectedAndActive(info *PeerInfo, now time.Time, ttl time.Duration) bool {
 	if !info.IsConnected {
 		return false
 	}
