@@ -33,10 +33,11 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 	s.mainChainRebuilding.Add(1)
 	defer s.mainChainRebuilding.Add(-1)
 
-	// Update the block to valid (not invalid) and clear the mined_set flag.
+	// Update the block to valid (not invalid) and clear the mined_set flag. Bump
+	// mined_set_gen so an in-flight tagging run cannot overwrite the reset.
 	q := `
 		UPDATE blocks
-		SET invalid = false, mined_set = false
+		SET invalid = false, mined_set = false, mined_set_gen = mined_set_gen + 1
 		WHERE hash = $1
 	`
 	// In a transaction so the shared row is locked first; see chainWriteStateKey.

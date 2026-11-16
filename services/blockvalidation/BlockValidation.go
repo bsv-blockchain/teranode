@@ -136,6 +136,20 @@ const (
 	setMinedMaxBackoff = 16 * time.Second
 )
 
+// setMinedRequeueError is what setTxMinedStatus returns when the block's state moved
+// under the run: its final mined_set write was refused because the generation moved, or
+// the invalid flag changed before the run started. The run did not fail, so the setMined
+// worker neither charges nor resets the block's retry counter. It re-queues the block
+// through the backoff path, so a generation that keeps moving cannot drive back-to-back
+// full re-tags of a large block.
+type setMinedRequeueError struct {
+	reason string
+}
+
+func (e *setMinedRequeueError) Error() string {
+	return "set-mined run must be re-queued: " + e.reason
+}
+
 // setMinedRetryBackoff computes the exponential-with-cap backoff for the
 // (attempt)th retry. attempt is 1-indexed (1 = first retry after the initial
 // failure). 1s, 2s, 4s, 8s, 16s, 16s, ...
@@ -868,6 +882,26 @@ func (u *BlockValidation) start(ctx context.Context) error {
 					case <-ctx.Done():
 						return
 					default:
+					}
+
+					var requeue *setMinedRequeueError
+					if errors.As(err, &requeue) {
+						// The block's state moved under the run; it did not fail. Leave the
+						// retry counter as it is, neither charged nor reset, so a block that
+						// is also failing for real still reaches setMinedMaxRetries. Wait at
+						// the backoff for the attempts already made (1s at least) rather than
+						// re-queueing at once, so repeated resets cannot drive back-to-back
+						// full re-tags.
+						var attempt uint64
+						if prev, ok := u.setMinedRetries.Load(*blockHash); ok {
+							attempt = prev.(uint64)
+						}
+
+						backoff := setMinedRetryBackoff(int(attempt))
+						u.logger.Warnf("[BlockValidation:start][%s] setTxMined re-queued in %s, retry counter unchanged at %d: %s", blockHash.String(), backoff, attempt, err)
+						u.scheduleSetMinedRetry(ctx, blockHash, backoff)
+
+						return
 					}
 
 					u.logger.Errorf("[BlockValidation:start][%s] failed setTxMined: %s", blockHash.String(), err)
@@ -1654,20 +1688,25 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		ids             []uint32
 	)
 
-	cachedBlock, blockWasAlreadyCached := u.lastValidatedBlocks.Get(*blockHash)
+	// Take the block out of the cache in one step. Whoever removes a block from
+	// lastValidatedBlocks owns it from then on and is the only one that may release
+	// its subtrees. ValidateBlock's updateSubtreesDAH failure path races this worker
+	// for the same entry when SetBlockSubtreesSet commits but reports an error; a
+	// Get followed by a separate Delete let both sides believe they had it.
+	cachedBlock, blockWasAlreadyCached := u.lastValidatedBlocks.GetAndDelete(*blockHash)
 
 	if blockWasAlreadyCached && cachedBlock != nil {
 		// Verify the cached block has subtrees loaded
 		if u.hasValidSubtrees(cachedBlock) {
 			u.logger.Debugf("[setTxMined][%s] using cached block with subtrees", blockHash.String())
 			block = cachedBlock
-
-			// Remove from cache immediately - we're about to use it and don't need it cached anymore
-			// This frees memory sooner than waiting for cache expiry or the delete at line 894
-			u.lastValidatedBlocks.Delete(*blockHash)
 		} else {
 			u.logger.Warnf("[setTxMined][%s] cached block has invalid subtrees, fetching from blockchain", blockHash.String())
 			blockWasAlreadyCached = false
+
+			// Taken out of the cache, so the eviction function will never see it:
+			// release whatever subtrees it still holds before dropping it.
+			releaseBlockNodes(cachedBlock)
 		}
 	}
 
@@ -1681,6 +1720,27 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 	_, blockHeaderMeta, err = u.blockchainClient.GetBlockHeader(ctx, blockHash)
 	if err != nil {
 		return errors.NewServiceError("[setTxMined][%s] failed to get block header from blockchain", blockHash.String(), err)
+	}
+
+	// Capture the generation before any work. Everything this run decides (tag or untag,
+	// on the longest chain or not) is read after this point, so a reset that lands later
+	// moves the generation and the final SetBlockMinedSet is refused.
+	minedSetGeneration := blockHeaderMeta.MinedSetGeneration
+
+	// The caller read the invalid flag earlier, in its own GetBlockHeader. If an invalidate
+	// or revalidate landed between that read and this one, the generation above already
+	// counts it, so the guard cannot catch a run started on the stale flag. Ask the
+	// worker to re-queue instead; the next pick-up reads both together.
+	if startedInvalid := len(unsetMined) > 0 && unsetMined[0]; startedInvalid != blockHeaderMeta.Invalid {
+		u.logger.Warnf("[setTxMined][%s] block invalid flag changed before the run started (caller saw %t, now %t), re-queueing", blockHash.String(), startedInvalid, blockHeaderMeta.Invalid)
+
+		// A block taken from lastValidatedBlocks may hold mmap-backed subtrees, which
+		// have no finalizer; release them before dropping the block.
+		if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
+			u.logger.Warnf("[setTxMined][%s] failed closing subtrees before re-queue: %v", blockHash.String(), releaseErr)
+		}
+
+		return &setMinedRequeueError{reason: fmt.Sprintf("invalid flag changed before the run started (caller saw %t, now %t)", startedInvalid, blockHeaderMeta.Invalid)}
 	}
 
 	onLongestChain, err = u.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{blockHeaderMeta.ID})
@@ -1771,8 +1831,8 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 
 	// Close mmap-backed subtrees and clear to free memory. Routed through
 	// ReleaseSubtreeNodes so the entries are nil-ed under the block's subtree
-	// mutex: this block may still be reachable via lastValidatedBlocks, whose
-	// TTL cleaner runs the same release concurrently. Nodes are not pooled here
+	// mutex. A block taken from lastValidatedBlocks is no longer reachable there
+	// (GetAndDelete above), so nothing else releases it. Nodes are not pooled here
 	// (put is nil): a block fetched fresh from the blockchain has no node
 	// allocator, so its slices never came from the pool. A block taken from
 	// lastValidatedBlocks does carry pool-allocated slices — recycling those is
@@ -1781,8 +1841,21 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		u.logger.Warnf("[setTxMined][%s] failed closing subtrees after setting mined: %v", block.Hash().String(), releaseErr)
 	}
 
-	// update block mined_set to true
-	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash); err != nil {
+	// update block mined_set to true, but only if the block's mined_set generation is still
+	// the one this run started from. ClearBlockMinedSet, InvalidateBlock and RevalidateBlock
+	// clear mined_set so the block is processed again, and bump the generation. Overwriting
+	// mined_set here would make the worker's MinedSet guard and the mined-not-set sweep both
+	// skip the block for good, leaving its transactions tagged for a chain state that no
+	// longer holds.
+	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash, minedSetGeneration); err != nil {
+		if errors.Is(err, errors.ErrStateError) {
+			// Not a failure of this run: the block must be processed again under its new
+			// state. The worker re-queues it after a backoff and leaves the retry counter alone.
+			u.logger.Warnf("[setTxMined][%s] block mined_set was cleared during the run, re-queueing: %v", blockHash.String(), err)
+
+			return &setMinedRequeueError{reason: "mined_set generation moved during the run: " + err.Error()}
+		}
+
 		return errors.NewServiceError("[setTxMined][%s] failed to set block mined", block.Hash().String(), err)
 	}
 
@@ -2780,14 +2853,18 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// This sends the BlockSubtreesSet notification which triggers setMined
 				if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
 					u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees DAH [%s]", block.Hash().String(), err)
-					// Clean up cache since DAH update failed. Delete bypasses the
-					// eviction function so we must release pooled []Node slices
-					// explicitly here.
-					u.lastValidatedBlocks.Delete(*block.Hash())
-					releaseBlockNodes(block)
-					// Trigger revalidation to ensure block is retried
-					// This is consistent with other error handling in this goroutine
-					u.ReValidateBlock(block, baseURL)
+
+					// Trigger revalidation to ensure block is retried. This is
+					// consistent with other error handling in this goroutine.
+					// When the setMined worker took the block first, this
+					// goroutine no longer owns it and must not hand the same
+					// object to a revalidation that reloads its subtrees.
+					if u.reclaimBlockAfterFailedSubtreesSet(block, true) {
+						u.ReValidateBlock(block, baseURL)
+					} else {
+						u.ReValidateBlock(detachedBlockCopy(block), baseURL)
+					}
+
 					return
 				}
 			}()
@@ -3004,9 +3081,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// caches the block once Valid returns, which is the only Set on this
 		// path with a lifetime that outlives its reader.
 		if !useOptimisticMining {
+			blockCached := false
+
 			if u.hasValidSubtrees(block) {
 				u.logger.Debugf("[ValidateBlock][%s] caching block with %d subtrees loaded", block.Hash().String(), block.GetSubtreeSlicesCount())
 				u.lastValidatedBlocks.Set(*block.Hash(), block)
+				blockCached = true
 			} else {
 				u.logger.Warnf("[ValidateBlock][%s] not caching block - subtrees not loaded (%d slices, %d hashes)", block.Hash().String(), block.GetSubtreeSlicesCount(), len(block.Subtrees))
 			}
@@ -3014,17 +3094,73 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// it's critical that we call updateSubtreesDAH() only when we know the block is valid
 			// This sends the BlockSubtreesSet notification which triggers setMined
 			if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
-				// Clean up cache since DAH update failed. Delete bypasses the
-				// eviction function so we must release pooled []Node slices
-				// explicitly here.
-				u.lastValidatedBlocks.Delete(*block.Hash())
-				releaseBlockNodes(block)
+				u.reclaimBlockAfterFailedSubtreesSet(block, blockCached)
 				return errors.NewProcessingError("[ValidateBlock][%s] failed to update subtrees DAH", block.Hash().String(), err)
 			}
 		}
 
 		return nil
 	})
+}
+
+// reclaimBlockAfterFailedSubtreesSet is the updateSubtreesDAH failure path's half
+// of the lastValidatedBlocks handover, and reports whether ValidateBlock still owns
+// block afterwards.
+//
+// The failure is ambiguous. SetBlockSubtreesSet can commit on the blockchain server
+// and still return an error (a deadline, or a connection reset during a blockchain
+// restart). The server has then already sent BlockSubtreesSet, and the setMined
+// worker may have taken the block out of the cache and be reading its subtrees.
+// Releasing it here would return node arrays to the pool under that worker, so the
+// hashes it tags as mined could come from another block's subtree.
+//
+// So the block goes to whichever side removes it from the cache. If this call
+// removes it, it releases it, as the old Delete-then-release did. If the entry is
+// already gone, the setMined worker or the cache's eviction function has it and
+// releases it, and the caller must not touch the block's subtrees again. A block
+// that was never cached (cached false) is still only ValidateBlock's, so it is
+// released directly.
+func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block, cached bool) bool {
+	if !cached {
+		releaseBlockNodes(block)
+		return true
+	}
+
+	taken, removed := u.lastValidatedBlocks.GetAndDelete(*block.Hash())
+	if !removed {
+		u.logger.Warnf("[ValidateBlock][%s] block already taken from the validated-blocks cache after a failed subtrees_set, leaving its release to the taker", block.Hash().String())
+		return false
+	}
+
+	releaseBlockNodes(taken)
+
+	// Another Set for the same hash replaced our entry: ours left the cache without
+	// an owner, so it is still ours to release.
+	if taken != block {
+		releaseBlockNodes(block)
+	}
+
+	return true
+}
+
+// detachedBlockCopy returns a new *model.Block with block's header, coinbase and
+// subtree list but none of its loaded subtrees, for a caller that has given up the
+// original object and still needs to queue the block for another attempt. The
+// header and coinbase are shared and read-only on every path that takes them.
+func detachedBlockCopy(block *model.Block) *model.Block {
+	copied := &model.Block{
+		Header:           block.Header,
+		CoinbaseTx:       block.CoinbaseTx,
+		TransactionCount: block.TransactionCount,
+		SizeInBytes:      block.SizeInBytes,
+		Subtrees:         slices.Clone(block.Subtrees),
+		Height:           block.Height,
+		ID:               block.ID,
+		CoinbaseBUMP:     slices.Clone(block.CoinbaseBUMP),
+	}
+	copied.SetNodeAllocator(block.NodeAllocator())
+
+	return copied
 }
 
 // prepareBlockAssembly hands a block whose header checks passed and whose subtrees are in the
