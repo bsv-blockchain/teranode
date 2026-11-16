@@ -216,7 +216,14 @@ wallet load only. Scheduled runs only happen from the fork's default branch, so 
 to be on its `main`. The variable `NIGHTLY_PHASES` (for example `1`) limits which phases the
 scheduled run takes; a manual run (Actions → nightly-chain-integrity-stack → Run workflow)
 chooses its own. Install the runner as a service (`./svc.sh install && ./svc.sh start` in the
-runner directory) so it survives a restart.
+runner directory) so it survives a restart. On macOS the service runs as a launchd agent, which
+cannot use the login keychain, so `docker login` fails with "User interaction is not allowed".
+Give the runner its own Docker config that stores logins in a file: create
+`<runner>/.docker/config.json` with `{"currentContext": "<your context>", "credHelpers":
+{"credentials-in-file.invalid": "none"}}` (any `credHelpers` entry stops the CLI from picking
+the keychain), symlink `contexts`, `cli-plugins` and `buildx` from `~/.docker` into it, and add
+`export DOCKER_CONFIG=<runner>/.docker` to `runsvc.sh` after its "insert anything to setup env"
+line (`.env` does not reach the job's steps). The workflow logs out at the end of each job.
 
 ## Split topology
 
