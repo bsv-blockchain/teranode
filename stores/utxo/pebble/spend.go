@@ -436,10 +436,9 @@ func (s *Store) stageSpendSlot(m *masterRecord, pages map[uint32]*pageRecord, pa
 
 func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	// flagAsLocked is tri-state, as the SQL store treats it: absent leaves the
-	// locked flag alone, true sets it, false clears it. utxo.ProcessConflicting
-	// locks affected parents with true and ReverseProcessConflicting unlocks them
-	// with false, so collapsing it to "set or do nothing" left a reorg's demoted
-	// parents locked forever and wedged block assembly on the restored chain.
+	// locked flag alone, true sets it, false clears it. No caller in teranode
+	// passes it now: conflict processing locks and unlocks parents through
+	// SetConflictLocks, which checks the lock's owner.
 	lockedProvided := len(flagAsLocked) > 0
 	setLocked := lockedProvided && flagAsLocked[0]
 

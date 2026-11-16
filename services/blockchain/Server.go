@@ -2129,7 +2129,7 @@ func (b *Blockchain) BlocksBetterThan(ctx context.Context, req *blockchain_api.B
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid limit %d, must be 1 to %d", req.Limit, b.maxBlockHeadersPerRequest()))
 	}
 
-	after, err := model.NewBestTipKeyFromBytes(req.After)
+	after, err := model.NewCurrentBestTipKeyFromBytes(req.After)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid after key", err))
 	}
@@ -2137,7 +2137,7 @@ func (b *Blockchain) BlocksBetterThan(ctx context.Context, req *blockchain_api.B
 	var from *model.BestTipKey
 
 	if len(req.From) > 0 {
-		key, keyErr := model.NewBestTipKeyFromBytes(req.From)
+		key, keyErr := model.NewCurrentBestTipKeyFromBytes(req.From)
 		if keyErr != nil {
 			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid from key", keyErr))
 		}
