@@ -93,7 +93,8 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 
 	// recursively update all children blocks to invalid in 1 query.
 	// Also set mined_set = false (invalid blocks cannot be mined; this triggers
-	// block-validation to reset mining state) and on_main_chain = false so the
+	// block-validation to reset mining state), bump mined_set_gen so an in-flight
+	// tagging run cannot overwrite that reset, and on_main_chain = false so the
 	// invalidated subtree is removed from the canonical chain in the same
 	// transaction — no follow-up wide-window UPDATE needed.
 	q := `
@@ -107,7 +108,7 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 			INNER JOIN children c ON c.hash = b.previous_hash
 		)
 		UPDATE blocks
-		SET invalid = true, mined_set = false, on_main_chain = false
+		SET invalid = true, mined_set = false, mined_set_gen = mined_set_gen + 1, on_main_chain = false
 		WHERE id IN (SELECT id FROM children)
 		RETURNING hash
 	`
