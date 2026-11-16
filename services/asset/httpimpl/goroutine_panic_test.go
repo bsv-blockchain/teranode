@@ -73,7 +73,7 @@ func TestGetTransactions_PanicInErrgroupGoroutineDoesNotCrashProcess(t *testing.
 
 	subtreeHash := chainhash.HashH([]byte("panicInErrgroupGoroutine"))
 	setSubtreeRoute(echoContext, &subtreeHash)
-	mockGetSubtreeTransactions(mockRepo)
+	mockSubtreeWithoutData(mockRepo, *testTX1Hash)
 
 	mockRepo.On("GetTransaction", mock.Anything).Run(func(mock.Arguments) {
 		panic(panicMessage)

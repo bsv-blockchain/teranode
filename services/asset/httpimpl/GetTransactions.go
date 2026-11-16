@@ -49,10 +49,14 @@ import (
 //
 //   - Missing, malformed, or unknown subtree hash
 //
+//   - A transaction hash requested more than once
+//
 //   - 404 Not Found:
 //
 //   - One or more transactions not found
 //     Example: {"message": "not found"}
+//
+//   - A transaction hash that is not in the named subtree
 //
 //   - 413 Request Entity Too Large:
 //
@@ -86,6 +90,8 @@ import (
 //
 // Notes:
 //   - Each transaction hash in the request must be exactly 32 bytes
+//   - Only transactions in the named subtree are served, each at most once per
+//     request, so a response holds no more than the subtree's own transactions
 //   - A hash that is not found fails the whole request with 404
 //   - Transactions are retrieved concurrently for better performance
 //   - Response order matches request order
@@ -298,6 +304,12 @@ func (h *HTTP) getTransactionsFromSubtree(ctx context.Context, c echo.Context, s
 		return c.Blob(http.StatusOK, echo.MIMEOctetStream, nil)
 	}
 
+	// Checked from the body alone, before the permit below is taken.
+	unresolved, err := uniqueBatchHashes(hashes)
+	if err != nil {
+		return err
+	}
+
 	transactionFromSubtreeData := make(map[chainhash.Hash]*bt.Tx)
 
 	// The permit covers the map, so it is held for as long as the map is read -
@@ -317,6 +329,19 @@ func (h *HTTP) getTransactionsFromSubtree(ctx context.Context, c echo.Context, s
 		h.logger.Debugf("[Asset_http:GetTransactions][%s] error getting transactions from subtree data: %s", subtreeHash.String(), err.Error())
 	} else {
 		transactionFromSubtreeData = txMap
+	}
+
+	// A hash the subtree data answers is a member. Any other hash would be served
+	// from the store, which holds transactions from every subtree, so it has to be
+	// found in this subtree's node list first.
+	for hash := range unresolved {
+		if _, ok := transactionFromSubtreeData[hash]; ok {
+			delete(unresolved, hash)
+		}
+	}
+
+	if err = h.requireSubtreeMembers(ctx, c, subtreeHash, unresolved); err != nil {
+		return err
 	}
 
 	maxBytes := h.maxBatchResponseBytes()
@@ -358,6 +383,81 @@ func (h *HTTP) getTransactionsFromSubtree(ctx context.Context, c echo.Context, s
 	h.logger.Debugf("[Asset_http:GetTransactions] sending %d txs to client (%d bytes)", len(hashes), len(responseBytes))
 
 	return c.Blob(http.StatusOK, echo.MIMEOctetStream, responseBytes)
+}
+
+// uniqueBatchHashes returns the requested hashes as a set, or a 400 when one is
+// requested twice. Each record expands into a full transaction, so a repeated
+// txid would buy another copy of it for 32 request bytes. Honest catchup never
+// repeats one: subtree validation rejects a subtree that lists a tx twice before
+// it fetches the subtree's missing transactions.
+func uniqueBatchHashes(hashes []chainhash.Hash) (map[chainhash.Hash]struct{}, error) {
+	set := make(map[chainhash.Hash]struct{}, len(hashes))
+
+	for _, hash := range hashes {
+		if _, ok := set[hash]; ok {
+			return nil, echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("duplicate transaction hash %s in batch", hash.String()).Error())
+		}
+
+		set[hash] = struct{}{}
+	}
+
+	return set, nil
+}
+
+// requireSubtreeMembers returns a 404 unless every hash in pending is a node of
+// the subtree. It streams the node hashes and stops as soon as all of pending
+// has been seen, deleting from pending as it goes; memory stays at the size of
+// the request, not of the subtree. An empty pending reads nothing.
+//
+// It runs whenever the subtree data does not answer a requested hash, which on a
+// live subtree is every hash: .subtreeData is only written once the subtree is
+// in a block. GetSubtreeNodeHashesReader takes an asset_subtreeStreamConcurrency
+// permit (unlimited by default) for the read; the read is paced by the subtree
+// store, not by the client. A permit that cannot be had is a 503 with
+// Retry-After, which the catchup client retries instead of blaming the peer.
+func (h *HTTP) requireSubtreeMembers(ctx context.Context, c echo.Context, subtreeHash *chainhash.Hash, pending map[chainhash.Hash]struct{}) error {
+	if len(pending) == 0 {
+		return nil
+	}
+
+	reader, err := h.repository.GetSubtreeNodeHashesReader(ctx, subtreeHash)
+	if err != nil {
+		switch {
+		case errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such file"):
+			return echo.NewHTTPError(http.StatusNotFound, errors.NewNotFoundError("subtree %s not found", subtreeHash.String(), err).Error())
+		case errors.Is(err, errors.ErrServiceUnavailable):
+			c.Response().Header().Set("Retry-After", "1")
+			return echo.NewHTTPError(http.StatusServiceUnavailable, errors.NewServiceUnavailableError("subtree %s busy", subtreeHash.String(), err).Error())
+		default:
+			return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error reading subtree %s", subtreeHash.String(), err).Error())
+		}
+	}
+
+	defer func() {
+		_ = reader.Close()
+	}()
+
+	var hash chainhash.Hash
+
+	for len(pending) > 0 {
+		if _, err = io.ReadFull(reader, hash[:]); err != nil {
+			// Only a bare io.EOF is the end of the node list: the reader wraps io.EOF
+			// when the file ends before its node count, and errors.Is would match it.
+			if err == io.EOF {
+				break
+			}
+
+			return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error reading subtree %s", subtreeHash.String(), err).Error())
+		}
+
+		delete(pending, hash)
+	}
+
+	for missing := range pending {
+		return echo.NewHTTPError(http.StatusNotFound, errors.NewNotFoundError("transaction %s is not in subtree %s", missing.String(), subtreeHash.String()).Error())
+	}
+
+	return nil
 }
 
 // concatTransactionBytes joins the per-record serialized transactions into a
@@ -501,7 +601,7 @@ func (h *HTTP) maxBatchResponseBytes() int64 {
 // enforceBatchResponseBytes rejects a batch whose accumulated response exceeds
 // maxBytes, and otherwise records a rate-limited observation against the
 // unfloored asset_maxBatchResponseBytes setting. A record budget alone does not
-// bound output: duplicate txids in one batch each expand into a full transaction.
+// bound output: each txid in a batch expands into a full transaction.
 func (h *HTTP) enforceBatchResponseBytes(route string, total, maxBytes int64) error {
 	if maxBytes > 0 {
 		if total > maxBytes {

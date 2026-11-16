@@ -31,6 +31,9 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **`POST /api/v1/subtree/:hash/txs` serves only the named subtree's transactions, each once.** A
+  repeated txid gets 400 and one outside the subtree 404; peer catchup sends neither. A set
+  `asset_subtreeStreamConcurrency` now also bounds this route; size it per its recommendations. (#2201)
 - **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
   `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
   now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,
