@@ -643,6 +643,28 @@ func dropRetiredIndexes(db *usql.DB) error {
 	return nil
 }
 
+// createChainWorkIndexes builds the indexes the best-tip order reads, on Postgres and SQLite
+// alike, and then drops the retired indexes they replace. The drop comes after the creates, so a
+// node still running the old binary against this database is never left without a chain work
+// index. On failure it closes db, as the rest of the schema setup does.
+func createChainWorkIndexes(db *usql.DB) error {
+	// Primary index for best block queries without invalid filter.
+	// Used by: GetBlockStats, recursive CTEs that don't filter by invalid.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id_v2 ON blocks (chain_work DESC, id ASC);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_chain_work_id_v2 index", err)
+	}
+
+	// Partial index for valid blocks, the most common query pattern (GetBestBlockHeader, etc.):
+	// the primary index for finding the best valid block.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id_valid ON blocks (chain_work DESC, id ASC) WHERE invalid = false;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_chain_work_id_valid index", err)
+	}
+
+	return dropRetiredIndexes(db)
+}
+
 // isBlockchainSchemaCurrent returns true when the blocks table exists with all
 // expected columns and indexes in place. Uses only system-catalog reads
 // (AccessShare on pg_class / information_schema) so it never contends with
@@ -897,23 +919,7 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 			return errors.NewStorageError("could not drop idx_persisted_at index", err)
 		}
 
-		// === CHAIN WORK INDEXES ===
-		// Primary index for best block queries without invalid filter
-		// Used by: GetBlockStats, recursive CTEs that don't filter by invalid
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id_v2 ON blocks (chain_work DESC, id ASC);`); err != nil {
-			_ = db.Close()
-			return errors.NewStorageError("could not create idx_chain_work_id_v2 index", err)
-		}
-
-		// Partial index for valid blocks - most common query pattern (GetBestBlockHeader, etc.)
-		// This is the primary index for finding the best valid block
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id_valid ON blocks (chain_work DESC, id ASC) WHERE invalid = false;`); err != nil {
-			_ = db.Close()
-			return errors.NewStorageError("could not create idx_chain_work_id_valid index", err)
-		}
-		// The retired indexes are dropped only after their replacements exist, so a node still
-		// running the old binary against this database is never left without a chain work index.
-		if err := dropRetiredIndexes(db); err != nil {
+		if err := createChainWorkIndexes(db); err != nil {
 			return err
 		}
 
@@ -1201,23 +1207,7 @@ func createSqliteSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not drop idx_persisted_at index", err)
 	}
 
-	// === CHAIN WORK INDEXES ===
-	// Primary index for best block queries without invalid filter
-	// Used by: GetBlockStats, recursive CTEs that don't filter by invalid
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id_v2 ON blocks (chain_work DESC, id ASC);`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create idx_chain_work_id_v2 index", err)
-	}
-
-	// Partial index for valid blocks - most common query pattern (GetBestBlockHeader, etc.)
-	// This is the primary index for finding the best valid block
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id_valid ON blocks (chain_work DESC, id ASC) WHERE invalid = false;`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create idx_chain_work_id_valid index", err)
-	}
-	// The retired indexes are dropped only after their replacements exist, so a node still
-	// running the old binary against this database is never left without a chain work index.
-	if err := dropRetiredIndexes(db); err != nil {
+	if err := createChainWorkIndexes(db); err != nil {
 		return err
 	}
 
