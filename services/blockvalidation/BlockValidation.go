@@ -2541,20 +2541,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			useOptimisticMining = false
 		}
 
-		// The block's subtrees are in the subtree store now. Under optimistic mining the block is
-		// added straight away, so block assembly has nothing to get ahead of.
-		if !useOptimisticMining && !opts.IsCatchupMode && !opts.IsRevalidation {
-			u.prepareBlockAssembly(block)
-		}
-
-		var optimisticMiningWg sync.WaitGroup
-
-		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
-
+		// The checks that must pass before an optimistic add. They run ahead of
+		// prepareBlockAssembly so that a block the integrity floor turns away still prepares block
+		// assembly on its way to full validation.
 		if useOptimisticMining {
-			// NOTE: We do NOT cache the block here as subtrees are not yet loaded.
-			// The block will be cached after subtrees are validated in the background goroutine.
-
 			// Run the contextual header checks (2h-future timestamp, median-time-past, block-version
 			// floor) synchronously at receipt time BEFORE optimistically adding the block. The full
 			// block.Valid() runs later in the background goroutine below, where a drifted time.Now()
@@ -2597,9 +2587,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// is pure (header plus coinbase) and returns nil for any body carrying subtrees, so an
 			// honest multi-transaction block is never rejected here. Nothing has been added yet, so
 			// this matches the non-optimistic corrupt branch: strike the serving peer and return
-			// corrupt for re-download, under the corrupt-attempt cap. The residual under the opt-in
-			// is a body carrying subtrees that subtree validation did not bind (none of them cached),
-			// which cannot be bound here until block.Valid is split.
+			// corrupt for re-download, under the corrupt-attempt cap. A body carrying subtrees is bound
+			// by the integrity floor below.
 			if err = block.CheckCoinbaseOnlyBodyBound(); err != nil {
 				if !opts.IsRevalidation {
 					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, err.Error())
@@ -2607,6 +2596,34 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 				return err
 			}
+
+			// The integrity floor: bind a body carrying subtrees to the header through its first and
+			// last subtrees, then run the coinbase rules (shape, the common transaction rules, length,
+			// finality, BIP34) on the coinbase that binding proves is the block's own. Without it such
+			// a body is added before anything ties its coinbase to the header, and a coinbase that
+			// breaks a rule is caught only after the block is on the chain. A failure is not a verdict
+			// and strikes no peer: the block simply is not added early, and the full validation below
+			// decides it exactly as it would with the opt-in off.
+			if floorErr := block.CheckIntegrityFloor(ctx, u.subtreeStore, blockHeaders, u.settings, ctxLogger); floorErr != nil {
+				ctxLogger.Infof("[ValidateBlock][%s] integrity floor failed, validating fully before adding: %v", block.Hash().String(), floorErr)
+
+				useOptimisticMining = false
+			}
+		}
+
+		// The block's subtrees are in the subtree store now. Under optimistic mining the block is
+		// added straight away, so block assembly has nothing to get ahead of.
+		if !useOptimisticMining && !opts.IsCatchupMode && !opts.IsRevalidation {
+			u.prepareBlockAssembly(block)
+		}
+
+		var optimisticMiningWg sync.WaitGroup
+
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+
+		if useOptimisticMining {
+			// NOTE: We do NOT cache the block here as subtrees are not yet loaded.
+			// The block will be cached after subtrees are validated in the background goroutine.
 
 			ctxLogger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain", block.Hash().String())
 
@@ -2663,8 +2680,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					// corrupt for re-download), here the corrupt body is already accepted and there is
 					// no non-poisoning removal primitive. Leaving it accepted would be a silently
 					// accepted corrupt tip — worse than poisoning — so on this one opt-in path the
-					// corrupt body takes the INVALIDATE ROUTE (poison-loudly, never silently accept)
-					// until the block.Valid integrity-floor split lands and removes this path.
+					// corrupt body takes the INVALIDATE ROUTE (poison-loudly, never silently accept).
+					// The integrity floor ran before the add, so the body is bound and its coinbase
+					// passed; what lands here is a defect the floor does not check, such as a repeated
+					// transaction or a middle subtree of the wrong length.
 					// InvalidateBlock is called directly (not markBlockAsInvalid) so no second,
 					// mis-attributed Kafka strike lands on the announcing peer — the serving peer is
 					// already struck above by penalizeCorruptBlockPeer.
@@ -2694,7 +2713,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 							u.logger.Errorf("[ValidateBlock][%s] corrupt body optimistically added and InvalidateBlock FAILED; re-queuing revalidation to avoid a silently-accepted corrupt tip: %v", block.String(), invErr)
 							u.reValidateOptimisticallyAddedBlock(block, baseURL)
 						} else {
-							u.logger.Errorf("[ValidateBlock][%s] corrupt body optimistically added; invalidated (invalidate route, not silently accepted) — opt-in optimistic peer mining until the block.Valid integrity-floor split lands", block.String())
+							u.logger.Errorf("[ValidateBlock][%s] corrupt body optimistically added; invalidated (invalidate route, not silently accepted) under opt-in optimistic peer mining", block.String())
 						}
 
 						return
@@ -3310,8 +3329,9 @@ func (u *BlockValidation) subtreeToCheckPresentBefore(ctx context.Context, block
 // the operator sets blockvalidation_optimistic_mining_peer_blocks, a corrupt body found by the
 // background block.Valid AFTER the optimistic AddBlock takes the invalidate route (InvalidateBlock),
 // so it CAN become an invalid parent and legitimately cascade to descendants. That tradeoff is
-// documented on the setting's longdesc; it is deliberate and disabled by default. It disappears once
-// block.Valid is split so its integrity floor runs before the optimistic AddBlock.
+// documented on the setting's longdesc; it is deliberate and disabled by default. The integrity floor
+// that runs before the optimistic AddBlock narrows it to defects the floor does not check (repeated
+// transactions, middle subtree lengths); it does not remove it.
 //
 // Parameters:
 //   - parentMeta: Metadata of the parent block (can be nil)

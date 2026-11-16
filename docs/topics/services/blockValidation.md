@@ -108,14 +108,16 @@ The `optimisticMining` setting provides a validation strategy that prioritizes b
 **Optimistic Mining Mode (opt-in):**
 
 ```text
-1. Add block to blockchain immediately (before full validation)
-2. Mark block as existing in cache
-3. Validate in background goroutine:
+1. Check the integrity floor: header context, body bound to header, coinbase rules
+   (on failure → validate fully first, as in normal mode)
+2. Add block to blockchain (before full validation)
+3. Mark block as existing in cache
+4. Validate in background goroutine:
    a. Fetch block headers for validation context
    b. Validate subtrees and transactions
    c. Update stores (subtree DAH, tx metadata)
    d. Mark transactions as mined
-4. If validation fails → Queue for revalidation
+5. If validation fails → Queue for revalidation
 ```
 
 **Technical Implementation:**
@@ -139,15 +141,15 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
 - **Runtime Override**: Can be disabled per-block via `ValidateBlockOptions.DisableOptimisticMining`
 - **Revalidation**: Revalidation of an already-stored block is always non-optimistic regardless of
   the settings above
-- **Opt-in corrupt-body tradeoff**: with both flags set, a corrupt body on the optimistic-background
-  path is already added before background validation runs, so it takes the *invalidate route*
-  (invalidated/poisoned rather than re-downloaded) until the `block.Valid` integrity-floor split
-  lands and removes that path
-- **Known exposure under the opt-in**: a received body that carries subtrees is still added before
-  it is bound to its header, and when it is invalidated its coinbase is persisted with the invalid
-  record (bitcoin-sv/teranode#4844). A body carrying no subtrees is bound by the coinbase-only rule
-  and rejected before the add. Keep `blockvalidation_optimistic_mining_peer_blocks` off until the
-  `block.Valid` split lands
+- **Integrity floor before the add**: `model.Block.CheckIntegrityFloor` binds the body to its header
+  (through its first and last subtrees, or through the coinbase txid for a body with no subtrees)
+  and runs the coinbase rules on it: shape, the common transaction rules, coinbase length, finality
+  and BIP34. A block that fails the floor is not added early; it is validated fully first, exactly
+  as with the peer-blocks flag off
+- **Opt-in corrupt-body tradeoff**: the floor does not check duplicate transactions, the lengths of
+  the subtrees between the first and last, fees, or transaction order and spends. A body that breaks
+  one of those is found only after the add, so a corrupt one takes the *invalidate route*
+  (invalidated/poisoned rather than re-downloaded)
 
 **Performance Benefits:**
 

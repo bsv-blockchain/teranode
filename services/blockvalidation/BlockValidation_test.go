@@ -3808,8 +3808,9 @@ func TestBlockValidation_RevalidateBlockChan_Retries(t *testing.T) {
 // tradeoff on the opt-in optimistic-background path (bitcoin-sv/teranode#4692): a corrupt body that
 // was already AddBlock'd BEFORE block.Valid ran must NOT be left silently accepted. On this one
 // opt-in path (both optimistic flags set) it takes the invalidate route — InvalidateBlock is
-// called directly (poison-loudly, never silently accept) until the block.Valid integrity-floor
-// split lands and removes this path.
+// called directly (poison-loudly, never silently accept). The integrity floor runs before the add,
+// so a body only reaches this route with a defect the floor does not check, here a repeated
+// transaction.
 func TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -3827,8 +3828,9 @@ func TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute(t *testing
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
-	require.NoError(t, subtree.AddCoinbaseNode())
+	// A bound body that repeats a transaction: the integrity floor passes it, so it is added, and
+	// the background block.Valid's duplicate check returns corrupt.
+	subtree, merkleRoot := boundDuplicateTxSubtree(t, coinbaseTx)
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 	nodeBytes, err := subtree.SerializeNodes()
 	require.NoError(t, err)
@@ -3839,7 +3841,7 @@ func TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute(t *testing
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
-		HashMerkleRoot: &chainhash.Hash{},
+		HashMerkleRoot: merkleRoot,
 		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 		Bits:           *nBits,
 		Nonce:          0,
@@ -3887,8 +3889,8 @@ func TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute(t *testing
 	defer deferFunc()
 
 	// Let subtree validation pass so the corrupt verdict comes from the background block.Valid.
-	// The real service binds a cached body to its header up front and would reject this one
-	// synchronously, before the optimistic AddBlock this test pins.
+	// The real service would find the repeated transaction while validating the subtree and reject
+	// the block synchronously, before the optimistic AddBlock this test pins.
 	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
 	subtreeValidationClient.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -3902,8 +3904,8 @@ func TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute(t *testing
 	err = bv.ValidateBlock(ctx, block, "test", false)
 	require.NoError(t, err)
 
-	// bitcoin-sv/teranode#4692: this block fails CheckMerkleRoot (its merkle root was zeroed), a
-	// tier-2 CORRUPT body. On the opt-in optimistic-background path the body was already AddBlock'd
+	// bitcoin-sv/teranode#4692: this block repeats a transaction, a tier-2 CORRUPT body that only
+	// the background block.Valid finds. On the opt-in optimistic-background path the body was already AddBlock'd
 	// before block.Valid ran, so leaving it accepted would be a silently-accepted corrupt tip. The
 	// guard therefore takes the invalidate route: InvalidateBlock is called.
 	select {

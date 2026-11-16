@@ -2215,8 +2215,8 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	// non-poisoning removal primitive (only InvalidateBlock, which poisons). With the default
 	// (opt-out) gate, block.Valid runs monolithically before AddBlock, so no corrupt body is
 	// ever added. When opted in, a corrupt body on the optimistic-background path takes the
-	// invalidate route (see the block.Valid background handler). This gate is removed once
-	// block.Valid is split so its integrity floor runs before the optimistic AddBlock.
+	// invalidate route (see the block.Valid background handler). The integrity floor that runs
+	// before the optimistic AddBlock narrows that to defects it does not check, so the gate stays.
 	opts := &ValidateBlockOptions{
 		DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings, baseURL),
 		IsRevalidation:          false, // processBlockFound is for new blocks, not revalidation
