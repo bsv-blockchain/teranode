@@ -157,6 +157,7 @@ func TestValidateBlock_UnusableHeaderRunIsRebuiltByHashWalk(t *testing.T) {
 	mockBlockchain.On("SetBlockMinedSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockBlockchain.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil).Maybe()
 	mockBlockchain.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	mockBlockchain.On("CheckBlockIsAncestorOfBlock", mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 
 	notificationChan := make(chan *blockchain_api.Notification, 1)
 	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(notificationChan, nil).Maybe()
@@ -297,9 +298,11 @@ func TestServerValidateBlock_UnusableHeaderRunIsRebuiltByHashWalk(t *testing.T) 
 
 	// checkOldBlockIDs picks its route from BlockChain.UseInMemoryChainCheck, which comes from
 	// whatever settings_local.conf the machine happens to carry — the in-memory route calls
-	// CheckBlockIsInCurrentChain, the prefetch route calls GetBlockHeaderIDs. Mock both, so the
-	// test asserts the same thing on a developer box as it does in CI.
+	// CheckBlockIsAncestorOfBlock for every set, the prefetch route calls GetBlockHeaderIDs and then
+	// CheckBlockIsAncestorOfBlock on a miss. Mock all of them, so the test asserts the same thing on
+	// a developer box as it does in CI.
 	mockBlockchain.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	mockBlockchain.On("CheckBlockIsAncestorOfBlock", mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).
 		Return([]uint32{2, 1, 0}, nil).Maybe()
 
@@ -438,6 +441,7 @@ func TestServerValidateBlock_UnrepairableRunIsNotAVerdictOnTheBlock(t *testing.T
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil).Maybe()
 	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 	mockBlockchain.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	mockBlockchain.On("CheckBlockIsAncestorOfBlock", mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).
 		Return([]uint32{1, 0}, nil).Maybe()
 

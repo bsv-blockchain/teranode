@@ -2,6 +2,7 @@ package blockassembly
 
 import (
 	"context"
+	"encoding/binary"
 	"io"
 	"runtime"
 	"slices"
@@ -431,6 +432,60 @@ func TestReplayBestTipChanges_RestartResumesFromPersistedPosition(t *testing.T) 
 	requireBlockAssemblyTip(t, items, a[1])
 }
 
+// legacyBestTipPosition encodes a replay position the way a block assembly that ordered equal-work
+// blocks by peer id saved it: version 1, with the peer id between the chain work and the id.
+func legacyBestTipPosition(pos model.BestTipKey, peer string) []byte {
+	b := []byte{1}
+	b = binary.LittleEndian.AppendUint32(b, uint32(len(pos.ChainWork)))
+	b = append(b, pos.ChainWork...)
+	b = binary.LittleEndian.AppendUint32(b, uint32(len(peer)))
+	b = append(b, peer...)
+	b = binary.LittleEndian.AppendUint32(b, pos.ID)
+
+	return append(b, pos.Hash[:]...)
+}
+
+// TestReplayBestTipChanges_LegacyPositionRevisitsEqualWorkSiblings is an upgrade with block
+// assembly down. Its saved position is A1, written by the old binary with a peer id. While it was
+// down the old blockchain service made B1, an equal-work sibling of A1 stored later from a peer
+// whose id sorted lower, the best tip, and then A2 extended A1. In the order by id B1 sorts worse
+// than A1, so a replay from A1's id would find only A2 and extend A1 to A2 without ever visiting
+// B1, leaving B1's transactions marked mined and out of the pool. The legacy position is read last
+// among A1's equal-work blocks, so the replay moves to B1 and back, as the old order did.
+func TestReplayBestTipChanges_LegacyPositionRevisitsEqualWorkSiblings(t *testing.T) {
+	initPrometheusMetrics()
+
+	items := setupBlockAssemblyTest(t, withCoinbaseMaturity(testCoinbaseMaturity))
+	genesis := genesisHeader(t, items)
+
+	a1 := buildChain(genesis, 1, 13000)[0]
+	addChain(t, items, []*model.BlockHeader{a1})
+
+	pos := startReplayAt(t, items, a1, 1)
+	require.NoError(t, items.blockchainClient.SetState(t.Context(), BestTipPositionStateKey, legacyBestTipPosition(pos, "zzz_peer")))
+
+	b1 := buildChain(genesis, 1, 14000)[0]
+	addChain(t, items, []*model.BlockHeader{b1})
+
+	a2 := buildChain(a1, 1, 15000)[0]
+	addChain(t, items, []*model.BlockHeader{a2})
+
+	// The restart reads the legacy position back.
+	items.blockAssembler.bestTipPos.Store(nil)
+	items.blockAssembler.bestTipPosKnown.Store(false)
+	items.blockAssembler.loadBestTipPosition(t.Context())
+	require.True(t, items.blockAssembler.bestTipPosKnown.Load())
+
+	moves := recordMoves(t, items)
+	items.blockAssembler.processNewBlockAnnouncement(t.Context())
+
+	require.Equal(t, []recordedMove{
+		{back: headerHashes(a1), forward: headerHashes(b1)},
+		{back: headerHashes(b1), forward: headerHashes(a1, a2)},
+	}, *moves, "the replay visits the equal-work sibling the old order could have made best")
+	requireBlockAssemblyTip(t, items, a2)
+}
+
 // TestReplayBestTipChanges_MockWithoutOrderFollowsBestHeader checks block assembly against a
 // blockchain client that does not serve the best-tip order: it follows the best header as before.
 func TestReplayBestTipChanges_MockWithoutOrderFollowsBestHeader(t *testing.T) {
@@ -471,13 +526,13 @@ func TestReplayBestTipChanges_RepeatedFailureFollowsBestHeader(t *testing.T) {
 	}
 
 	require.True(t, ba.followBestTipChanges(t.Context()))
-	require.Equal(t, model.NewBestTipKey(best, bestMeta), *ba.bestTipPos.Load(), "the position jumps to the best tip, with its id and peer id")
+	require.Equal(t, model.NewBestTipKey(best, bestMeta), *ba.bestTipPos.Load(), "the position jumps to the best tip, with its id")
 	require.True(t, ba.skippedForkMarkPending, "the mark the history owes is pending")
 	m.AssertExpectations(t)
 }
 
 // withoutBestTipIdentity returns a copy of meta as GetBestBlockHeader returns it over gRPC: without
-// the block id and peer id, which place a block among others of equal work.
+// the block id, which places a block among others of equal work, and the peer id.
 func withoutBestTipIdentity(meta *model.BlockHeaderMeta) *model.BlockHeaderMeta {
 	stripped := *meta
 	stripped.ID = 0
@@ -512,7 +567,7 @@ func TestReturnToRunning_SavesAfterLeavingProcessingState(t *testing.T) {
 
 	var stateAtSave State
 
-	pos := model.BestTipKey{ChainWork: []byte{7}, PeerID: "p", ID: 7}
+	pos := model.BestTipKey{ChainWork: []byte{7}, ID: 7}
 
 	m.On("SetState", mock.Anything, BestTipPositionStateKey, pos.Bytes()).
 		Run(func(mock.Arguments) { stateAtSave = ba.GetCurrentRunningState() }).
@@ -534,7 +589,7 @@ func TestReturnToRunning_SavesAfterLeavingProcessingState(t *testing.T) {
 
 	// A moved position waits for bestTipPositionSaveInterval, so a pass per block during
 	// initial sync does not cost a write per block.
-	moved := model.BestTipKey{ChainWork: []byte{8}, PeerID: "p", ID: 8}
+	moved := model.BestTipKey{ChainWork: []byte{8}, ID: 8}
 	m.On("SetState", mock.Anything, BestTipPositionStateKey, moved.Bytes()).Return(nil).Once()
 	ba.setBestTipPos(moved)
 	ba.returnToRunning(t.Context())

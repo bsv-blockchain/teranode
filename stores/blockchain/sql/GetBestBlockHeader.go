@@ -60,7 +60,8 @@ import (
 //   - Filters for valid blocks only (is_valid = true)
 //   - Orders by chainwork in descending order to find the highest
 //   - Implements a deterministic tie-breaker for the rare case of equal chainwork
-//     values between competing chain tips, using peer_id and block id
+//     values between competing chain tips: the lowest block id, which above the
+//     checkpoints is the block this node stored first
 //   - Limits to a single result (the best block)
 //
 // 3. Reconstruction Layer: After retrieving the block data:
@@ -132,7 +133,7 @@ func (s *SQL) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeade
 }
 
 // queryBestBlockHeader is the one query behind both calls: the valid block with the most chain
-// work, ties broken by peer id and then insertion order.
+// work, ties broken by the lowest block id, the block this node stored first.
 func (s *SQL) queryBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -160,7 +161,7 @@ func (s *SQL) queryBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mo
 		,b.median_time_past
 		FROM blocks b
 		WHERE invalid = false
-		ORDER BY chain_work DESC, peer_id ASC, id ASC
+		ORDER BY chain_work DESC, id ASC
 		LIMIT 1
 	`
 
