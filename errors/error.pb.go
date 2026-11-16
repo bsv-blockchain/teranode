@@ -128,6 +128,10 @@ const (
 	// (not yet: see services/legacy/peer streamingBlockHandler). Wrapped inside the BLOCK_INVALID
 	// verdict at the sites that raise it, never the outermost code.
 	ERR_BLOCK_BODY_MISMATCH ERR = 122
+	// A block whose id is not above its parent's id. Ids come from one sequence and a child's id is
+	// taken only after its parent is stored, so a child always sits above its parent; the ancestry
+	// queries bound their walk by that. StoreBlock refuses a block that would break it.
+	ERR_BLOCK_ID_ORDER ERR = 123
 )
 
 // Enum value maps for ERR.
@@ -211,6 +215,7 @@ var (
 		120: "BLOCK_CORRUPT",
 		121: "BLOCK_POLICY_DECLINED",
 		122: "BLOCK_BODY_MISMATCH",
+		123: "BLOCK_ID_ORDER",
 	}
 	ERR_value = map[string]int32{
 		"UNKNOWN":                       0,
@@ -291,6 +296,7 @@ var (
 		"BLOCK_CORRUPT":                 120,
 		"BLOCK_POLICY_DECLINED":         121,
 		"BLOCK_BODY_MISMATCH":           122,
+		"BLOCK_ID_ORDER":                123,
 	}
 )
 
@@ -425,7 +431,7 @@ const file_errors_error_proto_rawDesc = "" +
 	"\fwrappedError\x18\x04 \x01(\v2\x0e.errors.TErrorR\fwrappedError\x12\x12\n" +
 	"\x04file\x18\x05 \x01(\tR\x04file\x12\x12\n" +
 	"\x04line\x18\x06 \x01(\x05R\x04line\x12\x1a\n" +
-	"\bfunction\x18\a \x01(\tR\bfunction*\x8a\r\n" +
+	"\bfunction\x18\a \x01(\tR\bfunction*\x9e\r\n" +
 	"\x03ERR\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x14\n" +
 	"\x10INVALID_ARGUMENT\x10\x01\x12\x16\n" +
@@ -511,7 +517,8 @@ const file_errors_error_proto_rawDesc = "" +
 	"\x16NETWORK_PEER_MALICIOUS\x10t\x12\x11\n" +
 	"\rBLOCK_CORRUPT\x10x\x12\x19\n" +
 	"\x15BLOCK_POLICY_DECLINED\x10y\x12\x17\n" +
-	"\x13BLOCK_BODY_MISMATCH\x10zB+Z)github.com/bsv-blockchain/teranode/errorsb\x06proto3"
+	"\x13BLOCK_BODY_MISMATCH\x10z\x12\x12\n" +
+	"\x0eBLOCK_ID_ORDER\x10{B+Z)github.com/bsv-blockchain/teranode/errorsb\x06proto3"
 
 var (
 	file_errors_error_proto_rawDescOnce sync.Once

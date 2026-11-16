@@ -587,6 +587,33 @@ func TestSyncManager_ARejectedParkedBlockDropsItsPeerInEveryState(t *testing.T) 
 	})
 }
 
+// TestParkCommitFailure_ABlockIDOrderRefusalKeepsTheBlock pins how the park reads
+// the blockchain store refusing an id that is not above the parent's. The cause
+// is a stale id reservation in this node's own database, so the block is kept,
+// not written off, and the peer is not blamed.
+func TestParkCommitFailure_ABlockIDOrderRefusalKeepsTheBlock(t *testing.T) {
+	refusal := errors.NewBlockIDOrderError("block id 5 is not above its parent's id 6")
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "plain", err: refusal},
+		{name: "wrapped by netsync", err: errors.NewProcessingError("failed to process block", errors.NewProcessingError("commit failed", refusal))},
+		{name: "through block validation and gRPC", err: parkCommitChain(refusal)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := parkCommitFailure(tc.err)
+
+			require.Equal(t, parkDispositionRetryLater, d)
+			require.Equal(t, parkBlobKeep, d.blob, "the downloaded block must stay parked")
+			require.False(t, d.markFailed, "a stale reservation says nothing about the block")
+			require.False(t, d.blamePeer, "the stale reservation is this node's fault, not the peer's")
+			require.False(t, d.dropPeer, "the peer sent a good block")
+		})
+	}
+}
+
 // TestParkCommitFailure_AMissingParentRefusalKeepsTheBlock pins how the park reads block
 // validation's refusal of a legacy block whose parent is not stored (processBlockFound,
 // bitcoin-sv/teranode#4973). It used to come back nil and be recorded as accepted; it now

@@ -14,11 +14,54 @@ import (
 // phase2Blocks walks deleteList tip-first, removing every block + its
 // subtree data + its transactions from the UTXO store.
 func (e *env) phase2Blocks(ctx context.Context, pf *preflightResult) error {
+	if len(pf.deleteList) > 0 {
+		if err := e.clearBlockIDReservations(ctx); err != nil {
+			return err
+		}
+	}
+
 	for _, b := range pf.deleteList {
 		if err := e.rewindOneBlock(ctx, pf, b); err != nil {
 			return errors.NewProcessingError("rewinding block %s (height %d)", b.hash.String(), b.height, err)
 		}
 	}
+	return nil
+}
+
+// blockIDReservationClearer is the store method clearBlockIDReservations needs.
+// It is asserted rather than added to blockchain.Store, because only the SQL store
+// keeps reservations.
+type blockIDReservationClearer interface {
+	ClearBlockIDReservations(ctx context.Context) (int64, error)
+}
+
+// clearBlockIDReservations deletes every durable block-id reservation before the
+// first block is deleted. A deleted block that is stored again gets a new, higher
+// id, while a child reserved before the rewind would keep its older, lower id and
+// land below its parent, which StoreBlock refuses. Clearing first means a run that
+// fails part-way never leaves deleted blocks beside surviving reservations. There
+// is no transaction to share: each DeleteBlock is its own store call.
+//
+// A block whose transactions were already stamped with a cleared reservation gets
+// a fresh id when it is validated again, which leaves the old id with no blocks
+// row: the same outcome as a reservation swept by age.
+func (e *env) clearBlockIDReservations(ctx context.Context) error {
+	clearer, ok := e.blockchainStore.(blockIDReservationClearer)
+	if !ok {
+		return errors.NewStorageError("blockchain store %T cannot clear block id reservations", e.blockchainStore)
+	}
+
+	if e.opts.ForceNotIdle {
+		e.logger.Warnf("--force-not-idle was given: a running node keeps block id reservations in memory too, and this tool cannot clear those; restart the node after the rewind so it does not hand out an id reserved before it")
+	}
+
+	cleared, err := clearer.ClearBlockIDReservations(ctx)
+	if err != nil {
+		return err
+	}
+
+	e.logger.Infof("cleared %d block id reservations before deleting blocks", cleared)
+
 	return nil
 }
 
