@@ -3696,9 +3696,10 @@ outside:
 
 			// Marked failed since it was queued: processInvMsg's check, made again
 			// for a mark set between the Append and this drain. Consumed, like the
-			// held case above; holding it would stall everything queued behind it
-			// for the mark's TTL.
-			if sm.recentlyFailed(iv.Hash) {
+			// held case above, since holding it would stall everything queued behind
+			// it for the mark's TTL, and put off rather than dropped: this item may
+			// be the peer's only announcement of the block (putOffIfMarked).
+			if sm.putOffIfMarked(parkedBlock{hash: iv.Hash, peer: peer}) {
 				break
 			}
 
@@ -3824,7 +3825,13 @@ func (sm *SyncManager) processInvMsg(i int, iv *wire.InvVect, processInvs bool, 
 	// trip and the disk read below. Read after blockHeldLocally for the same
 	// reason as there: a block being retried right now is held, so the mark is
 	// read only for a block nothing holds.
-	if iv.Type == wire.InvTypeBlock && sm.recentlyFailed(iv.Hash) {
+	//
+	// Put off, not dropped. Above the final checkpoint this announcement may be
+	// the peer's last: it often answers requestMissingBlocks' getblocks, and
+	// PushGetBlocksMsg drops a repeat of that getblocks while the tip has not
+	// moved. So the block is asked of this peer once the mark has gone
+	// (putOffIfMarked).
+	if iv.Type == wire.InvTypeBlock && sm.putOffIfMarked(parkedBlock{hash: iv.Hash, peer: peer}) {
 		return
 	}
 

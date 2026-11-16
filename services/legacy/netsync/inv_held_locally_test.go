@@ -217,6 +217,28 @@ func wireRecentlyFailed(t *testing.T, sm *SyncManager) {
 	t.Cleanup(sm.recentlyFailedBlocks.Stop)
 }
 
+// requireAskedOnceTheMarkIsGone is the second half of every skip test: a skipped
+// block is put off, not written off. Above the final checkpoint the announcement
+// the skip swallowed is the peer's only one; a repeat getblocks from the same tip
+// is dropped by PushGetBlocksMsg, so nothing announces the block again. The skip
+// leaves a re-ask behind that waits for the mark, is put off again while the mark
+// stands, and asks once it has gone, with no further announcement.
+func requireAskedOnceTheMarkIsGone(t *testing.T, sm *SyncManager, rec *peerMsgRecorder, failed chainhash.Hash) {
+	t.Helper()
+
+	before := rec.getDataCount()
+
+	sm.sendDueReAsks(time.Now().Add(recentlyFailedBlocksTTL + time.Second))
+	require.False(t, WaitUntil(func() bool { return rec.askedForSince(before, failed) }, 300*time.Millisecond),
+		"not asked while the mark stands")
+
+	sm.recentlyFailedBlocks.Delete(failed)
+
+	sm.sendDueReAsks(time.Now().Add(2*recentlyFailedBlocksTTL + 2*time.Second))
+	require.True(t, WaitUntil(func() bool { return rec.askedForSince(before, failed) }, 5*time.Second),
+		"asked for once the mark has gone, with no further announcement")
+}
+
 // A block marked in recentlyFailedBlocks is not asked for again while the mark
 // stands; the wanted-range pass has skipped it since #1333. Above the final
 // checkpoint the inv is the only discovery path, and it asked every announcer for
@@ -232,6 +254,7 @@ func TestHandleInvMsg_ARecentlyFailedBlockIsNotAskedFor(t *testing.T) {
 	sm.handleInvMsg(&invMsg{inv: blockInv(failed, control), peer: announcer})
 
 	requireOnlyControlAsked(t, sm, rec, failed, control)
+	requireAskedOnceTheMarkIsGone(t, sm, rec, failed)
 }
 
 // The end-to-end test above passes on the drain's check alone, so this pins
@@ -261,7 +284,7 @@ func TestDrainRequestQueue_SkipsARecentlyFailedBlock(t *testing.T) {
 	failed := chainhash.Hash{0x7c}
 	control := chainhash.Hash{0x7d}
 
-	sm, announcer, state, _, _ := newInvPathManager(t)
+	sm, announcer, state, rec, _ := newInvPathManager(t)
 	wireRecentlyFailed(t, sm)
 
 	state.requestQueue.Append(wire.NewInvVect(wire.InvTypeBlock, &failed))
@@ -276,6 +299,8 @@ func TestDrainRequestQueue_SkipsARecentlyFailedBlock(t *testing.T) {
 	require.Zero(t, state.requestQueue.Length(), "the marked item is consumed, not left to block the queue")
 	require.False(t, sm.blockDownloads.RequestedWithin(failed, time.Minute))
 	require.True(t, sm.blockDownloads.RequestedWithin(control, time.Minute))
+
+	requireAskedOnceTheMarkIsGone(t, sm, rec, failed)
 }
 
 // A parked block announced last in an inv used to reach the getblocks branch,

@@ -611,7 +611,9 @@ func (sm *SyncManager) handleBlockOnDiskMsg(msg *blockOnDiskMsg) {
 		if sm.takeLocalFaultDrain(msg.body.Hash) {
 			sm.logger.Warnf("[blockOnDisk][%s] the copy from %s was drained because this node could not store it; whoever else was asked is let off and the block is asked for again", msg.body.Hash, msg.peer)
 
-			if !sm.headersFirstMode.Load() && primary != nil && !sm.recentlyFailed(msg.body.Hash) {
+			// A marked block (the sink-panic verdict) is asked for once the mark has gone,
+			// not now: every copy meets the same panic until then (putOffIfMarked).
+			if !sm.headersFirstMode.Load() && primary != nil && !sm.putOffIfMarked(parkedBlock{hash: msg.body.Hash, peer: primary}) {
 				sm.reAskBlockFromPeer(primary, msg.body.Hash)
 			}
 
