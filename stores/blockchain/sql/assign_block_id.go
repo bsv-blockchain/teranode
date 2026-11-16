@@ -164,7 +164,8 @@ func (s *SQL) blockIDByHash(ctx context.Context, blockHash *chainhash.Hash) (uin
 
 // checkCallerSuppliedBlockID decides whether StoreBlock may write a blocks row
 // under an id the caller chose (options.WithID) rather than one the INSERT
-// allocates. Quick validation reserves an id with AssignBlockID, stamps the
+// allocates. alreadyStored reports the first rule below, so StoreBlock can skip
+// its other id checks and let the INSERT return "block already exists". Quick validation reserves an id with AssignBlockID, stamps the
 // block's transactions with it in the UTXO store, and only then asks for the
 // blocks row. The UTXO store is a separate database, so nothing but this check
 // stops a row landing under an id that another block's transactions already
@@ -192,14 +193,14 @@ func (s *SQL) blockIDByHash(ctx context.Context, blockHash *chainhash.Hash) (uin
 // under a new id after the sweep while the check runs; that caller then gets an
 // id the committed row does not carry. That window needs a sweep and a concurrent
 // re-reservation of the same hash, and it existed before this check.
-func (s *SQL) checkCallerSuppliedBlockID(ctx context.Context, blockHash *chainhash.Hash, id uint64) error {
+func (s *SQL) checkCallerSuppliedBlockID(ctx context.Context, blockHash *chainhash.Hash, id uint64) (alreadyStored bool, err error) {
 	facts, err := s.callerSuppliedBlockIDFacts(ctx, blockHash, id)
 	if err != nil {
-		return errors.NewStorageError("[StoreBlock][%s] failed to look up what holds caller-supplied block id %d", blockHash.String(), id, err)
+		return false, errors.NewStorageError("[StoreBlock][%s] failed to look up what holds caller-supplied block id %d", blockHash.String(), id, err)
 	}
 
 	if facts.committed {
-		return nil
+		return true, nil
 	}
 
 	// Another block already committed under this id. The INSERT would fail on
@@ -207,26 +208,26 @@ func (s *SQL) checkCallerSuppliedBlockID(ctx context.Context, blockHash *chainha
 	// already exists", which legacy sync treats as success, so the block would be
 	// dropped with no row. Refuse it here with an error that says what happened.
 	if facts.owner != nil {
-		return errors.NewStorageError("[StoreBlock][%s] refusing caller-supplied block id %d: block %s is already stored under it", blockHash.String(), id, hashString(facts.owner))
+		return false, errors.NewStorageError("[StoreBlock][%s] refusing caller-supplied block id %d: block %s is already stored under it", blockHash.String(), id, hashString(facts.owner))
 	}
 
 	if facts.reserved.Valid {
 		if uint64(facts.reserved.Int64) != id {
-			return errors.NewStorageError("[StoreBlock][%s] refusing caller-supplied block id %d: the id reserved for this block is %d", blockHash.String(), id, facts.reserved.Int64)
+			return false, errors.NewStorageError("[StoreBlock][%s] refusing caller-supplied block id %d: the id reserved for this block is %d", blockHash.String(), id, facts.reserved.Int64)
 		}
 
-		return nil
+		return false, nil
 	}
 
 	if facts.holder != nil {
-		return errors.NewStorageError("[StoreBlock][%s] refusing caller-supplied block id %d: it is reserved for block %s", blockHash.String(), id, hashString(facts.holder))
+		return false, errors.NewStorageError("[StoreBlock][%s] refusing caller-supplied block id %d: it is reserved for block %s", blockHash.String(), id, hashString(facts.holder))
 	}
 
 	if id > facts.highestIssued {
-		return errors.NewStorageError("[StoreBlock][%s] refusing caller-supplied block id %d: the id sequence has only issued up to %d and this block has no reservation", blockHash.String(), id, facts.highestIssued)
+		return false, errors.NewStorageError("[StoreBlock][%s] refusing caller-supplied block id %d: the id sequence has only issued up to %d and this block has no reservation", blockHash.String(), id, facts.highestIssued)
 	}
 
-	return nil
+	return false, nil
 }
 
 // callerSuppliedBlockIDFacts is everything checkCallerSuppliedBlockID decides on.

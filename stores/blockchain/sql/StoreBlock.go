@@ -653,15 +653,21 @@ func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Blo
 	// block's transactions may already carry it in the UTXO store. See
 	// checkCallerSuppliedBlockID for the rules and the swept-reservation case.
 	if useCustomID && !genesis {
-		if err := s.checkCallerSuppliedBlockID(ctx, block.Hash(), storeBlockOptions.ID); err != nil {
+		alreadyStored, err := s.checkCallerSuppliedBlockID(ctx, block.Hash(), storeBlockOptions.ID)
+		if err != nil {
 			return 0, 0, nil, false, err
 		}
 
+		// A hash that is already stored goes on to the INSERT, which returns
+		// "block already exists". Callers that retry an AddBlock whose first
+		// attempt landed treat that as success, so a late caller still holding a
+		// refused id must not get the id-order refusal, nor drop a reservation.
+		//
 		// Checked before the INSERT, because the extend path auto-commits it. This
 		// runs for a block stored invalid too, unlike the BIP34 guard above: the
 		// rule is about the row's place in the parent_id graph, which the ancestry
 		// walks follow whatever the invalid flag says, not about the block's validity.
-		if err := checkBlockIDAboveParent(block, storeBlockOptions.ID, previousBlockID); err != nil {
+		if err := checkBlockIDAboveParent(block, storeBlockOptions.ID, previousBlockID); err != nil && !alreadyStored {
 			// The reservation is stale. Drop it so the caller's next AssignBlockID
 			// takes a fresh id above the parent, rather than being refused with the
 			// same id until the age-based sweep removes it. A fallback that reuses

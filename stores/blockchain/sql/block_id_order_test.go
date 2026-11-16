@@ -61,6 +61,13 @@ func TestStoreBlock_RefusesIDNotAboveParent(t *testing.T) {
 		childID, _, err := s.StoreBlock(ctx, block2, "", options.WithID(freshID))
 		require.NoError(t, err)
 		require.Equal(t, freshID, childID)
+
+		// A late caller still holding the refused id gets "block already exists",
+		// which retrying callers read as success, not the id-order refusal.
+		_, _, err = s.StoreBlock(ctx, block2, "", options.WithID(childReserved))
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrBlockExists), "want block exists for a stored hash, got %v", err)
+		require.False(t, errors.Is(err, errors.ErrBlockIDOrder), "a stored hash must not get the id-order refusal")
 	}
 
 	t.Run("sqlite", func(t *testing.T) {
