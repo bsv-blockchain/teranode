@@ -353,9 +353,12 @@ func (r *minedSetAuditResult) report(out io.Writer, startHeight, endHeight uint3
 	return errors.NewProcessingError("%d block(s) stored with mined_set true carry untagged or locked transactions", len(r.Affected))
 }
 
-// nothingChecked reports whether the run had blocks to audit and checked none of them.
+// nothingChecked reports whether the run had blocks to audit and checked none of them. A
+// coinbase-only block counts as checked: it was classified, and when it has a subtree the
+// audit read that subtree's file to classify it, so a missing subtree store still leaves
+// every block UNCHECKED.
 func (r *minedSetAuditResult) nothingChecked() bool {
-	return len(r.Unchecked) > 0 && r.Tagged == 0 && len(r.Affected) == 0
+	return len(r.Unchecked) > 0 && r.Tagged == 0 && r.CoinbaseOnly == 0 && len(r.Affected) == 0
 }
 
 // minedSetAuditFlags are the audit-mined-set command's flags.

@@ -320,8 +320,9 @@ func TestMinedSetAudit_SkipsNettedRoute(t *testing.T) {
 // is flagged, so the command exits 2 rather than 0 and a script does not read a missing
 // subtree store as clean. One checked block, or nothing to audit at all, is not flagged.
 //
-// Mutation target: nothingChecked returning false. The all-unchecked subcase then passes
-// silently.
+// Mutation targets: nothingChecked returning false (the all-unchecked subcase then passes
+// silently), and nothingChecked ignoring coinbase-only blocks (the coinbase-only subcase then
+// exits 2 although one of its two blocks was classified).
 func TestMinedSetAudit_NothingCheckedIsNotAPass(t *testing.T) {
 	t.Run("every audited block is unchecked", func(t *testing.T) {
 		h := newMinedSetAuditHarness(t)
@@ -357,6 +358,19 @@ func TestMinedSetAudit_NothingCheckedIsNotAPass(t *testing.T) {
 		var out bytes.Buffer
 		require.NoError(t, result.report(&out, 1, 2))
 		require.NotContains(t, out.String(), "No block in this range could be checked")
+	})
+
+	t.Run("one block is coinbase only", func(t *testing.T) {
+		h := newMinedSetAuditHarness(t)
+
+		h.storeBlock(true, false, []*bt.Tx{})
+		h.storeBlock(true, true, []*bt.Tx{h.auditTx()})
+
+		result, err := h.auditor.run(h.ctx, 1, 2, 10)
+		require.NoError(t, err)
+		require.Equal(t, 1, result.CoinbaseOnly)
+		require.Len(t, result.Unchecked, 1)
+		require.False(t, result.nothingChecked())
 	})
 
 	t.Run("nothing to audit", func(t *testing.T) {
