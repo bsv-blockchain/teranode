@@ -172,8 +172,9 @@ func deleteRawMaster(t *testing.T, client *uaerospike.Client, store *teranode_ae
 // TestCreateWithCreating_SurvivingChildThatCannotBeAdoptedFailsTheCreate pins that a pagination child
 // left by an earlier attempt, which keeps that attempt's token when the adoption fails, does not let
 // the create succeed: the finalize of this attempt would never clear the child and its outputs would
-// stay unspendable. The create is undone, so the store is as it was before the attempt, and a later
-// create adopts the child and finalizes.
+// stay unspendable. The master the create published may already be in another actor's roll-forward,
+// so the create leaves it creating and returns its token for the caller's rollback. The rollback
+// leaves a hold, and once the hold is adopted a later create adopts the child and finalizes.
 func TestCreateWithCreating_SurvivingChildThatCannotBeAdoptedFailsTheCreate(t *testing.T) {
 	for name, batchLevel := range map[string]bool{"a record error": false, "a batch error": true} {
 		t.Run(name, func(t *testing.T) {
@@ -200,14 +201,32 @@ func TestCreateWithCreating_SurvivingChildThatCannotBeAdoptedFailsTheCreate(t *t
 
 			_, err = store.Create(ctx, tx, 101, utxo.WithCreating(true))
 			require.ErrorIs(t, err, errors.ErrProcessing, "an adoption that fails is a transient failure of the create")
-			require.ErrorIs(t, store.GetMeta(ctx, hash, &meta.Data{}), errors.ErrTxNotFound, "the master this attempt wrote is removed")
-			require.True(t, childRecordExists(t, client, store, hash, 1), "the surviving child is left as it was")
+
+			failed := utxo.RollBackAttempt(err)
+			require.NotNil(t, failed, "the error names the attempt the caller must roll back")
+			require.NotEqual(t, first.Attempt, failed)
+
+			published := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, hash, published), "the published master is not removed under a possible roll-forward")
+			require.True(t, published.Creating)
+			require.False(t, published.RollingBack)
+			require.Equal(t, failed, published.Attempt)
+			require.Equal(t, first.Attempt, recordBins(t, client, store, hash, 1, fields.Attempt)[fields.Attempt.String()], "the surviving child keeps the earlier token")
 
 			store.RestoreBatchOperate()
+
+			require.NoError(t, utxo.RollBackCreating(ctx, logger, store, tx, failed), "the caller rolls the failed attempt back")
+			requireHeld(t, ctx, store, hash, "the rollback leaves a hold")
+			require.True(t, childRecordExists(t, client, store, hash, 1), "the surviving child of the earlier attempt is left as it was")
+
+			cleared, err := store.ClearCreateFirstHold(ctx, hash, true)
+			require.NoError(t, err)
+			require.True(t, cleared, "a block-context create adopts the hold")
 
 			second, err := store.Create(ctx, tx, 101, utxo.WithCreating(true))
 			require.NoError(t, err, "with the failure gone the retry adopts the child")
 			require.NotEqual(t, first.Attempt, second.Attempt)
+			require.NotEqual(t, failed, second.Attempt)
 
 			require.NoError(t, store.FinalizeTransaction(ctx, tx, second.Attempt))
 

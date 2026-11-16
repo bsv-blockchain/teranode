@@ -32,6 +32,12 @@ func SetChildDAHBeforeWrite(f func()) {
 	childDAHBeforeWrite = f
 }
 
+// SetAfterChildAdoptionFailure installs the hook that runs after a create fails to give the surviving
+// pagination children its attempt token, and clears it when given nil.
+func SetAfterChildAdoptionFailure(f func()) {
+	afterChildAdoptionFailure = f
+}
+
 // UsesNativeMark reports whether MarkTransactionsOnLongestChain sends native sub-op 14.
 func (s *Store) UsesNativeMark() bool {
 	return s.useNativeMark()

@@ -2,6 +2,7 @@ package aerospike_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -862,4 +863,184 @@ func TestRollBackCreating_OwnerHoldsTheHoldForItsUnspend(t *testing.T) {
 	resp, err := store.GetSpend(ctx, inputs[0])
 	require.NoError(t, err)
 	require.Nil(t, resp.SpendingData, "the owner's unspend landed")
+}
+
+// TestCreateFirst_FailedAdoptionRollsBackOverAConcurrentRollForward pins that a create whose
+// surviving pagination children cannot be adopted does not remove the master it has published while
+// another actor may roll it forward. An earlier attempt left children and no master. The fresh
+// attempt writes the master and its adoption of the children fails. Before the create returns, a
+// duplicate submission reads the published master and rolls it forward: it spends the input, and
+// its finalize fails on the child that kept the earlier token. The parent output must not then name
+// a transaction whose record is gone: the attempt is rolled back, which reverses that spend, and it
+// leaves a hold.
+func TestCreateFirst_FailedAdoptionRollsBackOverAConcurrentRollForward(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 2
+	tSettings.UtxoStore.UseCreateFirstOrder = true
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	hash := tx.TxIDChainHash()
+
+	inputs, err := utxo.GetSpends(tx)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
+	require.NoError(t, err)
+	require.True(t, childRecordExists(t, client, store, hash, 1), "precondition: the tx paginates")
+
+	deleteRawMaster(t, client, store, hash)
+
+	var (
+		rolledForward bool
+		rfErr         error
+	)
+
+	store.FailChildAdoption(false)
+	t.Cleanup(store.RestoreBatchOperate)
+
+	teranode_aerospike.SetAfterChildAdoptionFailure(func() {
+		store.RestoreBatchOperate()
+
+		rolledForward = true
+		_, rfErr = utxo.RollForwardCreating(ctx, logger, store, tx, attemptOf(t, ctx, store, hash), 101)
+	})
+	t.Cleanup(func() { teranode_aerospike.SetAfterChildAdoptionFailure(nil) })
+
+	_, _, err = store.SpendAndCreate(ctx, tx, 101)
+	require.ErrorIs(t, err, errors.ErrProcessing, "an adoption that fails is a transient failure of the create")
+	require.True(t, rolledForward, "precondition: the concurrent roll-forward ran")
+	require.Error(t, rfErr, "the roll-forward cannot finalize past the child of the earlier attempt")
+
+	resp, err := store.GetSpend(ctx, inputs[0])
+	require.NoError(t, err)
+	require.Nil(t, resp.SpendingData, "the input must not stay spent by a transaction that is not stored as final")
+
+	requireHeld(t, ctx, store, hash, "the attempt is rolled back to a hold")
+}
+
+// hookedRollForwardStore is the store a roll-forward uses in a test that interleaves it with the
+// owner of a rollback. afterRead runs once after its first read of the record, and afterTake once
+// after its first take of the hold. Every store call is the real store's.
+type hookedRollForwardStore struct {
+	*teranode_aerospike.Store
+
+	readOnce  sync.Once
+	afterRead func()
+	takeOnce  sync.Once
+	afterTake func()
+}
+
+func (s *hookedRollForwardStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	err := s.Store.GetMeta(ctx, hash, data)
+	s.readOnce.Do(s.afterRead)
+
+	return err
+}
+
+func (s *hookedRollForwardStore) TakeRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	took, err := s.Store.TakeRollbackHold(ctx, hash, attempt)
+	s.takeOnce.Do(s.afterTake)
+
+	return took, err
+}
+
+// hookedReleaseStore runs beforeRelease once, after the owner of a rollback has reversed its spends
+// and before it releases the hold. Every store call is the real store's.
+type hookedReleaseStore struct {
+	*teranode_aerospike.Store
+
+	beforeRelease func()
+}
+
+func (s *hookedReleaseStore) ReleaseRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	if hook := s.beforeRelease; hook != nil {
+		s.beforeRelease = nil
+
+		hook()
+	}
+
+	return s.Store.ReleaseRollbackHold(ctx, hash, attempt)
+}
+
+// TestRollForward_CompensationWaitsForTheBusyOwner pins that a roll-forward whose spend lands after
+// the owner of the rollback has reversed that input still reverses it. The roll-forward reads the
+// record as creating, the owner then marks it rolling back and reverses its inputs, and only then
+// does the roll-forward's spend land. Its finalize is refused and its first take of the hold fails,
+// because the owner is still busy. The roll-forward must wait for the owner and take the hold, or
+// its spend names a transaction that is only a hold.
+func TestRollForward_CompensationWaitsForTheBusyOwner(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	child := spendableChildTx(t, tests.ParentTx, 0)
+	hash := child.TxIDChainHash()
+
+	inputs, err := utxo.GetSpends(child)
+	require.NoError(t, err)
+
+	md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	var (
+		read         = make(chan struct{})
+		ownerUnspent = make(chan struct{})
+		firstTake    = make(chan struct{})
+		rfDone       = make(chan error, 1)
+	)
+
+	forward := &hookedRollForwardStore{
+		Store: store,
+		afterRead: func() {
+			close(read)
+			<-ownerUnspent
+		},
+		afterTake: func() { close(firstTake) },
+	}
+
+	go func() {
+		_, rfErr := utxo.RollForwardCreating(ctx, logger, forward, child, md.Attempt, 101)
+		rfDone <- rfErr
+	}()
+
+	<-read
+
+	owner := &hookedReleaseStore{Store: store, beforeRelease: func() {
+		close(ownerUnspent)
+
+		select {
+		case <-firstTake:
+		case <-time.After(30 * time.Second):
+			t.Error("the roll-forward never tried to take the hold")
+		}
+	}}
+
+	require.NoError(t, utxo.RollBackCreating(ctx, logger, owner, child, md.Attempt))
+
+	select {
+	case rfErr := <-rfDone:
+		require.ErrorIs(t, rfErr, errors.ErrTxNotFound, "the finalize is refused on a record that is rolling back")
+	case <-time.After(60 * time.Second):
+		t.Fatal("the roll-forward did not return")
+	}
+
+	resp, err := store.GetSpend(ctx, inputs[0])
+	require.NoError(t, err)
+	require.Nil(t, resp.SpendingData, "the roll-forward's late spend must be reversed")
+
+	requireHeld(t, ctx, store, hash, "the rollback ended with a hold")
+	require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Busy), fields.Busy.String(), "every holder released the hold")
 }

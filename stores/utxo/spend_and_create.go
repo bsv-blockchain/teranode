@@ -85,10 +85,45 @@ func IsRolledForward(err error) bool {
 	return hasErrorData(err, rolledForwardKey)
 }
 
+// rollBackAttemptKey is the error-data key MarkRollBackAttempt sets.
+const rollBackAttemptKey = "rollBackAttempt"
+
+// MarkRollBackAttempt marks err as returned by a create-first Create that published its master
+// record and then failed. The record stays creating under attempt, because another actor may have
+// read it and begun a roll-forward, and only the rollback protocol can undo it without leaving that
+// actor's spends behind. The caller rolls the attempt back with RollBackCreating. It returns err.
+func MarkRollBackAttempt(err *errors.Error, attempt []byte) *errors.Error {
+	if err != nil {
+		err.SetData(rollBackAttemptKey, attempt)
+	}
+
+	return err
+}
+
+// RollBackAttempt returns the token MarkRollBackAttempt set anywhere in the Unwrap chain of err, and
+// nil when there is none.
+func RollBackAttempt(err error) []byte {
+	var attempt []byte
+
+	anyErrorInChain(err, func(te *errors.Error) bool {
+		attempt, _ = te.GetData(rollBackAttemptKey).([]byte)
+
+		return len(attempt) > 0
+	})
+
+	return attempt
+}
+
 // hasErrorData reports whether any *errors.Error in the Unwrap chain of err carries key set to true.
 func hasErrorData(err error, key string) bool {
+	return anyErrorInChain(err, func(te *errors.Error) bool { return te.GetData(key) == true })
+}
+
+// anyErrorInChain reports whether match accepts any *errors.Error in the Unwrap chain of err. It
+// stops at the first one match accepts.
+func anyErrorInChain(err error, match func(*errors.Error) bool) bool {
 	for cur := err; cur != nil; {
-		if te, ok := cur.(*errors.Error); ok && te.GetData(key) == true {
+		if te, ok := cur.(*errors.Error); ok && match(te) {
 			return true
 		}
 
@@ -526,6 +561,14 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 			break
 		}
 
+		if attempt := RollBackAttempt(err); attempt != nil {
+			if rollbackErr := RollBackCreating(ctx, logger, s, tx, attempt); rollbackErr != nil {
+				return nil, nil, errors.NewProcessingError("SpendAndCreate create-first: rolling back the failed create of %s failed, tx left for the sweep: %v", hash.String(), rollbackErr, err)
+			}
+
+			return nil, nil, err
+		}
+
 		if !errors.Is(err, errors.ErrTxExists) {
 			return nil, nil, err
 		}
@@ -739,16 +782,17 @@ func respendAndFinalize(ctx context.Context, logger ulogger.Logger, s creatingFi
 }
 
 // compensateRollForward reverses the spends of a roll-forward whose finalize was refused. It
-// reverses only after it has taken the hold of the attempt it recovered: a record that is absent,
-// owned by another attempt or busy under another holder means the inputs are not this
-// attempt's to release, and nothing is reversed.
+// reverses only after it has taken the hold of the attempt it recovered: a record that is absent
+// or owned by another attempt means the inputs are not this attempt's to release, and nothing is
+// reversed. A record that is busy under the owner of the rollback of the same attempt is waited
+// for, see takeRollbackHoldOfAttempt.
 func compensateRollForward(ctx context.Context, logger ulogger.Logger, s creatingFinisher, tx *bt.Tx, attempt []byte, spends []*Spend) {
 	hash := tx.TxIDChainHash()
 
 	rbCtx, cancel := rollbackContext(ctx, s)
 	defer cancel()
 
-	took, err := s.TakeRollbackHold(rbCtx, hash, attempt)
+	took, err := takeRollbackHoldOfAttempt(rbCtx, s, hash, attempt)
 	if err != nil {
 		logger.Errorf("RollForwardCreating: %s will not be completed and taking its hold failed, spends left in place: %v", hash.String(), err)
 
@@ -772,6 +816,55 @@ func compensateRollForward(ctx context.Context, logger ulogger.Logger, s creatin
 		logger.Errorf("RollForwardCreating: releasing the hold of %s failed, it expires on its own: %v", hash.String(), relErr)
 	}
 }
+
+// takeRollbackHoldOfAttempt takes the hold of the attempt that carries the token. A take that is
+// refused while the record is still rolling back under that token means the owner of the rollback
+// is busy reversing spends. The owner may already have passed an input that this roll-forward
+// spent afterwards, so a roll-forward that gives up here leaves that spend naming a hold. The call
+// therefore reads the record, waits and takes again until it takes the hold, the record is no
+// longer this attempt's rollback, or ctx ends. A crashed owner is not waited out: its busy marker
+// outlives ctx, and the sweep's own rollback reverses every input of the transaction.
+func takeRollbackHoldOfAttempt(ctx context.Context, s creatingFinisher, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	wait := takeHoldRetryMin
+
+	for {
+		took, err := s.TakeRollbackHold(ctx, hash, attempt)
+		if err != nil || took {
+			return took, err
+		}
+
+		current := &meta.Data{}
+		if getErr := s.GetMeta(ctx, hash, current); getErr != nil {
+			if errors.Is(getErr, errors.ErrTxNotFound) {
+				return false, nil
+			}
+
+			return false, getErr
+		}
+
+		if !current.RollingBack || !bytes.Equal(current.Attempt, attempt) {
+			return false, nil
+		}
+
+		timer := time.NewTimer(wait)
+
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+
+			return false, ctx.Err()
+		case <-timer.C:
+		}
+
+		wait = min(wait*2, takeHoldRetryMax)
+	}
+}
+
+// takeHoldRetryMin and takeHoldRetryMax bound the wait between two takes of a busy hold.
+const (
+	takeHoldRetryMin = 10 * time.Millisecond
+	takeHoldRetryMax = 500 * time.Millisecond
+)
 
 // unspendWithRetry reverses spends with up to 3 attempts and exponential backoff,
 // ported from the validator's reverseSpends. The backoff aborts early when ctx

@@ -499,7 +499,11 @@ from touching the next.
   its token from the record it read: the fresh create from its own create, the `ErrTxExists`
   roll-forward, the sweep and the setMined pre-flight from their `Get`. A multi-record create
   that finds children left by an earlier attempt gives them its own token. If a child cannot be
-  given the token, the create deletes the master it wrote and returns a transient error. A
+  given the token, the create leaves the master it wrote creating and returns a transient error
+  that carries the token (`utxo.MarkRollBackAttempt`). Another actor may already have read that
+  master and begun a roll-forward, so it is not deleted: the create-first caller rolls the
+  attempt back with `RollBackCreating`, which reverses every input of the transaction and leaves a
+  hold. A
   finalize that finds a child filtered out reads it back: only a child that is no longer
   creating counts as cleared, and the master stays creating otherwise.
 - **Hold.** The rollback end does not delete the master. It deletes the children and the
@@ -517,7 +521,10 @@ from touching the next.
   (record absent, another token, busy) means a replacement owns the inputs, or another actor is
   reversing them, and nothing is reversed. The sweep's `finishRollback` and the roll-forward's
   compensation work this way, and so does the direct owner, which takes the hold when it marks
-  the record. The rollback end fails while a live `busy` is set, because the rewrite would drop
+  the record. The compensation does not give up on a busy record of its own attempt: the owner
+  may already have passed an input that the roll-forward spent afterwards. It reads the record
+  and takes again until it gets the hold, the record is no longer rolling back under its token,
+  or its rollback bound ends. The rollback end fails while a live `busy` is set, because the rewrite would drop
   the marker that protects the holder, and the sweep ends the rollback on a later pass. A record
   that carries `reversed` needs no take: the sweep calls the rollback end for it directly.
 - **Expiry.** `ClearCreateFirstHold(hash, adopt)` deletes a hold, filtered on `hold` and on the

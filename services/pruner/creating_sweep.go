@@ -22,7 +22,8 @@ const defaultCreatingSweepMaxPerPass = 1000
 // re-spending inputs an earlier attempt already spent is safe. The roll-forward does not
 // ignore locks: a locked parent is the hand-off barrier, so ErrTxLocked leaves the record
 // creating and it is retried on a later pass. A tx that lost a double-spend (ErrSpent,
-// ErrTxConflicting, ErrFrozen, ErrUtxoHashMismatch) is rolled back by
+// ErrTxConflicting, ErrFrozen, ErrUtxoHashMismatch), or that spends a missing parent or a vout
+// that does not exist (ErrTxNotFound), is rolled back by
 // utxo.RollBackCreating: the record is marked rolling back, every input of the tx is
 // unspent and the record becomes a hold that keeps its txid taken for a while. A record already
 // marked rolling back was abandoned by a crashed rollback owner; the sweep finishes it by taking
@@ -31,7 +32,7 @@ const defaultCreatingSweepMaxPerPass = 1000
 // spends undone: the sweep ends its rollback without taking the hold, unspending or reading the
 // transaction, which may be gone from the blob store. The sweep reads the record in two steps, the
 // markers first and the transaction only when the record needs a roll-forward or a reversal. Records it cannot roll forward for another reason (e.g. a
-// missing parent) are left creating, gated (unspendable), and retried on a later pass. After finalizing, the
+// locked parent, or a finalize that fails) are left creating, gated (unspendable), and retried on a later pass. After finalizing, the
 // sweep hands the tx to block assembly and only then unlocks it, the order
 // loadUnminedTransactions uses. When the announce fails, or no block assembly client is
 // configured, the record stays finalized and locked so the next unmined reload restores it.
@@ -67,7 +68,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	s.logger.Infof("[pruner][creating-sweep][%d] healing %d stale creating txs", blockHeight, len(hashes))
 
 	// Track progress so a page that is stuck for a persistent reason (e.g. ≥cap records
-	// with a permanently locked/missing parent) is distinguishable from "more remain,
+	// with a permanently locked parent) is distinguishable from "more remain,
 	// caught up next block" — the reviewers' non-convergence concern.
 	progressed := 0
 	warnedNoBlockAssembly := false
@@ -219,7 +220,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	// records that cannot converge — surface it as a warning rather than the misleading
 	// "will catch up next block" info line above.
 	if progressed == 0 {
-		s.logger.Warnf("[pruner][creating-sweep][%d] rolled forward 0 of %d stale creating txs; the page may be stuck (e.g. a permanently locked or missing parent)", blockHeight, len(hashes))
+		s.logger.Warnf("[pruner][creating-sweep][%d] rolled forward 0 of %d stale creating txs; the page may be stuck (e.g. a permanently locked parent)", blockHeight, len(hashes))
 	}
 }
 

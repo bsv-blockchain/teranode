@@ -1125,6 +1125,11 @@ func isFilteredOut(err error) bool {
 // attemptTokenLength is the length in bytes of a create-first attempt token.
 const attemptTokenLength = 16
 
+// afterChildAdoptionFailure, when set, runs after adoptSurvivingChildren fails and before the create
+// returns. It is nil outside tests, which use it to act as a concurrent roll-forward of the master
+// that the failed create has already published.
+var afterChildAdoptionFailure func()
+
 // adoptSurvivingChildren gives the pagination children that survived an earlier attempt the
 // token of the attempt that has just created the master. The records are still creating, and a
 // finalize filtered on the token of this attempt would otherwise leave them creating for good.
@@ -1160,30 +1165,6 @@ func (s *Store) adoptSurvivingChildren(bItem *BatchStoreItem, recordKeys []*aero
 		if recErr := record.BatchRec().Err; recErr != nil && !isFilteredOut(recErr) {
 			return errors.NewProcessingError("failed to give a surviving child record of %s the attempt token", bItem.txHash, recErr)
 		}
-	}
-
-	return nil
-}
-
-// deleteOwnMaster removes the master record that the attempt carrying the token has just written,
-// so that the store returns to the state before the attempt. The delete is filtered on the creating
-// bin and the token, so a master that another actor has since taken over is left alone. It reports
-// an error only when the delete itself failed: the master then stays creating under the token and
-// the pruner sweep rolls it back.
-func (s *Store) deleteOwnMaster(txHash *chainhash.Hash, attempt []byte) error {
-	key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
-	if err != nil {
-		return errors.NewProcessingError("error in aerospike NewKey", err)
-	}
-
-	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
-	writePolicy.FilterExpression = aerospike.ExpAnd(
-		aerospike.ExpBinExists(fields.Creating.String()),
-		attemptFilter(attempt),
-	)
-
-	if _, delErr := s.client.Delete(writePolicy, key); delErr != nil && !errors.Is(delErr, aerospike.ErrKeyNotFound) && !isFilteredOut(delErr) {
-		return delErr
 	}
 
 	return nil
@@ -1403,13 +1384,11 @@ func (s *Store) storeExternallyWithLock(
 		if adoptErr := s.adoptSurvivingChildren(bItem, recordKeys, alreadyPresent); adoptErr != nil {
 			s.logger.Errorf("[%s] %v", funcName, adoptErr)
 
-			if delErr := s.deleteOwnMaster(bItem.txHash, bItem.attempt); delErr != nil {
-				bItem.complete(errors.NewStorageError("[%s] the surviving child records of %s could not be adopted and the master record could not be removed; it is left creating for the pruner sweep", funcName, bItem.txHash, errors.Join(adoptErr, delErr)))
-
-				return
+			if afterChildAdoptionFailure != nil {
+				afterChildAdoptionFailure()
 			}
 
-			bItem.complete(errors.NewProcessingError("[%s] the surviving child records of %s could not be adopted; the create is undone and may be retried", funcName, bItem.txHash, adoptErr))
+			bItem.complete(utxo.MarkRollBackAttempt(errors.NewProcessingError("[%s] the surviving child records of %s could not be adopted; the master record is left creating for the caller to roll back", funcName, bItem.txHash, adoptErr), bItem.attempt))
 
 			return
 		}

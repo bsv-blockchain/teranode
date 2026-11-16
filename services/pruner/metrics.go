@@ -154,7 +154,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "pruner",
 			Name:      "creating_sweep_failures_total",
-			Help:      "Total create-first records the sweep could not roll forward (left creating for a later pass); a sustained non-zero rate means records are stuck (e.g. a permanently locked or missing parent)",
+			Help:      "Total create-first records the sweep could not roll forward (left creating for a later pass); a sustained non-zero rate means records are stuck (e.g. a permanently locked parent)",
 		},
 	)
 
