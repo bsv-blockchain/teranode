@@ -321,7 +321,7 @@ func newForkParentFixture(ctx context.Context, t *testing.T, inMemoryChainCheck 
 	blockF, childTxHash := stores.buildBlockSpendingFrom(ctx, t, fundingMeta, blockP0.Hash(), forkHeight, baseTime+forkHeight)
 
 	// F's parent has had setTxMined run, as it would on a live node.
-	require.NoError(t, realClient.SetBlockMinedSet(ctx, blockP0.Hash()))
+	require.NoError(t, realClient.SetBlockMinedSet(ctx, blockP0.Hash(), 0))
 
 	// Preconditions, all read from the real store.
 	bestHeader, _, err := realClient.GetBestBlockHeader(ctx)
@@ -491,7 +491,7 @@ func TestValidateBlock_AcceptsMainChainBlockSpendingParentMinedPastThePrefetchWi
 
 			childHeight := chainLength + 1
 			blockC, _ := stores.buildBlockSpendingFrom(ctx, t, b1Meta, parent, childHeight, baseTime+childHeight*60)
-			require.NoError(t, stores.client.SetBlockMinedSet(ctx, parent))
+			require.NoError(t, stores.client.SetBlockMinedSet(ctx, parent, 0))
 
 			window, err := stores.client.GetBlockHeaderIDs(ctx, parent, 10_000)
 			require.NoError(t, err)
@@ -571,7 +571,7 @@ func rejectsForkBlockWithOneParentOffItsHistory(t *testing.T, inMemoryChainCheck
 
 	// F: the fork block on B13, at the tip's height.
 	blockF, _ := stores.buildBlockSpendingFromEach(ctx, t, fundingMetas, blockParentOfF.Hash(), chainLength, baseTime+chainLength)
-	require.NoError(t, stores.client.SetBlockMinedSet(ctx, blockParentOfF.Hash()))
+	require.NoError(t, stores.client.SetBlockMinedSet(ctx, blockParentOfF.Hash(), 0))
 
 	historyOfF, err := stores.client.GetBlockHeaderIDs(ctx, blockParentOfF.Hash(), 10_000)
 	require.NoError(t, err)
