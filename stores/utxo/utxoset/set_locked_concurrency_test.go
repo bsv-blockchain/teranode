@@ -187,7 +187,7 @@ func TestSetLockedConcurrentWithMiningDoesNotDeadlock(t *testing.T) {
 // the two can deadlock, and every call must still succeed through the retry. Five runs on a
 // laptop retried the restore four times. At the end every restored coin carries exactly its
 // transaction's lock, whichever call came last. That check rarely catches the race itself,
-// whose window is too narrow to hit this way: the four RacingAn tests in unspend_test.go hold
+// whose window is too narrow to hit this way: the Racing tests in unspend_test.go hold
 // each side open and are the proof of it.
 //
 // The lock changes take turns with each other. Two of them with opposite values, running at

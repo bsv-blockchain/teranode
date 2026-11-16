@@ -132,8 +132,8 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 // is a correctness requirement. Unspend share-locks the identity and membership rows it reads the
 // lock from, so a restore that started first makes the membership update wait for its commit.
 // A UTXO update in the same statement would still read the snapshot taken before that wait and
-// miss the coin the restore inserted, leaving it with the old lock under a transaction that has
-// the new one (TestUnlockOfAContainmentRowRacingAnUnspendWaitsForIt). As a later statement it
+// miss the coin the restore inserted, so the coin kept the lock the transaction had before this
+// call (TestUnlockOfAContainmentRowRacingAnUnspendWaitsForIt). As a later statement it
 // takes a fresh snapshot, taken after the wait, and finds the coin. The identity arm is already
 // earlier, in setLockedIdentSQL, so the transaction's row waits first whichever table holds it.
 const setLockedSQL = `
@@ -160,12 +160,29 @@ UPDATE utxo u SET flags = CASE WHEN $5::boolean
 
 // setLockedMinedSQL is the membership arm of SetLocked, run before setLockedSQL in the same
 // transaction. See setLockedSQL's comment for why it is a statement of its own.
+//
+// The probe is the txid-leading primary key behind a fenced LATERAL, the shape every by-txid
+// probe of tx_mined takes, and the update takes the ids it found as an ARRAY sub-select, the
+// shape setConflictingSQL's UTXO arm takes, so it can only be planned as a keyed scan. Planned
+// with nested loops off, the plain UPDATE ... FROM unnest join this replaced hash-joined the keys
+// against a Seq Scan of the containment partitions, and so did an UPDATE ... FROM the fenced
+// probe. The changed-bit test is repeated on the update so READ COMMITTED's recheck, after
+// waiting on a row, applies it to the row as it now stands.
 const setLockedMinedSQL = `
 UPDATE tx_mined m SET flags = CASE WHEN $2::boolean
                                    THEN m.flags | $3::smallint
                                    ELSE m.flags & ~$3::smallint END
-  FROM unnest($1::bytea[]) AS k(txid)
- WHERE m.txid = k.txid
+ WHERE m.txid = ANY (ARRAY(
+         SELECT c.txid
+           FROM unnest($1::bytea[]) AS k(txid)
+          CROSS JOIN LATERAL (
+            SELECT m2.txid
+              FROM tx_mined m2
+             WHERE m2.txid = k.txid
+               AND m2.mined_height >= $4::int
+               AND ((m2.flags & $3::smallint) <> 0) <> $2::boolean
+            OFFSET 0
+          ) AS c))
    AND m.mined_height >= $4::int
    AND ((m.flags & $3::smallint) <> 0) <> $2::boolean`
 

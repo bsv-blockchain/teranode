@@ -106,7 +106,7 @@ import (
 //
 // THE ROWS THE LOCK IS READ FROM ARE SHARE-LOCKED, each arm in a derived table of its own
 // because a locking clause cannot sit on the UNION. Without the locks a SetLocked running beside
-// the restore could leave the coin with the opposite lock from its transaction, in either order.
+// the restore could give the coin a lock its transaction no longer has, in either order.
 // SetLocked updates the transaction's rows in one statement and its UTXOs in a later one, and
 // under READ COMMITTED each statement sees only what had committed when it began. A SetLocked
 // that had updated the rows but not committed was invisible here, so the coin took the old lock,
