@@ -249,9 +249,13 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			reconcileErr = nil
 
 			// First, so a walk in any process sees the reconcile below; see
-			// chainWriteStateKey.
-			if storeErr = s.lockChainWrites(ctx, tx); storeErr != nil {
-				return storeErr
+			// chainWriteStateKey. A block stored as invalid skips the reconcile and
+			// moves no membership, so it takes no lock: otherwise a peer could keep
+			// rolling the walk back with blocks that change nothing it can see.
+			if !storeBlockOptions.Invalid {
+				if storeErr = s.lockChainWrites(ctx, tx); storeErr != nil {
+					return storeErr
+				}
 			}
 
 			newBlockID, height, _, storedInvalid, storeErr = s.storeBlock(ctx, tx, block, peerID, storeBlockOptions, onMainChain)

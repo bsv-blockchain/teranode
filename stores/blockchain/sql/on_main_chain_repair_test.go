@@ -1352,7 +1352,7 @@ func TestOnMainChainRepairRerunsWhenAnotherStoreRevalidates_PostgreSQL(t *testin
 	var atHeight3 int
 	require.NoError(t, s.db.QueryRow(`SELECT count(*) FROM blocks WHERE height = 3 AND on_main_chain = true`).Scan(&atHeight3))
 	require.Equal(t, 1, atHeight3, "one block per height on the main chain")
-	require.False(t, getOnMainChain(t, s, block3.Hash().CloneBytes()), "the rerun undoes the held walk's write")
+	require.False(t, getOnMainChain(t, s, block3.Hash().CloneBytes()), "the held walk is rolled back at its chain-write check, and its retry from a fresh snapshot leaves block3 off the main chain")
 	require.True(t, getOnMainChain(t, s, alt3.Hash().CloneBytes()))
 	require.True(t, getOnMainChain(t, s, alt4.Hash().CloneBytes()))
 }
@@ -1401,6 +1401,8 @@ func TestOnMainChainRepairWaitsOutAnUncommittedChainWrite_PostgreSQL(t *testing.
 	storeBlocks(t, s, block1, block2, block3)
 
 	started, release := holdFirstRepairWalk(s)
+	// Before the mark, so the held walk's own attempt is recorded.
+	sqlStates := recordWalkSQLStates(s)
 
 	s.markOnMainChainDirty(true, noRepairFloor, "test", errors.NewStorageError("injected"))
 	waitForHeldWalk(t, started)
@@ -1411,8 +1413,6 @@ func TestOnMainChainRepairWaitsOutAnUncommittedChainWrite_PostgreSQL(t *testing.
 	t.Cleanup(func() { _ = tx.Rollback() })
 
 	require.NoError(t, other.lockChainWrites(ctx, tx))
-
-	sqlStates := recordWalkSQLStates(s)
 
 	release()
 
@@ -1426,6 +1426,33 @@ func TestOnMainChainRepairWaitsOutAnUncommittedChainWrite_PostgreSQL(t *testing.
 	require.NoError(t, tx.Commit())
 	waitForRepair(t, s)
 	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+}
+
+// TestOnMainChainRepairIgnoresAnInvalidBlockFromAnotherStore_PostgreSQL: a block stored
+// as invalid is written off the main chain and skips the reconcile, so it moves nothing a
+// walk can see. It must not take the shared chain-write row, or a peer sending blocks with
+// valid proof of work and a bad body could keep rolling the repair walk back.
+func TestOnMainChainRepairIgnoresAnInvalidBlockFromAnotherStore_PostgreSQL(t *testing.T) {
+	s, other := newPostgresStorePair(t)
+	ctx := context.Background()
+
+	alt3 := createBlock3OnFork(blockAlternative2)
+	storeBlocks(t, s, block1, block2, block3, blockAlternative2)
+
+	started, release := holdFirstRepairWalk(s)
+	sqlStates := recordWalkSQLStates(s)
+
+	s.markOnMainChainDirty(true, noRepairFloor, "test", errors.NewStorageError("injected"))
+	waitForHeldWalk(t, started)
+
+	_, _, err := other.StoreBlock(ctx, alt3, "peer", options.WithInvalid(true))
+	require.NoError(t, err)
+
+	release()
+	waitForRepair(t, s)
+	require.Empty(t, sqlStates(), "an invalid block takes no chain-write lock, so the held walk commits first time")
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, alt3.Hash().CloneBytes()))
 }
 
 // TestOnMainChainRepairRerunsWhenAnotherStoreReorgs_PostgreSQL: a second instance stores
