@@ -7,6 +7,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/jackc/pgx/v5"
 )
 
 // BatchDecorate fills in metadata for many transactions at once.
@@ -124,20 +125,21 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 // 5.19-5.31 ms for 500 keys against 40,000 identity rows, a Hash Join over a Seq Scan of
 // all eight partitions, against 0.29-0.33 ms per leaf group for the leaf-scalar form. It is
 // now setLockedIdentSQL below, run once per leaf group the same way stampSQL and
-// provePresentSQL are, and setLockedDirect wraps that loop and this statement in one
-// transaction so the three arms still commit or fail together.
+// provePresentSQL are, and setLockedDirect wraps that loop, setLockedMinedSQL and this statement
+// in one transaction so the three arms still commit or fail together.
+//
+// The membership arm is its own statement, setLockedMinedSQL, run before this one, and the split
+// is a correctness requirement. Unspend share-locks the identity and membership rows it reads the
+// lock from, so a restore that started first makes the membership update wait for its commit.
+// A UTXO update in the same statement would still read the snapshot taken before that wait and
+// miss the coin the restore inserted, so the coin kept the lock the transaction had before this
+// call (TestUnlockOfAContainmentRowRacingAnUnspendWaitsForIt). As a later statement it
+// takes a fresh snapshot, taken after the wait, and finds the coin. The identity arm is already
+// earlier, in setLockedIdentSQL, so the transaction's row waits first whichever table holds it.
 const setLockedSQL = `
 WITH k AS (
     SELECT * FROM unnest($1::smallint[], $2::bytea[], $3::uuid[], $4::uuid[])
         AS t(leaf, txid, lo, hi)
-),
-mined AS (
-    UPDATE tx_mined m SET flags = CASE WHEN $5::boolean
-                                       THEN m.flags | $6::smallint
-                                       ELSE m.flags & ~$6::smallint END
-      FROM k WHERE m.txid = k.txid
-       AND m.mined_height >= $7::int
-       AND ((m.flags & $6::smallint) <> 0) <> $5::boolean
 ),
 hit AS (
     SELECT c.leaf, c.ukey, k.txid
@@ -155,6 +157,34 @@ UPDATE utxo u SET flags = CASE WHEN $5::boolean
   FROM hit
  WHERE u.leaf = hit.leaf AND u.ukey = hit.ukey AND u.txid = hit.txid
    AND ((u.flags & $6::smallint) <> 0) <> $5::boolean`
+
+// setLockedMinedSQL is the membership arm of SetLocked, run before setLockedSQL in the same
+// transaction. See setLockedSQL's comment for why it is a statement of its own.
+//
+// The probe is the txid-leading primary key behind a fenced LATERAL, the shape every by-txid
+// probe of tx_mined takes, and the update takes the ids it found as an ARRAY sub-select, the
+// shape setConflictingSQL's UTXO arm takes, so it can only be planned as a keyed scan. Planned
+// with nested loops off, the plain UPDATE ... FROM unnest join this replaced hash-joined the keys
+// against a Seq Scan of the containment partitions, and so did an UPDATE ... FROM the fenced
+// probe. The changed-bit test is repeated on the update so READ COMMITTED's recheck, after
+// waiting on a row, applies it to the row as it now stands.
+const setLockedMinedSQL = `
+UPDATE tx_mined m SET flags = CASE WHEN $2::boolean
+                                   THEN m.flags | $3::smallint
+                                   ELSE m.flags & ~$3::smallint END
+ WHERE m.txid = ANY (ARRAY(
+         SELECT c.txid
+           FROM unnest($1::bytea[]) AS k(txid)
+          CROSS JOIN LATERAL (
+            SELECT m2.txid
+              FROM tx_mined m2
+             WHERE m2.txid = k.txid
+               AND m2.mined_height >= $4::int
+               AND ((m2.flags & $3::smallint) <> 0) <> $2::boolean
+            OFFSET 0
+          ) AS c))
+   AND m.mined_height >= $4::int
+   AND ((m.flags & $3::smallint) <> 0) <> $2::boolean`
 
 // setLockedIdentSQL is the ident arm on its own, in the leaf-scalar shape: LEAF AS A SCALAR
 // and the txids as an array, run once per leaf group (leafGroups, set_mined.go) rather than
@@ -205,9 +235,9 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value 
 // mine, can lock those rows in different orders. PostgreSQL then stops one of them as a
 // deadlock, and withDeadlockRetry runs it again.
 //
-// The ident arm runs first, once per leaf group (leafGroups), and the mined+UTXO statement
-// runs after it -- both inside ONE transaction, so a caller reading either row mid-flight
-// still sees them agree: never a transaction whose identity row is locked and whose UTXO or
+// The ident arm runs first, once per leaf group (leafGroups), then the membership statement,
+// then the UTXO statement -- all inside ONE transaction, so a caller reading either row
+// mid-flight still sees them agree: never a transaction whose identity row is locked and whose UTXO or
 // membership row is not, or the reverse.
 func (s *Store) setLockedDirect(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
 	return withDeadlockRetry(ctx, "set_locked", func() error { return s.setLockedOnce(ctx, txHashes, value) })
@@ -215,6 +245,32 @@ func (s *Store) setLockedDirect(ctx context.Context, txHashes []chainhash.Hash, 
 
 // setLockedOnce is one attempt of setLockedDirect, in one database transaction.
 func (s *Store) setLockedOnce(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
+	dbTx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return errors.NewStorageError("[utxoset][SetLocked] begin", err)
+	}
+
+	if err := s.setLockedIn(ctx, dbTx, txHashes, value); err != nil {
+		_ = dbTx.Rollback(ctx)
+
+		return err
+	}
+
+	if err := dbTx.Commit(ctx); err != nil {
+		return errors.NewStorageError("[utxoset][SetLocked] commit", err)
+	}
+
+	return nil
+}
+
+// setLockedIn runs SetLocked's statements inside the caller's transaction, which commits them.
+//
+// They go to the server as one pipelined batch: one round trip, executed one after another, each
+// with the snapshot it takes when it starts. That is all the split in setLockedSQL's comment needs,
+// since a statement that waits on a restore's share lock still finishes before the next one
+// begins. Sent one round trip each, the membership statement the split added made a one-hash
+// release about a third slower.
+func (s *Store) setLockedIn(ctx context.Context, dbTx pgx.Tx, txHashes []chainhash.Hash, value bool) error {
 	leaves := make([]int16, 0, len(txHashes))
 	txids := make([][]byte, 0, len(txHashes))
 	los := make([][16]byte, 0, len(txHashes))
@@ -227,30 +283,35 @@ func (s *Store) setLockedOnce(ctx context.Context, txHashes []chainhash.Hash, va
 		his = append(his, Pack(txHashes[i][:], ^uint32(0)))
 	}
 
-	dbTx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return errors.NewStorageError("[utxoset][SetLocked] begin", err)
-	}
+	batch := &pgx.Batch{}
+	sites := make([]string, 0, 10)
 
 	for _, g := range leafGroups(txids) {
-		if _, err := dbTx.Exec(ctx, setLockedIdentSQL, g.leaf, g.txids, value, FlagLocked); err != nil {
-			_ = dbTx.Rollback(ctx)
-
-			return errors.NewStorageError("[utxoset][SetLocked] ident", err)
-		}
+		batch.Queue(setLockedIdentSQL, g.leaf, g.txids, value, FlagLocked)
+		sites = append(sites, "[utxoset][SetLocked] ident")
 	}
 
 	// The containment arm carries the lookup floor, so it plans and locks the same partitions
 	// at any stamp lag. A row below the floor never supplies the locked bit to a reader (see
 	// the tier-2 read, which masks it), so a copy of the bit left stale there loses nothing.
-	if _, err := dbTx.Exec(ctx, setLockedSQL, leaves, txids, los, his, value, FlagLocked, s.lookupFloor()); err != nil {
-		_ = dbTx.Rollback(ctx)
+	batch.Queue(setLockedMinedSQL, txids, value, FlagLocked, s.lookupFloor())
+	sites = append(sites, "[utxoset][SetLocked] containment")
 
-		return errors.NewStorageError("[utxoset][SetLocked]", err)
+	batch.Queue(setLockedSQL, leaves, txids, los, his, value, FlagLocked)
+	sites = append(sites, "[utxoset][SetLocked]")
+
+	results := dbTx.SendBatch(ctx, batch)
+
+	for _, site := range sites {
+		if _, err := results.Exec(); err != nil {
+			_ = results.Close()
+
+			return errors.NewStorageError(site, err)
+		}
 	}
 
-	if err := dbTx.Commit(ctx); err != nil {
-		return errors.NewStorageError("[utxoset][SetLocked] commit", err)
+	if err := results.Close(); err != nil {
+		return errors.NewStorageError("[utxoset][SetLocked] batch", err)
 	}
 
 	return nil
