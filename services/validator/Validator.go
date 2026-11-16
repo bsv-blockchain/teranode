@@ -1796,6 +1796,12 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 // genuinely unspendable output and mint coins (GHSA-v76m-6vc7-g7c7). Overwriting
 // every input from the store's own outputs closes that.
 func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, prefetched map[chainhash.Hash]*meta.Data) ([]uint32, error) {
+	return utxoBlockHeightsAndExtendTx(ctx, v.utxoStore, tx, txID, prefetched)
+}
+
+// utxoBlockHeightsAndExtendTx is getUtxoBlockHeightsAndExtendTx over utxoStore, for a check
+// that runs without a Validator (RecheckStoredTxAtHeight).
+func utxoBlockHeightsAndExtendTx(ctx context.Context, utxoStore utxo.Store, tx *bt.Tx, txID string, prefetched map[chainhash.Hash]*meta.Data) ([]uint32, error) {
 	utxoHeights := make([]uint32, len(tx.Inputs))
 
 	var (
@@ -1824,7 +1830,7 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 		return utxoHeights, nil
 	}
 
-	answers, err := v.utxoStore.ParentOutputsForValidation(ctx, outpoints)
+	answers, err := utxoStore.ParentOutputsForValidation(ctx, outpoints)
 	if err != nil {
 		return nil, errors.NewProcessingError("[Validate][%s] error getting parent outputs", txID, err)
 	}

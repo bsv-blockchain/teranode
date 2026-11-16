@@ -104,6 +104,54 @@ func EraBounds(params *chaincfg.Params, h uint32) (lo, hi uint32, ok bool) {
 	return lo, hi, true
 }
 
+// UnminedValidatedHeight returns the height an unmined transaction was validated at, read
+// from its unmined_since, or 0 when that is unknown. A transaction is created, and validated,
+// at its unmined_since, unless a reorg or an invalidation moved it back: then unmined_since
+// is backdated to the tip less the unmined retention, or 1 (utxo.BackdatedUnminedSince), and
+// says nothing about the rules it was validated under. Such a value, 1 or at least the
+// retention below the tip, is unknown; a transaction created that long ago is due for
+// pruning anyway.
+func UnminedValidatedHeight(unminedSince, tip, retention uint32) uint32 {
+	if unminedSince > 1 && (tip <= retention || unminedSince > tip-retention) {
+		return unminedSince
+	}
+
+	return 0
+}
+
+// VerdictHolds reports whether the verdict a stored transaction got at one of provenHeights
+// holds for a block at blockHeight, so the block may take it without checking the
+// transaction again. A proving height h must
+//   - check the transaction under the same rules (SameTxRules), so its scripts verify the
+//     same way;
+//   - not be above blockHeight: coinbase maturity and height-based finality only grow
+//     with the height, so a verdict at h holds above it, not below. A block below every
+//     proving height, a side block below an activation the transaction was validated
+//     above included, is checked again.
+//
+// Time-based finality is not covered: it depends on the median time of the block's own
+// branch, which no height bounds (LockTimeIsTime). A 0 in provenHeights is an unknown
+// height and proves nothing.
+func VerdictHolds(params *chaincfg.Params, provenHeights []uint32, blockHeight uint32) bool {
+	for _, h := range provenHeights {
+		if h != 0 && h <= blockHeight && SameTxRules(params, h, blockHeight) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// lockTimeThreshold is where a lock time stops being a block height and becomes a time.
+const lockTimeThreshold = 500_000_000
+
+// LockTimeIsTime reports whether lockTime is a time rather than a block height. A
+// transaction locked to a time is final against the median time of the block's branch,
+// which a verdict reached on another branch does not bound.
+func LockTimeIsTime(lockTime uint32) bool {
+	return lockTime >= lockTimeThreshold
+}
+
 // flagEngine returns the cached BDK engine for params, creating it on first use.
 func flagEngine(params *chaincfg.Params) *bdkscript.TxValidator {
 	key := flagEngineKey{

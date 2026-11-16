@@ -45,6 +45,12 @@ var (
 	// transactions per block, so it is worth being able to see rather than infer.
 	prometheusSubtreeValidationCachedConflictProbes prometheus.Counter
 
+	// prometheusSubtreeValidationStoredVerdictRechecks counts stored transactions a block
+	// checked again in full, scripts included, because the verdict the UTXO store holds for
+	// them does not hold at the block's height (txrules.VerdictHolds): validated under other
+	// rules, above the block, with a lock time, or at a height no longer known.
+	prometheusSubtreeValidationStoredVerdictRechecks prometheus.Counter
+
 	// prometheusSubtreeValidationValidateSubtree tracks the duration of complete subtree validation operations.
 	// This is the primary metric for monitoring the core validation functionality,
 	// measuring end-to-end validation time including all sub-operations.
@@ -195,6 +201,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "subtreevalidation",
 			Name:      "cached_subtree_conflict_probes_total",
 			Help:      "Transactions of already-cached subtrees whose conflicting flag was read from the UTXO store during block blessing",
+		},
+	)
+
+	prometheusSubtreeValidationStoredVerdictRechecks = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "stored_verdict_rechecks_total",
+			Help:      "Stored transactions a block checked again in full because their stored verdict does not hold at the block's height",
 		},
 	)
 

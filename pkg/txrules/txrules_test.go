@@ -89,3 +89,65 @@ func TestSameTxRules_MempoolSentinelHeight(t *testing.T) {
 	require.False(t, SameTxRules(&chaincfg.RegressionNetParams, 150, math.MaxInt32))
 	require.False(t, SameTxRules(&chaincfg.RegressionNetParams, math.MaxUint32, 150))
 }
+
+// TestUnminedValidatedHeight pins when unmined_since still names the height a tx was
+// validated at: a reorg or an invalidation backdates it to the tip less the unmined
+// retention, or 1 (utxo.BackdatedUnminedSince), and then it names nothing.
+func TestUnminedValidatedHeight(t *testing.T) {
+	tests := []struct {
+		name                         string
+		unminedSince, tip, retention uint32
+		want                         uint32
+	}{
+		{"mined on the longest chain", 0, 1000, 144, 0},
+		{"backdated to 1", 1, 100, 144, 0},
+		{"tip within the retention", 99, 100, 144, 99},
+		{"backdated to the tip less the retention", 856, 1000, 144, 0},
+		{"older than the retention", 800, 1000, 144, 0},
+		{"within the retention", 857, 1000, 144, 857},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, UnminedValidatedHeight(tt.unminedSince, tt.tip, tt.retention))
+		})
+	}
+}
+
+// TestVerdictHolds pins when a verdict a tx got at one of provenHeights still holds for a
+// block at another height: the same transaction rules (scripts) and no lower height
+// (coinbase maturity and height finality only grow with the height).
+// Regtest: Genesis at 100, Chronicle at 200.
+func TestVerdictHolds(t *testing.T) {
+	params := &chaincfg.RegressionNetParams
+
+	tests := []struct {
+		name          string
+		provenHeights []uint32
+		blockHeight   uint32
+		want          bool
+	}{
+		{"same height", []uint32{150}, 150, true},
+		{"lower height, same rules", []uint32{120}, 199, true},
+		{"validated below Genesis, block above", []uint32{99}, 101, false},
+		{"validated below Chronicle, block above", []uint32{199}, 200, false},
+		{"validated above the block, same rules", []uint32{160}, 150, false},
+		{"validated above Chronicle, block below", []uint32{200}, 199, false},
+		{"one proving height is enough", []uint32{99, 150}, 160, true},
+		{"no proving height", nil, 150, false},
+		{"an unknown height proves nothing", []uint32{0}, 50, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, VerdictHolds(params, tt.provenHeights, tt.blockHeight))
+		})
+	}
+}
+
+// TestLockTimeIsTime pins the height/time split of a lock time.
+func TestLockTimeIsTime(t *testing.T) {
+	require.False(t, LockTimeIsTime(0))
+	require.False(t, LockTimeIsTime(499_999_999), "a block height")
+	require.True(t, LockTimeIsTime(500_000_000), "a time")
+}

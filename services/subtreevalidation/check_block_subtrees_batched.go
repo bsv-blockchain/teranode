@@ -140,15 +140,21 @@ func (u *Server) processTransactionsBatched(ctx context.Context, checker validat
 		}
 	}
 
-	storedConflictingOptions := validator.ProcessOptions(
+	// the options this path validates a tx it has not seen with, which a stored tx checked
+	// again gets too (checkStoredTxsAtHeight)
+	storedTxOptions := validator.ProcessOptions(
 		validator.WithSkipPolicyChecks(true),
 		validator.WithCandidateBlockTime(candidateBlockTime),
 		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+		validator.WithUnconfirmedParentsAtCandidateHeight(true),
 	)
 
-	if err = u.checkStoredConflictingAtHeight(ctx, txHashes, txMetaSlice, allTransactions, blockHeight, storedConflictingOptions); err != nil {
+	cleared, err := u.checkStoredTxsAtHeight(ctx, txHashes, txMetaSlice, allTransactions, blockHeight, storedTxOptions)
+	if err != nil {
 		return err
 	}
+
+	missed += cleared
 
 	prometheusSubtreeValidationBatchStep.WithLabelValues("precheck").Observe(time.Since(start).Seconds())
 

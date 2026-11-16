@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
@@ -112,6 +114,91 @@ func TestCheckStoredTxAtHeight(t *testing.T) {
 	t.Run("one parent per input", func(t *testing.T) {
 		err := CheckStoredTxAtHeight(tx, nil, coinbaseHeight, tSettings, blockOptions(mtp))
 		require.True(t, errors.Is(err, errors.ErrProcessing), "%v", err)
+	})
+}
+
+// pushOnlyBreakingSpend returns a tx whose unlocking script, OP_1 OP_1 OP_ADD, is not push-only,
+// spending parent's OP_TRUE output: valid below Genesis, invalid from it on.
+func pushOnlyBreakingSpend(t *testing.T, parent *bt.Tx) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+	input := &bt.Input{
+		PreviousTxOutIndex: 0,
+		SequenceNumber:     0xffffffff,
+		UnlockingScript:    bscript.NewFromBytes([]byte{bscript.Op1, bscript.Op1, bscript.OpADD}),
+	}
+	require.NoError(t, input.PreviousTxIDAdd(parent.TxIDChainHash()))
+	tx.Inputs = append(tx.Inputs, input)
+	tx.AddOutput(&bt.Output{Satoshis: 90_000, LockingScript: bscript.NewFromBytes([]byte{bscript.OpTRUE})})
+
+	return tx
+}
+
+// TestRecheckStoredTxAtHeight pins the full recheck of a stored tx at a block's height: the
+// height checks of CheckStoredTxAtHeight and the scripts, under the block's rules. A tx
+// validated below an activation height is checked again by a block above it. It reads the
+// parents and writes nothing, and works on a copy of the tx. Regtest: Genesis at 100.
+func TestRecheckStoredTxAtHeight(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	require.Equal(t, uint32(100), tSettings.ChainCfgParams.GenesisActivationHeight)
+
+	ctx := t.Context()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///recheck_stored_tx_at_height")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+	utxoStore.RawDB().SetMaxOpenConns(1)
+
+	parent := transactions.Create(t,
+		transactions.WithCoinbaseData(50, "/recheck stored tx at height/"),
+		transactions.WithOutput(100_000, bscript.NewFromBytes([]byte{bscript.OpTRUE})),
+	)
+	_, err = utxoStore.Create(ctx, parent, 50, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 1, BlockHeight: 50, SubtreeIdx: 0}))
+	require.NoError(t, err)
+
+	tx := pushOnlyBreakingSpend(t, parent)
+	txValidator := NewTxValidator(logger, tSettings)
+	mtp := uint32(time.Now().Unix()) //nolint:gosec
+	opts := ProcessOptions(WithSkipPolicyChecks(true), WithCandidateBlockTime(mtp), WithCandidateParentMedianTime(mtp), WithUnconfirmedParentsAtCandidateHeight(true))
+
+	t.Run("valid below Genesis", func(t *testing.T) {
+		require.NoError(t, RecheckStoredTxAtHeight(ctx, utxoStore, txValidator, tx, 99, tSettings, opts))
+	})
+
+	t.Run("invalid from Genesis on", func(t *testing.T) {
+		err := RecheckStoredTxAtHeight(ctx, utxoStore, txValidator, tx, 101, tSettings, opts)
+		require.True(t, errors.Is(err, errors.ErrTxInvalid), "%v", err)
+		require.ErrorContains(t, err, "Only non-push operators allowed in signatures")
+	})
+
+	t.Run("the height checks still run", func(t *testing.T) {
+		nonFinal := tx.Clone()
+		nonFinal.LockTime = 99
+		nonFinal.Inputs[0].SequenceNumber = 0
+
+		err := RecheckStoredTxAtHeight(ctx, utxoStore, txValidator, nonFinal, 99, tSettings, opts)
+		require.True(t, errors.Is(err, errors.ErrNonFinal), "%v", err)
+	})
+
+	t.Run("the caller's tx is not extended", func(t *testing.T) {
+		require.NoError(t, RecheckStoredTxAtHeight(ctx, utxoStore, txValidator, tx, 99, tSettings, opts))
+		require.Nil(t, tx.Inputs[0].PreviousTxScript)
+	})
+
+	t.Run("a parent missing from the store is no verdict", func(t *testing.T) {
+		orphan := transactions.Create(t,
+			transactions.WithCoinbaseData(51, "/recheck stored tx at height orphan/"),
+			transactions.WithOutput(100_000, bscript.NewFromBytes([]byte{bscript.OpTRUE})),
+		)
+
+		err := RecheckStoredTxAtHeight(ctx, utxoStore, txValidator, pushOnlyBreakingSpend(t, orphan), 99, tSettings, opts)
+		require.Error(t, err)
+		require.False(t, errors.Is(err, errors.ErrTxInvalid), "%v", err)
+		require.True(t, errors.Is(err, errors.ErrTxNotFound), "%v", err)
 	})
 }
 

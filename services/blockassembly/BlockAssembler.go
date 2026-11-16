@@ -18,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/txrules"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/unminedsort"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -1493,10 +1494,7 @@ func (b *BlockAssembler) reloadValidatedHeights(ctx context.Context, txs []*utxo
 
 	for i, tx := range txs {
 		if len(tx.BlockIDs) == 0 {
-			unminedSince := uint32(max(tx.UnminedSince, 0)) //nolint:gosec // a block height
-			if unminedSince > 1 && (tip <= retention || unminedSince > tip-retention) {
-				heights[i] = unminedSince
-			}
+			heights[i] = txrules.UnminedValidatedHeight(uint32(max(tx.UnminedSince, 0)), tip, retention) //nolint:gosec // a block height
 
 			continue
 		}

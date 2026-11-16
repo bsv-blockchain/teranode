@@ -52,6 +52,12 @@ func (s *flakyBatchDecorateStore) BatchDecorate(_ context.Context, items []*utxo
 	return nil
 }
 
+// GetBlockHeight answers the tip read of the block path's stored-verdict check
+// (storedCheckFor); the embedded store is nil.
+func (s *flakyBatchDecorateStore) GetBlockHeight() uint32 {
+	return 0
+}
+
 func (s *flakyBatchDecorateStore) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

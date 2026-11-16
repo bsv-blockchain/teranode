@@ -68,7 +68,7 @@ func TestCachedSubtreeConflictingNodes_RetriesTransientStoreError(t *testing.T) 
 	}
 	server.utxoStore = store
 
-	conflicting, err := server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{rootHash})
+	conflicting, _, err := server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{rootHash}, 0)
 	require.NoError(t, err, "a transient store failure must be retried, not fail the block")
 	require.Empty(t, conflicting)
 	require.Equal(t, 2, store.callCount(), "expected one failed attempt followed by a successful one")
@@ -86,6 +86,12 @@ type barrierDecorateStore struct {
 	mu       sync.Mutex
 	inFlight int
 	reached  chan struct{}
+}
+
+// GetBlockHeight answers the tip read of the stored-verdict check (storedCheckFor); the
+// embedded store is nil.
+func (s *barrierDecorateStore) GetBlockHeight() uint32 {
+	return 0
 }
 
 func (s *barrierDecorateStore) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
@@ -136,7 +142,7 @@ func TestCachedSubtreeConflictingNodes_BatchesOfOneSubtreeRunConcurrently(t *tes
 		reached:     make(chan struct{}),
 	}
 
-	conflicting, err := server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{rootHash})
+	conflicting, _, err := server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{rootHash}, 0)
 	require.NoError(t, err)
 	require.Equal(t, []chainhash.Hash{txs[0], txs[6]}, conflicting, "flagged txs must come back in subtree order")
 }
@@ -157,7 +163,7 @@ func TestCachedSubtreeConflictingNodes_EmptySubtreeWithUnsetBatchSize(t *testing
 	rootHash := chainhash.HashH([]byte("empty-subtree"))
 	require.NoError(t, server.subtreeStore.Set(context.Background(), rootHash[:], fileformat.FileTypeSubtree, serialized))
 
-	conflicting, err := server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{rootHash})
+	conflicting, _, err := server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{rootHash}, 0)
 	require.NoError(t, err)
 	require.Empty(t, conflicting)
 }
@@ -184,7 +190,7 @@ func TestCachedSubtreeConflictingNodes_CancelledContextIsNotAStorageFault(t *tes
 		onCall:   func(int) { cancel() },
 	}
 
-	_, err := server.cachedSubtreeConflictingNodes(ctx, []chainhash.Hash{rootHash})
+	_, _, err := server.cachedSubtreeConflictingNodes(ctx, []chainhash.Hash{rootHash}, 0)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrContextCanceled), "expected a context-cancelled error, got: %v", err)
 	require.False(t, errors.Is(err, errors.ErrStorageError), "a cancellation must not surface as a storage fault, got: %v", err)
@@ -263,6 +269,12 @@ type itemErrStore struct {
 	calls    atomic.Int64
 }
 
+// GetBlockHeight answers the tip read of the stored-verdict check (storedCheckFor); the
+// embedded store is nil.
+func (s *itemErrStore) GetBlockHeight() uint32 {
+	return 0
+}
+
 func (s *itemErrStore) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
 	attempt := int(s.calls.Add(1))
 
@@ -296,7 +308,7 @@ func TestCachedSubtreeConflictingNodes_RetriesTransientItemError(t *testing.T) {
 	store := &itemErrStore{failures: 1, itemErr: aerospike.ErrTimeout}
 	server.utxoStore = store
 
-	conflicting, err := server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{rootHash})
+	conflicting, _, err := server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{rootHash}, 0)
 	require.NoError(t, err, "a transient per-record failure must be retried, not fail the block")
 	require.Empty(t, conflicting)
 	require.Equal(t, int64(2), store.calls.Load())
@@ -317,7 +329,7 @@ func TestCachedSubtreeConflictingNodes_PersistentItemErrorFailsAfterBoundedRetri
 	store := &itemErrStore{failures: 100, itemErr: errors.NewProcessingError("malformed record")}
 	server.utxoStore = store
 
-	_, err := server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{rootHash})
+	_, _, err := server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{rootHash}, 0)
 	require.Error(t, err)
 	require.Equal(t, int64(4), store.calls.Load(), "one attempt plus the configured 3 retries")
 }
@@ -326,6 +338,12 @@ func TestCachedSubtreeConflictingNodes_PersistentItemErrorFailsAfterBoundedRetri
 // one the txmeta cache would accept.
 type fullMetaStore struct {
 	utxo.Store
+}
+
+// GetBlockHeight answers the tip read of the stored-verdict check (storedCheckFor); the
+// embedded store is nil.
+func (s *fullMetaStore) GetBlockHeight() uint32 {
+	return 0
 }
 
 func (s *fullMetaStore) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
@@ -358,7 +376,7 @@ func TestCachedSubtreeConflictingNodes_DoesNotPopulateTxMetaCache(t *testing.T) 
 
 	server.utxoStore = cache
 
-	_, err = server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{rootHash})
+	_, _, err = server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{rootHash}, 0)
 	require.NoError(t, err)
 
 	_, cached := cache.(*txmetacache.TxMetaCache).GetMetaCached(context.Background(), tx)
@@ -372,7 +390,7 @@ func TestCachedSubtreeConflictingNodes_MissingSubtreeBlobFails(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	_, err := server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{chainhash.HashH([]byte("no-such-subtree"))})
+	_, _, err := server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{chainhash.HashH([]byte("no-such-subtree"))}, 0)
 	require.Error(t, err)
 }
 
@@ -389,7 +407,7 @@ func TestCachedSubtreeConflictingNodes_TruncatedSubtreeBlobFails(t *testing.T) {
 	rootHash := chainhash.HashH([]byte("truncated-subtree"))
 	require.NoError(t, server.subtreeStore.Set(context.Background(), rootHash[:], fileformat.FileTypeSubtree, blob))
 
-	_, err := server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{rootHash})
+	_, _, err := server.cachedSubtreeConflictingNodes(context.Background(), []chainhash.Hash{rootHash}, 0)
 	require.Error(t, err)
 }
 

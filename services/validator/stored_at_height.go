@@ -114,3 +114,39 @@ func readInputParent(ctx context.Context, utxoStore utxo.Store, hash *chainhash.
 
 	return parent, nil
 }
+
+// RecheckStoredTxAtHeight checks a tx already in the UTXO store again, in full, for a block at
+// blockHeight: the height checks of CheckStoredTxAtHeight, then txValidator's transaction and
+// script checks under the block's rules, as a block that validates the tx itself runs them.
+// A block takes a stored verdict only where it holds at its own height (txrules.VerdictHolds);
+// a tx validated below an activation height, for instance, verifies its scripts again above
+// it. Like CheckStoredTxAtHeight it reads the parents and writes nothing, so it never takes a
+// spend, and it extends a copy of tx, never tx itself. BIP68 sequence locks are not checked:
+// they need the median times of the block's branch, which only the validator holds.
+func RecheckStoredTxAtHeight(ctx context.Context, utxoStore utxo.Store, txValidator *TxValidator, tx *bt.Tx, blockHeight uint32,
+	tSettings *settings.Settings, opts *Options) error {
+	parents, err := InputParents(ctx, utxoStore, tx)
+	if err != nil {
+		return err
+	}
+
+	if err = CheckStoredTxAtHeight(tx, parents, blockHeight, tSettings, opts); err != nil {
+		return err
+	}
+
+	extended := tx.Clone()
+
+	utxoHeights, err := utxoBlockHeightsAndExtendTx(ctx, utxoStore, extended, extended.TxIDChainHash().String(), nil)
+	if err != nil {
+		return err
+	}
+
+	extended.SetExtended(true)
+
+	// as Validator.validateTransaction: a block's unconfirmed parent is one in the same block
+	if opts.UnconfirmedParentsAtCandidateHeight {
+		utxoHeights = resolveUnconfirmedParentsAtCandidateHeight(utxoHeights, blockHeight)
+	}
+
+	return txValidator.ValidateTransaction(extended, blockHeight, utxoHeights, opts)
+}

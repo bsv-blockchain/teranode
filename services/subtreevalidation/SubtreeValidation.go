@@ -948,9 +948,14 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		}
 
 		if v.FromBlock {
-			if err = u.checkStoredConflictingAtHeight(ctx, txHashes, txMetaSlice, nil, blockHeight, validator.ProcessOptions(validationOptions...)); err != nil {
+			var cleared int
+
+			cleared, err = u.checkStoredTxsAtHeight(ctx, txHashes, txMetaSlice, nil, blockHeight, validator.ProcessOptions(validationOptions...))
+			if err != nil {
 				return nil, err
 			}
+
+			missed += cleared
 		}
 
 		if missed > 0 {

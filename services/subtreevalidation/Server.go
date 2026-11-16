@@ -179,6 +179,11 @@ type Server struct {
 	// watcherReplayCalledFn is called by a RUNNING watcher after its replay call returns; nil in
 	// production.
 	watcherReplayCalledFn func()
+
+	// storedTxValidatorInstance checks a stored tx again for a block whose height its stored
+	// verdict does not hold at; created on first use (storedTxValidator).
+	storedTxValidatorInstance *validator.TxValidator
+	storedTxValidatorOnce     sync.Once
 }
 
 // New creates a new Server instance with the provided dependencies.

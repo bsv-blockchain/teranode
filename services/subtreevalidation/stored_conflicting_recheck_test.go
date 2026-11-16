@@ -60,21 +60,18 @@ func storedConflictingAtThisHeight(t *testing.T, f *conflictingFixture) *bt.Tx {
 	return f.loser
 }
 
-// TestBlockPathRechecksStoredConflictingTxs pins that a block never takes a stored conflicting
-// record as its own verdict, and checks it without the validator, which would spend inputs a
-// conflicting record does not hold. The block path creates a tx as conflicting at its block's height,
-// and another candidate block at another height can create the same tx; a tx valid there may be
-// invalid here, for instance spending a coinbase that matures in between. Every block entry
-// point accepted the stored record, from the UTXO store or the txmeta cache, without asking the
-// validator at its own height.
-func TestBlockPathRechecksStoredConflictingTxs(t *testing.T) {
+// storedTxEntryPoint runs a block holding tx and the fixture's other tx, at height 101, through
+// one block entry point, and returns its verdict.
+type storedTxEntryPoint func(t *testing.T, f *conflictingFixture, tx *bt.Tx) error
+
+// blockEntryPoints returns every block entry point that looks a tx up in the UTXO store or
+// the txmeta cache before it validates the tx.
+func blockEntryPoints() map[string]storedTxEntryPoint {
 	genesis := func(f *conflictingFixture) *chainhash.Hash {
 		return f.settings.ChainCfgParams.GenesisHash
 	}
 
-	type entryPoint func(t *testing.T, f *conflictingFixture, tx *bt.Tx) error
-
-	viaSubtreeFromBlock := func(baseURL string, cached bool) entryPoint {
+	viaSubtreeFromBlock := func(baseURL string, cached bool) storedTxEntryPoint {
 		return func(t *testing.T, f *conflictingFixture, tx *bt.Tx) error {
 			server, subtreeStore := f.newServer(t)
 
@@ -163,7 +160,7 @@ func TestBlockPathRechecksStoredConflictingTxs(t *testing.T) {
 		return f.server.processTransactionsInLevels(t.Context(), []*bt.Tx{tx.Clone(), f.other.Clone()}, chainhash.Hash{}, chainhash.Hash{}, 101, 0, 0, map[uint32]bool{}, false, nil)
 	}
 
-	entryPoints := map[string]entryPoint{
+	return map[string]storedTxEntryPoint{
 		"processTransactionsInLevels":         viaLevels,
 		"checkSubtreeFromBlock http":          viaSubtreeFromBlock("http://peer.invalid", false),
 		"checkSubtreeFromBlock legacy":        viaSubtreeFromBlock("legacy", false),
@@ -171,6 +168,17 @@ func TestBlockPathRechecksStoredConflictingTxs(t *testing.T) {
 		"CheckBlockSubtrees":                  viaCheckBlockSubtrees,
 		"processTransactionsBatched":          viaBatched,
 	}
+}
+
+// TestBlockPathRechecksStoredConflictingTxs pins that a block never takes a stored conflicting
+// record as its own verdict, and checks it without the validator, which would spend inputs a
+// conflicting record does not hold. The block path creates a tx as conflicting at its block's height,
+// and another candidate block at another height can create the same tx; a tx valid there may be
+// invalid here, for instance spending a coinbase that matures in between. Every block entry
+// point accepted the stored record, from the UTXO store or the txmeta cache, without asking the
+// validator at its own height.
+func TestBlockPathRechecksStoredConflictingTxs(t *testing.T) {
+	entryPoints := blockEntryPoints()
 
 	for name, check := range entryPoints {
 		t.Run(name+": a record created at another height is checked at this one", func(t *testing.T) {
@@ -225,38 +233,43 @@ func TestPeerPathTakesStoredConflictingRecords(t *testing.T) {
 	require.Equal(t, calls, f.recorder.total(), "the stored record is taken without a validator call")
 }
 
+// viaCachedSubtree runs a block at height 101 holding tx and the fixture's other tx through the
+// check of a subtree this node already validated, which never reaches the lookups of
+// blockEntryPoints.
+func viaCachedSubtree(t *testing.T, f *conflictingFixture, tx *bt.Tx) error {
+	server, subtreeStore := f.newServer(t)
+
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 0, 0))
+	require.NoError(t, subtree.AddNode(*f.other.TxIDChainHash(), 0, 0))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+
+	root := *subtree.RootHash()
+	require.NoError(t, subtreeStore.Set(t.Context(), root[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  f.settings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           model.NBit{},
+	}
+
+	block, err := model.NewBlock(header, &bt.Tx{Version: 1}, []*chainhash.Hash{&root}, 3, 1000, 101, 0)
+	require.NoError(t, err)
+
+	return server.checkCachedSubtreesAgainstCandidateChain(t.Context(), block, []chainhash.Hash{root})
+}
+
 // TestCachedSubtreeChecksStoredConflictingTxsAtHeight pins the same for a block that references a
 // subtree this node already validated: it never reaches the lookups above, and took a stored
 // conflicting tx in it with only the ancestry check, so a node holding the subtree accepted a
 // block a node without it rejected.
 func TestCachedSubtreeChecksStoredConflictingTxsAtHeight(t *testing.T) {
-	check := func(t *testing.T, f *conflictingFixture, tx *bt.Tx) error {
-		server, subtreeStore := f.newServer(t)
-
-		subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(2)
-		require.NoError(t, err)
-		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 0, 0))
-		require.NoError(t, subtree.AddNode(*f.other.TxIDChainHash(), 0, 0))
-
-		subtreeBytes, err := subtree.Serialize()
-		require.NoError(t, err)
-
-		root := *subtree.RootHash()
-		require.NoError(t, subtreeStore.Set(t.Context(), root[:], fileformat.FileTypeSubtree, subtreeBytes))
-
-		header := &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  f.settings.ChainCfgParams.GenesisHash,
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
-			Bits:           model.NBit{},
-		}
-
-		block, err := model.NewBlock(header, &bt.Tx{Version: 1}, []*chainhash.Hash{&root}, 3, 1000, 101, 0)
-		require.NoError(t, err)
-
-		return server.checkCachedSubtreesAgainstCandidateChain(t.Context(), block, []chainhash.Hash{root})
-	}
+	check := viaCachedSubtree
 
 	t.Run("a record created at another height is checked at this one", func(t *testing.T) {
 		f := newConflictingFixture(t)

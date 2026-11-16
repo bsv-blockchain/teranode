@@ -2,25 +2,120 @@ package subtreevalidation
 
 import (
 	"context"
+	"fmt"
+	"sync"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/txrules"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/util"
+	"golang.org/x/sync/errgroup"
 )
 
-// checkStoredConflictingAtHeight runs validator.CheckStoredTxAtHeight on every tx the lookups
-// took from a conflicting record. The block path creates a tx as conflicting at its block's
-// height, and another candidate block at another height may have created the record: a tx valid
-// there can be invalid here, for instance spending a coinbase that matures in between. The check
-// reads the tx and its parents and writes nothing; validating the tx again would spend inputs the
-// record does not hold. txs, when not nil, holds the block's txs by index; otherwise a tx is read
-// from the store.
-func (u *Server) checkStoredConflictingAtHeight(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []metaSliceItem,
-	txs []*bt.Tx, blockHeight uint32, opts *validator.Options) error {
+// storedCheckFields are the fields of a tx's record that tell what a block does with the
+// verdict the UTXO store holds for it (storedCheckFor).
+var storedCheckFields = []fields.FieldName{fields.Conflicting, fields.BlockHeights, fields.UnminedSince, fields.LockTime}
+
+// storedCheck is what a block does with a stored tx's verdict.
+type storedCheck uint8
+
+const (
+	// storedTake takes the verdict: it holds at the block's height.
+	storedTake storedCheck = iota
+	// storedAtHeight runs the checks that depend on the block's height and branch
+	// (validator.CheckStoredTxAtHeight): coinbase maturity and finality.
+	storedAtHeight
+	// storedFull checks the tx again in full, scripts included
+	// (validator.RecheckStoredTxAtHeight).
+	storedFull
+)
+
+// storedCheckFor returns what a block at blockHeight does with the verdict the UTXO store
+// holds for a tx whose record is data. The record proves the heights the tx was checked at:
+// the heights of the blocks it is in, each of which checked it at its own height, and the
+// height it was validated at while unmined, unless a reorg or an invalidation backdated it
+// (txrules.UnminedValidatedHeight). Where none of them proves the block's height
+// (txrules.VerdictHolds), the tx is checked again in full. Otherwise a conflicting record,
+// which another candidate block at another height may have created, and a tx locked to a
+// time, whose finality depends on the block's own branch, get the height checks. tip returns
+// the UTXO store's block height; it is read only when the block heights prove nothing.
+func (u *Server) storedCheckFor(data *meta.Data, blockHeight uint32, tip func() uint32) storedCheck {
+	params := u.settings.ChainCfgParams
+
+	holds := txrules.VerdictHolds(params, data.BlockHeights, blockHeight)
+	if !holds {
+		validated := txrules.UnminedValidatedHeight(data.UnminedSince, tip(), u.settings.UtxoStore.UnminedTxRetention)
+		holds = txrules.VerdictHolds(params, []uint32{validated}, blockHeight)
+	}
+
+	switch {
+	case !holds:
+		return storedFull
+	case data.Conflicting || txrules.LockTimeIsTime(data.LockTime):
+		return storedAtHeight
+	default:
+		return storedTake
+	}
+}
+
+// checkStoredTxsAtHeight checks, for a block at blockHeight, the txs the lookups found in the
+// UTXO store or the txmeta cache, which the block would otherwise take on their stored verdict.
+// The store keeps one verdict per tx, without the rules or the height it was reached under, so
+// a tx gets what storedCheckFor says: a tx validated below an activation height, or moved back
+// by a reorg, is checked again in full and gets the verdict a node that never saw it gives the
+// block.
+//
+// Both checks read the tx and its parents and write nothing; validating the tx again would
+// spend inputs a record already holds, or, for a conflicting record, does not hold. opts are
+// the options the caller validates a tx it has not seen with, so a tx checked again gets the
+// verdict it would get as a new one. txs, when not nil, holds the block's txs by index;
+// otherwise a tx is read from the store.
+//
+// A tx the lookups found, in the txmeta cache, whose record is no longer in the store has no
+// verdict to check: its txMetaSlice entry is cleared, so the caller validates it as a new tx,
+// as a node without the cache entry does. It returns how many entries it cleared.
+func (u *Server) checkStoredTxsAtHeight(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []metaSliceItem,
+	txs []*bt.Tx, blockHeight uint32, opts *validator.Options) (int, error) {
+	stored := make([]int, 0, len(txMetaSlice))
+
 	for i := range txMetaSlice {
-		if !txMetaSlice[i].isSet || !txMetaSlice[i].conflicting {
+		if txMetaSlice[i].isSet && !txHashes[i].Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			stored = append(stored, i)
+		}
+	}
+
+	if len(stored) == 0 {
+		return 0, nil
+	}
+
+	checks, gone, err := u.storedChecks(ctx, txHashes, stored, blockHeight)
+	if err != nil {
+		return 0, err
+	}
+
+	cleared := 0
+
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(u.logger, g, u.settings.SubtreeValidation.SpendBatcherSize*2)
+
+	for k, i := range stored {
+		if gone[k] {
+			txMetaSlice[i] = metaSliceItem{}
+			cleared++
+
+			continue
+		}
+
+		// the record's current conflicting flag, read with the rest, decides, as on the
+		// cached path
+		check := checks[k]
+		if check == storedTake {
 			continue
 		}
 
@@ -29,17 +124,106 @@ func (u *Server) checkStoredConflictingAtHeight(ctx context.Context, txHashes []
 			tx = txs[i]
 		}
 
-		if err := u.checkStoredTxAtHeight(ctx, txHashes[i], tx, blockHeight, opts); err != nil {
-			return err
-		}
+		txHash := txHashes[i]
+
+		g.Go(func() error {
+			return u.checkStoredTxAtHeight(gCtx, txHash, tx, blockHeight, check == storedFull, opts)
+		})
 	}
 
-	return nil
+	if err = g.Wait(); err != nil {
+		return 0, err
+	}
+
+	return cleared, nil
 }
 
-// checkStoredTxAtHeight runs validator.CheckStoredTxAtHeight on one stored tx, reading it from the
-// store when tx is nil.
-func (u *Server) checkStoredTxAtHeight(ctx context.Context, txHash chainhash.Hash, tx *bt.Tx, blockHeight uint32, opts *validator.Options) error {
+// storedChecks reads the records of the txs txHashes[idx] for idx in stored, and returns, in
+// the order of stored, what the block does with each one's verdict (storedCheckFor), and
+// whether its record is no longer in the store.
+func (u *Server) storedChecks(ctx context.Context, txHashes []chainhash.Hash, stored []int, blockHeight uint32) ([]storedCheck, []bool, error) {
+	batchSize := u.settings.BlockValidation.ProcessTxMetaUsingStoreBatchSize
+	if batchSize <= 0 {
+		batchSize = len(stored)
+	}
+
+	checks := make([]storedCheck, len(stored))
+	gone := make([]bool, len(stored))
+	tip := sync.OnceValue(u.utxoStore.GetBlockHeight)
+
+	// Straight to the origin store: a narrow read must not populate the txmeta cache (see
+	// decorateReadPath).
+	store, _ := u.decorateReadPath(true)
+
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(u.logger, g, u.settings.BlockValidation.ProcessTxMetaUsingStoreConcurrency)
+
+	for start := 0; start < len(stored); start += batchSize {
+		end := min(start+batchSize, len(stored))
+
+		g.Go(func() error {
+			items := make([]*utxo.UnresolvedMetaData, end-start)
+			for k := range items {
+				items[k] = &utxo.UnresolvedMetaData{Hash: txHashes[stored[start+k]], Idx: stored[start+k]}
+			}
+
+			if err := u.readStoredChecks(gCtx, store, items); err != nil {
+				return err
+			}
+
+			for k, item := range items {
+				switch {
+				case item.Err != nil, item.Data == nil:
+					// absent from the store; no record and no error, which no backend
+					// returns, is taken the same way
+					gone[start+k] = true
+				default:
+					checks[start+k] = u.storedCheckFor(item.Data, blockHeight, tip)
+				}
+			}
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, nil, err
+	}
+
+	return checks, gone, nil
+}
+
+// readStoredChecks decorates items with storedCheckFields, retrying a storage fault. A record
+// missing from the store is left on its item as ErrTxNotFound.
+func (u *Server) readStoredChecks(ctx context.Context, store utxo.Store, items []*utxo.UnresolvedMetaData) error {
+	// withStoreRetry reports a cancelled context as cancellation, not as a storage fault
+	// blockvalidation would redeliver the block for.
+	return u.withStoreRetry(ctx, fmt.Sprintf("stored verdict read of %d txs", len(items)), func() error {
+		for _, item := range items {
+			item.Data, item.Err = nil, nil
+		}
+
+		if err := store.BatchDecorate(ctx, items, storedCheckFields...); err != nil {
+			return err
+		}
+
+		// Aerospike reports a per-record timeout on the item, not from the call; any
+		// per-record failure other than not-found fails the attempt as a storage error, so
+		// the bounded retry covers it.
+		for _, item := range items {
+			if item.Err != nil && !errors.Is(item.Err, errors.ErrTxNotFound) {
+				return errors.NewStorageError("[readStoredChecks] failed to read record %s", item.Hash.String(), item.Err)
+			}
+		}
+
+		return nil
+	})
+}
+
+// checkStoredTxAtHeight checks one stored tx at blockHeight, reading it from the store when tx
+// is nil: in full (validator.RecheckStoredTxAtHeight) when full is set, otherwise only the
+// checks that depend on the height (validator.CheckStoredTxAtHeight).
+func (u *Server) checkStoredTxAtHeight(ctx context.Context, txHash chainhash.Hash, tx *bt.Tx, blockHeight uint32, full bool, opts *validator.Options) error {
 	if tx == nil {
 		stored, err := u.utxoStore.Get(ctx, &txHash, fields.Tx)
 		if err != nil {
@@ -53,10 +237,27 @@ func (u *Server) checkStoredTxAtHeight(ctx context.Context, txHash chainhash.Has
 		tx = stored.Tx
 	}
 
+	if full {
+		prometheusSubtreeValidationStoredVerdictRechecks.Inc()
+
+		return validator.RecheckStoredTxAtHeight(ctx, u.utxoStore, u.storedTxValidator(), tx, blockHeight, u.settings, opts)
+	}
+
 	parents, err := validator.InputParents(ctx, u.utxoStore, tx)
 	if err != nil {
 		return err
 	}
 
 	return validator.CheckStoredTxAtHeight(tx, parents, blockHeight, u.settings, opts)
+}
+
+// storedTxValidator returns the transaction validator checkStoredTxAtHeight checks a stored tx
+// with, created on first use. It runs in this service whether or not the validator does: a
+// check of a stored tx writes nothing, so it needs no validator service.
+func (u *Server) storedTxValidator() *validator.TxValidator {
+	u.storedTxValidatorOnce.Do(func() {
+		u.storedTxValidatorInstance = validator.NewTxValidator(u.logger, u.settings)
+	})
+
+	return u.storedTxValidatorInstance
 }

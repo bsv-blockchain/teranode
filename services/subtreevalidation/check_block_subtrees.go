@@ -3,7 +3,6 @@ package subtreevalidation
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -862,8 +861,13 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 // # WHY THIS EXISTS
 //
 // A stored subtree is reusable evidence for everything that does not depend on
-// chain context: the transactions parse, their scripts verify, their structure
-// is sound. None of that changes between blocks. Double-spend validity does.
+// chain context: the transactions parse and their structure is sound. None of
+// that changes between blocks. Double-spend validity does, and so does a
+// verdict reached at another height: the scripts verify under the rules of the
+// height they were checked at, which an activation height between it and this
+// block changes, and coinbase maturity and finality depend on the height too.
+// A transaction whose stored verdict does not hold at this block's height
+// (storedVerdictHolds) is checked again in full.
 //
 // A transaction can be legitimately blessed as conflicting while validating a
 // side-fork block, because its counter-spender is not in that fork's ancestry.
@@ -875,8 +879,9 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 //
 // # COST
 //
-// Every transaction of every cached subtree is read from the UTXO store, for the
-// single field fields.Conflicting. On a path that previously did no UTXO round
+// Every transaction of every cached subtree is read from the UTXO store, for
+// fields.Conflicting and the fields that tell whether its verdict holds at this
+// block's height (storedVerdictFields), in one read. On a path that previously did no UTXO round
 // trips at all this is the dominant new cost, and it is paid per block in the
 // steady state, where a node has already validated every subtree before the block
 // arrives.
@@ -903,8 +908,58 @@ func (u *Server) checkCachedSubtreesAgainstCandidateChain(ctx context.Context, b
 		return nil
 	}
 
-	conflictingTxHashes, err := u.cachedSubtreeConflictingNodes(ctx, cachedSubtrees)
+	conflictingTxHashes, storedChecks, err := u.cachedSubtreeConflictingNodes(ctx, cachedSubtrees, block.Height)
 	if err != nil {
+		return err
+	}
+
+	if len(conflictingTxHashes) == 0 && len(storedChecks) == 0 {
+		return nil
+	}
+
+	// the block's candidate times, as CheckBlockSubtrees derives them for the validator, for
+	// checkStoredTxAtHeight below
+	var candidateBlockTime, candidateParentMedianTime uint32
+	if block.Height < uint32(u.settings.ChainCfgParams.CSVHeight) {
+		candidateBlockTime = block.Header.Timestamp
+	} else if candidateParentMedianTime, err = u.fetchCandidateParentMedianTime(ctx, block.Header.HashPrevBlock); err != nil {
+		return errors.NewProcessingError("[CheckBlockSubtrees][%s] candidate-parent MTP for cached-subtree check", block.Hash().String(), err)
+	}
+
+	// the options CheckBlockSubtrees validates a tx it has not seen with, which a stored tx
+	// checked again gets too
+	atHeightOptions := validator.ProcessOptions(
+		validator.WithSkipPolicyChecks(true),
+		validator.WithCandidateBlockTime(candidateBlockTime),
+		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+		validator.WithUnconfirmedParentsAtCandidateHeight(true),
+	)
+
+	// A tx whose stored verdict does not hold at this block's height is checked again in full;
+	// a conflicting record, which another candidate block at another height may have created,
+	// and a tx locked to a time get the height checks, as on the full-validation path
+	// (checkStoredTxsAtHeight). A full check whose tx or parent is no longer in the store fails
+	// without a verdict: the tx is the one whose stored verdict the block cannot take, and
+	// this path has no body to validate it from. A height check whose record was pruned since
+	// the probe fails open, as below.
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(u.logger, g, u.settings.SubtreeValidation.SpendBatcherSize*2)
+
+	for _, c := range storedChecks {
+		g.Go(func() error {
+			err := u.checkStoredTxAtHeight(gCtx, c.hash, nil, block.Height, c.check == storedFull, atHeightOptions)
+			if err == nil || c.check == storedFull || !errors.Is(err, errors.ErrTxNotFound) {
+				return err
+			}
+
+			u.logger.Warnf("[CheckBlockSubtrees][%s][%s] cannot check cached-subtree tx at the block's height: it or a parent is no longer in the store, skipping",
+				block.Hash().String(), c.hash.String())
+
+			return nil
+		})
+	}
+
+	if err = g.Wait(); err != nil {
 		return err
 	}
 
@@ -926,36 +981,6 @@ func (u *Server) checkCachedSubtreesAgainstCandidateChain(ctx context.Context, b
 	blockIds := make(map[uint32]bool, len(blockHeaderIDs))
 	for _, blockID := range blockHeaderIDs {
 		blockIds[blockID] = true
-	}
-
-	// the block's candidate times, as CheckBlockSubtrees derives them for the validator, for the
-	// finality half of checkStoredTxAtHeight below
-	var candidateBlockTime, candidateParentMedianTime uint32
-	if block.Height < uint32(u.settings.ChainCfgParams.CSVHeight) {
-		candidateBlockTime = block.Header.Timestamp
-	} else if candidateParentMedianTime, err = u.fetchCandidateParentMedianTime(ctx, block.Header.HashPrevBlock); err != nil {
-		return errors.NewProcessingError("[CheckBlockSubtrees][%s] candidate-parent MTP for cached-subtree check", block.Hash().String(), err)
-	}
-
-	atHeightOptions := validator.ProcessOptions(
-		validator.WithSkipPolicyChecks(true),
-		validator.WithCandidateBlockTime(candidateBlockTime),
-		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
-	)
-
-	for _, txHash := range conflictingTxHashes {
-		// A conflicting record may have been created by another candidate block at another
-		// height; check it at this block's height, as the full-validation path does
-		// (checkStoredConflictingAtHeight). A record pruned since the probe, the tx or a parent,
-		// fails open, as below.
-		if err = u.checkStoredTxAtHeight(ctx, txHash, nil, block.Height, atHeightOptions); err != nil {
-			if !errors.Is(err, errors.ErrTxNotFound) {
-				return err
-			}
-
-			u.logger.Warnf("[CheckBlockSubtrees][%s][%s] cannot check cached-subtree tx at the block's height: it or a parent is no longer in the store, skipping",
-				block.Hash().String(), txHash.String())
-		}
 	}
 
 	// Same predicate the full-validation path applies via
@@ -1036,10 +1061,12 @@ func (u *Server) checkCachedSubtreesAgainstCandidateChain(ctx context.Context, b
 // subtree DAH to 0 (keep forever). In those cases this path can bless what the
 // fresh path would reject.
 //
-// Only fields.Conflicting is requested: the narrowest question that settles the
-// verdict.
-func (u *Server) cachedSubtreeConflictingNodes(ctx context.Context, cachedSubtrees []chainhash.Hash) ([]chainhash.Hash, error) {
-	perSubtree := make([][]chainhash.Hash, len(cachedSubtrees))
+// The same read returns, in checks, the stored verdicts a block at blockHeight does not take
+// as they are (storedCheckFor), from storedCheckFields, so that decision costs no round trip of
+// its own. A transaction absent from the store is skipped for it too.
+func (u *Server) cachedSubtreeConflictingNodes(ctx context.Context, cachedSubtrees []chainhash.Hash, blockHeight uint32) (conflicting []chainhash.Hash, checks []cachedStoredCheck, err error) {
+	perSubtree := make([][]cachedStoredCheck, len(cachedSubtrees))
+	tip := sync.OnceValue(u.utxoStore.GetBlockHeight)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(u.logger, g, u.settings.SubtreeValidation.CheckBlockSubtreesConcurrency)
@@ -1049,32 +1076,39 @@ func (u *Server) cachedSubtreeConflictingNodes(ctx context.Context, cachedSubtre
 		subtreeHash := cachedSubtrees[idx]
 
 		g.Go(func() error {
-			conflicting, err := u.cachedSubtreeConflictingNodesFor(gCtx, subtreeHash)
+			checks, err := u.cachedSubtreeConflictingNodesFor(gCtx, subtreeHash, blockHeight, tip)
 			if err != nil {
 				return err
 			}
 
-			perSubtree[idx] = conflicting
+			perSubtree[idx] = checks
 
 			return nil
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		return nil, err
+	if err = g.Wait(); err != nil {
+		return nil, nil, err
 	}
 
-	var all []chainhash.Hash
-	for _, conflictingNodes := range perSubtree {
-		all = append(all, conflictingNodes...)
+	// a conflicting record is never taken as it is (storedCheckFor), so every one is in checks
+	for _, subtreeChecks := range perSubtree {
+		for _, c := range subtreeChecks {
+			if c.conflicting {
+				conflicting = append(conflicting, c.hash)
+			}
+		}
+
+		checks = append(checks, subtreeChecks...)
 	}
 
-	return all, nil
+	return conflicting, checks, nil
 }
 
 // cachedSubtreeConflictingNodesFor reads one cached subtree's transaction hashes
-// and returns those the store currently flags Conflicting.
-func (u *Server) cachedSubtreeConflictingNodesFor(ctx context.Context, subtreeHash chainhash.Hash) ([]chainhash.Hash, error) {
+// and returns the stored verdicts a block at blockHeight does not take as they are,
+// those the store currently flags Conflicting among them.
+func (u *Server) cachedSubtreeConflictingNodesFor(ctx context.Context, subtreeHash chainhash.Hash, blockHeight uint32, tip func() uint32) ([]cachedStoredCheck, error) {
 	reader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 	if err != nil {
 		return nil, errors.NewProcessingError("[cachedSubtreeConflictingNodes][%s] failed to read cached subtree", subtreeHash.String(), err)
@@ -1103,7 +1137,7 @@ func (u *Server) cachedSubtreeConflictingNodesFor(ctx context.Context, subtreeHa
 	}
 
 	numBatches := (numNodes + batchSize - 1) / batchSize
-	perBatch := make([][]chainhash.Hash, numBatches)
+	perBatch := make([][]cachedStoredCheck, numBatches)
 
 	// Batches go to the store in parallel, as in processTxMetaUsingStore:
 	// parallelism across subtrees alone leaves a block of a few large subtrees
@@ -1117,12 +1151,12 @@ func (u *Server) cachedSubtreeConflictingNodesFor(ctx context.Context, subtreeHa
 		end := subtreepkg.Min(start+batchSize, numNodes)
 
 		g.Go(func() error {
-			conflicting, err := u.conflictingInBatch(gCtx, subtreeHash, nodeBytes[start*chainhash.HashSize:end*chainhash.HashSize])
+			checks, err := u.conflictingInBatch(gCtx, subtreeHash, nodeBytes[start*chainhash.HashSize:end*chainhash.HashSize], blockHeight, tip)
 			if err != nil {
 				return err
 			}
 
-			perBatch[batchIdx] = conflicting
+			perBatch[batchIdx] = checks
 
 			return nil
 		})
@@ -1132,17 +1166,18 @@ func (u *Server) cachedSubtreeConflictingNodesFor(ctx context.Context, subtreeHa
 		return nil, err
 	}
 
-	var conflicting []chainhash.Hash
+	var checks []cachedStoredCheck
 	for _, batch := range perBatch {
-		conflicting = append(conflicting, batch...)
+		checks = append(checks, batch...)
 	}
 
-	return conflicting, nil
+	return checks, nil
 }
 
 // conflictingInBatch decorates one run of 32-byte transaction hashes with
-// fields.Conflicting and returns the flagged ones.
-func (u *Server) conflictingInBatch(ctx context.Context, subtreeHash chainhash.Hash, nodeBytes []byte) ([]chainhash.Hash, error) {
+// storedCheckFields, and returns the stored verdicts a block at blockHeight does not
+// take as they are (storedCheckFor).
+func (u *Server) conflictingInBatch(ctx context.Context, subtreeHash chainhash.Hash, nodeBytes []byte, blockHeight uint32, tip func() uint32) ([]cachedStoredCheck, error) {
 	numNodes := len(nodeBytes) / chainhash.HashSize
 
 	itemsPtr := getUnresolvedMetaDataSlice(numNodes)
@@ -1169,39 +1204,17 @@ func (u *Server) conflictingInBatch(ctx context.Context, subtreeHash chainhash.H
 		return nil, nil
 	}
 
-	// Straight to the origin store: a one-field read must not populate the txmeta
+	// Straight to the origin store: a narrow read must not populate the txmeta
 	// cache (see decorateReadPath).
 	store, _ := u.decorateReadPath(true)
 
-	// withStoreRetry reports a cancelled context as cancellation, not as a storage
-	// fault blockvalidation would redeliver the block for.
-	if err := u.withStoreRetry(ctx, fmt.Sprintf("conflicting probe of %d txs", len(items)), func() error {
-		for _, item := range items {
-			item.Data, item.Err = nil, nil
-		}
-
-		if err := store.BatchDecorate(ctx, items, fields.Conflicting); err != nil {
-			return err
-		}
-
-		// Aerospike reports a per-record timeout on the item, not from the call,
-		// and as the client's own error, which IsRetryableError does not know.
-		// Any per-record failure other than not-found therefore fails the attempt
-		// as a storage error, so the bounded retry covers it.
-		for _, item := range items {
-			if item.Err != nil && !errors.Is(item.Err, errors.ErrTxNotFound) {
-				return errors.NewStorageError("[cachedSubtreeConflictingNodes][%s] failed to read record %s", subtreeHash.String(), item.Hash.String(), item.Err)
-			}
-		}
-
-		return nil
-	}); err != nil {
+	if err := u.readStoredChecks(ctx, store, items); err != nil {
 		return nil, errors.NewProcessingError("[cachedSubtreeConflictingNodes][%s] failed to read conflicting flags", subtreeHash.String(), err)
 	}
 
 	prometheusSubtreeValidationCachedConflictProbes.Add(float64(len(items)))
 
-	var out []chainhash.Hash
+	var checks []cachedStoredCheck
 
 	for _, item := range items {
 		if item.Err != nil {
@@ -1214,12 +1227,26 @@ func (u *Server) conflictingInBatch(ctx context.Context, subtreeHash chainhash.H
 			continue
 		}
 
-		if item.Data != nil && item.Data.Conflicting {
-			out = append(out, item.Hash)
+		if item.Data == nil {
+			// no record and no error, which no backend returns: nothing to check, as for a
+			// record absent from the store
+			continue
+		}
+
+		if check := u.storedCheckFor(item.Data, blockHeight, tip); check != storedTake {
+			checks = append(checks, cachedStoredCheck{hash: item.Hash, check: check, conflicting: item.Data.Conflicting})
 		}
 	}
 
-	return out, nil
+	return checks, nil
+}
+
+// cachedStoredCheck is what a block does with the stored verdict of one transaction of a
+// cached subtree (storedCheckFor), when it does not take it.
+type cachedStoredCheck struct {
+	hash        chainhash.Hash
+	check       storedCheck
+	conflicting bool
 }
 
 // findLocalSubtreeFile reports whether this node already has a copy of the given
@@ -1608,15 +1635,21 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		}
 	}
 
-	storedConflictingOptions := validator.ProcessOptions(
+	// the options this path validates a tx it has not seen with, which a stored tx checked
+	// again gets too (checkStoredTxsAtHeight)
+	storedTxOptions := validator.ProcessOptions(
 		validator.WithSkipPolicyChecks(true),
 		validator.WithCandidateBlockTime(candidateBlockTime),
 		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+		validator.WithUnconfirmedParentsAtCandidateHeight(true),
 	)
 
-	if err = u.checkStoredConflictingAtHeight(ctx, txHashes, txMetaSlice, allTransactions, blockHeight, storedConflictingOptions); err != nil {
+	cleared, err := u.checkStoredTxsAtHeight(ctx, txHashes, txMetaSlice, allTransactions, blockHeight, storedTxOptions)
+	if err != nil {
 		return err
 	}
+
+	missed += cleared
 
 	alreadyValidated := len(txHashes) - missed
 
