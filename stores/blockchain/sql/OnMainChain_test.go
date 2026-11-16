@@ -1323,19 +1323,21 @@ func requireReorgBelowTheReconcileWindowIsRepaired(t *testing.T, s *SQL) {
 	require.NoError(t, err)
 	s.ResetResponseCache()
 
-	// block1 is the fork point. The fork runs from height 2 to forkTipHeight, and its tip
-	// is more than reconcileMaxDepth (100 with these settings) above block1.
-	forkTipHeight := uint32(block1.Height) + uint32(s.reconcileMaxDepth()) + 10
+	// block1, at height 1, is the fork point. The fork is reconcileMaxDepth (100 with these
+	// settings) plus 10 blocks long, from height 2 to 111, so its tip is 110 blocks above
+	// block1. The stored height comes from the parent row; blockAlternative2's struct
+	// Height is not set, so the fixture counts blocks rather than reading it.
+	forkLength := int(s.reconcileMaxDepth()) + 10
 
 	fork := []*model.Block{blockAlternative2}
-	for fork[len(fork)-1].Height < forkTipHeight {
+	for len(fork) < forkLength {
 		fork = append(fork, createBlock3OnFork(fork[len(fork)-1]))
 	}
 
 	storeBlocks(t, s, fork[:len(fork)-1]...)
 
-	for _, b := range fork[:len(fork)-1] {
-		require.False(t, getOnMainChain(t, s, b.Hash().CloneBytes()), "pre-condition: the fork is below the old tip until its last block, height %d", b.Height)
+	for i, b := range fork[:len(fork)-1] {
+		require.False(t, getOnMainChain(t, s, b.Hash().CloneBytes()), "pre-condition: the fork is below the old tip until its last block, height %d", i+2)
 	}
 
 	// The old tip now has the work of the fork's second-to-last block, which keeps the tip
@@ -1349,11 +1351,15 @@ func requireReorgBelowTheReconcileWindowIsRepaired(t *testing.T, s *SQL) {
 
 	storeBlocks(t, s, fork[len(fork)-1])
 
+	var tipHeight int64
+	require.NoError(t, s.db.QueryRow(`SELECT height FROM blocks WHERE hash = $1`, fork[len(fork)-1].Hash().CloneBytes()).Scan(&tipHeight))
+	require.Equal(t, int64(block1.Height)+s.reconcileMaxDepth()+10, tipHeight, "the new tip is more than reconcileMaxDepth above the fork point")
+
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "the fork point stays on the main chain")
 	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "the old tip leaves the main chain")
 
-	for _, b := range fork {
-		require.True(t, getOnMainChain(t, s, b.Hash().CloneBytes()), "fork block at height %d is on the main chain", b.Height)
+	for i, b := range fork {
+		require.True(t, getOnMainChain(t, s, b.Hash().CloneBytes()), "fork block at height %d is on the main chain", i+2)
 	}
 
 	byHeight, err := s.GetBlockByHeight(ctx, block2.Height)
