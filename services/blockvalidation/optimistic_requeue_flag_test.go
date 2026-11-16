@@ -182,7 +182,7 @@ func TestOptimisticAdded_CatchupFloater_RequeuesWithOnChainFlag(t *testing.T) {
 }
 
 // TestOptimisticAdded_InvalidBodyInvalidateFailure_RequeuesWithOnChainFlag pins the ErrBlockInvalid
-// route: block.Valid condemns a merkle-bound bad-coinbase-length body as invalid, the handler calls
+// route: block.Valid condemns a merkle-bound body whose coinbase overpays as invalid, the handler calls
 // markBlockAsInvalid, and when that InvalidateBlock fails the on-chain unvalidated body must be
 // re-queued with the flag rather than left silently accepted.
 func TestOptimisticAdded_InvalidBodyInvalidateFailure_RequeuesWithOnChainFlag(t *testing.T) {
@@ -205,10 +205,13 @@ func TestOptimisticAdded_InvalidBodyInvalidateFailure_RequeuesWithOnChainFlag(t 
 	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
 	subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	// A merkle-bound body whose coinbase scriptSig (1 byte) is below the consensus floor: block.Valid
-	// step 4b condemns it ErrBlockInvalid once the body is bound. CheckBlockSubtrees is mocked to pass,
-	// so the invalid verdict comes only from block.Valid.
-	coinbaseTx := shortScriptSigCoinbaseForService(t)
+	// A merkle-bound body whose coinbase pays twice the subsidy. The reward check is not part of the
+	// integrity floor, so the block is added early, and block.Valid condemns it ErrBlockInvalid in
+	// the background. CheckBlockSubtrees is mocked to pass, so the invalid verdict comes only from
+	// block.Valid. The coinbase encodes height 1, the height StoreBlock derives from the genesis
+	// parent, so the store's own coinbase-height guard accepts the early add.
+	coinbaseTx := coinbaseAtHeight(t, 1)
+	coinbaseTx.Outputs[0].Satoshis = 2 * 50 * 100000000
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, err)
@@ -225,7 +228,7 @@ func TestOptimisticAdded_InvalidBodyInvalidateFailure_RequeuesWithOnChainFlag(t 
 
 	hdr := minedBIP34Header(t, 4, tSettings.ChainCfgParams.GenesisHash, merkleRoot)
 	block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{subtree.RootHash()},
-		uint64(subtree.Length()), uint64(coinbaseTx.Size()), 100, 0) //nolint:gosec
+		uint64(subtree.Length()), uint64(coinbaseTx.Size()), 1, 0) //nolint:gosec
 	require.NoError(t, err)
 
 	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
