@@ -577,6 +577,19 @@ func crossedLockChange(t *testing.T, s *Store, ctx context.Context, first, secon
 
 	defer func() { _ = holder.Rollback(context.Background()) }()
 
+	// The restore must be the deadlock victim, and it is without this: PostgreSQL runs the check
+	// in the backend whose deadlock_timeout runs out first, and the restore started waiting first.
+	// Only a superuser may raise the holder's timeout, which widens that margin from milliseconds.
+	var superuser string
+	require.NoError(t, holder.QueryRow(ctx, `SELECT current_setting('is_superuser')`).Scan(&superuser))
+
+	if superuser == "on" {
+		_, err = holder.Exec(ctx, `SET LOCAL deadlock_timeout = '30s'`)
+		require.NoError(t, err)
+	} else {
+		t.Log("not a superuser, so the holder keeps the default deadlock_timeout")
+	}
+
 	require.NoError(t, setLockedTo(s, first, false)(ctx, holder))
 
 	done := make(chan error, 1)
