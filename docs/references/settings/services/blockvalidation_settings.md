@@ -128,12 +128,13 @@ loader (0, false and false), so for these keys the two agree. The
   against a cached header run holding only the block's in-batch predecessors, which cannot carry the
   median-time-past window the optimistic branch checks synchronously; lifting this requires the
   header cache to top up short windows from the store first (issue 1499).
-- **Integrity floor before the add:** with both flags set, the body is bound to its header before
-  it is added (through its first and last subtrees, or through the coinbase txid for a body with no
-  subtrees), and the coinbase rules run on it: shape, the common transaction rules, coinbase length,
-  finality and BIP34. A block that fails the floor is not added early; it is validated fully first,
-  exactly as with the peer-blocks flag off. The floor costs one extra read of the first and last
-  subtrees.
+- **Checks before the add:** with both flags set, the header-context checks and, for a body with
+  no subtrees, the coinbase-only binding run first and are verdicts: a block that fails them is
+  rejected, not added. Then the integrity floor binds a body with subtrees to its header through its
+  first and last subtrees, and the coinbase rules run on it: shape, the common transaction rules,
+  coinbase length, finality and BIP34. A block that fails the floor is not added early; it is
+  validated fully first, exactly as with the peer-blocks flag off. The floor costs one extra read of
+  the first and last subtrees.
 - **Opt-in tradeoff:** the floor does not check duplicate transactions, the lengths of the subtrees
   between the first and last, fees, or transaction order and spends. A body that breaks one of those
   is found only after the add, so a corrupt one takes the *invalidate route* (it is

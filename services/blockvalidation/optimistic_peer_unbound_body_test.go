@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -178,8 +179,9 @@ func (c *validAddRecordingClient) addedValid(hash *chainhash.Hash) bool {
 // newOptimisticPeerBlockHarness is newNoPersistHarness with both optimistic flags on and the
 // blockchain client wrapped so a test can see whether a block was added before it was validated. The
 // wrapper is handed to NewBlockValidation, not swapped in afterwards, because the goroutines it
-// starts read the client.
-func newOptimisticPeerBlockHarness(ctx context.Context, t *testing.T) (*BlockValidation, *validAddRecordingClient, *settings.Settings) {
+// starts read the client. opts go to NewBlockValidation too, so a test can wire a block assembly
+// client the same way.
+func newOptimisticPeerBlockHarness(ctx context.Context, t *testing.T, opts ...interface{}) (*BlockValidation, *validAddRecordingClient, *settings.Settings) {
 	t.Helper()
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -201,7 +203,7 @@ func newOptimisticPeerBlockHarness(ctx context.Context, t *testing.T) (*BlockVal
 	subtreeVal := &subtreevalidation.MockSubtreeValidation{}
 	subtreeVal.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, recording, subtreeStore, txStore, utxoStore, nil, subtreeVal)
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, recording, subtreeStore, txStore, utxoStore, nil, subtreeVal, opts...)
 
 	return bv, recording, tSettings
 }
@@ -254,13 +256,24 @@ func requireNotTip(ctx context.Context, t *testing.T, client blockchain.ClientI,
 // block's own and then finds it non-final. The block is not added early, and the full validation
 // that follows condemns it synchronously. Without the floor it was added, became the chain tip, and
 // was only invalidated afterwards by the background block.Valid.
+//
+// The floor's failure must fall through to that full validation, not return on its own: only the
+// full path records the block as invalid in the store, and a block that is not added early is
+// handed to block assembly ahead of its validation.
 func TestValidateBlock_OptimisticPeerBlocks_NonFinalCoinbaseWithSubtreesNotAddedEarly(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	bv, client, tSettings := newOptimisticPeerBlockHarness(ctx, t)
+	ba := blockassembly.NewMock()
+
+	prepared := make(chan chainhash.Hash, 1)
+	ba.On("PrepareBlock", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		prepared <- *args.Get(1).(*model.Block).Hash()
+	}).Return(nil).Once()
+
+	bv, client, tSettings := newOptimisticPeerBlockHarness(ctx, t, blockassembly.ClientI(ba))
 
 	// Height-based nLockTime 500 at height 1, with a sequence number that does not opt out: not final.
 	coinbaseTx := coinbaseAtHeight(t, 1)
@@ -281,6 +294,17 @@ func TestValidateBlock_OptimisticPeerBlocks_NonFinalCoinbaseWithSubtreesNotAdded
 
 	require.False(t, client.addedValid(block.Hash()), "a block with a non-final coinbase must not be added before it is validated")
 	requireNotTip(ctx, t, client, tSettings, block.Hash())
+
+	_, meta, err := client.GetBlockHeader(ctx, block.Hash())
+	require.NoError(t, err, "the full validation stores the bound, condemned block")
+	require.True(t, meta.Invalid, "the floor's failure falls through to the full validation, which stores the block as invalid")
+
+	select {
+	case hash := <-prepared:
+		require.True(t, hash.IsEqual(block.Hash()))
+	case <-time.After(5 * time.Second):
+		t.Fatal("a block the floor turned away must still be handed to block assembly before its full validation")
+	}
 }
 
 // TestValidateBlock_OptimisticPeerBlocks_SwappedCoinbaseWithSubtreesNotAddedEarly: honest subtrees
