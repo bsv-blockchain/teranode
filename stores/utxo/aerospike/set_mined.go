@@ -671,10 +671,11 @@ func (s *Store) readExtraRecordCounts(txIDs []chainhash.Hash) ([]lockClearItem, 
 // utxoBatchSize) fails permanently with TX_LOCKED, wedging legacy sync.
 //
 // The `creating` bin has the same gap. Create sets it on every record and
-// clearCreatingFlag removes it from the extra records first and the master last,
-// returning on the first extra record that fails. setMined then deletes it from
-// the master only, so the master looks complete and nothing re-runs the create,
-// while every output on the stuck extra record is refused with CREATING. Deleting
+// clearCreatingFlag clears the extra records in one batch and the master last,
+// and skips the master if any extra record fails, which leaves `creating` on the
+// master and on each extra record that failed. setMined then deletes it from the
+// master only, so the master looks complete and nothing re-runs the create,
+// while every output on a stuck extra record is refused with CREATING. Deleting
 // the bin here, in the same write as the lock clear, makes those outputs
 // spendable once the transaction is mined. Every record exists with its full data
 // at this point, since create writes each record in one put.
