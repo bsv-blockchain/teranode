@@ -17,12 +17,14 @@ It ends with a prioritised test backlog and the test infrastructure needed to bu
 > - GAP-BV-005 (bsv-blockchain/teranode#2021)
 > - GAP-BV-020 and GAP-BV-021 (bsv-blockchain/teranode#2034)
 > - GAP-BV-029 and GAP-BV-056 (bsv-blockchain/teranode#2011)
-> - GAP-BV-043 (bsv-blockchain/teranode#2033)
+> - GAP-BV-043, partly (bsv-blockchain/teranode#2033): still open when the parent is off the main chain, and a failed `markBlockAsInvalid` is swallowed
 > - GAP-BV-045 (bsv-blockchain/teranode#2017)
 > - GAP-BV-054 (bsv-blockchain/teranode#2012, bsv-blockchain/teranode#2035)
 > - GAP-BV-057 (bsv-blockchain/teranode#2016)
 >
 > GAP-BV-031 and GAP-BV-055 were resolved by bsv-blockchain/teranode#1909. The coverage rows and backlog items below still describe the 2026-10-19 assessment. For a backlog item on a resolved gap, the expected result is now "passes" rather than "fails today".
+>
+> **Status update, 2026-11-16.** GAP-BV-046 was fixed by bsv-blockchain/teranode#2123 (regression test `TestGapBV046_PresentCoinbaseWithNoInputsIsInvalidNotIncomplete`), GAP-BV-001 by bsv-blockchain/teranode#2132 (`TestBlockFoundWait_*`) and GAP-BV-039 by bsv-blockchain/teranode#2180 (`TestBlockValidation_ReservedBlockIDStillTagsTransactions`). GAP-BV-011 was retired as by design (bitcoin-sv/teranode#4974): post-commit invalidation is the contract, and bsv-blockchain/teranode#2019 removed the setting that switched tagging off. bsv-blockchain/teranode#1997 bounded block requeues (the retry part of GAP-BV-007), so BV-QUEUE-007 is met. The rows below that name these gaps are updated.
 
 ---
 
@@ -170,8 +172,8 @@ Status codes: **C** covered, **P** partial, **G** pins a gap, **N** none. Unless
 | QUEUE-003 | P | `TestBlockPriorityQueue/Priority ordering`, `/Height ordering` | FIFO tie-break |
 | QUEUE-004 | P | `TestBlockPriorityQueue_GetEffectivePriority` | boundaries (60 s, 10 skips); lazy evaluation (GAP-BV-041) |
 | QUEUE-005 | P | `Duplicate prevention`, `TestAlternativeSourceTracking` | cap of 3 never exceeded in tests (GAP-BV-007) |
-| QUEUE-006 | G | `TestBlockPriorityQueueRetry/RequeueForRetry_New_Block` asserts the `retry` mechanism (GAP-BV-006) | primary fails then alternative fetched |
-| QUEUE-007 | G | `TestBlockProcessingWorkerRetry` asserts empty queue after failure (GAP-BV-007) | configurable bound |
+| QUEUE-006 | G | `TestBlockPriorityQueueRetry/RequeueForRetry_New_Block` asserts the `retry` mechanism, which nothing reaches since bsv-blockchain/teranode#1997 (GAP-BV-006) | primary fails then alternative fetched |
+| QUEUE-007 | C | `TestBlockRetryDelay_CappedByMaxRetries` and the other `TestBlockRetryDelay_*` tests (`block_retry_test.go`, bsv-blockchain/teranode#1997) | — |
 | QUEUE-008 | C | `TestAddBlockToPriorityQueue_RateLimitedFetchDoesNotChargeAnnouncer` | 429 on alternative and retry paths |
 | QUEUE-009 | P | `TestForkManager_BlockProcessing` (parallel cap) | one-per-fork at start not enforced (GAP-BV-008) |
 | QUEUE-010 | P | `TestForkManager_BlockProcessing/Already processing block` | refused duplicate dropped with its sources (GAP-BV-008) |
@@ -201,7 +203,7 @@ Status codes: **C** covered, **P** partial, **G** pins a gap, **N** none. Unless
 | BODY-002 | P | `TestEarlyBodyBinding_NonPlaceholderFirstLeaf` | placeholder in other slots or the last subtree |
 | BODY-003 | P | `TestGetAndValidateSubtrees_SizeMismatchIsCorrupt` | power-of-two and larger-final cases asserted only relative to a reference loader |
 | BODY-004 | G | `TestCVE20122459_MerklePassesDedupCatches` and dedup tests assert CORRUPT for every duplicate (GAP-BV-051) | non-merkle duplicate in a bound body → INVALID |
-| BODY-005 | G | `BlockValidation_test.go` ~1618 and `quick_validate_test.go` ~528 assert INCOMPLETE for an empty-input coinbase (GAP-BV-046) | INVALID expected |
+| BODY-005 | C | `TestGapBV046_PresentCoinbaseWithNoInputsIsInvalidNotIncomplete` (`coinbase_delivered_test.go`, bsv-blockchain/teranode#2123): bound → INVALID, unbound → INCOMPLETE, on every route | — |
 | BODY-006 | P | `TestBlockValid_InvalidWhenCoinbaseIsOnlyLooselyACoinbase` | two inputs; wrong index |
 | BODY-007 | C | `TestBlock_Valid_CoinbaseCommonRules`, `TestCoinbaseCommonRuleViolation` | post-Genesis 1 GB bound |
 | BODY-008 | C | `TestBlock_Valid_CoinbaseScriptSigLength` and service/quick variants | — |
@@ -213,7 +215,7 @@ Status codes: **C** covered, **P** partial, **G** pins a gap, **N** none. Unless
 | BODY-014 | C | `floater_fsm_gated_test.go` (RUNNING and CATCHINGBLOCKS) | IDLE |
 | BODY-015 | P | structure, value, BIP68 and finality-selector tests in `services/validator`; svnode vectors only in `test/consensus` (not CI) | null prevout, empty in/out, input-total and fee range, block-level maturity, block-level non-final rejection, consensus sigops |
 | BODY-016 | P | `TestBlockValidation_SubtreeError_Classification`, `TestValidateBlock_SubtreeTxInvalid_IsCorruptNotPersisted` | legacy branch; each transient cause |
-| BODY-017 | G | `TestUpdateTxMinedStatus_BlockIDCollisionDetection` asserts post-commit detection (GAP-BV-011) | "never becomes tip" |
+| BODY-017 | P | `TestUpdateTxMinedStatus_BlockIDCollisionDetection` (detection); `testLongestChainInvalidateBlockWithOldTx` (sequential, invalidated after commit) | no child validated on the block before it is invalidated |
 | BODY-018 | P | `TestValidateBlock_ExcessiveBlockSize_PlainPolicyDecline`, decline-cap tests | error code; under-declared size (GAP-BV-010); 1 MB floor |
 | BODY-019 | N | — | coinbase finality (GAP-BV-045) |
 | BODY-020 | N | — | context reuse (GAP-BV-047) |
@@ -435,19 +437,16 @@ These should be fixed or deleted before anyone relies on them. Items marked ✓ 
 | Test | Gap |
 |---|---|
 | `unified_route_server_test.go` `...NonLegacyBlockKeepsTheCatchupDivert` (`NoError` on divert) | GAP-BV-005 |
-| `block_processing_retry_test.go` `RequeueForRetry_New_Block`, `TestBlockProcessingWorkerRetry` | GAP-BV-006, 007 |
+| `block_processing_retry_test.go` `RequeueForRetry_New_Block` | GAP-BV-006 |
 | `Client_test.go` `BlockFound` signature | GAP-BV-004 |
 | `catchup_promotion_test.go` `TestRestoreFSMState_ExhaustedPersistenceRetriesRemainCatching` | GAP-BV-028 |
 | `TestCatchup_ConcurrentCatchupLock` drop assertion; "catchup-in-progress keeps the guard" | GAP-BV-019 |
 | `block_processing_retry_test.go` "unbound invalid-transaction verdict recovers via a cached alternative" | GAP-BV-044 |
 | `check_duplicate_txs_test.go`, `block_dedup_during_load_test.go` (every duplicate CORRUPT) | GAP-BV-051 |
-| `BlockValidation_test.go` ~1618, `quick_validate_test.go` ~528 (empty-input coinbase INCOMPLETE) | GAP-BV-046 |
 | `model/Block_test.go` ~603, `cheap_header_no_persist_test.go` ~345 (future-dated INVALID) | GAP-BV-050 |
-| `model/update-tx-mined_test.go` `BlockIDCollisionDetection` (post-commit detection) | GAP-BV-011 |
 | `model/update-tx-mined_test.go` ~1396 (revert errors swallowed) | GAP-BV-057 |
 | `TestBlockValidation_RevalidateIsCalledOnHeaderError` | GAP-BV-016 |
 | `catchup_release_policy_test.go` ~65 (expects `ERR_BLOCK_ERROR` from the parent-mined wait) | GAP-BV-014 |
-| `longest_chain_test.go` `testLongestChainInvalidateBlockWithOldTx` (post-commit invalidation) | GAP-BV-011 |
 
 ### Hidden divergences
 
@@ -478,9 +477,8 @@ A crash point is a moment where the process can stop, or a call can fail, betwee
 | N10 | between `SetMinedMulti` batches | some transactions tagged | sweep (b) re-runs (idempotent) | every transaction tagged once, no duplicates |
 | N11 | inside one batch | SQL: atomic per chunk; Aerospike: per record | as N10 | as N10 |
 | N12 | store reports success but a transaction is untagged | coverage error | retry / sweep | no `mined_set` until covered |
-| N13 | re-presented transaction found after commit | block tagged and valid | sweep re-detects, then invalidates (GAP-BV-011) | invalid, tags reverted |
+| N13 | re-presented transaction found after commit | block tagged and valid | sweep re-detects, then invalidates (by design, BV-BODY-017) | invalid, tags reverted |
 | N14 | all tagged, before `mined_set` | children wait in the parent-mined loop | sweep (b) | `mined_set` true |
-| N15 | tagging disabled by setting | `mined_set` set with nothing tagged | none (GAP-BV-011) | `mined_set` must not be set |
 | N16 | child validated while parent unmined | child waits about 160 s, then fails | re-announcement | child never accepted before parent is mined |
 | O1 | optimistic: added, before background validation | block on chain, unvalidated | **sweep accepts it without validating** (GAP-BV-013) | not marked until validated |
 | O2 | optimistic: validated, before `subtrees_set` | valid, flag false | sweep (a) | as N3 |
@@ -521,13 +519,13 @@ The chain-reconciliation oracle on branch `test/chain-reconciliation-oracle` (co
 | # | Invariant | Spec IDs | Violated by |
 |---|---|---|---|
 | I-1 | `subtrees_set` and not invalid ⇒ every subtree file exists (within retention) | COMMIT-002, QUICK-021 | GAP-BV-029, 056 |
-| I-2 | `mined_set` and not invalid ⇒ every transaction carries the block ID and height | COMMIT-005 | GAP-BV-011 (setting off), 039, 058 |
+| I-2 | `mined_set` and not invalid ⇒ every transaction carries the block ID and height | COMMIT-005 | GAP-BV-058 |
 | I-3 | invalid and `mined_set` ⇒ no transaction carries the block ID | COMMIT-011 | GAP-BV-057, 058 |
 | I-4 | not `subtrees_set` (full-validation route) ⇒ no transaction carries the block ID | COMMIT-004 | — |
 | I-5 | `mined_set` ⇒ `subtrees_set` (except pre-assigned-ID blocks) | COMMIT-004, 005 | — |
 | I-6 | no block awaits mined-tagging; only blocks with a missing file await `subtrees_set` | COMMIT-008, NFR-004 | sweep failures |
 | I-7 | `mined_set(B)` ⇒ `mined_set(parent(B))` | COMMIT-009 | — |
-| I-8 | no transaction is mined in two blocks on the best chain | BODY-017 | GAP-BV-011 |
+| I-8 | no transaction is mined in two blocks on the best chain, once mined-tagging has run | BODY-017 | — |
 | I-9 | a transaction's longest-chain flag matches whether any of its blocks is on the best chain | COMMIT-005 | reorg timing |
 | I-10 | every descendant of an invalid block is invalid; no invalid block is on the main chain | VERDICT-004 | — |
 | I-11 | every stored non-invalid block passes `ValidateBlock` (wall-clock rules excepted) | OPTIMISTIC-008 | GAP-BV-013, 043 |
@@ -556,9 +554,9 @@ Priorities: **P0** catches a consensus divergence, data loss or state corruption
 | 4 | P0 | property | BIP34 encoding | for sampled heights and every boundary (1–16, 127/128, 255/256, 32767/32768, 8388607/8388608), the checker accepts exactly `CScript() << h` as a prefix and rejects non-minimal pushes | BODY-009 |
 | 5 | P0 | differential | svnode block-vector corpus | blocks recorded from `p2p-fullblocktest.py` and `abc-p2p-fullblocktest.py` with svnode's verdict, replayed through `ValidateBlockWithOptions` on sqlitememory; accept ⇔ accept; known deviations in an allow-list keyed by GAP ID (plan in 9.8) | HEADER-*, BODY-* |
 | 6 | P0 | differential | svnode transaction vectors in CI | `test/consensus` in a CI tier, with its 127 skips replaced by an allow-list keyed by vector and reason | BODY-015 |
-| 7 | P0 | unit | Wrong-class pins inverted (fail today) | non-merkle duplicate in a bound body → INVALID (GAP-BV-051); empty-input coinbase → INVALID (GAP-BV-046) | BODY-004, 005 |
+| 7 | P0 | unit | Wrong-class pins inverted (fails today) | non-merkle duplicate in a bound body → INVALID (GAP-BV-051); empty-input coinbase → INVALID (GAP-BV-046, fixed by bsv-blockchain/teranode#2123) | BODY-004, 005 |
 | 8 | P0 | unit | Future timestamp is not a verdict (fails today, GAP-BV-050) | now + 3 h: not accepted, not persisted, no notification, no strike; accepted after the clock advances. Needs an injectable clock | HEADER-006 |
-| 9 | P0 | unit | Re-presentation never becomes tip (fails today, GAP-BV-011) | block N+2 re-including a transaction from block N is never the best tip, including with tagging disabled | BODY-017 |
+| 9 | P0 | unit | Re-presentation is invalidated before it is built on | block N+2 re-including a transaction from block N ends invalid, and no child of N+2 is validated first (GAP-BV-011 retired as by design) | BODY-017 |
 | 10 | P1 | differential | Difficulty vectors | port svnode `pow_tests.cpp` (retarget, EDA, DAA, testnet minimum) into `services/blockchain` | HEADER-004 |
 | 11 | P1 | metamorphic | Body re-chunking | for a random transaction list, every legal subtree split gives the same verdict; swapping two transactions → CORRUPT; duplicating the last → CORRUPT | BODY-001–004 |
 | 12 | P1 | invariant | Honest body after any corrupt body | for every CORRUPT sub-class in sequence against one store, an honest body for the same header then commits | VERDICT-002, BODY-001 |
@@ -640,7 +638,7 @@ Priorities: **P0** catches a consensus divergence, data loss or state corruption
 | 63 | P0 | invariant | Announcement paths agree | one random set of announcements through `BlockFound`, `ProcessBlock` and Kafka gives identical stored state, queue state, charges and error class; announcing twice equals once | INGRESS-001, 003, 004 |
 | 64 | P0 | race | Fork limit and duplicate merge (fails today, GAP-BV-008) | real workers, blocking validator: one block per fork, one validation per hash, refused duplicate's sources merged | QUEUE-009, 010 |
 | 65 | P0 | property | Classifier never underflows (fails today, GAP-BV-009) | random best, parent and threshold, including best < threshold | QUEUE-001, 002 |
-| 66 | P0 | fail-point | Alternatives then bounded retries (fails today, GAP-BV-006, 007) | primary fails, alternative serves; retries bounded; at most 3 sources | QUEUE-005–007 |
+| 66 | P0 | fail-point | Alternatives then bounded retries (fails today, GAP-BV-006, 007) | primary fails, alternative serves; retries bounded (met since bsv-blockchain/teranode#1997); at most 3 sources | QUEUE-005–007 |
 | 67 | P0 | unit | State matrix as a table | each FSM state (real blockchain service on sqlite) × each operation asserts its cell, generated from the spec table | STATE-001 |
 | 68 | P1 | model-based | Priority queue | random operations against a reference model of the spec ordering, with an injectable clock: ageing boundaries, skip promotion, FIFO, liveness | QUEUE-003, 004 |
 | 69 | P1 | fuzz | `BlockFound` and `ProcessBlock` requests | arbitrary hash length, base URL, height, block ID and bytes: no panic, error from the allowed set | INGRESS-002, 004, 011, 012 |

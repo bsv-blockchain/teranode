@@ -78,7 +78,7 @@ The service sits between block announcement (P2P, legacy netsync, Block Assembly
 
 **BV-INGRESS-015.** A peer-claimed block height MUST equal the stored parent's height + 1, or be 0 (meaning "derive"). Any other claim MUST be rejected with `ERR_BLOCK_INVALID` and message `rejecting block with peer-inconsistent height`.
 
-**BV-INGRESS-016.** When an announced block's parent is not stored, the service SHALL hand the block to catchup (BV-CATCHUP-001) instead of validating it directly.
+**BV-INGRESS-016.** When an announced block's parent is neither stored nor in flight, the service SHALL hand the block to catchup (BV-CATCHUP-001) instead of validating it directly. A parent is in flight while it is queued, being fetched or being validated. A block whose parent is in flight SHALL be queued behind the parent instead (BV-INGRESS-019), because sending it to catchup would move the FSM to `CATCHINGBLOCKS` and stop mining while the parent is still validating.
 
 **BV-INGRESS-017.** A synchronous caller — `ProcessBlock`, or `BlockFound` with `wait_to_complete = true` — MUST NOT receive success for a block that was not committed. When the parent is missing, the call MUST return a retryable `ERR_SERVICE_ERROR`, whether or not the block was also handed to catchup.
 
@@ -108,7 +108,7 @@ The service sits between block announcement (P2P, legacy netsync, Block Assembly
 
 **BV-QUEUE-008.** A fetch that fails with HTTP 429 (`ERR_SERVICE_RATE_LIMITED`) MUST NOT be charged to the announcer.
 
-**BV-QUEUE-009.** At most `blockvalidation_max_parallel_forks` (default 4) blocks SHALL be validated concurrently. At most one block per fork branch SHALL be validated at a time.
+**BV-QUEUE-009.** At most `blockvalidation_max_parallel_forks` (default 4) blocks SHALL be validated concurrently. At most one block per fork branch SHALL be validated at a time. When `blockvalidation_max_parallel_forks` > 1, blocks that do not extend the tip SHALL hold at most `blockvalidation_max_parallel_forks` − 1 of those slots, so one slot stays free for a chain-extending block. A block's class is the one recorded when it was queued.
 
 **BV-QUEUE-010.** The same hash MUST NOT be validated by two concurrent validations. A dequeued block that cannot start because its hash or fork is already being processed MUST be re-queued, not dropped.
 
@@ -159,7 +159,7 @@ A failure MUST be classified `ERR_BLOCK_CORRUPT`.
 
 **BV-BODY-004.** A block in which any transaction ID appears more than once MUST be rejected. A duplicate produced by merkle odd-node duplication (the CVE-2012-2459 pattern, which leaves the root unchanged and so admits an honest body for the same header) MUST be classified `ERR_BLOCK_CORRUPT`. Any other duplicate in a bound body MUST be classified `ERR_BLOCK_INVALID`.
 
-**BV-BODY-005.** A block whose coinbase transaction is absent MUST be classified `ERR_BLOCK_INCOMPLETE`. A coinbase that is present but malformed (including one with no inputs) falls under BV-BODY-006, BV-BODY-007 and BV-BODY-011.
+**BV-BODY-005.** A block whose coinbase transaction is absent MUST be classified `ERR_BLOCK_INCOMPLETE`. A coinbase with no inputs on a coinbase-only body that the header does not commit to counts as absent: a peer without the coinbase serves an empty transaction in its place, and only binding can tell that from a miner's coinbase. A coinbase that is present and committed to by the header, but malformed (including one with no inputs), falls under BV-BODY-006, BV-BODY-007 and BV-BODY-011.
 
 **BV-BODY-006.** The coinbase transaction MUST have exactly one input, whose previous-output hash is all zeros and whose previous-output index is `0xFFFFFFFF`.
 
@@ -219,7 +219,7 @@ A failure MUST be classified `ERR_BLOCK_CORRUPT`.
 
 A missing-parent or not-found transaction result SHALL be classified as a transient `ERR_BLOCK_INCOMPLETE`.
 
-**BV-BODY-017.** A block containing a non-coinbase transaction already mined in one of the block's own ancestors MUST be rejected with `ERR_BLOCK_INVALID`. The block MUST NOT become, or remain, the chain tip on the strength of a check that has not yet run.
+**BV-BODY-017.** A block containing a non-coinbase transaction already mined in one of the block's own ancestors MUST be rejected with `ERR_BLOCK_INVALID`. The check MAY run after the block is added, during mined-tagging (Open Question 3), but the block MUST then be invalidated before any child block is validated on top of it. Mined-tagging MUST NOT be possible to switch off.
 
 **BV-BODY-018.** A block whose size exceeds the local `excessiveblocksize` policy (when > 0) MUST be declined with `ERR_BLOCK_POLICY_DECLINED`. The check MUST be applied to the peer-declared size before fetch. It MUST also be applied to the size recomputed from the loaded body, so that an under-declared size cannot bypass the policy. This deliberately differs from bitcoin-sv, which treats an over-limit block as invalid (`bad-blk-length`): a decline is not persisted, so the block can be accepted after the limit is raised. A configured limit below 1,000,000 bytes MUST be rejected at startup, as in bitcoin-sv.
 
@@ -433,7 +433,7 @@ A breaker MUST always be able to return to closed.
 
 **BV-QUICK-007.** Height 0, and an empty checkpoint table, MUST make a block ineligible for every below-checkpoint route.
 
-**BV-QUICK-008.** Quick validation MUST reject a block below its version floor (BV-HEADER-008) with `ERR_BLOCK_INVALID`. It MUST reject a missing coinbase with `ERR_BLOCK_INCOMPLETE`. A present coinbase with no inputs is consensus-invalid and falls under BV-QUICK-011 (`ERR_BLOCK_INVALID`; today INCOMPLETE, GAP-BV-046).
+**BV-QUICK-008.** Quick validation MUST reject a block below its version floor (BV-HEADER-008) with `ERR_BLOCK_INVALID`. It MUST reject a missing coinbase with `ERR_BLOCK_INCOMPLETE`, including a coinbase with no inputs that the header does not commit to (BV-BODY-005). A coinbase with no inputs that the header commits to is consensus-invalid and falls under BV-QUICK-011 (`ERR_BLOCK_INVALID`).
 
 **BV-QUICK-009.** Quick validation MUST prove the body bound to the header (BV-BODY-001 through BV-BODY-004) before assigning a block ID or mutating the UTXO store. A failure MUST be `ERR_BLOCK_CORRUPT`.
 
@@ -846,7 +846,7 @@ stateDiagram-v2
 
 **AC-BV-BODY-016.1.** Given Subtree Validation reports a transaction invalid for a block from an `http` peer, then the outcome MUST be `ERR_BLOCK_CORRUPT`, nothing persisted, and the peer struck.
 
-**AC-BV-BODY-017.1.** Given transaction T is mined in block N, when block N + 2 on the same chain includes T, then block N + 2 MUST NOT become the chain tip.
+**AC-BV-BODY-017.1.** Given transaction T is mined in block N, when block N + 2 on the same chain includes T, then block N + 2 MUST end up invalid, and no block on top of N + 2 MUST be validated before it is.
 
 **AC-BV-BODY-018.1.** Given `excessiveblocksize = 1 MB` and a peer declares 500 KB for a block whose loaded body is 2 MB, then the outcome MUST be `ERR_BLOCK_POLICY_DECLINED`.
 
@@ -960,7 +960,7 @@ stateDiagram-v2
 
 **AC-BV-CONFIG-001.1.** Given `blockvalidation_previous_block_header_count = 5`, then the effective value MUST be 11 and a warning MUST be logged.
 
-**AC-BV-CONFIG-006.1.** For each of `blockvalidation_validation_retry_sleep`, `blockvalidation_check_subtree_from_block_timeout`, `blockvalidation_skipCheckParentMined`, `blockValidationMaxRetries`, `blockvalidation_catchupConcurrency`, `blockvalidation_catchup_min_throughput_kbps` and `blockvalidation_catchup_parallel_fetch_workers`, changing it from its default MUST produce the behaviour change its documentation describes, or the setting MUST no longer exist. (This is the GAP-BV-024 / GAP-BV-033 list; other settings are covered by their own scenarios.)
+**AC-BV-CONFIG-006.1.** For each of `blockvalidation_validation_retry_sleep`, `blockvalidation_check_subtree_from_block_timeout`, `blockvalidation_skipCheckParentMined`, `blockvalidation_catchupConcurrency`, `blockvalidation_catchup_min_throughput_kbps` and `blockvalidation_catchup_parallel_fetch_workers`, changing it from its default MUST produce the behaviour change its documentation describes, or the setting MUST no longer exist. (This is the GAP-BV-024 / GAP-BV-033 list; other settings are covered by their own scenarios.)
 
 **AC-BV-OBSERVABILITY-005.1.** Given a catchup has fetched 50 blocks, then `GetCatchupStatus.blocks_fetched` MUST be 50.
 
@@ -1126,11 +1126,11 @@ flowchart TD
 
 The following items are **defects**: places where the current implementation does not conform to this spec and work is required. File references are as of commit `bcae9c0d9`.
 
-**GAP-BV-001.** `wait_to_complete` returns at enqueue, not at validation.
+**GAP-BV-001.** `wait_to_complete` returns at enqueue, not at validation. **Resolved** by bsv-blockchain/teranode#2132.
 *Affects:* BV-INGRESS-005, BV-INGRESS-017.
 The waiting caller is released with nil as soon as the block is placed on the priority queue or diverted to catchup (`Server.go` `addBlockToPriorityQueue`, ~3048). Validation failures are never reported to the caller. This contradicts the `Interface.go` doc comment ("waits for validation to complete").
 *Work required:* hold the reply channel through validation and send the final outcome; return `ERR_SERVICE_ERROR` on a catchup divert.
-*Proof:* confirmed by `TestKnownDefect_BlockFoundWithWaitToComplete_ReturnsOnlyAfterValidationWithItsOutcome`, which fails today (`make test-bvgaps`).
+*Resolved:* fixed by bsv-blockchain/teranode#2132 (bitcoin-sv/teranode#4971); regression tests: the `TestBlockFoundWait_*` tests (`blockfound_waits_for_validation_test.go`). The proof test this spec carried was removed as a duplicate. The text above describes the behaviour before the fix.
 
 **GAP-BV-002.** Unbounded goroutines on a full block-found buffer.
 *Affects:* BV-INGRESS-006.
@@ -1156,13 +1156,14 @@ On the non-unified route, a missing parent diverts to catchup and returns nil. W
 
 **GAP-BV-006.** Alternative sources are lost when a block is dequeued.
 *Affects:* BV-QUEUE-006.
-`removeItem` deletes the hash index entry at dequeue, and `GetAlternativeSource` reads that index, so once a worker holds the block no alternative is found (unless the hash was re-announced and re-queued in the meantime) (`block_priority.go` ~116, ~381). The `retry` re-queue path therefore always fails with `no sources available`.
-*Work required:* carry the additional sources with the dequeued item.
+When a worker takes a block off the queue, the other announcers' sources are dropped with the queue entry. Since bsv-blockchain/teranode#1997 a failed block is requeued with only the peer that announced it (`Server.go` `requeueBlock`, ~2735; its rationale at `answerQueuedBlock`, ~2572), so every retry asks the peer that just failed. Another source is tried only if the hash is announced again after the take. Nothing produces the `retry` base URL any more, so the `GetAlternativeSource` branch for it (`Server.go` ~3872) is unreachable. Verified against main after #1997.
+*Work required:* carry the additional sources with the dequeued and requeued item, and try them before retrying the announcer; remove the dead `retry` branch.
 
-**GAP-BV-007.** Unbounded additional sources; a fetch failure gets one retry, then the block is dropped.
-*Affects:* BV-QUEUE-005, BV-QUEUE-007.
-`additionalSources` has no cap (`block_priority.go` ~133). A fetch failure is re-queued once after 5 s with base URL `retry` (`Server.go` ~2180, which carries a TODO). Because of GAP-BV-006, that retry always fails with `no sources available`, which is not classified as a network error, so the block is dropped. If GAP-BV-006 is fixed without a bound, retries become unbounded, which is why BV-QUEUE-007 asks for a bound.
-*Work required:* cap the sources at 3; add a configurable retry bound together with the GAP-BV-006 fix.
+**GAP-BV-007.** Unbounded additional sources. **Partly resolved** by bsv-blockchain/teranode#1997.
+*Affects:* BV-QUEUE-005.
+`additionalSources` has no cap: every repeat announcement of a queued hash is appended (`block_priority.go` `Add`, ~158).
+*Work required:* cap the sources at 3.
+*Resolved part:* the retry bound. A failure that is not a verdict (a fetch failure, or a deadline) now requeues the block after 5 s (fetch) or 1 min (deadline), at most `blockValidationMaxRetries` times, default 3 (`Server.go` `blockRetryDelay`, ~2657-2700). BV-QUEUE-007 is met. The text before the fix said a fetch failure got one retry with base URL `retry` and was then dropped.
 
 **GAP-BV-008.** Duplicate entries are dropped, and the one-block-per-fork rule is not enforced at start.
 *Affects:* BV-QUEUE-009, BV-QUEUE-010.
@@ -1179,11 +1180,11 @@ On the non-unified route, a missing parent diverts to catchup and returns nil. W
 `excessiveBlockSizeDeclined` reads `SizeInBytes` as declared on the wire. The recomputed size is never re-checked against the policy (`Server.go` ~2770; `model/Block.go` ~2802).
 *Work required:* apply the predicate to the recomputed size after load.
 
-**GAP-BV-011.** Re-presentation is detected only after commit.
+**GAP-BV-011.** Re-presentation is detected only after commit. **Retired**: by design (bitcoin-sv/teranode#4974).
 *Affects:* BV-BODY-017, BV-COMMIT-005.
 A transaction already mined in an ancestor is detected during mined-tagging, after AddBlock, when the block may already be the tip (`model/update-tx-mined.go` ~288, ~412). With `utxostore_updateTxMinedStatus = false`, tagging returns early (~208): re-presentation is not detected at all, and `mined_set` is still set although nothing was tagged.
 *Work required:* move the check before AddBlock, or document the post-commit invalidation as the contract (see Open Question 3); with tagging disabled, do not set `mined_set`.
-*Proof:* confirmed by `TestKnownDefect_BlockReincludingAncestorMinedTx_RejectedBeforeAddBlock`, which fails today (`make test-bvgaps`).
+*Retired:* post-commit detection is the accepted contract (Open Question 3, bitcoin-sv/teranode#4974). Checking before AddBlock would need a second read of every transaction's block IDs, growing with block size; mined-tagging already returns them for free. In the window before invalidation no child can be validated on the block, because `isParentMined` waits for its `mined_set`, which it never gets. The setting that switched tagging off (`utxostore_updateTxMinedStatus`) was removed by bsv-blockchain/teranode#2019. BV-BODY-017 and AC-BV-BODY-017.1 were reworded to match, and the proof test was removed. The text above describes the original finding.
 
 **GAP-BV-012.** Some optimistic-path invalidations skip the invalid-block notification.
 *Affects:* BV-VERDICT-009, BV-OPTIMISTIC-005.
@@ -1295,7 +1296,7 @@ Nothing prevents `blockvalidation_skipUnspendableTxStorageDuringCatchup` with th
 
 **GAP-BV-033.** Settings that have no effect.
 *Affects:* BV-CONFIG-006.
-`blockvalidation_validation_retry_sleep`, `blockvalidation_check_subtree_from_block_timeout`, `blockvalidation_skipCheckParentMined` and `blockValidationMaxRetries` are read into settings but never used. `blockvalidation_catchupConcurrency` is likewise unused. See also GAP-BV-024. Verified by grep.
+`blockvalidation_validation_retry_sleep`, `blockvalidation_check_subtree_from_block_timeout` and `blockvalidation_skipCheckParentMined` are read into settings but never used. (`blockValidationMaxRetries` was on this list; since bsv-blockchain/teranode#1997 it bounds block requeues, see GAP-BV-007.) `blockvalidation_catchupConcurrency` is likewise unused. See also GAP-BV-024. Verified by grep.
 *Work required:* implement or remove each, and correct the `longdesc` text.
 
 **GAP-BV-034.** Invalid-block producer failure: process exit in the common case, silent in a corner case.
@@ -1339,16 +1340,16 @@ When the producer cannot be created after its retries (e.g. unreachable broker),
 `docs/references/services/blockvalidation_reference.md` carries stale signatures.
 *Work required:* update the docs to point at this spec.
 
-**GAP-BV-039.** A caller-supplied `block_id` skips mined-tagging on any route.
+**GAP-BV-039.** A caller-supplied `block_id` skips mined-tagging on any route. **Resolved** by bsv-blockchain/teranode#2180.
 *Affects:* BV-COMMIT-005, BV-COMMIT-010, BV-INGRESS-013.
 `ProcessBlock` copies any non-zero `block_id` onto the block with no check on route or height (`Server.go` ~1503). Every block with a non-zero ID is then added with `WithMinedSet(true)` (`BlockValidation.go` `buildAddBlockOpts`, ~1658). The function's own comment justifies this only for checkpoint-covered legacy blocks. A `ProcessBlock` call with a non-zero `block_id` above the checkpoint is therefore stored with `mined_set` set and its transactions are never tagged mined, which also skips the post-storage double-spend cross-check. Verified by reading the code. Related to Open Question 7, since the gRPC port is unauthenticated.
 *Work required:* set `mined_set` up front only on the legacy route at or below the highest hardcoded checkpoint; otherwise keep the ID but run mined-tagging.
-*Proof:* confirmed by `TestKnownDefect_BlockWithPreassignedID_TransactionsStillTaggedMined`, which fails today (`make test-bvgaps`).
+*Resolved:* fixed by bsv-blockchain/teranode#2180 (bitcoin-sv/teranode#4979); regression test: `TestBlockValidation_ReservedBlockIDStillTagsTransactions`. The proof test this spec carried was removed as a duplicate. The text above describes the behaviour before the fix.
 
 **GAP-BV-040.** `ValidateBlock` relabels local failures as invalid.
 *Affects:* BV-REVALIDATE-009, BV-VERDICT-001, BV-VERDICT-008.
 Any error from the ancestor-membership check, including a storage or service failure of the lookup, is returned as `ERR_BLOCK_INVALID` `block is not valid` (`Server.go` ~1614). From `block.Valid`, only storage, service and header-context errors are passed through (~1608); a LOCAL `ERR_PROCESSING` (or a cancellation) is relabelled `block is not valid`. A transient local fault therefore tells the `checkblock` caller that a possibly valid block is invalid.
-*Work required:* pass every LOCAL error through unchanged, from every step, and report `ERR_BLOCK_INVALID` only for INVALID and HEADER-FINAL verdicts.
+*Work required:* pass every LOCAL error through unchanged, from every step, and report `ERR_BLOCK_INVALID` only for INVALID and HEADER-FINAL verdicts. This depends on reclassifying consensus failures that are coded `ERR_PROCESSING` first. A proof-of-work miss is one: `HasMetTargetDifficulty` returns `NewProcessingError("block header does not meet target ...")` (`model/BlockHeader.go` ~294), and `block.Valid` returns it as `ERR_PROCESSING`. `ValidateBlock` has no service-level proof-of-work gate (GAP-BV-017), so a blanket pass-through would report a block that misses its target as a local fault, breaking BV-HEADER-002 and BV-REVALIDATE-008. Fix GAP-BV-017 (a shared header gate) or reclassify those failures in `block.Valid` before passing `ERR_PROCESSING` through.
 
 **GAP-BV-041.** Queue ageing and skip promotion are evaluated lazily.
 *Affects:* BV-QUEUE-004.
@@ -1360,11 +1361,13 @@ Effective priority is recomputed only when the queue is re-sorted, and a re-sort
 The invalid-block producer close is raced against the stop context, but the block consumer's `Close()` is not; it is bounded only by the consumer's internal drain timeout (`Server.go` ~1323; `util/kafka/kafka_consumer.go` ~198-229). Not fully confirmed: the internal bound may be short enough in practice.
 *Work required:* race the consumer close against the stop context as well.
 
-**GAP-BV-043.** Internal revalidation leaves a block on the chain after an INVALID ancestor verdict. **Resolved** by bsv-blockchain/teranode#2033.
+**GAP-BV-043.** Internal revalidation leaves a block on the chain after an INVALID ancestor verdict. **Partly resolved** by bsv-blockchain/teranode#2033.
 *Affects:* BV-OPTIMISTIC-005, BV-VERDICT-009.
 The internal revalidation path ends by returning the ancestor-membership check's result without acting on it (`BlockValidation.go` ~3447). An INVALID verdict from that check is retried 3 times (~856), then logged as "retries exhausted". An optimistically added block found invalid this way stays on the chain, and nothing is published. Verified by reading the code.
 *Work required:* invalidate and publish on an INVALID verdict from that check, as the other branches of the same function do.
-*Resolved:* fixed by bsv-blockchain/teranode#2033; regression test: `TestReValidateBlock_InvalidAncestorVerdictInvalidatesAndPublishes` and the other `TestReValidateBlock_InvalidAncestorVerdict*` tests. The text above describes the behaviour before the fix.
+*Resolved part:* bsv-blockchain/teranode#2033 invalidates and publishes when the parent is on the main chain; regression test: `TestReValidateBlock_InvalidAncestorVerdictInvalidatesAndPublishes` and the other `TestReValidateBlock_InvalidAncestorVerdict*` tests.
+*Still open:* the fix acts only when `ancestorVerdictIsSound` holds, that is when the parent is on the main chain (`BlockValidation.go` ~3882, ~3901). Otherwise the INVALID verdict is still returned unacted, and the block stays on the chain with no notification, which BV-OPTIMISTIC-005 and BV-VERDICT-009 forbid. On the acted branch, a failed `markBlockAsInvalid` is only logged (~3883-3885), so a storage error is swallowed and the block stays on the chain.
+*Work required (remaining):* decide the INVALID verdict off the main chain from the block's own ancestor chain, not the main chain, and act on it; return a failed `markBlockAsInvalid` to the caller.
 
 **GAP-BV-044.** Catchup tries alternatives after an INVALID verdict on an unbound transaction list.
 *Affects:* BV-PEER-005.
@@ -1377,29 +1380,29 @@ bitcoin-sv applies `IsFinalTx` to every transaction in a block, coinbase include
 *Work required:* add the coinbase finality rule to block validation, on every route; review the Block Assembly coinbase construction.
 *Resolved:* fixed by bsv-blockchain/teranode#2017; regression test: `TestBlock_Valid_NonFinalCoinbaseRejected`. The text above describes the behaviour before the fix.
 
-**GAP-BV-046.** A present coinbase with no inputs is classified INCOMPLETE.
+**GAP-BV-046.** A present coinbase with no inputs is classified INCOMPLETE. **Resolved** by bsv-blockchain/teranode#2123.
 *Affects:* BV-BODY-005.
 Both full and quick validation return `ERR_BLOCK_INCOMPLETE` for a coinbase with no inputs (`BlockValidation.go` ~1778-1791; `quick_validate.go` ~268). Such a coinbase is consensus-invalid (`bad-txns-vin-empty`), so on a bound body it should be INVALID; today it is re-fetched indefinitely and never condemned.
 *Work required:* reserve INCOMPLETE for an absent coinbase.
-*Proof:* confirmed by `TestKnownDefect_InputlessCoinbase_IsInvalidNotIncomplete` (full and quick paths), which fails today (`make test-bvgaps`).
+*Resolved:* fixed by bsv-blockchain/teranode#2123 (bitcoin-sv/teranode#4982): a coinbase with no inputs that the header commits to is `ERR_BLOCK_INVALID` on both routes; on a coinbase-only body the header does not commit to, it stays `ERR_BLOCK_INCOMPLETE` by design (BV-BODY-005). Regression test: `TestGapBV046_PresentCoinbaseWithNoInputsIsInvalidNotIncomplete` (`coinbase_delivered_test.go`), covering bound and unbound bodies on the full, optimistic and quick routes; the proof test this spec carried was removed as a duplicate. The text above describes the behaviour before the fix.
 
 **GAP-BV-047.** Height- and time-dependent rules are not re-evaluated for reused validations.
 *Affects:* BV-BODY-020, BV-BODY-015.
 Finality, coinbase maturity, BIP68 and era script flags are evaluated once, in the context where a transaction was first validated. Transactions found in the txmeta cache are not re-validated (`services/subtreevalidation/SubtreeValidation.go` ~832-856), and cached subtrees are re-checked only for double-spend ancestry (`check_block_subtrees.go` ~777-806, whose comment assumes context-free validity does not change between blocks). A sibling or fork block at a lower height or median-time-past can therefore include a transaction that is non-final, or spends an immature coinbase, at that block's height. The BIP68 median-time store is also height-indexed rather than branch-aware (`Validator.go` ~2927-2948; pre-Genesis only), and the block-subtree path does not pass a candidate block time, so pre-`CSVHeight` finality is skipped there (`services/subtreevalidation/Server.go` ~968). Medium confidence; not reproduced.
 *Work required:* re-evaluate the context-dependent rules per candidate block, or key the cached result by the context it was validated in.
-*Proof:* confirmed by `TestKnownDefect_SiblingBlockAtLockHeight_RejectsTxAcceptedForNextHeight`, `TestKnownDefect_ForkBlockAtCoinbaseHeight_RejectsAcceptedSpendOfImmatureCoinbase` and `TestKnownDefect_CachedSubtreeUnderOlderParent_RejectsTimeLockedTx` (`services/subtreevalidation/stored_tx_block_context_recheck_test.go`, test task T08), which fail today; their controls show the same records are re-checked when flagged Conflicting, so the re-check is gated on that flag.
+*Proof:* not on this branch. The failing proofs are in bsv-blockchain/teranode#2124 (test task T08), `services/subtreevalidation/stored_tx_block_context_recheck_test.go`: `TestKnownDefect_TxSeenBeforeIsNotRecheckedForFinalityInALowerBlock`, `TestKnownDefect_SiblingBlockAtLockHeight_RejectsTxAcceptedForNextHeight`, `TestKnownDefect_ForkBlockAtCoinbaseHeight_RejectsAcceptedSpendOfImmatureCoinbase` and `TestKnownDefect_CachedSubtreeUnderOlderParent_RejectsTimeLockedTx`. Their controls show the same records are re-checked when flagged Conflicting, so the re-check is gated on that flag. Tracked as bitcoin-sv/teranode#5000.
 
 **GAP-BV-048.** No pre-Genesis block sigop limit.
 *Affects:* BV-BODY-021.
 No block-level sigop accumulator exists outside the legacy service. On mainnet every pre-Genesis block is below the highest hardcoded checkpoint, so the impact is limited to full re-validation of history, test networks, and chains without checkpoints.
 *Work required:* add the limit for heights below `GenesisActivationHeight`.
-*Proof:* confirmed by the `TestKnownDefect_PreGenesisBlockSigOpLimit_*` tests (`services/blockvalidation/pre_genesis_block_sigop_limit_test.go`, test task T08): 20,001 sigops in 900 KB and in exactly 1 MB, 40,001 just over 1 MB, and P2SH-counted sigops are all accepted today.
+*Proof:* not on this branch. The failing proofs are the `TestKnownDefect_PreGenesisBlockSigOpLimit_*` tests in bsv-blockchain/teranode#2124 (test task T08), `services/blockvalidation/pre_genesis_block_sigop_limit_test.go`: 20,001 sigops in 900 KB and in exactly 1 MB, 40,001 just over 1 MB, and P2SH-counted sigops are all accepted today.
 
 **GAP-BV-049.** BIP30 and coinbase-collision handling differ from bitcoin-sv.
 *Affects:* BV-BODY-022.
 Teranode does not enforce BIP30 below `BIP0034Height`, and when a coinbase's ID collides with an existing one, it silently skips re-creating it (`services/blockassembly/subtreeprocessor/SubtreeProcessor.go` ~6596-6601), leaving the earlier outputs in place where bitcoin-sv would overwrite them. Reachable only below the checkpoints or at the known future coinbase-collision heights (from ~1,983,702). Low impact.
 *Work required:* match bitcoin-sv's behaviour at those heights.
-*Proof:* confirmed by `TestKnownDefect_BlockRepeatingUnspentAncestorTxIDBelowBIP34_IsRejected` and `TestKnownDefect_CollidingCoinbase_LeavesNoEarlierCoinbaseOutputs` (`services/blockvalidation/bip30_duplicate_txid_test.go`, test task T08), which fail today. Not covered: the 91842/91880 exemption (a faked height cannot match the block hashes) and re-creation of a fully spent transaction (Open Question 23).
+*Proof:* not on this branch. The failing proofs are `TestKnownDefect_BlockRepeatingUnspentAncestorTxIDBelowBIP34_IsRejected` and `TestKnownDefect_CollidingCoinbase_LeavesNoEarlierCoinbaseOutputs` in bsv-blockchain/teranode#2124 (test task T08), `services/blockvalidation/bip30_duplicate_txid_test.go`. Not covered: the 91842/91880 exemption (a faked height cannot match the block hashes) and re-creation of a fully spent transaction (Open Question 23).
 
 **GAP-BV-050.** Future-dated catchup headers are reported malicious.
 *Affects:* BV-CATCHUP-007, BV-HEADER-006.
@@ -1458,8 +1461,8 @@ The mined-not-set sweep is guarded by a compare-and-swap (`BlockValidation.go` ~
 
 **GAP-BV-060.** Contextual header failures publish nothing on the non-optimistic path.
 *Affects:* BV-HEADER-009, BV-VERDICT-001, BV-VERDICT-011.
-`block.Valid` runs the contextual header checks (median time past, version floor) before it binds the body. On the default non-optimistic path a failure reaches the catch-all in `BlockValidation.go` ~2559-2575 with `bodyBoundToHeader = false`, which logs "not persisting invalid verdict" and returns `ERR_BLOCK_INVALID` without calling `kafkaNotifyBlockInvalid`. Not persisting is correct; not publishing is not: the verdict depends on the header alone, the peer is never struck, and the header is re-validated on every announcement. The optimistic path publishes through `rejectFinalHeaderVerdict` (~2246). Verified by reading the code.
-*Work required:* publish the invalid-block notification for HEADER-FINAL verdicts reached inside `block.Valid` (distinguish them from unbound body verdicts), without persisting.
+`block.Valid` runs the contextual header checks (median time past, version floor) before it binds the body. On the default non-optimistic path a failure reaches the catch-all in `BlockValidation.go` ~2559-2575 with `bodyBoundToHeader = false`, which logs "not persisting invalid verdict" and returns `ERR_BLOCK_INVALID` without calling `kafkaNotifyBlockInvalid`. Not persisting is correct; not publishing is not: the verdict depends on the header alone, the peer is never struck, and the header is re-validated on every announcement. Verified by reading the code.
+*Work required:* publish the invalid-block notification for HEADER-FINAL verdicts reached inside `block.Valid` (distinguish them from unbound body verdicts), without persisting. Exclude the "more than two hours in the future" failure explicitly: it comes out of the same `CheckHeaderContextual` with the same `ERR_BLOCK_INVALID` (`model/Block.go` ~716), but it is CLOCK-DEFERRED (BV-HEADER-006) and must not publish, or honest peers are struck over the local clock. Do not model the fix on the optimistic path's `rejectFinalHeaderVerdict`: it publishes for the future-timestamp case too, which is the GAP-BV-050 defect.
 *Proof:* confirmed by `TestKnownDefect_HeaderFinalVerdict_PublishesInvalidBlockNotification` (its control subtest, a bound invalid body publishing the notification, passes), which fails today (`make test-bvgaps`).
 
 **GAP-BV-061.** Catchup proceeds when clearing `mined_set` on the old branch fails.
@@ -1470,8 +1473,9 @@ The mined-not-set sweep is guarded by a compare-and-swap (`BlockValidation.go` ~
 
 **GAP-BV-062.** Quick validation never evaluates a post-CSV time-based coinbase lock, including above the hardcoded checkpoints.
 *Affects:* BV-QUICK-031, BV-BODY-019.
-`checkQuickValidationCoinbase` (`quick_validate.go`) always passes a parent median-time-past of 0 to `model.CoinbaseFinalityViolation`, which then skips a time-based nLockTime from `CSVHeight` on (`model/block_coinbase_finality.go`). Its comment justifies the skip as "a block below a hash-verified checkpoint". That holds under BV-QUICK-030, but not on the range above the highest hardcoded checkpoint that the operator catchup-checkpoint override opens (BV-CONFIG-005, `catchup.go` override checkpoint), where BV-QUICK-031 says coinbase finality SHOULD still be enforced. The height lock, the sequence rule and the pre-CSV time lock are enforced on that range. Verified by reading the code; found while writing the T08 tests, which deliberately do not pin it.
+`checkQuickValidationCoinbase` (`quick_validate.go`) always passes a parent median-time-past of 0 to `model.CoinbaseFinalityViolation`, which then skips a time-based nLockTime from `CSVHeight` on (`model/block_coinbase_finality.go`). Its comment justifies the skip as "a block below a hash-verified checkpoint". That holds under BV-QUICK-030, but not on the range above the highest hardcoded checkpoint that the operator catchup-checkpoint override opens (BV-CONFIG-005, `catchup.go` override checkpoint), where BV-QUICK-031 says coinbase finality SHOULD still be enforced. The height lock, the sequence rule and the pre-CSV time lock are enforced on that range. Found while writing the T08 tests.
 *Work required:* on the override range, compute the parent's median-time-past for quick validation (or route those blocks through full validation), and enforce the post-CSV cutoff.
+*Proof:* not on this branch. The failing proof is `TestKnownDefect_QuickValidationAboveCheckpointOverride_RejectsNonFinalCoinbaseTimeLock` in bsv-blockchain/teranode#2124 (test task T08), `services/blockvalidation/quick_validate_override_coinbase_time_lock_test.go`. Tracked as bitcoin-sv/teranode#5001.
 
 ---
 
@@ -1480,8 +1484,8 @@ The mined-not-set sweep is guarded by a compare-and-swap (`BlockValidation.go` ~
 These are unresolved design questions, distinct from Conformance Gaps.
 
 1. Should `BlockFound`, `ProcessBlock` and `ValidateBlock` be refused while the FSM is `IDLE`? Today only Kafka consumption is gated, deliberately, so that operator calls work. The matrix currently records "accept".
-2. BV-INGRESS-005 adopts the `Interface.go` reading of `wait_to_complete` ("waits for validation"). If the intended contract is only "waits until accepted for processing", BV-INGRESS-005 and GAP-BV-001 should be rewritten instead.
-3. Re-presentation (BV-BODY-017): is moving detection before AddBlock required, or is post-commit invalidation the accepted contract? The latter lets a block be built upon before it is invalidated.
+2. BV-INGRESS-005 adopts the `Interface.go` reading of `wait_to_complete` ("waits for validation"). If the intended contract is only "waits until accepted for processing", BV-INGRESS-005 and GAP-BV-001 should be rewritten instead. **Answered:** it waits for validation; bsv-blockchain/teranode#2132 implemented that reading.
+3. Re-presentation (BV-BODY-017): is moving detection before AddBlock required, or is post-commit invalidation the accepted contract? **Answered:** post-commit invalidation is the contract (bitcoin-sv/teranode#4974). No child can be validated on the block before it is invalidated, because `isParentMined` waits for its `mined_set`.
 4. Fork depth > `CoinbaseMaturity` is today rejected and reported *malicious* regardless of work (BV-CATCHUP-011). With the default T = 99, the work gate of BV-CATCHUP-012 is reachable only at depth exactly 100. Should a deeper but heavier chain be rejected without a malicious report, or followed?
 5. A catchup that stops short of the announced target (100,000-header cap, or the peer's tip ending earlier) currently counts as success. Is partial success the contract?
 6. Should a quick-route INVALID verdict in catchup be final, rather than re-judged by full validation (BV-QUICK-027)?
@@ -1503,7 +1507,7 @@ These are unresolved design questions, distinct from Conformance Gaps.
     | ID | What the author proposed | Basis |
     |---|---|---|
     | BV-QUEUE-005 | Cap additional sources per hash at 3 | Borrowed from the catchup-alternatives cap |
-    | BV-QUEUE-007 | Configurable bound on fetch retries | Code has a TODO; today a failure gets one retry, which always fails (GAP-BV-007) |
+    | BV-QUEUE-007 | Configurable bound on fetch retries | Accepted: implemented by bsv-blockchain/teranode#1997 (`blockValidationMaxRetries`) |
     | BV-INGRESS-017 | Synchronous callers get `ERR_SERVICE_ERROR` when the parent is missing | Mirrors the unified-route behaviour |
     | BV-BODY-018 (second half) | Re-check the size recomputed from the loaded body against `excessiveblocksize` | Comment says the authoritative size is recomputed; nothing re-checks it |
     | BV-OPTIMISTIC-008 | Revalidate an optimistically added block after restart, before `subtrees_set` | Code documents the crash case as a known limitation only |
