@@ -187,9 +187,8 @@ func TestBlockchainSubscriptionListener_PeerFailureNotHeldBehindParkedFSMCheck(t
 	// Registered before newAnnounceTestServer's RUNNING expectation, so testify
 	// matches this one first.
 	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Run(func(mock.Arguments) {
-		// Park only the first call, the Block's skip check. A later call (the
-		// same Block's publish gate after release) returns at once. The
-		// PeerFailure path makes no FSM call.
+		// Park only the first call, the Block's skip check. Any later call
+		// returns at once.
 		if parked.CompareAndSwap(false, true) {
 			entered <- struct{}{}
 			<-release
@@ -283,7 +282,21 @@ func TestBlockchainSubscriptionListener_StuckAnnouncementTimesOut(t *testing.T) 
 		previousReturned bool
 	)
 
+	var fsmDeadlines []time.Time
+
+	running := blockchain_api.FSMStateType_RUNNING
+
 	mockBlockchain := &blockchain.Mock{}
+	// Registered before newAnnounceTestServer's RUNNING expectation, so testify
+	// matches this one first. It records the deadline the FSM skip check runs
+	// under, which must come from the notification's bound.
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Run(func(args mock.Arguments) {
+		deadline, _ := args.Get(0).(context.Context).Deadline()
+
+		mu.Lock()
+		fsmDeadlines = append(fsmDeadlines, deadline)
+		mu.Unlock()
+	}).Return(&running, nil)
 	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		callCtx := args.Get(0).(context.Context)
 
@@ -343,6 +356,16 @@ func TestBlockchainSubscriptionListener_StuckAnnouncementTimesOut(t *testing.T) 
 		"the second announcement started before the first one's notificationProcessTimeout expired")
 	require.True(t, got[1].previousCallReturned,
 		"the second announcement started while the first GetBlockHeader was still running")
+
+	// currentFSMState adds its own 5 s bound, so a skip check on the service
+	// context would get a deadline seconds past the notification's.
+	mu.Lock()
+	require.NotEmpty(t, fsmDeadlines, "the FSM skip check never ran")
+	for _, deadline := range fsmDeadlines {
+		require.False(t, deadline.After(got[1].deadline),
+			"the FSM skip check must run under the notification's notificationProcessTimeout")
+	}
+	mu.Unlock()
 
 	// The worker counts the first announcement's timeout before it takes the
 	// second, and the second is parked.
@@ -532,4 +555,44 @@ func TestBlockchainSubscriptionListener_NonTimeoutErrorIsNotCountedAsTimeout(t *
 
 	require.Zero(t, testutil.ToFloat64(timedOut)-timedOutBefore,
 		"an announcement that failed for another reason must not be counted as a timeout")
+}
+
+// Cancelling the service context must end an announcement in flight at once,
+// not leave it running until its notificationProcessTimeout.
+func TestBlockchainSubscriptionListener_ShutdownCancelsInFlightAnnouncement(t *testing.T) {
+	entered := make(chan struct{}, 1)
+	ended := make(chan error, 1)
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		callCtx := args.Get(0).(context.Context)
+		entered <- struct{}{}
+		<-callCtx.Done()
+		ended <- callCtx.Err()
+	}).Return(nil, nil, context.Canceled)
+
+	s, _ := newAnnounceTestServer(t, mockBlockchain)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	subscription := make(chan *blockchain.Notification, 1)
+	go s.blockchainSubscriptionListener(ctx, subscription)
+
+	subscription <- blockNotification(chainhash.HashH([]byte("block in flight at shutdown")))
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("block announcement never reached GetBlockHeader")
+	}
+
+	cancel()
+
+	select {
+	case err := <-ended:
+		require.ErrorIs(t, err, context.Canceled, "the announcement must end because the service stopped, not because its bound passed")
+	case <-time.After(2 * time.Second):
+		t.Fatal("the announcement in flight kept running after the service context was cancelled")
+	}
 }

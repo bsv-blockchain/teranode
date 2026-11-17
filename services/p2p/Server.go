@@ -2693,12 +2693,14 @@ func (s *Server) processBlockchainNotification(ctx context.Context, notification
 
 // notificationProcessTimeout bounds the work done for one notification on the
 // announcement worker: Block, BlockSubtreesSet, Subtree, a PeerFailure that is
-// not a catchup failure, and any other type. It covers the
-// calls that take the notification's context: the FSM skip check, the
-// blockchain reads, the gossip publish and most of the node_status refresh.
-// The node_status sync-peer lookup (getPeer) still uses the service context,
-// so a hung registry call there is not bounded by it. A var so tests can
-// shorten it.
+// not a catchup failure, and any other type. It covers the calls that honour
+// the notification's context: the FSM skip check, the blockchain reads, the
+// wait for the pubsub event loop at the start of the gossip publish, and most
+// of the node_status refresh. Two waits are not bounded by it: the node_status
+// sync-peer lookup (getPeer) uses the service context, and libp2p's final
+// hand-off of a message to its event loop waits only on the pubsub's own
+// context, so a stalled pubsub loop can still park the announcement worker.
+// Peer rotation does not run on that worker. A var so tests can shorten it.
 var notificationProcessTimeout = 30 * time.Second
 
 // The queue sizes are vars so tests can shrink them.
@@ -2721,20 +2723,22 @@ var (
 )
 
 // blockchainSubscriptionListener reads the blockchain subscription and hands
-// every notification to a worker without doing any work itself, so nothing it
-// reads can wait behind a slow blockchain call or gossip publish.
+// each notification to a worker queue without doing any work itself, so
+// nothing it reads can wait behind a slow blockchain call or gossip publish. A
+// notification whose queue is full is dropped at once, logged at Warn and
+// counted with reason=queue_full.
 //
 // Catchup PeerFailure notifications get a worker of their own. They are what
-// drops a sync peer after a failed catchup, and catchup restores RUNNING before
-// it reports the failure, so they arrive while Block notifications are being
-// announced. On a shared serial loop a block announcement parked in
+// drops a sync peer promptly after a failed catchup; without them rotation
+// waits for the periodic reputation check or the no-progress timeout. Catchup
+// restores RUNNING before it reports the failure, so they arrive while Block
+// notifications are being announced. On a shared serial loop a block announcement parked in
 // GetBlockHeader or Publish held the PeerFailure behind it, and once the
 // subscription channel filled, the blockchain client dropped it outright: the
 // node kept syncing from the peer that had just failed it. Other PeerFailure
 // types (today only "block", from the Kafka block-retry path) are only logged,
-// so they go with everything else to
-// the announcement worker and cannot fill the peer-failure queue ahead of a
-// catchup failure. The announcement worker keeps the order this listener
+// so they go with everything else to the announcement worker and cannot fill
+// the peer-failure queue ahead of a catchup failure. The announcement worker keeps the order this listener
 // receives them in. The blockchain client sends each notification from its
 // own goroutine, so that order is not guaranteed.
 func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainSubscription <-chan *blockchain.Notification) {

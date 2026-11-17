@@ -21,7 +21,9 @@ var (
 	prometheusP2PHTTPRateLimited               prometheus.Counter
 
 	// prometheusP2PBlockchainNotificationsDropped counts blockchain
-	// notifications the subscription listener dropped on a full worker queue.
+	// notifications the p2p listener lost: dropped on a full worker queue
+	// (reason=queue_full) or abandoned by the announcement worker at
+	// notificationProcessTimeout (reason=timeout).
 	prometheusP2PBlockchainNotificationsDropped *prometheus.CounterVec
 
 	// prometheusP2PConnectedPeers tracks the number of peers currently connected
@@ -188,8 +190,8 @@ const (
 	dropReasonTimeout   = "timeout"
 )
 
-// blockchainNotificationDropped records a blockchain notification the
-// subscription listener lost on the named worker queue, for the given reason.
+// blockchainNotificationDropped records a blockchain notification lost on the
+// named worker queue, for the given reason.
 func blockchainNotificationDropped(queue, notificationType, reason string) {
 	initPrometheusMetrics()
 	prometheusP2PBlockchainNotificationsDropped.WithLabelValues(queue, notificationType, reason).Inc()
