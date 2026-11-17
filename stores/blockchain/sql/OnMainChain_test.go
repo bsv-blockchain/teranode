@@ -1465,6 +1465,10 @@ func TestReconcileOnMainChain_WalkStopsAtTheFirstFlaggedBlockPastTheWindow(t *te
 
 	windowBottom := tipHeight - maxDepth
 
+	const markerHeight = 5
+
+	require.Less(t, int64(markerHeight), windowBottom-2, "the marker must sit below the flagged block the walk stops at")
+
 	setFlag := func(height int64, onMainChain bool) {
 		t.Helper()
 
@@ -1474,7 +1478,7 @@ func TestReconcileOnMainChain_WalkStopsAtTheFirstFlaggedBlockPastTheWindow(t *te
 
 	setFlag(windowBottom, false)
 	setFlag(windowBottom-1, false)
-	setFlag(5, false)
+	setFlag(markerHeight, false)
 
 	changed, floor, err := s.reconcileOnMainChainRows(ctx, s.db)
 	require.NoError(t, err)
@@ -1493,5 +1497,54 @@ func TestReconcileOnMainChain_WalkStopsAtTheFirstFlaggedBlockPastTheWindow(t *te
 	require.True(t, flagAt(windowBottom), "the window's bottom block is repaired")
 	require.True(t, flagAt(windowBottom-1), "the walk continues past the window while blocks are unflagged")
 	require.True(t, flagAt(windowBottom-2), "the first flagged block past the window keeps its flag")
-	require.False(t, flagAt(5), "the walk stops at the first flagged block and never reaches height 5")
+	require.False(t, flagAt(markerHeight), "the walk stops at the first flagged block and never reaches the marker")
+}
+
+// TestReconcileOnMainChain_WalkThatMeetsNoFlaggedBlockEndsAtGenesis: with every flag
+// false, which is the state after the column is added or after import-blocks, the walk
+// finds no block where the new chain meets the old one. It must go on to genesis, flag the
+// whole lineage and report floor 0, the lowest height it changed.
+func TestReconcileOnMainChain_WalkThatMeetsNoFlaggedBlockEndsAtGenesis(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	storeBlocks(t, s, block1, block2, block3)
+
+	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false`)
+	require.NoError(t, err)
+
+	changed, floor, err := s.reconcileOnMainChainRows(context.Background(), s.db)
+	require.NoError(t, err)
+	require.Equal(t, int64(4), changed, "genesis and the three blocks above it are flagged")
+	require.Equal(t, int64(0), floor, "the walk reached genesis")
+
+	var flagged int64
+	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM blocks WHERE on_main_chain = true`).Scan(&flagged))
+	require.Equal(t, int64(4), flagged)
+}
+
+// TestReconcileOnMainChain_ParentLoopDoesNotRecurseForever: past reconcileMaxDepth the walk
+// goes on while the block it is on is flagged false, so with every flag false only the
+// parent_id lineage itself ends it. Each step must go down in height, which ends the walk
+// even if parent_id ever loops. Nothing writes such a loop today, so this one is made by
+// hand: block1's parent is set to block3, its own descendant.
+func TestReconcileOnMainChain_ParentLoopDoesNotRecurseForever(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	storeBlocks(t, s, block1, block2, block3)
+
+	var block3ID int64
+	require.NoError(t, s.db.QueryRow(`SELECT id FROM blocks WHERE hash = $1`, block3.Hash().CloneBytes()).Scan(&block3ID))
+
+	_, err := s.db.Exec(`UPDATE blocks SET parent_id = $1 WHERE hash = $2`, block3ID, block1.Hash().CloneBytes())
+	require.NoError(t, err)
+
+	_, err = s.db.Exec(`UPDATE blocks SET on_main_chain = false`)
+	require.NoError(t, err)
+
+	// A walk that loops never returns on its own; the deadline turns that into a failure.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	changed, floor, err := s.reconcileOnMainChainRows(ctx, s.db)
+	require.NoError(t, err, "the walk must end at the step that would go up in height")
+	require.Equal(t, int64(3), changed, "the walk flags block3, block2 and block1 and stops at block1")
+	require.Equal(t, int64(block1.Height), floor)
 }
