@@ -42,9 +42,26 @@ func (s *SQL) chainWriteLocking() bool {
 
 // ensureChainWriteRow creates the shared row if no process has yet. A walk that finds no
 // row cannot see a write that is creating it, so New creates it before any walk runs.
+//
+// It reads before it inserts. An INSERT ... ON CONFLICT waits for any open transaction
+// that has locked the row, and a chain write queued behind a full walk can hold it for as
+// long as the walk runs, so a starting process would sit in New with no deadline. A plain
+// read never waits on a row lock. Only the first start on a fresh database inserts, and
+// there the only possible holder is another process creating the same row.
 func (s *SQL) ensureChainWriteRow(ctx context.Context) error {
 	if !s.chainWriteLocking() {
 		return nil
+	}
+
+	var one int
+
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM state WHERE key = $1`, chainWriteStateKey).Scan(&one)
+	if err == nil {
+		return nil
+	}
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		return errors.NewStorageError("could not read the %s state row", chainWriteStateKey, err)
 	}
 
 	if _, err := s.db.ExecContext(ctx,

@@ -2,8 +2,13 @@ package sql
 
 import (
 	"context"
+	"net/url"
 	"testing"
+	"time"
 
+	"github.com/bsv-blockchain/teranode/test/utils/postgres"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -128,4 +133,93 @@ func TestEnsureChainWriteRowReportsFailure_PostgreSQL(t *testing.T) {
 	hideStateTable(t, s)
 
 	require.ErrorContains(t, s.ensureChainWriteRow(context.Background()), chainWriteStateKey)
+}
+
+// openPostgresChainWriteStore opens a store on a new PostgreSQL database and returns it
+// with the database's URL, so a test can open a second store on the same database the way
+// a second process would.
+func openPostgresChainWriteStore(t *testing.T) (*SQL, *url.URL) {
+	t.Helper()
+
+	if testing.Short() {
+		t.Skip("Skipping PostgreSQL tests in short mode")
+	}
+
+	connStr, teardown, err := postgres.SetupTestPostgresContainer()
+	if err != nil {
+		t.Skipf("PostgreSQL container not available: %v", err)
+	}
+
+	t.Cleanup(func() { _ = teardown() })
+
+	storeURL, err := url.Parse(connStr)
+	require.NoError(t, err)
+
+	s := openStoreOn(t, storeURL)
+
+	return s, storeURL
+}
+
+func openStoreOn(t *testing.T, storeURL *url.URL) *SQL {
+	t.Helper()
+
+	s, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+	waitForStartupRebuild(t, s)
+
+	return s
+}
+
+// TestNewCreatesTheChainWriteRow_PostgreSQL: a walk that finds no row cannot see a write
+// that is creating it, so New must create the row before any walk runs. On a new database
+// the genesis StoreBlock creates it anyway; the case New covers is a database that already
+// holds its chain but has no row, such as one written before the row existed.
+func TestNewCreatesTheChainWriteRow_PostgreSQL(t *testing.T) {
+	first, storeURL := openPostgresChainWriteStore(t)
+
+	_, err := first.db.Exec(`DELETE FROM state WHERE key = $1`, chainWriteStateKey)
+	require.NoError(t, err)
+
+	openStoreOn(t, storeURL)
+
+	var count int
+	require.NoError(t, first.db.QueryRow(`SELECT COUNT(*) FROM state WHERE key = $1`, chainWriteStateKey).Scan(&count))
+	require.Equal(t, 1, count)
+}
+
+// TestNewDoesNotWaitOnAnOpenChainWrite_PostgreSQL: a store opening on a database where
+// another process holds the shared row in an open chain write must not wait for that
+// write to end. The holder can be a writer queued behind a full on_main_chain walk, so
+// the wait could last as long as the walk.
+func TestNewDoesNotWaitOnAnOpenChainWrite_PostgreSQL(t *testing.T) {
+	holder, storeURL := openPostgresChainWriteStore(t)
+
+	tx, err := holder.db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = tx.Rollback() })
+
+	require.NoError(t, holder.lockChainWrites(context.Background(), tx))
+
+	opened := make(chan error, 1)
+
+	go func() {
+		second, newErr := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+		if newErr == nil {
+			_ = second.Close(context.Background())
+		}
+
+		opened <- newErr
+	}()
+
+	select {
+	case newErr := <-opened:
+		require.NoError(t, newErr)
+	case <-time.After(10 * time.Second):
+		require.NoError(t, tx.Rollback(), "release the row so New can return")
+		_ = <-opened
+		t.Fatal("New waited on another process's open chain write")
+	}
 }
