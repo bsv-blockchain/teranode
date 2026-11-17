@@ -3128,8 +3128,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 // the cache or the setMined worker took it first and the other object was cached
 // after. The worker may still be reading block's subtrees, so only the object this
 // call removed is released, and block is left as if taken. If it was really
-// replaced, nobody releases it: heap-backed nodes go to the GC, mmap-backed
-// subtrees keep their mapping and temp file until the process exits. That needs an
+// replaced, nobody releases it: heap-backed nodes go to the GC, and an mmap-backed
+// subtree keeps its mapping until the process exits and leaves its
+// subtree-nodes-* temp file in blockvalidation_subtreeMmapDir after that, since
+// nothing removes those files at startup. That needs an
 // operator invalidate and reconsider racing a lost SetBlockSubtreesSet reply, and a
 // leak is the safe side of that trade against tagging another block's hashes.
 func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block, cached bool) bool {
