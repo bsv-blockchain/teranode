@@ -343,7 +343,7 @@ These settings control how UTXO data is stored and retained.
 
 These settings determine the storage footprint and data persistence behavior of the service:
 
-- When `blockpersister_skipUTXODelete` is `false` (default), the service maintains minimal storage by deleting each previous UTXO set once the next one is recorded. A stop or a failed delete at that point can leave the previous set, or some of its side files, on disk until removed by hand, and a delete that keeps failing leaves more of them on every pass. A failed delete of the set is logged at Error, and of a side file at Warn
+- When `blockpersister_skipUTXODelete` is `false` (default), the service maintains minimal storage by deleting each previous UTXO set once the next one is recorded. A stop or a failed delete at that point can leave the previous set, or some of its side files, on disk until removed by hand, and a delete that keeps failing leaves more of them on every pass
 - When set to `true`, the service preserves all historical UTXO sets, which increases storage requirements but enables historical analysis and validation
 - The `blockstore` setting defines where all block-related data is stored, affecting both read and write performance based on the underlying storage system
 - The `txstore` and `txmeta_store` settings determine where transaction data and UTXO metadata are stored, respectively, which impacts performance and data availability
