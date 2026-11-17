@@ -35,8 +35,8 @@ func forkReorgFiltersQueueArrivals(t *testing.T, opts ...Options) {
 	chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedInFirstTx)}
 	chain.moveForward[1].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedInLastTx)}
 
-	// A drain only takes batches stamped before it starts, so stamp the batch a
-	// millisecond earlier than any drain can start.
+	// Stamp the batch a millisecond before any drain, so every drain after it
+	// is unambiguously free to take it.
 	enqueueAt := time.Now()
 	stp.queue.clock = fixedClock{t: enqueueAt}
 	stp.clock = fixedClock{t: enqueueAt.Add(time.Millisecond)}
