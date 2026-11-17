@@ -55,13 +55,17 @@ type mtpFloorEntry struct {
 // difference is deliberately left in place. GetAdjustedTime moves the local
 // clock by the median peer offset only when that offset is within 70 minutes,
 // and applies no offset at all beyond it. It stops updating once 200 peers have
-// been sampled, so it corrects startup skew and never tracks later drift. The
-// clock-skew failure below needs the local clock roughly three hours behind the
-// network, since median-time-past trails the tip by about an hour. At that skew
-// SV Node's adjustment is zero too, and its own template build fails the same
-// consensus check. Peer time would only nudge an ordinary candidate by under 70
-// minutes, at the cost of a call into the legacy service and a clock that peers
-// can influence.
+// been sampled, so it corrects startup skew and never tracks later drift. On a
+// chain whose median-time-past trails real time by about an hour, the
+// clock-skew failure below needs the local clock roughly three hours behind,
+// and at that skew SV Node's adjustment is zero too, so its own template build
+// fails the same consensus check. Forward-stamped blocks that push
+// median-time-past ahead of real time can trigger the failure at a smaller
+// skew. There a node whose clock was already slow while it sampled its first
+// peers can be rescued by SV Node's capped offset, where this code refuses the
+// poll; that gap is accepted. Otherwise peer time would only nudge a candidate
+// by under 70 minutes, at the cost of a call into the legacy service and a
+// clock that peers can influence.
 //
 // The two consensus bounds on a block timestamp are a pair, and this function
 // honours both. The median rule is the floor; the two-hours-in-the-future rule
