@@ -467,8 +467,9 @@ type Store interface {
 	SetFSMState(ctx context.Context, state string) error
 
 	// OpenLaneLease closes stale leases, then opens a lease on a free lane with its first grant.
-	// See SQL.OpenLaneLease for the lane choice rule an implementation must follow.
-	OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lane.LeaseID, lane.Grant, error)
+	// lapsed is how many stale leases it closed first. See SQL.OpenLaneLease for the lane choice
+	// rule an implementation must follow.
+	OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (id lane.LeaseID, grant lane.Grant, lapsed int, err error)
 
 	// RenewLaneLease renews a lease and, if asked, records its next grant. closed reports a lease
 	// that is closed or no longer the lane's current one; nothing is written for it.

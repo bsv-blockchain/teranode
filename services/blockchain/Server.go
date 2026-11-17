@@ -1742,7 +1742,7 @@ func openLaneLease(ctx context.Context, store blockchain_store.Store, tSettings 
 		return lane.LeaseID{}, lane.Grant{}, err
 	}
 
-	id, g, err := store.OpenLaneLease(ctx, blockchainoptions.LaneLeaseOpen{
+	id, g, lapsed, err := store.OpenLaneLease(ctx, blockchainoptions.LaneLeaseOpen{
 		Holder:     holder,
 		Height:     meta.Height,
 		GrantMin:   tSettings.BlockChain.LaneGrantMin,
@@ -1753,6 +1753,9 @@ func openLaneLease(ctx context.Context, store blockchain_store.Store, tSettings 
 	}
 
 	prometheusBlockchainLaneLeaseOpens.Inc()
+	// An open closes stale leases before it chooses a lane; after an outage most lapses happen here
+	// rather than in the sweep, so they feed the sweep's counter.
+	prometheusBlockchainLaneLeaseCloses.WithLabelValues("lapsed").Add(float64(lapsed))
 	prometheusBlockchainLaneLeaseGrants.WithLabelValues(strconv.Itoa(int(g.Lane))).Inc()
 
 	return id, g, nil

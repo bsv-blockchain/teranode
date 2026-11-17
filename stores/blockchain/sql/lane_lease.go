@@ -62,28 +62,35 @@ const (
 // positions. A lane with no lease row and no hand-out comes first, lowest number first; after that
 // the lane closed longest ago, where a lane that has hand-outs but no lease row counts as closed at
 // its newest hand-out. With no lane free it returns a service error, and the caller retries.
-func (s *SQL) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lane.LeaseID, lane.Grant, error) {
+// lapsed is how many stale leases it closed first, for the same metric the sweep feeds.
+func (s *SQL) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lane.LeaseID, lane.Grant, int, error) {
 	if req.Holder == "" {
-		return lane.LeaseID{}, lane.Grant{}, errors.NewInvalidArgumentError("lane lease holder must not be empty")
+		return lane.LeaseID{}, lane.Grant{}, 0, errors.NewInvalidArgumentError("lane lease holder must not be empty")
 	}
 
 	if req.GrantMin == 0 {
-		return lane.LeaseID{}, lane.Grant{}, errors.NewInvalidArgumentError("lane grant size must be at least 1")
+		return lane.LeaseID{}, lane.Grant{}, 0, errors.NewInvalidArgumentError("lane grant size must be at least 1")
 	}
 
 	if req.CloseAfter <= 0 {
-		return lane.LeaseID{}, lane.Grant{}, errors.NewInvalidArgumentError("lane lease close time must be positive")
+		return lane.LeaseID{}, lane.Grant{}, 0, errors.NewInvalidArgumentError("lane lease close time must be positive")
 	}
 
 	id, err := lane.NewLeaseID()
 	if err != nil {
-		return lane.LeaseID{}, lane.Grant{}, errors.NewProcessingError("could not make a lane lease id", err)
+		return lane.LeaseID{}, lane.Grant{}, 0, errors.NewProcessingError("could not make a lane lease id", err)
 	}
 
-	var grant lane.Grant
+	var (
+		grant  lane.Grant
+		lapsed int
+	)
 
 	err = s.leaseTx(ctx, true, func(tx *sql.Tx) error {
-		if _, err := s.closeStale(ctx, tx, req.CloseAfter); err != nil {
+		var err error
+
+		// RetryTx may run this more than once; only the run that commits counts.
+		if lapsed, err = s.closeStale(ctx, tx, req.CloseAfter); err != nil {
 			return err
 		}
 
@@ -97,14 +104,7 @@ func (s *SQL) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lan
 			return err
 		}
 
-		now := s.dbNow()
-
-		if _, err = tx.ExecContext(ctx, `
-			INSERT INTO lane_lease (lane, lease_id, holder, opened_at, renewed_at, closed_at)
-			VALUES ($1, $2, $3, `+now+`, `+now+`, NULL)
-			ON CONFLICT (lane) DO UPDATE SET
-				lease_id = EXCLUDED.lease_id, holder = EXCLUDED.holder, opened_at = EXCLUDED.opened_at,
-				renewed_at = EXCLUDED.renewed_at, closed_at = NULL`,
+		if _, err = tx.ExecContext(ctx, s.laneSQL(openLeaseSQL),
 			int(chosen), s.leaseParam(id), req.Holder,
 		); err != nil {
 			return errors.NewStorageError("could not record the lane lease", err)
@@ -113,10 +113,10 @@ func (s *SQL) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lan
 		return nil
 	})
 	if err != nil {
-		return lane.LeaseID{}, lane.Grant{}, leaseError("could not open a lane lease", err)
+		return lane.LeaseID{}, lane.Grant{}, 0, leaseError("could not open a lane lease", err)
 	}
 
-	return id, grant, nil
+	return id, grant, lapsed, nil
 }
 
 // RenewLaneLease records a renewal at the database's now. With WantGrant it also records the next
@@ -130,7 +130,7 @@ func (s *SQL) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (g
 
 	err = s.leaseTx(ctx, req.WantGrant, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
-			`UPDATE lane_lease SET renewed_at = `+s.dbNow()+` WHERE lane = $1 AND lease_id = $2 AND closed_at IS NULL`,
+			s.laneSQL(renewLeaseSQL),
 			int(req.Lane), s.leaseParam(req.Lease),
 		)
 		if err != nil {
@@ -168,9 +168,7 @@ func (s *SQL) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (g
 // reports alreadyClosed when the lease was closed before, and then writes nothing.
 func (s *SQL) ReleaseLaneLease(ctx context.Context, req options.LaneLeaseRelease) (alreadyClosed bool, err error) {
 	err = s.leaseTx(ctx, false, func(tx *sql.Tx) error {
-		now := s.dbNow()
-
-		res, err := tx.ExecContext(ctx, `UPDATE lane_lease SET closed_at = `+now+` WHERE lane = $1 AND lease_id = $2 AND closed_at IS NULL`,
+		res, err := tx.ExecContext(ctx, s.laneSQL(releaseLeaseSQL),
 			int(req.Lane), s.leaseParam(req.Lease))
 		if err != nil {
 			return errors.NewStorageError("could not close the lane lease", err)
@@ -183,9 +181,7 @@ func (s *SQL) ReleaseLaneLease(ctx context.Context, req options.LaneLeaseRelease
 			return nil
 		}
 
-		if _, err = tx.ExecContext(ctx, `
-			INSERT INTO lane_close (lease_id, lane, kind, last, settles_first, settles_last_taken, closed_at)
-			VALUES ($1, $2, $3, $4, $5, $6, `+now+`)`,
+		if _, err = tx.ExecContext(ctx, s.laneSQL(cleanCloseSQL),
 			s.leaseParam(req.Lease), int(req.Lane), closeClean, lane.ToSigned(req.LastTaken), settlesFirst(req.Settles), settlesLastTaken(req.Settles),
 		); err != nil {
 			return errors.NewStorageError("could not record the lane lease close", err)
@@ -244,25 +240,15 @@ func (s *SQL) leaseTx(ctx context.Context, grants bool, fn func(tx *sql.Tx) erro
 // records the lease's newest hand-out as its last position, and no settles pair: the holder never
 // reported one.
 func (s *SQL) closeStale(ctx context.Context, tx *sql.Tx, closeAfter time.Duration) (int, error) {
-	now := s.dbNow()
-
 	var (
 		rows *sql.Rows
 		err  error
 	)
 
 	if s.engine == util.Postgres {
-		rows, err = tx.QueryContext(ctx, `
-			UPDATE lane_lease SET closed_at = `+now+`
-			WHERE closed_at IS NULL AND renewed_at <= `+now+` - $1::bigint * interval '1 microsecond'
-			RETURNING lease_id, lane`,
-			closeAfter.Microseconds())
+		rows, err = tx.QueryContext(ctx, closeStaleSQL.postgres, closeAfter.Microseconds())
 	} else {
-		rows, err = tx.QueryContext(ctx, `
-			UPDATE lane_lease SET closed_at = `+now+`
-			WHERE closed_at IS NULL AND renewed_at <= strftime('%Y-%m-%d %H:%M:%f', 'now', $1)
-			RETURNING lease_id, lane`,
-			sqliteOffset(-closeAfter))
+		rows, err = tx.QueryContext(ctx, closeStaleSQL.sqlite, sqliteOffset(-closeAfter))
 	}
 
 	if err != nil {
@@ -305,11 +291,7 @@ func (s *SQL) closeStale(ctx context.Context, tx *sql.Tx, closeAfter time.Durati
 	}
 
 	for _, l := range closed {
-		if _, err = tx.ExecContext(ctx, `
-			INSERT INTO lane_close (lease_id, lane, kind, last, settles_first, settles_last_taken, closed_at)
-			SELECT $1, $2, $3, h.last, NULL, NULL, `+now+`
-			FROM lane_handout h WHERE h.lane = $2 AND h.lease_id = $1
-			ORDER BY h.first DESC LIMIT 1`,
+		if _, err = tx.ExecContext(ctx, s.laneSQL(lapsedCloseSQL),
 			l.id, l.lane, closeLapsed,
 		); err != nil {
 			return 0, errors.NewStorageError("could not record a lapsed lane lease", err)
@@ -434,9 +416,7 @@ func (s *SQL) recordGrant(ctx context.Context, tx *sql.Tx, id lane.LeaseID, l ui
 		}
 	}
 
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO lane_handout (lane, first, last, holder, height, handed_at, lease_id, settles_first, settles_last_taken)
-		VALUES ($1, $2, $3, $4, $5, `+s.dbNow()+`, $6, $7, $8)`,
+	if _, err = tx.ExecContext(ctx, s.laneSQL(recordGrantSQL),
 		int(l), lane.ToSigned(first), lane.ToSigned(last), holder, int64(height), s.leaseParam(id), settlesFirst(settles), settlesLastTaken(settles),
 	); err != nil {
 		return lane.Grant{}, errors.NewStorageError("could not record the lane grant", err)
@@ -459,15 +439,89 @@ func grantSize(rate uint64, d time.Duration, minimum uint64) uint64 {
 	return max(minimum, rate*secs)
 }
 
-// dbNow is the database clock as an SQL expression. Postgres uses clock_timestamp, not now, so a
-// grant recorded after waiting for the hand-out lock is stamped after the grant it waited for.
-func (s *SQL) dbNow() string {
+// laneSQL picks a lease statement's form for this database's engine.
+func (s *SQL) laneSQL(q engineSQL) string {
 	if s.engine == util.Postgres {
-		return `clock_timestamp()`
+		return q.postgres
 	}
 
-	return `strftime('%Y-%m-%d %H:%M:%f', 'now')`
+	return q.sqlite
 }
+
+// engineSQL is one lease statement written out for each engine. They differ only in how they read
+// the database clock: clock_timestamp() on Postgres, strftime on SQLite. Postgres uses
+// clock_timestamp, not now, so a grant recorded after waiting for the hand-out lock is stamped after
+// the grant it waited for. Each is a constant, so no
+// statement is built from pieces at run time.
+type engineSQL struct {
+	postgres string
+	sqlite   string
+}
+
+var (
+	openLeaseSQL = engineSQL{
+		postgres: `
+			INSERT INTO lane_lease (lane, lease_id, holder, opened_at, renewed_at, closed_at)
+			VALUES ($1, $2, $3, clock_timestamp(), clock_timestamp(), NULL)
+			ON CONFLICT (lane) DO UPDATE SET
+				lease_id = EXCLUDED.lease_id, holder = EXCLUDED.holder, opened_at = EXCLUDED.opened_at,
+				renewed_at = EXCLUDED.renewed_at, closed_at = NULL`,
+		sqlite: `
+			INSERT INTO lane_lease (lane, lease_id, holder, opened_at, renewed_at, closed_at)
+			VALUES ($1, $2, $3, strftime('%Y-%m-%d %H:%M:%f', 'now'), strftime('%Y-%m-%d %H:%M:%f', 'now'), NULL)
+			ON CONFLICT (lane) DO UPDATE SET
+				lease_id = EXCLUDED.lease_id, holder = EXCLUDED.holder, opened_at = EXCLUDED.opened_at,
+				renewed_at = EXCLUDED.renewed_at, closed_at = NULL`,
+	}
+	renewLeaseSQL = engineSQL{
+		postgres: `UPDATE lane_lease SET renewed_at = clock_timestamp() WHERE lane = $1 AND lease_id = $2 AND closed_at IS NULL`,
+		sqlite:   `UPDATE lane_lease SET renewed_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE lane = $1 AND lease_id = $2 AND closed_at IS NULL`,
+	}
+	releaseLeaseSQL = engineSQL{
+		postgres: `UPDATE lane_lease SET closed_at = clock_timestamp() WHERE lane = $1 AND lease_id = $2 AND closed_at IS NULL`,
+		sqlite:   `UPDATE lane_lease SET closed_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE lane = $1 AND lease_id = $2 AND closed_at IS NULL`,
+	}
+	cleanCloseSQL = engineSQL{
+		postgres: `
+			INSERT INTO lane_close (lease_id, lane, kind, last, settles_first, settles_last_taken, closed_at)
+			VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp())`,
+		sqlite: `
+			INSERT INTO lane_close (lease_id, lane, kind, last, settles_first, settles_last_taken, closed_at)
+			VALUES ($1, $2, $3, $4, $5, $6, strftime('%Y-%m-%d %H:%M:%f', 'now'))`,
+	}
+	// closeStaleSQL takes the close time as $1: microseconds on Postgres, an SQLite date modifier
+	// on SQLite.
+	closeStaleSQL = engineSQL{
+		postgres: `
+			UPDATE lane_lease SET closed_at = clock_timestamp()
+			WHERE closed_at IS NULL AND renewed_at <= clock_timestamp() - $1::bigint * interval '1 microsecond'
+			RETURNING lease_id, lane`,
+		sqlite: `
+			UPDATE lane_lease SET closed_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
+			WHERE closed_at IS NULL AND renewed_at <= strftime('%Y-%m-%d %H:%M:%f', 'now', $1)
+			RETURNING lease_id, lane`,
+	}
+	lapsedCloseSQL = engineSQL{
+		postgres: `
+			INSERT INTO lane_close (lease_id, lane, kind, last, settles_first, settles_last_taken, closed_at)
+			SELECT $1, $2, $3, h.last, NULL, NULL, clock_timestamp()
+			FROM lane_handout h WHERE h.lane = $2 AND h.lease_id = $1
+			ORDER BY h.first DESC LIMIT 1`,
+		sqlite: `
+			INSERT INTO lane_close (lease_id, lane, kind, last, settles_first, settles_last_taken, closed_at)
+			SELECT $1, $2, $3, h.last, NULL, NULL, strftime('%Y-%m-%d %H:%M:%f', 'now')
+			FROM lane_handout h WHERE h.lane = $2 AND h.lease_id = $1
+			ORDER BY h.first DESC LIMIT 1`,
+	}
+	recordGrantSQL = engineSQL{
+		postgres: `
+			INSERT INTO lane_handout (lane, first, last, holder, height, handed_at, lease_id, settles_first, settles_last_taken)
+			VALUES ($1, $2, $3, $4, $5, clock_timestamp(), $6, $7, $8)`,
+		sqlite: `
+			INSERT INTO lane_handout (lane, first, last, holder, height, handed_at, lease_id, settles_first, settles_last_taken)
+			VALUES ($1, $2, $3, $4, $5, strftime('%Y-%m-%d %H:%M:%f', 'now'), $6, $7, $8)`,
+	}
+)
 
 // leaseParam is a lease ID in the form the database keeps: a UUID string on Postgres, 16 bytes on SQLite.
 func (s *SQL) leaseParam(id lane.LeaseID) any {

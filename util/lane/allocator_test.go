@@ -373,6 +373,15 @@ func TestAllocatorRefusesAGrantNotAboveItsOwnHighest(t *testing.T) {
 
 	_, err := a.Next(context.Background())
 	require.ErrorIs(t, err, errors.ErrServiceUnavailable, "position 1 is never given out twice")
+
+	// The refused lease is released with nothing taken, so it does not hold lane 0 until it lapses
+	// while each retry of open holds another lane.
+	src.mu.Lock()
+	defer src.mu.Unlock()
+
+	require.NotEmpty(t, src.releases, "a refused lease is released")
+	require.Equal(t, uint8(0), src.releases[0].Lane)
+	require.Zero(t, src.releases[0].LastTaken)
 }
 
 func TestAllocatorReleaseReportsTheHighestPositionTaken(t *testing.T) {

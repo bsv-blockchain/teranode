@@ -187,7 +187,7 @@ func TestTwoAllocatorsOnOneLaneNeverSharePosition(t *testing.T) {
 	// Every other lane is held for the whole test. The fillers are opened on the store with a long
 	// close time, so opening the later ones does not sweep the earlier ones.
 	for l := 2; l < 254; l++ {
-		_, _, err := store.OpenLaneLease(context.Background(), options.LaneLeaseOpen{Holder: "filler", GrantMin: 1, CloseAfter: time.Hour})
+		_, _, _, err := store.OpenLaneLease(context.Background(), options.LaneLeaseOpen{Holder: "filler", GrantMin: 1, CloseAfter: time.Hour})
 		require.NoError(t, err)
 	}
 

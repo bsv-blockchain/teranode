@@ -693,7 +693,7 @@ func (m *MockStore) RevalidateBlock(ctx context.Context, blockHash *chainhash.Ha
 	panic(implementMe)
 }
 
-func (m *MockStore) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lane.LeaseID, lane.Grant, error) {
+func (m *MockStore) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lane.LeaseID, lane.Grant, int, error) {
 	panic(implementMe)
 }
 

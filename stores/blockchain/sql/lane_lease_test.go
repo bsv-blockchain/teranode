@@ -98,7 +98,7 @@ func ageLeases(t *testing.T, s *SQL, d time.Duration) {
 
 func TestOpenLaneLeaseGrantsTheMinimumOnAFreshLane(t *testing.T) {
 	runLaneHandoutTests(t, "fresh lane", func(t *testing.T, s *SQL) {
-		id, g, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
 		require.False(t, id.IsZero())
 		require.Equal(t, lane.Grant{Lane: 0, First: 1, Last: leaseTestGrantMin}, g)
@@ -134,7 +134,7 @@ func TestOpenLaneLeaseStartsAboveTheOldRanges(t *testing.T) {
 		sort.Slice(lanes, func(i, j int) bool { return handedAt[lanes[i]].Before(handedAt[lanes[j]]) })
 
 		for i := 0; i < 2; i++ {
-			_, g, err := s.OpenLaneLease(t.Context(), leaseOpen("new"))
+			_, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("new"))
 			require.NoError(t, err)
 			require.Equal(t, lanes[i], g.Lane, "open %d takes the lane idle longest", i)
 			require.Equal(t, uint64(g.Lane+1)*10_000_000+1, g.First, "the grant starts one above the lane's old range")
@@ -145,12 +145,12 @@ func TestOpenLaneLeaseStartsAboveTheOldRanges(t *testing.T) {
 func TestOpenLaneLeaseNeverGrantsLanes254And255(t *testing.T) {
 	runLaneHandoutTests(t, "254 and 255", func(t *testing.T, s *SQL) {
 		for i := 0; i < 254; i++ {
-			_, g, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+			_, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 			require.NoError(t, err)
 			require.Less(t, int(g.Lane), 254)
 		}
 
-		_, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		_, _, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.Error(t, err)
 
 		require.Equal(t, 254, countRows(t, s, `SELECT COUNT(DISTINCT lane) FROM lane_lease`))
@@ -159,7 +159,7 @@ func TestOpenLaneLeaseNeverGrantsLanes254And255(t *testing.T) {
 
 func TestRenewLaneLeaseSizesTheGrantByRate(t *testing.T) {
 	runLaneHandoutTests(t, "rate", func(t *testing.T, s *SQL) {
-		id, g, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
 
 		r := leaseRenew(id, g)
@@ -183,7 +183,7 @@ func TestRenewLaneLeaseSizesTheGrantByRate(t *testing.T) {
 
 func TestRenewLaneLeaseWithoutAGrantWritesNoHandoutRow(t *testing.T) {
 	runLaneHandoutTests(t, "no grant", func(t *testing.T, s *SQL) {
-		id, g, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
 
 		r := leaseRenew(id, g)
@@ -199,7 +199,7 @@ func TestRenewLaneLeaseWithoutAGrantWritesNoHandoutRow(t *testing.T) {
 
 func TestRenewLaneLeaseRecordsTheSettlesPairOnTheNextHandoutRow(t *testing.T) {
 	runLaneHandoutTests(t, "settles", func(t *testing.T, s *SQL) {
-		id, g, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
 
 		r := leaseRenew(id, g)
@@ -228,7 +228,7 @@ func TestRenewLaneLeaseRecordsTheSettlesPairOnTheNextHandoutRow(t *testing.T) {
 
 func TestSweepRecordsTheNewestHandoutOnALapsedClose(t *testing.T) {
 	runLaneHandoutTests(t, "lapsed", func(t *testing.T, s *SQL) {
-		id, g, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
 
 		r := leaseRenew(id, g)
@@ -240,7 +240,7 @@ func TestSweepRecordsTheNewestHandoutOnALapsedClose(t *testing.T) {
 
 		// A second lease on another lane takes a grant after this one, so "newest" must mean this
 		// lease's newest hand-out, not the table's.
-		_, _, err = s.OpenLaneLease(t.Context(), leaseOpen("b"))
+		_, _, _, err = s.OpenLaneLease(t.Context(), leaseOpen("b"))
 		require.NoError(t, err)
 
 		ageLeases(t, s, time.Hour)
@@ -264,9 +264,30 @@ func TestSweepRecordsTheNewestHandoutOnALapsedClose(t *testing.T) {
 	})
 }
 
+// An open closes stale leases before it chooses a lane, and reports how many, so the service can
+// count them with the sweep's lapsed closes.
+func TestOpenReportsTheStaleLeasesItCloses(t *testing.T) {
+	runLaneHandoutTests(t, "open-lapsed", func(t *testing.T, s *SQL) {
+		for _, holder := range []string{"a", "b"} {
+			_, _, _, err := s.OpenLaneLease(t.Context(), leaseOpen(holder))
+			require.NoError(t, err)
+		}
+
+		ageLeases(t, s, time.Hour)
+
+		open := leaseOpen("c")
+		open.CloseAfter = 30 * time.Minute
+
+		_, _, lapsed, err := s.OpenLaneLease(t.Context(), open)
+		require.NoError(t, err)
+		require.Equal(t, 2, lapsed)
+		require.Equal(t, 2, countRows(t, s, `SELECT COUNT(*) FROM lane_close WHERE kind = 'lapsed'`))
+	})
+}
+
 func TestRenewAndReleaseOfAClosedLeaseAreRefused(t *testing.T) {
 	runLaneHandoutTests(t, "closed", func(t *testing.T, s *SQL) {
-		id, g, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
 
 		already, err := s.ReleaseLaneLease(t.Context(), options.LaneLeaseRelease{Lease: id, Lane: g.Lane, LastTaken: g.First})
@@ -298,7 +319,7 @@ func TestRenewAndReleaseOfAClosedLeaseAreRefused(t *testing.T) {
 func TestReleaseAndSweepRaceWriteOneCloseRow(t *testing.T) {
 	runLaneHandoutTests(t, "race", func(t *testing.T, s *SQL) {
 		for i := 0; i < 50; i++ {
-			id, g, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+			id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 			require.NoError(t, err)
 
 			var (
@@ -365,7 +386,7 @@ func TestTwoLeasesOnOneLaneNeverSharePosition(t *testing.T) {
 				ctx := context.Background()
 
 				for i := 0; i < loops; i++ {
-					id, g, err := s.OpenLaneLease(ctx, leaseOpen("w"))
+					id, g, _, err := s.OpenLaneLease(ctx, leaseOpen("w"))
 					if err != nil {
 						errs <- err
 						return
@@ -496,7 +517,7 @@ func TestTwoLeasesOnOneLaneNeverSharePosition(t *testing.T) {
 func TestSweepClosesOnlyLeasesPastTheCloseTime(t *testing.T) {
 	runLaneHandoutTests(t, "close time", func(t *testing.T, s *SQL) {
 		for i := 0; i < 2; i++ {
-			_, _, err := s.OpenLaneLease(t.Context(), leaseOpen("old"))
+			_, _, _, err := s.OpenLaneLease(t.Context(), leaseOpen("old"))
 			require.NoError(t, err)
 		}
 
@@ -506,8 +527,9 @@ func TestSweepClosesOnlyLeasesPastTheCloseTime(t *testing.T) {
 		open := leaseOpen("new")
 		open.CloseAfter = time.Hour
 
-		fresh, _, err := s.OpenLaneLease(t.Context(), open)
+		fresh, _, lapsed, err := s.OpenLaneLease(t.Context(), open)
 		require.NoError(t, err)
+		require.Zero(t, lapsed)
 
 		closed, err := s.CloseStaleLaneLeases(t.Context(), 3*time.Minute)
 		require.NoError(t, err)
@@ -580,7 +602,7 @@ func TestLaneLeaseDDLIsANoOpOnACurrentSchema(t *testing.T) {
 // is the lane closed longest ago.
 func TestOpenLaneLeaseSkipsAnExhaustedLane(t *testing.T) {
 	runLaneHandoutTests(t, "exhausted", func(t *testing.T, s *SQL) {
-		id, g, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
 		require.Equal(t, uint8(0), g.Lane)
 
@@ -603,7 +625,7 @@ func TestOpenLaneLeaseSkipsAnExhaustedLane(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		_, g2, err := s.OpenLaneLease(t.Context(), leaseOpen("b"))
+		_, g2, _, err := s.OpenLaneLease(t.Context(), leaseOpen("b"))
 		require.NoError(t, err)
 		require.NotEqual(t, uint8(0), g2.Lane, "the exhausted lane is skipped")
 		require.Equal(t, uint64(11), g2.First)

@@ -487,14 +487,17 @@ func (a *Allocator) open() error {
 	}
 
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	// Recorded even when Close has begun, so Close releases it rather than leaving it to lapse.
 	if err = a.acceptableLocked(g); err != nil {
-		// The lease is left to lapse; this process will not use it.
+		a.mu.Unlock()
 		a.logger.Errorf("%v", err)
+		a.releaseRefused(id, g.Lane)
+
 		return err
 	}
+
+	defer a.mu.Unlock()
 
 	a.leased, a.lease, a.lane = true, id, g.Lane
 	a.installLocked(g)
@@ -509,6 +512,18 @@ func (a *Allocator) open() error {
 	a.logger.Infof("[lane] %s holds lane %d, positions %d to %d", a.holder, g.Lane, g.First, g.Last)
 
 	return nil
+}
+
+// releaseRefused closes a lease whose first grant this process refused, with no position taken.
+// Left open, it would hold its lane until it lapsed, and every retry of open would hold another
+// lane the same way. The release is best effort: if it fails, the lease lapses as before.
+func (a *Allocator) releaseRefused(id LeaseID, l uint8) {
+	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
+	defer cancel()
+
+	if _, err := a.src.ReleaseLaneLease(ctx, Release{Lease: id, Lane: l}); err != nil {
+		a.logger.Warnf("[lane] could not release the refused lease on lane %d for %s; it closes as lapsed: %v", l, a.holder, err)
+	}
 }
 
 func (a *Allocator) renew(want bool) error {
