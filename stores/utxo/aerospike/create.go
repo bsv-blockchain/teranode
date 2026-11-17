@@ -1161,8 +1161,8 @@ func (s *Store) storeExternallyWithLock(
 		// the coinbase store and the reorg restore that replaces carrying on with
 		// the creating bin set. Quick validation used to stamp an existing
 		// transaction mined instead, which clears the bin; now, if the lock is
-		// still held when its repeats run out, the block fails as a local fault
-		// and legacy sync applies it again later.
+		// still held when its repeats run out, its validation of the block fails
+		// with this storage error.
 		// The lock's ErrTxExists is carried as text, not wrapped: errors.Is walks the
 		// chain, so a wrapped one would still read as done.
 		if len(bItem.blockIDs) > 0 && errors.Is(err, errors.ErrTxExists) {

@@ -203,7 +203,7 @@ The protocol provides the following guarantees:
 **Lock Acquisition Failure:**
 
 - Another process holds the lock, or an earlier attempt failed to release it and it waits out its TTL
-- Return `TxExistsError` immediately; a create carrying mined block info returns a retryable storage error instead, because this attempt has not cleared the creating flag. Every such caller then fails while the lock is held, up to the lock's TTL when a release failed or a create crashed (30 s plus 2 s per record, at most 300 s). If the lock outlives quick validation's repeats, its block fails as a local fault and legacy sync applies it again later
+- Return `TxExistsError` immediately; a create carrying mined block info returns a retryable storage error instead, because this attempt has not cleared the creating flag. Every such caller then fails while the lock is held, up to the lock's TTL when a release failed or a create crashed (30 s plus 2 s per record, at most 300 s). If the lock outlives quick validation's repeats, its validation of the block fails with that storage error
 - No cleanup needed
 
 **Blob Storage Failure:**
