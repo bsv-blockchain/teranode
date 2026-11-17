@@ -2,7 +2,9 @@ package sql
 
 import (
 	"context"
+	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -127,7 +129,8 @@ func TestChainWriteLockWalkCheckFailureFailsTheWalk_PostgreSQL(t *testing.T) {
 
 // TestChainWriteLockWalkWithoutTheRow_PostgreSQL: New creates the shared row before any
 // walk runs, so a walk that finds none has nothing to check against and commits rather than
-// failing every repair on a database where the row was removed by hand.
+// failing every repair on a database where the row was removed by hand. It warns when it
+// does, because that warning is the only sign the cross-process check is off.
 func TestChainWriteLockWalkWithoutTheRow_PostgreSQL(t *testing.T) {
 	s := newPostgresChainWriteStore(t)
 
@@ -137,8 +140,41 @@ func TestChainWriteLockWalkWithoutTheRow_PostgreSQL(t *testing.T) {
 	_, err = s.db.Exec(`DELETE FROM state WHERE key = $1`, chainWriteStateKey)
 	require.NoError(t, err)
 
+	logger := &warnRecordingLogger{}
+	s.logger = logger
+
 	require.NoError(t, s.rebuildOnMainChainFlag(context.Background(), true))
 	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()))
+	require.True(t, logger.warnedAbout(chainWriteStateKey), "a walk that commits without the row must warn")
+}
+
+// warnRecordingLogger records each Warnf line, so a test can assert a path warned.
+// Everything else is TestLogger's.
+type warnRecordingLogger struct {
+	ulogger.TestLogger
+
+	mu    sync.Mutex
+	warns []string
+}
+
+func (l *warnRecordingLogger) Warnf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.warns = append(l.warns, fmt.Sprintf(format, args...))
+}
+
+func (l *warnRecordingLogger) warnedAbout(substr string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	for _, w := range l.warns {
+		if strings.Contains(w, substr) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // TestEnsureChainWriteRowReportsFailure_PostgreSQL: New must not start a store whose walks
@@ -214,7 +250,8 @@ func openStoreOn(t *testing.T, storeURL *url.URL) *SQL {
 }
 
 // TestNewCreatesTheChainWriteRow_PostgreSQL: a walk that finds no row cannot see a write
-// that is creating it, so New must create the row before any walk runs. On a new database
+// that is creating it, so New must create the row. It checks only that the row exists once
+// New has returned, not that New creates it before its own startup walk. On a new database
 // the genesis StoreBlock creates it anyway; the case New covers is a database that already
 // holds its chain but has no row, such as one written before the row existed.
 func TestNewCreatesTheChainWriteRow_PostgreSQL(t *testing.T) {
