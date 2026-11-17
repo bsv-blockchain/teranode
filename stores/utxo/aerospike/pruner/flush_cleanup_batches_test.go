@@ -590,6 +590,47 @@ func TestFlushCleanupBatches_FailedDeleteStillRemovesConfirmedBlobs(t *testing.T
 	require.True(t, blobExists, "the blob of a child whose master delete was refused must stay")
 }
 
+// TestFlushChunk_BlobsOfConfirmedDeletesOutliveTheContext: the batch call does
+// not watch the context, so a delete batch can land after the drain's deadline
+// has passed. The child's master is then gone, so no later scan finds it, and
+// its blob carries no DAH. The blob must still be deleted.
+func TestFlushChunk_BlobsOfConfirmedDeletesOutliveTheContext(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	child := chainhash.HashH([]byte("late-batch-blob-child"))
+	childKey := putRecord(t, client, &child, aerospike.BinMap{fields.TxID.String(): child.CloneBytes()})
+	require.NoError(t, s.external.Set(context.Background(), child.CloneBytes(), fileformat.FileTypeTx, []byte("blob")))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// The batch answers after the context has ended.
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		err := client.BatchOperate(policy, records)
+		cancel()
+
+		return err
+	}
+
+	carry := &deleteCarry{
+		deletions: []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{childKey}}},
+		files:     []*externalFileInfo{{txHash: &child, fileType: fileformat.FileTypeTx}},
+		updates:   []map[string]*parentUpdateInfo{{}},
+	}
+
+	deleted, _, err := s.flushChunk(ctx, carry, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, deleted, "fixture: the master delete landed")
+
+	exists, err := client.Exists(nil, childKey)
+	require.NoError(t, err)
+	require.False(t, exists, "fixture: the master is gone")
+
+	blobExists, err := s.external.Exists(context.Background(), child.CloneBytes(), fileformat.FileTypeTx)
+	require.NoError(t, err)
+	require.False(t, blobExists, "the blob of a child whose master delete landed must go even though the context ended")
+}
+
 // TestIsPaginationRecord: processRecordChunk sets pendingDeletion.page from
 // this, so a scanned page never stands in for its master. A master carries
 // totalExtraRecs, or, from a writer that does not set it, sits under the bare

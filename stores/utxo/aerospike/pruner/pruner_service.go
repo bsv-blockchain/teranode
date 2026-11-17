@@ -2482,6 +2482,11 @@ func (s *Service) drainCarryDetached(ctx context.Context, carry *deleteCarry) (d
 // drainTimeout bounds the drain of a partition worker.
 const drainTimeout = 30 * time.Second
 
+// blobDeleteTimeout bounds the external blob deletions of one batch's
+// confirmed deletes. They run detached from the batch's context; see
+// settleCarriedDeletes.
+const blobDeleteTimeout = 2 * time.Minute
+
 // flushChunk sends one batch: the marker writes for this chunk's queued
 // parents, and the deletes the carry holds from the previous batch's answers.
 // It then puts this chunk's cleared children in the carry for the next batch.
@@ -2753,9 +2758,17 @@ func (s *Service) settleCarriedDeletes(ctx context.Context, carry *deleteCarry, 
 	// are still there, but a child whose master is gone is never scanned again,
 	// and its blob carries no DAH (the external store is built
 	// WithDisableDAH(true)), so skipping it here would leave it for good.
+	//
+	// For the same reason they run under their own budget, detached from ctx.
+	// The batch call does not watch ctx and can answer after it has expired
+	// (the drain's drainTimeout, or a cancelled cycle), and a ctx that is done
+	// by then would skip every blob of a master already gone.
 	var blobErr error
 	if len(remaining) > 0 {
-		blobErr = s.executeBatchExternalFileDeletions(ctx, remaining)
+		blobCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), blobDeleteTimeout)
+		blobErr = s.executeBatchExternalFileDeletions(blobCtx, remaining)
+
+		cancel()
 	}
 
 	if len(results.failedRecords) > 0 {
@@ -3804,11 +3817,13 @@ func (s *Service) executeBatchExternalFileDeletions(ctx context.Context, files [
 	alreadyDeletedCount := 0
 	errorCount := 0
 
-	for _, fileInfo := range files {
+	for i, fileInfo := range files {
 		// Check context before each deletion
 		select {
 		case <-ctx.Done():
-			s.logger.Infof("Context cancelled, stopping external file deletions")
+			// The masters of these children are already gone and their blobs
+			// carry no DAH, so nothing deletes what is left here.
+			s.logger.Errorf("Context ended with %d of %d external file deletions not sent; those blobs are left behind: %v", len(files)-i, len(files), ctx.Err())
 			return ctx.Err()
 		default:
 		}
