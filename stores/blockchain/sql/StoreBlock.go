@@ -157,9 +157,12 @@ const forkLockTimeoutStatement = `SET LOCAL lock_timeout = '500ms'`
 // (30 min). A fork block's reconcile that reaches such a row would wait there while it
 // holds slowPathMu, and every later StoreBlock, extends included, would wait behind it.
 // With the bound, StoreBlock releases slowPathMu and runs the whole attempt again, so
-// extends keep being stored while the fork block retries. It retries until it stores or
-// its caller's context ends. Block validation gives AddBlock 30 s, so a fork block that
-// meets a longer walk fails as it did before this bound, and is stored when offered again.
+// extends keep being stored while the fork block retries. It retries until it stores,
+// fails with an error other than a lock wait, or its caller's context ends. Block
+// validation's non-optimistic store gives AddBlock 30 s, so there a fork block that meets
+// a longer walk fails and is stored when offered again. Callers that pass their own
+// context (the optimistic add, quick validation's commit, the invalid-block store, block
+// assembly's mined block) keep retrying until the walk commits, without slowPathMu.
 //
 // It neither unwraps to the driver error nor says "timeout" in its message, so RetryTx
 // treats it as not retriable and returns at once rather than retrying under slowPathMu,
