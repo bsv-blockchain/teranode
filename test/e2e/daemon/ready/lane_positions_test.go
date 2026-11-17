@@ -90,7 +90,9 @@ func TestLanePositionsOnNewRecordsUtxoset(t *testing.T) {
 
 // runLanePositionsScenario checks what the records carry: a transaction validated by the node gets a
 // lane position, a second process creating records against the same blockchain service gets a
-// different lane, and after a restart the node takes a lease again and never reuses a position.
+// different lane, and after a restart the node takes a lease again and its records still carry
+// positions. The restarted node lands on another lane, so this does not check that positions keep
+// rising within one lane; the lane hand-out tests in stores/blockchain/sql do.
 func runLanePositionsScenario(t *testing.T, td *daemon.TestDaemon, restart func() *daemon.TestDaemon) {
 	t.Helper()
 
@@ -190,9 +192,4 @@ func runLanePositionsScenario(t *testing.T, td *daemon.TestDaemon, restart func(
 	}
 
 	t.Logf("tx1 after restart %s: lane %d position %d", tx1.TxIDChainHash(), afterLane, afterPos)
-	// A restarted node takes a new lease, usually on another lane. In the same lane, it carries on
-	// above every position handed out before.
-	if afterLane == firstLane {
-		require.Greater(t, afterPos, firstPos, "positions only increase within a lane across a restart")
-	}
 }

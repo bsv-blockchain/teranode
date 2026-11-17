@@ -2,7 +2,11 @@ package validator
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"net/url"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -21,15 +25,18 @@ import (
 // leased is set, and gives no positions without one.
 type leaseLike struct {
 	started atomic.Bool
-	leased  atomic.Bool
-	n       atomic.Uint64
+	// startCtx is false if Start was given a nil context.
+	startCtx atomic.Bool
+	leased   atomic.Bool
+	n        atomic.Uint64
 
 	// startErr is what Start returns.
 	startErr error
 }
 
-func (s *leaseLike) Start(context.Context) error {
+func (s *leaseLike) Start(ctx context.Context) error {
 	s.started.Store(true)
+	s.startCtx.Store(ctx != nil)
 	return s.startErr
 }
 
@@ -52,6 +59,12 @@ func (s *leaseLike) Next(context.Context) (uint64, error) {
 func newLaneLeaseValidator(t *testing.T, source *leaseLike) (*Validator, utxo.Store) {
 	t.Helper()
 
+	return newLaneLeaseValidatorWithLogger(t, source, ulogger.TestLogger{})
+}
+
+func newLaneLeaseValidatorWithLogger(t *testing.T, source *leaseLike, logger ulogger.Logger) (*Validator, utxo.Store) {
+	t.Helper()
+
 	ctx := context.Background()
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BatcherDrainMode = true
@@ -66,7 +79,7 @@ func newLaneLeaseValidator(t *testing.T, source *leaseLike) (*Validator, utxo.St
 	require.True(t, ok)
 	taker.SetLanePositionSource(source)
 
-	v, err := New(ctx, ulogger.TestLogger{}, tSettings, store, nil, nil, nil, nil, nil)
+	v, err := New(ctx, logger, tSettings, store, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	return v.(*Validator), store
@@ -77,18 +90,62 @@ func TestValidatorIsNotReadyWithoutALease(t *testing.T) {
 	v, _ := newLaneLeaseValidator(t, source)
 
 	require.True(t, source.started.Load(), "a validator starts its lease when it is built")
+	require.True(t, source.startCtx.Load(), "the lease starts on the validator's context")
 
 	_, msg, _ := v.Health(context.Background(), false)
 	require.Contains(t, msg, "LaneLease: BAD")
+}
+
+// The lane lease check on its own, since Health is not ready for other reasons in a unit test too:
+// with no lease it reports 503 and an error, and with one it reports 200 and no error.
+func TestLaneLeaseCheckReportsServiceUnavailableWithoutALease(t *testing.T) {
+	source := &leaseLike{}
+	_, store := newLaneLeaseValidator(t, source)
+
+	holder, ok := utxo.As[utxo.LanePositionHolder](store)
+	require.True(t, ok)
+
+	check := laneLeaseCheck(holder)
+
+	status, msg, err := check(context.Background(), false)
+	require.Equal(t, http.StatusServiceUnavailable, status)
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.Contains(t, msg, "LaneLease: BAD")
+
+	source.leased.Store(true)
+
+	status, msg, err = check(context.Background(), false)
+	require.Equal(t, http.StatusOK, status)
+	require.NoError(t, err)
+	require.Equal(t, "LaneLease: GOOD", msg)
+}
+
+// warnRecorder keeps the warnings logged through it.
+type warnRecorder struct {
+	ulogger.TestLogger
+	mu    sync.Mutex
+	warns []string
+}
+
+func (l *warnRecorder) Warnf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.warns = append(l.warns, fmt.Sprintf(format, args...))
 }
 
 // A lease that cannot start does not stop the validator being built: the failure is logged, and
 // readiness reports a validator with no lease as not ready, so it takes no traffic.
 func TestValidatorIsBuiltWhenItsLeaseCannotStart(t *testing.T) {
 	source := &leaseLike{startErr: errors.NewServiceUnavailableError("blockchain service is down")}
-	v, _ := newLaneLeaseValidator(t, source)
+	logger := &warnRecorder{}
+	v, _ := newLaneLeaseValidatorWithLogger(t, source, logger)
 
 	require.True(t, source.started.Load())
+
+	logger.mu.Lock()
+	require.Contains(t, strings.Join(logger.warns, "\n"), "could not start the lane lease", "the start failure is logged")
+	logger.mu.Unlock()
 
 	_, msg, _ := v.Health(context.Background(), false)
 	require.Contains(t, msg, "LaneLease: BAD")

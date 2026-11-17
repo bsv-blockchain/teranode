@@ -38,7 +38,9 @@ type Timings struct {
 	Renew time.Duration
 	// Stop is how long after the last renewal that succeeded was sent the holder stops giving out
 	// positions. That renewal went out up to Renew before the service failed, so an outage stops
-	// creates up to Renew sooner than Stop. Set it shorter than the service's close time, on every
+	// creates up to Renew sooner than Stop. Positions can run out sooner still: the spare is asked
+	// for only at half of a grant, so at a steady rate a holder can use up its grant about half a
+	// GrantDuration into an outage. Set it shorter than the service's close time, on every
 	// process: each process can check only its own settings, so nothing here compares it with the
 	// close time the blockchain service runs on.
 	Stop time.Duration
@@ -164,6 +166,11 @@ func (a *Allocator) Start(context.Context) error {
 	return nil
 }
 
+// Timings returns the lease timings the allocator runs on.
+func (a *Allocator) Timings() Timings {
+	return a.t
+}
+
 // Ready returns nil while the allocator holds a lease whose stop has not passed. It does not ask
 // for a grant in hand: a grant used up for a moment is not a reason to take a process out of
 // service.
@@ -193,8 +200,10 @@ func (a *Allocator) Close() error {
 	a.broadcastLocked()
 	a.mu.Unlock()
 
-	// The loop stops first, so a lease it opened or a grant it took while Close ran is in the state
-	// read below, and released with it.
+	// The loop stops first, so a grant it took, or an open that returned before the cancel, is in
+	// the state read below and released with it. Two leases are not: an open the cancel cuts short,
+	// and one opened by a loop that a Next racing this Close started after started was read. Each
+	// lapses at the service's close time, as the lease of a process that dies does.
 	a.cancel()
 
 	if started {
@@ -490,7 +499,8 @@ func (a *Allocator) open() error {
 
 	a.mu.Lock()
 
-	// Recorded even when Close has begun, so Close releases it rather than leaving it to lapse.
+	// Recorded even when Close has begun: Close waits for this loop, so it releases a lease whose
+	// open returned rather than leaving it to lapse.
 	if err = a.acceptableLocked(g); err != nil {
 		a.mu.Unlock()
 		a.logger.Errorf("%v", err)

@@ -7542,7 +7542,7 @@ type RenewLaneLeaseRequest struct {
 	Lane             uint32                 `protobuf:"varint,2,opt,name=lane,proto3" json:"lane,omitempty"`
 	Rate             uint64                 `protobuf:"varint,3,opt,name=rate,proto3" json:"rate,omitempty"`                                                   // Positions taken per second, as the holder measured it
 	WantGrant        bool                   `protobuf:"varint,4,opt,name=want_grant,json=wantGrant,proto3" json:"want_grant,omitempty"`                        // Asks for the next grant
-	SettlesFirst     uint64                 `protobuf:"varint,5,opt,name=settles_first,json=settlesFirst,proto3" json:"settles_first,omitempty"`               // With want_grant: first position of the grant the holder last left; 0 for none
+	SettlesFirst     uint64                 `protobuf:"varint,5,opt,name=settles_first,json=settlesFirst,proto3" json:"settles_first,omitempty"`               // With want_grant: first position of the oldest grant the holder has left and not yet reported; 0 for none
 	SettlesLastTaken uint64                 `protobuf:"varint,6,opt,name=settles_last_taken,json=settlesLastTaken,proto3" json:"settles_last_taken,omitempty"` // Its final number: its last position if used up, else the highest taken; 0 if never used
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
@@ -8861,7 +8861,7 @@ func file_services_blockchain_blockchain_api_blockchain_api_proto_init() {
 	if File_services_blockchain_blockchain_api_blockchain_api_proto != nil {
 		return
 	}
-	file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[66].OneofWrappers = []any{}
+	file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[63].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

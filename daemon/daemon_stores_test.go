@@ -370,3 +370,36 @@ func TestGetUtxoStoreBuildsTheAllocatorWithTheGrantDuration(t *testing.T) {
 		require.Equal(t, lane.Pack(9, uint64(index)+1), md.LanePosition)
 	}
 }
+
+// closingLaneSource is a lease source with a Close, as the real blockchain client has, so the daemon
+// would retain it if it were wired to.
+type closingLaneSource struct {
+	laneSource
+}
+
+func (s *closingLaneSource) Close() error { return nil }
+
+// The allocator runs on its three timings, each from its own setting, and is the only client the
+// daemon retains for it: the allocator closes its own lease client after the release, so a daemon
+// that also closed that client would close it before the release could go out.
+func TestGetUtxoStoreBuildsTheAllocatorFromItsLeaseSettings(t *testing.T) {
+	appSettings, _ := laneStoreFixture(t, "lane_timings_wired", true, func() (lane.LeaseSource, error) {
+		return &closingLaneSource{}, nil
+	})
+	appSettings.BlockChain.LaneLeaseRenewInterval = 7 * time.Second
+	appSettings.BlockChain.LaneLeaseStopAfter = 11 * time.Second
+	appSettings.BlockChain.LaneLeaseCloseAfter = 13 * time.Second
+	appSettings.BlockChain.LaneGrantDuration = 17 * time.Second
+
+	d := &Stores{}
+
+	store, err := d.GetUtxoStore(context.Background(), ulogger.TestLogger{}, appSettings)
+	require.NoError(t, err)
+	closeLaneStore(t, d, store)
+
+	require.Len(t, d.constructedClients, 1, "only the allocator is retained, not its lease client")
+
+	allocator, ok := d.constructedClients[0].(*lane.Allocator)
+	require.True(t, ok)
+	require.Equal(t, lane.Timings{Renew: 7 * time.Second, Stop: 11 * time.Second, GrantDuration: 17 * time.Second}, allocator.Timings())
+}

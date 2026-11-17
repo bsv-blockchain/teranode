@@ -1135,7 +1135,10 @@ func createPostgresLaneTables(db *usql.DB) error {
 		}
 	}
 
-	// A lane_handout from before the lease lacks the lease columns. Its rows keep NULLs.
+	// A lane_handout from before the lease lacks the lease columns. Its rows keep NULLs. Only a
+	// database written by an earlier build of the lane change has such a table, so this ALTER runs
+	// at most once per database, and the catalog check above skips it on every later start. It sets
+	// no lock_timeout: it waits for that build's hand-out transactions, which are short.
 	for _, column := range laneHandoutLeaseColumns {
 		var exists bool
 		if err := db.QueryRow(

@@ -119,7 +119,8 @@ func TestCreateOptionsSize(t *testing.T) {
 }
 
 // TestTakeDoesNotAllocate holds the point of taking lane positions in the store: with a source set,
-// a create pays for the source's Next and nothing else.
+// Take allocates nothing beyond the source's Next. The stores that pass the position on as a create
+// option (SequentialSpendAndCreate and utxoset) add that option's two allocations.
 func TestTakeDoesNotAllocate(t *testing.T) {
 	var positions LanePositions
 

@@ -677,6 +677,24 @@ func TestOpenLaneLeaseSkipsAnExhaustedLane(t *testing.T) {
 	})
 }
 
+// A lane with no lease row can be exhausted by hand-outs from before the lease. However long ago
+// its last hand-out, an open skips it.
+func TestOpenLaneLeaseSkipsAnExhaustedLaneWithNoLease(t *testing.T) {
+	runLaneHandoutTests(t, "exhausted without lease", func(t *testing.T, s *SQL) {
+		_, err := s.db.ExecContext(t.Context(),
+			`INSERT INTO lane_handout (lane, first, last, holder, height, handed_at) VALUES (0, 1, $1, 'old', 1, $2)`,
+			int64(lane.MaxPosition), time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+
+		useUpLanesFrom(t, s, 1)
+
+		_, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		require.NoError(t, err)
+		require.Equal(t, uint8(1), g.Lane, "the exhausted lane 0 is skipped although its hand-out is the oldest")
+		require.Equal(t, uint64(20_000_001), g.First)
+	})
+}
+
 // useUpLanesFrom inserts one hand-out in each lane from first to 253, stamped a day ahead, so
 // none of them is never-used and each is a later pick than any lease closed now.
 func useUpLanesFrom(t *testing.T, s *SQL, first int) {

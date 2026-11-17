@@ -148,11 +148,15 @@ func TestClientLaneLeaseOverGRPC(t *testing.T) {
 func newLocalLeaseClient(t *testing.T) (*LocalClient, blockchain_store.Store) {
 	t.Helper()
 
+	// The lease close counters are registered by the service, which these tests do not build.
+	initPrometheusMetrics()
+
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockChain.LaneGrantMin = 100
+	tSettings.BlockChain.LaneGrantDuration = 10 * time.Second
 
 	store, err := blockchain_store.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
@@ -434,7 +438,24 @@ func TestLaneLeaseRateSettlesAndLastTakenCrossTheWire(t *testing.T) {
 
 	defer func() { require.NoError(t, client.(*Client).Close()) }()
 
-	var src lane.LeaseSource = client
+	requireLaneLeaseRoundTrip(t, client, server.store)
+}
+
+// TestLocalClientCarriesRateSettlesAndLastTaken is the same round trip through LocalClient, which
+// a single-process daemon uses in place of the gRPC client.
+func TestLocalClientCarriesRateSettlesAndLastTaken(t *testing.T) {
+	client, store := newLocalLeaseClient(t)
+
+	requireLaneLeaseRoundTrip(t, client, store)
+}
+
+// requireLaneLeaseRoundTrip opens, renews with a rate and a settles pair, and releases through
+// src, and reads the rows the service wrote. It needs blockchain_laneGrantMin 100 and
+// blockchain_laneGrantDuration 10s on a store with no lease yet.
+func requireLaneLeaseRoundTrip(t *testing.T, src lane.LeaseSource, store blockchain_store.Store) {
+	t.Helper()
+
+	ctx := t.Context()
 
 	cleans := testutil.ToFloat64(prometheusBlockchainLaneLeaseCloses.WithLabelValues("clean"))
 
@@ -452,7 +473,7 @@ func TestLaneLeaseRateSettlesAndLastTakenCrossTheWire(t *testing.T) {
 
 	var settlesFirst, settlesLastTaken sql.NullInt64
 
-	err = server.store.GetDB().QueryRow(`SELECT settles_first, settles_last_taken FROM lane_handout WHERE lane = 0 AND first = 101`).
+	err = store.GetDB().QueryRow(`SELECT settles_first, settles_last_taken FROM lane_handout WHERE lane = 0 AND first = 101`).
 		Scan(&settlesFirst, &settlesLastTaken)
 	require.NoError(t, err)
 	require.Equal(t, sql.NullInt64{Int64: 1, Valid: true}, settlesFirst)
@@ -467,7 +488,7 @@ func TestLaneLeaseRateSettlesAndLastTakenCrossTheWire(t *testing.T) {
 
 	var last int64
 
-	err = server.store.GetDB().QueryRow(`SELECT last, settles_first, settles_last_taken FROM lane_close WHERE lease_id = $1`, id[:]).
+	err = store.GetDB().QueryRow(`SELECT last, settles_first, settles_last_taken FROM lane_close WHERE lease_id = $1`, id[:]).
 		Scan(&last, &settlesFirst, &settlesLastTaken)
 	require.NoError(t, err)
 	require.Equal(t, int64(9000), last)
@@ -500,27 +521,44 @@ func TestStartedServiceSweepsASilentLease(t *testing.T) {
 	require.Eventually(t, func() bool { return closeKind(t, server.store, id) == "lapsed" }, 5*time.Second, 10*time.Millisecond)
 }
 
-// deadlineStore records whether the context of a sweep has a deadline.
+// deadlineStore records how long the context of a sweep had left when the sweep began.
 type deadlineStore struct {
 	blockchain_store.Store
-	hasDeadline atomic.Bool
+	left atomic.Int64
 }
 
 func (s *deadlineStore) CloseStaleLaneLeases(ctx context.Context, _ time.Duration) (int, error) {
-	_, ok := ctx.Deadline()
-	s.hasDeadline.Store(ok)
+	if deadline, ok := ctx.Deadline(); ok {
+		s.left.Store(int64(time.Until(deadline)))
+	}
 
 	return 0, nil
 }
 
+// A sweep holds row locks that every open needs, so it runs under a deadline of one renewal
+// interval, and at least 10 seconds when the interval is shorter.
 func TestLaneLeaseSweepHasADeadline(t *testing.T) {
-	tc := setup(t)
+	for _, tc := range []struct {
+		name  string
+		renew time.Duration
+		want  time.Duration
+	}{
+		{"a short interval gets 10 seconds", 10 * time.Millisecond, 10 * time.Second},
+		{"a long interval gets the interval", 30 * time.Second, 30 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setupCtx := setup(t)
+			setupCtx.server.settings.BlockChain.LaneLeaseRenewInterval = tc.renew
 
-	store := &deadlineStore{Store: tc.server.store}
-	b, err := New(context.Background(), tc.logger, tc.server.settings, store, nil)
-	require.NoError(t, err)
+			store := &deadlineStore{Store: setupCtx.server.store}
+			b, err := New(context.Background(), setupCtx.logger, setupCtx.server.settings, store, nil)
+			require.NoError(t, err)
 
-	b.sweepLaneLeases(context.Background())
+			b.sweepLaneLeases(context.Background())
 
-	require.True(t, store.hasDeadline.Load(), "a sweep holds row locks, so it must not run without a deadline")
+			left := time.Duration(store.left.Load())
+			require.LessOrEqual(t, left, tc.want, "a sweep must not run without its deadline")
+			require.Greater(t, left, tc.want-time.Second)
+		})
+	}
 }

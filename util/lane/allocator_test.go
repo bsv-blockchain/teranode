@@ -24,6 +24,7 @@ type fakeLeases struct {
 	gate     chan struct{} // when set, a grant request waits for it to close
 	openGate chan struct{} // when set, an open waits for it to close, ignoring the caller's context
 	opening  chan struct{} // when set, closed as an open starts waiting on openGate
+	asking   chan struct{} // when set, closed as a grant request starts waiting on gate
 	opens    int
 	renewals []Renewal
 	releases []Release
@@ -79,10 +80,17 @@ func (f *fakeLeases) grantLocked(l uint8, size uint64) Grant {
 
 func (f *fakeLeases) RenewLaneLease(_ context.Context, r Renewal) (RenewResult, error) {
 	f.mu.Lock()
-	gate := f.gate
+	gate, asking := f.gate, f.asking
+	if r.WantGrant && gate != nil {
+		f.asking = nil
+	}
 	f.mu.Unlock()
 
 	if r.WantGrant && gate != nil {
+		if asking != nil {
+			close(asking)
+		}
+
 		<-gate
 	}
 
@@ -462,6 +470,85 @@ func TestReadyStaysNilWhileAGrantIsUsedUpForAMoment(t *testing.T) {
 	require.Equal(t, Pack(0, 3), next(t, a))
 }
 
+// A pair recorded while a grant request is in flight was not on that request, so it stays for the
+// next one. Here grant 1 is used up while the request sent at its half waits on the service.
+func TestAllocatorKeepsAPairRecordedWhileAGrantRequestIsInFlight(t *testing.T) {
+	asking := make(chan struct{})
+	src := newFakeLeases(2)
+	src.gate, src.asking = make(chan struct{}), asking
+	a := newTestAllocator(t, src, quiet, nil)
+
+	require.Equal(t, Pack(0, 1), next(t, a)) // half of grant 1, so a grant request goes out
+	<-asking
+	require.Equal(t, Pack(0, 2), next(t, a))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := a.Next(ctx)
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable, "grant 1 is used up while the request waits")
+
+	close(src.gate)
+	require.Equal(t, Pack(0, 3), next(t, a)) // half of grant 2, so the next grant request goes out
+
+	require.Eventually(t, func() bool { return len(src.grantRequests()) == 2 }, 5*time.Second, time.Millisecond)
+	require.Equal(t, Settles{}, src.grantRequests()[0].Settles, "the request in flight carried nothing")
+	require.Equal(t, Settles{First: 1, LastTaken: 2}, src.grantRequests()[1].Settles, "grant 1's pair travels on the next request")
+}
+
+// hangingLeases makes its first hangOpens opens and its first hangRenews grant requests wait until
+// the caller's context ends, as a call on a half-open connection would.
+type hangingLeases struct {
+	*fakeLeases
+	hangOpens, hangRenews atomic.Int32
+}
+
+func (h *hangingLeases) OpenLaneLease(ctx context.Context, holder string) (LeaseID, Grant, error) {
+	if h.hangOpens.Add(-1) >= 0 {
+		<-ctx.Done()
+		return LeaseID{}, Grant{}, ctx.Err()
+	}
+
+	return h.fakeLeases.OpenLaneLease(ctx, holder)
+}
+
+func (h *hangingLeases) RenewLaneLease(ctx context.Context, r Renewal) (RenewResult, error) {
+	if r.WantGrant && h.hangRenews.Add(-1) >= 0 {
+		<-ctx.Done()
+		return RenewResult{}, ctx.Err()
+	}
+
+	return h.fakeLeases.RenewLaneLease(ctx, r)
+}
+
+// An open that hangs is given up after attemptTimeout and retried, so one stuck call does not
+// hold the lease back until Close.
+func TestAllocatorGivesUpOnAHungOpenAndRetries(t *testing.T) {
+	src := &hangingLeases{fakeLeases: newFakeLeases(1000)}
+	src.hangOpens.Store(1)
+
+	a := newTestAllocator(t, src, quiet, nil)
+	a.attemptTimeout = 50 * time.Millisecond
+
+	require.Equal(t, Pack(0, 1), next(t, a))
+	require.Equal(t, 1, src.openCount(), "the hung open was given up and the retry opened the lease")
+}
+
+// A grant request that hangs is given up after attemptTimeout and retried, so the spare still comes.
+func TestAllocatorGivesUpOnAHungGrantRequestAndRetries(t *testing.T) {
+	src := &hangingLeases{fakeLeases: newFakeLeases(10)}
+	src.hangRenews.Store(1)
+
+	a := newTestAllocator(t, src, quiet, nil)
+	a.attemptTimeout = 50 * time.Millisecond
+
+	for i := 0; i < 5; i++ {
+		next(t, a) // the fifth is half of the grant, so a grant request goes out and hangs
+	}
+
+	require.Eventually(t, a.hasSpareGrant, 5*time.Second, time.Millisecond, "the retry after the hung request brings the spare")
+}
+
 // timedDownLeases always fails, and records when each request came.
 type timedDownLeases struct {
 	mu    sync.Mutex
@@ -621,8 +708,9 @@ func TestAllocatorReleasesBeforeItsClientCloses(t *testing.T) {
 	require.Equal(t, []string{"close"}, src2.order)
 }
 
-// An open the service commits while Close runs is released, not left to lapse: Close stops the loop
-// before it reads the lease to release.
+// An open that returns while Close waits for the loop is released, not left to lapse: Close stops
+// the loop before it reads the lease to release. The fake answers even after Close cancels the
+// call; a real client's open cut short by the cancel is not recorded, and its lease lapses.
 func TestCloseReleasesALeaseOpenedWhileItRuns(t *testing.T) {
 	src := newFakeLeases(1000)
 	src.openGate, src.opening = make(chan struct{}), make(chan struct{})
