@@ -859,10 +859,8 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 		parent := createTransactionWithOutputs(10)
 
 		// The lock write fails before this call writes any record, so its error
-		// is not marked outcome-unknown and the caller may unspend. Only a held
-		// lock turns into the outcome-unknown error. (If an earlier attempt had
-		// already stored the records, that unspend would leave them with live
-		// inputs until a repeat re-spends them; that is unchanged from main.)
+		// is not marked outcome-unknown. Only a held lock turns into the
+		// outcome-unknown error.
 		var lockKey *aerospike.Key
 
 		store.SetLockPutFn(func(policy *aerospike.WritePolicy, key *aerospike.Key, bins ...*aerospike.Bin) aerospike.Error {
@@ -884,7 +882,7 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 		require.NotNil(t, lockKey, "the lock write went through the hook")
 
 		lockRec, getErr := client.Get(nil, lockKey)
-		require.Nil(t, lockRec, "the failed lock write leaves no lock record")
+		require.Nil(t, lockRec, "acquireLock writes no lock of its own beside the hook")
 		require.NotNil(t, getErr)
 
 		store.SetLockPutFn(nil)
