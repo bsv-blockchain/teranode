@@ -108,13 +108,14 @@ loader (0, false and false), so for these keys the two agree. The
 ### Optimistic Mining
 
 - `OptimisticMining` defaults to `true`: once the block's subtrees have been validated
-  (transaction and script checks, synchronously), the block is added to the chain and mining can
-  start on it, before the remaining block-level checks have run
-- Those block-level checks continue in the background - merkle root, coinbase and BIP34 checks,
-  duplicate transactions, transaction ordering and parent-spend checks, and the old-block-ID
-  double-spend scan. If a background check proves the block invalid it is invalidated and its
-  UTXO effects are rolled back; a transient storage or processing failure instead schedules a
-  re-validation and leaves the block on the chain in the meantime
+  (transaction and script checks, synchronously) and the checks before the add below have passed,
+  the block is added to the chain and mining can start on it, before the full block validation
+  has run
+- The full block validation continues in the background - the merkle root over every subtree, the
+  coinbase rules again, duplicate transactions, transaction ordering and parent-spend checks, and
+  the old-block-ID double-spend scan. If a background check proves the block invalid it is
+  invalidated and its UTXO effects are rolled back; a transient storage or processing failure
+  instead schedules a re-validation and leaves the block on the chain in the meantime
 - Can be overridden per-validation via the `DisableOptimisticMining` option
 - **On every validation path optimistic mining is OFF unless BOTH
   `blockvalidation_optimistic_mining` AND `blockvalidation_optimistic_mining_peer_blocks` are set**
@@ -133,8 +134,9 @@ loader (0, false and false), so for these keys the two agree. The
   rejected, not added. Then the integrity floor binds a body with subtrees to its header through its
   first and last subtrees, and the coinbase rules run on it: shape, the common transaction rules,
   coinbase length, finality and BIP34. A block that fails the floor is not added early; it is
-  validated fully first, exactly as with the peer-blocks flag off. The floor costs one extra read of
-  the first and last subtrees.
+  validated fully first, exactly as with the peer-blocks flag off. The floor reads, deserializes and
+  hashes the first and last subtrees once more than validation alone would, because the full
+  validation loads its own copies.
 - **Opt-in tradeoff:** the floor does not check duplicate transactions, the lengths of the subtrees
   between the first and last, fees, or transaction order and spends. A body that breaks one of those
   is found only after the add, so a corrupt one takes the *invalidate route* (it is

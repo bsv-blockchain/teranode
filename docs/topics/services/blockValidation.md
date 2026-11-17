@@ -124,13 +124,17 @@ The `optimisticMining` setting provides a validation strategy that prioritizes b
 
 **Technical Implementation:**
 
-The optimistic path is implemented in `ValidateBlock()` (services/blockvalidation/BlockValidation.go:1187-1220):
+The optimistic path is implemented in `ValidateBlockWithOptions()` (services/blockvalidation/BlockValidation.go):
 
-1. **Immediate Block Addition**: Calls `blockchainClient.AddBlock()` before subtree validation completes
-2. **Block Exists Cache**: Sets block as existing to prevent reprocessing
-3. **Background Validation**: Spawns goroutine with `optimisticMiningWg.Add(1)`
-4. **Decoupled Context**: Uses `tracing.DecoupleTracingSpan()` to prevent context cancellation from blocking background work
-5. **Rollback on Failure**: Calls `ReValidateBlock()` if background validation fails
+1. **Checks Before the Add**: Subtree validation has already run synchronously. The header-context
+   checks, the coinbase-only binding for a body with no subtrees, and `model.Block.CheckIntegrityFloor`
+   (merkle binding through the first and last subtrees, then the coinbase rules) run next. A block
+   that fails the floor is not added early and is validated fully first
+2. **Block Addition**: Calls `blockchainClient.AddBlock()` before the full `block.Valid()` runs
+3. **Block Exists Cache**: Sets block as existing to prevent reprocessing
+4. **Background Validation**: Spawns goroutine with `optimisticMiningWg.Add(1)`
+5. **Decoupled Context**: Uses `tracing.DecoupleTracingSpan()` to prevent context cancellation from blocking background work
+6. **Rollback on Failure**: Calls `ReValidateBlock()` if background validation fails
 
 **Configuration:**
 

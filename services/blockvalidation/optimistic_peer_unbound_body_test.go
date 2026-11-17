@@ -131,21 +131,32 @@ func TestValidateBlockWithOptions_GlobalFlagAloneIsNotOptimistic(t *testing.T) {
 	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "got: %v", err)
 }
 
-// validAddRecordingClient records every AddBlock that would put a block on the chain as valid. An
-// AddBlock carrying WithInvalid(true) is the record of a verdict, not an add, so it is not counted.
+// validAddRecordingClient records every AddBlock that would put a block on the chain as valid, and
+// separately every AddBlock carrying WithInvalid(true), which is the record of a verdict, not an add.
 type validAddRecordingClient struct {
 	blockchain.ClientI
 
-	mu        sync.Mutex
-	validAdds []chainhash.Hash
+	mu          sync.Mutex
+	validAdds   []chainhash.Hash
+	invalidAdds []chainhash.Hash
 
-	// subtreesSet is closed on the first SetBlockSubtreesSet, the background validation's last
-	// store write on success, so a test can wait for that goroutine before it returns.
+	// subtreesSet is closed on the first SetBlockSubtreesSet, the validation's last store write on
+	// success, so a test can wait for that write before it returns.
 	subtreesSet     chan struct{}
 	subtreesSetOnce sync.Once
+
+	// holdSubtreesSet, when not nil, keeps every SetBlockSubtreesSet waiting until it is closed. The
+	// non-optimistic path makes that write before ValidateBlockWithOptions returns and the optimistic
+	// path makes it in the background, so a test can tell the two apart by whether the call returns
+	// while the write is held.
+	holdSubtreesSet chan struct{}
 }
 
 func (c *validAddRecordingClient) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	if c.holdSubtreesSet != nil {
+		<-c.holdSubtreesSet
+	}
+
 	err := c.ClientI.SetBlockSubtreesSet(ctx, blockHash)
 
 	c.subtreesSetOnce.Do(func() { close(c.subtreesSet) })
@@ -154,11 +165,13 @@ func (c *validAddRecordingClient) SetBlockSubtreesSet(ctx context.Context, block
 }
 
 func (c *validAddRecordingClient) AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...blockchainoptions.StoreBlockOption) error {
-	if !blockchainoptions.ProcessStoreBlockOptions(opts...).Invalid {
-		c.mu.Lock()
+	c.mu.Lock()
+	if blockchainoptions.ProcessStoreBlockOptions(opts...).Invalid {
+		c.invalidAdds = append(c.invalidAdds, *block.Hash())
+	} else {
 		c.validAdds = append(c.validAdds, *block.Hash())
-		c.mu.Unlock()
 	}
+	c.mu.Unlock()
 
 	return c.ClientI.AddBlock(ctx, block, peerID, opts...)
 }
@@ -176,12 +189,28 @@ func (c *validAddRecordingClient) addedValid(hash *chainhash.Hash) bool {
 	return false
 }
 
+// invalidRecords counts the AddBlock calls that stored hash as invalid.
+func (c *validAddRecordingClient) invalidRecords(hash *chainhash.Hash) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	count := 0
+
+	for _, added := range c.invalidAdds {
+		if added.IsEqual(hash) {
+			count++
+		}
+	}
+
+	return count
+}
+
 // newOptimisticPeerBlockHarness is newNoPersistHarness with both optimistic flags on and the
 // blockchain client wrapped so a test can see whether a block was added before it was validated. The
 // wrapper is handed to NewBlockValidation, not swapped in afterwards, because the goroutines it
 // starts read the client. opts go to NewBlockValidation too, so a test can wire a block assembly
-// client the same way.
-func newOptimisticPeerBlockHarness(ctx context.Context, t *testing.T, opts ...interface{}) (*BlockValidation, *validAddRecordingClient, *settings.Settings) {
+// client the same way. The p2p client records peer strikes, so a test can count them.
+func newOptimisticPeerBlockHarness(ctx context.Context, t *testing.T, opts ...interface{}) (*BlockValidation, *validAddRecordingClient, *corruptStrikeP2PClient, *settings.Settings) {
 	t.Helper()
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -205,7 +234,10 @@ func newOptimisticPeerBlockHarness(ctx context.Context, t *testing.T, opts ...in
 
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, recording, subtreeStore, txStore, utxoStore, nil, subtreeVal, opts...)
 
-	return bv, recording, tSettings
+	strikes := &corruptStrikeP2PClient{}
+	bv.p2pClient = strikes
+
+	return bv, recording, strikes, tSettings
 }
 
 // blockWithStoredSubtree builds a height-1 block on genesis whose single subtree holds only the
@@ -259,7 +291,9 @@ func requireNotTip(ctx context.Context, t *testing.T, client blockchain.ClientI,
 //
 // The floor's failure must fall through to that full validation, not return on its own: only the
 // full path records the block as invalid in the store, and a block that is not added early is
-// handed to block assembly ahead of its validation.
+// handed to block assembly. The floor itself strikes no peer and records nothing, so the store holds
+// exactly the one invalid record the full validation writes, and no peer is struck. The test checks
+// that block assembly is told about the block, not when: the hint is sent from a goroutine.
 func TestValidateBlock_OptimisticPeerBlocks_NonFinalCoinbaseWithSubtreesNotAddedEarly(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -273,7 +307,7 @@ func TestValidateBlock_OptimisticPeerBlocks_NonFinalCoinbaseWithSubtreesNotAdded
 		prepared <- *args.Get(1).(*model.Block).Hash()
 	}).Return(nil).Once()
 
-	bv, client, tSettings := newOptimisticPeerBlockHarness(ctx, t, blockassembly.ClientI(ba))
+	bv, client, strikes, tSettings := newOptimisticPeerBlockHarness(ctx, t, blockassembly.ClientI(ba))
 
 	// Height-based nLockTime 500 at height 1, with a sequence number that does not opt out: not final.
 	coinbaseTx := coinbaseAtHeight(t, 1)
@@ -298,25 +332,39 @@ func TestValidateBlock_OptimisticPeerBlocks_NonFinalCoinbaseWithSubtreesNotAdded
 	_, meta, err := client.GetBlockHeader(ctx, block.Hash())
 	require.NoError(t, err, "the full validation stores the bound, condemned block")
 	require.True(t, meta.Invalid, "the floor's failure falls through to the full validation, which stores the block as invalid")
+	require.Equal(t, 1, client.invalidRecords(block.Hash()), "only the full validation records the block as invalid; the floor records nothing")
+	require.Empty(t, strikes.recorded(), "a bound, condemned block strikes no peer, and neither does the floor")
 
 	select {
 	case hash := <-prepared:
 		require.True(t, hash.IsEqual(block.Hash()))
 	case <-time.After(5 * time.Second):
-		t.Fatal("a block the floor turned away must still be handed to block assembly before its full validation")
+		t.Fatal("a block the floor turned away must still be handed to block assembly")
 	}
 }
 
 // TestValidateBlock_OptimisticPeerBlocks_SwappedCoinbaseWithSubtreesNotAddedEarly: honest subtrees
 // with a coinbase other than the one the header commits to. The integrity floor cannot bind the body,
 // so the block is not added early, and the full validation rejects it as corrupt.
+//
+// The floor's corrupt failure must fall through like any other: the full validation strikes the
+// serving peer once and block assembly is told about the block. A floor that returned the corrupt
+// error itself would strike nobody and skip block assembly; a floor that struck the peer as well
+// would strike twice.
 func TestValidateBlock_OptimisticPeerBlocks_SwappedCoinbaseWithSubtreesNotAddedEarly(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	bv, client, tSettings := newOptimisticPeerBlockHarness(ctx, t)
+	ba := blockassembly.NewMock()
+
+	prepared := make(chan chainhash.Hash, 1)
+	ba.On("PrepareBlock", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		prepared <- *args.Get(1).(*model.Block).Hash()
+	}).Return(nil).Once()
+
+	bv, client, strikes, tSettings := newOptimisticPeerBlockHarness(ctx, t, blockassembly.ClientI(ba))
 
 	committed := coinbaseAtHeight(t, 1)
 	delivered := coinbaseAtHeight(t, 1)
@@ -333,28 +381,70 @@ func TestValidateBlock_OptimisticPeerBlocks_SwappedCoinbaseWithSubtreesNotAddedE
 
 	require.False(t, client.addedValid(block.Hash()), "a body not bound to its header must not be added before it is validated")
 	requireNotTip(ctx, t, client, tSettings, block.Hash())
+	require.Zero(t, client.invalidRecords(block.Hash()), "an unbound body is never recorded as invalid")
+
+	calls := strikes.recorded()
+	require.Len(t, calls, 1, "the full validation strikes the serving peer once, and the floor strikes nobody")
+	require.Equal(t, "peer-serving", calls[0].peerID)
+
+	select {
+	case hash := <-prepared:
+		require.True(t, hash.IsEqual(block.Hash()))
+	case <-time.After(5 * time.Second):
+		t.Fatal("a block the floor turned away must still be handed to block assembly")
+	}
 }
 
 // TestValidateBlock_OptimisticPeerBlocks_HonestBodyWithSubtreesAddedEarly is the control for the two
 // tests above: an honest block carrying subtrees passes the integrity floor and is still added
 // before the background validation, so a floor that refused everything would fail here.
+//
+// Both paths end with the block added and its subtrees set, so the test holds the subtrees-set write.
+// Only the optimistic path returns while it is held, having already added the block; the
+// non-optimistic path makes that write before it returns.
 func TestValidateBlock_OptimisticPeerBlocks_HonestBodyWithSubtreesAddedEarly(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	bv, client, tSettings := newOptimisticPeerBlockHarness(ctx, t)
+	bv, client, _, tSettings := newOptimisticPeerBlockHarness(ctx, t)
+
+	hold := make(chan struct{})
+	client.holdSubtreesSet = hold
+
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			close(hold)
+		}
+	}
+	defer release()
 
 	coinbaseTx := coinbaseAtHeight(t, 1)
 	block := blockWithStoredSubtree(ctx, t, bv, tSettings, coinbaseTx, coinbaseTx)
 
-	err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{
-		PeerID:                  "peer-serving",
-		DisableOptimisticMining: optimisticMiningDisabledForPeerPath(tSettings, "http://localhost"),
-	})
-	require.NoError(t, err)
-	require.True(t, client.addedValid(block.Hash()), "an honest block must still take the optimistic add")
+	done := make(chan error, 1)
+	go func() {
+		done <- bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{
+			PeerID:                  "peer-serving",
+			DisableOptimisticMining: optimisticMiningDisabledForPeerPath(tSettings, "http://localhost"),
+		})
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		release()
+		t.Logf("validation returned once the write was released: %v", <-done)
+		t.Fatal("the validation waited for the subtrees-set write, so the block took the non-optimistic path")
+	}
+
+	require.True(t, client.addedValid(block.Hash()), "an honest block must take the optimistic add, before its validation finishes")
+
+	release()
 
 	// Wait for the background validation to finish, so it does not outlive the test.
 	select {
