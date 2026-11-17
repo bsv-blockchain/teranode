@@ -113,8 +113,9 @@ func TestBlockchainSubscriptionListener_PeerFailureNotHeldBehindParkedFSMCheck(t
 	// Registered before newAnnounceTestServer's RUNNING expectation, so testify
 	// matches this one first.
 	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Run(func(mock.Arguments) {
-		// Park only the first call; later ones (the PeerFailure path, for
-		// example) return at once.
+		// Park only the first call, the Block's skip check. A later call (the
+		// same Block's publish gate after release) returns at once. The
+		// PeerFailure path makes no FSM call.
 		if parked.CompareAndSwap(false, true) {
 			entered <- struct{}{}
 			<-release
@@ -139,8 +140,9 @@ func TestBlockchainSubscriptionListener_PeerFailureNotHeldBehindParkedFSMCheck(t
 		"the catchup PeerFailure must clear the failed sync peer while a block's FSM skip check is parked")
 }
 
-// While the node is catching up, the announcement worker must skip a Block
-// notification before doing any blockchain read for it.
+// While the node is catching up, a Block notification must be skipped before
+// GetBlockHeader is called for it. This does not pin where the skip check
+// runs; PeerFailureNotHeldBehindParkedFSMCheck does that.
 func TestBlockchainSubscriptionListener_SkipsBlockAnnouncementWhileCatchingUp(t *testing.T) {
 	catchingBlocks := blockchain_api.FSMStateType_CATCHINGBLOCKS
 
@@ -269,19 +271,32 @@ func TestBlockchainSubscriptionListener_FullAnnouncementQueueDropsInsteadOfBlock
 	dropped := prometheusP2PBlockchainNotificationsDropped.WithLabelValues("announcement", model.NotificationType_Block.String())
 	droppedBefore := testutil.ToFloat64(dropped)
 
+	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Run(func(mock.Arguments) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
 		<-release
 	}).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100, SubtreesSet: true}, nil)
 
 	s, subscription := startListenerTestServer(t, mockBlockchain)
 
-	// One parked in the worker, two filling the queue, at least one more with
-	// nowhere to go.
-	for i := 0; i < announcementQueueSize+2; i++ {
+	// Park the worker on the first block before sending the rest, so the queue
+	// is empty when they arrive: two fill it and exactly one is dropped.
+	subscription <- blockNotification(chainhash.HashH([]byte{0}))
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first block announcement never reached GetBlockHeader")
+	}
+
+	for i := 1; i <= announcementQueueSize+1; i++ {
 		subscription <- blockNotification(chainhash.HashH([]byte{byte(i)}))
 	}
 
@@ -290,9 +305,43 @@ func TestBlockchainSubscriptionListener_FullAnnouncementQueueDropsInsteadOfBlock
 	require.Eventually(t, func() bool { return currentSyncPeer(s) == "" }, 2*time.Second, 10*time.Millisecond,
 		"the catchup PeerFailure must get through while the announcement queue is full")
 
-	// The listener routes in order, so every drop was counted before the
-	// PeerFailure was routed. One or two drops, depending on whether the worker
-	// had taken the first block off the queue yet.
-	require.GreaterOrEqual(t, testutil.ToFloat64(dropped)-droppedBefore, 1.0,
-		"a Block notification sent to a full announcement queue must be dropped and counted")
+	// The listener routes in order, so the drop was counted before the
+	// PeerFailure was routed.
+	require.Equal(t, 1.0, testutil.ToFloat64(dropped)-droppedBefore,
+		"exactly the one Block notification sent to the full announcement queue must be counted as dropped")
+}
+
+// When the peer-failure queue is full, a PeerFailure is dropped and counted
+// under the peer-failure queue, so a lost peer-failure signal is visible apart
+// from lost announcements.
+func TestBlockchainSubscriptionListener_FullPeerFailureQueueCountsDrop(t *testing.T) {
+	previous := peerFailureQueueSize
+	peerFailureQueueSize = 1
+	t.Cleanup(func() { peerFailureQueueSize = previous })
+
+	initPrometheusMetrics()
+	peerFailureType := model.NotificationType_PeerFailure.String()
+	droppedPeerFailure := prometheusP2PBlockchainNotificationsDropped.WithLabelValues("peer-failure", peerFailureType)
+	droppedAsAnnouncement := prometheusP2PBlockchainNotificationsDropped.WithLabelValues("announcement", peerFailureType)
+	peerFailureBefore := testutil.ToFloat64(droppedPeerFailure)
+	announcementBefore := testutil.ToFloat64(droppedAsAnnouncement)
+
+	s, subscription := startListenerTestServer(t, &blockchain.Mock{})
+
+	// HandleCatchupFailure takes decisionMu, so holding it parks the
+	// peer-failure worker on whichever failure it takes first.
+	s.syncCoordinator.decisionMu.Lock()
+	t.Cleanup(s.syncCoordinator.decisionMu.Unlock)
+
+	for i := 0; i < 3; i++ {
+		subscription <- catchupPeerFailureNotification()
+	}
+
+	// One or two drops: one failure may still be in the queue rather than
+	// parked in the worker when the third arrives.
+	require.Eventually(t, func() bool { return testutil.ToFloat64(droppedPeerFailure)-peerFailureBefore >= 1 },
+		2*time.Second, 10*time.Millisecond, "a PeerFailure sent to a full peer-failure queue must be counted as dropped")
+	require.LessOrEqual(t, testutil.ToFloat64(droppedPeerFailure)-peerFailureBefore, 2.0)
+	require.Zero(t, testutil.ToFloat64(droppedAsAnnouncement)-announcementBefore,
+		"a dropped PeerFailure must not be counted under the announcement queue")
 }
