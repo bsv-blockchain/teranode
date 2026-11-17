@@ -54,10 +54,10 @@ type mtpFloorEntry struct {
 // network-adjusted time where this floors against the raw local clock, and the
 // difference is deliberately left in place. GetAdjustedTime moves the local
 // clock by the median peer offset only when that offset is within 70 minutes,
-// and applies no offset at all beyond it. It stops updating once 200 peers have
-// been sampled, so it corrects startup skew and never tracks later drift. On a
-// chain whose median-time-past trails real time by about an hour, the
-// clock-skew failure below needs the local clock roughly three hours behind,
+// and applies no offset at all beyond it. It recomputes that median as new peers
+// are sampled and freezes once 200 have been, so a long-running node stops
+// following drift. On a chain whose median-time-past trails real time by about
+// an hour, the clock-skew failure below needs the local clock roughly three hours behind,
 // and at that skew SV Node's adjustment is zero too, so its own template build
 // fails the same consensus check. Forward-stamped blocks that push
 // median-time-past ahead of real time can trigger the failure at a smaller
