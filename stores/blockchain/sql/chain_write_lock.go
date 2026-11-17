@@ -11,8 +11,8 @@ import (
 // chainWriteStateKey is the state row the chain-membership writes on PostgreSQL lock,
 // and every on_main_chain walk checks before it commits. The writes that lock it are
 // DeleteBlock, InvalidateBlock, RevalidateBlock, the fork path of StoreBlock, and the
-// extend path's later clear of the new block's own flag when the chain_work tiebreak
-// places that block on a fork. The extend path's insert takes no lock: it decides on_main_chain from this process's best-block cache, which a lock taken
+// extend path's later clear of the new block's own flag when its best-block read after
+// the insert names another block. The extend path's insert takes no lock: it decides on_main_chain from this process's best-block cache, which a lock taken
 // inside its transaction could not correct.
 //
 // The walks read their rows from a REPEATABLE READ snapshot and most run without
