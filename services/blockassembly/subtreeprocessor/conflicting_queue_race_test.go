@@ -211,6 +211,30 @@ func TestDequeueDuringBlockMovement_DrainCutoffAtClockNow(t *testing.T) {
 		require.Equal(t, int64(1), stp.queue.length())
 	})
 
+	t.Run("positive_window_cutoff_is_exclusive", func(t *testing.T) {
+		stp := newTestProcessorNoStart(t)
+		stp.settings.BlockAssembly.DoubleSpendWindow = time.Second
+
+		drainAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+		cutoff := drainAt.Add(-time.Second)
+		stp.clock = fixedClock{t: drainAt}
+
+		older := chainhash.HashH([]byte("positive-window-before-cutoff"))
+		atCutoff := chainhash.HashH([]byte("positive-window-at-cutoff"))
+
+		stp.queue.clock = fixedClock{t: cutoff.Add(-time.Millisecond)}
+		stp.queue.enqueueBatch([]subtreepkg.Node{{Hash: older, Fee: 1, SizeInBytes: 220}}, []*subtreepkg.TxInpoints{{}})
+		stp.queue.clock = fixedClock{t: cutoff}
+		stp.queue.enqueueBatch([]subtreepkg.Node{{Hash: atCutoff, Fee: 1, SizeInBytes: 220}}, []*subtreepkg.TxInpoints{{}})
+
+		require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
+
+		hashes := collectSubtreeHashes(stp)
+		require.Contains(t, hashes, older, "a batch older than the window must drain")
+		require.NotContains(t, hashes, atCutoff, "with a window, a batch stamped exactly at now - window must wait")
+		require.Equal(t, int64(1), stp.queue.length())
+	})
+
 	t.Run("control_one_ms_advance_drains_the_batch", func(t *testing.T) {
 		stp := newTestProcessorNoStart(t)
 		require.Zero(t, stp.settings.BlockAssembly.DoubleSpendWindow)

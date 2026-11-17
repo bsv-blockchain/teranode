@@ -8133,9 +8133,9 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	// batch before it links it, so a batch stamped in this millisecond can
 	// still miss the drain: when a later-stamped batch links ahead of it,
 	// or when it links after the drain ends. The steady-state dequeue loop
-	// then places it with no block filter, or the next block's drain
-	// filters it against that block alone if one comes first, as for any
-	// tx that arrives after its block's drain.
+	// then places it with no block filter, or the next block movement takes
+	// it and filters it only against the blocks that movement moves, never
+	// against this one, as for any tx that arrives after its block's drain.
 	now := stp.clock.Now()
 	window := stp.settings.BlockAssembly.DoubleSpendWindow
 
