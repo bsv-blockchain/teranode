@@ -438,6 +438,52 @@ func TestNetUnmined_InMemoryReportsTheForwardSetItHeld(t *testing.T) {
 	require.Equal(t, uint64(119), res.PeakForwardInMemory)
 }
 
+// A cancellation that lands while the last range is scanned must come back as an
+// error even when that range has nothing to emit, where no store call would
+// notice it: a range can hold billions of records, and a cancelled reset must not
+// scan them to the end and report success.
+func TestNetUnmined_OnDiskACancellationInTheLastRangeIsReturned(t *testing.T) {
+	old := netUnminedBeatEvery
+	netUnminedBeatEvery = 8
+
+	t.Cleanup(func() { netUnminedBeatEvery = old })
+
+	r := rand.New(rand.NewSource(31))
+	forward := makeBlocks(r, []int{400}, 50)
+
+	// every back hash is a forward hash, so nothing is emitted
+	back := []blockHashes{{hashes: append([]chainhash.Hash(nil), forward[0].hashes[:200]...), subtreeLen: 50}}
+
+	run := func(ctx context.Context, beat func()) error {
+		_, err := netUnmined(ctx, 1, streamOf(back), 1, streamOf(forward),
+			netUnminedParams{Dir: t.TempDir(), ForwardCount: 400, MaxForwardInMemory: 200, ChunkSize: 100, Beat: beat},
+			func([]chainhash.Hash) error {
+				t.Error("nothing is net unmined")
+				return nil
+			})
+
+		return err
+	}
+
+	// The last two beats are around the removal of the scratch directory. The one
+	// before them is inside the last range, after its check of the context.
+	beats := 0
+	require.NoError(t, run(context.Background(), func() { beats++ }))
+	require.Greater(t, beats, 4)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	seen := 0
+	err := run(ctx, func() {
+		seen++
+		if seen == beats-2 {
+			cancel()
+		}
+	})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestNetUnmined_RemovesItsScratchFiles(t *testing.T) {
 	r := rand.New(rand.NewSource(8))
 	back := makeBlocks(r, []int{100}, 10)
@@ -671,7 +717,7 @@ func TestForEachScratchHash_ATruncatedRecordIsAnError(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, make([]byte, chainhash.HashSize+8), 0o600))
 
 	seen := 0
-	err := forEachScratchHash(path, func() {}, nil, func(h []chainhash.Hash) error {
+	err := forEachScratchHash(context.Background(), path, func() {}, nil, func(h []chainhash.Hash) error {
 		seen += len(h)
 		return nil
 	})

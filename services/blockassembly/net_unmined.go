@@ -353,7 +353,7 @@ func netUnminedOnDisk(
 		beat()
 		clear(inForward)
 
-		if err = forEachScratchHash(netUnminedRangePath(dir, "forward", r), beat, nil, func(h []chainhash.Hash) error {
+		if err = forEachScratchHash(ctx, netUnminedRangePath(dir, "forward", r), beat, nil, func(h []chainhash.Hash) error {
 			for i := range h {
 				inForward[h[i]] = struct{}{}
 			}
@@ -365,9 +365,14 @@ func netUnminedOnDisk(
 
 		res.PeakForwardInMemory = max(res.PeakForwardInMemory, uint64(len(inForward)))
 
-		if err = forEachScratchHash(netUnminedRangePath(dir, "back", r), beat, inForward, out.add); err != nil {
+		if err = forEachScratchHash(ctx, netUnminedRangePath(dir, "back", r), beat, inForward, out.add); err != nil {
 			return err
 		}
+	}
+
+	// A range with nothing to emit makes no store call that would notice.
+	if err = ctx.Err(); err != nil {
+		return err
 	}
 
 	// The last chunk, before the scratch files go.
@@ -420,7 +425,8 @@ type netUnminedParams struct {
 	// ForwardCount is how many transactions the move-forward blocks hold.
 	ForwardCount uint64
 	// MaxForwardInMemory is the most move-forward hashes held in memory at once:
-	// the whole set when it has no more than that, otherwise one range of it.
+	// the whole set when it has no more than that, otherwise one range of it, for
+	// a forward set of up to 1024 times this many (see maxNetUnminedRangeBits).
 	MaxForwardInMemory uint64
 	// ChunkSize is the most hashes handed to emit at once.
 	ChunkSize int
@@ -456,7 +462,10 @@ type netUnminedResult struct {
 
 const (
 	// maxNetUnminedRangeBits caps the number of ranges, and with it the open
-	// scratch files, at 1024.
+	// scratch files, at 1024. Past 1024 times MaxForwardInMemory forward hashes
+	// (32.768 billion at 32M a range) a range holds more than MaxForwardInMemory:
+	// forwardCount/1024 of them, so the memory grows with the forward set from
+	// there instead of the run failing. PeakForwardInMemory reports what was held.
 	maxNetUnminedRangeBits = 10
 
 	// netUnminedScratchPrefix starts the name of every scratch directory this
@@ -607,8 +616,9 @@ func (w *rangeWriters) closeAll() error {
 }
 
 // forEachScratchHash reads the hashes of a scratch file and hands them to visit,
-// a batch at a time, leaving out the ones in skip.
-func forEachScratchHash(path string, beat func(), skip map[chainhash.Hash]struct{}, visit func([]chainhash.Hash) error) error {
+// a batch at a time, leaving out the ones in skip. It stops with the context's
+// error when the context is done, which it checks as often as it beats.
+func forEachScratchHash(ctx context.Context, path string, beat func(), skip map[chainhash.Hash]struct{}, visit func([]chainhash.Hash) error) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return errors.NewStorageError("[netUnmined] error opening the scratch file %s", path, err)
@@ -624,6 +634,10 @@ func forEachScratchHash(path string, beat func(), skip map[chainhash.Hash]struct
 	for n := 1; ; n++ {
 		if n%netUnminedBeatEvery == 0 {
 			beat()
+
+			if cerr := ctx.Err(); cerr != nil {
+				return cerr
+			}
 		}
 
 		_, err = io.ReadFull(rd, h[:])

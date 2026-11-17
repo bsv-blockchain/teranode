@@ -88,6 +88,12 @@ func (b *BlockAssembler) markNetUnminedMoveBackTxs(ctx context.Context, moveBack
 		return nil
 	}
 
+	// The scratch is split into at most 1024 ranges, so past this the ranges, and
+	// the memory with them, grow with the moveForward set.
+	if bounded := resetNetUnminedMaxForwardInMemory << maxNetUnminedRangeBits; forwardTxs > bounded {
+		b.logger.Warnf("[BlockAssembler][Reset] the moveForward blocks hold %d transactions, more than the %d the net unmined computation keeps within %d in memory at once; it will hold about %d", forwardTxs, bounded, resetNetUnminedMaxForwardInMemory, forwardTxs>>maxNetUnminedRangeBits)
+	}
+
 	// The configured tx map directory is this node's own fast disk, so a scratch
 	// directory in it that this run did not make is an earlier run's. The OS temp
 	// directory may be shared with other processes, so nothing is swept there.
