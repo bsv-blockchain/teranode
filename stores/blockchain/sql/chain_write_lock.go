@@ -10,9 +10,10 @@ import (
 
 // chainWriteStateKey is the state row the chain-membership writes on PostgreSQL lock,
 // and every on_main_chain walk checks before it commits. The writes that lock it are
-// DeleteBlock, InvalidateBlock, RevalidateBlock and the fork path of StoreBlock. The
-// extend path of StoreBlock does not: it decides on_main_chain from this process's
-// best-block cache, which a lock taken inside its transaction could not correct.
+// DeleteBlock, InvalidateBlock, RevalidateBlock, the fork path of StoreBlock, and the
+// extend path's later clear of a sibling fork's flag. The extend path's insert takes no
+// lock: it decides on_main_chain from this process's best-block cache, which a lock taken
+// inside its transaction could not correct.
 //
 // The walks read their rows from a REPEATABLE READ snapshot and most run without
 // slowPathMu, which in any case only orders writers in this process. A chain write that
@@ -49,8 +50,10 @@ func (s *SQL) chainWriteLocking() bool {
 // It reads before it inserts. An INSERT ... ON CONFLICT waits for any open transaction
 // that has locked the row, and a chain write queued behind a full walk can hold it for as
 // long as the walk runs, so a starting process would sit in New with no deadline. A plain
-// read never waits on a row lock. Only the first start on a fresh database inserts, and
-// there the only possible holder is another process creating the same row.
+// read never waits on a row lock. On a new database the genesis StoreBlock's lock has
+// already created the row, so only a database that holds its chain but has no row reaches
+// the insert, such as one written before the row existed. There the usual holder is
+// another process's own insert in New, which lasts milliseconds.
 func (s *SQL) ensureChainWriteRow(ctx context.Context) error {
 	if !s.chainWriteLocking() {
 		return nil

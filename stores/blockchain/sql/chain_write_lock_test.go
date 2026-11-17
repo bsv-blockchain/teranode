@@ -142,13 +142,38 @@ func TestChainWriteLockWalkWithoutTheRow_PostgreSQL(t *testing.T) {
 }
 
 // TestEnsureChainWriteRowReportsFailure_PostgreSQL: New must not start a store whose walks
-// would find no row while a write is creating it, so a failure to create the row is an error.
+// would find no row while a write is creating it, so a failure to read or to create the
+// row is an error.
 func TestEnsureChainWriteRowReportsFailure_PostgreSQL(t *testing.T) {
-	s := newPostgresChainWriteStore(t)
+	t.Run("read fails", func(t *testing.T) {
+		s := newPostgresChainWriteStore(t)
 
-	hideStateTable(t, s)
+		hideStateTable(t, s)
 
-	require.ErrorContains(t, s.ensureChainWriteRow(context.Background()), chainWriteStateKey)
+		require.ErrorContains(t, s.ensureChainWriteRow(context.Background()), "could not read")
+	})
+
+	t.Run("insert fails", func(t *testing.T) {
+		s := newPostgresChainWriteStore(t)
+
+		_, err := s.db.Exec(`DELETE FROM state WHERE key = $1`, chainWriteStateKey)
+		require.NoError(t, err)
+
+		_, err = s.db.Exec(`
+			CREATE OR REPLACE FUNCTION refuse_state_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+			BEGIN
+				RAISE EXCEPTION 'state insert refused';
+			END $$`)
+		require.NoError(t, err)
+
+		_, err = s.db.Exec(`CREATE TRIGGER refuse_state_insert BEFORE INSERT ON state
+			FOR EACH ROW EXECUTE FUNCTION refuse_state_insert()`)
+		require.NoError(t, err)
+
+		t.Cleanup(func() { _, _ = s.db.Exec(`DROP TRIGGER IF EXISTS refuse_state_insert ON state`) })
+
+		require.ErrorContains(t, s.ensureChainWriteRow(context.Background()), "could not create")
+	})
 }
 
 // openPostgresChainWriteStore opens a store on a new PostgreSQL database and returns it
