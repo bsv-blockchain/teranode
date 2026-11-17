@@ -16,6 +16,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
@@ -1223,16 +1224,27 @@ func TestLimitedUserCannotMutateUTXOs(t *testing.T) {
 
 type freezeSpy struct {
 	utxo.Store
-	tx     *bt.Tx
-	frozen []*utxo.Spend
+	tx       *bt.Tx
+	getErr   error
+	frozen   []*utxo.Spend
+	unfrozen []*utxo.Spend
 }
 
 func (f *freezeSpy) Get(context.Context, *chainhash.Hash, ...fields.FieldName) (*meta.Data, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+
 	return &meta.Data{Tx: f.tx}, nil
 }
 
 func (f *freezeSpy) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, _ *settings.Settings) error {
 	f.frozen = append(f.frozen, spends...)
+	return nil
+}
+
+func (f *freezeSpy) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, _ *settings.Settings) error {
+	f.unfrozen = append(f.unfrozen, spends...)
 	return nil
 }
 
@@ -1255,4 +1267,74 @@ func TestHandleFreezeUsesRealUTXOHash(t *testing.T) {
 
 	_, err = handleFreeze(context.Background(), s, &bsvjson.FreezeCmd{TxID: tx.TxID(), Vout: 5}, nil)
 	require.Error(t, err)
+}
+
+func TestHandleUnfreezeUsesRealUTXOHash(t *testing.T) {
+	tx := bt.NewTx()
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+	require.NoError(t, tx.PayToAddress("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", 2000))
+
+	spy := &freezeSpy{tx: tx}
+	s := &RPCServer{logger: mocklogger.NewTestLogger(), utxoStore: spy, settings: &settings.Settings{}}
+
+	_, err := handleUnfreeze(context.Background(), s, &bsvjson.UnfreezeCmd{TxID: tx.TxID(), Vout: 1}, nil)
+	require.NoError(t, err)
+	require.Len(t, spy.unfrozen, 1)
+
+	want, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[1], 1)
+	require.NoError(t, err)
+
+	require.Equal(t, tx.TxIDChainHash(), spy.unfrozen[0].TxID)
+	require.Equal(t, uint32(1), spy.unfrozen[0].Vout)
+	require.Equal(t, want, spy.unfrozen[0].UTXOHash)
+	require.Empty(t, spy.frozen)
+}
+
+func TestSpendForOutputRejectsUnusableOutputs(t *testing.T) {
+	txWithNilOutput := bt.NewTx()
+	txWithNilOutput.Outputs = []*bt.Output{nil}
+
+	getErr := errors.NewServiceUnavailableError("store unavailable")
+
+	tests := []struct {
+		name    string
+		spy     *freezeSpy
+		vout    uint32
+		wantErr error
+		wantRPC bool
+	}{
+		{name: "store error", spy: &freezeSpy{getErr: getErr}, wantErr: getErr},
+		{name: "tx missing from store", spy: &freezeSpy{}, wantRPC: true},
+		{name: "vout out of range", spy: &freezeSpy{tx: bt.NewTx()}, wantRPC: true},
+		{name: "nil output", spy: &freezeSpy{tx: txWithNilOutput}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &RPCServer{logger: mocklogger.NewTestLogger(), utxoStore: tt.spy, settings: &settings.Settings{}}
+
+			_, freezeErr := handleFreeze(context.Background(), s,
+				&bsvjson.FreezeCmd{TxID: strings.Repeat("ab", 32), Vout: int(tt.vout)}, nil)
+			_, unfreezeErr := handleUnfreeze(context.Background(), s,
+				&bsvjson.UnfreezeCmd{TxID: strings.Repeat("ab", 32), Vout: int(tt.vout)}, nil)
+
+			for _, err := range []error{freezeErr, unfreezeErr} {
+				require.Error(t, err)
+
+				if tt.wantErr != nil {
+					require.True(t, errors.Is(err, tt.wantErr))
+				}
+
+				var rpcErr *bsvjson.RPCError
+				require.Equal(t, tt.wantRPC, errors.As(err, &rpcErr))
+
+				if tt.wantRPC {
+					require.Equal(t, bsvjson.ErrRPCInvalidParameter, rpcErr.Code)
+				}
+			}
+
+			require.Empty(t, tt.spy.frozen, "no freeze may reach the store")
+			require.Empty(t, tt.spy.unfrozen, "no unfreeze may reach the store")
+		})
+	}
 }
