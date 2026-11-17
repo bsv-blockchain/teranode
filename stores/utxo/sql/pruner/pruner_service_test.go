@@ -507,7 +507,7 @@ func TestService_EdgeCases(t *testing.T) {
 // out in full in each pruning query, so every statement is one literal. The
 // marker INSERT and the DELETE must hold back exactly the same children, or a
 // child would be deleted without its marker, or marked and kept. This pins the
-// copies to one text: twice scoped to child, four times to transactions.
+// copies to one text: twice scoped to child, twice to transactions.
 func TestUnverifiedClaimClauseIsIdentical(t *testing.T) {
 	src, err := os.ReadFile("pruner_service.go")
 	require.NoError(t, err)
@@ -522,8 +522,8 @@ func TestUnverifiedClaimClauseIsIdentical(t *testing.T) {
 	}
 
 	require.Equal(t, 2, strings.Count(string(src), clause("child")))
-	require.Equal(t, 4, strings.Count(string(src), clause("transactions")))
-	require.Equal(t, 6, strings.Count(string(src), "LEFT JOIN outputs ho ON"), "every copy of the clause must match the text above")
+	require.Equal(t, 2, strings.Count(string(src), clause("transactions")))
+	require.Equal(t, 4, strings.Count(string(src), "LEFT JOIN outputs ho ON"), "every copy of the clause must match the text above")
 }
 
 func newSqlmockService(t *testing.T, defensive bool, reap func(ctx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error)) (*Service, sqlmock.Sqlmock, *[]string) {
