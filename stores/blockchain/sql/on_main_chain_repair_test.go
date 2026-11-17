@@ -457,7 +457,7 @@ func TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime(t *testing.T) {
 			require.Equal(t, []bool{false, true}, fulls, "one bounded attempt runs out of time, then the full walk lands")
 			require.Equal(t, int64(0), floors[0], "the bounded attempt walks down to the noted floor")
 			require.Equal(t, []bool{true, !tc.unlocked}, locked, "the bounded attempt holds slowPathMu; the full walk holds it only on SQLite")
-			require.Greater(t, fullBudget, rebuildOffChainSetTimeout, "the full walk runs under the full-walk budget, not the bounded one it escaped")
+			require.InDelta(t, float64(migrationFullRebuildTimeout), float64(fullBudget), float64(time.Minute), "the full walk runs under the 30 min full-walk budget, not the bounded one it escaped")
 
 			s.onMainChainRepair.mu.Lock()
 			defer s.onMainChainRepair.mu.Unlock()

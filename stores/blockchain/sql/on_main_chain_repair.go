@@ -404,15 +404,17 @@ const (
 // switch does not ask why the walk ran out of time, so a database slow enough to stall a
 // bounded walk only a few hundred blocks deep also hands the repair to the full walk. The
 // repair then stays a full walk, retried after the backoff, until one lands or an
-// overlapping write narrows it. On PostgreSQL those walks leave block storage running; on
-// SQLite each holds slowPathMu for up to 30 min instead of 30 s.
+// overlapping write narrows it. On PostgreSQL those walks run without slowPathMu (see
+// below); on SQLite each holds it for up to 30 min instead of 30 s.
 //
 // On PostgreSQL a full attempt never takes slowPathMu. It can run for up to 30 min, and
 // while the database stays slow it is retried every 30 s, so holding the lock would stop
-// block storage for as long as the fault lasts. Without the lock, blocks that extend the
-// tip keep being stored. A fork block whose reconcile reaches a row the walk has already
-// updated waits on that row, holding slowPathMu, until the walk reaches its chain-write
-// check, finds the fork's write and rolls back. Readers are on their flag-free walk
+// block storage for as long as the fault lasts. Without the lock, blocks keep being stored
+// while no chain write meets the walk. A fork block whose reconcile reaches a row the walk
+// has already updated waits on that row while it holds slowPathMu, so every StoreBlock
+// after it, extends included, waits too. The wait ends when the walk rolls back, at its
+// chain-write check or on any earlier error, and lasts at most the rest of the walk's
+// 30 min budget. Readers are on their flag-free walk
 // because of the guard, and rows a concurrent StoreBlock inserts are flagged by that
 // StoreBlock. A chain write that commits during the attempt can leave the attempt's older
 // view in place (see watchOnMainChainWrites), so the attempt watches for chain writes and
