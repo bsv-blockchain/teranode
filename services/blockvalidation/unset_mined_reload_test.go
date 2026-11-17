@@ -390,7 +390,7 @@ func TestReloadSubtreesForInvalidBlock_CorruptCopyIsPermanent(t *testing.T) {
 			require.NoError(t, u.reloadSubtreesForInvalidBlock(ctx, block))
 			require.Len(t, block.SubtreeSlices, 1)
 			require.NotNil(t, block.SubtreeSlices[0], "the subtree-to-check copy must be used")
-			require.Equal(t, *st.RootHash(), *subtreeRootFromNodes(block.SubtreeSlices[0]), "the nodes used must hash to the subtree hash")
+			require.NoError(t, model.ValidateSubtreeNodesMatchKey(block.SubtreeSlices[0], st.RootHash()), "the nodes used must hash to the subtree hash")
 			require.Equal(t, before, promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt))
 
 			require.NoError(t, block.ReleaseSubtreeNodes(nil))

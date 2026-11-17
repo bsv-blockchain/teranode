@@ -1678,13 +1678,10 @@ func (u *BlockValidation) reloadSubtreeForInvalidBlock(ctx context.Context, bloc
 		// The revert unmines the transactions this list names, so it must be the subtree the
 		// block commits to. A copy whose nodes hash to another root is as unusable as one that
 		// does not parse.
-		if root := subtreeRootFromNodes(subtree); root == nil || !subtreeHash.IsEqual(root) {
-			computed := "<nil>"
-			if root != nil {
-				computed = root.String()
-			}
-
-			corrupt = append(corrupt, fmt.Sprintf("%s: root hash %s does not match", fileType, computed))
+		// ValidateSubtreeNodesMatchKey hashes the node list: a deserialized subtree's RootHash
+		// is the root field stored in the file, which damaged node bytes would leave intact.
+		if err := model.ValidateSubtreeNodesMatchKey(subtree, subtreeHash); err != nil {
+			corrupt = append(corrupt, fmt.Sprintf("%s: %v", fileType, err))
 
 			if closeErr := subtree.Close(); closeErr != nil {
 				u.logger.Warnf("[setTxMined][%s] failed closing mismatched subtree %d/%s: %v", block.Hash().String(), subtreeIdx, subtreeHash.String(), closeErr)
@@ -1708,25 +1705,6 @@ func (u *BlockValidation) reloadSubtreeForInvalidBlock(ctx context.Context, bloc
 	u.logger.Errorf("[setTxMined][%s] manual_intervention_required: subtree %d/%s has no usable copy, its transactions keep this invalid block's tag: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), strings.Join(corrupt, "; "))
 
 	return nil, nil
-}
-
-// subtreeRootFromNodes hashes a subtree's node list to its merkle root, or nil
-// when it has no nodes. A deserialized subtree's RootHash returns the root field
-// stored in the file without hashing the nodes, so a file with damaged node bytes
-// and an intact root field would pass a RootHash comparison.
-func subtreeRootFromNodes(subtree *subtreepkg.Subtree) *chainhash.Hash {
-	if subtree == nil || len(subtree.Nodes) == 0 {
-		return nil
-	}
-
-	store, err := subtreepkg.BuildMerkleTreeStoreFromBytes(subtree.Nodes)
-	if err != nil || len(*store) == 0 {
-		return nil
-	}
-
-	root := (*store)[len(*store)-1]
-
-	return &root
 }
 
 // setTxMinedStatus marks all transactions within a block as mined in the blockchain system.
