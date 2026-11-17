@@ -99,7 +99,7 @@ func (c *testChain) storeBlock(prev chainhash.Hash, height, salt uint32) (uint32
 
 	// Block validation marks a block mined once its containment is recorded, and the store
 	// refuses to stamp a partition with a main-chain block still unmarked. Every block here is.
-	require.NoError(c.t, c.store.SetBlockMinedSet(context.Background(), blk.Hash()))
+	require.NoError(c.t, c.store.SetBlockMinedSet(context.Background(), blk.Hash(), nil))
 
 	return uint32(id), *blk.Hash() //nolint:gosec // a test id is small
 }
