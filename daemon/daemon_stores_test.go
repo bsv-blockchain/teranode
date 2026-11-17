@@ -3,8 +3,6 @@ package daemon
 import (
 	"context"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -20,15 +18,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// laneSource answers for the blockchain service: lane 9, ranges of 1,000 positions.
+// laneSource answers for the blockchain service: a lease on lane 9, grants of 1,000 positions.
 type laneSource struct {
 	high atomic.Uint64
 }
 
-func (s *laneSource) ReserveLaneRange(context.Context, string, uint8, bool) (lane.Range, error) {
+func (s *laneSource) grant() lane.Grant {
 	last := s.high.Add(1000)
 
-	return lane.Range{Lane: 9, First: last - 999, Last: last}, nil
+	return lane.Grant{Lane: 9, First: last - 999, Last: last}
+}
+
+func (s *laneSource) OpenLaneLease(context.Context, string) (lane.LeaseID, lane.Grant, error) {
+	return lane.LeaseID{9}, s.grant(), nil
+}
+
+func (s *laneSource) RenewLaneLease(_ context.Context, r lane.Renewal) (lane.RenewResult, error) {
+	if !r.WantGrant {
+		return lane.RenewResult{}, nil
+	}
+
+	return lane.RenewResult{Granted: true, Grant: s.grant()}, nil
+}
+
+func (s *laneSource) ReleaseLaneLease(context.Context, lane.Release) (bool, error) {
+	return false, nil
 }
 
 // closeCountingStore counts Close calls on the store GetUtxoStore opened.
@@ -48,10 +62,10 @@ func (s *closeCountingStore) Close(ctx context.Context) error {
 	return s.Store.Close(ctx)
 }
 
-// laneStoreFixture points the two seams of GetUtxoStore at a sqlitememory store and a test range
+// laneStoreFixture points the two seams of GetUtxoStore at a sqlitememory store and a test lease
 // source, and restores them afterwards. Those seams are package vars, so these tests do not run
 // in parallel.
-func laneStoreFixture(t *testing.T, name string, lanePositions bool, source func() (lane.RangeSource, error)) (*settings.Settings, *closeCountingStore) {
+func laneStoreFixture(t *testing.T, name string, lanePositions bool, source func() (lane.LeaseSource, error)) (*settings.Settings, *closeCountingStore) {
 	t.Helper()
 
 	appSettings := settings.NewSettings()
@@ -67,26 +81,26 @@ func laneStoreFixture(t *testing.T, name string, lanePositions bool, source func
 
 	opened := &closeCountingStore{Store: inner}
 
-	origStore, origSource := newMainUtxoStore, laneRangeSource
+	origStore, origSource := newMainUtxoStore, laneLeaseSource
 
-	t.Cleanup(func() { newMainUtxoStore, laneRangeSource = origStore, origSource })
+	t.Cleanup(func() { newMainUtxoStore, laneLeaseSource = origStore, origSource })
 
 	newMainUtxoStore = func(context.Context, ulogger.Logger, *settings.Settings) (utxostore.Store, error) {
 		return opened, nil
 	}
 
-	laneRangeSource = func(context.Context, *Stores, ulogger.Logger, *settings.Settings) (lane.RangeSource, error) {
+	laneLeaseSource = func(context.Context, *Stores, ulogger.Logger, *settings.Settings) (lane.LeaseSource, error) {
 		return source()
 	}
 
 	return appSettings, opened
 }
 
-// With the flag off nothing about lane positions runs: no range source is asked for, and a create
+// With the flag off nothing about lane positions runs: no lease source is asked for, and a create
 // writes no position.
 func TestGetUtxoStoreWithLanePositionsOffGivesNoSource(t *testing.T) {
-	appSettings, opened := laneStoreFixture(t, "lane_off", false, func() (lane.RangeSource, error) {
-		require.Fail(t, "with the flag off nothing asks for a range source")
+	appSettings, opened := laneStoreFixture(t, "lane_off", false, func() (lane.LeaseSource, error) {
+		require.Fail(t, "with the flag off nothing asks for a lease source")
 
 		return nil, nil
 	})
@@ -111,7 +125,7 @@ func TestGetUtxoStoreWithLanePositionsOffGivesNoSource(t *testing.T) {
 func TestGetUtxoStoreWithLanePositionsOnGivesTheStoreASource(t *testing.T) {
 	ctx := context.Background()
 
-	appSettings, opened := laneStoreFixture(t, "lane_on", true, func() (lane.RangeSource, error) {
+	appSettings, opened := laneStoreFixture(t, "lane_on", true, func() (lane.LeaseSource, error) {
 		return &laneSource{}, nil
 	})
 
@@ -135,11 +149,7 @@ func TestGetUtxoStoreWithLanePositionsOnGivesTheStoreASource(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, lane.Pack(9, 1), md.LanePosition)
 
-	saved, err := os.ReadFile(filepath.Join(appSettings.DataFolder, "lane", "lane-test.lane"))
-	require.NoError(t, err)
-	require.Equal(t, "9\n", string(saved), "the lane is saved under the data folder for the next start")
-
-	// The daemon owns the allocator's background fetch, and closes it with its other clients.
+	// The daemon owns the allocator's lease, and closes it with its other clients.
 	var allocators int
 
 	for _, client := range d.constructedClients {
@@ -160,10 +170,10 @@ type plainStore struct {
 }
 
 // Lane positions on with a store that cannot write them, such as the null store, is not an error.
-// That store takes no lane, because nothing asks for a range source.
+// That store takes no lane, because nothing asks for a lease source.
 func TestGetUtxoStoreWithLanePositionsOnLeavesAStoreThatCannotTakeThem(t *testing.T) {
-	appSettings, _ := laneStoreFixture(t, "lane_no_taker", true, func() (lane.RangeSource, error) {
-		require.Fail(t, "a store that cannot write lane positions asks for no range source")
+	appSettings, _ := laneStoreFixture(t, "lane_no_taker", true, func() (lane.LeaseSource, error) {
+		require.Fail(t, "a store that cannot write lane positions asks for no lease source")
 
 		return nil, nil
 	})
@@ -185,53 +195,14 @@ func TestGetUtxoStoreWithLanePositionsOnLeavesAStoreThatCannotTakeThem(t *testin
 	require.Empty(t, d.constructedClients, "there is no allocator to close")
 }
 
-// A client name is free text, and the lane file's name is made from it. It must stay in the lane
-// folder whatever the name holds.
-func TestGetUtxoStoreKeepsTheLaneFileUnderItsFolder(t *testing.T) {
-	ctx := context.Background()
-
-	appSettings, opened := laneStoreFixture(t, "lane_escape", true, func() (lane.RangeSource, error) {
-		return &laneSource{}, nil
-	})
-	appSettings.ClientName = "../../escape"
-
-	d := &Stores{}
-
-	store, err := d.GetUtxoStore(ctx, ulogger.TestLogger{}, appSettings)
-	require.NoError(t, err)
-
-	t.Cleanup(func() { require.NoError(t, store.Close(ctx)) })
-
-	_, _, err = store.SpendAndCreate(ctx, tests.BuildMultiWorkload(t, 0xe7, 1, 1).Roots[0], 900, utxostore.WithCreateOnly())
-	require.NoError(t, err)
-	require.Zero(t, opened.closes.Load())
-
-	for _, client := range d.constructedClients {
-		if allocator, ok := client.(*lane.Allocator); ok {
-			require.NoError(t, allocator.Close())
-		}
-	}
-
-	files, err := filepath.Glob(filepath.Join(appSettings.DataFolder, "lane", "*"))
-	require.NoError(t, err)
-	require.Equal(t, []string{filepath.Join(appSettings.DataFolder, "lane", "______escape.lane")}, files)
-
-	entries, err := os.ReadDir(appSettings.DataFolder)
-	require.NoError(t, err)
-	require.Len(t, entries, 1, "nothing is written beside the lane folder")
-
-	_, err = os.Stat(filepath.Join(filepath.Dir(appSettings.DataFolder), "escape.lane"))
-	require.True(t, os.IsNotExist(err), "nothing is written above the data folder")
-}
-
-// A failure to get a range source must close the store it opened and leave the singleton unset, so a retry
+// A failure to get a lease source must close the store it opened and leave the singleton unset, so a retry
 // starts clean rather than returning a nil store or leaking the first one.
 func TestGetUtxoStoreClosesTheStoreWhenTheSourceFails(t *testing.T) {
 	ctx := context.Background()
 
 	failing := true
 
-	appSettings, opened := laneStoreFixture(t, "lane_fail", true, func() (lane.RangeSource, error) {
+	appSettings, opened := laneStoreFixture(t, "lane_fail", true, func() (lane.LeaseSource, error) {
 		if failing {
 			return nil, errors.NewServiceError("no blockchain client")
 		}

@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strconv"
 	"sync"
 
@@ -125,23 +124,23 @@ var newMainUtxoStore = func(ctx context.Context, logger ulogger.Logger, appSetti
 	return utxofactory.NewStore(ctx, logger, appSettings, "main")
 }
 
-// laneRangeSource returns what the allocator asks for ranges. A var so a test can answer without
-// a blockchain service.
-var laneRangeSource = func(ctx context.Context, d *Stores, logger ulogger.Logger, appSettings *settings.Settings) (lane.RangeSource, error) {
-	return d.GetBlockchainClient(ctx, logger, appSettings, "lane")
+// laneLeaseSource returns what the allocator takes its lease from. A var so a test can answer
+// without a blockchain service.
+var laneLeaseSource = func(ctx context.Context, d *Stores, logger ulogger.Logger, appSettings *settings.Settings) (lane.LeaseSource, error) {
+	client, err := d.GetBlockchainClient(ctx, logger, appSettings, "lane")
+	if err != nil {
+		return nil, err
+	}
+
+	// The daemon retains and closes this client itself, so the allocator is not handed its Close.
+	return struct{ lane.LeaseSource }{client}, nil
 }
 
 // giveLanePositions hands the process's one UTXO store its lane position source. Every service in
-// the process creates records through that store, so that is one allocator and one lane per
-// process, with no change at any call site. The allocator only starts on the first create, so a
-// process that never creates records never takes a lane. A store that cannot write lane positions,
-// such as the null store, gets none.
-//
-// The lane number is kept in <dataFolder>/lane/<clientName>.lane. Two
-// processes on one host sharing a data folder and a client name would share
-// that file and so a lane; positions stay unique, because the blockchain
-// service hands each range out once, but give such processes distinct client
-// names to keep one lane each.
+// the process creates records through that store, so that is one allocator and one lane lease per
+// process, with no change at any call site. The allocator starts on the first create unless
+// something starts it sooner, so a process that never creates records never takes a lane. A store
+// that cannot write lane positions, such as the null store, gets none.
 func (d *Stores) giveLanePositions(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings,
 	store utxostore.Store) error {
 	taker, ok := utxostore.As[utxostore.LanePositionTaker](store)
@@ -151,7 +150,7 @@ func (d *Stores) giveLanePositions(ctx context.Context, logger ulogger.Logger, a
 		return nil
 	}
 
-	source, err := laneRangeSource(ctx, d, logger, appSettings)
+	source, err := laneLeaseSource(ctx, d, logger, appSettings)
 	if err != nil {
 		return err
 	}
@@ -162,11 +161,14 @@ func (d *Stores) giveLanePositions(ctx context.Context, logger ulogger.Logger, a
 	}
 
 	holder := appSettings.ClientName + "@" + hostname
-	file := filepath.Join(appSettings.DataFolder, "lane", lane.FileName(appSettings.ClientName))
 
-	logger.Infof("[lane] lane positions on: holder %s, lane file %s", holder, file)
+	logger.Infof("[lane] lane positions on: holder %s", holder)
 
-	allocator := lane.NewAllocator(source, holder, file, logger)
+	allocator := lane.NewAllocator(source, holder, lane.Timings{
+		Renew:         appSettings.BlockChain.LaneLeaseRenewInterval,
+		Stop:          appSettings.BlockChain.LaneLeaseStopAfter,
+		GrantDuration: appSettings.BlockChain.LaneGrantDuration,
+	}, logger)
 	d.retainClient(allocator)
 	taker.SetLanePositionSource(allocator)
 

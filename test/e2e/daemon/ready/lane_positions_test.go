@@ -2,7 +2,6 @@ package smoke
 
 import (
 	"net/url"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -140,7 +139,11 @@ func runLanePositionsScenario(t *testing.T, td *daemon.TestDaemon, restart func(
 	other, err := utxofactory.NewStore(td.Ctx, td.Logger, td.Settings, "lane-test", false)
 	require.NoError(t, err)
 
-	alloc := lane.NewAllocator(td.BlockchainClient, "second-process@test", filepath.Join(t.TempDir(), "lane"), td.Logger)
+	alloc := lane.NewAllocator(td.BlockchainClient, "second-process@test", lane.Timings{
+		Renew:         td.Settings.BlockChain.LaneLeaseRenewInterval,
+		Stop:          td.Settings.BlockChain.LaneLeaseStopAfter,
+		GrantDuration: td.Settings.BlockChain.LaneGrantDuration,
+	}, td.Logger)
 	defer func() { require.NoError(t, alloc.Close()) }()
 
 	taker, ok := utxo.As[utxo.LanePositionTaker](other)
@@ -178,6 +181,9 @@ func runLanePositionsScenario(t *testing.T, td *daemon.TestDaemon, restart func(
 
 	afterLane, afterPos := lane.Unpack(lanePosition(td, tx1))
 	t.Logf("tx1 after restart %s: lane %d position %d", tx1.TxIDChainHash(), afterLane, afterPos)
-	require.Equal(t, firstLane, afterLane, "the restarted node carries on in its saved lane")
-	require.Greater(t, afterPos, firstPos, "positions only increase within a lane across a restart")
+	// A restarted node takes a new lease, usually on another lane. In the same lane, it carries on
+	// above every position handed out before.
+	if afterLane == firstLane {
+		require.Greater(t, afterPos, firstPos, "positions only increase within a lane across a restart")
+	}
 }

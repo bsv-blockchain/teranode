@@ -8,10 +8,12 @@ import (
 )
 
 var (
-	prometheusLaneCurrent   prometheus.Gauge
-	prometheusLanePositions prometheus.Counter
-	prometheusLaneRanges    prometheus.Counter
-	prometheusLaneExhausted prometheus.Counter
+	prometheusLaneCurrent       prometheus.Gauge
+	prometheusLanePositions     prometheus.Counter
+	prometheusLaneGrants        prometheus.Counter
+	prometheusLaneWaits         prometheus.Counter
+	prometheusLaneTakeFailures  prometheus.Counter
+	prometheusLaneRefusedGrants prometheus.Counter
 
 	prometheusMetricsInitOnce sync.Once
 )
@@ -22,7 +24,7 @@ func initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "current",
-			Help:      "Lane this process is handing out positions in",
+			Help:      "Lane this process holds a lease on",
 		})
 		prometheusLanePositions = promauto.NewCounter(prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -30,17 +32,29 @@ func initPrometheusMetrics() {
 			Name:      "positions_total",
 			Help:      "Lane positions this process handed to new records",
 		})
-		prometheusLaneRanges = promauto.NewCounter(prometheus.CounterOpts{
+		prometheusLaneGrants = promauto.NewCounter(prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "lane",
-			Name:      "ranges_total",
-			Help:      "Ranges of lane positions this process received from the blockchain service",
+			Name:      "grants_total",
+			Help:      "Grants of lane positions this process received from the blockchain service, the first grant of each lease included",
 		})
-		prometheusLaneExhausted = promauto.NewCounter(prometheus.CounterOpts{
+		prometheusLaneWaits = promauto.NewCounter(prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "lane",
-			Name:      "unstamped_total",
-			Help:      "New records created without a lane position because no range was in hand",
+			Name:      "waits_total",
+			Help:      "Takes of a lane position that had to wait because none was in hand",
+		})
+		prometheusLaneTakeFailures = promauto.NewCounter(prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "lane",
+			Name:      "take_failures_total",
+			Help:      "Takes of a lane position that failed, failing their create with service unavailable",
+		})
+		prometheusLaneRefusedGrants = promauto.NewCounter(prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "lane",
+			Name:      "refused_grants_total",
+			Help:      "Grants refused because they did not start above a position this process already gave out in that lane",
 		})
 	})
 }
