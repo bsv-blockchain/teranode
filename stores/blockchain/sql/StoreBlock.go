@@ -12,7 +12,6 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"reflect"
 	"time"
 
@@ -143,8 +142,10 @@ const (
 	forkLockWarnEvery = 30
 )
 
-// forkLockTimeoutStatement sets forkLockTimeout for the rest of one transaction.
-var forkLockTimeoutStatement = fmt.Sprintf(`SET LOCAL lock_timeout = '%dms'`, forkLockTimeout.Milliseconds())
+// forkLockTimeoutStatement sets forkLockTimeout for the rest of one transaction. It is a
+// literal rather than formatted from forkLockTimeout so no SQL is built at run time;
+// TestForkLockTimeoutStatementMatchesTheTimeout keeps the two in step.
+const forkLockTimeoutStatement = `SET LOCAL lock_timeout = '500ms'`
 
 // forkLockWaitError is the fork path's transaction giving up a lock wait after
 // forkLockTimeout (55P03, lock_not_available).

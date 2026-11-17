@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/url"
 	"testing"
 	"time"
@@ -1219,4 +1220,10 @@ func TestForkLockWaitErrorIsNotRetriedByRetryTx(t *testing.T) {
 	lockWait, ok := err.(*forkLockWaitError) //nolint:errorlint // StoreBlock matches it unwrapped
 	require.True(t, ok)
 	require.Same(t, lockTimeout, lockWait.cause)
+}
+
+// TestForkLockTimeoutStatementMatchesTheTimeout: the statement is a literal, so it has to
+// be changed by hand with forkLockTimeout.
+func TestForkLockTimeoutStatementMatchesTheTimeout(t *testing.T) {
+	require.Equal(t, fmt.Sprintf(`SET LOCAL lock_timeout = '%dms'`, forkLockTimeout.Milliseconds()), forkLockTimeoutStatement)
 }
