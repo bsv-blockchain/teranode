@@ -24,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/semaphore"
 	"k8s.io/apimachinery/pkg/util/rand"
 )
 
@@ -2146,12 +2147,13 @@ func TestValidateFileHeader_MarksOnlyBadBytesCorrupt(t *testing.T) {
 		name    string
 		reader  io.Reader
 		corrupt bool
+		cause   error // the underlying read error, kept in the chain for the operator; nil when there is none
 	}{
-		{name: "empty file", reader: bytes.NewReader(nil), corrupt: true},
-		{name: "truncated header", reader: bytes.NewReader([]byte("abc")), corrupt: true},
-		{name: "unknown magic", reader: bytes.NewReader([]byte("NOTMAGIC-rest-of-body")), corrupt: true},
+		{name: "empty file", reader: bytes.NewReader(nil), corrupt: true, cause: io.EOF},
+		{name: "truncated header", reader: bytes.NewReader([]byte("abc")), corrupt: true, cause: io.ErrUnexpectedEOF},
+		{name: "unknown magic", reader: bytes.NewReader([]byte("NOTMAGIC-rest-of-body")), corrupt: true, cause: fileformat.ErrUnknownMagic},
 		{name: "wrong file type", reader: bytes.NewReader(subtreeHeader.Bytes()), corrupt: true},
-		{name: "disk read error", reader: errReader{err: io.ErrClosedPipe}, corrupt: false},
+		{name: "disk read error", reader: errReader{err: io.ErrClosedPipe}, corrupt: false, cause: io.ErrClosedPipe},
 	}
 
 	for _, tc := range cases {
@@ -2160,10 +2162,47 @@ func TestValidateFileHeader_MarksOnlyBadBytesCorrupt(t *testing.T) {
 			require.Error(t, err)
 			require.ErrorIs(t, err, errors.ErrStorageError, "a header failure stays a StorageError for existing callers")
 			require.Equal(t, tc.corrupt, errors.IsBlobCorrupt(err))
+
+			if tc.cause != nil {
+				require.ErrorIs(t, err, tc.cause, "the read error must stay in the chain")
+			}
 		})
 	}
 
 	t.Run("matching header is accepted", func(t *testing.T) {
 		require.NoError(t, s.validateFileHeader(bytes.NewReader(subtreeHeader.Bytes()), "test-file", fileformat.FileTypeSubtree))
 	})
+}
+
+// TestGetIoReader_CorruptHeaderReleasesReadPermit reads a file whose header is corrupt
+// with a read semaphore of one slot. GetIoReader must close the file it opened on that
+// error path, which releases the permit, or every later read would wait 25 seconds for
+// a slot and then fail.
+func TestGetIoReader_CorruptHeaderReleasesReadPermit(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	storeURL, err := url.Parse("file://" + dir)
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL)
+	require.NoError(t, err)
+
+	key := []byte("corrupt-header")
+	require.NoError(t, store.Set(ctx, key, fileformat.FileTypeSubtree, []byte("body")))
+
+	fileName, err := store.options.ConstructFilename(store.path, key, fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(fileName, []byte("NOTMAGIC-rest-of-body"), 0o600))
+
+	previous := readSemaphore
+	readSemaphore = semaphore.NewWeighted(1)
+
+	t.Cleanup(func() { readSemaphore = previous })
+
+	_, err = store.GetIoReader(ctx, key, fileformat.FileTypeSubtree)
+	require.True(t, errors.IsBlobCorrupt(err))
+
+	require.True(t, readSemaphore.TryAcquire(1), "the read permit must be released after a corrupt header")
+	readSemaphore.Release(1)
 }

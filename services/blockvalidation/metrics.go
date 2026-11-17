@@ -267,7 +267,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "blockvalidation",
 			Name:      "revert_subtree_corrupt_total",
-			Help:      "Total number of subtrees the invalid-block revert skipped because every stored copy was corrupt. Their transactions keep the invalid block's tag; non-zero values require manual intervention, and the block and subtree hashes are recorded in the logs.",
+			Help:      "Number of times the invalid-block revert skipped a subtree because no stored copy was usable and at least one was corrupt. A subtree is counted again on each revert attempt that reaches it. Its transactions keep the invalid block's tag; non-zero values require manual intervention, and the block and subtree hashes are in the manual_intervention_required ERROR log line.",
 		},
 	)
 

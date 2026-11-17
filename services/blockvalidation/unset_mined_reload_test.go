@@ -3,6 +3,7 @@ package blockvalidation
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io/fs"
 	"net/url"
 	"os"
@@ -270,12 +271,11 @@ func TestReloadSubtreesForInvalidBlock_ClosesLoadedSubtreesOnReadError(t *testin
 // TestReloadSubtreesForInvalidBlock_CorruptCopyIsPermanent pins the one rule for a
 // subtree file that is present but unusable, whichever part of it is broken.
 //
-// A bad header (the store's header check fails), a bad body (the header passes
-// and the subtree does not parse) and a foreign body (it parses, but its nodes hash
-// to another root than the key, including a damaged node under an intact stored
-// root) are the same permanent fault: the store writes
-// whole files, so a retry reads the same bytes. Both now try the
-// FileTypeSubtreeToCheck copy, and when no copy is usable the subtree is skipped
+// It runs four corrupt copies: a bad header (the store's header check fails), a
+// bad body (the header passes and the subtree does not parse), a well-formed
+// subtree with another root, and damaged node bytes under an intact stored root.
+// They are the same permanent fault: the store writes whole files, so a retry
+// reads the same bytes. All four now try the FileTypeSubtreeToCheck copy, and when no copy is usable the subtree is skipped
 // with the corrupt-subtree counter raised, rather than returned for a retry that
 // would hold the block at mined_set=false and block assembly with it.
 //
@@ -398,21 +398,60 @@ func TestReloadSubtreesForInvalidBlock_CorruptCopyIsPermanent(t *testing.T) {
 
 		t.Run(tc.name+" with no usable copy is skipped and counted", func(t *testing.T) {
 			before := promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt)
-			u := &BlockValidation{logger: ulogger.TestLogger{}, subtreeStore: newStore(t, tc.corrupt, false)}
+			logger := &errorRecordingLogger{Logger: ulogger.TestLogger{}}
+			mmapDir := t.TempDir()
+			u := &BlockValidation{logger: logger, subtreeStore: newStore(t, tc.corrupt, false), mmapDir: mmapDir}
 
 			require.NoError(t, u.reloadSubtreesForInvalidBlock(ctx, block), "a corrupt file is permanent, so it must not be returned for a retry")
 			require.Len(t, block.SubtreeSlices, 1)
 			require.Nil(t, block.SubtreeSlices[0])
 			require.Equal(t, before+1, promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt))
+
+			// The operator finds the subtree from this line, so it must be an ERROR naming both hashes.
+			lines := logger.errorLines()
+			require.Len(t, lines, 1)
+			require.Contains(t, lines[0], "manual_intervention_required")
+			require.Contains(t, lines[0], block.Hash().String())
+			require.Contains(t, lines[0], st.RootHash().String())
+
+			// A copy that parsed and was then rejected must be closed, removing its mmap backing file.
+			entries, err := os.ReadDir(mmapDir)
+			require.NoError(t, err)
+			require.Empty(t, entries, "a rejected copy must be closed")
 		})
 	}
 
 	t.Run("absent subtree is skipped without the corrupt counter", func(t *testing.T) {
 		before := promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt)
-		u := &BlockValidation{logger: ulogger.TestLogger{}, subtreeStore: blobmemory.New()}
+		logger := &errorRecordingLogger{Logger: ulogger.TestLogger{}}
+		u := &BlockValidation{logger: logger, subtreeStore: blobmemory.New()}
 
 		require.NoError(t, u.reloadSubtreesForInvalidBlock(ctx, block))
 		require.Nil(t, block.SubtreeSlices[0])
 		require.Equal(t, before, promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt))
+		require.Empty(t, logger.errorLines(), "an absent subtree is not a manual-intervention case")
 	})
+}
+
+// errorRecordingLogger keeps each rendered Errorf line and passes every call on.
+type errorRecordingLogger struct {
+	ulogger.Logger
+
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *errorRecordingLogger) Errorf(format string, args ...interface{}) {
+	l.mu.Lock()
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+	l.mu.Unlock()
+
+	l.Logger.Errorf(format, args...)
+}
+
+func (l *errorRecordingLogger) errorLines() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string(nil), l.lines...)
 }

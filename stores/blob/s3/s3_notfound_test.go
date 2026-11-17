@@ -422,5 +422,10 @@ func TestS3_MalformedStoredObjectIsAStorageFault(t *testing.T) {
 
 		require.ErrorIs(t, err, errors.ErrStorageError)
 		require.True(t, errors.IsBlobCorrupt(err), "Get must apply the same file-type check as GetIoReader")
+
+		// The rejected body must not reach Get's cache, or the next Get would serve it with no error.
+		content, err := s3Store.Get(context.Background(), key, fileformat.FileTypeTx)
+		require.True(t, errors.IsBlobCorrupt(err), "a second Get must be rejected too, not served from the cache")
+		require.Nil(t, content)
 	})
 }

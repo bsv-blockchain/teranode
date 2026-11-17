@@ -207,6 +207,15 @@ func TestHeader_UnknownMagicIsWrapped(t *testing.T) {
 
 	_, err = ReadHeaderFromBytes([]byte("NOTMAGIC"))
 	require.ErrorIs(t, err, ErrUnknownMagic)
+
+	// A short input is a different fault: there are not enough bytes to hold any magic.
+	_, err = ReadHeaderFromBytes([]byte("abc"))
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrUnknownMagic)
+
+	err = header.Read(bytes.NewReader([]byte("abc")))
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrUnknownMagic)
 }
 
 // TestHeader_Read_BackwardCompatibility tests Read with trailing nulls
