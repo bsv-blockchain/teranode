@@ -104,7 +104,7 @@ func (s *SQL) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lan
 			return err
 		}
 
-		if _, err = tx.ExecContext(ctx, s.laneSQL(openLeaseSQL),
+		if _, err = s.laneExec(ctx, tx, openLeaseSQL,
 			int(chosen), s.leaseParam(id), req.Holder,
 		); err != nil {
 			return errors.NewStorageError("could not record the lane lease", err)
@@ -129,8 +129,7 @@ func (s *SQL) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (g
 	}
 
 	err = s.leaseTx(ctx, req.WantGrant, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx,
-			s.laneSQL(renewLeaseSQL),
+		res, err := s.laneExec(ctx, tx, renewLeaseSQL,
 			int(req.Lane), s.leaseParam(req.Lease),
 		)
 		if err != nil {
@@ -168,7 +167,7 @@ func (s *SQL) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (g
 // reports alreadyClosed when the lease was closed before, and then writes nothing.
 func (s *SQL) ReleaseLaneLease(ctx context.Context, req options.LaneLeaseRelease) (alreadyClosed bool, err error) {
 	err = s.leaseTx(ctx, false, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, s.laneSQL(releaseLeaseSQL),
+		res, err := s.laneExec(ctx, tx, releaseLeaseSQL,
 			int(req.Lane), s.leaseParam(req.Lease))
 		if err != nil {
 			return errors.NewStorageError("could not close the lane lease", err)
@@ -181,7 +180,7 @@ func (s *SQL) ReleaseLaneLease(ctx context.Context, req options.LaneLeaseRelease
 			return nil
 		}
 
-		if _, err = tx.ExecContext(ctx, s.laneSQL(cleanCloseSQL),
+		if _, err = s.laneExec(ctx, tx, cleanCloseSQL,
 			s.leaseParam(req.Lease), int(req.Lane), closeClean, lane.ToSigned(req.LastTaken), settlesFirst(req.Settles), settlesLastTaken(req.Settles),
 		); err != nil {
 			return errors.NewStorageError("could not record the lane lease close", err)
@@ -291,7 +290,7 @@ func (s *SQL) closeStale(ctx context.Context, tx *sql.Tx, closeAfter time.Durati
 	}
 
 	for _, l := range closed {
-		if _, err = tx.ExecContext(ctx, s.laneSQL(lapsedCloseSQL),
+		if _, err = s.laneExec(ctx, tx, lapsedCloseSQL,
 			l.id, l.lane, closeLapsed,
 		); err != nil {
 			return 0, errors.NewStorageError("could not record a lapsed lane lease", err)
@@ -416,7 +415,7 @@ func (s *SQL) recordGrant(ctx context.Context, tx *sql.Tx, id lane.LeaseID, l ui
 		}
 	}
 
-	if _, err = tx.ExecContext(ctx, s.laneSQL(recordGrantSQL),
+	if _, err = s.laneExec(ctx, tx, recordGrantSQL,
 		int(l), lane.ToSigned(first), lane.ToSigned(last), holder, int64(height), s.leaseParam(id), settlesFirst(settles), settlesLastTaken(settles),
 	); err != nil {
 		return lane.Grant{}, errors.NewStorageError("could not record the lane grant", err)
@@ -439,13 +438,14 @@ func grantSize(rate uint64, d time.Duration, minimum uint64) uint64 {
 	return max(minimum, rate*secs)
 }
 
-// laneSQL picks a lease statement's form for this database's engine.
-func (s *SQL) laneSQL(q engineSQL) string {
+// laneExec runs a lease statement in the form for this database's engine. It passes the constant
+// itself to ExecContext, not a string a function returned, so no query is built at run time.
+func (s *SQL) laneExec(ctx context.Context, tx *sql.Tx, q engineSQL, args ...any) (sql.Result, error) {
 	if s.engine == util.Postgres {
-		return q.postgres
+		return tx.ExecContext(ctx, q.postgres, args...)
 	}
 
-	return q.sqlite
+	return tx.ExecContext(ctx, q.sqlite, args...)
 }
 
 // engineSQL is one lease statement written out for each engine. They differ only in how they read
