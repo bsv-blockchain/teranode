@@ -187,9 +187,10 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		}
 
 		// InvalidateBlock can move the chain tip arbitrarily deep — an
-		// operator may invalidate a block far below the current tip, leaving
-		// the new winning branch's fork point well below the bounded walk
-		// in reconcileOnMainChain. Use the full rebuild here for correctness;
+		// operator may invalidate a block far below the current tip.
+		// reconcileOnMainChain trusts the flags below the first flagged
+		// block its walk meets, and the full rebuild trusts none. Use the
+		// full rebuild here for correctness;
 		// invalidations are rare admin operations and can afford the wider
 		// lock window. migrationFullRebuildTimeout matches the startup
 		// migration's bound, generous enough for multi-million-block chains.
