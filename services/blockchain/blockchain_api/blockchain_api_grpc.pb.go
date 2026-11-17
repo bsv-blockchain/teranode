@@ -59,7 +59,6 @@ const (
 	BlockchainAPI_GetBlocksByHeight_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetBlocksByHeight"
 	BlockchainAPI_FindBlocksContainingSubtree_FullMethodName         = "/blockchain_api.BlockchainAPI/FindBlocksContainingSubtree"
 	BlockchainAPI_GetBlockHeaderIDs_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
-	BlockchainAPI_ReserveLaneRange_FullMethodName                    = "/blockchain_api.BlockchainAPI/ReserveLaneRange"
 	BlockchainAPI_OpenLaneLease_FullMethodName                       = "/blockchain_api.BlockchainAPI/OpenLaneLease"
 	BlockchainAPI_RenewLaneLease_FullMethodName                      = "/blockchain_api.BlockchainAPI/RenewLaneLease"
 	BlockchainAPI_ReleaseLaneLease_FullMethodName                    = "/blockchain_api.BlockchainAPI/ReleaseLaneLease"
@@ -178,9 +177,6 @@ type BlockchainAPIClient interface {
 	FindBlocksContainingSubtree(ctx context.Context, in *FindBlocksContainingSubtreeRequest, opts ...grpc.CallOption) (*FindBlocksContainingSubtreeResponse, error)
 	// GetBlockHeaderIDs retrieves block header IDs for a range of blocks.
 	GetBlockHeaderIDs(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeaderIDsResponse, error)
-	// ReserveLaneRange hands a record-creating process the next range of positions in a lane.
-	// A holder that names a lane gets it, unless it is exhausted. Otherwise the service assigns a free lane.
-	ReserveLaneRange(ctx context.Context, in *ReserveLaneRangeRequest, opts ...grpc.CallOption) (*ReserveLaneRangeResponse, error)
 	// OpenLaneLease opens a lease on a free lane for a record-creating process, with its first grant of positions.
 	OpenLaneLease(ctx context.Context, in *OpenLaneLeaseRequest, opts ...grpc.CallOption) (*LaneLeaseGrant, error)
 	// RenewLaneLease renews a lane lease and, if asked, grants the next stretch of positions.
@@ -566,16 +562,6 @@ func (c *blockchainAPIClient) GetBlockHeaderIDs(ctx context.Context, in *GetBloc
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBlockHeaderIDsResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlockHeaderIDs_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *blockchainAPIClient) ReserveLaneRange(ctx context.Context, in *ReserveLaneRangeRequest, opts ...grpc.CallOption) (*ReserveLaneRangeResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ReserveLaneRangeResponse)
-	err := c.cc.Invoke(ctx, BlockchainAPI_ReserveLaneRange_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1094,9 +1080,6 @@ type BlockchainAPIServer interface {
 	FindBlocksContainingSubtree(context.Context, *FindBlocksContainingSubtreeRequest) (*FindBlocksContainingSubtreeResponse, error)
 	// GetBlockHeaderIDs retrieves block header IDs for a range of blocks.
 	GetBlockHeaderIDs(context.Context, *GetBlockHeadersRequest) (*GetBlockHeaderIDsResponse, error)
-	// ReserveLaneRange hands a record-creating process the next range of positions in a lane.
-	// A holder that names a lane gets it, unless it is exhausted. Otherwise the service assigns a free lane.
-	ReserveLaneRange(context.Context, *ReserveLaneRangeRequest) (*ReserveLaneRangeResponse, error)
 	// OpenLaneLease opens a lease on a free lane for a record-creating process, with its first grant of positions.
 	OpenLaneLease(context.Context, *OpenLaneLeaseRequest) (*LaneLeaseGrant, error)
 	// RenewLaneLease renews a lane lease and, if asked, grants the next stretch of positions.
@@ -1284,9 +1267,6 @@ func (UnimplementedBlockchainAPIServer) FindBlocksContainingSubtree(context.Cont
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeaderIDs(context.Context, *GetBlockHeadersRequest) (*GetBlockHeaderIDsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBlockHeaderIDs not implemented")
-}
-func (UnimplementedBlockchainAPIServer) ReserveLaneRange(context.Context, *ReserveLaneRangeRequest) (*ReserveLaneRangeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ReserveLaneRange not implemented")
 }
 func (UnimplementedBlockchainAPIServer) OpenLaneLease(context.Context, *OpenLaneLeaseRequest) (*LaneLeaseGrant, error) {
 	return nil, status.Error(codes.Unimplemented, "method OpenLaneLease not implemented")
@@ -1956,24 +1936,6 @@ func _BlockchainAPI_GetBlockHeaderIDs_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).GetBlockHeaderIDs(ctx, req.(*GetBlockHeadersRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BlockchainAPI_ReserveLaneRange_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReserveLaneRangeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockchainAPIServer).ReserveLaneRange(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockchainAPI_ReserveLaneRange_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockchainAPIServer).ReserveLaneRange(ctx, req.(*ReserveLaneRangeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2867,10 +2829,6 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlockHeaderIDs",
 			Handler:    _BlockchainAPI_GetBlockHeaderIDs_Handler,
-		},
-		{
-			MethodName: "ReserveLaneRange",
-			Handler:    _BlockchainAPI_ReserveLaneRange_Handler,
 		},
 		{
 			MethodName: "OpenLaneLease",

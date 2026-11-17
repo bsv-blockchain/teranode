@@ -71,7 +71,6 @@ var (
 	prometheusBlockchainSubscriberPendingFull *prometheus.CounterVec
 	prometheusBlockchainSubscriberSendErrors  *prometheus.CounterVec
 	prometheusBlockchainWatchdogFires         *prometheus.CounterVec
-	prometheusBlockchainLaneHandouts          *prometheus.CounterVec
 	prometheusBlockchainLaneLeaseOpens        prometheus.Counter
 	prometheusBlockchainLaneLeaseGrants       *prometheus.CounterVec
 	prometheusBlockchainLaneLeaseCloses       *prometheus.CounterVec
@@ -535,16 +534,6 @@ func _initPrometheusMetrics() {
 			Help:      "Number of times the client-side stream-progress watchdog cancelled a stale gRPC subscription stream (issue #872 zombie-stream detector).",
 		},
 		[]string{"source"},
-	)
-
-	prometheusBlockchainLaneHandouts = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockchain",
-			Name:      "lane_handouts_total",
-			Help:      "Number of lane position ranges handed out, by lane.",
-		},
-		[]string{"lane"},
 	)
 
 	prometheusBlockchainLaneLeaseOpens = promauto.NewCounter(

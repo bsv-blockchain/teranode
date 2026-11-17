@@ -693,10 +693,6 @@ func (m *MockStore) RevalidateBlock(ctx context.Context, blockHash *chainhash.Ha
 	panic(implementMe)
 }
 
-func (m *MockStore) ReserveLaneRange(ctx context.Context, req options.LaneRangeRequest) (lane.Range, error) {
-	panic(implementMe)
-}
-
 func (m *MockStore) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lane.LeaseID, lane.Grant, error) {
 	panic(implementMe)
 }

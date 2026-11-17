@@ -392,8 +392,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaxBlocksByHeightRange:     getInt("blockchain_maxBlocksByHeightRange", 2000, alternativeContext...),
 			GenerationalCacheCapacity:  getInt("blockchain_generationalCacheCapacity", 100000, alternativeContext...),
 			MaxInvalidBlocksPerRequest: getInt("blockchain_maxInvalidBlocksPerRequest", 10000, alternativeContext...),
-			LaneRangeSize:              getUint64AtLeast("blockchain_laneRangeSize", 10_000_000, 1, alternativeContext...),
-			LaneFreeAfter:              getDuration("blockchain_laneFreeAfter", 24*time.Hour, alternativeContext...),
 			LaneLeaseRenewInterval:     getDuration("blockchain_laneLeaseRenewInterval", 30*time.Second, alternativeContext...),
 			LaneLeaseStopAfter:         getDuration("blockchain_laneLeaseStopAfter", 2*time.Minute, alternativeContext...),
 			LaneLeaseCloseAfter:        getDuration("blockchain_laneLeaseCloseAfter", 3*time.Minute, alternativeContext...),
@@ -592,7 +590,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			IncrementBatcherTickerIntervalMillis:    getInt("utxostore_incrementBatcherTickerIntervalMillis", 0, alternativeContext...),
 			SetDAHBatcherTickerIntervalMillis:       getInt("utxostore_setDAHBatcherTickerIntervalMillis", 0, alternativeContext...),
 			LockedBatcherTickerIntervalMillis:       getInt("utxostore_lockedBatcherTickerIntervalMillis", 0, alternativeContext...),
-			LanePositions:                           getBool("utxostore_lanePositions", false, alternativeContext...),
 			LaneMigration:                           LaneMigration(getString("utxostore_laneMigration", string(LaneMigrationOff), alternativeContext...)),
 		},
 		P2P: P2PSettings{

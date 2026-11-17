@@ -31,10 +31,13 @@ read every section between yours and the target.
 
 ### Breaking
 
-- **Blockchain `Store` and `blockchain.ClientI` gain `ReserveLaneRange`, and the blockchain database a
-  `lane_handout` table.** Out-of-tree stores and `ClientI` implementations (mocks included) add the method.
-  If the node's Postgres role lacks `CREATE` on the schema, create `lane_handout` with the owner role
-  before upgrading and grant the node role `SELECT, INSERT` on it, or startup fails (DDL in #2136).
+- **Blockchain `Store` and `blockchain.ClientI` gain `OpenLaneLease`, `RenewLaneLease` and
+  `ReleaseLaneLease`, the store also `CloseStaleLaneLeases`, and the blockchain database the tables
+  `lane_handout`, `lane_lease` and `lane_close`.** Out-of-tree stores and `ClientI` implementations
+  (mocks included) add the methods. If the node's Postgres role lacks `CREATE` on the schema, create
+  the three tables with the owner role before upgrading, and grant the node role `SELECT, INSERT, UPDATE`
+  on `lane_lease` and `SELECT, INSERT` on the other two, or startup fails. A `lane_handout` left by a soak
+  of this PR also needs its new columns added by the owner (DDL in #2136).
 - **Between two blocks of equal chain work, the node now keeps the one it stored first.** It used
   to switch to the block relayed by the lowest-sorting peer id, and a block this node mined, stored
   with an empty peer id, won every tie. Until the blockchain service and block assembly both run

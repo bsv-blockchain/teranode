@@ -99,12 +99,6 @@ type ClientI interface {
 	// AssignBlockID returns a stable block ID for a given block hash (idempotent per hash).
 	AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error)
 
-	// ReserveLaneRange hands the holder the next range of positions in a lane and records it.
-	// With hasLane true the holder gets wantLane, unless that lane is exhausted. With hasLane false,
-	// or an exhausted lane, the service assigns a free lane; the returned range names the lane given.
-	// It returns an error when no lane is free.
-	ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (lane.Range, error)
-
 	// OpenLaneLease opens a lease on a free lane, never 254 or 255, with its first grant. It returns
 	// an error when no lane is free, and the caller retries.
 	OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error)

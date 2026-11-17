@@ -171,7 +171,7 @@ func (d *Stores) giveLanePositions(ctx context.Context, logger ulogger.Logger, a
 
 	holder := appSettings.ClientName + "@" + hostname
 
-	logger.Infof("[lane] lane positions on: holder %s", holder)
+	logger.Infof("[lane] lane migration at %s: holder %s takes a lane lease", appSettings.UtxoStore.LaneMigration, holder)
 
 	allocator := lane.NewAllocator(source, holder, lane.Timings{
 		Renew:         appSettings.BlockChain.LaneLeaseRenewInterval,

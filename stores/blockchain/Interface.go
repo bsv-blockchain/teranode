@@ -463,11 +463,6 @@ type Store interface {
 	// Returns: Any error encountered
 	SetFSMState(ctx context.Context, state string) error
 
-	// ReserveLaneRange hands out the next range of lane positions and records it.
-	// See options.LaneRangeRequest for the request, and SQL.ReserveLaneRange for the lane choice rule
-	// an implementation must follow.
-	ReserveLaneRange(ctx context.Context, req options.LaneRangeRequest) (lane.Range, error)
-
 	// OpenLaneLease closes stale leases, then opens a lease on a free lane with its first grant.
 	// See SQL.OpenLaneLease for the lane choice rule an implementation must follow.
 	OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lane.LeaseID, lane.Grant, error)

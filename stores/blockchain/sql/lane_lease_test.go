@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/lane"
@@ -20,6 +21,49 @@ import (
 )
 
 const leaseTestGrantMin = 10_000
+
+// runLaneHandoutTests runs fn against SQLite in memory and, unless -short, Postgres.
+func runLaneHandoutTests(t *testing.T, name string, fn func(t *testing.T, s *SQL)) {
+	t.Helper()
+
+	t.Run(name+"/sqlite", func(t *testing.T) {
+		storeURL, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		s, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+		require.NoError(t, err)
+
+		fn(t, s)
+	})
+
+	t.Run(name+"/postgres", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip("skipping postgres-backed test in -short mode")
+		}
+
+		s, cleanup := setupLanePostgresStore(t)
+		defer cleanup()
+
+		fn(t, s)
+	})
+}
+
+func setupLanePostgresStore(t *testing.T) (*SQL, func()) {
+	t.Helper()
+
+	connStr, teardown, err := postgres.SetupTestPostgresContainer()
+	if err != nil {
+		t.Skipf("PostgreSQL container not available: %v", err)
+	}
+
+	storeURL, err := url.Parse(connStr)
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+
+	return s, func() { _ = teardown() }
+}
 
 func leaseOpen(holder string) options.LaneLeaseOpen {
 	return options.LaneLeaseOpen{Holder: holder, Height: 7, GrantMin: leaseTestGrantMin, CloseAfter: 3 * time.Minute}
@@ -530,4 +574,38 @@ func TestLaneLeaseDDLIsANoOpOnACurrentSchema(t *testing.T) {
 	require.Error(t, err, "the role must not own the table for this test to mean anything")
 
 	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, nodeDB, true))
+}
+
+// An exhausted lane, one whose last hand-out reached the last position, is never chosen, even when it
+// is the lane closed longest ago.
+func TestOpenLaneLeaseSkipsAnExhaustedLane(t *testing.T) {
+	runLaneHandoutTests(t, "exhausted", func(t *testing.T, s *SQL) {
+		id, g, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		require.NoError(t, err)
+		require.Equal(t, uint8(0), g.Lane)
+
+		r := leaseRenew(id, g)
+		r.WantGrant, r.Rate = true, lane.MaxPosition
+
+		last, _, _, err := s.RenewLaneLease(t.Context(), r)
+		require.NoError(t, err)
+		require.Equal(t, lane.MaxPosition, last.Last, "a grant is capped at the last position")
+
+		_, err = s.ReleaseLaneLease(t.Context(), options.LaneLeaseRelease{Lease: id, Lane: g.Lane, LastTaken: g.First})
+		require.NoError(t, err)
+
+		// Every other lane has a hand-out from after lane 0 closed, so lane 0 is the one closed
+		// longest ago.
+		for l := 1; l < 254; l++ {
+			_, err = s.db.ExecContext(t.Context(),
+				`INSERT INTO lane_handout (lane, first, last, holder, height, handed_at) VALUES ($1, 1, 10, 'old', 1, $2)`,
+				l, time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC))
+			require.NoError(t, err)
+		}
+
+		_, g2, err := s.OpenLaneLease(t.Context(), leaseOpen("b"))
+		require.NoError(t, err)
+		require.NotEqual(t, uint8(0), g2.Lane, "the exhausted lane is skipped")
+		require.Equal(t, uint64(11), g2.First)
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -12,6 +13,22 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/lane"
 )
+
+// laneHandoutLockID is the Postgres advisory lock that serialises lane
+// hand-outs across blockchain service pods. It must stay unique among the
+// advisory lock ids used on this database and stable across releases.
+const laneHandoutLockID int64 = 7_265_726_102
+
+// laneHandoutMu serialises hand-outs on SQLite, where one process owns the file.
+var laneHandoutMu sync.Mutex
+
+// laneState is the latest hand-out in one lane.
+type laneState struct {
+	used      bool
+	last      uint64
+	handedAt  time.Time
+	exhausted bool
+}
 
 // grantableLanes is the number of lanes a lease can take: 0 to 253. Lane 254 is the coinbase lane
 // and 255 the backfill lane, and neither is ever leased.
@@ -484,4 +501,28 @@ func leaseError(msg string, err error) error {
 	}
 
 	return errors.NewStorageError(msg, err)
+}
+
+// readLaneState reads the latest hand-out in a lane through the primary key.
+func readLaneState(ctx context.Context, tx *sql.Tx, l uint8) (laneState, error) {
+	var (
+		last     int64
+		handedAt time.Time
+	)
+
+	err := tx.QueryRowContext(ctx,
+		`SELECT last, handed_at FROM lane_handout WHERE lane = $1 ORDER BY first DESC LIMIT 1`,
+		int(l),
+	).Scan(&last, &handedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return laneState{}, nil
+	}
+
+	if err != nil {
+		return laneState{}, errors.NewStorageError("could not read the latest lane hand-out", err)
+	}
+
+	lastPos := lane.FromSigned(last)
+
+	return laneState{used: true, last: lastPos, handedAt: handedAt, exhausted: lastPos >= lane.MaxPosition}, nil
 }

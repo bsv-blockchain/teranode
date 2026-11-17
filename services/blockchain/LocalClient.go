@@ -177,10 +177,6 @@ func (c *LocalClient) AssignBlockID(ctx context.Context, blockHash *chainhash.Ha
 	return c.store.AssignBlockID(ctx, blockHash)
 }
 
-func (c *LocalClient) ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (lane.Range, error) {
-	return reserveLaneRange(ctx, c.store, c.settings, holder, wantLane, hasLane)
-}
-
 func (c *LocalClient) OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
 	return openLaneLease(ctx, c.store, c.settings, holder)
 }

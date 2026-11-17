@@ -817,9 +817,6 @@ func (m *MockBlockchainClient) GetFSMCurrentStateForE2ETestMode() blockchain.FSM
 	defer m.mu.RUnlock()
 	return m.fsmState
 }
-func (m *MockBlockchainClient) ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (lane.Range, error) {
-	return lane.Range{}, nil
-}
 func (m *MockBlockchainClient) OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
 	return lane.LeaseID{}, lane.Grant{}, nil
 }

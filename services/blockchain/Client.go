@@ -485,24 +485,6 @@ func (c *Client) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (
 	return resp.BlockId, nil
 }
 
-// ReserveLaneRange asks the blockchain service for the next range of lane positions.
-func (c *Client) ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (lane.Range, error) {
-	resp, err := c.client.ReserveLaneRange(ctx, &blockchain_api.ReserveLaneRangeRequest{
-		Holder:   holder,
-		WantLane: uint32(wantLane),
-		HasLane:  hasLane,
-	})
-	if err != nil {
-		return lane.Range{}, errors.UnwrapGRPC(err)
-	}
-
-	if resp.Lane > lane.MaxLane {
-		return lane.Range{}, errors.NewServiceError("blockchain service returned lane %d, above %d", resp.Lane, lane.MaxLane)
-	}
-
-	return lane.Range{Lane: uint8(resp.Lane), First: resp.First, Last: resp.Last}, nil
-}
-
 // OpenLaneLease asks the blockchain service for a lease on a free lane, with its first grant.
 func (c *Client) OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
 	resp, err := c.client.OpenLaneLease(ctx, &blockchain_api.OpenLaneLeaseRequest{Holder: holder})

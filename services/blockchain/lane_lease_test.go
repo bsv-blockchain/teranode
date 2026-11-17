@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
@@ -218,4 +219,39 @@ func TestServerRefusesToStartWithStopNotShorterThanClose(t *testing.T) {
 	err = b.Init(context.Background())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "blockchain_laneLeaseStopAfter")
+}
+
+// bestHeightStore answers with a best block at a chosen height, so the height a grant records is
+// not the zero a fresh store would give anyway.
+type bestHeightStore struct {
+	blockchain_store.Store
+	height uint32
+}
+
+func (s *bestHeightStore) GetBestBlockHeader(context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return nil, &model.BlockHeaderMeta{Height: s.height}, nil
+}
+
+// Each grant's hand-out row records the best block's height at the time, on open and on renewal.
+func TestServerLaneLeaseRecordsTheBestBlockHeight(t *testing.T) {
+	tc := setup(t)
+
+	store := tc.server.store
+	tc.server.store = &bestHeightStore{Store: store, height: 812_345}
+
+	g, err := tc.server.OpenLaneLease(context.Background(), &blockchain_api.OpenLaneLeaseRequest{Holder: "validator-1"})
+	require.NoError(t, err)
+
+	tc.server.store = &bestHeightStore{Store: store, height: 812_346}
+
+	r, err := tc.server.RenewLaneLease(context.Background(), &blockchain_api.RenewLaneLeaseRequest{LeaseId: g.LeaseId, Lane: g.Lane, WantGrant: true})
+	require.NoError(t, err)
+
+	for first, want := range map[uint64]int64{g.First: 812_345, r.First: 812_346} {
+		var height int64
+
+		require.NoError(t, store.GetDB().QueryRow(`SELECT height FROM lane_handout WHERE lane = $1 AND first = $2`,
+			int(g.Lane), lane.ToSigned(first)).Scan(&height))
+		require.Equal(t, want, height)
+	}
 }

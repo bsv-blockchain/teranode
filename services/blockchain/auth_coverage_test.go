@@ -19,7 +19,6 @@ func TestBlockchainAuthMethodCoverage(t *testing.T) {
 		"/blockchain_api.BlockchainAPI/GetBlockByID":                        true,
 		"/blockchain_api.BlockchainAPI/GetNextBlockID":                      true,
 		"/blockchain_api.BlockchainAPI/AssignBlockID":                       true,
-		"/blockchain_api.BlockchainAPI/ReserveLaneRange":                    true,
 		"/blockchain_api.BlockchainAPI/OpenLaneLease":                       true,
 		"/blockchain_api.BlockchainAPI/RenewLaneLease":                      true,
 		"/blockchain_api.BlockchainAPI/ReleaseLaneLease":                    true,
