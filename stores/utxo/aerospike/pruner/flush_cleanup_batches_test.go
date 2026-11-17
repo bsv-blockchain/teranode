@@ -1188,6 +1188,61 @@ func TestWithdrawMarkers_UnroutableKeyDoesNotBlockTheOthers(t *testing.T) {
 	require.False(t, hasMarker(t, client, upKey, &upChild), "the routable parent's marker was withdrawn")
 }
 
+// TestWithdrawMarkers_KeepsEveryParentWhenTheRoutableResendAlsoFails: an
+// unsent batch lists its unroutable key first in the retry indexes, then the
+// routable keys whose own resend failed, so the indexes are not ascending.
+// Every parent must still be sent on the next attempt. pending is built from a
+// map, so the run is repeated to cover the unroutable key at each position.
+func TestWithdrawMarkers_KeepsEveryParentWhenTheRoutableResendAlsoFails(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	for run := byte(0); run < 6; run++ {
+		parents := make([]chainhash.Hash, 3)
+		children := make([]chainhash.Hash, 3)
+		keys := make([]*aerospike.Key, 3)
+		updates := make(map[string]*parentUpdateInfo)
+		withdraw := make(map[chainhash.Hash]struct{})
+
+		for i := range parents {
+			parents[i] = chainhash.HashH([]byte{0xF7, run, byte(i)})
+			children[i] = chainhash.HashH([]byte{0xF7, run, byte(i), 1})
+			keys[i] = putRecord(t, client, &parents[i], spentBy(&children[i]))
+			require.NoError(t, s.addParentUpdatesForInput(updates, &parents[i], 0, &children[i]))
+			withdraw[children[i]] = struct{}{}
+		}
+
+		_, err := s.markParents(context.Background(), updates)
+		require.NoError(t, err)
+
+		downKey := keys[0]
+		routableSends := 0
+		s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+			for _, rec := range records {
+				br := rec.BatchRec()
+				if br.Key.Equals(downKey) {
+					br.ResultCode = types.INVALID_NODE_ERROR
+					br.Err = &aerospike.AerospikeError{ResultCode: types.INVALID_NODE_ERROR}
+
+					return &aerospike.AerospikeError{ResultCode: types.INVALID_NODE_ERROR}
+				}
+			}
+
+			routableSends++
+			if routableSends == 1 {
+				return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+			}
+
+			return client.BatchOperate(policy, records)
+		}
+
+		s.withdrawMarkers(updates, withdraw)
+
+		for i := 1; i < len(keys); i++ {
+			require.False(t, hasMarker(t, client, keys[i], &children[i]), "run %d: routable parent %d was resent and withdrawn", run, i)
+		}
+	}
+}
+
 // TestWithdrawMarkers_StopsAfterTheLastAttempt: a withdrawal that keeps failing
 // is sent withdrawMarkerAttempts times and then left, counted and logged.
 func TestWithdrawMarkers_StopsAfterTheLastAttempt(t *testing.T) {

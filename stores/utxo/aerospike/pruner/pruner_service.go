@@ -3375,7 +3375,10 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 			}
 		}
 
-		next := pending[:0]
+		// A fresh slice: retry need not be ascending (an unsent batch lists its
+		// unroutable keys first), so filtering pending in place would let one
+		// entry overwrite another before it is copied.
+		next := make([]withdrawal, 0, len(retry))
 		for _, i := range retry {
 			next = append(next, pending[i])
 		}
@@ -3409,9 +3412,9 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 // for every write. A parent that is gone, or that has no marker bin, has
 // nothing to withdraw and is not a failure.
 //
-// A key the client cannot route to a node (INVALID_NODE_ERROR,
-// PARTITION_UNAVAILABLE) makes BatchOperate return before it sends anything,
-// under the default RespondAllKeys. That key is resent on the next attempt, so
+// A key the client cannot route to a node (INVALID_NODE_ERROR, stamped by the
+// client when it picks the key's node) makes BatchOperate return before it
+// sends anything, under the default RespondAllKeys. That key is resent on the next attempt, so
 // the routable keys are sent again at once, on their own, rather than wait
 // behind it on every attempt. RespondAllKeys stays on: off, the server would
 // stop a node's batch at the first key-level failure instead.
@@ -3493,15 +3496,15 @@ func (s *Service) sendWithdrawals(policy *aerospike.BatchWritePolicy, keys []*ae
 }
 
 // splitUnsent recognises a batch the client returned before sending: some
-// records carry a node-selection error and every other record still holds the
-// client's initial NO_RESPONSE with no error. It returns the indexes of each
+// records carry the client's INVALID_NODE_ERROR and every other record still
+// holds the client's initial NO_RESPONSE with no error. It returns the indexes of each
 // group, or nil when the batch was sent.
 func splitUnsent(records []aerospike.BatchRecordIfc) (unroutable, routable []int) {
 	for i, rec := range records {
 		batchRec := rec.BatchRec()
 
 		switch {
-		case batchRec.ResultCode == types.INVALID_NODE_ERROR || batchRec.ResultCode == types.PARTITION_UNAVAILABLE:
+		case batchRec.ResultCode == types.INVALID_NODE_ERROR:
 			unroutable = append(unroutable, i)
 		case batchRec.ResultCode == types.NO_RESPONSE && batchRec.Err == nil:
 			routable = append(routable, i)
