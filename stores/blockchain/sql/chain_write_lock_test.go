@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -350,12 +351,14 @@ func holdBlocksWrites(t *testing.T, s *SQL) (release func()) {
 func waitForHeldBlocksWrite(t *testing.T, s *SQL) {
 	t.Helper()
 
-	require.Eventually(t, func() bool {
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		var waiting int
-		require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting))
+		if !assert.NoError(c, s.db.QueryRow(`SELECT COUNT(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting)) {
+			return
+		}
 
-		return waiting > 0
-	}, 10*time.Second, 10*time.Millisecond, "the writer did not reach its blocks statement")
+		assert.Positive(c, waiting, "the writer did not reach its blocks statement")
+	}, 10*time.Second, 10*time.Millisecond)
 }
 
 // TestChainWriteLockIsTakenBeforeTheWritersFlags_PostgreSQL: each chain writer must lock
