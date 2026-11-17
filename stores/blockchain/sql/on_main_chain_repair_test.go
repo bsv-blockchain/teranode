@@ -433,6 +433,13 @@ func TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime(t *testing.T) {
 				if deadline, ok := ctx.Deadline(); ok && full {
 					fullBudget = time.Until(deadline)
 				}
+
+				fullCalls := 0
+				for _, f := range fulls {
+					if f {
+						fullCalls++
+					}
+				}
 				mu.Unlock()
 
 				if !full {
@@ -441,6 +448,11 @@ func TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime(t *testing.T) {
 					// A driver reports a statement cancelled at the deadline as its own
 					// error, which does not wrap context.DeadlineExceeded.
 					return errors.NewStorageError("pq: canceling statement due to user request")
+				}
+
+				if fullCalls == 1 {
+					// The first full walk fails too. The retry must still be a full walk.
+					return errors.NewStorageError("full walk failed")
 				}
 
 				return s.rebuildOnMainChainFlagTx(ctx, full, floor)
@@ -454,10 +466,10 @@ func TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime(t *testing.T) {
 			mu.Lock()
 			defer mu.Unlock()
 
-			require.Equal(t, []bool{false, true}, fulls, "one bounded attempt runs out of time, then the full walk lands")
+			require.Equal(t, []bool{false, true, true}, fulls, "one bounded attempt runs out of time, a failed full walk is retried as a full walk, which lands")
 			require.Equal(t, int64(0), floors[0], "the bounded attempt walks down to the noted floor")
-			require.Equal(t, []bool{true, !tc.unlocked}, locked, "the bounded attempt holds slowPathMu; the full walk holds it only on SQLite")
-			require.InDelta(t, float64(migrationFullRebuildTimeout), float64(fullBudget), float64(time.Minute), "the full walk runs under the 30 min full-walk budget, not the bounded one it escaped")
+			require.Equal(t, []bool{true, !tc.unlocked, !tc.unlocked}, locked, "the bounded attempt holds slowPathMu; the full walks hold it only on SQLite")
+			require.InDelta(t, float64(30*time.Minute), float64(fullBudget), float64(5*time.Second), "the full walk runs under the 30 min full-walk budget, not the bounded one it escaped")
 
 			s.onMainChainRepair.mu.Lock()
 			defer s.onMainChainRepair.mu.Unlock()
