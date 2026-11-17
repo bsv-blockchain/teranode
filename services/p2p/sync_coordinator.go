@@ -1729,10 +1729,14 @@ func (sc *SyncCoordinator) sendSyncMessage(peerID string) (deferred bool, err er
 	}
 
 	bestHash := ""
-	if peerInfo.BlockHash != nil {
+	switch {
+	case peerInfo.BlockHash != nil:
 		bestHash = peerInfo.BlockHash.String()
 		sc.logger.Infof("[sendSyncMessage] Found block hash %s for peer %s", bestHash, peerID)
-	} else {
+	case peerInfo.ValidatedBlockHash != nil:
+		bestHash = peerInfo.ValidatedBlockHash.String()
+		sc.logger.Infof("[sendSyncMessage] No advertised block hash for peer %s, using validated block hash %s", peerID, bestHash)
+	default:
 		sc.logger.Warnf("[sendSyncMessage] No block hash found in registry for peer %s", peerID)
 	}
 
