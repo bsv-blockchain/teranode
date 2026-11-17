@@ -19,14 +19,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// lanePositionSettings is lane positions on, with small ranges.
+// lanePositionSettings is the lane migration at shadow, with small grants.
 func lanePositionSettings(extra func(*settings.Settings)) func(*settings.Settings) {
 	return test.ComposeSettings(
 		test.SystemTestSettings(),
 		func(s *settings.Settings) {
 			s.ChainCfgParams.CoinbaseMaturity = 2
-			s.UtxoStore.LanePositions = true
-			s.BlockChain.LaneRangeSize = 1000
+			s.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+			s.BlockChain.LaneGrantMin = 1000
 
 			if extra != nil {
 				extra(s)

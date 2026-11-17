@@ -28,7 +28,7 @@ import (
 func newLaneStore(t *testing.T) (*Store, context.Context) {
 	t.Helper()
 
-	return newTestStoreWith(t, func(ts *settings.Settings) { ts.UtxoStore.LanePositions = true })
+	return newTestStoreWith(t, func(ts *settings.Settings) { ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
 }
 
 func newUncheckpointedLaneStore(t *testing.T) (*Store, context.Context) {
@@ -36,7 +36,7 @@ func newUncheckpointedLaneStore(t *testing.T) (*Store, context.Context) {
 
 	return newTestStoreWith(t, func(ts *settings.Settings) {
 		withCheckpoints(ts, nil)
-		ts.UtxoStore.LanePositions = true
+		ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 	})
 }
 
@@ -47,7 +47,7 @@ func newCheckpointLaneStore(t *testing.T) (*Store, context.Context) {
 		params := *ts.ChainCfgParams
 		params.Checkpoints = []chaincfg.Checkpoint{{Height: checkpointFloor}}
 		ts.ChainCfgParams = &params
-		ts.UtxoStore.LanePositions = true
+		ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 	})
 }
 
@@ -56,7 +56,7 @@ func newBodySkipLaneStore(t *testing.T) *Store {
 
 	s, _ := newTestStoreWith(t, func(ts *settings.Settings) {
 		ts.UtxoStore.SkipTxBodyBelowCheckpoint = true
-		ts.UtxoStore.LanePositions = true
+		ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 	})
 
 	return s
@@ -67,7 +67,11 @@ func reopenWithFlag(t *testing.T, s *Store, on bool) *Store {
 	t.Helper()
 
 	ts := *s.settings
-	ts.UtxoStore.LanePositions = on
+	ts.UtxoStore.LaneMigration = settings.LaneMigrationOff
+
+	if on {
+		ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+	}
 
 	u, err := url.Parse(testDSN(t))
 	require.NoError(t, err)
@@ -401,7 +405,7 @@ func TestALaneReadInABatchWithAReadThatDidNotAsk(t *testing.T) {
 		// Two items fill a batch, and the window is long enough that neither flushes alone.
 		ts.UtxoStore.GetBatcherSize = 2
 		ts.UtxoStore.GetBatcherDurationMillis = 5_000
-		ts.UtxoStore.LanePositions = true
+		ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 	})
 	require.NotNil(t, s.getBatcher)
 
@@ -567,7 +571,7 @@ func TestUtxosetTakesPositionsBeforeItOpensATransaction(t *testing.T) {
 	t.Run("Create on the direct path", func(t *testing.T) {
 		s, _ := newTestStoreWith(t, func(ts *settings.Settings) {
 			withCheckpoints(ts, nil)
-			ts.UtxoStore.LanePositions = true
+			ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 			ts.UtxoStore.StoreBatcherSize = 1
 		})
 		require.Nil(t, s.createBatcher, "this subtest needs Create's direct path")

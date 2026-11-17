@@ -95,8 +95,17 @@ func (d *Stores) GetUtxoStore(ctx context.Context, logger ulogger.Logger,
 		return nil, err
 	}
 
+	// A step this build does not implement, or an unknown one, fails the open whatever it is.
+	if err := settings.CheckLaneMigration(appSettings.UtxoStore.LaneMigration); err != nil {
+		if closeErr := store.Close(ctx); closeErr != nil {
+			logger.Warnf("[lane] could not close the UTXO store after refusing its lane migration step: %v", closeErr)
+		}
+
+		return nil, err
+	}
+
 	// Lane positions go to the real store, before any test wrapper, so the allocator is found on it.
-	if appSettings.UtxoStore.LanePositions {
+	if appSettings.UtxoStore.LaneMigration.Stamps() {
 		if err := d.giveLanePositions(ctx, logger, appSettings, store); err != nil {
 			// The singleton stays unset, so a retry starts clean, and the store just opened is not leaked.
 			if closeErr := store.Close(ctx); closeErr != nil {
@@ -124,16 +133,12 @@ var newMainUtxoStore = func(ctx context.Context, logger ulogger.Logger, appSetti
 	return utxofactory.NewStore(ctx, logger, appSettings, "main")
 }
 
-// laneLeaseSource returns what the allocator takes its lease from. A var so a test can answer
-// without a blockchain service.
-var laneLeaseSource = func(ctx context.Context, d *Stores, logger ulogger.Logger, appSettings *settings.Settings) (lane.LeaseSource, error) {
-	client, err := d.GetBlockchainClient(ctx, logger, appSettings, "lane")
-	if err != nil {
-		return nil, err
-	}
-
-	// The daemon retains and closes this client itself, so the allocator is not handed its Close.
-	return struct{ lane.LeaseSource }{client}, nil
+// laneLeaseSource returns what the allocator takes its lease from: a blockchain client of its own,
+// which the allocator closes after it releases its lease. The daemon closes the clients it retains
+// in the order it built them, so a retained client would close before the release could go out. A
+// var so a test can answer without a blockchain service.
+var laneLeaseSource = func(ctx context.Context, _ *Stores, logger ulogger.Logger, appSettings *settings.Settings) (lane.LeaseSource, error) {
+	return blockchain.NewClient(ctx, logger, appSettings, "lane")
 }
 
 // giveLanePositions hands the process's one UTXO store its lane position source. Every service in
@@ -148,6 +153,10 @@ func (d *Stores) giveLanePositions(ctx context.Context, logger ulogger.Logger, a
 		logger.Warnf("[lane] lane positions are on, but this UTXO store cannot write them")
 
 		return nil
+	}
+
+	if err := appSettings.BlockChain.CheckLaneLease(); err != nil {
+		return err
 	}
 
 	source, err := laneLeaseSource(ctx, d, logger, appSettings)
@@ -169,6 +178,7 @@ func (d *Stores) giveLanePositions(ctx context.Context, logger ulogger.Logger, a
 		Stop:          appSettings.BlockChain.LaneLeaseStopAfter,
 		GrantDuration: appSettings.BlockChain.LaneGrantDuration,
 	}, logger)
+	// Retained so the daemon closes it, which releases the lease and then closes its client.
 	d.retainClient(allocator)
 	taker.SetLanePositionSource(allocator)
 

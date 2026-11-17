@@ -383,7 +383,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		return nil, errors.NewStorageError("[utxoset] create schema", err)
 	}
 
-	laneColumn, err := openLaneColumns(ctx, pool, tSettings.UtxoStore.LanePositions)
+	laneColumn, err := openLaneColumns(ctx, pool, tSettings.UtxoStore.LaneMigration.Stamps())
 	if err != nil {
 		pool.Close()
 		return nil, errors.NewStorageError("[utxoset] lane position columns", err)

@@ -72,6 +72,36 @@ func (l *LanePositions) TakeLanePositions(ctx context.Context, n int) ([]uint64,
 	return positions, nil
 }
 
+// LanePositionHolder is a store whose lane position source can be started before the first create
+// and asked whether it can give positions. A validator starts it when it is built, so it holds a
+// lease before it takes traffic, and is not ready without one.
+type LanePositionHolder interface {
+	// StartLanePositions starts the source, if it has a Start. It does not wait for a lease.
+	StartLanePositions(ctx context.Context) error
+
+	// LanePositionsReady returns nil with no source, or when the source has nothing to report, or
+	// when the source is ready.
+	LanePositionsReady() error
+}
+
+// StartLanePositions implements LanePositionHolder.
+func (l *LanePositions) StartLanePositions(ctx context.Context) error {
+	if starter, ok := l.source.(interface{ Start(context.Context) error }); ok {
+		return starter.Start(ctx)
+	}
+
+	return nil
+}
+
+// LanePositionsReady implements LanePositionHolder.
+func (l *LanePositions) LanePositionsReady() error {
+	if ready, ok := l.source.(interface{ Ready() error }); ok {
+		return ready.Ready()
+	}
+
+	return nil
+}
+
 // WithTakenLanePosition returns opts with the position appended, without writing into the caller's
 // backing array. A position of zero leaves opts as they are.
 func WithTakenLanePosition(opts []CreateOption, position uint64) []CreateOption {

@@ -490,6 +490,18 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		logger.Infof("TxMeta Kafka batching enabled: batchSize=%d, timeout=%dms", txmetaKafkaBatchSize, txmetaKafkaBatchTimeout)
 	}
 
+	// A validator creates records, so it takes its lane lease now rather than on its first create:
+	// readiness waits for the lease, and a validator that is not ready gets no traffic, so a lazy
+	// start would never happen. The lease opens in the background; a failure here is only logged,
+	// because readiness reports it.
+	if store != nil {
+		if holder, ok := utxo.As[utxo.LanePositionHolder](store); ok {
+			if err := holder.StartLanePositions(ctx); err != nil {
+				logger.Warnf("[Validator] could not start the lane lease: %v", err)
+			}
+		}
+	}
+
 	return v, nil
 }
 
@@ -583,9 +595,26 @@ func (v *Validator) Health(ctx context.Context, checkLiveness bool) (int, string
 
 	if v.utxoStore != nil {
 		checks = append(checks, health.Check{Name: "UTXOStore", Check: v.utxoStore.Health})
+
+		// With lane positions on, a create fails without a lane lease, so the validator is not ready
+		// until it holds one. A grant used up for a moment does not count against it.
+		if holder, ok := utxo.As[utxo.LanePositionHolder](v.utxoStore); ok {
+			checks = append(checks, health.Check{Name: "LaneLease", Check: laneLeaseCheck(holder)})
+		}
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
+}
+
+// laneLeaseCheck reports the lane lease as a readiness check.
+func laneLeaseCheck(holder utxo.LanePositionHolder) func(context.Context, bool) (int, string, error) {
+	return func(context.Context, bool) (int, string, error) {
+		if err := holder.LanePositionsReady(); err != nil {
+			return http.StatusServiceUnavailable, "LaneLease: BAD: " + err.Error(), err
+		}
+
+		return http.StatusOK, "LaneLease: GOOD", nil
+	}
 }
 
 // GetBlockHeight returns the current block height from the UTXO store.

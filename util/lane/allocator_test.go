@@ -565,3 +565,37 @@ func TestAllocatorReleaseCarriesTheOlderOfTwoPairs(t *testing.T) {
 	require.Equal(t, Settles{First: 1, LastTaken: 10}, src.releases[0].Settles)
 	require.Equal(t, uint64(20), src.releases[0].LastTaken)
 }
+
+// closingLeases records the order of its release and its Close.
+type closingLeases struct {
+	*fakeLeases
+	order []string
+}
+
+func (c *closingLeases) ReleaseLaneLease(ctx context.Context, r Release) (bool, error) {
+	c.order = append(c.order, "release")
+
+	return c.fakeLeases.ReleaseLaneLease(ctx, r)
+}
+
+func (c *closingLeases) Close() error {
+	c.order = append(c.order, "close")
+
+	return nil
+}
+
+// The allocator owns its blockchain client: Close releases the lease first and closes the client
+// after, so the release can still go out.
+func TestAllocatorReleasesBeforeItsClientCloses(t *testing.T) {
+	src := &closingLeases{fakeLeases: newFakeLeases(1000)}
+	a := NewAllocator(src, "pod-3", quiet, nil)
+
+	next(t, a)
+	require.NoError(t, a.Close())
+	require.Equal(t, []string{"release", "close"}, src.order)
+
+	// A process that never took a lease still closes its client.
+	src2 := &closingLeases{fakeLeases: newFakeLeases(1000)}
+	require.NoError(t, NewAllocator(src2, "pod-4", quiet, nil).Close())
+	require.Equal(t, []string{"close"}, src2.order)
+}

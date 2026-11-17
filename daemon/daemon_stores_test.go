@@ -69,7 +69,9 @@ func laneStoreFixture(t *testing.T, name string, lanePositions bool, source func
 	t.Helper()
 
 	appSettings := settings.NewSettings()
-	appSettings.UtxoStore.LanePositions = lanePositions
+	if lanePositions {
+		appSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+	}
 	appSettings.DataFolder = t.TempDir()
 	appSettings.ClientName = "lane-test"
 
@@ -98,7 +100,7 @@ func laneStoreFixture(t *testing.T, name string, lanePositions bool, source func
 
 // With the flag off nothing about lane positions runs: no lease source is asked for, and a create
 // writes no position.
-func TestGetUtxoStoreWithLanePositionsOffGivesNoSource(t *testing.T) {
+func TestGetUtxoStoreWithLaneMigrationOffGivesNoSource(t *testing.T) {
 	appSettings, opened := laneStoreFixture(t, "lane_off", false, func() (lane.LeaseSource, error) {
 		require.Fail(t, "with the flag off nothing asks for a lease source")
 
@@ -121,8 +123,8 @@ func TestGetUtxoStoreWithLanePositionsOffGivesNoSource(t *testing.T) {
 	require.Equal(t, lane.None, md.LanePosition)
 }
 
-// With the flag on the process's one store gets one source, and a create takes a position.
-func TestGetUtxoStoreWithLanePositionsOnGivesTheStoreASource(t *testing.T) {
+// At shadow the process's one store gets one source, and a create takes a position.
+func TestGetUtxoStoreWithLaneMigrationShadowGivesTheStoreASource(t *testing.T) {
 	ctx := context.Background()
 
 	appSettings, opened := laneStoreFixture(t, "lane_on", true, func() (lane.LeaseSource, error) {
@@ -169,9 +171,9 @@ type plainStore struct {
 	utxostore.Store
 }
 
-// Lane positions on with a store that cannot write them, such as the null store, is not an error.
+// Shadow with a store that cannot write them, such as the null store, is not an error.
 // That store takes no lane, because nothing asks for a lease source.
-func TestGetUtxoStoreWithLanePositionsOnLeavesAStoreThatCannotTakeThem(t *testing.T) {
+func TestGetUtxoStoreWithLaneMigrationShadowLeavesAStoreThatCannotTakeThem(t *testing.T) {
 	appSettings, _ := laneStoreFixture(t, "lane_no_taker", true, func() (lane.LeaseSource, error) {
 		require.Fail(t, "a store that cannot write lane positions asks for no lease source")
 
@@ -223,4 +225,38 @@ func TestGetUtxoStoreClosesTheStoreWhenTheSourceFails(t *testing.T) {
 	store, err = d.GetUtxoStore(ctx, ulogger.TestLogger{}, appSettings)
 	require.NoError(t, err, "a retry starts clean")
 	require.NotNil(t, store)
+}
+
+// A step this build does not implement fails the store's open, and closes the store it opened, so a
+// node configured for a later step never runs a step it only half has.
+func TestGetUtxoStoreRefusesLaneMigrationRows(t *testing.T) {
+	appSettings, opened := laneStoreFixture(t, "lane_rows", false, func() (lane.LeaseSource, error) {
+		require.Fail(t, "a refused step asks for no lease source")
+
+		return nil, nil
+	})
+	appSettings.UtxoStore.LaneMigration = settings.LaneMigrationRows
+
+	d := &Stores{}
+
+	store, err := d.GetUtxoStore(context.Background(), ulogger.TestLogger{}, appSettings)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "utxostore_laneMigration=rows")
+	require.Nil(t, store)
+	require.Nil(t, d.mainUtxoStore)
+	require.Equal(t, int64(1), opened.closes.Load())
+}
+
+// Lease timings that would let two holders use one lane fail the store's open at shadow.
+func TestGetUtxoStoreRefusesLeaseTimingsWhereStopIsNotBeforeClose(t *testing.T) {
+	appSettings, _ := laneStoreFixture(t, "lane_timings", true, func() (lane.LeaseSource, error) {
+		return &laneSource{}, nil
+	})
+	appSettings.BlockChain.LaneLeaseStopAfter = appSettings.BlockChain.LaneLeaseCloseAfter
+
+	d := &Stores{}
+
+	_, err := d.GetUtxoStore(context.Background(), ulogger.TestLogger{}, appSettings)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "blockchain_laneLeaseStopAfter")
 }

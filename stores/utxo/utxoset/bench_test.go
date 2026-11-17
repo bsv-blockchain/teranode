@@ -98,7 +98,9 @@ func openBenchStore(b *testing.B, lanePositions bool) (*Store, context.Context) 
 	require.NoError(b, err)
 
 	tSettings := settings.NewSettings()
-	tSettings.UtxoStore.LanePositions = lanePositions
+	if lanePositions {
+		tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+	}
 
 	s, err := New(ctx, ulogger.TestLogger{}, tSettings, u)
 	require.NoError(b, err)
