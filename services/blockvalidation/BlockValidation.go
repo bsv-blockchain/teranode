@@ -1673,6 +1673,24 @@ func (u *BlockValidation) reloadSubtreeForInvalidBlock(ctx context.Context, bloc
 			continue
 		}
 
+		// The revert unmines the transactions this list names, so it must be the subtree the
+		// block commits to. A copy whose nodes hash to another root is as unusable as one that
+		// does not parse.
+		if root := subtree.RootHash(); root == nil || !subtreeHash.IsEqual(root) {
+			computed := "<nil>"
+			if root != nil {
+				computed = root.String()
+			}
+
+			corrupt = append(corrupt, fmt.Sprintf("%s: root hash %s does not match", fileType, computed))
+
+			if closeErr := subtree.Close(); closeErr != nil {
+				u.logger.Warnf("[setTxMined][%s] failed closing mismatched subtree %d/%s: %v", block.Hash().String(), subtreeIdx, subtreeHash.String(), closeErr)
+			}
+
+			continue
+		}
+
 		u.logger.Debugf("[setTxMined][%s] loaded subtree %d/%s from store as %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), fileType)
 
 		return subtree, nil

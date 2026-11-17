@@ -411,4 +411,16 @@ func TestS3_MalformedStoredObjectIsAStorageFault(t *testing.T) {
 		require.ErrorIs(t, err, errors.ErrStorageError)
 		require.True(t, errors.IsBlobCorrupt(err), "a wrong file type is a corrupt object")
 	})
+
+	t.Run("Get on a blob whose header is a different file type", func(t *testing.T) {
+		s3Store, mock := setupTestS3(t)
+
+		header := fileformat.NewHeader(fileformat.FileTypeSubtree)
+		storeRaw(t, mock, s3Store, append(header.Bytes(), []byte("body")...))
+
+		_, err := s3Store.Get(context.Background(), key, fileformat.FileTypeTx)
+
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.True(t, errors.IsBlobCorrupt(err), "Get must apply the same file-type check as GetIoReader")
+	})
 }

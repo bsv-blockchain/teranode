@@ -270,8 +270,9 @@ func TestReloadSubtreesForInvalidBlock_ClosesLoadedSubtreesOnReadError(t *testin
 // TestReloadSubtreesForInvalidBlock_CorruptCopyIsPermanent pins the one rule for a
 // subtree file that is present but unusable, whichever part of it is broken.
 //
-// A bad header (the store's header check fails) and a bad body (the header passes
-// and the subtree does not parse) are the same permanent fault: the store writes
+// A bad header (the store's header check fails), a bad body (the header passes
+// and the subtree does not parse) and a foreign body (it parses, but its nodes hash
+// to another root than the key) are the same permanent fault: the store writes
 // whole files, so a retry reads the same bytes. Both now try the
 // FileTypeSubtreeToCheck copy, and when no copy is usable the subtree is skipped
 // with the corrupt-subtree counter raised, rather than returned for a retry that
@@ -349,12 +350,25 @@ func TestReloadSubtreesForInvalidBlock_CorruptCopyIsPermanent(t *testing.T) {
 	badHeader := func([]byte) []byte { return []byte("abc") }
 	badBody := func(raw []byte) []byte { return append(append([]byte{}, raw[:8]...), 0xff, 0xff, 0xff) }
 
+	// A well-formed subtree under the wrong key: the header and body are valid, but its nodes
+	// hash to another root, so unmining them would leave the block's real transactions tagged.
+	foreign, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, foreign.AddNode(chainhash.HashH([]byte("foreign-0")), 1, 0))
+	require.NoError(t, foreign.AddNode(chainhash.HashH([]byte("foreign-1")), 1, 0))
+
+	foreignSerialized, err := foreign.Serialize()
+	require.NoError(t, err)
+
+	foreignBody := func(raw []byte) []byte { return append(append([]byte{}, raw[:8]...), foreignSerialized...) }
+
 	for _, tc := range []struct {
 		name    string
 		corrupt func([]byte) []byte
 	}{
 		{name: "bad header", corrupt: badHeader},
 		{name: "bad body", corrupt: badBody},
+		{name: "foreign subtree", corrupt: foreignBody},
 	} {
 		t.Run(tc.name+" falls back to the subtree-to-check copy", func(t *testing.T) {
 			before := promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt)

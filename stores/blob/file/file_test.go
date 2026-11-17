@@ -2133,8 +2133,7 @@ func (r errReader) Read([]byte) (int, error) { return 0, r.err }
 // TestValidateFileHeader_MarksOnlyBadBytesCorrupt pins which header failures carry the
 // BlobCorrupt cause. Writes are temp file then rename, so a header that is short, has
 // unknown magic or names another file type stays that way and a retry reads the same
-// bytes. A short header read from the longterm client is not marked, because that reader
-// can be a network stream that dropped. A read that fails for another reason (a disk I/O error) says nothing about the
+// bytes. A read that fails for another reason (a disk I/O error) says nothing about the
 // file, so it must stay a plain StorageError that callers retry.
 func TestValidateFileHeader_MarksOnlyBadBytesCorrupt(t *testing.T) {
 	s := &File{logger: ulogger.TestLogger{}}
@@ -2146,21 +2145,18 @@ func TestValidateFileHeader_MarksOnlyBadBytesCorrupt(t *testing.T) {
 	cases := []struct {
 		name    string
 		reader  io.Reader
-		local   bool
 		corrupt bool
 	}{
-		{name: "empty file", reader: bytes.NewReader(nil), local: true, corrupt: true},
-		{name: "truncated header", reader: bytes.NewReader([]byte("abc")), local: true, corrupt: true},
-		{name: "short header on a longterm stream", reader: bytes.NewReader([]byte("abc")), local: false, corrupt: false},
-		{name: "unknown magic", reader: bytes.NewReader([]byte("NOTMAGIC-rest-of-body")), local: true, corrupt: true},
-		{name: "unknown magic on a longterm stream", reader: bytes.NewReader([]byte("NOTMAGIC-rest-of-body")), local: false, corrupt: true},
-		{name: "wrong file type", reader: bytes.NewReader(subtreeHeader.Bytes()), local: false, corrupt: true},
-		{name: "disk read error", reader: errReader{err: io.ErrClosedPipe}, local: true, corrupt: false},
+		{name: "empty file", reader: bytes.NewReader(nil), corrupt: true},
+		{name: "truncated header", reader: bytes.NewReader([]byte("abc")), corrupt: true},
+		{name: "unknown magic", reader: bytes.NewReader([]byte("NOTMAGIC-rest-of-body")), corrupt: true},
+		{name: "wrong file type", reader: bytes.NewReader(subtreeHeader.Bytes()), corrupt: true},
+		{name: "disk read error", reader: errReader{err: io.ErrClosedPipe}, corrupt: false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := s.validateFileHeader(tc.reader, "test-file", fileformat.FileTypeSubtreeToCheck, tc.local)
+			err := s.validateFileHeader(tc.reader, "test-file", fileformat.FileTypeSubtreeToCheck)
 			require.Error(t, err)
 			require.ErrorIs(t, err, errors.ErrStorageError, "a header failure stays a StorageError for existing callers")
 			require.Equal(t, tc.corrupt, errors.IsBlobCorrupt(err))
@@ -2168,6 +2164,6 @@ func TestValidateFileHeader_MarksOnlyBadBytesCorrupt(t *testing.T) {
 	}
 
 	t.Run("matching header is accepted", func(t *testing.T) {
-		require.NoError(t, s.validateFileHeader(bytes.NewReader(subtreeHeader.Bytes()), "test-file", fileformat.FileTypeSubtree, true))
+		require.NoError(t, s.validateFileHeader(bytes.NewReader(subtreeHeader.Bytes()), "test-file", fileformat.FileTypeSubtree))
 	})
 }

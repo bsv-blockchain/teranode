@@ -456,6 +456,14 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 		return nil, err
 	}
 
+	if header.FileType() != fileType {
+		err = errors.NewStorageError("[S3] [%s/%s] header filetype mismatch", g.bucket, aws.ToString(objectKey),
+			errors.NewBlobCorruptError("got %s, want %s", header.FileType(), fileType))
+		span.RecordError(err)
+
+		return nil, err
+	}
+
 	content = content[len(header.Bytes()):]
 
 	cache.Set(*objectKey, content)
