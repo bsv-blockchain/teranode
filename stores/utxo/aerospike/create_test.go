@@ -858,10 +858,20 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 
 		parent := createTransactionWithOutputs(10)
 
-		// The lock write times out before anything is stored. Only a held lock
-		// may turn into the outcome-unknown error: here nothing was written, so
-		// the caller must be free to unspend the inputs.
-		store.SetLockPutFn(func(*aerospike.WritePolicy, *aerospike.Key, ...*aerospike.Bin) aerospike.Error {
+		// The lock write fails before this call writes any record, so its error
+		// is not marked outcome-unknown and the caller may unspend. Only a held
+		// lock turns into the outcome-unknown error. (If an earlier attempt had
+		// already stored the records, that unspend would leave them with live
+		// inputs until a repeat re-spends them; that is unchanged from main.)
+		var lockKey *aerospike.Key
+
+		store.SetLockPutFn(func(policy *aerospike.WritePolicy, key *aerospike.Key, bins ...*aerospike.Bin) aerospike.Error {
+			if policy == nil || key == nil || len(bins) == 0 {
+				return &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+			}
+
+			lockKey = key
+
 			return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
 		})
 		t.Cleanup(func() { store.SetLockPutFn(nil) })
@@ -871,6 +881,11 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 		require.NotErrorIs(t, err, errors.ErrTxExists)
 		require.False(t, utxo.IsCreateOutcomeUnknown(err), "nothing was written, so the outcome is known: %v", err)
 		require.ErrorContains(t, err, "failed to acquire lock")
+		require.NotNil(t, lockKey, "the lock write went through the hook")
+
+		lockRec, getErr := client.Get(nil, lockKey)
+		require.Nil(t, lockRec, "the failed lock write leaves no lock record")
+		require.NotNil(t, getErr)
 
 		store.SetLockPutFn(nil)
 
