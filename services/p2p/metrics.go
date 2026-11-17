@@ -22,8 +22,8 @@ var (
 
 	// prometheusP2PBlockchainNotificationsDropped counts blockchain
 	// notifications the p2p listener lost: dropped on a full worker queue
-	// (reason=queue_full) or abandoned by the announcement worker at
-	// notificationProcessTimeout (reason=timeout).
+	// (reason=queue_full) or failed on the announcement worker after its
+	// notificationProcessTimeout deadline had passed (reason=timeout).
 	prometheusP2PBlockchainNotificationsDropped *prometheus.CounterVec
 
 	// prometheusP2PConnectedPeers tracks the number of peers currently connected
@@ -86,7 +86,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "p2p",
 			Name:      "blockchain_notifications_dropped_total",
-			Help:      "Number of blockchain notifications the p2p listener lost, by queue, notification type and reason (queue_full: the worker queue was full; timeout: the announcement ran past its per-notification bound)",
+			Help:      "Number of blockchain notifications the p2p listener lost, by queue, notification type and reason (queue_full: the worker queue was full; timeout: the announcement failed after its per-notification bound passed)",
 		},
 		[]string{"queue", "type", "reason"},
 	)

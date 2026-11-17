@@ -282,7 +282,10 @@ func TestBlockchainSubscriptionListener_StuckAnnouncementTimesOut(t *testing.T) 
 		previousReturned bool
 	)
 
-	var fsmDeadlines []time.Time
+	var (
+		fsmDeadlines       []time.Time
+		fsmWithoutDeadline int
+	)
 
 	running := blockchain_api.FSMStateType_RUNNING
 
@@ -291,10 +294,13 @@ func TestBlockchainSubscriptionListener_StuckAnnouncementTimesOut(t *testing.T) 
 	// matches this one first. It records the deadline the FSM skip check runs
 	// under, which must come from the notification's bound.
 	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Run(func(args mock.Arguments) {
-		deadline, _ := args.Get(0).(context.Context).Deadline()
+		deadline, ok := args.Get(0).(context.Context).Deadline()
 
 		mu.Lock()
 		fsmDeadlines = append(fsmDeadlines, deadline)
+		if !ok {
+			fsmWithoutDeadline++
+		}
 		mu.Unlock()
 	}).Return(&running, nil)
 	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
@@ -361,6 +367,7 @@ func TestBlockchainSubscriptionListener_StuckAnnouncementTimesOut(t *testing.T) 
 	// context would get a deadline seconds past the notification's.
 	mu.Lock()
 	require.NotEmpty(t, fsmDeadlines, "the FSM skip check never ran")
+	require.Zero(t, fsmWithoutDeadline, "the FSM skip check ran without a deadline")
 	for _, deadline := range fsmDeadlines {
 		require.False(t, deadline.After(got[1].deadline),
 			"the FSM skip check must run under the notification's notificationProcessTimeout")
@@ -560,6 +567,9 @@ func TestBlockchainSubscriptionListener_NonTimeoutErrorIsNotCountedAsTimeout(t *
 // Cancelling the service context must end an announcement in flight at once,
 // not leave it running until its notificationProcessTimeout.
 func TestBlockchainSubscriptionListener_ShutdownCancelsInFlightAnnouncement(t *testing.T) {
+	timedOut := droppedNotifications("announcement", model.NotificationType_Block, "timeout")
+	timedOutBefore := testutil.ToFloat64(timedOut)
+
 	entered := make(chan struct{}, 1)
 	ended := make(chan error, 1)
 
@@ -595,4 +605,7 @@ func TestBlockchainSubscriptionListener_ShutdownCancelsInFlightAnnouncement(t *t
 	case <-time.After(2 * time.Second):
 		t.Fatal("the announcement in flight kept running after the service context was cancelled")
 	}
+
+	require.Never(t, func() bool { return testutil.ToFloat64(timedOut)-timedOutBefore != 0 }, 200*time.Millisecond, 10*time.Millisecond,
+		"an announcement cancelled by shutdown must not be counted as a timeout")
 }
