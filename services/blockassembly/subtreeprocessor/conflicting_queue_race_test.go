@@ -164,6 +164,45 @@ func TestDequeueDuringBlockMovement_DrainCutoffAtClockNow(t *testing.T) {
 		require.NotContains(t, collectSubtreeHashes(stp), txHash)
 	})
 
+	t.Run("cutoff_is_sampled_once_at_entry", func(t *testing.T) {
+		stp := newTestProcessorNoStart(t)
+
+		drainAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+		// The first reading is the drain's entry; every later one has moved on.
+		stp.clock = &firstThenLaterClock{first: drainAt, later: drainAt.Add(5 * time.Millisecond)}
+
+		before := chainhash.HashH([]byte("zero-window-entry-ms"))
+		after := chainhash.HashH([]byte("zero-window-after-entry"))
+
+		stp.queue.clock = fixedClock{t: drainAt}
+		stp.queue.enqueueBatch([]subtreepkg.Node{{Hash: before, Fee: 1, SizeInBytes: 220}}, []*subtreepkg.TxInpoints{{}})
+		stp.queue.clock = fixedClock{t: drainAt.Add(time.Millisecond)}
+		stp.queue.enqueueBatch([]subtreepkg.Node{{Hash: after, Fee: 1, SizeInBytes: 220}}, []*subtreepkg.TxInpoints{{}})
+
+		require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
+
+		hashes := collectSubtreeHashes(stp)
+		require.Contains(t, hashes, before)
+		require.NotContains(t, hashes, after, "the cutoff is the clock at entry, not a reading taken during the drain")
+		require.Equal(t, int64(1), stp.queue.length())
+	})
+
+	t.Run("negative_window_cuts_off_at_entry", func(t *testing.T) {
+		stp := newTestProcessorNoStart(t)
+		stp.settings.BlockAssembly.DoubleSpendWindow = -time.Second
+
+		drainAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+		stp.clock = fixedClock{t: drainAt}
+		stp.queue.clock = fixedClock{t: drainAt.Add(time.Millisecond)}
+
+		txHash := chainhash.HashH([]byte("negative-window-later-ms"))
+		stp.queue.enqueueBatch([]subtreepkg.Node{{Hash: txHash, Fee: 1, SizeInBytes: 220}}, []*subtreepkg.TxInpoints{{}})
+
+		require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
+
+		require.Equal(t, int64(1), stp.queue.length(), "a negative window must not move the cutoff past the drain clock")
+	})
+
 	t.Run("control_one_ms_advance_drains_the_batch", func(t *testing.T) {
 		stp := newTestProcessorNoStart(t)
 		require.Zero(t, stp.settings.BlockAssembly.DoubleSpendWindow)
@@ -235,4 +274,20 @@ func collectSubtreeHashes(stp *SubtreeProcessor) []chainhash.Hash {
 		}
 	}
 	return out
+}
+
+// firstThenLaterClock returns first on its first reading and later after that.
+type firstThenLaterClock struct {
+	first, later time.Time
+	read         bool
+}
+
+func (c *firstThenLaterClock) Now() time.Time {
+	if c.read {
+		return c.later
+	}
+
+	c.read = true
+
+	return c.first
 }

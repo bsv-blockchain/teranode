@@ -158,10 +158,13 @@ func Test_queueClockOverride(t *testing.T) {
 	require.Equal(t, fixed.UnixMilli(), batch.time)
 }
 
-// Test_zeroWindowFormulasAgree asserts that both dequeue call sites in
-// SubtreeProcessor admit a same-millisecond batch at DoubleSpendWindow=0
-// (the documented default - see BlockAssembly.DoubleSpendWindow in
-// settings/blockassembly_settings.go).
+// Test_zeroWindowFormulasAgree pins, on a bare queue, the dequeue each
+// SubtreeProcessor call site uses at DoubleSpendWindow=0 (the documented
+// default - see BlockAssembly.DoubleSpendWindow in
+// settings/blockassembly_settings.go): both admit a same-millisecond batch.
+// The subtests mirror the call sites rather than run them;
+// TestDequeueDuringBlockMovement_DrainCutoffAtClockNow pins the drain call
+// site itself.
 //
 //	Start loop (the default: branch of SubtreeProcessor.Start):
 //	  dequeueBatch(0)                                  if DoubleSpendWindow == 0
@@ -172,9 +175,7 @@ func Test_queueClockOverride(t *testing.T) {
 //	  dequeueBatch((now - window).UnixMilli())         otherwise
 //
 // The Start loop disables the time filter; the drain keeps one, inclusive
-// of its own millisecond, so it still does not chase fresh ingest. If a
-// future change holds back same-millisecond batches at either call site,
-// the corresponding subtest will fail.
+// of its own millisecond, so it still does not chase fresh ingest.
 func Test_zeroWindowFormulasAgree(t *testing.T) {
 	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
 	window := time.Duration(0)

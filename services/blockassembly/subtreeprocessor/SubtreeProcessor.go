@@ -8088,12 +8088,13 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHa
 func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*TxBatch) (int, error)) error {
 	// Bound the drain by two complementary cutoffs:
 	//
-	//  1. Time: clock.Now() at function entry, inclusive, or
-	//     clock.Now() - DoubleSpendWindow, exclusive, when that filter is
-	//     enabled. The queue holds back any batch stamped later, so we
-	//     only drain batches that existed by this moment. Batches arriving during the
-	//     drain stay queued and roll forward to the next state-transition
-	//     cycle. The gRPC ingest handlers admit through AddBatchBounded,
+	//  1. Time: the millisecond of clock.Now() at function entry,
+	//     inclusive, or clock.Now() - DoubleSpendWindow, exclusive, when
+	//     that filter is enabled. The drain stops at the first queued batch
+	//     stamped after the cutoff, and that batch and everything behind it
+	//     roll forward to the next state-transition cycle. With no window, a
+	//     batch stamped in the drain's own millisecond can arrive during the
+	//     drain and is taken too, which the item bound below caps. The gRPC ingest handlers admit through AddBatchBounded,
 	//     which only refuses when blockassembly_maxQueueItems is positive;
 	//     with the default of 0 ingest is not backpressured, and even when
 	//     it is, the queue keeps filling up to its cap during the drain.
@@ -8101,9 +8102,8 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	//     ingest.
 	//
 	//  2. Items: queueLength snapshotted at entry, compared against items
-	//     drained. Belt-and-braces — if clock granularity ever caused the
-	//     time filter to admit slightly more than expected, this caps
-	//     total work at the snapshot.
+	//     drained. It caps total work at the snapshot, plus at most one
+	//     batch, whatever the time filter admits.
 	//
 	// Previous form left validFromMillis=0 when DoubleSpendWindow=0,
 	// which disables the queue filter entirely (LockFreeQueue.dequeueBatch
@@ -8125,15 +8125,21 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	// enqueued in the gap between the two samples.
 	//
 	// With no double-spend window the cutoff includes the drain's own
-	// millisecond. A batch stamped in that millisecond reached the queue
-	// before the drain or while it ran, and a drain during block movement
-	// filters it against the block it moves; held back, it would be
-	// filtered against a later block or none, and a tx this block mined
-	// would go back into block assembly. The queue-length snapshot still
-	// bounds the drain.
+	// millisecond, so a batch stamped then and queued ahead of any later
+	// one is filtered against the block this drain moves. An exclusive
+	// cutoff held it back, and a later block's filter, or none, then let a
+	// tx this block mined back into block assembly. A producer stamps a
+	// batch before it links it, so a batch stamped in this millisecond can
+	// still miss the drain: when a later-stamped batch links ahead of it,
+	// or when it links after the drain ends. A later drain takes it then,
+	// as for any tx that arrives after its block's drain.
 	now := stp.clock.Now()
 	window := stp.settings.BlockAssembly.DoubleSpendWindow
-	validFromMillis := now.Add(-window).UnixMilli()
+
+	validFromMillis := now.UnixMilli()
+	if window > 0 {
+		validFromMillis = now.Add(-window).UnixMilli()
+	}
 
 	dequeue := func() (*TxBatch, bool) {
 		if window > 0 {
