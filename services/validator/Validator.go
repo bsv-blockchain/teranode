@@ -1103,8 +1103,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	//
 	// The Kafka retry loop below still honours caller cancellation, deliberately and
 	// explicitly, through its own select on ctx.
-	decoupledCtx, _, deferFn := tracing.DecoupleTracingSpan(context.WithoutCancel(ctx), "validator", "decoupledSpan")
-	defer deferFn()
+	// Use a distinct name for the decoupled span's end function: the deferred closure
+	// at the top of this function reads deferFn when it runs, so re-binding deferFn
+	// here would end the decoupled span twice and never end validateInternal's span.
+	decoupledCtx, _, endDecoupledSpan := tracing.DecoupleTracingSpan(context.WithoutCancel(ctx), "validator", "decoupledSpan")
+	defer endDecoupledSpan()
 
 	/*
 		Scenario where store is done before adding to assembly:
