@@ -27,12 +27,13 @@ import (
 // TestValidateReportsPrunedReplayRatherThanConflict: replay C spends P:0, whose
 // parent carries C's marker, and Q:0, which after a reorg a different
 // transaction X now holds. The store answers the marker for P:0 and ErrSpent for
-// Q:0. With CreateConflicting set, as the legacy block path sets it, the ErrSpent
-// alone used to send the validator down the conflicting-create branch, which
-// returned ErrTxConflicting with the marker rejection dropped from the chain.
-// netsync swallows ErrTxConflicting below the checkpoint, so the block committed
-// with C back in the store. A pruned replay must reach the caller as one.
-// Reproduced by review.
+// Q:0. With CreateConflicting set, as the legacy block path sets it, a spend set
+// whose every failure is a double spend takes the conflicting-create branch,
+// which returns ErrTxConflicting, and netsync swallows that below the
+// checkpoint. The marker answer carries its own code, ERR_UTXO_SPENDING_TX_PRUNED,
+// which spendConflicts does not count, so the validator stays off that branch and
+// the replay reaches the caller as one. The test fails if that code is ever
+// counted as a double spend.
 func TestValidateReportsPrunedReplayRatherThanConflict(t *testing.T) {
 	tracing.SetupMockTracer()
 
@@ -170,10 +171,11 @@ func TestValidateReportsPrunedReplayRatherThanConflict(t *testing.T) {
 //
 // With 11 inputs the marker answer is the eleventh failed spend, past the
 // validator's cap of 10 aggregated errors, and it must still reach the caller.
-// On this store it would without utxo.ReplayRejectionsFirst too: the SQL spend
-// joins its per-input errors into one chain, so the tenth kept error still
-// links to the marker answer. TestBatchedSpendKeepsReplayPastTheErrorCap pins
-// the Aerospike batched spend, where the errors stand alone.
+// The validator appends its aggregate behind the store's own error chain and
+// never replaces it, so what carries the marker answer is the store's chain:
+// the SQL spend joins every per-input error into it, and the Aerospike batched
+// spend puts the marker answer first in its capped aggregate
+// (TestBatchedSpendKeepsReplayPastTheErrorCap).
 //
 // The answer is never a block verdict: the marker cannot show that C was mined
 // on the chain the block extends.
@@ -288,4 +290,11 @@ func TestValidatePrunedReplayInABlock(t *testing.T) {
 			require.NotErrorIs(t, err, errors.ErrTxConflicting)
 		})
 	}
+}
+
+// TestSpendConflictsDoesNotCountAPrunedReplay pins what keeps a pruned replay
+// off the conflicting-create branch: its answer is not a double spend.
+func TestSpendConflictsDoesNotCountAPrunedReplay(t *testing.T) {
+	require.False(t, spendConflicts(errors.NewUtxoSpendingTxPrunedError("pruned")))
+	require.True(t, spendConflicts(errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, spendpkg.NewSpendingData(&chainhash.Hash{}, 0))))
 }

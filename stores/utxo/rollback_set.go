@@ -120,15 +120,18 @@ func NeedsSpendRollback(spends []*Spend, requireParentOutputs bool) bool {
 // input and failed left that input spent by a transaction with no record, and
 // treating the missing sibling parent as a replay kept that orphan spent for
 // good. A pruned replay whose surviving parent still records it meets that
-// parent's marker, so the marker answer alone covers it.
+// parent's marker, so the marker answer alone covers it. A prune that lands
+// after an input's marker read is caught by the rollback instead, which reads
+// the marker again once the spender is gone (withoutMarkedMatches in each
+// store).
 func IsReplayAnswer(err error) bool {
 	return err != nil && errors.Is(err, errors.ErrUtxoSpendingTxPruned)
 }
 
 // ReplayRejectionsFirst reorders per-input spend errors so the marker
-// rejection comes first, then a missing parent, then the rest. Stores and the
-// validator aggregate these with errors.JoinCapped, which keeps only the first
-// few links. On a wide transaction whose marker hit sat past the cap the
+// rejection comes first, then a missing parent, then the rest. The Aerospike
+// batched spend aggregates these with errors.JoinCapped, which keeps only the
+// first few links. On a wide transaction whose marker hit sat past the cap the
 // rejection vanished from the error, and the block paths could not recognise
 // the replay. A missing parent ranks second not as a replay signal
 // (IsReplayAnswer counts only the marker) but because the legacy block path
