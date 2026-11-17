@@ -1082,9 +1082,10 @@ func TestIsTransientWriteFailure_UnansweredRecord(t *testing.T) {
 	require.False(t, isBatchTransportError(&aerospike.AerospikeError{ResultCode: types.MAX_ERROR_RATE}),
 		"MAX_ERROR_RATE leaves per-record results to read, so it is not resent wholesale")
 
-	// The client stamps a partition with no live node per record, with a
-	// fresh error and no cause chain. Those, and any code not known to be a
-	// lasting refusal, are resent.
+	// A partition with no live node: the client stamps INVALID_NODE_ERROR per
+	// record, with a fresh error and no cause chain, and the server answers
+	// PARTITION_UNAVAILABLE. Those, and any code not known to be a lasting
+	// refusal, are resent.
 	for _, code := range []types.ResultCode{types.INVALID_NODE_ERROR, types.PARTITION_UNAVAILABLE, types.FAIL_FORBIDDEN, types.QUERY_ABORTED} {
 		rec := aerospike.NewBatchWrite(nil, key).BatchRec()
 		rec.ResultCode = code
@@ -1191,55 +1192,70 @@ func TestWithdrawMarkers_UnroutableKeyDoesNotBlockTheOthers(t *testing.T) {
 // TestWithdrawMarkers_KeepsEveryParentWhenTheRoutableResendAlsoFails: an
 // unsent batch lists its unroutable key first in the retry indexes, then the
 // routable keys whose own resend failed, so the indexes are not ascending.
-// Every parent must still be sent on the next attempt. pending is built from a
-// map, so the run is repeated to cover the unroutable key at each position.
+// Every parent must still be sent on the next attempt. The unroutable key is
+// the last one in the first batch, so the indexes are out of order every run.
 func TestWithdrawMarkers_KeepsEveryParentWhenTheRoutableResendAlsoFails(t *testing.T) {
 	s, client := newFlushTestService(t)
 
-	for run := byte(0); run < 6; run++ {
-		parents := make([]chainhash.Hash, 3)
-		children := make([]chainhash.Hash, 3)
-		keys := make([]*aerospike.Key, 3)
-		updates := make(map[string]*parentUpdateInfo)
-		withdraw := make(map[chainhash.Hash]struct{})
+	parents := make([]chainhash.Hash, 3)
+	children := make([]chainhash.Hash, 3)
+	keys := make([]*aerospike.Key, 3)
+	updates := make(map[string]*parentUpdateInfo)
+	withdraw := make(map[chainhash.Hash]struct{})
 
-		for i := range parents {
-			parents[i] = chainhash.HashH([]byte{0xF7, run, byte(i)})
-			children[i] = chainhash.HashH([]byte{0xF7, run, byte(i), 1})
-			keys[i] = putRecord(t, client, &parents[i], spentBy(&children[i]))
-			require.NoError(t, s.addParentUpdatesForInput(updates, &parents[i], 0, &children[i]))
-			withdraw[children[i]] = struct{}{}
+	for i := range parents {
+		parents[i] = chainhash.HashH([]byte{0xF7, byte(i)})
+		children[i] = chainhash.HashH([]byte{0xF7, byte(i), 1})
+		keys[i] = putRecord(t, client, &parents[i], spentBy(&children[i]))
+		require.NoError(t, s.addParentUpdatesForInput(updates, &parents[i], 0, &children[i]))
+		withdraw[children[i]] = struct{}{}
+	}
+
+	_, err := s.markParents(context.Background(), updates)
+	require.NoError(t, err)
+
+	for i := range keys {
+		require.True(t, hasMarker(t, client, keys[i], &children[i]), "fixture: marker %d landed", i)
+	}
+
+	var downKey *aerospike.Key
+
+	downSends, routableSends := 0, 0
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		if downKey == nil {
+			downKey = records[len(records)-1].BatchRec().Key
 		}
 
-		_, err := s.markParents(context.Background(), updates)
-		require.NoError(t, err)
+		for _, rec := range records {
+			br := rec.BatchRec()
+			if br.Key.Equals(downKey) {
+				downSends++
+				br.ResultCode = types.INVALID_NODE_ERROR
+				br.Err = &aerospike.AerospikeError{ResultCode: types.INVALID_NODE_ERROR}
 
-		downKey := keys[0]
-		routableSends := 0
-		s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
-			for _, rec := range records {
-				br := rec.BatchRec()
-				if br.Key.Equals(downKey) {
-					br.ResultCode = types.INVALID_NODE_ERROR
-					br.Err = &aerospike.AerospikeError{ResultCode: types.INVALID_NODE_ERROR}
-
-					return &aerospike.AerospikeError{ResultCode: types.INVALID_NODE_ERROR}
-				}
+				return &aerospike.AerospikeError{ResultCode: types.INVALID_NODE_ERROR}
 			}
-
-			routableSends++
-			if routableSends == 1 {
-				return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
-			}
-
-			return client.BatchOperate(policy, records)
 		}
 
-		s.withdrawMarkers(updates, withdraw)
-
-		for i := 1; i < len(keys); i++ {
-			require.False(t, hasMarker(t, client, keys[i], &children[i]), "run %d: routable parent %d was resent and withdrawn", run, i)
+		routableSends++
+		if routableSends == 1 {
+			return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
 		}
+
+		return client.BatchOperate(policy, records)
+	}
+
+	s.withdrawMarkers(updates, withdraw)
+	require.Equal(t, withdrawMarkerAttempts, downSends, "the unroutable parent is resent every attempt")
+
+	for i := range keys {
+		if keys[i].Equals(downKey) {
+			require.True(t, hasMarker(t, client, keys[i], &children[i]), "the unroutable parent keeps its marker")
+
+			continue
+		}
+
+		require.False(t, hasMarker(t, client, keys[i], &children[i]), "routable parent %d was resent and withdrawn", i)
 	}
 }
 

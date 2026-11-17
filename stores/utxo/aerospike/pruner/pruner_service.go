@@ -3523,9 +3523,10 @@ func splitUnsent(records []aerospike.BatchRecordIfc) (unroutable, routable []int
 // configuration or edition never allows, an unauthorised sender. FAIL_FORBIDDEN
 // ("not allowed at this time") is not final: it clears by itself. Every
 // other failure is resent: a timeout, a busy key or device, a lost connection,
-// a partition with no live node (INVALID_NODE_ERROR, PARTITION_UNAVAILABLE,
-// stamped by the client without a cause chain), a record the server never
-// answered (the client's initial NO_RESPONSE), and any code not listed. A
+// a partition with no live node (INVALID_NODE_ERROR, stamped by the client
+// without a cause chain, or PARTITION_UNAVAILABLE from the server), a record
+// the server never answered (the client's initial NO_RESPONSE), and any code
+// not listed. A
 // wasted resend costs one batch op; a withdrawal given up too early leaves a
 // marker that refuses a live child's re-spend.
 func isTransientWriteFailure(batchRec *aerospike.BatchRecord) bool {
