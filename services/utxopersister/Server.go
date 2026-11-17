@@ -91,6 +91,11 @@ type Server struct {
 	// heartbeatInterval is the idle tick of the main loop. Zero means
 	// defaultHeartbeatInterval; tests set it shorter.
 	heartbeatInterval time.Duration
+
+	// pollInterval is how long the main loop waits for other work before it
+	// polls on its own. Zero means 1m with a blockchain client and 10s without
+	// one; tests set it shorter.
+	pollInterval time.Duration
 }
 
 // defaultHeartbeatInterval is how often an idle main loop beats its heartbeat.
@@ -332,6 +337,10 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		duration = 10 * time.Second
 	}
 
+	if s.pollInterval > 0 {
+		duration = s.pollInterval
+	}
+
 	heartbeatInterval := effectiveHeartbeatInterval(s.heartbeatInterval)
 
 	// A timeout at or below the idle tick cannot tell an idle loop from a wedged
@@ -403,6 +412,10 @@ func (s *Server) publishHeartbeatAge(ctx context.Context, interval time.Duration
 
 		select {
 		case <-ctx.Done():
+			// The loop has stopped and disabled its heartbeat, so the gauge
+			// reads 0 rather than freezing at its last age.
+			prometheusUTXOPersisterLivenessHeartbeatAge.Set(0)
+
 			return
 		case <-ticker.C:
 		}
@@ -668,7 +681,8 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	// publishes a set under its name only once it is complete, so an existing
 	// set is a finished one. CreateUTXOSet is not idempotent (NewFileStorer
 	// refuses an existing blob), so without this check every later pass would
-	// fail on the same block and the persister would be wedged for good.
+	// fail on ErrBlobAlreadyExists until the chain tip moves the target past
+	// this block, which on a chain whose tip has stopped is indefinitely.
 	existing, err := s.blockStore.Exists(ctx, c.lastBlockHash[:], fileformat.FileTypeUtxoSet)
 	if err != nil {
 		return 0, errors.NewStorageError("[UTXOPersister] error checking for an existing UTXOSet for block %s height %d", c.lastBlockHash, c.lastBlockHeight, err)

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	terrors "github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -18,6 +20,7 @@ import (
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -531,19 +534,30 @@ func TestHealth_LivenessReportsStalledLoop(t *testing.T) {
 func newLivenessTestServer(t *testing.T, stallTimeout time.Duration, bestBlockHeader func(mock.Arguments)) (*Server, func()) {
 	t.Helper()
 
+	return startLivenessTestServer(t, stallTimeout, 0, bestBlockHeader, nil)
+}
+
+// startLivenessTestServer is newLivenessTestServer with a poll interval (0 =
+// the production default) and a best-block lookup that fails with
+// bestBlockErr when it is not nil, so a pass returns at once and the loop
+// goes back to idling in its select.
+func startLivenessTestServer(t *testing.T, stallTimeout, pollInterval time.Duration, bestBlockHeader func(mock.Arguments), bestBlockErr error) (*Server, func()) {
+	t.Helper()
+
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Block.UTXOPersisterLivenessStallTimeout = stallTimeout
 
 	mockClient := &blockchain.Mock{}
 	mockClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(nil)
 	mockClient.On("Subscribe", mock.Anything, mock.Anything).Return(make(chan *blockchain.Notification), nil)
-	mockClient.On("GetBestBlockHeader", mock.Anything).Run(bestBlockHeader).Return(createTestBlockHeader(), createTestBlockHeaderMeta(150), nil)
+	mockClient.On("GetBestBlockHeader", mock.Anything).Run(bestBlockHeader).Return(createTestBlockHeader(), createTestBlockHeaderMeta(150), bestBlockErr)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	server := New(ctx, ulogger.TestLogger{}, tSettings, memory.New(), mockClient)
 	server.lastHeight = 100
 	server.heartbeatInterval = 10 * time.Millisecond
+	server.pollInterval = pollInterval
 
 	done := make(chan error, 1)
 
@@ -590,9 +604,69 @@ func TestStart_IdleLoopStaysLiveAndStopDisablesHeartbeat(t *testing.T) {
 
 	require.NotZero(t, server.heartbeat.Age(), "the loop must have claimed the heartbeat")
 
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(prometheusUTXOPersisterLivenessHeartbeatAge) > 0
+	}, 5*time.Second, 10*time.Millisecond, "a running loop publishes its heartbeat age")
+
 	stop()
 
 	require.Zero(t, server.heartbeat.Age(), "a stopped loop must disable its heartbeat")
+
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(prometheusUTXOPersisterLivenessHeartbeatAge) == 0
+	}, 5*time.Second, 10*time.Millisecond, "a stopped loop's gauge reads 0, not its last age")
+}
+
+// A pass that returns at once leaves the loop idling in its select, where only
+// the idle tick beats. With nothing else to do for longer than the timeout, the
+// probe must still answer OK.
+func TestStart_IdleTickKeepsAnIdleLoopLive(t *testing.T) {
+	asked := make(chan struct{}, 1)
+
+	server, stop := startLivenessTestServer(t, 100*time.Millisecond, 0, func(mock.Arguments) {
+		select {
+		case asked <- struct{}{}:
+		default:
+		}
+	}, terrors.NewServiceError("best block unavailable"))
+
+	defer stop()
+
+	select {
+	case <-asked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the startup pass never asked for the best block")
+	}
+
+	require.Never(t, func() bool {
+		status, _, _ := server.Health(context.Background(), true)
+		return status != http.StatusOK
+	}, 500*time.Millisecond, 10*time.Millisecond, "an idle loop must stay live on the idle tick alone")
+}
+
+// The poll timer fires even though the idle tick keeps waking the select. A
+// time.After created on every pass would be restarted by each tick and never
+// fire, so a persister without notifications would never poll again.
+func TestStart_PollTimerFiresBetweenIdleTicks(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		calls int
+	)
+
+	_, stop := startLivenessTestServer(t, 0, 50*time.Millisecond, func(mock.Arguments) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+	}, terrors.NewServiceError("best block unavailable"))
+
+	defer stop()
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return calls >= 3
+	}, 5*time.Second, 10*time.Millisecond, "the poll timer must run passes with no notification or trigger")
 }
 
 // The reproduction from issue 1447: a loop stuck inside a pass (here a
@@ -618,7 +692,9 @@ func TestStart_WedgedLoopFailsLiveness(t *testing.T) {
 // state a persister is in once it has recorded height 1. It returns a Server
 // at lastHeight 1 whose best block is 3, so its next pass rolls blocks 2 and 3
 // up into the set for block 3.
-func restartTestChain(t *testing.T, store blob.Store) (*Server, map[uint32]*chainhash.Hash) {
+//
+// block3Txs replaces block 3's single new output when given.
+func restartTestChain(t *testing.T, store blob.Store, block3Txs ...*bt.Tx) (*Server, map[uint32]*chainhash.Hash) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -628,7 +704,11 @@ func restartTestChain(t *testing.T, store blob.Store) (*Server, map[uint32]*chai
 
 	stageBlockDeltas(t, ctx, tSettings, store, byH[1], 1, p2pkhTx(t, 0x11, 1000))
 	stageBlockDeltas(t, ctx, tSettings, store, byH[2], 2, p2pkhTx(t, 0x22, 2000))
-	stageBlockDeltas(t, ctx, tSettings, store, byH[3], 3, p2pkhTx(t, 0x33, 3000))
+	if len(block3Txs) == 0 {
+		block3Txs = []*bt.Tx{p2pkhTx(t, 0x33, 3000)}
+	}
+
+	stageBlockDeltas(t, ctx, tSettings, store, byH[3], 3, block3Txs...)
 
 	mockClient := &blockchain.Mock{}
 	mockClient.On("GetBestBlockHeader", mock.Anything).Return(headers[2], metas[2], nil)
@@ -705,4 +785,77 @@ func TestProcessNextBlock_RecordsHeightBeforeDeletingPreviousSet(t *testing.T) {
 	exists, err := store.Exists(ctx, byH[3][:], fileformat.FileTypeUtxoSet)
 	require.NoError(t, err)
 	require.True(t, exists)
+}
+
+// processNextBlock and BuildUTXOSetToHeight both hand the heartbeat to the
+// consolidator, so a long roll-up renews a heartbeat the main loop owns. The
+// heartbeat is armed an hour stale; the per-block beats must bring it back.
+func TestRollUp_RenewsAnArmedHeartbeat(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name   string
+		rollUp func(*Server) error
+	}{
+		{name: "processNextBlock", rollUp: func(s *Server) error {
+			_, err := s.processNextBlock(ctx)
+			return err
+		}},
+		{name: "BuildUTXOSetToHeight", rollUp: func(s *Server) error {
+			return s.BuildUTXOSetToHeight(ctx, 1, 3, false)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, _ := restartTestChain(t, memory.New())
+			server.heartbeat.SetLastBeatForTest(time.Now().Add(-time.Hour))
+
+			require.NoError(t, tt.rollUp(server))
+			require.Less(t, server.heartbeat.Age(), time.Minute, "the roll-up must renew the heartbeat")
+		})
+	}
+}
+
+// Every record a roll-up and a set write handle counts toward a beat. With a
+// beat on every record, the count is the sum of each counting step, so removing
+// any one of them changes it.
+func TestRollUpAndSetWrite_BeatPerRecord(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+
+	// Block 3 spends block 1's output, so the roll-up reads a deletion and the
+	// set write filters a record copied from the previous set.
+	spend := p2pkhTx(t, 0x33, 3000)
+
+	in := &bt.Input{
+		PreviousTxOutIndex: 0,
+		UnlockingScript:    bscript.NewFromBytes([]byte{0x51}),
+		SequenceNumber:     bt.DefaultSequenceNumber,
+	}
+	require.NoError(t, in.PreviousTxIDAdd(p2pkhTx(t, 0x11, 1000).TxIDChainHash()))
+	spend.Inputs = append(spend.Inputs, in)
+
+	server, byH := restartTestChain(t, store, spend)
+
+	c := NewConsolidator(server.logger, server.settings, nil, server.blockchainClient, store, byH[1])
+	c.beatEvery = 1
+
+	beats := 0
+	c.progress = func() { beats++ }
+
+	require.NoError(t, c.ConsolidateBlockRange(ctx, 2, 3))
+
+	// Two blocks, one deletion read, and one additions record per block.
+	require.Equal(t, 2+1+2, beats, "roll-up beats")
+
+	us, err := GetUTXOSet(ctx, server.logger, server.settings, store, byH[1], 1)
+	require.NoError(t, err)
+
+	beats = 0
+
+	require.NoError(t, us.CreateUTXOSet(ctx, c))
+
+	// One record copied from block 1's set, and the two additions.
+	require.Equal(t, 1+2, beats, "set write beats")
 }

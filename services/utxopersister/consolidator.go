@@ -101,6 +101,10 @@ type consolidator struct {
 
 	// recordsSinceBeat counts records handled since progress was last called.
 	recordsSinceBeat int
+
+	// beatEvery is how many records pass between progress calls. Zero means
+	// progressBeatEvery; tests set it to 1.
+	beatEvery int
 }
 
 // beat reports progress to the owning loop, if there is one.
@@ -110,12 +114,17 @@ func (c *consolidator) beat() {
 	}
 }
 
-// recordDone counts one record and reports progress every progressBeatEvery
-// records.
+// recordDone counts one record and reports progress every beatEvery records
+// (progressBeatEvery unless a test set it).
 func (c *consolidator) recordDone() {
 	c.recordsSinceBeat++
 
-	if c.recordsSinceBeat >= progressBeatEvery {
+	every := c.beatEvery
+	if every <= 0 {
+		every = progressBeatEvery
+	}
+
+	if c.recordsSinceBeat >= every {
 		c.recordsSinceBeat = 0
 		c.beat()
 	}

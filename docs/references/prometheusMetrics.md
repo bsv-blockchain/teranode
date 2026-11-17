@@ -363,7 +363,7 @@ The download gauges and the `download_*_total` counters are published from the 3
 
 | Metric                                                  | Type  | Description |
 |---------------------------------------------------------|-------|-------------|
-| `teranode_utxopersister_liveness_heartbeat_age_seconds` | Gauge | Seconds since the main loop last beat its liveness heartbeat (0 before the loop starts and after it stops); the value `utxoPersister_livenessStallTimeout` is compared against |
+| `teranode_utxopersister_liveness_heartbeat_age_seconds` | Gauge | Seconds since the main loop last beat its liveness heartbeat (0 before the loop's first beat and after it stops); the value `utxoPersister_livenessStallTimeout` is compared against |
 
 ## Validator Service Metrics
 
