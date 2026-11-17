@@ -611,3 +611,56 @@ func TestBlockchainSubscriptionListener_ShutdownCancelsInFlightAnnouncement(t *t
 	require.Never(t, func() bool { return testutil.ToFloat64(timedOut)-timedOutBefore != 0 }, 200*time.Millisecond, 10*time.Millisecond,
 		"an announcement cancelled by shutdown must not be counted as a timeout")
 }
+
+// Only an announcement that fails after its own deadline is a timeout. An inner
+// call that reports DeadlineExceeded while the bound still has time left, and
+// an announcement that succeeds after its deadline, are not counted.
+func TestBlockchainSubscriptionListener_OnlyFailuresPastTheDeadlineCountAsTimeouts(t *testing.T) {
+	previous := notificationProcessTimeout
+	notificationProcessTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { notificationProcessTimeout = previous })
+
+	timedOut := droppedNotifications("announcement", model.NotificationType_Block, "timeout")
+	timedOutBefore := testutil.ToFloat64(timedOut)
+
+	innerDeadline := chainhash.HashH([]byte("inner call's own deadline"))
+	lateSuccess := chainhash.HashH([]byte("succeeds after the bound"))
+	barrier := chainhash.HashH([]byte("barrier block"))
+
+	isHash := func(want chainhash.Hash) interface{} {
+		return mock.MatchedBy(func(hash *chainhash.Hash) bool { return *hash == want })
+	}
+
+	ready := &model.BlockHeaderMeta{Height: 100, SubtreesSet: true}
+	barrierReached := make(chan struct{}, 1)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBlockHeader", mock.Anything, isHash(innerDeadline)).
+		Return(nil, nil, context.DeadlineExceeded)
+	mockBlockchain.On("GetBlockHeader", mock.Anything, isHash(lateSuccess)).Run(func(args mock.Arguments) {
+		<-args.Get(0).(context.Context).Done()
+	}).Return(model.GenesisBlockHeader, ready, nil)
+	mockBlockchain.On("GetBlockHeader", mock.Anything, isHash(barrier)).Run(func(mock.Arguments) {
+		barrierReached <- struct{}{}
+		<-release
+	}).Return(model.GenesisBlockHeader, ready, nil)
+
+	_, subscription := startListenerTestServer(t, mockBlockchain)
+
+	subscription <- blockNotification(innerDeadline)
+	subscription <- blockNotification(lateSuccess)
+	// The worker is serial: once the barrier reaches GetBlockHeader, both
+	// announcements before it have been fully handled.
+	subscription <- blockNotification(barrier)
+
+	select {
+	case <-barrierReached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the barrier block never reached GetBlockHeader")
+	}
+
+	require.Zero(t, testutil.ToFloat64(timedOut)-timedOutBefore,
+		"neither an inner DeadlineExceeded inside the bound nor a late success is a timeout")
+}
