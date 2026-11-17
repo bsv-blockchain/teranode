@@ -2746,7 +2746,8 @@ func maxMedianTimePastHeightsPerRequest(tSettings *settings.Settings) uint32 {
 //
 // Only the client's lifetime is detached. Its startup calls (the health check and the API key
 // check) still end when ctx does, so a blockchain service that accepts the connection and never
-// answers cannot hold up a process that is shutting down.
+// answers holds up a process that is shutting down only for NewClient's retry backoff, which
+// does not watch ctx: about 6 s with the default blockchain_maxRetries and blockchain_retrySleep.
 func NewLaneClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (ClientI, error) {
 	life, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	stop := context.AfterFunc(ctx, cancel)
