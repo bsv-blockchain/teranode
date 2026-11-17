@@ -446,12 +446,19 @@ reorg/conflict helpers) are single-phase and bypass the create-first ordering.
   `utxo.IsRolledForward` is true, so the validator hands the transaction to block assembly.
   A record that is rolling back, or a hold a finished rollback left, is refused with a
   transient error until the hold expires. A create in block context clears a hold at once.
+  A rollback that its owner left open is first finished by the same call
+  (`utxo.FinishRollBackCreating`), when no holder is busy and no spend lease is live, so a block
+  that contains the transaction does not depend on the sweep. With the flag off, a spend-first
+  `SpendAndCreate` that finds a hold or an open rollback reverses its own spends and returns a
+  transient error, and it creates over a hold it may clear.
 - **Pruner sweeper** — `QueryStaleCreatingTxs` (secondary index on `unminedSince` +
   `creating` filter) finds abandoned creating records older than
   `pruner_creatingTxSweepMinAgeBlocks`; the sweeper re-spends (`SpendAndCreate(WithSpendOnly)`,
   without ignoring locks) and finalizes them, rolls back a loser whose input belongs to
   another transaction, finishes a rollback a crashed owner left marked, and deletes a hold that
-  has expired. Every step names the token it read from the record.
+  a namespace without record expiry kept past its time. Every step names the token it read from
+  the record. The sweep reverses nothing while a spend lease of the attempt is live (see "Spend
+  lease" below): it leaves the record for a later pass.
 - **setMined** — a pre-flight in `SetMinedMulti` rolls a still-creating record forward
   (re-spend, then finalize) before the mined write. The write paths no longer clear the
   `creating` bin. The pre-flight runs on every call, whatever `utxostore_useCreateFirstOrder`
@@ -461,13 +468,43 @@ reorg/conflict helpers) are single-phase and bypass the create-first ordering.
 
 The healers (setMined pre-flight and pruner sweep) are not gated on the flag.
 
+### Spend lease
+
+A hold carries no transaction, so nothing can reverse a spend that lands after the rollback has
+reversed the inputs. The store therefore makes a spend and a rollback of one attempt exclude each
+other, with a lease on the master record.
+
+- **Who holds one.** Every actor that spends the inputs of a creating record. The create writes
+  the creator's lease in the `spenders` bin, a map from a lease id to the unix time by which the
+  spend must end, now plus `utxostore_spendRollbackTimeout`. The creator's id is its attempt token.
+  A roll-forward (the `ErrTxExists` retry, the sweep, the setMined pre-flight) calls
+  `TakeSpendLease(hash, attempt)` before it spends: one write, filtered on `creating`, the token
+  and no `rollingBack` bin, that adds a random id. The spend runs under a context that ends at the
+  time the lease names.
+- **The fence.** `BeginCreateFirstRollback` sets `rollingBack` in one write, and `TakeSpendLease`
+  is refused from then on. A spender either holds a lease from before the marker, or it never
+  spends. `RollBackCreating` then waits until `SpendLeasesLive` reports false before it reverses
+  an input. Every spend of the attempt therefore lands before the reversal, and the reversal,
+  which covers every input of the transaction, undoes it.
+- **Release.** A spender calls `ReleaseSpendLease` when its spend has returned with a known
+  outcome, and after a finalize that failed. A roll-forward never reverses a spend itself. The
+  finalize removes the bin with the `creating` bin.
+- **Unknown outcome and crash.** A spend that gave no per-input result, whose context ended, or
+  that hit `utxostore_spendWaitTimeout` may still commit. Its lease is not released. A lease is
+  live until the time it names has passed by a further `utxostore_spendRollbackTimeout`. The owner
+  of a rollback waits at most 10 seconds for live spenders. If a lease is still live then, the
+  owner reverses nothing, releases the hold and leaves the record rolling back. The sweep, or the
+  next create-first `SpendAndCreate` of the txid, finishes the rollback after the lease is stale. `TakeSpendLease` drops stale leases from the bin.
+
 ### Rollback of a failed create-first spend
 
-A spend that fails after the tentative create is rolled back by `utxo.RollBackCreating`:
+A spend that fails after the tentative create is rolled back by `utxo.RollBackCreating`. The
+creator first releases its own spend lease.
 `BeginCreateFirstRollback(hash, attempt)` sets the `rollingBack` bin on the master with a filter
 on the `creating` bin and the token. The same write sets `busy` and `holdUntil`, so the owner
 holds the hold for its whole unspend and releases it with `ReleaseRollbackHold` before it ends
-the rollback. Every input of the tx is unspent (not only the spends that
+the rollback. The owner waits for the spend leases of the attempt. Then every input of the tx is
+unspent (not only the spends that
 succeeded in the failing pass, because an earlier attempt may have spent an input that now fails
 for another reason; the Lua ownership check makes an input the tx does not own a no-op, and an
 input whose UTXO hash does not match or whose vout does not exist is skipped, because the tx can
@@ -475,10 +512,14 @@ never have spent it), then `EndCreateFirstRollback(hash, attempt)` removes the p
 children (filtered on the token) and the external blobs and turns the master into a hold. Its
 first write sets the `reversed` bin, which says that every spend is undone, so that a recovery
 that finds the record after the blob is gone ends the rollback without reading the transaction.
+That write is filtered on no live `busy` bin and sets `busy` itself, so one caller owns the
+cleanup from the `reversed` write to the hold: a second caller, and an actor that still reverses
+spends under the hold, make it fail, and the reversal is not recorded while anyone is still
+reversing. A cleanup that fails releases `busy`.
 While
 the marker is set, `FinalizeTransaction` (single and multi-record) refuses the record with
 `ErrTxNotFound`, so a concurrent roll-forward cannot complete it. A roll-forward whose finalize
-is refused reverses the spends it made only if it can take the hold (see below). The Lua spend
+is refused releases its lease, and the owner, which was waiting for it, reverses its spends. The Lua spend
 gate still reads `creating`, so a rolling-back record's outputs stay unspendable. A spend whose
 batch may still be in flight (a context error, or the `utxostore_spendWaitTimeout`
 ServiceUnavailable) is not rolled back: the record stays creating for the sweep. The fresh
@@ -498,7 +539,10 @@ from touching the next.
   `FILTERED_OUT` that reads back as "not mine" (`ErrTxNotFound` for a finalize). Every actor takes
   its token from the record it read: the fresh create from its own create, the `ErrTxExists`
   roll-forward, the sweep and the setMined pre-flight from their `Get`. A multi-record create
-  that finds children left by an earlier attempt gives them its own token. If a child cannot be
+  that finds children left by an earlier attempt gives them its own token. A create that finds
+  the master of an earlier attempt still creating does the reverse: it gives every child,
+  including one it has just written, the token of that master, because only the master's attempt
+  can be finalized. If a child cannot be
   given the token, the create leaves the master it wrote creating and returns a transient error
   that carries the token (`utxo.MarkRollBackAttempt`). Another actor may already have read that
   master and begun a roll-forward, so it is not deleted: the create-first caller rolls the
@@ -509,26 +553,28 @@ from touching the next.
 - **Hold.** The rollback end does not delete the master. It deletes the children and the
   external blobs while the master is still there, so a same-txid create is refused and writes
   nothing, and then rewrites the master in one `REPLACE_ONLY` write, filtered on the token, the
-  `rollingBack` bin and no `busy` bin. The hold keeps `txID`, `creating`, `rollingBack`,
+  `rollingBack` and `reversed` bins and no `hold` bin. The hold keeps `txID`, `creating`, `rollingBack`,
   the token and `unminedSince` (so the sweep query finds it), and adds `hold` and `holdUntil`,
-  now plus `utxostore_spendRollbackTimeout`. It has no outputs, so every gate that keys on
+  now plus `utxostore_spendRollbackTimeout`. The write carries that time as the record's time to
+  live, so the server removes the hold on its own and a rejected double-spend leaves no durable
+  record. A namespace that forbids a time to live gets the hold without one, and the sweep
+  deletes it. It has no outputs, so every gate that keys on
   `creating` refuses it, `GetMeta` reports `Creating`, `RollingBack` and `Hold`, and a create of
   the txid gets `ErrTxExists` and then a transient error.
 - **Take the hold before unspending.** An actor that unspends the inputs of a transaction after
   the mark calls `TakeRollbackHold(hash, attempt)`: one write filtered on `rollingBack`, the
-  token and no `busy` bin, which sets `busy` and renews `holdUntil`. It unspends under a context
-  bounded by `utxostore_spendRollbackTimeout`, then calls `ReleaseRollbackHold`. A failed take
-  (record absent, another token, busy) means a replacement owns the inputs, or another actor is
-  reversing them, and nothing is reversed. The sweep's `finishRollback` and the roll-forward's
-  compensation work this way, and so does the direct owner, which takes the hold when it marks
-  the record. The compensation does not give up on a busy record of its own attempt: the owner
-  may already have passed an input that the roll-forward spent afterwards. It reads the record
-  and takes again until it gets the hold, the record is no longer rolling back under its token,
-  or its rollback bound ends. The rollback end fails while a live `busy` is set, because the rewrite would drop
-  the marker that protects the holder, and the sweep ends the rollback on a later pass. A record
-  that carries `reversed` needs no take: the sweep calls the rollback end for it directly.
-- **Expiry.** `ClearCreateFirstHold(hash, adopt)` deletes a hold, filtered on `hold` and on the
-  `holdUntil` that was read, so a take in between makes the delete fail. Without `adopt` it goes
+  token, no `reversed` bin, no `hold` bin and no `busy` bin, which sets `busy` and renews
+  `holdUntil`. It unspends under a context bounded by `utxostore_spendRollbackTimeout`, then calls
+  `ReleaseRollbackHold`. A failed take (record absent, another token, busy, reversed or a hold)
+  means a replacement owns the inputs, another actor is reversing them, or the reversal is
+  already recorded, and nothing is reversed. The sweep's `finishRollback` works this way, and so
+  does the direct owner, which takes the hold when it marks the record. A record that carries
+  `reversed`, and a hold, cannot be taken: the transaction data may be gone, so a reversal that
+  failed after such a take could not be repeated. The sweep calls the rollback end for a
+  `reversed` record directly.
+- **Expiry.** A hold expires with its time to live. `ClearCreateFirstHold(hash, adopt)` deletes
+  one earlier, or one that has no time to live, filtered on `hold` and on the `holdUntil` that
+  was read. Without `adopt` it goes
   once `holdUntil` has passed and no holder is busy, or has passed by a further timeout (a
   holder that crashed). The next create that finds the hold and the sweep both call it.
 - **Block context.** A create that ignores locks, or carries mined block info, passes `adopt`:
@@ -537,10 +583,12 @@ from touching the next.
   tentative record under a fresh token, and every actor left over from the earlier attempt fails
   its take.
 
-`RollForwardCreating` runs its spend and finalize under a context bounded by
-`utxostore_spendRollbackTimeout`. What this does not close: a fresh-path spend still in flight
-after the sweep rolled the record back and the hold expired, and a second rollback and expiry
-before that spend lands. Closing it needs the attempt in the spend record (issue 1291).
+`RollForwardCreating` and the fresh create-first spend run under a context bounded by
+`utxostore_spendRollbackTimeout`, the time their lease names. What this does not close: a spend
+write that the store applies later than a further `utxostore_spendRollbackTimeout` after its
+lease ran out, and an owner of a rollback that stalls past its own bound and then unspends after
+a new attempt of the same txid has spent. Closing those needs the attempt in the spend record
+(issue 1291).
 
 ### Sweep visibility of mined creating records
 

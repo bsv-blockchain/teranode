@@ -413,3 +413,18 @@ func (m *NullStore) SetConflictLocks(ctx context.Context, id chainhash.Hash, par
 func (m *NullStore) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
 	return nil
 }
+
+// TakeSpendLease reports false and writes nothing. The null store holds no records, so none is creating.
+func (m *NullStore) TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+// ReleaseSpendLease does nothing. The null store holds no records, so none is creating.
+func (m *NullStore) ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error {
+	return nil
+}
+
+// SpendLeasesLive reports false. The null store holds no records, so none is creating.
+func (m *NullStore) SpendLeasesLive(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	return false, nil
+}

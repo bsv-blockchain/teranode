@@ -3,7 +3,6 @@ package pruner
 import (
 	"context"
 
-	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -26,9 +25,10 @@ const defaultCreatingSweepMaxPerPass = 1000
 // that does not exist (ErrTxNotFound), is rolled back by
 // utxo.RollBackCreating: the record is marked rolling back, every input of the tx is
 // unspent and the record becomes a hold that keeps its txid taken for a while. A record already
-// marked rolling back was abandoned by a crashed rollback owner; the sweep finishes it by taking
-// the hold of its attempt, unspending every input and ending the rollback. A hold whose time has
-// passed is deleted. A record marked rolling back that also carries the reversed marker has all its
+// marked rolling back was abandoned by a crashed rollback owner; the sweep finishes it (utxo.FinishRollBackCreating) by taking
+// the hold of its attempt, unspending every input once no spender holds a live lease, and ending
+// the rollback. A hold expires on its own; one that a namespace without record expiry keeps past
+// its time is deleted here. A record marked rolling back that also carries the reversed marker has all its
 // spends undone: the sweep ends its rollback without taking the hold, unspending or reading the
 // transaction, which may be gone from the blob store. The sweep reads the record in two steps, the
 // markers first and the transaction only when the record needs a roll-forward or a reversal. Records it cannot roll forward for another reason (e.g. a
@@ -141,16 +141,19 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 		}
 
 		if md.RollingBack {
-			if err = s.finishRollback(ctx, md.Tx, md.Attempt); err != nil {
-				s.logger.Errorf("[pruner][creating-sweep][%d] finishing rollback of %s failed, will retry next block: %v", blockHeight, hash, err)
+			finished, finishErr := utxo.FinishRollBackCreating(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt, false)
+			if finishErr != nil {
+				s.logger.Errorf("[pruner][creating-sweep][%d] finishing rollback of %s failed, will retry next block: %v", blockHeight, hash, finishErr)
 				prunerCreatingSweepFailures.Inc()
 
 				continue
 			}
 
-			progressed++
+			if finished {
+				progressed++
 
-			s.logger.Infof("[pruner][creating-sweep][%d] finished abandoned rollback of %s", blockHeight, hash)
+				s.logger.Infof("[pruner][creating-sweep][%d] finished abandoned rollback of %s", blockHeight, hash)
+			}
 
 			continue
 		}
@@ -159,11 +162,22 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 		// finalize, through the shared roll-forward rule. Spends are idempotent for the same
 		// spender, which makes roll-forward safe. Locks are not ignored: a locked parent is
 		// the hand-off barrier, so ErrTxLocked is retried on a later pass rather than
-		// bypassed. The rule refuses a record that is rolling back, and reverses its own
-		// spends when the record is rolled back or deleted before the finalize lands.
+		// bypassed. The rule takes a spend lease first, which the store refuses for a record
+		// that is rolling back, and a rollback that begins later waits for the lease and then
+		// reverses the spends this pass made.
 		_, rfErr := utxo.RollForwardCreating(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt, blockHeight)
 		if rfErr != nil {
 			if isUnwinnableSpendError(rfErr) {
+				// A lease that is still live belongs to a spender that returned with an unknown
+				// outcome or crashed. The rollback would wait for it, so the record is left for a
+				// later pass, when the lease is stale.
+				if live, liveErr := s.utxoStore.SpendLeasesLive(ctx, &hash, md.Attempt); liveErr != nil || live {
+					s.logger.Warnf("[pruner][creating-sweep][%d] %s cannot be completed but a spender may still hold a lease on it, will retry next block: %v", blockHeight, hash, liveErr)
+					prunerCreatingSweepFailures.Inc()
+
+					continue
+				}
+
 				if rbErr := utxo.RollBackCreating(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt); rbErr != nil {
 					s.logger.Errorf("[pruner][creating-sweep][%d] rollback of %s failed, will retry next block: %v", blockHeight, hash, rbErr)
 					prunerCreatingSweepFailures.Inc()
@@ -233,83 +247,4 @@ func isUnwinnableSpendError(err error) bool {
 		errors.Is(err, errors.ErrTxConflicting) ||
 		errors.Is(err, errors.ErrFrozen) ||
 		errors.Is(err, errors.ErrUtxoHashMismatch)
-}
-
-// finishRollback completes a rollback a crashed owner left marked. It first takes the hold of
-// the attempt that was rolled back. The take is exclusive and proves that the record still
-// belongs to that attempt, so a second pruner, or one that read the record before a new attempt
-// replaced it, takes nothing and reverses nothing. A failed take is logged and is not an error.
-// With the hold taken, it unspends every input of tx under a context bounded by
-// utxostore_spendRollbackTimeout, skipping inputs the tx can never have spent (a parent that is
-// already gone, a vout that does not exist or a UTXO hash that does not match), releases the
-// hold, and ends the rollback, which turns the record into a hold. Every step is idempotent. The
-// record is rolling back, so nothing can finalize it meanwhile.
-func (s *Server) finishRollback(ctx context.Context, tx *bt.Tx, attempt []byte) error {
-	hash := tx.TxIDChainHash()
-
-	took, err := s.utxoStore.TakeRollbackHold(ctx, hash, attempt)
-	if err != nil {
-		return err
-	}
-
-	if !took {
-		s.logger.Infof("[pruner][creating-sweep] hold of %s not taken: the record is gone, owned by another attempt or busy, nothing reversed", hash)
-
-		return nil
-	}
-
-	if err = s.unspendHeld(ctx, tx, attempt); err != nil {
-		return err
-	}
-
-	return s.utxoStore.EndCreateFirstRollback(ctx, hash, attempt)
-}
-
-// unspendHeld reverses the spends of tx while the caller holds the hold of its attempt, then
-// releases the hold. A reversal that fails still releases the hold, best effort, and returns the
-// reversal error. A release that fails after a good reversal is an error too: the caller must not
-// end the rollback, because that would record the spends as reversed over a busy marker that the
-// conversion refuses, and the record would stay rolling back until the marker ages out.
-func (s *Server) unspendHeld(ctx context.Context, tx *bt.Tx, attempt []byte) error {
-	hash := tx.TxIDChainHash()
-
-	reverseErr := s.reverseSpends(ctx, tx)
-
-	relCtx, cancel := s.rollbackContext(context.WithoutCancel(ctx))
-	defer cancel()
-
-	relErr := s.utxoStore.ReleaseRollbackHold(relCtx, hash, attempt)
-	if relErr != nil {
-		s.logger.Errorf("[pruner][creating-sweep] releasing the hold of %s failed, it expires on its own: %v", hash, relErr)
-	}
-
-	if reverseErr != nil {
-		return reverseErr
-	}
-
-	return relErr
-}
-
-// reverseSpends unspends every input of tx under a context bounded by the rollback bound.
-func (s *Server) reverseSpends(ctx context.Context, tx *bt.Tx) error {
-	spends, err := utxo.GetSpends(tx)
-	if err != nil {
-		return err
-	}
-
-	rbCtx, cancel := s.rollbackContext(ctx)
-	defer cancel()
-
-	return utxo.UnspendTolerantOfMissingParents(rbCtx, s.utxoStore, spends)
-}
-
-// rollbackContext bounds a reversal of spends by utxostore_spendRollbackTimeout, the life of the
-// hold it runs under.
-func (s *Server) rollbackContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	bound := s.settings.UtxoStore.SpendRollbackTimeout
-	if bound <= 0 {
-		return context.WithCancel(ctx)
-	}
-
-	return context.WithTimeout(ctx, bound)
 }

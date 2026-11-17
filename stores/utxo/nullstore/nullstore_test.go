@@ -148,6 +148,16 @@ func TestNullStoreCreateFirstNoOps(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, took)
 	assert.NoError(t, store.ReleaseRollbackHold(ctx, tx.TxIDChainHash(), nil))
+
+	lease, leased, err := store.TakeSpendLease(ctx, tx.TxIDChainHash(), nil)
+	assert.NoError(t, err)
+	assert.False(t, leased, "a store with no records has nothing to lease")
+	assert.Nil(t, lease)
+	assert.NoError(t, store.ReleaseSpendLease(ctx, tx.TxIDChainHash(), nil, []byte{1}))
+
+	live, err := store.SpendLeasesLive(ctx, tx.TxIDChainHash(), nil)
+	assert.NoError(t, err)
+	assert.False(t, live)
 	assert.NoError(t, store.EndCreateFirstRollback(ctx, tx.TxIDChainHash(), nil))
 
 	cleared, err := store.ClearCreateFirstHold(ctx, tx.TxIDChainHash(), false)

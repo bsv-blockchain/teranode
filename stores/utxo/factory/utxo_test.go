@@ -175,6 +175,18 @@ func (m *MockUTXOStore) BeginCreateFirstRollback(ctx context.Context, hash *chai
 	return false, nil
 }
 
+func (m *MockUTXOStore) TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (m *MockUTXOStore) ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error {
+	return nil
+}
+
+func (m *MockUTXOStore) SpendLeasesLive(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	return false, nil
+}
+
 func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return nil, nil
 }

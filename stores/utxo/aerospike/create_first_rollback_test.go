@@ -2,6 +2,7 @@ package aerospike_test
 
 import (
 	"context"
+	"encoding/hex"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -202,6 +203,31 @@ func TestBeginCreateFirstRollback(t *testing.T) {
 	})
 }
 
+// leaseRollBacker is the store subset rollBackAsCreator needs.
+type leaseRollBacker interface {
+	utxo.CreatingRollBacker
+	ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error
+}
+
+// rollBackAsCreator rolls an attempt back the way the call that created it does: it releases the
+// spend lease its create took, which is filed under the attempt token, and then runs the rollback.
+func rollBackAsCreator(ctx context.Context, logger ulogger.Logger, s leaseRollBacker, tx *bt.Tx, attempt []byte) error {
+	if err := s.ReleaseSpendLease(ctx, tx.TxIDChainHash(), attempt, attempt); err != nil {
+		return err
+	}
+
+	return utxo.RollBackCreating(ctx, logger, s, tx, attempt)
+}
+
+// leasesOf returns the spenders bin of the master record of hash, nil when it has none.
+func leasesOf(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, hash *chainhash.Hash) map[interface{}]interface{} {
+	t.Helper()
+
+	leases, _ := recordBins(t, client, store, hash, 0, fields.Spenders)[fields.Spenders.String()].(map[interface{}]interface{})
+
+	return leases
+}
+
 // rolledBackHold creates child in the creating state, marks it as rolling back and ends the
 // rollback, which leaves the hold. It returns the token of the attempt that was rolled back.
 func rolledBackHold(t *testing.T, ctx context.Context, store *teranode_aerospike.Store, child *bt.Tx) []byte {
@@ -261,6 +287,7 @@ func TestRollbackHold(t *testing.T) {
 
 		require.ErrorContains(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "holder is reversing spends", "the end of the rollback must not drop the busy marker of a holder")
 		require.NoError(t, store.GetMeta(ctx, hash, &meta.Data{}))
+		require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Reversed), fields.Reversed.String(), "a rollback that a holder is still reversing is not recorded as reversed")
 
 		bins := recordBins(t, client, store, hash, 0, fields.Busy, fields.HoldUntil)
 		require.Equal(t, true, bins[fields.Busy.String()])
@@ -282,8 +309,31 @@ func TestRollbackHold(t *testing.T) {
 
 		took, err = store.TakeRollbackHold(ctx, hash, md.Attempt)
 		require.NoError(t, err)
-		require.True(t, took, "a hold can be taken too, and the take renews it")
+		require.False(t, took, "a hold carries no transaction, so nobody may take it to reverse spends")
+		require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Busy), fields.Busy.String(), "the end of the rollback left no busy marker")
+	})
+
+	t.Run("a rollback that is recorded as reversed cannot be taken", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 0)
+		child.Version = 17
+		hash := child.TxIDChainHash()
+
+		md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, began)
 		require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
+
+		writeRawBins(t, client, store, hash, 0, aerospike.NewBin(fields.Reversed.String(), true))
+
+		took, err := store.TakeRollbackHold(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.False(t, took, "the transaction data may be gone once the reversal is recorded, so a reversal that failed after this take could not be repeated")
+
+		require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt))
+		requireHeld(t, ctx, store, hash)
 	})
 
 	t.Run("a take of an absent record reports false", func(t *testing.T) {
@@ -347,9 +397,7 @@ func TestRollbackHold(t *testing.T) {
 		require.False(t, cleared, "a live hold is not cleared by a create that is not in block context")
 		requireHeld(t, ctx, store, hash)
 
-		took, err := store.TakeRollbackHold(ctx, hash, token)
-		require.NoError(t, err)
-		require.True(t, took)
+		setBusy(t, client, store, hash, time.Now().Unix()+1)
 
 		cleared, err = store.ClearCreateFirstHold(ctx, hash, true)
 		require.NoError(t, err)
@@ -387,46 +435,31 @@ func TestRollbackHold(t *testing.T) {
 		require.True(t, got.Creating, "a creating record survives every clear")
 	})
 
-	t.Run("an expired hold is cleared, a busy one only after a further expiry, and the sweep query finds it", func(t *testing.T) {
+	t.Run("a hold is found by the sweep query, refuses a clear before its time and then expires on its own", func(t *testing.T) {
 		free := spendableChildTx(t, tests.ParentTx, 0)
 		free.Version = 14
-		busy := spendableChildTx(t, tests.ParentTx, 0)
-		busy.Version = 15
+		hash := free.TxIDChainHash()
 
 		rolledBackHold(t, ctx, store, free)
-		busyToken := rolledBackHold(t, ctx, store, busy)
-
-		took, err := store.TakeRollbackHold(ctx, busy.TxIDChainHash(), busyToken)
-		require.NoError(t, err)
-		require.True(t, took)
 
 		stale, err := store.QueryStaleCreatingTxs(ctx, 200, 0)
 		require.NoError(t, err)
-		require.Contains(t, stale, *free.TxIDChainHash(), "the sweep selects a hold by unminedSince")
-		require.Contains(t, stale, *busy.TxIDChainHash())
+		require.Contains(t, stale, *hash, "the sweep selects a hold by unminedSince")
 
-		cleared, err := store.ClearCreateFirstHold(ctx, free.TxIDChainHash(), false)
+		cleared, err := store.ClearCreateFirstHold(ctx, hash, false)
 		require.NoError(t, err)
 		require.False(t, cleared, "the hold has not expired yet")
 
 		time.Sleep(3 * time.Second)
 
-		cleared, err = store.ClearCreateFirstHold(ctx, free.TxIDChainHash(), false)
-		require.NoError(t, err)
-		require.True(t, cleared, "an expired hold with no busy holder is deleted")
-		require.ErrorIs(t, store.GetMeta(ctx, free.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound)
+		require.ErrorIs(t, store.GetMeta(ctx, hash, &meta.Data{}), errors.ErrTxNotFound, "the hold is written with a time to live, so it goes without a sweep")
 
-		cleared, err = store.ClearCreateFirstHold(ctx, busy.TxIDChainHash(), false)
+		stale, err = store.QueryStaleCreatingTxs(ctx, 200, 0)
 		require.NoError(t, err)
-		require.False(t, cleared, "a busy hold survives its first expiry")
-		requireHeld(t, ctx, store, busy.TxIDChainHash())
+		require.NotContains(t, stale, *hash, "an expired hold takes no slot of a sweep pass")
 
-		time.Sleep(2 * time.Second)
-
-		cleared, err = store.ClearCreateFirstHold(ctx, busy.TxIDChainHash(), false)
-		require.NoError(t, err)
-		require.True(t, cleared, "a hold whose holder crashed is deleted once it has expired by a further timeout")
-		require.ErrorIs(t, store.GetMeta(ctx, busy.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound)
+		_, err = store.Create(ctx, free, 102, utxo.WithCreating(true))
+		require.NoError(t, err, "the txid is free again")
 	})
 }
 
@@ -597,4 +630,263 @@ func TestRollbackHold_CrashedHolderAgesOut(t *testing.T) {
 		require.True(t, cleared, "a crashed holder does not stop a block-context create")
 		require.ErrorIs(t, store.GetMeta(ctx, stale.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound)
 	})
+}
+
+// TestSpendLease covers the lease every spender of a creating record's inputs holds: the create
+// writes the creator's, a roll-forward takes its own before it spends, the rolling back marker
+// refuses a new one, and the owner of a rollback sees a lease as live until it is released or
+// stale.
+func TestSpendLease(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.SpendRollbackTimeout = 2 * time.Second
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	t.Run("the create writes the creator's lease, a take adds one and a release removes it", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 0)
+		child.Version = 31
+		hash := child.TxIDChainHash()
+
+		md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		creator := hex.EncodeToString(md.Attempt)
+		require.Contains(t, leasesOf(t, client, store, hash), creator, "the creator holds a lease under its attempt token from the create on")
+
+		live, err := store.SpendLeasesLive(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, live)
+
+		lease, took, err := store.TakeSpendLease(ctx, hash, []byte("another attempt!"))
+		require.NoError(t, err)
+		require.False(t, took, "a lease for another attempt's token is refused")
+		require.Nil(t, lease)
+
+		lease, took, err = store.TakeSpendLease(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, took)
+		require.Len(t, leasesOf(t, client, store, hash), 2)
+
+		require.NoError(t, store.ReleaseSpendLease(ctx, hash, md.Attempt, md.Attempt), "the creator releases its lease")
+
+		live, err = store.SpendLeasesLive(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, live, "the roll-forward's lease is still live")
+
+		require.NoError(t, store.ReleaseSpendLease(ctx, hash, []byte("another attempt!"), lease))
+		require.Len(t, leasesOf(t, client, store, hash), 1, "a release under another attempt's token removes nothing")
+
+		require.NoError(t, store.ReleaseSpendLease(ctx, hash, md.Attempt, lease))
+		require.Empty(t, leasesOf(t, client, store, hash))
+
+		live, err = store.SpendLeasesLive(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.False(t, live)
+
+		require.NoError(t, store.ReleaseSpendLease(ctx, hash, md.Attempt, lease), "a second release is a no-op")
+	})
+
+	t.Run("the rolling back marker refuses a new lease", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 0)
+		child.Version = 32
+		hash := child.TxIDChainHash()
+
+		md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, began)
+
+		_, took, err := store.TakeSpendLease(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.False(t, took, "a spender that asks after the marker never starts")
+		require.Len(t, leasesOf(t, client, store, hash), 1, "only the creator's lease is on the record")
+
+		live, err := store.SpendLeasesLive(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, live, "the owner of the rollback still sees the creator's lease")
+	})
+
+	t.Run("an absent record and a final one give no lease", func(t *testing.T) {
+		absent := spendableChildTx(t, tests.ParentTx, 0)
+		absent.Version = 33
+
+		_, took, err := store.TakeSpendLease(ctx, absent.TxIDChainHash(), []byte("anything"))
+		require.NoError(t, err)
+		require.False(t, took)
+		require.Nil(t, recordBins(t, client, store, absent.TxIDChainHash(), 0, fields.Spenders), "UPDATE_ONLY must not create the record")
+
+		live, err := store.SpendLeasesLive(ctx, absent.TxIDChainHash(), []byte("anything"))
+		require.NoError(t, err)
+		require.False(t, live)
+
+		final := spendableChildTx(t, tests.ParentTx, 0)
+		final.Version = 34
+
+		md, err := store.Create(ctx, final, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+		require.NoError(t, store.FinalizeTransaction(ctx, final, md.Attempt))
+		require.NotContains(t, recordBins(t, client, store, final.TxIDChainHash(), 0, fields.Spenders), fields.Spenders.String(), "the finalize removes the leases with the creating state")
+
+		_, took, err = store.TakeSpendLease(ctx, final.TxIDChainHash(), md.Attempt)
+		require.NoError(t, err)
+		require.False(t, took)
+	})
+
+	t.Run("a lease that was never released is live until it is stale, and a take drops stale ones", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 0)
+		child.Version = 35
+		hash := child.TxIDChainHash()
+
+		md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		now := time.Now().Unix()
+
+		writeRawBins(t, client, store, hash, 0, aerospike.NewBin(fields.Spenders.String(), map[interface{}]interface{}{"crashed": int(now - 1)}))
+
+		live, err := store.SpendLeasesLive(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, live, "a spend that ran out of time can still land for a further timeout")
+
+		writeRawBins(t, client, store, hash, 0, aerospike.NewBin(fields.Spenders.String(), map[interface{}]interface{}{"crashed": int(now - 10)}))
+
+		live, err = store.SpendLeasesLive(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.False(t, live, "a lease that its time passed by a further timeout is a crashed spender's")
+
+		lease, took, err := store.TakeSpendLease(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, took)
+
+		leases := leasesOf(t, client, store, hash)
+		require.NotContains(t, leases, "crashed", "the take removed the stale lease")
+		require.Contains(t, leases, hex.EncodeToString(lease))
+	})
+}
+
+// TestEndCreateFirstRollback_OwnsItsCleanup pins that the end of a rollback is exclusive from the
+// write that records the reversal to the write that leaves the hold. A second caller that arrives
+// while the first removes the children and blobs must not run that cleanup too: it could finish
+// later than the hold, and then delete the blobs of an attempt that replaced it.
+func TestEndCreateFirstRollback_OwnsItsCleanup(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.SpendRollbackTimeout = 2 * time.Second
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	child := spendableChildTx(t, tests.ParentTx, 0)
+	child.Version = 41
+	hash := child.TxIDChainHash()
+
+	md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
+	require.NoError(t, err)
+	require.True(t, began)
+	require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
+
+	// The state the first caller's opening write leaves while its cleanup is in flight.
+	writeRawBins(t, client, store, hash, 0, aerospike.NewBin(fields.Reversed.String(), true))
+	setBusy(t, client, store, hash, time.Now().Unix()+2)
+
+	require.ErrorContains(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "removing its records", "a second caller does not run the cleanup beside the first")
+
+	got := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, hash, got))
+	require.False(t, got.Hold, "the refused caller did not convert the record")
+	require.Equal(t, true, recordBins(t, client, store, hash, 0, fields.Busy)[fields.Busy.String()], "the refused caller left the first caller's marker in place")
+
+	require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt), "the first caller's cleanup failed and released its marker")
+	require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "a retry then owns the cleanup and ends the rollback")
+	requireHeld(t, ctx, store, hash)
+	require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Busy, fields.Spenders), fields.Busy.String(), "the hold carries no busy marker")
+}
+
+// TestSpendFirstOverAHold pins the path a node takes after utxostore_useCreateFirstOrder is turned
+// off while a hold remains. A spend-first SpendAndCreate spends the inputs and its create then finds
+// the hold. The hold is not a duplicate: outside block context the spends are reversed and the call
+// fails with a retryable error, and in block context the hold is adopted and the create succeeds.
+func TestSpendFirstOverAHold(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UseCreateFirstOrder = false
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	child := spendableChildTx(t, tests.ParentTx, 0)
+	child.Version = 51
+	hash := child.TxIDChainHash()
+
+	inputs, err := utxo.GetSpends(child)
+	require.NoError(t, err)
+
+	rolledBackHold(t, ctx, store, child)
+
+	md, spends, err := store.SpendAndCreate(ctx, child, 102)
+	require.ErrorIs(t, err, errors.ErrProcessing, "a hold that stands is a retryable failure")
+	require.NotErrorIs(t, err, errors.ErrTxExists, "a hold is not a stored transaction")
+	require.Nil(t, md)
+	require.Nil(t, spends, "the spends are no longer in effect")
+
+	resp, err := store.GetSpend(ctx, inputs[0])
+	require.NoError(t, err)
+	require.Nil(t, resp.SpendingData, "the input must not stay spent by a txid that is only a hold")
+	requireHeld(t, ctx, store, hash, "the hold stands")
+
+	open := spendableChildTx(t, tests.ParentTx, 1)
+	open.Version = 52
+
+	openInputs, err := utxo.GetSpends(open)
+	require.NoError(t, err)
+
+	openMd, err := store.Create(ctx, open, 101, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	began, err := store.BeginCreateFirstRollback(ctx, open.TxIDChainHash(), openMd.Attempt)
+	require.NoError(t, err)
+	require.True(t, began)
+
+	_, spends, err = store.SpendAndCreate(ctx, open, 102)
+	require.ErrorIs(t, err, errors.ErrProcessing, "a record whose rollback is open is a retryable failure")
+	require.NotErrorIs(t, err, errors.ErrTxExists)
+	require.Nil(t, spends)
+
+	resp, err = store.GetSpend(ctx, openInputs[0])
+	require.NoError(t, err)
+	require.Nil(t, resp.SpendingData, "the rollback reverses the inputs once, so a spend made beside it must not stay")
+
+	md, spends, err = store.SpendAndCreate(ctx, child, 102, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 102, SubtreeIdx: 0}))
+	require.NoError(t, err, "block context adopts the hold and creates")
+	require.NotNil(t, md)
+	require.Len(t, spends, 1)
+
+	got := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, hash, got))
+	require.False(t, got.Hold)
+	require.False(t, got.Creating, "the record is a stored transaction")
+
+	resp, err = store.GetSpend(ctx, inputs[0])
+	require.NoError(t, err)
+	require.NotNil(t, resp.SpendingData)
+	require.Equal(t, hash.String(), resp.SpendingData.TxID.String())
 }

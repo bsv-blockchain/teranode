@@ -7242,3 +7242,18 @@ func (s *Store) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utx
 
 	return utxo.SpendsForTx(txMeta.Tx)
 }
+
+// TakeSpendLease reports false and writes nothing. The SQL store has no tentative state, so no spend needs a lease.
+func (s *Store) TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+// ReleaseSpendLease does nothing. The SQL store has no tentative state, so no spend needs a lease.
+func (s *Store) ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error {
+	return nil
+}
+
+// SpendLeasesLive reports false. The SQL store has no tentative state, so no spend needs a lease.
+func (s *Store) SpendLeasesLive(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	return false, nil
+}

@@ -215,7 +215,7 @@ func TestCreateWithCreating_SurvivingChildThatCannotBeAdoptedFailsTheCreate(t *t
 
 			store.RestoreBatchOperate()
 
-			require.NoError(t, utxo.RollBackCreating(ctx, logger, store, tx, failed), "the caller rolls the failed attempt back")
+			require.NoError(t, rollBackAsCreator(ctx, logger, store, tx, failed), "the caller rolls the failed attempt back")
 			requireHeld(t, ctx, store, hash, "the rollback leaves a hold")
 			require.True(t, childRecordExists(t, client, store, hash, 1), "the surviving child of the earlier attempt is left as it was")
 
@@ -304,4 +304,46 @@ func TestFinalizeTransaction_ChildAlreadyFinalIsCleared(t *testing.T) {
 	got := &meta.Data{}
 	require.NoError(t, store.GetMeta(ctx, hash, got))
 	require.False(t, got.Creating, "a child that is already final does not hold the master back")
+}
+
+// TestCreate_ChildWrittenByARetryTakesTheTokenOfItsMaster pins that a paginated transaction whose
+// first create wrote the master and missed a pagination child can still be completed. The retry
+// finds the master, so it is not the attempt that owns the record, and it writes the missing child.
+// That child must carry the token of the master. Under the token of the retry no finalize could
+// ever clear it: the master's attempt is the only one that can be finalized, and its finalize is
+// filtered on its own token.
+func TestCreate_ChildWrittenByARetryTakesTheTokenOfItsMaster(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 2
+	tSettings.UtxoStore.UseCreateFirstOrder = true
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	hash := tx.TxIDChainHash()
+
+	first, err := store.Create(ctx, tx, 100, utxo.WithCreating(true))
+	require.NoError(t, err)
+	require.True(t, childRecordExists(t, client, store, hash, 1), "precondition: the tx paginates")
+
+	deleteChildRecordsByHand(t, client, store, hash, 1, 1)
+	require.False(t, childRecordExists(t, client, store, hash, 1), "precondition: the first create missed child 1")
+
+	_, _, err = store.SpendAndCreate(ctx, tx, 101)
+	require.ErrorIs(t, err, errors.ErrTxExists)
+	require.True(t, utxo.IsRolledForward(err), "the retry completes the attempt that wrote the master, got: %v", err)
+
+	got := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, hash, got))
+	require.False(t, got.Creating, "the master is final")
+
+	childBins := recordBins(t, client, store, hash, 1, fields.Creating, fields.Attempt)
+	require.NotNil(t, childBins, "the retry wrote the missing child")
+	require.NotContains(t, childBins, fields.Creating.String(), "the finalize of the master's attempt cleared the child the retry wrote")
+	require.Equal(t, first.Attempt, childBins[fields.Attempt.String()], "the child carries the token of its master")
 }

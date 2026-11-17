@@ -591,7 +591,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 		}
 
 		if bItem.attempt != nil {
-			putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.Attempt.String(), bItem.attempt)))
+			putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.Attempt.String(), bItem.attempt)), s.spendLeaseOp(bItem.attempt))
 		}
 
 		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
@@ -1142,24 +1142,62 @@ var afterChildAdoptionFailure func()
 // adoptSurvivingChildren gives the pagination children that survived an earlier attempt the
 // token of the attempt that has just created the master. The records are still creating, and a
 // finalize filtered on the token of this attempt would otherwise leave them creating for good.
-// The write is filtered on the creating bin. A child that is no longer creating is already final:
-// its write is filtered out and that is not a failure. Any other per-record error, or an error of
-// the batch, is a failure, and the caller must not let the create succeed: a child that keeps the
+// Any failure is one the caller must not let the create succeed over: a child that keeps the
 // token of the earlier attempt is never cleared by this attempt's finalize and its outputs would
 // stay unspendable for good.
 func (s *Store) adoptSurvivingChildren(bItem *BatchStoreItem, recordKeys []*aerospike.Key, present []int) error {
-	records := make([]aerospike.BatchRecordIfc, 0, len(present))
+	keys := make([]*aerospike.Key, 0, len(present))
 
 	for _, idx := range present {
-		if idx == 0 {
-			continue
+		if idx != 0 {
+			keys = append(keys, recordKeys[idx])
 		}
+	}
 
+	return s.stampChildren(bItem.txHash, keys, bItem.attempt)
+}
+
+// alignChildrenWithMaster gives every pagination child of txHash the token of the master record
+// that an earlier attempt left creating. A create that finds that master and writes a child the
+// earlier attempt did not write stamps the child with its own fresh token, and the finalize of the
+// master's attempt, which is the only one that can run, would never clear that child. A master
+// that is absent, final or rolling back is left alone: it has no finalize to run, or its rollback
+// removes the children.
+func (s *Store) alignChildrenWithMaster(txHash *chainhash.Hash, recordKeys []*aerospike.Key) error {
+	if len(recordKeys) < 2 {
+		return nil
+	}
+
+	state, err := s.readCreatingState(recordKeys[0])
+	if err != nil {
+		return errors.NewStorageError("failed to read the master record of %s to align its child records", txHash, err)
+	}
+
+	if state.absent || !state.creating || state.rollingBack {
+		return nil
+	}
+
+	return s.stampChildren(txHash, recordKeys[1:], state.attempt)
+}
+
+// stampChildren writes the attempt token on the given pagination children, and removes the bin
+// when the token is empty. The write is filtered on the creating bin. A child that is no longer
+// creating is already final: its write is filtered out and that is not a failure. Any other
+// per-record error, or an error of the batch, is a failure.
+func (s *Store) stampChildren(txHash *chainhash.Hash, keys []*aerospike.Key, attempt []byte) error {
+	var token interface{}
+	if len(attempt) > 0 {
+		token = attempt
+	}
+
+	records := make([]aerospike.BatchRecordIfc, 0, len(keys))
+
+	for _, key := range keys {
 		writePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
 		writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 		writePolicy.FilterExpression = aerospike.ExpBinExists(fields.Creating.String())
 
-		records = append(records, aerospike.NewBatchWrite(writePolicy, recordKeys[idx], aerospike.PutOp(aerospike.NewBin(fields.Attempt.String(), bItem.attempt))))
+		records = append(records, aerospike.NewBatchWrite(writePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.Attempt.String(), token))))
 	}
 
 	if len(records) == 0 {
@@ -1167,12 +1205,12 @@ func (s *Store) adoptSurvivingChildren(bItem *BatchStoreItem, recordKeys []*aero
 	}
 
 	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), records); err != nil {
-		return errors.NewProcessingError("failed to give the surviving child records of %s the attempt token", bItem.txHash, err)
+		return errors.NewProcessingError("failed to give the child records of %s the attempt token", txHash, err)
 	}
 
 	for _, record := range records {
 		if recErr := record.BatchRec().Err; recErr != nil && !isFilteredOut(recErr) {
-			return errors.NewProcessingError("failed to give a surviving child record of %s the attempt token", bItem.txHash, recErr)
+			return errors.NewProcessingError("failed to give a child record of %s the attempt token", txHash, recErr)
 		}
 	}
 
@@ -1364,6 +1402,10 @@ func (s *Store) storeExternallyWithLock(
 
 		if bItem.attempt != nil {
 			putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.Attempt.String(), bItem.attempt)))
+
+			if idx == 0 {
+				putOps = append(putOps, s.spendLeaseOp(bItem.attempt))
+			}
 		}
 
 		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
@@ -1441,6 +1483,14 @@ func (s *Store) storeExternallyWithLock(
 		// Create-first: leave the creating flag set whoever the duplicate is. This request's
 		// own option says nothing about another attempt's tentative record, so only
 		// FinalizeTransaction and the roll-forward healers clear it, once the inputs are spent.
+		//
+		// A child this call wrote, or one an attempt before the master's left, carries a token the
+		// master does not. It is given the master's token here, so that the finalize of the master's
+		// attempt clears it. A failure is logged and the next create of the txid repeats the step.
+		if alignErr := s.alignChildrenWithMaster(bItem.txHash, recordKeys); alignErr != nil {
+			s.logger.Warnf("[%s] Transaction %s exists but its child records could not be given the token of its master: %v", funcName, bItem.txHash, alignErr)
+		}
+
 		if !s.settings.UtxoStore.UseCreateFirstOrder {
 			clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore), s.masterAttempt(bItem.txHash))
 			if clearErr != nil {
@@ -1738,7 +1788,7 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int, attemp
 		// This saves storage space and makes absence of bin = not creating
 		ops := []*aerospike.Operation{aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))}
 		if i == 0 {
-			ops = append(ops, removeUnminedSinceIfMinedOp())
+			ops = append(ops, aerospike.PutOp(aerospike.NewBin(fields.Spenders.String(), nil)), removeUnminedSinceIfMinedOp())
 		}
 
 		writeOp := aerospike.NewBatchWrite(writePolicy, key, ops...)

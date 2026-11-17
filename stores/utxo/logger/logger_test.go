@@ -193,6 +193,24 @@ func (m *MockStore) BeginCreateFirstRollback(ctx context.Context, hash *chainhas
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockStore) TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	args := m.Called(ctx, hash, attempt)
+
+	lease, _ := args.Get(0).([]byte)
+
+	return lease, args.Bool(1), args.Error(2)
+}
+
+func (m *MockStore) ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error {
+	args := m.Called(ctx, hash, attempt, lease)
+	return args.Error(0)
+}
+
+func (m *MockStore) SpendLeasesLive(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	args := m.Called(ctx, hash, attempt)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	args := m.Called(ctx, hashes, minedBlockInfo)
 	return args.Get(0).(map[chainhash.Hash][]uint32), args.Error(1)
@@ -1461,4 +1479,54 @@ func TestHoldMethods_Delegate(t *testing.T) {
 	require.Equal(t, expectedErr, err)
 
 	mockStore.AssertExpectations(t)
+}
+
+func TestSpendLeaseMethods_Delegate(t *testing.T) {
+	mockStore := &MockStore{}
+	store := New(context.Background(), ulogger.TestLogger{}, mockStore).(*Store)
+
+	ctx := context.Background()
+	hash := createTestTx(1).TxIDChainHash()
+	attempt := []byte{1, 2}
+	lease := []byte{3, 4}
+	expectedErr := errors.NewError("lease error")
+
+	mockStore.On("TakeSpendLease", ctx, hash, attempt).Return(lease, true, expectedErr)
+	mockStore.On("ReleaseSpendLease", ctx, hash, attempt, lease).Return(expectedErr)
+	mockStore.On("SpendLeasesLive", ctx, hash, attempt).Return(true, expectedErr)
+
+	gotLease, took, err := store.TakeSpendLease(ctx, hash, attempt)
+	require.Equal(t, lease, gotLease)
+	require.True(t, took)
+	require.Equal(t, expectedErr, err)
+
+	require.Equal(t, expectedErr, store.ReleaseSpendLease(ctx, hash, attempt, lease))
+
+	live, err := store.SpendLeasesLive(ctx, hash, attempt)
+	require.True(t, live)
+	require.Equal(t, expectedErr, err)
+
+	mockStore.AssertExpectations(t)
+}
+
+// boundedMockStore is a wrapped store that names its own rollback bound.
+type boundedMockStore struct {
+	*MockStore
+
+	bound time.Duration
+}
+
+func (b *boundedMockStore) SpendRollbackTimeout() time.Duration { return b.bound }
+
+// TestSpendRollbackTimeout_ComesFromTheWrappedStore pins that the shared rollback and roll-forward
+// see the bound of the store behind the wrapper, and zero, which selects the shared default, when
+// that store names none.
+func TestSpendRollbackTimeout_ComesFromTheWrappedStore(t *testing.T) {
+	ctx := context.Background()
+
+	bounded := New(ctx, ulogger.TestLogger{}, &boundedMockStore{MockStore: &MockStore{}, bound: 30 * time.Second}).(*Store)
+	require.Equal(t, 30*time.Second, bounded.SpendRollbackTimeout())
+
+	unbounded := New(ctx, ulogger.TestLogger{}, &MockStore{}).(*Store)
+	require.Equal(t, time.Duration(0), unbounded.SpendRollbackTimeout())
 }

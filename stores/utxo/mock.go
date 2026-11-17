@@ -660,3 +660,24 @@ func (m *MockUtxostore) SetConflictLocks(ctx context.Context, id chainhash.Hash,
 func (m *MockUtxostore) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
 	return nil
 }
+
+// TakeSpendLease mocks taking a spend lease on a creating record.
+func (m *MockUtxostore) TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	args := m.Called(ctx, hash, attempt)
+
+	lease, _ := args.Get(0).([]byte)
+
+	return lease, args.Bool(1), args.Error(2)
+}
+
+// ReleaseSpendLease mocks releasing a spend lease.
+func (m *MockUtxostore) ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error {
+	args := m.Called(ctx, hash, attempt, lease)
+	return args.Error(0)
+}
+
+// SpendLeasesLive mocks reading whether a spend lease is live.
+func (m *MockUtxostore) SpendLeasesLive(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	args := m.Called(ctx, hash, attempt)
+	return args.Bool(0), args.Error(1)
+}

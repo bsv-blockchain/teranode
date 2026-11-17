@@ -339,7 +339,7 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		require.True(t, got.Creating, "the record is not finalized")
 
 		// The sweep's path for an unwinnable spend error: roll the record back and delete it.
-		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, child, attemptOf(t, ctx, store, child.TxIDChainHash())))
+		require.NoError(t, rollBackAsCreator(ctx, logger, store, child, attemptOf(t, ctx, store, child.TxIDChainHash())))
 		requireHeld(t, ctx, store, child.TxIDChainHash(), "the rolled back record is a hold")
 	})
 
@@ -377,7 +377,7 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		require.True(t, sawSpent, "the loser must fail with ErrSpent (top-level or per-spend), got: %v", err)
 
 		// Roll back as the submit path and the sweep do: mark, unspend what was taken, delete.
-		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, parent3, attemptOf(t, ctx, store, parent3.TxIDChainHash())))
+		require.NoError(t, rollBackAsCreator(ctx, logger, store, parent3, attemptOf(t, ctx, store, parent3.TxIDChainHash())))
 
 		requireHeld(t, ctx, store, parent3.TxIDChainHash(), "the loser must leave no record but a hold")
 
@@ -447,7 +447,7 @@ func TestCreateFirstLifecycle(t *testing.T) {
 
 		require.True(t, sawLocked, "input 1 must fail this pass with ErrTxLocked")
 
-		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, loser, attemptOf(t, ctx, store, loser.TxIDChainHash())))
+		require.NoError(t, rollBackAsCreator(ctx, logger, store, loser, attemptOf(t, ctx, store, loser.TxIDChainHash())))
 
 		requireHeld(t, ctx, store, loser.TxIDChainHash(), "the rolled back record must be a hold")
 
@@ -496,7 +496,7 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		require.NotNil(t, before.SpendingData, "the valid input is spent in the failing pass, so the rollback has work to undo")
 		require.Equal(t, child.TxIDChainHash().String(), before.SpendingData.TxID.String())
 
-		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, child, attemptOf(t, ctx, store, child.TxIDChainHash())),
+		require.NoError(t, rollBackAsCreator(ctx, logger, store, child, attemptOf(t, ctx, store, child.TxIDChainHash())),
 			"an input the tx can never have spent must not fail the rollback")
 
 		requireHeld(t, ctx, store, child.TxIDChainHash(), "the rolled back record must be a hold, not left rolling back with its transaction")
@@ -586,92 +586,6 @@ func TestRollForwardCreating_RollingBackRecordHasNoParentSpent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int(utxo.Status_OK), resp.Status, "the parent output must still be unspent")
 	require.Nil(t, resp.SpendingData, "no spender is recorded on the parent output")
-}
-
-// swapBeforeFinalizeStore runs swap once, just before the roll-forward's finalize reaches the
-// store. It places the interleaving that only timing produces: the attempt being recovered is
-// rolled back and replaced after the roll-forward read it, and before its finalize lands. Every
-// store call is the real store's.
-type swapBeforeFinalizeStore struct {
-	*teranode_aerospike.Store
-
-	swap func()
-}
-
-func (s *swapBeforeFinalizeStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
-	if s.swap != nil {
-		swap := s.swap
-		s.swap = nil
-
-		swap()
-	}
-
-	return s.Store.FinalizeTransaction(ctx, tx, attempt)
-}
-
-// TestRollForward_CompensationOfAReplacedAttemptLeavesItsSpends pins that the compensation of a
-// roll-forward does not reverse spends the txid's later attempt made. Attempt A is read as
-// creating and re-spent, then A is rolled back and attempt B creates the same txid and spends the
-// same inputs. A's finalize is refused, and A's compensation fails its take of the hold, because
-// the record no longer carries A's token and is not rolling back. B's spends, which cannot be told
-// from A's, must stay.
-func TestRollForward_CompensationOfAReplacedAttemptLeavesItsSpends(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.UtxoStore.UseCreateFirstOrder = true
-
-	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
-	t.Cleanup(deferFn)
-	cleanDB(t, client)
-
-	_, err := store.Create(ctx, tests.ParentTx, 100)
-	require.NoError(t, err)
-
-	child := spendableChildTx(t, tests.ParentTx, 0)
-	hash := child.TxIDChainHash()
-
-	inputs, err := utxo.GetSpends(child)
-	require.NoError(t, err)
-
-	first, err := store.Create(ctx, child, 106, utxo.WithCreating(true))
-	require.NoError(t, err)
-
-	var second *meta.Data
-
-	wrapper := &swapBeforeFinalizeStore{Store: store}
-	wrapper.swap = func() {
-		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, child, first.Attempt), "attempt A is rolled back")
-
-		cleared, clearErr := store.ClearCreateFirstHold(ctx, hash, true)
-		require.NoError(t, clearErr)
-		require.True(t, cleared, "a block-context create adopts the hold")
-
-		var createErr error
-
-		second, createErr = store.Create(ctx, child, 106, utxo.WithCreating(true))
-		require.NoError(t, createErr, "attempt B creates the same txid")
-
-		_, spendErr := store.Spend(ctx, child, 106)
-		require.NoError(t, spendErr, "attempt B spends the same inputs")
-	}
-
-	_, rfErr := utxo.RollForwardCreating(ctx, logger, wrapper, child, first.Attempt, 106)
-	require.ErrorIs(t, rfErr, errors.ErrTxNotFound, "A's finalize is refused on B's record")
-	require.NotNil(t, second, "the interleaving ran")
-
-	resp, err := store.GetSpend(ctx, inputs[0])
-	require.NoError(t, err)
-	require.NotNil(t, resp.SpendingData, "B's spend of the input must survive A's compensation")
-	require.Equal(t, hash.String(), resp.SpendingData.TxID.String())
-
-	got := &meta.Data{}
-	require.NoError(t, store.GetMeta(ctx, hash, got))
-	require.True(t, got.Creating, "B is still creating")
-	require.False(t, got.RollingBack, "A's failed take must not have marked B's record")
-	require.Equal(t, second.Attempt, got.Attempt)
-	require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Busy), fields.Busy.String())
-
-	require.NoError(t, store.FinalizeTransaction(ctx, child, second.Attempt), "B finalizes with its own token")
 }
 
 // TestCreateFirst_HoldRefusesResubmissionUntilItExpires pins what a rolled back attempt leaves
@@ -766,9 +680,7 @@ func TestCreateFirst_BlockContextAdoptsHold(t *testing.T) {
 
 			token := attemptOf(t, ctx, store, hash)
 
-			took, err := store.TakeRollbackHold(ctx, hash, token)
-			require.NoError(t, err)
-			require.True(t, took, "a holder is reversing spends")
+			setBusy(t, client, store, hash, time.Now().Unix()+60)
 
 			_, _, err = store.SpendAndCreate(ctx, orphan, 107, opts...)
 			require.ErrorIs(t, err, errors.ErrProcessing, "block context waits for a busy holder")
@@ -849,7 +761,7 @@ func TestRollBackCreating_OwnerHoldsTheHoldForItsUnspend(t *testing.T) {
 		clearedDuringUnspend, hookErr = store.ClearCreateFirstHold(ctx, hash, true)
 	}}
 
-	require.NoError(t, utxo.RollBackCreating(ctx, logger, owner, child, md.Attempt))
+	require.NoError(t, rollBackAsCreator(ctx, logger, owner, child, md.Attempt))
 	require.NoError(t, hookErr)
 	require.False(t, tookDuringUnspend, "a second actor cannot take the hold while the owner unspends")
 	require.False(t, clearedDuringUnspend, "a block-context create cannot adopt the record while the owner unspends")
@@ -925,57 +837,33 @@ func TestCreateFirst_FailedAdoptionRollsBackOverAConcurrentRollForward(t *testin
 	requireHeld(t, ctx, store, hash, "the attempt is rolled back to a hold")
 }
 
-// hookedRollForwardStore is the store a roll-forward uses in a test that interleaves it with the
-// owner of a rollback. afterRead runs once after its first read of the record, and afterTake once
-// after its first take of the hold. Every store call is the real store's.
-type hookedRollForwardStore struct {
+// leasedRollForwardStore is the store a roll-forward uses in a test that interleaves it with the
+// owner of a rollback. afterLease runs once, after the store has granted the roll-forward its
+// spend lease and before the roll-forward spends. Every store call is the real store's.
+type leasedRollForwardStore struct {
 	*teranode_aerospike.Store
 
-	readOnce  sync.Once
-	afterRead func()
-	takeOnce  sync.Once
-	afterTake func()
+	once       sync.Once
+	afterLease func()
 }
 
-func (s *hookedRollForwardStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
-	err := s.Store.GetMeta(ctx, hash, data)
-	s.readOnce.Do(s.afterRead)
+func (s *leasedRollForwardStore) TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	lease, took, err := s.Store.TakeSpendLease(ctx, hash, attempt)
+	s.once.Do(s.afterLease)
 
-	return err
+	return lease, took, err
 }
 
-func (s *hookedRollForwardStore) TakeRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
-	took, err := s.Store.TakeRollbackHold(ctx, hash, attempt)
-	s.takeOnce.Do(s.afterTake)
-
-	return took, err
-}
-
-// hookedReleaseStore runs beforeRelease once, after the owner of a rollback has reversed its spends
-// and before it releases the hold. Every store call is the real store's.
-type hookedReleaseStore struct {
-	*teranode_aerospike.Store
-
-	beforeRelease func()
-}
-
-func (s *hookedReleaseStore) ReleaseRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
-	if hook := s.beforeRelease; hook != nil {
-		s.beforeRelease = nil
-
-		hook()
-	}
-
-	return s.Store.ReleaseRollbackHold(ctx, hash, attempt)
-}
-
-// TestRollForward_CompensationWaitsForTheBusyOwner pins that a roll-forward whose spend lands after
-// the owner of the rollback has reversed that input still reverses it. The roll-forward reads the
-// record as creating, the owner then marks it rolling back and reverses its inputs, and only then
-// does the roll-forward's spend land. Its finalize is refused and its first take of the hold fails,
-// because the owner is still busy. The roll-forward must wait for the owner and take the hold, or
-// its spend names a transaction that is only a hold.
-func TestRollForward_CompensationWaitsForTheBusyOwner(t *testing.T) {
+// TestRollBack_WaitsForARollForwardThatHoldsASpendLease pins the fence between a roll-forward and
+// the rollback of the same attempt. The roll-forward reads the record as creating and is granted its
+// lease. The rollback then sets its marker. Only after that does the roll-forward's spend land. The
+// rollback must not reverse the inputs before that spend: the hold it leaves carries no transaction,
+// so a spend that lands after the reversal would name a txid nobody can undo it for. The owner
+// therefore waits for the lease, and its reversal covers the roll-forward's spend.
+//
+// The first case is a roll-forward that spends one input and fails on the other, which returns
+// without a finalize. The second is one that spends every input and whose finalize is refused.
+func TestRollBack_WaitsForARollForwardThatHoldsASpendLease(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -986,61 +874,248 @@ func TestRollForward_CompensationWaitsForTheBusyOwner(t *testing.T) {
 	_, err := store.Create(ctx, tests.ParentTx, 100)
 	require.NoError(t, err)
 
+	winner := spendableChildTx(t, tests.ParentTx, 1)
+	_, err = store.Spend(ctx, winner, 101, utxo.IgnoreFlags{SkipUTXOHashCheck: true})
+	require.NoError(t, err)
+
+	partial := spendableChildTx(t, tests.ParentTx, 1)
+	require.NoError(t, partial.From(
+		tests.ParentTx.TxIDChainHash().String(), 2,
+		tests.ParentTx.Outputs[2].LockingScript.String(),
+		tests.ParentTx.Outputs[2].Satoshis,
+	))
+	partial.Version = 61
+
+	complete := spendableChildTx(t, tests.ParentTx, 0)
+	complete.Version = 62
+
+	cases := []struct {
+		name      string
+		tx        *bt.Tx
+		freeInput int
+		wantErr   error
+	}{
+		{name: "a spend that fails on another input after the marker", tx: partial, freeInput: 1, wantErr: errors.ErrSpent},
+		{name: "a finalize that is refused after the marker", tx: complete, freeInput: 0, wantErr: errors.ErrTxNotFound},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hash := tc.tx.TxIDChainHash()
+
+			inputs, err := utxo.GetSpends(tc.tx)
+			require.NoError(t, err)
+
+			md, err := store.Create(ctx, tc.tx, 101, utxo.WithCreating(true))
+			require.NoError(t, err)
+
+			var (
+				leased  = make(chan struct{})
+				proceed = make(chan struct{})
+				rfDone  = make(chan error, 1)
+				rbDone  = make(chan error, 1)
+			)
+
+			forward := &leasedRollForwardStore{Store: store, afterLease: func() {
+				close(leased)
+				<-proceed
+			}}
+
+			go func() {
+				_, rfErr := utxo.RollForwardCreating(ctx, logger, forward, tc.tx, md.Attempt, 101)
+				rfDone <- rfErr
+			}()
+
+			<-leased
+
+			go func() {
+				rbDone <- rollBackAsCreator(ctx, logger, store, tc.tx, md.Attempt)
+			}()
+
+			require.Eventually(t, func() bool {
+				got := &meta.Data{}
+
+				return store.GetMeta(ctx, hash, got) == nil && got.RollingBack
+			}, 10*time.Second, 10*time.Millisecond, "the owner sets its marker while the roll-forward holds its lease")
+
+			select {
+			case rbErr := <-rbDone:
+				t.Fatalf("the rollback ended while a spender held a live lease: %v", rbErr)
+			case <-time.After(500 * time.Millisecond):
+			}
+
+			got := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, hash, got))
+			require.False(t, got.Hold, "the record is not a hold while a spend may still land")
+
+			close(proceed)
+
+			select {
+			case rfErr := <-rfDone:
+				require.ErrorIs(t, rfErr, tc.wantErr)
+			case <-time.After(60 * time.Second):
+				t.Fatal("the roll-forward did not return")
+			}
+
+			select {
+			case rbErr := <-rbDone:
+				require.NoError(t, rbErr)
+			case <-time.After(60 * time.Second):
+				t.Fatal("the rollback did not return")
+			}
+
+			resp, err := store.GetSpend(ctx, inputs[tc.freeInput])
+			require.NoError(t, err)
+			require.Nil(t, resp.SpendingData, "the spend the roll-forward made after the marker must be reversed")
+
+			requireHeld(t, ctx, store, hash, "the rollback ended with a hold")
+			require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Busy), fields.Busy.String())
+		})
+	}
+
+	partialInputs, err := utxo.GetSpends(partial)
+	require.NoError(t, err)
+
+	resp, err := store.GetSpend(ctx, partialInputs[0])
+	require.NoError(t, err)
+	require.NotNil(t, resp.SpendingData, "the rival's spend is intact")
+	require.Equal(t, winner.TxIDChainHash().String(), resp.SpendingData.TxID.String())
+}
+
+// TestRollBack_LeavesTheLeaseOfACrashedSpenderToAgeOut pins what a rollback does when a spender of
+// its attempt never releases its lease: the spender crashed, or its spend returned with an unknown
+// outcome and may still land. The rollback reverses nothing while that lease is live and leaves the
+// record rolling back. Once the lease is stale, the pruner sweep's steps finish the rollback.
+func TestRollBack_LeavesTheLeaseOfACrashedSpenderToAgeOut(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.SpendRollbackTimeout = 2 * time.Second
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
 	child := spendableChildTx(t, tests.ParentTx, 0)
+	child.Version = 63
 	hash := child.TxIDChainHash()
 
 	inputs, err := utxo.GetSpends(child)
 	require.NoError(t, err)
 
+	// The creator spends and then dies: its lease stays on the record.
 	md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
 	require.NoError(t, err)
 
-	var (
-		read         = make(chan struct{})
-		ownerUnspent = make(chan struct{})
-		firstTake    = make(chan struct{})
-		rfDone       = make(chan error, 1)
-	)
+	_, err = store.Spend(ctx, child, 101)
+	require.NoError(t, err)
 
-	forward := &hookedRollForwardStore{
-		Store: store,
-		afterRead: func() {
-			close(read)
-			<-ownerUnspent
-		},
-		afterTake: func() { close(firstTake) },
-	}
-
-	go func() {
-		_, rfErr := utxo.RollForwardCreating(ctx, logger, forward, child, md.Attempt, 101)
-		rfDone <- rfErr
-	}()
-
-	<-read
-
-	owner := &hookedReleaseStore{Store: store, beforeRelease: func() {
-		close(ownerUnspent)
-
-		select {
-		case <-firstTake:
-		case <-time.After(30 * time.Second):
-			t.Error("the roll-forward never tried to take the hold")
-		}
-	}}
-
-	require.NoError(t, utxo.RollBackCreating(ctx, logger, owner, child, md.Attempt))
-
-	select {
-	case rfErr := <-rfDone:
-		require.ErrorIs(t, rfErr, errors.ErrTxNotFound, "the finalize is refused on a record that is rolling back")
-	case <-time.After(60 * time.Second):
-		t.Fatal("the roll-forward did not return")
-	}
+	require.Error(t, utxo.RollBackCreating(ctx, logger, store, child, md.Attempt), "a rollback does not outwait a live lease")
 
 	resp, err := store.GetSpend(ctx, inputs[0])
 	require.NoError(t, err)
-	require.Nil(t, resp.SpendingData, "the roll-forward's late spend must be reversed")
+	require.NotNil(t, resp.SpendingData, "nothing is reversed while a spend of the attempt may still land")
 
-	requireHeld(t, ctx, store, hash, "the rollback ended with a hold")
-	require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Busy), fields.Busy.String(), "every holder released the hold")
+	got := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, hash, got))
+	require.True(t, got.RollingBack, "the record is left rolling back")
+	require.False(t, got.Hold)
+	require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Busy), fields.Busy.String(), "the owner released the hold for the sweep")
+
+	require.Eventually(t, func() bool {
+		live, liveErr := store.SpendLeasesLive(ctx, hash, md.Attempt)
+
+		return liveErr == nil && !live
+	}, 10*time.Second, 100*time.Millisecond, "the lease goes stale on its own")
+
+	took, err := store.TakeRollbackHold(ctx, hash, md.Attempt)
+	require.NoError(t, err)
+	require.True(t, took)
+	require.NoError(t, utxo.UnspendTolerantOfMissingParents(ctx, store, inputs))
+	require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
+	require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt))
+
+	resp, err = store.GetSpend(ctx, inputs[0])
+	require.NoError(t, err)
+	require.Nil(t, resp.SpendingData, "the input is unspent")
+	requireHeld(t, ctx, store, hash)
+}
+
+// TestCreateFirst_OpenRollbackIsFinishedByTheNextCreate pins that a rollback its owner left open
+// does not wait for the pruner sweep, which runs only when the chain advances. The owner gave up
+// because a spender's lease was live. Once the lease is stale, the next create-first SpendAndCreate
+// of the txid finishes the rollback itself: outside block context it then reports the hold as a
+// transient error, and in block context it adopts the hold and stores the transaction.
+func TestCreateFirst_OpenRollbackIsFinishedByTheNextCreate(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UseCreateFirstOrder = true
+	tSettings.UtxoStore.SpendRollbackTimeout = 2 * time.Second
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	blockContext := utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 102, SubtreeIdx: 0})
+
+	for vout, inBlock := range []bool{false, true} {
+		child := spendableChildTx(t, tests.ParentTx, uint32(vout))
+		child.Version = uint32(70 + vout)
+		hash := child.TxIDChainHash()
+
+		inputs, err := utxo.GetSpends(child)
+		require.NoError(t, err)
+
+		md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		_, err = store.Spend(ctx, child, 101)
+		require.NoError(t, err)
+
+		require.Error(t, utxo.RollBackCreating(ctx, logger, store, child, md.Attempt), "the owner gives up over the creator's live lease")
+
+		_, _, err = store.SpendAndCreate(ctx, child, 102, blockContext)
+		require.ErrorIs(t, err, errors.ErrProcessing, "nothing finishes the rollback while the lease is live")
+
+		resp, err := store.GetSpend(ctx, inputs[0])
+		require.NoError(t, err)
+		require.NotNil(t, resp.SpendingData, "nothing is reversed while the lease is live")
+
+		require.Eventually(t, func() bool {
+			live, liveErr := store.SpendLeasesLive(ctx, hash, md.Attempt)
+
+			return liveErr == nil && !live
+		}, 10*time.Second, 100*time.Millisecond)
+
+		if !inBlock {
+			_, _, err = store.SpendAndCreate(ctx, child, 102)
+			require.ErrorIs(t, err, errors.ErrProcessing, "outside block context the hold is waited out")
+			requireHeld(t, ctx, store, hash, "the call finished the open rollback")
+
+			resp, err = store.GetSpend(ctx, inputs[0])
+			require.NoError(t, err)
+			require.Nil(t, resp.SpendingData, "the call reversed the inputs of the rolled back attempt")
+
+			continue
+		}
+
+		stored, _, err := store.SpendAndCreate(ctx, child, 102, blockContext)
+		require.NoError(t, err, "block context finishes the rollback, adopts the hold and stores the transaction")
+		require.NotNil(t, stored)
+
+		got := &meta.Data{}
+		require.NoError(t, store.GetMeta(ctx, hash, got))
+		require.False(t, got.Creating)
+		require.False(t, got.Hold)
+
+		resp, err = store.GetSpend(ctx, inputs[0])
+		require.NoError(t, err)
+		require.NotNil(t, resp.SpendingData)
+		require.Equal(t, hash.String(), resp.SpendingData.TxID.String())
+	}
 }

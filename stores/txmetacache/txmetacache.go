@@ -1211,6 +1211,32 @@ func (t *TxMetaCache) ReleaseRollbackHold(ctx context.Context, hash *chainhash.H
 	return t.utxoStore.ReleaseRollbackHold(ctx, hash, attempt)
 }
 
+// SpendRollbackTimeout returns the rollback bound of the wrapped store, so that the shared
+// rollback and roll-forward run under the same bound through the cache. Zero when the wrapped
+// store names none.
+func (t *TxMetaCache) SpendRollbackTimeout() time.Duration {
+	if b, ok := t.utxoStore.(interface{ SpendRollbackTimeout() time.Duration }); ok {
+		return b.SpendRollbackTimeout()
+	}
+
+	return 0
+}
+
+// TakeSpendLease delegates to the wrapped store.
+func (t *TxMetaCache) TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	return t.utxoStore.TakeSpendLease(ctx, hash, attempt)
+}
+
+// ReleaseSpendLease delegates to the wrapped store.
+func (t *TxMetaCache) ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error {
+	return t.utxoStore.ReleaseSpendLease(ctx, hash, attempt, lease)
+}
+
+// SpendLeasesLive delegates to the wrapped store.
+func (t *TxMetaCache) SpendLeasesLive(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	return t.utxoStore.SpendLeasesLive(ctx, hash, attempt)
+}
+
 // ClearCreateFirstHold clears a hold in the underlying store and evicts the cache entry
 // whatever the outcome, for the same reason DeleteComplete does.
 func (t *TxMetaCache) ClearCreateFirstHold(ctx context.Context, hash *chainhash.Hash, adopt bool) (bool, error) {

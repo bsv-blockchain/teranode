@@ -4024,6 +4024,16 @@ func TestSQLStore_CreateFirstNoOps(t *testing.T) {
 	require.False(t, took, "no record is rolling back, so no hold can be taken")
 	require.NoError(t, store.ReleaseRollbackHold(ctx, tests.Tx.TxIDChainHash(), nil))
 
+	lease, leased, err := store.TakeSpendLease(ctx, tests.Tx.TxIDChainHash(), nil)
+	require.NoError(t, err)
+	require.False(t, leased, "no record is creating, so no spend needs a lease")
+	require.Nil(t, lease)
+	require.NoError(t, store.ReleaseSpendLease(ctx, tests.Tx.TxIDChainHash(), nil, []byte{1}))
+
+	live, err := store.SpendLeasesLive(ctx, tests.Tx.TxIDChainHash(), nil)
+	require.NoError(t, err)
+	require.False(t, live, "the store never holds a lease")
+
 	cleared, err := store.ClearCreateFirstHold(ctx, tests.Tx.TxIDChainHash(), true)
 	require.NoError(t, err)
 	require.False(t, cleared, "the store never leaves a hold")

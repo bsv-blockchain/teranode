@@ -2,7 +2,9 @@ package pruner
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -17,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -57,6 +60,76 @@ type fakeSweepStore struct {
 	txUnreadable   map[chainhash.Hash]bool
 	endErr         error
 	releaseErr     error
+
+	// leaseDeclined makes TakeSpendLease refuse a record it would otherwise grant, and leaseErr
+	// makes it fail. Without them the fake grants a lease as the store does: only for a record that
+	// is creating and not rolling back.
+	leaseDeclined bool
+	leaseErr      error
+	// leasesLive is popped once per SpendLeasesLive call; false when exhausted. leasesLiveErr fails
+	// every call.
+	leasesLive    []bool
+	leasesLiveErr error
+
+	leaseTokens  [][]byte
+	leasesTaken  [][]byte
+	leasesFreed  [][]byte
+	liveReads    int
+	releaseCalls int
+	// trace records every call of the roll-forward and rollback protocol in order, the spend and
+	// the finalize included. events keeps the calls that write the rollback state.
+	trace []string
+}
+
+// fakeLease is the lease the fake grants.
+var fakeLease = []byte{0xaa, 0xbb}
+
+func (f *fakeSweepStore) record(event string) {
+	f.events = append(f.events, event)
+	f.trace = append(f.trace, event)
+}
+
+func (f *fakeSweepStore) TakeSpendLease(_ context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	f.trace = append(f.trace, "lease")
+	f.leaseTokens = append(f.leaseTokens, attempt)
+
+	if f.leaseErr != nil {
+		return nil, false, f.leaseErr
+	}
+
+	md, ok := f.getResp[*hash]
+	if !ok || !md.Creating || md.RollingBack || f.leaseDeclined {
+		return nil, false, nil
+	}
+
+	f.leasesTaken = append(f.leasesTaken, fakeLease)
+
+	return fakeLease, true, nil
+}
+
+func (f *fakeSweepStore) ReleaseSpendLease(_ context.Context, _ *chainhash.Hash, _, lease []byte) error {
+	f.trace = append(f.trace, "unlease")
+	f.leasesFreed = append(f.leasesFreed, lease)
+
+	return nil
+}
+
+func (f *fakeSweepStore) SpendLeasesLive(_ context.Context, _ *chainhash.Hash, _ []byte) (bool, error) {
+	f.trace = append(f.trace, "leases")
+	f.liveReads++
+
+	if f.leasesLiveErr != nil {
+		return false, f.leasesLiveErr
+	}
+
+	if len(f.leasesLive) > 0 {
+		live := f.leasesLive[0]
+		f.leasesLive = f.leasesLive[1:]
+
+		return live, nil
+	}
+
+	return false, nil
 }
 
 func (f *fakeSweepStore) SetLocked(_ context.Context, txHashes []chainhash.Hash, value bool) error {
@@ -100,6 +173,7 @@ func (f *fakeSweepStore) Get(_ context.Context, hash *chainhash.Hash, requested 
 func (f *fakeSweepStore) SpendAndCreate(_ context.Context, tx *bt.Tx, _ uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
 	f.spends = append(f.spends, *tx.TxIDChainHash())
 	f.spendOpts = opts
+	f.trace = append(f.trace, "spend")
 
 	if f.spendErr != nil {
 		return nil, f.spendSpends, f.spendErr
@@ -121,6 +195,8 @@ func (f *fakeSweepStore) SpendAndCreate(_ context.Context, tx *bt.Tx, _ uint32, 
 
 func (f *fakeSweepStore) FinalizeTransaction(_ context.Context, tx *bt.Tx, _ []byte) error {
 	f.finalized = append(f.finalized, *tx.TxIDChainHash())
+	f.trace = append(f.trace, "finalize")
+
 	return f.finalizeErr
 }
 
@@ -136,14 +212,14 @@ func (f *fakeSweepStore) GetMeta(_ context.Context, hash *chainhash.Hash, data *
 }
 
 func (f *fakeSweepStore) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash, _ []byte) (bool, error) {
-	f.events = append(f.events, "begin")
+	f.record("begin")
 	f.began = append(f.began, *hash)
 
 	return !f.beginDeclined, nil
 }
 
 func (f *fakeSweepStore) Unspend(_ context.Context, spends []*utxo.Spend, _ ...bool) error {
-	f.events = append(f.events, "unspend")
+	f.record("unspend")
 	f.unspent = append(f.unspent, spends)
 
 	if f.unspendFn != nil {
@@ -154,27 +230,28 @@ func (f *fakeSweepStore) Unspend(_ context.Context, spends []*utxo.Spend, _ ...b
 }
 
 func (f *fakeSweepStore) EndCreateFirstRollback(_ context.Context, hash *chainhash.Hash, _ []byte) error {
-	f.events = append(f.events, "end")
+	f.record("end")
 	f.ended = append(f.ended, *hash)
 
 	return f.endErr
 }
 
 func (f *fakeSweepStore) TakeRollbackHold(_ context.Context, _ *chainhash.Hash, attempt []byte) (bool, error) {
-	f.events = append(f.events, "take")
+	f.record("take")
 	f.taken = append(f.taken, attempt)
 
 	return !f.takeDeclined, nil
 }
 
 func (f *fakeSweepStore) ReleaseRollbackHold(_ context.Context, _ *chainhash.Hash, _ []byte) error {
-	f.events = append(f.events, "release")
+	f.record("release")
+	f.releaseCalls++
 
 	return f.releaseErr
 }
 
 func (f *fakeSweepStore) ClearCreateFirstHold(_ context.Context, hash *chainhash.Hash, adopt bool) (bool, error) {
-	f.events = append(f.events, "clear")
+	f.record("clear")
 	f.cleared = append(f.cleared, *hash)
 
 	if adopt {
@@ -236,6 +313,8 @@ func TestSweepCreatingTxsRollsForward(t *testing.T) {
 	s.sweepCreatingTxs(context.Background(), 100)
 
 	require.Equal(t, []chainhash.Hash{hashA}, store.spends, "must attempt to spend the stale creating tx")
+	require.Equal(t, []string{"lease", "spend", "finalize"}, store.trace, "the lease comes before the spend, and a finalized record needs no release")
+	require.Empty(t, store.leasesFreed)
 	require.Equal(t, []chainhash.Hash{hashA}, store.finalized, "a successful re-spend must be finalized")
 	require.Equal(t, []chainhash.Hash{hashA}, store.unlocked, "a rolled-forward record must be unlocked so its outputs are spendable")
 	require.Empty(t, store.setConflicting, "no double-spend, so nothing marked conflicting")
@@ -434,6 +513,9 @@ func TestSweepCreatingTxsDoubleSpendRollsBack(t *testing.T) {
 	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
 
 	require.Equal(t, []string{"begin", "unspend", "release", "end"}, store.events, "a loser is marked rolling back, unspent, then its rollback ends")
+	require.Equal(t, []string{"lease", "spend", "unlease", "leases", "begin", "leases", "unspend", "release", "end"}, store.trace,
+		"the pass releases its own lease, reads the leases before it claims the rollback, and the rollback reads them again before it unspends")
+	require.Equal(t, [][]byte{fakeLease}, store.leasesFreed, "the lease the pass took is the one it releases")
 	require.Equal(t, []chainhash.Hash{hashA}, store.began)
 	require.Len(t, store.unspent, 1)
 	require.Len(t, store.unspent[0], len(txA.Inputs), "every input of the tx is unspent, not only the ones this pass took")
@@ -502,6 +584,8 @@ func TestSweepCreatingTxsLockedParentRetriesNextBlock(t *testing.T) {
 		stale:     []chainhash.Hash{hashA},
 		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
 		spendErr:  errors.ErrTxLocked,
+		// A per-input result makes the outcome of the spend known, so its lease is released.
+		spendSpends: []*utxo.Spend{{Err: errors.ErrTxLocked}},
 	}
 
 	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
@@ -509,6 +593,8 @@ func TestSweepCreatingTxsLockedParentRetriesNextBlock(t *testing.T) {
 	require.Equal(t, []chainhash.Hash{hashA}, store.spends, "the spend is attempted")
 	require.Empty(t, store.finalized, "a locked parent must not finalize")
 	require.Empty(t, store.events, "a locked parent is transient: no rollback")
+	require.Equal(t, []string{"lease", "spend", "unlease"}, store.trace, "the lease is taken before the spend and released once the spend has failed")
+	require.Equal(t, [][]byte{fakeLease}, store.leasesFreed)
 	require.Empty(t, store.unlocked)
 }
 
@@ -555,6 +641,7 @@ func TestSweepCreatingTxsFinishesAbandonedRollback(t *testing.T) {
 	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
 
 	require.Equal(t, []string{"take", "unspend", "release", "end"}, store.events, "an abandoned rollback is finished by taking the hold, unspending, releasing it and ending the rollback")
+	require.Equal(t, []string{"take", "leases", "unspend", "release", "end"}, store.trace, "the leases are read under the hold and before any unspend")
 	require.Len(t, store.unspent, 1)
 	require.Len(t, store.unspent[0], len(txA.Inputs), "every input is unspent")
 	require.Equal(t, []chainhash.Hash{hashA}, store.ended)
@@ -685,7 +772,11 @@ func TestSweepCreatingTxsSkippedBelowMinAge(t *testing.T) {
 	require.Empty(t, store.spends, "the sweep must not run when blockHeight <= minAge")
 }
 
-func TestSweepCreatingTxsFinalizeOfGoneRecordUnspendsItsOwnSpends(t *testing.T) {
+// TestSweepCreatingTxsFinalizeOfGoneRecordReleasesItsLeaseAndReversesNothing pins that a
+// roll-forward whose finalize is refused, because a rollback began after its lease was granted,
+// releases the lease and unspends nothing itself: the owner of that rollback waits for the lease
+// and then reverses every input. The pass does not claim a rollback another caller owns.
+func TestSweepCreatingTxsFinalizeOfGoneRecordReleasesItsLeaseAndReversesNothing(t *testing.T) {
 	ns, err := nullstore.NewNullStore()
 	require.NoError(t, err)
 
@@ -704,8 +795,12 @@ func TestSweepCreatingTxsFinalizeOfGoneRecordUnspendsItsOwnSpends(t *testing.T) 
 	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
 
 	require.Equal(t, []chainhash.Hash{hashA}, store.finalized)
-	require.Len(t, store.unspent, 1, "a rollback that began between the re-spend and the finalize leaves no spend of this pass behind")
-	require.Len(t, store.unspent[0], len(txA.Inputs))
+	require.Equal(t, []string{"lease", "spend", "finalize", "unlease", "leases", "begin"}, store.trace,
+		"the lease is released after the refused finalize, and the declined claim ends the pass for this record")
+	require.Equal(t, [][]byte{fakeLease}, store.leasesFreed)
+	require.Empty(t, store.unspent, "the roll-forward reverses nothing: the owner of the rollback does")
+	require.Empty(t, store.taken, "the roll-forward never takes the rollback hold")
+	require.Empty(t, store.ended)
 	require.Empty(t, store.unlocked, "a record that was not finalized is never unlocked")
 }
 
@@ -735,6 +830,9 @@ func TestSweepCreatingTxsDoesNotSpendForRecordThatBeganRollingBack(t *testing.T)
 	srv.sweepCreatingTxs(context.Background(), 100)
 
 	require.Empty(t, store.spends, "the roll-forward must not spend the parents of a record whose rollback began after the sweep read it")
+	require.Equal(t, []string{"lease"}, store.trace, "the refused lease is the only call the roll-forward makes")
+	require.Empty(t, store.leasesTaken)
+	require.Empty(t, store.leasesFreed, "a lease that was not granted is not released")
 	require.Empty(t, store.finalized)
 	require.Empty(t, store.unspent)
 }
@@ -887,4 +985,286 @@ func TestSweepCreatingTxsLeavesLiveHold(t *testing.T) {
 	require.Equal(t, []string{"clear"}, store.events)
 	require.Empty(t, store.unspent)
 	require.Empty(t, store.finalized)
+}
+
+// sweepFailures reads the sweep's failure counter.
+func sweepFailures() float64 {
+	return testutil.ToFloat64(prunerCreatingSweepFailures)
+}
+
+// TestSweepCreatingTxsLeavesUnwinnableRecordWhoseLeaseIsLive pins that the sweep does not claim the
+// rollback of a record while a spender of its attempt may still be spending: the rollback would
+// have to wait for that spender, so the record is left creating and counted as a failure.
+func TestSweepCreatingTxsLeavesUnwinnableRecordWhoseLeaseIsLive(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore:   ns,
+		stale:       []chainhash.Hash{hashA},
+		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		spendErr:    errors.ErrSpent,
+		spendSpends: []*utxo.Spend{{Err: errors.ErrSpent}},
+		leasesLive:  []bool{true},
+	}
+
+	srv := newSweepServer(t, store)
+	before := sweepFailures()
+
+	srv.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"lease", "spend", "unlease", "leases"}, store.trace)
+	require.Empty(t, store.began, "the rollback must not be claimed while a lease is live")
+	require.Empty(t, store.unspent)
+	require.Empty(t, store.ended)
+	require.Empty(t, store.finalized)
+	require.Equal(t, before+1, sweepFailures(), "the record is counted as not healed in this pass")
+}
+
+// TestSweepCreatingTxsLeavesUnwinnableRecordWhoseLeasesCannotBeRead pins that a failed read of the
+// leases is treated as a live lease: nothing is rolled back.
+func TestSweepCreatingTxsLeavesUnwinnableRecordWhoseLeasesCannotBeRead(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore:     ns,
+		stale:         []chainhash.Hash{hashA},
+		getResp:       map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		spendErr:      errors.ErrSpent,
+		leasesLiveErr: errors.NewStorageError("lease read boom"),
+	}
+
+	srv := newSweepServer(t, store)
+	before := sweepFailures()
+
+	srv.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, 1, store.liveReads)
+	require.Empty(t, store.events, "no rollback call is made when the leases cannot be read")
+	require.Empty(t, store.unspent)
+	require.Equal(t, before+1, sweepFailures())
+}
+
+// TestSweepCreatingTxsKeepsLeaseOfSpendWithUnknownOutcome pins that a re-spend that may still
+// commit keeps its lease, so that a rollback of the record waits until the store can no longer
+// apply it.
+func TestSweepCreatingTxsKeepsLeaseOfSpendWithUnknownOutcome(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore: ns,
+		stale:     []chainhash.Hash{hashA},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		spendErr:  errors.NewServiceUnavailableError("spend batch did not complete"),
+		// Per-input results do not make a spend known when the store stopped waiting for its batch.
+		spendSpends: []*utxo.Spend{{}},
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"lease", "spend"}, store.trace, "the lease of a spend that may still commit is not released")
+	require.Empty(t, store.leasesFreed)
+	require.Empty(t, store.events)
+}
+
+// TestSweepCreatingTxsFinishRollbackWaitsForALiveLease pins that the sweep reverses nothing for an
+// abandoned rollback while a spender of the attempt may still be spending: it takes the hold,
+// finds the lease live, releases the hold and leaves the record rolling back for a later pass.
+func TestSweepCreatingTxsFinishRollbackWaitsForALiveLease(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore:  ns,
+		stale:      []chainhash.Hash{hashA},
+		getResp:    map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Tx: txA}},
+		leasesLive: []bool{true},
+	}
+
+	srv := newSweepServer(t, store)
+
+	srv.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"take", "leases", "release"}, store.trace, "the hold is taken, the lease is found live and the hold is released")
+	require.Empty(t, store.unspent, "no spend is reversed while a spend of the attempt may still land")
+	require.Empty(t, store.ended, "the rollback is not ended")
+
+	store.trace = nil
+
+	srv.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"take", "leases", "unspend", "release", "end"}, store.trace, "a later pass, with the lease stale, finishes the rollback")
+	require.Equal(t, []chainhash.Hash{hashA}, store.ended)
+}
+
+// TestSweepCreatingTxsFinishRollbackReleasesTheHoldWhenLeasesCannotBeRead pins that a failed read
+// of the leases under the hold releases the hold, reverses nothing and is a sweep failure.
+func TestSweepCreatingTxsFinishRollbackReleasesTheHoldWhenLeasesCannotBeRead(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore:     ns,
+		stale:         []chainhash.Hash{hashA},
+		getResp:       map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Tx: txA}},
+		leasesLiveErr: errors.NewStorageError("lease read boom"),
+	}
+
+	srv := newSweepServer(t, store)
+	before := sweepFailures()
+
+	srv.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"take", "leases", "release"}, store.trace)
+	require.Equal(t, 1, store.releaseCalls)
+	require.Empty(t, store.unspent)
+	require.Empty(t, store.ended)
+	require.Equal(t, before+1, sweepFailures(), "the read error surfaces as a failure of the pass")
+}
+
+// TestSweepCreatingTxsRollForwardNamesTheAttemptOnItsLease pins that the lease is asked for the
+// attempt the sweep read from the record, so the store can refuse it for a later attempt.
+func TestSweepCreatingTxsRollForwardNamesTheAttemptOnItsLease(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+	token := []byte{7, 7}
+
+	store := &fakeSweepStore{
+		NullStore: ns,
+		stale:     []chainhash.Hash{hashA},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: token, Tx: txA}},
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, [][]byte{token}, store.leaseTokens)
+	require.Equal(t, []chainhash.Hash{hashA}, store.finalized)
+}
+
+// TestSweepCreatingTxsLeaseErrorSpendsNothing pins that a store fault on the lease stops the
+// roll-forward before any input is spent.
+func TestSweepCreatingTxsLeaseErrorSpendsNothing(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore: ns,
+		stale:     []chainhash.Hash{hashA},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		leaseErr:  errors.NewStorageError("lease boom"),
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"lease"}, store.trace)
+	require.Empty(t, store.spends)
+	require.Empty(t, store.finalized)
+}
+
+// TestSweepCreatingTxsKeepsLeaseOfSpendWithNoPerInputResult pins the other unknown outcome: a spend
+// that failed without a result per input may still commit, so its lease is kept.
+func TestSweepCreatingTxsKeepsLeaseOfSpendWithNoPerInputResult(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore: ns,
+		stale:     []chainhash.Hash{hashA},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		spendErr:  errors.ErrTxLocked,
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"lease", "spend"}, store.trace)
+	require.Empty(t, store.leasesFreed)
+}
+
+// sweepLogRecorder records the info and warning lines of a sweep pass.
+type sweepLogRecorder struct {
+	ulogger.TestLogger
+
+	lines []string
+}
+
+func (l *sweepLogRecorder) Infof(format string, args ...interface{}) {
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *sweepLogRecorder) Warnf(format string, args ...interface{}) {
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *sweepLogRecorder) contains(part string) bool {
+	for _, line := range l.lines {
+		if strings.Contains(line, part) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// TestSweepCreatingTxsCountsARollbackAsFinishedOnlyWhenItEnded pins that a pass which could not
+// finish a marked rollback, because a spend lease is live or the hold is not the sweep's to take,
+// does not report it as finished and does not hide a page that made no progress.
+func TestSweepCreatingTxsCountsARollbackAsFinishedOnlyWhenItEnded(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore:  ns,
+		stale:      []chainhash.Hash{hashA},
+		getResp:    map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Tx: txA}},
+		leasesLive: []bool{true},
+	}
+
+	srv := newSweepServer(t, store)
+	recorder := &sweepLogRecorder{}
+	srv.logger = recorder
+	before := sweepFailures()
+
+	srv.sweepCreatingTxs(context.Background(), 100)
+
+	require.Empty(t, store.ended, "precondition: the live lease stopped the finish")
+	require.False(t, recorder.contains("finished abandoned rollback"), "a rollback that was not ended is not reported as finished")
+	require.True(t, recorder.contains("rolled forward 0 of 1"), "a page with no progress is reported")
+	require.Equal(t, before, sweepFailures(), "a live lease is a wait, not a failure of the pass")
+
+	recorder.lines = nil
+
+	srv.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []chainhash.Hash{hashA}, store.ended, "precondition: the second pass ended the rollback")
+	require.True(t, recorder.contains("finished abandoned rollback"))
+	require.False(t, recorder.contains("rolled forward 0 of 1"))
 }
