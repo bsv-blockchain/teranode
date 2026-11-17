@@ -3,6 +3,7 @@ package subtreeprocessor
 import (
 	"context"
 	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
@@ -185,6 +186,62 @@ func TestDequeueDuringBlockMovement_DrainCutoffAtClockNow(t *testing.T) {
 		require.Contains(t, hashes, before)
 		require.NotContains(t, hashes, after, "the cutoff is the clock at entry, not a reading taken during the drain")
 		require.Equal(t, int64(1), stp.queue.length())
+	})
+
+	t.Run("positive_window_cutoff_is_sampled_once_at_entry", func(t *testing.T) {
+		stp := newTestProcessorNoStart(t)
+		stp.settings.BlockAssembly.DoubleSpendWindow = time.Second
+
+		drainAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+		cutoff := drainAt.Add(-time.Second)
+		// The first reading is the drain's entry; every later one has moved on.
+		stp.clock = &firstThenLaterClock{first: drainAt, later: drainAt.Add(5 * time.Millisecond)}
+
+		older := chainhash.HashH([]byte("positive-window-entry-older"))
+		newer := chainhash.HashH([]byte("positive-window-entry-newer"))
+
+		stp.queue.clock = fixedClock{t: cutoff.Add(-time.Millisecond)}
+		stp.queue.enqueueBatch([]subtreepkg.Node{{Hash: older, Fee: 1, SizeInBytes: 220}}, []*subtreepkg.TxInpoints{{}})
+		stp.queue.clock = fixedClock{t: cutoff.Add(time.Millisecond)}
+		stp.queue.enqueueBatch([]subtreepkg.Node{{Hash: newer, Fee: 1, SizeInBytes: 220}}, []*subtreepkg.TxInpoints{{}})
+
+		require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
+
+		hashes := collectSubtreeHashes(stp)
+		require.Contains(t, hashes, older)
+		require.NotContains(t, hashes, newer, "the cutoff is the clock at entry minus the window, not a later reading")
+	})
+
+	t.Run("item_bound_stops_same_millisecond_arrivals", func(t *testing.T) {
+		stp := newTestProcessorNoStart(t)
+
+		drainAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+		stp.clock = fixedClock{t: drainAt}
+		stp.queue.clock = fixedClock{t: drainAt}
+
+		stp.queue.enqueueBatch([]subtreepkg.Node{{Hash: chainhash.HashH([]byte("item-bound-0")), Fee: 1, SizeInBytes: 220}}, []*subtreepkg.TxInpoints{{}})
+
+		// Each chunk the drain hands over brings another batch stamped in the
+		// drain's millisecond, which the inclusive cutoff admits. Only the
+		// queue-length snapshot can end the drain. The cap keeps a broken
+		// bound from looping forever.
+		const arrivalCap = 10
+
+		chunks := 0
+		require.NoError(t, stp.forEachDrainChunk(1, func(batches []*TxBatch) (int, error) {
+			chunks++
+			if chunks <= arrivalCap {
+				stp.queue.enqueueBatch(
+					[]subtreepkg.Node{{Hash: chainhash.HashH([]byte("item-bound-" + strconv.Itoa(chunks))), Fee: 1, SizeInBytes: 220}},
+					[]*subtreepkg.TxInpoints{{}},
+				)
+			}
+
+			return 0, nil
+		}))
+
+		require.Equal(t, 1, chunks, "the drain must stop at the one item queued at entry")
+		require.Equal(t, int64(1), stp.queue.length(), "the batch that arrived during the drain stays queued")
 	})
 
 	t.Run("negative_window_cuts_off_at_entry", func(t *testing.T) {
