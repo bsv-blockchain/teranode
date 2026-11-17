@@ -116,10 +116,10 @@ The `optimisticMining` setting provides a validation strategy that prioritizes b
 4. Mark block as existing in cache
 5. Validate in background goroutine:
    a. Fetch block headers for validation context
-   b. Validate subtrees and transactions
+   b. Run the full block validation (`block.Valid`)
    c. Update stores (subtree DAH, tx metadata)
    d. Mark transactions as mined
-6. If validation fails → Queue for revalidation
+6. If validation proves the block invalid → invalidate it; on any other failure → queue for revalidation
 ```
 
 **Technical Implementation:**
@@ -134,7 +134,9 @@ The optimistic path is implemented in `ValidateBlockWithOptions()` (services/blo
 3. **Block Exists Cache**: Sets block as existing to prevent reprocessing
 4. **Background Validation**: Spawns goroutine with `optimisticMiningWg.Add(1)`
 5. **Decoupled Context**: Uses `tracing.DecoupleTracingSpan()` to prevent context cancellation from blocking background work
-6. **Rollback on Failure**: Calls `ReValidateBlock()` if background validation fails
+6. **Rollback on Failure**: an invalid verdict invalidates the block (`markBlockAsInvalid`, or
+   `InvalidateBlock` for a corrupt body); any other failure re-queues it through
+   `reValidateOptimisticallyAddedBlock` and leaves it on the chain
 
 **Configuration:**
 

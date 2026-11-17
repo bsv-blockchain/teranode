@@ -85,8 +85,9 @@ func requireNotPrepared(t *testing.T, ba *blockassembly.Mock) {
 }
 
 // A block from a peer is handed to block assembly once its header checks and subtree validation
-// passed, whatever its own validation then decides. The test checks that the hint is sent, not when:
-// it goes out from a goroutine, so its order against the block's validation is not observable here.
+// passed, whatever its own validation then decides. This test checks that the hint is sent, not when.
+// TestValidateBlock_OptimisticPeerBlocks_NonFinalCoinbaseWithSubtreesNotAddedEarly pins the order: the
+// hint goes out before the full validation records its verdict.
 func TestValidateBlock_PreparesBlockAssemblyAfterSubtreeValidation(t *testing.T) {
 	initPrometheusMetrics()
 

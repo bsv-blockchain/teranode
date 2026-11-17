@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -150,6 +151,10 @@ type validAddRecordingClient struct {
 	// path makes it in the background, so a test can tell the two apart by whether the call returns
 	// while the write is held.
 	holdSubtreesSet chan struct{}
+
+	// beforeInvalidAdd, when not nil, runs at the start of every AddBlock carrying WithInvalid(true),
+	// so a test can check what has already happened when the verdict is recorded.
+	beforeInvalidAdd func()
 }
 
 func (c *validAddRecordingClient) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
@@ -165,6 +170,10 @@ func (c *validAddRecordingClient) SetBlockSubtreesSet(ctx context.Context, block
 }
 
 func (c *validAddRecordingClient) AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...blockchainoptions.StoreBlockOption) error {
+	if c.beforeInvalidAdd != nil && blockchainoptions.ProcessStoreBlockOptions(opts...).Invalid {
+		c.beforeInvalidAdd()
+	}
+
 	c.mu.Lock()
 	if blockchainoptions.ProcessStoreBlockOptions(opts...).Invalid {
 		c.invalidAdds = append(c.invalidAdds, *block.Hash())
@@ -294,8 +303,9 @@ func requireNotTip(ctx context.Context, t *testing.T, client blockchain.ClientI,
 // handed to block assembly. The floor itself strikes no peer and records nothing, so the store holds
 // exactly the one invalid record the full validation writes, and no corrupt strike goes to the
 // serving peer (the invalid verdict reaches the peer through the Kafka invalid-block notification,
-// which this harness does not wire). The test checks that block assembly is told about the block,
-// not when: the hint is sent from a goroutine.
+// which this harness does not wire). Block assembly must be told about the block before that
+// invalid record is written: the hint goes out from a goroutine, but the goroutine starts before the
+// full validation does, so the record waits for it with a deadline.
 func TestValidateBlock_OptimisticPeerBlocks_NonFinalCoinbaseWithSubtreesNotAddedEarly(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -320,6 +330,16 @@ func TestValidateBlock_OptimisticPeerBlocks_NonFinalCoinbaseWithSubtreesNotAdded
 
 	block := blockWithStoredSubtree(ctx, t, bv, tSettings, coinbaseTx, coinbaseTx)
 
+	var preparedBeforeVerdict atomic.Bool
+
+	client.beforeInvalidAdd = func() {
+		select {
+		case hash := <-prepared:
+			preparedBeforeVerdict.Store(hash.IsEqual(block.Hash()))
+		case <-time.After(5 * time.Second):
+		}
+	}
+
 	err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{
 		PeerID:                  "peer-serving",
 		DisableOptimisticMining: optimisticMiningDisabledForPeerPath(tSettings, "http://localhost"),
@@ -327,6 +347,7 @@ func TestValidateBlock_OptimisticPeerBlocks_NonFinalCoinbaseWithSubtreesNotAdded
 	require.Error(t, err, "the block is validated before it is added, so the verdict is synchronous")
 	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "got: %v", err)
 	require.Contains(t, err.Error(), "coinbase is not final")
+	require.True(t, preparedBeforeVerdict.Load(), "a block the floor turned away must be handed to block assembly before the full validation records its verdict")
 
 	require.False(t, client.addedValid(block.Hash()), "a block with a non-final coinbase must not be added before it is validated")
 	requireNotTip(ctx, t, client, tSettings, block.Hash())
@@ -336,13 +357,6 @@ func TestValidateBlock_OptimisticPeerBlocks_NonFinalCoinbaseWithSubtreesNotAdded
 	require.True(t, meta.Invalid, "the floor's failure falls through to the full validation, which stores the block as invalid")
 	require.Equal(t, 1, client.invalidRecords(block.Hash()), "only the full validation records the block as invalid; the floor records nothing")
 	require.Empty(t, strikes.recorded(), "no corrupt strike: neither the floor nor the invalid verdict calls penalizeCorruptBlockPeer")
-
-	select {
-	case hash := <-prepared:
-		require.True(t, hash.IsEqual(block.Hash()))
-	case <-time.After(5 * time.Second):
-		t.Fatal("a block the floor turned away must still be handed to block assembly")
-	}
 }
 
 // TestValidateBlock_OptimisticPeerBlocks_SwappedCoinbaseWithSubtreesNotAddedEarly: honest subtrees
