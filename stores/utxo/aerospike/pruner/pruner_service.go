@@ -124,8 +124,32 @@ type Options struct {
 	// keeps a record whose references could not be cleared.
 	ClearParentRefs func(ctx context.Context, txHash *chainhash.Hash) error
 
+	// BuildVerifiedMarkerRecord, when non-nil, builds a parent's replay-marker
+	// write as native sub-op 15 (addVerifiedDeletedChildren). It returns false
+	// when the server does not serve that sub-op, and the pruner then builds the
+	// filtered map write itself (buildVerifiedMarkerRecords). The native write
+	// must enforce what markerFilter does, all or nothing per record, and must
+	// keep the record's lifetime and never create a missing parent: the store
+	// sends it UPDATE_ONLY with TTLDontUpdate.
+	BuildVerifiedMarkerRecord func(key *aerospike.Key, children []MarkerChild) (aerospike.BatchRecordIfc, bool)
+
+	// ObserveNativeOpError, when non-nil, is handed every per-record error of a
+	// marker write built by BuildVerifiedMarkerRecord. The store reads a
+	// PARAMETER_ERROR there as a node that does not serve sub-op 15, a node of a
+	// mixed-version cluster the start-up probe did not reach, and turns the
+	// native marker write off. The pruner does not filter the codes.
+	ObserveNativeOpError func(error)
+
 	// Observers is a list of observers to notify when pruning completes
 	Observers []pruner.Observer
+}
+
+// MarkerChild is one child a native marker write vouches for on one parent
+// record: its txid and the positions in that record's utxos bin its inputs
+// name. See Options.BuildVerifiedMarkerRecord.
+type MarkerChild struct {
+	Hash    *chainhash.Hash
+	Offsets []uint32
 }
 
 // Service manages background jobs for cleaning up records based on block height
@@ -150,6 +174,8 @@ type Service struct {
 	blockHeightRetention           uint32
 	defensiveEnabled               bool
 	clearParentRefs                func(ctx context.Context, txHash *chainhash.Hash) error
+	buildVerifiedMarkerRecord      func(key *aerospike.Key, children []MarkerChild) (aerospike.BatchRecordIfc, bool)
+	observeNativeOpError           func(error)
 	defensiveBatchReadSize         int
 	chunkSize                      int
 	chunkGroupLimit                int
@@ -394,6 +420,8 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		blockHeightRetention:           settings.GetUtxoStoreBlockHeightRetention(),
 		defensiveEnabled:               settings.Pruner.UTXODefensiveEnabled,
 		clearParentRefs:                opts.ClearParentRefs,
+		buildVerifiedMarkerRecord:      opts.BuildVerifiedMarkerRecord,
+		observeNativeOpError:           opts.ObserveNativeOpError,
 		defensiveBatchReadSize:         settings.Pruner.UTXODefensiveBatchReadSize,
 		chunkSize:                      settings.Pruner.UTXOChunkSize,
 		chunkGroupLimit:                settings.Pruner.UTXOChunkGroupLimit,
@@ -3123,7 +3151,7 @@ func (s *Service) writeVerifiedMarkers(ctx context.Context, updates map[string]*
 	default:
 	}
 
-	markerRecords, sources := s.buildVerifiedMarkerRecords(updates)
+	markerRecords, sources, native := s.buildVerifiedMarkerRecords(updates)
 
 	batchRecords := markerRecords
 	if len(extra) > 0 {
@@ -3155,10 +3183,31 @@ func (s *Service) writeVerifiedMarkers(ctx context.Context, updates map[string]*
 		info := updates[sources[i]]
 		batchRec := rec.BatchRec()
 
+		var (
+			outcome    parentUpdateOutcome
+			outcomeErr error
+		)
+
+		switch {
+		case native[i]:
+			if batchRec.Err != nil && s.observeNativeOpError != nil {
+				s.observeNativeOpError(batchRec.Err)
+			}
+
+			outcome, outcomeErr = classifyNativeMarkerResult(batchRec)
+
 		// A refusal that is in doubt may follow an attempt the client retried,
 		// which may have written the markers before the record changed. It is
 		// a failed write, so its children's markers are withdrawn from it too.
-		if batchRec.Err != nil && batchRec.Err.Matches(types.FILTERED_OUT) && !batchRec.InDoubt && !batchRec.Err.IsInDoubt() {
+		case batchRec.Err != nil && batchRec.Err.Matches(types.FILTERED_OUT) && !batchRec.InDoubt && !batchRec.Err.IsInDoubt():
+			outcome = parentUpdateRefused
+
+		default:
+			outcome, outcomeErr = classifyParentUpdateResult(batchRec)
+		}
+
+		switch outcome {
+		case parentUpdateRefused:
 			if refused == nil {
 				refused = make(map[string]*parentUpdateInfo)
 			}
@@ -3166,12 +3215,6 @@ func (s *Service) writeVerifiedMarkers(ctx context.Context, updates map[string]*
 			refused[sources[i]] = info
 			filtered++
 
-			continue
-		}
-
-		outcome, outcomeErr := classifyParentUpdateResult(batchRec)
-
-		switch outcome {
 		case parentUpdateOK:
 			tally.success++
 			plan.existing++
@@ -3209,17 +3252,38 @@ func (s *Service) writeVerifiedMarkers(ctx context.Context, updates map[string]*
 	return refused, s.reportParentUpdateTally(tally, len(markerRecords)), true, nil
 }
 
-// buildVerifiedMarkerRecords builds one UPDATE_ONLY MapPutItems write per
-// queued record, adding every queued child to deletedChildren, under a filter
-// that holds only when each child is named as the spender by at least one of
-// the outputs it claims on that record (markerFilter). It returns the records
-// with the update keys they were built from, index-aligned.
-func (s *Service) buildVerifiedMarkerRecords(updates map[string]*parentUpdateInfo) ([]aerospike.BatchRecordIfc, []string) {
+// buildVerifiedMarkerRecords builds one marker write per queued record, adding
+// every queued child to deletedChildren only when each child is named as the
+// spender by at least one of the outputs it claims on that record. When the
+// server serves native sub-op 15 the store builds it
+// (Options.BuildVerifiedMarkerRecord), which checks and writes in one native
+// op. Otherwise it is an UPDATE_ONLY MapPutItems write under markerFilter. It
+// returns the records with the update keys they were built from and whether
+// each one is native, index-aligned. The path is chosen per record, so a write
+// retried after a refusal or a runtime demotion takes whichever path is
+// current.
+func (s *Service) buildVerifiedMarkerRecords(updates map[string]*parentUpdateInfo) ([]aerospike.BatchRecordIfc, []string, []bool) {
 	mapPolicy := aerospike.DefaultMapPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(updates))
 	sources := make([]string, 0, len(updates))
+	native := make([]bool, 0, len(updates))
 
 	for source, info := range updates {
+		if s.buildVerifiedMarkerRecord != nil {
+			children := make([]MarkerChild, len(info.childHashes))
+			for i, childHash := range info.childHashes {
+				children[i] = MarkerChild{Hash: childHash, Offsets: info.offsets[*childHash]}
+			}
+
+			if record, ok := s.buildVerifiedMarkerRecord(info.key, children); ok {
+				batchRecords = append(batchRecords, record)
+				sources = append(sources, source)
+				native = append(native, true)
+
+				continue
+			}
+		}
+
 		items := make(map[interface{}]interface{}, len(info.childHashes))
 		for _, childHash := range info.childHashes {
 			items[childHash.String()] = true
@@ -3237,9 +3301,10 @@ func (s *Service) buildVerifiedMarkerRecords(updates map[string]*parentUpdateInf
 		op := aerospike.MapPutItemsOp(mapPolicy, s.fieldDeletedChildren, items)
 		batchRecords = append(batchRecords, aerospike.NewBatchWrite(policy, info.key, op))
 		sources = append(sources, source)
+		native = append(native, false)
 	}
 
-	return batchRecords, sources
+	return batchRecords, sources, native
 }
 
 // markerFilter is true when, for every queued child of the record, at least one
@@ -3699,7 +3764,110 @@ const (
 	parentUpdateNotFound
 	// parentUpdateFailed — the update failed, or its outcome could not be read.
 	parentUpdateFailed
+	// parentUpdateRefused — the server checked the record and wrote nothing,
+	// because a queued child is not named as the spender by any output it
+	// claims: FILTERED_OUT on the filtered write, NOT_SPENDER on the native one.
+	parentUpdateRefused
 )
+
+// Wire vocabulary of the native marker write's response (mod-teranode sub-op
+// 15). The pruner cannot import the store package, which imports the pruner,
+// so these restate the store's LuaSuccess bin name and its LuaMapResponse
+// field and code names.
+const (
+	nativeResultBin       = "SUCCESS"
+	nativeFieldStatus     = "status"
+	nativeFieldErrorCode  = "errorCode"
+	nativeFieldMessage    = "message"
+	nativeStatusOK        = "OK"
+	nativeStatusError     = "ERROR"
+	nativeErrorNotSpender = "NOT_SPENDER"
+	nativeErrorTxNotFound = "TX_NOT_FOUND"
+)
+
+// classifyNativeMarkerResult maps one native marker write (sub-op 15) onto the
+// outcomes the filtered write has. OK is written. NOT_SPENDER is refused,
+// exactly as FILTERED_OUT: nothing was written and keepSpendHolders sorts the
+// record's children out. A missing parent is KEY_NOT_FOUND on the wire under
+// UPDATE_ONLY (TX_NOT_FOUND in the map is accepted too) and needs no marker.
+// Everything else fails closed: an INVALID_PARAMETER answer, a wire error
+// (PARAMETER_ERROR from a node without sub-op 15 included), and any answer the
+// pruner cannot read. A refusal in doubt is a failure, as on the filtered
+// write, because a retried attempt may have written the markers first.
+func classifyNativeMarkerResult(batchRec *aerospike.BatchRecord) (parentUpdateOutcome, error) {
+	if batchRec.Err != nil {
+		if isKeyNotFound(batchRec.Err) {
+			return parentUpdateNotFound, nil
+		}
+
+		return parentUpdateFailed, batchRec.Err
+	}
+
+	if batchRec.ResultCode != types.OK {
+		return parentUpdateFailed, errors.NewProcessingError("native marker write got no answer for its record (result code %v)", batchRec.ResultCode)
+	}
+
+	if batchRec.Record == nil || batchRec.Record.Bins == nil {
+		return parentUpdateFailed, errors.NewProcessingError("native marker write returned no record")
+	}
+
+	resp, ok := batchRec.Record.Bins[nativeResultBin]
+	if !ok {
+		return parentUpdateFailed, errors.NewProcessingError("native marker write returned no %q bin", nativeResultBin)
+	}
+
+	status, _ := nativeResultField(resp, nativeFieldStatus)
+	if status == nativeStatusOK {
+		return parentUpdateOK, nil
+	}
+
+	errorCode, _ := nativeResultField(resp, nativeFieldErrorCode)
+	message, _ := nativeResultField(resp, nativeFieldMessage)
+
+	if status != nativeStatusError {
+		return parentUpdateFailed, errors.NewProcessingError("unreadable native marker write response (%T, status %q)", resp, status)
+	}
+
+	switch errorCode {
+	case nativeErrorNotSpender:
+		if batchRec.InDoubt {
+			return parentUpdateFailed, errors.NewProcessingError("native marker write refused in doubt (%s)", message)
+		}
+
+		return parentUpdateRefused, nil
+
+	case nativeErrorTxNotFound:
+		return parentUpdateNotFound, nil
+
+	default:
+		return parentUpdateFailed, errors.NewProcessingError("native marker write returned ERROR (code=%q, message=%q)", errorCode, message)
+	}
+}
+
+// nativeResultField reads one string field of a native response map, in any of
+// the map shapes the client decodes one into. ok is false when the field is
+// absent or not a string, or resp is not a map.
+func nativeResultField(resp interface{}, field string) (string, bool) {
+	switch m := resp.(type) {
+	case map[interface{}]interface{}:
+		value, ok := m[field].(string)
+		return value, ok
+
+	case map[string]interface{}:
+		value, ok := m[field].(string)
+		return value, ok
+
+	case []aerospike.MapPair:
+		for _, pair := range m {
+			if key, isString := pair.Key.(string); isString && key == field {
+				value, ok := pair.Value.(string)
+				return value, ok
+			}
+		}
+	}
+
+	return "", false
+}
 
 // classifyParentUpdateResult maps one marker-write batch record onto the
 // outcome the cleanup counters track.

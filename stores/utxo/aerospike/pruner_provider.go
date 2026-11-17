@@ -54,6 +54,12 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 	}
 
 	// Create options for the pruner service.
+	//
+	// BuildVerifiedMarkerRecord sends the replay-marker write as native sub-op 15
+	// when the server serves it (detectNativeVerifiedMarkerSupport), and the
+	// pruner falls back to its filtered map write otherwise. ObserveNativeOpError
+	// turns sub-op 15 off on a runtime PARAMETER_ERROR, for a node of a
+	// mixed-version cluster the start-up probe did not reach.
 	opts := aeropruner.Options{
 		Logger:        s.logger,
 		Ctx:           s.ctx,
@@ -65,6 +71,8 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 		ClearParentRefs: func(ctx context.Context, txHash *chainhash.Hash) error {
 			return utxo.ClearParentRefs(ctx, s, txHash)
 		},
+		BuildVerifiedMarkerRecord: s.prunerVerifiedMarkerRecord,
+		ObserveNativeOpError:      s.observePrunerNativeOpError,
 	}
 
 	// Create a new pruner service

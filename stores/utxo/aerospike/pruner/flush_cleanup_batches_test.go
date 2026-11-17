@@ -2,6 +2,7 @@ package pruner
 
 import (
 	"context"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +22,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 // flushCleanupBatches runs one chunk through flushChunk and drains the carry at
@@ -48,7 +51,18 @@ func newFlushTestService(t *testing.T) (*Service, *uaerospike.Client) {
 
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	var containerOpts []testcontainers.ContainerCustomizer
+
+	if image := os.Getenv("AEROSPIKE_CONTAINER_IMAGE"); image != "" {
+		platform := os.Getenv("AEROSPIKE_CONTAINER_PLATFORM")
+		if platform == "" {
+			platform = "linux/amd64"
+		}
+
+		containerOpts = append(containerOpts, aeroTest.WithImage(image), testcontainers.WithImagePlatform(platform))
+	}
+
+	container, err := aeroTest.RunContainer(ctx, containerOpts...)
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -74,7 +88,41 @@ func newFlushTestService(t *testing.T) (*Service, *uaerospike.Client) {
 	})
 	require.NoError(t, err)
 
+	// Against the fork image (AEROSPIKE_EXPECT_NATIVE_OPS=true) every marker
+	// write goes out as native sub-op 15, so the marker rules are proven on
+	// that path too.
+	if os.Getenv("AEROSPIKE_EXPECT_NATIVE_OPS") == "true" {
+		service.buildVerifiedMarkerRecord = testNativeMarkerRecord
+	}
+
 	return service, client
+}
+
+// testNativeMarkerRecord builds a native sub-op 15 marker write as the store's
+// prunerVerifiedMarkerRecord does: payload [15, [[key, txid, offsets]...]],
+// UPDATE_ONLY, TTLDontUpdate. The store package cannot be imported here.
+func testNativeMarkerRecord(key *aerospike.Key, children []MarkerChild) (aerospike.BatchRecordIfc, bool) {
+	entries := make([]any, len(children))
+
+	for i, child := range children {
+		offsets := make([]any, len(child.Offsets))
+		for j, offset := range child.Offsets {
+			offsets[j] = int64(offset)
+		}
+
+		entries[i] = []any{child.Hash.String(), child.Hash.CloneBytes(), offsets}
+	}
+
+	payload, err := msgpack.Marshal([]any{uint8(15), []any{entries}})
+	if err != nil {
+		panic(err)
+	}
+
+	policy := aerospike.NewBatchWritePolicy()
+	policy.RecordExistsAction = aerospike.UPDATE_ONLY
+	policy.Expiration = aerospike.TTLDontUpdate
+
+	return aerospike.NewBatchWrite(policy, key, aerospike.TeranodeModifyOp(nativeResultBin, payload)), true
 }
 
 // TestFlushCleanupBatches_MarkersAreAllOrNothingPerChild drives
@@ -92,6 +140,20 @@ func newFlushTestService(t *testing.T) (*Service, *uaerospike.Client) {
 // live child would refuse that child's own re-spend.
 func TestFlushCleanupBatches_MarkersAreAllOrNothingPerChild(t *testing.T) {
 	s, client := newFlushTestService(t)
+
+	// On the fork image the rows must have gone out as native writes, or a
+	// green run would only prove the filtered path again.
+	if build := s.buildVerifiedMarkerRecord; build != nil {
+		nativeWrites := 0
+		s.buildVerifiedMarkerRecord = func(key *aerospike.Key, children []MarkerChild) (aerospike.BatchRecordIfc, bool) {
+			nativeWrites++
+			return build(key, children)
+		}
+
+		defer func() {
+			require.Positive(t, nativeWrites, "the marker writes must take the native path")
+		}()
+	}
 
 	var other chainhash.Hash
 	other[0] = 0xEE

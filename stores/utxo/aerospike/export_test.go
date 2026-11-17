@@ -33,6 +33,11 @@ func SetChildDAHBeforeWrite(f func()) {
 	childDAHBeforeWrite = f
 }
 
+// UsesNativeVerifiedMarker reports whether the pruner's replay-marker write uses native sub-op 15.
+func (s *Store) UsesNativeVerifiedMarker() bool {
+	return s.useNativeVerifiedMarkerWrite()
+}
+
 // UsesNativeMark reports whether MarkTransactionsOnLongestChain sends native sub-op 14.
 func (s *Store) UsesNativeMark() bool {
 	return s.useNativeMark()

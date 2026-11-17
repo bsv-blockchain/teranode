@@ -59,6 +59,7 @@ const (
 	subOpSetDeleteAtHeight      uint8 = 12
 	subOpAddDeletedChildren     uint8 = 13
 	subOpMarkLongestChain       uint8 = 14
+	subOpAddVerifiedDeleted     uint8 = 15
 )
 
 // nativeOpResultBin is the bin name used by the native-op result message.
@@ -680,6 +681,7 @@ func (s *Store) initNativeTeranodeOps(ctx context.Context) {
 	supported := s.detectNativeTeranodeOpSupport(ctx)
 	s.useNativeTeranodeOps.Store(supported)
 	s.useNativeMarkLongestChain.Store(supported && s.detectNativeMarkLongestChainSupport(ctx))
+	s.useNativeVerifiedMarker.Store(supported && s.detectNativeVerifiedMarkerSupport(ctx))
 	s.nativeOpBatchWritePolicy = aerospike.NewBatchWritePolicy()
 	// UPDATE_ONLY: a mod-teranode invocation must never create a record. On
 	// the UDF path a missing key runs the Lua function against no record and
@@ -694,6 +696,12 @@ func (s *Store) initNativeTeranodeOps(ctx context.Context) {
 			"capability probe rejected; using UDF path")
 	} else if supported {
 		s.logger.Infof("[teranode-native-op] enabled (op type 200, sub_op_id wire format)")
+	}
+
+	if s.useNativeVerifiedMarker.Load() {
+		s.logger.Infof("[teranode-native-op] the pruner writes replay markers with native sub-op 15 (addVerifiedDeletedChildren)")
+	} else {
+		s.logger.Infof("[teranode-native-op] the pruner writes replay markers with the filtered map write")
 	}
 }
 

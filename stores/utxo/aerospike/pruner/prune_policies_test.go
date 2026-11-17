@@ -128,7 +128,7 @@ func TestBuildVerifiedMarkerRecordsKeepCommitAll(t *testing.T) {
 		fieldUtxos:           "utxos",
 	}
 
-	batchRecords, _ := s.buildVerifiedMarkerRecords(updates)
+	batchRecords, _, _ := s.buildVerifiedMarkerRecords(updates)
 
 	require.Len(t, batchRecords, len(updates))
 
@@ -144,4 +144,72 @@ func TestBuildVerifiedMarkerRecordsKeepCommitAll(t *testing.T) {
 		require.True(t, ok, "child record %d should be a BatchDelete", i)
 		require.Equal(t, aerospike.COMMIT_MASTER, batchDelete.Policy.CommitLevel)
 	}
+}
+
+// TestBuildVerifiedMarkerRecordsChoosesThePath: the marker write is the native
+// sub-op 15 record when the store's builder says the server serves it, and the
+// filtered map write when there is no builder or it declines. The builder gets
+// every queued child with the offsets it claims.
+func TestBuildVerifiedMarkerRecordsChoosesThePath(t *testing.T) {
+	child := chainhash.HashH([]byte("child"))
+
+	newUpdates := func() map[string]*parentUpdateInfo {
+		key, err := aerospike.NewKey("test", "utxo", 2000)
+		require.NoError(t, err)
+
+		info := &parentUpdateInfo{key: key, seen: make(map[chainhash.Hash]struct{})}
+		info.add(&child, 3)
+		info.add(&child, 5)
+
+		return map[string]*parentUpdateInfo{key.String(): info}
+	}
+
+	s := &Service{fieldDeletedChildren: "deletedChildren", fieldUtxos: "utxos"}
+
+	filtered := func(t *testing.T, records []aerospike.BatchRecordIfc, native []bool) {
+		t.Helper()
+		require.Len(t, records, 1)
+		require.Equal(t, []bool{false}, native)
+
+		batchWrite, ok := records[0].(*aerospike.BatchWrite)
+		require.True(t, ok)
+		require.NotNil(t, batchWrite.Policy.FilterExpression, "the filtered write carries markerFilter")
+		require.Equal(t, uint32(aerospike.TTLDontUpdate), batchWrite.Policy.Expiration)
+		require.Equal(t, aerospike.UPDATE_ONLY, batchWrite.Policy.RecordExistsAction)
+	}
+
+	t.Run("no builder takes the filtered write", func(t *testing.T) {
+		records, _, native := s.buildVerifiedMarkerRecords(newUpdates())
+		filtered(t, records, native)
+	})
+
+	t.Run("a builder that declines takes the filtered write", func(t *testing.T) {
+		s.buildVerifiedMarkerRecord = func(*aerospike.Key, []MarkerChild) (aerospike.BatchRecordIfc, bool) { return nil, false }
+		t.Cleanup(func() { s.buildVerifiedMarkerRecord = nil })
+
+		records, _, native := s.buildVerifiedMarkerRecords(newUpdates())
+		filtered(t, records, native)
+	})
+
+	t.Run("a builder that serves sub-op 15 takes the native write", func(t *testing.T) {
+		var got []MarkerChild
+
+		s.buildVerifiedMarkerRecord = func(key *aerospike.Key, children []MarkerChild) (aerospike.BatchRecordIfc, bool) {
+			got = children
+			return testNativeMarkerRecord(key, children)
+		}
+		t.Cleanup(func() { s.buildVerifiedMarkerRecord = nil })
+
+		records, _, native := s.buildVerifiedMarkerRecords(newUpdates())
+		require.Len(t, records, 1)
+		require.Equal(t, []bool{true}, native)
+		require.Equal(t, []MarkerChild{{Hash: &child, Offsets: []uint32{3, 5}}}, got)
+
+		batchWrite, ok := records[0].(*aerospike.BatchWrite)
+		require.True(t, ok)
+		require.Nil(t, batchWrite.Policy.FilterExpression, "the native write checks the spender itself")
+		require.Equal(t, uint32(aerospike.TTLDontUpdate), batchWrite.Policy.Expiration)
+		require.Equal(t, aerospike.UPDATE_ONLY, batchWrite.Policy.RecordExistsAction)
+		require.Equal(t, aerospike.COMMIT_ALL, batchWrite.Policy.CommitLevel)
+	})
 }

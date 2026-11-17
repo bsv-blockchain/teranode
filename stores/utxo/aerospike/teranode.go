@@ -257,6 +257,9 @@ const (
 	LuaErrorCodeUtxoHashMismatch LuaErrorCode = "UTXO_HASH_MISMATCH"
 	LuaErrorCodeUtxoNotFrozen    LuaErrorCode = "UTXO_NOT_FROZEN"
 	LuaErrorCodeInvalidParameter LuaErrorCode = "INVALID_PARAMETER"
+	// LuaErrorCodeNotSpender is native sub-op 15's refusal: a child is not named as the spender by
+	// any output it claims, so no marker was written.
+	LuaErrorCodeNotSpender LuaErrorCode = "NOT_SPENDER"
 )
 
 // LuaErrorInfo represents an individual error from Lua functions
