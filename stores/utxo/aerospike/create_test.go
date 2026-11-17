@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -24,6 +25,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -640,4 +642,161 @@ func TestSpendAndCreateKeepsSpendsWhenCreateInDoubt(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp.SpendingData, "the parent coin must stay spent by the stored transaction")
 	require.Equal(t, child.TxIDChainHash().String(), resp.SpendingData.TxID.String())
+}
+
+// TestCreateMinedReportsCreatingNotCleared covers a paginated transaction
+// created already mined, as quick validation creates every transaction of a
+// block below the checkpoint, whose clear of the creating bin fails. Nothing
+// repeats a create that returned success, and setMined never runs for a
+// transaction created mined, so a success there left the records with the
+// creating bin for good and every output on them refused with CREATING. The
+// create must return an error its caller repeats, and keep the spends; the
+// repeat must finish the clear.
+func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	const (
+		blockHeight = 604315
+		blockID     = 11
+		// The parent spends the zero hash, so the store takes it for a
+		// coinbase; spend it well past maturity.
+		spendHeight = blockHeight + 1_000
+	)
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// Batch size 4 and 10 outputs: the master holds vouts 0-3, extra record 1
+	// holds 4-7, extra record 2 holds 8-9.
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	// failClears fails the next n clears of the creating bin. A clear is the
+	// only UPDATE_ONLY batch write a create sends; it fails before anything
+	// is sent, so the records keep the bin.
+	failClears := func(n int) {
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if n > 0 && len(records) > 0 {
+				if write, ok := records[0].(*aerospike.BatchWrite); ok && write.Policy != nil &&
+					write.Policy.RecordExistsAction == aerospike.UPDATE_ONLY {
+					n--
+
+					return &aerospike.AerospikeError{ResultCode: types.SERVER_NOT_AVAILABLE}
+				}
+			}
+
+			return client.BatchOperate(policy, records)
+		})
+		t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+	}
+
+	hasCreatingBin := func(t *testing.T, tx *bt.Tx, recordIdx uint32) bool {
+		t.Helper()
+
+		key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(tx.TxIDChainHash(), recordIdx))
+		require.NoError(t, err)
+
+		rec, err := client.Get(nil, key)
+		require.NoError(t, err)
+		require.NotNil(t, rec, "record %d of %s must exist", recordIdx, tx.TxIDChainHash())
+
+		_, ok := rec.Bins[fields.Creating.String()]
+
+		return ok
+	}
+
+	spendVout := func(parent *bt.Tx, vout uint32) error {
+		out := parent.Outputs[vout]
+
+		child := bt.NewTx()
+		require.NoError(t, child.From(parent.TxIDChainHash().String(), vout, out.LockingScript.String(), out.Satoshis))
+		child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00, 0x48, 0x30, 0x45})
+		require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", out.Satoshis-100))
+
+		_, err := store.Spend(ctx, child, spendHeight)
+
+		return err
+	}
+
+	mined := utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: blockID, BlockHeight: blockHeight})
+
+	requireCreatingNotCleared := func(t *testing.T, err error) {
+		t.Helper()
+
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errors.ErrTxExists, "a failed clear must not read as a finished create")
+		require.True(t, errors.IsRetryableError(err), "the caller must repeat the create: %v", err)
+		require.True(t, utxo.IsCreateOutcomeUnknown(err), "the records are stored, so the spends must stay: %v", err)
+	}
+
+	requireAllCleared := func(t *testing.T, parent *bt.Tx) {
+		t.Helper()
+
+		for idx := uint32(0); idx <= 2; idx++ {
+			require.Falsef(t, hasCreatingBin(t, parent, idx), "record %d must lose the creating bin", idx)
+		}
+
+		// One output on each record: master, extra 1, extra 2.
+		for _, vout := range []uint32{0, 5, 9} {
+			require.NoErrorf(t, spendVout(parent, vout), "vout %d must be spendable", vout)
+		}
+	}
+
+	t.Run("repeat finishes the clear", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		failClears(1)
+
+		_, err := store.Create(ctx, parent, blockHeight, mined)
+		requireCreatingNotCleared(t, err)
+
+		require.True(t, hasCreatingBin(t, parent, 2), "the failed clear leaves the bin on the extra record")
+		require.ErrorIs(t, spendVout(parent, 9), errors.ErrTxCreating, "an output on the extra record is refused until the clear is done")
+
+		_, err = store.Create(ctx, parent, blockHeight, mined)
+		require.ErrorIs(t, err, errors.ErrTxExists, "the repeat finds the records and finishes the clear")
+
+		requireAllCleared(t, parent)
+	})
+
+	t.Run("repeat whose clear fails reports it again", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		failClears(2)
+
+		_, err := store.Create(ctx, parent, blockHeight, mined)
+		requireCreatingNotCleared(t, err)
+
+		// The repeat finds the master record; its failed clear must not come
+		// back as ErrTxExists, which the caller reads as done.
+		_, err = store.Create(ctx, parent, blockHeight, mined)
+		requireCreatingNotCleared(t, err)
+
+		_, err = store.Create(ctx, parent, blockHeight, mined)
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		requireAllCleared(t, parent)
+	})
+
+	t.Run("create with no mined info still succeeds", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		// A validator create keeps its recovery paths: the transaction is seen
+		// again in a subtree, or setMined runs when its block is mined.
+		failClears(1)
+
+		_, err := store.Create(ctx, parent, blockHeight)
+		require.NoError(t, err)
+		require.True(t, hasCreatingBin(t, parent, 2))
+	})
 }
