@@ -3,6 +3,7 @@ package utxoset
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -445,11 +446,19 @@ func TestDeleteCutWhileWaitingOnARowDeletesNothing(t *testing.T) {
 
 	go func() { done <- s.Delete(cut, h) }()
 
-	waitForLockWait(t, s, ctx, "FROM")
+	waitForLockWait(t, s, ctx, "FOR UPDATE OF i")
 	cancel()
 
-	derr := <-done
+	var derr error
+
+	select {
+	case derr = <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Delete did not return after its context was cancelled")
+	}
+
 	require.True(t, errors.Is(derr, errors.ErrStorageError), "a Delete cut while it waits is a storage error, got %v", derr)
+	require.ErrorContains(t, derr, "[utxoset][Delete] lock", "the cut landed while Delete waited for the rows")
 
 	require.NoError(t, holder.Rollback(ctx))
 
