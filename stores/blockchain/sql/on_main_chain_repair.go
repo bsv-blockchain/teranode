@@ -400,7 +400,12 @@ const (
 // down to genesis: a reorg whose reconcile walked to genesis because every flag was false
 // notes floor 0. A bounded walk that runs out of its budget is therefore turned into a
 // full one, which on PostgreSQL runs without the lock under a 30 min budget, instead of
-// holding slowPathMu for 30 s on every retry of a walk that cannot finish in time.
+// holding slowPathMu for 30 s on every retry of a walk that cannot finish in time. The
+// switch does not ask why the walk ran out of time, so a database slow enough to stall a
+// bounded walk only a few hundred blocks deep also hands the repair to the full walk. The
+// repair then stays a full walk, retried after the backoff, until one lands or an
+// overlapping write narrows it. On PostgreSQL those walks leave block storage running; on
+// SQLite each holds slowPathMu for up to 30 min instead of 30 s.
 //
 // On PostgreSQL a full attempt never takes slowPathMu. It can run for up to 30 min, and
 // while the database stays slow it is retried every 30 s, so holding the lock would stop
