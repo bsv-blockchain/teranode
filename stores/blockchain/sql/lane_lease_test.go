@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -282,6 +283,50 @@ func TestOpenReportsTheStaleLeasesItCloses(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 2, lapsed)
 		require.Equal(t, 2, countRows(t, s, `SELECT COUNT(*) FROM lane_close WHERE kind = 'lapsed'`))
+	})
+}
+
+// An open whose first attempt commits but reports a retriable error (a lost COMMIT reply) is
+// retried by RetryTx. The retry must take a new lease id, or the two committed leases share one id
+// and, once both lapse, their two lapsed closes collide on lane_close's primary key: the sweep, and
+// every open that sweeps first, would then fail for good.
+func TestOpenLaneLeaseRetryAfterALostCommitTakesANewID(t *testing.T) {
+	runLaneHandoutTests(t, "lost commit", func(t *testing.T, s *SQL) {
+		// Postgres retries are off unless postgres_retryEnabled is set; this is the retrying case.
+		s.db.SetRetryConfig(usql.RetryConfig{MaxAttempts: 3, BaseDelay: time.Millisecond, Enabled: true})
+
+		attempts := 0
+		openLeaseAttemptHook = func(tx *sql.Tx) error {
+			attempts++
+			if attempts > 1 {
+				return nil
+			}
+
+			require.NoError(t, tx.Commit())
+
+			return errors.NewServiceError("connection reset by peer")
+		}
+
+		defer func() { openLeaseAttemptHook = nil }()
+
+		id, _, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		require.NoError(t, err)
+		require.Equal(t, 2, attempts, "the lost commit must be retried")
+
+		openLeaseAttemptHook = nil
+
+		require.Equal(t, 2, countRows(t, s, `SELECT COUNT(*) FROM lane_lease WHERE closed_at IS NULL`))
+		require.Equal(t, 2, countRows(t, s, `SELECT COUNT(DISTINCT lease_id) FROM lane_lease`), "each attempt takes its own lease id")
+		require.Equal(t, 1, countRows(t, s, `SELECT COUNT(*) FROM lane_lease WHERE lease_id = $1`, s.leaseParam(id)), "the returned id is the committed retry's")
+
+		ageLeases(t, s, time.Hour)
+
+		closed, err := s.CloseStaleLaneLeases(t.Context(), 30*time.Minute)
+		require.NoError(t, err)
+		require.Equal(t, 2, closed)
+
+		_, _, _, err = s.OpenLaneLease(t.Context(), leaseOpen("b"))
+		require.NoError(t, err)
 	})
 }
 

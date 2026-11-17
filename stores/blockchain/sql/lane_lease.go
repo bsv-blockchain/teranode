@@ -22,6 +22,11 @@ const laneHandoutLockID int64 = 7_265_726_102
 // laneHandoutMu serialises hand-outs on SQLite, where one process owns the file.
 var laneHandoutMu sync.Mutex
 
+// openLeaseAttemptHook, when set, runs at the end of each OpenLaneLease attempt, inside its
+// transaction. It is nil in production. Tests set it to make an attempt commit and then report a
+// retriable error, as a lost COMMIT reply would.
+var openLeaseAttemptHook func(tx *sql.Tx) error
+
 // laneState is the latest hand-out in one lane.
 type laneState struct {
 	used      bool
@@ -76,20 +81,23 @@ func (s *SQL) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lan
 		return lane.LeaseID{}, lane.Grant{}, 0, errors.NewInvalidArgumentError("lane lease close time must be positive")
 	}
 
-	id, err := lane.NewLeaseID()
-	if err != nil {
-		return lane.LeaseID{}, lane.Grant{}, 0, errors.NewProcessingError("could not make a lane lease id", err)
-	}
-
 	var (
+		id     lane.LeaseID
 		grant  lane.Grant
 		lapsed int
 	)
 
-	err = s.leaseTx(ctx, true, func(tx *sql.Tx) error {
+	err := s.leaseTx(ctx, true, func(tx *sql.Tx) error {
 		var err error
 
-		// RetryTx may run this more than once; only the run that commits counts.
+		// RetryTx may run this more than once; only the run that commits counts. Each run makes its
+		// own lease id: an attempt can commit and still report a retriable error (a lost COMMIT
+		// reply), and a retry that reused the id would leave two lane_lease rows under one id. Their
+		// lapsed closes would then collide on lane_close's primary key and fail every sweep and open.
+		if id, err = lane.NewLeaseID(); err != nil {
+			return errors.NewProcessingError("could not make a lane lease id", err)
+		}
+
 		if lapsed, err = s.closeStale(ctx, tx, req.CloseAfter); err != nil {
 			return err
 		}
@@ -108,6 +116,10 @@ func (s *SQL) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lan
 			int(chosen), s.leaseParam(id), req.Holder,
 		); err != nil {
 			return errors.NewStorageError("could not record the lane lease", err)
+		}
+
+		if openLeaseAttemptHook != nil {
+			return openLeaseAttemptHook(tx)
 		}
 
 		return nil
