@@ -852,4 +852,29 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 
 		requireAllCleared(t, parent)
 	})
+
+	t.Run("lock write that fails for another reason is not outcome-unknown", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		// The lock write times out before anything is stored. Only a held lock
+		// may turn into the outcome-unknown error: here nothing was written, so
+		// the caller must be free to unspend the inputs.
+		store.SetLockPutFn(func(*aerospike.WritePolicy, *aerospike.Key, ...*aerospike.Bin) aerospike.Error {
+			return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+		})
+		t.Cleanup(func() { store.SetLockPutFn(nil) })
+
+		_, err := store.Create(ctx, parent, blockHeight, mined)
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errors.ErrTxExists)
+		require.False(t, utxo.IsCreateOutcomeUnknown(err), "nothing was written, so the outcome is known: %v", err)
+		require.ErrorContains(t, err, "failed to acquire lock")
+
+		store.SetLockPutFn(nil)
+
+		_, err = store.Get(ctx, parent.TxIDChainHash())
+		require.ErrorIs(t, err, errors.ErrTxNotFound, "the failed lock write stores nothing")
+	})
 }

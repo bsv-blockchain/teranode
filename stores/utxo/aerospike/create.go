@@ -1389,7 +1389,12 @@ func (s *Store) acquireLock(txHash *chainhash.Hash, numRecords int) (*aerospike.
 		aerospike.NewBin("lock_token", token),
 	}
 
-	err = s.client.PutBins(lockPolicy, lockKey, lockBins...)
+	if s.lockPutFn != nil {
+		err = s.lockPutFn(lockPolicy, lockKey, lockBins...)
+	} else {
+		err = s.client.PutBins(lockPolicy, lockKey, lockBins...)
+	}
+
 	if err != nil {
 		if isKeyExists(err) {
 			return nil, "", errors.NewTxExistsError("transaction creation in progress or already exists: %s", txHash)
