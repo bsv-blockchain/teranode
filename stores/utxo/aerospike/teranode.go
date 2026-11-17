@@ -276,10 +276,11 @@ type LuaMapResponse struct {
 	Errors     map[int]LuaErrorInfo `json:"errors,omitempty"`
 	ChildCount int                  `json:"childCount,omitempty"`
 	// Idempotent lists the spend indexes whose utxo already recorded exactly this
-	// spend, so the Lua wrote nothing for them. They succeed, but a rollback must
-	// leave them alone: the spend they matched is the confirmed, historical one.
-	// Absent from responses produced by a native-op server that predates it, in
-	// which case every success is treated as a fresh spend, as before.
+	// spend, so the Lua wrote nothing for them. They succeed, and a rollback
+	// reverses them only as utxo.RollbackSet allows, since the spend they matched
+	// may be a confirmed, historical one. A native-op server that does not
+	// report it fails probeNativeReplayProtection, and spend and spendMulti then
+	// run on the UDF path.
 	Idempotent []int `json:"idempotent,omitempty"`
 	// DeleteAtHeight is the master record's stamped delete-at-height, present only with a DAHSET signal from a Lua package that reports it.
 	DeleteAtHeight    int  `json:"deleteAtHeight,omitempty"`
@@ -472,8 +473,9 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 	// Parse idempotent list for spendMulti
 	// Parsed like blockIDs, through luaResponseIntSlice, because the native
 	// dispatcher may encode it as a typed integer slice such as []int64. A bare
-	// []interface{} assertion failed that shape, and a parse failure completes
-	// every spend in the record with an error and demotes the native path.
+	// []interface{} assertion failed that shape. A parse failure completes every
+	// spend in the record with a processing error. It does not demote the native
+	// path, so every later spend on that dispatcher fails the same way.
 	if idempotentField, ok := respMap["idempotent"]; ok {
 		offsets, err := luaResponseIntSlice("idempotent", idempotentField)
 		if err != nil {

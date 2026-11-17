@@ -414,11 +414,12 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		fieldConflicting:               fields.Conflicting.String(),
 	}
 
-	// Every parent of a deleted record gets an addDeletedChildren write. Do
-	// not skip parents through a probabilistic "already pruned" set: a false
-	// positive drops the replay marker on a live parent (see #1701). Missing
-	// parents already return TX_NOT_FOUND / KEY_NOT_FOUND and are counted as
-	// skipped.
+	// Every parent of a deleted record whose output still names the child gets
+	// one filtered deletedChildren map write (buildVerifiedMarkerRecords); a
+	// parent whose output names a different spender gets none. Do not skip
+	// parents through a probabilistic "already pruned" set: a false positive
+	// drops the replay marker on a live parent (see #1701). A missing parent
+	// answers KEY_NOT_FOUND under UPDATE_ONLY and is counted as skipped.
 	service.partitionWorkerFn = service.partitionWorker
 
 	return service, nil
@@ -2506,9 +2507,11 @@ const blobDeleteTimeout = 2 * time.Minute
 // Aerospike batches are not atomic across records, so a failed marker write
 // must leave the affected children in place for a later cycle, regardless of
 // defensive mode. Per-record marker failures are isolated: they hold back the
-// children of that one parent and are returned in heldBack. Only a whole-batch
-// failure, the BatchOperate call itself or a cancelled context, is returned as
-// an error, because that says nothing about any individual record. One
+// children of that one parent and are returned in heldBack. Of the marker
+// writes, only a whole-batch failure, the BatchOperate call itself or a
+// cancelled context, is returned as an error, because that says nothing about
+// any individual record. A carried delete that fails per record, and a failed
+// blob deletion, are returned too, as they were on main. One
 // permanently unwritable parent returned as a chunk error would re-fail every
 // block forever: PruneWithPartitions never retries a non-TimeoutError, and
 // services/pruner/worker.go logs the failure and advances lastProcessedHeight
@@ -2518,7 +2521,7 @@ func (s *Service) flushChunk(ctx context.Context, carry *deleteCarry, parentUpda
 	// deletions. The spend path consults a marker for the transaction asking to
 	// spend, so a marker for a child that is then deliberately NOT deleted turns
 	// that live, mined child's own idempotent re-spend into a pruned-replay
-	// rejection, and the block paths would delete it as a ghost.
+	// rejection, so a block that re-includes it is refused and retried.
 	//
 	// It gates the external blob deletions as well as the record deletions. The
 	// pruner is the only production deleter of those blobs (the external store is
@@ -3317,8 +3320,9 @@ const (
 // failed the write, and a cancelled compensation leaves the poison in place. A
 // parent that is gone has lost its markers with it.
 //
-// A write that fails is sent again, up to withdrawMarkerAttempts in all, and
-// only then counted and logged; it is never returned, since the child is
+// A write that fails transiently is sent again, up to withdrawMarkerAttempts
+// in all; a refusal that answers the same way every time (lastingWriteRefusals)
+// is counted at once. Both are logged and never returned, since the child is
 // already kept. The resend matters because a later cycle does not always come
 // back: a child whose delete was refused because a reorg took it off the chain
 // has lost its deletion height, so no scan finds it again, and a marker left
@@ -3638,7 +3642,7 @@ func isKeyNotFound(err aerospike.Error) bool {
 	return err.Matches(types.KEY_NOT_FOUND_ERROR)
 }
 
-// parentUpdateOutcome is how a single addDeletedChildren batch record is tallied.
+// parentUpdateOutcome is how a single marker-write batch record is tallied.
 type parentUpdateOutcome int
 
 const (

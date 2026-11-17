@@ -2217,10 +2217,10 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	}
 
 	// Fail closed on missing spending data before any spend is dispatched, as the
-	// Aerospike store does (validateSpendItem). Both spend paths pass the
-	// spender's txid as the parameter the replay marker is matched against, and
-	// with no spending data that parameter is NULL, which "= NULL" never matches:
-	// the marker check would silently pass.
+	// Aerospike store does (validateSpendItem). Both spend paths write and
+	// compare spend.SpendingData.Bytes(), and the replay marker refuses a spend
+	// only when the output already records exactly that spending data, so a
+	// spend with none is malformed.
 	for _, spend := range spends {
 		if spend != nil && (spend.SpendingData == nil || spend.SpendingData.TxID == nil) {
 			return nil, errors.NewProcessingError("spend of %s:%d carries no spending data", spend.TxID, spend.Vout)
