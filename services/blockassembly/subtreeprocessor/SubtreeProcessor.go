@@ -8091,8 +8091,9 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	//  1. Time: the millisecond of clock.Now() at function entry,
 	//     inclusive, or clock.Now() - DoubleSpendWindow, exclusive, when
 	//     that filter is enabled. The drain stops at the first queued batch
-	//     stamped after the cutoff, and that batch and everything behind it
-	//     roll forward to the next state-transition cycle. With no window, a
+	//     the cutoff excludes (stamped after it with no window, at or after
+	//     it with one), and that batch and everything behind it roll
+	//     forward to the next state-transition cycle. With no window, a
 	//     batch stamped in the drain's own millisecond can arrive during the
 	//     drain and is taken too, which the item bound below caps. The gRPC ingest handlers admit through AddBatchBounded,
 	//     which only refuses when blockassembly_maxQueueItems is positive;
@@ -8131,8 +8132,10 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	// tx this block mined back into block assembly. A producer stamps a
 	// batch before it links it, so a batch stamped in this millisecond can
 	// still miss the drain: when a later-stamped batch links ahead of it,
-	// or when it links after the drain ends. A later drain takes it then,
-	// as for any tx that arrives after its block's drain.
+	// or when it links after the drain ends. The steady-state dequeue loop
+	// then places it with no block filter, or the next block's drain
+	// filters it against that block alone if one comes first, as for any
+	// tx that arrives after its block's drain.
 	now := stp.clock.Now()
 	window := stp.settings.BlockAssembly.DoubleSpendWindow
 

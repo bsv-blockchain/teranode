@@ -193,14 +193,22 @@ func TestDequeueDuringBlockMovement_DrainCutoffAtClockNow(t *testing.T) {
 
 		drainAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
 		stp.clock = fixedClock{t: drainAt}
-		stp.queue.clock = fixedClock{t: drainAt.Add(time.Millisecond)}
 
-		txHash := chainhash.HashH([]byte("negative-window-later-ms"))
-		stp.queue.enqueueBatch([]subtreepkg.Node{{Hash: txHash, Fee: 1, SizeInBytes: 220}}, []*subtreepkg.TxInpoints{{}})
+		sameMs := chainhash.HashH([]byte("negative-window-same-ms"))
+		laterMs := chainhash.HashH([]byte("negative-window-later-ms"))
+
+		stp.queue.clock = fixedClock{t: drainAt}
+		stp.queue.enqueueBatch([]subtreepkg.Node{{Hash: sameMs, Fee: 1, SizeInBytes: 220}}, []*subtreepkg.TxInpoints{{}})
+		stp.queue.clock = fixedClock{t: drainAt.Add(time.Millisecond)}
+		stp.queue.enqueueBatch([]subtreepkg.Node{{Hash: laterMs, Fee: 1, SizeInBytes: 220}}, []*subtreepkg.TxInpoints{{}})
 
 		require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
 
-		require.Equal(t, int64(1), stp.queue.length(), "a negative window must not move the cutoff past the drain clock")
+		// A negative window behaves like no window, on both sides of the cutoff.
+		hashes := collectSubtreeHashes(stp)
+		require.Contains(t, hashes, sameMs, "a batch stamped in the drain's millisecond must drain, as at window 0")
+		require.NotContains(t, hashes, laterMs, "a negative window must not move the cutoff past the drain clock")
+		require.Equal(t, int64(1), stp.queue.length())
 	})
 
 	t.Run("control_one_ms_advance_drains_the_batch", func(t *testing.T) {

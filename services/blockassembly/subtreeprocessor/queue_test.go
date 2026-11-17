@@ -167,12 +167,12 @@ func Test_queueClockOverride(t *testing.T) {
 // site itself.
 //
 //	Start loop (the default: branch of SubtreeProcessor.Start):
-//	  dequeueBatch(0)                                  if DoubleSpendWindow == 0
-//	  dequeueBatch((now - window).UnixMilli())         otherwise
+//	  dequeueBatch(0)                                  if DoubleSpendWindow <= 0
+//	  dequeueBatch((now - window).UnixMilli())         if DoubleSpendWindow > 0
 //
 //	SubtreeProcessor.forEachDrainChunk (block-movement drains):
-//	  dequeueBatchUntil(now.UnixMilli())               if DoubleSpendWindow == 0
-//	  dequeueBatch((now - window).UnixMilli())         otherwise
+//	  dequeueBatchUntil(now.UnixMilli())               if DoubleSpendWindow <= 0
+//	  dequeueBatch((now - window).UnixMilli())         if DoubleSpendWindow > 0
 //
 // The Start loop disables the time filter; the drain keeps one, inclusive
 // of its own millisecond, so it still does not chase fresh ingest.
