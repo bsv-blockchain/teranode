@@ -3120,6 +3120,18 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 // releases it, and the caller must not touch the block's subtrees again. A block
 // that was never cached (cached false) is still only ValidateBlock's, so it is
 // released directly.
+//
+// The cache can also hold a different object for the same hash: a revalidation of
+// the block, or the optimistic-mining goroutine, which runs outside
+// runOncePerBlock, cached its own. Set overwrites without calling the eviction
+// function, so this call cannot tell whether block was replaced while it sat in
+// the cache or the setMined worker took it first and the other object was cached
+// after. The worker may still be reading block's subtrees, so only the object this
+// call removed is released, and block is left as if taken. If it was really
+// replaced, nobody releases it: heap-backed nodes go to the GC, mmap-backed
+// subtrees keep their mapping and temp file until the process exits. That needs an
+// operator invalidate and reconsider racing a lost SetBlockSubtreesSet reply, and a
+// leak is the safe side of that trade against tagging another block's hashes.
 func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block, cached bool) bool {
 	if !cached {
 		releaseBlockNodes(block)
@@ -3134,13 +3146,7 @@ func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block,
 
 	releaseBlockNodes(taken)
 
-	// Another Set for the same hash replaced our entry: ours left the cache without
-	// an owner, so it is still ours to release.
-	if taken != block {
-		releaseBlockNodes(block)
-	}
-
-	return true
+	return taken == block
 }
 
 // detachedBlockCopy returns a new *model.Block with block's header, coinbase and

@@ -315,16 +315,40 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 		require.False(t, block.SubtreesLoaded())
 	})
 
-	t.Run("entry replaced by another object: both released", func(t *testing.T) {
+	// The cache holds another object for the same hash. Set overwrites without
+	// calling the eviction function, so reclaim cannot tell whether ours was
+	// replaced while cached or taken by the setMined worker before the other
+	// object was cached. The worker may still be reading ours, so only the
+	// object reclaim removed is released, and the caller must not reuse ours.
+	t.Run("entry replaced by another object: only the cached one released", func(t *testing.T) {
 		bv := newBV(t)
 		block := blockWithLoadedSubtree(t)
 		other := detachedBlockCopy(block)
 		other.SubtreeSlices = loadedSubtrees(t)
 		bv.lastValidatedBlocks.Set(*block.Hash(), other)
 
-		require.True(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
-		require.False(t, block.SubtreesLoaded())
+		require.False(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
+		require.True(t, block.SubtreesLoaded(), "a block the setMined worker may hold must not be released")
 		require.False(t, other.SubtreesLoaded())
+		require.Zero(t, bv.lastValidatedBlocks.Len())
+	})
+
+	t.Run("worker took ours, then a revalidation cached another: ours left to the worker", func(t *testing.T) {
+		bv := newBV(t)
+		block := blockWithLoadedSubtree(t)
+		bv.lastValidatedBlocks.Set(*block.Hash(), block)
+
+		workerBlock, took := bv.lastValidatedBlocks.GetAndDelete(*block.Hash())
+		require.True(t, took)
+		require.Same(t, block, workerBlock)
+
+		revalidated := detachedBlockCopy(block)
+		revalidated.SubtreeSlices = loadedSubtrees(t)
+		bv.lastValidatedBlocks.Set(*block.Hash(), revalidated)
+
+		require.False(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
+		require.True(t, workerBlock.SubtreesLoaded(), "reclaim released the block the setMined worker is reading")
+		require.False(t, revalidated.SubtreesLoaded())
 	})
 }
 
@@ -500,12 +524,16 @@ func TestSubtreesSetFailure_SetTxMinedStatusTakesTheBlockOnce(t *testing.T) {
 		f := newSetMinedOwnershipFixture(ctx, t)
 		cached := f.cacheFreshBlock(ctx, t)
 
-		var reclaimOwned atomic.Bool
+		var (
+			reclaimOwned atomic.Bool
+			hookRan      atomic.Bool
+		)
 
 		// The hook runs inside setTxMinedStatus, after it has looked the block up
 		// and decided to use it. A worker that had not yet removed the entry by
 		// then would leave reclaim free to take and release the same object.
 		f.logger.onCachedBlock = func() {
+			hookRan.Store(true)
 			reclaimOwned.Store(f.bv.reclaimBlockAfterFailedSubtreesSet(cached, true))
 		}
 
@@ -514,6 +542,9 @@ func TestSubtreesSetFailure_SetTxMinedStatusTakesTheBlockOnce(t *testing.T) {
 		f.logger.onCachedBlock = nil
 		require.NoError(t, err)
 
+		// The hook keys on a log format string. If that line is reworded the hook
+		// never runs and the race goes unexercised, so fail rather than pass.
+		require.True(t, hookRan.Load(), "the cached-block hook never ran; the setTxMinedStatus debug line it matches has changed")
 		require.False(t, reclaimOwned.Load(), "reclaim took a block the setMined worker had already chosen to use")
 		require.Equal(t, before, f.client.getBlockCalls.Load(), "the worker owned the cached block, so it must not fetch another")
 		require.Contains(t, f.store.recordedHashes(), *f.childTx.TxIDChainHash())
