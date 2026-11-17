@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
@@ -254,7 +255,7 @@ func TestBlockchainSubscriptionListener_StuckAnnouncementTimesOut(t *testing.T) 
 	notificationProcessTimeout = 100 * time.Millisecond
 	t.Cleanup(func() { notificationProcessTimeout = previous })
 
-	timedOut := droppedNotifications("announcement", model.NotificationType_Block, dropReasonTimeout)
+	timedOut := droppedNotifications("announcement", model.NotificationType_Block, "timeout")
 	timedOutBefore := testutil.ToFloat64(timedOut)
 
 	type headerCall struct {
@@ -267,6 +268,14 @@ func TestBlockchainSubscriptionListener_StuckAnnouncementTimesOut(t *testing.T) 
 	}
 
 	calls := make(chan headerCall, 4)
+
+	first := chainhash.HashH([]byte("first block"))
+	second := chainhash.HashH([]byte("second block"))
+
+	// The second call parks until cleanup instead of timing out, so the
+	// timeout count read below covers the first announcement only.
+	releaseSecond := make(chan struct{})
+	t.Cleanup(func() { close(releaseSecond) })
 
 	var (
 		mu               sync.Mutex
@@ -294,7 +303,11 @@ func TestBlockchainSubscriptionListener_StuckAnnouncementTimesOut(t *testing.T) 
 
 		calls <- call
 
-		<-callCtx.Done()
+		if call.hash == second {
+			<-releaseSecond
+		} else {
+			<-callCtx.Done()
+		}
 
 		mu.Lock()
 		previousReturned = true
@@ -303,8 +316,6 @@ func TestBlockchainSubscriptionListener_StuckAnnouncementTimesOut(t *testing.T) 
 
 	_, subscription := startListenerTestServer(t, mockBlockchain)
 
-	first := chainhash.HashH([]byte("first block"))
-	second := chainhash.HashH([]byte("second block"))
 	subscription <- blockNotification(first)
 	subscription <- blockNotification(second)
 
@@ -334,7 +345,7 @@ func TestBlockchainSubscriptionListener_StuckAnnouncementTimesOut(t *testing.T) 
 		"the second announcement started while the first GetBlockHeader was still running")
 
 	// The worker counts the first announcement's timeout before it takes the
-	// second, and the second is still waiting on its own deadline.
+	// second, and the second is parked.
 	require.Equal(t, 1.0, testutil.ToFloat64(timedOut)-timedOutBefore,
 		"the announcement abandoned at notificationProcessTimeout must be counted as a timeout")
 }
@@ -348,7 +359,7 @@ func TestBlockchainSubscriptionListener_FullAnnouncementQueueDropsInsteadOfBlock
 	announcementQueueSize = 2
 	t.Cleanup(func() { announcementQueueSize = previous })
 
-	dropped := droppedNotifications("announcement", model.NotificationType_Block, dropReasonQueueFull)
+	dropped := droppedNotifications("announcement", model.NotificationType_Block, "queue_full")
 	droppedBefore := testutil.ToFloat64(dropped)
 
 	entered := make(chan struct{}, 1)
@@ -399,8 +410,8 @@ func TestBlockchainSubscriptionListener_FullPeerFailureQueueCountsDrop(t *testin
 	peerFailureQueueSize = 1
 	t.Cleanup(func() { peerFailureQueueSize = previous })
 
-	droppedPeerFailure := droppedNotifications("peer-failure", model.NotificationType_PeerFailure, dropReasonQueueFull)
-	droppedAsAnnouncement := droppedNotifications("announcement", model.NotificationType_PeerFailure, dropReasonQueueFull)
+	droppedPeerFailure := droppedNotifications("peer-failure", model.NotificationType_PeerFailure, "queue_full")
+	droppedAsAnnouncement := droppedNotifications("announcement", model.NotificationType_PeerFailure, "queue_full")
 	peerFailureBefore := testutil.ToFloat64(droppedPeerFailure)
 	announcementBefore := testutil.ToFloat64(droppedAsAnnouncement)
 
@@ -444,7 +455,7 @@ func TestBlockchainSubscriptionListener_NonCatchupPeerFailuresBypassPeerFailureQ
 	peerFailureQueueSize = 1
 	t.Cleanup(func() { peerFailureQueueSize = previous })
 
-	dropped := droppedNotifications("peer-failure", model.NotificationType_PeerFailure, dropReasonQueueFull)
+	dropped := droppedNotifications("peer-failure", model.NotificationType_PeerFailure, "queue_full")
 	droppedBefore := testutil.ToFloat64(dropped)
 
 	blockReached := make(chan struct{}, 1)
@@ -482,4 +493,43 @@ func TestBlockchainSubscriptionListener_NonCatchupPeerFailuresBypassPeerFailureQ
 
 	require.Zero(t, testutil.ToFloat64(dropped)-droppedBefore,
 		"block PeerFailure reports must not be dropped from, or fill, the peer-failure queue")
+}
+
+// An announcement that fails with an ordinary error, well inside its bound,
+// must not be counted as a timeout.
+func TestBlockchainSubscriptionListener_NonTimeoutErrorIsNotCountedAsTimeout(t *testing.T) {
+	timedOut := droppedNotifications("announcement", model.NotificationType_Block, "timeout")
+	timedOutBefore := testutil.ToFloat64(timedOut)
+
+	failing := chainhash.HashH([]byte("block whose header read fails"))
+	barrier := chainhash.HashH([]byte("barrier block"))
+
+	barrierReached := make(chan struct{}, 1)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool { return *hash == failing })).
+		Return(nil, nil, errors.NewProcessingError("block header not found"))
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool { return *hash == barrier })).
+		Run(func(mock.Arguments) {
+			barrierReached <- struct{}{}
+			<-release
+		}).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100, SubtreesSet: true}, nil)
+
+	_, subscription := startListenerTestServer(t, mockBlockchain)
+
+	subscription <- blockNotification(failing)
+	// The worker is serial: once the barrier reaches GetBlockHeader, the failed
+	// announcement has been fully handled.
+	subscription <- blockNotification(barrier)
+
+	select {
+	case <-barrierReached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the barrier block never reached GetBlockHeader")
+	}
+
+	require.Zero(t, testutil.ToFloat64(timedOut)-timedOutBefore,
+		"an announcement that failed for another reason must not be counted as a timeout")
 }
