@@ -2735,3 +2735,14 @@ func maxMedianTimePastHeightsPerRequest(tSettings *settings.Settings) uint32 {
 	}
 	return uint32(configured) //nolint:gosec // bounded above before conversion
 }
+
+// NewLaneClient returns the blockchain client a lane allocator takes its lease through. The
+// allocator owns it and closes it after it releases its lease.
+//
+// It is built on a context that ctx's cancel does not reach. A client closes its connection when
+// its context ends, and a process cancels its context before it closes its clients, so on ctx the
+// release at shutdown would go out over a closed connection and the lease would lapse instead.
+// Close still ends the client's subscription, so nothing outlives the allocator.
+func NewLaneClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (ClientI, error) {
+	return NewClient(context.WithoutCancel(ctx), logger, tSettings, "lane")
+}

@@ -132,10 +132,11 @@ var newMainUtxoStore = func(ctx context.Context, logger ulogger.Logger, appSetti
 
 // laneLeaseSource returns what the allocator takes its lease from: a blockchain client of its own,
 // which the allocator closes after it releases its lease. The daemon closes the clients it retains
-// in the order it built them, so a retained client would close before the release could go out. A
-// var so a test can answer without a blockchain service.
+// in the order it built them, so a retained client would close before the release could go out,
+// and the daemon's context ends before that, so the client is built on one shutdown does not
+// cancel (see blockchain.NewLaneClient). A var so a test can answer without a blockchain service.
 var laneLeaseSource = func(ctx context.Context, _ *Stores, logger ulogger.Logger, appSettings *settings.Settings) (lane.LeaseSource, error) {
-	return blockchain.NewClient(ctx, logger, appSettings, "lane")
+	return blockchain.NewLaneClient(ctx, logger, appSettings)
 }
 
 // giveLanePositions hands the process's one UTXO store its lane position source. Every service in

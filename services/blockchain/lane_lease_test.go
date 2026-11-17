@@ -382,3 +382,30 @@ func TestLanePositionsSurviveABlockchainRestart(t *testing.T) {
 		require.Equal(t, 1, leases, "the allocator holds a new lease")
 	})
 }
+
+// The daemon cancels its context before it closes its clients, so a lane client built on that
+// context would have closed its connection before the allocator's release went out. The release
+// must still land, and close the lease clean.
+func TestLaneClientReleasesAfterItsContextEnds(t *testing.T) {
+	b, s, _ := startAuthenticatedBlockchain(t, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	client, err := NewLaneClient(ctx, ulogger.NewErrorTestLogger(t), s)
+	require.NoError(t, err)
+
+	a := lane.NewAllocator(client, "pod", lane.Timings{Renew: time.Hour, Stop: 2 * time.Hour, GrantDuration: time.Hour}, nil)
+
+	_, err = a.Next(context.Background())
+	require.NoError(t, err)
+
+	// Shutdown: the context ends first, and the clients close after.
+	cancel()
+	time.Sleep(300 * time.Millisecond)
+
+	require.NoError(t, a.Close())
+
+	var kind string
+	require.NoError(t, b.store.GetDB().QueryRow(`SELECT kind FROM lane_close`).Scan(&kind))
+	require.Equal(t, "clean", kind)
+}
