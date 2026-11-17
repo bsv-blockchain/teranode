@@ -926,6 +926,10 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	case rollbackFire:
 	}
 
+	if rollback = s.withoutMarkedMatches(rbCtx, tx, rollback, result.idempotentSpends, phase); len(rollback) == 0 {
+		return
+	}
+
 	// Unspend is ownership-checked (teranode.lua only clears spending_data it
 	// still owns), which stops this from wiping a *different* tx's spend. It
 	// does not answer the question that matters here: SpendingData is just
@@ -937,6 +941,85 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	// parents — tracked in #1291; the outcome metrics here make the residual
 	// window measurable in the meantime.
 	s.unspendRollback(rbCtx, tx, rollback, phase)
+}
+
+// withoutMarkedMatches drops from rollback every idempotent match whose parent
+// now carries a replay marker for this spender.
+//
+// The spend read the parent's deletedChildren bin before the existence probe
+// ran, and the pruner can work in between: it writes the marker for (parent,
+// spender), and only once that write has answered does it delete the spender.
+// The input read before the marker answered as an idempotent match, a sibling
+// whose parent was already gone failed, and the probe then finds no spender.
+// The match is then a confirmed spend by a pruned transaction, and reversing it
+// would release a confirmed output. Because the marker lands before the delete,
+// a probe that found no spender comes after it, so reading it here closes the
+// window.
+//
+// A spend this call wrote is never dropped: its output was free before the
+// call, so a marker naming this spender says nothing about it. A read that
+// fails drops the match too, leaving the output spent by a transaction the store
+// does not hold, which the next attempt heals (utxo.RollbackSet). A parent that
+// is gone keeps its match: there is no output left to release.
+func (s *Store) withoutMarkedMatches(ctx context.Context, tx *bt.Tx, rollback, idempotent []*utxo.Spend, phase string) []*utxo.Spend {
+	if len(idempotent) == 0 {
+		return rollback
+	}
+
+	isIdempotent := make(map[*utxo.Spend]struct{}, len(idempotent))
+	for _, spend := range idempotent {
+		isIdempotent[spend] = struct{}{}
+	}
+
+	spender := tx.TxIDChainHash().String()
+	bin := fields.DeletedChildren.String()
+	kept := make([]*utxo.Spend, 0, len(rollback))
+
+	for _, spend := range rollback {
+		if _, ok := isIdempotent[spend]; !ok {
+			kept = append(kept, spend)
+
+			continue
+		}
+
+		key, err := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySource(spend.TxID, spend.Vout, s.utxoBatchSize))
+		if err != nil {
+			s.logger.Errorf("[SPEND][%s] cannot read the replay marker on %s:%d (%s), leaving its idempotent match in place: %v", tx.TxID(), spend.TxID, spend.Vout, phase, err)
+
+			continue
+		}
+
+		if ctx.Err() != nil {
+			s.logger.Errorf("[SPEND][%s] rollback budget spent before reading the replay marker on %s:%d (%s), leaving its idempotent match in place", tx.TxID(), spend.TxID, spend.Vout, phase)
+
+			continue
+		}
+
+		rec, getErr := s.client.Get(util.GetAerospikeReadPolicy(s.settings), key, bin)
+		if getErr != nil {
+			if getErr.Matches(types.KEY_NOT_FOUND_ERROR) {
+				kept = append(kept, spend)
+
+				continue
+			}
+
+			s.logger.Errorf("[SPEND][%s] cannot read the replay marker on %s:%d (%s), leaving its idempotent match in place: %v", tx.TxID(), spend.TxID, spend.Vout, phase, getErr)
+
+			continue
+		}
+
+		if markers, ok := rec.Bins[bin].(map[interface{}]interface{}); ok {
+			if _, marked := markers[spender]; marked {
+				s.logger.Warnf("[SPEND][%s] %s:%d now carries a replay marker for this spender (%s), leaving its confirmed spend in place", tx.TxID(), spend.TxID, spend.Vout, phase)
+
+				continue
+			}
+		}
+
+		kept = append(kept, spend)
+	}
+
+	return kept
 }
 
 // spendRollbackContext is the context a rollback runs under; see

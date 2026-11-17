@@ -848,3 +848,55 @@ func TestPrunerMarkersStayOnTheOutputPageThatHoldsTheChild(t *testing.T) {
 	_, _, err = store.SpendAndCreate(ctx, childOf[outputs-1], 1200)
 	require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "page-only markers must still reject a pruned child's replay")
 }
+
+// TestRollbackKeepsAMatchMarkedAfterTheSpendRead: the pruner works between a
+// replay's spend read and its existence probe. The replay's input on P read
+// P:0 before C's marker landed, so it answered as an idempotent match, and a
+// sibling input whose parent was gone failed. The pruner then wrote the marker
+// and deleted C, so the probe finds no spender. The rollback must read the
+// marker again: P:0 is a confirmed spend by the pruned C, and reversing it
+// would release a confirmed output. The test drives the rollback directly with
+// the state that interleaving leaves behind.
+func TestRollbackKeepsAMatchMarkedAfterTheSpendRead(t *testing.T) {
+	logger := ulogger.New("rollback-marker-reread-test")
+	s := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, cleanup := initAerospike(t, s, logger)
+	t.Cleanup(cleanup)
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	p := bt.NewTx()
+	require.NoError(t, p.From("1111111111111111111111111111111111111111111111111111111111111111", 0, "51", 30000))
+	require.NoError(t, p.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+	require.NoError(t, p.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+	_, err := store.Create(ctx, p, 1000)
+	require.NoError(t, err)
+
+	c := bt.NewTx()
+	require.NoError(t, c.From(p.TxID(), 0, p.Outputs[0].LockingScript.String(), p.Outputs[0].Satoshis))
+	require.NoError(t, c.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+	_, _, err = store.SpendAndCreate(ctx, c, 1000)
+	require.NoError(t, err)
+
+	p0Hash, err := util.UTXOHashFromOutput(p.TxIDChainHash(), p.Outputs[0], 0)
+	require.NoError(t, err)
+	match := &utxo.Spend{TxID: p.TxIDChainHash(), Vout: 0, UTXOHash: p0Hash, SpendingData: spendpkg.NewSpendingData(c.TxIDChainHash(), 0)}
+
+	// The prune: the marker first, then the child's delete.
+	pKey := parentKeyForOutput(t, store, p.TxIDChainHash(), 0, s.UtxoStore.UtxoBatchSize)
+	require.NoError(t, client.PutBins(nil, pKey, aerospike.NewBin(fields.DeletedChildren.String(),
+		map[interface{}]interface{}{c.TxID(): true})))
+
+	cKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), c.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+	existed, err := client.Delete(nil, cKey)
+	require.NoError(t, err)
+	require.True(t, existed, "fixture: C existed before it was pruned")
+
+	store.RollbackIdempotentMatchesForTest(c, []*utxo.Spend{match})
+
+	after, err := store.GetSpend(ctx, match)
+	require.NoError(t, err)
+	require.NotNil(t, after.SpendingData, "a match whose parent carries the marker by the time of the probe is a confirmed spend and must stay")
+	require.Equal(t, *c.TxIDChainHash(), *after.SpendingData.TxID, "P:0 must still be spent by C")
+}

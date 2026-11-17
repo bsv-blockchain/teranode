@@ -2432,7 +2432,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		case len(rollback) == 0:
 			// Nothing this call wrote, so nothing to reverse or probe for.
 		case !(sawTransientLock || sawTransientCreating) || hasUnwinnableFailure(spends):
-			s.probeAndRollbackPartialSpends(tx, rollback)
+			s.probeAndRollbackPartialSpends(tx, rollback, idempotentSpends)
 		default:
 			// Transient suppression: record the outcome so this store's dashboard
 			// signal has the same value set as aerospike's — a suppressed
@@ -2472,7 +2472,12 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 // transaction has a record. With a record present the ref is not dangling and
 // the rollback would instead clear a slot a live tx legitimately owns; an
 // indeterminate lookup skips the rollback.
-func (s *Store) probeAndRollbackPartialSpends(tx *bt.Tx, rollback []*utxo.Spend) {
+//
+// idempotent lists the inputs whose output already recorded this spender before
+// the call. Once the probe finds no spender, every one of them in rollback is
+// checked for a replay marker again before it is reversed; see
+// withoutMarkedMatches.
+func (s *Store) probeAndRollbackPartialSpends(tx *bt.Tx, rollback, idempotent []*utxo.Spend) {
 	rbCtx, rbCancel := s.spendRollbackContext()
 	defer rbCancel()
 
@@ -2513,9 +2518,71 @@ func (s *Store) probeAndRollbackPartialSpends(tx *bt.Tx, rollback []*utxo.Spend)
 		return
 	}
 
+	if rollback = s.withoutMarkedMatches(rbCtx, tx, rollback, idempotent); len(rollback) == 0 {
+		return
+	}
+
 	prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeFired).Inc()
 
 	s.unspendRollback(rbCtx, tx, rollback)
+}
+
+// withoutMarkedMatches drops from rollback every idempotent match whose parent
+// now carries a replay marker for this spender.
+//
+// The spend reads the markers before the existence probe runs, and a prune can
+// commit in between: it writes the marker for (parent, spender) and deletes the
+// spender in one transaction. The input read before that commit answered as an
+// idempotent match, a sibling whose parent was already gone found no spender,
+// and the probe then finds none either. The match is then a confirmed spend by
+// a pruned transaction, and reversing it would release a confirmed output.
+// Because the marker and the delete commit together, a probe that found no
+// spender has already seen the marker, so reading it here closes the window.
+//
+// A spend this call wrote is never dropped: its output was free before the
+// call, so a marker naming this spender says nothing about it. A lookup that
+// fails drops the match too, leaving the output spent by a transaction the store
+// does not hold, which the next attempt heals (utxo.RollbackSet).
+func (s *Store) withoutMarkedMatches(ctx context.Context, tx *bt.Tx, rollback, idempotent []*utxo.Spend) []*utxo.Spend {
+	if len(idempotent) == 0 {
+		return rollback
+	}
+
+	isIdempotent := make(map[*utxo.Spend]struct{}, len(idempotent))
+	for _, spend := range idempotent {
+		isIdempotent[spend] = struct{}{}
+	}
+
+	const q = `SELECT EXISTS(SELECT 1 FROM deleted_children d
+		JOIN transactions t ON t.id = d.parent_id
+		WHERE t.hash = $1 AND d.child_hash = $2)`
+
+	kept := make([]*utxo.Spend, 0, len(rollback))
+
+	for _, spend := range rollback {
+		if _, ok := isIdempotent[spend]; !ok {
+			kept = append(kept, spend)
+
+			continue
+		}
+
+		var marked bool
+		if err := s.db.QueryRowContext(ctx, q, spend.TxID[:], tx.TxIDChainHash()[:]).Scan(&marked); err != nil {
+			s.logger.Errorf("[SPEND][%s] cannot read the replay marker on %s:%d, leaving its idempotent match in place: %v", tx.TxID(), spend.TxID, spend.Vout, err)
+
+			continue
+		}
+
+		if marked {
+			s.logger.Warnf("[SPEND][%s] %s:%d now carries a replay marker for this spender, leaving its confirmed spend in place", tx.TxID(), spend.TxID, spend.Vout)
+
+			continue
+		}
+
+		kept = append(kept, spend)
+	}
+
+	return kept
 }
 
 // rollbackPartialSpends reverses rollback with no existence probe, for a caller

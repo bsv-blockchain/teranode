@@ -3,6 +3,8 @@ package aerospike
 import (
 	"context"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -74,4 +76,11 @@ func (s *Store) QueryConflictWALIndex(ctx context.Context) (int, bool, error) {
 // ConflictWALFallbackScans is the number of WAL reads that scanned the set, for this process.
 func ConflictWALFallbackScans() float64 {
 	return testutil.ToFloat64(prometheusConflictWALFallbackScans)
+}
+
+// RollbackIdempotentMatchesForTest runs the abort path's rollback for a failed
+// spend by tx whose only successful inputs were the given idempotent matches,
+// with an unwinnable sibling failure so no transient window suppresses it.
+func (s *Store) RollbackIdempotentMatchesForTest(tx *bt.Tx, idempotent []*utxo.Spend) {
+	s.rollbackPartialSpends(tx, &spendCompletionResult{idempotentSpends: idempotent, rollbackNeeded: true, sawUnwinnable: true}, "test")
 }

@@ -870,3 +870,30 @@ func TestSpendRollbackSetForRequireParentOutputs(t *testing.T) {
 		spendRollbackSet([]*utxo.Spend{written, timedOut}, []*utxo.Spend{written}),
 		"a call that failed only on a transient error reverses nothing")
 }
+
+// TestRollbackKeepsAMatchMarkedAfterTheSpendRead: a prune that commits between
+// a replay's marker read and its existence probe. The replay's input on P read
+// P:0 before the prune's marker landed, so it answered as an idempotent match
+// with no error, and a sibling input whose parent was gone failed. The probe
+// then finds no spender, because the same prune deleted it. The rollback must
+// read the marker again: P:0 is a confirmed spend by the pruned child, and
+// reversing it would release a confirmed output. The test calls the rollback
+// directly with the state that interleaving leaves behind.
+func TestRollbackKeepsAMatchMarkedAfterTheSpendRead(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+		p, _, child := twoParentPrunedChild(t, ctx, store)
+
+		historical := spendpkg.NewSpendingData(child.TxIDChainHash(), 0).Bytes()
+		require.Equal(t, historical, outputSpendingData(t, ctx, store, p, 0), "fixture: P:0 is confirmed spent by the child")
+
+		utxoHash, err := util.UTXOHashFromOutput(p.TxIDChainHash(), p.Outputs[0], 0)
+		require.NoError(t, err)
+
+		match := &utxo.Spend{TxID: p.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash, SpendingData: spendpkg.NewSpendingData(child.TxIDChainHash(), 0)}
+
+		store.probeAndRollbackPartialSpends(child, []*utxo.Spend{match}, []*utxo.Spend{match})
+
+		require.Equal(t, historical, outputSpendingData(t, ctx, store, p, 0),
+			"a match whose parent carries the marker by the time of the probe is a confirmed spend and must stay")
+	})
+}
