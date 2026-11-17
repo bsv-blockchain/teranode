@@ -91,7 +91,52 @@ func TestPrunerVerifiedMarkerRecord(t *testing.T) {
 	require.Len(t, batchWrite.Ops, 1)
 }
 
-// TestObservePrunerNativeOpError: a PARAMETER_ERROR on a sub-op 15 write turns
+// TestVerifiedMarkerAnswer covers how the sub-op 15 probe reads each answer,
+// which a stock server never reaches because it refuses the opcode outright.
+func TestVerifiedMarkerAnswer(t *testing.T) {
+	s := &Store{logger: ulogger.TestLogger{}}
+
+	answer := func(resp interface{}) *aerospike.BatchRecord {
+		return &aerospike.BatchRecord{ResultCode: types.OK, Record: &aerospike.Record{Bins: aerospike.BinMap{nativeOpResultBin: resp}}}
+	}
+
+	code, err := s.verifiedMarkerAnswer(answer(map[interface{}]interface{}{"status": "OK"}))
+	require.NoError(t, err)
+	require.Empty(t, code, "OK")
+
+	code, err = s.verifiedMarkerAnswer(answer(map[interface{}]interface{}{"status": "ERROR", "errorCode": "NOT_SPENDER", "message": "no"}))
+	require.NoError(t, err)
+	require.Equal(t, LuaErrorCodeNotSpender, code)
+
+	_, err = s.verifiedMarkerAnswer(answer(map[interface{}]interface{}{"status": "ERROR"}))
+	require.Error(t, err, "ERROR without a code")
+
+	_, err = s.verifiedMarkerAnswer(answer(map[interface{}]interface{}{"status": "MAYBE"}))
+	require.Error(t, err, "unknown status")
+
+	_, err = s.verifiedMarkerAnswer(answer("OK"))
+	require.Error(t, err, "a response that is not a map")
+
+	_, err = s.verifiedMarkerAnswer(&aerospike.BatchRecord{ResultCode: types.OK})
+	require.Error(t, err, "no response record")
+
+	wireErr := &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+	_, err = s.verifiedMarkerAnswer(&aerospike.BatchRecord{Err: wireErr, ResultCode: types.PARAMETER_ERROR})
+	require.True(t, hasResultCode(err, types.PARAMETER_ERROR), "the wire error reaches the probe")
+}
+
+// TestMarkerSet: the probe reads the marker the way the spend path does, a
+// true value under the child's key.
+func TestMarkerSet(t *testing.T) {
+	require.True(t, markerSet(map[interface{}]interface{}{"a": true}, "a"))
+	require.True(t, markerSet(map[string]interface{}{"a": true}, "a"))
+	require.False(t, markerSet(map[interface{}]interface{}{"a": false}, "a"), "false is no marker")
+	require.False(t, markerSet(map[interface{}]interface{}{"b": true}, "a"))
+	require.False(t, markerSet(nil, "a"))
+	require.False(t, markerSet("invalid-map", "a"))
+}
+
+// TestObservePrunerNativeOpError:a PARAMETER_ERROR on a sub-op 15 write turns
 // the native marker write off and leaves the other native ops on, and nothing
 // else does.
 func TestObservePrunerNativeOpError(t *testing.T) {

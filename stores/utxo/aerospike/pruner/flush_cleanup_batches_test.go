@@ -44,8 +44,10 @@ func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[str
 }
 
 // newFlushTestService starts an Aerospike container and returns a pruner
-// service on it. No Lua package is configured, so markers go through the plain
-// MapPutItems path; the marker rules under test sit above that choice.
+// service on it. AEROSPIKE_CONTAINER_IMAGE picks the server image. Markers go
+// through the filtered MapPutItems write, or native sub-op 15 when
+// AEROSPIKE_EXPECT_NATIVE_OPS=true; the marker rules under test sit above that
+// choice.
 func newFlushTestService(t *testing.T) (*Service, *uaerospike.Client) {
 	t.Helper()
 

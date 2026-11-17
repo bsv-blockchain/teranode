@@ -14,7 +14,7 @@ import (
 // code change, for when the relaxation has to be ruled out in the field.
 //
 // This applies to the pruner's own record removals ONLY. Parent updates (the
-// deletedChildren marker writes, each a map write filtered on the parent output)
+// deletedChildren marker writes, each native sub-op 15 or a map write filtered on the parent output)
 // mutate records that survive the prune, so they keep COMMIT_ALL, as does every write outside the
 // pruner — see util.GetAerospikeWritePolicy.
 

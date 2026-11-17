@@ -208,6 +208,14 @@ func (s *Store) probeVerifiedMarker(key *aerospike.Key, child *chainhash.Hash, o
 		return "", batchErr
 	}
 
+	return s.verifiedMarkerAnswer(&record.BatchRecord)
+}
+
+// verifiedMarkerAnswer reads one sub-op 15 batch record: the response's error
+// code, empty for OK, or the record's wire error. Split from
+// probeVerifiedMarker so the probe's reading can be tested without a server, as
+// rejectsWith is.
+func (s *Store) verifiedMarkerAnswer(record *aerospike.BatchRecord) (LuaErrorCode, error) {
 	if record.Err != nil {
 		return "", record.Err
 	}

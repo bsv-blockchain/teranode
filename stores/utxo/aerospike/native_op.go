@@ -100,8 +100,8 @@ func encodeNativeOpPayload(subOp uint8, args []any) ([]byte, error) {
 // on the outcome of probeNativeReplayProtection rather than for everyone:
 // spendMulti and the single-output spend must consult the replay marker and
 // report idempotent matches. addDeletedChildren, which nothing in production
-// calls since the pruner writes markers with a plain map write, stays fenced
-// with them. A fork build that passes the first-seen probe but predates those
+// calls since the pruner writes markers with sub-op 15 or a filtered map write
+// (see detectNativeVerifiedMarkerSupport), stays fenced with them. A fork build that passes the first-seen probe but predates those
 // semantics keeps the native path for every other sub-op and runs these three
 // through the UDF, instead of losing the native path wholesale.
 func (s *Store) useNativeForSubOp(subOp uint8) bool {
@@ -927,9 +927,9 @@ func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospi
 	return true
 }
 
-// probePlantMarker records child as pruned on a probe record with the write the
-// pruner makes (buildVerifiedMarkerRecords): a plain MapPutItems of
-// {child.String(): true} into the deletedChildren bin.
+// probePlantMarker records child as pruned on a probe record with the marker
+// the pruner leaves (buildVerifiedMarkerRecords), {child.String(): true} in the
+// deletedChildren bin, written here as a plain MapPutItems.
 func (s *Store) probePlantMarker(ctx context.Context, policy *aerospike.WritePolicy, key *aerospike.Key, child *chainhash.Hash) bool {
 	if ctx.Err() != nil {
 		s.logger.Warnf("[teranode-native-op] replay-marker probe aborted by context: %v", ctx.Err())

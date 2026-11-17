@@ -33,6 +33,11 @@ func SetChildDAHBeforeWrite(f func()) {
 	childDAHBeforeWrite = f
 }
 
+// UsesNativeOps reports whether the store engaged the native operate-path at start-up and still has it.
+func (s *Store) UsesNativeOps() bool {
+	return s.useNativeTeranodeOps.Load()
+}
+
 // UsesNativeVerifiedMarker reports whether the pruner's replay-marker write uses native sub-op 15.
 func (s *Store) UsesNativeVerifiedMarker() bool {
 	return s.useNativeVerifiedMarkerWrite()
