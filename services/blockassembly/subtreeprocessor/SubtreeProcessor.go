@@ -5770,7 +5770,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		// drained. The reset that follows a failed fork reorg reloads every tx
 		// the store marks unmined, and a queued tx is one, as with the last
 		// step's drain before. A tx that arrives after its own block's step
-		// still reaches only later blocks' filters, as it does outside a reorg.
+		// still reaches only later blocks' filters, as it does outside a reorg,
+		// and so does one a positive double-spend window holds back past it.
 		if transactionMap, losingTxHashesMap, err = stp.moveForwardBlock(ctx, block, true, processedConflictingHashesMap, false, lastMoveForwardBlock); err != nil {
 			return err
 		}
@@ -8087,11 +8088,10 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHa
 func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*TxBatch) (int, error)) error {
 	// Bound the drain by two complementary cutoffs:
 	//
-	//  1. Time: validFromMillis = clock.Now() at function entry (or
-	//     clock.Now() - DoubleSpendWindow when that filter is enabled).
-	//     The queue filter in LockFreeQueue.dequeueBatch holds back any batch whose
-	//     enqueue timestamp is >= this value, so we only drain batches
-	//     that existed before this moment. Batches arriving during the
+	//  1. Time: clock.Now() at function entry, inclusive, or
+	//     clock.Now() - DoubleSpendWindow, exclusive, when that filter is
+	//     enabled. The queue holds back any batch stamped later, so we
+	//     only drain batches that existed by this moment. Batches arriving during the
 	//     drain stay queued and roll forward to the next state-transition
 	//     cycle. The gRPC ingest handlers admit through AddBatchBounded,
 	//     which only refuses when blockassembly_maxQueueItems is positive;
@@ -8123,10 +8123,24 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	// "function entry" semantic the docstring describes. Calling
 	// stp.clock.Now() twice would let the second call admit batches
 	// enqueued in the gap between the two samples.
+	//
+	// With no double-spend window the cutoff includes the drain's own
+	// millisecond. A batch stamped in that millisecond reached the queue
+	// before the drain or while it ran, and a drain during block movement
+	// filters it against the block it moves; held back, it would be
+	// filtered against a later block or none, and a tx this block mined
+	// would go back into block assembly. The queue-length snapshot still
+	// bounds the drain.
 	now := stp.clock.Now()
-	validFromMillis := now.UnixMilli()
-	if stp.settings.BlockAssembly.DoubleSpendWindow > 0 {
-		validFromMillis = now.Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
+	window := stp.settings.BlockAssembly.DoubleSpendWindow
+	validFromMillis := now.Add(-window).UnixMilli()
+
+	dequeue := func() (*TxBatch, bool) {
+		if window > 0 {
+			return stp.queue.dequeueBatch(validFromMillis)
+		}
+
+		return stp.queue.dequeueBatchUntil(validFromMillis)
 	}
 
 	itemsProcessed := int64(0)
@@ -8134,7 +8148,7 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	chunkItems := 0
 
 	for itemsProcessed < queueLength {
-		batch, found := stp.queue.dequeueBatch(validFromMillis)
+		batch, found := dequeue()
 		if !found {
 			break
 		}

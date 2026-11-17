@@ -105,15 +105,12 @@ func TestDequeueDuringBlockMovement_RejectsChildOfConflictingParent(t *testing.T
 }
 
 // TestDequeueDuringBlockMovement_DrainCutoffAtClockNow pins, at the real
-// call site, that dequeueDuringBlockMovement holds back batches enqueued
-// in the same millisecond as the drain — even with DoubleSpendWindow=0.
+// call site, that with DoubleSpendWindow=0 dequeueDuringBlockMovement takes
+// a batch enqueued in the drain's own millisecond and holds back a later one.
 //
-// The drain's validFromMillis is always set (clock.Now() when
-// DoubleSpendWindow=0, clock.Now()-DoubleSpendWindow otherwise) so the
-// queue filter in LockFreeQueue.dequeueBatch (`batch.time >= validFromMillis -> hold`)
-// uses the drain clock as the cutoff. This bounds the drain to batches
-// that already existed before the drain started, preventing the loop
-// from chasing fresh ingest produced by AddTxBatchColumnar — the
+// The cutoff is the drain clock, inclusive, so the drain filters a batch
+// that reached the queue before it against the block it moves, and still
+// does not chase fresh ingest produced by AddTxBatchColumnar, the
 // behaviour that previously stalled the scaling-2 pod inside
 // moveForwardBlock.
 //
@@ -125,7 +122,7 @@ func TestDequeueDuringBlockMovement_RejectsChildOfConflictingParent(t *testing.T
 // SubtreeProcessor clock has advanced past the enqueue clock; the
 // batch passes the cutoff and drains.
 func TestDequeueDuringBlockMovement_DrainCutoffAtClockNow(t *testing.T) {
-	t.Run("same_millisecond_batch_held_back", func(t *testing.T) {
+	t.Run("same_millisecond_batch_drains", func(t *testing.T) {
 		stp := newTestProcessorNoStart(t)
 		require.Zero(t, stp.settings.BlockAssembly.DoubleSpendWindow,
 			"default window is 0; cutoff-at-now is the property being asserted")
@@ -143,10 +140,28 @@ func TestDequeueDuringBlockMovement_DrainCutoffAtClockNow(t *testing.T) {
 
 		require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
 
-		require.Equal(t, int64(1), stp.queue.length(),
-			"same-ms batch must be held back: validFromMillis == batch.time")
-		require.NotContains(t, collectSubtreeHashes(stp), txHash,
-			"held-back batch must not appear in chainedSubtrees / currentSubtree")
+		require.Zero(t, stp.queue.length(),
+			"a same-ms batch must drain: the cutoff includes the drain's millisecond")
+		require.Contains(t, collectSubtreeHashes(stp), txHash)
+	})
+
+	t.Run("later_batch_held_back", func(t *testing.T) {
+		stp := newTestProcessorNoStart(t)
+
+		drainAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+		stp.clock = fixedClock{t: drainAt}
+		stp.queue.clock = fixedClock{t: drainAt.Add(time.Millisecond)}
+
+		txHash := chainhash.HashH([]byte("zero-window-later-ms"))
+		stp.queue.enqueueBatch(
+			[]subtreepkg.Node{{Hash: txHash, Fee: 1, SizeInBytes: 220}},
+			[]*subtreepkg.TxInpoints{{}},
+		)
+
+		require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
+
+		require.Equal(t, int64(1), stp.queue.length(), "a batch stamped after the drain clock must be held back")
+		require.NotContains(t, collectSubtreeHashes(stp), txHash)
 	})
 
 	t.Run("control_one_ms_advance_drains_the_batch", func(t *testing.T) {

@@ -67,3 +67,61 @@ func forkReorgFiltersQueueArrivals(t *testing.T, opts ...Options) {
 	require.Contains(t, hashes, unmined, "a queued tx no block mined must be kept")
 	require.Equal(t, uint64(len(hashes)), stp.txCount.Load(), "the transaction count must equal what the subtrees hold") // nolint:gosec
 }
+
+// A batch that reaches the queue in the same millisecond as forward block A's
+// drain must be filtered against block A. Held back, a later step would drain
+// it against block B alone and bring back a tx that block A mined.
+func TestReorgBlocks_Fork_HeldBackBatchIsFilteredAgainstEarlierForwardBlock(t *testing.T) {
+	cases := map[string]struct {
+		window     time.Duration
+		firstDrain time.Duration // the drain clock at block A's step, after the enqueue
+		laterDrain time.Duration // the drain clock at block B's step
+	}{
+		"same_millisecond_at_zero_window": {window: 0, firstDrain: 0, laterDrain: time.Millisecond},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false)
+			stp.settings.BlockAssembly.DoubleSpendWindow = tc.window
+
+			minedInFirstTx, _ := createResetWALConflict(t, store, 23)
+			minedInLastTx, _ := createResetWALConflict(t, store, 24)
+			minedInFirst := *minedInFirstTx.TxIDChainHash()
+			unmined := chainhash.HashH([]byte("fork-reorg-held-back-not-mined"))
+
+			back := moveToBlockAbove(t, stp, chain)
+			chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedInFirstTx)}
+			chain.moveForward[1].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedInLastTx)}
+
+			enqueueAt := time.Now()
+			stp.queue.clock = fixedClock{t: enqueueAt}
+
+			// Before block A's step the batch arrives, at a drain clock that holds it
+			// back; before block B's step the clock moves on so B's drain takes it.
+			var enqueued, advanced bool
+
+			stp.SetProgressHook(func() {
+				switch {
+				case !enqueued && stp.currentBlockHeader.Load().Hash().IsEqual(chain.genesis.Hash()):
+					enqueued = true
+					stp.clock = fixedClock{t: enqueueAt.Add(tc.firstDrain)}
+					stp.AddBatch(
+						[]subtreepkg.Node{{Hash: minedInFirst, Fee: 1, SizeInBytes: 1}, {Hash: unmined, Fee: 1, SizeInBytes: 1}},
+						[]*subtreepkg.TxInpoints{inpointsPtr(), inpointsPtr()},
+					)
+				case enqueued && !advanced && stp.currentBlockHeader.Load().Hash().IsEqual(chain.moveForward[0].Header.Hash()):
+					advanced = true
+					stp.clock = fixedClock{t: enqueueAt.Add(tc.laterDrain)}
+				}
+			})
+
+			require.NoError(t, stp.reorgBlocks(t.Context(), []*model.Block{back}, chain.moveForward))
+			require.True(t, enqueued && advanced, "the batch must arrive before block A's step and the clock move before block B's")
+
+			hashes := collectSubtreeHashes(stp)
+			require.NotContains(t, hashes, minedInFirst, "a held-back tx the first forward block mined must not re-enter block assembly")
+			require.Contains(t, hashes, unmined, "a held-back tx no block mined must be kept")
+		})
+	}
+}
