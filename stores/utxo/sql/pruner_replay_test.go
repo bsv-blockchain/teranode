@@ -893,10 +893,27 @@ func TestRollbackKeepsAMatchMarkedAfterTheSpendRead(t *testing.T) {
 
 		match := &utxo.Spend{TxID: p.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash, SpendingData: spendpkg.NewSpendingData(child.TxIDChainHash(), 0)}
 
-		store.probeAndRollbackPartialSpends(child, []*utxo.Spend{match}, []*utxo.Spend{match})
+		// A spend this same call wrote on the marked parent: P:1 was free
+		// before the call. The marker names this spender, but says nothing
+		// about an output the call itself just took, so it must be reversed.
+		p1Hash, err := util.UTXOHashFromOutput(p.TxIDChainHash(), p.Outputs[1], 1)
+		require.NoError(t, err)
+
+		written := &utxo.Spend{TxID: p.TxIDChainHash(), Vout: 1, UTXOHash: p1Hash, SpendingData: spendpkg.NewSpendingData(child.TxIDChainHash(), 2)}
+
+		require.Nil(t, outputSpendingData(t, ctx, store, p, 1), "fixture: P:1 is free before the call")
+
+		_, err = store.db.ExecContext(ctx,
+			"UPDATE outputs SET spending_data = $2 WHERE idx = 1 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
+			p.TxIDChainHash()[:], written.SpendingData.Bytes())
+		require.NoError(t, err)
+
+		store.probeAndRollbackPartialSpends(child, []*utxo.Spend{match, written}, []*utxo.Spend{match})
 
 		require.Equal(t, historical, outputSpendingData(t, ctx, store, p, 0),
 			"a match whose parent carries the marker by the time of the probe is a confirmed spend and must stay")
+		require.Nil(t, outputSpendingData(t, ctx, store, p, 1),
+			"a spend this call wrote is reversed even though its parent carries a marker for this spender")
 	})
 }
 
