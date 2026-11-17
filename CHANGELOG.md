@@ -145,7 +145,7 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   block's height.** Validated below an activation height or above the block, or moved back by a reorg: such a
   transaction is now script-verified at the block's height, and one locked to a time is checked for finality, so a
   block a node used to accept on the stored verdict alone can be rejected. Consensus change: upgrade every node
-  before the next activation height.
+  before the next activation height. (#2232)
 
 - **A block below a checkpoint the tip has passed is rejected.** Block validation now
   applies bitcoin-sv's `bad-fork-prior-to-checkpoint` rule. A block whose height is
