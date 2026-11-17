@@ -305,7 +305,21 @@ func parentKeyForOutput(t *testing.T, store *astore.Store, txID *chainhash.Hash,
 // A rebroadcast of C is rejected on P's marker, and Q:0 must STILL be spent by
 // C afterwards: that spend was never made by the replay, and releasing it hands
 // a confirmed output to any new transaction. Reproduced by review.
+//
+// Two shapes. With C retained, the rollback's existence probe finds C and
+// skips the rollback altogether. With C pruned, the shape a real replay meets,
+// the probe finds nothing and the rollback fires, so only utxo.RollbackSet's
+// exclusion of the idempotent match keeps Q:0 spent by C.
 func TestPrunedReplayRollbackKeepsSiblingHistoricalSpend(t *testing.T) {
+	t.Run("child retained", func(t *testing.T) {
+		testPrunedReplayRollbackKeepsSiblingHistoricalSpend(t, false)
+	})
+	t.Run("child pruned", func(t *testing.T) {
+		testPrunedReplayRollbackKeepsSiblingHistoricalSpend(t, true)
+	})
+}
+
+func testPrunedReplayRollbackKeepsSiblingHistoricalSpend(t *testing.T, pruneChild bool) {
 	logger := ulogger.New("pruner-replay-sibling-test")
 	s := test.CreateBaseTestSettings(t)
 	s.UtxoStore.DisableDAHCleaner = false
@@ -368,7 +382,7 @@ func TestPrunedReplayRollbackKeepsSiblingHistoricalSpend(t *testing.T) {
 	qKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySource(q.TxIDChainHash(), 0, s.UtxoStore.UtxoBatchSize))
 	require.NoError(t, err)
 
-	// P carries C's marker, Q does not, and C is still present.
+	// P carries C's marker and Q does not. C is still present unless pruneChild.
 	require.NoError(t, client.Put(nil, pKey, aerospike.BinMap{
 		fields.DeletedChildren.String(): map[interface{}]interface{}{c.TxID(): true},
 	}))
@@ -381,9 +395,15 @@ func TestPrunedReplayRollbackKeepsSiblingHistoricalSpend(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, qRecord.Bins[fields.DeletedChildren.String()], "fixture: Q must carry no marker")
 
+	if pruneChild {
+		existed, deleteErr := client.Delete(nil, cKey)
+		require.NoError(t, deleteErr)
+		require.True(t, existed, "fixture: C's record existed before it was pruned")
+	}
+
 	cExists, err := client.Exists(nil, cKey)
 	require.NoError(t, err)
-	require.True(t, cExists, "fixture: the held-back child is retained")
+	require.Equal(t, !pruneChild, cExists, "fixture: C is retained only when not pruned")
 
 	q0Hash, err := util.UTXOHashFromOutput(q.TxIDChainHash(), q.Outputs[0], 0)
 	require.NoError(t, err)
