@@ -162,9 +162,10 @@ func releaseLocksOnMine(ctx context.Context, q querier, txids [][]byte, floor in
 }
 
 // releaseUTXOLocks clears the locked bit on the UTXOs of the transactions releaseLocksOnMine
-// released, through setLockedSQL, which also covers every containment row they have at or above
-// the floor, including the one this mine inserted. Nothing is run when nothing was locked, so a
-// block whose transactions were all released by the two-phase commit pays no UTXO probe.
+// released, through setLockedSQL, after setLockedMinedSQL, which covers every containment row
+// they have at or above the floor, including the one this mine inserted. Nothing is run when
+// nothing was locked, so a block whose transactions were all released by the two-phase commit
+// pays no UTXO probe.
 func releaseUTXOLocks(ctx context.Context, q querier, txids [][]byte, floor int32) error {
 	if len(txids) == 0 {
 		return nil
@@ -180,7 +181,11 @@ func releaseUTXOLocks(ctx context.Context, q querier, txids [][]byte, floor int3
 		his = append(his, Pack(txid, ^uint32(0)))
 	}
 
-	if _, err := q.Exec(ctx, setLockedSQL, leaves, txids, los, his, false, FlagLocked, floor); err != nil {
+	if _, err := q.Exec(ctx, setLockedMinedSQL, txids, false, FlagLocked, floor); err != nil {
+		return errors.NewStorageError("[utxoset][SetMinedMulti] release containment lock", err)
+	}
+
+	if _, err := q.Exec(ctx, setLockedSQL, leaves, txids, los, his, false, FlagLocked); err != nil {
 		return errors.NewStorageError("[utxoset][SetMinedMulti] release UTXO lock", err)
 	}
 

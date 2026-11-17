@@ -182,10 +182,16 @@ type chainWriteWatch struct {
 // watchOnMainChainWrites opens a watch for a walk about to run without slowPathMu.
 //
 // Such a walk reads its rows from a snapshot taken when it began. A chain write that
-// commits during the walk can touch only rows the walk does not, so REPEATABLE READ aborts
-// neither, and the walk can then commit its older view over the write. The owner opens a
-// watch before the walk and closes it under slowPathMu after the walk has committed, so
-// every write that committed in between has been noted on it.
+// commits during the walk can touch only rows the walk does not, so REPEATABLE READ on its
+// own aborts neither, and the walk can then commit its older view over the write. The owner
+// opens a watch before the walk and closes it under slowPathMu after the walk has
+// committed, so every write in this process that committed in between has been noted on it.
+//
+// On PostgreSQL the shared chain-write row (see chainWriteStateKey) already rolls such a
+// walk back and its retry lands from a fresh snapshot, for writes from every process. The
+// watch still reports the write, so the owner runs one more walk than it needs to: a
+// bounded one after a reorg, a full one after an operator write. On SQLite the watch is
+// the only guard.
 //
 // Each write notes the lowest height at which it can have moved the best chain. Every row
 // below every noted height has the same membership on the chain the walk saw as on the
@@ -396,7 +402,7 @@ const (
 // reports an overlap when one was noted. When every noted write named the lowest height it
 // can have moved, and no mark owing a full walk arrived meanwhile, the walk left every row
 // below that height right, and the record is narrowed to a bounded walk down to it, which
-// runs next under slowPathMu like any bounded attempt and which no write can overlap. When
+// runs next under slowPathMu like any bounded attempt. When
 // one of them could not name a height, which is InvalidateBlock and RevalidateBlock, the
 // full walk runs again, unlocked, after the backoff. A steady stream of such operator
 // writes can keep the repair owed; readers stay on the flag-free walk meanwhile, which
@@ -405,7 +411,11 @@ const (
 // On SQLite a full attempt does take slowPathMu. SQLite lets one writer in at a time, so a
 // long walk would make each StoreBlock that needs to write fail with SQLITE_BUSY after the
 // 5 s busy timeout; waiting on the lock delays block storage without failing it. Every
-// SQLite attempt is therefore locked, and none can be overlapped.
+// SQLite attempt is therefore locked.
+//
+// slowPathMu only orders writers in this process. On PostgreSQL every walk, locked or
+// not, also checks the shared chain-write row before it commits (see chainWriteStateKey),
+// which rolls it back when a write from any process committed during it.
 //
 // A locked attempt reads the record only once it holds the lock. A chain write it queued
 // behind has finished by then and cannot overlap it, and a rebuild outside the loop that

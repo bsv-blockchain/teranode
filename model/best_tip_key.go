@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/binary"
+	"math"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -12,20 +13,29 @@ import (
 // (invalidating or deleting a block), and block assembly clears it once it has replayed from it.
 const BestTipLowWaterStateKey = "BestTipLowWater"
 
-// bestTipKeyVersion is the first byte of an encoded BestTipKey.
-const bestTipKeyVersion = 1
+// bestTipKeyVersion is the first byte of an encoded BestTipKey. Version 2 is the order by chain
+// work and id. Version 1, written by binaries that broke equal-work ties by the relaying peer's
+// id first, carried the peer id between the chain work and the id; it is still read from stored
+// state, see readBestTipKey. A binary that knows only version 1 rejects version 2, so neither
+// side reads a key of the other order as one of its own.
+const (
+	bestTipKeyVersion       = 2
+	bestTipKeyLegacyVersion = 1
+)
 
 // BestTipKey is a block's place in the order the blockchain store picks its best tip by: most
-// chain work first, then the lowest peer id, then the lowest block id. The order is total, and
-// without an invalidation the best tip only ever moves to a block that sorts better, so a reader
-// that keeps the key of the last block it handled finds every later best tip among the valid
-// blocks that sort better than that key.
+// chain work first, then the lowest block id. Above the checkpoints a block's id is taken when
+// StoreBlock writes its row, after validation, so between blocks of equal work the one this node
+// stored first wins. That is close to SV Node's rule of keeping the block it received first, but
+// not the same: a sibling that arrives later and validates faster can take the lower id. The
+// order is total, and without an invalidation the best tip only ever moves to a block that sorts
+// better, so a reader that keeps the key of the last block it handled finds every later best tip
+// among the valid blocks that sort better than that key.
 //
 // ChainWork is the stored cumulative work, 32 bytes big-endian, so comparing it bytewise
 // compares the work. Hash identifies the block and plays no part in the order.
 type BestTipKey struct {
 	ChainWork []byte
-	PeerID    string
 	ID        uint32
 	Hash      chainhash.Hash
 }
@@ -34,26 +44,25 @@ type BestTipKey struct {
 func NewBestTipKey(header *BlockHeader, meta *BlockHeaderMeta) BestTipKey {
 	return BestTipKey{
 		ChainWork: append([]byte(nil), meta.ChainWork...),
-		PeerID:    meta.PeerID,
 		ID:        meta.ID,
 		Hash:      *header.Hash(),
 	}
 }
 
-// Bytes serialises the key: a version byte, the chain work and the peer id each behind a 4-byte
-// length, the id, and the hash.
+// Bytes serialises the key: a version byte, the chain work behind a 4-byte length, the id, and
+// the hash.
 func (k BestTipKey) Bytes() []byte {
-	b := make([]byte, 0, 1+4+len(k.ChainWork)+4+len(k.PeerID)+4+chainhash.HashSize)
+	b := make([]byte, 0, 1+4+len(k.ChainWork)+4+chainhash.HashSize)
 	b = append(b, bestTipKeyVersion)
 	b = appendBestTipBytes(b, k.ChainWork)
-	b = appendBestTipBytes(b, []byte(k.PeerID))
 	b = binary.LittleEndian.AppendUint32(b, k.ID)
 
 	return append(b, k.Hash[:]...)
 }
 
-// NewBestTipKeyFromBytes parses a key written by Bytes. It fails on anything else, an empty or
-// truncated value included, rather than guessing.
+// NewBestTipKeyFromBytes parses a key from stored state: one written by Bytes, or a version 1
+// key an older binary saved, placed as readBestTipKey describes. It fails on anything else, an
+// empty or truncated value included, rather than guessing.
 func NewBestTipKeyFromBytes(b []byte) (BestTipKey, error) {
 	k, rest, err := readBestTipKey(b)
 	if err != nil {
@@ -65,6 +74,19 @@ func NewBestTipKeyFromBytes(b []byte) (BestTipKey, error) {
 	}
 
 	return k, nil
+}
+
+// NewCurrentBestTipKeyFromBytes parses a key a caller sends in a request, which must be one
+// written by Bytes. A version 1 key comes from a block assembly that still orders by peer id: it
+// would read the replies in its own order and clear a low-water mark it cannot parse, so refusing
+// it makes that block assembly follow the best header instead, as it does against any blockchain
+// service that does not serve its order.
+func NewCurrentBestTipKeyFromBytes(b []byte) (BestTipKey, error) {
+	if len(b) > 0 && b[0] != bestTipKeyVersion {
+		return BestTipKey{}, errors.NewProcessingError("invalid best tip key: version %d, expected %d", b[0], bestTipKeyVersion)
+	}
+
+	return NewBestTipKeyFromBytes(b)
 }
 
 // BestTipLowWater is the low-water mark of the best tip: the key of the best tip right after it
@@ -186,7 +208,7 @@ func NewBestTipLowWaterFromBytes(b []byte) (BestTipLowWater, error) {
 }
 
 func appendBestTipBytes(b, v []byte) []byte {
-	// Chain work is 32 bytes and a peer id a short string; neither comes near 4 GiB.
+	// Chain work is 32 bytes; it comes nowhere near 4 GiB.
 	b = binary.LittleEndian.AppendUint32(b, uint32(len(v))) //nolint:gosec // see above
 
 	return append(b, v...)
@@ -207,8 +229,16 @@ func readBestTipBytes(b []byte) ([]byte, []byte, error) {
 	return append([]byte(nil), b[:n]...), b[n:], nil
 }
 
+// readBestTipKey reads a key in either version. A version 1 key held its place in the order by
+// chain work, peer id and id, so among blocks of equal work it does not have the same place by
+// chain work and id: a sibling with a higher id and a lower peer id sorted better than it and now
+// sorts worse, and a replay from its id would skip that sibling. A version 1 key with a peer id is
+// therefore read with the highest id, last among blocks of its work, so a replay from it visits
+// every sibling of equal work again; a block it already holds is passed over. One with an empty
+// peer id sorted first among its equal-work siblings in the old order, so its id already places
+// it at least as early, and it is read as it is.
 func readBestTipKey(b []byte) (BestTipKey, []byte, error) {
-	if len(b) == 0 || b[0] != bestTipKeyVersion {
+	if len(b) == 0 || (b[0] != bestTipKeyVersion && b[0] != bestTipKeyLegacyVersion) {
 		return BestTipKey{}, nil, errors.NewProcessingError("invalid best tip key: unknown version")
 	}
 
@@ -218,17 +248,18 @@ func readBestTipKey(b []byte) (BestTipKey, []byte, error) {
 		err  error
 	)
 
+	legacy := b[0] == bestTipKeyLegacyVersion
 	rest := b[1:]
 
 	if k.ChainWork, rest, err = readBestTipBytes(rest); err != nil {
 		return BestTipKey{}, nil, err
 	}
 
-	if peer, rest, err = readBestTipBytes(rest); err != nil {
-		return BestTipKey{}, nil, err
+	if legacy {
+		if peer, rest, err = readBestTipBytes(rest); err != nil {
+			return BestTipKey{}, nil, err
+		}
 	}
-
-	k.PeerID = string(peer)
 
 	if len(rest) < 4+chainhash.HashSize {
 		return BestTipKey{}, nil, errors.NewProcessingError("invalid best tip key: truncated id or hash")
@@ -236,6 +267,10 @@ func readBestTipKey(b []byte) (BestTipKey, []byte, error) {
 
 	k.ID = binary.LittleEndian.Uint32(rest)
 	copy(k.Hash[:], rest[4:4+chainhash.HashSize])
+
+	if len(peer) > 0 {
+		k.ID = math.MaxUint32
+	}
 
 	return k, rest[4+chainhash.HashSize:], nil
 }
