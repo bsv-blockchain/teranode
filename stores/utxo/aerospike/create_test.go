@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -677,14 +678,17 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 
 	// failClears fails the next n clears of the creating bin. A clear is the
 	// only UPDATE_ONLY batch write a create sends; it fails before anything
-	// is sent, so the records keep the bin.
-	failClears := func(n int) {
-		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
-			if n > 0 && len(records) > 0 {
-				if write, ok := records[0].(*aerospike.BatchWrite); ok && write.Policy != nil &&
-					write.Policy.RecordExistsAction == aerospike.UPDATE_ONLY {
-					n--
+	// is sent, so the records keep the bin. The external write runs in its own
+	// goroutine beside the store's other batches, so the count is atomic.
+	failClears := func(n int32) {
+		var left atomic.Int32
 
+		left.Store(n)
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if len(records) > 0 {
+				if write, ok := records[0].(*aerospike.BatchWrite); ok && write.Policy != nil &&
+					write.Policy.RecordExistsAction == aerospike.UPDATE_ONLY && left.Add(-1) >= 0 {
 					return &aerospike.AerospikeError{ResultCode: types.SERVER_NOT_AVAILABLE}
 				}
 			}
