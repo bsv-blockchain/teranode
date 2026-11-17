@@ -57,9 +57,9 @@ type mtpFloorEntry struct {
 // and applies no offset at all beyond it. It recomputes that median as new peers
 // are sampled and freezes once 200 have been, so a long-running node stops
 // following drift. On a chain whose median-time-past trails real time by about
-// an hour, the clock-skew failure below needs the local clock roughly three hours behind,
-// and at that skew SV Node's adjustment is zero too, so its own template build
-// fails the same consensus check. Forward-stamped blocks that push
+// an hour, the clock-skew failure below needs the local clock roughly three
+// hours behind, and at that skew SV Node's adjustment is zero too, so its own
+// template build fails the same consensus check. Forward-stamped blocks that push
 // median-time-past ahead of real time can trigger the failure at a smaller
 // skew. There a node whose clock was already slow while it sampled its first
 // peers can be rescued by SV Node's capped offset, where this code refuses the
