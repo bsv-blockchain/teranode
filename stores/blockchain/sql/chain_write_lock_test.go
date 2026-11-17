@@ -282,9 +282,10 @@ func TestNewDoesNotWaitOnAnOpenChainWrite_PostgreSQL(t *testing.T) {
 	require.NoError(t, holder.lockChainWrites(context.Background(), tx))
 
 	opened := make(chan error, 1)
+	tSettings := test.CreateBaseTestSettings(t)
 
 	go func() {
-		second, newErr := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+		second, newErr := New(ulogger.TestLogger{}, storeURL, tSettings)
 		if newErr == nil {
 			_ = second.Close(context.Background())
 		}
