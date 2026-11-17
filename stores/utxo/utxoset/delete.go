@@ -157,12 +157,21 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 		return errors.NewProcessingError("[utxoset][Delete] nil hash")
 	}
 
-	return s.deleteIn(ctx, s.pool, []chainhash.Hash{*hash})
+	// The statement deletes the identity and membership rows in its main query and the undo
+	// records at its end, and a restore of the same transaction (Unspend) takes an undo record
+	// first and share-locks the identity row after, so the two can deadlock on one transaction.
+	// Against the pool the statement is its own transaction and rolls back whole, so it runs again.
+	return withDeadlockRetry(ctx, "delete", func() error {
+		return s.deleteIn(ctx, s.pool, []chainhash.Hash{*hash})
+	})
 }
 
 // deleteIn is Delete against an arbitrary querier and over a batch, so a future multi-delete
 // and any composition inside a database transaction share these predicates rather than growing
 // a second copy of them. A single Delete is a batch of one.
+//
+// It does not retry a deadlock itself. Inside a caller's transaction a deadlock has already
+// aborted that transaction, so only the caller can run it again from the start.
 func (s *Store) deleteIn(ctx context.Context, q querier, hashes []chainhash.Hash) error {
 	if len(hashes) == 0 {
 		return nil

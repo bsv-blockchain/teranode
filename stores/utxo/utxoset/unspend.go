@@ -116,8 +116,14 @@ import (
 // that comes second waits on the share lock, so its UTXO update starts after the restore commits
 // and finds the coin. It must be FOR SHARE: FOR KEY SHARE does not conflict with an update that
 // changes only flags. A transaction found in neither table has no lock for SetLocked to change,
-// because SetLocked keeps the transaction's lock on those same rows. A share lock writes nothing to the row's data, but it does set the row's
-// locker, which dirties its page, so every restore pays that on each row it reads the lock from.
+// because SetLocked keeps the transaction's lock on those same rows. A share lock writes nothing
+// to the row's data, but it does set the row's locker, which dirties its page, so every restore
+// pays that on each row it reads the lock from.
+//
+// The containment arm locks from the dropped floor ($5), wider than the lookup floor ($8) the
+// lock bit is read from, because the conflicting bit is read from the dropped floor up, and
+// SetConflicting writes those rows too. Locking only from $8 would let a SetConflicting on a row
+// between the floors run beside the restore, the same race the lock bit had.
 //
 // The restored UTXO's pair is the copy's own, verbatim, whenever it is non-zero: a non-zero
 // pair was final when it was copied and stays final. A copy at (0,0) is the REPAIR's case. The
@@ -283,16 +289,29 @@ SELECT (SELECT count(*) FROM restored),
 // block disconnect does NOT come through here: a transaction in a disconnected block is
 // still valid and returns to assembly unmined, so its spends must STAY -- restoring them
 // would create a UTXO that a still-live transaction is already spending.
+//
+// Nothing in the store bounds how long the restore waits for the rows it share-locks; the
+// caller's context does. A writer holding them, a mine of a whole batch until it commits or a
+// deadlock until PostgreSQL detects it, can run a short deadline out. The restore then returns a
+// storage error and rolls back whole: no UTXO of the call is restored and every undo record it
+// would have consumed is still there, so a later Unspend of the same spends can restore them. The
+// validator's shed unwind is the caller with a short deadline (validator_shedUnwindTimeout).
 func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	req, err := newUnspendRequest(spends, len(flagAsLocked) > 0 && flagAsLocked[0])
 	if err != nil || len(req.ukeys) == 0 {
 		return err
 	}
 
-	// The restore share-locks the identity and containment rows it reads the lock from, and a
-	// SetLocked or a mine naming several of the same transactions locks those rows in another
-	// order, so PostgreSQL can stop the restore as a deadlock. The attempt is one transaction
-	// that rolls back whole, so it runs again from the start, as SetLocked and the mine do.
+	// The restore share-locks the identity and containment rows it reads the lock from, and other
+	// writers lock those rows in another order, so PostgreSQL can stop the restore as a deadlock:
+	// a SetLocked or a mine naming several of the same transactions, an un-mine even on one
+	// shared transaction (unMine deletes containment rows before it updates the identity rows),
+	// and a Delete of the restored coin's transaction (it removes the identity rows before the
+	// undo records).
+	// The attempt is one transaction that rolls back whole, so it runs again from the start, as
+	// SetLocked, the mine and Delete do. Each crossing costs at least PostgreSQL's
+	// deadlock_timeout, a second by default, before the retry, and the shared fence lock is held
+	// for all of it.
 	var res unspendResult
 
 	if err := withDeadlockRetry(ctx, "unspend", func() (err error) {

@@ -569,7 +569,13 @@ func TestUnlockOfAContainmentRowRacingAnUnspendWaitsForIt(t *testing.T) {
 // When the restore had already share-locked second before it reached first, that last update
 // waits on the restore while the restore waits on it, and PostgreSQL stops the restore, which
 // started waiting first, as the deadlock victim. The Unspend must run again and succeed.
-func crossedLockChange(t *testing.T, s *Store, ctx context.Context, first, second *bt.Tx, spends []*utxo.Spend) {
+//
+// It reports false when the holder was the victim instead. That happens when more than the
+// restore's deadlock_timeout passes between the restore blocking and the holder blocking: the
+// restore's one deadlock check has already run and found no cycle, so the holder's check is the
+// one that finds it. The holder's change is then rolled back, so the caller redoes the iteration
+// on a fresh store rather than asserting on a lock that was never changed.
+func crossedLockChange(t *testing.T, s *Store, ctx context.Context, first, second *bt.Tx, spends []*utxo.Spend) bool {
 	t.Helper()
 
 	holder, err := s.pool.Begin(ctx)
@@ -598,9 +604,20 @@ func crossedLockChange(t *testing.T, s *Store, ctx context.Context, first, secon
 
 	waitForLockWait(t, s, ctx, "spend_journal")
 
-	require.NoError(t, setLockedTo(s, second, false)(ctx, holder))
+	err = setLockedTo(s, second, false)(ctx, holder)
+	if isDeadlock(err) {
+		require.NoError(t, holder.Rollback(ctx))
+		require.NoError(t, <-done)
+
+		return false
+	}
+
+	require.NoError(t, err)
+
 	require.NoError(t, holder.Commit(ctx))
 	require.NoError(t, <-done, "a deadlock is retried, not returned")
+
+	return true
 }
 
 // TestUnspendRetriesADeadlockWithALockChange: the restore share-locks each parent's identity
@@ -612,33 +629,51 @@ func TestUnspendRetriesADeadlockWithALockChange(t *testing.T) {
 	before := testutil.ToFloat64(deadlockRetried.WithLabelValues("unspend"))
 
 	for _, holdFirst := range []int{0, 1} {
-		s, ctx := newTestStore(t)
+		for attempt := 1; ; attempt++ {
+			if crossedLockChangeOnce(t, holdFirst) {
+				break
+			}
 
-		require.NoError(t, s.SetBlockHeight(100))
-
-		parents := make([]*bt.Tx, 2)
-
-		var spends []*utxo.Spend
-
-		for i := range parents {
-			parents[i] = mkTx(t, 2, uint64(10_000+i))
-			_, err := s.Create(ctx, parents[i], 100, utxo.WithLocked(true))
-			require.NoError(t, err)
-
-			spent, err := spendOnly(ctx, s, spendParentTx(t, parents[i], nil, 1_000, 0), 101, utxo.WithIgnoreLocked(true))
-			require.NoError(t, err)
-			require.Len(t, spent, 1)
-
-			spends = append(spends, spent...)
-		}
-
-		crossedLockChange(t, s, ctx, parents[holdFirst], parents[1-holdFirst], spends)
-
-		for _, parent := range parents {
-			requireRestoredCoinLock(t, s, ctx, parent, false)
+			require.Less(t, attempt, 3, "the holder, not the restore, was the deadlock victim on every attempt")
 		}
 	}
 
 	require.GreaterOrEqual(t, testutil.ToFloat64(deadlockRetried.WithLabelValues("unspend"))-before, 1.0,
 		"one of the two orders must cross the restore's share locks and be retried")
+}
+
+// crossedLockChangeOnce is one order of TestUnspendRetriesADeadlockWithALockChange on a fresh
+// store. It reports false when crossedLockChange had to give the iteration up.
+func crossedLockChangeOnce(t *testing.T, holdFirst int) bool {
+	t.Helper()
+
+	s, ctx := newTestStore(t)
+
+	require.NoError(t, s.SetBlockHeight(100))
+
+	parents := make([]*bt.Tx, 2)
+
+	var spends []*utxo.Spend
+
+	for i := range parents {
+		parents[i] = mkTx(t, 2, uint64(10_000+i))
+		_, err := s.Create(ctx, parents[i], 100, utxo.WithLocked(true))
+		require.NoError(t, err)
+
+		spent, err := spendOnly(ctx, s, spendParentTx(t, parents[i], nil, 1_000, 0), 101, utxo.WithIgnoreLocked(true))
+		require.NoError(t, err)
+		require.Len(t, spent, 1)
+
+		spends = append(spends, spent...)
+	}
+
+	if !crossedLockChange(t, s, ctx, parents[holdFirst], parents[1-holdFirst], spends) {
+		return false
+	}
+
+	for _, parent := range parents {
+		requireRestoredCoinLock(t, s, ctx, parent, false)
+	}
+
+	return true
 }

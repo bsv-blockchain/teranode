@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -229,4 +230,54 @@ func TestDeleteRemovesMembershipRows(t *testing.T) {
 	h := tx.TxIDChainHash()
 	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM tx_body WHERE txid = $1`, h[:]),
 		"a mined-only transaction's body must not survive Delete")
+}
+
+// TestDeleteRetriesADeadlockOnItsJournalRow: Delete removes the transaction's identity and
+// membership rows in its main query and the undo records for its spent outputs at the end of the
+// same statement, so a writer that holds one of those undo records and then asks for the
+// identity row crosses it. Unspend of the same transaction is that writer: it consumes the undo
+// record first and share-locks the identity row after. The holder here plays it with its deadlock
+// check pushed out, so Delete, which started waiting first, is the one PostgreSQL stops. Delete
+// must run again and succeed rather than hand a reorg a storage error it does not tolerate.
+func TestDeleteRetriesADeadlockOnItsJournalRow(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends := mempoolParentSpent(t, s, ctx, false)
+	h := parent.TxIDChainHash()
+	ukey := Pack(h[:], spends[0].Vout)
+
+	holder, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = holder.Rollback(context.Background()) }()
+
+	var superuser string
+	require.NoError(t, holder.QueryRow(ctx, `SELECT current_setting('is_superuser')`).Scan(&superuser))
+
+	if superuser != "on" {
+		t.Skip("only a superuser can push the holder's deadlock check out, which pins Delete as the victim")
+	}
+
+	_, err = holder.Exec(ctx, `SET LOCAL deadlock_timeout = '30s'`)
+	require.NoError(t, err)
+
+	_, err = holder.Exec(ctx, `SELECT 1 FROM spend_journal WHERE ukey = $1 AND txid = $2 FOR UPDATE`, ukey, h[:])
+	require.NoError(t, err)
+
+	before := testutil.ToFloat64(deadlockRetried.WithLabelValues("delete"))
+
+	done := make(chan error, 1)
+
+	go func() { done <- s.Delete(ctx, h) }()
+
+	waitForLockWait(t, s, ctx, "WITH k AS")
+
+	_, err = holder.Exec(ctx, `SELECT 1 FROM tx_ident WHERE txid = $1 FOR SHARE`, h[:])
+	require.NoError(t, err, "the holder waits out Delete's deadlock check and gets the row")
+	require.NoError(t, holder.Rollback(ctx))
+
+	require.NoError(t, <-done, "a deadlock is retried, not returned")
+	require.Greater(t, testutil.ToFloat64(deadlockRetried.WithLabelValues("delete")), before, "Delete was stopped as a deadlock and ran again")
+	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM tx_ident WHERE txid = $1`, h[:]))
+	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM spend_journal WHERE txid = $1`, h[:]))
 }
