@@ -40,7 +40,7 @@ func WithAdvisoryLock(ctx context.Context, db *DB, lockID int64, fn func() error
 	// Pin a single connection so lock + unlock run on the same session.
 	conn, err := db.DB.Conn(ctx)
 	if err != nil {
-		return errors.New(errors.ERR_ERROR, "advisory lock %d: failed to acquire connection: %w", lockID, err)
+		return errors.New(errors.ERR_ERROR, "advisory lock %d: failed to acquire connection", lockID, err)
 	}
 	defer func() {
 		// Returns the pinned connection to the pool; the advisory lock must
@@ -50,7 +50,7 @@ func WithAdvisoryLock(ctx context.Context, db *DB, lockID int64, fn func() error
 	}()
 
 	if _, err := conn.ExecContext(ctx, fmt.Sprintf("SELECT pg_advisory_lock(%d)", lockID)); err != nil {
-		return errors.New(errors.ERR_ERROR, "failed to acquire advisory lock %d: %w", lockID, err)
+		return errors.New(errors.ERR_ERROR, "failed to acquire advisory lock %d", lockID, err)
 	}
 
 	defer func() {

@@ -171,10 +171,10 @@ func (hc *HeaderChainCache) GetValidationHeaders(blockHash *chainhash.Hash) ([]*
 		return nil, false
 	}
 
-	// Return a copy to prevent modification
-	result := make([]*model.BlockHeader, len(headers))
-	copy(result, headers)
-	return result, true
+	// Read-only contract: callers (the catchup validation path) only read the
+	// returned slice, so we return the stored slice directly under the RLock
+	// rather than copying it on every block. Do not mutate the result.
+	return headers, true
 }
 
 // HasBlock checks if a block hash exists in the chain index.

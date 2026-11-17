@@ -14,6 +14,18 @@ import (
 // p2pk is an optional parameter to specify if the coinbase output should be a pay to public key
 // instead of a pay to public key hash
 func (mc *MiningCandidate) CreateCoinbaseTxCandidate(tSettings *settings.Settings, p2pk ...bool) (*bt.Tx, error) {
+	// Explicit nil-guard preserving the documented (and tested) panic contract.
+	// Relying on the implicit nil-dereference stopped being safe once the
+	// Settings struct grew toward 4KB: Go only converts a nil dereference into a
+	// recoverable panic while the accessed field's offset stays inside the
+	// runtime's nil guard page (~4KB). Beyond it the access becomes an
+	// UNRECOVERABLE fault ("unexpected fault address") that kills the process
+	// instead of unwinding to the caller's recover — observed live once the
+	// struct crossed the line on a feature branch.
+	if tSettings == nil {
+		panic("CreateCoinbaseTxCandidate: nil settings")
+	}
+
 	// Create a new coinbase transaction
 	arbitraryText := tSettings.Coinbase.ArbitraryText
 
@@ -66,6 +78,18 @@ func (mc *MiningCandidate) CreateCoinbaseTxCandidate(tSettings *settings.Setting
 }
 
 func (mc *MiningCandidate) CreateCoinbaseTxCandidateForAddress(tSettings *settings.Settings, address *string) (*bt.Tx, error) {
+	// Explicit nil-guard preserving the documented (and tested) panic contract.
+	// Relying on the implicit nil-dereference stopped being safe once the
+	// Settings struct grew toward 4KB: Go only converts a nil dereference into a
+	// recoverable panic while the accessed field's offset stays inside the
+	// runtime's nil guard page (~4KB). Beyond it the access becomes an
+	// UNRECOVERABLE fault ("unexpected fault address") that kills the process
+	// instead of unwinding to the caller's recover — observed live once the
+	// struct crossed the line on a feature branch.
+	if tSettings == nil {
+		panic("CreateCoinbaseTxCandidateForAddress: nil settings")
+	}
+
 	arbitraryText := tSettings.Coinbase.ArbitraryText
 
 	if address == nil {

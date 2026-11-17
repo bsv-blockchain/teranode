@@ -21,7 +21,7 @@ func TestSetBlockPersistedAt(t *testing.T) {
 
 		store, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer store.Close()
+		defer store.Close(context.Background())
 
 		// Store block1 using the proper method
 		_, _, err = store.StoreBlock(context.Background(), block1, "test")
@@ -46,7 +46,7 @@ func TestSetBlockPersistedAt(t *testing.T) {
 
 		store, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer store.Close()
+		defer store.Close(context.Background())
 
 		nonExistentHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
 
@@ -62,7 +62,7 @@ func TestSetBlockPersistedAt(t *testing.T) {
 
 		store, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer store.Close()
+		defer store.Close(context.Background())
 
 		// Store block1
 		_, _, err = store.StoreBlock(context.Background(), block1, "test")

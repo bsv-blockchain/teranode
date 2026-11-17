@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -145,6 +146,67 @@ func TestStoreExternallySuccessScenarios(t *testing.T) {
 
 		assert.Equal(t, 1, successCount, "Exactly one attempt should succeed completely")
 	})
+}
+
+// TestStoreExternallyMasterRecordDecidesCreation drives the issue 1442 regression through
+// the production path against a real server, rather than through the classifier alone.
+//
+// The scenario needs no concurrency and no injected errors. A multi-record transaction is
+// created, then its child record is removed, leaving the master behind - the same end state
+// a partial batch failure leaves, since a failed attempt deliberately leaves its records in
+// place for the next one to complete. A second attempt then finds the master already present
+// and writes only the missing child.
+//
+// That attempt must NOT report that it created the transaction. The master carries the
+// mined-state bins, so the earlier writer's metadata is what stands; reporting success is
+// what suppressed block validation's mined-info repair and left mined transactions recorded
+// as unmined. Before the fix the second attempt returned success here, because it had
+// written *a* record.
+func TestStoreExternallyMasterRecordDecidesCreation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	settings := test.CreateBaseTestSettings(t)
+
+	client, store, _, cleanup := initAerospike(t, settings, logger)
+	defer cleanup()
+
+	cleanDB(t, client)
+
+	tx := createTransactionWithOutputs(settings.UtxoStore.UtxoBatchSize + 1) // master + one child
+	txHash := tx.TxIDChainHash()
+
+	_, err := store.Create(ctx, tx, 100)
+	require.NoError(t, err, "the first attempt owns the master and should succeed")
+
+	// Drop the child, keeping the master. This is the state a partial failure leaves.
+	childKeySource := uaerospike.CalculateKeySourceInternal(txHash, 1)
+	childKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), childKeySource)
+	require.NoError(t, err)
+
+	existed, aErr := client.Delete(util.GetAerospikeWritePolicy(settings, 0), childKey)
+	require.NoError(t, aErr)
+	require.True(t, existed, "the child record should have been there to delete")
+
+	// The second attempt writes the missing child, but the master is not its own.
+	bItem, binsToStore := prepareBatchStoreItem(t, store, tx, 100, []uint32{}, []uint32{}, []int{})
+	go store.StoreTransactionExternally(ctx, bItem, binsToStore)
+
+	err = bItem.RecvDone()
+	require.Error(t, err,
+		"filling in a missing child over someone else's master is not creating the transaction")
+
+	var txExistsErr *errors.Error
+	require.True(t, errors.As(err, &txExistsErr) && txExistsErr.Is(errors.ErrTxExists),
+		"the caller must be told the transaction already exists, so it runs its mined-info repair: %v", err)
+
+	// The child really was written back, so the transaction is whole again.
+	record, aErr := client.Get(util.GetAerospikeReadPolicy(settings), childKey)
+	require.NoError(t, aErr, "the second attempt should still have completed the missing child")
+	require.NotNil(t, record)
 }
 
 // TestCreatingBinRemoval verifies that the creating bin is properly removed after transaction creation
@@ -294,4 +356,86 @@ func TestStoreExternallyWithLock_BatchOperateFails(t *testing.T) {
 	require.True(t, errors.As(err, &teranodeErr), "error should be a teranode errors.Error: %v", err)
 	require.True(t, teranodeErr.Is(errors.ErrProcessing), "error should be a ProcessingError: %v", err)
 	require.Contains(t, err.Error(), tx.TxIDChainHash().String(), "error should mention the tx hash")
+}
+
+// TestStoreExternallyWithLock_MasterMayExistLeavesOutcomeUnknown checks that a
+// multi-record create whose master record may exist reaches the caller marked
+// outcome-unknown. utxo.SequentialSpendAndCreate unspends the inputs of a
+// create that failed for certain, and doing that while the master record
+// stands leaves a stored transaction with live inputs. A batch the server
+// rejected before writing anything stays a plain failure.
+func TestStoreExternallyWithLock_MasterMayExistLeavesOutcomeUnknown(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	cases := []struct {
+		name        string
+		batchFn     func(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
+		wantUnknown bool
+	}{
+		{
+			// The records are written, and the client reports the call in doubt,
+			// as a timeout after sending does.
+			name: "write lands, call in doubt",
+			batchFn: func(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+				return func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+					_ = client.BatchOperate(policy, records)
+
+					return &aerospike.AerospikeError{ResultCode: types.TIMEOUT, InDoubt: true}
+				}
+			},
+			wantUnknown: true,
+		},
+		{
+			// The master record is written and a child record fails.
+			name: "master written, child failed",
+			batchFn: func(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+				return func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+					if err := client.BatchOperate(policy, records); err != nil {
+						return err
+					}
+
+					records[1].BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+					records[1].BatchRec().ResultCode = types.PARAMETER_ERROR
+
+					return nil
+				}
+			},
+			wantUnknown: true,
+		},
+		{
+			name: "server rejected the batch, nothing written",
+			batchFn: func(_ *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+				return func(_ *aerospike.BatchPolicy, _ []aerospike.BatchRecordIfc) aerospike.Error {
+					return &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			logger := ulogger.NewErrorTestLogger(t)
+			settings := test.CreateBaseTestSettings(t)
+
+			client, store, _, cleanup := initAerospike(t, settings, logger)
+			defer cleanup()
+
+			cleanDB(t, client)
+
+			tx := createTransactionWithOutputs(settings.UtxoStore.UtxoBatchSize + 1)
+
+			store.SetBatchOperateFn(tc.batchFn(client))
+			defer store.SetBatchOperateFn(nil)
+
+			bItem, binsToStore := prepareBatchStoreItem(t, store, tx, 100, []uint32{}, []uint32{}, []int{})
+			go store.StoreTransactionExternally(ctx, bItem, binsToStore)
+
+			err := bItem.RecvDone()
+			require.Error(t, err)
+			require.Equal(t, tc.wantUnknown, utxo.IsCreateOutcomeUnknown(err), "result: %v", err)
+		})
+	}
 }

@@ -8,9 +8,14 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
+	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
@@ -18,6 +23,12 @@ import (
 // maxPeerNameLength caps untrusted peer-supplied client names to prevent
 // resource exhaustion and oversized log lines.
 const maxPeerNameLength = 128
+
+// MaxValidatedChainWorkBytes bounds advisory peer-progress chainwork input before it
+// is converted into a big.Int for monotonic comparison. It is the single source of
+// truth for this cap; the p2p service's inbound ReportValidatedChainProgress guard
+// (maxReportedChainWorkBytes) aliases this value.
+const MaxValidatedChainWorkBytes = 128
 
 // sanitizeClientName scrubs an untrusted peer-supplied client name string.
 // Control characters and high-Unicode are dropped; XSS-flavoured ASCII
@@ -49,34 +60,82 @@ func sanitizeClientName(name string) string {
 	return strings.TrimSpace(cleaned.String())
 }
 
+// maxCatchupErrorLength caps a stored catchup error. It is a diagnostic for the
+// dashboard, not a log: the full error is logged where it happens.
+const maxCatchupErrorLength = 512
+
+// SanitizeCatchupError makes a catchup error safe to store and serve. The error comes
+// from fetches at peer-chosen URLs and is served by the Asset /peers and
+// /catchup/status endpoints, so IP
+// literals are redacted - a dial error otherwise tells the peer which private address
+// a hostname resolved to (bitcoin-sv/teranode#4855) - and the length is capped, cutting
+// on a rune boundary.
+func SanitizeCatchupError(errMsg string) string {
+	errMsg = urlutil.RedactIPLiterals(errMsg)
+
+	if len(errMsg) <= maxCatchupErrorLength {
+		return errMsg
+	}
+
+	cut := maxCatchupErrorLength
+	for cut > 0 && !utf8.RuneStart(errMsg[cut]) {
+		cut--
+	}
+
+	return errMsg[:cut] + "…"
+}
+
+// LegacyPeerInfo holds fields that only a Bitcoin wire-protocol (legacy) peer
+// supplies. A nil pointer on PeerInfo means "this update carries no legacy
+// data"; it never means "clear the stored values". The struct is replaced
+// wholesale on update, because Inbound and IsSyncPeer are meaningful when
+// false and a field-by-field merge could not tell false from unset.
+type LegacyPeerInfo struct {
+	Inbound         bool      // The peer dialled us
+	ProtocolVersion uint32    // Wire protocol version, e.g. 70016
+	ServiceFlags    uint64    // wire.ServiceFlag bits
+	PingMicros      int64     // Last ping round trip, microseconds
+	TimeOffsetSecs  int64     // Peer clock offset from ours, seconds
+	StartingHeight  int32     // Peer height at handshake
+	IsSyncPeer      bool      // The legacy sync manager selected this peer
+	TimeConnected   time.Time // When the wire connection opened
+}
+
 // PeerInfo holds transport-agnostic information about a peer known to the node.
 // It is used across all transport types (HTTP DataHub, wire protocol, etc.).
 type PeerInfo struct {
-	ID                     string
-	TransportType          blockchain_api.TransportType
-	TransportTypeSet       bool // When true, TransportType was explicitly set by the caller
-	ClientName             string
-	Height                 uint32
-	DataHubURL             string
-	NetworkAddress         string
-	IsBanned               bool
-	BanScore               int32
-	Storage                string
-	BytesSent              uint64
-	BytesReceived          uint64
-	InteractionAttempts    int64
-	InteractionSuccesses   int64
-	InteractionFailures    int64
-	MaliciousCount         int64
-	ReputationScore        float64
-	AvgResponseTimeMs      int64
-	ConnectedAt            time.Time
-	LastMessageTime        time.Time
-	LastInteractionAttempt time.Time
-	LastInteractionSuccess time.Time
-	LastInteractionFailure time.Time
-	LastSeen               time.Time
-	BlockHash              *chainhash.Hash
+	ID                        string
+	TransportType             blockchain_api.TransportType
+	TransportTypeSet          bool // When true, TransportType was explicitly set by the caller
+	ClientName                string
+	Height                    uint32
+	AdvertisedHeight          uint32
+	DataHubURL                string
+	NetworkAddress            string
+	IsBanned                  bool
+	BanScore                  int32
+	Storage                   string
+	BytesSent                 uint64
+	BytesReceived             uint64
+	InteractionAttempts       int64
+	InteractionSuccesses      int64
+	InteractionFailures       int64
+	MaliciousCount            int64
+	ReputationScore           float64
+	AvgResponseTimeMs         int64
+	ConnectedAt               time.Time
+	LastMessageTime           time.Time
+	LastInteractionAttempt    time.Time
+	LastInteractionSuccess    time.Time
+	LastInteractionFailure    time.Time
+	LastSeen                  time.Time
+	BlockHash                 *chainhash.Hash
+	ValidatedHeight           uint32
+	ValidatedBlockHash        *chainhash.Hash
+	ValidatedChainWork        []byte
+	LastValidatedAt           time.Time
+	FullStorageContradictions int64
+	FullStoragePenaltyUntil   time.Time
 
 	// P2P-domain fields. Migrated from services/p2p so the blockchain registry is
 	// the single source of truth for peer state across libp2p connections.
@@ -86,12 +145,48 @@ type PeerInfo struct {
 	SubtreesReceived     int64
 	TransactionsReceived int64
 	CatchupBlocks        int64
+	CatchupAttempts      int64
+	CatchupSuccesses     int64
+	CatchupFailures      int64
 	LastSyncAttempt      time.Time
 	SyncAttemptCount     int32
 	LastReputationReset  time.Time
 	ReputationResetCount int32
 	LastCatchupError     string
 	LastCatchupErrorTime time.Time
+
+	// Legacy holds wire-protocol-only fields. It is nil for libp2p peers.
+	Legacy *LegacyPeerInfo
+}
+
+func clonePeerInfo(info *PeerInfo) PeerInfo {
+	peerCopy := *info
+	peerCopy.BlockHash = cloneHash(info.BlockHash)
+	peerCopy.ValidatedBlockHash = cloneHash(info.ValidatedBlockHash)
+	peerCopy.ValidatedChainWork = append([]byte(nil), info.ValidatedChainWork...)
+	peerCopy.Legacy = cloneLegacyPeerInfo(info.Legacy)
+
+	return peerCopy
+}
+
+// cloneLegacyPeerInfo copies the legacy block behind a fresh pointer so the
+// registry never aliases a caller's struct. A nil input returns nil.
+func cloneLegacyPeerInfo(legacy *LegacyPeerInfo) *LegacyPeerInfo {
+	if legacy == nil {
+		return nil
+	}
+
+	legacyCopy := *legacy
+
+	return &legacyCopy
+}
+
+func cloneHash(hash *chainhash.Hash) *chainhash.Hash {
+	if hash == nil {
+		return nil
+	}
+	hashCopy := *hash
+	return &hashCopy
 }
 
 // banEntry tracks ban scoring state for a single peer.
@@ -125,7 +220,12 @@ func DefaultBanConfig() BanConfig {
 			"protocol_violation": 20,
 			"spam":               50,
 			"invalid_block":      10,
-			"catchup_failure":    30,
+			// Corrupt block body (bitcoin-sv/teranode#4692): scored like invalid_block (a DoS-scoring
+			// event) but without the block-index poison — the block is re-downloaded. Keyed off the
+			// shared constant so a rename cannot silently zero the score.
+			p2pconstants.ReasonCorruptBlockBody.String(): 10,
+			"catchup_failure":   30,
+			"catchup_malicious": 50,
 		},
 	}
 }
@@ -241,14 +341,14 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 
 	existing, exists := r.peers[info.ID]
 	if !exists {
-		entry := *info
-		if info.BlockHash != nil {
-			hashCopy := *info.BlockHash
-			entry.BlockHash = &hashCopy
-		}
+		entry := clonePeerInfo(info)
 		// Strip dangerous characters out of the peer-supplied client name so
 		// it can't break logs / dashboards / JSON consumers.
 		entry.ClientName = sanitizeClientName(entry.ClientName)
+		entry.LastCatchupError = SanitizeCatchupError(entry.LastCatchupError)
+		if storagePromotionBlocked(entry.Storage, entry.FullStoragePenaltyUntil, now) {
+			entry.Storage = ""
+		}
 		entry.ConnectedAt = now
 		entry.LastSeen = now
 		entry.LastMessageTime = now
@@ -276,6 +376,16 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 	if info.Height > 0 {
 		existing.Height = info.Height
 	}
+	// Carried separately from Height: Height is capped against local progress
+	// for sync decisions, AdvertisedHeight is what the peer actually claimed
+	// and is reported to operators unchanged. Newest-wins, like Height: the
+	// p2p batcher keeps the highest claim within one flush window, but across
+	// windows a lower claim may replace a higher one. That is intended — a
+	// peer that reorgs to a lower tip must not keep showing its old height —
+	// and a display that dips heals on the peer's next announcement.
+	if info.AdvertisedHeight > 0 {
+		existing.AdvertisedHeight = info.AdvertisedHeight
+	}
 	if info.DataHubURL != "" {
 		existing.DataHubURL = info.DataHubURL
 	}
@@ -283,12 +393,56 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 		existing.NetworkAddress = info.NetworkAddress
 	}
 	if info.Storage != "" {
-		existing.Storage = info.Storage
+		if !storagePromotionBlocked(info.Storage, effectiveFullStoragePenaltyUntil(existing, info), now) {
+			existing.Storage = info.Storage
+		}
 	}
 	if info.BlockHash != nil {
-		hashCopy := *info.BlockHash
-		existing.BlockHash = &hashCopy
+		existing.BlockHash = cloneHash(info.BlockHash)
 	}
+	if shouldAdvanceValidatedWork(existing.ValidatedChainWork, info.ValidatedBlockHash, info.ValidatedChainWork) {
+		existing.ValidatedHeight = info.ValidatedHeight
+		existing.ValidatedBlockHash = cloneHash(info.ValidatedBlockHash)
+		existing.ValidatedChainWork = append([]byte(nil), info.ValidatedChainWork...)
+		if !info.LastValidatedAt.IsZero() {
+			existing.LastValidatedAt = info.LastValidatedAt
+		} else {
+			existing.LastValidatedAt = now
+		}
+	}
+	// Additive so callers pass a delta (e.g. +1 per observed contradiction)
+	// rather than a read-modify-write off a stale snapshot. Applied under
+	// r.mu, so concurrent increments for the same peer are not lost.
+	if info.FullStorageContradictions != 0 {
+		existing.FullStorageContradictions += info.FullStorageContradictions
+	}
+	if !info.FullStoragePenaltyUntil.IsZero() {
+		prevPenalty := existing.FullStoragePenaltyUntil
+		existing.FullStoragePenaltyUntil = maxFullStoragePenaltyUntil(existing.FullStoragePenaltyUntil, info.FullStoragePenaltyUntil)
+		if existing.Storage == "full" && now.Before(existing.FullStoragePenaltyUntil) {
+			existing.Storage = ""
+		}
+		// A delivery-failure penalty that advances the window decays any credited
+		// validated work. Header work is credited before a block body is delivered,
+		// so stale never-delivered credit must not re-confer top-tier ranking once
+		// the penalty window expires; the peer must re-earn work via fresh delivery.
+		// Gated on advancing the window (strictly later than the prior penalty) so a
+		// duplicate or late penalty with the same/earlier timestamp does not re-wipe
+		// freshly re-earned work.
+		if info.FullStoragePenaltyUntil.After(prevPenalty) && now.Before(existing.FullStoragePenaltyUntil) {
+			existing.ValidatedChainWork = nil
+			existing.ValidatedBlockHash = nil
+			existing.ValidatedHeight = 0
+		}
+	}
+	// Replace the legacy block wholesale rather than field-by-field: Inbound
+	// and IsSyncPeer are meaningful when false, so a per-field "is it non-zero"
+	// merge could not distinguish false from unset. A nil Legacy means the
+	// caller has no legacy data and must leave the stored block alone.
+	if info.Legacy != nil {
+		existing.Legacy = cloneLegacyPeerInfo(info.Legacy)
+	}
+
 	// Only update TransportType when the caller explicitly set it.
 	if info.TransportTypeSet {
 		existing.TransportType = info.TransportType
@@ -329,6 +483,13 @@ func (r *CentralizedPeerRegistry) UpdateMetrics(
 	info.LastSeen = now
 
 	if recordMalicious {
+		// Setting LastInteractionFailure here and the 5.0 reputation pin in
+		// calculateAndUpdateReputation are both load-bearing for recovery:
+		// ReconsiderBadPeers only clears MaliciousCount for peers with
+		// ReputationScore < 20 and a non-zero last failure, and that sweep is
+		// the sole automatic path that stops IsPeerMalicious excluding the
+		// peer. Removing either turns a malicious record into a permanent
+		// exclusion.
 		info.MaliciousCount++
 		info.InteractionAttempts++
 		info.InteractionFailures++
@@ -386,11 +547,7 @@ func (r *CentralizedPeerRegistry) Get(peerID string) (*PeerInfo, bool) {
 	// Fast path: no ban expiry needed for this peer. Copy under the read lock.
 	needsExpiry := info.IsBanned && r.isBanExpiredLocked(peerID)
 	if !needsExpiry {
-		peerCopy := *info
-		if info.BlockHash != nil {
-			hashCopy := *info.BlockHash
-			peerCopy.BlockHash = &hashCopy
-		}
+		peerCopy := clonePeerInfo(info)
 		r.mu.RUnlock()
 		return &peerCopy, true
 	}
@@ -406,11 +563,7 @@ func (r *CentralizedPeerRegistry) Get(peerID string) (*PeerInfo, bool) {
 	if !exists {
 		return nil, false
 	}
-	peerCopy := *info
-	if info.BlockHash != nil {
-		hashCopy := *info.BlockHash
-		peerCopy.BlockHash = &hashCopy
-	}
+	peerCopy := clonePeerInfo(info)
 	return &peerCopy, true
 }
 
@@ -461,11 +614,7 @@ func (r *CentralizedPeerRegistry) List(
 			continue
 		}
 
-		peerCopy := *info
-		if info.BlockHash != nil {
-			hashCopy := *info.BlockHash
-			peerCopy.BlockHash = &hashCopy
-		}
+		peerCopy := clonePeerInfo(info)
 		result = append(result, &peerCopy)
 	}
 
@@ -497,6 +646,39 @@ func storagePreference(mode string) int {
 	default:
 		return 1
 	}
+}
+
+func storagePromotionBlocked(storage string, penaltyUntil time.Time, now time.Time) bool {
+	return storage == "full" && !penaltyUntil.IsZero() && now.Before(penaltyUntil)
+}
+
+func effectiveFullStoragePenaltyUntil(existing, incoming *PeerInfo) time.Time {
+	var existingPenalty time.Time
+	var incomingPenalty time.Time
+	if existing != nil {
+		existingPenalty = existing.FullStoragePenaltyUntil
+	}
+	if incoming != nil && !incoming.FullStoragePenaltyUntil.IsZero() {
+		incomingPenalty = incoming.FullStoragePenaltyUntil
+	}
+	return maxFullStoragePenaltyUntil(existingPenalty, incomingPenalty)
+}
+
+func maxFullStoragePenaltyUntil(existing, incoming time.Time) time.Time {
+	if incoming.After(existing) {
+		return incoming
+	}
+	return existing
+}
+
+func shouldAdvanceValidatedWork(storedChainWork []byte, incomingBlockHash *chainhash.Hash, incomingChainWork []byte) bool {
+	if incomingBlockHash == nil || len(incomingChainWork) == 0 || len(incomingChainWork) > MaxValidatedChainWorkBytes {
+		return false
+	}
+	if len(storedChainWork) == 0 {
+		return true
+	}
+	return work.CompareChainWork(incomingChainWork, storedChainWork) > 0
 }
 
 // Count returns the number of peers currently in the registry.
@@ -835,9 +1017,9 @@ func (r *CentralizedPeerRegistry) StartPeriodicSave(ctx context.Context, interva
 
 // StartCleanup starts a background goroutine that periodically runs
 // Cleanup(maxSize, ttl) so the in-memory registry cannot grow unboundedly
-// under churn. Connected and banned peers are exempt; expired bans are
-// normalised before each pass so a stale IsBanned flag can't keep an idle
-// peer alive forever. The goroutine exits on the first of: ctx cancellation
+// under churn. Banned peers are exempt, connected peers only while active
+// within ttl; expired bans are normalised before each pass so a stale
+// IsBanned flag can't keep an idle peer alive forever. The goroutine exits on the first of: ctx cancellation
 // OR Close().
 //
 // A zero or negative interval disables the loop (caller's choice — useful
@@ -968,6 +1150,10 @@ func (r *CentralizedPeerRegistry) ResetReputation(peerID string) int {
 
 		info.LastSyncAttempt = time.Time{}
 		info.SyncAttemptCount = 0
+
+		info.CatchupAttempts = 0
+		info.CatchupSuccesses = 0
+		info.CatchupFailures = 0
 	}
 
 	if peerID == "" {
@@ -1012,8 +1198,63 @@ func (r *CentralizedPeerRegistry) UpdateStorage(peerID string, storage string) {
 	defer r.mu.Unlock()
 
 	if info, ok := r.peers[peerID]; ok {
+		if storagePromotionBlocked(storage, info.FullStoragePenaltyUntil, time.Now()) {
+			return
+		}
 		info.Storage = storage
 	}
+}
+
+// RecordValidatedPeerProgress stores locally validated peer chain progress.
+// Peer-advertised tips remain separate discovery metadata until header work is
+// validated locally.
+func (r *CentralizedPeerRegistry) RecordValidatedPeerProgress(peerID string, height uint32, blockHash *chainhash.Hash, chainWork []byte) error {
+	if peerID == "" {
+		return errors.NewInvalidArgumentError("peer ID is required")
+	}
+	if blockHash == nil {
+		return errors.NewInvalidArgumentError("validated block hash is required")
+	}
+	if len(chainWork) == 0 {
+		return errors.NewInvalidArgumentError("validated chainwork is required")
+	}
+	if len(chainWork) > MaxValidatedChainWorkBytes {
+		return errors.NewInvalidArgumentError("validated chainwork is too large: %d bytes", len(chainWork))
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	info, ok := r.peers[peerID]
+	if !ok {
+		return nil
+	}
+
+	// Do not credit validated header work while the peer is inside an active
+	// delivery-failure penalty window. Header work is credited before a block body is
+	// delivered, so a penalized header-only non-deliverer that keeps serving headers
+	// would otherwise re-accumulate work and regain top-tier eligibility the instant the
+	// window expired, without ever delivering a block. The one-time work wipe at penalty
+	// onset is handled separately in Register; this guard only prevents fresh crediting
+	// during the window, so the two are complementary rather than double-handling.
+	if !info.FullStoragePenaltyUntil.IsZero() && time.Now().Before(info.FullStoragePenaltyUntil) {
+		return nil
+	}
+
+	if len(info.ValidatedChainWork) > 0 {
+		if work.CompareChainWork(chainWork, info.ValidatedChainWork) <= 0 {
+			return nil
+		}
+	}
+
+	info.ValidatedHeight = height
+	info.ValidatedBlockHash = cloneHash(blockHash)
+	info.ValidatedChainWork = append([]byte(nil), chainWork...)
+	info.LastValidatedAt = time.Now()
+	// The peer served headers that advanced locally validated work, so it is
+	// demonstrably live for registry TTL purposes.
+	info.LastSeen = info.LastValidatedAt
+	return nil
 }
 
 // RecordSyncAttempt notes that we attempted to sync with the peer for backoff tracking.
@@ -1045,9 +1286,9 @@ func (r *CentralizedPeerRegistry) ClearAllSyncAttempts() int {
 }
 
 // recordReceivedSuccessLocked is the shared body of RecordBlockReceived /
-// RecordSubtreeReceived: increment the supplied counter, mark a successful
-// interaction, blend the response time into the rolling average, recompute
-// reputation. Caller must hold the write lock.
+// RecordSubtreeReceived / RecordCatchupSuccess: increment the supplied counter,
+// mark a successful interaction, blend the response time into the rolling
+// average, recompute reputation. Caller must hold the write lock.
 func (r *CentralizedPeerRegistry) recordReceivedSuccessLocked(info *PeerInfo, counter *int64, responseTimeMs int64) {
 	*counter++
 	info.InteractionAttempts++
@@ -1104,8 +1345,55 @@ func (r *CentralizedPeerRegistry) RecordTransactionReceived(peerID string) {
 	}
 }
 
-// RecordCatchupError stores the most recent catchup error reported against the peer.
+// RecordCatchupAttempt notes that a catchup attempt was made to the peer:
+// increments the catchup-attempt counter and updates the sync backoff tracking
+// fields (LastSyncAttempt / SyncAttemptCount). The attempt is counted even when
+// it later produces neither a success nor a failure.
+func (r *CentralizedPeerRegistry) RecordCatchupAttempt(peerID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if info, ok := r.peers[peerID]; ok {
+		info.CatchupAttempts++
+		info.LastSyncAttempt = time.Now()
+		info.SyncAttemptCount++
+	}
+}
+
+// RecordCatchupSuccess increments the catchup-success counter and records a
+// successful interaction with the given response time.
+func (r *CentralizedPeerRegistry) RecordCatchupSuccess(peerID string, responseTimeMs int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if info, ok := r.peers[peerID]; ok {
+		r.recordReceivedSuccessLocked(info, &info.CatchupSuccesses, responseTimeMs)
+	}
+}
+
+// RecordCatchupFailure increments the catchup-failure counter and records a
+// failed interaction.
+func (r *CentralizedPeerRegistry) RecordCatchupFailure(peerID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if info, ok := r.peers[peerID]; ok {
+		now := time.Now()
+		info.CatchupFailures++
+		info.InteractionAttempts++
+		info.InteractionFailures++
+		info.LastInteractionAttempt = now
+		info.LastInteractionFailure = now
+		info.LastSeen = now
+		r.calculateAndUpdateReputation(info)
+	}
+}
+
+// RecordCatchupError stores the most recent catchup error reported against the peer,
+// sanitized by SanitizeCatchupError.
 func (r *CentralizedPeerRegistry) RecordCatchupError(peerID string, errMsg string) {
+	errMsg = SanitizeCatchupError(errMsg)
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -1118,7 +1406,8 @@ func (r *CentralizedPeerRegistry) RecordCatchupError(peerID string, errMsg strin
 // Cleanup evicts stale peers to bound memory and lookup cost. Phase 1 (TTL)
 // drops peers whose recency timestamp is older than ttl. Phase 2 (LRU) then
 // drops oldest-first until the non-exempt portion of the registry fits under
-// maxSize. Connected peers and banned peers are exempt from both phases.
+// maxSize. Banned peers are exempt from both phases; connected peers are
+// exempt only while their activity is within ttl (see isCleanupExempt).
 // A maxSize of 0 disables the LRU phase. Returns (expired, lru) counts.
 //
 // Recency is taken from peerActivity(info), which uses LastSeen as the canonical
@@ -1137,7 +1426,7 @@ func (r *CentralizedPeerRegistry) Cleanup(maxSize int, ttl time.Duration) (int, 
 	expired := 0
 
 	for id, info := range r.peers {
-		if isCleanupExempt(info) {
+		if isCleanupExempt(info, now, ttl) {
 			continue
 		}
 		if last := peerActivity(info); !last.IsZero() && now.Sub(last) <= ttl {
@@ -1158,7 +1447,7 @@ func (r *CentralizedPeerRegistry) Cleanup(maxSize int, ttl time.Duration) (int, 
 	candidates := make([]candidate, 0, len(r.peers))
 	exemptCount := 0
 	for id, info := range r.peers {
-		if isCleanupExempt(info) {
+		if isCleanupExempt(info, now, ttl) {
 			exemptCount++
 			continue
 		}
@@ -1186,9 +1475,20 @@ func (r *CentralizedPeerRegistry) Cleanup(maxSize int, ttl time.Duration) (int, 
 }
 
 // isCleanupExempt reports whether a peer must be retained regardless of TTL or
-// size pressure. Caller must hold the registry lock.
-func isCleanupExempt(info *PeerInfo) bool {
-	return info.IsConnected || info.IsBanned
+// size pressure. Banned peers are always retained. IsConnected only exempts a
+// peer whose activity is still within ttl: the flag is asserted by the p2p
+// service on every gossip message but there is no libp2p disconnect signal to
+// clear it, so a stale flag must not pin an entry in the registry forever.
+// Caller must hold the registry lock.
+func isCleanupExempt(info *PeerInfo, now time.Time, ttl time.Duration) bool {
+	if info.IsBanned {
+		return true
+	}
+	if !info.IsConnected {
+		return false
+	}
+	last := peerActivity(info)
+	return !last.IsZero() && now.Sub(last) <= ttl
 }
 
 // peerActivity returns the canonical freshness timestamp used by Cleanup —

@@ -2,20 +2,23 @@
 
 function get_block_header() {
   local node=$1
+  local output_file=$2
   local url="http://$node/api/v1/bestblockheader/json"
-  curl -s "$url" | jq -r '. | "\(.height): \(.hash)"' > "$2" # Write output to temp file
+  curl -s "$url" | jq -r '. | "\(.height): \(.hash)"' > "$output_file" # Write output to temp file
 }
 
 function get_fsm_state() {
   local node=$1
+  local output_file=$2
   local url="http://$node/api/v1/fsm/state"
-  curl -s "$url" | jq -r '.state' > "$2" # Write output to temp file
+  curl -s "$url" | jq -r '.state' > "$output_file" # Write output to temp file
 }
 
 function get_service_heights() {
   local node=$1
+  local output_file=$2
   local url="http://$node/api/v1/service/heights"
-  curl -s "$url" | jq -r '"Persister: \(.block_persister_height // "N/A") Assembly: \(.block_assembly_height // "N/A")"' > "$2"
+  curl -s "$url" | jq -r '"Persister: \(.block_persister_height // "N/A") Assembly: \(.block_assembly_height // "N/A")"' > "$output_file"
 }
 
 while true; do

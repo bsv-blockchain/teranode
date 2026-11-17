@@ -9,7 +9,7 @@
     - [2.3. Validating the Transaction](#23-validating-the-transaction)
         - [2.3.1. Consensus Rules vs Policy Checks](#231-consensus-rules-vs-policy-checks)
         - [2.3.2. Transaction Format Extension](#232-transaction-format-extension)
-    - [2.4. Script Verification](#24-script-verification)
+    - [2.4. BDK Transaction Validation](#24-bdk-transaction-validation)
     - [2.5. Error Handling and Transaction Rejection](#25-error-handling-and-transaction-rejection)
     - [2.6. Concurrent Processing](#26-concurrent-processing)
     - [2.7. Post-validation: Updating stores and propagating the transaction](#27-post-validation-updating-stores-and-propagating-the-transaction)
@@ -246,6 +246,8 @@ The above represents an implementation of the core Teranode validation rules:
 
         - Note: This means that Teranode will deem non-final transactions invalid and REJECT these transactions. It is up to the user to create proper non-final transactions to ensure that Teranode is aware of them. For clarity, if a transaction has a locktime in the future, the Tx Validator will reject it.
 
+        - Design note (mempool-less rejection): Teranode has no mempool — neither a main mempool nor a non-final holding pool — so a non-final transaction is **terminally rejected** rather than retained. This differs from svnode, whose `CTimeLockedMempool` holds a non-final transaction and re-enqueues it once it becomes final. In Teranode this is expected behaviour, not a defect: the client is responsible for resubmitting once the chain tip's median-time-past (BIP113) passes the transaction's locktime. The rejection now carries the actionable reason (`UTXO_NON_FINAL` → `TX_LOCK_TIME`, including the locktime and the compared median block time) through to the public HTTP and gRPC surfaces, so the submitter can see why the transaction was rejected and when it is worth resubmitting.
+
     - No output must be Pay-to-Script-Hash (P2SH)
 
     - A new transaction must not have any output which includes P2SH, as creation of new P2SH transactions is not allowed.
@@ -481,7 +483,6 @@ The Validator notifies the Block Assembly service of new transactions through gR
 
 The Validator service behavior is controlled by several key configuration parameters:
 
-- **`validator_kafkaWorkers`** (default: 0): Controls the number of concurrent Kafka message processing workers. When set to 0, Kafka consumer processing is disabled.
 - **`validator_httpRateLimit`** (default: 1024): Sets the rate limit for HTTP API requests to prevent service overload.
 - **`validator_verbose_debug`** (default: false): Enables detailed validation logging for troubleshooting.
 - **`useLocalValidator`** (code default: false; `settings.conf` ships with `true`): Determines whether to use a local validator instance or connect to a remote validator service via gRPC. Standard deployments using the provided `settings.conf` will use local validator mode.

@@ -74,11 +74,11 @@ func (c *Client) Start(_ context.Context, addr string) error {
 	})
 
 	c.client.OnMessage(func(e centrifuge.MessageEvent) {
-		c.logger.Infof("[CentrifugeClient] message: %s", string(e.Data))
+		c.logger.Debugf("[CentrifugeClient] message: %s", string(e.Data))
 	})
 
 	c.client.OnPublication(func(e centrifuge.ServerPublicationEvent) {
-		c.logger.Infof("[CentrifugeClient] publication: %s", string(e.Data))
+		c.logger.Debugf("[CentrifugeClient] publication: %s", string(e.Data))
 	})
 
 	c.client.OnError(func(e centrifuge.ErrorEvent) {
@@ -87,7 +87,7 @@ func (c *Client) Start(_ context.Context, addr string) error {
 
 	subscriptions := []string{"blocks", "subtrees"}
 	for _, channel := range subscriptions {
-		c.logger.Infof("[CentrifugeClient] subscribing to %s", channel)
+		c.logger.Debugf("[CentrifugeClient] subscribing to %s", channel)
 
 		sub, err := c.client.NewSubscription(channel, centrifuge.SubscriptionConfig{})
 		if err != nil {

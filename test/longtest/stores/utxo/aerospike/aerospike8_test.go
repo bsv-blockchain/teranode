@@ -16,7 +16,7 @@ func TestAerospike8TransactionSupport(t *testing.T) {
 
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike/aerospike-server:8.0"), aeroTest.WithTTLSupport("test"))
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike/aerospike-server:8.1"), aeroTest.WithTTLSupport("test"))
 	require.NoError(t, err)
 
 	t.Cleanup(func() {

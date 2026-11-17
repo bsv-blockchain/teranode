@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +29,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jellydator/ttlcache/v3"
@@ -640,6 +643,9 @@ func (m *MockBlockchainClient) AddBlock(ctx context.Context, block *model.Block,
 	return nil
 }
 func (m *MockBlockchainClient) GetNextBlockID(ctx context.Context) (uint64, error) { return 0, nil }
+func (m *MockBlockchainClient) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	return 0, nil
+}
 func (m *MockBlockchainClient) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
 	return nil
 }
@@ -693,23 +699,26 @@ func (m *MockBlockchainClient) GetBlockHeader(ctx context.Context, blockHash *ch
 func (m *MockBlockchainClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
+func (m *MockBlockchainClient) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return m.GetBestBlockHeader(ctx)
+}
+func (m *MockBlockchainClient) GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return nil, nil, nil
+}
 func (m *MockBlockchainClient) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
 func (m *MockBlockchainClient) GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
-func (m *MockBlockchainClient) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	return nil, nil, nil
-}
-func (m *MockBlockchainClient) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return nil, nil, nil
-}
-func (m *MockBlockchainClient) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return nil, nil, nil
-}
 func (m *MockBlockchainClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
+}
+func (m *MockBlockchainClient) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
+	return nil, nil, false, nil
+}
+func (m *MockBlockchainClient) ClearBestTipLowWater(ctx context.Context, expected []byte) error {
+	return nil
 }
 func (m *MockBlockchainClient) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
@@ -754,7 +763,7 @@ func (m *MockBlockchainClient) GetMedianTimePastRange(_ context.Context, fromHei
 func (m *MockBlockchainClient) SetState(ctx context.Context, key string, data []byte) error {
 	return nil
 }
-func (m *MockBlockchainClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+func (m *MockBlockchainClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, minedSetGeneration uint64) error {
 	return nil
 }
 func (m *MockBlockchainClient) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
@@ -781,10 +790,6 @@ func (m *MockBlockchainClient) GetBestHeightAndTime(ctx context.Context) (uint32
 func (m *MockBlockchainClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	// Default to true - blocks are on the current chain unless specifically testing reorg scenarios
 	return true, nil
-}
-func (m *MockBlockchainClient) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
-	// Report rebuilding so callers fall back to per-block CheckBlockIsInCurrentChain.
-	return nil, 0, true, nil
 }
 func (m *MockBlockchainClient) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
 	// Default to false - blocks are not ancestors unless specifically testing reorg scenarios
@@ -814,7 +819,6 @@ func (m *MockBlockchainClient) GetFSMCurrentStateForE2ETestMode() blockchain.FSM
 func (m *MockBlockchainClient) IsFullyReady(ctx context.Context) (bool, error) { return true, nil }
 func (m *MockBlockchainClient) Run(ctx context.Context, source string) error   { return nil }
 func (m *MockBlockchainClient) CatchUpBlocks(ctx context.Context) error        { return nil }
-func (m *MockBlockchainClient) LegacySync(ctx context.Context) error           { return nil }
 func (m *MockBlockchainClient) Idle(ctx context.Context) error                 { return nil }
 func (m *MockBlockchainClient) SendFSMEvent(ctx context.Context, event blockchain.FSMEventType) error {
 	return nil
@@ -879,7 +883,7 @@ func (m *MockBlockchainClient) CompleteBlobDeletions(ctx context.Context, comple
 	return 0, 0, nil
 }
 
-func (m *MockBlockchainClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+func (m *MockBlockchainClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int, excludeStoreTypes []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
 	return "", nil, nil
 }
 
@@ -971,14 +975,19 @@ func (m *MockUTXOStore) Health(ctx context.Context, checkLiveness bool) (int, st
 	return http.StatusOK, "OK", nil
 }
 
+func (m *MockUTXOStore) Close(context.Context) error { return nil }
+
 // Required interface methods for utxo.Store
+func (m *MockUTXOStore) SupportsOutpointOnlySpend() bool { return false }
+
 func (m *MockUTXOStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	return nil, nil
 }
 func (m *MockUTXOStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	return nil, nil
 }
-func (m *MockUTXOStore) Delete(ctx context.Context, hash *chainhash.Hash) error { return nil }
+func (m *MockUTXOStore) Delete(ctx context.Context, hash *chainhash.Hash) error         { return nil }
+func (m *MockUTXOStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error { return nil }
 func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return nil, nil
 }
@@ -987,6 +996,9 @@ func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash, txMet
 }
 func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	return nil, nil
+}
+func (m *MockUTXOStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	return nil, nil, nil
 }
 func (m *MockUTXOStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	return nil
@@ -1003,6 +1015,9 @@ func (m *MockUTXOStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (
 }
 func (m *MockUTXOStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 	return nil, nil
+}
+func (m *MockUTXOStore) ConflictingTxHashes(_ context.Context) ([]chainhash.Hash, bool, error) {
+	return nil, true, nil
 }
 func (m *MockUTXOStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
 	return nil
@@ -1023,6 +1038,13 @@ func (m *MockUTXOStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSli
 	return nil
 }
 func (m *MockUTXOStore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error { return nil }
+func (m *MockUTXOStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	return nil, nil
+}
+
+func (m *MockUTXOStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, opts ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	return nil, nil
+}
 func (m *MockUTXOStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
 	return nil
 }
@@ -1047,13 +1069,23 @@ func (m *MockUTXOStore) SetConflicting(ctx context.Context, txHashes []chainhash
 func (m *MockUTXOStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	return nil
 }
+func (m *MockUTXOStore) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+	return nil
+}
+func (m *MockUTXOStore) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	return nil
+}
+func (m *MockUTXOStore) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
+	return nil, nil
+}
 func (m *MockUTXOStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
 	return nil
 }
-func (m *MockUTXOStore) SetBlockHeight(height uint32) error     { return nil }
-func (m *MockUTXOStore) GetBlockHeight() uint32                 { return 0 }
-func (m *MockUTXOStore) SetMedianBlockTime(height uint32) error { return nil }
-func (m *MockUTXOStore) GetMedianBlockTime() uint32             { return 0 }
+func (m *MockUTXOStore) SetBlockHeight(height uint32) error            { return nil }
+func (m *MockUTXOStore) GetBlockHeight() uint32                        { return 0 }
+func (m *MockUTXOStore) SetMedianBlockTime(height uint32) error        { return nil }
+func (m *MockUTXOStore) SetBlockState(height, medianTime uint32) error { return nil }
+func (m *MockUTXOStore) GetMedianBlockTime() uint32                    { return 0 }
 
 func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
 	return utxo.BlockState{
@@ -1061,6 +1093,8 @@ func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
 		MedianTime: m.GetMedianBlockTime(),
 	}
 }
+
+func (m *MockUTXOStore) Stamper() pruner.Stamper { return pruner.NoStamp }
 
 // Comprehensive tests for Start method
 
@@ -1844,4 +1878,151 @@ func TestHealthConcurrency(t *testing.T) {
 	}
 
 	assert.Equal(t, 0, errorCount)
+}
+
+// SpendsMadeBy returns nothing: no test here drives the conflict-undo path.
+func (m *MockUTXOStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
+}
+
+// shutdownLogger records when the processing loop logs that it is shutting down.
+type shutdownLogger struct {
+	ulogger.TestLogger
+	stopped chan struct{}
+	once    sync.Once
+}
+
+func (l *shutdownLogger) Infof(format string, args ...interface{}) {
+	if strings.Contains(format, "Shutting down block processing loop") {
+		l.once.Do(func() { close(l.stopped) })
+	}
+}
+
+// loopOutcomeClient gives the processing loop one outcome, no block, an error or a block to
+// persist, and signals once the loop has asked for it. Start asks once before the loop starts, to
+// publish its initial state, so the loop's first call is the second.
+type loopOutcomeClient struct {
+	*MockBlockchainClient
+	block        *model.Block
+	blocksErr    error
+	persistedErr error
+	asked        chan struct{}
+	calls        atomic.Int32
+}
+
+func (c *loopOutcomeClient) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
+	if c.calls.Add(1) == 2 {
+		close(c.asked)
+	}
+
+	if c.blocksErr != nil {
+		return nil, c.blocksErr
+	}
+
+	if c.block == nil {
+		return nil, nil
+	}
+
+	return []*model.Block{c.block}, nil
+}
+
+func (c *loopOutcomeClient) SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error {
+	return c.persistedErr
+}
+
+// TestStart_ProcessingLoopStopsDuringPersistSleep checks that a shutdown stops the processing loop
+// while it sleeps PersistSleep, at every point it sleeps, instead of after the sleep.
+func TestStart_ProcessingLoopStopsDuringPersistSleep(t *testing.T) {
+	tests := []struct {
+		name string
+		// arrange sets up the client and returns the block store
+		arrange func(t *testing.T, client *loopOutcomeClient, block *model.Block, blockBytes []byte) blob.Store
+	}{
+		{
+			name: "no block to process",
+			arrange: func(t *testing.T, client *loopOutcomeClient, block *model.Block, blockBytes []byte) blob.Store {
+				return memory.New()
+			},
+		},
+		{
+			name: "getting the next block fails",
+			arrange: func(t *testing.T, client *loopOutcomeClient, block *model.Block, blockBytes []byte) blob.Store {
+				client.blocksErr = errors.NewProcessingError("blockchain unavailable")
+				return memory.New()
+			},
+		},
+		{
+			name: "persisting the block fails",
+			arrange: func(t *testing.T, client *loopOutcomeClient, block *model.Block, blockBytes []byte) blob.Store {
+				client.block = block
+				return &existsFailingStore{Memory: memory.New(), fileType: fileformat.FileTypeBlock}
+			},
+		},
+		{
+			name: "marking the block persisted fails",
+			arrange: func(t *testing.T, client *loopOutcomeClient, block *model.Block, blockBytes []byte) blob.Store {
+				client.block = block
+				client.persistedErr = errors.NewProcessingError("blockchain unavailable")
+
+				blockStore := memory.New()
+				for _, fileType := range []fileformat.FileType{fileformat.FileTypeBlock, fileformat.FileTypeUtxoAdditions, fileformat.FileTypeUtxoDeletions} {
+					require.NoError(t, blockStore.Set(t.Context(), block.Header.Hash()[:], fileType, blockBytes))
+				}
+
+				return blockStore
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			block, blockBytes, _, mockUTXOStore, subtreeStore, _, _, tSettings := setup(t)
+			tSettings.BlockPersister.PersistSleep = time.Hour
+			tSettings.BlockPersister.HTTPListenAddress = ""
+
+			client := &loopOutcomeClient{MockBlockchainClient: NewMockBlockchainClient(), asked: make(chan struct{})}
+			blockStore := tt.arrange(t, client, block, blockBytes)
+			logger := &shutdownLogger{stopped: make(chan struct{})}
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			server := New(ctx, logger, tSettings, blockStore, subtreeStore, mockUTXOStore, client)
+
+			go func() {
+				_ = server.Start(ctx, make(chan struct{}, 1))
+			}()
+
+			select {
+			case <-client.asked:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the processing loop did not ask for a block")
+			}
+
+			cancel()
+
+			select {
+			case <-logger.stopped:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the processing loop did not stop while it slept")
+			}
+		})
+	}
+}
+
+func (m *MockUTXOStore) SaveConflictRecovery(context.Context, chainhash.Hash, *utxo.ConflictRecovery) error {
+	return nil
+}
+func (m *MockUTXOStore) LoadConflictRecovery(context.Context, chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) RestoreConflictSpends(context.Context, []*utxo.Spend, uint32) error {
+	return nil
+}
+func (m *MockUTXOStore) SetConflictLocks(context.Context, chainhash.Hash, []chainhash.Hash, bool) error {
+	return nil
+}
+
+func (m *MockUTXOStore) ReleaseConflictLocks(context.Context, chainhash.Hash, []chainhash.Hash) error {
+	return nil
 }

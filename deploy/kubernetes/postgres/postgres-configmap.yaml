@@ -3,7 +3,7 @@ data:
   init.sql: |
     CREATE ROLE teranode LOGIN
       PASSWORD 'teranode'
-      SUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
+      NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
     grant teranode to postgres;
     CREATE
     DATABASE teranode

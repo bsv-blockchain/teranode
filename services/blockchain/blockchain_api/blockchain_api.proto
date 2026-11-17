@@ -3,6 +3,13 @@ syntax = "proto3";
 option go_package = "./;blockchain_api";
 
 // Package blockchain_api defines the gRPC service interface for blockchain operations.
+//
+// Version: v1 (implicit). No version suffix; the unsuffixed name IS v1. This
+// package has already had a breaking change handled via `reserved` enum
+// values without a version bump (see FSMEventType / FSMStateType below) --
+// reserving prevents wire corruption but is not the same as version
+// coexistence. A version bump (v2) is for changes reserved values can't
+// express -- see docs/references/protoVersioning.md.
 package blockchain_api;
 
 import "google/protobuf/timestamp.proto";
@@ -33,6 +40,11 @@ service BlockchainAPI {
   // GetNextBlockID retrieves the next available block ID.
   rpc GetNextBlockID (google.protobuf.Empty) returns (GetNextBlockIDResponse) {}
 
+  // AssignBlockID returns a stable block ID for a given block hash (idempotent
+  // per hash). Used by ingestion paths so UTXO mined-info and the committed
+  // block share one id.
+  rpc AssignBlockID (AssignBlockIDRequest) returns (AssignBlockIDResponse) {}
+
   // GetBlockStats retrieves statistical information about the blockchain.
   rpc GetBlockStats (google.protobuf.Empty) returns (model.BlockStats) {}
 
@@ -51,12 +63,6 @@ service BlockchainAPI {
   // GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specified depth.
   rpc GetHashOfAncestorBlock (GetHashOfAncestorBlockRequest) returns (GetHashOfAncestorBlockResponse) {}
 
-  // GetLatestBlockHeaderFromBlockLocator retrieves the latest block header using a block locator.
-  rpc GetLatestBlockHeaderFromBlockLocator (GetLatestBlockHeaderFromBlockLocatorRequest) returns (GetBlockHeaderResponse) {}
-
-  // GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
-  rpc GetBlockHeadersFromOldest (GetBlockHeadersFromOldestRequest) returns (GetBlockHeadersResponse) {}
-
   // GetNextWorkRequired calculates the required proof of work for the next block.
   rpc GetNextWorkRequired (GetNextWorkRequiredRequest) returns (GetNextWorkRequiredResponse) {}
 
@@ -66,17 +72,31 @@ service BlockchainAPI {
   // GetBlockHeaders retrieves headers for multiple blocks.
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
 
+  // GetBestBlockHeaderUncached is GetBestBlockHeader with the response cache left out on both
+  // sides, and with the block id filled in. A block store clears the cache only after its own
+  // commit, so the cached call can be one block stale; a caller that writes the tip into
+  // permanent state reads it here.
+  rpc GetBestBlockHeaderUncached(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
+
+  // GetBlockHeadersByParentLinks retrieves headers by walking parent links back from a hash.
+  // It never selects rows by the on_main_chain flag and never reads or writes a cache, so it
+  // is the fetch a chain answer is proven against.
+  rpc GetBlockHeadersByParentLinks(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
+
   // GetBlockHeadersToCommonAncestor retrieves headers from a block to its common ancestor.
   rpc GetBlockHeadersToCommonAncestor(GetBlockHeadersToCommonAncestorRequest) returns (GetBlockHeadersResponse) {}
 
   // GetBlockHeadersFromCommonAncestor retrieves headers from a common ancestor to a target block.
   rpc GetBlockHeadersFromCommonAncestor(GetBlockHeadersFromCommonAncestorRequest) returns (GetBlockHeadersResponse) {}
 
-  // GetBlockHeadersFromTill retrieves block headers between two specified blocks.
-  rpc GetBlockHeadersFromTill(GetBlockHeadersFromTillRequest) returns (GetBlockHeadersResponse) {}
-
   // GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
   rpc GetBlockHeadersFromHeight(GetBlockHeadersFromHeightRequest) returns (GetBlockHeadersFromHeightResponse) {}
+
+  // BlocksBetterThan returns the valid blocks that sort better than a key in the best-tip order, worst first.
+  rpc BlocksBetterThan(BlocksBetterThanRequest) returns (BlocksBetterThanResponse) {}
+
+  // ClearBestTipLowWater deletes the best tip's low-water mark if it still holds the expected bytes.
+  rpc ClearBestTipLowWater(ClearBestTipLowWaterRequest) returns (google.protobuf.Empty) {}
 
   // GetBlockHeadersByHeight retrieves block headers between two specified heights.
   rpc GetBlockHeadersByHeight(GetBlockHeadersByHeightRequest) returns (GetBlockHeadersByHeightResponse) {}
@@ -93,12 +113,6 @@ service BlockchainAPI {
 
   // GetBlockHeaderIDs retrieves block header IDs for a range of blocks.
   rpc GetBlockHeaderIDs(GetBlockHeadersRequest) returns (GetBlockHeaderIDsResponse) {}
-
-  // GetOffChainBlockIDs returns the complete set of block IDs known NOT to be
-  // on the current main chain (the in-memory off-chain set). Lets callers
-  // prefetch the negative set once and answer main-chain membership locally,
-  // instead of issuing one CheckBlockIsInCurrentChain RPC per candidate set.
-  rpc GetOffChainBlockIDs(google.protobuf.Empty) returns (GetOffChainBlockIDsResponse) {}
 
   // GetBestBlockHeader retrieves the header of the current best block.
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
@@ -172,9 +186,6 @@ service BlockchainAPI {
   // GetFSMCurrentState retrieves the current state of the FSM.
   rpc GetFSMCurrentState(google.protobuf.Empty) returns (GetFSMStateResponse) {}
 
-  // WaitFSMToTransitionToGivenState waits for FSM to reach a specific state.
-  rpc WaitFSMToTransitionToGivenState(WaitFSMToTransitionRequest) returns (google.protobuf.Empty) {}
-
   // WaitUntilFSMTransitionFromIdleState waits for FSM to transition from IDLE state.
   rpc WaitUntilFSMTransitionFromIdleState(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 
@@ -183,9 +194,6 @@ service BlockchainAPI {
 
   // CatchUpBlocks initiates block catch-up process.
   rpc CatchUpBlocks(google.protobuf.Empty) returns (google.protobuf.Empty) {}
-
-  // LegacySync initiates legacy synchronization process.
-  rpc LegacySync(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 
   // Idle marks the service as idle.
   rpc Idle(google.protobuf.Empty) returns (google.protobuf.Empty) {}
@@ -291,6 +299,16 @@ message GetNextBlockIDResponse {
   uint64 next_block_id = 1;  // Next available block ID
 }
 
+// AssignBlockIDRequest carries the block hash to assign/reserve an id for.
+message AssignBlockIDRequest {
+  bytes block_hash = 1; // 32-byte block hash
+}
+
+// AssignBlockIDResponse carries the stable block ID for the requested hash.
+message AssignBlockIDResponse {
+  uint64 block_id = 1;
+}
+
 // GetBlockInChainByHeightHashRequest represents a request to retrieve a block by height in a specific chain.
 message GetBlockInChainByHeightHashRequest {
   uint32 height = 1;      // Target block height
@@ -357,12 +375,6 @@ message GetBlockHeadersResponse {
   repeated bytes metas = 2;         // List of serialized metadata
 }
 
-// GetBlockHeadersFromTillRequest requests headers between two blocks.
-message GetBlockHeadersFromTillRequest {
-  bytes startHash = 1;  // Starting block hash
-  bytes endHash = 2;    // Ending block hash
-}
-
 // GetBlockHeadersFromHeightRequest requests headers starting from a height.
 message GetBlockHeadersFromHeightRequest {
   uint32 startHeight = 1;  // Starting height
@@ -373,6 +385,26 @@ message GetBlockHeadersFromHeightRequest {
 message GetBlockHeadersFromHeightResponse {
   repeated bytes blockHeaders = 1;  // List of serialized block headers
   repeated bytes metas = 2;         // List of serialized metadata
+}
+
+// BlocksBetterThanRequest requests the valid blocks that sort better than a key in the best-tip order.
+message BlocksBetterThanRequest {
+  bytes after = 1;       // Serialised model.BestTipKey: return blocks that sort better than it
+  bytes from = 2;        // Optional serialised model.BestTipKey: also return blocks at or above it
+  uint32 minHeight = 3;  // Skip blocks below this height
+  uint32 limit = 4;      // Maximum number of blocks to return
+}
+
+// BlocksBetterThanResponse contains the blocks, worst first.
+message BlocksBetterThanResponse {
+  repeated bytes blockHeaders = 1;  // List of serialized block headers
+  repeated bytes metas = 2;         // List of serialized metadata
+  bool more = 3;                    // More blocks sort better than the last one returned
+}
+
+// ClearBestTipLowWaterRequest names the low-water mark bytes the caller read.
+message ClearBestTipLowWaterRequest {
+  bytes expected = 1;  // The mark is deleted only if it still holds these bytes
 }
 
 // GetBlockHeadersByHeightRequest requests headers between two heights.
@@ -424,13 +456,6 @@ message GetBlockHeaderIDsResponse {
   repeated uint32 ids = 1;  // List of block header IDs
 }
 
-// GetOffChainBlockIDsResponse contains the in-memory off-chain (forked) block ID set.
-message GetOffChainBlockIDsResponse {
-  repeated uint32 off_chain_block_ids = 1;  // Block IDs known NOT to be on the main chain
-  bool rebuilding = 2;                       // True when the set is stale (reorg/startup); callers must fall back to per-set checks
-  uint32 max_block_id = 3;                   // Highest known block ID; IDs above this cannot be on the main chain (mirrors CheckBlockIsInCurrentChain's guard)
-}
-
 // GetMedianTimeResponse contains block timestamp information.
 message GetMedianTimeResponse {
   repeated uint32 block_header_time = 1;  // Timestamps of the last 11 (+1) blocks
@@ -478,6 +503,7 @@ message GetBlockHeaderResponse {
   bool invalid = 13;          // Validity status
   google.protobuf.Timestamp processed_at = 14; // Timestamp when block was processed
   uint32 median_time_past = 15; // Median Time Past (MTP) - median of last 11 block timestamps (BIP113)
+  uint64 mined_set_generation = 16; // Bumped by every write that clears mined_set; SetBlockMinedSet compares against it
 }
 
 // CheckBlockIsCurrentChainResponse indicates if blocks are in the main chain.
@@ -583,19 +609,6 @@ message GetHashOfAncestorBlockRequest {
   uint32 depth = 2;   // Number of generations to go back
 }
 
-// GetLatestBlockHeaderFromBlockLocatorRequest
-message GetLatestBlockHeaderFromBlockLocatorRequest {
-  bytes bestBlockHash = 1;                // Best block hash
-  repeated bytes blockLocatorHashes = 2;  // Block locator hashes
-}
-
-// GetBlockHeadersFromOldestRequest retrieves block headers starting from the oldest block.
-message GetBlockHeadersFromOldestRequest {
-  bytes chainTipHash = 1;     // Chain tip hash
-  bytes targetHash = 2;       // Target block hash
-  uint64 numberOfHeaders = 3; // Maximum number of hashes to return
-}
-
 // GetHashOfAncestorBlockResponse contains an ancestor block hash.
 message GetHashOfAncestorBlockResponse {
   bytes hash = 1;  // Ancestor block hash
@@ -615,6 +628,12 @@ message GetNextWorkRequiredResponse {
 // SetBlockMinedSetRequest marks a block as mined.
 message SetBlockMinedSetRequest {
   bytes blockHash = 1;  // Hash of the mined block
+  // The block's mined_set generation (GetBlockHeaderResponse.mined_set_generation)
+  // when the caller's tagging run started. Every writer that clears mined_set bumps
+  // it, so the write is refused with ERR_STATE_ERROR if it has changed since.
+  // Absent means a caller that predates the field: the write is unconditional, as
+  // it was before.
+  optional uint64 mined_set_generation = 2;
 }
 
 message ClearBlockMinedSetRequest {
@@ -651,11 +670,6 @@ message GetFSMStateResponse {
   FSMStateType state = 1;  // Current FSM state
 }
 
-// WaitFSMToTransitionRequest specifies target FSM state.
-message WaitFSMToTransitionRequest {
-  FSMStateType state = 1;  // Target FSM state
-}
-
 // SendFSMEventRequest triggers an FSM event.
 message SendFSMEventRequest {
   FSMEventType event = 1;  // FSM event to trigger
@@ -666,7 +680,8 @@ enum FSMEventType {
   STOP = 0;
   RUN = 1;
   CATCHUPBLOCKS = 2;
-  LEGACYSYNC = 3;
+  reserved 3;
+  reserved "LEGACYSYNC";
 }
 
 // TransportType distinguishes how to communicate with a peer during catchup.
@@ -734,6 +749,17 @@ service PeerRegistryService {
   // RecordCatchupError stores the peer's most recent catchup error for diagnostics.
   rpc RecordCatchupError(RecordCatchupErrorRequest) returns (google.protobuf.Empty) {}
 
+  // RecordCatchupAttempt increments the peer's catchup-attempt counter and updates
+  // sync backoff tracking (LastSyncAttempt / SyncAttemptCount).
+  rpc RecordCatchupAttempt(RecordCatchupAttemptRequest) returns (google.protobuf.Empty) {}
+
+  // RecordCatchupSuccess increments the peer's catchup-success counter and records
+  // a successful interaction with the given response time.
+  rpc RecordCatchupSuccess(RecordCatchupSuccessRequest) returns (google.protobuf.Empty) {}
+
+  // RecordCatchupFailure increments the peer's catchup-failure counter and records a failed interaction.
+  rpc RecordCatchupFailure(RecordCatchupFailureRequest) returns (google.protobuf.Empty) {}
+
   // ResetReputation resets reputation for the given peer (or all peers when peer_id is empty)
   // to the recovery baseline and returns the count of peers reset.
   rpc ResetReputation(ResetReputationRequest) returns (ResetReputationResponse) {}
@@ -741,6 +767,9 @@ service PeerRegistryService {
   // ReconsiderBadPeers resets reputation for peers whose last failure is older than the cooldown
   // and returns the count of peers reconsidered.
   rpc ReconsiderBadPeers(ReconsiderBadPeersRequest) returns (ReconsiderBadPeersResponse) {}
+
+  // RecordValidatedPeerProgress stores locally validated peer chain progress.
+  rpc RecordValidatedPeerProgress(RecordValidatedPeerProgressRequest) returns (google.protobuf.Empty) {}
 }
 
 // PeerRegistryInfo holds all information about a peer in the centralized registry.
@@ -789,11 +818,40 @@ message PeerRegistryInfo {
   int32 reputation_reset_count = 34;
   string last_catchup_error = 35;
   google.protobuf.Timestamp last_catchup_error_time = 36;
+  uint32 validated_height = 37;               // Highest locally validated height attributed to this peer
+  bytes validated_block_hash = 38;            // Block hash for validated_height
+  bytes validated_chain_work = 39;            // Locally validated cumulative chain work
+  google.protobuf.Timestamp last_validated_at = 40;
+  int64 full_storage_contradictions = 41;     // Count of observed contradictions to full-storage claims
+  google.protobuf.Timestamp full_storage_penalty_until = 42;
+
+  // Catchup-specific counters, maintained via RecordCatchupAttempt/Success/Failure.
+  // Distinct from the generic interaction counters, which mix in blocks/subtrees/txs.
+  int64 catchup_attempts = 43;
+  int64 catchup_successes = 44;
+  int64 catchup_failures = 45;
+
+  // Wire-protocol-only fields. Absent (nil) for libp2p peers.
+  LegacyPeerInfo legacy = 46;
+
+  // Raw height the peer advertised, before the unvalidated-lead cap that
+  // produces `height`. Telemetry only: `height` remains the value sync
+  // decisions read. While this node catches up the two differ, and reporting
+  // only the capped one makes every peer appear to sit at local+max_lead.
+  uint32 advertised_height = 47;
 }
 
 // RegisterPeerRequest registers or updates a peer in the centralized registry.
 message RegisterPeerRequest {
   PeerRegistryInfo peer = 1;
+}
+
+// RecordValidatedPeerProgressRequest records locally validated progress for a peer.
+message RecordValidatedPeerProgressRequest {
+  string peer_id = 1;
+  uint32 height = 2;
+  bytes block_hash = 3;
+  bytes chain_work = 4;
 }
 
 // UpdatePeerMetricsRequest updates runtime metrics for an existing peer.
@@ -906,6 +964,22 @@ message RecordCatchupErrorRequest {
   string error_message = 2;
 }
 
+// RecordCatchupAttemptRequest records a catchup attempt against a peer.
+message RecordCatchupAttemptRequest {
+  string peer_id = 1;
+}
+
+// RecordCatchupSuccessRequest records a successful catchup from a peer.
+message RecordCatchupSuccessRequest {
+  string peer_id = 1;
+  int64 response_time_ms = 2;                 // Duration of the catchup operation (0 = not applicable)
+}
+
+// RecordCatchupFailureRequest records a failed catchup attempt against a peer.
+message RecordCatchupFailureRequest {
+  string peer_id = 1;
+}
+
 // ResetReputationRequest resets reputation for a single peer or all peers when peer_id is empty.
 message ResetReputationRequest {
   string peer_id = 1;
@@ -931,7 +1005,8 @@ enum FSMStateType {
   IDLE = 0;           // Service is idle
   RUNNING = 1;        // Service is running normally
   CATCHINGBLOCKS = 2; // Service is catching up blocks
-  LEGACYSYNCING = 3;  // Service is in legacy sync mode
+  reserved 3;
+  reserved "LEGACYSYNCING";
 }
 
 // GetBlockLocatorRequest requests a block locator.
@@ -1085,6 +1160,7 @@ message AcquireBlobDeletionBatchRequest {
   uint32 height = 1;
   int32 limit = 2;
   int32 lock_timeout_seconds = 3;  // Optional: how long to hold the lock (default: 300s)
+  repeated int32 exclude_store_types = 4;  // Optional: store types to leave out of the batch
 }
 
 message AcquireBlobDeletionBatchResponse {
@@ -1104,4 +1180,17 @@ message BatchTokenInfo {
   int64 acquired_at = 2;  // Unix timestamp
   int32 deletion_count = 3;
   repeated int64 deletion_ids = 4;
+}
+
+// LegacyPeerInfo holds fields that only a Bitcoin wire-protocol (legacy) peer
+// supplies. It is absent for libp2p peers.
+message LegacyPeerInfo {
+  bool inbound = 1;                             // The peer dialled us
+  uint32 protocol_version = 2;                  // Wire protocol version, e.g. 70016
+  uint64 service_flags = 3;                     // wire.ServiceFlag bits
+  int64 ping_micros = 4;                        // Last ping round trip, microseconds
+  int64 time_offset_secs = 5;                   // Peer clock offset from ours, seconds
+  int32 starting_height = 6;                    // Peer height at handshake
+  bool is_sync_peer = 7;                        // The legacy sync manager selected this peer
+  google.protobuf.Timestamp time_connected = 8; // When the wire connection opened
 }

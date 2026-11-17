@@ -79,6 +79,14 @@ import (
 // sequential revalidation pass; Lua business-rule rejections surface to
 // the caller), not by this breaker. Counting them here causes the breaker
 // to trip during normal IBD and stall sync (#953).
+//
+// DEVICE_OVERLOAD is also excluded: it is owned by the uaerospike
+// overload-retry layer, which re-issues it under a bounded budget. By the
+// time it surfaces here the retry has already given up, so tripping the
+// breaker into reject mode would only deepen the stall the retry exists to
+// avoid. MAX_ERROR_RATE is retried by that layer too but is kept here: it is
+// a client-side per-node error-rate signal that also fires for non-overload
+// node failures, so it remains a meaningful infrastructure indicator.
 var infrastructureResultCodes = []types.ResultCode{
 	types.TIMEOUT,
 	types.NETWORK_ERROR,
@@ -91,7 +99,6 @@ var infrastructureResultCodes = []types.ResultCode{
 	types.PARTITION_UNAVAILABLE,
 	types.SERVER_MEM_ERROR,
 	types.SERVER_ERROR,
-	types.DEVICE_OVERLOAD,
 	types.BATCH_FAILED,
 	types.GRPC_ERROR,
 }

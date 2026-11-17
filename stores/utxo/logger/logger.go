@@ -25,6 +25,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
@@ -34,6 +35,11 @@ type Store struct {
 	logger ulogger.Logger
 	store  utxo.Store
 }
+
+// Callers that check the store for an optional method, such as the pruner
+// service looking for a pruner, use utxo.As, which looks through the wrapper by
+// way of Unwrap. Without it, turning logging on would hide those methods.
+var _ utxo.Unwrapper = (*Store)(nil)
 
 // New creates a new logging wrapper around the provided UTXO store.
 // All operations on the returned store will be logged with detailed information
@@ -116,6 +122,13 @@ func (s *Store) GetMedianBlockTime() uint32 {
 	return res
 }
 
+func (s *Store) SetBlockState(height, medianTime uint32) error {
+	err := s.store.SetBlockState(height, medianTime)
+	s.logger.Debugf("[UTXOStore][logger][SetBlockState] height: %d, medianTime: %d err %v : %s", height, medianTime, err, caller())
+
+	return err
+}
+
 func (s *Store) GetBlockState() utxo.BlockState {
 	blockState := s.store.GetBlockState()
 	s.logger.Debugf("[UTXOStore][logger][GetBlockState] height: %d, medianTime: %d : %s", blockState.Height, blockState.MedianTime, caller())
@@ -123,48 +136,28 @@ func (s *Store) GetBlockState() utxo.BlockState {
 	return blockState
 }
 
+func (s *Store) Stamper() pruner.Stamper {
+	return s.store.Stamper()
+}
+
+// SupportsOutpointOnlySpend delegates to the wrapped store.
+func (s *Store) SupportsOutpointOnlySpend() bool {
+	return s.store.SupportsOutpointOnlySpend()
+}
+
+// NetsBelowCheckpoint forwards the wrapped store's answer.
+func (s *Store) NetsBelowCheckpoint() bool {
+	return utxo.NetsBelowCheckpoint(s.store)
+}
+
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	s.logger.Debugf("[UTXOStore][logger][Health] : %s", caller())
 	return s.store.Health(ctx, checkLiveness)
 }
 
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
-	data, err := s.store.Create(ctx, tx, blockHeight, opts...)
-	inputDetails := make([]string, len(tx.Inputs))
-
-	for i, input := range tx.Inputs {
-		inputDetails[i] = fmt.Sprintf("{Input %d: PreviousTxID %s, PreviousTxOutIndex %d, SequenceNumber %d}",
-			i, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, input.SequenceNumber)
-	}
-
-	outputDetails := make([]string, len(tx.Outputs))
-	skipLogging := false
-
-	for i, output := range tx.Outputs {
-		if output == nil {
-			skipLogging = true
-			break
-		}
-
-		outputDetails[i] = fmt.Sprintf("{Output %d: Satoshis %d}",
-			i, output.Satoshis)
-	}
-
-	if !skipLogging {
-		s.logger.Debugf("[UTXOStore][logger][Create] tx %s, inputs: [%s], outputs: [%s], isCoinbase %t, blockHeight %d, lockTime %d, version %d, data %s, err %v : %s",
-			tx.TxIDChainHash(),
-			strings.Join(inputDetails, ", "),
-			strings.Join(outputDetails, ", "),
-			tx.IsCoinbase(),
-			blockHeight,
-			tx.LockTime,
-			tx.Version,
-			data.String(),
-			err,
-			caller())
-	}
-
-	return data, err
+func (s *Store) Close(ctx context.Context) error {
+	s.logger.Debugf("[UTXOStore][logger][Close] : %s", caller())
+	return s.store.Close(ctx)
 }
 
 func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
@@ -181,22 +174,60 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.
 	return data, err
 }
 
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
-	spends, err := s.store.Spend(ctx, tx, blockHeight, ignoreFlags...)
-	spendDetails := make([]string, len(spends))
+// SpendAndCreate delegates the combined spend+create operation to the wrapped store.
+func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	data, spends, err := s.store.SpendAndCreate(ctx, tx, blockHeight, opts...)
 
-	for i, spend := range spends {
-		spendDetails[i] = fmt.Sprintf("{SpendingData: %v, TxID: %s, Vout: %d}", spend.SpendingData, spend.TxID, spend.Vout)
+	// a tx with a nil output cannot be serialized for its txid
+	skipLogging := false
+
+	for _, output := range tx.Outputs {
+		if output == nil {
+			skipLogging = true
+			break
+		}
 	}
 
-	s.logger.Debugf("[UTXOStore][logger][Spend] spends: [%s], blockHeight: %d, err: %v : %s",
-		strings.Join(spendDetails, ", "), s.store.GetBlockHeight(), err, caller())
+	if !skipLogging {
+		inputDetails := make([]string, len(tx.Inputs))
 
-	return spends, err
+		for i, input := range tx.Inputs {
+			inputDetails[i] = fmt.Sprintf("{Input %d: PreviousTxID %s, PreviousTxOutIndex %d, SequenceNumber %d}",
+				i, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, input.SequenceNumber)
+		}
+
+		outputDetails := make([]string, len(tx.Outputs))
+
+		for i, output := range tx.Outputs {
+			outputDetails[i] = fmt.Sprintf("{Output %d: Satoshis %d}",
+				i, output.Satoshis)
+		}
+
+		spendDetails := make([]string, len(spends))
+
+		for i, spend := range spends {
+			spendDetails[i] = fmt.Sprintf("{SpendingData: %v, TxID: %s, Vout: %d}", spend.SpendingData, spend.TxID, spend.Vout)
+		}
+
+		s.logger.Debugf("[UTXOStore][logger][SpendAndCreate] tx %s, inputs: [%s], outputs: [%s], spends: [%s], isCoinbase %t, blockHeight %d, lockTime %d, version %d, data %v, err %v : %s",
+			tx.TxIDChainHash(),
+			strings.Join(inputDetails, ", "),
+			strings.Join(outputDetails, ", "),
+			strings.Join(spendDetails, ", "),
+			tx.IsCoinbase(),
+			blockHeight,
+			tx.LockTime,
+			tx.Version,
+			data,
+			err,
+			caller())
+	}
+
+	return data, spends, err
 }
 
 func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
-	err := s.store.Unspend(ctx, spends, false)
+	err := s.store.Unspend(ctx, spends, flagAsLocked...)
 	spendDetails := make([]string, len(spends))
 
 	for i, spend := range spends {
@@ -212,6 +243,13 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	err := s.store.Delete(ctx, hash)
 	s.logger.Debugf("[UTXOStore][logger][Delete] hash %s err %v : %s", hash.String(), err, caller())
+
+	return err
+}
+
+func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	err := s.store.DeleteComplete(ctx, hash)
+	s.logger.Debugf("[UTXOStore][logger][DeleteComplete] hash %s err %v : %s", hash.String(), err, caller())
 
 	return err
 }
@@ -237,6 +275,10 @@ func (s *Store) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.Unm
 
 func (s *Store) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 	return s.store.GetConflictingTxIterator()
+}
+
+func (s *Store) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	return s.store.ConflictingTxHashes(ctx)
 }
 
 func (s *Store) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
@@ -272,6 +314,20 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	s.logger.Debugf("[UTXOStore][logger][PreviousOutputsDecorate] outpoints %v err %v : %s", tx, err, caller())
 
 	return err
+}
+
+func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	results, err := s.store.SpendAndCreateMulti(ctx, txs, blockHeight, opts...)
+	s.logger.Debugf("[UTXOStore][logger][SpendAndCreateMulti] txCount=%d blockHeight=%d err=%v : %s", len(txs), blockHeight, err, caller())
+
+	return results, err
+}
+
+func (s *Store) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, opts ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	answers, err := s.store.ParentOutputsForValidation(ctx, outpoints, opts...)
+	s.logger.Debugf("[UTXOStore][logger][ParentOutputsForValidation] outpoints=%d err=%v : %s", len(outpoints), err, caller())
+
+	return answers, err
 }
 
 func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
@@ -330,6 +386,27 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 	return err
 }
 
+func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+	err := s.store.BeginConflictIntent(ctx, intent)
+	s.logger.Debugf("[UTXOStore][logger][BeginConflictIntent] kind %s height %d hashes %v err %v : %s", intent.Kind, intent.BlockHeight, intent.TxHashes, err, caller())
+
+	return err
+}
+
+func (s *Store) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	err := s.store.CompleteConflictIntent(ctx, intentID)
+	s.logger.Debugf("[UTXOStore][logger][CompleteConflictIntent] intentID %s err %v : %s", intentID, err, caller())
+
+	return err
+}
+
+func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
+	intents, err := s.store.PendingConflictIntents(ctx)
+	s.logger.Debugf("[UTXOStore][logger][PendingConflictIntents] count %d err %v : %s", len(intents), err, caller())
+
+	return intents, err
+}
+
 func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
 	err := s.store.MarkTransactionsOnLongestChain(ctx, txHashes, onLongestChain)
 	s.logger.Debugf("[UTXOStore][logger][MarkTransactionsOnLongestChain] txHashes %v onLongestChain %v err %v : %s", txHashes, onLongestChain, err, caller())
@@ -356,4 +433,36 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 	s.logger.Debugf("[UTXOStore][logger][ProcessExpiredPreservations] currentHeight %d err %v : %s", currentHeight, err, caller())
 
 	return err
+}
+
+// SpendsMadeBy passes through, with the record count logged. The records themselves are not
+// logged: undoing a conflict on a wide transaction would produce thousands.
+func (s *Store) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	spends, err := s.store.SpendsMadeBy(ctx, txHash)
+	s.logger.Debugf("[UTXOStore][logger][SpendsMadeBy] %s returned %d spends, err %v", txHash.String(), len(spends), err)
+
+	return spends, err
+}
+
+// Unwrap returns the wrapped store.
+func (s *Store) Unwrap() utxo.Store {
+	return s.store
+}
+
+func (s *Store) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return s.store.SaveConflictRecovery(ctx, id, r)
+}
+func (s *Store) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return s.store.LoadConflictRecovery(ctx, id)
+}
+func (s *Store) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return s.store.RestoreConflictSpends(ctx, spends, height)
+}
+
+func (s *Store) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return s.store.SetConflictLocks(ctx, id, parents, locked)
+}
+
+func (s *Store) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
+	return s.store.ReleaseConflictLocks(ctx, id, parents)
 }

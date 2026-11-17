@@ -35,6 +35,54 @@ import (
 
 // go test -v -tags test_bigblock ./test/...
 
+// anchorBlockOnTestChain builds an 11-header linked parent chain stamped in the
+// recent past, re-anchors the block's header on its tip and re-mines the
+// easy-target nonce. CheckHeaderContextual requires the supplied chain to be
+// anchored at the block's parent (issue 1467), so the previous fabricated
+// unanchored fixtures no longer pass validation.
+func anchorBlockOnTestChain(t *testing.T, block *teranode_model.Block) ([]*teranode_model.BlockHeader, []uint32) {
+	t.Helper()
+
+	nBits, err := teranode_model.NewNBitFromString("2000ffff")
+	require.NoError(t, err)
+
+	currentChain := make([]*teranode_model.BlockHeader, 11)
+	currentChainIDs := make([]uint32, 11)
+	prev := &chainhash.Hash{}
+	baseTime := block.Header.Timestamp - 100
+
+	for i := 0; i < 11; i++ {
+		currentChain[i] = &teranode_model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  prev,
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      baseTime + uint32(i),
+			Bits:           *nBits,
+			Nonce:          uint32(i),
+		}
+		prev = currentChain[i].Hash()
+		currentChainIDs[i] = uint32(i)
+	}
+
+	block.Header.HashPrevBlock = prev
+	block.Header.Nonce = 0
+
+	for {
+		if ok, _, _ := block.Header.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		block.Header.Nonce++
+
+		// Bounded like the sibling grinders in services/blockvalidation. The regtest target is
+		// easy enough that this never runs long, but an unbounded loop turns any future change
+		// to the target into a hung long-test suite rather than a failing test.
+		require.Less(t, block.Header.Nonce, uint32(10_000_000), "could not find a valid nonce")
+	}
+
+	return currentChain, currentChainIDs
+}
+
 func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	txCount := uint64(4 * 1024) // configurable
@@ -43,20 +91,8 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	block, subtreeStore, txMetaStore, err := createTestBlockWithMultipleTxs(t, txCount, subtreeSize)
 	require.NoError(t, err)
 
-	currentChain := make([]*teranode_model.BlockHeader, 11)
-	currentChainIDs := make([]uint32, 11)
-	for i := 0; i < 11; i++ {
-		currentChain[i] = &teranode_model.BlockHeader{
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			// set the last 11 block header timestamps to be less than the current timestamps
-			Timestamp: 1231469665 - uint32(i),
-		}
-		currentChainIDs[i] = uint32(i)
-	}
-	currentChain[0].HashPrevBlock = &chainhash.Hash{}
+	currentChain, currentChainIDs := anchorBlockOnTestChain(t, block)
 
-	// check if the block is valid, we expect an error because of the duplicate transaction
 	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
 	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, txMetaStore, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
@@ -274,7 +310,12 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	require.NoError(t, err)
 	teranode_model.TestSubtreeSize = 8
 
-	subtreeStore := teranode_model.NewLocalSubtreeStore()
+	// An in-memory blob store that serves the actual crafted subtree bytes. The
+	// previous TestLocalSubtreeStore read testdata files by index, so the fetch
+	// failed (or served an unrelated file) and the bare require.Error at the end
+	// passed without ever reaching the duplicate-transaction check this test
+	// exists to pin.
+	subtreeStore := blobmemory.New()
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
@@ -330,8 +371,8 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	// get subtree root hash
 	subtreeHash := subtree.RootHash()
 
-	// store subtree hash in the subtreeStore map
-	subtreeStore.Files[*subtreeHash] = 0
+	// store the serialized subtree under its root hash
+	require.NoError(t, subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	// create a new subtree for replaced coinbase transaction
 	replacedCoinbaseSubtree, err := subtreepkg.NewTreeByLeafCount(teranode_model.TestSubtreeSize)
@@ -382,24 +423,14 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	currentChain := make([]*teranode_model.BlockHeader, 11)
-	currentChainIDs := make([]uint32, 11)
-	for i := 0; i < 11; i++ {
-		currentChain[i] = &teranode_model.BlockHeader{
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			// set the last 11 block header timestamps to be less than the current timestamps
-			Timestamp: 1231469665 - uint32(i),
-		}
-		currentChainIDs[i] = uint32(i)
-	}
-	currentChain[0].HashPrevBlock = &chainhash.Hash{}
+	currentChain, currentChainIDs := anchorBlockOnTestChain(t, b)
 
 	// check if the block is valid, we expect an error because of the duplicate transaction
 	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
 	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
 	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate transaction", "the failure must come from duplicate detection, not an earlier check")
 	require.False(t, v)
 
 	_, hasTransactionsReferencingOldBlocks := txmap.ConvertSyncedMapToUint32Slice(oldBlockIDs)
@@ -428,18 +459,7 @@ func TestBigBlock_Valid(t *testing.T) {
 		BlockIDs:    []uint32{},
 	}, data)
 
-	currentChain := make([]*teranode_model.BlockHeader, 11)
-	currentChainIDs := make([]uint32, 11)
-	for i := 0; i < 11; i++ {
-		currentChain[i] = &teranode_model.BlockHeader{
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			// set the last 11 block header timestamps to be less than the current timestamps
-			Timestamp: 1231469665 - uint32(i),
-		}
-		currentChainIDs[i] = uint32(i)
-	}
-	currentChain[0].HashPrevBlock = &chainhash.Hash{}
+	currentChain, currentChainIDs := anchorBlockOnTestChain(t, block)
 
 	// Only start profiling if not already profiling
 	f, err := os.Create("cpu.prof")

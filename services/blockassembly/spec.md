@@ -156,9 +156,9 @@ The implementation MAY apply additional usage-derived ceilings; such ceilings ar
 
 **BA-REORG-005.** The service SHALL always build subsequent candidates on the chain tip with the most accumulated proof of work known to the Blockchain service at the moment the candidate is generated.
 
-**BA-REORG-006.** When a competing chain's depth from the common ancestor exceeds the coinbase-maturity threshold AND the current chain height is greater than 1000, the service MUST perform a full reset rather than attempting an in-place reorganization.
+**BA-REORG-006.** The service MUST perform a full reset rather than an in-place reorganization when the deeper side of the reorganization (blocks moved back or forward from the common ancestor) is at least the effective UTXO store block height retention (`GetUtxoStoreBlockHeightRetention()`: the global retention plus the UTXO store adjustment, floored at 0; 0 disables this rule), at any height, or when it is at least the coinbase-maturity threshold and the current chain height is greater than 1000.
 
-**BA-REORG-007.** Advancement of the service's best-block reference SHALL be atomic with successful completion of subtree-processor reconciliation for the new tip. A partial failure during reorg or move-forward MUST leave the best-block reference unchanged.
+**BA-REORG-007.** Advancement of the service's best-block reference SHALL be atomic with successful completion of subtree-processor reconciliation for the new tip. A partial failure during reorg or move-forward MUST leave the best-block reference unchanged, and MUST leave the transaction map consistent with the subtrees it leaves in place.
 
 **BA-REORG-008.** The operational state SHALL return to `Running` at the end of every reconciliation cycle, regardless of cycle outcome. The service MUST NOT be wedged in `Reorging`, `MovingUp`, or other transient states due to reconciliation failure.
 
@@ -197,7 +197,7 @@ For any transaction failing validation, the operation SHALL mark it conflicting 
 
 **BA-STARTUP-009.** The service SHALL provide `CheckBlockAssembly` to verify the internal consistency of the assembly state and subtree processor. The operation returns success or an error describing the inconsistency found.
 
-**BA-STARTUP-010.** Reset variants MUST NOT reject ingest. `AddTx`, `AddTxBatch`, and `AddTxBatchColumnar` SHALL continue to accept and queue transactions throughout the duration of a reset. Only subtree completion is paused for the reset duration.
+**BA-STARTUP-010.** Reset variants MUST NOT reject ingest on their own account. `AddTx`, `AddTxBatch`, and `AddTxBatchColumnar` SHALL continue to accept and queue transactions throughout the duration of a reset. Only subtree completion is paused for the reset duration. When `blockassembly_maxTransactionsInMemory` is positive, the reset's unmined reload counts as a load (BA-STARTUP-003): the held count reads at least the limit for the duration of the reload, so a non-block batch is refused with `ERR_THRESHOLD_EXCEEDED` (held) until the reload completes, and block batches (`inBlock`) are admitted. The refusal is the limit's, not the reset's, and `GetBlockAssemblyQueueStats` reports the held count so the validator's Kafka backpressure pauses instead of dropping. The limit assumes trusted gRPC callers: the `inBlock` flag lifts it, like the other trust flags on these RPCs, so operators who expose gRPC SHOULD set `security_level_grpc`. Because block assembly cannot tell a validator that never sends `inBlock` from a mempool batch, operators MUST upgrade every validator and subtree-validation pod to a build that sends it before enabling the limit, and keep `blockassembly_maxTransactionsInMemory` at 0 until then: a block transaction refused as held by a new block assembly is otherwise accepted and unlocked by an old validator without a template entry. A validator that polls a held count at the limit sheds an ingest transaction before any UTXO store work with the same held marker, and the transaction crossing the limit between two polls takes the refusal and unwind. A block transaction that the ingest queue bound refuses stays Locked and is counted in `teranode_validator_shed_inblock_dropped_total`; operators SHOULD watch it, and a block assembly reset or restart runs the unmined reload, which reads Locked unmined records, adds them to the template and unlocks them.
 
 **BA-STARTUP-011.** All reset variants MUST be gated behind the BA-STARTUP-003 unmined-loading guard and SHALL be rejected during startup recovery.
 
@@ -236,6 +236,8 @@ For any transaction failing validation, the operation SHALL mark it conflicting 
 **BA-CONFIG-007.** Availability of `GenerateBlocks` MUST be gated by `ChainCfgParams.GenerateSupported`, which is a per-network compile-time constant. Mainnet has `GenerateSupported = false`. The setting MUST NOT be overridable from `settings.conf`.
 
 **BA-CONFIG-008.** When `ChainCfgParams.GenerateSupported` is `false`, `GenerateBlocks` MUST return an error with message `generate is not supported`.
+
+**BA-CONFIG-009.** Before building each candidate, `GenerateBlocks` MUST wait for block assembly to be level with the Blockchain tip AND in the `Running` state. Being level alone is NOT sufficient: `reset()` publishes the new tip before `SubtreeProcessor.Reset` runs, so a wait keyed on the tip alone can return while the subtree processor is mid-rebuild, and the `MovingUp` window is one in which `GetMiningCandidate` short-circuits to a transaction-less template. The wait MUST be bounded by `blockassembly_generateTipWaitTimeout` (default `90s`), and exceeding that bound MUST fail the call with an error naming the state rather than build a candidate. The default SHOULD exceed the bounded part of the awaited work: on the `invalidateblock` path that is `waitForBlockMinedSet`, whose budget is ~78s with the default `blockvalidation_isParentMined_retry_max_retry` of 45 (20ms base, factor 2, 2s cap). The effective bound is the smaller of `blockassembly_generateTipWaitTimeout` and the caller's own deadline; through the `generate` / `generatetoaddress` RPCs that deadline is `rpc_timeout` (default `30s`), so a value above it is unreachable on that path and the two MUST be raised together for the sizing above to apply. The two expiries MUST be reported distinguishably, because they call for different actions. The wait CANNOT bound `subtreeProcessor.WaitForPendingBlocks`, which precedes it and retries indefinitely, so expiry MUST NOT be treated as evidence of a fault.
 
 ### Observability Contract (`BA-OBSERVABILITY-NNN`)
 
@@ -383,7 +385,7 @@ The Block Assembly service exposes 18 gRPC operations. Each is governed by the r
 | **Success effect** | Assembly state realigned to current best block header |
 | **Error responses** | `service not ready` during startup recovery (BA-STARTUP-011) |
 | **Idempotency** | Yes (calling repeatedly converges) |
-| **Concurrency** | Ingest continues during reset (BA-STARTUP-010) |
+| **Concurrency** | Ingest continues during reset (BA-STARTUP-010); with `blockassembly_maxTransactionsInMemory` set, non-block ingest is refused as held while the reset reloads |
 | **Persistence** | None directly; downstream effects flow through normal paths |
 | **Requirement IDs** | BA-STARTUP-006, BA-STARTUP-010, BA-STARTUP-011 |
 
@@ -448,14 +450,14 @@ The Block Assembly service exposes 18 gRPC operations. Each is governed by the r
 | Field | Value |
 |---|---|
 | **Operation** | `GenerateBlocks` |
-| **Valid states** | `Running`, AND `ChainCfgParams.GenerateSupported == true` |
+| **Valid states** | `Running`, AND `ChainCfgParams.GenerateSupported == true`. A call arriving in any non-`Running` state that is not already rejected by the unmined-loading gate blocks until the assembler reaches `Running` at the chain tip (BA-CONFIG-009) rather than being rejected outright; if the bound expires first the call fails. `LoadingUnmined` is the exception: `unminedTransactionsLoading` is checked before the wait is entered, so that column stays `reject (not ready)`. `Starting` is deliberately included: `Start` sets `Running` from a goroutine, so a call arriving just after startup is legitimately in `Starting` and the state alone cannot distinguish that from an assembler that was never started |
 | **Request validation** | Count is non-negative |
 | **Success effect** | Creates and submits the requested number of synthetic blocks |
-| **Error responses** | `generate is not supported` if `GenerateSupported == false`; `service not ready` during recovery |
+| **Error responses** | `generate is not supported` if `GenerateSupported == false`; `service not ready` during recovery; `did not reach the chain tip within <timeout>` when the BA-CONFIG-009 wait is exceeded, or `caller gave up before block assembly reached the chain tip` when the caller's deadline expires first |
 | **Idempotency** | No |
-| **Concurrency** | Sequential per request |
+| **Concurrency** | Sequential per request. Each candidate is preceded by a bounded wait on assembler state (BA-CONFIG-009), so the call blocks for as long as a transition is in flight |
 | **Persistence** | Each generated block persisted via the same path as a normal solution |
-| **Requirement IDs** | BA-CONFIG-007, BA-CONFIG-008 |
+| **Requirement IDs** | BA-CONFIG-007, BA-CONFIG-008, BA-CONFIG-009 |
 
 ### `CheckBlockAssembly`
 
@@ -526,7 +528,7 @@ stateDiagram-v2
     LoadingUnmined --> Running: all unmined transactions re-added
     LoadingUnmined --> Idle: Blockchain unreachable<br/>during startup
     Running --> Resetting: reset operation invoked
-    Running --> Resetting: deep reorg detected<br/>— depth > maturity AND height > 1000
+    Running --> Resetting: deep reorg detected<br/>— (depth >= maturity AND height > 1000) OR depth >= UTXO retention (BA-REORG-006)
     Running --> Reorging: competing chain detected
     Running --> MovingUp: linear extension detected
     Resetting --> Running: state realigned
@@ -545,7 +547,7 @@ stateDiagram-v2
 |---|---|---|---|---|---|---|---|
 | `HealthGRPC` | accept | accept | accept | accept | accept | accept | accept |
 | `GetBlockAssemblyState` | accept | accept | accept | accept | accept | accept | accept |
-| `AddTx` / `AddTxBatch` / `AddTxBatchColumnar` | reject (not ready) | reject (not ready) | accept (enqueue) | accept (enqueue) | accept (enqueue) | accept (enqueue) | reject (idle) |
+| `AddTx` / `AddTxBatch` / `AddTxBatchColumnar` | reject (not ready) | reject (not ready) | accept (enqueue) | accept (enqueue); with the in-memory limit set, non-block batches are refused as held while the reset reloads | accept (enqueue) | accept (enqueue) | reject (idle) |
 | `RemoveTx` | reject (not ready) | reject (not ready) | accept | accept | accept | accept | reject (idle) |
 | `GetMiningCandidate` | reject (not ready) | reject (not ready) | accept | accept (stale data) | accept (stale data) | accept (stale data) | reject (idle) |
 | `GetCurrentDifficulty` | reject (not ready) | reject (not ready) | accept | accept | accept | accept | reject (idle) |
@@ -553,12 +555,14 @@ stateDiagram-v2
 | `ResetBlockAssembly` (any variant) | reject (not ready) | reject (not ready) | accept | reject (already resetting) | reject | reject | reject (idle) |
 | `CheckBlockAssemblyValidateInputs` | reject (not ready) | reject (not ready) | accept | accept | accept | accept | reject (idle) |
 | `CheckBlockAssembly` | reject (not ready) | reject (not ready) | accept | accept | accept | accept | reject (idle) |
-| `GenerateBlocks` | reject (not ready) | reject (not ready) | accept (if `GenerateSupported`) | reject | reject | reject | reject (idle) |
+| `GenerateBlocks` | wait, then reject (bound expires) | reject (not ready) | accept (if `GenerateSupported`) | wait, then accept | wait, then accept | wait, then accept | reject (idle) |
 | `GetBlockAssemblyBlockCandidate` | reject | reject | accept | accept | accept | accept | reject (idle) |
 | `GetBlockAssemblyTxs` | reject | reject | accept | accept | accept | accept | reject (idle) |
 | `GetCandidateBlock` | reject | reject | accept | accept | accept | accept | reject (idle) |
 
 **BA-STATE-001.** The state machine SHALL conform to the per-operation matrix above. Implementation MUST NOT add or remove cells without spec amendment.
+
+> **Conformance gap (pre-existing).** The implementation also has `BlockchainSubscription` and `Reconciling` states (`StateStrings`, `BlockAssembler.go`), which the matrix has no columns for. `GenerateBlocks` treats both as waitable under BA-CONFIG-009. Adding the columns is out of scope for that requirement and is recorded here rather than left implicit.
 
 **BA-STATE-002.** Transitions out of `Resetting`, `Reorging`, `MovingUp`, and `Idle` MUST always end at `Running` (or remain in `Idle` while the Blockchain dependency is still failing). The operational state MUST NOT be permanently wedged in any transient state.
 
@@ -606,7 +610,9 @@ stateDiagram-v2
 
 **AC-BA-STARTUP-007.1.** Given an unmined transaction T whose input is recorded in the UTXO store as spent by a different transaction T', when `ResetBlockAssemblyValidateInputs` is invoked, then T MUST be marked conflicting, T's descendants in the assembly pipeline MUST be evicted, and the operation MUST complete successfully.
 
-**AC-BA-STARTUP-010.1.** Given the service is in `Resetting` due to an in-flight `ResetBlockAssembly`, when `AddTxBatch` is invoked, then the request MUST be accepted and the transactions MUST be present in the queue when the reset completes.
+**AC-BA-STARTUP-010.1.** Given the service is in `Resetting` due to an in-flight `ResetBlockAssembly` and `blockassembly_maxTransactionsInMemory` is zero, when `AddTxBatch` is invoked, then the request MUST be accepted and the transactions MUST be present in the queue when the reset completes.
+
+**AC-BA-STARTUP-010.2.** Given the service is in `Resetting` and `blockassembly_maxTransactionsInMemory` is positive, when a non-block `AddTxBatch` is invoked while the reset reloads its unmined transactions, then the request MUST be refused with `ERR_THRESHOLD_EXCEEDED` marked as held, a block batch (`inBlock`) MUST be accepted, and a non-block batch invoked after the reload completes MUST be accepted while the held count is below the limit.
 
 **AC-BA-DEPENDENCY-002.1.** Given the Blockchain service has returned three consecutive errors within a 30-second window with no successful interleaved call, when the service evaluates dependency health, then it MUST transition to `Idle` and `GetBlockAssemblyState` MUST report `BlockAssemblyState == "idle"` within one probe interval.
 
@@ -615,6 +621,12 @@ stateDiagram-v2
 **AC-BA-CONFIG-002.1.** Given `MinimumMerkleItemsPerSubtree` is set to 1000 (not a power of two), when the service is started, then it MUST refuse to start and emit a configuration-validation error naming the offending setting.
 
 **AC-BA-CONFIG-008.1.** Given `ChainCfgParams.GenerateSupported == false`, when `GenerateBlocks` is invoked, then it MUST return an error with message `generate is not supported`.
+
+**AC-BA-CONFIG-009.1.** Given block assembly is level with the Blockchain tip but still in `Resetting`, `Reorging` or `MovingUp`, when `GenerateBlocks` is invoked, then it MUST NOT build a candidate until the state returns to `Running`.
+
+**AC-BA-CONFIG-009.3.** Given the caller's deadline expires before `blockassembly_generateTipWaitTimeout`, when `GenerateBlocks` is invoked, then the error MUST identify the caller's deadline as the bound that expired, and MUST NOT report the configured timeout as though it had been spent.
+
+**AC-BA-CONFIG-009.2.** Given block assembly does not reach `Running` at the chain tip within `blockassembly_generateTipWaitTimeout`, when `GenerateBlocks` is invoked, then it MUST return an error naming the state it was waiting on, and MUST NOT submit a block.
 
 **AC-BA-OBSERVABILITY-003.1.** Given the service is mid-reorg, when `GetBlockAssemblyState` is invoked, then `BlockAssemblyState` MUST be one of `"reorging"` or related transient values, never `"running"`.
 
@@ -737,7 +749,7 @@ flowchart TD
     C -- yes --> MF[Move forward]
     C -- no --> D{Stronger competing chain?}
     D -- no --> WAIT[Out-of-order or weaker:<br/>defer until stronger signal]
-    D -- yes --> E{Depth > coinbase maturity<br/>AND height > 1000?}
+    D -- yes --> E{(Depth >= coinbase maturity<br/>AND height > 1000)<br/>OR depth >= UTXO retention (BA-REORG-006)?}
     E -- yes --> RESET[Full reset]
     E -- no --> REORG[Reorg in place]
     MF --> RUN[Resume assembly]
@@ -784,6 +796,11 @@ The current implementation does not validate `InitialMerkleItemsPerSubtree` and 
 *Affects:* BA-SUBTREE-024.
 The current implementation hardcodes `50` as the anti-creep threshold at `subtreeprocessor/SubtreeProcessor.go:1600`. The spec requires it to be a function of `MinimumMerkleItemsPerSubtree` so the gate scales with deployment configuration.
 *Work required:* replace the hardcoded constant with a derived value (e.g. a small multiple of `MinimumMerkleItemsPerSubtree`); the chosen factor MUST be commented in the source.
+
+**GAP-BA-004.** A fork reorg that fails inside its move-back's bulk build leaves the moved-back transactions in the transaction map.
+*Affects:* BA-REORG-007.
+A failed fork reorg keeps the subtrees and transaction map of its last completed step, and a step that fails part way puts back its own input. The move-back, though, writes the moved-back block's transactions into `currentTxMap` in place before its bulk build, and when that build fails it puts back only the subtrees it started from. Those transactions stay in the map, which then no longer matches the subtrees (`CheckSubtreeProcessor` reports the mismatch), contrary to BA-REORG-007. Only a reset may run after a failed fork reorg (`failedForkReorgNeedsReset`), and it clears the map, which hides the stale entries. Proof: `TestKnownDefect_MoveBackBuildFailureLeavesMovedBackTxsInTheMap` (build tag `bagaps`).
+*Work required:* have the move-back delete the entries it inserted (it knows them from `wasSet`) when its build fails.
 
 ---
 

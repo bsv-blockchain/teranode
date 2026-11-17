@@ -3,8 +3,9 @@
 function get_lastblocks() {
   local node=$1
   local n=$2
+  local output_file=$3
   local url="https://$node.scaling.ubsv.dev/api/v1/lastblocks?n=$n"
-  curl -s "$url" | jq -r '.[] | "\(.height) \(.height): \(.hash)"' > "$3"
+  curl -s "$url" | jq -r '.[] | "\(.height) \(.height): \(.hash)"' > "$output_file"
 }
 
 n=10

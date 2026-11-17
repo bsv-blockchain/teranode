@@ -102,7 +102,7 @@ func TestGetCounterConflictingTxHashes(t *testing.T) {
 
 	// get the counter conflicting transactions of the conflicting transaction
 	// this should process all indexes from the parents properly
-	txHashes, err := utxostore.GetCounterConflictingTxHashes(t.Context(), utxoStore, *txConflicting.TxIDChainHash())
+	txHashes, err := utxostore.GetCounterConflictingTxHashes(t.Context(), utxoStore, *txConflicting.TxIDChainHash(), 0)
 	require.NoError(t, err)
 
 	require.Len(t, txHashes, 2)

@@ -163,6 +163,11 @@ func (m *MockKafkaProducer) Publish(msg *kafka.Message) {
 	m.Called(msg)
 }
 
+func (m *MockKafkaProducer) TryPublish(msg *kafka.Message) bool {
+	args := m.Called(msg)
+	return args.Bool(0)
+}
+
 func (m *MockKafkaProducer) Close() error {
 	args := m.Called()
 	return args.Error(0)

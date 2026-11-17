@@ -58,8 +58,13 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
+
+// txRejectedPrefix is the message prefix used when a raw transaction is rejected.
+const txRejectedPrefix = "TX rejected: "
 
 // live items expire after 10s
 var rpcCallCache = newRPCCache()
@@ -97,7 +102,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlock",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBlock),
-		tracing.WithLogMessage(s.logger, "[handleGetBlock] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetBlock] called"),
 	)
 	defer deferFn()
 
@@ -111,7 +116,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	// Load the raw block bytes from the database.
 	b, err := s.blockchainClient.GetBlock(ctx, ch)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	result, err := s.blockToJSON(ctx, b, *c.Verbosity)
@@ -173,7 +178,7 @@ func handleGetBlockByHeight(ctx context.Context, s *RPCServer, cmd interface{}, 
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlockByHeight",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBlockByHeight),
-		tracing.WithLogMessage(s.logger, "[handleGetBlockByHeight] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetBlockByHeight] called"),
 	)
 	defer deferFn()
 
@@ -182,7 +187,7 @@ func handleGetBlockByHeight(ctx context.Context, s *RPCServer, cmd interface{}, 
 	// Load the raw block bytes from the database.
 	b, err := s.blockchainClient.GetBlockByHeight(ctx, c.Height)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcHeightLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	return s.blockToJSON(ctx, b, *c.Verbosity)
@@ -214,7 +219,7 @@ func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlockHash",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBlockHash),
-		tracing.WithLogMessage(s.logger, "[handleGetBlockHash] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetBlockHash] called"),
 	)
 	defer deferFn()
 
@@ -222,7 +227,7 @@ func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 
 	indexUint32, err := safeconversion.Int64ToUint32(c.Index)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
 	}
 
 	// Load the raw block bytes from the database.
@@ -246,7 +251,7 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlockHeader",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBlockHeader),
-		tracing.WithLogMessage(s.logger, "[handleGetBlockHeader] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetBlockHeader] called"),
 	)
 	defer deferFn()
 
@@ -259,110 +264,115 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 	// Load the raw block bytes from the database.
 	b, meta, err := s.blockchainClient.GetBlockHeader(ctx, ch)
 	if err != nil {
+		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
+	}
+
+	if !*c.Verbose {
+		return fmt.Sprintf("%x", b.Bytes()), nil
+	}
+
+	return s.getBlockHeaderVerboseResult(ctx, b, meta)
+}
+
+// getBlockHeaderVerboseResult builds the verbose getblockheader reply from the
+// block header and its metadata.
+func (s *RPCServer) getBlockHeaderVerboseResult(ctx context.Context, b *model.BlockHeader, meta *model.BlockHeaderMeta) (*bsvjson.GetBlockHeaderVerboseResult, error) {
+	versionInt32, err := safeconversion.Uint32ToInt32(b.Version)
+	if err != nil {
 		return nil, err
 	}
 
-	if *c.Verbose {
-		versionInt32, err := safeconversion.Uint32ToInt32(b.Version)
-		if err != nil {
-			return nil, err
-		}
-
-		nonceUint64, err := safeconversion.Uint32ToUint64(b.Nonce)
-		if err != nil {
-			return nil, err
-		}
-
-		timeInt64, err := safeconversion.Uint32ToInt64(b.Timestamp)
-		if err != nil {
-			return nil, err
-		}
-
-		heightInt32, err := safeconversion.Uint32ToInt32(meta.Height)
-		if err != nil {
-			return nil, err
-		}
-
-		diff := b.Bits.CalculateDifficulty()
-		diffFloat, _ := diff.Float64()
-
-		// Get best block header for confirmations calculation
-		_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		// Calculate median time for this block
-		medianTime, err := calculateMedianTime(ctx, s.blockchainClient, b.Hash())
-		if err != nil {
-			// If we can't calculate median time, use block time
-			s.logger.Warnf("Failed to calculate median time for block %s: %v, falling back to block timestamp", b.Hash(), err)
-			medianTime = b.Timestamp
-		}
-
-		// Handle previousblockhash for genesis block
-		previousBlockHash := b.HashPrevBlock.String()
-		if meta.Height == 0 {
-			// For genesis block, return empty string instead of zeros
-			previousBlockHash = ""
-		}
-
-		// Get next block hash unless there are none
-		nextBlock, err := s.blockchainClient.GetBlockByHeight(ctx, meta.Height+1)
-		var nextBlockHash string
-		if err == nil && nextBlock != nil {
-			nextBlockHash = nextBlock.Hash().String()
-		}
-
-		// Get block size
-		blockBytes := b.Bytes()
-		blockSizeInt32, err := safeconversion.IntToInt32(len(blockBytes))
-		if err != nil {
-			return nil, err
-		}
-
-		// Get transaction count from the block at this height
-		block, err := s.blockchainClient.GetBlockByHeight(ctx, meta.Height)
-		var numTx int
-		if err == nil && block != nil {
-			numTx = int(block.TransactionCount)
-		}
-
-		headerReply := &bsvjson.GetBlockHeaderVerboseResult{
-			Hash:          b.Hash().String(),
-			Version:       versionInt32,
-			VersionHex:    fmt.Sprintf("%08x", b.Version),
-			PreviousHash:  previousBlockHash,
-			Nonce:         nonceUint64,
-			Time:          timeInt64,
-			Bits:          b.Bits.String(),
-			Difficulty:    diffFloat,
-			MerkleRoot:    b.HashMerkleRoot.String(),
-			Confirmations: int64(1 + bestBlockMeta.Height - meta.Height),
-			Height:        heightInt32,
-			Size:          blockSizeInt32,
-			NumTx:         numTx,
-			MedianTime:    int64(medianTime),
-			ChainWork:     hex.EncodeToString(meta.ChainWork),
-			NextHash:      nextBlockHash,
-			Status:        "active",
-		}
-
-		// Check if this block is on the main chain
-		isOnMainChain, err := s.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{meta.ID})
-		if err != nil {
-			return nil, err
-		}
-
-		if !isOnMainChain {
-			headerReply.Confirmations = -1
-			return headerReply, nil
-		}
-
-		return headerReply, nil
+	nonceUint64, err := safeconversion.Uint32ToUint64(b.Nonce)
+	if err != nil {
+		return nil, err
 	}
 
-	return fmt.Sprintf("%x", b.Bytes()), nil
+	timeInt64, err := safeconversion.Uint32ToInt64(b.Timestamp)
+	if err != nil {
+		return nil, err
+	}
+
+	heightInt32, err := safeconversion.Uint32ToInt32(meta.Height)
+	if err != nil {
+		return nil, err
+	}
+
+	diff := b.Bits.CalculateDifficulty()
+	diffFloat, _ := diff.Float64()
+
+	// Get best block header for confirmations calculation
+	_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Calculate median time for this block
+	medianTime, err := calculateMedianTime(ctx, s.blockchainClient, b.Hash())
+	if err != nil {
+		// If we can't calculate median time, use block time
+		s.logger.Warnf("Failed to calculate median time for block %s: %v, falling back to block timestamp", b.Hash(), err)
+		medianTime = b.Timestamp
+	}
+
+	// Handle previousblockhash for genesis block
+	previousBlockHash := b.HashPrevBlock.String()
+	if meta.Height == 0 {
+		// For genesis block, return empty string instead of zeros
+		previousBlockHash = ""
+	}
+
+	// Get next block hash unless there are none
+	nextBlock, err := s.blockchainClient.GetBlockByHeight(ctx, meta.Height+1)
+	var nextBlockHash string
+	if err == nil && nextBlock != nil {
+		nextBlockHash = nextBlock.Hash().String()
+	}
+
+	// Get block size
+	blockBytes := b.Bytes()
+	blockSizeInt32, err := safeconversion.IntToInt32(len(blockBytes))
+	if err != nil {
+		return nil, err
+	}
+
+	// Get transaction count from the block at this height
+	block, err := s.blockchainClient.GetBlockByHeight(ctx, meta.Height)
+	var numTx int
+	if err == nil && block != nil {
+		numTx = int(block.TransactionCount)
+	}
+
+	headerReply := &bsvjson.GetBlockHeaderVerboseResult{
+		Hash:          b.Hash().String(),
+		Version:       versionInt32,
+		VersionHex:    fmt.Sprintf("%08x", b.Version),
+		PreviousHash:  previousBlockHash,
+		Nonce:         nonceUint64,
+		Time:          timeInt64,
+		Bits:          b.Bits.String(),
+		Difficulty:    diffFloat,
+		MerkleRoot:    b.HashMerkleRoot.String(),
+		Confirmations: int64(1 + bestBlockMeta.Height - meta.Height),
+		Height:        heightInt32,
+		Size:          blockSizeInt32,
+		NumTx:         numTx,
+		MedianTime:    int64(medianTime),
+		ChainWork:     hex.EncodeToString(meta.ChainWork),
+		NextHash:      nextBlockHash,
+		Status:        "active",
+	}
+
+	// Check if this block is on the main chain
+	isOnMainChain, err := s.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{meta.ID})
+	if err != nil {
+		return nil, err
+	}
+
+	if !isOnMainChain {
+		headerReply.Confirmations = -1
+	}
+
+	return headerReply, nil
 }
 
 // blockToJSON converts a block to JSON format based on verbosity level.
@@ -498,7 +508,7 @@ func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ 
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBestBlockHash",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBestBlockHash),
-		tracing.WithLogMessage(s.logger, "[handleGetBestBlockHash] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetBestBlockHash] called"),
 	)
 	defer deferFn()
 
@@ -550,7 +560,7 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetRawTransaction",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetRawTransaction),
-		tracing.WithLogMessage(s.logger, "[handleGetRawTransaction] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetRawTransaction] called"),
 	)
 	defer deferFn()
 
@@ -560,7 +570,27 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 		return nil, errors.NewConfigurationError("asset_httpURL is not set")
 	}
 
-	fullURL := s.assetHTTPURL.ResolveReference(&url.URL{Path: fmt.Sprintf("/api/v1/tx/%s/hex", c.Txid)})
+	// Parse the txid before it goes anywhere, as svnode's ParseHashV does. It is
+	// interpolated into the asset service URL, where an unchecked value addresses
+	// other routes ("../block/<hash>"), and a malformed one came back as the asset
+	// service's 400, answered as an internal error for the caller's own typo.
+	// Hex first and then length, in svnode's order, so its texts match.
+	if _, err := hex.DecodeString(c.Txid); err != nil {
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidParameter,
+			fmt.Sprintf("parameter 1 must be hexadecimal string (not '%s')", c.Txid))
+	}
+
+	if len(c.Txid) != chainhash.MaxHashStringSize {
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidParameter,
+			fmt.Sprintf("parameter 1 must be of length %d (not %d)", chainhash.MaxHashStringSize, len(c.Txid)))
+	}
+
+	txHash, err := chainhash.NewHashFromStr(c.Txid)
+	if err != nil {
+		return nil, rpcDecodeHexError(c.Txid)
+	}
+
+	fullURL := s.assetHTTPURL.ResolveReference(&url.URL{Path: fmt.Sprintf("/api/v1/tx/%s/hex", txHash.String())})
 
 	// Set up HTTP client with timeouts
 	client := &http.Client{
@@ -574,9 +604,26 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 	}
 	defer resp.Body.Close()
 
-	// Check the response status code
+	// A 404 the asset handler marks as its own is the asset service saying it does
+	// not hold this transaction, which bitcoind reports as -5 with this text, not
+	// as an internal error. A wallet polling for a transaction that is not mined
+	// yet needs to tell that apart from the asset service being down.
+	//
+	// Only a marked one. -5 is the strongest answer this API has, and an unmarked
+	// 404 is a route that did not match: the path below is an absolute reference,
+	// so it replaces any path on assetHTTPURL, and a misconfigured URL 404s every
+	// request. That falls through to the non-200 branch, which answers it as the
+	// node fault it is and logs it, with the URL, at error.
+	if resp.StatusCode == http.StatusNotFound && resp.Header.Get(util.AssetNotFoundHeader) == util.AssetNotFoundTx {
+		return nil, s.rpcTxLookupError(
+			errors.NewTxNotFoundError("tx %s not found in asset service", txHash.String()),
+			bsvjson.ErrRPCInvalidAddressOrKey, "")
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.NewServiceError(fmt.Sprintf("Error: Unexpected status code %d", resp.StatusCode))
+		return nil, s.rpcError(
+			errors.NewServiceError("unexpected status code %d from asset service at %s", resp.StatusCode, fullURL.Redacted()),
+			bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -670,7 +717,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleCreateRawTransaction",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleCreateRawTransaction),
-		tracing.WithLogMessage(s.logger, "[handleCreateRawTransaction] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleCreateRawTransaction] called"),
 	)
 	defer deferFn()
 
@@ -720,10 +767,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 		// Decode the provided address.
 		addr, err := bsvutil.DecodeAddress(encodedAddr, s.settings.ChainCfgParams)
 		if err != nil {
-			return nil, &bsvjson.RPCError{
-				Code:    bsvjson.ErrRPCInvalidAddressOrKey,
-				Message: "Invalid address or key: " + err.Error(),
-			}
+			return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidAddressOrKey, "Invalid address or key: ")
 		}
 
 		// Ensure the address is one of the supported types and that
@@ -770,7 +814,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 	if c.LockTime != nil {
 		lockTimeUint32, err := safeconversion.Int64ToUint32(*c.LockTime)
 		if err != nil {
-			return nil, err
+			return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
 		}
 
 		mtx.LockTime = lockTimeUint32
@@ -821,7 +865,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleSendRawTransaction",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleSendRawTransaction),
-		tracing.WithLogMessage(s.logger, "[handleSendRawTransaction] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleSendRawTransaction] called"),
 	)
 	defer deferFn()
 
@@ -841,33 +885,81 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// Use 0 for the tag to represent local node.
 	tx, err := bt.NewTxFromBytes(serializedTx)
 	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCDeserialization,
-			Message: "TX rejected: " + err.Error(),
-		}
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCDeserialization, txRejectedPrefix)
 	}
 
 	s.logger.Debugf("tx to send: %v", tx)
+
+	// A syncing node stores no unmined transaction, not even the blob (issue
+	// 2003). -10 is the code bitcoind uses for a call it refuses during initial
+	// block download, so a client already handling that one needs no change.
+	if s.unminedTxGate.Refuses(ctx, tx.TxIDChainHash()) {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCClientInInitialDownload,
+			Message: "node is syncing and accepts no unmined transactions until it reaches the chain tip",
+		}
+	}
 
 	// Store the transaction in blob store first (following the pattern from propagation service)
 	if s.txStore != nil {
 		err = s.txStore.Set(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, tx.SerializeBytes())
 		if err != nil {
-			return nil, &bsvjson.RPCError{
-				Code:    bsvjson.ErrRPCInternal.Code,
-				Message: "Failed to store transaction: " + err.Error(),
+			return nil, s.rpcError(err, bsvjson.ErrRPCInternal.Code, "Failed to store transaction: ")
+		}
+	}
+
+	// User-protection absurd-fee ceiling. The ceiling exists only to catch a
+	// fat-fingered fee on the RPC entry point — it is NOT consensus or policy
+	// (a miner would happily include an absurd-fee tx). The check is therefore
+	// confined to this handler and never visible to the validator or the P2P
+	// path. AllowHighFees=true on the per-call command bypasses it; a global
+	// MaxRawTxFee of 0 disables it entirely (operator opt-out).
+	allowHighFees := c.AllowHighFees != nil && *c.AllowHighFees
+	if !allowHighFees && s.settings.Policy.MaxRawTxFee > 0 {
+		// Resolve the fee from local outputs even when the caller sends extended
+		// bytes. The decorator only fills missing fields, so clear both supplied
+		// fields first; removing the IsExtended gate alone would still trust them.
+		// The validator re-reads the parents for consensus validation. This read
+		// must happen before submission so an excessive fee can reject the call.
+		// PreviousOutputsDecorate does not return the parent metadata needed to
+		// reuse this lookup through Options.PrefetchedParents.
+		for _, input := range tx.Inputs {
+			if input == nil {
+				continue
+			}
+
+			input.PreviousTxScript = nil
+			input.PreviousTxSatoshis = 0
+		}
+
+		tx.SetExtended(false)
+
+		if err = s.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
+			return nil, s.rpcSubmitError(err, bsvjson.ErrRPCVerify, txRejectedPrefix)
+		}
+
+		tx.SetExtended(true)
+
+		inputSats := tx.TotalInputSatoshis()
+		outputSats := tx.TotalOutputSatoshis()
+		if inputSats > outputSats {
+			fee := inputSats - outputSats
+			if fee > s.settings.Policy.MaxRawTxFee {
+				return nil, &bsvjson.RPCError{
+					Code:    bsvjson.ErrRPCVerify,
+					Message: fmt.Sprintf("absurdly-high-fee %d > %d (use allowhighfees=true to bypass)", fee, s.settings.Policy.MaxRawTxFee),
+				}
 			}
 		}
+		// inputSats <= outputSats means fee is zero or negative; the validator
+		// will reject on its own (consensus check). Don't pre-empt.
 	}
 
 	// Validate the transaction synchronously
 	// This will validate scripts, check UTXOs, spend them, create new UTXOs, and send to block assembly
 	_, err = s.validatorClient.Validate(ctx, tx, 0)
-	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCVerify,
-			Message: "TX rejected: " + err.Error(),
-		}
+	if err != nil && !errors.Is(err, errors.ErrTxUnlockFailed) {
+		return nil, s.rpcSubmitError(err, bsvjson.ErrRPCVerify, txRejectedPrefix)
 	}
 
 	// Return the transaction ID as a hex string per Bitcoin RPC spec
@@ -933,7 +1025,7 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	numblocksInt32, err := safeconversion.Uint32ToInt32(c.NumBlocks)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
 	}
 
 	// Generate blocks and return their hashes
@@ -1000,10 +1092,17 @@ func handleGenerateToAddress(ctx context.Context, s *RPCServer, cmd interface{},
 	// check address
 	_, err := bsvutil.DecodeAddress(c.Address, s.settings.ChainCfgParams)
 	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInvalidAddressOrKey,
-			Message: err.Error(),
-		}
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidAddressOrKey, "")
+	}
+
+	// DecodeAddress also takes a CashAddr or a bare public key, but block
+	// assembly builds the coinbase with AddressToScript, which reads base58 only,
+	// and its refusal would come back as a node fault. Refused here instead, with
+	// svnode's answer to an address it cannot pay.
+	if _, err = model.AddressToScript(c.Address); err != nil {
+		s.logger.Debugf("[handleGenerateToAddress] %q: %v", c.Address, err)
+
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidAddressOrKey, "Error: Invalid address")
 	}
 
 	// Generate blocks and return their hashes
@@ -1091,12 +1190,15 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 	}
 
 	if c.ProvideCoinbaseTx != nil && *c.ProvideCoinbaseTx {
-		coinbaseTx, err := mc.CreateCoinbaseTxCandidate(s.settings, true)
-		if err != nil {
-			return nil, err
+		// The coinbase block assembly keeps on the candidate's job, as bitcoin-sv returns the
+		// candidate block's own coinbase. A solution submitted without a coinbase is mined with
+		// this one, so a miner that hashes it and omits it from submitminingsolution gets the block
+		// it hashed. A coinbase built here instead would be one block assembly never sees.
+		if len(mc.CoinbaseTx) == 0 {
+			return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInternal.Code, "block assembly returned the candidate without its coinbase: it could not build one from miner_wallet_private_keys, or it is an older or other implementation that does not set coinbase_tx")
 		}
 
-		jsonMap["coinbase"] = hex.EncodeToString(coinbaseTx.Bytes())
+		jsonMap["coinbase"] = hex.EncodeToString(mc.CoinbaseTx)
 	}
 
 	if *c.Verbosity == uint32(1) {
@@ -1144,7 +1246,7 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetpeerinfo",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetpeerinfo),
-		tracing.WithLogMessage(s.logger, "[handleGetpeerinfo] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetpeerinfo] called"),
 	)
 	defer deferFn()
 
@@ -1258,12 +1360,14 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 			}
 
 			for _, p := range newResult.resp {
+				displayHeight := p.DisplayHeight()
+
 				info := &bsvjson.GetPeerInfoResult{
 					PeerID:         p.ID.String(),
 					Addr:           p.DataHubURL, // Use DataHub URL as address
 					SubVer:         p.ClientName,
-					CurrentHeight:  int32(p.Height),
-					StartingHeight: int32(p.Height), // Use current height as starting height
+					CurrentHeight:  int32(displayHeight),
+					StartingHeight: int32(displayHeight), // Use current height as starting height
 					BanScore:       int32(p.BanScore),
 					BytesRecv:      p.BytesReceived,
 					BytesSent:      0, // P2P doesn't track bytes sent currently
@@ -1294,7 +1398,7 @@ func handleGetRawMempool(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetRawMempool",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetRawmempool),
-		tracing.WithLogMessage(s.logger, "[handleGetRawMempool] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetRawMempool] called"),
 	)
 	defer deferFn()
 
@@ -1302,19 +1406,13 @@ func handleGetRawMempool(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 
 	txs, err := s.blockAssemblyClient.GetTransactionHashes(ctx)
 	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: "Error retrieving raw mempool: " + err.Error(),
-		}
+		return nil, s.rpcError(err, bsvjson.ErrRPCInternal.Code, "Error retrieving raw mempool: ")
 	}
 
 	if verbose != nil && *verbose {
 		miningCandidate, err := s.blockAssemblyClient.GetMiningCandidate(ctx)
 		if err != nil {
-			return nil, &bsvjson.RPCError{
-				Code:    bsvjson.ErrRPCInternal.Code,
-				Message: "Error retrieving mining candidate: " + err.Error(),
-			}
+			return nil, s.rpcError(err, bsvjson.ErrRPCInternal.Code, "Error retrieving mining candidate: ")
 		}
 
 		result := bsvjson.GetRawMempoolVerboseResult{
@@ -1362,7 +1460,7 @@ func handleGetDifficulty(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetDifficulty",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetDifficulty),
-		tracing.WithLogMessage(s.logger, "[handleGetDifficulty] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetDifficulty] called"),
 	)
 	defer deferFn()
 
@@ -1406,7 +1504,7 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetblockchaininfo",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetblockchaininfo),
-		tracing.WithLogMessage(s.logger, "[handleGetblockchaininfo] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetblockchaininfo] called"),
 	)
 	defer deferFn()
 
@@ -1585,7 +1683,7 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetInfo",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetinfo),
-		tracing.WithLogMessage(s.logger, "[handleGetInfo] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetInfo] called"),
 	)
 	defer deferFn()
 
@@ -1742,6 +1840,14 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 		return nil, rpcDecodeHexError(c.MiningSolution.ID)
 	}
 
+	// Jobs are keyed by a 32-byte hash. Any other length names no job, and
+	// blockassembly refused it with chainhash's bare error, which reads as a node
+	// fault once it crosses back.
+	if len(id) != chainhash.HashSize {
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidParameter,
+			fmt.Sprintf("id must be of length %d (not %d)", chainhash.MaxHashStringSize, len(c.MiningSolution.ID)))
+	}
+
 	coinbase, err := hex.DecodeString(c.MiningSolution.Coinbase)
 	if err != nil {
 		return nil, rpcDecodeHexError(c.MiningSolution.Coinbase)
@@ -1761,9 +1867,13 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 		// Handle "job not found" as an expected condition - miners often submit stale solutions
 		if terr, ok := err.(*errors.Error); ok && terr.Code() == errors.ERR_NOT_FOUND {
 			s.logger.Infof("Mining solution rejected: %s (job expired or block already found)", err.Error())
-			return nil, bsvjson.NewRPCError(bsvjson.ErrRPCMisc, err.Error())
+
+			// A fixed text: the error renders its code and blockassembly's own
+			// breadcrumb, and this is a limited-tier path miners hit routinely.
+			return nil, bsvjson.NewRPCError(bsvjson.ErrRPCMisc, "job not found")
 		}
-		return nil, err
+
+		return nil, s.rpcMiningSubmissionError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	return true, nil
@@ -1819,7 +1929,7 @@ func handleInvalidateBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 
 	_, err = s.blockchainClient.InvalidateBlock(ctx, ch)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	return nil, nil
@@ -1880,27 +1990,38 @@ func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 		}
 	}
 
-	// Revalidate the block - this will fetch it, validate it, and update its status
-	s.logger.Infof("[handleReconsiderBlock] revalidating block %s", ch)
-	err = s.blockValidationClient.RevalidateBlock(ctx, *ch)
+	// Resolve the named block before revalidating anything, as svnode does. This is
+	// the only lookup on this path that is about the block the caller named, so it
+	// is the only one allowed to answer "Block not found": a not-found inside a
+	// revalidation failure is about an ancestor or a descendant.
+	_, meta, err := s.blockchainClient.GetBlockHeader(ctx, ch)
 	if err != nil {
-		s.logger.Errorf("[handleReconsiderBlock] block revalidation failed for %s: %v", ch, err)
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCVerify,
-			Message: "Block failed revalidation: " + err.Error(),
-		}
+		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
-	s.logger.Infof("[handleReconsiderBlock] block %s successfully reconsidered and validated", ch)
+	if meta == nil || meta.Invalid {
+		// Revalidate the block - this will fetch it, validate it, and update its status
+		s.logger.Infof("[handleReconsiderBlock] revalidating block %s", ch)
+
+		err = s.blockValidationClient.RevalidateBlock(ctx, *ch)
+		if err != nil {
+			return nil, s.rpcRevalidationError(err, bsvjson.ErrRPCVerify, "Block failed revalidation: ")
+		}
+
+		s.logger.Infof("[handleReconsiderBlock] block %s successfully reconsidered and validated", ch)
+	} else {
+		// Not marked invalid, so there is nothing to clear on the block itself and
+		// BlockValidation would refuse to revalidate it. bitcoind answers success
+		// here, and its ResetBlockFailureFlags still clears every descendant, so the
+		// children are reconsidered below either way.
+		s.logger.Infof("[handleReconsiderBlock] block %s is not marked invalid, reconsidering its invalid descendants only", ch)
+	}
 
 	// Now recursively clear invalid status for all invalid child blocks
 	err = s.reconsiderInvalidChildren(ctx, ch)
 	if err != nil {
-		s.logger.Errorf("[handleReconsiderBlock] failed to reconsider child blocks: %v", err)
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: fmt.Sprintf("Block %s was reconsidered but failed to reconsider children: %v", ch, err),
-		}
+		return nil, s.rpcRevalidationError(err, bsvjson.ErrRPCInternal.Code,
+			fmt.Sprintf("Block %s was reconsidered but failed to reconsider children: ", ch))
 	}
 
 	return nil, nil
@@ -1971,7 +2092,7 @@ func handleHelp(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan str
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleHelp",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleHelp),
-		tracing.WithLogMessage(s.logger, "[handleHelp] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleHelp] called"),
 	)
 	defer deferFn()
 
@@ -2043,7 +2164,7 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleIsBanned",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleIsBanned),
-		tracing.WithLogMessage(s.logger, "[handleIsBanned] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleIsBanned] called"),
 	)
 	defer deferFn()
 
@@ -2076,7 +2197,15 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	var peerBanned bool
 
 	if isIP && s.legacyP2PClient != nil {
-		isBannedLegacy, err := s.legacyP2PClient.IsBanned(ctx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
+		// Bound the call: the legacy peer client is lazily dialed and non-nil
+		// whenever legacy_grpcAddress is configured, so on a node without a
+		// running legacy service this would otherwise block on the parent
+		// context until the RPC's own deadline (see #591).
+		legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
+		isBannedLegacy, err := s.legacyP2PClient.IsBanned(legacyCtx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
+
+		cancel()
+
 		if err != nil {
 			s.logger.Warnf("Failed to check if banned in legacy peer service: %v", err)
 		} else {
@@ -2115,7 +2244,7 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleListBanned",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleListBanned),
-		tracing.WithLogMessage(s.logger, "[handleListBanned] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleListBanned] called"),
 	)
 	defer deferFn()
 
@@ -2188,7 +2317,27 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 		}
 	}
 
-	return bannedList, nil
+	// Return each exact string once, retaining the first occurrence in the
+	// collected order: successful P2P entries first, then successful legacy
+	// entries. An empty collected slice is returned unchanged so that a nil
+	// list stays nil and a non-nil empty list stays non-nil empty.
+	if len(bannedList) == 0 {
+		return bannedList, nil
+	}
+
+	seen := make(map[string]struct{})
+	unique := make([]string, 0)
+
+	for _, banned := range bannedList {
+		if _, exists := seen[banned]; exists {
+			continue
+		}
+
+		seen[banned] = struct{}{}
+		unique = append(unique, banned)
+	}
+
+	return unique, nil
 }
 
 // handleClearBanned implements the clearbanned command, which removes all IP address
@@ -2227,22 +2376,105 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 
 	s.logger.Debugf("in handleClearBanned")
 
+	// clearbanned is asymmetric: ClearBanned is in the p2p protected set but not
+	// the legacy one, so with the admin key unset the p2p leg returns
+	// Unauthenticated while the legacy leg clears unauthenticated. "Any leg
+	// succeeded" would then report success while every p2p ban survives.
+	//
+	// So distinguish a leg that is merely ABSENT (a configured-but-absent service
+	// times out or is Unavailable by design, #591 - tolerate it) from a leg that
+	// ANSWERED AND REFUSED (notably Unauthenticated, or a !Ok response - a real
+	// ban list was left untouched). success needs at least one leg to clear;
+	// refused fails the command even if another leg cleared. lastErr keeps a
+	// reason for the message when nothing cleared and nothing explicitly refused
+	// (e.g. all legs absent).
+	var (
+		success bool
+		refused string
+		lastErr string
+	)
+
 	// check if P2P service is available
 	if s.p2pClient != nil {
 		err := s.p2pClient.ClearBanned(ctx)
-		if err != nil {
+		switch {
+		case err == nil:
+			success = true
+		case legAbsent(err):
+			lastErr = err.Error()
+
+			s.logger.Warnf("P2P service unavailable while clearing banned list: %v", err)
+		default:
+			refused = err.Error()
+
 			s.logger.Warnf("Failed to clear banned list in P2P service: %v", err)
 		}
 	}
 	// check if legacy peer service is available
 	if s.legacyP2PClient != nil {
-		_, err := s.legacyP2PClient.ClearBanned(ctx, &emptypb.Empty{})
-		if err != nil {
+		// Bound the call so an absent-but-configured legacy service can't stall
+		// the RPC on the parent context (#591).
+		legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
+		resp, err := s.legacyP2PClient.ClearBanned(legacyCtx, &emptypb.Empty{})
+
+		cancel()
+
+		switch {
+		case err == nil && resp != nil && resp.Ok:
+			success = true
+		case err != nil && legAbsent(err):
+			lastErr = err.Error()
+
+			s.logger.Warnf("Legacy peer service unavailable while clearing banned list: %v", err)
+		case err != nil:
+			refused = err.Error()
+
 			s.logger.Warnf("Failed to clear banned list in legacy peer service: %v", err)
+		default:
+			// The p2p client turns !Ok into an error one layer down; the legacy
+			// client returns the response raw, so check Ok here too - otherwise a
+			// "did not clear" response would be counted as a successful clear.
+			refused = "legacy peer service reported the ban list was not cleared"
+
+			s.logger.Warnf("Legacy peer service did not clear the ban list")
+		}
+	}
+
+	// Fail when any reachable leg refused (so an Unauthenticated p2p leg cannot be
+	// papered over by the unprotected legacy leg), or when no leg cleared at all
+	// (all absent, or none configured). clearbanned removes a security control, so
+	// report the failure (server-side/internal error) rather than a false success.
+	if refused != "" || !success {
+		reason := refused
+		if reason == "" {
+			reason = lastErr
+		}
+
+		msg := "Failed to clear banned list"
+		if reason != "" {
+			msg = fmt.Sprintf("%s: %s", msg, reason)
+		}
+
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInternal.Code,
+			Message: msg,
 		}
 	}
 
 	return true, nil
+}
+
+// legAbsent reports whether a gRPC error means the target service is merely
+// absent - a configured-but-not-running service times out or reports Unavailable
+// by design (#591) - as opposed to a service that answered and refused (e.g.
+// Unauthenticated when grpc_admin_api_key is unset), which must not be tolerated.
+func legAbsent(err error) bool {
+	switch status.Code(err) {
+	case codes.DeadlineExceeded, codes.Unavailable:
+		return true
+	default:
+		return false
+	}
 }
 
 // handleSetBan implements the setban command, which adds or removes an IP address or subnet
@@ -2300,11 +2532,22 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		}
 	}
 
+	// success tracks whether at least one applicable ban leg actually applied
+	// the ban; checked after the switch so the outcome no longer depends on
+	// which legs ran (previously a failed p2p ban was only surfaced when the
+	// legacy leg also ran and failed). lastErr keeps the most recent leg reason
+	// so the RPC error can name the cause (e.g. Unauthenticated when the admin
+	// key is unset) instead of a bare "failed". Unlike clearbanned, both BanPeer
+	// and UnbanPeer are protected on p2p AND legacy, so a refused leg can't be
+	// masked by an unprotected sibling - any-leg-succeeds is safe here.
+	var (
+		success bool
+		lastErr string
+	)
+
 	// Handle the command
 	switch c.Command {
 	case "add":
-		var success bool
-
 		var expirationTime time.Time
 
 		// If BanTime is nil or 0, use a default ban time (e.g., 24 hours)
@@ -2331,73 +2574,66 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 				success = true
 				s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
 			} else {
+				lastErr = err.Error()
 				s.logger.Warnf("Error while trying to ban teranode peer: %v", err)
 			}
 		}
 
 		// and ban legacy peers
 		if s.legacyP2PClient != nil {
-			until := expirationTimeInt64
+			// Bound the call so an absent-but-configured legacy service can't
+			// stall the RPC on the parent context (#591).
+			legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
 
-			resp, err := s.legacyP2PClient.BanPeer(ctx, &peer_api.BanPeerRequest{
+			resp, err := s.legacyP2PClient.BanPeer(legacyCtx, &peer_api.BanPeerRequest{
 				Addr:  c.IPOrSubnet,
-				Until: until,
+				Until: expirationTimeInt64,
 			})
 
-			if err != nil {
-				s.logger.Warnf("Error while trying to ban legacy peer: %v", err)
+			cancel()
 
-				if !success {
-					return nil, &bsvjson.RPCError{
-						Code:    bsvjson.ErrRPCInvalidParameter,
-						Message: "Failed to add ban",
-					}
-				}
+			if err != nil {
+				lastErr = err.Error()
+				s.logger.Warnf("Error while trying to ban legacy peer: %v", err)
 			} else if resp == nil || !resp.Ok {
-				if !success {
-					return nil, &bsvjson.RPCError{
-						Code:    bsvjson.ErrRPCInvalidParameter,
-						Message: "Failed to ban peer",
-					}
-				}
+				lastErr = "legacy peer service did not apply the ban"
+				s.logger.Warnf("Legacy peer service did not apply ban for %s", c.IPOrSubnet)
 			} else {
+				success = true
 				s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
 			}
 		}
 	case "remove":
-		var success bool
-
 		if s.p2pClient != nil {
 			err := s.p2pClient.UnbanPeer(ctx, c.IPOrSubnet)
 			if err == nil {
 				success = true
 			} else {
+				lastErr = err.Error()
 				s.logger.Errorf("Error while trying to unban teranode peer: %v", err)
 			}
 		}
 
 		// unban legacy peer
 		if s.legacyP2PClient != nil {
-			resp, err := s.legacyP2PClient.UnbanPeer(ctx, &peer_api.UnbanPeerRequest{
+			// Bound the call so an absent-but-configured legacy service can't
+			// stall the RPC on the parent context (#591).
+			legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
+
+			resp, err := s.legacyP2PClient.UnbanPeer(legacyCtx, &peer_api.UnbanPeerRequest{
 				Addr: c.IPOrSubnet,
 			})
-			if err != nil {
-				s.logger.Errorf("Error while trying to unban legacy peer: %v", err)
 
-				if !success {
-					return nil, &bsvjson.RPCError{
-						Code:    bsvjson.ErrRPCInvalidParameter,
-						Message: "Error while trying to unban peer",
-					}
-				}
+			cancel()
+
+			if err != nil {
+				lastErr = err.Error()
+				s.logger.Errorf("Error while trying to unban legacy peer: %v", err)
 			} else if resp == nil || !resp.Ok {
-				if !success {
-					return nil, &bsvjson.RPCError{
-						Code:    bsvjson.ErrRPCInvalidParameter,
-						Message: "Failed to unban peer",
-					}
-				}
+				lastErr = "legacy peer service did not remove the ban"
+				s.logger.Warnf("Legacy peer service did not remove ban for %s", c.IPOrSubnet)
 			} else {
+				success = true
 				s.logger.Debugf("Removed ban for %s", c.IPOrSubnet)
 			}
 		}
@@ -2405,6 +2641,26 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCInvalidParameter,
 			Message: "Invalid command. Must be 'add' or 'remove'.",
+		}
+	}
+
+	// No applicable ban leg succeeded (every attempted leg failed, or none was
+	// available). setban is an administrative control, so report the failure
+	// (as a server-side/internal error, naming the cause) rather than silently
+	// returning success.
+	if !success {
+		msg := "Failed to apply ban"
+		if c.Command == "remove" {
+			msg = "Failed to remove ban"
+		}
+
+		if lastErr != "" {
+			msg = fmt.Sprintf("%s: %s", msg, lastErr)
+		}
+
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInternal.Code,
+			Message: msg,
 		}
 	}
 
@@ -2444,7 +2700,7 @@ func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetMiningInfo",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetMiningInfo),
-		tracing.WithLogMessage(s.logger, "[handleGetMiningInfo] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetMiningInfo] called"),
 	)
 	defer deferFn()
 
@@ -2524,7 +2780,7 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 
 	h, err := chainhash.NewHashFromStr(c.TxID)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.TxID)
 	}
 
 	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
@@ -2573,7 +2829,7 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	h, err := chainhash.NewHashFromStr(c.TxID)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.TxID)
 	}
 
 	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
@@ -2623,17 +2879,17 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	oldTXIDHash, err := chainhash.NewHashFromStr(c.OldTxID)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.OldTxID)
 	}
 
 	oldUTXOHash, err := chainhash.NewHashFromStr(c.OldUTXOHash)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.OldUTXOHash)
 	}
 
 	newUTXOHash, err := chainhash.NewHashFromStr(c.NewUTXOHash)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.NewUTXOHash)
 	}
 
 	if err = s.utxoStore.ReAssignUTXO(ctx,
@@ -2734,7 +2990,7 @@ func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetchaintips",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetchaintips),
-		tracing.WithLogMessage(s.logger, "[handleGetchaintips] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetchaintips] called"),
 	)
 	defer deferFn()
 
@@ -2789,10 +3045,7 @@ func (s *RPCServer) generateBlocksAndReturnHashes(ctx context.Context, count int
 	// Get the current best block hash before generation
 	_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: errors.NewServiceError("RPC blockchain client", err).Error(),
-		}
+		return nil, s.rpcError(errors.NewServiceError("RPC blockchain client", err), bsvjson.ErrRPCInternal.Code, "")
 	}
 	startHeight := bestBlockMeta.Height
 
@@ -2803,10 +3056,7 @@ func (s *RPCServer) generateBlocksAndReturnHashes(ctx context.Context, count int
 		MaxTries: maxTries,
 	})
 	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: errors.NewServiceError("RPC blockassembly client", err).Error(),
-		}
+		return nil, s.rpcError(errors.NewServiceError("RPC blockassembly client", err), bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	// Collect the block hashes of the generated blocks
@@ -2818,10 +3068,7 @@ func (s *RPCServer) generateBlocksAndReturnHashes(ctx context.Context, count int
 		// Get the block at the target height
 		block, err := s.blockchainClient.GetBlockByHeight(ctx, targetHeight)
 		if err != nil {
-			return nil, &bsvjson.RPCError{
-				Code:    bsvjson.ErrRPCInternal.Code,
-				Message: errors.NewServiceError("RPC blockchain client", err).Error(),
-			}
+			return nil, s.rpcError(errors.NewServiceError("RPC blockchain client", err), bsvjson.ErrRPCInternal.Code, "")
 		}
 
 		blockHashes = append(blockHashes, block.Header.Hash().String())

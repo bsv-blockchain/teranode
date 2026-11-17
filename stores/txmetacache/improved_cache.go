@@ -13,9 +13,17 @@ import (
 	swiss "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/cespare/xxhash/v2"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
+)
+
+const (
+	errMaxBytesCannotBeZero      = "maxBytes cannot be zero"
+	errTooBigMaxBytes            = "too big maxBytes=%d; should be smaller than %d"
+	errFailedConvertingMaxChunks = "failed converting maxChunks"
+	errKVDoesNotFitChunk         = "key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes"
+	errCannotAllocateChunk       = "cannot allocate chunk"
+	msgChunks                    = "chunks: "
 )
 
 // ImprovedCache Design Calculations and Memory Model:
@@ -88,6 +96,10 @@ const (
 	maxSlabBytesPerMmap = 4 * 1024 * 1024           // 4MB target maximum slab size
 	minSlabBytesPerMmap = minSlabChunks * ChunkSize // keep in sync with minSlabChunks
 )
+
+// defaultTrimRatio is used by New when no trimRatio is supplied by the caller.
+// It matches the default of subtreevalidation_txMetaCacheTrimRatio.
+const defaultTrimRatio = 2
 
 // smallSetMultiBatchThreshold gates SetMulti's two paths: at or below this
 // size, keys are written sequentially via per-key Set on the caller's
@@ -208,6 +220,16 @@ type Stats struct {
 	// PreviousGenEntries is the count of valid entries from the previous generation
 	// that have not yet been overwritten.
 	PreviousGenEntries uint64
+
+	// LaneWaits counts the times a lockfree-cache writer found every lane
+	// busy and had to wait for one. It stays at 0 unless more writers run at
+	// once than the cache has lanes.
+	LaneWaits uint64
+
+	// Evictions is the number of entries the cache dropped to make room
+	// (ring wraps). Only the lockfree cache reports it; explicit deletes are
+	// counted separately by TxMetaCache.
+	Evictions uint64
 }
 
 // Reset clears all statistics in the Stats object.
@@ -233,6 +255,9 @@ type bucketInterface interface {
 	SetMultiKeysSingleValue(keys [][]byte, value []byte)
 	SetMulti(keys [][]byte, values [][]byte)
 	Get(*[]byte, []byte, uint64, bool, ...bool) bool
+	// GetMulti looks up keys under a single read lock, appending each found
+	// value to *dst and recording its span; spans[i] = {-1, -1} on a miss.
+	GetMulti(dst *[]byte, keys [][]byte, hashes []uint64, spans [][2]int)
 	Del(k uint64)
 	UpdateStats(s *Stats)
 	listChunks()
@@ -277,6 +302,9 @@ type ImprovedCache struct {
 //   - Unallocated: Allocates memory on demand, suitable for caches with unpredictable usage patterns
 //   - Preallocated: Allocates all memory upfront, optimizing for predictable high-throughput scenarios
 //   - Trimmed: Uses a trimming strategy to manage memory, balancing between the other approaches
+//   - trimRatio: Optional override for how aggressively the Preallocated bucket type trims its
+//     chunk arena on generation rollover (see subtreevalidation_txMetaCacheTrimRatio). Ignored by
+//     every other bucket type. Defaults to defaultTrimRatio when omitted.
 //
 // Returns:
 // - A new ImprovedCache instance configured with the specified parameters
@@ -284,7 +312,7 @@ type ImprovedCache struct {
 //
 // The cache distributes data across multiple buckets to reduce lock contention,
 // with each bucket initialized according to the specified allocation strategy.
-func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
+func New(maxBytes int, bucketType BucketType, trimRatio ...int) (*ImprovedCache, error) {
 	LogCacheConfig(BucketsCount, MapInitialCapacity)
 
 	if maxBytes <= 0 {
@@ -302,7 +330,10 @@ func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 		maxBucketBytes = ChunkSize * 8
 	}
 
-	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 2)
+	ratio := defaultTrimRatio
+	if len(trimRatio) > 0 {
+		ratio = trimRatio[0]
+	}
 
 	switch bucketType {
 	// if the cache is unallocated cache, unallocatedCache is false, minedBlockStore
@@ -322,7 +353,7 @@ func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 			}
 		}
 	case Preallocated:
-		c.trimRatio = trimRatio
+		c.trimRatio = ratio
 
 		for i := range BucketsCount {
 			c.buckets[i] = &bucketPreallocated{}
@@ -792,6 +823,96 @@ func (c *ImprovedCache) Get(dst *[]byte, k []byte) error {
 	return nil
 }
 
+// GetMulti looks up many keys, taking each bucket's read lock once for all of
+// its keys instead of once per key, and returns the values in one buffer:
+// value i is (*dst)[spans[i][0]:spans[i][1]], or spans[i] = {-1, -1} on a miss.
+// Values are copied out under the lock, so callers decode without holding it.
+// hashes, if non-nil, must hold xxhash.Sum64(keys[i]) and saves rehashing.
+//
+// Pays off when many keys share a bucket: a whole subtree probed by bucket
+// range touches each bucket once rather than ~128 times, which is what keeps a
+// read flood from crowding the Kafka txmeta writers off the bucket locks. The
+// per-call bookkeeping is sized to the span of buckets the keys fall into, so
+// a small lookup confined to one probe range stays cheap.
+func (c *ImprovedCache) GetMulti(keys [][]byte, hashes []uint64, dst *[]byte, spans [][2]int) {
+	if len(keys) == 0 {
+		return
+	}
+
+	if hashes == nil {
+		hashes = make([]uint64, len(keys))
+		for i, k := range keys {
+			hashes[i] = xxhash.Sum64(k)
+		}
+	}
+
+	lo, hi := uint64(BucketsCount), uint64(0)
+
+	for _, h := range hashes {
+		b := h % BucketsCount
+		lo = min(lo, b)
+		hi = max(hi, b)
+	}
+
+	counts := make([]int, hi-lo+1)
+
+	for _, h := range hashes {
+		counts[h%BucketsCount-lo]++
+	}
+
+	// next[b] starts at bucket lo+b's first slot in the sorted order and ends
+	// one past its last once the keys are scattered.
+	next := make([]int, len(counts))
+
+	offset := 0
+	for b, n := range counts {
+		next[b] = offset
+		offset += n
+	}
+
+	order := make([]int, len(keys))
+	sortedKeys := make([][]byte, len(keys))
+	sortedHashes := make([]uint64, len(keys))
+
+	for i, h := range hashes {
+		b := h%BucketsCount - lo
+		j := next[b]
+		next[b]++
+		order[j] = i
+		sortedKeys[j] = keys[i]
+		sortedHashes[j] = h
+	}
+
+	sortedSpans := make([][2]int, len(keys))
+
+	for b, n := range counts {
+		if n == 0 {
+			continue
+		}
+
+		start := next[b] - n
+		c.buckets[lo+uint64(b)].GetMulti(dst, sortedKeys[start:start+n], sortedHashes[start:start+n], sortedSpans[start:start+n])
+	}
+
+	for j, i := range order {
+		spans[i] = sortedSpans[j]
+	}
+}
+
+// getMultiLocked runs Get for each key on a bucket whose read lock the caller
+// holds.
+func getMultiLocked(b bucketInterface, dst *[]byte, keys [][]byte, hashes []uint64, spans [][2]int) {
+	for i, k := range keys {
+		start := len(*dst)
+
+		if b.Get(dst, k, hashes[i], true, true) {
+			spans[i] = [2]int{start, len(*dst)}
+		} else {
+			spans[i] = [2]int{-1, -1}
+		}
+	}
+}
+
 // Has checks if an entry exists in the cache for the given key.
 //
 // This method performs a lightweight existence check without retrieving the actual value,
@@ -906,17 +1027,17 @@ type bucketNative struct {
 
 func (b *bucketNative) Init(maxBytes uint64, _ int) error {
 	if maxBytes == 0 {
-		return errors.NewProcessingError("maxBytes cannot be zero")
+		return errors.NewProcessingError(errMaxBytesCannotBeZero)
 	}
 
 	if maxBytes >= maxBucketSize {
-		return errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize)
+		return errors.NewProcessingError(errTooBigMaxBytes, maxBytes, maxBucketSize)
 	}
 
 	maxChunks := (maxBytes + ChunkSize - 1) / ChunkSize
 	maxChunksInt, errConv := safeconversion.Uint64ToInt(maxChunks)
 	if errConv != nil {
-		return errors.NewProcessingError("failed converting maxChunks", errConv)
+		return errors.NewProcessingError(errFailedConvertingMaxChunks, errConv)
 	}
 
 	b.chunks = make([][]byte, maxChunksInt)
@@ -1044,7 +1165,7 @@ func (b *bucketNative) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if kvLen >= ChunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, ChunkSize)
+		return errors.NewProcessingError(errKVDoesNotFitChunk, kvLen, ChunkSize)
 	}
 
 	chunks := b.chunks
@@ -1053,6 +1174,13 @@ func (b *bucketNative) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if len(skipLocking) == 0 || !skipLocking[0] {
 		b.mu.Lock()
 		defer b.mu.Unlock()
+	}
+
+	// If key exists, skip (don't overwrite).
+	// NativeSplitLockFreeMapUint64 does not support overwrite, so the new value
+	// could never become visible; skip it before spending ring space on it.
+	if b.m.Exists(h) {
+		return nil
 	}
 
 	// calculate the idx of the k-v pair to be added
@@ -1099,7 +1227,7 @@ func (b *bucketNative) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 		chunk, err = b.getChunk()
 
 		if err != nil {
-			return errors.NewProcessingError("cannot allocate chunk", err)
+			return errors.NewProcessingError(errCannotAllocateChunk, err)
 		}
 
 		chunk = chunk[:0]
@@ -1113,11 +1241,7 @@ func (b *bucketNative) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	// Track entry count in current generation, increase by 1
 	b.currentGenCount++
 
-	// If key exists, skip (don't overwrite)
-	// NativeSplitLockFreeMapUint64 does not support overwrite, so we just skip the new value.
-	if !b.m.Exists(h) {
-		_ = b.m.Put(h, idx|(b.gen<<bucketSizeBits))
-	}
+	_ = b.m.Put(h, idx|(b.gen<<bucketSizeBits))
 	b.idx = idxNew
 
 	if needClean {
@@ -1125,6 +1249,14 @@ func (b *bucketNative) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	}
 
 	return nil
+}
+
+// GetMulti looks up keys under a single read lock; see ImprovedCache.GetMulti.
+func (b *bucketNative) GetMulti(dst *[]byte, keys [][]byte, hashes []uint64, spans [][2]int) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	getMultiLocked(b, dst, keys, hashes, spans)
 }
 
 // Get retrieves a value from the bucket. Pass skipLocking=true when the caller already holds b.mu.
@@ -1345,11 +1477,11 @@ type bucketTrimmed struct {
 
 func (b *bucketTrimmed) Init(maxBytes uint64, _ int) error {
 	if maxBytes == 0 {
-		return errors.NewInvalidArgumentError("maxBytes cannot be zero")
+		return errors.NewInvalidArgumentError(errMaxBytesCannotBeZero)
 	}
 
 	if maxBytes >= maxBucketSize {
-		return errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize)
+		return errors.NewProcessingError(errTooBigMaxBytes, maxBytes, maxBucketSize)
 	}
 
 	// IMPORTANT: Use floor division so this bucket can never mmap more than maxBytes
@@ -1361,7 +1493,7 @@ func (b *bucketTrimmed) Init(maxBytes uint64, _ int) error {
 	b.maxSlabChunks = calcMaxSlabChunks(maxBytes, maxChunks)
 	maxChunksInt, err := safeconversion.Uint64ToInt(maxChunks)
 	if err != nil {
-		return errors.NewProcessingError("failed converting maxChunks", err)
+		return errors.NewProcessingError(errFailedConvertingMaxChunks, err)
 	}
 	b.chunks = make([][]byte, maxChunksInt)
 	// Inner shard count of 1 — see bucketNative.Init for the rationale. The
@@ -1470,7 +1602,7 @@ func (b *bucketTrimmed) UpdateStats(s *Stats) {
 }
 
 func (b *bucketTrimmed) listChunks() {
-	fmt.Println("chunks: ", b.chunks)
+	fmt.Println(msgChunks, b.chunks)
 }
 
 func (b *bucketTrimmed) SetMulti(keys [][]byte, values [][]byte) {
@@ -1505,7 +1637,7 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if kvLen >= ChunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, ChunkSize)
+		return errors.NewProcessingError(errKVDoesNotFitChunk, kvLen, ChunkSize)
 	}
 
 	chunks := b.chunks
@@ -1562,7 +1694,7 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 		chunk, err = b.getChunk()
 
 		if err != nil {
-			return errors.NewProcessingError("cannot allocate chunk", err)
+			return errors.NewProcessingError(errCannotAllocateChunk, err)
 		}
 
 		chunk = chunk[:0]
@@ -1590,6 +1722,14 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	}
 
 	return nil
+}
+
+// GetMulti looks up keys under a single read lock; see ImprovedCache.GetMulti.
+func (b *bucketTrimmed) GetMulti(dst *[]byte, keys [][]byte, hashes []uint64, spans [][2]int) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	getMultiLocked(b, dst, keys, hashes, spans)
 }
 
 // Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
@@ -1829,11 +1969,11 @@ type bucketPreallocated struct {
 
 func (b *bucketPreallocated) Init(maxBytes uint64, trimRatio int) error {
 	if maxBytes == 0 {
-		return errors.NewProcessingError("maxBytes cannot be zero")
+		return errors.NewProcessingError(errMaxBytesCannotBeZero)
 	}
 
 	if maxBytes >= maxBucketSize {
-		return errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize)
+		return errors.NewProcessingError(errTooBigMaxBytes, maxBytes, maxBucketSize)
 	}
 
 	// allocate memory for all chunks of the bucket
@@ -1917,7 +2057,7 @@ func (b *bucketPreallocated) UpdateStats(s *Stats) {
 }
 
 func (b *bucketPreallocated) listChunks() {
-	fmt.Println("chunks: ", b.chunks)
+	fmt.Println(msgChunks, b.chunks)
 }
 
 // SetMulti stores multiple (k, v) entries with 1-1 mapping for the same bucket. OWERWRITES.
@@ -1967,7 +2107,7 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 	if kvLen >= ChunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, ChunkSize)
+		return errors.NewProcessingError(errKVDoesNotFitChunk, kvLen, ChunkSize)
 	}
 
 	chunks := b.chunks
@@ -2040,6 +2180,14 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 	b.idx = idxNew
 
 	return nil
+}
+
+// GetMulti looks up keys under a single read lock; see ImprovedCache.GetMulti.
+func (b *bucketPreallocated) GetMulti(dst *[]byte, keys [][]byte, hashes []uint64, spans [][2]int) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	getMultiLocked(b, dst, keys, hashes, spans)
 }
 
 // TODO: Simplify by removing references to generations, generations are not relevant for bucket.
@@ -2154,11 +2302,11 @@ type bucketUnallocated struct {
 
 func (b *bucketUnallocated) Init(maxBytes uint64, _ int) error {
 	if maxBytes == 0 {
-		return errors.NewProcessingError("maxBytes cannot be zero")
+		return errors.NewProcessingError(errMaxBytesCannotBeZero)
 	}
 
 	if maxBytes >= maxBucketSize {
-		return errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize)
+		return errors.NewProcessingError(errTooBigMaxBytes, maxBytes, maxBucketSize)
 	}
 
 	// IMPORTANT: Use floor division so this bucket can never mmap more than maxBytes
@@ -2172,7 +2320,7 @@ func (b *bucketUnallocated) Init(maxBytes uint64, _ int) error {
 	b.maxSlabChunks = calcMaxSlabChunks(maxBytes, maxChunks)
 	maxChunksInt, err := safeconversion.Uint64ToInt(maxChunks)
 	if err != nil {
-		return errors.NewProcessingError("failed converting maxChunks", err)
+		return errors.NewProcessingError(errFailedConvertingMaxChunks, err)
 	}
 
 	b.chunks = make([][]byte, maxChunksInt)
@@ -2265,7 +2413,7 @@ func (b *bucketUnallocated) UpdateStats(s *Stats) {
 }
 
 func (b *bucketUnallocated) listChunks() {
-	fmt.Println("chunks: ", b.chunks)
+	fmt.Println(msgChunks, b.chunks)
 }
 
 func (b *bucketUnallocated) SetMulti(keys [][]byte, values [][]byte) {
@@ -2300,7 +2448,7 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 	if kvLen >= ChunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, ChunkSize)
+		return errors.NewProcessingError(errKVDoesNotFitChunk, kvLen, ChunkSize)
 	}
 
 	chunks := b.chunks
@@ -2355,7 +2503,7 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 		chunk, err = b.getChunk()
 
 		if err != nil {
-			return errors.NewProcessingError("cannot allocate chunk", err)
+			return errors.NewProcessingError(errCannotAllocateChunk, err)
 		}
 
 		chunk = chunk[:0]
@@ -2377,6 +2525,14 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 	}
 
 	return nil
+}
+
+// GetMulti looks up keys under a single read lock; see ImprovedCache.GetMulti.
+func (b *bucketUnallocated) GetMulti(dst *[]byte, keys [][]byte, hashes []uint64, spans [][2]int) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	getMultiLocked(b, dst, keys, hashes, spans)
 }
 
 // Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.

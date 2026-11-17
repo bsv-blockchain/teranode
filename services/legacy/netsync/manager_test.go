@@ -5,12 +5,17 @@
 package netsync
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-batcher/v2"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -24,9 +29,13 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/txscript"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
+	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
@@ -89,12 +98,27 @@ func (tc *testContext) Setup(t *testing.T, config *testConfig) error {
 		return errors.NewServiceError("failed to create utxo store", err)
 	}
 
-	validatorClient, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
+	validatorClient, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 	if err != nil {
 		return errors.NewServiceError("failed to create validator client", err)
 	}
 
 	subtreeStore := blob_memory.New()
+
+	// A real file-backed temp store, because the out-of-order block park needs a
+	// store whose contents a restart could enumerate — anything else and the park
+	// switches itself off.
+	tempStoreURL, err := url.Parse("file://" + t.TempDir())
+	if err != nil {
+		return errors.NewServiceError("failed to parse temp store url", err)
+	}
+
+	tSettings.Legacy.TempStore = tempStoreURL
+
+	tempStore, err := blob.NewStore(ulogger.TestLogger{}, tempStoreURL)
+	if err != nil {
+		return errors.NewServiceError("failed to create temp store", err)
+	}
 
 	subtreeValidation := &subtreevalidation.MockSubtreeValidation{}
 
@@ -110,6 +134,7 @@ func (tc *testContext) Setup(t *testing.T, config *testConfig) error {
 		validatorClient,
 		utxoStore,
 		subtreeStore,
+		tempStore,
 		subtreeValidation,
 		blockvalidationClient,
 		nil,
@@ -464,291 +489,6 @@ func TestQueueInv_NoPanicWhenChannelsClosedDuringShutdown(t *testing.T) {
 	})
 }
 
-// Test blockchain syncing protocol. SyncManager should request, processes, and
-// relay blocks to/from peers.
-// TODO: Test is timing out, needs to be fixed.
-func TestBlockchainSync(t *testing.T) {
-	t.Skip("skipping")
-
-	chainParams := chaincfg.RegressionNetParams
-	chainParams.CoinbaseMaturity = 1
-
-	var ctx testContext
-
-	err := ctx.Setup(t, &testConfig{
-		dbName:      "TestBlockchainSync",
-		chainParams: &chainParams,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer ctx.Teardown()
-
-	syncMgr := ctx.syncManager
-	syncMgr.Start()
-
-	remoteMessages := newMessageChans()
-	remotePeerCfg := peer.Config{
-		Listeners: peer.MessageListeners{
-			OnGetBlocks: func(p *peer.Peer, msg *wire.MsgGetBlocks) {
-				remoteMessages.getBlocksChan <- msg
-			},
-			OnGetData: func(p *peer.Peer, msg *wire.MsgGetData) {
-				remoteMessages.getDataChan <- msg
-			},
-			OnReject: func(p *peer.Peer, msg *wire.MsgReject) {
-				remoteMessages.rejectChan <- msg
-			},
-		},
-		UserAgentName:    "btcdtest",
-		UserAgentVersion: "1.0",
-		ChainParams:      &chainParams,
-		Services:         wire.SFNodeNetwork,
-	}
-
-	localMessages := newMessageChans()
-	localPeerCfg := peer.Config{
-		Listeners: peer.MessageListeners{
-			OnInv: func(p *peer.Peer, msg *wire.MsgInv) {
-				localMessages.invChan <- msg
-			},
-		},
-		UserAgentName:    "btcdtest",
-		UserAgentVersion: "1.0",
-		ChainParams:      &chainParams,
-		Services:         wire.SFNodeNetwork,
-	}
-
-	_, localNode, err := MakeConnectedPeers(t, remotePeerCfg, localPeerCfg, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	syncMgr.NewPeer(localNode, nil)
-
-	// SyncManager should send a getblocks message to start block download
-	select {
-	case msg := <-remoteMessages.getBlocksChan:
-		if msg.HashStop != zeroHash {
-			t.Fatalf("Expected no hash stop in getblocks, got %v", msg.HashStop)
-		}
-
-		if len(msg.BlockLocatorHashes) != 1 ||
-			*msg.BlockLocatorHashes[0] != *chainParams.GenesisHash {
-			t.Fatal("Received unexpected block locator in getblocks message")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Timeout waiting for remote node to receive getblocks message")
-	}
-
-	// Address is an anyone-can-spend P2SH script
-	address, scriptSig, err := GenerateAnyoneCanspendAddress(&chainParams)
-	if err != nil {
-		t.Fatalf("Error constructing P2SH address: %v", err)
-	}
-
-	genesisBlock := bsvutil.NewBlock(chainParams.GenesisBlock)
-
-	// Generate chain of 3 blocks
-	blocks := make([]*bsvutil.Block, 0, 3)
-	blockVersion := int32(2)
-	prevBlock := genesisBlock
-
-	for i := 0; i < 3; i++ {
-		block, err := CreateBlock(prevBlock, nil, blockVersion,
-			nullTime, address, []wire.TxOut{}, &chainParams)
-		if err != nil {
-			t.Fatalf("failed to generate block: %v", err)
-		}
-
-		blocks = append(blocks, block)
-		prevBlock = block
-	}
-
-	// Remote node replies to getblocks with an inv
-	invMsg := wire.NewMsgInv()
-
-	for _, block := range blocks {
-		invVect := wire.NewInvVect(wire.InvTypeBlock, block.Hash())
-		err := invMsg.AddInvVect(invVect)
-		require.NoError(t, err)
-	}
-
-	syncMgr.QueueInv(invMsg, localNode)
-
-	// SyncManager should send a getdata message requesting blocks
-	select {
-	case msg := <-remoteMessages.getDataChan:
-		if len(msg.InvList) != len(blocks) {
-			t.Fatalf("Expected %d blocks in getdata message, got %d",
-				len(blocks), len(msg.InvList))
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Timeout waiting for remote node to receive getdata message")
-	}
-	// Remote node sends first 3 blocks
-	errChan := make(chan error)
-	for _, block := range blocks {
-		syncMgr.QueueBlock(block, localNode, errChan)
-
-		select {
-		case err := <-errChan:
-			t.Fatalf("Error in sync manager to process block %d: %v", block.Height(), err)
-		case <-time.After(time.Second):
-			t.Fatalf("Timeout waiting for sync manager to process block %d", block.Height())
-		}
-	}
-
-	if localNode.LastBlock() != 3 {
-		t.Fatalf("Expected peer's LastBlock to be 3, got %d",
-			localNode.LastBlock())
-	}
-
-	if syncMgr.IsCurrent() {
-		t.Fatal("Expected IsCurrent() to be false as blocks have old " +
-			"timestamps")
-	}
-
-	// Check that no blocks were relayed to peers since syncer is not current
-	select {
-	case <-ctx.peerNotifier.relayInventoryChan:
-		t.Fatal("PeerNotifier received unexpected RelayInventory call")
-	default:
-	}
-
-	// Create current block with a non-Coinbase transaction
-	prevTx, err := blocks[0].Tx(0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	spendTx, err := createSpendingTx(prevTx, 0, scriptSig, address)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	timestamp := time.Now().Truncate(time.Second)
-	prevBlock = blocks[len(blocks)-1]
-	txns := []*bsvutil.Tx{spendTx}
-
-	block, err := CreateBlock(prevBlock, txns, blockVersion,
-		timestamp, address, []wire.TxOut{}, &chainParams)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// SyncManager should send a getdata message requesting blocks
-	syncMgr.QueueInv(buildBlockInv(block), localNode)
-	select {
-	case msg := <-remoteMessages.getDataChan:
-		if len(msg.InvList) != 1 {
-			t.Fatalf("Expected 1 block in getdata message, got %d",
-				len(msg.InvList))
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Timeout waiting for remote node to receive getdata message")
-	}
-
-	// Remote node sends new block
-	syncMgr.QueueBlock(block, localNode, errChan)
-	select {
-	case <-errChan:
-	case <-time.After(time.Second):
-		t.Fatalf("Timeout waiting for sync manager to process block %d",
-			block.Height())
-	}
-
-	// Assert calls made to PeerNotifier
-	select {
-	case call := <-ctx.peerNotifier.transactionConfirmedChan:
-		if !call.tx.Hash().IsEqual(spendTx.Hash()) {
-			t.Fatalf("PeerNotifier received TransactionConfirmed with "+
-				"unexpected tx %v, expected %v", call.tx.Hash(),
-				spendTx.Hash())
-		}
-	default:
-		t.Fatal("Expected SyncManager to make TransactionConfirmed call to " +
-			"PeerNotifier")
-	}
-
-	select {
-	case <-ctx.peerNotifier.announceNewTransactionsChan:
-	default:
-		t.Fatal("Expected SyncManager to make AnnounceNewTransactions call " +
-			"to PeerNotifier")
-	}
-
-	select {
-	case call := <-ctx.peerNotifier.relayInventoryChan:
-		if call.invVect.Type != wire.InvTypeBlock ||
-			call.invVect.Hash != *block.Hash() {
-			t.Fatalf("PeerNotifier received unexpected RelayInventory call: "+
-				"%v", call.invVect)
-		}
-	default:
-		t.Fatal("Expected SyncManager to make RelayInventory call to " +
-			"PeerNotifier")
-	}
-
-	if localNode.LastBlock() != 4 {
-		t.Fatalf("Expected peer's LastBlock to be 4, got %d",
-			localNode.LastBlock())
-	}
-
-	// SyncManager should now be current since last block was recent
-	if !syncMgr.IsCurrent() {
-		t.Fatal("Expected IsCurrent() to be true")
-	}
-
-	// Send invalid block with timestamp in the far future
-	prevBlock = block
-	timestamp = time.Now().Truncate(time.Second).Add(1000 * time.Hour)
-
-	block, err = CreateBlock(prevBlock, nil, blockVersion,
-		timestamp, address, []wire.TxOut{}, &chainParams)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	syncMgr.QueueInv(buildBlockInv(block), localNode)
-	select {
-	case <-remoteMessages.getDataChan:
-	case <-time.After(time.Second):
-		t.Fatal("Timeout waiting for remote node to receive getdata message")
-	}
-
-	syncMgr.QueueBlock(block, localNode, errChan)
-	select {
-	case <-errChan:
-	case <-time.After(time.Second):
-		t.Fatalf("Timeout waiting for sync manager to process block %d",
-			block.Height())
-	}
-
-	// Expect block to not be added to chain
-	if localNode.LastBlock() != 4 {
-		t.Fatalf("Expected peer's LastBlock to be 4, got %d",
-			localNode.LastBlock())
-	}
-
-	// Expect node to send reject in response to invalid block
-	select {
-	case msg := <-remoteMessages.rejectChan:
-		if msg.Code != wire.RejectInvalid {
-			t.Fatalf("Reject message has unexpected code %s, expected %s",
-				msg.Code, wire.RejectInvalid)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Timeout waiting for remote node to receive reject message")
-	}
-
-	err = syncMgr.Stop()
-	if err != nil {
-		t.Fatalf("failed to stop SyncManager: %v", err)
-	}
-}
-
 type msgChans struct {
 	memPoolChan    chan *wire.MsgMemPool
 	txChan         chan *wire.MsgTx
@@ -872,6 +612,193 @@ func TestHandleCheckSyncPeer_HeadersFirstMode(t *testing.T) {
 		// No violations, sync peer should still be set
 		assert.Equal(t, sp, sm.loadSyncPeer())
 	})
+
+	t.Run("headers-first mode keeps actively-downloading peer despite last-block-time", func(t *testing.T) {
+		sp := &peer.Peer{}
+		sps := &syncPeerState{
+			lastBlockTime:          time.Now().Add(-10 * time.Minute), // past maxLastBlockTime
+			ticks:                  1,
+			assocReadBytes:         10 * 1024 * 1024, // 10 MB pulled in over the last tick
+			assocReadBytesLastTick: 0,
+		}
+
+		sm := &SyncManager{
+			logger:                  ulogger.TestLogger{},
+			peerStates:              txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+			minSyncPeerNetworkSpeed: 51200,
+		}
+		sm.storeSyncPeer(sp, sps)
+		sm.headersFirstMode.Store(true)
+		sm.peerStates.Set(sp, &peerSyncState{})
+
+		// A large block is still streaming in (healthy association throughput),
+		// so the peer must NOT be rotated even though no block completed within
+		// maxLastBlockTime. If it rotated, the minimal SyncManager would panic.
+		require.NotPanics(t, func() { sm.handleCheckSyncPeer() })
+		assert.Equal(t, sp, sm.loadSyncPeer())
+	})
+
+	t.Run("rotates a slow-drip peer once past the wall-clock cap", func(t *testing.T) {
+		sp := &peer.Peer{}
+		sps := &syncPeerState{
+			// No completed block for longer than peer.MaxBlockDownloadTime.
+			lastBlockTime:          time.Now().Add(-peer.MaxBlockDownloadTime - time.Minute),
+			ticks:                  1,
+			assocReadBytes:         10 * 1024 * 1024, // still "healthy" throughput
+			assocReadBytesLastTick: 0,
+		}
+
+		sm := &SyncManager{
+			logger:                  ulogger.TestLogger{},
+			peerStates:              txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+			minSyncPeerNetworkSpeed: 51200,
+		}
+		sm.storeSyncPeer(sp, sps)
+		sm.headersFirstMode.Store(true)
+		sm.peerStates.Set(sp, &peerSyncState{})
+
+		// Past the cap, throughput no longer protects the peer — it is rotated
+		// (which panics in this minimal SyncManager).
+		assert.Panics(t, func() { sm.handleCheckSyncPeer() })
+	})
+}
+
+// TestProcessTXmetaBatchMessage_SkipsInBlockTx verifies the tx announce path
+// drops txmeta entries flagged InBlock. The txmeta Kafka topic carries every
+// validated transaction — including those that arrived as part of a block or
+// announced subtree (block validation, subtree validation, legacy sync, which
+// feed the subtree-validation cache) — and announcing those as fresh mempool
+// txs floods peers with getdata for transactions that are long mined and
+// often already pruned.
+func TestProcessTXmetaBatchMessage_SkipsInBlockTx(t *testing.T) {
+	inBlockHash := chainhash.Hash{0xAA}
+	mempoolHash := chainhash.Hash{0xBB}
+
+	inBlockBytes, err := (&meta.Data{Fee: 1, SizeInBytes: 100, InBlock: true}).MetaBytes()
+	require.NoError(t, err)
+
+	mempoolBytes, err := (&meta.Data{Fee: 2, SizeInBytes: 200}).MetaBytes()
+	require.NoError(t, err)
+
+	// Build a v1 wire message with both entries.
+	buf := new(bytes.Buffer)
+	require.NoError(t, binary.Write(buf, binary.LittleEndian, uint32(2)))
+
+	for _, entry := range []struct {
+		hash    chainhash.Hash
+		content []byte
+	}{
+		{inBlockHash, inBlockBytes},
+		{mempoolHash, mempoolBytes},
+	} {
+		buf.Write(entry.hash[:])
+		buf.WriteByte(txmetacache.WireActionADD)
+		require.NoError(t, binary.Write(buf, binary.LittleEndian, uint32(len(entry.content))))
+		buf.Write(entry.content)
+	}
+
+	var (
+		mu        sync.Mutex
+		announced []chainhash.Hash
+	)
+
+	sm := &SyncManager{logger: ulogger.TestLogger{}}
+	sm.txAnnounceBatcher = batcher.NewWithDeduplicationAndPool[TxHashAndFee](10, 10*time.Millisecond, func(batch []*TxHashAndFee) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, item := range batch {
+			announced = append(announced, item.TxHash)
+		}
+	}, true)
+
+	require.NoError(t, sm.processTXmetaBatchMessage(buf.Bytes()))
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(announced) > 0
+	}, 2*time.Second, 10*time.Millisecond, "expected the mempool tx to be announced")
+
+	// Give the batcher one more flush window so a wrongly-announced in-block
+	// tx would have surfaced.
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []chainhash.Hash{mempoolHash}, announced, "only the mempool tx must be announced")
+}
+
+func TestHasHealthyDownloadThroughput(t *testing.T) {
+	const minSpeed = 51200 // 50 KiB/s, matches default minSyncPeerNetworkSpeed
+
+	t.Run("no prior sample", func(t *testing.T) {
+		sps := &syncPeerState{ticks: 0, assocReadBytes: 10 * 1024 * 1024}
+		require.False(t, sps.hasHealthyDownloadThroughput(minSpeed))
+	})
+
+	t.Run("no bytes moved is never healthy, even with zero threshold", func(t *testing.T) {
+		sps := &syncPeerState{ticks: 1, assocReadBytes: 100, assocReadBytesLastTick: 100}
+		require.False(t, sps.hasHealthyDownloadThroughput(0))
+	})
+
+	t.Run("chatter below threshold", func(t *testing.T) {
+		// ~33 B/s over a 30s tick — far below 50 KiB/s.
+		sps := &syncPeerState{ticks: 1, assocReadBytes: 1000, assocReadBytesLastTick: 0}
+		require.False(t, sps.hasHealthyDownloadThroughput(minSpeed))
+	})
+
+	t.Run("active download above threshold", func(t *testing.T) {
+		// 10 MB over the tick — well above 50 KiB/s.
+		sps := &syncPeerState{ticks: 1, assocReadBytes: 10 * 1024 * 1024, assocReadBytesLastTick: 0}
+		require.True(t, sps.hasHealthyDownloadThroughput(minSpeed))
+	})
+
+	t.Run("counter decrease (stream removed) is not healthy", func(t *testing.T) {
+		// A stream dropped between samples, so the association sum fell. The
+		// unsigned subtraction must not wrap to a huge "healthy" value.
+		sps := &syncPeerState{ticks: 2, assocReadBytes: 1000, assocReadBytesLastTick: 10 * 1024 * 1024}
+		require.False(t, sps.hasHealthyDownloadThroughput(minSpeed))
+	})
+}
+
+// TestSyncPeerStateFor verifies the last-block-time refresh matches not just the
+// sync peer itself but any stream of its association — under BlockPriority the
+// block is delivered on the DATA1 stream peer, not the GENERAL sync peer.
+func TestSyncPeerStateFor(t *testing.T) {
+	general := &peer.Peer{}
+	sps := &syncPeerState{lastBlockTime: time.Now()}
+
+	sm := &SyncManager{
+		logger:     ulogger.TestLogger{},
+		peerStates: txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+	}
+	sm.storeSyncPeer(general, sps)
+
+	assoc := peer.NewAssociation([]byte{0x01}, general)
+	general.SetAssociation(assoc)
+
+	// The DATA1 stream peer is a different Peer sharing the same association.
+	data1 := &peer.Peer{}
+	require.True(t, assoc.AddStream(wire.StreamTypeData1, data1))
+	data1.SetAssociation(assoc)
+
+	t.Run("sync peer itself matches", func(t *testing.T) {
+		got, ok := sm.syncPeerStateFor(general)
+		require.True(t, ok)
+		require.Equal(t, sps, got)
+	})
+
+	t.Run("association sibling (DATA1) matches", func(t *testing.T) {
+		got, ok := sm.syncPeerStateFor(data1)
+		require.True(t, ok)
+		require.Equal(t, sps, got)
+	})
+
+	t.Run("unrelated peer does not match", func(t *testing.T) {
+		other := &peer.Peer{}
+		_, ok := sm.syncPeerStateFor(other)
+		require.False(t, ok)
+	})
 }
 
 // TestHandleNewPeerMsg_NilFSMState exercises the path where the blockchain
@@ -919,6 +846,75 @@ func TestHandleNewPeerMsg_NilFSMState(t *testing.T) {
 	require.Equal(t, uint64(0), sm.currentFeeFilter.Load(), "fee filter must not be set when FSM state is unavailable")
 }
 
+// TestHandleNewPeerMsg_SetsFeeFilterWhenCatchingBlocks verifies that EVERY peer
+// connecting while the node is catching up is asked (via a raised feefilter) to
+// hold back transaction announcements, reducing load during sync. It asserts the
+// observable behaviour — the feefilter message is actually delivered to each
+// peer's remote end — not just the internal marker, and covers the second peer
+// (regression guard: an earlier version only raised it for the first connector).
+// The filter is restored to the policy default once the node reaches RUNNING
+// (resetFeeFilterToDefault).
+func TestHandleNewPeerMsg_SetsFeeFilterWhenCatchingBlocks(t *testing.T) {
+	chainParams := &chaincfg.MainNetParams
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.Mock.On("GetFSMCurrentState", mock.Anything).
+		Return(&catchingBlocks, nil)
+
+	sm := &SyncManager{
+		ctx:              context.Background(),
+		settings:         test.CreateBaseTestSettings(t),
+		logger:           ulogger.TestLogger{},
+		chainParams:      chainParams,
+		blockchainClient: blockchainClient,
+		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+	}
+
+	// connectPeer returns a peer for handleNewPeerMsg to operate on; gotFee
+	// records the MinFee of any feefilter its remote end receives.
+	connectPeer := func(idx uint8, gotFee *atomic.Int64) *peer.Peer {
+		remoteCfg := peer.Config{
+			Listeners: peer.MessageListeners{
+				OnFeeFilter: func(_ *peer.Peer, msg *wire.MsgFeeFilter) {
+					gotFee.Store(msg.MinFee)
+				},
+			},
+			UserAgentName:    "btcdtest",
+			UserAgentVersion: "1.0",
+			ChainParams:      chainParams,
+		}
+		localCfg := peer.Config{
+			Listeners:        peer.MessageListeners{},
+			UserAgentName:    "btcdtest",
+			UserAgentVersion: "1.0",
+			ChainParams:      chainParams,
+		}
+		remote, smPeer, err := MakeConnectedPeers(t, remoteCfg, localCfg, idx)
+		require.NoError(t, err)
+		require.True(t, remote.Connected())
+		return smPeer
+	}
+
+	var fee1, fee2 atomic.Int64
+	p1 := connectPeer(101, &fee1)
+	p2 := connectPeer(102, &fee2)
+
+	sm.handleNewPeerMsg(p1)
+	sm.handleNewPeerMsg(p2)
+
+	want := int64(bsvutil.SatoshiPerBitcoin)
+	require.True(t, WaitUntil(func() bool { return fee1.Load() == want }, 2*time.Second),
+		"first peer must receive the raised feefilter")
+	require.True(t, WaitUntil(func() bool { return fee2.Load() == want }, 2*time.Second),
+		"second peer must also receive the raised feefilter, not just the first")
+
+	require.Equal(t, uint64(bsvutil.SatoshiPerBitcoin), sm.currentFeeFilter.Load(),
+		"fee filter marker must be set while catching up")
+	require.True(t, sm.peerStates.Exists(p1), "first peer must be registered")
+	require.True(t, sm.peerStates.Exists(p2), "second peer must be registered")
+}
+
 // TestHandleNewPeerMsg_SkipsDisconnectedPeer verifies that a peer whose socket
 // was torn down before the queued newPeerMsg drained is not inserted into
 // peerStates. Pairs with the Connected() filter in startSync to prevent a dead
@@ -947,4 +943,248 @@ func TestHandleNewPeerMsg_SkipsDisconnectedPeer(t *testing.T) {
 	sm.handleNewPeerMsg(disconnectedPeer)
 
 	require.False(t, sm.peerStates.Exists(disconnectedPeer), "disconnected peer must not be registered in peerStates")
+}
+
+// TestHandleCheckSyncPeer_SpeedArmRespectsAssociationThroughput covers the arm
+// the healthy-throughput suppression used to miss.
+//
+// validNetworkSpeed reads BytesReceived, which is the sync peer object's own
+// counter. Under the BlockPriority stream policy a large block arrives on DATA1,
+// so that counter barely moves while the association is pulling at full rate,
+// and the peer records a speed violation every tick. The suppression guarded
+// only the last-block-time arm, so the speed arm rotated a peer that was
+// downloading perfectly well. Observed on mainnet at 124 MB average blocks: the
+// sync peer was demoted three times in seven minutes, mid-transfer, each
+// demotion reopening its assignments and rewinding the cursor, so the work was
+// done twice.
+func TestHandleCheckSyncPeer_SpeedArmRespectsAssociationThroughput(t *testing.T) {
+	// speedViolatingState has a clean last-block-time arm so only the speed arm
+	// can fire, which is what isolates the arm under test. The general stream is
+	// silent and the association is pulling hard: a large block on DATA1.
+	speedViolatingState := func(assocBytes uint64) *syncPeerState {
+		return &syncPeerState{
+			lastBlockTime:          time.Now(),
+			ticks:                  maxNetworkViolations + 1,
+			violations:             maxNetworkViolations,
+			recvBytes:              0,
+			recvBytesLastTick:      0,
+			assocReadBytes:         assocBytes,
+			assocReadBytesLastTick: 0,
+		}
+	}
+
+	t.Run("a peer downloading on DATA1 is not rotated for a quiet general stream", func(t *testing.T) {
+		sm := newDemotionManager(t)
+		sm.headersFirstMode.Store(false) // speed checks only run outside headers-first
+		sm.minSyncPeerNetworkSpeed = 51200
+
+		sp, _, _ := connectRacePeer(t, 90, 1000)
+		state := registerRacePeer(sm, sp)
+		sm.storeSyncPeer(sp, speedViolatingState(64<<20))
+
+		sm.handleCheckSyncPeer()
+
+		// The demotion cooldown is the observable, not the sync-peer pointer: a
+		// demoted peer is re-elected immediately when it is the only candidate,
+		// so the pointer looks unchanged either way.
+		require.False(t, state.inDemotionCooldown(),
+			"a peer whose association is downloading at a healthy rate must not be demoted for a quiet general stream")
+	})
+
+	t.Run("a genuinely silent peer is still rotated", func(t *testing.T) {
+		sm := newDemotionManager(t)
+		sm.headersFirstMode.Store(false)
+		sm.minSyncPeerNetworkSpeed = 51200
+
+		sp, _, _ := connectRacePeer(t, 91, 1000)
+		state := registerRacePeer(sm, sp)
+		sm.storeSyncPeer(sp, speedViolatingState(0)) // nothing anywhere on the association
+
+		sm.handleCheckSyncPeer()
+
+		require.True(t, state.inDemotionCooldown(),
+			"a peer sending nothing on any stream is stalled and must still be demoted")
+	})
+}
+
+// syncStateCases are the FSM states the issue 2003 gate is judged in. A cached
+// IDLE accepts: it is what a healthy node at the tip reads while the blockchain
+// service restarts.
+var syncStateCases = []struct {
+	state   blockchain2.FSMStateType
+	refuses bool
+}{
+	{blockchain2.FSMStateCATCHINGBLOCKS, true},
+	{blockchain2.FSMStateRUNNING, false},
+	{blockchain2.FSMStateIDLE, false},
+}
+
+// gatedSyncManager returns a sync manager whose validator writes tx to a real
+// UTXO store when called, with both issue 2003 gates reading state. The
+// validator stores the extended tx it was given here, because the wire form
+// legacy hands it carries no parent amounts to compute a fee from.
+func gatedSyncManager(t *testing.T, name string, state blockchain2.FSMStateType, tx *bt.Tx) (*SyncManager, *peer.Peer, *sql.Store) {
+	t.Helper()
+
+	store := newUnlockFailureStore(t, name)
+	sm, p := newUnlockSyncManager(t, &validator.MockValidator{
+		ValidateFunc: func(ctx context.Context, _ *bt.Tx) (*meta.Data, error) {
+			return store.Create(ctx, tx, 1)
+		},
+	})
+	sm.utxoStore = store
+	sm.peerNotifier = &recordingNotifier{MockPeerNotifier: &MockPeerNotifier{}}
+
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+	sm.blockchainClient = blockchainClient
+	sm.txGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyTx)
+	sm.orphanGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyOrphan)
+	sm.orphanEvictionGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyOrphanEviction)
+
+	return sm, p, store
+}
+
+// TestHandleTxMsg_RefusedWhileSyncing pins issue 2003 on the legacy tx route.
+// A peer may send tx without an inv, so the inv gate does not cover it. In
+// CATCHINGBLOCKS the tx is dropped before the validator, so the UTXO store never
+// sees it, and it is not recorded as rejected, so the peer can offer it again
+// once the node is RUNNING.
+func TestHandleTxMsg_RefusedWhileSyncing(t *testing.T) {
+	initPrometheusMetrics()
+
+	for _, tt := range syncStateCases {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			btTx := transactions.CreateTestTransactionChainWithCount(t, 3)[1]
+			sm, p, store := gatedSyncManager(t, "netsync_gate_tx_"+tt.state.String(), tt.state, btTx)
+
+			msg := wire.NewMsgTx(1)
+			require.NoError(t, msg.Deserialize(bytes.NewReader(btTx.Bytes())))
+
+			refusedBefore := sm.txGate.RefusedTotal()
+
+			sm.handleTxMsg(&txMsg{tx: bsvutil.NewTx(msg), peer: p})
+
+			_, getErr := store.Get(t.Context(), btTx.TxIDChainHash())
+			_, rejected := sm.rejectedTxns.Get(*btTx.TxIDChainHash())
+			require.False(t, rejected, "a refused or accepted tx is not a rejected one")
+
+			if tt.refuses {
+				require.ErrorIs(t, getErr, errors.ErrTxNotFound, "a refused tx must not reach the UTXO store")
+				require.InDelta(t, refusedBefore+1, sm.txGate.RefusedTotal(), 0)
+
+				return
+			}
+
+			require.NoError(t, getErr, "an accepted tx is in the UTXO store")
+			require.InDelta(t, refusedBefore, sm.txGate.RefusedTotal(), 0)
+		})
+	}
+}
+
+// TestEvictOrphan_RefusedWhileSyncing covers the other legacy write: an orphan
+// parked while RUNNING gets one last validation when the pool evicts it, which
+// can happen after the node has fallen back into a sync.
+func TestEvictOrphan_RefusedWhileSyncing(t *testing.T) {
+	initPrometheusMetrics()
+
+	for _, tt := range syncStateCases {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			orphan := transactions.CreateTestTransactionChainWithCount(t, 3)[1]
+			sm, _, store := gatedSyncManager(t, "netsync_gate_orphan_"+tt.state.String(), tt.state, orphan)
+
+			refusedBefore := sm.orphanEvictionGate.RefusedTotal()
+
+			require.True(t, sm.evictOrphan(*orphan.TxIDChainHash(), &orphanTxAndParents{tx: orphan, addedAt: time.Now()}))
+
+			_, getErr := store.Get(t.Context(), orphan.TxIDChainHash())
+
+			if tt.refuses {
+				require.ErrorIs(t, getErr, errors.ErrTxNotFound, "a refused orphan must not reach the UTXO store")
+				require.InDelta(t, refusedBefore+1, sm.orphanEvictionGate.RefusedTotal(), 0)
+
+				return
+			}
+
+			require.NoError(t, getErr, "an accepted orphan is in the UTXO store")
+			require.InDelta(t, refusedBefore, sm.orphanEvictionGate.RefusedTotal(), 0)
+		})
+	}
+}
+
+// TestProcessOrphanTransactions_RefusedOnceTheNodeStartsSyncing pins the orphan
+// walk's own gate (issue 2003). handleTxMsg reads the FSM once, before the
+// parent's validation; the node can fall into a sync during that validation or
+// the walk that follows. Here the first read says RUNNING and every later one
+// CATCHINGBLOCKS: the parent is stored, and the child parked behind it must not
+// be, nor announced, nor left in the pool. The RUNNING row is the control, where
+// the same walk stores and announces the child.
+func TestProcessOrphanTransactions_RefusedOnceTheNodeStartsSyncing(t *testing.T) {
+	initPrometheusMetrics()
+
+	for _, tt := range []struct {
+		name        string
+		laterState  blockchain2.FSMStateType
+		childStored bool
+	}{
+		{"sync starts mid walk", blockchain2.FSMStateCATCHINGBLOCKS, false},
+		{"stays running", blockchain2.FSMStateRUNNING, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+			parent, child := txs[0], txs[1]
+
+			// The validator stores the extended form of whichever tx it is given,
+			// because the wire form handleTxMsg decodes carries no parent amounts.
+			extended := map[chainhash.Hash]*bt.Tx{*parent.TxIDChainHash(): parent, *child.TxIDChainHash(): child}
+			store := newUnlockFailureStore(t, "netsync_gate_orphan_walk_"+tt.laterState.String())
+			sm, p := newUnlockSyncManager(t, &validator.MockValidator{
+				ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+					return store.Create(ctx, extended[*tx.TxIDChainHash()], 1)
+				},
+			})
+			sm.utxoStore = store
+			notifier := &recordingNotifier{MockPeerNotifier: &MockPeerNotifier{}}
+			sm.peerNotifier = notifier
+
+			running := blockchain2.FSMStateRUNNING
+			later := tt.laterState
+			blockchainClient := &blockchain2.Mock{}
+			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&running, nil).Once()
+			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&later, nil)
+			sm.blockchainClient = blockchainClient
+			sm.txGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyTx)
+			sm.orphanGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyOrphan)
+
+			parents := txmap.NewSyncedMap[chainhash.Hash, struct{}]()
+			parents.Set(*parent.TxIDChainHash(), struct{}{})
+			sm.orphanTxs.Set(*child.TxIDChainHash(), &orphanTxAndParents{tx: child, parents: parents, addedAt: time.Now()})
+
+			msg := wire.NewMsgTx(1)
+			require.NoError(t, msg.Deserialize(bytes.NewReader(parent.Bytes())))
+
+			refusedBefore := sm.orphanGate.RefusedTotal()
+
+			sm.handleTxMsg(&txMsg{tx: bsvutil.NewTx(msg), peer: p})
+
+			_, parentErr := store.Get(t.Context(), parent.TxIDChainHash())
+			require.NoError(t, parentErr, "the parent was read as RUNNING and is stored")
+
+			_, childErr := store.Get(t.Context(), child.TxIDChainHash())
+			_, stillParked := sm.orphanTxs.Get(*child.TxIDChainHash())
+			require.False(t, stillParked, "the child leaves the pool whether it is stored or refused")
+
+			if !tt.childStored {
+				require.ErrorIs(t, childErr, errors.ErrTxNotFound, "a child walked after the sync started must not reach the UTXO store")
+				require.Equal(t, []chainhash.Hash{*parent.TxIDChainHash()}, notifier.announced(), "only the parent is announced")
+				require.InDelta(t, refusedBefore+1, sm.orphanGate.RefusedTotal(), 0)
+
+				return
+			}
+
+			require.NoError(t, childErr, "a child walked while RUNNING is stored")
+			require.ElementsMatch(t, []chainhash.Hash{*parent.TxIDChainHash(), *child.TxIDChainHash()}, notifier.announced())
+			require.InDelta(t, refusedBefore, sm.orphanGate.RefusedTotal(), 0)
+		})
+	}
 }

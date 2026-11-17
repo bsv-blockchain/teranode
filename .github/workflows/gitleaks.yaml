@@ -1,0 +1,51 @@
+name: Secret Scan
+
+# Fails a pull request if it introduces a hard-coded secret, so credentials and
+# tokens are caught before they reach main. Only the commits introduced by the
+# PR are scanned (base..head), so pre-existing committed dev defaults are not
+# re-flagged; see .gitleaks.toml for the allowlist.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: gitleaks
+    # arm64-safe: downloads the gitleaks binary and scans git history only.
+    runs-on: teranode-runner-4-core-arm
+    env:
+      GITLEAKS_VERSION: "8.18.4"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl -sSfL --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_arm64.tar.gz" \
+            | tar -xz -C "${RUNNER_TEMP}/bin" gitleaks
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/bin/gitleaks" version
+
+      - name: Scan PR commits for secrets
+        # SHAs are passed via env, never interpolated directly into the script,
+        # to avoid GitHub Actions template injection.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          gitleaks detect \
+            --source . \
+            --config .gitleaks.toml \
+            --redact \
+            --no-banner \
+            --exit-code 1 \
+            --log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}"

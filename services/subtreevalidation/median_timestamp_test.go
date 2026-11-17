@@ -143,3 +143,59 @@ func TestFetchCandidateParentMedianTime_WalkFallbackRecoversFromBadBatchedFetch(
 	require.NoError(t, err, "fallback walk must recover when batched path returns wrong-head headers")
 	require.Equal(t, uint32(100), got)
 }
+
+// TestCandidateParentMedianTimeFromHeaders_ErrorsOnShortRunNotAtGenesis pins the
+// run-length half of the window contract. Truncating the run at its OLDEST end
+// leaves it anchored at the parent and correctly linked, so neither of those
+// guards can see it — but the median is then taken over a narrower window and
+// stops being the consensus one. svnode cannot express this state at all: it
+// walks pprev pointers, so a window is shorter than 11 only when the chain
+// itself ends at genesis. Before the length check the truncated run yielded 140
+// instead of 100.
+func TestCandidateParentMedianTimeFromHeaders_ErrorsOnShortRunNotAtGenesis(t *testing.T) {
+	full := makeChain(t, 11, []uint32{150, 140, 130, 120, 110, 100, 90, 80, 70, 60, 50})
+	parent := full[0].Hash()
+
+	// Sanity: the full run is the consensus window and yields 100.
+	got, err := candidateParentMedianTimeFromHeaders(parent, full)
+	require.NoError(t, err)
+	require.Equal(t, uint32(100), got)
+
+	// Truncated at the oldest end: still anchored, still linked, still short.
+	short := full[:4]
+	require.NotNil(t, short[len(short)-1].HashPrevBlock)
+	require.False(t, short[len(short)-1].HashPrevBlock.IsEqual(&chainhash.Hash{}), "fixture's oldest header must not look like genesis")
+
+	_, err = candidateParentMedianTimeFromHeaders(parent, short)
+	require.Error(t, err, "a short run that does not reach genesis must be refused, not measured")
+}
+
+// TestCandidateParentMedianTimeFromHeaders_AcceptsShortRunAtGenesis is the other
+// side of the rule: a chain that genuinely ends at genesis is shorter than 11
+// legitimately, exactly as it is in svnode, and must still produce a median.
+func TestCandidateParentMedianTimeFromHeaders_AcceptsShortRunAtGenesis(t *testing.T) {
+	headers := makeChain(t, 3, []uint32{130, 120, 110})
+	parent := headers[0].Hash()
+
+	got, err := candidateParentMedianTimeFromHeaders(parent, headers)
+	require.NoError(t, err)
+	require.Equal(t, uint32(120), got)
+}
+
+// TestCandidateParentMedianTimeFromHeaders_ErrorsOnOverLongRun mirrors the netsync copy: see the
+// comment there. A run longer than the window is as wrong as a short one and is invisible to the
+// anchor and linkage checks, and block assembly's verifyParentChainRun already refuses it.
+func TestCandidateParentMedianTimeFromHeaders_ErrorsOnOverLongRun(t *testing.T) {
+	n := int(blockchain.MedianTimeBlocks) + 1
+
+	timestamps := make([]uint32, n)
+	for i := range timestamps {
+		timestamps[i] = uint32(1_700_000_000 + i)
+	}
+
+	headers := makeChain(t, n, timestamps)
+
+	_, err := candidateParentMedianTimeFromHeaders(headers[0].Hash(), headers)
+	require.Error(t, err, "a run longer than the median window must be refused")
+	require.Contains(t, err.Error(), "more than")
+}

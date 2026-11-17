@@ -21,6 +21,7 @@ package blockvalidation
 import (
 	"sync"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 )
@@ -123,27 +124,60 @@ func NodeAllocFromPool(numLeaves int) []subtreepkg.Node {
 	return GetNodeSlice(numLeaves)
 }
 
-// releaseBlockNodes walks a block's SubtreeSlices and returns each pooled
-// Nodes backing slice to the pool. Subtrees with no Nodes (already released or
-// mmap-backed) are skipped. Safe to call multiple times — ReleaseNodes is
-// idempotent. Intended to be invoked from cache eviction and validation
-// failure paths.
+// releaseBlockNodes returns a block's pooled []Node backing slices to the
+// per-class pool and drops the released subtrees from the block. See
+// model.Block.ReleaseSubtreeNodes for what release does and why. Safe to call
+// multiple times. Intended for cache eviction and validation failure paths.
+//
+// Its Close error is deliberately dropped here: the only way Close fails is a
+// munmap error, and all eight callers of this wrapper are ValidateBlock paths
+// where the block will not be cached, or where a cache Delete has bypassed the
+// eviction function — none of them can do anything differently on a munmap
+// failure. Cache eviction itself goes through tryReleaseBlockNodes instead,
+// because it must not block. The release sites that can act on the error log it
+// themselves: setTxMinedStatus calls ReleaseSubtreeNodes directly, and the
+// reload in model.GetAndValidateSubtrees closes its mmap-backed survivors
+// inline.
 func releaseBlockNodes(b *model.Block) {
 	if b == nil {
 		return
 	}
 
-	for _, st := range b.SubtreeSlices {
-		if st == nil {
-			continue
-		}
+	_ = b.ReleaseSubtreeNodes(PutNodeSlice)
+}
 
-		// mmap-backed subtrees never produce a heap-pooled slice; ReleaseNodes
-		// hands back the slice exactly as allocated, and PutNodeSlice's
-		// cap-match check discards anything not produced by GetNodeSlice.
-		nodes := st.ReleaseNodes()
-		if nodes != nil {
-			PutNodeSlice(nodes)
-		}
+// tryReleaseBlockNodes is releaseBlockNodes for the cache-eviction path, which
+// runs under expiringmap's own write lock and so must never block. It reports
+// whether the release happened; false means the block was busy and the caller
+// should decline the eviction so the next tick retries it.
+//
+// Its Close error is dropped for the same reason releaseBlockNodes drops it.
+func tryReleaseBlockNodes(b *model.Block) bool {
+	if b == nil {
+		return true
 	}
+
+	released, _ := b.TryReleaseSubtreeNodes(PutNodeSlice)
+
+	return released
+}
+
+// evictLastValidatedBlock is the lastValidatedBlocks eviction function.
+//
+// It pools heap-backed []Node slices, Closes mmap-backed subtrees (unmap plus
+// backing-file removal) and nils the entries — all under the block's subtree
+// mutex.
+//
+// Attempted, not forced. expiringmap.clean() calls this while holding the map's
+// write lock, and a block being validated holds its subtree mutex across store
+// reads with retries — so waiting for it here would park the cleaner and queue
+// every cache operation behind one block's I/O. Declining leaves the entry in
+// place with its expiry unchanged, so the next tick retries it.
+//
+// Named rather than written inline at the WithEvictionFunction call so a test
+// can exercise the function block validation actually registers. As a closure
+// it was reachable only through NewBlockValidation, and restoring it to a
+// forced release left the eviction tests green.
+func evictLastValidatedBlock(_ chainhash.Hash, block *model.Block) bool {
+	return tryReleaseBlockNodes(block)
 }

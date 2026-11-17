@@ -105,7 +105,7 @@ func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Ha
 	}
 
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeaderIDs-%s-%d", blockHashFrom.String(), numberOfHeaders)))
-	cacheOp := cache.Begin(cacheID)
+	cacheOp := cache.NewOp(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil {

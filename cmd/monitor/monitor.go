@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -27,6 +28,16 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+)
+
+const (
+	clientSourceName    = "TUI Monitor"
+	statusNotConfigured = "Not configured"
+	namespacePrefix     = "namespace/"
+	timeFormatHMS       = "15:04:05"
+	msgLoading          = "Loading..."
+	labelGRPCAddress    = "gRPC Address"
+	labelGRPCListen     = "gRPC Listen"
 )
 
 // ViewMode represents the current view
@@ -166,7 +177,7 @@ func NewModel(logger ulogger.Logger, s *settings.Settings) (*Model, error) {
 	ctx := context.Background()
 
 	// Create blockchain client
-	blockchainClient, err := blockchain.NewClient(ctx, logger, s, "TUI Monitor")
+	blockchainClient, err := blockchain.NewClient(ctx, logger, s, clientSourceName)
 	if err != nil {
 		return nil, errors.NewProcessingError("failed to create blockchain client", err)
 	}
@@ -174,6 +185,13 @@ func NewModel(logger ulogger.Logger, s *settings.Settings) (*Model, error) {
 	// Create P2P client
 	p2pClient, err := p2p.NewClient(ctx, logger, s)
 	if err != nil {
+		// Close the already-created blockchain client: NewModel returns before
+		// Run can install the deferred m.close() cleanup. ClientI does not
+		// declare Close; the concrete client gained it in DC7.
+		if c, ok := blockchainClient.(interface{ Close() error }); ok {
+			_ = c.Close()
+		}
+
 		return nil, errors.NewProcessingError("failed to create p2p client", err)
 	}
 
@@ -185,7 +203,7 @@ func NewModel(logger ulogger.Logger, s *settings.Settings) (*Model, error) {
 
 	var blockValClient blockvalidation.Interface
 	if s.BlockValidation.GRPCAddress != "" {
-		blockValClient, _ = blockvalidation.NewClient(ctx, logger, s, "TUI Monitor")
+		blockValClient, _ = blockvalidation.NewClient(ctx, logger, s, clientSourceName)
 	}
 
 	var blockAsmClient blockassembly.ClientI
@@ -195,7 +213,7 @@ func NewModel(logger ulogger.Logger, s *settings.Settings) (*Model, error) {
 
 	var subtreeClient subtreevalidation.Interface
 	if s.SubtreeValidation.GRPCAddress != "" {
-		subtreeClient, _ = subtreevalidation.NewClient(ctx, logger, s, "TUI Monitor")
+		subtreeClient, _ = subtreevalidation.NewClient(ctx, logger, s, clientSourceName)
 	}
 
 	// Create Aerospike client (optional - don't fail if not configured)
@@ -309,7 +327,7 @@ func (m Model) collectAerospikeStats() *AerospikeStats {
 	}
 
 	if m.aerospikeClient == nil {
-		stats.Error = "Not configured"
+		stats.Error = statusNotConfigured
 		return stats
 	}
 
@@ -370,9 +388,9 @@ func (m Model) collectAerospikeStats() *AerospikeStats {
 		// Fallback to common namespace names
 		if namespaceName == "" {
 			for _, ns := range []string{"teranode", "test", "bar"} {
-				nsInfo, err := node.RequestInfo(policy, "namespace/"+ns)
+				nsInfo, err := node.RequestInfo(policy, namespacePrefix+ns)
 				if err == nil {
-					if nsStr, ok := nsInfo["namespace/"+ns]; ok && nsStr != "" {
+					if nsStr, ok := nsInfo[namespacePrefix+ns]; ok && nsStr != "" {
 						namespaceName = ns
 						break
 					}
@@ -427,9 +445,9 @@ func (m Model) collectAerospikeStats() *AerospikeStats {
 
 		// Get namespace statistics for this node
 		if namespaceName != "" {
-			nsInfo, err := node.RequestInfo(policy, "namespace/"+namespaceName)
+			nsInfo, err := node.RequestInfo(policy, namespacePrefix+namespaceName)
 			if err == nil {
-				if nsStr, ok := nsInfo["namespace/"+namespaceName]; ok && nsStr != "" {
+				if nsStr, ok := nsInfo[namespacePrefix+namespaceName]; ok && nsStr != "" {
 					nInfo.NamespaceStats = parseAerospikeInfoString(nsStr)
 					stats.Namespaces[namespaceName] = nInfo.NamespaceStats
 					// Aggregate namespace stats
@@ -565,7 +583,7 @@ func (m Model) collectServiceHealth(ctx context.Context, data *NodeData) {
 		data.ServiceHealth["validator"] = &ServiceHealth{
 			Name:       "Validator",
 			Configured: false,
-			Message:    "Not configured",
+			Message:    statusNotConfigured,
 		}
 	}
 
@@ -579,7 +597,7 @@ func (m Model) collectServiceHealth(ctx context.Context, data *NodeData) {
 		data.ServiceHealth["blockvalidation"] = &ServiceHealth{
 			Name:       "Block Validation",
 			Configured: false,
-			Message:    "Not configured",
+			Message:    statusNotConfigured,
 		}
 	}
 
@@ -593,7 +611,7 @@ func (m Model) collectServiceHealth(ctx context.Context, data *NodeData) {
 		data.ServiceHealth["blockassembly"] = &ServiceHealth{
 			Name:       "Block Assembly",
 			Configured: false,
-			Message:    "Not configured",
+			Message:    statusNotConfigured,
 		}
 	}
 
@@ -607,7 +625,7 @@ func (m Model) collectServiceHealth(ctx context.Context, data *NodeData) {
 		data.ServiceHealth["subtreevalidation"] = &ServiceHealth{
 			Name:       "Subtree Validation",
 			Configured: false,
-			Message:    "Not configured",
+			Message:    statusNotConfigured,
 		}
 	}
 }
@@ -782,7 +800,7 @@ func (m Model) View() string {
 
 	// Status bar
 	b.WriteString("\n")
-	statusLine := fmt.Sprintf("Last updated: %s", m.data.LastUpdated.Format("15:04:05"))
+	statusLine := fmt.Sprintf("Last updated: %s", m.data.LastUpdated.Format(timeFormatHMS))
 	b.WriteString(labelStyle.Render(statusLine))
 
 	// Help
@@ -800,7 +818,7 @@ func (m Model) renderBlockchainPanel() string {
 	content.WriteString("\n")
 
 	if m.data.BlockStats == nil {
-		content.WriteString(labelStyle.Render("Loading..."))
+		content.WriteString(labelStyle.Render(msgLoading))
 		return boxStyle.Width(40).Render(content.String())
 	}
 
@@ -829,7 +847,7 @@ func (m Model) renderFSMPanel() string {
 	content.WriteString("\n")
 
 	if m.data.FSMState == nil {
-		content.WriteString(labelStyle.Render("Loading..."))
+		content.WriteString(labelStyle.Render(msgLoading))
 		return boxStyle.Width(40).Render(content.String())
 	}
 
@@ -879,7 +897,7 @@ func (m Model) renderPeersPanel() string {
 	content.WriteString("\n")
 
 	if m.data.Peers == nil {
-		content.WriteString(labelStyle.Render("Loading..."))
+		content.WriteString(labelStyle.Render(msgLoading))
 		return boxStyle.Width(50).Render(content.String())
 	}
 
@@ -925,7 +943,7 @@ func (m Model) renderPeersPanel() string {
 				repStyled = errorStyle.Render(repScore)
 			}
 
-			line := fmt.Sprintf("  %s h:%d rep:%s", peerID, peer.Height, repStyled)
+			line := fmt.Sprintf("  %s h:%d rep:%s", peerID, peer.DisplayHeight(), repStyled)
 			content.WriteString(line)
 			content.WriteString("\n")
 			shown++
@@ -1025,17 +1043,17 @@ func (m Model) renderSettingsView() string {
 
 	// Blockchain settings
 	lines = append(lines, settingSectionStyle.Render("BLOCKCHAIN"))
-	lines = append(lines, m.renderSettingRow("gRPC Address", m.settings.BlockChain.GRPCAddress))
-	lines = append(lines, m.renderSettingRow("gRPC Listen", m.settings.BlockChain.GRPCListenAddress))
+	lines = append(lines, m.renderSettingRow(labelGRPCAddress, m.settings.BlockChain.GRPCAddress))
+	lines = append(lines, m.renderSettingRow(labelGRPCListen, m.settings.BlockChain.GRPCListenAddress))
 	lines = append(lines, m.renderSettingRow("HTTP Listen", m.settings.BlockChain.HTTPListenAddress))
 	if m.settings.BlockChain.StoreURL != nil {
-		lines = append(lines, m.renderSettingRow("Store", m.settings.BlockChain.StoreURL.String()))
+		lines = append(lines, m.renderSettingRow("Store", urlutil.Redact(m.settings.BlockChain.StoreURL)))
 	}
 
 	// P2P settings
 	lines = append(lines, settingSectionStyle.Render("P2P"))
-	lines = append(lines, m.renderSettingRow("gRPC Address", m.settings.P2P.GRPCAddress))
-	lines = append(lines, m.renderSettingRow("gRPC Listen", m.settings.P2P.GRPCListenAddress))
+	lines = append(lines, m.renderSettingRow(labelGRPCAddress, m.settings.P2P.GRPCAddress))
+	lines = append(lines, m.renderSettingRow(labelGRPCListen, m.settings.P2P.GRPCListenAddress))
 	lines = append(lines, m.renderSettingRow("HTTP Address", m.settings.P2P.HTTPAddress))
 	lines = append(lines, m.renderSettingRow("Port", fmt.Sprintf("%d", m.settings.P2P.Port)))
 	lines = append(lines, m.renderSettingRow("Listen Mode", m.settings.P2P.ListenMode))
@@ -1049,14 +1067,14 @@ func (m Model) renderSettingsView() string {
 
 	// Validator settings
 	lines = append(lines, settingSectionStyle.Render("VALIDATOR"))
-	lines = append(lines, m.renderSettingRow("gRPC Address", m.settings.Validator.GRPCAddress))
-	lines = append(lines, m.renderSettingRow("gRPC Listen", m.settings.Validator.GRPCListenAddress))
+	lines = append(lines, m.renderSettingRow(labelGRPCAddress, m.settings.Validator.GRPCAddress))
+	lines = append(lines, m.renderSettingRow(labelGRPCListen, m.settings.Validator.GRPCListenAddress))
 
 	// Block Assembly settings
 	lines = append(lines, settingSectionStyle.Render("BLOCK ASSEMBLY"))
 	lines = append(lines, m.renderSettingRow("Disabled", fmt.Sprintf("%v", m.settings.BlockAssembly.Disabled)))
-	lines = append(lines, m.renderSettingRow("gRPC Address", m.settings.BlockAssembly.GRPCAddress))
-	lines = append(lines, m.renderSettingRow("gRPC Listen", m.settings.BlockAssembly.GRPCListenAddress))
+	lines = append(lines, m.renderSettingRow(labelGRPCAddress, m.settings.BlockAssembly.GRPCAddress))
+	lines = append(lines, m.renderSettingRow(labelGRPCListen, m.settings.BlockAssembly.GRPCListenAddress))
 
 	// Kafka settings
 	lines = append(lines, settingSectionStyle.Render("KAFKA"))
@@ -1231,7 +1249,7 @@ func (m Model) renderHealthView() string {
 
 	// Last checked timestamp
 	b.WriteString("\n")
-	b.WriteString(labelStyle.Render(fmt.Sprintf("Last checked: %s", m.data.LastUpdated.Format("15:04:05"))))
+	b.WriteString(labelStyle.Render(fmt.Sprintf("Last checked: %s", m.data.LastUpdated.Format(timeFormatHMS))))
 
 	// Help
 	b.WriteString("\n\n")
@@ -1362,7 +1380,7 @@ func (m Model) renderAerospikeView() string {
 
 	stats := m.data.AerospikeStats
 	if stats == nil {
-		b.WriteString(labelStyle.Render("Loading..."))
+		b.WriteString(labelStyle.Render(msgLoading))
 		b.WriteString("\n\n")
 		b.WriteString(helpStyle.Render("a/esc: back | r: refresh | q: quit"))
 		return b.String()
@@ -1567,7 +1585,7 @@ func (m Model) renderAerospikeView() string {
 
 	// Last updated
 	b.WriteString("\n")
-	b.WriteString(labelStyle.Render(fmt.Sprintf("Last updated: %s", m.data.LastUpdated.Format("15:04:05"))))
+	b.WriteString(labelStyle.Render(fmt.Sprintf("Last updated: %s", m.data.LastUpdated.Format(timeFormatHMS))))
 
 	// Help
 	b.WriteString("\n")
@@ -1598,11 +1616,32 @@ func (m Model) formatAeroStringValue(key, val string) string {
 }
 
 // Run starts the TUI monitor
+// close releases the gRPC connections owned by the monitor's clients. The
+// fields are interface types that do not declare Close, so each is closed via
+// the optional Close() error gained by the concrete clients in Fix group A.
+func (m *Model) close() {
+	for _, client := range []any{
+		m.blockchainClient,
+		m.p2pClient,
+		m.validatorClient,
+		m.blockValClient,
+		m.blockAsmClient,
+		m.subtreeClient,
+	} {
+		if cc, ok := client.(interface{ Close() error }); ok {
+			_ = cc.Close()
+		}
+	}
+}
+
 func Run(logger ulogger.Logger, s *settings.Settings) error {
 	m, err := NewModel(logger, s)
 	if err != nil {
 		return err
 	}
+
+	// Close the clients once the TUI exits (Run blocks until quit).
+	defer m.close()
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()

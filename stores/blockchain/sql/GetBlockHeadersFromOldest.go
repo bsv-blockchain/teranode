@@ -69,14 +69,14 @@ import (
 //   - nil if the operation was successful (even if fewer headers than requested were found)
 func (s *SQL) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeaders",
-		tracing.WithLogMessage(s.logger, "[GetBlockHeaders][%s] called for %d headers", targetHash.String(), numberOfHeaders),
+		tracing.WithDebugLogMessage(s.logger, "[GetBlockHeaders][%s] called for %d headers", targetHash.String(), numberOfHeaders),
 	)
 	defer deferFn()
 
 	// Try to get from response cache using derived cache key
 	// Use operation-prefixed key to be consistent with other operations
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeadersFromOldest-%s-%s-%d", chainTipHash.String(), targetHash.String(), numberOfHeaders)))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil {

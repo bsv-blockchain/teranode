@@ -14,23 +14,66 @@ import (
 // phase2Blocks walks deleteList tip-first, removing every block + its
 // subtree data + its transactions from the UTXO store.
 func (e *env) phase2Blocks(ctx context.Context, pf *preflightResult) error {
-	for _, b := range pf.deleteList {
-		if err := e.rewindOneBlock(ctx, pf, b); err != nil {
-			return errors.NewProcessingError("rewinding block %s (height %d): %w", b.hash.String(), b.height, err)
+	if len(pf.deleteList) > 0 {
+		if err := e.clearBlockIDReservations(ctx); err != nil {
+			return err
 		}
 	}
+
+	for _, b := range pf.deleteList {
+		if err := e.rewindOneBlock(ctx, pf, b); err != nil {
+			return errors.NewProcessingError("rewinding block %s (height %d)", b.hash.String(), b.height, err)
+		}
+	}
+	return nil
+}
+
+// blockIDReservationClearer is the store method clearBlockIDReservations needs.
+// It is asserted rather than added to blockchain.Store, because only the SQL store
+// keeps reservations.
+type blockIDReservationClearer interface {
+	ClearBlockIDReservations(ctx context.Context) (int64, error)
+}
+
+// clearBlockIDReservations deletes every durable block-id reservation before the
+// first block is deleted. A deleted block that is stored again gets a new, higher
+// id, while a child reserved before the rewind would keep its older, lower id and
+// land below its parent, which StoreBlock refuses. Clearing first means a run that
+// fails part-way never leaves deleted blocks beside surviving reservations. There
+// is no transaction to share: each DeleteBlock is its own store call.
+//
+// A block whose transactions were already stamped with a cleared reservation gets
+// a fresh id when it is validated again, which leaves the old id with no blocks
+// row: the same outcome as a reservation swept by age.
+func (e *env) clearBlockIDReservations(ctx context.Context) error {
+	clearer, ok := e.blockchainStore.(blockIDReservationClearer)
+	if !ok {
+		return errors.NewStorageError("blockchain store %T cannot clear block id reservations", e.blockchainStore)
+	}
+
+	if e.opts.ForceNotIdle {
+		e.logger.Warnf("--force-not-idle was given: a running node keeps block id reservations in memory too, and this tool cannot clear those; restart the node after the rewind so it does not hand out an id reserved before it")
+	}
+
+	cleared, err := clearer.ClearBlockIDReservations(ctx)
+	if err != nil {
+		return err
+	}
+
+	e.logger.Infof("cleared %d block id reservations before deleting blocks", cleared)
+
 	return nil
 }
 
 func (e *env) rewindOneBlock(ctx context.Context, pf *preflightResult, bl blockToDelete) error {
 	block, _, err := e.blockchainStore.GetBlock(ctx, bl.hash)
 	if err != nil {
-		return errors.NewStorageError("GetBlock: %w", err)
+		return errors.NewStorageError("GetBlock", err)
 	}
 
 	subtrees, err := block.GetSubtrees(ctx, e.logger, e.subtreeStore, e.concurrency)
 	if err != nil {
-		return errors.NewStorageError("GetSubtrees: %w", err)
+		return errors.NewStorageError("GetSubtrees", err)
 	}
 
 	collector := newRemovalCollector()
@@ -75,7 +118,7 @@ func (e *env) rewindOneBlock(ctx context.Context, pf *preflightResult, bl blockT
 	}
 
 	if err = e.blockchainStore.DeleteBlock(ctx, bl.hash); err != nil {
-		return errors.NewStorageError("DeleteBlock: %w", err)
+		return errors.NewStorageError("DeleteBlock", err)
 	}
 	e.stats.BlocksDeleted++
 
@@ -91,7 +134,7 @@ func (e *env) deleteCoinbase(ctx context.Context, pf *preflightResult, coinbaseH
 		if isNotFound(err) {
 			return nil
 		}
-		return errors.NewStorageError("Get coinbase %s: %w", coinbaseHash.String(), err)
+		return errors.NewStorageError("Get coinbase %s", coinbaseHash.String(), err)
 	}
 
 	var deletedHits, survivors []uint32
@@ -106,7 +149,7 @@ func (e *env) deleteCoinbase(ctx context.Context, pf *preflightResult, coinbaseH
 		if len(deletedHits) > 0 {
 			removals := []utxo.BlockIDsRemoval{{TxHash: coinbaseHash, BlockIDs: deletedHits}}
 			if err = e.utxoStore.RemoveBlockIDs(ctx, removals); err != nil {
-				return errors.NewStorageError("RemoveBlockIDs coinbase: %w", err)
+				return errors.NewStorageError("RemoveBlockIDs coinbase", err)
 			}
 			e.stats.TxsBlockIDsTrimmed++
 		}
@@ -115,7 +158,7 @@ func (e *env) deleteCoinbase(ctx context.Context, pf *preflightResult, coinbaseH
 
 	if err = e.utxoStore.Delete(ctx, coinbaseHash); err != nil {
 		if !isNotFound(err) {
-			return errors.NewStorageError("Delete coinbase: %w", err)
+			return errors.NewStorageError("Delete coinbase", err)
 		}
 	}
 	e.stats.TxsDeleted++
@@ -130,7 +173,7 @@ func (e *env) deleteSubtreeBlobs(ctx context.Context, pf *preflightResult, subtr
 
 		shared, err := e.blockchainStore.HasBlockBelowHeightContainingSubtree(ctx, sh, pf.target)
 		if err != nil {
-			return errors.NewStorageError("HasBlockBelowHeightContainingSubtree: %w", err)
+			return errors.NewStorageError("HasBlockBelowHeightContainingSubtree", err)
 		}
 		if shared {
 			e.stats.SubtreesSkippedShared++
@@ -142,6 +185,7 @@ func (e *env) deleteSubtreeBlobs(ctx context.Context, pf *preflightResult, subtr
 			fileformat.FileTypeSubtreeData,
 			fileformat.FileTypeSubtreeMeta,
 			fileformat.FileTypeSubtreeToCheck,
+			fileformat.FileTypeSubtreeConflicting,
 		} {
 			if delErr := e.subtreeStore.Del(ctx, sh[:], ft); delErr != nil {
 				// Best effort — tolerate NotFound per file type.

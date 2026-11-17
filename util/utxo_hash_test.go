@@ -86,6 +86,20 @@ func TestGetOutputUtxoHash(t *testing.T) {
 			want:    hash,
 			wantErr: false,
 		},
+		{
+			// The UTXO store encodes "this output is not a live UTXO" as a nil
+			// entry in the output vector, so a caller resolving an index it did
+			// not choose can legitimately arrive here with one. It must error,
+			// not fault on the field access.
+			name: "nil output",
+			args: args{
+				txID:   txID,
+				output: nil,
+				vOut:   0,
+			},
+			want:    nil,
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

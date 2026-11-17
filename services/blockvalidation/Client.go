@@ -25,6 +25,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"google.golang.org/grpc"
 )
 
 // Client provides an interface to interact with the block validation service.
@@ -33,6 +34,9 @@ import (
 type Client struct {
 	// apiClient handles gRPC communication with the validation service
 	apiClient blockvalidation_api.BlockValidationAPIClient
+
+	// conn is the gRPC connection owned by this client; closed by Close()
+	conn *grpc.ClientConn
 
 	// logger provides structured logging capabilities
 	logger ulogger.Logger
@@ -71,11 +75,21 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	client := &Client{
 		apiClient: blockvalidation_api.NewBlockValidationAPIClient(baConn),
+		conn:      baConn,
 		logger:    logger,
 		settings:  tSettings,
 	}
 
 	return client, nil
+}
+
+// Close releases the gRPC connection owned by this client.
+func (c *Client) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+
+	return nil
 }
 
 // Health performs a comprehensive health check of the block validation service.
@@ -122,6 +136,9 @@ func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 //   - baseURL: Source URL from which the block can be retrieved
 //   - waitToComplete: When true, waits for validation to complete before returning
 //
+// The request carries no peer ID, so the server's per-(hash, peer) caps, such as the
+// recovered-panic cap, never apply to a block announced through this method.
+//
 // Returns an error if notification fails or validation encounters issues
 func (s *Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseURL string, waitToComplete bool) error {
 	req := &blockvalidation_api.BlockFoundRequest{
@@ -148,20 +165,23 @@ func (s *Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, base
 //   - ctx: Context for the processing operation
 //   - block: Complete block data to validate
 //   - blockHeight: Expected chain height for the block
+//   - headerProven: the caller's ancestry proof for a below-checkpoint block; travels as
+//     its own request field because block.Bytes() carries neither it nor the block ID
 //
 // Returns an error if block processing fails
-func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error {
+func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32, headerProven bool) error {
 	blockBytes, err := block.Bytes()
 	if err != nil {
 		return err
 	}
 
 	req := &blockvalidation_api.ProcessBlockRequest{
-		Block:   blockBytes,
-		Height:  blockHeight,
-		PeerId:  peerID,
-		BaseUrl: baseURL,
-		BlockId: blockID,
+		Block:        blockBytes,
+		Height:       blockHeight,
+		PeerId:       peerID,
+		BaseUrl:      baseURL,
+		BlockId:      blockID,
+		HeaderProven: headerProven,
 	}
 
 	_, err = s.apiClient.ProcessBlock(ctx, req)

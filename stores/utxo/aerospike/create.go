@@ -6,8 +6,8 @@
 //
 // The implementation uses a combination of Aerospike Key-Value store and Lua scripts
 // for atomic operations. Transactions are stored with the following structure:
-//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
-//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - Main Record: Contains transaction metadata and up to utxostore_utxoBatchSize UTXOs (default 128)
+//   - Pagination Records: Additional records for transactions with more outputs than utxostore_utxoBatchSize (default 128)
 //   - External Storage: Optional blob storage for large transactions
 //
 // # Features
@@ -44,7 +44,7 @@
 // Large Transaction with External Storage:
 //   - Same as normal but with external=true
 //   - Transaction data stored in blob storage
-//   - Multiple records for >20k outputs
+//   - Multiple records when outputs exceed utxostore_utxoBatchSize
 //
 // # Thread Safety
 //
@@ -56,11 +56,15 @@ package aerospike
 
 import (
 	"context"
+	"crypto/rand"
 	"os"
+	"runtime/debug"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
@@ -128,8 +132,37 @@ type BatchStoreItem struct {
 	// Locked indicates if this transaction is locked for spending
 	locked bool
 
-	// Done is used to signal completion and return errors
-	done chan error
+	// group signals completion of the whole batch; the producer waits on it
+	// once instead of one channel receive per item.
+	group *completion.Group
+
+	// completed guards exactly-once completion. It also lets a sweep (panic
+	// recovery) or a goroutine that took ownership of this item complete it
+	// without racing a second write into result.
+	completed atomic.Bool
+
+	// result carries the terminal error for this item. Written by the CAS
+	// winner, after the CAS and before group.Done() (see complete), so it is
+	// safe to read only after group.Wait returns nil.
+	result error
+}
+
+// complete writes err into the item's result slot and marks the shared group's
+// completion counter. Idempotent: only the first call has any effect, so a
+// panic-recovery sweep over an already-completed item, or a goroutine that took
+// ownership of the item's result, never double-signals or races a second write
+// into result. The slot write happens inside the CAS-winner branch, after the
+// CAS succeeds and before group.Done(); group.Done()'s eventual channel close
+// synchronizes-with a nil group.Wait(), making the slot safe to read only after
+// group.Wait returns nil. completed is the exactly-once guard (CAS), not a
+// publication flag by itself.
+func (b *BatchStoreItem) complete(err error) {
+	if b.completed.CompareAndSwap(false, true) {
+		b.result = err
+		if b.group != nil {
+			b.group.Done()
+		}
+	}
 }
 
 // Create stores a new transaction's outputs as UTXOs.
@@ -176,8 +209,12 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		}
 	}
 
-	errCh := make(chan error)
-	defer close(errCh)
+	// One shared completion group for this single-item batch. The dispatcher
+	// completes the item exactly once (CAS-guarded), so Create can depart on a
+	// timeout / cancel without leaving a dangling send: complete simply writes
+	// the result slot and decrements the group whenever the dispatcher gets
+	// there, whether or not this caller is still waiting.
+	group := completion.NewGroup(1)
 
 	var txHash *chainhash.Hash
 	if createOptions.TxID != nil {
@@ -215,15 +252,37 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		subtreeIdxs:  subtreeIdxs,
 		conflicting:  createOptions.Conflicting,
 		locked:       createOptions.Locked,
-		done:         errCh,
+		group:        group,
 	}
 
-	s.storeBatcher.PutCtx(ctx, item)
+	// Guard the enqueue: Store.Close closes the store batcher first, so a Create
+	// racing shutdown would otherwise panic. Complete the item so the shared wait
+	// below returns and the existing item.result read surfaces the error.
+	if enqueueErr := safeBatcherPutCtx(s.storeBatcher, ctx, item, "store"); enqueueErr != nil {
+		item.complete(enqueueErr)
+	}
 
-	err = <-errCh
-	if err != nil {
+	// One shared wait for the item instead of a per-item timer + select.
+	// s.batcherWait <= 0 means unbounded (ctx-only) — Group.Wait treats a
+	// non-positive timeout the same way, mirroring the previous nil timeout
+	// channel arm (Store built without New) exactly.
+	if waitErr := group.Wait(ctx, s.batcherWait); waitErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// Matches the previous select: a canceled/expired context surfaces
+			// the raw context error, not a wrapped teranode error type.
+			return nil, ctxErr
+		}
+
+		// The item is still queued and the dispatcher writes it regardless, so the
+		// record may yet be committed: the outcome is unknown, not a failure.
+		return nil, utxo.MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("aerospike store batch did not complete within %s", s.batcherWait))
+	}
+
+	// group.Wait returned nil: the item has completed, so its result slot is
+	// safe to read.
+	if item.result != nil {
 		// return raw err, should already be wrapped
-		return nil, err
+		return nil, item.result
 	}
 
 	prometheusUtxostoreCreate.Inc()
@@ -256,6 +315,40 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 // Parameters:
 //   - batch: Array of BatchStoreItems to process
 func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
+	// resultHandledElsewhere[idx] == true means batch[idx] has already been
+	// completed by this iteration of sendStoreBatch (either directly via
+	// complete below or via a goroutine that takes ownership of the result), so
+	// subsequent error/success loops MUST NOT complete it a second time.
+	// Declared up front so the panic guard below can skip already-handled items.
+	// (complete is CAS-guarded, so a redundant call is harmless; the skip
+	// preserves the invariant that a handed-off item is completed only by the
+	// goroutine that owns it.)
+	resultHandledElsewhere := make([]bool, len(batch))
+
+	// go-batcher recovers panics raised in this fn; without re-completing the
+	// not-yet-handled items, a panic (e.g. a nil tx) would orphan every
+	// remaining waiting caller on group.Wait permanently. Items already handed
+	// to a goroutine are skipped — that goroutine owns their completion.
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+
+		if prometheusUtxoMapErrors != nil {
+			prometheusUtxoMapErrors.WithLabelValues("Batch", "PanicRecovered").Inc()
+		}
+
+		s.logger.Errorf("[sendStoreBatch] recovered panic, failing batch items: %v\n%s", r, debug.Stack())
+
+		var err error = errors.NewProcessingError("panic in sendStoreBatch: %v", r)
+		for idx, bItem := range batch {
+			if !resultHandledElsewhere[idx] {
+				bItem.complete(err)
+			}
+		}
+	}()
+
 	start := time.Now()
 
 	stat := gocore.NewStat("sendStoreBatch")
@@ -276,14 +369,6 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 	batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
-	// resultHandledElsewhere[idx] = true means bItem.done has already been notified by
-	// this iteration of sendStoreBatch (either directly via SafeSend below or via a
-	// goroutine that takes ownership of the result), so subsequent error/success
-	// loops MUST NOT send a second notification on the same channel. Without this,
-	// items that were notified pre-BatchOperate would receive a duplicate from the
-	// per-record loop, and items that hit specific aerospike result codes would
-	// silently fall through unnotified.
-	resultHandledElsewhere := make([]bool, len(batch))
 
 	if s.settings.UtxoStore.VerboseDebug {
 		s.logger.Debugf("[STORE_BATCH] sending batch of %d txMetas", len(batch))
@@ -301,7 +386,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 	for idx, bItem := range batch {
 		key, err = aerospike.NewKey(s.namespace, s.setName, bItem.txHash[:])
 		if err != nil {
-			util.SafeSend(bItem.done, err)
+			bItem.complete(err)
 			resultHandledElsewhere[idx] = true
 
 			// NOOP for this record
@@ -337,7 +422,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 		binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, arena) // false is to say this is a normal record, not external.
 		if err != nil {
-			util.SafeSend[error](bItem.done, errors.NewProcessingError("could not get bins to store", err))
+			bItem.complete(errors.NewProcessingError("could not get bins to store", err))
 			resultHandledElsewhere[idx] = true
 
 			// NOOP for this record
@@ -355,7 +440,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			// cannot corrupt the bytes the goroutine still references.
 			binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, nil)
 			if err != nil {
-				util.SafeSend[error](bItem.done, errors.NewProcessingError("could not rebuild bins for external store", err))
+				bItem.complete(errors.NewProcessingError("could not rebuild bins for external store", err))
 				resultHandledElsewhere[idx] = true
 				batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
@@ -364,7 +449,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 			// Make this batch item a NOOP and persist all of these to be written via a queue
 			batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
-			// Goroutine takes ownership of bItem.done; the per-record loop must not touch it.
+			// Goroutine takes ownership of bItem's completion; the per-record loop must not touch it.
 			resultHandledElsewhere[idx] = true
 
 			if len(batch[idx].tx.Inputs) == 0 {
@@ -415,7 +500,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 					wrapper.Bytes(),
 					setOptions...,
 				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-					util.SafeSend[error](bItem.done, errors.NewStorageError("error writing outputs to external store [%s]", bItem.txHash.String(), err))
+					bItem.complete(errors.NewStorageError("error writing outputs to external store [%s]", bItem.txHash.String(), err))
 					resultHandledElsewhere[idx] = true
 					// NOOP for this record
 					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
@@ -434,7 +519,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 					fileformat.FileTypeTx,
 					bItem.tx.ExtendedBytes(),
 				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-					util.SafeSend[error](bItem.done, errors.NewStorageError("[sendStoreBatch] error batch writing transaction to external store [%s]", bItem.txHash.String(), err))
+					bItem.complete(errors.NewStorageError("[sendStoreBatch] error batch writing transaction to external store [%s]", bItem.txHash.String(), err))
 					resultHandledElsewhere[idx] = true
 					// NOOP for this record
 					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
@@ -452,8 +537,9 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 		}
 
 		if bItem.conflicting {
-			dah := bItem.blockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
-			putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), dah)))
+			if dah, ok := s.deleteAtHeightFor(bItem.blockHeight); ok {
+				putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), dah)))
+			}
 		}
 
 		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
@@ -462,12 +548,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 	batchID := s.batchID.Add(1)
 
-	batchOperate := s.batchOperateFn
-	if batchOperate == nil {
-		batchOperate = s.client.BatchOperate
-	}
-
-	err = batchOperate(batchPolicy, batchRecords)
+	err = s.batchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		var aErr *aerospike.AerospikeError
 
@@ -481,7 +562,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 					if resultHandledElsewhere[idx] {
 						continue
 					}
-					util.SafeSend[error](bItem.done, errors.NewTxExistsError("[sendStoreBatch-1] %v already exists in store", bItem.txHash))
+					bItem.complete(errors.NewTxExistsError("[sendStoreBatch-1] %v already exists in store", bItem.txHash))
 				}
 
 				return
@@ -490,11 +571,22 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %v", batchID, err)
 
+		batchInDoubt := isInDoubt(err)
+
 		for idx, bItem := range batch {
 			if resultHandledElsewhere[idx] {
 				continue
 			}
-			util.SafeSend(bItem.done, err)
+
+			// A batch spans nodes, and the error names one of them: a record
+			// another node wrote is OK, or KEY_EXISTS from an earlier attempt,
+			// while the call failed.
+			if batchInDoubt || recordMayExist(batchRecords[idx].BatchRec()) {
+				bItem.complete(createMayHaveCommittedError(err))
+				continue
+			}
+
+			bItem.complete(err)
 		}
 
 		// MUST return here. The previous code fell through to the per-record loop
@@ -521,14 +613,14 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 		if err != nil {
 			if aErr, ok := err.(*aerospike.AerospikeError); ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					util.SafeSend[error](batch[idx].done, errors.NewTxExistsError("[sendStoreBatch-2] %v already exists in store", batch[idx].txHash))
+					batch[idx].complete(errors.NewTxExistsError("[sendStoreBatch-2] %v already exists in store", batch[idx].txHash))
 					continue
 				}
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
 					binsToStore, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, batch[idx].blockHeights, batch[idx].subtreeIdxs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting, batch[idx].locked, nil) // true is to say this is a big record
 					if err != nil {
-						util.SafeSend[error](batch[idx].done, errors.NewProcessingError("could not get bins to store", err))
+						batch[idx].complete(errors.NewProcessingError("could not get bins to store", err))
 						continue
 					}
 
@@ -549,7 +641,12 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			// and KEY_NOT_FOUND_ERROR on a real BatchWrite (which is NOT a NOOP) — must
 			// be surfaced. Previously the SafeSend was nested inside the type-asserted
 			// branch and a non-matching error left the caller hung on <-errCh.
-			util.SafeSend[error](batch[idx].done, errors.NewStorageError("[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d", batch[idx].txHash.String(), idx, batchID, err))
+			if writeMayHaveApplied(batchRecord.BatchRec()) {
+				batch[idx].complete(createMayHaveCommittedError(err))
+				continue
+			}
+
+			batch[idx].complete(errors.NewStorageError("[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d", batch[idx].txHash.String(), idx, batchID, err))
 			continue
 		}
 
@@ -559,7 +656,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 		// the resultHandledElsewhere flag now makes that proxy redundant. If outputs
 		// > batchSize the item would already have set resultHandledElsewhere=true and
 		// been skipped above, so reaching this point means we owe the caller a result.
-		util.SafeSend(batch[idx].done, nil)
+		batch[idx].complete(nil)
 	}
 
 	stat.NewStat("postBatchOperate").AddTime(start)
@@ -787,8 +884,8 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 		if output != nil {
 			outputs[i] = appendOutputInto(arena, output)
 
-			// store all coinbases, non-zero utxos and exceptions from pre-genesis
-			if utxo.ShouldStoreOutputAsUTXO(isCoinbase, output, blockHeight) {
+			// store only spendable outputs (era-aware, value-agnostic; matches SV Node IsUnspendable)
+			if utxo.ShouldStoreOutputAsUTXO(output, blockHeight, s.settings.ChainCfgParams.GenesisActivationHeight) {
 				utxos[i] = aerospike.NewBytesValue(utxoHashes[i][:])
 			}
 		}
@@ -828,6 +925,9 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 	// Split utxos into batches
 	batches := s.splitIntoBatches(utxos, commonBins)
 
+	// Record 0 is the master: the mined-state bins below live only here. classifyCreateBatchResults
+	// depends on that to decide whether a writer created the transaction, so moving them off
+	// batches[0] would silently change what Create reports to its callers.
 	batches[0] = append(batches[0], aerospike.NewBin(fields.TotalExtraRecs.String(), aerospike.NewIntegerValue(len(batches)-1)))
 	batches[0] = append(batches[0], aerospike.NewBin(fields.BlockIDs.String(), blockIDs))
 	batches[0] = append(batches[0], aerospike.NewBin(fields.BlockHeights.String(), blockHeights))
@@ -837,6 +937,29 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 	// Set UnminedSince for unmined transactions (when no blockIDs/blockHeights)
 	if len(blockIDs) == 0 && len(blockHeights) == 0 && len(subtreeIdxs) == 0 {
 		batches[0] = append(batches[0], aerospike.NewBin(fields.UnminedSince.String(), aerospike.NewIntegerValue(int(blockHeight))))
+	} else if !isConflicting {
+		// A transaction with no spendable outputs (e.g. one that only carries
+		// OP_RETURN / data outputs) can never be spent, so it never transitions
+		// to "all spent" via the spend path. When it is created already-mined
+		// during block validation it also bypasses setMined - the other place
+		// that assigns a deleteAtHeight. Without one, the record would never be
+		// eligible for pruning and would be retained in the UTXO store forever.
+		// Give such a mined transaction the same retention window as a
+		// fully-spent transaction so the pruner can expire it; we only want
+		// truly spendable outputs retained indefinitely. (Conflicting txs get
+		// their deleteAtHeight set separately by the caller.)
+		spendableUtxos := 0
+		for _, u := range utxos {
+			if u != nil {
+				spendableUtxos++
+			}
+		}
+
+		if spendableUtxos == 0 {
+			if dah, ok := s.deleteAtHeightFor(blockHeight); ok {
+				batches[0] = append(batches[0], aerospike.NewBin(fields.DeleteAtHeight.String(), aerospike.NewIntegerValue(int(dah))))
+			}
+		}
 	}
 
 	// add the created at bin in milliseconds to the first record
@@ -922,6 +1045,60 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 	)
 }
 
+// isKeyExists reports whether err is Aerospike's "this key already exists" result, which on
+// a CREATE_ONLY write means another attempt got there first.
+func isKeyExists(err error) bool {
+	var aErr aerospike.Error
+	return errors.As(err, &aErr) && aErr.Matches(types.KEY_EXISTS_ERROR)
+}
+
+// isFilteredOut reports whether err is Aerospike's "the policy's filter expression did not
+// match" result, which on a write means the server declined to apply it.
+func isFilteredOut(err error) bool {
+	var aErr aerospike.Error
+	return errors.As(err, &aErr) && aErr.Matches(types.FILTERED_OUT)
+}
+
+// classifyCreateBatchResults decides, from one CREATE_ONLY batch's per-record results,
+// whether THIS writer created the transaction.
+//
+// masterCreated is true only when record 0 was written by us. Record 0 is the master:
+// GetBinsToStore puts BlockIDs/BlockHeights/SubtreeIdxs — or UnminedSince when there are
+// none — only on batches[0]. So if record 0 already existed, another writer owns that
+// mined-state metadata and ours was never applied, however many child records we filled in.
+//
+// Answering "did I create this transaction" with "did I write any record" is what let a
+// writer report success over someone else's master. That success is one the caller acts on:
+// block validation only collects a transaction for its mined-info repair when the store says
+// it already exists, so a false success suppressed the repair and left the master carrying
+// the earlier writer's UnminedSince with no BlockIDs — a mined transaction recorded as
+// unmined, which then feeds the unmined pruner and the re-add-to-block-assembly path.
+//
+// It needs no concurrency: a partial batch failure deliberately leaves its records in place
+// for the next attempt, so a later sequential create from a different caller finds the master
+// present, fills in the missing child, and used to report success.
+//
+// alreadyPresent and failed list the record indices in each state, so the caller can log
+// them without walking the results again. Split out from storeExternallyWithLock so the
+// rule can be tested without an Aerospike client — the surrounding function acquires the
+// creation lock through the concrete client before it ever reaches this point.
+func classifyCreateBatchResults(batchRecords []aerospike.BatchRecordIfc) (masterCreated bool, alreadyPresent, failed []int) {
+	for idx, record := range batchRecords {
+		switch err := record.BatchRec().Err; {
+		case err == nil:
+			if idx == 0 {
+				masterCreated = true
+			}
+		case isKeyExists(err):
+			alreadyPresent = append(alreadyPresent, idx)
+		default:
+			failed = append(failed, idx)
+		}
+	}
+
+	return masterCreated, alreadyPresent, failed
+}
+
 // storeExternallyWithLock is the shared implementation for external transaction storage
 // Both StoreTransactionExternally and StorePartialTransactionExternally delegate to this
 //
@@ -946,12 +1123,12 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 //
 // 1. TRANSACTION IS PERSISTED: Phase 1 success means all records exist with complete data
 // 2. SPEND PROTECTION: creating=true flags prevent premature UTXO spending (per-record Lua checks)
-// 3. AUTO-RECOVERY: System self-heals through multiple paths (see line 911 for details)
+// 3. AUTO-RECOVERY: System self-heals through multiple paths (see RECOVERY SCENARIOS below)
 // 4. ATOMICITY: Returning error would break atomicity (Phase 1 done, but system thinks it failed)
 // 5. BLOCK ASSEMBLY: Notification is about existence, not spendability
 //
 // RECOVERY SCENARIOS:
-// - Retry attempts complete Phase 2 via "All exist" path (line 888)
+// - Retry attempts complete Phase 2 via the "master already exists" recovery path below
 // - Auto-recovery triggers when transaction is re-encountered (processTxMetaUsingStore.go:112-122)
 // - Mining operation clears flags via setMined
 func (s *Store) storeExternallyWithLock(
@@ -969,9 +1146,9 @@ func (s *Store) storeExternallyWithLock(
 	}
 
 	// Acquire lock FIRST to prevent duplicate work
-	lockKey, err := s.acquireLock(bItem.txHash, len(binsToStore))
+	lockKey, lockToken, err := s.acquireLock(bItem.txHash, len(binsToStore))
 	if err != nil {
-		util.SafeSend(bItem.done, err)
+		bItem.complete(err)
 		return
 	}
 
@@ -979,7 +1156,7 @@ func (s *Store) storeExternallyWithLock(
 	// The creating bin in each record prevents UTXO spending until cleared
 	// Failed creations leave partial records for the next attempt to "finish off"
 	defer func() {
-		if releaseErr := s.releaseLock(lockKey); releaseErr != nil {
+		if releaseErr := s.releaseLock(lockKey, lockToken); releaseErr != nil {
 			s.logger.Warnf("[%s] Failed to release lock: %v", funcName, releaseErr)
 		}
 	}()
@@ -987,7 +1164,7 @@ func (s *Store) storeExternallyWithLock(
 	// Pre-create all record keys to fail fast on key creation errors
 	recordKeys, err := s.prepareRecordKeys(bItem.txHash, len(binsToStore))
 	if err != nil {
-		util.SafeSend(bItem.done, err)
+		bItem.complete(err)
 		return
 	}
 
@@ -996,7 +1173,7 @@ func (s *Store) storeExternallyWithLock(
 	// deletion of external files directly when pruning Aerospike records.
 	timeStart := time.Now()
 	if err := s.externalStore.Set(ctx, bItem.txHash[:], fileType, blobData, options.WithDeleteAt(0)); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-		util.SafeSend[error](bItem.done, errors.NewStorageError("[%s] error writing to external store [%s]", funcName, bItem.txHash.String(), err))
+		bItem.complete(errors.NewStorageError("[%s] error writing to external store [%s]", funcName, bItem.txHash.String(), err))
 		return
 	}
 
@@ -1017,8 +1194,9 @@ func (s *Store) storeExternallyWithLock(
 		}
 
 		if idx == 0 && bItem.conflicting {
-			dah := bItem.blockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
-			putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), dah)))
+			if dah, ok := s.deleteAtHeightFor(bItem.blockHeight); ok {
+				putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), dah)))
+			}
 		}
 
 		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
@@ -1026,45 +1204,48 @@ func (s *Store) storeExternallyWithLock(
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
-	batchOperate := s.batchOperateFn
-	if batchOperate == nil {
-		batchOperate = s.client.BatchOperate
-	}
+	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
+		failErr := errors.NewProcessingError("[%s] BatchOperate failed for tx %s", funcName, bItem.txHash, err)
+		if isInDoubt(err) || recordMayExist(batchRecords[0].BatchRec()) {
+			bItem.complete(createMayHaveCommittedError(failErr))
+			return
+		}
 
-	if err := batchOperate(batchPolicy, batchRecords); err != nil {
-		util.SafeSend[error](bItem.done, errors.NewProcessingError("[%s] BatchOperate failed for tx %s", funcName, bItem.txHash, err))
+		bItem.complete(failErr)
 		return
 	}
 
 	// Check results - KEY_EXISTS_ERROR means recovery (completing previous attempt)
-	hasFailures := false
-	createdAny := false
-	for idx, record := range batchRecords {
-		if err := record.BatchRec().Err; err != nil {
-			aErr, ok := err.(*aerospike.AerospikeError)
-			if ok && aErr.ResultCode == types.KEY_EXISTS_ERROR {
-				s.logger.Debugf("[%s] Record %d already exists for tx %s (completing previous attempt)", funcName, idx, bItem.txHash)
-				continue
-			}
-			s.logger.Errorf("[%s] Failed to create record %d for tx %s: %v", funcName, idx, bItem.txHash, err)
-			hasFailures = true
-		} else {
-			// No error - this record was created successfully
-			createdAny = true
-		}
+	masterCreated, alreadyPresent, failed := classifyCreateBatchResults(batchRecords)
+
+	for _, idx := range alreadyPresent {
+		s.logger.Debugf("[%s] Record %d already exists for tx %s (completing previous attempt)", funcName, idx, bItem.txHash)
 	}
 
-	if hasFailures {
+	if len(failed) > 0 {
+		for _, idx := range failed {
+			s.logger.Errorf("[%s] Failed to create record %d for tx %s: %v", funcName, idx, bItem.txHash, batchRecords[idx].BatchRec().Err)
+		}
+
 		// Do NOT clean up partial records - leave them for the next attempt to complete
 		// The creating bin in each record prevents UTXO spending until all records exist
 		// The defer will release the lock, allowing another process to finish the creation
-		util.SafeSend[error](bItem.done, errors.NewProcessingError("failed to create all records for tx %s - partial records remain for next attempt to complete", bItem.txHash))
+		failErr := errors.NewProcessingError("failed to create all records for tx %s - partial records remain for next attempt to complete", bItem.txHash)
+		if recordMayExist(batchRecords[0].BatchRec()) {
+			// The master record makes the transaction exist, creating, so its
+			// spends must stay for the next attempt to complete it.
+			bItem.complete(createMayHaveCommittedError(failErr))
+			return
+		}
+
+		bItem.complete(failErr)
 		return
 	}
 
-	// If we didn't create any new records, all already existed - transaction is complete
-	if !createdAny {
-		// RECOVERY PATH: All records already exist from previous attempt
+	// If we did not create the master record, this transaction was created by someone else -
+	// their mined-state metadata stands, and ours must be reconciled by the caller.
+	if !masterCreated {
+		// RECOVERY PATH: the master record already exists from a previous attempt
 		//
 		// We don't notify block assembly (transaction already processed) but we still attempt
 		// Phase 2 cleanup to handle the case where a previous attempt completed Phase 1 but
@@ -1080,7 +1261,7 @@ func (s *Store) storeExternallyWithLock(
 		if clearErr != nil {
 			s.logger.Warnf("[%s] Transaction %s exists but creating flag cleanup failed: %v", funcName, bItem.txHash, clearErr)
 		}
-		util.SafeSend[error](bItem.done, errors.NewTxExistsError("transaction already exists: %s", bItem.txHash))
+		bItem.complete(errors.NewTxExistsError("transaction already exists: %s", bItem.txHash))
 		return
 	}
 
@@ -1122,7 +1303,7 @@ func (s *Store) storeExternallyWithLock(
 		s.logger.Errorf("[%s] Records remain with creating=true, preventing UTXO spending until auto-recovery completes", funcName)
 	}
 
-	util.SafeSend(bItem.done, nil)
+	bItem.complete(nil)
 }
 
 // calculateLockKey generates the key for a lock record using the special LockRecordIndex
@@ -1140,11 +1321,12 @@ func calculateLockTTL(numRecords int) uint32 {
 }
 
 // acquireLock creates and acquires the lock record for transaction creation
-// Returns the lock key on success, or error if lock acquisition fails
-func (s *Store) acquireLock(txHash *chainhash.Hash, numRecords int) (*aerospike.Key, error) {
+// Returns the lock key and the token identifying this acquisition on success, or error
+// if lock acquisition fails
+func (s *Store) acquireLock(txHash *chainhash.Hash, numRecords int) (*aerospike.Key, string, error) {
 	lockKey, err := aerospike.NewKey(s.namespace, s.setName, calculateLockKey(txHash))
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to create lock key", err)
+		return nil, "", errors.NewProcessingError("failed to create lock key", err)
 	}
 
 	lockTTL := calculateLockTTL(numRecords)
@@ -1154,39 +1336,75 @@ func (s *Store) acquireLock(txHash *chainhash.Hash, numRecords int) (*aerospike.
 
 	hostname, _ := os.Hostname()
 
+	// token uniquely identifies this acquisition, so that releaseLock can prove it is
+	// deleting the lock it was handed rather than a different writer's lock created
+	// after this one's TTL expired. rand.Text is at least 128 bits and cannot fail.
+	token := rand.Text()
+
 	lockBins := []*aerospike.Bin{
 		aerospike.NewBin("created_at", time.Now().Unix()),
 		aerospike.NewBin("lock_type", "tx_creation"),
 		aerospike.NewBin("process_id", os.Getpid()),
 		aerospike.NewBin("hostname", hostname),
 		aerospike.NewBin("expected_recs", numRecords),
+		aerospike.NewBin("lock_token", token),
 	}
 
 	err = s.client.PutBins(lockPolicy, lockKey, lockBins...)
 	if err != nil {
-		aErr, ok := err.(*aerospike.AerospikeError)
-		if ok && aErr.ResultCode == types.KEY_EXISTS_ERROR {
-			return nil, errors.NewTxExistsError("transaction creation in progress or already exists: %s", txHash)
+		if isKeyExists(err) {
+			return nil, "", errors.NewTxExistsError("transaction creation in progress or already exists: %s", txHash)
 		}
 
-		return nil, errors.NewProcessingError("failed to acquire lock", err)
+		return nil, "", errors.NewProcessingError("failed to acquire lock", err)
 	}
 
-	return lockKey, nil
+	return lockKey, token, nil
 }
 
-// releaseLock deletes the lock record
-func (s *Store) releaseLock(lockKey *aerospike.Key) error {
+// releaseLock deletes the lock record, but only if it still carries the token this
+// caller was given when it acquired the lock.
+//
+// What this fences against: a writer that stalls past the lock's TTL loses the lock
+// silently - Aerospike expires the record regardless of whether the stalled writer is
+// still "holding" it in its own head. A second writer can then CREATE_ONLY a fresh lock
+// record for the same key. Without the token check, the first writer's deferred release
+// would delete that second writer's live lock by key alone, letting a third writer in
+// while the second still believes it holds the lock. The FilterExpression makes the
+// delete conditional on lock_token still matching what THIS acquisition wrote, so a
+// stale release becomes a no-op (FILTERED_OUT) instead of evicting someone else's lock.
+//
+// Why a token and not the record's generation: the acquire is always a CREATE_ONLY first
+// write, so its generation is always 1 - and a lock re-created after expiry is also 1.
+// Generation cannot tell "my live lock" from "someone else's, created after mine expired",
+// which is exactly the case being fenced.
+//
+// What this does NOT fence against: the token check only protects the lock record
+// itself from cross-writer deletion. It does nothing to stop two writers from both
+// believing they hold the lock and racing to create the same transaction's records at
+// the same time - that race is bounded separately, by the per-record CREATE_ONLY writes
+// (which Aerospike settles server-side, so only one writer's put can win each record)
+// and by the master-record rule in this package.
+func (s *Store) releaseLock(lockKey *aerospike.Key, token string) error {
 	policy := util.GetAerospikeWritePolicy(s.settings, 0)
+	policy.FilterExpression = aerospike.ExpEq(aerospike.ExpStringBin("lock_token"), aerospike.ExpStringVal(token))
 
-	_, err := s.client.Delete(policy, lockKey)
+	existed, err := s.client.Delete(policy, lockKey)
 	if err != nil {
-		aErr, ok := err.(*aerospike.AerospikeError)
-		if ok && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
+		if isFilteredOut(err) {
+			s.logger.Debugf("[releaseLock] Lock record for key %v is now held by a different token; not ours to delete", lockKey)
 			return nil
 		}
 
 		return err
+	}
+
+	// A missing lock record is not an error on the delete path - the client maps the
+	// server's KEY_NOT_FOUND to existed=false with a nil error, so there is no separate
+	// not-found branch to take here - but it is worth distinguishing in the logs from a
+	// delete that actually removed our lock.
+	if !existed {
+		s.logger.Debugf("[releaseLock] Lock record for key %v already gone (expired or already released)", lockKey)
 	}
 
 	return nil
@@ -1266,7 +1484,7 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 
 	// Phase 1: Clear child records first (indices 1, 2, ..., N-1)
 	if len(childWrites) > 0 {
-		err := s.client.BatchOperate(batchPolicy, childWrites)
+		err := s.batchOperate(batchPolicy, childWrites)
 		if err != nil {
 			return errors.NewProcessingError("failed to unlock child records", err)
 		}
@@ -1293,7 +1511,7 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 	// Phase 2: Clear master record last (index 0)
 	// Only executed if children succeeded - master's creating flag becomes atomic completion indicator
 	if masterWrite != nil {
-		err := s.client.BatchOperate(batchPolicy, []aerospike.BatchRecordIfc{masterWrite})
+		err := s.batchOperate(batchPolicy, []aerospike.BatchRecordIfc{masterWrite})
 		if err != nil {
 			return errors.NewProcessingError("failed to unlock master record", err)
 		}
@@ -1310,4 +1528,80 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 	}
 
 	return nil
+}
+
+// createMayHaveCommittedError marks err, from a create write that may have
+// committed on the server, as leaving the create's outcome unknown.
+// utxo.SequentialSpendAndCreate unspends the inputs of a create that failed for
+// certain, and doing that for a write that did commit leaves a stored
+// transaction with live inputs, which a repeat never heals because a repeat
+// drops a transaction whose record exists. Marked outcome-unknown, the spends
+// stay, as for a context error, until a repeat finds the record or writes it.
+func createMayHaveCommittedError(err error) error {
+	var tErr *errors.Error
+	if !errors.As(err, &tErr) {
+		tErr = errors.NewStorageError("aerospike create write may have committed", err)
+	}
+
+	return utxo.MarkCreateOutcomeUnknown(tErr)
+}
+
+// isInDoubt reports whether err, from a write, says the write may have been
+// applied. BatchOperate runs one command per node and chains their errors, so
+// the head names only the last node to fail, and a node's in-doubt flag can be
+// lost: the client judges a node's batch a read when its last record is one.
+// isInDoubt therefore walks the whole chain and answers true for any error
+// marked in doubt, any TIMEOUT, and any client-side code (zero or below:
+// network and connection failures), the codes the client's own in-doubt rule
+// uses. One timeout is told apart: uaerospike.PermitTimeoutError, the wrapper's
+// wait for a connection permit running out, comes back before anything is sent,
+// so it is not in doubt. The rule still over-marks other writes that never went
+// out: client codes such as MAX_ERROR_RATE and
+// NO_AVAILABLE_CONNECTIONS_TO_NODE, where the client sent nothing on its last
+// attempt. Such a create keeps its spends with no record until a repeat of the
+// create, the safe direction. Those codes stay marked because the client can
+// return one after an earlier attempt of the same command did send.
+func isInDoubt(err error) bool {
+	for err != nil {
+		// Nothing was sent: the permit wait ran out before the client was
+		// called, and the permit is taken once for the whole call.
+		if _, ok := err.(*uaerospike.PermitTimeoutError); ok {
+			return false
+		}
+
+		// As reads this one link of the chain, the client's constant errors
+		// included; errors.As would stop at the first link.
+		if link, ok := err.(interface{ As(any) bool }); ok {
+			aeErr := &aerospike.AerospikeError{}
+			if link.As(aeErr) && (aeErr.InDoubt || aeErr.ResultCode == types.TIMEOUT || aeErr.ResultCode <= 0) {
+				return true
+			}
+		}
+
+		unwrapper, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+
+		err = unwrapper.Unwrap()
+	}
+
+	return false
+}
+
+// writeMayHaveApplied reports whether a batch write's record may have been
+// written: the server applied it (OK), or the client sent it and lost the
+// answer (in doubt). A record the call never sent keeps NO_RESPONSE. The
+// record's error is read with isInDoubt as well, because the client flags a
+// batch record in doubt only after a retry: a write the server answered with
+// TIMEOUT on the first send, which may have applied on the master, comes back
+// unflagged.
+func writeMayHaveApplied(rec *aerospike.BatchRecord) bool {
+	return rec.InDoubt || isInDoubt(rec.Err) || (rec.Err == nil && rec.ResultCode == types.OK)
+}
+
+// recordMayExist reports whether a create's record may exist after its batch
+// write: written now, in doubt, or left by an earlier attempt (KEY_EXISTS).
+func recordMayExist(rec *aerospike.BatchRecord) bool {
+	return writeMayHaveApplied(rec) || isKeyExists(rec.Err)
 }

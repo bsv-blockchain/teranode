@@ -57,7 +57,7 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockInChainByHeightHash-%d-%s", height, startHash.String())))
 
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 	cached := cacheOp.Get()
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().(*model.Block); ok && cacheData != nil {
@@ -202,7 +202,11 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 		return nil, false, errors.NewStorageError("[GetBlockInChainByHeightHash][%s:%d] failed to get block in-chain by height", startHash.String(), height, err)
 	}
 
-	bits, _ := model.NewNBitFromSlice(nBits)
+	bits, err := model.NewNBitFromSlice(nBits)
+	if err != nil {
+		return nil, false, errors.NewStorageError("[GetBlockInChainByHeightHash][%s:%d] malformed n_bits (length %d, expected 4)", startHash.String(), height, len(nBits), err)
+	}
+
 	block.Header.Bits = *bits
 
 	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)

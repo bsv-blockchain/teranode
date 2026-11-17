@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ordishs/gocore"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetString(t *testing.T) {
@@ -233,4 +234,106 @@ func TestGetIntSlice_MissingKey(t *testing.T) {
 			t.Errorf("Expected default value %d at index %d, got %d", defaultValue[i], i, v)
 		}
 	}
+}
+
+func TestGetUint64AtLeast(t *testing.T) {
+	t.Run("value above the floor is used as configured", func(t *testing.T) {
+		gocore.Config().Set("test_at_least", "50")
+		defer gocore.Config().Unset("test_at_least")
+
+		require.Equal(t, uint64(50), getUint64AtLeast("test_at_least", 100, 11))
+	})
+
+	t.Run("value below the floor is raised to it", func(t *testing.T) {
+		gocore.Config().Set("test_at_least", "5")
+		defer gocore.Config().Unset("test_at_least")
+
+		require.Equal(t, uint64(11), getUint64AtLeast("test_at_least", 100, 11))
+	})
+
+	t.Run("zero is raised to the floor", func(t *testing.T) {
+		gocore.Config().Set("test_at_least", "0")
+		defer gocore.Config().Unset("test_at_least")
+
+		require.Equal(t, uint64(11), getUint64AtLeast("test_at_least", 100, 11))
+	})
+
+	t.Run("missing key falls back to the default", func(t *testing.T) {
+		require.Equal(t, uint64(100), getUint64AtLeast("missing_at_least_key", 100, 11))
+	})
+}
+
+// TestPreviousBlockHeaderCountFloor pins the consensus floor on the header run that
+// CheckHeaderContextual evaluates median time past over. svnode's window
+// (CBlockIndex::nMedianTimeSpan) is a hard constant; configuring fewer than 11 here would
+// silently compute the median over fewer blocks and accept blocks the network rejects.
+func TestPreviousBlockHeaderCountFloor(t *testing.T) {
+	gocore.Config().Set("blockvalidation_previous_block_header_count", "5")
+	defer gocore.Config().Unset("blockvalidation_previous_block_header_count")
+
+	require.GreaterOrEqual(t, NewSettings().BlockValidation.PreviousBlockHeaderCount, uint64(11))
+}
+
+// TestGetPostgresPoolSettings_CircuitBreaker pins the per-service override
+// path for the five circuit breaker keys (<prefix>_postgres_circuitBreaker*).
+// Before this was wired, getPostgresPoolSettings never read these keys, so a
+// service-specific override silently fell back to whatever the global
+// Postgres settings produced.
+func TestGetPostgresPoolSettings_CircuitBreaker(t *testing.T) {
+	t.Run("per-service circuit breaker keys populate the returned settings", func(t *testing.T) {
+		gocore.Config().Set("myservice_postgres_circuitBreakerEnabled", "true")
+		gocore.Config().Set("myservice_postgres_circuitBreakerFailureThreshold", "9")
+		gocore.Config().Set("myservice_postgres_circuitBreakerHalfOpenMax", "6")
+		gocore.Config().Set("myservice_postgres_circuitBreakerCooldown", "15s")
+		gocore.Config().Set("myservice_postgres_circuitBreakerFailureWindow", "5s")
+
+		defer func() {
+			gocore.Config().Unset("myservice_postgres_circuitBreakerEnabled")
+			gocore.Config().Unset("myservice_postgres_circuitBreakerFailureThreshold")
+			gocore.Config().Unset("myservice_postgres_circuitBreakerHalfOpenMax")
+			gocore.Config().Unset("myservice_postgres_circuitBreakerCooldown")
+			gocore.Config().Unset("myservice_postgres_circuitBreakerFailureWindow")
+		}()
+
+		poolSettings := getPostgresPoolSettings("myservice")
+		require.NotNil(t, poolSettings)
+		require.NotNil(t, poolSettings.CircuitBreakerEnabled)
+		require.True(t, *poolSettings.CircuitBreakerEnabled)
+		require.Equal(t, 9, poolSettings.CircuitBreakerFailureThreshold)
+		require.Equal(t, 6, poolSettings.CircuitBreakerHalfOpenMax)
+		require.Equal(t, 15*time.Second, poolSettings.CircuitBreakerCooldown)
+		require.Equal(t, 5*time.Second, poolSettings.CircuitBreakerFailureWindow)
+	})
+
+	t.Run("a single circuit breaker key alone counts as configured", func(t *testing.T) {
+		gocore.Config().Set("otherservice_postgres_circuitBreakerFailureThreshold", "9")
+		defer gocore.Config().Unset("otherservice_postgres_circuitBreakerFailureThreshold")
+
+		poolSettings := getPostgresPoolSettings("otherservice")
+		require.NotNil(t, poolSettings, "setting only a circuit breaker key must not be treated as unconfigured")
+		require.Equal(t, 9, poolSettings.CircuitBreakerFailureThreshold)
+	})
+
+	t.Run("nothing configured for the prefix returns nil", func(t *testing.T) {
+		require.Nil(t, getPostgresPoolSettings("unconfiguredservice"))
+	})
+
+	t.Run("explicit false is distinguishable from absent", func(t *testing.T) {
+		gocore.Config().Set("falseservice_postgres_circuitBreakerEnabled", "false")
+		defer gocore.Config().Unset("falseservice_postgres_circuitBreakerEnabled")
+
+		poolSettings := getPostgresPoolSettings("falseservice")
+		require.NotNil(t, poolSettings, "an explicit false key must count as configured, not as absent")
+		require.NotNil(t, poolSettings.CircuitBreakerEnabled)
+		require.False(t, *poolSettings.CircuitBreakerEnabled)
+	})
+
+	t.Run("retryEnabled alone counts as configured", func(t *testing.T) {
+		gocore.Config().Set("retryservice_postgres_retryEnabled", "true")
+		defer gocore.Config().Unset("retryservice_postgres_retryEnabled")
+
+		poolSettings := getPostgresPoolSettings("retryservice")
+		require.NotNil(t, poolSettings, "setting only retryEnabled must not be treated as unconfigured")
+		require.True(t, poolSettings.RetryEnabled)
+	})
 }

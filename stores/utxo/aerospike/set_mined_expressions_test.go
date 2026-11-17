@@ -139,7 +139,7 @@ func TestProcessBatchResultsForSetMinedExpressions_FilteredOutSynthesizesMapEntr
 	rec.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.FILTERED_OUT}
 
 	const blockID uint32 = 1234
-	got, err := s.processBatchResultsForSetMinedExpressions(
+	got, work, err := s.processBatchResultsForSetMinedExpressions(
 		context.Background(),
 		[]aerospike.BatchRecordIfc{rec},
 		[]*chainhash.Hash{hash},
@@ -150,6 +150,14 @@ func TestProcessBatchResultsForSetMinedExpressions_FilteredOutSynthesizesMapEntr
 	require.NoError(t, err, "FILTERED_OUT must be treated as a successful idempotent retry, not an error")
 	require.Contains(t, got, *hash, "hash must be present in the returned map so the model-layer coverage check passes")
 	assert.Equal(t, []uint32{blockID}, got[*hash], "synthesized slice must contain exactly the current blockID")
+
+	// #1037: the FILTERED_OUT write (incl. Locked=false) is skipped by the blockID
+	// filter, so the record must be enqueued for a full SetLocked(false) unlock —
+	// this guards the load-bearing line set_mined_expressions.go that appends to
+	// work.fullUnlock. Without it a still-locked pagination record never heals.
+	require.Len(t, work.fullUnlock, 1, "FILTERED_OUT record must be queued for full unlock")
+	assert.Equal(t, *hash, work.fullUnlock[0], "the FILTERED_OUT hash must be the one queued for unlock")
+	assert.Empty(t, work.items, "FILTERED_OUT records use fullUnlock, not the direct child-clear items")
 }
 
 // TestProcessBatchResultsForSetMinedExpressions_KeyNotFoundIsHardError pairs
@@ -163,7 +171,7 @@ func TestProcessBatchResultsForSetMinedExpressions_KeyNotFoundIsHardError(t *tes
 	rec := newFakeBatchWrite(t, hash)
 	rec.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.KEY_NOT_FOUND_ERROR}
 
-	got, err := s.processBatchResultsForSetMinedExpressions(
+	got, _, err := s.processBatchResultsForSetMinedExpressions(
 		context.Background(),
 		[]aerospike.BatchRecordIfc{rec},
 		[]*chainhash.Hash{hash},
@@ -187,7 +195,7 @@ func TestProcessBatchResultsForSetMinedExpressions_CoverageGap_NilRecord(t *test
 	rec := newFakeBatchWrite(t, hash)
 	// Default state: rec.BatchRec().Err == nil && rec.BatchRec().Record == nil.
 
-	got, err := s.processBatchResultsForSetMinedExpressions(
+	got, _, err := s.processBatchResultsForSetMinedExpressions(
 		context.Background(),
 		[]aerospike.BatchRecordIfc{rec},
 		[]*chainhash.Hash{hash},
@@ -213,7 +221,7 @@ func TestProcessBatchResultsForSetMinedExpressions_CoverageGap_EmptyBlockIDs(t *
 		"blockIDs": []interface{}{},
 	}}
 
-	got, err := s.processBatchResultsForSetMinedExpressions(
+	got, _, err := s.processBatchResultsForSetMinedExpressions(
 		context.Background(),
 		[]aerospike.BatchRecordIfc{rec},
 		[]*chainhash.Hash{hash},
@@ -237,7 +245,7 @@ func TestProcessBatchResultsForSetMinedExpressions_UnsetMinedToleratesGap(t *tes
 	rec := newFakeBatchWrite(t, hash)
 	// Nil Record — same shape as the NilRecord test above.
 
-	got, err := s.processBatchResultsForSetMinedExpressions(
+	got, _, err := s.processBatchResultsForSetMinedExpressions(
 		context.Background(),
 		[]aerospike.BatchRecordIfc{rec},
 		[]*chainhash.Hash{hash},

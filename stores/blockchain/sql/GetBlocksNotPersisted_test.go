@@ -31,7 +31,7 @@ func TestGetBlocksNotPersisted(t *testing.T) {
 		s := settings.NewSettings()
 		store, err := New(logger, dbURL, s)
 		require.NoError(t, err)
-		defer store.Close()
+		defer store.Close(context.Background())
 
 		// Mark genesis as persisted so we start with a clean slate
 		markGenesisAsPersisted(t, store, s)
@@ -49,7 +49,7 @@ func TestGetBlocksNotPersisted(t *testing.T) {
 		s := settings.NewSettings()
 		store, err := New(logger, dbURL, s)
 		require.NoError(t, err)
-		defer store.Close()
+		defer store.Close(context.Background())
 
 		// Mark genesis as persisted
 		markGenesisAsPersisted(t, store, s)
@@ -72,7 +72,7 @@ func TestGetBlocksNotPersisted(t *testing.T) {
 		s := settings.NewSettings()
 		store, err := New(logger, dbURL, s)
 		require.NoError(t, err)
-		defer store.Close()
+		defer store.Close(context.Background())
 
 		// Mark genesis as persisted
 		markGenesisAsPersisted(t, store, s)
@@ -98,7 +98,7 @@ func TestGetBlocksNotPersisted(t *testing.T) {
 		s := settings.NewSettings()
 		store, err := New(logger, dbURL, s)
 		require.NoError(t, err)
-		defer store.Close()
+		defer store.Close(context.Background())
 
 		// Mark genesis as persisted
 		markGenesisAsPersisted(t, store, s)
@@ -124,7 +124,7 @@ func TestGetBlocksNotPersisted(t *testing.T) {
 		s := settings.NewSettings()
 		store, err := New(logger, dbURL, s)
 		require.NoError(t, err)
-		defer store.Close()
+		defer store.Close(context.Background())
 
 		// Mark genesis as persisted
 		markGenesisAsPersisted(t, store, s)
@@ -153,7 +153,7 @@ func TestGetBlocksNotPersisted(t *testing.T) {
 		s := settings.NewSettings()
 		store, err := New(logger, dbURL, s)
 		require.NoError(t, err)
-		defer store.Close()
+		defer store.Close(context.Background())
 
 		// Mark genesis as persisted
 		markGenesisAsPersisted(t, store, s)
@@ -178,7 +178,7 @@ func TestGetBlocksNotPersisted(t *testing.T) {
 		s := settings.NewSettings()
 		store, err := New(logger, dbURL, s)
 		require.NoError(t, err)
-		defer store.Close()
+		defer store.Close(context.Background())
 
 		// Mark genesis as persisted
 		markGenesisAsPersisted(t, store, s)
@@ -213,7 +213,7 @@ func TestGetBlocksNotPersisted(t *testing.T) {
 		s := settings.NewSettings()
 		store, err := New(logger, dbURL, s)
 		require.NoError(t, err)
-		defer store.Close()
+		defer store.Close(context.Background())
 
 		// Mark genesis as persisted
 		markGenesisAsPersisted(t, store, s)
@@ -243,7 +243,7 @@ func TestGetBlocksNotPersisted(t *testing.T) {
 		s := settings.NewSettings()
 		store, err := New(logger, dbURL, s)
 		require.NoError(t, err)
-		defer store.Close()
+		defer store.Close(context.Background())
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()

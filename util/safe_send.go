@@ -24,3 +24,22 @@ func SafeSend[T any](ch chan T, t T, timeoutOption ...time.Duration) bool {
 		return false
 	}
 }
+
+// TrySend performs a non-blocking send on a channel, recovering from panics if the
+// channel is closed. It returns true if the value was sent, and false if the channel
+// was full or closed. Use this for best-effort sends where blocking the caller on a
+// full buffer is worse than dropping the value.
+func TrySend[T any](ch chan T, t T) (sent bool) {
+	defer func() {
+		if recover() != nil {
+			sent = false
+		}
+	}()
+
+	select {
+	case ch <- t:
+		return true
+	default:
+		return false
+	}
+}

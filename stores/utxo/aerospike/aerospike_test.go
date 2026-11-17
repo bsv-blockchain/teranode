@@ -6,8 +6,8 @@
 //
 // The implementation uses a combination of Aerospike Key-Value store and Lua scripts
 // for atomic operations. Transactions are stored with the following structure:
-//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
-//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - Main Record: Contains transaction metadata and up to utxostore_utxoBatchSize UTXOs (default 128)
+//   - Pagination Records: Additional records for transactions with more outputs than utxostore_utxoBatchSize (default 128)
 //   - External Storage: Optional blob storage for large transactions
 //
 // # Features
@@ -44,7 +44,7 @@
 // Large Transaction with External Storage:
 //   - Same as normal but with external=true
 //   - Transaction data stored in blob storage
-//   - Multiple records for >20k outputs
+//   - Multiple records when outputs exceed utxostore_utxoBatchSize
 //
 // # Thread Safety
 //
@@ -72,10 +72,31 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
-	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResolveBatcherMaxConcurrent(t *testing.T) {
+	tests := []struct {
+		name       string
+		perBatcher int
+		shared     int
+		want       int
+	}{
+		{name: "unset inherits shared", perBatcher: 0, shared: 24, want: 24},
+		{name: "override wins over shared", perBatcher: 8, shared: 24, want: 8},
+		{name: "override above shared also wins", perBatcher: 128, shared: 24, want: 128},
+		{name: "both zero stays uncapped", perBatcher: 0, shared: 0, want: 0},
+		{name: "negative override defensively inherits", perBatcher: -1, shared: 24, want: 24},
+		{name: "override set while shared unlimited", perBatcher: 8, shared: 0, want: 8},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, resolveBatcherMaxConcurrent(tt.perBatcher, tt.shared))
+		})
+	}
+}
 
 func TestCalculateKeySource(t *testing.T) {
 	hash := chainhash.HashH([]byte("test"))
@@ -115,8 +136,8 @@ func TestUnmined(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
+	container, err := runAerospikeTestContainer(ctx)
+	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
 		err = container.Terminate(ctx)
@@ -137,6 +158,9 @@ func TestUnmined(t *testing.T) {
 
 	store, err := New(ctx, logger, tSettings, aeroURL)
 	require.NoError(t, err)
+	if os.Getenv("AEROSPIKE_EXPECT_NATIVE_OPS") == "true" {
+		require.True(t, store.useNativeTeranodeOps.Load())
+	}
 
 	t.Run("check_empty_store", func(t *testing.T) {
 		exists, err := store.indexExists("unminedSinceIndex")
@@ -339,8 +363,8 @@ func TestLargeTxStoresExternally(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
+	container, err := runAerospikeTestContainer(ctx)
+	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
 		err = container.Terminate(ctx)
@@ -369,7 +393,13 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	err = os.RemoveAll("./data/external")
 	require.NoError(t, err)
 
-	_, err = store.Create(context.Background(), tx, 1)
+	// tx.Outputs[0] carries a ~40KB locking script. Pre-Genesis that exceeds
+	// MAX_SCRIPT_SIZE_BEFORE_GENESIS and is provably unspendable (so it would
+	// not be stored as a UTXO and could not be spent below); mine post-Genesis,
+	// where the script-size cap no longer applies, so both outputs are spendable.
+	postGenesisHeight := tSettings.ChainCfgParams.GenesisActivationHeight + 1
+
+	_, err = store.Create(context.Background(), tx, postGenesisHeight)
 	require.NoError(t, err)
 
 	// check that the tx is stored externally
@@ -393,7 +423,7 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now let's spend the outputs
-	_, err = store.Spend(context.Background(), spendTx, 1)
+	_, err = store.Spend(context.Background(), spendTx, postGenesisHeight)
 	require.NoError(t, err)
 
 	// Verify DAH file does not exist (external store has DisableDAH=true)
@@ -478,11 +508,12 @@ func TestStore_BlockHeight(t *testing.T) {
 	t.Run("GetBlockHeightOnly", func(t *testing.T) {
 		store := &Store{}
 
-		// Test direct manipulation of atomic value for GetBlockHeight
-		store.blockHeight.Store(12345)
+		// Write through the embedded snapshot, which needs neither the logger
+		// nor the external store that the Store wrapper touches.
+		require.NoError(t, store.BlockStateFields.SetBlockHeight(12345))
 		assert.Equal(t, uint32(12345), store.GetBlockHeight())
 
-		store.blockHeight.Store(99999)
+		require.NoError(t, store.BlockStateFields.SetBlockHeight(99999))
 		assert.Equal(t, uint32(99999), store.GetBlockHeight())
 	})
 
@@ -533,11 +564,12 @@ func TestStore_MedianBlockTime(t *testing.T) {
 	})
 
 	t.Run("DirectAtomicManipulation", func(t *testing.T) {
-		// Test direct manipulation of atomic value for GetMedianBlockTime
-		store.medianBlockTime.Store(54321)
+		// Write through the embedded snapshot rather than the Store wrapper, so
+		// GetMedianBlockTime is exercised against the backing state directly.
+		require.NoError(t, store.BlockStateFields.SetMedianBlockTime(54321))
 		assert.Equal(t, uint32(54321), store.GetMedianBlockTime())
 
-		store.medianBlockTime.Store(98765)
+		require.NoError(t, store.BlockStateFields.SetMedianBlockTime(98765))
 		assert.Equal(t, uint32(98765), store.GetMedianBlockTime())
 	})
 }
@@ -646,7 +678,7 @@ func TestStore_AtomicOperations(t *testing.T) {
 		const numOperations = 100
 
 		// Set initial value
-		store.blockHeight.Store(1000)
+		require.NoError(t, store.BlockStateFields.SetBlockHeight(1000))
 
 		// Test concurrent reads and atomic writes
 		for i := 0; i < numGoroutines; i++ {
@@ -656,8 +688,9 @@ func TestStore_AtomicOperations(t *testing.T) {
 					height := store.GetBlockHeight()
 					assert.NotNil(t, height) // Just ensure it doesn't panic
 
-					// Atomic store operation
-					store.blockHeight.Store(uint32(id*1000 + j))
+					// Atomic store operation. +1 because zero is not a legal
+					// height, and id and j both start at zero.
+					_ = store.BlockStateFields.SetBlockHeight(uint32(id*1000+j) + 1)
 				}
 			}(i)
 		}
@@ -675,7 +708,7 @@ func TestStore_AtomicOperations(t *testing.T) {
 		const numOperations = 100
 
 		// Set initial value
-		store.medianBlockTime.Store(2000)
+		require.NoError(t, store.BlockStateFields.SetMedianBlockTime(2000))
 
 		// Test concurrent reads and atomic writes
 		for i := 0; i < numGoroutines; i++ {
@@ -686,7 +719,7 @@ func TestStore_AtomicOperations(t *testing.T) {
 					assert.NotNil(t, medianTime) // Just ensure it doesn't panic
 
 					// Atomic store operation
-					store.medianBlockTime.Store(uint32(id*2000 + j))
+					_ = store.BlockStateFields.SetMedianBlockTime(uint32(id*2000 + j))
 				}
 			}(i)
 		}

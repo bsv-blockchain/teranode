@@ -280,8 +280,13 @@ func TestPopulateVersionInfoComponents(t *testing.T) {
 			assert.True(t, len(parts) >= 3, "Timestamp-based version should have format v0.0.0-TIMESTAMP-COMMIT")
 			assert.Equal(t, "v0.0.0", parts[0], "Timestamp-based version should start with v0.0.0")
 		} else {
-			// Tag-based format (can have any format, but typically vX.Y.Z with optional suffix)
-			assert.Regexp(t, `^v\d+\.\d+\.\d+`, version, "Version should match vX.Y.Z format")
+			// Tag-based format: populateVersionInfo uses `git describe --tags
+			// --exact-match` and accepts any tag starting with "v", so the version
+			// is the literal tag name. It need NOT be semver — this repo also uses
+			// non-semver tags (e.g. v-scaling-test-YYYYMMDD for deploy builds), which
+			// must not fail this check. Assert the actual contract: a single
+			// "v"-prefixed token with no whitespace.
+			assert.Regexp(t, `^v\S+$`, version, "Tag-based version should be a v-prefixed token")
 		}
 	})
 

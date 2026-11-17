@@ -1,11 +1,14 @@
 # Subtree-Lift Activation Strategy — Audit Notes
 
-This file documents the audit performed for Task 0 of `plans/subtree-lift.md`. It records
-where merkle-root computation lives on the assembly side today, whether incomplete final
-subtrees ever reach finalised (mined-and-persisted) blocks, and a recommended activation
-strategy for the upcoming `RootHashPadded` lift.
+This file documents the audit performed for Task 0 of the subtree-lift design work.
+The design plan referenced throughout was never committed to this repository, so the
+references to it below have no in-repo target. This file records where merkle-root
+computation lives on the assembly side today, whether incomplete final subtrees ever
+reach finalised (mined-and-persisted) blocks, and a recommended activation strategy for
+the upcoming `RootHashPadded` lift.
 
 Source versions inspected:
+
 - `github.com/bsv-blockchain/go-subtree` v1.2.0 (from `go.mod`)
 - Teranode at HEAD (commit `efaeedf9c`)
 
@@ -173,7 +176,7 @@ header was computed against that same un-padded root by `createMerkleTreeFromSub
 
 This implies that under the planned `RootHashPadded(targetHeight)` change, the validator
 needs an explicit notion of the "intended" subtree height to lift to. The new validation
-rules in `plans/subtree-lift.md` use `targetHeight = subtrees[0].Height`, which is fine
+rules proposed in the design plan use `targetHeight = subtrees[0].Height`, which is fine
 **only when there are >1 subtrees** (since the first one defines the canonical full
 height). For the single-incomplete-subtree case — which is the only one that occurs
 today — there is no peer subtree to compare against; `len(hashes) == 1` falls into the
@@ -191,7 +194,7 @@ i.e. it does **not** perform any lift.
 - Finalised blocks **do** contain incomplete subtrees today, exclusively in the
   "one and only subtree is incomplete" case. The `>1`-subtree-with-incomplete-final case
   cannot occur because `chainedSubtrees` is only appended to after a subtree fills.
-- The `CheckMerkleRoot` change in `plans/subtree-lift.md` only kicks in for the
+- The `CheckMerkleRoot` change proposed in the design plan only kicks in for the
   `len(subtrees) > 1` branch. The `len(subtrees) == 1` branch (`model/Block.go:1329`)
   uses the single subtree's `RootHash()` as the block merkle root directly, with no
   lifting — and this is the only branch that gets exercised today on incomplete
@@ -206,7 +209,7 @@ i.e. it does **not** perform any lift.
 
 ### Recommendation: **Strategy A** (apply unconditionally), with two caveats
 
-The migration risk described in `plans/subtree-lift.md:17` predicates Strategy B on the
+The migration risk described in the design plan predicates Strategy B on the
 existence of "historical blocks whose final subtree was incomplete." Such blocks do
 exist — but they all fall into the `len(subtrees) == 1` case, which the new
 `CheckMerkleRoot` does not touch (the `case len(hashes) == 1` branch at
@@ -232,7 +235,7 @@ flow. Since that producer is itself the path audited in §2 above (which never p
 
 **Caveat 2 — the single-subtree incomplete case still needs assembly + validation to
 match.** Even though the new validation does not lift in the 1-subtree branch, the new
-top-tree-construction approach described in `plans/subtree-lift.md` ("target height =
+top-tree-construction approach described in the design plan ("target height =
 `subtrees[0].Height`") would behave incorrectly if the assembler keeps computing the
 header off `Subtree.RootHash()` (un-padded) while the validator computes off
 `RootHashPadded(subtrees[0].Height)` for a single subtree. The plan as written treats the
@@ -249,6 +252,7 @@ subtree if incomplete**. The plan's "in lockstep" requirement is satisfied by pa
 
 If reviewers prefer to err on the side of caution (e.g. because Caveat 1 cannot be
 quickly cleared), a configurable activation height is cheap:
+
 - Add `SubtreeLiftActivationHeight uint32` to `settings.BlockValidation` (default
   `math.MaxUint32`).
 - In `CheckMerkleRoot`, branch on `b.Height >= settings.SubtreeLiftActivationHeight`.
@@ -268,6 +272,7 @@ it provides defence-in-depth against the Caveat 1 unknown.
 ### Final recommendation
 
 **Strategy A.** All known production paths that produce a `model.Block` in Teranode are:
+
 1. **`BlockAssembly.SubmitMiningSolution`** — audited in §2; never produces
    `len(subtrees) > 1` with an incomplete final subtree.
 2. **`services/legacy/netsync/handle_block.go:prepareSubtrees`** — audited in Caveat 1;
@@ -302,9 +307,9 @@ uncertainty about external block sources outside `services/legacy/` and
 - Did not measure the empirical frequency of single-subtree-incomplete blocks on any
   live network. The audit only establishes that the code path exists, not how often it
   fires.
-- The plan in `plans/subtree-lift.md` describes the new validation rule in prose but
-  not in code. The exact `CheckMerkleRoot` semantics will need re-reading once the new
-  implementation lands to confirm the branching matches what this audit assumed.
+- The design plan describes the new validation rule in prose but not in code. The exact
+  `CheckMerkleRoot` semantics will need re-reading once the new implementation lands to
+  confirm the branching matches what this audit assumed.
 - Did not verify the behaviour of `services/blockassembly/Server.go:GetCandidateBlock`
   (line 1538) — this is a proposal-mode read-only RPC that does not persist a block,
   but its merkle root computation must also be updated in lockstep with the validator

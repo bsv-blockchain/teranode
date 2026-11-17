@@ -11,7 +11,7 @@ import (
 	"pgregory.net/rapid"
 )
 
-// The queue-filter contract at queue.go:96 is:
+// The queue-filter contract in LockFreeQueue.dequeueBatch is:
 //
 //	if validFromMillis > 0 && next.time >= validFromMillis {
 //	    return nil, false
@@ -57,7 +57,7 @@ func Test_propertyDequeueBatchAdmitPredicate(t *testing.T) {
 		_, admitted := q.dequeueBatch(validFromMillis)
 		want := validFromMillis <= 0 || batchTimeMs < validFromMillis
 		require.Equal(t, want, admitted,
-			"admit/reject diverged from queue.go:96 spec: batch_time=%d, validFromMillis=%d",
+			"admit/reject diverged from LockFreeQueue.dequeueBatch spec: batch_time=%d, validFromMillis=%d",
 			batchTimeMs, validFromMillis)
 	})
 }
@@ -66,7 +66,7 @@ func Test_propertyDequeueBatchAdmitPredicate(t *testing.T) {
 // with random (window, enqueue_clock, drain_clock) and asserts the
 // integration-level outcome matches the expected admit predicate. This
 // catches regressions in either the validFromMillis formula in
-// dequeueDuringBlockMovement or the queue filter at queue.go:96.
+// dequeueDuringBlockMovement or the queue filter in LockFreeQueue.dequeueBatch.
 //
 // The expected predicate composes both call sites:
 //
@@ -75,7 +75,7 @@ func Test_propertyDequeueBatchAdmitPredicate(t *testing.T) {
 //	admit iff batch.time < validFromMillis
 //
 // (validFromMillis is always non-zero in dequeueDuringBlockMovement so
-// the queue.go:96 zero-guard never triggers from this call site; the
+// the LockFreeQueue.dequeueBatch zero-guard never triggers from this call site; the
 // zero-guard still applies to the Start-loop default-case dequeue.)
 func Test_propertyDrainAdmitInvariant(outerT *testing.T) {
 	rapid.Check(outerT, func(t *rapid.T) {

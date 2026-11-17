@@ -67,7 +67,7 @@ func ParseBlockHeaders(headerBytes []byte) ([]*model.BlockHeader, error) {
 		header, err := model.NewBlockHeaderFromBytes(headerData)
 		if err != nil {
 			// Return immediately on first parse error
-			return nil, errors.NewNetworkInvalidResponseError("failed to parse header at offset %d: %w", i, err)
+			return nil, errors.NewNetworkInvalidResponseError("failed to parse header at offset %d", i, err)
 		}
 
 		// Perform basic header validation
@@ -124,6 +124,7 @@ func BuildBlockLocatorString(locatorHashes []*chainhash.Hash) string {
 //   - logger: Logger for retry attempts
 //   - url: URL to fetch headers from
 //   - maxRetries: Maximum retry attempts
+//   - maxBytes: Cap on the response body, enforced before it is read into memory
 //
 // Returns:
 //   - []byte: Raw header bytes
@@ -131,9 +132,16 @@ func BuildBlockLocatorString(locatorHashes []*chainhash.Hash) string {
 //
 // Uses exponential backoff with 2x factor, max 30s between retries.
 // Categorizes errors (timeout, connection refused, generic network) for proper handling.
-func FetchHeadersWithRetry(ctx context.Context, logger ulogger.Logger, url string, maxRetries int) ([]byte, error) {
+//
+// maxBytes bounds the read: this sits inside a retry.Retry loop, so an unbounded
+// util.DoHTTPRequest would give a hostile peer several unbounded reads per catchup
+// iteration (bitcoin-sv/teranode#4742). Unlike a block, a header response has a
+// caller-known exact size - the caller requests a fixed count and each header is a
+// fixed model.BlockHeaderSize bytes - so, unlike the block-fetch paths, a byte cap is
+// the right fit here and needs no invented constant.
+func FetchHeadersWithRetry(ctx context.Context, logger ulogger.Logger, url string, maxRetries int, maxBytes int64) ([]byte, error) {
 	return retry.Retry(ctx, logger, func() ([]byte, error) {
-		headerBytes, err := util.DoHTTPRequest(ctx, url)
+		headerBytes, err := util.DoHTTPRequestBounded(ctx, url, maxBytes)
 		if err != nil {
 			// If already a typed error, return as-is
 			var tErr *errors.Error
@@ -143,15 +151,15 @@ func FetchHeadersWithRetry(ctx context.Context, logger ulogger.Logger, url strin
 
 			// Categorize raw errors for better handling
 			if errors.Is(err, os.ErrDeadlineExceeded) || strings.Contains(err.Error(), "timeout") {
-				return nil, errors.NewNetworkTimeoutError("request timed out: %w", err)
+				return nil, errors.NewNetworkTimeoutError("request timed out", err)
 			}
 
 			if strings.Contains(err.Error(), "connection refused") {
-				return nil, errors.NewNetworkConnectionRefusedError("peer unavailable: %w", err)
+				return nil, errors.NewNetworkConnectionRefusedError("peer unavailable", err)
 			}
 
 			if strings.Contains(err.Error(), "network") || strings.Contains(err.Error(), "dial") {
-				return nil, errors.NewNetworkError("network error: %w", err)
+				return nil, errors.NewNetworkError("network error", err)
 			}
 
 			return nil, err
@@ -178,7 +186,7 @@ func FetchHeadersWithRetry(ctx context.Context, logger ulogger.Logger, url strin
 func CheckContextCancellation(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
-		return errors.NewContextCanceledError("operation cancelled: %w", ctx.Err())
+		return errors.NewContextCanceledError("operation cancelled", ctx.Err())
 	default:
 		return nil
 	}

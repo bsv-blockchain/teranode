@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -209,10 +210,14 @@ func TestNew(t *testing.T) {
 
 		e.ServeHTTP(optionsRec, optionsReq)
 
-		// Test CORS headers
+		// Test CORS headers. With no asset_corsAllowOrigins configured the
+		// origin is still reflected, but credentials are refused: reflecting an
+		// arbitrary origin and allowing credentials is what exposed the admin
+		// routes on this listener to a hostile same-site origin. See
+		// TestAssetCORSConfig_ExplicitAllowlistIsStrict for the credentialed case.
 		corsHeaders := optionsRec.Header()
 		assert.Equal(t, "http://localhost:8090", corsHeaders.Get("Access-Control-Allow-Origin"))
-		assert.Equal(t, "true", corsHeaders.Get("Access-Control-Allow-Credentials"))
+		assert.Empty(t, corsHeaders.Get("Access-Control-Allow-Credentials"))
 		assert.Contains(t, corsHeaders.Get("Access-Control-Allow-Methods"), "GET")
 		assert.Contains(t, corsHeaders.Get("Access-Control-Allow-Headers"), "Authorization")
 
@@ -222,6 +227,103 @@ func TestNew(t *testing.T) {
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusUnauthorized, rec.Code) // Should return 401 when not authenticated
 	})
+}
+
+// TestGetBlockByHeightRouteRegistered verifies that http.go actually wires the
+// GetBlockByHeight handler up to routes under the API prefix (binary, hex, and
+// json variants), mirroring the by-hash triplet. GetBlockByHeight itself already
+// has thorough handler-level tests in GetBlock_test.go; this test exists to catch
+// the case where the handler exists but is never registered on the router.
+func TestGetBlockByHeightRouteRegistered(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	testSettings := &settings.Settings{
+		Asset: settings.AssetSettings{
+			APIPrefix: "/api/v1",
+		},
+		Dashboard: settings.DashboardSettings{
+			Enabled: false,
+		},
+		SecurityLevelHTTP: 0, // HTTP mode
+	}
+
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, uint32(0)).Return(testBlock, nil)
+	// GetBlockByHeight(JSON) also looks up height+1 for the "nextblock" field.
+	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, uint32(1)).Return(nil, errors.ErrNotFound)
+
+	repo, err := repository.NewRepository(logger, testSettings, nil, nil, mockBlockchainClient, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	httpServer, err := New(logger, testSettings, repo, nil)
+	require.NoError(t, err)
+	require.NotNil(t, httpServer)
+
+	e := httpServer.e
+
+	t.Run("binary", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/block/height/0", nil)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "application/octet-stream", rec.Header().Get("Content-Type"))
+		assert.Equal(t, testBlockBytes, rec.Body.Bytes())
+	})
+
+	t.Run("hex", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/block/height/0/hex", nil)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, hex.EncodeToString(testBlockBytes), rec.Body.String())
+	})
+
+	t.Run("json", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/block/height/0/json", nil)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	})
+}
+
+// TestNew_PeerAuthBodyCapTracksBatchSize — http.go must wire the peer-auth
+// verifier's signed-body cap to subtreevalidation_missingTransactionsBatchSize
+// via resolveMaxSignedBodyBytes, not construct it with the package default.
+// Reverting that wiring back to a plain newPeerAuthVerifier(...) call leaves
+// every other test in this package green, since none of them raise the batch
+// size, so this exercises the actual New()/peerAuth construction path.
+func TestNew_PeerAuthBodyCapTracksBatchSize(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	const batchSize = 65536 // 65536*32 = 2MiB, above the 1MiB default floor
+
+	testSettings := &settings.Settings{
+		Asset: settings.AssetSettings{
+			APIPrefix: "/api/v1",
+		},
+		SubtreeValidation: settings.SubtreeValidationSettings{
+			MissingTransactionsBatchSize: batchSize,
+		},
+		Dashboard:         settings.DashboardSettings{Enabled: false},
+		SecurityLevelHTTP: 0,
+	}
+
+	repo, err := repository.NewRepository(logger, testSettings, nil, nil, nil, nil, nil, nil, &registryStubP2PClient{}, nil)
+	require.NoError(t, err)
+
+	httpServer, err := New(logger, testSettings, repo, nil)
+	require.NoError(t, err)
+	require.NotNil(t, httpServer)
+
+	require.NotNil(t, httpServer.peerAuth, "a non-nil P2P client must produce a peer-auth verifier")
+	require.Equal(t, resolveMaxSignedBodyBytes(batchSize), httpServer.peerAuth.maxSignedBodyBytes,
+		"New() must resolve the signed-body cap from subtreevalidation_missingTransactionsBatchSize, not the package default")
+	require.Greater(t, httpServer.peerAuth.maxSignedBodyBytes, int64(defaultMaxSignedBodyBytes),
+		"a raised batch size must actually grow the cap past the default floor")
 }
 
 // TestNewWithSigningEnabled tests the New function with response signing enabled
@@ -410,7 +512,7 @@ func (l *captureLogger) Errorf(format string, args ...interface{}) {
 // the values you don't want in logs (auth tokens in URLs, search terms, etc.).
 func TestCustomHTTPErrorHandler_DoesNotLogQueryString(t *testing.T) {
 	logger := &captureLogger{}
-	handler := customHTTPErrorHandler(logger)
+	handler := customHTTPErrorHandler(logger, &settings.Settings{})
 
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=SECRET_QUERY_STRING&token=DEADBEEF", nil)

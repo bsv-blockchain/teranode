@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/labstack/gommon/random"
-	"github.com/ordishs/gocore"
 )
 
 // getKafkaAsyncProducer creates a new Kafka async producer from the provided URL.
@@ -87,21 +86,42 @@ func getKafkaTxmetaAsyncProducer(ctx context.Context, logger ulogger.Logger,
 	return kafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaTxmetaConfig, &settings.Kafka, opts...)
 }
 
-// getKafkaTxAsyncProducer creates a new Kafka async producer for validator transactions using the configuration from gocore.
-func getKafkaTxAsyncProducer(ctx context.Context, logger ulogger.Logger, settings *settings.Settings) (kafka.KafkaAsyncProducerI, error) {
-	value, found := gocore.Config().Get("kafka_validatortxsConfig")
-	if !found || value == "" {
+// getKafkaTxmetaEvictionAsyncProducer creates the txmeta producer block assembly uses to
+// publish DELETEs for txs it demotes to conflicting. It returns nil, nil when no txmeta
+// topic is configured, in which case block assembly simply publishes nothing.
+//
+// Unlike the validator's producer this never uses manual partitioning, even when
+// Validator.TxMetaWireFormat is "v2": the DELETEs are v1-format messages keyed by tx
+// hash, which subtreevalidation's txmetaHandler detects per message, so they need no
+// xxhash bucket routing.
+func getKafkaTxmetaEvictionAsyncProducer(ctx context.Context, logger ulogger.Logger,
+	settings *settings.Settings) (kafka.KafkaAsyncProducerI, error) {
+	kafkaTxmetaConfig := settings.Kafka.TxMetaConfig
+	if kafkaTxmetaConfig == nil {
 		return nil, nil
 	}
 
-	kafkaURL, err := urlutil.ParseMultiHostURL(value)
+	producer, err := getKafkaAsyncProducer(ctx, logger, kafkaTxmetaConfig, &settings.Kafka)
 	if err != nil {
-		return nil, errors.NewConfigurationError("failed to get Kafka URL for validatortxs producer - kafka_validatortxsConfig", err)
+		return nil, errors.NewServiceError("could not create txmeta kafka producer for block assembly", err)
 	}
 
-	var producer kafka.KafkaAsyncProducerI
+	return producer, nil
+}
 
-	producer, err = kafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL, &settings.Kafka)
+// getKafkaTxAsyncProducer creates a new Kafka async producer for validator transactions using the configuration from settings.
+//
+// This must read the same parsed setting as getKafkaTxConsumerGroup: the raw gocore
+// key resolves against the ambient settings context, while the parsed setting honours
+// the alternative context NewSettings was built with, so the two can disagree and
+// leave the Propagation -> Validator transport wired up on one side only.
+func getKafkaTxAsyncProducer(ctx context.Context, logger ulogger.Logger, settings *settings.Settings) (kafka.KafkaAsyncProducerI, error) {
+	kafkaURL := settings.Kafka.ValidatorTxsConfig
+	if kafkaURL == nil {
+		return nil, nil
+	}
+
+	producer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL, &settings.Kafka)
 	if err != nil {
 		return nil, errors.NewServiceError("could not create validatortxs kafka producer for local validator", err)
 	}
@@ -114,7 +134,7 @@ func getKafkaConsumerGroup(logger ulogger.Logger, url *url.URL, consumerGroupID 
 	autoCommit bool, kafkaSettings *settings.KafkaSettings) (*kafka.KafkaConsumerGroup, error) {
 	consumer, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, consumerGroupID, autoCommit, kafkaSettings)
 	if err != nil {
-		return nil, errors.NewConfigurationError("missing Kafka URL for "+url.String(), err)
+		return nil, errors.NewConfigurationError("missing Kafka URL for "+urlutil.Redact(url), err)
 	}
 
 	return consumer, nil
@@ -160,7 +180,7 @@ func getKafkaSubtreesConsumerGroup(logger ulogger.Logger, settings *settings.Set
 	return getKafkaConsumerGroup(logger, kafkaSubtreesConfig, consumerGroupID, true, &settings.Kafka)
 }
 
-// getKafkaTxConsumerGroup creates a new Kafka consumer group for validator transactions using the configuration from gocore.
+// getKafkaTxConsumerGroup creates a new Kafka consumer group for validator transactions using the configuration from settings.
 func getKafkaTxConsumerGroup(logger ulogger.Logger, settings *settings.Settings,
 	consumerGroupID string) (kafka.KafkaConsumerGroupI, error) {
 	kafkaTxConfig := settings.Kafka.ValidatorTxsConfig
@@ -186,6 +206,16 @@ func getKafkaTxmetaConsumerGroup(logger ulogger.Logger, settings *settings.Setti
 	return getKafkaConsumerGroup(logger, kafkaTxmetaConfig, consumerGroupID, true, &settings.Kafka)
 }
 
+// nonNilConsumerGroup returns the consumer group as an interface, mapping a
+// typed nil to a true nil so downstream nil checks behave correctly.
+func nonNilConsumerGroup(group *kafka.KafkaConsumerGroup) kafka.KafkaConsumerGroupI {
+	if group == nil {
+		return nil
+	}
+
+	return group
+}
+
 func getKafkaInvalidBlocksConsumerGroup(logger ulogger.Logger, settings *settings.Settings, consumerGroupID string) (*kafka.KafkaConsumerGroup, error) {
 	kafkaInvalidBlocksConfig := settings.Kafka.InvalidBlocksConfig
 	if kafkaInvalidBlocksConfig == nil {
@@ -202,4 +232,25 @@ func getKafkaInvalidSubtreeConsumerGroup(logger ulogger.Logger, settings *settin
 	}
 
 	return getKafkaConsumerGroup(logger, kafkaInvalidSubtreeConfig, consumerGroupID, true, &settings.Kafka)
+}
+
+func getKafkaTxPolicyRejectedAsyncProducer(ctx context.Context, logger ulogger.Logger, settings *settings.Settings) (*kafka.KafkaAsyncProducer, error) {
+	cfg := settings.Kafka.TxPolicyRejectedConfig
+	if cfg == nil {
+		return nil, nil
+	}
+
+	return getKafkaAsyncProducer(ctx, logger, cfg, &settings.Kafka)
+}
+
+func getKafkaTxPolicyRejectedConsumerGroup(logger ulogger.Logger, settings *settings.Settings,
+	consumerGroupID string) (*kafka.KafkaConsumerGroup, error) {
+	cfg := settings.Kafka.TxPolicyRejectedConfig
+	if cfg == nil {
+		return nil, nil
+	}
+
+	consumerGroupID = consumerGroupID + "." + random.String(16, random.Alphanumeric)
+
+	return getKafkaConsumerGroup(logger, cfg, consumerGroupID, true, &settings.Kafka)
 }

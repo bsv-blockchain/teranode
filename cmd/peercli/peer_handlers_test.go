@@ -88,7 +88,7 @@ func TestOnBlock(t *testing.T) {
 	mockMsg := &wire.MsgBlock{}
 
 	output := captureOutput(func() {
-		OnBlock(mockPeer, mockMsg, nil)
+		OnBlock(mockPeer, mockMsg, nil, 0)
 	})
 
 	assert.Contains(t, output, "Received block message:", "Output did not match expected value")

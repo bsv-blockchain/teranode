@@ -16,7 +16,6 @@ import (
 	"context"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -43,6 +42,9 @@ type MockStore struct {
 	BlockChainWork map[chainhash.Hash][]byte
 	// BlockIsMined maps block hashes to their mined status for mined status checks
 	BlockIsMined map[chainhash.Hash]bool
+	// blockIDReservations holds reserved block IDs for hashes not yet committed,
+	// so that repeated calls to AssignBlockID for the same hash return the same id.
+	blockIDReservations map[chainhash.Hash]uint64
 	// state tracks the current state of the mock store (e.g., IDLE)
 	state string
 	// MainChainFastPathDisabled, when true, makes MainChainBlockHashesByHeights
@@ -59,12 +61,13 @@ type MockStore struct {
 //   - *MockStore: A new, initialized MockStore instance with empty block maps and IDLE state
 func NewMockStore() *MockStore {
 	return &MockStore{
-		Blocks:         map[chainhash.Hash]*model.Block{},
-		BlockExists:    map[chainhash.Hash]bool{},
-		BlockByHeight:  map[uint32]*model.Block{},
-		BlockChainWork: map[chainhash.Hash][]byte{},
-		BlockIsMined:   map[chainhash.Hash]bool{},
-		state:          "IDLE",
+		Blocks:              map[chainhash.Hash]*model.Block{},
+		BlockExists:         map[chainhash.Hash]bool{},
+		BlockByHeight:       map[uint32]*model.Block{},
+		BlockChainWork:      map[chainhash.Hash][]byte{},
+		BlockIsMined:        map[chainhash.Hash]bool{},
+		blockIDReservations: map[chainhash.Hash]uint64{},
+		state:               "IDLE",
 	}
 }
 
@@ -86,6 +89,11 @@ const implementMe = "implement me"
 //   - error: Any error encountered (always nil)
 func (m *MockStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return http.StatusOK, "OK", nil
+}
+
+// Close is a no-op for the mock store, which holds no closable resource.
+func (m *MockStore) Close(_ context.Context) error {
+	return nil
 }
 
 // GetDB returns the underlying SQL database instance.
@@ -276,6 +284,46 @@ func (m *MockStore) GetNextBlockID(_ context.Context) (uint64, error) {
 	}
 
 	return maxID + 1, nil
+}
+
+// AssignBlockID returns a stable block ID for the given block hash: repeated
+// calls for the same hash return the same id, and a committed block returns its
+// authoritative id.
+//
+// Resolution order (mirrors the SQL store contract):
+//  1. If the block is already stored (committed), return its authoritative id.
+//  2. If an id is already reserved for this hash, return it.
+//  3. Otherwise allocate a new id the same way GetNextBlockID does and reserve it.
+func (m *MockStore) AssignBlockID(_ context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 1. Committed block — return its authoritative id.
+	if block, ok := m.Blocks[*blockHash]; ok {
+		return uint64(block.ID), nil
+	}
+
+	// 2. Already reserved — return the same id.
+	if id, ok := m.blockIDReservations[*blockHash]; ok {
+		return id, nil
+	}
+
+	// 3. Allocate a fresh id (same logic as GetNextBlockID) and reserve it.
+	maxID := uint64(0)
+	for _, block := range m.Blocks {
+		if uint64(block.ID) > maxID {
+			maxID = uint64(block.ID)
+		}
+	}
+	for _, reserved := range m.blockIDReservations {
+		if reserved > maxID {
+			maxID = reserved
+		}
+	}
+
+	id := maxID + 1
+	m.blockIDReservations[*blockHash] = id
+	return id, nil
 }
 
 func (m *MockStore) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
@@ -518,6 +566,12 @@ func (m *MockStore) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader,
 	return m.BestBlock.Header, &model.BlockHeaderMeta{Height: m.BestBlock.Height}, nil
 }
 
+// GetBestBlockHeaderUncached answers exactly as GetBestBlockHeader does here, because the mock
+// has no cache to skip.
+func (m *MockStore) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return m.GetBestBlockHeader(ctx)
+}
+
 // GetBlockHeader retrieves a block header and its metadata by the block's hash.
 func (m *MockStore) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	m.mu.RLock()
@@ -560,17 +614,22 @@ func (m *MockStore) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Ha
 	return headers, metas, nil
 }
 
-// GetBlockHeadersFromTill retrieves block headers between two specified blocks.
-func (m *MockStore) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
-}
-
-func (m *MockStore) GetForkedBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic(implementMe)
+// GetBlockHeadersByParentLinks walks parent links exactly as GetBlockHeaders does here, because
+// the mock has no main-chain flag to select by.
+func (m *MockStore) GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return m.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
 }
 
 func (m *MockStore) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic(implementMe)
+	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
+}
+
+func (m *MockStore) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
+}
+
+func (m *MockStore) ClearBestTipLowWater(ctx context.Context, expected []byte) error {
+	return nil
 }
 
 // GetBlockHeadersByHeight retrieves block headers within a specified height range.
@@ -674,7 +733,7 @@ func (m *MockStore) GetBlockIsMined(_ context.Context, blockHash *chainhash.Hash
 	return isMined, nil
 }
 
-func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, expectedGeneration *uint64) error {
 	panic(implementMe)
 }
 
@@ -711,10 +770,6 @@ func (m *MockStore) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*mo
 	return []*model.Block{}, nil
 }
 
-func (m *MockStore) GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error) {
-	panic(implementMe)
-}
-
 func (m *MockStore) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
 	panic(implementMe)
 }
@@ -725,10 +780,6 @@ func (m *MockStore) ExportBlockDB(ctx context.Context, hash *chainhash.Hash) (*f
 
 func (m *MockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	return true, nil
-}
-
-func (m *MockStore) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
-	return nil, 0, true, nil
 }
 
 func (m *MockStore) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {

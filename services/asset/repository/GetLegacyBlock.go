@@ -24,6 +24,36 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// legacyBlockReaderPeerPoolCtxKey is the context key WithLegacyBlockReaderPeerPool
+// and LegacyBlockReaderUsesPeerPool use to pass the HTTP boundary's pool decision
+// into GetLegacyBlockReader without changing its signature.
+type legacyBlockReaderPeerPoolCtxKey struct{}
+
+// WithLegacyBlockReaderPeerPool marks ctx so a subsequent GetLegacyBlockReader call
+// draws from semGetLegacyBlockReaderPeer (the internal legacy-peer-server budget)
+// instead of semGetLegacyBlockReader (the anonymous-HTTP budget).
+//
+// Callers must only pass usePeerPool=true once they have verified the request
+// truly originates from this node's own legacy peer server. The wire-format query
+// parameter alone (?wire=1) is not sufficient: any anonymous caller can set it.
+// httpimpl.GetLegacyBlock only sets this after checking asset_legacyPeerPoolToken:
+// a shared secret the request must present in the X-Teranode-Internal-Token
+// header, compared with a constant-time comparison. An empty (default) token
+// makes the pool unreachable regardless of what any caller presents.
+func WithLegacyBlockReaderPeerPool(ctx context.Context, usePeerPool bool) context.Context {
+	return context.WithValue(ctx, legacyBlockReaderPeerPoolCtxKey{}, usePeerPool)
+}
+
+// LegacyBlockReaderUsesPeerPool reports whether ctx was marked by
+// WithLegacyBlockReaderPeerPool. An unmarked ctx (the common case: anonymous HTTP
+// clients, and any test that does not opt in) defaults to false, i.e. the
+// anonymous-HTTP pool. Exported so callers (and tests, including outside this
+// package) can observe the same decision GetLegacyBlockReader acts on.
+func LegacyBlockReaderUsesPeerPool(ctx context.Context) bool {
+	usePeerPool, _ := ctx.Value(legacyBlockReaderPeerPoolCtxKey{}).(bool)
+	return usePeerPool
+}
+
 // chunkResult holds the result of fetching a chunk of transactions from the UTXO store.
 // Used for ordered fan-in: chunks are fetched in parallel but written in order.
 type chunkResult struct {
@@ -45,29 +75,54 @@ type chunkResult struct {
 //   - *io.PipeReader: Reader for streaming block data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error) {
-	if err := acquireSemaphorePermit(ctx, repo.semGetLegacyBlockReader, "GetLegacyBlockReader"); err != nil {
+	returnWireBlock := len(wireBlock) > 0 && wireBlock[0]
+
+	// Which pool this call draws from is decided at the HTTP boundary (see
+	// httpimpl.GetLegacyBlock), not here: ?wire=1 alone is not a trust signal, since
+	// any anonymous caller can set it. The boundary verifies the request carries the
+	// asset_legacyPeerPoolToken shared secret before marking ctx, so a request that
+	// merely asks for wire format without presenting a matching token still draws
+	// from the anonymous pool.
+	sem := repo.semGetLegacyBlockReader
+	semName := "GetLegacyBlockReader"
+
+	if LegacyBlockReaderUsesPeerPool(ctx) {
+		sem = repo.semGetLegacyBlockReaderPeer
+		semName = "GetLegacyBlockReaderPeer"
+	}
+
+	if err := acquireSemaphorePermit(ctx, sem, semName); err != nil {
 		return nil, err
 	}
 
-	returnWireBlock := len(wireBlock) > 0 && wireBlock[0]
-
 	block, err := repo.GetBlockByHash(ctx, hash)
 	if err != nil {
-		releaseSemaphorePermit(repo.semGetLegacyBlockReader)
+		releaseSemaphorePermit(sem)
 		return nil, err
 	}
 
 	r, w := io.Pipe()
 
-	// Release semaphore after initial setup is complete but before streaming begins.
-	// The semaphore protects the database query (GetBlockByHash) and pipe creation,
-	// but streaming is I/O-bound and doesn't need CPU-based concurrency limiting.
-	// File operations have their own semaphore protection (readSemaphore with 768 slots).
-	// This allows unlimited concurrent streams while protecting database/initialization.
-	releaseSemaphorePermit(repo.semGetLegacyBlockReader)
-
 	g, gCtx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
+		// Hold the permit for the whole producer, not just for setup. The expensive
+		// part of a legacy block read happens here, after this function has returned:
+		// subtree reads, UTXO reconstruction, serialization and pipe writes, all paced
+		// by the client reading the other end. A blocked producer keeps an arena and,
+		// on the stored-subtree branch, one of the file store's global read permits.
+		// Releasing at setup left the configured concurrency bounding nothing. This
+		// defer is registered first so it runs last, after the pipe has been closed.
+		defer releaseSemaphorePermit(sem)
+
+		// This goroutine outlives the request: the caller gets the pipe reader back
+		// and reads from it after GetLegacyBlockReader has returned, so nothing in
+		// the HTTP layer can recover a panic in here. Fail the pipe on panic too,
+		// otherwise the consumer blocks on bytes that will never arrive.
+		defer util.RecoverToError(repo.logger, &err, func(panicErr error) {
+			_ = w.CloseWithError(panicErr)
+			_ = r.CloseWithError(panicErr)
+		}, "GetLegacyBlockReader %s", block.Hash().String())()
+
 		if err = repo.writeLegacyBlockHeader(w, block, returnWireBlock); err != nil {
 			_ = w.CloseWithError(io.ErrClosedPipe)
 			_ = r.CloseWithError(err)
@@ -84,8 +139,10 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 				return err
 			}
 
-			// close the writer after the coinbase tx has been streamed
-			_ = w.CloseWithError(io.ErrClosedPipe)
+			// Close cleanly so the consumer's read ends in io.EOF. CloseWithError(io.ErrClosedPipe)
+			// here reported a complete body as a failure, which made streamOrAbort hijack the
+			// connection and drop the chunked terminator on every successful block.
+			_ = w.Close()
 
 			return nil
 		}
@@ -94,6 +151,17 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 			subtreeDataExists bool
 			subtreeDataReader io.ReadCloser
 		)
+
+		// Backstop for the panic path: subtreeDataReader is a *semaphoreReadCloser
+		// whose Close is the only thing that returns the file store's global read
+		// permit, and the explicit closes below are all skipped when a panic unwinds
+		// through the loop. Each of them nils the reference out, so this fires only
+		// when one is genuinely still open — no redundant second Close.
+		defer func() {
+			if subtreeDataReader != nil {
+				_ = subtreeDataReader.Close()
+			}
+		}()
 
 		// Write the coinbase first before processing subtrees
 		if _, err = block.CoinbaseTx.WriteTo(w); err != nil {
@@ -106,6 +174,8 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 		defer putAssetArena(arena)
 
 		for subtreeIdx, subtreeHash := range block.Subtrees {
+			// FileTypeSubtreeData is read without a validation check; GetSubtreeDataReader in
+			// GetSubtreeData.go explains why that is safe.
 			subtreeDataExists, err = repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 			if err == nil && subtreeDataExists {
 				subtreeDataReader, err = repo.SubtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
@@ -129,6 +199,15 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 							break
 						}
 
+						// Close the underlying reader before returning so the file-store
+						// read permit held by the semaphoreReadCloser is released, and
+						// close the pipe so the consumer's Read returns instead of
+						// hanging forever waiting for bytes that will never arrive.
+						_ = subtreeDataReader.Close()
+						subtreeDataReader = nil
+						_ = w.CloseWithError(io.ErrClosedPipe)
+						_ = r.CloseWithError(err)
+
 						return errors.NewProcessingError("error reading transaction: %s", err)
 					}
 
@@ -142,6 +221,10 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 
 					// Write the normal transaction bytes to the writer
 					if _, err = tx.WriteTo(w); err != nil {
+						// Close the underlying reader so the file-store read permit
+						// is released. The pipe close below already wakes the consumer.
+						_ = subtreeDataReader.Close()
+						subtreeDataReader = nil
 						_ = w.CloseWithError(io.ErrClosedPipe)
 						_ = r.CloseWithError(err)
 
@@ -156,6 +239,7 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 
 				// close the subtree data reader after processing all transactions
 				_ = subtreeDataReader.Close()
+				subtreeDataReader = nil
 
 				// move to the next subtree
 				continue
@@ -171,8 +255,10 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 			}
 		}
 
-		// close the writer after all subtrees have been streamed
-		_ = w.CloseWithError(io.ErrClosedPipe)
+		// Close cleanly after all subtrees have been streamed, so the consumer's read ends
+		// in io.EOF and streamOrAbort takes the happy path. See the note on the
+		// no-subtrees close above; io.ErrClosedPipe stays reserved for genuine failures.
+		_ = w.Close()
 
 		return nil
 	})
@@ -291,19 +377,38 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 	defer cancel()
 
 	resultsChan := make(chan chunkResult, concurrency)
+
+	// Window semaphore: bounds how far the chunk scheduler may run ahead of the chunk
+	// currently being written. A token is acquired before a chunk fetch is scheduled and
+	// released only once that chunk has been written to the output, in order. This couples
+	// fetch-ahead to write progress, so a slow in-order chunk applies backpressure to the
+	// scheduler rather than letting later out-of-order chunks pile up unbounded in `pending`
+	// (which previously overflowed the cap and truncated the response mid-stream). Sized at
+	// 2*concurrency: up to `concurrency` fetches in flight plus `concurrency` completed
+	// chunks buffered ahead of the writer, keeping fetchers busy while bounding peak memory.
+	window := 2 * concurrency
+	writeWindow := make(chan struct{}, window)
+
 	g, gCtx := errgroup.WithContext(streamCtx)
-	g.Go(func() error {
+	g.Go(func() (err error) {
 		defer close(resultsChan)
-		return repo.scheduleSubtreeChunkFetches(gCtx, bufferedReader, subtreeHash, totalTxs, chunkSize, concurrency, resultsChan)
+
+		// Registered after close(resultsChan) so it runs first: err is set before the
+		// channel closes, and the consumer's range then exits into g.Wait() below,
+		// which surfaces the error. A recover on the caller's goroutine cannot see a
+		// panic in here.
+		defer util.RecoverToError(repo.logger, &err, nil, "scheduleSubtreeChunkFetches %s", subtreeHash.String())()
+
+		return repo.scheduleSubtreeChunkFetches(gCtx, bufferedReader, subtreeHash, totalTxs, chunkSize, concurrency, writeWindow, resultsChan)
 	})
 
 	pending := make(map[int]chunkResult)
 	nextChunk := 0
 
-	// Defensive cap on out-of-order chunks held in memory. With the current scheduler
-	// this should never exceed `concurrency`, but a future change to the scheduler could
-	// silently grow it. Aborting beats OOM. 2x leaves headroom for transient races.
-	pendingCap := 2 * concurrency
+	// Invariant guard: with the write-window semaphore the scheduler can never run more
+	// than `window` chunks ahead of the writer, so `pending` cannot exceed it. This only
+	// fires if that invariant is broken by a future change; aborting beats OOM.
+	pendingCap := window
 
 	for result := range resultsChan {
 		if result.err != nil {
@@ -318,7 +423,7 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 			cancel()
 			drainChunkResults(resultsChan)
 			_ = g.Wait()
-			return errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming][%s] pending chunk buffer exceeded cap %d (likely scheduler regression)",
+			return errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming][%s] pending chunk buffer exceeded cap %d (write-window invariant violated)",
 				subtreeHash.String(), pendingCap)
 		}
 
@@ -337,6 +442,11 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 
 			delete(pending, nextChunk)
 			nextChunk++
+
+			// Release the write-window slot this chunk occupied, letting the scheduler
+			// fetch one more chunk ahead. There is always at least this chunk's own token
+			// buffered, so the receive never blocks.
+			<-writeWindow
 		}
 	}
 
@@ -348,17 +458,33 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 }
 
 func (repo *Repository) scheduleSubtreeChunkFetches(ctx context.Context, subtreeReader *bufio.Reader, subtreeHash *chainhash.Hash,
-	totalTxs, chunkSize, concurrency int, resultsChan chan<- chunkResult) error {
+	totalTxs, chunkSize, concurrency int, writeWindow chan struct{}, resultsChan chan<- chunkResult) error {
 	fetchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	g, gCtx := errgroup.WithContext(fetchCtx)
-	util.SafeSetLimit(g, concurrency)
+	util.SafeSetLimit(repo.logger, g, concurrency)
 
 	var readErr error
 	for chunkIdx, offset := 0, 0; offset < totalTxs; chunkIdx, offset = chunkIdx+1, offset+chunkSize {
 		if readErr = gCtx.Err(); readErr != nil {
 			cancel()
+			break
+		}
+
+		// Acquire a write-window slot before scheduling this chunk; the consumer releases
+		// it once the chunk has been written in order. This blocks (applying backpressure)
+		// when the writer has fallen `window` chunks behind, bounding `pending`. Honour
+		// cancellation so teardown after a worker error can't deadlock here.
+		acquired := false
+		select {
+		case writeWindow <- struct{}{}:
+			acquired = true
+		case <-gCtx.Done():
+			readErr = gCtx.Err()
+			cancel()
+		}
+		if !acquired {
 			break
 		}
 
@@ -373,7 +499,9 @@ func (repo *Repository) scheduleSubtreeChunkFetches(ctx context.Context, subtree
 		chunkIdx := chunkIdx
 		offset := offset
 		chunkHashesForWorker := chunkHashes
-		g.Go(func() error {
+		g.Go(func() (err error) {
+			defer util.RecoverToError(repo.logger, &err, nil, "fetchSubtreeChunk %s chunk %d", subtreeHash.String(), chunkIdx)()
+
 			return repo.fetchSubtreeChunk(gCtx, subtreeHash, chunkIdx, offset, chunkHashesForWorker, resultsChan)
 		})
 	}
@@ -437,6 +565,7 @@ func sendChunkResult(ctx context.Context, resultsChan chan<- chunkResult, result
 
 func drainChunkResults(resultsChan <-chan chunkResult) {
 	for range resultsChan {
+		// drain remaining results until the channel is closed
 	}
 }
 
@@ -470,6 +599,27 @@ func (repo *Repository) writeChunkToWriter(ctx context.Context, w io.Writer, blo
 			}
 			continue
 		} else {
+			// A record with no serialized body is a legal answer from the UTXO store
+			// — the tx_body partition has aged out, or utxostore_skipTxBodyBelowCheckpoint
+			// meant the bytes below the checkpoint were never written — and getTxs
+			// does not count it as missed, because the record IS there.
+			//
+			// Without this guard WriteTo dereferences the nil *bt.Tx. That panic was
+			// already contained: util.RecoverToError on the streaming goroutine turns
+			// it into an error and the reader end of the pipe closes. What it was not
+			// is diagnosable — the operator got a recovered runtime panic naming a
+			// line, not the transaction. The guard gives that error a name and the
+			// txid instead.
+			//
+			// Either way the response is already committed: the legacy block header
+			// and transaction count went out before the first chunk, so the client
+			// sees a chunked stream that stops early rather than an HTTP error. That
+			// is the endpoint refusing a block it cannot serve, and it is why the
+			// setting documents this as a block the asset service cannot serve at all.
+			if chunkMetaSlice[i] == nil || chunkMetaSlice[i].Tx == nil {
+				return errors.NewProcessingError("[writeChunkToWriter] tx %s at offset %d is not retained in full by this node", chunkHashes[i].String(), chunkOffset+i)
+			}
+
 			// always write the non-extended normal bytes to the subtree data file !
 			// our peer node should extend the transactions if needed
 			if _, err := chunkMetaSlice[i].Tx.WriteTo(w); err != nil {
@@ -503,14 +653,19 @@ func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, t
 	processSubtreeConcurrency := repo.settings.BlockValidation.ProcessTxMetaUsingStoreConcurrency
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, processSubtreeConcurrency)
+	util.SafeSetLimit(repo.logger, g, processSubtreeConcurrency)
 
 	var missed atomic.Int32
 
 	for i := 0; i < len(txHashes); i += batchSize {
 		i := i // capture range variable for goroutine
 
-		g.Go(func() error {
+		g.Go(func() (err error) {
+			// The innermost fan-out on the streaming path: this is where the store
+			// hands back reconstructed transactions, so it is the closest guard to the
+			// nil *bt.Output holes a partially-present tx carries.
+			defer util.RecoverToError(repo.logger, &err, nil, "getTxs batch at %d", i)()
+
 			end := subtreepkg.Min(i+batchSize, len(txHashes))
 
 			missingTxHashesCompacted := make([]*utxo.UnresolvedMetaData, 0, end-i)
@@ -546,6 +701,20 @@ func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, t
 			default:
 				for _, data := range missingTxHashesCompacted {
 					if data.Data == nil || data.Err != nil {
+						missed.Add(1)
+						continue
+					}
+
+					// A record reconstructed from a UTXO-set snapshot is non-nil and
+					// carries no per-item error, so the miss counter above never sees
+					// it — but it has no inputs and may have nil output holes, so it
+					// either panics in WriteTo or serializes into a short transaction
+					// that does not hash to the requested txid. Either way it must not
+					// reach the writer: the subtree-data path finalises whatever it
+					// streams, and a bad blob is sticky until DAH pruning. Same gate as
+					// the single-transaction boundary (isRequestedTransaction) and as
+					// blockpersister.CreateSubtreeDataFileStreaming.
+					if !isRequestedTransaction(data.Data, &data.Hash) {
 						missed.Add(1)
 						continue
 					}

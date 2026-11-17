@@ -12,12 +12,14 @@ on:
 permissions:
   contents: read
   pull-requests: read
-  id-token: write
 
 jobs:
   # Tests and code lint
   test_and_lint:
     uses: ./.github/workflows/teranode_main_tests.yaml
+    permissions:
+      contents: read
+      pull-requests: read
     secrets: inherit
 
   # Calculate version information
@@ -54,16 +56,3 @@ jobs:
       architectures: '["amd64", "arm64"]'
       runner_labels: '{"amd64":"teranode-runner-16-core","arm64":"teranode-runner-16-core-arm","manifest":"ubuntu-latest"}'
     secrets: inherit
-
-  # Run chain integrity test
-  # Disabled for now, since they depend on private teranode-commands/teranode-coinbase packages
-  #chainintegrity:
-  #  needs: build-and-deploy
-  #  uses: ./.github/workflows/chainintegrity-3blasters.yaml
-  #  # uses: ./.github/workflows/chainintegrity.yaml
-  #  permissions:
-  #    contents: read
-  #    pull-requests: read
-  #    id-token: write
-  #    packages: read
-  #  secrets: inherit

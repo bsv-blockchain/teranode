@@ -120,42 +120,8 @@ func parseSmaps(breakdown *MemoryBreakdown) error {
 			continue
 		}
 
-		// Parse memory statistics for current region
-		var value int64
-		if strings.HasPrefix(line, "Size:") {
-			_, _ = fmt.Sscanf(line, "Size: %d kB", &value)
-			currentRegion.Size = value * 1024
-			breakdown.TotalVirtual += value * 1024
-		} else if strings.HasPrefix(line, "Rss:") {
-			_, _ = fmt.Sscanf(line, "Rss: %d kB", &value)
-			currentRegion.Rss = value * 1024
-			breakdown.TotalRss += value * 1024
-		} else if strings.HasPrefix(line, "Pss:") {
-			_, _ = fmt.Sscanf(line, "Pss: %d kB", &value)
-			currentRegion.Pss = value * 1024
-			breakdown.TotalPss += value * 1024
-		} else if strings.HasPrefix(line, "Shared_Clean:") {
-			_, _ = fmt.Sscanf(line, "Shared_Clean: %d kB", &value)
-			currentRegion.SharedClean = value * 1024
-		} else if strings.HasPrefix(line, "Shared_Dirty:") {
-			_, _ = fmt.Sscanf(line, "Shared_Dirty: %d kB", &value)
-			currentRegion.SharedDirty = value * 1024
-		} else if strings.HasPrefix(line, "Private_Clean:") {
-			_, _ = fmt.Sscanf(line, "Private_Clean: %d kB", &value)
-			currentRegion.PrivateClean = value * 1024
-		} else if strings.HasPrefix(line, "Private_Dirty:") {
-			_, _ = fmt.Sscanf(line, "Private_Dirty: %d kB", &value)
-			currentRegion.PrivateDirty = value * 1024
-		} else if strings.HasPrefix(line, "Referenced:") {
-			_, _ = fmt.Sscanf(line, "Referenced: %d kB", &value)
-			currentRegion.Referenced = value * 1024
-		} else if strings.HasPrefix(line, "Anonymous:") {
-			_, _ = fmt.Sscanf(line, "Anonymous: %d kB", &value)
-			currentRegion.Anonymous = value * 1024
-		} else if strings.HasPrefix(line, "Swap:") {
-			_, _ = fmt.Sscanf(line, "Swap: %d kB", &value)
-			currentRegion.Swap = value * 1024
-		}
+		// Parse memory statistics for current region.
+		parseRegionStat(line, currentRegion, breakdown)
 	}
 
 	// Don't forget the last region
@@ -165,6 +131,48 @@ func parseSmaps(breakdown *MemoryBreakdown) error {
 	}
 
 	return scanner.Err()
+}
+
+// parseRegionStat parses a single smaps statistic line into region, and
+// accumulates the aggregate totals (virtual/rss/pss) into breakdown.
+func parseRegionStat(line string, region *MemoryRegion, breakdown *MemoryBreakdown) {
+	var value int64
+
+	switch {
+	case strings.HasPrefix(line, "Size:"):
+		_, _ = fmt.Sscanf(line, "Size: %d kB", &value)
+		region.Size = value * 1024
+		breakdown.TotalVirtual += value * 1024
+	case strings.HasPrefix(line, "Rss:"):
+		_, _ = fmt.Sscanf(line, "Rss: %d kB", &value)
+		region.Rss = value * 1024
+		breakdown.TotalRss += value * 1024
+	case strings.HasPrefix(line, "Pss:"):
+		_, _ = fmt.Sscanf(line, "Pss: %d kB", &value)
+		region.Pss = value * 1024
+		breakdown.TotalPss += value * 1024
+	case strings.HasPrefix(line, "Shared_Clean:"):
+		_, _ = fmt.Sscanf(line, "Shared_Clean: %d kB", &value)
+		region.SharedClean = value * 1024
+	case strings.HasPrefix(line, "Shared_Dirty:"):
+		_, _ = fmt.Sscanf(line, "Shared_Dirty: %d kB", &value)
+		region.SharedDirty = value * 1024
+	case strings.HasPrefix(line, "Private_Clean:"):
+		_, _ = fmt.Sscanf(line, "Private_Clean: %d kB", &value)
+		region.PrivateClean = value * 1024
+	case strings.HasPrefix(line, "Private_Dirty:"):
+		_, _ = fmt.Sscanf(line, "Private_Dirty: %d kB", &value)
+		region.PrivateDirty = value * 1024
+	case strings.HasPrefix(line, "Referenced:"):
+		_, _ = fmt.Sscanf(line, "Referenced: %d kB", &value)
+		region.Referenced = value * 1024
+	case strings.HasPrefix(line, "Anonymous:"):
+		_, _ = fmt.Sscanf(line, "Anonymous: %d kB", &value)
+		region.Anonymous = value * 1024
+	case strings.HasPrefix(line, "Swap:"):
+		_, _ = fmt.Sscanf(line, "Swap: %d kB", &value)
+		region.Swap = value * 1024
+	}
 }
 
 // categorizeRegion places a memory region into the appropriate category.

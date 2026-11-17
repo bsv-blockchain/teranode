@@ -58,6 +58,67 @@ func TestParseLuaMapResponse(t *testing.T) {
 			},
 		},
 		{
+			name: "native spendMulti error map with int64 keys",
+			response: map[interface{}]interface{}{
+				"status": "ERROR",
+				"errors": map[interface{}]interface{}{
+					int64(0): map[interface{}]interface{}{
+						"errorCode": "SPENT",
+						"message":   "UTXO already spent",
+					},
+					int64(7): map[interface{}]interface{}{
+						"errorCode":    "UTXO_HASH_MISMATCH",
+						"message":      "UTXO hash mismatch",
+						"spendingData": "001122",
+					},
+				},
+			},
+			expectError: false,
+			validateResult: func(t *testing.T, result *LuaMapResponse) {
+				assert.Equal(t, LuaStatusError, result.Status)
+				require.Len(t, result.Errors, 2)
+				assert.Equal(t, LuaErrorCodeSpent, result.Errors[0].ErrorCode)
+				assert.Equal(t, LuaErrorCodeUtxoHashMismatch, result.Errors[7].ErrorCode)
+				assert.Equal(t, "001122", result.Errors[7].SpendingData)
+			},
+		},
+		{
+			name: "native response numeric fields with int64 values",
+			response: map[interface{}]interface{}{
+				"status":     "OK",
+				"blockIDs":   []interface{}{int64(100), int64(101), uint64(102)},
+				"childCount": int64(5),
+			},
+			expectError: false,
+			validateResult: func(t *testing.T, result *LuaMapResponse) {
+				assert.Equal(t, []int{100, 101, 102}, result.BlockIDs)
+				assert.Equal(t, 5, result.ChildCount)
+			},
+		},
+		{
+			name: "native response with string maps and typed slices",
+			response: map[string]interface{}{
+				"status":     "ERROR",
+				"blockIDs":   []int64{200, 201},
+				"childCount": uint16(3),
+				"errors": map[int64]interface{}{
+					2: map[string]interface{}{
+						"errorCode": "FROZEN",
+						"message":   "UTXO is frozen",
+					},
+				},
+			},
+			expectError: false,
+			validateResult: func(t *testing.T, result *LuaMapResponse) {
+				assert.Equal(t, LuaStatusError, result.Status)
+				assert.Equal(t, []int{200, 201}, result.BlockIDs)
+				assert.Equal(t, 3, result.ChildCount)
+				require.Len(t, result.Errors, 1)
+				assert.Equal(t, LuaErrorCodeFrozen, result.Errors[2].ErrorCode)
+				assert.Equal(t, "UTXO is frozen", result.Errors[2].Message)
+			},
+		},
+		{
 			name: "minimal response with only status",
 			response: map[interface{}]interface{}{
 				"status": "ERROR",
@@ -313,5 +374,35 @@ func TestParseLuaMapResponse_EdgeCases(t *testing.T) {
 		_, err := s.ParseLuaMapResponse(response)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid error offset type: string")
+	})
+}
+
+func TestParseLuaMapResponse_Conflicting(t *testing.T) {
+	s := &Store{}
+
+	tests := []struct {
+		name     string
+		response interface{}
+		want     bool
+	}{
+		{"udf shape true", map[interface{}]interface{}{"status": "OK", "signal": "DAHSET", "conflicting": true}, true},
+		{"native shape true", map[string]interface{}{"status": "OK", "signal": "DAHSET", "conflicting": true}, true},
+		{"explicit false", map[interface{}]interface{}{"status": "OK", "signal": "DAHSET", "conflicting": false}, false},
+		{"absent", map[interface{}]interface{}{"status": "OK", "signal": "DAHSET"}, false},
+		{"non bool ignored", map[interface{}]interface{}{"status": "OK", "conflicting": 1}, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := s.ParseLuaMapResponse(tc.response)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, res.Conflicting)
+		})
+	}
+
+	t.Run("reset clears", func(t *testing.T) {
+		r := &LuaMapResponse{Conflicting: true}
+		r.Reset()
+		require.False(t, r.Conflicting)
 	})
 }

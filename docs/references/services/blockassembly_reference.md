@@ -89,15 +89,6 @@ type BlockAssembler struct {
     // This is updated via BlockPersisted notifications
     lastPersistedHeight atomic.Uint32
 
-    // currentChainMap maps block hashes to their heights
-    currentChainMap map[chainhash.Hash]uint32
-
-    // currentChainMapIDs tracks block IDs in the current chain
-    currentChainMapIDs map[uint32]struct{}
-
-    // currentChainMapMu protects access to chain maps
-    currentChainMapMu sync.RWMutex
-
     // blockchainSubscriptionCh receives blockchain notifications
     blockchainSubscriptionCh chan *blockchain.Notification
 
@@ -613,7 +604,7 @@ Handles blockchain reorganization by processing moved blocks. This method manage
 #### Reset
 
 ```go
-func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, isLegacySync bool) ResetResponse
+func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, useFastForwardReset bool, postProcess func() error) ResetResponse
 ```
 
 Resets the processor to a clean state, removing all subtrees and transactions.

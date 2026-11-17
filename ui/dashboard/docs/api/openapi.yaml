@@ -632,6 +632,7 @@ components:
         - fee
         - sizeInBytes
         - tx
+        - txAvailable
       properties:
         blockHashes:
           type: array
@@ -646,7 +647,20 @@ components:
         sizeInBytes:
           type: integer
         tx:
-          $ref: '#/components/schemas/TxDetail'
+          description: |-
+            Null when this node does not retain the full transaction. A node
+            bootstrapped from a UTXO-set snapshot keeps only the live outputs,
+            which cannot reproduce the transaction, so the key is always present
+            but its value may be null. Every other field stays accurate.
+          oneOf:
+            - $ref: '#/components/schemas/TxDetail'
+            - type: 'null'
+        txAvailable:
+          type: boolean
+          description: |-
+            Whether tx is populated. Lets a caller distinguish "this node does
+            not retain the transaction" from a missing field, without inspecting
+            tx itself.
     Stats:
       type: object
       required:

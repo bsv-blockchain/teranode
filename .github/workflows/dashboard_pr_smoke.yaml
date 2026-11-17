@@ -49,6 +49,12 @@ jobs:
       # The runes migration cleared the legacy baseline (0 errors); this step
       # keeps it clean and catches any regression to legacy syntax.
       - run: npm run check
+      # Vitest unit tests. `test:unit` is bundled only under `npm run test`,
+      # which this workflow does not call, so it is invoked explicitly here -
+      # otherwise regression guards like the msgbox HTML-escaping invariant
+      # would never execute on a PR. `--run` forces single-run mode so the
+      # step cannot hang in watch mode.
+      - run: npm run test:unit -- --run
       - run: npm run test:integration
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

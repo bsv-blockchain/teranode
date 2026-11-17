@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"math/big"
 	"net/url"
 	"runtime"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
@@ -20,8 +22,8 @@ import (
 
 // newOnMainChainTestStore creates a *SQL backed by an sqlitememory DB, waits
 // for the background startup rebuild to complete, and returns the store ready
-// for use. The caller is responsible for s.Close() (via t.Cleanup).
-func newOnMainChainTestStore(t *testing.T) *SQL {
+// for use. The caller is responsible for s.Close(context.Background()) (via t.Cleanup).
+func newOnMainChainTestStore(t testing.TB) *SQL {
 	t.Helper()
 	return newOnMainChainTestStoreWith(t, nil)
 }
@@ -29,7 +31,7 @@ func newOnMainChainTestStore(t *testing.T) *SQL {
 // newOnMainChainTestStoreWith is the same as newOnMainChainTestStore but lets
 // the caller mutate settings before the store is created (e.g. to tweak
 // CoinbaseMaturity or enable UseInMemoryChainCheck).
-func newOnMainChainTestStoreWith(t *testing.T, mutate func(*settings.Settings)) *SQL {
+func newOnMainChainTestStoreWith(t testing.TB, mutate func(*settings.Settings)) *SQL {
 	t.Helper()
 	tSettings := test.CreateBaseTestSettings(t)
 	if mutate != nil {
@@ -40,14 +42,14 @@ func newOnMainChainTestStoreWith(t *testing.T, mutate func(*settings.Settings)) 
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	waitForStartupRebuild(t, s)
 	return s
 }
 
 // storeBlocks stores a sequence of blocks via StoreBlock, failing the test on
 // any error. Returns the list for convenience.
-func storeBlocks(t *testing.T, s *SQL, blocks ...*model.Block) {
+func storeBlocks(t testing.TB, s *SQL, blocks ...*model.Block) {
 	t.Helper()
 	for i, b := range blocks {
 		_, _, err := s.StoreBlock(context.Background(), b, "peer")
@@ -57,7 +59,7 @@ func storeBlocks(t *testing.T, s *SQL, blocks ...*model.Block) {
 
 // getOnMainChain reads the on_main_chain flag directly from the database for the block
 // with the given hash. Returns false if the block does not exist.
-func getOnMainChain(t *testing.T, s *SQL, hashBytes []byte) bool {
+func getOnMainChain(t testing.TB, s *SQL, hashBytes []byte) bool {
 	t.Helper()
 	var v bool
 	err := s.db.QueryRow(`SELECT on_main_chain FROM blocks WHERE hash = $1`, hashBytes).Scan(&v)
@@ -966,7 +968,7 @@ func TestReconcileOnMainChain_ReorgDiff(t *testing.T) {
 	require.False(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()))
 
 	// Reconcile: walks from the actual best (forkB4 by chain_work) and fixes flags.
-	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.NoError(t, s.reconcileOnMainChain(context.Background(), s.db))
 
 	// Post-state: block1 (LCA) untouched, block2/block3 off-chain, fork chain on-chain.
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "LCA stays on main chain")
@@ -977,7 +979,7 @@ func TestReconcileOnMainChain_ReorgDiff(t *testing.T) {
 	require.True(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()), "new branch flipped on (tip)")
 
 	// Idempotency: a second call against the now-correct state must be a no-op.
-	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.NoError(t, s.reconcileOnMainChain(context.Background(), s.db))
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
 	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()))
 	require.True(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()))
@@ -989,7 +991,7 @@ func TestReconcileOnMainChain_AlreadyConsistent(t *testing.T) {
 	s := newOnMainChainTestStore(t)
 	storeBlocks(t, s, block1, block2)
 
-	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.NoError(t, s.reconcileOnMainChain(context.Background(), s.db))
 
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "block1 unchanged")
 	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "tip unchanged")
@@ -1004,7 +1006,7 @@ func TestReconcileOnMainChain_EmptyDB(t *testing.T) {
 	_, err := s.db.Exec(`DELETE FROM blocks`)
 	require.NoError(t, err)
 
-	require.NoError(t, s.reconcileOnMainChain(context.Background()),
+	require.NoError(t, s.reconcileOnMainChain(context.Background(), s.db),
 		"reconcile must commit cleanly on an empty blocks table")
 }
 
@@ -1023,7 +1025,7 @@ func TestReconcileOnMainChain_LowCoinbaseMaturityFloor(t *testing.T) {
 		block2.Hash().CloneBytes())
 	require.NoError(t, err)
 
-	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.NoError(t, s.reconcileOnMainChain(context.Background(), s.db))
 	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()),
 		"floor-bounded walk must still cover the actual best's lineage")
 }
@@ -1035,7 +1037,7 @@ func TestReconcileOnMainChain_BeginTxError(t *testing.T) {
 	s := newOnMainChainTestStore(t)
 	require.NoError(t, s.db.Close())
 
-	err := s.reconcileOnMainChain(context.Background())
+	err := s.reconcileOnMainChain(context.Background(), s.db)
 	require.Error(t, err, "reconcile must return an error when the DB is unusable")
 }
 
@@ -1050,7 +1052,7 @@ func TestReconcileOnMainChain_QueryError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := s.reconcileOnMainChain(ctx)
+	err := s.reconcileOnMainChain(ctx, s.db)
 	require.Error(t, err, "reconcile must return an error when context is canceled")
 }
 
@@ -1112,7 +1114,7 @@ func TestReconcileOnMainChain_FillsFastPathDescendantGap(t *testing.T) {
 	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
 
 	// Reconcile must walk the actual best's lineage and flip the gap closed.
-	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.NoError(t, s.reconcileOnMainChain(context.Background(), s.db))
 
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
 	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "gap on the actual main chain must be filled")
@@ -1139,7 +1141,7 @@ func TestReconcileOnMainChain_NoStaleBranchSurvives(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()), "pre-condition: stale flag")
 
-	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.NoError(t, s.reconcileOnMainChain(context.Background(), s.db))
 
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
 	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()))
@@ -1261,4 +1263,235 @@ func TestOnMainChain_MigrationTimeoutExceedsWindowedTimeout(t *testing.T) {
 		"full-migration rebuild must have a more generous timeout than windowed rebuilds")
 	require.GreaterOrEqual(t, migrationFullRebuildTimeout, time.Minute,
 		"migration timeout should be minutes-scale to accommodate multi-million-block chains")
+}
+
+// TestStoreBlock_ReorgForkingBelowTheReconcileWindow: catch-up bounds a fork's depth from
+// the old tip, not from the block that finally takes the tip. A branch with less work per
+// block can fork one block below the old tip and only overtake it more than
+// reconcileMaxDepth blocks above the fork point. The reconcile StoreBlock runs for that
+// block walks down from the new best, so it must keep walking until it reaches the old
+// chain, or the rows between the fork point and its window keep the old chain's flags.
+//
+// The fixture stands in for the lower-work branch by giving the old tip, block2, more
+// chain work than the whole fork, then lowering it just below the fork before the last
+// fork block is stored.
+func TestStoreBlock_ReorgForkingBelowTheReconcileWindow(t *testing.T) {
+	requireReorgBelowTheReconcileWindowIsRepaired(t, newOnMainChainTestStore(t))
+}
+
+// TestStoreBlock_ReorgForkingBelowTheReconcileWindow_PostgreSQL runs the same reorg on
+// PostgreSQL, which evaluates the same recursive walk and UPDATE ... RETURNING under its
+// own planner and snapshot rules.
+func TestStoreBlock_ReorgForkingBelowTheReconcileWindow_PostgreSQL(t *testing.T) {
+	requireReorgBelowTheReconcileWindowIsRepaired(t, newPostgresOnMainChainTestStore(t))
+}
+
+// newPostgresOnMainChainTestStore opens a store on a fresh PostgreSQL container, or skips
+// the test when no container can start.
+func newPostgresOnMainChainTestStore(t *testing.T) *SQL {
+	t.Helper()
+
+	if testing.Short() {
+		t.Skip("Skipping PostgreSQL tests in short mode")
+	}
+
+	connStr, teardown, err := postgres.SetupTestPostgresContainer()
+	if err != nil {
+		t.Skipf("PostgreSQL container not available: %v", err)
+	}
+
+	t.Cleanup(func() { _ = teardown() })
+
+	storeURL, err := url.Parse(connStr)
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+	waitForStartupRebuild(t, s)
+
+	return s
+}
+
+func requireReorgBelowTheReconcileWindowIsRepaired(t *testing.T, s *SQL) {
+	t.Helper()
+
+	ctx := context.Background()
+
+	storeBlocks(t, s, block1, block2)
+
+	var oldTipWork []byte
+	require.NoError(t, s.db.QueryRow(`SELECT chain_work FROM blocks WHERE hash = $1`, block2.Hash().CloneBytes()).Scan(&oldTipWork))
+
+	heavy := make([]byte, len(oldTipWork))
+	for i := range heavy {
+		heavy[i] = 0xff
+	}
+
+	_, err := s.db.Exec(`UPDATE blocks SET chain_work = $1 WHERE hash = $2`, heavy, block2.Hash().CloneBytes())
+	require.NoError(t, err)
+	s.ResetResponseCache()
+
+	// block1, at height 1, is the fork point. The fork is reconcileMaxDepth (100 with these
+	// settings) plus 10 blocks long, from height 2 to 111, so its tip is 110 blocks above
+	// block1. The stored height comes from the parent row; blockAlternative2's struct
+	// Height is not set, so the fixture counts blocks rather than reading it.
+	forkLength := int(s.reconcileMaxDepth()) + 10
+
+	fork := []*model.Block{blockAlternative2}
+	for len(fork) < forkLength {
+		fork = append(fork, createBlock3OnFork(fork[len(fork)-1]))
+	}
+
+	storeBlocks(t, s, fork[:len(fork)-1]...)
+
+	for i, b := range fork[:len(fork)-1] {
+		require.False(t, getOnMainChain(t, s, b.Hash().CloneBytes()), "pre-condition: the fork is below the old tip until its last block, height %d", i+2)
+	}
+
+	// The old tip now has the work of the fork's second-to-last block, which keeps the tip
+	// on the tie, so the last fork block is the one that overtakes.
+	_, err = s.db.Exec(`UPDATE blocks SET chain_work = (SELECT chain_work FROM blocks WHERE hash = $1) WHERE hash = $2`,
+		fork[len(fork)-2].Hash().CloneBytes(), block2.Hash().CloneBytes())
+	require.NoError(t, err)
+	s.ResetResponseCache()
+
+	watch := s.watchOnMainChainWrites()
+
+	storeBlocks(t, s, fork[len(fork)-1])
+
+	var tipHeight int64
+	require.NoError(t, s.db.QueryRow(`SELECT height FROM blocks WHERE hash = $1`, fork[len(fork)-1].Hash().CloneBytes()).Scan(&tipHeight))
+	require.Equal(t, int64(block1.Height)+s.reconcileMaxDepth()+10, tipHeight, "the new tip is more than reconcileMaxDepth above the fork point")
+
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "the fork point stays on the main chain")
+	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "the old tip leaves the main chain")
+
+	for i, b := range fork {
+		require.True(t, getOnMainChain(t, s, b.Hash().CloneBytes()), "fork block at height %d is on the main chain", i+2)
+	}
+
+	byHeight, err := s.GetBlockByHeight(ctx, block2.Height)
+	require.NoError(t, err)
+	require.Equal(t, blockAlternative2.Hash().String(), byHeight.Hash().String(), "the main chain's block at height 2 is the fork's")
+
+	needsRebuild, err := s.needsFullOnMainChainRebuild(ctx)
+	require.NoError(t, err)
+	require.False(t, needsRebuild, "one flagged block per height up to the tip")
+
+	moved, floor := s.closeOnMainChainWatch(watch)
+	require.True(t, moved, "the reorg is noted")
+	require.Equal(t, int64(block2.Height), floor, "the noted floor is the lowest height the reorg moved, just above the fork point")
+}
+
+// TestStoreBlock_ReorgOverStaleFlagsNotesTheForkPoint: the floor a reorg notes is where the
+// best chain changed, not where the reconcile changed a flag. The two differ when the flags
+// are stale. Here block2 (branch A) and blockAlternative2 (branch B) both sit on block1,
+// B has the most work, and the flags still describe A, as they would while a repair of the
+// column is owed. block3 extends A and retakes the tip. The reconcile finds A already
+// flagged and changes only block3's row, at height 3, but the best chain moved at height 2.
+// A full repair that read the column while B was best writes B's view over every row the
+// reconcile left alone, so a note at height 3 would let it leave height 2 wrong.
+func TestStoreBlock_ReorgOverStaleFlagsNotesTheForkPoint(t *testing.T) {
+	requireReorgOverStaleFlagsNotesTheForkPoint(t, newOnMainChainTestStore(t))
+}
+
+// TestStoreBlock_ReorgOverStaleFlagsNotesTheForkPoint_PostgreSQL runs the same reorg on
+// PostgreSQL, the engine whose full repair runs without slowPathMu and so can overlap it.
+func TestStoreBlock_ReorgOverStaleFlagsNotesTheForkPoint_PostgreSQL(t *testing.T) {
+	requireReorgOverStaleFlagsNotesTheForkPoint(t, newPostgresOnMainChainTestStore(t))
+}
+
+func requireReorgOverStaleFlagsNotesTheForkPoint(t *testing.T, s *SQL) {
+	t.Helper()
+
+	storeBlocks(t, s, block1, block2, blockAlternative2)
+	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "pre-condition: A holds the tip on the tie")
+	require.False(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()), "pre-condition: B is off the main chain")
+
+	// B gains one unit of work over A without its flag moving, so B is the best block and
+	// the column still describes A.
+	var aWork []byte
+	require.NoError(t, s.db.QueryRow(`SELECT chain_work FROM blocks WHERE hash = $1`, block2.Hash().CloneBytes()).Scan(&aWork))
+
+	bWork := new(big.Int).Add(new(big.Int).SetBytes(aWork), big.NewInt(1)).FillBytes(make([]byte, len(aWork)))
+	_, err := s.db.Exec(`UPDATE blocks SET chain_work = $1 WHERE hash = $2`, bWork, blockAlternative2.Hash().CloneBytes())
+	require.NoError(t, err)
+	s.ResetResponseCache()
+
+	watch := s.watchOnMainChainWrites()
+
+	storeBlocks(t, s, block3)
+
+	_, bestHash, err := s.getBestBlockID(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, block3.Hash().String(), bestHash.String(), "pre-condition: block3 retakes the tip for A")
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()), "the new tip is flagged")
+
+	moved, floor := s.closeOnMainChainWatch(watch)
+	require.True(t, moved, "the reorg is noted")
+	require.NotEqual(t, noRepairFloor, floor, "the fork point is known, so the note names a height")
+	require.LessOrEqual(t, floor, int64(block2.Height),
+		"the best chain changed at height 2, above the fork point block1, though the reconcile changed only height 3")
+}
+
+// TestReconcileOnMainChain_WalkStopsAtTheFirstFlaggedBlockPastTheWindow: past
+// reconcileMaxDepth the walk goes on only while the block it is on is flagged false, and
+// stops at the first flagged one. A walk that kept going would visit every block to genesis
+// on each reorg. The chain is 130 blocks on one lineage, so the window's bottom is height
+// 30. Heights 29 and 30 are flagged false, height 28 stays flagged, and height 5 is flagged
+// false as a marker below the stop. The walk must repair 29 and 30, stop at 28, and never
+// reach 5.
+func TestReconcileOnMainChain_WalkStopsAtTheFirstFlaggedBlockPastTheWindow(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	ctx := context.Background()
+
+	const chainLength = 130
+
+	maxDepth := s.reconcileMaxDepth()
+	require.Less(t, maxDepth+2, int64(chainLength), "the chain must reach past the window")
+
+	chain := []*model.Block{block1, block2}
+	for len(chain) < chainLength {
+		chain = append(chain, createBlock3OnFork(chain[len(chain)-1]))
+	}
+
+	storeBlocks(t, s, chain...)
+
+	var tipHeight int64
+	require.NoError(t, s.db.QueryRow(`SELECT height FROM blocks WHERE hash = $1`, chain[len(chain)-1].Hash().CloneBytes()).Scan(&tipHeight))
+	require.Equal(t, int64(chainLength), tipHeight)
+
+	windowBottom := tipHeight - maxDepth
+
+	setFlag := func(height int64, onMainChain bool) {
+		t.Helper()
+
+		_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = $1 WHERE height = $2`, onMainChain, height)
+		require.NoError(t, err)
+	}
+
+	setFlag(windowBottom, false)
+	setFlag(windowBottom-1, false)
+	setFlag(5, false)
+
+	changed, floor, err := s.reconcileOnMainChainRows(ctx, s.db)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), changed, "only the two unflagged blocks the walk reached are changed")
+	require.Equal(t, windowBottom-1, floor, "the walk went past the window to the first flagged block")
+
+	flagAt := func(height int64) bool {
+		t.Helper()
+
+		var v bool
+		require.NoError(t, s.db.QueryRow(`SELECT on_main_chain FROM blocks WHERE height = $1`, height).Scan(&v))
+
+		return v
+	}
+
+	require.True(t, flagAt(windowBottom), "the window's bottom block is repaired")
+	require.True(t, flagAt(windowBottom-1), "the walk continues past the window while blocks are unflagged")
+	require.True(t, flagAt(windowBottom-2), "the first flagged block past the window keeps its flag")
+	require.False(t, flagAt(5), "the walk stops at the first flagged block and never reaches height 5")
 }

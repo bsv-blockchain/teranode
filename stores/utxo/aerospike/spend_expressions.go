@@ -32,11 +32,13 @@ type SpendState struct {
 	RecordUtxos int
 	// SpentExtraRecs is the number of spent extra records
 	SpentExtraRecs *int
+	// DAHVersion is the master's deleteAtHeight version after the write
+	DAHVersion dahVersion
 }
 
 // parseSpendState extracts the SpendState from Aerospike bins.
 func (s *Store) parseSpendState(bins aerospike.BinMap) (SpendState, error) {
-	state := SpendState{}
+	state := SpendState{DAHVersion: parseDAHVersion(bins)}
 
 	// Parse blockIDs
 	if blockIDs, ok := bins[fields.BlockIDs.String()]; ok && blockIDs != nil {
@@ -87,10 +89,13 @@ func (s *Store) parseSpendState(bins aerospike.BinMap) (SpendState, error) {
 	if deleteAtHeightResults, ok := bins[fields.DeleteAtHeight.String()]; ok && deleteAtHeightResults != nil {
 		switch v := deleteAtHeightResults.(type) {
 		case aerospike.OpResults:
-			s.parseDAHFromSlice([]interface{}(v), &SetMinedState{
-				OldDeleteAtHeight: state.OldDeleteAtHeight,
-				NewDeleteAtHeight: state.NewDeleteAtHeight,
-			})
+			// Batch operations return the two DAH reads (before, after) as OpResults. The result
+			// used to be parsed into a throwaway struct and dropped, so the old/new DAH stayed nil
+			// and the child-record DAH follow-up never ran on this path.
+			tempState := &SetMinedState{}
+			s.parseDAHFromSlice([]interface{}(v), tempState)
+			state.OldDeleteAtHeight = tempState.OldDeleteAtHeight
+			state.NewDeleteAtHeight = tempState.NewDeleteAtHeight
 		case []interface{}:
 			// Create temporary SetMinedState to reuse parsing logic
 			tempState := &SetMinedState{}
@@ -98,6 +103,7 @@ func (s *Store) parseSpendState(bins aerospike.BinMap) (SpendState, error) {
 			state.OldDeleteAtHeight = tempState.OldDeleteAtHeight
 			state.NewDeleteAtHeight = tempState.NewDeleteAtHeight
 		case int:
+			s.debugBareDAH()
 			dah := uint32(v)
 			state.OldDeleteAtHeight = &dah
 			state.NewDeleteAtHeight = &dah
@@ -107,12 +113,13 @@ func (s *Store) parseSpendState(bins aerospike.BinMap) (SpendState, error) {
 	return state, nil
 }
 
-// buildSpendFilterExpression creates a filter expression that validates spend preconditions.
-// Returns nil if the spend should be rejected, allowing the operation to proceed if all checks pass.
+// buildSpendFilterExpression builds the filter expression that gates a spend write.
+// The returned expression evaluates true only when every precondition holds; when it
+// is false the record is FILTERED_OUT and re-evaluated through the Lua UDF. It always
+// returns a non-nil expression.
 func (s *Store) buildSpendFilterExpression(
 	offset uint32,
 	utxoHash []byte,
-	spendingData []byte,
 	ignoreConflicting bool,
 	ignoreLocked bool,
 	currentBlockHeight uint32,
@@ -190,11 +197,35 @@ func (s *Store) buildSpendFilterExpression(
 		),
 	)
 
-	// Note: We cannot check the exact UTXO hash in expressions due to limitations:
-	// - No byte-by-byte comparison support
-	// - No ExpBlobSize function
-	// - List element byte operations are not supported
-	// The ListSetOp will fail if the UTXO doesn't match during the operation.
+	// First-seen guard: the element at offset must be exactly the unspent
+	// 32-byte UTXO hash. An unspent element is the bare 32-byte hash; once
+	// spent it becomes 68 bytes (hash + 36-byte spendingData), so this
+	// equality is false the moment the UTXO has been spent — including by a
+	// different spender in an earlier batch. Without this clause ListSetOp
+	// would overwrite an already-spent element unconditionally, letting a
+	// second (double-spend) spender pass the filter and silently replace the
+	// first-seen spender at the store level.
+	//
+	// Comparing against the expected hash also confirms the element at this
+	// offset is the UTXO we mean to spend, guarding against a wrong-slot
+	// ListSetOp on a hash mismatch.
+	//
+	// A failed match returns FILTERED_OUT, which processSpendBatchResultsExpressions
+	// retries through the Lua UDF — the UDF inspects the element bytes and
+	// returns the correctly classified rejection (ErrSpent for a real
+	// double-spend, or an idempotent success for a re-spend by the same
+	// spender, which crucially does NOT re-increment spentUtxos).
+	filterConditions = append(filterConditions,
+		aerospike.ExpEq(
+			aerospike.ExpListGetByIndex(
+				aerospike.ListReturnTypeValue,
+				aerospike.ExpTypeBLOB,
+				aerospike.ExpIntVal(int64(offset)),
+				utxosBin,
+			),
+			aerospike.ExpBlobVal(utxoHash),
+		),
+	)
 
 	// Combine all conditions with AND
 	if len(filterConditions) == 1 {
@@ -236,17 +267,11 @@ func (s *Store) buildSpendOperations(
 		aerospike.AddOp(aerospike.NewBin(fields.SpentUtxos.String(), 1)),
 	)
 
-	// Set deleteAtHeight to nil initially
-	ops = append(ops, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)))
-
-	// Add deleteAtHeight expression if retention is enabled
+	// Add deleteAtHeight ops if retention is enabled. The bin is not nulled first: the
+	// expressions read the existing DAH (raise, never lower; clear when ineligible; leave
+	// pagination records alone), matching the Lua setDeleteAtHeight.
 	if blockHeightRetention > 0 {
-		dahExp := s.buildDeleteAtHeightExpression(currentBlockHeight, blockHeightRetention, false)
-		ops = append(ops, aerospike.ExpWriteOp(
-			fields.DeleteAtHeight.String(),
-			dahExp,
-			aerospike.ExpWriteFlagAllowDelete|aerospike.ExpWriteFlagEvalNoFail,
-		))
+		ops = append(ops, s.buildDeleteAtHeightOps(currentBlockHeight, blockHeightRetention, false)...)
 	}
 
 	// Read final values after modifications
@@ -285,12 +310,12 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 	for _, bItem := range batch {
 		key, err := s.getOrCreateAerospikeKey(bItem, s.utxoBatchSize, aeroKeyMap)
 		if err != nil {
-			bItem.errCh <- err
+			bItem.complete(err)
 			continue
 		}
 
 		if err := s.validateSpendItem(bItem); err != nil {
-			bItem.errCh <- err
+			bItem.complete(err)
 			continue
 		}
 
@@ -301,7 +326,6 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 		filterExp := s.buildSpendFilterExpression(
 			offset,
 			bItem.spend.UTXOHash[:],
-			bItem.spend.SpendingData.Bytes(),
 			bItem.ignoreConflicting,
 			bItem.ignoreLocked,
 			bItem.blockHeight,
@@ -334,9 +358,12 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 	}
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
-	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
+	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
+		// complete is CAS-guarded: items already completed above (key-creation/
+		// validation failures) are no-ops here, so this safely covers every
+		// remaining item without racing or double-signalling.
 		for _, bItem := range batch {
-			bItem.errCh <- errors.NewStorageError("[SPEND_BATCH_EXP] failed to batch spend: %w", err)
+			bItem.complete(errors.NewStorageError("[SPEND_BATCH_EXP] failed to batch spend", err))
 		}
 		return
 	}
@@ -368,20 +395,15 @@ func (s *Store) processSpendBatchResultsExpressions(
 	// (missing parent during catch-up) or FILTERED_OUT — issue #953.
 	infraErrCount := 0
 
-	// Collect follow-up actions
-	extraRecords := make([]*chainhash.Hash, 0)
-	dahSetItems := make([]struct {
-		TxID           *chainhash.Hash
-		ChildCount     int
-		DeleteAtHeight uint32
-	}, 0)
-	externalDAH := make([]struct {
-		TxID *chainhash.Hash
-		DAH  uint32
-	}, 0)
+	// Collect follow-up actions. Extra-record increments are grouped by the spend's
+	// block height so each tx's delete-at-height is stamped from its own spend
+	// height (a single batch may aggregate spends from different blocks).
+	extraRecordsByHeight := make(map[uint32][]*chainhash.Hash)
+	// Child (pagination) record DAH follow-ups, last state per txid wins.
+	var childDAH childDAHFollowUps
 
-	// Records filtered out by the expression — retried through Lua before sending
-	// any response on their errCh, so each caller still sees exactly one result.
+	// Records filtered out by the expression — retried through Lua before
+	// completing them, so each item is still completed exactly once.
 	var retryThroughLua []*batchSpend
 
 	for idx, batchRecord := range batchRecords {
@@ -397,7 +419,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 			var aErr *aerospike.AerospikeError
 			if errors.As(batchRec.Err, &aErr) {
 				if aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
-					bItem.errCh <- errors.NewTxNotFoundError("transaction not found: %s", bItem.spend.TxID.String())
+					bItem.complete(errors.NewTxNotFoundError("transaction not found: %s", bItem.spend.TxID.String()))
 					errCount++
 					continue
 				}
@@ -414,7 +436,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 				}
 			}
 
-			bItem.errCh <- errors.NewStorageError("spend error for %s:%d: %w", bItem.spend.TxID.String(), bItem.spend.Vout, batchRec.Err)
+			bItem.complete(errors.NewStorageError("spend error for %s:%d", bItem.spend.TxID.String(), bItem.spend.Vout, batchRec.Err))
 			errCount++
 			if isInfrastructureFailure(batchRec.Err) {
 				infraErrCount++
@@ -424,14 +446,14 @@ func (s *Store) processSpendBatchResultsExpressions(
 
 		// Parse successful result
 		if batchRec.Record == nil || batchRec.Record.Bins == nil {
-			bItem.errCh <- nil
+			bItem.complete(nil)
 			okCount++
 			continue
 		}
 
 		state, err := s.parseSpendState(batchRec.Record.Bins)
 		if err != nil {
-			bItem.errCh <- errors.NewProcessingError("failed to parse spend state: %w", err)
+			bItem.complete(errors.NewProcessingError("failed to parse spend state", err))
 			errCount++
 			continue
 		}
@@ -440,43 +462,20 @@ func (s *Store) processSpendBatchResultsExpressions(
 		if state.TotalExtraRecs == nil {
 			// Pagination record - check if all spent
 			if state.RecordUtxos > 0 && state.SpentUtxos == state.RecordUtxos {
-				extraRecords = append(extraRecords, bItem.spend.TxID)
+				extraRecordsByHeight[bItem.blockHeight] = append(extraRecordsByHeight[bItem.blockHeight], bItem.spend.TxID)
 			}
-		} else if state.TotalExtraRecs != nil {
-			// Master record - check DAH changes for external transactions
-			if state.External {
-				dahChanged := false
-				if state.OldDeleteAtHeight == nil && state.NewDeleteAtHeight != nil {
-					dahChanged = true
-				} else if state.OldDeleteAtHeight != nil && state.NewDeleteAtHeight == nil {
-					dahChanged = true
-				} else if state.OldDeleteAtHeight != nil && state.NewDeleteAtHeight != nil {
-					dahChanged = *state.OldDeleteAtHeight != *state.NewDeleteAtHeight
-				}
-
-				if dahChanged {
-					if state.NewDeleteAtHeight != nil {
-						dahSetItems = append(dahSetItems, struct {
-							TxID           *chainhash.Hash
-							ChildCount     int
-							DeleteAtHeight uint32
-						}{TxID: bItem.spend.TxID, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: *state.NewDeleteAtHeight})
-					}
-
-					externalDAH = append(externalDAH, struct {
-						TxID *chainhash.Hash
-						DAH  uint32
-					}{TxID: bItem.spend.TxID, DAH: func() uint32 {
-						if state.NewDeleteAtHeight != nil {
-							return *state.NewDeleteAtHeight
-						}
-						return 0
-					}()})
-				}
-			}
+		} else {
+			// Master record: queue the child-record DAH follow-up if the master DAH changed
+			childDAH.collect(bItem.spend.TxID, SetMinedState{
+				External:          state.External,
+				TotalExtraRecs:    state.TotalExtraRecs,
+				OldDeleteAtHeight: state.OldDeleteAtHeight,
+				NewDeleteAtHeight: state.NewDeleteAtHeight,
+				DAHVersion:        state.DAHVersion,
+			})
 		}
 
-		bItem.errCh <- nil
+		bItem.complete(nil)
 		okCount++
 	}
 
@@ -501,19 +500,20 @@ func (s *Store) processSpendBatchResultsExpressions(
 	// Execute follow-up actions
 	var postErr error
 
-	if len(extraRecords) > 0 {
-		if err := s.IncrementSpentRecordsMulti(extraRecords, 1); err != nil {
+	for bh, txids := range extraRecordsByHeight {
+		if err := s.IncrementSpentRecordsMulti(ctx, txids, 1, bh); err != nil {
 			postErr = errors.Join(postErr, err)
 		}
 	}
 
-	if len(dahSetItems) > 0 {
-		if err := s.SetDAHForChildRecordsMulti(dahSetItems); err != nil {
-			postErr = errors.Join(postErr, err)
-		}
-	}
+	applied := s.applyChildDAHFollowUps(ctx, &childDAH)
+	postErr = errors.JoinCapped(10, postErr, applied.unsetErr, applied.setErr)
 
 	if postErr != nil {
+		// The spends were already completed, so the caller cannot see this; count it.
+		if prometheusUtxoMapErrors != nil {
+			prometheusUtxoMapErrors.WithLabelValues("SpendExpressions", "ChildDAHFollowUp").Inc()
+		}
 		s.logger.Errorf("[SPEND_BATCH_EXP] follow-up errors: %v", postErr)
 	}
 
@@ -524,8 +524,8 @@ func (s *Store) processSpendBatchResultsExpressions(
 
 	// Dispatch FILTERED_OUT records to the Lua UDF for a correct decision. The Lua
 	// path checks UtxoSpendableIn per-offset and returns the precise rejection
-	// reason for records that genuinely cannot be spent. Each item still has a
-	// pending errCh receive — Lua sends exactly one response on it.
+	// reason for records that genuinely cannot be spent. Each item is still
+	// uncompleted at this point — Lua's dispatch completes it exactly once.
 	//
 	// This is a single additional batched Lua call per expression batch — its
 	// cost is independent of how many records were filtered out, but it is only

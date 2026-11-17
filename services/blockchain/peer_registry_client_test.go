@@ -1,7 +1,9 @@
 package blockchain
 
 import (
+	"context"
 	"net"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
@@ -10,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // startFakePeerRegistryServer starts a gRPC server with the unimplemented
@@ -202,4 +205,69 @@ func TestPeerRegistryClient_SetLoggerNilIsNoop(t *testing.T) {
 	first := client.log()
 	client.SetLogger(nil)
 	require.Equal(t, first, client.log())
+}
+
+// ---------------------------------------------------------------------------
+// Rolling-upgrade fallback: catchup RPCs against an old blockchain service
+// ---------------------------------------------------------------------------
+
+// legacyPeerRegistryServer simulates a blockchain service that predates the
+// catchup-specific RPCs: RecordCatchupAttempt/Success/Failure return
+// codes.Unimplemented (via the embedded unimplemented server), while the
+// legacy RecordSyncAttempt and UpdatePeerMetrics RPCs work and record calls.
+type legacyPeerRegistryServer struct {
+	blockchain_api.UnimplementedPeerRegistryServiceServer
+
+	mu            sync.Mutex
+	syncAttempts  []string
+	metricUpdates []*blockchain_api.UpdatePeerMetricsRequest
+}
+
+func (s *legacyPeerRegistryServer) RecordSyncAttempt(_ context.Context, req *blockchain_api.RecordSyncAttemptRequest) (*emptypb.Empty, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.syncAttempts = append(s.syncAttempts, req.PeerId)
+	return &emptypb.Empty{}, nil
+}
+
+func (s *legacyPeerRegistryServer) UpdatePeerMetrics(_ context.Context, req *blockchain_api.UpdatePeerMetricsRequest) (*emptypb.Empty, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.metricUpdates = append(s.metricUpdates, req)
+	return &emptypb.Empty{}, nil
+}
+
+func TestPeerRegistryClient_CatchupRPCs_FallBackOnUnimplemented(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	legacy := &legacyPeerRegistryServer{}
+	s := grpc.NewServer()
+	blockchain_api.RegisterPeerRegistryServiceServer(s, legacy)
+	go func() { _ = s.Serve(lis) }()
+	defer s.Stop()
+
+	conn := dialConn(t, lis.Addr().String())
+	defer conn.Close()
+	client := NewPeerRegistryClientFromConn(conn)
+
+	ctx := context.Background()
+
+	require.NoError(t, client.RecordCatchupAttempt(ctx, "peer-1"))
+	require.NoError(t, client.RecordCatchupSuccess(ctx, "peer-1", 150))
+	require.NoError(t, client.RecordCatchupFailure(ctx, "peer-1"))
+
+	legacy.mu.Lock()
+	defer legacy.mu.Unlock()
+
+	require.Equal(t, []string{"peer-1"}, legacy.syncAttempts, "attempt must fall back to RecordSyncAttempt")
+
+	require.Len(t, legacy.metricUpdates, 2)
+	success := legacy.metricUpdates[0]
+	require.True(t, success.RecordSuccess, "success must fall back to UpdatePeerMetrics(success)")
+	require.False(t, success.RecordFailure)
+	require.Equal(t, int64(150), success.ResponseTimeMs)
+	failure := legacy.metricUpdates[1]
+	require.True(t, failure.RecordFailure, "failure must fall back to UpdatePeerMetrics(failure)")
+	require.False(t, failure.RecordSuccess)
 }

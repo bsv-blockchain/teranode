@@ -1,7 +1,9 @@
 package settings
 
 import (
+	"fmt"
 	"net/url"
+	"os"
 	"strconv"
 	"time"
 
@@ -44,6 +46,12 @@ func getInt32(key string, defaultValue int32, alternativeContext ...string) int3
 	return value
 }
 
+func getInt64(key string, defaultValue int64, alternativeContext ...string) int64 {
+	value, _ := gocore.Config(alternativeContext...).GetInt64(key, defaultValue)
+
+	return value
+}
+
 func getUint32(key string, defaultValue uint32, alternativeContext ...string) uint32 {
 	value, _ := gocore.Config(alternativeContext...).GetUint32(key, defaultValue)
 
@@ -54,6 +62,39 @@ func getUint64(key string, defaultValue uint64, alternativeContext ...string) ui
 	value, _ := gocore.Config(alternativeContext...).GetUint64(key, defaultValue)
 
 	return value
+}
+
+// getUint64AtLeast reads a uint64 setting and raises it to floor when the configured value is
+// lower. For settings where too small a value is unsafe rather than merely slow, so that a
+// misconfiguration degrades into the safe minimum instead of taking effect. The override is
+// reported on stderr rather than applied silently: an operator who set the value needs to know
+// it did not take, or they lose an hour to it during an incident.
+func getUint64AtLeast(key string, defaultValue, floor uint64, alternativeContext ...string) uint64 {
+	value := getUint64(key, defaultValue, alternativeContext...)
+	if value >= floor {
+		return value
+	}
+
+	fmt.Fprintf(os.Stderr, "WARN: setting %s is %d, below the safe minimum %d — using %d\n", key, value, floor, floor)
+
+	return floor
+}
+
+// getIntFloorUnlessZero reads an int setting and raises it to floor when it is configured
+// to a positive value below the floor. Zero is left alone: for settings where it means
+// "uncapped" rather than "unset", flooring it would silently turn an operator's intent to
+// disable the cap into the floor value instead. The override is reported on stderr rather
+// than applied silently, naming both this key and relatedKey, the setting that defines why
+// the floor exists.
+func getIntFloorUnlessZero(key string, defaultValue, floor int, relatedKey string, alternativeContext ...string) int {
+	value := getInt(key, defaultValue, alternativeContext...)
+	if value <= 0 || value >= floor {
+		return value
+	}
+
+	fmt.Fprintf(os.Stderr, "WARN: setting %s is %d, below the floor of %d set by %s — using %d\n", key, value, floor, relatedKey, floor)
+
+	return floor
 }
 
 func getURL(key string, defaultValue string, alternativeContext ...string) *url.URL {
@@ -72,6 +113,33 @@ func getURL(key string, defaultValue string, alternativeContext ...string) *url.
 
 func getBool(key string, defaultValue bool, alternativeContext ...string) bool {
 	return gocore.Config(alternativeContext...).GetBool(key, defaultValue)
+}
+
+// boolPtr returns a pointer to a concrete bool value. Used for settings
+// fields that are typed *bool to distinguish "unset" (nil) from an explicit
+// value, when the caller already has a definite value to assign (e.g. the
+// global settings block, which is always fully populated).
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+// getBoolPtr reads a bool setting and returns nil if the key is not
+// explicitly configured (via env or config file), distinguishing "absent"
+// from "explicitly false". Unlike getBool, no default value is applied here:
+// callers that need tri-state semantics (unset / explicit-true /
+// explicit-false) use the nil case as their own "inherit" signal.
+func getBoolPtr(key string, alternativeContext ...string) *bool {
+	str, ok := gocore.Config(alternativeContext...).Get(key)
+	if !ok {
+		return nil
+	}
+
+	b, err := strconv.ParseBool(str)
+	if err != nil {
+		return nil
+	}
+
+	return &b
 }
 
 func getFloat64(key string, defaultValue float64, alternativeContext ...string) float64 {
@@ -139,20 +207,35 @@ func getPostgresPoolSettings(servicePrefix string, alternativeContext ...string)
 	retryMaxAttempts := getInt(servicePrefix+"_postgres_retryMaxAttempts", 0, alternativeContext...)
 	retryBaseDelay := getDuration(servicePrefix+"_postgres_retryBaseDelay", 0, alternativeContext...)
 	retryEnabled := getBool(servicePrefix+"_postgres_retryEnabled", false, alternativeContext...)
+	// circuitBreakerEnabled is nil when the key is not explicitly configured, so
+	// an absent key is distinguishable from an explicit "false" - the latter
+	// must be able to opt a service out of a globally-enabled circuit breaker.
+	circuitBreakerEnabled := getBoolPtr(servicePrefix+"_postgres_circuitBreakerEnabled", alternativeContext...)
+	circuitBreakerFailureThreshold := getInt(servicePrefix+"_postgres_circuitBreakerFailureThreshold", 0, alternativeContext...)
+	circuitBreakerHalfOpenMax := getInt(servicePrefix+"_postgres_circuitBreakerHalfOpenMax", 0, alternativeContext...)
+	circuitBreakerCooldown := getDuration(servicePrefix+"_postgres_circuitBreakerCooldown", 0, alternativeContext...)
+	circuitBreakerFailureWindow := getDuration(servicePrefix+"_postgres_circuitBreakerFailureWindow", 0, alternativeContext...)
 
 	// Only return settings if at least one is configured (non-zero)
 	if maxOpenConns == 0 && maxIdleConns == 0 && connMaxLifetime == 0 && connMaxIdleTime == 0 &&
-		retryMaxAttempts == 0 && retryBaseDelay == 0 {
+		retryMaxAttempts == 0 && retryBaseDelay == 0 && !retryEnabled && circuitBreakerEnabled == nil &&
+		circuitBreakerFailureThreshold == 0 && circuitBreakerHalfOpenMax == 0 &&
+		circuitBreakerCooldown == 0 && circuitBreakerFailureWindow == 0 {
 		return nil
 	}
 
 	return &PostgresSettings{
-		MaxOpenConns:     maxOpenConns,
-		MaxIdleConns:     maxIdleConns,
-		ConnMaxLifetime:  connMaxLifetime,
-		ConnMaxIdleTime:  connMaxIdleTime,
-		RetryMaxAttempts: retryMaxAttempts,
-		RetryBaseDelay:   retryBaseDelay,
-		RetryEnabled:     retryEnabled,
+		MaxOpenConns:                   maxOpenConns,
+		MaxIdleConns:                   maxIdleConns,
+		ConnMaxLifetime:                connMaxLifetime,
+		ConnMaxIdleTime:                connMaxIdleTime,
+		RetryMaxAttempts:               retryMaxAttempts,
+		RetryBaseDelay:                 retryBaseDelay,
+		RetryEnabled:                   retryEnabled,
+		CircuitBreakerEnabled:          circuitBreakerEnabled,
+		CircuitBreakerFailureThreshold: circuitBreakerFailureThreshold,
+		CircuitBreakerHalfOpenMax:      circuitBreakerHalfOpenMax,
+		CircuitBreakerCooldown:         circuitBreakerCooldown,
+		CircuitBreakerFailureWindow:    circuitBreakerFailureWindow,
 	}
 }

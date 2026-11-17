@@ -24,7 +24,7 @@
 //	}
 //
 //	// Use the store
-//	metadata, err := store.Create(ctx, tx, blockHeight)
+//	metadata, _, err := store.SpendAndCreate(ctx, tx, blockHeight, utxo.WithCreateOnly())
 //
 // # Features
 //

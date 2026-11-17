@@ -3,7 +3,9 @@ package blockvalidation
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math/big"
 	"net/http"
 	"strings"
 	"sync"
@@ -12,9 +14,13 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
+	"github.com/bsv-blockchain/teranode/services/p2p"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
@@ -75,9 +81,14 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*chainhash.Hash{bestBlock.Hash()}, nil)
 
-		// Mock common ancestor checks
+		// Mock common ancestor checks: our best block is the common ancestor; the
+		// peer's chain blocks are absent from our chain, so GetBlockHeader reports
+		// not found and the common-ancestor walk stops at the divergence point.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, bestBlock.Header.Hash()).
+			Return(bestBlock.Header, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlockHeaders for common ancestor finding
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
@@ -383,9 +394,26 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*model.BlockHeader{bestBlockHeader}, []*model.BlockHeaderMeta{{Height: 50, ID: 1}}, nil).Maybe()
 
-		// Mock GetBlockHeader for any header lookups during validation
+		// GetBlockHeader conveys both existence and height in a single RPC during
+		// common-ancestor finding. Our best block (height 50) is in our chain and
+		// serves as the common ancestor; the adversarial fork headers are absent, so
+		// they must surface as not-found errors to stop the search.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, bestBlockHeader.Hash()).
+			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 50, ID: 1}, nil).Maybe()
+		for _, h := range invalidChain {
+			mockBlockchainClient.On("GetBlockHeader", mock.Anything, h.Hash()).
+				Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+					errors.NewBlockNotFoundError("block not found")).Maybe()
+		}
+		// Catch-all for any other header lookups
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
+
+		// Fork cleanup (step 9.6) queries the headers between the common ancestor and
+		// our tip to clear their mined_set; an empty result keeps the test focused.
+		mockBlockchainClient.On("GetBlockHeadersByHeight", mock.Anything, mock.Anything, mock.Anything).
+			Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
 
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
@@ -481,6 +509,11 @@ func TestCatchup_CoinbaseMaturityFork(t *testing.T) {
 				nil,
 			)
 
+		// Fork blocks are absent from our chain: not-found stops the common-ancestor walk
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
+
 		// Mock GetBlock for secret mining check
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).
 			Return(&model.Block{Height: forkPoint}, nil).Maybe()
@@ -565,8 +598,16 @@ func TestCatchup_CoinbaseMaturityFork(t *testing.T) {
 				nil,
 			).Once()
 
+		// GetBlockHeader conveys both existence and height in a single RPC during
+		// common-ancestor finding: a not-found error means the block is absent from
+		// our chain and stops the walk. Peer headers we don't have must surface as
+		// not-found, mirroring the old GetBlockExists=false behavior. Without this,
+		// the catch-all returning empty success makes every peer header look present,
+		// so the walk selects a bogus height-0 ancestor (forkDepth = 1020) and then
+		// panics in the unmocked fork-cleanup GetBlockHeadersByHeight call.
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlock for validation
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(&model.Block{Height: 1015}, nil).Maybe()
@@ -596,13 +637,307 @@ func TestCatchup_CoinbaseMaturityFork(t *testing.T) {
 	})
 }
 
+// TestCatchup_NoMinedSetChurnOnRejectedFork verifies that catchup does NOT clear the
+// mined_set (or emit BlockMinedUnset notifications) on the node's own still-canonical
+// blocks when the announced fork is going to be rejected by the fork-depth or
+// secret-mining safety checks. Clearing must only happen for forks that pass both gates.
+// Regression test for issue #1145.
+func TestCatchup_NoMinedSetChurnOnRejectedFork(t *testing.T) {
+	initPrometheusMetrics()
+
+	// buildForkScenario wires up a server whose chain forks from a known common
+	// ancestor at ancestorHeight, with the local accepted chain tip at currentHeight. The peer
+	// announces a short fork off that ancestor. mined_set/notification mocks are
+	// registered permissively so the (buggy) early-clear path would execute without
+	// panicking, letting AssertNotCalled catch the regression rather than a panic.
+	buildForkScenarioWithHeaders := func(t *testing.T, ancestorHeight, currentHeight uint32) (*Server, *blockchain.Mock, *model.Block, func(), *model.BlockHeader, []*model.BlockHeader) {
+		server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
+
+		mockUTXOStore.On("GetBlockHeight").Return(currentHeight)
+
+		// Common ancestor header that exists in our chain at ancestorHeight.
+		ancestorHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: testhelpers.GenerateMerkleRoot(0),
+			Timestamp:      uint32(time.Now().Unix() - 3600),
+			Nonce:          0,
+		}
+		nBits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+		ancestorHeader.Bits = *nBits
+		testhelpers.MineHeader(ancestorHeader)
+
+		// Cumulative work of each chain tip, proportional to its height, so the secret-mining
+		// work gate sees the local chain (currentHeight blocks) as heavier than the peer's short
+		// fork (ancestorHeight + a few fork blocks). Without this the mock's zero chainwork would
+		// make any offered fork look heavier and bypass the check.
+		perBlockWork := work.CalcBlockWork(binary.LittleEndian.Uint32(nBits.CloneBytes()))
+		ancestorChainWork := new(big.Int).Mul(perBlockWork, big.NewInt(int64(ancestorHeight)))
+		localChainWork := new(big.Int).Mul(perBlockWork, big.NewInt(int64(currentHeight)))
+
+		// Peer's fork: a few blocks built on top of the common ancestor.
+		forkHeaders := testhelpers.CreateSyntheticChainFrom(ancestorHeader, 5)
+		targetBlock := &model.Block{
+			Header: forkHeaders[len(forkHeaders)-1],
+			Height: currentHeight + uint32(len(forkHeaders)),
+		}
+
+		// Ancestor exists locally; fork blocks (and target) do not.
+		mockBlockchainClient.On("GetBlockExists", mock.Anything, ancestorHeader.Hash()).
+			Return(true, nil).Maybe()
+		mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).
+			Return(false, nil).Maybe()
+
+		// findCommonAncestor conveys existence through GetBlockHeader, so the common
+		// ancestor resolves to its header+meta.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, ancestorHeader.Hash()).
+			Return(ancestorHeader, &model.BlockHeaderMeta{Height: ancestorHeight, ID: 1, ChainWork: ancestorChainWork.Bytes()}, nil).Maybe()
+		// Every other header (the peer's fork blocks, and the target) must report
+		// ErrBlockNotFound so the walk stops at the divergence point and the fork
+		// headers stay the peer's offered chain. A permissive catch-all that returned
+		// metadata here would make the whole peer chain look already-present, leaving
+		// zero offered headers for the secret-mining check.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
+
+		// Header-fetch plumbing.
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).
+			Return(ancestorHeader, &model.BlockHeaderMeta{Height: currentHeight, ChainWork: localChainWork.Bytes()}, nil).Maybe()
+		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
+			Return([]*chainhash.Hash{ancestorHeader.Hash()}, nil).Maybe()
+		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
+			Return([]*model.BlockHeader{ancestorHeader}, []*model.BlockHeaderMeta{{Height: ancestorHeight, ID: 1}}, nil).Maybe()
+		currentState := blockchain.FSMStateRUNNING
+		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&currentState, nil).Maybe()
+
+		// mined_set churn surface — registered so the buggy path runs without panic.
+		mockBlockchainClient.On("GetBlockHeadersByHeight", mock.Anything, mock.Anything, mock.Anything).
+			Return([]*model.BlockHeader{ancestorHeader}, []*model.BlockHeaderMeta{{Height: ancestorHeight}}, nil).Maybe()
+		mockBlockchainClient.On("ClearBlockMinedSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockBlockchainClient.On("SendNotification", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+
+		var responseHeaders []byte
+		responseHeaders = append(responseHeaders, ancestorHeader.Bytes()...)
+		for _, h := range forkHeaders {
+			responseHeaders = append(responseHeaders, h.Bytes()...)
+		}
+		httpmock.RegisterResponder(
+			"GET",
+			`=~^http://peer/headers_from_common_ancestor/.*`,
+			httpmock.NewBytesResponder(200, responseHeaders),
+		)
+		// Counts every block fetch, so a test can tell whether the run got that far.
+		httpmock.RegisterResponder("GET", blockFetchPattern, httpmock.NewStringResponder(404, "not found"))
+
+		combinedCleanup := func() {
+			httpmock.DeactivateAndReset()
+			cleanup()
+		}
+
+		return server, mockBlockchainClient, targetBlock, combinedCleanup, ancestorHeader, forkHeaders
+	}
+
+	buildForkScenario := func(t *testing.T, ancestorHeight, currentHeight uint32) (*Server, *blockchain.Mock, *model.Block, func()) {
+		server, mockBlockchainClient, targetBlock, cleanup, _, _ := buildForkScenarioWithHeaders(t, ancestorHeight, currentHeight)
+		return server, mockBlockchainClient, targetBlock, cleanup
+	}
+
+	blockFetches := func() int {
+		return httpmock.GetCallCountInfo()["GET "+blockFetchPattern]
+	}
+
+	t.Run("ForkDepthExceedsCoinbaseMaturity", func(t *testing.T) {
+		// Fork depth 250 - 100 = 150 > CoinbaseMaturity (100) => validateForkDepth rejects.
+		server, mockBlockchainClient, targetBlock, cleanup := buildForkScenario(t, 100, 250)
+		defer cleanup()
+
+		server.settings.ChainCfgParams.CoinbaseMaturity = 100
+		server.settings.BlockValidation.SecretMiningThreshold = 1000 // don't let secret mining fire first
+
+		err := server.catchup(context.Background(), targetBlock, "peer-1145", "http://peer")
+
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "exceeds coinbase maturity")
+
+		mockBlockchainClient.AssertNotCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)
+		mockBlockchainClient.AssertNotCalled(t, "SendNotification", mock.Anything, mock.Anything)
+	})
+
+	t.Run("SecretMiningDepth", func(t *testing.T) {
+		// Fork depth 180 - 100 = 80 <= CoinbaseMaturity (100) so validateForkDepth passes,
+		// but blocksBehind 80 > SecretMiningThreshold (50) => checkSecretMining rejects.
+		server, mockBlockchainClient, targetBlock, cleanup := buildForkScenario(t, 100, 180)
+		defer cleanup()
+
+		server.settings.ChainCfgParams.CoinbaseMaturity = 100
+		server.settings.BlockValidation.SecretMiningThreshold = 50
+
+		err := server.catchup(context.Background(), targetBlock, "peer-1145", "http://peer")
+
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "secretly mined")
+
+		mockBlockchainClient.AssertNotCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)
+		mockBlockchainClient.AssertNotCalled(t, "SendNotification", mock.Anything, mock.Anything)
+	})
+
+	t.Run("ShallowLessWorkForkIsNotFetched", func(t *testing.T) {
+		// Issue 2067: fork depth 110 - 100 = 10, well inside SecretMiningThreshold, and the
+		// offered chain (ancestor + 5 blocks = 105 blocks of work) has less work than our 110.
+		// The run ends as a no-op: no error to charge the peer with, no mined_set churn, and
+		// no move to CATCHINGBLOCKS because nothing is fetched.
+		server, mockBlockchainClient, targetBlock, cleanup := buildForkScenario(t, 100, 110)
+		defer cleanup()
+
+		server.settings.ChainCfgParams.CoinbaseMaturity = 100
+		server.settings.BlockValidation.SecretMiningThreshold = 50
+		mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(nil).Maybe()
+
+		err := server.catchup(context.Background(), targetBlock, "peer-2067", "http://peer")
+
+		require.NoError(t, err)
+		mockBlockchainClient.AssertNotCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)
+		mockBlockchainClient.AssertNotCalled(t, "CatchUpBlocks", mock.Anything)
+		require.Zero(t, blockFetches(), "no block may be fetched")
+	})
+
+	t.Run("LessWorkForkFetchedPastAnnouncedBlockIsNotFetched", func(t *testing.T) {
+		// The peer announces the third fork block but its registry tip is the fifth, so the
+		// header fetch runs past the announced block. The whole list (ancestor + 5 = 105) is
+		// still lighter than our 110, so nothing is fetched or un-stamped.
+		server, mockBlockchainClient, _, cleanup, ancestorHeader, forkHeaders := buildForkScenarioWithHeaders(t, 100, 110)
+		defer cleanup()
+
+		server.settings.ChainCfgParams.CoinbaseMaturity = 100
+		server.settings.BlockValidation.SecretMiningThreshold = 50
+		server.p2pClient = &registryTipP2PClient{subtreeAttributionP2PClient: &subtreeAttributionP2PClient{}, tip: forkHeaders[4].Hash()}
+		mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(nil).Maybe()
+
+		// Serve headers only for a request towards the registry tip, so the test fails if the
+		// fetch falls back to the announced block instead of running past it.
+		var toTip []byte
+		for _, h := range append([]*model.BlockHeader{ancestorHeader}, forkHeaders...) {
+			toTip = append(toTip, h.Bytes()...)
+		}
+		tipPath := "/headers_from_common_ancestor/" + forkHeaders[4].Hash().String()
+		var tipRequests int
+		httpmock.RegisterResponder("GET", `=~^http://peer/headers_from_common_ancestor/.*`, func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != tipPath {
+				return httpmock.NewStringResponse(404, "not found"), nil
+			}
+			tipRequests++
+			return httpmock.NewBytesResponse(200, toTip), nil
+		})
+
+		announced := &model.Block{Header: forkHeaders[2], Height: 103}
+		err := server.catchup(context.Background(), announced, "peer-2067", "http://peer")
+
+		require.NoError(t, err)
+		require.NotZero(t, tipRequests, "the header fetch must ask for the registry tip")
+		mockBlockchainClient.AssertNotCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)
+		mockBlockchainClient.AssertNotCalled(t, "CatchUpBlocks", mock.Anything)
+		require.Zero(t, blockFetches(), "no block may be fetched")
+	})
+
+	t.Run("GappedHeaderListIsAnInvalidResponse", func(t *testing.T) {
+		// The peer leaves out the third fork block. Weighed as it stands the list is lighter
+		// than our tip, but it is not a chain: the run fails as an invalid response, which
+		// charges the peer and tries the other announcers, before mined_set is touched.
+		server, mockBlockchainClient, targetBlock, cleanup, ancestorHeader, forkHeaders := buildForkScenarioWithHeaders(t, 100, 110)
+		defer cleanup()
+
+		server.settings.ChainCfgParams.CoinbaseMaturity = 100
+		server.settings.BlockValidation.SecretMiningThreshold = 50
+
+		var gapped []byte
+		for _, h := range []*model.BlockHeader{ancestorHeader, forkHeaders[0], forkHeaders[1], forkHeaders[3], forkHeaders[4]} {
+			gapped = append(gapped, h.Bytes()...)
+		}
+		httpmock.RegisterResponder("GET", `=~^http://peer/headers_from_common_ancestor/.*`, httpmock.NewBytesResponder(200, gapped))
+
+		err := server.catchup(context.Background(), targetBlock, "peer-2067", "http://peer")
+
+		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "got %v", err)
+		mockBlockchainClient.AssertNotCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)
+		require.Zero(t, blockFetches(), "no block may be fetched")
+	})
+
+	t.Run("GappedHeaderListIsNotReadAsSecretMining", func(t *testing.T) {
+		// Our tip is 80 blocks past the ancestor, beyond SecretMiningThreshold, so a linked
+		// fork this short would be refused as secret mining. A gapped list is not a fork at
+		// all: it fails as an invalid response before the secret-mining check weighs it.
+		server, mockBlockchainClient, targetBlock, cleanup, ancestorHeader, forkHeaders := buildForkScenarioWithHeaders(t, 100, 180)
+		defer cleanup()
+
+		server.settings.ChainCfgParams.CoinbaseMaturity = 100
+		server.settings.BlockValidation.SecretMiningThreshold = 50
+
+		var gapped []byte
+		for _, h := range []*model.BlockHeader{ancestorHeader, forkHeaders[0], forkHeaders[2], forkHeaders[3], forkHeaders[4]} {
+			gapped = append(gapped, h.Bytes()...)
+		}
+		httpmock.RegisterResponder("GET", `=~^http://peer/headers_from_common_ancestor/.*`, httpmock.NewBytesResponder(200, gapped))
+
+		err := server.catchup(context.Background(), targetBlock, "peer-2067", "http://peer")
+
+		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "got %v", err)
+		require.NotContains(t, err.Error(), "secretly mined")
+		mockBlockchainClient.AssertNotCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)
+		require.Zero(t, blockFetches(), "no block may be fetched")
+	})
+
+	t.Run("ShallowEqualWorkForkIsStillFetched", func(t *testing.T) {
+		// Equal work (ancestor + 5 = 105 blocks, our tip at 105) is fetched, as SV Node and
+		// Bitcoin Core do. Passing the gate is visible as the fork's mined_set clearing,
+		// which runs only after every refusal check.
+		server, mockBlockchainClient, targetBlock, cleanup := buildForkScenario(t, 100, 105)
+		defer cleanup()
+
+		server.settings.ChainCfgParams.CoinbaseMaturity = 100
+		server.settings.BlockValidation.SecretMiningThreshold = 50
+
+		_ = server.catchup(context.Background(), targetBlock, "peer-2067", "http://peer")
+
+		mockBlockchainClient.AssertCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)
+		require.NotZero(t, blockFetches(), "an equal-work fork must reach the block fetch")
+	})
+}
+
+// blockFetchPattern matches the single-block and batched block endpoints a catchup fetches from.
+const blockFetchPattern = `=~^http://peer/blocks?/.*`
+
+// registryTipP2PClient serves a fixed registry tip for every peer, so catchupTargetHash fetches
+// headers past the announced block.
+type registryTipP2PClient struct {
+	*subtreeAttributionP2PClient
+
+	tip *chainhash.Hash
+}
+
+func (c *registryTipP2PClient) GetPeer(_ context.Context, _ string) (*p2p.PeerInfo, error) {
+	return &p2p.PeerInfo{BlockHash: c.tip}, nil
+}
+
+// nettingMockStore is the catch-up test's mock UTXO store as a store that nets below the
+// checkpoint and takes outpoint-only spends, the two properties model.NettedRouteAt reads.
+type nettingMockStore struct {
+	*utxo.MockUtxostore
+}
+
+func (nettingMockStore) NetsBelowCheckpoint() bool       { return true }
+func (nettingMockStore) SupportsOutpointOnlySpend() bool { return true }
+
 // TestCatchup_CompetingEqualWorkChains tests handling of chains with equal proof of work
 func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 	t.Run("FollowFirstSeenWithEqualWork", func(t *testing.T) {
 		// This test verifies that the catchup layer can process competing chains
-		// with equal work. The actual "first-seen" tiebreaker (peer_id ASC) is
+		// with equal work. The actual first-stored tiebreaker (chain_work DESC, id ASC) is
 		// implemented in the blockchain store layer - see the test:
-		// TestSqlGetChainTip/equal_chainwork_prefers_lower_peer_id_(first-seen_rule)
+		// TestSqlGetChainTip/equal_chainwork_keeps_the_block_stored_first
 		// in stores/blockchain/sql/GetBestBlockHeader_test.go
 		//
 		// This test tracks which chain's HTTP endpoint was called first during catchup.
@@ -640,8 +975,11 @@ func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 		}
 		testhelpers.MineHeader(genesisHeader)
 
-		// Create two different synthetic chains from the same genesis with equal work
-		// Each chain will have 10 blocks with the same difficulty
+		// Two synthetic chains from the same genesis with equal work. CreateSyntheticChainFrom walks
+		// deterministically from the parent, so with the same genesis and length these are in fact
+		// bit-identical (same hashes) — two peers offering the same 10-block tip, served over
+		// distinct peer URLs below. That is what this test exercises: concurrent equal-work catchup
+		// for the same tip, and which peer's delivery is accepted first.
 		chain1 := testhelpers.CreateSyntheticChainFrom(genesisHeader, 10)
 		chain2 := testhelpers.CreateSyntheticChainFrom(genesisHeader, 10)
 
@@ -674,12 +1012,25 @@ func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
 
+		// Anchored parent-chain runs for both competing chains' blocks:
+		// CheckHeaderContextual requires GetBlockHeaders(parent) to actually return the
+		// parent's chain (issue 1467). Registered before the catch-all below so testify
+		// matches these first.
+		registerParentChainHeaders(mockBlockchainClient, append([]*model.BlockHeader{genesisHeader}, chain1...), 0)
+		registerParentChainHeaders(mockBlockchainClient, append([]*model.BlockHeader{genesisHeader}, chain2...), 0)
+
 		// Mock GetBlockHeaders for common ancestor finding
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*model.BlockHeader{bestBlockHeader}, []*model.BlockHeaderMeta{{Height: 0, ID: 1}}, nil).Maybe()
 
+		// The genesis block (height 0) is our chain tip and the common ancestor; the
+		// competing chains' blocks are absent, so GetBlockHeader reports not found and
+		// the common-ancestor walk stops at genesis.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, bestBlockHeader.Hash()).
+			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 0}, nil).Maybe()
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 0}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlock for any block request
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).
@@ -917,8 +1268,11 @@ func TestCatchup_ForkBattleSimulation(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
 
+		// Peer fork blocks are absent from our chain: not-found stops the
+		// common-ancestor walk at the divergence point.
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlockHeaders for common ancestor finding
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
@@ -1008,6 +1362,11 @@ func TestCatchup_ReorgMetrics(t *testing.T) {
 				nil,
 			).Maybe()
 
+		// Reorg blocks are absent from our chain: not-found stops the common-ancestor walk
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
+
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).
 			Return(&model.Block{Height: 950}, nil).Maybe()
 
@@ -1080,8 +1439,11 @@ func TestCatchup_TimestampValidationDuringFork(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
 
+		// Peer fork blocks are absent from our chain: not-found stops the
+		// common-ancestor walk at the divergence point.
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlockHeaders for common ancestor finding
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
@@ -1196,6 +1558,12 @@ func TestCatchup_CoinbaseMaturityCheckFixed(t *testing.T) {
 				},
 				nil,
 			).Maybe()
+
+		// Their fork headers are absent from our chain: not-found stops the
+		// common-ancestor walk at the divergence point.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlockHeaders for common ancestor finding (returns empty when walking back)
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
@@ -1322,6 +1690,12 @@ func TestCatchup_CoinbaseMaturityCheckFixed(t *testing.T) {
 				},
 				nil,
 			).Maybe()
+
+		// Their fork headers are absent from our chain: not-found stops the
+		// common-ancestor walk at the divergence point.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlockHeaders
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).

@@ -4,11 +4,9 @@ import (
 	"fmt"
 	_ "net/http/pprof" //nolint:gosec // Import for pprof, only enabled via CLI flag
 	"os"
-	"os/exec"
-	"strconv"
-	"strings"
 
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -17,24 +15,57 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-// RunDaemon starts the teranode daemon with all necessary initialization
-func RunDaemon(progname, version, commit string) {
+// redactedConfigDump is the boot-time settings dump RunDaemon logs.
+//
+// gocore's Config().Stats() resolves every setting and decrypts it on the way
+// past, and masks only values still carrying gocore's literal "*EHE*" prefix.
+// A plaintext postgres://user:password@host store URL therefore reaches the log
+// verbatim, and docs/howto/bugReporting.md asks operators to paste this output
+// into a bug report. Redact before either happens.
+//
+// Two passes, because each catches what the other cannot.
+// settings.RedactConfigStats masks every redact-tagged key by name and
+// redacts a key=value row whose whole value is a URL. urlutil.RedactText then
+// works on tokens, so it also reaches the bare argv entries of the CMDLINE
+// section, which have no "key=" in front, and a password holding a raw "/"
+// that url.Parse misreads as host, port and path.
+//
+// It is a named function rather than an expression so a test can assert what
+// RunDaemon actually logs.
+func redactedConfigDump() string {
+	return urlutil.RedactText(settings.RedactConfigStats(gocore.Config().Stats()))
+}
+
+// configAdvertisingPayload is what RunDaemon registers as gocore's "CONFIG"
+// app payload. gocore POSTs it to advertisingURL on every advertising tick,
+// when that setting is non-empty, and Config().GetAll() hands back the raw
+// configuration map with no masking of any kind. Teranode store URLs carry
+// their password in the userinfo, so the raw map is a set of working
+// credentials leaving the node over HTTP.
+//
+// It applies the same two passes as redactedConfigDump.
+func configAdvertisingPayload() interface{} {
+	return urlutil.RedactMapValues(settings.RedactConfigMap(gocore.Config().GetAll()))
+}
+
+// RunDaemon starts the teranode daemon with all necessary initialization and
+// blocks until it stops. It returns the error that brought the daemon down, or
+// nil after a clean shutdown; the caller turns that into the exit status.
+func RunDaemon(progname, version, commit string) error {
 	// Initialize gocore with version info
 	gocore.SetInfo(progname, version, commit)
 
 	// Call the gocore.Log function to initialize the logger and start the Unix domain socket that allows us to configure settings at runtime.
 	gocore.Log(progname)
 
-	gocore.AddAppPayloadFn("CONFIG", func() interface{} {
-		return gocore.Config().GetAll()
-	})
+	gocore.AddAppPayloadFn("CONFIG", configAdvertisingPayload)
 
 	// Initialize settings
 	tSettings := settings.NewSettings()
 
 	// Configure GC tuning (GOMEMLIMIT + GOGC) based on cgroup memory limits.
 	// Must happen early, before services allocate significant memory.
-	daemon.ConfigureGCTuning(tSettings.GCTuning)
+	daemon.ConfigureGCTuning(tSettings, os.Args[1:])
 
 	debugflags.Init(debugflags.Flags{
 		All:       tSettings.Debug.All,
@@ -43,47 +74,48 @@ func RunDaemon(progname, version, commit string) {
 		UTXOStore: tSettings.Debug.UTXOStore,
 	})
 
+	logger := ulogger.InitLogger(progname, tSettings)
+
 	readLimit := tSettings.Block.FileStoreReadConcurrency
 	writeLimit := tSettings.Block.FileStoreWriteConcurrency
-
-	if tSettings.Block.FileStoreUseSystemLimits {
-		out, err := exec.Command("bash", "-c", "ulimit -u").Output()
-		if err != nil {
-			fmt.Printf("Warning: Failed to get ulimit: %v, using configured limits\n", err)
-		} else {
-			limit, err := strconv.Atoi(strings.TrimSpace(string(out)))
-			if err != nil {
-				fmt.Printf("Warning: Failed to parse ulimit: %v, using configured limits\n", err)
-			} else if limit > 0 {
-				if limit > file.MaxSemaphoreLimit {
-					limit = file.MaxSemaphoreLimit
-				}
-
-				readLimit = limit * 3 / 4
-				writeLimit = limit / 4
-			}
-		}
-	}
 
 	// CRITICAL: Initialize file store semaphores BEFORE any file operations begin.
 	// This MUST happen before daemon.Start() creates any file stores or starts any
 	// services that use file stores. The InitSemaphores function replaces global
 	// channel variables and is not safe to call after file operations have started.
 	// See file.go for detailed documentation on the race condition risk.
-	if err := file.InitSemaphores(readLimit, writeLimit); err != nil {
+	//
+	// It runs after the logger exists so that a reduced concurrency reaches the
+	// operator's log rather than only stdout. Nothing between here and
+	// daemon.Start() opens a file store.
+	//
+	// Note for anyone tempted to reinstate a shell-out here: the previous version
+	// read "ulimit -u", which is the max-user-processes limit rather than the
+	// open-file limit, and scaled concurrency UP from it. The open-file limit is
+	// now read directly, in util/fdlimit.
+	applied, err := file.InitSemaphores(readLimit, writeLimit, tSettings.Block.FileStoreUseSystemLimits)
+	if err != nil {
 		panic(fmt.Sprintf("Failed to initialize file store semaphores: %v", err))
 	}
 
-	fmt.Printf("File store semaphores initialized: read=%d, write=%d\n", readLimit, writeLimit)
-
-	logger := ulogger.InitLogger(progname, tSettings)
+	if applied.Clamped {
+		// Deliberately a warning and not fatal. The semaphores are a ceiling on
+		// concurrent operations, not a reservation of descriptors, so the node runs
+		// correctly here — just with less file concurrency than was configured.
+		// Refusing to start would turn a bounded, already-handled condition into
+		// total unavailability from boot (issue 1431).
+		logger.Warnf("File store concurrency reduced to fit the open-file limit: read=%d, write=%d (configured read=%d, write=%d). Raise the hard limit (ulimit -Hn, systemd LimitNOFILE, or macOS kern.maxfilesperproc) to use the configured concurrency.",
+			applied.Read, applied.Write, readLimit, writeLimit)
+	} else {
+		logger.Infof("File store semaphores initialized: read=%d, write=%d", applied.Read, applied.Write)
+	}
 
 	util.InitGRPCResolver(logger, tSettings.GRPCResolver)
 
-	stats := gocore.Config().Stats()
+	stats := redactedConfigDump()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
-	daemon.New(daemon.WithLoggerFactory(func(serviceName string) ulogger.Logger {
+	return daemon.New(daemon.WithLoggerFactory(func(serviceName string) ulogger.Logger {
 		return ulogger.New(serviceName, ulogger.WithLevel(tSettings.LogLevel))
 	})).Start(logger, os.Args[1:], tSettings)
 }

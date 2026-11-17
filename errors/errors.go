@@ -150,33 +150,52 @@ func (e *Error) Error() string {
 	return b.String()
 }
 
-// Is reports whether error codes match.
+// maxIsChainDepth bounds the chain walk in (*Error).Is as insurance against a
+// cycle that slipped past SetWrappedErr's guards. Far above any legitimate
+// chain depth.
+const maxIsChainDepth = 1 << 20
+
+// Is reports whether any error in e's wrapped chain matches target's code.
+//
+// Implemented as a flat loop. The previous implementation recursed into the
+// remaining chain at every level — and the stdlib errors.Is driver already
+// invokes this method once per unwrap level — giving O(N²) reflection-based
+// errors.As calls for an N-link chain. A mass spend failure on a
+// high-input-count tx produced chains tens of thousands of links deep,
+// turning a single errors.Is into CPU-hours (mainnet IBD stall, block 820116).
 func (e *Error) Is(target error) bool {
 	if e == nil || target == nil {
 		return false
 	}
 
-	var targetError *Error
-	ok := errors.As(target, &targetError)
-	if !ok {
-		// fmt.Println("Target is not of type *Error, checking \ne.Error()", e.Error(), "contains() target.Error():\n", target.Error())
+	// Resolve the target *Error once, not per chain link.
+	targetError, ok := target.(*Error)
+	if !ok && !errors.As(target, &targetError) {
+		// Target is not an *Error: fall back to substring matching on the
+		// rendered message. Error() truncates the chain at a fixed depth, so
+		// this stays bounded even for pathological chains.
 		return strings.Contains(e.Error(), target.Error())
 	}
 
-	if e.code == targetError.code {
-		return true
-	}
-
-	if e.wrappedErr == nil {
-		return false
-	}
-
-	// Unwrap the current error and recursively call Is on the unwrapped error
-	if unwrapped := errors.Unwrap(e); unwrapped != nil {
-		var ue *Error
-		if errors.As(unwrapped, &ue) {
-			return ue.Is(target)
+	for cur, depth := e, 0; cur != nil && depth < maxIsChainDepth; depth++ {
+		if cur.code == targetError.code {
+			return true
 		}
+
+		if cur.wrappedErr == nil {
+			return false
+		}
+
+		next, ok := cur.wrappedErr.(*Error)
+		if !ok {
+			// Non-*Error link: let errors.As dig through foreign wrappers to
+			// the next *Error, mirroring the previous unwrap behaviour.
+			if !errors.As(cur.wrappedErr, &next) {
+				return false
+			}
+		}
+
+		cur = next
 	}
 
 	return false
@@ -238,6 +257,14 @@ func (e *Error) SetWrappedErr(err error) {
 	lastErr := e
 
 	for lastErr.wrappedErr != nil {
+		// Fast path: direct *Error link, no reflection. Appending to an N-link
+		// chain via errors.As cost O(N) reflection calls per append — O(N²) to
+		// build a chain through repeated appends (the errors.Join loop shape).
+		if next, ok := lastErr.wrappedErr.(*Error); ok {
+			lastErr = next
+			continue
+		}
+
 		if errors.As(lastErr.wrappedErr, &lastWrappedErr) {
 			lastErr = lastWrappedErr
 		} else {
@@ -320,6 +347,12 @@ func (e *Error) GetData(key string) interface{} {
 }
 
 // New creates a new Error instance with the specified code, message, and optional parameters.
+//
+// Pass the causing error as the final argument to wrap it; do NOT use a %w verb
+// in the message. The trailing error is extracted before fmt.Errorf runs, so a
+// %w would be orphaned (rendering "%!w(MISSING)" or a literal "%w"); the wrapped
+// error is rendered by Error() via " -> " instead. Any orphaned %w is stripped
+// defensively, but the errors.New* format strings should simply omit it.
 func New(code ERR, message string, params ...interface{}) *Error {
 	var wErr *Error
 
@@ -335,6 +368,15 @@ func New(code ERR, message string, params ...interface{}) *Error {
 			wErr = &Error{message: err.Error()}
 			params = params[:len(params)-1]
 		}
+	}
+
+	// A trailing error argument was extracted as the wrapped error above, so any
+	// %w verb left in the format string is now orphaned: fmt.Errorf would render
+	// it as %!w(MISSING), or (when no params remain) the literal %w would survive
+	// unformatted. The wrapped error is rendered by Error() via " -> ", so the
+	// verb is redundant here — strip it. Escaped %%w is preserved.
+	if wErr != nil {
+		message = stripOrphanedWrapVerbs(message)
 	}
 
 	// Format the message with the remaining parameters
@@ -379,6 +421,53 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	}
 
 	return returnErr
+}
+
+// stripOrphanedWrapVerbs removes unescaped %w verbs from a format string, together
+// with one immediately preceding separator run (trailing spaces and/or ':', '-',
+// ','), so "GetBlock: %w" -> "GetBlock" and "failed %s: %w" -> "failed %s". Escaped
+// verbs (%%w, i.e. a literal "%w") are preserved. It is only called once a trailing
+// error argument has been extracted as the wrapped error, at which point any %w in
+// the format is orphaned (see New). The scan is escape-aware rather than a regex so
+// that the second % of a %%w sequence is never mistaken for a verb.
+func stripOrphanedWrapVerbs(format string) string {
+	if !strings.Contains(format, "%w") {
+		return format
+	}
+
+	var b strings.Builder
+	b.Grow(len(format))
+
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' {
+			b.WriteByte(format[i])
+			continue
+		}
+
+		// Escaped percent: keep both bytes verbatim so "%%w" stays a literal "%w".
+		if i+1 < len(format) && format[i+1] == '%' {
+			b.WriteString("%%")
+			i++
+
+			continue
+		}
+
+		// Orphaned wrap verb: drop it and tidy any dangling separator that preceded it.
+		if i+1 < len(format) && format[i+1] == 'w' {
+			s := strings.TrimRight(b.String(), " ")
+			s = strings.TrimRight(s, ":-,")
+			s = strings.TrimRight(s, " ")
+			b.Reset()
+			b.WriteString(s)
+			i++
+
+			continue
+		}
+
+		b.WriteByte(format[i])
+	}
+
+	return b.String()
 }
 
 // contains checks if the target error or any of its wrapped errors exist in this error's chain
@@ -669,6 +758,134 @@ func WrapGRPC(err error) error {
 	}
 }
 
+// publicCauseCodes is the allowlist of client-safe verdict codes whose inner
+// code+message may be surfaced through the public error boundary. Each names a
+// verdict about the submitted transaction, carries no node-internal state, and
+// is actionable by the submitter; everything else collapses to the outermost code.
+//
+// This allowlist is intentionally narrower than the set of codes an HTTP handler
+// may classify as client errors: some codes earn a specific 4xx status yet are
+// deliberately absent here and from ErrorCodeToGRPCCode. An HTTP status only sorts
+// the request into a coarse client-error category and exposes neither the detailed
+// ERR code nor its message; surfacing a message is held to the stricter bar of a
+// client-safe, actionable verdict. Widening this set therefore needs the same
+// safety review — it is not kept in sync with the HTTP classifier by design.
+var publicCauseCodes = map[ERR]struct{}{
+	ERR_UTXO_NON_FINAL:          {},
+	ERR_TX_LOCK_TIME:            {},
+	ERR_TX_POLICY:               {},
+	ERR_TX_INVALID:              {},
+	ERR_TX_INVALID_DOUBLE_SPEND: {},
+	ERR_TX_CONFLICTING:          {},
+	ERR_UTXO_SPENT:              {},
+	ERR_TX_LOCKED:               {},
+	// ERR_TX_CREATING is the same kind of verdict as ERR_TX_LOCKED: the parent
+	// tx this one spends from is still completing its own commit. It carries no
+	// node-internal state and is actionable by the submitter (resubmit shortly),
+	// so it belongs on the same allowlist for the same reason ERR_TX_LOCKED does.
+	ERR_TX_CREATING: {},
+	// ERR_UTXO_FROZEN is a verdict about the submitted tx — an output it spends is
+	// held, either outright or until a given height. Its producers do not all
+	// format the same fields, so the claim here is only that none of them carries
+	// node-internal state: the transaction id always, the output index in every
+	// producer except the aerospike record-group formatter (createGeneralError,
+	// which reports the group rather than one output and substitutes the current
+	// block height), and the height the hold expires at only where the store knows
+	// it. All of that is either supplied by the submitter or already public.
+	ERR_UTXO_FROZEN: {},
+	// ERR_TX_MISSING_PARENT meets every bar above: its messages name transactions
+	// and nothing else, and "a parent this transaction spends is not in my utxo
+	// set" is the most actionable thing a submitter can be told — resubmit the
+	// parent, or resubmit this one after it lands. Call sites should name the
+	// child and the parent; one today does not (validator.extendTransaction says
+	// only "error extending transaction, parent tx not found"), which costs the
+	// client detail but never leaks node state.
+	//
+	// It is also the code whose absence did the most damage. Collapsing it to
+	// the outermost PROCESSING wrapper made an ordering artifact
+	// indistinguishable from a permanent validation failure, so clients that
+	// broadcast a chain across several requests terminalized their own
+	// children as REJECTED and cascaded that verdict onto the descendants.
+	ERR_TX_MISSING_PARENT: {},
+}
+
+// Deliberately NOT on the allowlist, recorded so the decision is not re-made by
+// accident:
+//
+//   - ERR_TX_COINBASE_IMMATURE: the message is built by the utxo store and
+//     embeds the node's block height and an internal batch id. It would qualify
+//     once it carries only the outpoint and the maturity height. RPC's
+//     sendrawtransaction shows it as a fixed text instead (services/rpc,
+//     fixedVerdictText), which needs no change here.
+//   - ERR_STORAGE_ERROR, ERR_SERVICE_ERROR, ERR_PROCESSING: faults in this
+//     node, not verdicts. Collapsing them is correct — a caller that cannot
+//     tell them apart from a rejection would terminalize on an outage.
+
+// isPublicCause reports whether code is on the client-safe allowlist.
+func isPublicCause(code ERR) bool {
+	_, ok := publicCauseCodes[code]
+	return ok
+}
+
+// DeepestPublicCause walks err's wrapped chain and returns the innermost error
+// whose code is on the client-safe allowlist (publicCauseCodes), or nil if none
+// is present. The walk is bounded like (*Error).Is to stay safe on pathological
+// chains. Only code+message are meaningful on the returned error; callers must
+// never surface its file/line/function, data, or the rest of the chain.
+//
+// This helper backs the shared public error boundary — UserMessage, PublicError,
+// and thus WrapGRPCPublic — consumed by all external surfaces (propagation /tx and
+// /txs, the asset HTTP error boundary, p2p), so preferring the deepest allowlisted
+// cause is a global boundary behaviour, not scoped to a single service. It is safe
+// by construction: only codes on publicCauseCodes are ever surfaced, and any other
+// cause collapses to the outermost code.
+func DeepestPublicCause(err error) *Error {
+	if err == nil {
+		return nil
+	}
+
+	var cur *Error
+	if !errors.As(err, &cur) || cur == nil {
+		return nil
+	}
+
+	var deepest *Error
+
+	for depth := 0; cur != nil && depth < maxIsChainDepth; depth++ {
+		if isPublicCause(cur.code) {
+			deepest = cur
+		}
+
+		if cur.wrappedErr == nil {
+			break
+		}
+
+		next, ok := cur.wrappedErr.(*Error)
+		if !ok {
+			// Non-*Error link: let errors.As dig through foreign wrappers to
+			// the next *Error, mirroring (*Error).Is.
+			if !errors.As(cur.wrappedErr, &next) {
+				break
+			}
+		}
+
+		cur = next
+	}
+
+	return deepest
+}
+
+// IsPublicCause reports whether code is on the shared public-cause allowlist.
+//
+// Exported so a surface that needs per-link membership rather than
+// DeepestPublicCause's whole-chain answer still asks publicCauseCodes instead of
+// keeping its own copy. A second list is how the closed-membership test in
+// public_cause_allowlist_test.go gets bypassed: the widening happens somewhere
+// the test does not look.
+func IsPublicCause(code ERR) bool {
+	return isPublicCause(code)
+}
+
 // UserMessage returns a concise, user-facing error message without wrapped error chains or data.
 // It is intended for external surfaces (HTTP/gRPC) where internal details should not be exposed.
 func UserMessage(err error) string {
@@ -678,6 +895,12 @@ func UserMessage(err error) string {
 
 	if isGRPCWrappedError(err) {
 		err = UnwrapGRPC(err)
+	}
+
+	// Prefer an allowlisted verdict cause so actionable tx-rejection reasons
+	// survive the boundary instead of collapsing to the outermost generic code.
+	if cause := DeepestPublicCause(err); cause != nil {
+		return fmt.Sprintf(errCodeMsgFmt, cause.code.String(), cause.code, cause.message)
 	}
 
 	var tErr *Error
@@ -702,6 +925,14 @@ func PublicError(err error) *Error {
 
 	if isGRPCWrappedError(err) {
 		err = UnwrapGRPC(err)
+	}
+
+	// Prefer an allowlisted verdict cause when present; still emit code+message only.
+	if cause := DeepestPublicCause(err); cause != nil {
+		return &Error{
+			code:    cause.code,
+			message: cause.message,
+		}
 	}
 
 	var tErr *Error
@@ -795,45 +1026,84 @@ func UnwrapGRPC(err error) *Error {
 		}
 	}
 
-	var prevErr, currErr *Error
+	links := make([]*TError, 0, len(st.Details()))
 
-	for i := len(st.Details()) - 1; i >= 0; i-- {
+	for _, detail := range st.Details() {
 		// Cast the protoadapt.MessageV1 to *anypb.Any, which is what we need to unmarshal
-		detail := st.Details()[i]
 		detailAny, ok := detail.(*anypb.Any)
-
 		if !ok {
 			// TODO: This should not happen, detail is not of type anypb.Any. What to do here?
 			continue // If the detail isn't of the expected type, skip it
 		}
 
-		var customDetails TError
-		if err = anypb.UnmarshalTo(detailAny, &customDetails, proto.UnmarshalOptions{}); err == nil {
-			currErr = New(customDetails.Code, customDetails.Message)
-
-			if customDetails.Data != nil {
-				// get the data
-				data, errorGettingData := GetErrorData(customDetails.Code, customDetails.Data)
-				if errorGettingData != nil {
-					// TODO (GOKHAN) CHECK OPTION OF LOGGING / PRINTING HERE
-					currErr.data = nil
-				} else {
-					currErr.data = data
-				}
-			}
-
-			// Set file, line and function information from the TError
-			currErr.file = customDetails.File
-			currErr.line = int(customDetails.Line)
-			currErr.function = customDetails.Function
-
-			// if we moved up higher in the hierarchy
-			if prevErr != nil {
-				currErr.wrappedErr = prevErr
-			}
-
-			prevErr = currErr
+		customDetails := &TError{}
+		if err = anypb.UnmarshalTo(detailAny, customDetails, proto.UnmarshalOptions{}); err == nil {
+			links = append(links, customDetails)
 		}
+	}
+
+	return chainFromTErrors(links)
+}
+
+// UnwrapTError converts a *TError chain into the equivalent *Error chain.
+//
+// A *TError is the protobuf form of an error, and it reaches callers without a
+// gRPC status around it wherever a response message carries errors as a field -
+// the validator's batch response does, one per transaction. Handing it on
+// unconverted leaves every consumer that reads a Teranode error with As seeing a
+// foreign one, so this is the same conversion UnwrapGRPC applies to a status.
+//
+// Returns nil for a nil or empty *TError.
+func UnwrapTError(t *TError) *Error {
+	if t.IsNil() {
+		return nil
+	}
+
+	// Iterative, not recursive: a mass spend failure builds a chain tens of
+	// thousands of links deep, and Wrap already recursed once to encode it.
+	links := make([]*TError, 0, 4)
+	for cur := t; cur != nil; cur = cur.WrappedError {
+		links = append(links, cur)
+	}
+
+	return chainFromTErrors(links)
+}
+
+// chainFromTErrors rebuilds an *Error chain from its protobuf links, given
+// outermost first. Code, message, data and source location are carried across
+// link by link, and the result's wrapping order matches the input order.
+//
+// Returns nil when links is empty.
+func chainFromTErrors(links []*TError) *Error {
+	var prevErr, currErr *Error
+
+	for i := len(links) - 1; i >= 0; i-- {
+		link := links[i]
+
+		currErr = New(link.Code, link.Message)
+
+		if link.Data != nil {
+			// get the data
+			data, errorGettingData := GetErrorData(link.Code, link.Data)
+			if errorGettingData != nil {
+				// TODO (GOKHAN) CHECK OPTION OF LOGGING / PRINTING HERE
+				currErr.data = nil
+			} else {
+				currErr.data = data
+			}
+		}
+
+		// Set file, line and function information from the TError
+		currErr.file = link.File
+		currErr.line = int(link.Line)
+		currErr.function = link.Function
+
+		// if we moved up higher in the hierarchy
+		if prevErr != nil {
+			currErr.wrappedErr = prevErr
+		}
+
+		prevErr = currErr
 	}
 
 	return currErr
@@ -848,6 +1118,48 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 		return codes.InvalidArgument
 	case ERR_THRESHOLD_EXCEEDED:
 		return codes.ResourceExhausted
+	// Tx-rejection verdicts: the submitted tx is not acceptable — a client error,
+	// not a server fault. This is a pure ERR->codes.Code lookup consumed by BOTH
+	// WrapGRPC (outermost code) and WrapGRPCPublic (public cause), so these rows
+	// change the gRPC status for every WrapGRPC caller, not only the public tx
+	// surfaces. That reach is intentional and benign: no caller branches on
+	// codes.Internal, the retry gate keys only on Unavailable/DeadlineExceeded, and
+	// application control-flow keys on the reconstructed ERR code, not the gRPC code.
+	case ERR_TX_INVALID, ERR_TX_LOCK_TIME, ERR_UTXO_NON_FINAL, ERR_TX_POLICY:
+		return codes.InvalidArgument
+	// Conflict/locked family: valid request, chain-state conflict. TX_MISSING_PARENT
+	// belongs here rather than with the InvalidArgument rows above: the bytes are
+	// not the problem, the node's current utxo set is, and the same submission
+	// succeeds once the parent lands. Every code on publicCauseCodes must have a
+	// row in this switch — WrapGRPCPublic derives its status from the public cause,
+	// so an allowlisted code that falls through to codes.Internal returns the right
+	// message inside a transport status that says "this node broke", which is
+	// exactly the ambiguity the allowlist exists to remove.
+	//
+	// Most codes in this family clear on their own, but ERR_UTXO_FROZEN does not —
+	// an outright freeze never clears, and a height-gated hold clears only many
+	// blocks later — so the family name should not be read as a promise that it
+	// will. It still belongs here rather than codes.PermissionDenied, which gRPC
+	// reserves for the caller lacking authorisation: a frozen output rejects every
+	// submitter equally, so it is a statement about the chain state, not about who
+	// asked. The HTTP layer answers 403 for the same error and the two maps are
+	// independent by design; see httpStatusForTxError in services/propagation.
+	case ERR_TX_INVALID_DOUBLE_SPEND, ERR_TX_CONFLICTING, ERR_TX_REJECTED_CONFLICTING, ERR_UTXO_SPENT, ERR_TX_LOCKED,
+		ERR_TX_CREATING, ERR_UTXO_FROZEN, ERR_TX_MISSING_PARENT:
+		return codes.FailedPrecondition
+	// ERR_TX_UNLOCK_FAILED is not in the family above: the transaction WAS accepted
+	// (spent, created, delivered to block assembly) and only the post-acceptance
+	// unlock failed, so FailedPrecondition would be the wrong claim — that family
+	// means "not accepted yet, come back later", while a resubmit of this one is an
+	// already-exists success. Aborted says "the operation took effect, its final step
+	// did not", which is the truth, and matches what the validator's own HTTP /tx
+	// handler answers for the same outcome (200 OK, see handleSingleTx). It is not on
+	// publicCauseCodes, so the message stays private inside the status. Safe to move
+	// off codes.Internal: the retry gate keys on Unavailable/DeadlineExceeded only and
+	// the oversized-message HTTP fallback keys on ResourceExhausted, so neither fires
+	// on Aborted, and callers key control flow on the reconstructed ERR code.
+	case ERR_TX_UNLOCK_FAILED:
+		return codes.Aborted
 	default:
 		return codes.Internal
 	}
@@ -893,12 +1205,65 @@ func Join(errs ...error) error {
 	return errors.New(strings.Join(messages, ", "))
 }
 
+// JoinCapped combines errors like Join but keeps at most maxErrs wrapped
+// links; the remainder is summarized by count in a final link. Use it for
+// per-item failure aggregation (batch spends, batch record updates) where the
+// item count is unbounded: every link makes each subsequent errors.Is walk
+// longer, gRPC serialization carries the whole chain, and nobody consumes
+// more than the first few links anyway.
+func JoinCapped(maxErrs int, errs ...error) error {
+	if maxErrs <= 0 {
+		maxErrs = 1
+	}
+
+	kept := make([]error, 0, min(len(errs), maxErrs+1))
+	total := 0
+
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+
+		total++
+
+		if len(kept) < maxErrs {
+			kept = append(kept, err)
+		}
+	}
+
+	if total == 0 {
+		return nil
+	}
+
+	if total > maxErrs {
+		kept = append(kept, NewError(fmt.Sprintf("... and %d more errors", total-maxErrs)))
+	}
+
+	return Join(kept...)
+}
+
 // Is checks if the error matches the target error.
 func Is(err, target error) bool {
 	origErr := err
 
 	if isGRPCWrappedError(err) {
 		err = UnwrapGRPC(err)
+	}
+
+	// Fast path: both sides are *Error — one flat O(N) chain walk.
+	// Letting the stdlib errors.Is drive instead invokes (*Error).Is once per
+	// unwrap level, each walking the remaining chain: O(N²) on deep chains.
+	// (*Error).Is digs through foreign (non-*Error) links via errors.As, so
+	// the only behaviour given up is a foreign error type whose own Is method
+	// matches a teranode *Error target — a shape that does not exist here.
+	if e, ok := err.(*Error); ok {
+		if t, ok := target.(*Error); ok {
+			if e.Is(t) {
+				return true
+			}
+
+			return checkGRPCContextError(origErr, err, target)
+		}
 	}
 
 	if errors.Is(err, target) {

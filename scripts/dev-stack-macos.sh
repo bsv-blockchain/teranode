@@ -95,10 +95,10 @@ is_container_running() {
     local container_name=$1
     local inspect_output
     inspect_output=$($CONTAINER_BINARY inspect "$container_name" 2>/dev/null || echo "[]")
-    if [ "$inspect_output" != "[]" ]; then
+    if [[ "$inspect_output" != "[]" ]]; then
         local state
         state=$(echo "$inspect_output" | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "")
-        [ "$state" = "running" ] && return 0
+        [[ "$state" = "running" ]] && return 0
     fi
     return 1
 }
@@ -202,7 +202,7 @@ stop_container() {
     local container_name=$1
     local inspect_output
     inspect_output=$($CONTAINER_BINARY inspect "$container_name" 2>/dev/null || echo "[]")
-    if [ "$inspect_output" = "[]" ]; then
+    if [[ "$inspect_output" = "[]" ]]; then
         return 0
     fi
 
@@ -278,7 +278,7 @@ show_status() {
 show_logs() {
     local follow="${1:-false}"
 
-    if [ "$follow" = "true" ]; then
+    if [[ "$follow" = "true" ]]; then
         echo "📜 Following Container Logs (Ctrl+C to stop):"
         echo ""
 
@@ -304,7 +304,7 @@ show_logs() {
             fi
         done
 
-        if [ ${#pids[@]} -eq 0 ]; then
+        if [[ ${#pids[@]} -eq 0 ]]; then
             echo "No running containers found"
             return 1
         fi
@@ -337,7 +337,7 @@ clean_data() {
         fi
     done
 
-    if [ ${#running_containers[@]} -gt 0 ]; then
+    if [[ ${#running_containers[@]} -gt 0 ]]; then
         echo "❌ Error: Cannot clean data while containers are running" >&2
         echo "" >&2
         echo "Running containers:" >&2
@@ -359,7 +359,7 @@ clean_data() {
 
     # Ask for confirmation
     read -p "Are you sure you want to delete all data? (yes/no): " confirmation
-    if [ "$confirmation" != "yes" ]; then
+    if [[ "$confirmation" != "yes" ]]; then
         echo "Cancelled."
         return 0
     fi
@@ -368,14 +368,14 @@ clean_data() {
     echo ""
     echo "Deleting data directories..."
 
-    if [ -d "${DATA_PATH}/aerospike" ]; then
+    if [[ -d "${DATA_PATH}/aerospike" ]]; then
         rm -rf "${DATA_PATH}/aerospike"
         echo "✅ Deleted ${DATA_PATH}/aerospike"
     else
         echo "  ${DATA_PATH}/aerospike does not exist"
     fi
 
-    if [ -d "${DATA_PATH}/postgres" ]; then
+    if [[ -d "${DATA_PATH}/postgres" ]]; then
         rm -rf "${DATA_PATH}/postgres"
         echo "✅ Deleted ${DATA_PATH}/postgres"
     else
@@ -389,12 +389,12 @@ clean_data() {
 # Main execution
 ACTION="${1:-}"
 
-if [ -z "$ACTION" ]; then
+if [[ -z "$ACTION" ]]; then
     usage
 fi
 
 # Only allow a single sub-command
-if [ $# -gt 1 ]; then
+if [[ $# -gt 1 ]]; then
     echo "Error: Only one command allowed at a time. Got: $*" >&2
     echo "" >&2
     usage

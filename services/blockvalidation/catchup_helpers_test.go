@@ -2,6 +2,7 @@ package blockvalidation
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,9 +11,12 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // TestValidateBlockHeaderBytes tests the validateBlockHeaderBytes function
@@ -417,3 +421,42 @@ func TestCreateCatchupResult(t *testing.T) {
 
 // Note: setupTestCatchupServer is already defined in catchup_coinbase_maturity_test.go
 // and reused across test files in this package
+
+// registerParentChainHeaders registers a GetBlockHeaders expectation for every
+// header in the ascending chain, returning the newest-first run anchored at the
+// requested hash and walking back to the chain start — the shape the real
+// blockchain client returns. CheckHeaderContextual requires the parent chain to
+// be anchored at the validated block's parent (issue 1467), so catch-all
+// GetBlockHeaders mocks that return an unrelated header no longer pass
+// validation; register these BEFORE any catch-all expectation so testify
+// matches them first.
+func registerParentChainHeaders(mockClient *blockchain.Mock, ascending []*model.BlockHeader, baseHeight uint32) {
+	for i := range ascending {
+		run := make([]*model.BlockHeader, 0, i+1)
+		metas := make([]*model.BlockHeaderMeta, 0, i+1)
+
+		for j := i; j >= 0; j-- {
+			run = append(run, ascending[j])
+			metas = append(metas, &model.BlockHeaderMeta{Height: baseHeight + uint32(j), ID: uint32(j + 1)}) // nolint:gosec
+		}
+
+		mockClient.On("GetBlockHeaders", mock.Anything, ascending[i].Hash(), mock.Anything).
+			Return(run, metas, nil).Maybe()
+	}
+}
+
+// regtestGenesisHeader returns the real regtest genesis block header. Fixtures
+// whose block is built on the regtest genesis hash need the genuine header —
+// CheckHeaderContextual verifies the supplied parent chain is anchored at the
+// block's parent by hash (issue 1467), so a fabricated stand-in no longer works.
+func regtestGenesisHeader(t *testing.T) *model.BlockHeader {
+	t.Helper()
+
+	genesisBytes, err := hex.DecodeString("0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f2002000000")
+	require.NoError(t, err)
+
+	genesis, err := model.NewBlockHeaderFromBytes(genesisBytes)
+	require.NoError(t, err)
+
+	return genesis
+}

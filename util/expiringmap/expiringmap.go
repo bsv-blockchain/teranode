@@ -23,6 +23,11 @@ type ExpiringMap[K comparable, V any] struct {
 	evictionFn func(K, V) bool
 	stopCh     chan struct{}
 	maxSize    int
+
+	// randomEviction selects the cap-eviction policy: false evicts the oldest
+	// entry by insertion time, which scans every entry; true evicts whichever
+	// entry a map iteration yields first, one step whatever the size.
+	randomEviction bool
 }
 
 // New creates a new ExpiringMap with the given expiry duration.
@@ -82,16 +87,32 @@ func (m *ExpiringMap[K, V]) WithEvictionFunction(f func(K, V) bool) *ExpiringMap
 // the new entry is added. If an eviction function is configured and it vetoes
 // the eviction of the oldest entry, the new entry is dropped instead — the
 // cap is always honored. A value of 0 (the default) disables the cap and
-// preserves the original unbounded behaviour.
+// preserves the original unbounded behaviour. WithRandomEviction swaps the
+// oldest-entry policy for an arbitrary-entry one.
 //
-// Note: cap-eviction's eviction-channel send is non-blocking (the notification
-// is dropped if the channel is full), since cap-eviction runs synchronously
-// inside Set. The TTL clean() path's eviction-channel send remains blocking.
+// Note: the eviction-channel send is non-blocking on both the cap-eviction
+// path (inside Set) and the TTL clean() path (the ticker) — the notification
+// is dropped if the channel is full — so eviction never blocks under m.mu.
 func (m *ExpiringMap[K, V]) WithMaxSize(n int) *ExpiringMap[K, V] {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.maxSize = n
+	return m
+}
+
+// WithRandomEviction makes a cap eviction remove whichever entry a map
+// iteration yields first instead of the oldest. Finding the oldest entry
+// scans the whole map on every insert at the cap, which is linear in the cap;
+// a map with hundreds of thousands of entries, such as the legacy service's
+// set of transaction hashes already asked for, needs this one-step policy.
+// The eviction function and channel fire for the removed entry exactly as
+// they do for the oldest-entry policy.
+func (m *ExpiringMap[K, V]) WithRandomEviction() *ExpiringMap[K, V] {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.randomEviction = true
 	return m
 }
 
@@ -102,7 +123,7 @@ func (m *ExpiringMap[K, V]) Set(key K, value V) {
 
 	now := time.Now()
 	if _, exists := m.items[key]; !exists && m.maxSize > 0 && len(m.items) >= m.maxSize {
-		if !m.evictOldestLocked() {
+		if !m.evictOneLocked() {
 			return
 		}
 	}
@@ -112,6 +133,63 @@ func (m *ExpiringMap[K, V]) Set(key K, value V) {
 		expiry:  now.Add(m.expiry).UnixNano(),
 		addedAt: now.UnixNano(),
 	}
+}
+
+// SetIfAbsent sets the value for the given key only if the key is absent, and
+// returns whether it wrote. An entry past its expiry that the sweeper has not
+// yet removed counts as absent, as it does for Get. It takes the lock once, so
+// two callers racing on one key see exactly one true. The size cap applies as
+// in Set, and a vetoed eviction returns false without writing.
+func (m *ExpiringMap[K, V]) SetIfAbsent(key K, value V) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+
+	if item, exists := m.items[key]; exists && now.UnixNano() <= item.expiry {
+		return false
+	} else if !exists && m.maxSize > 0 && len(m.items) >= m.maxSize {
+		if !m.evictOneLocked() {
+			return false
+		}
+	}
+
+	m.items[key] = &itemWrapper[V]{
+		item:    value,
+		expiry:  now.Add(m.expiry).UnixNano(),
+		addedAt: now.UnixNano(),
+	}
+
+	return true
+}
+
+// evictOneLocked removes one entry under the configured policy: the oldest by
+// default, or an arbitrary one after WithRandomEviction. The caller must hold
+// m.mu for writing. Returns true if an entry was evicted; false if there was
+// nothing to evict or the eviction function vetoed it.
+func (m *ExpiringMap[K, V]) evictOneLocked() bool {
+	if !m.randomEviction {
+		return m.evictOldestLocked()
+	}
+
+	for key, item := range m.items {
+		if m.evictionFn != nil && !m.evictionFn(key, item.item) {
+			return false
+		}
+
+		delete(m.items, key)
+
+		if m.evictionCh != nil {
+			select {
+			case m.evictionCh <- []V{item.item}:
+			default:
+			}
+		}
+
+		return true
+	}
+
+	return false
 }
 
 // evictOldestLocked removes the entry with the smallest addedAt timestamp.
@@ -172,6 +250,28 @@ func (m *ExpiringMap[K, V]) Get(key K) (value V, ok bool) {
 
 	value = item.item
 	return
+}
+
+// GetAndDelete removes the entry for key and returns its value, in one step
+// under the write lock. ok reports whether this call removed an entry, so when
+// several goroutines race for the same key exactly one of them gets ok == true.
+//
+// Expiry is ignored: an entry the cleaner has not yet removed is still returned.
+// The eviction function and channel do not fire, as with Delete. A caller that
+// hands ownership of a value through the map can rely on both: the goroutine
+// that gets ok == true is the only one that will ever see the value leave it.
+func (m *ExpiringMap[K, V]) GetAndDelete(key K) (value V, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	item, ok := m.items[key]
+	if !ok {
+		return
+	}
+
+	delete(m.items, key)
+
+	return item.item, true
 }
 
 // Delete deletes the given key from the map.
@@ -258,6 +358,13 @@ func (m *ExpiringMap[K, V]) clean() {
 	}
 
 	if m.evictionCh != nil && len(expiredItems) > 0 {
-		m.evictionCh <- expiredItems
+		// Non-blocking send: clean() holds m.mu, so a blocking send to a full
+		// (or unconsumed) eviction channel would stall the ticker under the
+		// write lock and deadlock all Get/Set/Delete/Len. Drop the notification
+		// if the consumer can't keep up, matching the cap-eviction path.
+		select {
+		case m.evictionCh <- expiredItems:
+		default:
+		}
 	}
 }

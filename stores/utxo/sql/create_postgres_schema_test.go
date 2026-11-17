@@ -237,6 +237,20 @@ func TestCreatePostgresSchema_ErrorAtUnspentByParentIndex(t *testing.T) {
 	assert.Contains(t, err.Error(), "could not create px_outputs_unspent_by_parent index")
 }
 
+func TestCreatePostgresSchema_ErrorAtConflictIntentsTable(t *testing.T) {
+	mockDB := CreateMockDBForSchema()
+	defer mockDB.AssertExpectations(t)
+
+	// Setup error at step 15 (conflict_intents table)
+	SetupCreatePostgresSchemaErrorMocks(mockDB, 15)
+
+	udb := &usql.DB{DB: nil}
+	err := createPostgresSchemaWithMockDB(udb, mockDB)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "could not create conflict_intents table")
+}
+
 // The ACTUAL solution to get coverage: Create a testable interface version
 // and temporarily modify the original function to be testable
 

@@ -26,7 +26,11 @@ enum ERR {
   CONTEXT_CANCELED = 7;
   EXTERNAL = 8;
   ERROR = 9;
-  // Block errors 10-19
+  // Block errors 10-19 (FULL: 10-19 are all assigned; 19 is the range terminator.
+  // Further block errors continue at 120-129 below, and errorCodeCategory maps that
+  // range to "block" as well.) A new block error code must widen this range and the
+  // matching bound in errorCodeCategory in error_utils.go before it can be added
+  // here; otherwise it falls outside 10-19 and is mis-bucketed.
   BLOCK_NOT_FOUND=10;
   BLOCK_INVALID=11;
   BLOCK_EXISTS=12;
@@ -35,6 +39,7 @@ enum ERR {
   BLOCK_COINBASE_MISSING_HEIGHT=15;
   BLOCK_ASSEMBLY_RESET=16;
   BLOCK_INCOMPLETE=17;
+  BLOCK_HEADER_CONTEXT=18;
   BLOCK_ERROR=19;
   // Subtree errors 20-29
   SUBTREE_NOT_FOUND=20;
@@ -57,10 +62,16 @@ enum ERR {
   TX_POLICY=39;
   TX_CONSENSUS=40;
   TX_CREATING=41;
+  TX_UNLOCK_FAILED=42;
+  // Rejected because every input that failed to spend is already spent by a different tx
+  // or is an output of a conflicting tx. Only the validator sets it; a store never does.
+  TX_REJECTED_CONFLICTING=43;
   TX_ERROR=49;
   // Service errors 50-59
   SERVICE_UNAVAILABLE=50;
   SERVICE_NOT_STARTED=51;
+  SERVICE_RATE_LIMITED=52;
+  SERVICE_NOT_READY=53;
   SERVICE_ERROR=59;
   // Storage errors 60-69
   STORAGE_UNAVAILABLE=60;
@@ -74,6 +85,7 @@ enum ERR {
   UTXO_MISMATCH=74;
   UTXO_INVALID_SIZE=75;
   UTXO_UNSPENT=76;
+  UTXO_WALK_LIMIT_EXCEEDED=77;
   UTXO_ERROR=79;
   // Kafka errors 80-89
   KAFKA_DECODE_ERROR=80;
@@ -95,4 +107,20 @@ enum ERR {
   NETWORK_CONNECTION_REFUSED=114;
   NETWORK_INVALID_RESPONSE=115;
   NETWORK_PEER_MALICIOUS=116;
+  // Block errors continued 120-129. The original 10-19 decade is full (see above);
+  // errorCodeCategory maps this range to "block" too, so the category stays correct.
+  BLOCK_CORRUPT=120;
+  // A block this node declined under its own local policy: never a verdict on the block or the peer.
+  BLOCK_POLICY_DECLINED=121;
+  // A delivered block body, read to its declared end, that cannot be the block its header names:
+  // a merkle root the header does not carry, a duplicate transaction, or no coinbase. Either the
+  // peer built it wrong or it was damaged in transit, which only the wire checksum tells apart. The
+  // only verdict the legacy peer server will ban a host for, and only once that checksum is verified
+  // (not yet: see services/legacy/peer streamingBlockHandler). Wrapped inside the BLOCK_INVALID
+  // verdict at the sites that raise it, never the outermost code.
+  BLOCK_BODY_MISMATCH=122;
+  // A block whose id is not above its parent's id. Ids come from one sequence and a child's id is
+  // taken only after its parent is stored, so a child always sits above its parent; the ancestry
+  // queries bound their walk by that. StoreBlock refuses a block that would break it.
+  BLOCK_ID_ORDER=123;
 }

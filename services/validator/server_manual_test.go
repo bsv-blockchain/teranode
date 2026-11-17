@@ -125,8 +125,8 @@ func setupServer(t *testing.T, sendBatchSize ...int) (context.Context, *Server, 
 
 	// Create a custom validator that always succeeds
 	txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-	mockValidator := &TestMockValidator{
-		validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+	mockValidator := &MockValidator{
+		ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 			return &meta.Data{
 				Fee:            32279815860,
 				SizeInBytes:    245,

@@ -159,7 +159,7 @@ func (h *HTTP) GetBlocks(c echo.Context) error {
 		},
 	}
 
-	h.logger.Infof("[GetBlocks][%d][%d] sending to client in json (%d nodes)", offset, limit, len(blocks))
+	h.logger.Debugf("[GetBlocks][%d][%d] sending to client in json (%d nodes)", offset, limit, len(blocks))
 
 	return c.JSONPretty(200, response, "  ")
 }

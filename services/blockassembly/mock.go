@@ -8,6 +8,7 @@ package blockassembly
 
 import (
 	"context"
+	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -157,6 +158,31 @@ func (m *Mock) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.St
 	return args.Get(0).(*blockassembly_api.StateMessage), nil
 }
 
+// GetBlockAssemblyQueueStats returns the stats a test registered. A test that registered none
+// gets empty stats, which report no in-memory limit, because the validator's held-limit gate
+// polls this call in the background without the test ever asking for it.
+func (m *Mock) GetBlockAssemblyQueueStats(ctx context.Context) (stats QueueStats, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if msg, ok := r.(string); ok && strings.Contains(msg, "GetBlockAssemblyQueueStats") {
+				stats, err = QueueStats{}, nil
+
+				return
+			}
+
+			panic(r)
+		}
+	}()
+
+	args := m.Called(ctx)
+
+	if args.Error(1) != nil {
+		return QueueStats{}, args.Error(1)
+	}
+
+	return args.Get(0).(QueueStats), nil
+}
+
 func (m *Mock) GetBlockAssemblyBlockCandidate(ctx context.Context) (*model.Block, error) {
 	args := m.Called(ctx)
 
@@ -189,6 +215,18 @@ func (m *Mock) GetCandidateBlock(ctx context.Context, candidateID []byte) (*bloc
 	}
 
 	return args.Get(0).(*blockassembly_api.GetCandidateBlockResponse), nil
+}
+
+// PrepareBlock is a hint its callers do not wait on, so without an expectation for it the
+// mock accepts the call rather than failing every test that validates a block.
+func (m *Mock) PrepareBlock(ctx context.Context, block *model.Block) error {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "PrepareBlock" {
+			return m.Called(ctx, block).Error(0)
+		}
+	}
+
+	return nil
 }
 
 // mockBlockAssemblyAPIClient is a mock implementation of BlockAssemblyAPIClient
@@ -300,6 +338,14 @@ func (m *mockBlockAssemblyAPIClient) GetBlockAssemblyState(ctx context.Context, 
 	return args.Get(0).(*blockassembly_api.StateMessage), args.Error(1)
 }
 
+func (m *mockBlockAssemblyAPIClient) GetBlockAssemblyQueueStats(ctx context.Context, in *blockassembly_api.EmptyMessage, opts ...grpc.CallOption) (*blockassembly_api.QueueStatsMessage, error) {
+	args := m.Called(ctx, in, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*blockassembly_api.QueueStatsMessage), args.Error(1)
+}
+
 func (m *mockBlockAssemblyAPIClient) GenerateBlocks(ctx context.Context, in *blockassembly_api.GenerateBlocksRequest, opts ...grpc.CallOption) (*blockassembly_api.EmptyMessage, error) {
 	args := m.Called(ctx, in, opts)
 	if args.Get(0) == nil {
@@ -338,4 +384,12 @@ func (m *mockBlockAssemblyAPIClient) GetCandidateBlock(ctx context.Context, in *
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*blockassembly_api.GetCandidateBlockResponse), args.Error(1)
+}
+
+func (m *mockBlockAssemblyAPIClient) PrepareBlock(ctx context.Context, in *blockassembly_api.PrepareBlockRequest, opts ...grpc.CallOption) (*blockassembly_api.EmptyMessage, error) {
+	args := m.Called(ctx, in, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*blockassembly_api.EmptyMessage), args.Error(1)
 }

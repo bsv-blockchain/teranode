@@ -123,4 +123,28 @@ func TestGetSubtreeData(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 		assert.Equal(t, "PROCESSING (4): error getting subtree", echoErr.Message)
 	})
+
+	t.Run("empty body is a server error, never a cacheable 200", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+		reader, writer := io.Pipe()
+
+		go func() {
+			// An on-demand generation that produced nothing: closed with no bytes.
+			_ = writer.Close()
+		}()
+
+		mockRepo.On("GetSubtreeDataReader", mock.Anything, mock.Anything, mock.Anything).Return(reader, nil)
+
+		echoContext.SetPath("/subtree_data/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
+
+		err := httpServer.GetSubtreeData()(echoContext)
+
+		echoErr := &echo.HTTPError{}
+		require.True(t, errors.As(err, &echoErr))
+		require.Equal(t, http.StatusInternalServerError, echoErr.Code)
+		require.Empty(t, responseRecorder.Body.String())
+	})
 }

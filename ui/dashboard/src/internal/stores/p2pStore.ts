@@ -144,8 +144,14 @@ export async function connectToP2PServer() {
             const data = await event.data
             const json: any = JSON.parse(data)
 
-            // Centrifuge server ping arrives as an empty reply object — ignore it.
+            // Centrifuge server ping arrives as an empty reply object. The
+            // bidirectional protocol requires a pong (an empty command) in reply;
+            // without it the server disconnects us after its PongTimeout
+            // (~8s), churning the connection and dropping live updates. Reply
+            // with an empty command, then ignore. Only ever sent in response to a
+            // server ping, so it can never be an "unnecessary pong".
             if (!json || Object.keys(json).length === 0) {
+              socket.send('{}')
               return
             }
 

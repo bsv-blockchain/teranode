@@ -20,7 +20,7 @@ func TestGetBlocksMinedNotSet(t *testing.T) {
 
 		subStore, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer subStore.Close()
+		defer subStore.Close(context.Background())
 
 		blocks, err := subStore.GetBlocksMinedNotSet(context.Background())
 		require.NoError(t, err)
@@ -34,7 +34,7 @@ func TestGetBlocksMinedNotSet(t *testing.T) {
 
 		subStore, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer subStore.Close()
+		defer subStore.Close(context.Background())
 
 		// Store block with subtrees_set=true and mined_set=false
 		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithSubtreesSet(true), options.WithMinedSet(false))
@@ -55,7 +55,7 @@ func TestGetBlocksMinedNotSet(t *testing.T) {
 
 		subStore, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer subStore.Close()
+		defer subStore.Close(context.Background())
 
 		// Store block with mined_set=true
 		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithMinedSet(true))
@@ -78,7 +78,7 @@ func TestGetBlocksMinedNotSet(t *testing.T) {
 
 		subStore, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer subStore.Close()
+		defer subStore.Close(context.Background())
 
 		// Store blocks with subtrees_set=true and mined_set=false
 		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithSubtreesSet(true), options.WithMinedSet(false))
@@ -103,7 +103,7 @@ func TestGetBlocksMinedNotSet(t *testing.T) {
 
 		subStore, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer subStore.Close()
+		defer subStore.Close(context.Background())
 
 		// Store block with subtrees_set=true and mined_set=false
 		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithSubtreesSet(true), options.WithMinedSet(false))
@@ -135,7 +135,7 @@ func TestGetBlocksMinedNotSet(t *testing.T) {
 
 		subStore, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer subStore.Close()
+		defer subStore.Close(context.Background())
 
 		// Create cancelled context
 		ctx, cancel := context.WithCancel(context.Background())

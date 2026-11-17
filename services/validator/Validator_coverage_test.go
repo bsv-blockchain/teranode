@@ -2,9 +2,12 @@ package validator
 
 import (
 	"context"
+	"encoding/binary"
+	"fmt"
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -12,12 +15,15 @@ import (
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -31,7 +37,7 @@ func TestNew_MissingKafkaConfig(t *testing.T) {
 	settings := test.CreateBaseTestSettings(t)
 	settings.Kafka.TxMetaConfig = nil // Missing Kafka config
 
-	_, err := New(ctx, logger, settings, nil, nil, nil, nil, nil)
+	_, err := New(ctx, logger, settings, nil, nil, nil, nil, nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing Kafka URL for txmeta")
 }
@@ -45,7 +51,7 @@ func TestNew_BlockAssemblyDisabled(t *testing.T) {
 	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.Disabled = true // Block assembly disabled
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, validator)
 
@@ -67,7 +73,7 @@ func TestNew_BlockAssemblyEnabled(t *testing.T) {
 	blockAssemblyClient, err := blockassembly.NewClient(ctx, logger, settings)
 	require.NoError(t, err)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, blockAssemblyClient, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, blockAssemblyClient, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, validator)
 
@@ -83,7 +89,7 @@ func TestValidator_Health_Liveness(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	code, message, err := validator.Health(context.Background(), true)
@@ -104,7 +110,7 @@ func TestValidator_Health_Readiness(t *testing.T) {
 	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
 	require.NoError(t, err)
 
-	validator, err := New(ctx, logger, settings, utxoStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, utxoStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	code, _, _ := validator.Health(ctx, false)
@@ -126,7 +132,7 @@ func TestValidator_GetBlockHeight(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// NullStore returns 0 as default height
@@ -141,7 +147,7 @@ func TestValidator_GetMedianBlockTime(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// NullStore returns 0 as default median time
@@ -165,7 +171,7 @@ func TestValidator_Validate_CallsValidateWithOptions(t *testing.T) {
 	blockAssemblyClient, err := blockassembly.NewClient(ctx, logger, settings)
 	require.NoError(t, err)
 
-	validator, err := New(ctx, logger, settings, utxoStore, nil, nil, blockAssemblyClient, nil)
+	validator, err := New(ctx, logger, settings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 	require.NoError(t, err)
 
 	// Create a simple transaction using the transactions helper
@@ -194,7 +200,7 @@ func TestValidator_TriggerBatcher(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// This is a no-op function, just verify it doesn't panic
@@ -208,7 +214,7 @@ func TestValidator_ValidateInternal_CoinbaseTransaction(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Create coinbase transaction
@@ -236,7 +242,7 @@ func TestValidator_ExtendTransaction_Coinbase(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Create coinbase transaction
@@ -261,7 +267,7 @@ func TestValidator_ExtendTransaction_NonCoinbase(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Create non-coinbase transaction
@@ -287,7 +293,7 @@ func TestValidator_ValidateTransaction_NotExtended(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Create non-extended transaction
@@ -304,6 +310,35 @@ func TestValidator_ValidateTransaction_NotExtended(t *testing.T) {
 	options := &Options{}
 
 	err = v.validateTransaction(ctx, tx, 100, []uint32{99}, options)
+	// Should error trying to extend transaction since parent doesn't exist
+	assert.Error(t, err)
+}
+
+func TestValidator_ValidateTransactionScripts_NotExtended(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+
+	nullStore, _ := nullstore.NewNullStore()
+	settings := test.CreateBaseTestSettings(t)
+
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	// Create non-extended transaction
+	tx := bt.NewTx()
+	prevHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	input := &bt.Input{
+		PreviousTxOutIndex: 0,
+		SequenceNumber:     0xfffffffe,
+	}
+	_ = input.PreviousTxIDAdd(prevHash)
+	tx.Inputs = append(tx.Inputs, input)
+
+	v := validator.(*Validator)
+	options := &Options{}
+
+	err = v.validateTransaction(ctx, tx, 100, []uint32{99}, options)
+	// Should error trying to extend transaction since parent doesn't exist
 	assert.Error(t, err)
 }
 
@@ -314,7 +349,7 @@ func TestValidator_CreateInUtxoStore(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Create a simple transaction
@@ -337,7 +372,7 @@ func TestValidator_SendTxMetaToKafka_NilProducer(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Create a simple transaction
@@ -359,117 +394,9 @@ func TestValidator_SendTxMetaToKafka_NilProducer(t *testing.T) {
 	assert.NotNil(t, hash)
 }
 
-func TestValidator_ReverseSpends_Success(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-
-	nullStore, _ := nullstore.NewNullStore()
-	settings := test.CreateBaseTestSettings(t)
-
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
-	require.NoError(t, err)
-
-	v := validator.(*Validator)
-
-	// Test reverseSpends directly with empty spends (should succeed)
-	err = v.reverseSpends(ctx, []*utxo.Spend{})
-	assert.NoError(t, err)
-}
-
-func TestValidator_ReverseSpends_WithRetries(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-
-	// Create a mock UTXO store that will fail on Unspend calls
-	mockStore := &utxo.MockUtxostore{}
-	settings := test.CreateBaseTestSettings(t)
-
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
-	require.NoError(t, err)
-
-	v := validator.(*Validator)
-
-	// Create some dummy spends with proper hash
-	testHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	spends := []*utxo.Spend{
-		{
-			TxID: testHash,
-			Vout: 0,
-		},
-	}
-
-	// Mock will return success after retries
-	mockStore.On("Unspend", mock.Anything, spends, mock.Anything).Return(nil).Once()
-
-	err = v.reverseSpends(ctx, spends)
-	assert.NoError(t, err)
-
-	mockStore.AssertExpectations(t)
-}
-
-func TestValidator_ReverseSpends_WithRetriesAndFailure(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-
-	// Create a mock UTXO store that will fail on Unspend calls
-	mockStore := &utxo.MockUtxostore{}
-	settings := test.CreateBaseTestSettings(t)
-
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
-	require.NoError(t, err)
-
-	v := validator.(*Validator)
-
-	// Create some dummy spends with proper hash
-	testHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	spends := []*utxo.Spend{
-		{
-			TxID: testHash,
-			Vout: 0,
-		},
-	}
-
-	// Mock will fail first 2 times, then succeed on 3rd try
-	mockStore.On("Unspend", mock.Anything, spends, mock.Anything).Return(assert.AnError).Twice()
-	mockStore.On("Unspend", mock.Anything, spends, mock.Anything).Return(nil).Once()
-
-	err = v.reverseSpends(ctx, spends)
-	assert.NoError(t, err)
-
-	mockStore.AssertExpectations(t)
-}
-
-func TestValidator_ReverseSpends_AllRetriesFail(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-
-	// Create a mock UTXO store that will always fail
-	mockStore := &utxo.MockUtxostore{}
-	settings := test.CreateBaseTestSettings(t)
-
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
-	require.NoError(t, err)
-
-	v := validator.(*Validator)
-
-	// Create some dummy spends with proper hash
-	testHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	spends := []*utxo.Spend{
-		{
-			TxID: testHash,
-			Vout: 0,
-		},
-	}
-
-	// Mock will always fail (3 times)
-	mockStore.On("Unspend", mock.Anything, spends, mock.Anything).Return(assert.AnError).Times(3)
-
-	err = v.reverseSpends(ctx, spends)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "error resetting utxos")
-
-	mockStore.AssertExpectations(t)
-}
+// The reverseSpends retry logic moved into utxo.SequentialSpendAndCreate; its
+// behavior (empty spends, transient retries, all-retries-fail) is covered by
+// TestSequentialSpendAndCreate in stores/utxo/spend_and_create_test.go.
 
 func XTestValidator_ValidateInternal_SpendUtxosError_WithConflicting(t *testing.T) {
 	ctx := context.Background()
@@ -479,7 +406,7 @@ func XTestValidator_ValidateInternal_SpendUtxosError_WithConflicting(t *testing.
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -507,14 +434,19 @@ func XTestValidator_ValidateInternal_SpendUtxosError_WithConflicting(t *testing.
 		},
 	}
 
+	spentParentIsNotACoinbase(mockStore)
 	// Mock the Get calls that happen during transaction extension
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
+	// The store knows the real parent: the validator re-extends from the
+	// parent's own outputs rather than trusting the supplied ones
+	// (GHSA-v76m-6vc7-g7c7), so a synthetic parent would fail script or value
+	// checks against a genuinely signed child.
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 
 	// Mock spendUtxos to return UTXO error with spends containing errors
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return(spends, errors.NewUtxoError("utxo error", errors.ErrUtxoError))
+	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, spends, errors.NewUtxoError("utxo error", errors.ErrUtxoError))
 
 	// Mock CreateInUtxoStore for conflicting transaction
-	mockStore.On("Create", mock.Anything, tx, uint32(100), mock.Anything).Return(&meta.Data{}, nil)
+	mockStore.On("SpendAndCreate", mock.Anything, tx, uint32(100), mock.Anything).Return(&meta.Data{}, nil, nil)
 
 	options := &Options{
 		CreateConflicting: true, // Enable conflicting creation
@@ -533,7 +465,7 @@ func TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists(t *testing
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	v := validator.(*Validator)
 
@@ -550,16 +482,28 @@ func TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists(t *testing
 	)
 
 	testHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	// Spent by a different transaction, which every store names: aerospike and sql fill
+	// ConflictingTxID from the spend record, and utxoset from its journal. A bare ErrSpent with
+	// no spender is utxoset's shape for coins this transaction may have taken itself, which the
+	// resubmission check answers instead (TestValidate_ResubmissionIsRecognisedByItsOwnTxid).
+	winner := chainhash.Hash{0x0b}
 	spends := []*utxo.Spend{
-		{TxID: testHash, Vout: 0, Err: errors.ErrSpent},
+		{TxID: testHash, Vout: 0, Err: errors.ErrSpent, ConflictingTxID: &winner},
 	}
 
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
+	// The store knows the real parent: the validator re-extends from the
+	// parent's own outputs rather than trusting the supplied ones
+	// (GHSA-v76m-6vc7-g7c7), so a synthetic parent would fail script or value
+	// checks against a genuinely signed child.
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return(spends, errors.NewUtxoError("utxo error", errors.ErrUtxoError))
+	spentParentIsNotACoinbase(mockStore)
+	// The main spend-and-create fails with a spend-phase utxo error (Once so the
+	// conflicting-fallback create below matches the second expectation).
+	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, spends, errors.NewUtxoError("utxo error", errors.ErrUtxoError)).Once()
 
 	// CreateInUtxoStore returns ErrTxExists — tx was already validated via P2P
-	mockStore.On("Create", mock.Anything, tx, uint32(100), mock.Anything).Return(&meta.Data{}, errors.NewTxExistsError("already exists"))
+	mockStore.On("SpendAndCreate", mock.Anything, tx, uint32(100), mock.Anything).Return(&meta.Data{}, nil, errors.NewTxExistsError("already exists"))
 
 	// GetMeta succeeds — tx exists in store (not yet marked conflicting)
 	mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(nil)
@@ -577,6 +521,180 @@ func TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists(t *testing
 	mockStore.AssertExpectations(t)
 }
 
+// TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExistsEvictsTxMeta pins
+// that marking an existing tx (and its spending descendants) conflicting also
+// evicts them from subtree validation's txmeta cache, which holds them as
+// non-conflicting from their original validation.
+func TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExistsEvictsTxMeta(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	mockStore := &utxo.MockUtxostore{}
+	settings := test.CreateBaseTestSettings(t)
+
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+	v := validator.(*Validator)
+	v.settings.Validator.TxMetaWireFormat = "v1"
+
+	txmetaProducer := kafka.NewKafkaAsyncProducerMock()
+	v.txmetaKafkaProducerClient = txmetaProducer
+
+	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	coinbaseTx := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/Test miner/"),
+		transactions.WithP2PKHOutputs(1, 50e8, publicKey),
+	)
+	tx := transactions.Create(t,
+		transactions.WithPrivateKey(privateKey),
+		transactions.WithInput(coinbaseTx, 0),
+		transactions.WithP2PKHOutputs(1, 1000),
+		transactions.WithChangeOutput(),
+	)
+
+	testHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	// Spent by a named other transaction, as every store reports a real conflict; see
+	// TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists.
+	winner := chainhash.Hash{0x0b}
+	spends := []*utxo.Spend{
+		{TxID: testHash, Vout: 0, Err: errors.ErrSpent, ConflictingTxID: &winner},
+	}
+
+	// The store knows the real parent: the validator re-extends from the
+	// parent's own outputs rather than trusting the supplied ones
+	// (GHSA-v76m-6vc7-g7c7), so a synthetic parent would fail script or value
+	// checks against a genuinely signed child.
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
+	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
+	spentParentIsNotACoinbase(mockStore)
+	// The main spend-and-create fails with a spend-phase utxo error (Once so the
+	// conflicting-fallback create below matches the second expectation).
+	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, spends, errors.NewUtxoError("utxo error", errors.ErrUtxoError)).Once()
+
+	// CreateInUtxoStore returns ErrTxExists — tx was already validated via P2P
+	mockStore.On("SpendAndCreate", mock.Anything, tx, uint32(100), mock.Anything).Return(&meta.Data{}, nil, errors.NewTxExistsError("already exists"))
+
+	// GetMeta succeeds — tx exists in store (not yet marked conflicting)
+	mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// SetConflicting is called to mark the existing tx as conflicting
+	child := chainhash.HashH([]byte("spending-child"))
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{*tx.TxIDChainHash()}, true).Return([]*utxo.Spend{}, []chainhash.Hash{child}, nil)
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{child}, true).Return([]*utxo.Spend{}, []chainhash.Hash{}, nil)
+
+	options := &Options{CreateConflicting: true}
+	_, err = v.validateInternal(ctx, tx, 100, options)
+
+	// Should return ErrTxConflicting, not a ProcessingError
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, errors.ErrTxConflicting), "expected ErrTxConflicting, got: %v", err)
+
+	mockStore.AssertExpectations(t)
+
+	deleted := drainTxMetaDeletes(txmetaProducer)
+
+	require.True(t, deleted[*tx.TxIDChainHash()], "the tx marked conflicting must be evicted from the txmeta cache")
+	require.True(t, deleted[child], "its cascaded descendant must be evicted from the txmeta cache")
+}
+
+// TestValidator_ValidateInternal_CreateConflicting_PartialMarkEvictsTxMeta pins
+// that a cascade failing below its first level still evicts what it may have
+// flipped. The tx itself is conflicting in the store by then.
+func TestValidator_ValidateInternal_CreateConflicting_PartialMarkEvictsTxMeta(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	mockStore := &utxo.MockUtxostore{}
+	settings := test.CreateBaseTestSettings(t)
+
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+	v := validator.(*Validator)
+	v.settings.Validator.TxMetaWireFormat = "v1"
+
+	txmetaProducer := kafka.NewKafkaAsyncProducerMock()
+	v.txmetaKafkaProducerClient = txmetaProducer
+
+	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	coinbaseTx := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/Test miner/"),
+		transactions.WithP2PKHOutputs(1, 50e8, publicKey),
+	)
+	tx := transactions.Create(t,
+		transactions.WithPrivateKey(privateKey),
+		transactions.WithInput(coinbaseTx, 0),
+		transactions.WithP2PKHOutputs(1, 1000),
+		transactions.WithChangeOutput(),
+	)
+
+	testHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	// Spent by a named other transaction, as every store reports a real conflict; see
+	// TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists.
+	winner := chainhash.Hash{0x0b}
+	spends := []*utxo.Spend{
+		{TxID: testHash, Vout: 0, Err: errors.ErrSpent, ConflictingTxID: &winner},
+	}
+
+	// The store knows the real parent: the validator re-extends from the
+	// parent's own outputs rather than trusting the supplied ones
+	// (GHSA-v76m-6vc7-g7c7), so a synthetic parent would fail script or value
+	// checks against a genuinely signed child.
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
+	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
+	spentParentIsNotACoinbase(mockStore)
+	// The main spend-and-create fails with a spend-phase utxo error (Once so the
+	// conflicting-fallback create below matches the second expectation).
+	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, spends, errors.NewUtxoError("utxo error", errors.ErrUtxoError)).Once()
+
+	// CreateInUtxoStore returns ErrTxExists — tx was already validated via P2P
+	mockStore.On("SpendAndCreate", mock.Anything, tx, uint32(100), mock.Anything).Return(&meta.Data{}, nil, errors.NewTxExistsError("already exists"))
+
+	// GetMeta succeeds — tx exists in store (not yet marked conflicting)
+	mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// SetConflicting is called to mark the existing tx as conflicting
+	child := chainhash.HashH([]byte("spending-child"))
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{*tx.TxIDChainHash()}, true).Return([]*utxo.Spend{}, []chainhash.Hash{child}, nil)
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{child}, true).Return([]*utxo.Spend(nil), []chainhash.Hash(nil), errors.NewStorageError("child write failed"))
+
+	options := &Options{CreateConflicting: true}
+	_, err = v.validateInternal(ctx, tx, 100, options)
+
+	require.Error(t, err)
+	require.False(t, errors.Is(err, errors.ErrTxConflicting), "the cascade failed, so the call fails: %v", err)
+
+	mockStore.AssertExpectations(t)
+
+	deleted := drainTxMetaDeletes(txmetaProducer)
+
+	// A revalidation now reads the tx as conflicting and skips this branch, so
+	// this is the only chance to evict it.
+	require.True(t, deleted[*tx.TxIDChainHash()], "the tx flipped before the failure must be evicted from the txmeta cache")
+	require.True(t, deleted[child], "the descendant whose write failed may be flipped and must be evicted too")
+}
+
+// drainTxMetaDeletes decodes every v1 message on the producer and returns the
+// hashes sent as DELETEs.
+func drainTxMetaDeletes(producer *kafka.KafkaAsyncProducerMock) map[chainhash.Hash]bool {
+	deleted := map[chainhash.Hash]bool{}
+
+	for len(producer.PublishChannel()) > 0 {
+		data := (<-producer.PublishChannel()).Value
+		offset := 4
+
+		for i := uint32(0); i < binary.LittleEndian.Uint32(data[:4]); i++ {
+			var h chainhash.Hash
+			copy(h[:], data[offset:offset+32])
+
+			if data[offset+32] == txmetacache.WireActionDELETE {
+				deleted[h] = true
+			}
+
+			offset += 32 + 1 + 4 + int(binary.LittleEndian.Uint32(data[offset+33:]))
+		}
+	}
+
+	return deleted
+}
+
 func XTestValidator_ValidateInternal_SpendUtxosError_TxNotFound(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
@@ -585,7 +703,7 @@ func XTestValidator_ValidateInternal_SpendUtxosError_TxNotFound(t *testing.T) {
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -604,10 +722,14 @@ func XTestValidator_ValidateInternal_SpendUtxosError_TxNotFound(t *testing.T) {
 	)
 
 	// Mock the Get calls that happen during transaction extension
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
+	// The store knows the real parent: the validator re-extends from the
+	// parent's own outputs rather than trusting the supplied ones
+	// (GHSA-v76m-6vc7-g7c7), so a synthetic parent would fail script or value
+	// checks against a genuinely signed child.
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 
 	// Mock spendUtxos to return TxNotFound error (parent DAH'd)
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, errors.ErrTxNotFound)
+	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, errors.ErrTxNotFound)
 
 	// Mock GetMeta to return existing tx (already blessed)
 	existingMeta := &meta.Data{Tx: tx}
@@ -630,7 +752,7 @@ func XTestValidator_ValidateInternal_SpendUtxosError_TxNotFound_NotInStore(t *te
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -649,10 +771,14 @@ func XTestValidator_ValidateInternal_SpendUtxosError_TxNotFound_NotInStore(t *te
 	)
 
 	// Mock the Get calls that happen during transaction extension
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
+	// The store knows the real parent: the validator re-extends from the
+	// parent's own outputs rather than trusting the supplied ones
+	// (GHSA-v76m-6vc7-g7c7), so a synthetic parent would fail script or value
+	// checks against a genuinely signed child.
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 
 	// Mock spendUtxos to return TxNotFound error
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, errors.ErrTxNotFound)
+	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, errors.ErrTxNotFound)
 
 	// Mock GetMeta to also fail (tx not in store)
 	mockStore.On("GetMeta", mock.Anything, tx.TxIDChainHash()).Return(nil, errors.ErrTxNotFound)
@@ -674,7 +800,7 @@ func XTestValidator_ValidateInternal_SpendUtxosError_GeneralError(t *testing.T) 
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -693,11 +819,15 @@ func XTestValidator_ValidateInternal_SpendUtxosError_GeneralError(t *testing.T) 
 	)
 
 	// Mock the Get calls that happen during transaction extension
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
+	// The store knows the real parent: the validator re-extends from the
+	// parent's own outputs rather than trusting the supplied ones
+	// (GHSA-v76m-6vc7-g7c7), so a synthetic parent would fail script or value
+	// checks against a genuinely signed child.
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 	mockStore.On("GetBlockHeight").Return(uint32(100))
 
 	// Mock spendUtxos to return a general error (not UTXO or TxNotFound)
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, assert.AnError)
+	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, assert.AnError)
 
 	options := &Options{}
 
@@ -716,7 +846,7 @@ func TestValidator_ValidateInternal_UTXOError_ConflictingTxCreation(t *testing.T
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	v := validator.(*Validator)
 
@@ -734,17 +864,21 @@ func TestValidator_ValidateInternal_UTXOError_ConflictingTxCreation(t *testing.T
 	)
 
 	// Mock parent tx extension
-	parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
+	spentParentIsNotACoinbase(mockStore)
 
-	// Mock spendUtxos to return UTXO error with conflicting spend
-	spends := []*utxo.Spend{{TxID: &chainhash.Hash{}, Vout: 0, Err: errors.ErrSpent}}
+	// Mock the spend phase to return UTXO error with conflicting spend (Once so
+	// the conflicting-fallback create below matches the second expectation)
+	// Spent by a named other transaction, as every store reports a real conflict; see
+	// TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists.
+	winner := chainhash.Hash{0x0b}
+	spends := []*utxo.Spend{{TxID: &chainhash.Hash{}, Vout: 0, Err: errors.ErrSpent, ConflictingTxID: &winner}}
 	utxoErr := errors.NewUtxoError("utxo error", errors.ErrUtxoError)
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return(spends, utxoErr)
+	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, spends, utxoErr).Once()
 
 	// Mock CreateInUtxoStore for conflicting transaction
-	mockStore.On("Create", mock.Anything, tx, uint32(100), mock.Anything).Return(&meta.Data{}, nil)
+	mockStore.On("SpendAndCreate", mock.Anything, tx, uint32(100), mock.Anything).Return(&meta.Data{}, nil, nil)
 
 	options := &Options{CreateConflicting: true}
 	_, err = v.validateInternal(ctx, tx, 100, options)
@@ -760,7 +894,7 @@ func TestValidator_ValidateInternal_TxNotFoundError_ExistingTx(t *testing.T) {
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	v := validator.(*Validator)
 
@@ -778,12 +912,11 @@ func TestValidator_ValidateInternal_TxNotFoundError_ExistingTx(t *testing.T) {
 	)
 
 	// Mock parent tx extension
-	parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 
 	// Mock spendUtxos to return TxNotFound error
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
+	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
 
 	// Mock GetMeta to return existing tx already mined and not flagged — legitimate DAH-evicted-parent case.
 	existingMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
@@ -830,14 +963,13 @@ func TestValidate_TxNotFoundShortcut(t *testing.T) {
 		mockStore := &utxo.MockUtxostore{}
 		settings := test.CreateBaseTestSettings(t)
 
-		validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+		validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 		require.NoError(t, err)
 		v := validator.(*Validator)
 
-		parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
-		mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
+		mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 		mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
-		mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
+		mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
 		if getMetaErr != nil {
 			mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(getMetaErr)
 		} else {
@@ -927,7 +1059,7 @@ func TestValidator_ValidateInternal_GeneralSpendError(t *testing.T) {
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	v := validator.(*Validator)
 
@@ -945,13 +1077,12 @@ func TestValidator_ValidateInternal_GeneralSpendError(t *testing.T) {
 	)
 
 	// Mock parent tx extension
-	parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 
 	// Mock spendUtxos to return a general error
 	generalErr := errors.NewProcessingError("general spending error")
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, generalErr)
+	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, generalErr)
 
 	options := &Options{}
 	_, err = v.validateInternal(ctx, tx, 100, options)
@@ -969,7 +1100,7 @@ func TestValidator_Health_BlockHeight_Zero_Coverage(t *testing.T) {
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -999,7 +1130,7 @@ func TestValidator_Health_BlockHeight_Valid_Default_Coverage(t *testing.T) {
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -1026,3 +1157,239 @@ func TestValidator_Health_BlockHeight_Valid_Default_Coverage(t *testing.T) {
 // 1. GetBlockHeight() returns uint32, which can't be negative
 // 2. The blockHeight == 0 case (lines 198-200) comes first in the switch
 // This is dead code that should be removed, but we've covered the reachable cases above.
+
+// parentOutputsOf answers a single-input ParentOutputsForValidation call with
+// the given parent's output 0, in the given status.
+func parentOutputsOf(parent *bt.Tx, status utxo.ParentOutputStatus) []utxo.ParentOutput {
+	return []utxo.ParentOutput{{
+		Status:        status,
+		Satoshis:      parent.Outputs[0].Satoshis,
+		LockingScript: parent.Outputs[0].LockingScript,
+	}}
+}
+
+// TestSendTxMetaDeletesToKafka_BoundsAndSplitsCascades pins that the unbatched
+// DELETE path never sends a record over Kafka's default 1 MiB limit, never
+// sends a v1 record whose entry count reads as a v2 header (767), and still
+// delivers every hash, in both wire formats.
+func TestSendTxMetaDeletesToKafka_BoundsAndSplitsCascades(t *testing.T) {
+	const maxRecord = 1 << 20
+
+	for _, format := range []string{"v1", "v2"} {
+		for _, n := range []int{767, 30_000} {
+			t.Run(fmt.Sprintf("%s/%d", format, n), func(t *testing.T) {
+				tSettings := test.CreateBaseTestSettings(t)
+				tSettings.Validator.TxMetaWireFormat = format
+				tSettings.Validator.TxMetaNumPartitions = 1
+
+				producer := kafka.NewKafkaAsyncProducerMockWithBuffer(1_000)
+				v := &Validator{settings: tSettings, txmetaKafkaProducerClient: producer}
+
+				hashes := make([]chainhash.Hash, n)
+				for i := range hashes {
+					hashes[i] = chainhash.HashH([]byte(fmt.Sprintf("cascade-%d", i)))
+				}
+
+				v.sendTxMetaDeletesToKafka(hashes)
+
+				seen := map[chainhash.Hash]bool{}
+				keys := map[string]bool{}
+
+				for len(producer.PublishChannel()) > 0 {
+					msg := <-producer.PublishChannel()
+					value := msg.Value
+					keys[string(msg.Key)] = true
+					require.LessOrEqual(t, len(value), maxRecord, "a record must fit Kafka's default message size")
+
+					isV2 := value[0] == txmetacache.WireV2Magic && value[1] == txmetacache.WireV2Version && value[2] == 0 && value[3] == 0
+					require.Equal(t, format == "v2", isV2, "a v1 record must never start with the v2 header signature")
+
+					count, offset := int(binary.LittleEndian.Uint32(value[:4])), 4
+					if isV2 {
+						count, offset = int(binary.LittleEndian.Uint32(value[4:])), txmetacache.WireV2HeaderLen
+					}
+
+					for i := 0; i < count; i++ {
+						if isV2 {
+							offset += 8
+						}
+
+						var h chainhash.Hash
+						copy(h[:], value[offset:offset+32])
+						require.Equal(t, txmetacache.WireActionDELETE, value[offset+32])
+
+						seen[h] = true
+						offset += 32 + 1 + 4
+					}
+
+					require.Equal(t, len(value), offset, "record length must match its entry count")
+				}
+
+				require.Len(t, seen, n, "every hash must be sent")
+
+				if format == "v1" {
+					require.Len(t, keys, 1, "every record of one batch keeps its key, and so its partition")
+				}
+			})
+		}
+	}
+}
+
+// TestSendTxMetaBatch_NeverSendsAV2LookalikeV1Record pins that a batcher flush
+// of exactly 767 items, whose v1 count encodes as the v2 header signature, is
+// not sent as one record: the handler could read it as v2 and drop every entry,
+// ADDs included.
+func TestSendTxMetaBatch_NeverSendsAV2LookalikeV1Record(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Validator.TxMetaWireFormat = "v1"
+
+	producer := kafka.NewKafkaAsyncProducerMockWithBuffer(10)
+	v := &Validator{settings: tSettings, txmetaKafkaProducerClient: producer}
+
+	batch := make([]*txmetaBatchItem, 767)
+	for i := range batch {
+		h := chainhash.HashH([]byte(fmt.Sprintf("flush-%d", i)))
+		batch[i] = &txmetaBatchItem{hash: &h, metaBytes: []byte{1, 2, 3}}
+	}
+
+	v.sendTxMetaBatch(batch)
+
+	total := 0
+
+	for len(producer.PublishChannel()) > 0 {
+		value := (<-producer.PublishChannel()).Value
+		require.False(t, value[0] == txmetacache.WireV2Magic && value[1] == txmetacache.WireV2Version && value[2] == 0 && value[3] == 0,
+			"a v1 record must never start with the v2 header signature")
+
+		total += int(binary.LittleEndian.Uint32(value[:4]))
+	}
+
+	require.Equal(t, len(batch), total, "every item must still be sent")
+}
+
+// TestSendTxMetaDeletesToKafka_BatchedRecordsStayBounded pins that DELETEs sent
+// through a real batcher with a large batch size still go out in records under
+// Kafka's default 1 MiB limit, in both wire formats, and that every hash arrives.
+func TestSendTxMetaDeletesToKafka_BatchedRecordsStayBounded(t *testing.T) {
+	const (
+		maxRecord = 1 << 20
+		n         = 30_000
+	)
+
+	for _, format := range []string{"v1", "v2"} {
+		t.Run(format, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.Validator.TxMetaWireFormat = format
+			tSettings.Validator.TxMetaNumPartitions = 1
+			tSettings.Validator.TxMetaKafkaBatchSize = n
+			tSettings.Validator.TxMetaKafkaBatchTimeoutMs = 50
+
+			producer := kafka.NewKafkaAsyncProducerMockWithBuffer(1_000)
+
+			validator, err := New(t.Context(), ulogger.TestLogger{}, tSettings, &utxo.MockUtxostore{}, producer, nil, nil, nil, nil)
+			require.NoError(t, err)
+
+			v := validator.(*Validator)
+			require.NotNil(t, v.txmetaKafkaBatcher, "this test needs the batched path")
+
+			hashes := make([]chainhash.Hash, n)
+			for i := range hashes {
+				hashes[i] = chainhash.HashH([]byte(fmt.Sprintf("batched-cascade-%d", i)))
+			}
+
+			v.sendTxMetaDeletesToKafka(hashes)
+
+			var (
+				records [][]byte
+				total   int
+			)
+
+			require.Eventually(t, func() bool {
+				for len(producer.PublishChannel()) > 0 {
+					value := (<-producer.PublishChannel()).Value
+					records = append(records, value)
+
+					// v1 opens with the entry count; v2 carries it after the
+					// 4-byte header signature.
+					countOffset := 0
+					if format == "v2" {
+						countOffset = 4
+					}
+
+					total += int(binary.LittleEndian.Uint32(value[countOffset : countOffset+4]))
+				}
+
+				return total >= n
+			}, 10*time.Second, 10*time.Millisecond, "every DELETE must be sent")
+
+			require.Equal(t, n, total)
+
+			for _, value := range records {
+				require.LessOrEqual(t, len(value), maxRecord, "a record must fit Kafka's default message size")
+
+				if format == "v1" {
+					require.False(t, value[0] == txmetacache.WireV2Magic && value[1] == txmetacache.WireV2Version && value[2] == 0 && value[3] == 0)
+				}
+			}
+		})
+	}
+}
+
+func TestSplitTxMetaBatch(t *testing.T) {
+	items := func(n, content int) []*txmetaBatchItem {
+		out := make([]*txmetaBatchItem, n)
+		for i := range out {
+			h := chainhash.HashH([]byte(fmt.Sprintf("split-%d", i)))
+			out[i] = &txmetaBatchItem{hash: &h, metaBytes: make([]byte, content), isDelete: content == 0}
+		}
+
+		return out
+	}
+
+	cases := map[string][]*txmetaBatchItem{
+		"empty":             nil,
+		"767 deletes":       items(767, 0),
+		"30k deletes":       items(30_000, 0),
+		"size cut at 767":   items(2_000, 980), // 767 entries of 1,025 bytes fill a record exactly
+		"oversized item":    items(3, maxTxMetaRecordBytes),
+		"one under the cut": items(766, 980),
+		// 766 deletes and a 700 KB ADD fill 767 items; a 500 KB ADD then forces
+		// a cut, the 700 KB item is carried and must not share a record with it
+		"carried item re-checked": append(append(items(766, 0), items(1, 700*1024)...), items(1, 500*1024)...),
+	}
+
+	for name, batch := range cases {
+		t.Run(name, func(t *testing.T) {
+			var joined []*txmetaBatchItem
+
+			for _, chunk := range splitTxMetaBatch(batch) {
+				require.NotEmpty(t, chunk)
+				require.NotEqual(t, txmetacache.V2LookalikeCount, len(chunk), "no chunk may be 767 items long")
+
+				size := txmetacache.WireV2HeaderLen
+				for _, item := range chunk {
+					size += txMetaEntrySize(item)
+				}
+
+				if len(chunk) > 1 {
+					require.LessOrEqual(t, size, maxTxMetaRecordBytes)
+				}
+
+				joined = append(joined, chunk...)
+			}
+
+			require.Equal(t, len(batch), len(joined))
+
+			for i := range batch {
+				require.Same(t, batch[i], joined[i], "chunks keep every item, in order")
+			}
+		})
+	}
+}
+
+// spentParentIsNotACoinbase answers the validator's read, on the block path, of the parent of an
+// output another tx already spent: a mined tx that is not a coinbase, so the failed spend is a
+// double spend and nothing else.
+func spentParentIsNotACoinbase(mockStore *utxo.MockUtxostore) {
+	mockStore.On("Get", mock.Anything, mock.Anything, []fields.FieldName{fields.IsCoinbase, fields.BlockHeights}).Return(&meta.Data{BlockHeights: []uint32{1}}, nil)
+}

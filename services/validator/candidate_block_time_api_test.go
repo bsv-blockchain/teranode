@@ -1,15 +1,10 @@
 package validator
 
 import (
-	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
-	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -88,49 +83,10 @@ func TestBuildValidateTxRequest_OmitsCandidateBlockTimeWhenZero(t *testing.T) {
 		"buildValidateTxRequest must leave CandidateBlockTime nil when Options.CandidateBlockTime is zero")
 }
 
-// TestBuildValidateTxHTTPQuery_PopulatesCandidateBlockTimeWhenSet pins the
-// HTTP fallback path. The fallback fires on gRPC ResourceExhausted (large
-// txs), and these are exactly the transactions most likely to need
-// block-validation finality. The query string must carry candidateBlockTime.
-func TestBuildValidateTxHTTPQuery_PopulatesCandidateBlockTimeWhenSet(t *testing.T) {
-	opts := &Options{CandidateBlockTime: 1700000000}
-	q := buildValidateTxHTTPQuery(opts, 42)
-
-	require.Equal(t, "1700000000", q.Get("candidateBlockTime"))
-	require.Equal(t, "42", q.Get("blockHeight"))
-}
-
-// TestBuildValidateTxHTTPQuery_OmitsCandidateBlockTimeWhenZero confirms the
-// HTTP path also avoids the field for policy-mode requests.
-func TestBuildValidateTxHTTPQuery_OmitsCandidateBlockTimeWhenZero(t *testing.T) {
-	opts := &Options{}
-	q := buildValidateTxHTTPQuery(opts, 42)
-
-	require.Equal(t, "", q.Get("candidateBlockTime"))
-}
-
-// TestExtractValidationParams_ReadsCandidateBlockTime pins the server-side
-// HTTP parse that pairs with buildValidateTxHTTPQuery. Closes the loop on the
-// HTTP fallback path: client builds the query, server reads it back.
-func TestExtractValidationParams_ReadsCandidateBlockTime(t *testing.T) {
-	e := echo.New()
-	req, err := echoRequestWithQuery(e, "candidateBlockTime=1700000000")
-	require.NoError(t, err)
-
-	_, opts := extractValidationParams(req)
-	require.Equal(t, uint32(1700000000), opts.CandidateBlockTime)
-}
-
-// TestExtractValidationParams_ZeroWhenAbsent confirms the parse is
-// permissive of omitted fields.
-func TestExtractValidationParams_ZeroWhenAbsent(t *testing.T) {
-	e := echo.New()
-	req, err := echoRequestWithQuery(e, "")
-	require.NoError(t, err)
-
-	_, opts := extractValidationParams(req)
-	require.Equal(t, uint32(0), opts.CandidateBlockTime)
-}
+// The query-build and query-parse cases that used to live here are gone: the
+// /tx endpoint no longer reads validation options from the query string, so
+// there is no HTTP projection of candidateBlockTime to pin on either side. The
+// gRPC projection below is the surviving wire.
 
 // TestOptionsFromValidateRequest_RoundTrip pins the server-side gRPC option
 // mapping. Combined with buildValidateTxRequest, it covers the full Client →
@@ -149,7 +105,8 @@ func TestOptionsFromValidateRequest_RoundTrip(t *testing.T) {
 	}
 
 	req := buildValidateTxRequest(newTinyTx(t).SerializeBytes(), 42, src)
-	got := optionsFromValidateRequest(req)
+	got, err := optionsFromValidateRequest(req)
+	require.NoError(t, err)
 
 	require.Equal(t, src.SkipUtxoCreation, got.SkipUtxoCreation)
 	require.Equal(t, src.AddTXToBlockAssembly, got.AddTXToBlockAssembly)
@@ -174,37 +131,10 @@ func TestOptionsFromValidateRequest_OmittedFieldsStayZero(t *testing.T) {
 	require.Nil(t, req.CandidateBlockTime)
 	require.Nil(t, req.CandidateParentMedianTime)
 
-	got := optionsFromValidateRequest(req)
+	got, err := optionsFromValidateRequest(req)
+	require.NoError(t, err)
 	require.Equal(t, uint32(0), got.CandidateBlockTime)
 	require.Equal(t, uint32(0), got.CandidateParentMedianTime)
-}
-
-// TestHTTPHandlerPath_CandidateBlockTime_EndToEnd mirrors what the /tx HTTP
-// handler does internally: parse the query string into Options, then build
-// the validator request from those Options. This pins the *handler* path
-// (handleSingleTx / handleMultipleTx) — a regression where one of those
-// handlers reverts to inline struct-literal request building (dropping
-// CandidateBlockTime as a recent regression did) is caught here, not at
-// runtime in production where pre-CSV finality would silently skip.
-func TestHTTPHandlerPath_CandidateBlockTime_EndToEnd(t *testing.T) {
-	const wantCBT uint32 = 1700000000
-
-	// Build the same query the HTTP fallback client emits.
-	q := buildValidateTxHTTPQuery(&Options{CandidateBlockTime: wantCBT}, 42)
-
-	// Hand it to the same parser handleSingleTx/handleMultipleTx use.
-	e := echo.New()
-	ctx, err := echoRequestWithQuery(e, q.Encode())
-	require.NoError(t, err)
-	blockHeight, opts := extractValidationParams(ctx)
-
-	// Then build the same gRPC request the handlers feed into the validator.
-	req := buildValidateTxRequest(newTinyTx(t).SerializeBytes(), blockHeight, opts)
-
-	require.Equal(t, uint32(42), req.BlockHeight)
-	require.NotNil(t, req.CandidateBlockTime,
-		"HTTP handler path must propagate candidateBlockTime through to the gRPC request")
-	require.Equal(t, wantCBT, *req.CandidateBlockTime)
 }
 
 // TestCandidateBlockTimePtr_AliasesOptsField pins the no-alloc contract: the
@@ -219,18 +149,4 @@ func TestCandidateBlockTimePtr_AliasesOptsField(t *testing.T) {
 	require.NotNil(t, ptr)
 	require.Same(t, &opts.CandidateBlockTime, ptr,
 		"candidateBlockTimePtr must return &opts.CandidateBlockTime (no per-request copy/allocation)")
-}
-
-// echoRequestWithQuery builds a minimal echo.Context backed by an HTTP
-// request with the given query string. Used to drive extractValidationParams
-// without standing up a full HTTP server.
-func echoRequestWithQuery(e *echo.Echo, query string) (echo.Context, error) {
-	u, err := url.Parse("/tx?" + query)
-	if err != nil {
-		return nil, err
-	}
-
-	httpReq := httptest.NewRequest(http.MethodPost, u.String(), strings.NewReader(""))
-	rec := httptest.NewRecorder()
-	return e.NewContext(httpReq, rec), nil
 }

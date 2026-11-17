@@ -357,7 +357,7 @@ must decide before the spec can be considered final.
    `services/blockchain → BC`). Reuse across the package's spec.
 
 3. Confirm the branch strategy. Per project convention (CLAUDE.md +
-   `.claude/rules/git-workflow.md`), never commit to `main` — work on
+   the Git Workflow section in `AGENTS.md`), never commit to `main` — work on
    a feature branch.
 
 ### Per spec

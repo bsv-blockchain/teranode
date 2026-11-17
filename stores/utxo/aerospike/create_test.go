@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
@@ -17,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranodeaerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	testutil "github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -179,6 +182,154 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		assert.True(t, hasConflicting)
 		assert.True(t, hasLocked)
 	})
+}
+
+// TestStore_GetBinsToStore_UnspendableTransactionExpires verifies that a mined
+// transaction with no spendable outputs (e.g. an OP_RETURN-only data-carrier
+// transaction) is assigned a deleteAtHeight at creation time so the pruner can
+// expire it after the retention window.
+//
+// Such transactions never transition to "all spent" via the spend path (there
+// is nothing spendable to spend), and when they are created already-mined during
+// block validation they also bypass setMined - the other place that assigns a
+// deleteAtHeight. Without this, the record is never eligible for pruning and is
+// retained in the UTXO store forever. We only want truly spendable outputs to be
+// retained indefinitely.
+func TestStore_GetBinsToStore_UnspendableTransactionExpires(t *testing.T) {
+	teranodeaerospike.InitPrometheusMetrics()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	retention := tSettings.GetUtxoStoreBlockHeightRetention()
+	require.Greater(t, retention, uint32(0), "test requires a non-zero block height retention")
+
+	s := teranodeaerospike.Store{}
+	s.SetUtxoBatchSize(100)
+	s.SetSettings(tSettings)
+
+	const minedHeight = uint32(1000)
+
+	findBin := func(t *testing.T, bins [][]*aerospike.Bin, name string) (aerospike.Value, bool) {
+		t.Helper()
+		require.NotEmpty(t, bins)
+		for _, b := range bins[0] {
+			if b.Name == name {
+				return b.Value, true
+			}
+		}
+
+		return nil, false
+	}
+
+	// opReturnOnlyTx builds a transaction whose only output is an OP_RETURN data
+	// output, i.e. a transaction with zero spendable outputs (recordUtxos == 0).
+	opReturnOnlyTx := func(t *testing.T) *bt.Tx {
+		t.Helper()
+		txHex, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
+		require.NoError(t, err)
+		tx, err := bt.NewTxFromString(string(txHex))
+		require.NoError(t, err)
+
+		tx.Outputs = []*bt.Output{}
+		require.NoError(t, tx.AddOpReturnOutput([]byte("teranode op_return data carrier")))
+		require.False(t, utxo.ShouldStoreOutputAsUTXO(tx.Outputs[0], minedHeight, tSettings.ChainCfgParams.GenesisActivationHeight),
+			"sanity: the op_return output must be unspendable")
+
+		return tx
+	}
+
+	t.Run("mined unspendable tx is given a deleteAtHeight", func(t *testing.T) {
+		tx := opReturnOnlyTx(t)
+
+		bins, err := s.GetBinsToStore(tx, minedHeight,
+			[]uint32{1}, []uint32{minedHeight}, []int{0},
+			false, tx.TxIDChainHash(), false, false, false, nil)
+		require.NoError(t, err)
+
+		dah, ok := findBin(t, bins, fields.DeleteAtHeight.String())
+		require.True(t, ok, "a mined tx with no spendable outputs must have a deleteAtHeight so the pruner can expire it")
+		assert.Equal(t, aerospike.NewIntegerValue(int(minedHeight+retention)), dah)
+
+		_, hasUnmined := findBin(t, bins, fields.UnminedSince.String())
+		assert.False(t, hasUnmined, "a mined tx must not carry an unminedSince marker")
+	})
+
+	t.Run("unmined unspendable tx is not expired", func(t *testing.T) {
+		tx := opReturnOnlyTx(t)
+
+		bins, err := s.GetBinsToStore(tx, minedHeight,
+			nil, nil, nil,
+			false, tx.TxIDChainHash(), false, false, false, nil)
+		require.NoError(t, err)
+
+		_, ok := findBin(t, bins, fields.DeleteAtHeight.String())
+		assert.False(t, ok, "an unmined tx must not be given a deleteAtHeight - it is not in a block yet")
+
+		_, hasUnmined := findBin(t, bins, fields.UnminedSince.String())
+		assert.True(t, hasUnmined, "an unmined tx must carry an unminedSince marker")
+	})
+
+	t.Run("mined spendable tx is not expired at creation", func(t *testing.T) {
+		txHex, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
+		require.NoError(t, err)
+		tx, err := bt.NewTxFromString(string(txHex))
+		require.NoError(t, err)
+
+		bins, err := s.GetBinsToStore(tx, minedHeight,
+			[]uint32{1}, []uint32{minedHeight}, []int{0},
+			false, tx.TxIDChainHash(), false, false, false, nil)
+		require.NoError(t, err)
+
+		_, ok := findBin(t, bins, fields.DeleteAtHeight.String())
+		assert.False(t, ok, "a tx with spendable outputs must only get a deleteAtHeight once those outputs are spent, not at creation")
+	})
+}
+
+// TestCreateMinedUnspendableGetsDAH is the end-to-end counterpart to
+// TestStore_GetBinsToStore_UnspendableTransactionExpires: it drives the real
+// Create path with a transaction that is created already-mined (as happens
+// during block validation / catchup) and whose only output is an OP_RETURN, and
+// asserts the persisted record carries a deleteAtHeight so the pruner can expire
+// it. Before the fix this record had no deleteAtHeight and was retained forever.
+func TestCreateMinedUnspendableGetsDAH(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	retention := tSettings.GetUtxoStoreBlockHeightRetention()
+	require.Greater(t, retention, uint32(0), "test requires a non-zero block height retention")
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	teranodeaerospike.InitPrometheusMetrics()
+
+	// Build an OP_RETURN-only transaction: real inputs, a single unspendable
+	// (zero spendable outputs) OP_RETURN output.
+	txHex, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
+	require.NoError(t, err)
+	tx, err := bt.NewTxFromString(string(txHex))
+	require.NoError(t, err)
+	tx.Outputs = []*bt.Output{}
+	require.NoError(t, tx.AddOpReturnOutput([]byte("teranode op_return data carrier")))
+
+	const minedHeight = uint32(1000)
+
+	// Create the transaction already-mined, mirroring the block-validation path.
+	_, err = store.Create(ctx, tx, minedHeight, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+		BlockID: 1, BlockHeight: minedHeight, SubtreeIdx: 0, OnLongestChain: true,
+	}))
+	require.NoError(t, err)
+
+	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+
+	response, err := client.Get(nil, key)
+	require.NoError(t, err)
+	require.NotNil(t, response)
+
+	assert.Equal(t, 0, response.Bins[fields.RecordUtxos.String()], "tx must have no spendable outputs")
+	assert.Equal(t, int(minedHeight+retention), response.Bins[fields.DeleteAtHeight.String()],
+		"a mined unspendable tx must be assigned deleteAtHeight = minedHeight + retention so the pruner can expire it")
 }
 
 func TestStore_StoreTransactionExternally(t *testing.T) {
@@ -422,7 +573,7 @@ func TestStore_TwoPhaseCommit(t *testing.T) {
 
 	tx := td.CreateTransaction(t, block1.CoinbaseTx)
 
-	txMeta, err := td.UtxoStore.Create(td.Ctx, tx, 0)
+	txMeta, _, err := td.UtxoStore.SpendAndCreate(td.Ctx, tx, 0, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
 	// err = td.PropagationClient.ProcessTransaction(td.Ctx, tx)
@@ -432,4 +583,61 @@ func TestStore_TwoPhaseCommit(t *testing.T) {
 	// require.NoError(t, err)
 
 	t.Logf("%v", txMeta)
+}
+
+// TestSpendAndCreateKeepsSpendsWhenCreateInDoubt runs a create whose write
+// lands on the server while the client reports it in doubt, as a timeout after
+// sending does. SpendAndCreate must keep the parent coin spent: the
+// transaction is stored, and unspending its input would let a second
+// transaction spend the coin while the first stands, which a repeat never
+// heals because a repeat drops a transaction whose record exists.
+func TestSpendAndCreateKeepsSpendsWhenCreateInDoubt(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	_, _, err := store.SpendAndCreate(ctx, tests.Tx, 1000, utxo.WithCreateOnly())
+	require.NoError(t, err)
+
+	in := tests.Tx.Outputs[0]
+
+	child := bt.NewTx()
+	require.NoError(t, child.From(tests.Tx.TxIDChainHash().String(), 0, in.LockingScript.String(), in.Satoshis))
+	child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00, 0x48, 0x30, 0x45})
+	require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", in.Satoshis-1_000))
+
+	// Run every batch for real, then report a batch that writes a record as
+	// in doubt. The spends go through as UDF calls and are left alone.
+	store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		realErr := client.BatchOperate(policy, records)
+
+		for _, rec := range records {
+			if _, isWrite := rec.(*aerospike.BatchWrite); isWrite {
+				return &aerospike.AerospikeError{ResultCode: types.TIMEOUT, InDoubt: true}
+			}
+		}
+
+		return realErr
+	})
+	t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+
+	_, spends, err := store.SpendAndCreate(ctx, child, store.GetBlockHeight()+1)
+	require.Error(t, err)
+	require.True(t, utxo.IsCreateOutcomeUnknown(err), "an in-doubt create must leave the outcome unknown: %v", err)
+	require.Len(t, spends, 1, "the spends stay in effect and are returned")
+
+	store.SetBatchOperateFn(nil)
+
+	_, err = store.Get(ctx, child.TxIDChainHash())
+	require.NoError(t, err, "the write landed, so the transaction is stored")
+
+	utxoHash, err := util.UTXOHashFromOutput(tests.Tx.TxIDChainHash(), in, 0)
+	require.NoError(t, err)
+
+	resp, err := store.GetSpend(ctx, &utxo.Spend{TxID: tests.Tx.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash})
+	require.NoError(t, err)
+	require.NotNil(t, resp.SpendingData, "the parent coin must stay spent by the stored transaction")
+	require.Equal(t, child.TxIDChainHash().String(), resp.SpendingData.TxID.String())
 }

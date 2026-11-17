@@ -37,7 +37,7 @@ func newSchemaTestDB(t *testing.T) (*url.URL, *usql.DB) {
 				WithStartupTimeout(5*time.Minute),
 		),
 	)
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 	t.Cleanup(func() { _ = pgContainer.Terminate(context.Background()) })
 
 	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
@@ -77,7 +77,7 @@ func TestIsBlockchainSchemaCurrent_AfterCreate(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 
 	current, err := isBlockchainSchemaCurrent(db, true)
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestIsBlockchainSchemaCurrent_MissingColumn(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 
 	// Drop one of the expected columns to simulate an out-of-date schema. The
 	// probe must then report not-current so the DDL path runs.
@@ -104,6 +104,72 @@ func TestIsBlockchainSchemaCurrent_MissingColumn(t *testing.T) {
 	current, err := isBlockchainSchemaCurrent(db, true)
 	require.NoError(t, err)
 	assert.False(t, current, "schema should not be current after column drop")
+}
+
+// TestBlockchainSchema_AddsMinedSetGenToExistingBlocks covers the upgrade of a database that
+// predates mined_set_gen: reopening the store must add the column, give existing rows 0, and
+// leave the schema current, so a tagging run on an old block reads generation 0 and its
+// SetBlockMinedSet still lands.
+func TestBlockchainSchema_AddsMinedSetGenToExistingBlocks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+
+	_, _, err = s.StoreBlock(context.Background(), block1, "")
+	require.NoError(t, err)
+	require.NoError(t, s.Close(context.Background()))
+
+	// simulate a database written by a build without the column
+	_, err = db.Exec(`ALTER TABLE blocks DROP COLUMN mined_set_gen`)
+	require.NoError(t, err)
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.False(t, current, "a missing mined_set_gen must send the store through the DDL path")
+
+	s, err = New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	current, err = isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.True(t, current, "reopening the store must add mined_set_gen back")
+
+	_, meta, err := s.GetBlockHeader(context.Background(), block1.Hash())
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), meta.MinedSetGeneration, "existing rows start at generation 0")
+
+	gen := meta.MinedSetGeneration
+	require.NoError(t, s.SetBlockMinedSet(context.Background(), block1.Hash(), &gen))
+}
+
+func TestIsBlockchainSchemaCurrent_MissingReservationsTable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	// Drop block_id_reservations to simulate a deployment that predates the
+	// durable-reservation table. The probe must report not-current so the DDL
+	// fast-path is skipped and createPostgresSchemaUnlocked re-creates it.
+	_, err = db.Exec(`DROP TABLE block_id_reservations`)
+	require.NoError(t, err)
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err, "missing table must not be reported as a transport error")
+	assert.False(t, current, "schema must not be current when block_id_reservations is missing")
 }
 
 func TestIsBlockchainSchemaCurrent_MissingIndex(t *testing.T) {
@@ -116,7 +182,7 @@ func TestIsBlockchainSchemaCurrent_MissingIndex(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 
 	_, err = db.Exec(`DROP INDEX IF EXISTS idx_on_main_chain_height`)
 	require.NoError(t, err)
@@ -136,7 +202,7 @@ func TestIsBlockchainSchemaCurrent_WrongPeerIDType(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 
 	// Flip peer_id back to an older type so the probe must return false.
 	// TEXT -> VARCHAR(64) — the ALTER COLUMN peer_id TYPE TEXT in
@@ -159,7 +225,7 @@ func TestIsBlockchainSchemaCurrent_MissingPeerIDColumn(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 
 	// Drop the peer_id column entirely. Per the function contract, a missing
 	// column must surface as (false, nil), not (false, sql.ErrNoRows). Without
@@ -183,7 +249,7 @@ func TestCreatePostgresSchema_FastPathOnSecondCall(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	s1, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s1.Close() })
+	t.Cleanup(func() { _ = s1.Close(context.Background()) })
 
 	// The second call must detect the schema as current and return without
 	// running DDL. The cheapest proof that no DDL ran is that the call is
@@ -202,4 +268,137 @@ func TestCreatePostgresSchema_FastPathOnSecondCall(t *testing.T) {
 	).Scan(&oidAfter))
 
 	assert.Equal(t, oidBefore, oidAfter, "fast path must not re-create objects")
+}
+
+// An index the schema has retired must make the probe report not-current, or the
+// fast path would skip the DDL sequence and the DROP INDEX would never run on an
+// existing database.
+func TestIsBlockchainSchemaCurrent_RetiredIndexPresent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	_, err = db.Exec(`CREATE INDEX idx_inserted_at ON blocks (inserted_at)`)
+	require.NoError(t, err)
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.False(t, current, "schema must not be current while a retired index exists")
+
+	// Without indexes the DDL never drops it, so its presence must not force a rerun.
+	current, err = isBlockchainSchemaCurrent(db, false)
+	require.NoError(t, err)
+	require.True(t, current, "the retired-index check applies only with indexes")
+}
+
+// A database created by an older version still carries idx_inserted_at. Running the
+// schema setup against it must drop the index and leave the schema current.
+func TestCreatePostgresSchema_DropsRetiredIndex(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	_, err = db.Exec(`CREATE INDEX idx_inserted_at ON blocks (inserted_at)`)
+	require.NoError(t, err)
+
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true))
+
+	var exists bool
+	require.NoError(t, db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'idx_inserted_at' AND relkind = 'i')`,
+	).Scan(&exists))
+	require.False(t, exists, "idx_inserted_at must be dropped")
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.True(t, current, "schema must be current once the retired index is gone")
+}
+
+// A database created before the best-tip order dropped peer_id carries idx_chain_work_peer_id and
+// idx_chain_work_valid, both ordered by peer_id, and lacks the indexes ordered by id. Running the
+// schema setup against it must swap them and leave the schema current.
+func TestCreatePostgresSchema_ReplacesPeerIDBestTipIndexes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	for _, stmt := range []string{
+		`DROP INDEX idx_chain_work_id_v2`,
+		`DROP INDEX idx_chain_work_id_valid`,
+		`CREATE INDEX idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC)`,
+		`CREATE INDEX idx_chain_work_valid ON blocks (chain_work DESC, peer_id ASC, id ASC) WHERE invalid = false`,
+		// The name an earlier build of the id order used, which an older binary drops on start.
+		`CREATE INDEX idx_chain_work_id ON blocks (chain_work DESC, id ASC)`,
+	} {
+		_, err = db.Exec(stmt)
+		require.NoError(t, err, stmt)
+	}
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.False(t, current, "a schema with the peer_id indexes is not current")
+
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true))
+
+	for name, want := range map[string]bool{
+		"idx_chain_work_peer_id":  false,
+		"idx_chain_work_valid":    false,
+		"idx_chain_work_id":       false,
+		"idx_chain_work_id_v2":    true,
+		"idx_chain_work_id_valid": true,
+	} {
+		var exists bool
+		require.NoError(t, db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = $1 AND relkind = 'i')`, name,
+		).Scan(&exists))
+		require.Equal(t, want, exists, name)
+	}
+
+	current, err = isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.True(t, current, "schema must be current once the indexes are swapped")
+}
+
+// A failed DROP INDEX on the retired index must stop the schema setup with an
+// error rather than carry on. A table with the index's name makes Postgres refuse
+// the drop, because the name is not an index.
+func TestCreatePostgresSchema_RetiredIndexDropFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	_, err = db.Exec(`CREATE TABLE idx_inserted_at (id INTEGER)`)
+	require.NoError(t, err)
+
+	err = createPostgresSchemaUnlocked(db, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "could not drop idx_inserted_at index")
 }

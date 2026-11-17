@@ -10,15 +10,14 @@
     - [3.2.3. Access via gRPC](#323-access-via-grpc)
     - [3.3. State Machine States](#33-state-machine-states)
     - [3.3.1. FSM: Idle State](#331-fsm-idle-state)
-    - [3.3.2. FSM: Legacy Syncing State](#332-fsm-legacy-syncing-state)
-    - [3.3.3. FSM: Running State](#333-fsm-running-state)
-    - [3.3.4. FSM: Catching Blocks State](#334-fsm-catching-blocks-state)
+    - [3.3.2. FSM: Running State](#332-fsm-running-state)
+    - [3.3.3. FSM: Catching Blocks State](#333-fsm-catching-blocks-state)
     - [3.4. State Machine Events](#34-state-machine-events)
-    - [3.4.1. FSM Event: Legacy Sync](#341-fsm-event-legacy-sync)
-    - [3.4.2. FSM Event: Run](#342-fsm-event-run)
-    - [3.4.3. FSM Event: Catch up Blocks](#343-fsm-event-catch-up-blocks)
-    - [3.4.4. FSM Event: Stop](#344-fsm-event-stop)
+    - [3.4.1. FSM Event: Run](#341-fsm-event-run)
+    - [3.4.2. FSM Event: Catch up Blocks](#342-fsm-event-catch-up-blocks)
+    - [3.4.3. FSM Event: Stop](#343-fsm-event-stop)
     - [3.5. Waiting on State Machine Transitions](#35-waiting-on-state-machine-transitions)
+    - [3.6. Health Check Status Codes](#36-health-check-status-codes)
 4. [Other Resources](#4-other-resources)
 
 ## 1. Introduction
@@ -40,13 +39,11 @@ The Teranode blockchain service uses a Finite State Machine (FSM) to manage the 
 The FSM has the following **states**:
 
 - **Idle**
-- **LegacySyncing**
 - **Running**
 - **CatchingBlocks**
 
 The FSM responds to the following **events**:
 
-- **LegacySync**
 - **Run**
 - **CatchupBlocks**
 - **Stop**
@@ -57,10 +54,9 @@ The diagram below represents the relationships between the states and events in 
 
 The FSM handles the following state **transitions**:
 
-- **LegacySync**: Transitions to _LegacySyncing_ from _Idle_
-- **Run**: Transitions to _Running_ from _Idle_, _LegacySyncing_ or _CatchingBlocks_
-- **CatchupBlocks**: Transitions to _CatchingBlocks_ from _Running_
-- **Stop**: Transitions to _Idle_ from _LegacySyncing_ or _Running_
+- **Run**: Transitions to _Running_ from _Idle_ or _CatchingBlocks_
+- **CatchupBlocks**: Transitions to _CatchingBlocks_ from _Running_ or _Idle_
+- **Stop**: Transitions to _Idle_ from _Running_ or _CatchingBlocks_
 
 Teranode provides a visualizer tool to generate and visualize the state machine diagram. To run the visualizer, use the command `go run services/blockchain/fsm_visualizer/main.go`. The generated `docs/state-machine.diagram.md` can be visualized using <https://mermaid.live/>.
 
@@ -68,7 +64,21 @@ Teranode provides a visualizer tool to generate and visualize the state machine 
 
 ### 3.1. State Machine Initialization
 
-As part of its own initialization, the Blockchain service initializes the FSM in the **Idle** state, before it transitions to a LegacySyncing or Running state.
+As part of initialization, the Blockchain service normally restores the FSM
+state it last persisted. A node with no persisted state uses
+`blockchain_initializeNodeInState`: an empty value means **CatchingBlocks**,
+while production `operator` and `docker.m` contexts default it to **Idle** so a
+seed can be inspected before catch-up. Uppercase values are required. Validation
+applies only when no FSM state is persisted; invalid values then abort startup.
+
+The test-only local start-state override takes precedence. Otherwise, a
+configured fresh-node **Running** state must pass the active network's checkpoint
+gate; below-checkpoint configured **Running** aborts startup without fallback.
+A persisted **Running** state with a successfully read tip below the checkpoint
+is persisted and resumed as **CatchingBlocks** instead. A tip-read failure or
+missing tip metadata aborts startup and leaves the persisted state unchanged.
+Unrecognized persisted state names likewise abort without writes; only the
+known retired `LEGACYSYNCING` name is migrated automatically.
 
 ### 3.2. Accessing the State Machine
 
@@ -102,7 +112,6 @@ The Blockchain service also exposes the following gRPC methods to interact with 
 
 - **GetFSMCurrentState** - Returns the current state of the FSM
 - **SendFSMEvent** - Sends an event to the FSM to trigger a state transition
-- **LegacySync** - Transitions the FSM to the LegacySyncing state (delegates on the SendFSMEvent method)
 - **Run** - Transitions the FSM to the Running state (delegates on the SendFSMEvent method)
 - **CatchUpBlocks** - Transitions the FSM to the CatchingBlocks state (delegates on the SendFSMEvent method)
 - **Idle** - Transitions the FSM to the Idle state by sending the STOP event (delegates on the SendFSMEvent method)
@@ -111,7 +120,9 @@ The Blockchain service also exposes the following gRPC methods to interact with 
 
 #### 3.3.1. FSM: Idle State
 
-The Blockchain service always starts in an `Idle` state. In this state:
+A node reaches `Idle` by being stopped from `Running` or `CatchingBlocks`, by restoring persisted
+`Idle`, or by starting fresh under a context configured to park there (production
+deployments do; see section 3.1). In this state:
 
 - No operations are permitted
 - All services are inactive
@@ -131,28 +142,13 @@ Allowed Operations in Idle State:
 - ❌ Create subtrees (or propagate them)
 - ❌ Create blocks (mine candidates)
 
-All services will wait for the FSM to transition to the `Running` state (either directly or after going through a `Legacy Sync` step) before starting their operations. As such, the node should see no activity until the FSM transitions to the `Running` state.
+Services wait for the FSM to leave `Idle` before starting their operations — any
+non-Idle state, including `CatchingBlocks`, releases them (see section 3.5). As
+such, a node that boots into `Idle` sees no activity until it leaves `Idle`.
 
-The node can also return back to the `Idle` state from `Running` or `LegacySyncing`, however this can only be triggered by a manual / external request.
+The node can also return to `Idle` from `Running` or `CatchingBlocks`, but only on a manual / external request. Services that have already started keep running; `Idle` records the operator's intent and blocks automatic promotion, it is not a drain barrier. In particular, a STOP from `CatchingBlocks` does not cancel the catchup batch in progress: it keeps validating blocks under `Idle` and its final promotion to `Running` is refused. The catchup safeguards (no block-assembly feeding, no peer-subtree validation, no rejected-transaction or invalid-subtree publishing, pruner `SkipDuringCatchup`) apply in every state except `Running`, so they stay in force under `Idle`. In legacy sync mode, block download is not FSM-gated and continues. Stop the services before destructive recovery such as `rewindblockchain`.
 
-#### 3.3.2. FSM: Legacy Syncing State
-
-When a node is starting up, it may need to perform a legacy sync. This is a full block sync performed against legacy BSV nodes. In this state:
-
-Allowed Operations in Legacy Syncing State:
-
-- ❌ Process external transactions
-- ❌ Legacy relay transactions
-- ❌ Queue subtrees
-- ❌ Process subtrees
-- ❌ Queue blocks
-- ❌ Process blocks
-- ❌ Relay blocks
-- ✅ Speedy process blocks
-- ❌ Create subtrees (or propagate them)
-- ❌ Create blocks (mine candidates)
-
-#### 3.3.3. FSM: Running State
+#### 3.3.2. FSM: Running State
 
 The `Running` state represents the node actively participating in the network. In this state:
 
@@ -173,9 +169,13 @@ Once the FSM transitions to the `Running` state, all services will start their n
 
 The Block Assembler will only mine blocks when the node is in the `Running` state. The Block Assembler will never mine blocks under any other node state.
 
-#### 3.3.4. FSM: Catching Blocks State
+#### 3.3.3. FSM: Catching Blocks State
 
-The `CatchingBlocks` state represents the node catching up on blocks. This state is triggered by BlockValidation when the node needs to catch up with the network. In this state:
+The `CatchingBlocks` state represents the node catching up on blocks. It is entered
+by BlockValidation when a running node finds it has fallen behind the network; at
+startup when selected as the fresh-node boot state (see section 3.1); when an
+unsafe persisted `Running` state is recovered; or through an explicit
+CATCHUPBLOCKS event from `Idle`. In this state:
 
 Allowed Operations in Catching Blocks State:
 
@@ -189,6 +189,20 @@ Allowed Operations in Catching Blocks State:
 - ❌ Speedy process blocks
 - ❌ Create subtrees (or propagate them)
 - ❌ Create blocks (mine candidates)
+
+Outbound P2P gossip is gated per FSM state by a declarative allow-list
+(`outboundTopicsAllowed` in `services/p2p/publish_gate.go`): in `Running` the
+node may publish block, subtree, rejected-tx, and `node_status` messages; in
+`CatchingBlocks` and `Idle` it publishes only `node_status` (so peers can track
+its height). `Idle` is deliberately restrictive because it doubles as the
+blockchain client's safety fallback: when the FSM state cannot be fetched or
+the heartbeat is lost, the client caches `Idle` and reports it with no error,
+so a degraded blockchain client reads as `Idle` and gossip stops (only
+`node_status` keeps flowing) until the state is re-fetched. An idle node must
+not participate in the network in any case. States unknown to the
+allow-list (e.g. from a newer blockchain service) also fall back to
+`node_status`-only. Suppressed publishes are counted in the
+`teranode_p2p_publish_blocked_total` metric.
 
 ##### Error Handling in Catching Blocks State
 
@@ -208,27 +222,19 @@ Key points about error handling:
 
 ### 3.4. State Machine Events
 
-#### 3.4.1. FSM Event: Legacy Sync
-
-The gRPC `LegacySync` method triggers the FSM to transition to the `LegacySyncing` state. This event is used to indicate that the node is syncing from legacy BSV nodes.
-
-The Legacy service triggers this event when the node is starting up and needs to perform a legacy sync.
-
-![fsm_legacy_symc.svg](img/plantuml/fsm_legacy_sync.svg)
-
-#### 3.4.2. FSM Event: Run
+#### 3.4.1. FSM Event: Run
 
 The gRPC `Run` method triggers the FSM to transition to the `Running` state. This event is used to indicate that the node is ready to start participating in the network and processing transactions and blocks.
 
 ![fsm_run.svg](img/plantuml/fsm_run.svg)
 
-#### 3.4.3. FSM Event: Catch up Blocks
+#### 3.4.2. FSM Event: Catch up Blocks
 
 The gRPC `CatchUpBlocks` method triggers the FSM to transition to the `CatchingBlocks` state. This event is used to indicate that the node is catching up on blocks and needs to process the latest blocks before resuming full operations.
 
 ![fsm_catchup_blocks.svg](img/plantuml/fsm_catchup_blocks.svg)
 
-#### 3.4.4. FSM Event: Stop
+#### 3.4.3. FSM Event: Stop
 
 The gRPC `Idle` method sends a `Stop` event to the FSM, which triggers a transition to the `Idle` state. This event is used to stop the node from participating in the network and halt all operations.
 
@@ -238,7 +244,7 @@ This method is not currently used.
 
 Through internal helper methods, services can wait for the FSM to transition out of the `Idle` state before proceeding with their operations. This method is used by various services to ensure that the node is in the correct state before starting their activities.
 
-The method blocks until the FSM transitions from the `Idle` state to any non-Idle state (such as `Running`, `LegacySyncing`, or `CatchingBlocks`) or until a timeout occurs. This ensures that services are synchronized with the node's state changes and can respond accordingly.
+The method blocks until the FSM transitions from the `Idle` state to any non-Idle state (such as `Running` or `CatchingBlocks`) or until a timeout occurs. This ensures that services are synchronized with the node's state changes and can respond accordingly.
 
 The following services wait for the FSM to transition from the `Idle` state before starting their operations:
 
@@ -252,6 +258,25 @@ The following services wait for the FSM to transition from the `Idle` state befo
 - Subtree Validation
 - UTXO Persister
 - Validator
+
+### 3.6. Health Check Status Codes
+
+Each service's own `/health` HTTP route does not consult the FSM. Propagation's (`services/propagation/Server.go`) is a hardcoded 200; the asset server's (`services/asset/httpimpl/http.go`) returns its repository's readiness JSON with a 200 status code, and since `health.CheckAll` never returns a non-nil error the 500 branch there is unreachable, so the body can report `"status": "503"` under a 200 code. The FSM state is checked by the _daemon's_ aggregated health server instead: the daemon (`daemon/daemon.go`) starts a separate HTTP listener on `HealthCheckHTTPListenAddress` (default `:8000`) that exposes `/health/readiness` and `/health/liveness` for every service running in the process, plus a legacy `/health` alias of `/health/readiness`. Thirteen services register `CheckFSM` (`services/blockchain/fsm.go`) as one of their _readiness_ checks — notably _not_ the blockchain service itself, which owns the FSM and builds its readiness set from the gRPC server, HTTP server, Kafka and `BlockchainStore` only (`services/blockchain/Server.go`), so a blockchain pod's `/health/readiness` has no FSM row at all. `health.CheckGRPCServerWithSettings` (a plain TCP/gRPC connectivity probe, not a gRPC health-check protocol implementation) may be registered alongside it. The same readiness set is also reachable over gRPC, for some services: eight servers implement a `HealthGRPC` RPC and answer it by calling their own `Health(ctx, false)`, and seven of those eight (alert, block assembly, block validation, propagation, pruner, subtree validation, validator) register `CheckFSM`, so their gRPC health response folds in the FSM state exactly as `/health/readiness` does; asset, block persister, legacy, p2p, RPC and UTXO persister register the check but expose no `HealthGRPC`, and the blockchain service is the reverse — it has `HealthGRPC` but does not register the check for itself. `/health/liveness` reaches every service: the daemon's handler calls `ServiceManager.HealthHandler(ctx, true)`, which loops over all services and invokes each one's `Health(ctx, true)`. The short-circuit is inside those implementations — on the liveness path a service returns `health.CheckAll(ctx, checkLiveness, nil)` with no checks, so the FSM check is never built or run and the FSM state never affects liveness. `CheckFSM` maps the FSM state to an HTTP status code as follows:
+
+| FSM State        | HTTP Status                    | Meaning                                                        |
+|------------------|---------------------------------|-----------------------------------------------------------------|
+| `Idle`           | 200 `StatusOK`                  | Healthy, but not yet processing transactions/blocks.             |
+| `Running`        | 200 `StatusOK`                  | Healthy and actively participating in the network.               |
+| `CatchingBlocks` | 200 `StatusOK`                  | Healthy and catching up on blocks.                                |
+| Unknown/unlisted | 503 `StatusServiceUnavailable`  | Unrecognized FSM state, or the FSM state query itself failed.    |
+
+The mapping above is for the FSM check in isolation: `/health/readiness` runs all of a service's registered `health.Check` entries through `health.CheckAll` (`util/health/health.go`), and the endpoint returns 503 if _any_ check fails, so the FSM state is only one contributor to the overall status.
+
+The state a non-blockchain service reports is also normally the value its blockchain client last received over the notification subscription, not a fresh query — `Client.GetFSMCurrentState` (`services/blockchain/Client.go`) returns the cached value whenever it is populated, and a live query happens only in the window before that cache is first filled. If the subscription drops (no heartbeat, or a stale one) the client deliberately pins the cache to `IDLE`, and a failed post-reconnect refetch does the same "for safety". So `Idle` + 200 from this check can also mean "lost contact with the blockchain service" rather than "not yet sent `Run`" — it is the co-registered `BlockchainClient` check, not this one, that turns that case into a 503 on `/health/readiness`.
+
+Note that `Idle` reports 200, not 503: an idle node is healthy, just not yet running. `CheckFSM` takes a `checkLiveness` parameter but ignores it, since it is registered as a readiness check and each service omits its readiness checks when answering a liveness probe, so this one is never reached on that path; the parameter exists only so the function matches the shared `health.Check` signature. The reason `Idle` still needs to report 200 rather than 503 is the readiness/liveness split itself: if an operator wires the same path to both the readiness and the liveness probe (instead of the dedicated `/health/readiness` and `/health/liveness` routes), a 503 readiness result would then also fail the liveness probe and cause the orchestrator to restart-loop a node that is intentionally idle (for example, before its operator issues the `Run` event). Wired correctly — readiness to `/health/readiness`, liveness to `/health/liveness` — a failing readiness check only pulls the pod out of service endpoints; it does not restart anything.
+
+For the services listed in [3.5. Waiting on State Machine Transitions](#35-waiting-on-state-machine-transitions), readiness for actual work is enforced separately by their `WaitUntilFSMTransitionFromIdleState` startup gate, not by the health-check status code. Services outside that list either gate individual operations on the FSM state instead (block assembly checks `IsFSMCurrentState(RUNNING)` before serving a mining candidate) or do not gate on the FSM at all (alert, RPC) — registering `CheckFSM` as a readiness check does not by itself imply a startup gate. An operator monitoring only the `/health/readiness` status code should not read "200 while idle" as "the node is doing work" — check the reported FSM state string alongside the status code to distinguish `Idle` from `Running`/`CatchingBlocks`.
 
 ---
 

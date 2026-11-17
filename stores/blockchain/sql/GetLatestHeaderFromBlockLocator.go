@@ -75,7 +75,7 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 		locatorStrs[i] = hash.String()
 	}
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetLatestHeaderFromBlockLocator-%s-%s", bestBlockHash.String(), strings.Join(locatorStrs, ","))))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil {
@@ -257,7 +257,11 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 		return nil, nil, errors.NewStorageError("error in GetBlockHeader", err)
 	}
 
-	bits, _ := model.NewNBitFromSlice(nBits)
+	bits, err := model.NewNBitFromSlice(nBits)
+	if err != nil {
+		return nil, nil, errors.NewStorageError("error in GetLatestBlockHeaderFromBlockLocator: malformed n_bits (length %d, expected 4) for block height %d", len(nBits), blockHeaderMeta.Height, err)
+	}
+
 	blockHeader.Bits = *bits
 
 	blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
@@ -276,7 +280,7 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 			return nil, nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
 		}
 
-		miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
+		miner, err := util.ExtractCoinbaseMinerRaw(coinbaseTx, s.rawMinerTag)
 		if err != nil {
 			s.logger.Debugf("failed to extract miner in GetLatestHeaderFromBlockLocator (block may be invalid): %v", err)
 		} else {

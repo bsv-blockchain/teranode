@@ -186,6 +186,27 @@ func TestRegistryClient_UpdatePeerMetrics_Malicious(t *testing.T) {
 	require.Equal(t, 5.0, got.ReputationScore)
 }
 
+func TestRegistryClient_RecordValidatedPeerProgress(t *testing.T) {
+	client, cleanup := setupRegistryGRPC(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	require.NoError(t, client.RegisterPeer(ctx, &PeerInfo{ID: "validated-peer", Height: 500}))
+
+	validatedHash := mustPeerRegistryHash("client-validated")
+	require.NoError(t, client.RecordValidatedPeerProgress(ctx, "validated-peer", 300, validatedHash, []byte{0x05, 0x06}))
+
+	got, found, err := client.GetPeer(ctx, "validated-peer")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, uint32(500), got.Height)
+	require.Equal(t, uint32(300), got.ValidatedHeight)
+	require.NotNil(t, got.ValidatedBlockHash)
+	require.Equal(t, validatedHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, []byte{0x05, 0x06}, got.ValidatedChainWork)
+	require.False(t, got.LastValidatedAt.IsZero())
+}
+
 // ---------------------------------------------------------------------------
 // RemovePeer -> verify via GetPeer (not found)
 // ---------------------------------------------------------------------------

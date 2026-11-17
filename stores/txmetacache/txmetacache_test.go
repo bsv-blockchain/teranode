@@ -3,6 +3,7 @@ package txmetacache
 import (
 	"context"
 	"net/url"
+	"runtime"
 	"testing"
 	"time"
 
@@ -57,7 +58,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		require.NoError(t, err)
 
-		metaCreated, err := c.Create(ctx, coinbaseTx, 100)
+		metaCreated, _, err := c.SpendAndCreate(ctx, coinbaseTx, 100, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -80,7 +81,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, nativeUtxoStore, Native)
 		require.NoError(t, err)
 
-		metaCreated, err := c.Create(ctx, coinbaseTx, 100)
+		metaCreated, _, err := c.SpendAndCreate(ctx, coinbaseTx, 100, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -148,7 +149,12 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 }
 
 func Test_txMetaCache_Set_FixedIterations(t *testing.T) {
-	maxSetBenchmarkTxs := 1_000_000
+	// CI runs this under -race purely for concurrent-SetCache race coverage (it asserts
+	// nothing on throughput, only logs it). 1M iterations filled a fresh cache per run to
+	// ~8GiB RSS under -race — a top contributor to txmetacache.test peak (#1051). 100k
+	// still exercises the concurrent path for the race detector at ~1/10th the memory; the
+	// real throughput numbers come from the Benchmark in this package, not this test.
+	maxSetBenchmarkTxs := 100_000
 	scenarioRuns := 5
 
 	// Generate once and reuse across all bucket-type scenarios.
@@ -188,6 +194,14 @@ func Test_txMetaCache_Set_FixedIterations(t *testing.T) {
 
 				start := time.Now()
 				g := new(errgroup.Group)
+				// Bound fan-out: this used to spawn one goroutine per Set in a single
+				// unbounded batch (originally 1M — the largest and most run-to-run-variable
+				// contributor to txmetacache.test peak RSS, ~9GiB measured under -race, #1051).
+				// All maxSetBenchmarkTxs Set operations still run (and still exercise
+				// concurrent SetCache for the race detector); only the number live at once is
+				// capped. Nothing asserts on the logged throughput, so bounding does not
+				// weaken coverage.
+				g.SetLimit(runtime.GOMAXPROCS(0) * 8)
 
 				for i := 0; i < maxSetBenchmarkTxs; i++ {
 					hash := hashes[i]
@@ -716,15 +730,15 @@ func Test_txMetaCache_MultiOperations(t *testing.T) {
 		err = cache.SetCacheMulti([][]byte{hash[:]}, [][]byte{[]byte{}})
 		require.NoError(t, err)
 
-		// An empty value still gets the 4-byte height suffix appended by
-		// SetCacheMulti, so the stored entry is exactly 4 bytes.
+		// Values are stored exactly as given (no block height suffix), so the
+		// empty value comes back empty.
 		byteBackend, ok := cache.cache.(*improvedCacheBackend)
 		require.True(t, ok, "test relies on ImprovedCache byte backend")
 
 		cachedBytes := make([]byte, 0)
 		err = byteBackend.cache.Get(&cachedBytes, hash[:])
 		require.NoError(t, err)
-		require.Equal(t, 4, len(cachedBytes))
+		require.Empty(t, cachedBytes)
 	})
 }
 
@@ -846,7 +860,7 @@ func Test_TxMetaCache_BatchDecorate(t *testing.T) {
 	}
 
 	// Pre-populate the underlying store with test data
-	_, err = cache.utxoStore.Create(ctx, tests.Tx, 100)
+	_, _, err = cache.utxoStore.SpendAndCreate(ctx, tests.Tx, 100, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Set up some cache entries
@@ -878,6 +892,82 @@ func Test_TxMetaCache_BatchDecorate(t *testing.T) {
 
 // Note: GetSpend test skipped due to type compatibility issues
 
+// TestBatchDecorate_DoesNotCachePartialInpoints pins the producer-side root-cause
+// fix: BatchDecorate must never cache a partial meta — a non-coinbase tx whose
+// TxInpoints (parent tx hashes) was not populated, as a reduced-field
+// BatchDecorate ({BlockIDs, BlockHeights}) yields. Caching it poisons the cache
+// and wedges block validation because subtree-meta serialization rejects an
+// inpoints-less non-coinbase node.
+func TestBatchDecorate_DoesNotCachePartialInpoints(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+	require.NoError(t, ns.SetBlockHeight(100))
+
+	// The store returns a partial meta: non-coinbase but no parent tx hashes.
+	partial := &meta.Data{
+		Fee:         100,
+		SizeInBytes: 111,
+		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+		BlockIDs:    make([]uint32, 0),
+	}
+	store := &decoratingNullStore{NullStore: ns, metaData: partial}
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, store, Unallocated)
+	require.NoError(t, err)
+	cache := c.(*TxMetaCache)
+
+	h := chainhash.HashH([]byte("partial-batchdecorate"))
+	items := []*utxo.UnresolvedMetaData{{Hash: h}}
+
+	err = cache.BatchDecorate(ctx, items, fields.BlockIDs, fields.BlockHeights)
+	require.NoError(t, err)
+
+	_, found := cache.GetMetaCached(ctx, h)
+	require.False(t, found, "BatchDecorate must not cache a partial (inpoints-less) non-coinbase meta")
+}
+
+// TestBatchDecorate_CachesCompleteInpoints is the positive counterpart: a meta
+// with populated parent tx hashes is complete and must be cached as before.
+func TestBatchDecorate_CachesCompleteInpoints(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+	require.NoError(t, ns.SetBlockHeight(100))
+
+	parent := chainhash.HashH([]byte("parent"))
+	in := &bt.Input{PreviousTxOutIndex: 0}
+	require.NoError(t, in.PreviousTxIDAdd(&parent))
+	ti, err := subtree.NewTxInpointsFromInputs([]*bt.Input{in})
+	require.NoError(t, err)
+
+	complete := &meta.Data{
+		Fee:         100,
+		SizeInBytes: 111,
+		TxInpoints:  ti,
+		BlockIDs:    make([]uint32, 0),
+	}
+	store := &decoratingNullStore{NullStore: ns, metaData: complete}
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, store, Unallocated)
+	require.NoError(t, err)
+	cache := c.(*TxMetaCache)
+
+	h := chainhash.HashH([]byte("complete-batchdecorate"))
+	items := []*utxo.UnresolvedMetaData{{Hash: h}}
+
+	err = cache.BatchDecorate(ctx, items, fields.Fee, fields.SizeInBytes, fields.TxInpoints)
+	require.NoError(t, err)
+
+	cached, found := cache.GetMetaCached(ctx, h)
+	require.True(t, found, "BatchDecorate must cache a complete meta")
+	require.Len(t, cached.TxInpoints.ParentTxHashes, 1)
+}
+
 func Test_TxMetaCache_MiningOperations(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
@@ -896,7 +986,7 @@ func Test_TxMetaCache_MiningOperations(t *testing.T) {
 	cache := c.(*TxMetaCache)
 
 	// First create a transaction in the store
-	_, err = cache.Create(ctx, coinbaseTx, 100)
+	_, _, err = cache.SpendAndCreate(ctx, coinbaseTx, 100, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
 	hash := coinbaseTx.TxIDChainHash()
@@ -1208,3 +1298,40 @@ func TestTxMetaCacheSetMinedMulti_UnsetMinedToleratesGap(t *testing.T) {
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
+
+// conflictingAnswerStore answers ConflictingTxHashes with a fixed answer the
+// cache could not make up itself.
+type conflictingAnswerStore struct {
+	*nullstore.NullStore
+	hashes  []chainhash.Hash
+	indexed bool
+	err     error
+}
+
+func (s *conflictingAnswerStore) ConflictingTxHashes(context.Context) ([]chainhash.Hash, bool, error) {
+	return s.hashes, s.indexed, s.err
+}
+
+// TestTxMetaCache_ConflictingTxHashesAsksTheStore pins that the cache forwards
+// ConflictingTxHashes to its store unchanged: it holds no conflicting set of
+// its own, and must neither invent an indexed answer nor hide an error.
+func TestTxMetaCache_ConflictingTxHashesAsksTheStore(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	answers := []*conflictingAnswerStore{
+		{NullStore: ns, hashes: []chainhash.Hash{{1}, {2}}, indexed: true},
+		{NullStore: ns, indexed: false},
+		{NullStore: ns, err: errors.NewStorageError("index query failed")},
+	}
+
+	for _, store := range answers {
+		c, err := NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, store, Unallocated)
+		require.NoError(t, err)
+
+		hashes, indexed, err := c.(*TxMetaCache).ConflictingTxHashes(t.Context())
+		require.Equal(t, store.hashes, hashes)
+		require.Equal(t, store.indexed, indexed)
+		require.Equal(t, store.err, err)
+	}
+}

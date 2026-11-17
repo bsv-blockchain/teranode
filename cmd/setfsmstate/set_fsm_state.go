@@ -53,15 +53,12 @@ func UpdateFSMState(logger ulogger.Logger, settings *settings.Settings, targetFs
 		targetEvent = blockchain.FSMEventRUN
 	case "catchingblocks":
 		targetEvent = blockchain.FSMEventCATCHUPBLOCKS
-	case "legacysyncing":
-		targetEvent = blockchain.FSMEventLEGACYSYNC
 	default:
 		fmt.Println("Error: invalid fsm state")
 		fmt.Println("\nAccepted FSM States:")
 		fmt.Println("  running         - The node is running normally.")
 		fmt.Println("  idle            - The node is idle, awaiting instructions.")
 		fmt.Println("  catchingblocks  - The node is catching up by processing incoming blocks.")
-		fmt.Println("  legacysyncing   - The node is syncing using the legacy method.")
 		os.Exit(1)
 	}
 
@@ -70,6 +67,10 @@ func UpdateFSMState(logger ulogger.Logger, settings *settings.Settings, targetFs
 	if err != nil {
 		logger.Fatalf("Failed to create blockchain client: %v", err)
 		os.Exit(1)
+	}
+	// ClientI does not declare Close; the concrete client gained it in DC7.
+	if c, ok := blockchainClient.(interface{ Close() error }); ok {
+		defer func() { _ = c.Close() }()
 	}
 
 	// get the current FSM state

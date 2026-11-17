@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"net/url"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -16,12 +19,16 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	blockchainsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxofields "github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	storelogger "github.com/bsv-blockchain/teranode/stores/utxo/logger"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -473,6 +480,9 @@ func TestRewindBlockchain_Integration(t *testing.T) {
 	// the block-timestamp / response / chain-walk caches and triggers the
 	// off-chain-set rebuild (mirroring InvalidateBlock), so GetBestBlockHeader
 	// inside Phase 4 reflects the new tip without any manual cache flush.
+	// A deleted block's subtree can also have kept-aside conflicting txs next to it.
+	require.NoError(t, subtreeStore.Set(ctx, subtree3Root[:], fileformat.FileTypeSubtreeConflicting, []byte{0x01}))
+
 	opts := Options{
 		TargetHeight: 2,
 		AssumeYes:    true,
@@ -555,6 +565,10 @@ func TestRewindBlockchain_Integration(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, exists, "subtree blob %s should be deleted from blob store", name)
 	}
+
+	exists, err := subtreeStore.Exists(ctx, subtree3Root[:], fileformat.FileTypeSubtreeConflicting)
+	require.NoError(t, err)
+	require.False(t, exists, "kept-aside conflicting txs of subtree3 should be deleted from blob store")
 
 	// Surviving subtree blobs remain.
 	for name, h := range map[string]*chainhash.Hash{
@@ -842,10 +856,14 @@ func TestRewindBlockchain_ForceDeep(t *testing.T) {
 type errOnGetStateStore struct {
 	blockchain_store.Store
 	getStateErr error
+	// onlyKey, when non-empty, limits the injected failure to that one state
+	// key. Without it a test cannot tell "the persister read aborted preflight"
+	// from "the first read of any key aborted preflight".
+	onlyKey string
 }
 
 func (e *errOnGetStateStore) GetState(ctx context.Context, key string) ([]byte, error) {
-	if e.getStateErr != nil {
+	if e.getStateErr != nil && (e.onlyKey == "" || e.onlyKey == key) {
 		return nil, e.getStateErr
 	}
 	return e.Store.GetState(ctx, key)
@@ -873,4 +891,1067 @@ func TestResetBlockPersisterHeight_RealErrorPropagates(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to read state")
 	require.True(t, errors.Is(err, simulated), "real error must propagate, not be swallowed as missing")
+}
+
+// TestConfirmPrompt exercises the y/N gate in isolation. confirmPrompt only
+// reads Options.Stdin and writes Options.Stdout, so no stores or chain fixture
+// are required.
+func TestConfirmPrompt(t *testing.T) {
+	pf := &preflightResult{tip: 1749337, target: 1749330}
+
+	newEnv := func(stdin string, out *bytes.Buffer) *env {
+		return &env{
+			logger: logger(),
+			opts: Options{
+				Stdin:  strings.NewReader(stdin),
+				Stdout: out,
+			},
+		}
+	}
+
+	t.Run("accepts affirmative answers", func(t *testing.T) {
+		// "y" without a trailing newline is the regression guard: ReadString
+		// returns ("y", io.EOF) and must still count as a yes.
+		for _, in := range []string{"y\n", "yes\n", "Y\n", "YES\n", " y \n", "y"} {
+			var out bytes.Buffer
+
+			require.NoError(t, newEnv(in, &out).confirmPrompt(pf), "input %q must be accepted", in)
+			require.Contains(t, out.String(), "DESTRUCTIVE", "input %q must still print the warning", in)
+			require.Contains(t, out.String(), "1749330", "input %q must print the target height", in)
+		}
+	})
+
+	t.Run("rejects negative and unrecognised answers", func(t *testing.T) {
+		for _, in := range []string{"n\n", "no\n", "\n", "maybe\n"} {
+			var out bytes.Buffer
+
+			err := newEnv(in, &out).confirmPrompt(pf)
+			require.Error(t, err, "input %q must be rejected", in)
+			require.Contains(t, err.Error(), "aborted by user", "input %q", in)
+		}
+	})
+
+	t.Run("names the remedy when stdin is closed", func(t *testing.T) {
+		var out bytes.Buffer
+
+		err := newEnv("", &out).confirmPrompt(pf)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "--assume-yes",
+			"an operator hitting EOF on a non-TTY must be told how to proceed")
+	})
+
+	t.Run("names the remedy when stdin is absent", func(t *testing.T) {
+		var out bytes.Buffer
+
+		e := &env{logger: logger(), opts: Options{Stdout: &out}}
+
+		err := e.confirmPrompt(pf)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "--assume-yes")
+	})
+}
+
+// setPersisterHeight seeds state["BlockPersisterHeight"] with an LE uint32,
+// the format services/blockpersister/Server.go writes.
+func setPersisterHeight(t *testing.T, ctx context.Context, store blockchain_store.Store, height uint32) {
+	t.Helper()
+	payload := make([]byte, 4)
+	binary.LittleEndian.PutUint32(payload, height)
+	require.NoError(t, store.SetState(ctx, "BlockPersisterHeight", payload))
+}
+
+// countingSetStateStore wraps a blockchain.Store and counts SetState calls per
+// key. Needed because a value assertion cannot distinguish "skipped the write"
+// from "wrote LE(target)" when the stored height already equals the target —
+// both leave the same bytes behind. The call count can.
+type countingSetStateStore struct {
+	blockchain_store.Store
+	setStateCalls map[string]int
+}
+
+func newCountingSetStateStore(inner blockchain_store.Store) *countingSetStateStore {
+	return &countingSetStateStore{Store: inner, setStateCalls: make(map[string]int)}
+}
+
+func (c *countingSetStateStore) SetState(ctx context.Context, key string, data []byte) error {
+	c.setStateCalls[key]++
+	return c.Store.SetState(ctx, key, data)
+}
+
+// TestResetBlockPersisterHeight_NeverMovesForward covers issue #1340: the tool
+// used to write LE(target) unconditionally, which raised the recorded persister
+// height on nodes whose persister was behind the target (normal after a
+// resync). Raising it makes the pruner treat unpersisted blocks as persisted.
+func TestResetBlockPersisterHeight_NeverMovesForward(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("below target is left untouched", func(t *testing.T) {
+		bcStore, _, _, _ := newTestStores(t, ctx)
+		setPersisterHeight(t, ctx, bcStore, 422492)
+		spy := newCountingSetStateStore(bcStore)
+
+		e := &env{logger: logger(), blockchainStore: spy}
+		require.NoError(t, e.resetBlockPersisterHeight(ctx, &preflightResult{target: 1749334}))
+
+		require.Zero(t, spy.setStateCalls[blockPersisterHeightKey], "no write may be issued at all")
+
+		got, err := bcStore.GetState(ctx, "BlockPersisterHeight")
+		require.NoError(t, err)
+		require.Len(t, got, 4)
+		require.Equal(t, uint32(422492), binary.LittleEndian.Uint32(got),
+			"persister height behind the target must not be moved forward")
+	})
+
+	t.Run("equal to target is left untouched", func(t *testing.T) {
+		bcStore, _, _, _ := newTestStores(t, ctx)
+		setPersisterHeight(t, ctx, bcStore, 7)
+		spy := newCountingSetStateStore(bcStore)
+
+		e := &env{logger: logger(), blockchainStore: spy}
+		require.NoError(t, e.resetBlockPersisterHeight(ctx, &preflightResult{target: 7}))
+
+		// The call count is the only assertion that can fail here: skipping the
+		// write and rewriting LE(7) both leave 7 in the store.
+		require.Zero(t, spy.setStateCalls[blockPersisterHeightKey], "no write may be issued at the equality boundary")
+
+		got, err := bcStore.GetState(ctx, "BlockPersisterHeight")
+		require.NoError(t, err)
+		require.Equal(t, uint32(7), binary.LittleEndian.Uint32(got))
+	})
+
+	t.Run("above target is rewritten down", func(t *testing.T) {
+		bcStore, _, _, _ := newTestStores(t, ctx)
+		setPersisterHeight(t, ctx, bcStore, 10)
+		spy := newCountingSetStateStore(bcStore)
+
+		e := &env{logger: logger(), blockchainStore: spy}
+		require.NoError(t, e.resetBlockPersisterHeight(ctx, &preflightResult{target: 4}))
+
+		require.Equal(t, 1, spy.setStateCalls[blockPersisterHeightKey], "exactly one write down to the target")
+
+		got, err := bcStore.GetState(ctx, "BlockPersisterHeight")
+		require.NoError(t, err)
+		require.Len(t, got, 4)
+		require.Equal(t, uint32(4), binary.LittleEndian.Uint32(got),
+			"persister height ahead of the target must be rewritten down to it")
+	})
+
+	t.Run("payload shorter than 4 bytes is left untouched", func(t *testing.T) {
+		bcStore, _, _, _ := newTestStores(t, ctx)
+		require.NoError(t, bcStore.SetState(ctx, "BlockPersisterHeight", []byte{0x01, 0x02}))
+		spy := newCountingSetStateStore(bcStore)
+
+		e := &env{logger: logger(), blockchainStore: spy}
+		require.NoError(t, e.resetBlockPersisterHeight(ctx, &preflightResult{target: 4}),
+			"an undecodable payload must not fail the run")
+
+		require.Zero(t, spy.setStateCalls[blockPersisterHeightKey])
+
+		got, err := bcStore.GetState(ctx, "BlockPersisterHeight")
+		require.NoError(t, err)
+		require.Equal(t, []byte{0x01, 0x02}, got,
+			"cannot prove a write would be downward, so leave the value alone")
+	})
+
+	t.Run("empty payload is left untouched", func(t *testing.T) {
+		bcStore, _, _, _ := newTestStores(t, ctx)
+		require.NoError(t, bcStore.SetState(ctx, "BlockPersisterHeight", []byte{}))
+		spy := newCountingSetStateStore(bcStore)
+
+		e := &env{logger: logger(), blockchainStore: spy}
+		require.NoError(t, e.resetBlockPersisterHeight(ctx, &preflightResult{target: 4}))
+
+		require.Zero(t, spy.setStateCalls[blockPersisterHeightKey])
+
+		got, err := bcStore.GetState(ctx, "BlockPersisterHeight")
+		require.NoError(t, err)
+		require.Empty(t, got, "a present-but-empty row is as undecodable as a short one")
+	})
+
+	t.Run("absent key stays absent", func(t *testing.T) {
+		bcStore, _, _, _ := newTestStores(t, ctx)
+		spy := newCountingSetStateStore(bcStore)
+
+		e := &env{logger: logger(), blockchainStore: spy}
+		require.NoError(t, e.resetBlockPersisterHeight(ctx, &preflightResult{target: 4}))
+
+		require.Zero(t, spy.setStateCalls[blockPersisterHeightKey])
+
+		_, err := bcStore.GetState(ctx, "BlockPersisterHeight")
+		require.Error(t, err, "the tool must not create the key when it was never set")
+	})
+}
+
+// TestPreflight_CapturesBlockPersisterHeight checks that preflight records the
+// pre-run persister height so Phase 4 has a baseline to compare against.
+func TestPreflight_CapturesBlockPersisterHeight(t *testing.T) {
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+	setPersisterHeight(t, ctx, bcStore, 1)
+
+	e := &env{
+		logger:          logger(),
+		settings:        tSettings,
+		blockchainStore: bcStore,
+		utxoStore:       utxoStore,
+		subtreeStore:    subtreeStore,
+		opts:            Options{TargetHeight: 2, AssumeYes: true},
+		stats:           &Stats{},
+		concurrency:     1,
+	}
+
+	pf, err := e.preflight(ctx)
+	require.NoError(t, err)
+	require.True(t, pf.persisterHeightKnown, "a decodable key must be reported as known")
+	require.Equal(t, uint32(1), pf.persisterHeight)
+}
+
+// TestPreflight_MissingBlockPersisterHeightIsNotKnown checks the absent-key
+// path: preflight succeeds and reports the value as unknown.
+func TestPreflight_MissingBlockPersisterHeightIsNotKnown(t *testing.T) {
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+	e := &env{
+		logger:          logger(),
+		settings:        tSettings,
+		blockchainStore: bcStore,
+		utxoStore:       utxoStore,
+		subtreeStore:    subtreeStore,
+		opts:            Options{TargetHeight: 2, AssumeYes: true},
+		stats:           &Stats{},
+		concurrency:     1,
+	}
+
+	pf, err := e.preflight(ctx)
+	require.NoError(t, err)
+	require.False(t, pf.persisterHeightKnown)
+	require.Zero(t, pf.persisterHeight)
+}
+
+// TestPreflight_BlockPersisterHeightReadErrorFailsFast checks that a genuine
+// storage failure on the state read aborts during preflight, before Phase 0
+// touches any store — rather than surfacing in Phase 3 with phases 0-2 already
+// applied. The injected failure is scoped to the persister key so the test
+// cannot pass by aborting on some other state read.
+func TestPreflight_BlockPersisterHeightReadErrorFailsFast(t *testing.T) {
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+	simulated := errors.NewStorageError("simulated db read failure")
+	wrapped := &errOnGetStateStore{Store: bcStore, getStateErr: simulated, onlyKey: blockPersisterHeightKey}
+
+	e := &env{
+		logger:          logger(),
+		settings:        tSettings,
+		blockchainStore: wrapped,
+		utxoStore:       utxoStore,
+		subtreeStore:    subtreeStore,
+		opts:            Options{TargetHeight: 2, AssumeYes: true},
+		stats:           &Stats{},
+		concurrency:     1,
+	}
+
+	_, err = e.preflight(ctx)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, simulated), "real read failure must abort preflight, got %v", err)
+}
+
+// TestPhase4Verify_BlockPersisterHeightIncrease asserts the --verify guard
+// catches a persister height that went up during the run. The fixture points
+// the target at the existing tip so the best-block checks pass and only the
+// persister comparison decides the outcome.
+func TestPhase4Verify_BlockPersisterHeightIncrease(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("increase fails verify", func(t *testing.T) {
+		bcStore, _, _, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+
+		blocks := buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+		setPersisterHeight(t, ctx, bcStore, 2)
+
+		e := &env{logger: logger(), blockchainStore: bcStore}
+		pf := &preflightResult{
+			target:               4,
+			targetHash:           blocks[3].Hash(),
+			persisterHeight:      1,
+			persisterHeightKnown: true,
+		}
+
+		err = e.phase4Verify(ctx, pf)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "increased from 1 to 2")
+	})
+
+	t.Run("unchanged passes verify", func(t *testing.T) {
+		bcStore, _, _, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+
+		blocks := buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+		setPersisterHeight(t, ctx, bcStore, 1)
+
+		e := &env{logger: logger(), blockchainStore: bcStore}
+		pf := &preflightResult{
+			target:               4,
+			targetHash:           blocks[3].Hash(),
+			persisterHeight:      1,
+			persisterHeightKnown: true,
+		}
+
+		require.NoError(t, e.phase4Verify(ctx, pf))
+	})
+
+	t.Run("unreadable before and set after fails verify", func(t *testing.T) {
+		bcStore, _, _, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+
+		blocks := buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+		setPersisterHeight(t, ctx, bcStore, 9999)
+
+		e := &env{logger: logger(), blockchainStore: bcStore}
+		pf := &preflightResult{
+			target:               4,
+			targetHash:           blocks[3].Hash(),
+			persisterHeightKnown: false,
+		}
+
+		// An unreadable baseline is still a baseline: this tool never creates the
+		// key, so a value appearing across the run is an anomaly, not a no-op.
+		err = e.phase4Verify(ctx, pf)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "was unreadable before the run and is now 9999")
+	})
+
+	t.Run("force-not-idle downgrades a concurrent increase to a warning", func(t *testing.T) {
+		bcStore, _, _, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+
+		blocks := buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+		setPersisterHeight(t, ctx, bcStore, 2)
+
+		log := &capturingLogger{}
+		e := &env{logger: log, blockchainStore: bcStore, opts: Options{ForceNotIdle: true}}
+		pf := &preflightResult{
+			target:               4,
+			targetHash:           blocks[3].Hash(),
+			persisterHeight:      1,
+			persisterHeightKnown: true,
+		}
+
+		// With the node left running, block persister raises this key itself. A
+		// hard failure here would condemn a run that actually succeeded, after
+		// every mutation is already applied.
+		require.NoError(t, e.phase4Verify(ctx, pf))
+		require.Contains(t, log.warnText(), "--force-not-idle")
+	})
+
+	t.Run("value lost during the run is reported as lost, not as zero", func(t *testing.T) {
+		bcStore, _, _, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+
+		blocks := buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+		require.NoError(t, bcStore.SetState(ctx, "BlockPersisterHeight", []byte{0x01, 0x02}))
+
+		log := &capturingLogger{}
+		e := &env{logger: log, blockchainStore: bcStore}
+		pf := &preflightResult{
+			target:               4,
+			targetHash:           blocks[3].Hash(),
+			persisterHeight:      422492,
+			persisterHeightKnown: true,
+		}
+
+		require.NoError(t, e.phase4Verify(ctx, pf))
+		require.Contains(t, log.warnText(), "is no longer readable")
+		require.NotContains(t, log.infoText(), "=0 did not increase",
+			"an unreadable value must never be reported as a live 0")
+	})
+}
+
+// TestRewind_PersisterHeightBelowTargetLeftAlone runs the whole pipeline with
+// --verify against a node whose persister sits far behind the target — the
+// issue #1340 shape. Target equals the tip, so no blocks are deleted and the
+// run exercises Phase 0/1/3/4 wiring end to end.
+func TestRewind_PersisterHeightBelowTargetLeftAlone(t *testing.T) {
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	blocks := buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+	require.NoError(t, setBlockAssemblerState(ctx, bcStore, 4, blocks[3].Header))
+	setPersisterHeight(t, ctx, bcStore, 1)
+
+	stats, err := Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 4,
+		AssumeYes:    true,
+		Verify:       true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       utxoStore,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	require.Zero(t, stats.BlocksDeleted)
+
+	got, err := bcStore.GetState(ctx, "BlockPersisterHeight")
+	require.NoError(t, err)
+	require.Len(t, got, 4)
+	require.Equal(t, uint32(1), binary.LittleEndian.Uint32(got),
+		"a lagging persister height must survive a full rewind run untouched")
+}
+
+// capturingLogger records Infof/Warnf output so tests can assert on the
+// operator-facing diagnostics. On the skip path the log IS the deliverable —
+// the tool deliberately changes nothing — so it is worth asserting on.
+type capturingLogger struct {
+	ulogger.TestLogger
+	mu    sync.Mutex
+	infos []string
+	warns []string
+}
+
+func (c *capturingLogger) Infof(format string, args ...interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.infos = append(c.infos, fmt.Sprintf(format, args...))
+}
+
+func (c *capturingLogger) Warnf(format string, args ...interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.warns = append(c.warns, fmt.Sprintf(format, args...))
+}
+
+func (c *capturingLogger) infoText() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.Join(c.infos, "\n")
+}
+
+func (c *capturingLogger) warnText() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.Join(c.warns, "\n")
+}
+
+// TestBlockPersisterGroundTruth derives the persister's real position from the
+// blocks table instead of trusting the state key — the same derivation block
+// persister itself uses on startup.
+func TestBlockPersisterGroundTruth(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("lowest unpersisted block minus one", func(t *testing.T) {
+		bcStore, _, _, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+
+		blocks := buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+		require.NoError(t, bcStore.SetBlockPersistedAt(ctx, blocks[0].Hash()))
+		require.NoError(t, bcStore.SetBlockPersistedAt(ctx, blocks[1].Hash()))
+
+		e := &env{logger: logger(), blockchainStore: bcStore}
+		height, known := e.blockPersisterGroundTruth(ctx)
+		require.True(t, known)
+		require.Equal(t, uint32(2), height, "blocks 1-2 persisted, lowest pending is 3, so the real position is 2")
+	})
+
+	t.Run("nothing pending is not a baseline", func(t *testing.T) {
+		bcStore, _, _, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+
+		blocks := buildLinearChain(t, ctx, bcStore, 2, bits, tSettings.ChainCfgParams.GenesisHash)
+		for _, b := range blocks {
+			require.NoError(t, bcStore.SetBlockPersistedAt(ctx, b.Hash()))
+		}
+
+		e := &env{logger: logger(), blockchainStore: bcStore}
+		_, known := e.blockPersisterGroundTruth(ctx)
+		require.False(t, known, "with no pending block there is nothing to compare against")
+	})
+}
+
+// TestPreflight_WarnsOnInflatedAndLaggingPersisterHeight covers the two
+// operator-facing diagnostics: a key already inflated past the real position by
+// an earlier buggy run (issue 1340 leaves exactly this state behind, and the
+// fixed tool cannot repair it), and a persister lagging the target far enough
+// that the rewind will not change where it resumes.
+func TestPreflight_WarnsOnInflatedAndLaggingPersisterHeight(t *testing.T) {
+	ctx := context.Background()
+
+	newEnv := func(t *testing.T, bcStore blockchain_store.Store, utxoStore utxo.Store, subtreeStore *memory.Memory, tSettings *settings.Settings, log *capturingLogger, target int64) *env {
+		return &env{
+			logger:          log,
+			settings:        tSettings,
+			blockchainStore: bcStore,
+			utxoStore:       utxoStore,
+			subtreeStore:    subtreeStore,
+			opts:            Options{TargetHeight: target, AssumeYes: true},
+			stats:           &Stats{},
+			concurrency:     1,
+		}
+	}
+
+	t.Run("inflated key is called out", func(t *testing.T) {
+		bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+
+		blocks := buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+		require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+		require.NoError(t, bcStore.SetBlockPersistedAt(ctx, blocks[0].Hash()))
+		// Real position is 1, but the key claims 4 — the shape a pre-fix run leaves.
+		setPersisterHeight(t, ctx, bcStore, 4)
+
+		log := &capturingLogger{}
+		pf, err := newEnv(t, bcStore, utxoStore, subtreeStore, tSettings, log, 3).preflight(ctx)
+		require.NoError(t, err)
+		require.Equal(t, uint32(4), pf.persisterHeight)
+
+		require.Contains(t, log.warnText(), "is ahead of the real block persister position 1",
+			"an inflated key must be reported, not silently accepted")
+	})
+
+	t.Run("large lag is called out", func(t *testing.T) {
+		bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+
+		buildLinearChain(t, ctx, bcStore, 150, bits, tSettings.ChainCfgParams.GenesisHash)
+		require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+		// Nothing persisted at all: real position 0, target 149 — a 149-block lag.
+		setPersisterHeight(t, ctx, bcStore, 0)
+
+		log := &capturingLogger{}
+		_, err = newEnv(t, bcStore, utxoStore, subtreeStore, tSettings, log, 149).preflight(ctx)
+		require.NoError(t, err)
+
+		require.Contains(t, log.warnText(), "blocks behind the target",
+			"a persister lagging past coinbase maturity must warn")
+	})
+
+	t.Run("healthy persister stays quiet and the decision is logged", func(t *testing.T) {
+		bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+
+		blocks := buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+		require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+		for _, b := range blocks[:3] {
+			require.NoError(t, bcStore.SetBlockPersistedAt(ctx, b.Hash()))
+		}
+		// Real position 3, key agrees, target 2 → the write-down case.
+		setPersisterHeight(t, ctx, bcStore, 3)
+
+		log := &capturingLogger{}
+		_, err = newEnv(t, bcStore, utxoStore, subtreeStore, tSettings, log, 2).preflight(ctx)
+		require.NoError(t, err)
+
+		require.Empty(t, log.warnText(), "a healthy, slightly-ahead persister is not an anomaly")
+		require.Contains(t, log.infoText(), "it will be rewritten down to the target",
+			"the preflight log must state the decision, not just the numbers")
+	})
+}
+
+// -----------------------------------------------------------------------------
+// Production store construction (resolveStores)
+// -----------------------------------------------------------------------------
+
+// newFileStoreSettings points all three stores at throwaway backends: real
+// file:// subtree storage in a temp dir, in-memory SQL for the other two. The
+// subtree URL deliberately carries no query parameters, matching the resolved
+// config on a real deployment (subtreestore=file:///data/.../subtreestore),
+// where the node's default hashPrefix=2 applies.
+func newFileStoreSettings(t *testing.T, subtreeQuery string) (*settings.Settings, *url.URL) {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	bcURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+	tSettings.BlockChain.StoreURL = bcURL
+
+	utxoURL, err := url.Parse("sqlitememory:///resolve-stores-utxo")
+	require.NoError(t, err)
+	tSettings.UtxoStore.UtxoStore = utxoURL
+
+	raw := "file://" + t.TempDir()
+	if subtreeQuery != "" {
+		raw += "?" + subtreeQuery
+	}
+
+	subtreeURL, err := url.Parse(raw)
+	require.NoError(t, err)
+	tSettings.SubtreeValidation.SubtreeStore = subtreeURL
+
+	return tSettings, subtreeURL
+}
+
+// TestResolveStores_SubtreeStoreReadsWhatTheNodeWrote is the regression test for
+// the bug where the tool opened the subtree store without options.WithHashPrefix.
+// blob.NewStore does not parse hashPrefix from the URL query (stores/blob/factory.go
+// reads only batch, logger, sizeInBytes, writeKeys), so without the option
+// Options.HashPrefix stayed 0, CalculatePrefix returned "", and the tool resolved
+// flat filenames while the node wrote hash-sharded ones. Every read missed with
+// NOT_FOUND and Phase 2 could not rewind any file:// deployment.
+//
+// The existing Rewind tests all inject memory.New() via Options.Stores, which
+// bypasses resolveStores entirely — so none of them could catch this.
+func TestResolveStores_SubtreeStoreReadsWhatTheNodeWrote(t *testing.T) {
+	ctx := context.Background()
+	tSettings, subtreeURL := newFileStoreSettings(t, "")
+
+	hash := chainhash.HashH([]byte("subtree-hashprefix-regression"))
+	payload := []byte("subtree bytes")
+
+	// Write through a store built the way the daemon builds it
+	// (daemon/daemon_stores.go:454-479): hashPrefix 2, so the blob lands in a
+	// two-character shard directory.
+	nodeStore, err := blob.NewStore(logger(), subtreeURL, options.WithHashPrefix(2))
+	require.NoError(t, err)
+	require.NoError(t, nodeStore.Set(ctx, hash[:], fileformat.FileTypeSubtree, payload))
+
+	// Confirm the fixture really is sharded — otherwise this test would pass
+	// against a flat layout too and prove nothing.
+	shard := filepath.Join(subtreeURL.Path, hash.String()[:2])
+	require.DirExists(t, shard, "fixture must be hash-sharded for this test to mean anything")
+
+	// The tool's own construction path must find it.
+	stores, ownedByUs, err := resolveStores(ctx, logger(), tSettings, Options{})
+	require.NoError(t, err)
+	require.True(t, ownedByUs, "resolveStores opened these, so the caller owns closing them")
+
+	// ownedByUs is the close-me signal; honour it.
+	t.Cleanup(func() {
+		require.NoError(t, stores.Subtree.Close(ctx))
+	})
+
+	exists, err := stores.Subtree.Exists(ctx, hash[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.True(t, exists,
+		"resolveStores must open the subtree store with the node's hashPrefix; "+
+			"without it every subtree read misses and Phase 2 cannot rewind")
+
+	got, err := stores.Subtree.Get(ctx, hash[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.Equal(t, payload, got)
+
+	// And the deletion Phase 2 performs must land on the same path.
+	require.NoError(t, stores.Subtree.Del(ctx, hash[:], fileformat.FileTypeSubtree))
+
+	exists, err = stores.Subtree.Exists(ctx, hash[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.False(t, exists, "Del must remove the sharded blob, not a flat path that never existed")
+}
+
+// TestNewSubtreeStore_FlatLayoutMissesShardedBlob pins the mechanism itself, so
+// the regression above cannot be "fixed" by something that merely happens to
+// work. A store opened without the option — the old behaviour — cannot see a
+// blob the node wrote.
+func TestNewSubtreeStore_FlatLayoutMissesShardedBlob(t *testing.T) {
+	ctx := context.Background()
+	_, subtreeURL := newFileStoreSettings(t, "")
+
+	hash := chainhash.HashH([]byte("flat-vs-sharded"))
+
+	nodeStore, err := blob.NewStore(logger(), subtreeURL, options.WithHashPrefix(2))
+	require.NoError(t, err)
+	require.NoError(t, nodeStore.Set(ctx, hash[:], fileformat.FileTypeSubtree, []byte("x")))
+
+	flatStore, err := blob.NewStore(logger(), subtreeURL)
+	require.NoError(t, err)
+
+	exists, err := flatStore.Exists(ctx, hash[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.False(t, exists,
+		"a store opened without WithHashPrefix looks at a flat path — this is the bug, "+
+			"and blob.NewStore never reads hashPrefix from the URL query")
+}
+
+// TestSubtreeHashPrefix covers the tool's own prefix resolution directly.
+//
+// This deliberately does NOT assert on file layout. The file backend parses
+// ?hashPrefix for itself and applies it after the store options
+// (stores/blob/file/file.go:446-453), so a layout-based test passes whether or
+// not this code resolves anything — it cannot discriminate. Asserting on the
+// resolved value pins the tool's logic for every backend, including s3, which
+// does not read the query at all.
+func TestSubtreeHashPrefix(t *testing.T) {
+	t.Run("defaults to the daemon's 2 when the URL carries no query", func(t *testing.T) {
+		// This is every shipped subtreestore setting: a bare file:// URL.
+		u, err := url.Parse("file:///data/teranode/subtreestore")
+		require.NoError(t, err)
+
+		prefix, err := subtreeHashPrefix(u)
+		require.NoError(t, err)
+		require.Equal(t, 2, prefix, "must match daemon.GetSubtreeStore's default")
+	})
+
+	t.Run("honours an explicit ?hashPrefix", func(t *testing.T) {
+		for _, tc := range []struct {
+			query string
+			want  int
+		}{
+			{"hashPrefix=4", 4},
+			{"hashPrefix=0", 0},
+			{"hashPrefix=-2", -2}, // negative means suffix; parity with the daemon
+		} {
+			u, err := url.Parse("file:///data/teranode/subtreestore?" + tc.query)
+			require.NoError(t, err)
+
+			prefix, err := subtreeHashPrefix(u)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, prefix, "query %q", tc.query)
+		}
+	})
+
+	t.Run("rejects a non-numeric ?hashPrefix", func(t *testing.T) {
+		u, err := url.Parse("file:///data/teranode/subtreestore?hashPrefix=banana")
+		require.NoError(t, err)
+
+		_, err = subtreeHashPrefix(u)
+		require.Error(t, err)
+		// Assert on this tool's message, not the substring "hashPrefix": the file
+		// backend also rejects "banana" with a message containing that word, so a
+		// looser assertion would pass even with this parse deleted.
+		require.Contains(t, err.Error(), "subtreestore hashPrefix config error")
+	})
+}
+
+// TestNewSubtreeStore_RejectsBadHashPrefix checks the error surfaces through the
+// constructor rather than being swallowed or replaced by the backend's own.
+func TestNewSubtreeStore_RejectsBadHashPrefix(t *testing.T) {
+	tSettings, _ := newFileStoreSettings(t, "hashPrefix=banana")
+
+	_, err := newSubtreeStore(logger(), tSettings)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "subtreestore hashPrefix config error")
+}
+
+// TestNewSubtreeStore_RejectsNilURL covers the guard added with this fix:
+// blob.NewStore dereferences storeURL.Scheme before any nil check, so an
+// unconfigured subtreestore used to panic.
+func TestNewSubtreeStore_RejectsNilURL(t *testing.T) {
+	tSettings, _ := newFileStoreSettings(t, "")
+	tSettings.SubtreeValidation.SubtreeStore = nil
+
+	_, err := newSubtreeStore(logger(), tSettings)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not configured")
+}
+
+// stampedUTXOStore stands in for a UTXO store that writes blocks permanently at a fixed depth,
+// for the boundary the preflight refuses to cross. The sql store underneath answers everything
+// else; the stamp, which the sql store does not have, is supplied here. Its floors and depth are
+// fixed values, not a real stamp: a rewind reads only those two.
+type stampedUTXOStore struct {
+	utxo.Store
+
+	fence uint32
+	depth uint32
+}
+
+func (s stampedUTXOStore) Stamper() pruner.Stamper { return s }
+
+func (s stampedUTXOStore) Floors(context.Context) (pruner.StampFloors, error) {
+	return pruner.StampFloors{StampFence: s.fence, StampCompleteFloor: s.fence}, nil
+}
+
+func (s stampedUTXOStore) StampDepth() uint32 { return s.depth }
+
+func (stampedUTXOStore) WindowBlocks() uint32 { return 96 }
+
+// OpenDrain is refused: a rewind never opens a drain.
+func (stampedUTXOStore) OpenDrain(context.Context) (pruner.StampDrain, pruner.StampFloors, error) {
+	return nil, pruner.StampFloors{}, errors.NewProcessingError("a rewind never opens a stamp drain")
+}
+
+// TestRewindBlockchain_RefusesToExposeAStampedHeight: with a stamp fence of 96 and a stamp depth
+// of 96, the highest stamped height is 95 and the lowest safe target is 191. A target below
+// that is refused with no override, --force-deep included; the boundary target is accepted (and
+// short-circuits through DryRun). The numbers are a third of mainnet's because the chain
+// builder here holds at most 255 blocks; the rule is the same arithmetic.
+func TestRewindBlockchain_RefusesToExposeAStampedHeight(t *testing.T) {
+	const chainHeight = 200
+
+	run := func(t *testing.T, target int64) error {
+		ctx := context.Background()
+		bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+		buildLinearChain(t, ctx, bcStore, chainHeight, bits, tSettings.ChainCfgParams.GenesisHash)
+		require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+		_, err = Rewind(ctx, logger(), tSettings, Options{
+			TargetHeight: target,
+			DryRun:       true,
+			AssumeYes:    true,
+			ForceDeep:    true,
+			Stores: &Stores{
+				Blockchain: bcStore,
+				UTXO:       stampedUTXOStore{Store: utxoStore, fence: 96, depth: 96},
+				Subtree:    subtreeStore,
+			},
+		})
+
+		return err
+	}
+
+	t.Run("refused one below the boundary", func(t *testing.T) {
+		err := run(t, 190)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "highest stamped height 95")
+		require.Contains(t, err.Error(), "lowest safe target is 191")
+		require.NotContains(t, err.Error(), "--force-deep", "there is no override")
+	})
+
+	t.Run("accepted at the boundary", func(t *testing.T) {
+		require.NoError(t, run(t, 191))
+	})
+}
+
+// TestRewindBlockchain_RefusesToExposeAStampedHeightThroughTheLoggingWrapper: a store opened with
+// logging=true reaches the tool wrapped in stores/utxo/logger. The wrapper forwards Stamper like
+// any other method, so the preflight still reads the stamp boundary and refuses the target.
+func TestRewindBlockchain_RefusesToExposeAStampedHeightThroughTheLoggingWrapper(t *testing.T) {
+	const chainHeight = 200
+
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+	buildLinearChain(t, ctx, bcStore, chainHeight, bits, tSettings.ChainCfgParams.GenesisHash)
+	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+	wrapped := storelogger.New(ctx, logger(), stampedUTXOStore{Store: utxoStore, fence: 96, depth: 96})
+
+	_, err = Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 190,
+		DryRun:       true,
+		AssumeYes:    true,
+		ForceDeep:    true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       wrapped,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.Error(t, err, "the logging wrapper hid the stamp boundary from the preflight")
+	require.Contains(t, err.Error(), "lowest safe target is 191")
+}
+
+// TestRewindBlockchain_SQLStoreHasNoStampBoundary: the plain sql store is asked for its stamp the
+// same way as any other and answers pruner.NoStamp, whose zero fence means nothing is stamped.
+// The preflight reads that as no boundary and permits a deep target, as it always has for a
+// store without a stamp. Without the zero-fence test, fence - 1 + depth wraps to the top of
+// uint32 and every target would be refused.
+func TestRewindBlockchain_SQLStoreHasNoStampBoundary(t *testing.T) {
+	const chainHeight = 200
+
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	require.Equal(t, pruner.NoStamp, utxoStore.Stamper(), "the sql store has nothing to stamp")
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+	buildLinearChain(t, ctx, bcStore, chainHeight, bits, tSettings.ChainCfgParams.GenesisHash)
+	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+	_, err = Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 1,
+		DryRun:       true,
+		AssumeYes:    true,
+		ForceDeep:    true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       utxoStore,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.NoError(t, err)
+}
+
+// TestRewind_ClearsBlockIDReservations checks that a rewind which deletes blocks
+// also clears every durable block-id reservation. A reservation that outlived the
+// rewind would let a child keep an id reserved before its deleted parent was stored
+// again under a new, higher id, so the child would land below its parent, which
+// StoreBlock refuses. The node is stopped while the tool runs, so the durable table
+// is the only reservation state the next start sees; the in-memory map of the store
+// instance used here is not checked because the tool runs as its own process.
+func TestRewind_ClearsBlockIDReservations(t *testing.T) {
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	storeChainWithPendingChild(t, ctx, bcStore, tSettings, nil)
+
+	stats, err := Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 2,
+		AssumeYes:    true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       utxoStore,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.BlocksDeleted, "the rewind must delete blocks for the reservations to matter")
+	require.Zero(t, countBlockIDReservations(t, ctx, bcStore), "a rewind that deletes blocks must clear every reservation")
+}
+
+// TestRewind_ClearsBlockIDReservationsBeforeAFailure checks that phase 2 clears the
+// reservations before it deletes the first block, so a run that fails part-way
+// never leaves deleted blocks beside surviving reservations. The tip names a
+// subtree with no blob in the subtree store, so rewindOneBlock fails on its first
+// block, on GetSubtrees.
+func TestRewind_ClearsBlockIDReservationsBeforeAFailure(t *testing.T) {
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	missingSubtree := chainhash.HashH([]byte("subtree with no blob"))
+	storeChainWithPendingChild(t, ctx, bcStore, tSettings, &missingSubtree)
+
+	_, err := Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 2,
+		AssumeYes:    true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       utxoStore,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "GetSubtrees", "the run must fail inside phase 2, after it starts")
+	require.Zero(t, countBlockIDReservations(t, ctx, bcStore), "phase 2 must clear the reservations before it deletes any block")
+}
+
+// TestClearBlockIDReservations_StoreAndForceNotIdle covers the two edges of the
+// clear: a store that keeps no reservations is refused rather than skipped, and
+// with --force-not-idle the operator is warned that a running node's in-memory
+// reservations are out of the tool's reach.
+func TestClearBlockIDReservations_StoreAndForceNotIdle(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a store that cannot clear is refused", func(t *testing.T) {
+		bcStore, _, _, _ := newTestStores(t, ctx)
+		wrapped := &errOnGetStateStore{Store: bcStore}
+
+		e := &env{logger: logger(), blockchainStore: wrapped}
+
+		err := e.clearBlockIDReservations(ctx)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cannot clear block id reservations")
+	})
+
+	t.Run("force-not-idle warns about the running node's memory", func(t *testing.T) {
+		bcStore, _, _, _ := newTestStores(t, ctx)
+
+		pending := chainhash.HashH([]byte("reserved while the node runs"))
+		_, err := bcStore.AssignBlockID(ctx, &pending)
+		require.NoError(t, err)
+
+		log := &capturingLogger{}
+		e := &env{logger: log, blockchainStore: bcStore, opts: Options{ForceNotIdle: true}}
+
+		require.NoError(t, e.clearBlockIDReservations(ctx))
+		require.Zero(t, countBlockIDReservations(t, ctx, bcStore))
+		require.Contains(t, log.warnText(), "--force-not-idle")
+		require.Contains(t, log.infoText(), "cleared 1 block id reservations")
+	})
+}
+
+// storeChainWithPendingChild stores four blocks on genesis and reserves an id for
+// a child of the tip that is never stored. Only the tip may name a subtree, and
+// that subtree has no blob unless the caller writes one; the others name none, so
+// phase 2 can delete them without subtree blobs.
+func storeChainWithPendingChild(t *testing.T, ctx context.Context, bcStore blockchain_store.Store, tSettings *settings.Settings, tipSubtree *chainhash.Hash) {
+	t.Helper()
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	prevHash := tSettings.ChainCfgParams.GenesisHash
+	var blocks []*model.Block
+	for i := 1; i <= 4; i++ {
+		coinbase := makeCoinbaseTx(t, byte(i), byte(i))
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				Timestamp:      uint32(1700000000 + i),
+				Nonce:          uint32(i),
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: coinbase.TxIDChainHash(),
+				Bits:           *bits,
+			},
+			CoinbaseTx:       coinbase,
+			TransactionCount: 1,
+		}
+		if i == 4 && tipSubtree != nil {
+			block.Subtrees = []*chainhash.Hash{tipSubtree}
+		}
+		_, _, err = bcStore.StoreBlock(ctx, block, "peer", blockchainoptions.WithMinedSet(true))
+		require.NoError(t, err, "StoreBlock height %d", i)
+
+		blocks = append(blocks, block)
+		prevHash = block.Hash()
+	}
+
+	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+	require.NoError(t, setBlockAssemblerState(ctx, bcStore, 4, blocks[3].Header))
+
+	// A child of the tip that was reserved but never stored.
+	pendingChild := chainhash.HashH([]byte("reserved before the rewind"))
+	_, err = bcStore.AssignBlockID(ctx, &pendingChild)
+	require.NoError(t, err)
+	require.Equal(t, 1, countBlockIDReservations(t, ctx, bcStore))
+}
+
+func countBlockIDReservations(t *testing.T, ctx context.Context, store blockchain_store.Store) int {
+	t.Helper()
+
+	var count int
+	require.NoError(t, store.GetDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM block_id_reservations`).Scan(&count))
+
+	return count
 }

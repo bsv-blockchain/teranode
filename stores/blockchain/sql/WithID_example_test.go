@@ -21,12 +21,14 @@ func TestExampleUsage(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 
-	// Example 1: Store with custom ID
-	customID := uint64(1000)
+	// Example 1: Store with custom ID. The id must be the one reserved for the
+	// hash, which is what quick validation stamps on the block's transactions.
+	customID, err := s.AssignBlockID(ctx, block1.Hash())
+	require.NoError(t, err)
 	blockID, _, err := s.StoreBlock(ctx, block1, "", options.WithID(customID))
 	require.NoError(t, err)
 	require.Equal(t, customID, blockID)

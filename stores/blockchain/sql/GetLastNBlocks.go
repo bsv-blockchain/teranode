@@ -56,7 +56,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetLastNBlocks-%d-%t-%d", n, includeOrphans, fromHeight)))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil && cached.Value() != nil {
@@ -88,10 +88,11 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 		,b.inserted_at
 		FROM blocks b
 		WHERE invalid = false
+		  AND ($2 = 0 OR height <= $2)
 		ORDER BY height DESC
 	  LIMIT $1
 	`
-		args = []any{n}
+		args = []any{n, fromHeight}
 	} else if fromHeight > 0 {
 		if s.mainChainRebuilding.Load() > 0 {
 			// When paginating, cap CTE walk depth to the lower of tip height and fromHeight,
@@ -102,7 +103,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 			SELECT id, parent_id, height
 			FROM blocks
 			WHERE invalid = false
-			ORDER BY chain_work DESC, peer_id ASC, id ASC
+			ORDER BY chain_work DESC, id ASC
 			LIMIT 1
 		),
 		ChainBlocks AS (
@@ -163,7 +164,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 			SELECT id, parent_id, height
 			FROM blocks
 			WHERE invalid = false
-			ORDER BY chain_work DESC, peer_id ASC, id ASC
+			ORDER BY chain_work DESC, id ASC
 			LIMIT 1
 		),
 		ChainBlocks AS (

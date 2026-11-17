@@ -69,7 +69,41 @@ type TraceOptions struct {
 	LogMessages      []logMessage            // log messages to be added to the span
 	Timeout          time.Duration           // timeout for the span, if set
 	SampleRate       *float64                // per-span sample rate override (nil = use default)
+	InjectStartTime  bool                    // inject the span start time into the context under StartTime
 }
+
+// traceOptionsPool recycles TraceOptions across spans. On the hot path (millions
+// of spans per block during big-block catchup) allocating a fresh TraceOptions
+// per Start — together with the end-function closure — was the dominant remaining
+// per-span cost after #1099 gated the gocore.Stat/tag/StartTime work when tracing
+// is disabled. Objects are taken in Start and returned either immediately (the
+// no-op fast path) or when the span's end function runs.
+var traceOptionsPool = sync.Pool{
+	New: func() any { return &TraceOptions{} },
+}
+
+// reset clears a pooled TraceOptions for reuse. Slices that are only ever
+// appended to internally (Tags, LogMessages) keep their backing array for reuse;
+// SpanStartOptions is set to nil because WithSpanStartOptions replaces the field
+// with a caller-owned slice, which must not be aliased across spans.
+func (s *TraceOptions) reset() {
+	s.SpanStartOptions = nil
+	s.ParentStat = nil
+	s.Tags = s.Tags[:0]
+	s.Histogram = nil
+	s.Counter = nil
+	s.Logger = nil
+	s.LogMessages = s.LogMessages[:0]
+	s.Timeout = 0
+	s.SampleRate = nil
+	s.InjectStartTime = false
+}
+
+// noopEndFn is the shared, allocation-free end function returned by Start for
+// spans that have no finalisation work (tracing disabled and no metrics, log
+// messages, context timeout or gocore.Stat). Returning a single package-level
+// function avoids allocating a closure per span on the hot path.
+func noopEndFn(...error) {}
 
 // addLogMessage adds a log message to the trace options
 func (s *TraceOptions) addLogMessage(logger ulogger.Logger, message, level string, args []interface{}) {
@@ -213,9 +247,29 @@ func WithParentStat(stat *gocore.Stat) Options {
 	}
 }
 
+// WithStartTime injects the span's start time into the returned context under the
+// StartTime key, so callers can read it back via ctx.Value(tracing.StartTime).
+//
+// This is opt-in because injecting it costs a context.WithValue (and boxing the
+// time.Time) on every span, and only a few call sites read it. The hot validation
+// path opens many spans per transaction and does not need it, so it must not pay
+// the cost by default.
+func WithStartTime() Options {
+	return func(s *TraceOptions) {
+		s.InjectStartTime = true
+	}
+}
+
 // WithTag adds a key-value tag to the trace
 func WithTag(key, value string) Options {
 	return func(s *TraceOptions) {
+		// Tags are only consumed when building OpenTelemetry span attributes, which
+		// is skipped entirely when tracing is disabled. Avoid the slice allocation
+		// (and append growth) on the disabled hot path.
+		if !tracingEnabled.Load() {
+			return
+		}
+
 		if s.Tags == nil {
 			s.Tags = make([]tracingTag, 0)
 		}
@@ -372,8 +426,14 @@ func Tracer(name string, otelOpts ...trace.TracerOption) *UTracer {
 func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (context.Context, trace.Span, func(...error)) {
 	tracingEnabled := IsTracingEnabled()
 
-	// Process options
-	options := &TraceOptions{}
+	// Process options into a pooled TraceOptions to avoid a per-span heap
+	// allocation; recycled in the no-op fast path below or when the span ends.
+	// If an option closure or the OTel SDK panics before either Put, the object is
+	// simply dropped (GC reclaims it) — sync.Pool does not require balanced
+	// Get/Put, so this is a benign reuse miss, not a leak. We deliberately avoid a
+	// defer-Put here to keep the hot path allocation- and defer-free.
+	options := traceOptionsPool.Get().(*TraceOptions)
+	options.reset()
 
 	for _, opt := range opts {
 		opt(options)
@@ -386,20 +446,37 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 		ctx, cancelFunc = context.WithTimeout(ctx, options.Timeout)
 	}
 
-	// Create gocore.Stat (only if enabled)
+	// Create gocore.Stat (only when tracing is enabled).
+	//
+	// The gocore.Stat tree is consumed by the /stats perf endpoint via
+	// WithParentStat. Creating it allocates a Stat (each with its own RWMutex and
+	// child sync.Map) and takes the parent's child-map lock on every span. On the
+	// hot sync path the validator opens several spans per transaction across
+	// millions of transactions per block, so this allocation + lock is a dominant,
+	// contended cost. When tracing is disabled (the documented "zero overhead"
+	// state) skip it; start is still computed for metrics/log durations and for the
+	// StartTime context value when a caller opts in via WithStartTime.
 	var (
 		start time.Time
 		stat  *gocore.Stat
 	)
 
-	if options.ParentStat != nil {
-		start, stat, ctx = NewStatFromContext(ctx, spanName, options.ParentStat)
+	if tracingEnabled {
+		if options.ParentStat != nil {
+			start, stat, ctx = NewStatFromContext(ctx, spanName, options.ParentStat)
+		} else {
+			start, stat, ctx = NewStatFromContext(ctx, spanName, defaultStat)
+		}
 	} else {
-		start, stat, ctx = NewStatFromContext(ctx, spanName, defaultStat)
+		start = gocore.CurrentTime()
 	}
 
-	// add the start time to the context
-	ctx = context.WithValue(ctx, StartTime, start)
+	// add the start time to the context only when a caller opts in (read downstream,
+	// e.g. blockvalidation catchup). Skipped by default to avoid the context.WithValue
+	// boxing on the hot path, where many spans are opened per transaction.
+	if options.InjectStartTime {
+		ctx = context.WithValue(ctx, StartTime, start)
+	}
 
 	// inject sample rate override into context for the custom sampler
 	if options.SampleRate != nil {
@@ -467,7 +544,38 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 		}
 	}
 
+	// Fast path: when the end function would do nothing — tracing disabled and no
+	// gocore.Stat, metrics, log messages or context timeout to finalise — return a
+	// shared no-op and recycle the options immediately. This eliminates both the
+	// per-span end-closure allocation and (via the pool) the TraceOptions
+	// allocation for the common zero-finalisation disabled span (e.g.
+	// aerospike:Create, which passes no options at all).
+	if !tracingEnabled && cancelFunc == nil && stat == nil &&
+		options.Histogram == nil && options.Counter == nil &&
+		!(options.Logger != nil && len(options.LogMessages) > 0) {
+		traceOptionsPool.Put(options)
+
+		return ctx, span, noopEndFn
+	}
+
+	// ended is a per-span guard captured by the end closure — deliberately NOT a
+	// field on the pooled TraceOptions, which reset() clears on reissue and would
+	// thus re-open the guard for a stale end call landing after the object had been
+	// recycled into another span (corrupting that span's metrics/logs and
+	// double-Putting). Declared after the fast-path return above, so the common
+	// allocation-free path is untouched; on the slow path it rides in the end
+	// closure. Atomic so a repeated or concurrent call is a safe no-op.
+	var ended atomic.Bool
+
 	endFn := func(optionalError ...error) {
+		// Finalise exactly once: only the call that wins the compare-and-swap runs
+		// finalisation and returns options to the pool. A later or concurrent call
+		// returns before touching options, which by then may have been recycled into
+		// an unrelated span. Winning the CAS is what licenses every read below.
+		if !ended.CompareAndSwap(false, true) {
+			return
+		}
+
 		var err error
 		if len(optionalError) > 0 {
 			err = optionalError[0]
@@ -495,6 +603,8 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 		if cancelFunc != nil {
 			cancelFunc()
 		}
+
+		traceOptionsPool.Put(options)
 	}
 
 	return ctx, span, endFn
@@ -522,9 +632,19 @@ func (span *USpan) Stat() *gocore.Stat {
 
 // DecoupleTracingSpan creates a new context with the current span for decoupled tracing
 func DecoupleTracingSpan(ctx context.Context, name string, spanName string) (context.Context, trace.Span, func(...error)) {
-	// Fast path: if tracing is disabled, return immediately
+	// Fast path: if tracing is disabled, return immediately - still detached
+	// from the caller's cancellation, as the enabled path is (it builds on
+	// context.Background()). Callers decouple precisely so the work outlives
+	// a caller that gives up; that must not depend on a tracing setting. A
+	// context that can never be cancelled is returned as is, so a caller
+	// that already detached pays nothing more.
 	if !IsTracingEnabled() {
 		noopSpan := trace.SpanFromContext(ctx)
+
+		if ctx.Done() != nil {
+			ctx = context.WithoutCancel(ctx)
+		}
+
 		return ctx, noopSpan, func(...error) {
 			// no-op cleanup: tracing is disabled
 		}

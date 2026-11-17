@@ -101,7 +101,7 @@ func TestHandleExtraRecords_DAHSetWithDrift(t *testing.T) {
 
 	// Call handleExtraRecords(+1) → this will increment spentExtraRecs to 2 == totalExtraRecs
 	// Lua returns DAHSET → Go verifies children → finds not-all-spent → clears DAH
-	err = store.handleExtraRecords(ctx, txID, 1)
+	err = store.handleExtraRecords(ctx, txID, 1, 0)
 	require.NoError(t, err)
 
 	// Verify DAH was cleared (drift detected)
@@ -163,7 +163,7 @@ func TestHandleExtraRecords_DAHSetAllSpent(t *testing.T) {
 
 	// Call handleExtraRecords(+1) → spentExtraRecs goes from 0 to 1 == totalExtraRecs(1)
 	// Lua returns DAHSET → Go verifies child1 → all spent → DAH should be set
-	err = store.handleExtraRecords(ctx, txID, 1)
+	err = store.handleExtraRecords(ctx, txID, 1, 0)
 	require.NoError(t, err)
 
 	// Verify DAH was set (all children genuinely spent)

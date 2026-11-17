@@ -30,7 +30,7 @@ case "$ACTION" in
     up|down|restart)
         ;;
     *)
-        echo "Error: Invalid action '$ACTION'"
+        echo "Error: Invalid action '$ACTION'" >&2
         usage
         ;;
 esac
@@ -43,8 +43,8 @@ case "$ACTION" in
         docker rm "$CONTAINER_NAME" 2>/dev/null || true
 
         # Check if the nginx config exists
-        if [ ! -f "${NGINX_CONF}" ]; then
-            echo "Error: nginx config not found at ${NGINX_CONF}"
+        if [[ ! -f "${NGINX_CONF}" ]]; then
+            echo "Error: nginx config not found at ${NGINX_CONF}" >&2
             exit 1
         fi
 

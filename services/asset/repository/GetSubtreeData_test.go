@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -152,6 +154,51 @@ func TestGetSubtreeDataWithReader(t *testing.T) {
 			0, "client_gone must not increment for a server-side fault")
 	})
 
+	t.Run("a zero-leaf subtree must not commit an empty subtreeData blob", func(t *testing.T) {
+		// Regression for issue 1368's write side. writeTransactionsViaSubtreeStoreStreaming
+		// returns nil after writing nothing when the subtree stream header reports
+		// numLeaves == 0 (a corrupt or truncated subtree file). FileStorer.Close finalises
+		// the blob unconditionally, so the old code persisted a zero-byte subtreeData.
+		// Exists then returns true for that hash forever after, so every later request
+		// takes the stored-file branch, never retries generation, and — now that an empty
+		// source is a 500 rather than a cacheable empty 200 — serves a hard 500 for that
+		// hash until DAH pruning. Refuse to commit instead: nothing is stored, so the
+		// handler's 500 stays retryable.
+		resetQuorumForTests()
+		ctx := setup(t)
+
+		hash := chainhash.HashH([]byte("zero-leaf-subtree"))
+
+		// A subtree stream header with numLeaves == 0 and no node records after it:
+		// 32-byte root hash + fees + sizeInBytes + numLeaves, all little-endian uint64s.
+		header := make([]byte, subtreeStreamHeaderSize)
+		copy(header, hash[:])
+		require.NoError(t, ctx.repo.SubtreeStore.Set(t.Context(), hash[:], fileformat.FileTypeSubtree, header))
+
+		initPrometheusMetrics()
+		writeFailedBefore := testutil.ToFloat64(prometheusAssetSubtreeDataCreated.WithLabelValues("error", "write_failed"))
+
+		r, err := ctx.repo.GetSubtreeDataReader(t.Context(), &hash)
+		require.NoError(t, err, "the on-demand path must start; the emptiness is only detectable after generation")
+
+		// The reader must surface the generation failure rather than a clean EOF —
+		// a clean EOF is what the HTTP layer would turn into an empty 200.
+		body, readErr := io.ReadAll(r)
+		require.Empty(t, body)
+		require.Error(t, readErr, "an empty generation must fail the stream, not end it cleanly")
+		require.NoError(t, r.Close())
+
+		require.Eventually(t, func() bool {
+			return testutil.ToFloat64(prometheusAssetSubtreeDataCreated.WithLabelValues("error", "write_failed")) > writeFailedBefore
+		}, 2*time.Second, 10*time.Millisecond, "an empty generation must be recorded as a server-side write failure")
+
+		// The blob must not exist: if it did, Exists would short-circuit every later
+		// request to the stored-file branch and the 500 would stick for the DAH window.
+		exists, err := ctx.repo.SubtreeStore.Exists(t.Context(), hash[:], fileformat.FileTypeSubtreeData)
+		require.NoError(t, err)
+		require.False(t, exists, "a zero-byte subtreeData must never be committed")
+	})
+
 	t.Run("get subtree from utxo store and verify file creation", func(t *testing.T) {
 		resetQuorumForTests() // Reset singleton for this test
 		ctx, subtree, _ := setupSubtreeReaderTest(t)
@@ -221,7 +268,7 @@ func setupSubtreeReaderTest(t *testing.T) (*testContext, *subtreepkg.Subtree, []
 	// Create the txs in the utxo store
 	for i, tx := range params.txs {
 		if i != 0 {
-			_, err := ctx.repo.UtxoStore.Create(t.Context(), tx, params.height)
+			_, _, err := ctx.repo.UtxoStore.SpendAndCreate(t.Context(), tx, params.height, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 

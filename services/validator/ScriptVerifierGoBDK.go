@@ -6,9 +6,11 @@ This file implements the GoBDK transaction validation adapter.
 package validator
 
 import (
+	"context"
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	gobdk "github.com/bitcoin-sv/bdk/module/gobdk"
 	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
@@ -21,9 +23,87 @@ import (
 )
 
 const (
-	errMsgInvalidTx = "GoBDK fail to ValidateTransaction"
-	errMsgPolicy    = "GoBDK fail to ValidateTransaction by policy settings"
+	// Exported because services/rpc suppresses these exact strings at the
+	// JSON-RPC boundary: they name the adapter and say nothing about the
+	// transaction, and the error code already carries what they carry. See
+	// uninformativeVerdictText in services/rpc/rpc_errors.go.
+	//
+	// Exporting makes a rename a compile error there, and since the map reads
+	// these constants, rewording one changes both sides together. Do not copy
+	// the text anywhere: a copy is what would drift.
+	ErrMsgInvalidTx = "GoBDK fail to ValidateTransaction"
+	ErrMsgPolicy    = "GoBDK fail to ValidateTransaction by policy settings"
+
+	errMsgInvalidTx = ErrMsgInvalidTx
+	errMsgPolicy    = ErrMsgPolicy
+
+	// mempoolHeight is the BDK / svnode sentinel for "this UTXO is not yet
+	// confirmed" — sourced from bitcoin-sv/src/protocol_era.h:14
+	// (MEMPOOL_HEIGHT = 0x7FFFFFFF) and exercised by BDK at
+	// bdk/core/txvalidator.cpp:779 (consensus rejection) and
+	// txvalidator.hpp:178-192 (caller contract).
+	//
+	// This constant lives in the BDK-adapter file because MEMPOOL_HEIGHT is a
+	// BDK / svnode concept; the rest of the validator works with
+	// unconfirmedParentHeight (defined in Validator.go) and only this adapter
+	// translates outward at the BDK call boundary.
+	mempoolHeight uint32 = 0x7FFFFFFF
 )
+
+// substituteUnconfirmedHeights translates the teranode-internal
+// unconfirmedParentHeight sentinel into the value BDK expects at the call
+// boundary. The helper allocates a new slice only when the input contains at
+// least one sentinel; in the common path (no unconfirmed parents) the input
+// is returned unchanged.
+//
+// Translation rules:
+//   - consensus == true  → mempoolHeight (0x7FFFFFFF). BDK rejects with
+//     UnconfirmedInputInBlock → bad-txns-unconfirmed-input-in-block
+//     (bdk/core/txvalidator.cpp:779).
+//   - consensus == false → blockHeight (the candidate height the caller is
+//     validating against; in policy mode that is tip+1, matching svnode's
+//     GetInputScriptBlockHeight conversion of chainActive.Height()+1 at
+//     bitcoin-sv/src/validation.cpp:2668-2675).
+func substituteUnconfirmedHeights(utxoHeights []uint32, blockHeight uint32, consensus bool) []uint32 {
+	hasSentinel := false
+	for _, h := range utxoHeights {
+		if h == unconfirmedParentHeight {
+			hasSentinel = true
+			break
+		}
+	}
+	if !hasSentinel {
+		return utxoHeights
+	}
+
+	var substitute uint32
+	if consensus {
+		substitute = mempoolHeight
+	} else {
+		substitute = blockHeight
+	}
+
+	out := make([]uint32, len(utxoHeights))
+	for i, h := range utxoHeights {
+		if h == unconfirmedParentHeight {
+			out[i] = substitute
+		} else {
+			out[i] = h
+		}
+	}
+	return out
+}
+
+// resolveUnconfirmedParentsAtCandidateHeight rewrites every
+// unconfirmedParentHeight sentinel in utxoHeights to the candidate block
+// height. Purpose-named wrapper for the Options.UnconfirmedParentsAtCandidateHeight
+// path so the consensus-context call site does not read as a policy-mode
+// translation: it reuses substituteUnconfirmedHeights with consensus=false
+// because that branch performs exactly the blockHeight substitution wanted
+// here — NOT because the caller is in policy mode.
+func resolveUnconfirmedParentsAtCandidateHeight(utxoHeights []uint32, blockHeight uint32) []uint32 {
+	return substituteUnconfirmedHeights(utxoHeights, blockHeight, false)
+}
 
 // uint2int safely converts uint32 slice to int32 slice, checking for overflow.
 func uint2int(arr []uint32) ([]int32, error) {
@@ -74,12 +154,36 @@ func getBDKChainNameFromParams(l ulogger.Logger, pa *chaincfg.Params) string {
 //   - l: Logger instance for verification operations
 //   - po: Policy settings for validation rules
 //   - pa: Network parameters
+//   - consensusRerunSlots: Maximum concurrent consensus re-runs (validator_consensusRerunSlots)
 //
 // Returns:
 //   - bdkValidator: The created GoBDK validation adapter
-func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *chaincfg.Params) bdkValidator {
+func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *chaincfg.Params, consensusRerunSlots int) bdkValidator {
 	l.Infof("Use GoBDK transaction validator, version : %v", gobdk.BDK_VERSION_STRING())
 
+	// A nil channel never has a free slot, so 0 or less disables the re-run.
+	var rerunSlots chan struct{}
+	if consensusRerunSlots > 0 {
+		rerunSlots = make(chan struct{}, consensusRerunSlots)
+	}
+
+	return &scriptVerifierGoBDK{
+		logger: l,
+		policy: po,
+		params: pa,
+		se:     newBDKTxValidator(l, po, pa, int64(po.MaxStackMemoryUsageConsensus)),
+		// The consensus re-run of a policy script failure is held to the policy stack
+		// limit: the consensus limit is unlimited by default, and the re-run is for a
+		// transaction that is already rejected and pays nothing. See
+		// classifyPolicyScriptError.
+		consensusRerun: newBDKTxValidator(l, po, pa, int64(po.MaxStackMemoryUsagePolicy)),
+		rerunSlots:     rerunSlots,
+	}
+}
+
+// newBDKTxValidator creates a BDK transaction validator configured from po, with
+// maxStackMemoryConsensus as its consensus-mode stack memory limit.
+func newBDKTxValidator(l ulogger.Logger, po *settings.PolicySettings, pa *chaincfg.Params, maxStackMemoryConsensus int64) *bdkscript.TxValidator {
 	network := getBDKChainNameFromParams(l, pa)
 	se := bdkscript.NewTxValidator(network)
 
@@ -121,7 +225,7 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 		panic(err)
 	}
 
-	if err := se.SetMaxStackMemoryUsage(int64(po.MaxStackMemoryUsageConsensus), int64(po.MaxStackMemoryUsagePolicy)); err != nil {
+	if err := se.SetMaxStackMemoryUsage(maxStackMemoryConsensus, int64(po.MaxStackMemoryUsagePolicy)); err != nil {
 		panic(err)
 	}
 
@@ -167,12 +271,7 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 
 	se.SetAcceptNonStdConsolidationInput(po.AcceptNonStdConsolidationInput)
 
-	return &scriptVerifierGoBDK{
-		logger: l,
-		policy: po,
-		params: pa,
-		se:     se,
-	}
+	return se
 }
 
 type bdkValidator interface {
@@ -181,6 +280,7 @@ type bdkValidator interface {
 
 type bdkNativeTxValidator interface {
 	ValidateTransaction(extendedTX []byte, utxoHeights []int32, blockHeight int32, consensus bool) error
+	VerifyScriptContext(ctx context.Context, extendedTX []byte, utxoHeights []int32, blockHeight int32, consensus bool) error
 }
 
 // scriptVerifierGoBDK adapts Teranode validation data to GoBDK.
@@ -189,6 +289,10 @@ type scriptVerifierGoBDK struct {
 	policy *settings.PolicySettings
 	params *chaincfg.Params
 	se     bdkNativeTxValidator
+	// consensusRerun runs the consensus re-run of a policy script failure, and
+	// rerunSlots bounds how many run at once.
+	consensusRerun bdkNativeTxValidator
+	rerunSlots     chan struct{}
 }
 
 func bdkBlockHeight(blockHeight uint32, consensus bool) (int32, error) {
@@ -208,6 +312,12 @@ func (v *scriptVerifierGoBDK) ValidateTransaction(tx *bt.Tx, blockHeight uint32,
 	if tx.IsCoinbase() {
 		return errors.NewTxInvalidError("coinbase transactions are not supported")
 	}
+
+	// Translate the teranode-internal unconfirmedParentHeight sentinel into
+	// BDK's MEMPOOL_HEIGHT (consensus) or the candidate next-block height
+	// (policy). Other slots pass through untouched. See
+	// substituteUnconfirmedHeights for the full contract.
+	utxoHeights = substituteUnconfirmedHeights(utxoHeights, blockHeight, consensus)
 
 	eTxBytes := tx.ExtendedBytes()
 	intUtxoHeights, errConv := uint2int(utxoHeights)
@@ -233,48 +343,246 @@ func (v *scriptVerifierGoBDK) ValidateTransaction(tx *bt.Tx, blockHeight uint32,
 
 		v.logger.Warnf("%s txID=%s blockHeight=%d utxoHeights=%s error=%v", errMsgInvalidTx, tx.TxID(), blockHeight, utxoInfoStr, errVerify)
 
+		var scriptErr bdkscript.ScriptError
+		if !consensus && errors.As(errVerify, &scriptErr) && bdkPolicyRelatedScriptError(scriptErr.Code()) {
+			return v.classifyPolicyScriptError(tx, eTxBytes, intUtxoHeights, blockHeight, errVerify)
+		}
+
 		return v.mapBDKValidationError(errVerify, consensus)
 	}
 
 	return nil
 }
 
+// classifyPolicyScriptError decides whether a policy-class script error from
+// policy mode is policy only or also a consensus failure, by running the scripts
+// again in consensus mode. An error code alone cannot tell: SCRIPTNUM_OVERFLOW is
+// both a number over maxscriptnumlengthpolicy and an int64 overflow, and OP_COUNT
+// and the other size limits are consensus failures on a pre-Genesis UTXO. sv-node
+// makes the same distinction in CheckInputScripts, though it re-runs only the
+// failing input.
+//
+// Only the scripts run again: the transaction-level checks already passed, and a
+// consensus ValidateTransaction would reject an unconfirmed parent as
+// unconfirmed-input-in-block. utxoHeights is the policy-mode slice, so
+// unconfirmed parents stay at the candidate height.
+//
+// The re-run uses consensus limits, far above policy's, for a transaction that
+// is already rejected and pays nothing, so three things bound it:
+//   - consensusRerun holds its stack memory to the policy limit; reaching that is
+//     STACK_SIZE, reported as policy.
+//   - maxnonstdtxvalidationduration cancels it, but only between opcodes: one
+//     OP_MUL on consensus-size numbers can run for minutes.
+//   - rerunSlots caps how many run at once, and so the cores they can take.
+//
+// A re-run that is cancelled or finds no free slot is reported as policy, as
+// sv-node does for a timed-out re-check: subtree validation validates every
+// transaction it takes from the policy-rejected cache in consensus mode anyway.
+func (v *scriptVerifierGoBDK) classifyPolicyScriptError(tx *bt.Tx, eTxBytes []byte, utxoHeights []int32, blockHeight uint32, errVerify error) error {
+	intBlockHeight, errConv := bdkBlockHeight(blockHeight, true)
+	if errConv != nil {
+		return errors.NewInvalidArgumentError("failed conversion for block height", errConv)
+	}
+
+	// STACK_SIZE is decided without a re-run. Pre-Genesis, so that holding every
+	// slot cannot turn it into policy. Otherwise it is the stack memory cap, which
+	// consensusRerun shares, so a re-run could only report policy again.
+	if v.isPreGenesisStackSize(errVerify, utxoHeights) {
+		return errors.NewTxInvalidError(errMsgInvalidTx, bdkCause(errors.ERR_TX_INVALID, errVerify))
+	}
+
+	if isStackSize(errVerify) {
+		return v.mapBDKValidationError(errVerify, false)
+	}
+
+	select {
+	case v.rerunSlots <- struct{}{}:
+		defer func() { <-v.rerunSlots }()
+	default:
+		v.logger.Debugf("%s txID=%s no free consensus re-run slot, reporting policy error=%v", errMsgInvalidTx, tx.TxID(), errVerify)
+
+		return v.mapBDKValidationError(errVerify, false)
+	}
+
+	ctx := context.Background()
+
+	if d := v.policy.MaxNonStdTxValidationDuration; d > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(d)*time.Millisecond)
+
+		defer cancel()
+	}
+
+	errConsensus := v.consensusRerun.VerifyScriptContext(ctx, eTxBytes, utxoHeights, intBlockHeight, true)
+
+	switch {
+	case errConsensus == nil:
+		return v.mapBDKValidationError(errVerify, false)
+	case errors.Is(errConsensus, bdkscript.ErrCancelled):
+		v.logger.Debugf("%s txID=%s consensus re-run did not finish within maxnonstdtxvalidationduration=%dms, reporting policy error=%v", errMsgInvalidTx, tx.TxID(), v.policy.MaxNonStdTxValidationDuration, errVerify)
+
+		return v.mapBDKValidationError(errVerify, false)
+	}
+
+	v.logger.Debugf("%s txID=%s consensus re-run of policy error=%v failed: %v", errMsgInvalidTx, tx.TxID(), errVerify, errConsensus)
+
+	if v.isPreGenesisStackSize(errConsensus, utxoHeights) {
+		return errors.NewTxInvalidError(errMsgInvalidTx, bdkCause(errors.ERR_TX_INVALID, errConsensus))
+	}
+
+	return v.mapBDKValidationError(errConsensus, true)
+}
+
+// isPreGenesisStackSize reports whether err is STACK_SIZE on a transaction with a
+// pre-Genesis input. STACK_SIZE is both the stack memory limit, which is policy,
+// and the pre-Genesis 1000-element limit, which is consensus. BDK does not say
+// which input failed, so any pre-Genesis input makes it consensus: wrongly so
+// only for a transaction that mixes one with a memory-limit failure, which errs
+// towards not publishing. A pre-Genesis script cannot reach the default 100 MB
+// policy memory limit on its own.
+func (v *scriptVerifierGoBDK) isPreGenesisStackSize(err error, utxoHeights []int32) bool {
+	if !isStackSize(err) {
+		return false
+	}
+
+	for _, h := range utxoHeights {
+		if h >= 0 && uint32(h) < v.params.GenesisActivationHeight {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isStackSize(err error) bool {
+	var scriptErr bdkscript.ScriptError
+	return errors.As(err, &scriptErr) && scriptErr.Code() == bdkscript.SCRIPT_ERR_STACK_SIZE
+}
+
+// bdkCause turns the engine's own description of the failure into a typed link
+// on the error chain, carrying the verdict code the caller classified it under.
+//
+// The public error boundary (errors.UserMessage / PublicError) surfaces a
+// single code and message: the innermost cause whose code is on
+// publicCauseCodes, or the outermost code. errVerify is a bdkscript error, not
+// a *errors.Error, so wrapping it directly cannot work — errors.New converts a
+// foreign error to a code-0 link, which is never allowlisted. Every script and
+// standardness rejection therefore left this node as one of the bare constants
+// below, and the submitter was told only that validation failed; the reason
+// existed solely in this node's Warnf line.
+//
+// Giving the cause a code of its own is what carries it across, and it is safe
+// to surface: these strings come from svnode's static tables (bsv::DoSErrorString,
+// ScriptErrorString) — reject reasons like "insufficient-fee" and
+// "bad-txns-in-belowout", and script prose like "Script evaluated without error
+// but finished with a false/empty top stack element". They are verdicts about
+// the submitted transaction and name no node-internal state.
+//
+// A nil return is safe to pass on as the wrapped cause: errors.New only attaches
+// a non-nil one.
+func bdkCause(code errors.ERR, errVerify error) *errors.Error {
+	if errVerify == nil {
+		return nil
+	}
+
+	cause := errVerify.Error()
+	if cause == "" {
+		return nil
+	}
+
+	// %s, never cause-as-format: the string crosses a CGO boundary and must
+	// never be interpreted as a format string.
+	return errors.New(code, "%s", cause)
+}
+
 func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus bool) error {
+	// An ABI error is the binding reporting that the call could not be expressed
+	// across the C boundary — a length that cannot be represented, or a length
+	// inconsistent with its pointer. It says nothing about the transaction, so it
+	// is classified before anything that reads as a verdict: a reader adding a
+	// fourth branch meets the fail-safe classification first.
+	//
+	// PROCESSING with the raw errVerify, not bdkCause: bdkCause exists to carry a
+	// verdict across the public boundary, and the abi-* strings are neither
+	// verdicts nor about the transaction — they describe this node's binding. The
+	// operator still gets them from the caller's Warnf line above.
+	var abiErr bdkscript.ABIError
+	if errors.As(errVerify, &abiErr) {
+		// This branch returns the same class as the catch-all at the bottom of the
+		// function, so no caller can tell the two apart from the error alone. The
+		// log line is what makes the branch discriminable, and it is the only
+		// ABI-specific operational signal this node emits. A test asserts on it, so
+		// a later refactor that reorders or deletes this branch fails instead of
+		// silently routing ABI errors into the verdict path.
+		v.logger.Warnf("BDK ABI error, call not expressible across the C boundary: code=%d error=%v", abiErr.Code(), errVerify)
+
+		return errors.NewProcessingError(errMsgInvalidTx, errVerify)
+	}
+
 	var dosErr bdkscript.DoSError
 	if errors.As(errVerify, &dosErr) {
 		switch dosErr.Code() {
 		case bdkscript.DOS_ERR_NOT_STANDARD, bdkscript.DOS_ERR_SIGOPS_POLICY, bdkscript.DOS_ERR_NOT_FREE_CONSOLIDATION:
-			policyErr := errors.NewTxPolicyError(errMsgPolicy, errVerify)
+			policyErr := errors.NewTxPolicyError(errMsgPolicy, bdkCause(errors.ERR_TX_POLICY, errVerify))
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		case bdkscript.DOS_ERR_INSUFFICIENT_FEE:
-			policyErr := errors.NewTxPolicyError("transaction fee is too low", errVerify)
+			policyErr := errors.NewTxPolicyError("transaction fee is too low", bdkCause(errors.ERR_TX_POLICY, errVerify))
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		default:
 			if dosErr.Code() <= bdkscript.DOS_ERR_OK || dosErr.Code() >= bdkscript.DOS_ERR_COUNT {
 				v.logger.Warnf("unknown BDK DoS error code=%d error=%v", dosErr.Code(), errVerify)
+
+				// A code outside the range this build knows is a value this node
+				// cannot interpret, exactly like the unknown error domain handled at
+				// the bottom of this function — so it takes the same node-fault path.
+				// Returning a verdict here would let a policy-class DOS_ERR_* that BDK
+				// adds later read as a hard consensus violation downstream
+				// (SubtreeValidation.go, check_block_subtrees.go) and condemn a block
+				// on a rule this node never evaluated. The fail-safe rule has to hold
+				// one level below the domain boundary too, not only at it.
+				return errors.NewProcessingError(errMsgInvalidTx, errVerify)
 			}
 
-			return errors.NewTxInvalidError(errMsgInvalidTx, errVerify)
+			// A code inside the known range that this switch does not name
+			// explicitly is a genuine verdict from a rule this build understands.
+			return errors.NewTxInvalidError(errMsgInvalidTx, bdkCause(errors.ERR_TX_INVALID, errVerify))
 		}
 	}
 
 	var scriptErr bdkscript.ScriptError
-	if errors.As(errVerify, &scriptErr) {
+
+	matchedScript := errors.As(errVerify, &scriptErr)
+	if matchedScript {
 		errCode := scriptErr.Code()
 		if errCode == bdkscript.SCRIPT_ERR_CGO_EXCEPTION {
+			// A CGO exception is a fault in this node, not a verdict about the
+			// transaction: PROCESSING keeps it off the public-cause allowlist
+			// so no detail is surfaced, and the caller retries elsewhere.
 			return errors.NewProcessingError(errMsgInvalidTx, errVerify)
 		}
 
 		if (!consensus && bdkPolicyRelatedScriptError(errCode)) ||
 			(consensus && errCode == bdkscript.SCRIPT_ERR_STACK_SIZE) {
-			policyErr := errors.NewTxPolicyError(errMsgPolicy, errVerify)
+			policyErr := errors.NewTxPolicyError(errMsgPolicy, bdkCause(errors.ERR_TX_POLICY, errVerify))
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		}
 	}
 
-	return errors.NewTxInvalidError(errMsgInvalidTx, errVerify)
+	// Anything that is none of the three engine types is a value this node could
+	// not interpret — today, the plain error BDK's translateTxError returns for a
+	// domain it does not know. Turning that into a verdict would let a domain BDK
+	// adds later reject a transaction this node never examined, so it takes the
+	// same node-fault path as the two branches above.
+	if !matchedScript {
+		return errors.NewProcessingError(errMsgInvalidTx, errVerify)
+	}
+
+	return errors.NewTxInvalidError(errMsgInvalidTx, bdkCause(errors.ERR_TX_INVALID, errVerify))
 }
 
+// bdkPolicyRelatedScriptError lists the script errors a policy limit can cause.
+// Each can also be a consensus failure, so policy mode reports one as TxPolicy
+// only after the consensus re-run in classifyPolicyScriptError passes.
 func bdkPolicyRelatedScriptError(errCode bdkscript.ScriptErrorCode) bool {
 	return errCode == bdkscript.SCRIPT_ERR_OP_COUNT ||
 		errCode == bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW ||

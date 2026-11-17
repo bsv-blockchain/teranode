@@ -2,6 +2,7 @@ package utxo
 
 import (
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -62,6 +63,35 @@ func TestSerializeDeserialize_Roundtrip(t *testing.T) {
 	assert.NotNil(t, result.TxInpoints)
 	assert.Equal(t, len(original.TxInpoints.ParentTxHashes), len(result.TxInpoints.ParentTxHashes))
 	assert.Equal(t, original.TxInpoints.ParentTxHashes[0], result.TxInpoints.ParentTxHashes[0])
+}
+
+func TestSerializeDeserialize_CreatedAtUnixMilli(t *testing.T) {
+	hash, err := chainhash.NewHashFromStr("000000000000000000000000000000000000000000000000000000000000000a")
+	require.NoError(t, err)
+
+	// CreatedAt is set from time.Now().UnixMilli() (~1.78e12), far larger than
+	// uint32 max (~4.29e9). Round-tripping must preserve it exactly.
+	createdAt := int(time.Now().UnixMilli())
+	require.Greater(t, createdAt, int(^uint32(0)), "test value must exceed uint32 max")
+
+	original := &UnminedTransaction{
+		Node: &subtree.Node{
+			Hash:        *hash,
+			Fee:         100,
+			SizeInBytes: 200,
+		},
+		CreatedAt:    createdAt,
+		UnminedSince: 1000,
+		BlockIDs:     []uint32{},
+	}
+
+	data, err := SerializeUnminedTransaction(original)
+	require.NoError(t, err)
+
+	result, err := DeserializeUnminedTransaction(data)
+	require.NoError(t, err)
+
+	assert.Equal(t, createdAt, result.CreatedAt)
 }
 
 func TestSerializeDeserialize_EmptyBlockIDs(t *testing.T) {

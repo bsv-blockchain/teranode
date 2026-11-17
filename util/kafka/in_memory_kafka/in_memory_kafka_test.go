@@ -139,8 +139,10 @@ func TestInMemoryAsyncProducerClose(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	require.NoError(t, producer.Close())
 	for range producer.Successes() {
+		// drain successes channel
 	}
 	for range producer.Errors() {
+		// drain errors channel
 	}
 	_, okSuccess := <-producer.Successes()
 	assert.False(t, okSuccess)

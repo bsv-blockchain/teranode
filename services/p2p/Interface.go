@@ -14,19 +14,23 @@ import (
 // any transport-specific representations (like protobuf).
 // Thread safety: All access to peer data is protected by PeerRegistry's mutex.
 type PeerInfo struct {
-	ID              peer.ID
-	ClientName      string // Human-readable name of the client software
-	Height          uint32
-	BlockHash       *chainhash.Hash
-	DataHubURL      string
-	BanScore        int
-	IsBanned        bool
-	IsConnected     bool // Whether this peer is directly connected (vs gossiped)
-	ConnectedAt     time.Time
-	BytesReceived   uint64
-	LastBlockTime   time.Time
-	LastMessageTime time.Time // Last time we received any message from this peer
-	Storage         string    // Storage mode: "full", "pruned", or empty (unknown/old version)
+	ID         peer.ID
+	ClientName string // Human-readable name of the client software
+	Height     uint32 // Capped against local progress; drives sync decisions
+	// AdvertisedHeight is the height the peer actually claimed, before the
+	// unvalidated-lead cap. Reported to operators so a catching-up node does
+	// not display every peer at localHeight+maxLead.
+	AdvertisedHeight uint32
+	BlockHash        *chainhash.Hash
+	DataHubURL       string
+	BanScore         int
+	IsBanned         bool
+	IsConnected      bool // Whether this peer is directly connected (vs gossiped)
+	ConnectedAt      time.Time
+	BytesReceived    uint64
+	LastBlockTime    time.Time
+	LastMessageTime  time.Time // Last time we received any message from this peer
+	Storage          string    // Storage mode: "full", "pruned", or empty (unknown/old version)
 
 	// Interaction metrics - track peer reliability across all interactions (blocks, subtrees, catchup, etc.)
 	InteractionAttempts    int64         // Total number of interactions with this peer
@@ -45,6 +49,12 @@ type PeerInfo struct {
 	TransactionsReceived int64 // Number of transactions received from this peer
 	CatchupBlocks        int64 // Number of blocks received during catchup
 
+	// Catchup-specific counters (recorded via RecordCatchupAttempt/Success/Failure),
+	// distinct from the generic interaction counters above.
+	CatchupAttempts  int64 // Catchup attempts made to this peer (including unresolved ones)
+	CatchupSuccesses int64 // Catchup operations that completed successfully
+	CatchupFailures  int64 // Catchup operations that failed
+
 	// Sync attempt tracking for backoff and recovery
 	LastSyncAttempt      time.Time // When we last attempted to sync with this peer
 	SyncAttemptCount     int       // Number of sync attempts with this peer
@@ -54,6 +64,17 @@ type PeerInfo struct {
 	// Catchup error tracking
 	LastCatchupError     string    // Last error message from catchup attempt with this peer
 	LastCatchupErrorTime time.Time // When the last catchup error occurred
+}
+
+// DisplayHeight is the height to show an operator: what the peer advertised,
+// or the capped Height for peers on versions that predate AdvertisedHeight.
+// Never use it for sync decisions; those read Height.
+func (p *PeerInfo) DisplayHeight() uint32 {
+	if p.AdvertisedHeight != 0 {
+		return p.AdvertisedHeight
+	}
+
+	return p.Height
 }
 
 // ClientI defines the interface for P2P client operations.
@@ -67,7 +88,7 @@ type PeerInfo struct {
 type ClientI interface {
 	// GetPeers retrieves a list of connected peers from the P2P network.
 	// It provides information about all active peer connections including their
-	// addresses, connection details, and network statistics.
+	// heights, ban scores, and network statistics.
 	//
 	// Parameters:
 	// - ctx: Context for the operation, allowing for cancellation and timeouts
@@ -163,16 +184,15 @@ type ClientI interface {
 	// RecordCatchupFailure records a failed catchup attempt from a peer.
 	RecordCatchupFailure(ctx context.Context, peerID string) error
 
+	// RecordCatchupFailureWithKind records a failed catchup attempt with optional diagnostic context.
+	RecordCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) error
+
 	// RecordCatchupMalicious records malicious behavior detected during catchup.
 	RecordCatchupMalicious(ctx context.Context, peerID string) error
 
 	// UpdateCatchupError stores the last catchup error for a peer.
 	// This helps track why catchup failed for specific peers.
 	UpdateCatchupError(ctx context.Context, peerID string, errorMsg string) error
-
-	// UpdateCatchupReputation updates the reputation score for a peer.
-	// Score should be between 0 and 100.
-	UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error
 
 	// ResetReputation resets reputation metrics for a peer or all peers.
 	// If peerID is empty, resets all peers. Returns the number of peers reset.
@@ -186,20 +206,35 @@ type ClientI interface {
 	// This increases the peer's reputation score for providing valid data.
 	ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error
 
+	// ReportValidBlockHeaders reports that a peer successfully served a batch of block
+	// headers during catchup. Credits a generic interaction success (reputation and
+	// response time) without touching the catchup-operation counters.
+	ReportValidBlockHeaders(ctx context.Context, peerID string, durationMs int64) error
+
 	// ReportValidBlock reports that a block was successfully received and validated from a peer.
 	// This increases the peer's reputation score for providing valid blocks.
 	ReportValidBlock(ctx context.Context, peerID string, blockHash string) error
 
+	// ReportValidatedChainProgress reports locally validated header-chain progress for a peer.
+	ReportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) error
+
 	// IsPeerMalicious checks if a peer is considered malicious based on their behavior.
-	// A peer is considered malicious if they are banned or have a very low reputation score.
+	// A peer is considered malicious if it is banned or has malicious behavior recorded
+	// against it (e.g. via RecordCatchupMalicious).
 	IsPeerMalicious(ctx context.Context, peerID string) (bool, string, error)
 
 	// IsPeerUnhealthy checks if a peer is considered unhealthy based on their performance.
 	// A peer is considered unhealthy if they have poor performance metrics or low reputation.
-	IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, error)
+	// The unknown return value is true when the peer is absent from the registry: this is an
+	// absence of information, not a verdict, and callers must not treat it the same as a
+	// positive unhealthy finding.
+	IsPeerUnhealthy(ctx context.Context, peerID string) (isUnhealthy bool, reason string, reputationScore float32, unknown bool, err error)
 
 	// GetPeerRegistry retrieves the comprehensive peer registry data.
-	// Returns all peers in the registry with their complete information.
+	// Returns all peers in the registry with the subset of PeerInfo carried by
+	// p2p_api.PeerRegistryInfo (see convertFromAPIPeerInfo); in-process sync
+	// backoff state (LastSyncAttempt, SyncAttemptCount, LastReputationReset,
+	// ReputationResetCount) and CatchupBlocks are not transmitted.
 	GetPeerRegistry(ctx context.Context) ([]*PeerInfo, error)
 
 	// RecordBytesDownloaded records the number of bytes downloaded via HTTP from a peer.

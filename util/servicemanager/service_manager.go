@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -25,6 +26,14 @@ type serviceWrapper struct {
 	index    int
 	readyCh  chan struct{}
 }
+
+// DefaultStopTimeout is the per-service graceful Stop() timeout used during
+// shutdown when none is configured. It must be comfortably long enough for the
+// slowest Stop() — Kafka producer flushes and go-batcher drains — to complete,
+// so it is deliberately well above the previous 5s. Override via
+// ServiceManager.StopTimeout (the daemon sets it from
+// settings.ServiceManagerStopTimeout).
+const DefaultStopTimeout = 30 * time.Second
 
 var (
 	once      sync.Once
@@ -42,6 +51,12 @@ type ServiceManager struct {
 	Ctx                   context.Context
 	cancelFunc            context.CancelFunc
 	g                     *errgroup.Group
+	// StopTimeout bounds each service's graceful Stop() during shutdown.
+	// Defaults to DefaultStopTimeout in NewServiceManager; the daemon overrides
+	// it from settings.ServiceManagerStopTimeout.
+	StopTimeout time.Duration
+	// killed is set by Kill; Wait then skips every service's Stop().
+	killed atomic.Bool
 	// statusClient       status.ClientI
 }
 
@@ -53,11 +68,12 @@ func NewServiceManager(ctx context.Context, logger ulogger.Logger) *ServiceManag
 	g, ctx := errgroup.WithContext(ctx)
 
 	sm := &ServiceManager{
-		services:   make([]serviceWrapper, 0),
-		logger:     logger,
-		Ctx:        ctx,
-		cancelFunc: cancelFunc,
-		g:          g,
+		services:    make([]serviceWrapper, 0),
+		logger:      logger,
+		Ctx:         ctx,
+		cancelFunc:  cancelFunc,
+		g:           g,
+		StopTimeout: DefaultStopTimeout,
 		// statusClient: statusClient,
 	}
 
@@ -178,7 +194,23 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 		sm.dependencyChannelsMux.Unlock()
 
 		if err := service.Start(ctx, sw.readyCh); err != nil {
+			// A service that returns because its own context was cancelled
+			// (a signal, ForceShutdown, a cancelled parent context, or the
+			// errgroup after another service failed) has stopped cleanly.
+			// This must be decided here, before the error reaches the
+			// errgroup: returning it cancels ctx, so any later check would
+			// see a cancelled context whatever the cause. A cancellation
+			// that arrives while ctx is still live, such as a gRPC
+			// codes.Canceled from a remote service that is stopping (which
+			// the project errors.Is matches against context.Canceled), is a
+			// failure.
+			if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+				sm.logger.Infof("[%s] Service stopped: %v", name, err)
+				return nil
+			}
+
 			sm.logger.Errorf("Error from service start %s: %v", name, err)
+
 			return err
 		}
 
@@ -250,29 +282,58 @@ func (sm *ServiceManager) ForceShutdown() {
 	sm.cancelFunc()
 }
 
+// Kill cancels the services' context like ForceShutdown, but Wait then skips
+// every service's Stop(), so no graceful shutdown work (Kafka flushes, batcher
+// drains) runs. It lets the test daemon emulate a process crash in-process.
+func (sm *ServiceManager) Kill() {
+	sm.killed.Store(true)
+	sm.cancelFunc()
+}
+
 // Wait starts all services and waits for them to complete or error.
 // If any service errors, all other services are stopped gracefully and the error is returned.
 func (sm *ServiceManager) Wait() error {
 	// Wait for all services to complete or error
+	// A service that stopped because its context was cancelled returns nil
+	// from its errgroup worker (see AddService), so any error here is a real
+	// failure, including a cancellation that did not come from this process.
 	err := sm.g.Wait()
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			sm.logger.Infof("Shutdown signal received, stopping services...")
-		} else {
-			sm.logger.Errorf("Received error: %v", err)
-		}
+		sm.logger.Errorf("Received error: %v", err)
 	}
+
+	if sm.killed.Load() {
+		sm.logger.Warnf("🛑 Services killed, skipping graceful stop")
+
+		if errors.Is(err, context.Canceled) {
+			err = nil
+		}
+
+		return err
+	}
+
+	// Per-service Stop() timeout; configurable (default DefaultStopTimeout)
+	// and long enough for Kafka flushes and batcher drains.
+	stopTimeout := sm.StopTimeout
+	if stopTimeout <= 0 {
+		stopTimeout = DefaultStopTimeout
+	}
+
+	// Aggregate Stop() failures separately from the original Wait error so a
+	// failed Stop() is surfaced to the caller while still attempting every
+	// remaining service's Stop() (one failure must not skip the rest).
+	var stopErrs []error
 
 	for i := len(sm.services) - 1; i >= 0; i-- {
 		service := sm.services[i]
 
-		// Ensure all other services are stopped gracefully with a 10-second timeout
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), stopTimeout)
 
 		sm.logger.Infof("🟠 Stopping service %s...", service.name)
 
-		if err = service.instance.Stop(stopCtx); err != nil {
-			sm.logger.Warnf("[%s] Failed to stop service: %v", service.name, err)
+		if stopErr := service.instance.Stop(stopCtx); stopErr != nil {
+			sm.logger.Errorf("[%s] Failed to stop service: %v", service.name, stopErr)
+			stopErrs = append(stopErrs, errors.NewServiceError("failed to stop service %s", service.name, stopErr))
 		} else {
 			sm.logger.Infof("[%s] Service stopped gracefully", service.name)
 		}
@@ -282,11 +343,24 @@ func (sm *ServiceManager) Wait() error {
 
 	sm.logger.Infof("🛑 All services stopped.")
 
-	if errors.Is(err, context.Canceled) {
-		return nil
+	// Combine the original Wait error (if any) with any Stop() failures using
+	// the PROJECT errors.Join (the repo's depguard lint forbids importing the
+	// stdlib errors package outside the project errors package, so stdlib
+	// errors.Join is not an option here). The original err is passed FIRST:
+	// when it is a project *Error, errors.Join chains the Stop errors into its
+	// wrapped chain and errors.Is walks that chain, so errors.Is matches BOTH
+	// the original Wait error and each (project) Stop error. The Stop errors are
+	// already project errors (errors.NewServiceError below). Tradeoff: identity
+	// is preserved for project errors — the type teranode services return; a
+	// non-project original error degrades to text-only joining.
+	allErrs := make([]error, 0, len(stopErrs)+1)
+	if err != nil {
+		allErrs = append(allErrs, err)
 	}
 
-	return err // This is the original error
+	allErrs = append(allErrs, stopErrs...)
+
+	return errors.Join(allErrs...) // nil when there are no errors
 }
 
 // HealthHandler aggregates health status from all registered services and returns

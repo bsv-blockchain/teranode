@@ -327,8 +327,9 @@ func (b *TestChainBuilder) CreateTestBlocks(headers []*model.BlockHeader, startH
 	blocks := make([]*model.Block, len(headers))
 	for i, header := range headers {
 		blocks[i] = &model.Block{
-			Header: header,
-			Height: startHeight + uint32(i),
+			Header:           header,
+			TransactionCount: 1,
+			Height:           startHeight + uint32(i),
 		}
 	}
 	return blocks

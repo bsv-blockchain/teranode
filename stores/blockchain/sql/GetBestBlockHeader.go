@@ -60,7 +60,8 @@ import (
 //   - Filters for valid blocks only (is_valid = true)
 //   - Orders by chainwork in descending order to find the highest
 //   - Implements a deterministic tie-breaker for the rare case of equal chainwork
-//     values between competing chain tips, using peer_id and block id
+//     values between competing chain tips: the lowest block id, which above the
+//     checkpoints is the block this node stored first
 //   - Limits to a single result (the best block)
 //
 // 3. Reconstruction Layer: After retrieving the block data:
@@ -93,7 +94,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 
 	// Begin cache-safe query - captures generation to prevent stale writes
 	cacheID := chainhash.HashH([]byte("GetBestBlockHeader"))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil {
@@ -106,6 +107,34 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		}
 	}
 
+	blockHeader, blockHeaderMeta, err := s.queryBestBlockHeader(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Cache result - CacheQuery.Set() checks if cache was invalidated during query
+	result := [2]interface{}{blockHeader, blockHeaderMeta}
+	cacheOp.Set(result, s.cacheTTL)
+
+	return blockHeader, blockHeaderMeta, nil
+}
+
+// GetBestBlockHeaderUncached is GetBestBlockHeader with the response cache left out on both
+// sides: it neither reads the cache nor fills it. Every block store clears the cache, but only
+// after its own commit, so for the moment between a commit and the clear the cached call
+// returns the previous tip. The pruner's stamp reads the tip between every store call of a
+// drain and hands the height to the completion record, and a one-block-stale tip there would
+// be written into permanent state, so it takes this call.
+func (s *SQL) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBestBlockHeaderUncached")
+	defer deferFn()
+
+	return s.queryBestBlockHeader(ctx)
+}
+
+// queryBestBlockHeader is the one query behind both calls: the valid block with the most chain
+// work, ties broken by the lowest block id, the block this node stored first.
+func (s *SQL) queryBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -132,7 +161,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		,b.median_time_past
 		FROM blocks b
 		WHERE invalid = false
-		ORDER BY chain_work DESC, peer_id ASC, id ASC
+		ORDER BY chain_work DESC, id ASC
 		LIMIT 1
 	`
 
@@ -174,7 +203,11 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		return nil, nil, errors.NewStorageError("error in GetBestBlockHeader", err)
 	}
 
-	bits, _ := model.NewNBitFromSlice(nBits)
+	bits, err := model.NewNBitFromSlice(nBits)
+	if err != nil {
+		return nil, nil, errors.NewStorageError("error in GetBestBlockHeader: malformed n_bits (length %d, expected 4) for block id %d height %d", len(nBits), blockHeaderMeta.ID, blockHeaderMeta.Height, err)
+	}
+
 	blockHeader.Bits = *bits
 
 	blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
@@ -193,7 +226,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 			return nil, nil, errors.NewStorageError("failed to convert coinbaseTx", err)
 		}
 
-		miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
+		miner, err := util.ExtractCoinbaseMinerRaw(coinbaseTx, s.rawMinerTag)
 		if err != nil {
 			s.logger.Debugf("failed to extract miner in GetBestBlockHeader (block may be invalid): %v", err)
 		} else {
@@ -209,10 +242,6 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 
 	// Set the block time to the timestamp in the meta
 	blockHeaderMeta.BlockTime = blockHeader.Timestamp
-
-	// Cache result - CacheQuery.Set() checks if cache was invalidated during query
-	result := [2]interface{}{blockHeader, blockHeaderMeta}
-	cacheOp.Set(result, s.cacheTTL)
 
 	return blockHeader, blockHeaderMeta, nil
 }

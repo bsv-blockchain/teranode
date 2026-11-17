@@ -75,7 +75,19 @@ type mockCache struct {
 	txmetacache.TxMetaCache
 }
 
+// DeleteDemoted shadows the embedded zero TxMetaCache's, which has no backend.
+func (m *mockCache) DeleteDemoted(hashes []chainhash.Hash) {
+	for i := range hashes {
+		_ = m.Delete(context.Background(), &hashes[i])
+	}
+}
+
 func (m *mockCache) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	args := m.Called(ctx, hash)
+	return args.Error(0)
+}
+
+func (m *mockCache) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	args := m.Called(ctx, hash)
 	return args.Error(0)
 }
@@ -104,6 +116,8 @@ func (m *mockCache) BatchDecorate(ctx context.Context, txs []*utxo.UnresolvedMet
 	args := m.Called(ctx, txs, fields)
 	return args.Error(0)
 }
+
+func (m *mockCache) SupportsOutpointOnlySpend() bool { return false }
 
 func (m *mockCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	args := m.Called(ctx, tx, blockHeight, opts)

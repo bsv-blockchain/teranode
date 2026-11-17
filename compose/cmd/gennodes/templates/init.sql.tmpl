@@ -3,7 +3,7 @@
 {{ range .Nodes }}
 CREATE ROLE miner{{ .Index }} LOGIN
   PASSWORD 'miner{{ .Index }}'
-  SUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
+  NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
 GRANT miner{{ .Index }} TO postgres;
 CREATE DATABASE teranode{{ .Index }}
   WITH OWNER = miner{{ .Index }}

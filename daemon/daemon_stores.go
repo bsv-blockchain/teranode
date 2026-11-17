@@ -24,6 +24,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 )
 
+const msgCreateBlockHeightTrackerCh = "could not create block height tracker channel"
+
 type Stores struct {
 	mainBlockPersisterStore     blob.Store
 	mainBlockStore              blob.Store
@@ -45,6 +47,36 @@ type Stores struct {
 	// them is out of scope for this PR.
 	peerRegistryClientOnce sync.Once
 	peerRegistryClientErr  error
+
+	// wrappers wrap each store as it is built; set with WithStoreWrappers.
+	wrappers StoreWrappers
+	// rawUtxoStore and rawBlockchainStore are the stores before wrapping, so
+	// the test daemon's Crash can reach their database handles.
+	rawUtxoStore       utxostore.Store
+	rawBlockchainStore blockchainstore.Store
+
+	// constructedClients retains every gRPC client the daemon constructs
+	// (both daemonStores singletons and the fresh-per-construction clients
+	// otherwise discarded into locals) so daemon.closeClients can close each
+	// exactly once on shutdown. The daemon is the sole owner; receiving
+	// services borrow these clients and must not close them.
+	constructedClients   []clientCloser
+	constructedClientsMu sync.Mutex
+}
+
+// retainClient records a daemon-constructed client for shutdown close. It
+// type-asserts to clientCloser, so callers can pass any client interface value;
+// clients without a Close() error method (e.g. in-process locals) are ignored.
+// Each constructed instance must be retained exactly once.
+func (d *Stores) retainClient(client any) {
+	cc, ok := client.(clientCloser)
+	if !ok {
+		return
+	}
+
+	d.constructedClientsMu.Lock()
+	d.constructedClients = append(d.constructedClients, cc)
+	d.constructedClientsMu.Unlock()
 }
 
 // GetUtxoStore returns the main UTXO store instance. If the store hasn't been initialized yet,
@@ -56,12 +88,18 @@ func (d *Stores) GetUtxoStore(ctx context.Context, logger ulogger.Logger,
 		return d.mainUtxoStore, nil
 	}
 
-	var err error
-
-	d.mainUtxoStore, err = utxofactory.NewStore(ctx, logger, appSettings, "main")
+	store, err := utxofactory.NewStore(ctx, logger, appSettings, "main")
 	if err != nil {
 		return nil, err
 	}
+
+	d.rawUtxoStore = store
+
+	if d.wrappers.UtxoStore != nil {
+		store = d.wrappers.UtxoStore(store)
+	}
+
+	d.mainUtxoStore = store
 
 	return d.mainUtxoStore, nil
 }
@@ -78,6 +116,9 @@ func (d *Stores) GetSubtreeValidationClient(ctx context.Context, logger ulogger.
 	var err error
 
 	d.mainSubtreeValidationClient, err = subtreevalidation.NewClient(ctx, logger, appSettings, "main_stores")
+	if err == nil {
+		d.retainClient(d.mainSubtreeValidationClient)
+	}
 
 	return d.mainSubtreeValidationClient, err
 }
@@ -94,6 +135,9 @@ func (d *Stores) GetBlockValidationClient(ctx context.Context, logger ulogger.Lo
 	var err error
 
 	d.mainBlockValidationClient, err = blockvalidation.NewClient(ctx, logger, appSettings, "main_stores")
+	if err == nil {
+		d.retainClient(d.mainBlockValidationClient)
+	}
 
 	return d.mainBlockValidationClient, err
 }
@@ -121,6 +165,7 @@ func (d *Stores) GetP2PClient(ctx context.Context, logger ulogger.Logger, appSet
 	}
 
 	d.mainP2PClient = p2pClient
+	d.retainClient(p2pClient)
 
 	return p2pClient, nil
 }
@@ -131,7 +176,16 @@ func (d *Stores) GetP2PClient(ctx context.Context, logger ulogger.Logger, appSet
 func (d *Stores) GetBlockchainClient(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings,
 	source string) (blockchain.ClientI, error) {
 	// don't use a global client, otherwise we don't know the source
-	return blockchain.NewClient(ctx, logger, appSettings, source)
+	client, err := blockchain.NewClient(ctx, logger, appSettings, source)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fresh instance per call (not a singleton); retain each so closeClients
+	// closes every constructed blockchain client exactly once.
+	d.retainClient(client)
+
+	return client, nil
 }
 
 // GetPeerRegistryClient returns a singleton client to the centralized peer
@@ -176,6 +230,7 @@ func (d *Stores) GetBlockAssemblyClient(ctx context.Context, logger ulogger.Logg
 	}
 
 	d.mainBlockAssemblyClient = client
+	d.retainClient(client)
 
 	return client, nil
 }
@@ -183,6 +238,50 @@ func (d *Stores) GetBlockAssemblyClient(ctx context.Context, logger ulogger.Logg
 // GetValidatorClient returns the main validator client instance. If the client hasn't been
 // initialized yet, it creates either a local validator or a remote client based on configuration.
 // For local validators, it sets up necessary dependencies including UTXO store and Kafka producers.
+// Compile-time guard: the local-validator path retains a *validator.Validator and
+// relies on the daemon's clientCloser contract (Close() error) to drain+stop it on
+// shutdown. If Validator.Close's signature ever drifts, retainClient would silently
+// skip it (it type-asserts at runtime); this assertion turns that drift into a build
+// failure instead.
+var _ clientCloser = (*validator.Validator)(nil)
+
+// localValidatorKafkaProducers builds the three async Kafka producers owned by a
+// local validator (txmeta, rejectedTx, policyRejected). It is a package var so
+// tests can substitute recording producers to exercise the construction-error
+// cleanup path in GetValidatorClient.
+//
+// On a creation failure it returns the producers created so far (a true-nil
+// interface for the rest) plus the error, so the caller's deferred cleanup can
+// Stop the orphans. policyRejected may legitimately be nil when no topic is
+// configured; it is normalised to a true-nil interface so caller nil-checks work.
+var localValidatorKafkaProducers = func(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) (
+	kafka.KafkaAsyncProducerI, kafka.KafkaAsyncProducerI, kafka.KafkaAsyncProducerI, error,
+) {
+	txmeta, err := getKafkaTxmetaAsyncProducer(ctx, logger, appSettings)
+	if err != nil {
+		return nil, nil, nil, errors.NewServiceError("could not create txmeta kafka producer for local validator", err)
+	}
+
+	rejectedTx, err := getKafkaRejectedTxAsyncProducer(ctx, logger, appSettings)
+	if err != nil {
+		// txmeta is already created — hand it back so the caller's cleanup Stops it.
+		return txmeta, nil, nil, errors.NewServiceError("could not create rejectedTx kafka producer for local validator", err)
+	}
+
+	policyRejected, err := getKafkaTxPolicyRejectedAsyncProducer(ctx, logger, appSettings)
+	if err != nil {
+		return txmeta, rejectedTx, nil, errors.NewServiceError("could not create policy-rejected tx kafka producer for local validator", err)
+	}
+
+	if policyRejected == nil {
+		// No policy-rejected topic configured: return a true-nil interface so the
+		// caller's nil-checks (cleanup loop, validator.New) behave correctly.
+		return txmeta, rejectedTx, nil, nil
+	}
+
+	return txmeta, rejectedTx, policyRejected, nil
+}
+
 func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
 	appSettings *settings.Settings) (validator.Interface, error) {
 	if d.mainValidatorClient != nil {
@@ -203,18 +302,43 @@ func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
 			return nil, errors.NewServiceError("could not create local validator client", err)
 		}
 
-		var txMetaKafkaProducerClient *kafka.KafkaAsyncProducer
+		// The async Kafka producers are created before the *Validator that will
+		// own them exists. Declare the holders and register the cleanup BEFORE
+		// creating any of them, so a failure partway through producer creation —
+		// or in any dependent-client / validator.New step below — Stops whichever
+		// producers were already created instead of leaking them. (Registering the
+		// defer only after all three are created would miss a failure at the 2nd
+		// or 3rd producer.) The cleanup is a no-op once ownership transfers to the
+		// retained *Validator, whose Close drives the real drain+stop on shutdown;
+		// producer Stop is idempotent.
+		var (
+			txMetaKafkaProducerClient           kafka.KafkaAsyncProducerI
+			rejectedTxKafkaProducerClient       kafka.KafkaAsyncProducerI
+			policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
+		)
 
-		txMetaKafkaProducerClient, err = getKafkaTxmetaAsyncProducer(ctx, logger, appSettings)
+		ownershipTransferred := false
+
+		defer func() {
+			if ownershipTransferred {
+				return
+			}
+
+			for _, p := range []kafka.KafkaAsyncProducerI{
+				txMetaKafkaProducerClient,
+				rejectedTxKafkaProducerClient,
+				policyRejectedTxKafkaProducerClient,
+			} {
+				if p != nil {
+					_ = p.Stop()
+				}
+			}
+		}()
+
+		txMetaKafkaProducerClient, rejectedTxKafkaProducerClient, policyRejectedTxKafkaProducerClient, err =
+			localValidatorKafkaProducers(ctx, logger, appSettings)
 		if err != nil {
-			return nil, errors.NewServiceError("could not create txmeta kafka producer for local validator", err)
-		}
-
-		var rejectedTxKafkaProducerClient *kafka.KafkaAsyncProducer
-
-		rejectedTxKafkaProducerClient, err = getKafkaRejectedTxAsyncProducer(ctx, logger, appSettings)
-		if err != nil {
-			return nil, errors.NewServiceError("could not create rejectedTx kafka producer for local validator", err)
+			return nil, err
 		}
 
 		var blockAssemblyClient blockassembly.ClientI
@@ -239,6 +363,7 @@ func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
 			utxoStore,
 			txMetaKafkaProducerClient,
 			rejectedTxKafkaProducerClient,
+			policyRejectedTxKafkaProducerClient,
 			blockAssemblyClient,
 			blockchainClient,
 		)
@@ -246,12 +371,23 @@ func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
 			return nil, errors.NewServiceError("could not create local validator", err)
 		}
 
-		return validatorClient, nil
+		// Memoize and retain the local validator, matching the gRPC branch below:
+		// the daemon owns this *Validator instance and closes it (Validator.Close,
+		// via the clientCloser contract) during closeClients. Without retaining it,
+		// closeClients could not reach it and its producers/batcher would only
+		// self-close on ctx-cancel — outside the bounded shutdown window.
+		d.mainValidatorClient = validatorClient
+		d.retainClient(d.mainValidatorClient)
+		ownershipTransferred = true
+
+		return d.mainValidatorClient, nil
 	} else {
 		d.mainValidatorClient, err = validator.NewClient(ctx, logger, appSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create validator client", err)
 		}
+
+		d.retainClient(d.mainValidatorClient)
 	}
 
 	return d.mainValidatorClient, nil
@@ -306,9 +442,14 @@ func (d *Stores) GetTxStore(ctx context.Context, logger ulogger.Logger, appSetti
 	d.mainTxStore, err = blob.NewStore(logger, txStoreURL,
 		options.WithHashPrefix(hashPrefix),
 		options.WithBlobDeletionScheduler(blobDeletionScheduler),
-		options.WithStoreType(storetypes.TXSTORE))
+		options.WithStoreType(storetypes.TXSTORE),
+		options.WithHTTPAuthToken(appSettings.BlobHTTPAuthToken))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create tx store", err)
+	}
+
+	if d.wrappers.TxStore != nil {
+		d.mainTxStore = d.wrappers.TxStore(d.mainTxStore)
 	}
 
 	return d.mainTxStore, nil
@@ -345,7 +486,7 @@ func (d *Stores) GetSubtreeStore(ctx context.Context, logger ulogger.Logger, app
 
 	ch, err := getBlockHeightTrackerCh(ctx, logger, blockchainClient)
 	if err != nil {
-		return nil, errors.NewServiceError("could not create block height tracker channel", err)
+		return nil, errors.NewServiceError(msgCreateBlockHeightTrackerCh, err)
 	}
 
 	// Get blob deletion scheduler (blockchain client)
@@ -358,9 +499,14 @@ func (d *Stores) GetSubtreeStore(ctx context.Context, logger ulogger.Logger, app
 		options.WithHashPrefix(hashPrefix),
 		options.WithBlockHeightCh(ch),
 		options.WithBlobDeletionScheduler(blobDeletionScheduler),
-		options.WithStoreType(storetypes.SUBTREESTORE))
+		options.WithStoreType(storetypes.SUBTREESTORE),
+		options.WithHTTPAuthToken(appSettings.BlobHTTPAuthToken))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create subtree store", err)
+	}
+
+	if d.wrappers.SubtreeStore != nil {
+		d.mainSubtreeStore = d.wrappers.SubtreeStore(d.mainSubtreeStore)
 	}
 
 	return d.mainSubtreeStore, nil
@@ -381,6 +527,12 @@ func (d *Stores) GetBlockchainStore(_ context.Context, logger ulogger.Logger, ap
 	blockchainStore, err := blockchainstore.NewStore(logger, blockchainStoreURL, appSettings)
 	if err != nil {
 		return nil, err
+	}
+
+	d.rawBlockchainStore = blockchainStore
+
+	if d.wrappers.BlockchainStore != nil {
+		blockchainStore = d.wrappers.BlockchainStore(blockchainStore)
 	}
 
 	d.mainBlockchainStore = blockchainStore
@@ -417,7 +569,7 @@ func (d *Stores) GetTempStore(ctx context.Context, logger ulogger.Logger, appSet
 
 	ch, err := getBlockHeightTrackerCh(ctx, logger, blockchainClient)
 	if err != nil {
-		return nil, errors.NewServiceError("could not create block height tracker channel", err)
+		return nil, errors.NewServiceError(msgCreateBlockHeightTrackerCh, err)
 	}
 
 	// Get blob deletion scheduler (blockchain client)
@@ -430,7 +582,8 @@ func (d *Stores) GetTempStore(ctx context.Context, logger ulogger.Logger, appSet
 		options.WithHashPrefix(hashPrefix),
 		options.WithBlockHeightCh(ch),
 		options.WithBlobDeletionScheduler(blobDeletionScheduler),
-		options.WithStoreType(storetypes.TEMPSTORE))
+		options.WithStoreType(storetypes.TEMPSTORE),
+		options.WithHTTPAuthToken(appSettings.BlobHTTPAuthToken))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create temp_store", err)
 	}
@@ -470,7 +623,7 @@ func (d *Stores) GetBlockStore(ctx context.Context, logger ulogger.Logger, appSe
 
 	ch, err := getBlockHeightTrackerCh(ctx, logger, blockchainClient)
 	if err != nil {
-		return nil, errors.NewServiceError("could not create block height tracker channel", err)
+		return nil, errors.NewServiceError(msgCreateBlockHeightTrackerCh, err)
 	}
 
 	// Get blob deletion scheduler (blockchain client)
@@ -483,9 +636,14 @@ func (d *Stores) GetBlockStore(ctx context.Context, logger ulogger.Logger, appSe
 		options.WithHashPrefix(hashPrefix),
 		options.WithBlockHeightCh(ch),
 		options.WithBlobDeletionScheduler(blobDeletionScheduler),
-		options.WithStoreType(storetypes.BLOCKSTORE))
+		options.WithStoreType(storetypes.BLOCKSTORE),
+		options.WithHTTPAuthToken(appSettings.BlobHTTPAuthToken))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create block store", err)
+	}
+
+	if d.wrappers.BlockStore != nil {
+		d.mainBlockStore = d.wrappers.BlockStore(d.mainBlockStore)
 	}
 
 	return d.mainBlockStore, nil
@@ -522,7 +680,7 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 
 	ch, err := getBlockHeightTrackerCh(ctx, logger, blockchainClient)
 	if err != nil {
-		return nil, errors.NewServiceError("could not create block height tracker channel", err)
+		return nil, errors.NewServiceError(msgCreateBlockHeightTrackerCh, err)
 	}
 
 	// Get blob deletion scheduler (blockchain client)
@@ -535,7 +693,8 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 		options.WithHashPrefix(hashPrefix),
 		options.WithBlockHeightCh(ch),
 		options.WithBlobDeletionScheduler(blobDeletionScheduler),
-		options.WithStoreType(storetypes.BLOCKPERSISTERSTORE))
+		options.WithStoreType(storetypes.BLOCKPERSISTERSTORE),
+		options.WithHTTPAuthToken(appSettings.BlobHTTPAuthToken))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create block persister store", err)
 	}
@@ -546,17 +705,31 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 // Cleanup resets all singleton stores. This is particularly important for tests
 // where stores may persist between test runs.
 func (d *Stores) Cleanup() {
+	// closeStores (the daemon's deferred shutdown drain) reads these store
+	// pointers under globalStoreMutex.RLock and can run concurrently with test
+	// teardown, which calls Cleanup. Take the write lock so the two are
+	// synchronised — otherwise the -race detector flags a read/write data race
+	// on the store fields during daemon shutdown.
+	globalStoreMutex.Lock()
 	d.mainBlockPersisterStore = nil
 	d.mainBlockStore = nil
+	// closeStores now closes mainBlockchainStore (DC9); nil it here too so
+	// GetBlockchainStore constructs a fresh store on reuse instead of handing
+	// back a closed cached handle. The other closed singletons (block /
+	// block-persister stores, peer-registry client) are already nil'd below.
+	d.mainBlockchainStore = nil
+	d.rawBlockchainStore = nil
 	d.mainBlockValidationClient = nil
 	d.mainSubtreeStore = nil
 	d.mainSubtreeValidationClient = nil
 	d.mainTempStore = nil
 	d.mainTxStore = nil
 	d.mainUtxoStore = nil
+	d.rawUtxoStore = nil
 	d.mainValidatorClient = nil
 	d.mainP2PClient = nil
 	d.mainPeerRegistryClient = nil
+	globalStoreMutex.Unlock()
 
 	// Reset the Aerospike cleanup service singleton if it exists
 	// This prevents state leakage between test runs

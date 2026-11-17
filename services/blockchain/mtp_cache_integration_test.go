@@ -163,3 +163,16 @@ func TestMTPCacheIntegration_InvalidateBlockTruncatesCache(t *testing.T) {
 	_, ok = ctx.server.mtpCache.get(3)
 	require.False(t, ok, "height 3 (above invalidated) must be truncated from cache")
 }
+
+// TestServerInvalidateBlock_GenesisGuard verifies the gRPC server rejects an
+// attempt to invalidate the genesis block (defense-in-depth mirror of the guard
+// in the SQL store), so a stray admin invalidateblock call cannot wipe the chain.
+func TestServerInvalidateBlock_GenesisGuard(t *testing.T) {
+	ctx := setup(t)
+
+	_, err := ctx.server.InvalidateBlock(context.Background(), &blockchain_api.InvalidateBlockRequest{
+		BlockHash: ctx.server.settings.ChainCfgParams.GenesisHash.CloneBytes(),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot invalidate the genesis block")
+}

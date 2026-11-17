@@ -46,6 +46,18 @@ var (
 	prometheusCatchupHeadersFetched *prometheus.CounterVec
 	prometheusCatchupErrors         *prometheus.CounterVec
 	prometheusCatchupActive         prometheus.Gauge
+	prometheusCatchupPeerHealthGate *prometheus.CounterVec
+
+	// prometheusRecoveredPanics counts the panics that the four BV-STARTUP-007 recovers caught,
+	// by path. The block hash and the stack are in the PANIC log line.
+	prometheusRecoveredPanics *prometheus.CounterVec
+
+	// catch-up subtree-data prefetch budget metrics. Aggregate counters with no block-hash
+	// label, for the cardinality reason recorded below; the block hash is in the log line
+	// each of these accompanies.
+	prometheusCatchupPrefetchBudgetParked         prometheus.Counter
+	prometheusCatchupPrefetchOversizedBlocks      prometheus.Counter
+	prometheusCatchupPrefetchUndeclaredSizeBlocks prometheus.Counter
 
 	// priority queue metrics
 	prometheusBlockPriorityQueueSize      *prometheus.GaugeVec
@@ -61,9 +73,6 @@ var (
 	prometheusForkCreated           *prometheus.CounterVec
 	prometheusForkLifetime          prometheus.Histogram
 	prometheusForkDepth             prometheus.Histogram
-	prometheusForkResolved          *prometheus.CounterVec
-	prometheusForkResolutionDepth   prometheus.Histogram
-	prometheusOrphanedForks         prometheus.Counter
 	prometheusProcessingBlocksStuck prometheus.Gauge
 	prometheusForkAverageDepth      prometheus.Gauge
 	prometheusForkLongestDepth      prometheus.Gauge
@@ -72,11 +81,25 @@ var (
 	blockQueueSkipCount prometheus.Histogram
 	blockQueueWaitTime  prometheus.Histogram
 
-	// setMinedChan retry tracking. Per-blockhash label deliberately accepts the
-	// cardinality cost: an alert on a single block hitting the retry ceiling is
-	// the primary signal that historical-corrupt state requires manual repair.
-	prometheusBlockValidationSetMinedRetries *prometheus.CounterVec
-	prometheusBlockValidationSetMinedDrops   *prometheus.CounterVec
+	// setMinedChan retry tracking. These are aggregate counters with no
+	// per-blockhash label: using the block hash as a label value would create
+	// unbounded Prometheus cardinality (one permanent series per distinct hash
+	// over the node's lifetime). The specific block hash is recorded in the
+	// accompanying log lines for manual repair.
+	prometheusBlockValidationSetMinedRetries         prometheus.Counter
+	prometheusBlockValidationSetMinedDrops           prometheus.Counter
+	prometheusBlockValidationSetMinedEnqueueOverflow prometheus.Counter
+
+	// outpoint-only fast-path counter: incremented once per block when the
+	// below-checkpoint outpoint-only path is active (setting on, height ≤ highest
+	// checkpoint). A rising rate indicates the fast path is in use during IBD.
+	prometheusBlockValidationOutpointOnlyBlocks prometheus.Counter
+
+	// quick-validation commit tail: per-step timings for commitBlock, the shared
+	// final commit for the quick-validation path.
+	prometheusBlockValidationQuickCommitAddBlock    prometheus.Histogram
+	prometheusBlockValidationQuickCommitUnlock      prometheus.Histogram
+	prometheusBlockValidationQuickCommitBlockExists prometheus.Histogram
 )
 
 var (
@@ -216,24 +239,70 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockValidationSetMinedRetries = promauto.NewCounterVec(
+	prometheusBlockValidationSetMinedRetries = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "blockvalidation",
 			Name:      "setmined_retry_total",
-			Help:      "Number of setTxMined retries per block hash. Alert when this approaches the retry ceiling (typically 10): the block likely has historical-corrupt state and needs manual repair.",
+			Help:      "Total number of setTxMined retries across all blocks. A rising rate indicates blocks with historical-corrupt state that need manual repair; the specific block hash is recorded in the logs.",
 		},
-		[]string{"blockhash"},
 	)
 
-	prometheusBlockValidationSetMinedDrops = promauto.NewCounterVec(
+	prometheusBlockValidationSetMinedDrops = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "blockvalidation",
 			Name:      "setmined_drops_total",
-			Help:      "Number of blocks dropped from the setTxMined retry loop after exceeding the retry ceiling. Non-zero values are page-worthy and require manual intervention.",
+			Help:      "Total number of blocks dropped from the setTxMined retry loop after exceeding the retry ceiling. Non-zero values are page-worthy and require manual intervention; the specific block hash is recorded in the logs.",
 		},
-		[]string{"blockhash"},
+	)
+
+	prometheusBlockValidationOutpointOnlyBlocks = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "outpoint_only_blocks_total",
+			Help:      "Total number of blocks that entered the below-checkpoint outpoint-only fast path (OutpointOnlyBelowCheckpoint setting on, height at or below highest checkpoint). Counted once on entry; a block that later falls back to normal validation is still counted. A rising rate during IBD indicates the fast path is active.",
+		},
+	)
+
+	prometheusBlockValidationSetMinedEnqueueOverflow = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "setmined_enqueue_overflow_total",
+			Help:      "Total number of setMined enqueues parked in the overflow set because setMinedChan was full. A sustained rise means producers are outpacing the serial setMined worker; the overflow set is deduped by block hash, so memory stays bounded by the number of distinct blocks.",
+		},
+	)
+
+	prometheusBlockValidationQuickCommitAddBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_commit_add_block_seconds",
+			Help:      "AddBlock duration in the quick-validation commit tail",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockValidationQuickCommitUnlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_commit_unlock_seconds",
+			Help:      "Unlock pass duration in the quick-validation commit tail",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockValidationQuickCommitBlockExists = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_commit_block_exists_seconds",
+			Help:      "SetBlockExists duration in the quick-validation commit tail",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
 	)
 
 	// Initialize catchup operation metrics
@@ -286,6 +355,58 @@ func _initPrometheusMetrics() {
 			Help:      "Number of active catchup operations (0 or 1)",
 		},
 	)
+
+	prometheusCatchupPrefetchBudgetParked = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "catchup_prefetch_budget_parked_total",
+			Help:      "Total number of times a catchup prewarm worker parked waiting for catchup prefetch budget. A sustained rise means catchup throughput is being limited by blockvalidation_catchup_prefetch_budget_bytes rather than by peers or storage; the parked block hash is recorded in the logs.",
+		},
+	)
+
+	prometheusCatchupPrefetchOversizedBlocks = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "catchup_prefetch_oversized_blocks_total",
+			Help:      "Total number of blocks whose declared size exceeded blockvalidation_catchup_prefetch_budget_bytes (including a declared size too large to represent as an int64) and which therefore parsed their subtrees one at a time. A rising rate means the budget is routinely smaller than the blocks being synced, which slows catchup; the block hash is recorded in the logs.",
+		},
+	)
+
+	prometheusCatchupPrefetchUndeclaredSizeBlocks = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "catchup_prefetch_undeclared_size_blocks_total",
+			Help:      "Total number of blocks that declared no size (SizeInBytes 0) and were therefore not trusted with the configured subtree fetch concurrency. Blocks served by a healthy peer carry a declared size, so a sustained rise points at a peer supplying undeclared sizes; the block hash is recorded in the logs.",
+		},
+	)
+
+	prometheusCatchupPeerHealthGate = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "catchup_peer_health_gate_total",
+			Help:      "Total number of times the pre-catchup peer health gate produced a signal, by reason. malicious/low_reputation/low_success_rate/other refuse the peer as a catchup source; unknown means the peer is absent from the registry and is NOT refused (fail open) — a rising unknown rate points at registry-population lag (e.g. after a blockchain-service restart), not at bad peers.",
+		},
+		[]string{"reason"},
+	)
+
+	prometheusRecoveredPanics = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "recovered_panics_total",
+			Help:      "Total number of panics recovered in block validation, by path: worker (priority-queue block worker), catchup (catchup consumer), kafka (Kafka block message handler), block_found (blockFoundCh worker), or one of three paths for goroutines that those start: catchup_fetch (catchup fetch and validate pipeline), block_validation (parallel work inside one block validation) or service (service start and startup sweeps). Each one is a bug in this node. The node continues to run, and the block hash and stack are in the PANIC log line.",
+		},
+		[]string{"path"},
+	)
+
+	for _, path := range []string{recoveredPanicPathWorker, recoveredPanicPathCatchup, recoveredPanicPathKafka, recoveredPanicPathBlockFound,
+		recoveredPanicPathCatchupFetch, recoveredPanicPathBlockValidation, recoveredPanicPathService} {
+		prometheusRecoveredPanics.WithLabelValues(path)
+	}
 
 	// Initialize priority queue metrics
 	prometheusBlockPriorityQueueSize = promauto.NewGaugeVec(
@@ -374,35 +495,6 @@ func _initPrometheusMetrics() {
 			Name:      "fork_depth_blocks",
 			Help:      "Depth of forks in blocks",
 			Buckets:   prometheus.LinearBuckets(1, 1, 20),
-		},
-	)
-
-	prometheusForkResolved = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "fork_resolved_total",
-			Help:      "Total number of forks resolved",
-		},
-		[]string{"result"},
-	)
-
-	prometheusForkResolutionDepth = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "fork_resolution_depth_blocks",
-			Help:      "Depth of forks when resolved",
-			Buckets:   prometheus.LinearBuckets(1, 1, 20),
-		},
-	)
-
-	prometheusOrphanedForks = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "fork_orphaned_total",
-			Help:      "Total number of forks marked as orphaned",
 		},
 	)
 

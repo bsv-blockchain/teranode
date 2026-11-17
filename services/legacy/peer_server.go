@@ -9,7 +9,6 @@ package legacy
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -47,7 +46,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
-	blob_options "github.com/bsv-blockchain/teranode/stores/blob/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -74,27 +72,9 @@ const (
 	// store in the peer.
 	maxKnownAddresses = 10000
 
-	// maxRebroadcastInventory caps how many tx invs the rebroadcastHandler
-	// holds at once. Beyond this, new adds are dropped — the existing
-	// (older, already-retried) entries keep their retry budget instead of
-	// being evicted by fresher adds that haven't yet failed. The cap is
-	// the only memory bound on the rebroadcast queue, since there is no
-	// TransactionConfirmed hook wired to remove entries on block inclusion.
-	maxRebroadcastInventory = 4096
-
-	// maxRebroadcastAttempts is the per-entry retry budget in the
-	// rebroadcastHandler. With the 5-minute initial + up to 30-minute
-	// random subsequent interval, six attempts cover roughly 90 minutes
-	// in expectation — long enough to ride out a peer reconnect window
-	// without indefinitely retrying txs whose peers will never come back.
-	maxRebroadcastAttempts = 6
-
-	// modifyRebroadcastInvBuffer is the channel buffer between
-	// AddRebroadcastInventory callers and rebroadcastHandler. Sized to
-	// absorb a short backlog while the handler is busy serving a tick;
-	// AddRebroadcastInventory drops on full rather than blocking the
-	// hot relay path, so this is best-effort, not lossless.
-	modifyRebroadcastInvBuffer = 1024
+	// cantSplitBanPeerMsg is logged when a peer address cannot be split into
+	// host and port during ban handling.
+	cantSplitBanPeerMsg = "can't split ban peer %s %v"
 )
 
 var (
@@ -186,6 +166,12 @@ type broadcastInventoryDel *wire.InvVect
 type relayMsg struct {
 	invVect *wire.InvVect
 	data    interface{}
+
+	// requeue re-announces a tx inv to peers that are already known to
+	// have it. Set only by the rebroadcast path: the first announce puts
+	// the inv in each peer's known inventory, so without it a rebroadcast
+	// never reaches a peer that stayed connected.
+	requeue bool
 }
 
 // updatePeerHeightsMsg is a message sent from the blockmanager to the server
@@ -213,12 +199,6 @@ type unbanPeerReq struct {
 	addr bannedPeerAddr
 }
 
-// a struct to represent a query to check if a peer is banned
-type isPeerBannedMsg struct {
-	addr  string
-	reply chan bool
-}
-
 // peerState maintains state of inbound, persistent, outbound peers as well
 // as banned peers and outbound groups.
 type peerState struct {
@@ -226,8 +206,6 @@ type peerState struct {
 	outboundPeers   *txmap.SyncedMap[int32, *serverPeer]
 	persistentPeers *txmap.SyncedMap[int32, *serverPeer]
 	banned          *txmap.SyncedMap[string, time.Time]
-	outboundGroups  *txmap.SyncedMap[string, int]
-	connectionCount *txmap.SyncedMap[string, int]
 }
 
 // Count returns the count of all known peers.
@@ -235,12 +213,172 @@ func (ps *peerState) Count() int {
 	return ps.inboundPeers.Length() + ps.outboundPeers.Length() + ps.persistentPeers.Length()
 }
 
-// CountIP returns the count of all peers matching the IP.
-func (ps *peerState) CountIP(host string) int {
-	count, found := ps.connectionCount.Get(host)
-	if !found {
-		return 0
+// countFailedDial reports whether a failed dial should count against the
+// address that failed.
+//
+// It should only count when the node has evidence that its own connectivity is
+// fine, or a spell of broken networking would walk the whole address book,
+// blame every address for the node's own fault, and leave it with nowhere to
+// dial on recovery. svnode makes the same judgement the same way, at
+// net.cpp:1943, requiring at least min(nMaxConnections-1, 2) distinct outbound
+// netgroups before it will hold an address responsible.
+//
+// svnode counts netgroups where this counts automatic outbound peers, and in
+// Teranode those are the same number: newAddressFunc refuses any candidate
+// whose group is already represented, so every automatic outbound peer holds a
+// distinct group by construction.
+func (s *server) countFailedDial() bool {
+	if s.connManager == nil {
+		return false
 	}
+
+	required := cfg.MaxPeers - 1
+	if required > 2 {
+		required = 2
+	}
+
+	return s.connManager.AutomaticOutboundCount() >= required
+}
+
+// recordFailedDial tells the address manager that a dial to this address did
+// not produce a connection.
+func (s *server) recordFailedDial(addr net.Addr) {
+	host, portStr, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return
+	}
+
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return
+	}
+
+	portUint16, err := safeconversion.Uint64ToUint16(port)
+	if err != nil {
+		return
+	}
+
+	s.addrManager.Attempt(wire.NewNetAddressIPPort(ip, portUint16, 0), s.countFailedDial())
+}
+
+// outboundGroups derives the set of netgroups currently occupied by automatic
+// outbound peers.
+//
+// Derived, not maintained. This used to be a tally incremented when a peer was
+// added and decremented when it left, across four separate mutation sites, and
+// two of them were wrong: named peers claimed a group they never occupied, and
+// a peer that dropped before its handshake claimed one it never released,
+// barring that segment for the life of the process. Both were symptoms of the
+// same thing — a derived quantity kept by hand.
+//
+// Reading it from the peer list instead makes those bugs unrepresentable. There
+// is no claim to forget and no release to skip; membership of outboundPeers is
+// the whole rule, and that list is already the authority on which peers hold an
+// automatic slot. Inbound and named peers are excluded for free, because they
+// are kept in different lists. svnode does exactly this, rebuilding its
+// setConnected from vNodes on every pass of ThreadOpenConnections rather than
+// carrying a counter.
+//
+// The cost is a walk of the automatic tier per address selection — at most a
+// handful of peers, and only when the node is about to dial.
+func (ps *peerState) outboundGroups() map[string]struct{} {
+	groups := make(map[string]struct{}, ps.outboundPeers.Length())
+
+	ps.outboundPeers.Iterate(func(_ int32, sp *serverPeer) bool {
+		if na := sp.NA(); na != nil {
+			groups[addrmgr.GroupKey(na)] = struct{}{}
+		}
+
+		return true
+	})
+
+	return groups
+}
+
+// connectedHosts returns the host of every peer the node currently holds, in
+// any tier.
+//
+// Coarser than the netgroup set and deliberately so: it is what the feeler
+// probe uses to avoid opening a second connection to a host the node is already
+// talking to. The netgroup set cannot answer that question, because it is
+// derived from the automatic outbound list alone and so cannot see inbound or
+// named peers at all.
+//
+// Host rather than host:port, because MaxPeersPerIP is the rule a remote is
+// likely to be applying to us, and a second connection to a host we are
+// mid-download from is a good way to lose the first one.
+func (ps *peerState) connectedHosts() map[string]struct{} {
+	hosts := make(map[string]struct{}, ps.Count())
+
+	note := func(sp *serverPeer) {
+		if host, _, err := net.SplitHostPort(sp.Addr()); err == nil {
+			hosts[host] = struct{}{}
+		}
+	}
+
+	for _, list := range []*txmap.SyncedMap[int32, *serverPeer]{
+		ps.inboundPeers, ps.outboundPeers, ps.persistentPeers,
+	} {
+		list.Iterate(func(_ int32, sp *serverPeer) bool {
+			note(sp)
+
+			return true
+		})
+	}
+
+	return hosts
+}
+
+// CountExcludingPermanent returns the peers that draw on MaxPeers: the inbound
+// and automatic outbound tiers. Permanent (addnode) peers have their own budget
+// and are additive to this figure, so they are deliberately left out.
+func (ps *peerState) CountExcludingPermanent() int {
+	return ps.inboundPeers.Length() + ps.outboundPeers.Length()
+}
+
+// CountIP returns how many peers the node holds from the given host.
+//
+// Derived, not maintained, for the same reason the netgroup set is. The tally
+// this replaces was incremented when a peer was added and decremented when it
+// left, and the two did not always pair up: handleAddPeerMsg's
+// already-connected dedup deletes the displaced peer from its list directly, so
+// when that peer's disconnect arrived, handleDonePeerMsg no longer found it and
+// took the fall-through branch that decrements nothing. The count ratcheted up
+// and never came back down, and after MaxPeersPerIP such events the node
+// refused every peer from that host for the life of the process.
+//
+// Counting the peers themselves cannot drift: there is nothing to decrement.
+// svnode does the same, deriving nConnectionsFromAddr by walking vNodes at
+// accept time (net.cpp:1273) rather than carrying a counter.
+//
+// Persistent peers are excluded, matching what the old tally counted: they are
+// named by the operator, so holding several from one host is a deliberate
+// choice rather than a stranger crowding the node out.
+func (ps *peerState) CountIP(host string) int {
+	count := 0
+
+	tally := func(sp *serverPeer) {
+		if peerHost, _, err := net.SplitHostPort(sp.Addr()); err == nil && peerHost == host {
+			count++
+		}
+	}
+
+	ps.inboundPeers.Iterate(func(_ int32, sp *serverPeer) bool {
+		tally(sp)
+
+		return true
+	})
+
+	ps.outboundPeers.Iterate(func(_ int32, sp *serverPeer) bool {
+		tally(sp)
+
+		return true
+	})
 
 	return count
 }
@@ -303,6 +441,7 @@ type server struct {
 	hashCache            *txscript.HashCache
 	syncManager          *netsync.SyncManager
 	modifyRebroadcastInv chan interface{}
+	rebroadcastTip       chan struct{}
 	newPeers             chan *serverPeer
 	donePeers            chan *serverPeer
 	banPeers             chan *serverPeer
@@ -324,10 +463,21 @@ type server struct {
 	droppedRebroadcastAdds atomic.Uint64
 
 	// droppedRebroadcastCapHits counts rebroadcastHandler add attempts that
-	// failed because pendingInvs was at maxRebroadcastInventory. A non-zero
+	// failed because the queue was at maxRebroadcastInventory with every
+	// entry already retried, so no fresh entry could be evicted. A non-zero
 	// value indicates the retry queue is saturated and new adds are losing
 	// their retry safety net (their immediate RelayInventory still ran).
 	droppedRebroadcastCapHits atomic.Uint64
+
+	// relayTxBatchTail is closed when the most recently started relayTxBatch
+	// send finishes. Each new batch waits on it, so batches go out in order.
+	relayTxBatchMu   sync.Mutex
+	relayTxBatchTail chan struct{}
+
+	// rebroadcastTipDelay is how long rebroadcastHandler waits after a new
+	// block before retrying, so peers have connected it first. A field
+	// rather than the constant so tests can shorten it.
+	rebroadcastTipDelay time.Duration
 
 	// cfCheckptCaches stores a cached slice of filter headers for cfcheckpt
 	// messages for each filter type.
@@ -340,13 +490,45 @@ type server struct {
 	utxoStore         utxostore.Store
 	subtreeStore      blob.Store
 	tempStore         blob.Store
-	concurrentStore   *blob.ConcurrentBlob[chainhash.Hash]
 	subtreeValidation subtreevalidation.Interface
 	blockValidation   blockvalidation.Interface
 	blockAssembly     *blockassembly.Client
 	assetHTTPAddress  string
 	banList           *p2p.BanList
 	banChan           chan p2p.BanEvent
+
+	// runPeerLoop is the loop Start runs in the foreground until shutdown. Nil
+	// means peerHandler; tests substitute a loop that needs no address, sync or
+	// connection manager, so they can check what Start runs alongside it. A
+	// substitute must call s.wg.Done() when it returns, as peerHandler does, to
+	// balance the s.wg.Add(1) Start makes for it.
+	runPeerLoop func()
+
+	// feelerAttempted and feelerVerified count probes launched and probes that
+	// completed a BSV version exchange. Reported on the per-probe log line so
+	// the feature's slow, statistical benefit can be checked from the logs
+	// rather than inferred. Never reset.
+	feelerAttempted atomic.Uint64
+	feelerVerified  atomic.Uint64
+
+	// feelerTokens hands out the reserved probe slots: one token per slot,
+	// taken for the whole life of a probe and returned when it ends. Created by
+	// startFeeler, nil when feelers are disabled.
+	feelerTokens chan struct{}
+
+	// feelerHandshake is how long a probe waits for a version message, settled
+	// from legacy_feelerHandshakeTimeout by startFeeler. Resolved once because
+	// the setting is fixed at startup and its two guards warn: doing it per
+	// probe reported a startup mistake as permanent runtime noise. Written
+	// before the feeler goroutine exists and never again, which is what makes it
+	// safe to read from a probe without synchronisation.
+	feelerHandshake time.Duration
+
+	// feelerSlots is how many peer slots are held back for feeler probes. It
+	// is deducted from the peer-admission ceiling and never from the automatic
+	// outbound target, mirroring svnode's nMaxInbound arithmetic
+	// (net.cpp:1261). Zero disables feelers entirely, reservation included.
+	feelerSlots int
 
 	// multistream association tracking
 	associationMgr *peer.AssociationManager
@@ -365,9 +547,15 @@ type serverPeer struct {
 
 	*peer.Peer
 
-	connReq        *connmgr.ConnReq
-	server         *server
-	persistent     bool
+	connReq    *connmgr.ConnReq
+	server     *server
+	persistent bool
+	// addnode is SV Node's fAddnode for this connection: the operator named
+	// the host (connect or addpeer at startup, or a permanent node add), so
+	// banMisbehaving never bans it. Set from persistent in newServerPeer. A
+	// DATA1 sub-peer is never persistent (it is not in persistentPeers), so
+	// newStreamServerPeer copies its primary's flag instead.
+	addnode        bool
 	continueHash   *chainhash.Hash
 	relayMtx       sync.Mutex
 	disableRelayTx bool
@@ -379,8 +567,7 @@ type serverPeer struct {
 	banScore       connmgr.DynamicBanScore
 	quit           chan struct{}
 	// The following chans are used to sync blockmanager and server.
-	txProcessed    chan struct{}
-	blockProcessed chan error
+	txProcessed chan struct{}
 }
 
 // newServerPeer returns a new serverPeer instance. The peer needs to be set by
@@ -390,11 +577,11 @@ func newServerPeer(s *server, isPersistent bool) *serverPeer {
 		ctx:            s.ctx, // set the context to the server, if server dies, all peers die
 		server:         s,
 		persistent:     isPersistent,
+		addnode:        isPersistent,
 		filter:         bloom.LoadFilter(nil),
 		knownAddresses: make(map[string]struct{}),
 		quit:           make(chan struct{}),
 		txProcessed:    make(chan struct{}, 1),
-		blockProcessed: make(chan error, 1),
 	}
 }
 
@@ -534,9 +721,9 @@ func (sp *serverPeer) pushAddrMsg(addresses []*wire.NetAddress) {
 // disconnected.
 func (sp *serverPeer) addBanScore(persistent, transient uint32, reason string) {
 	// No warning is logged and no score is calculated if banning is disabled.
-	// if cfg.DisableBanning {
-	//	return
-	// }
+	if cfg.DisableBanning {
+		return
+	}
 	if sp.isWhitelisted {
 		sp.server.logger.Debugf("Misbehaving whitelisted peer %s: %s", sp, reason)
 		return
@@ -572,6 +759,17 @@ func (sp *serverPeer) addBanScore(persistent, transient uint32, reason string) {
 // all of the provided desired service flags set.
 func hasServices(advertised, desired wire.ServiceFlag) bool {
 	return advertised&desired == desired
+}
+
+// isBSVUserAgent reports whether a peer's user agent identifies a BSV node.
+//
+// Extracted so the feeler probe applies the same test as the ordinary peer
+// path. A probe that promoted a BTC or BCH node into the tried table would not
+// merely waste itself: promotion can evict an existing tried entry, so it would
+// push out a genuine BSV peer and degrade the very pool the probe exists to
+// improve.
+func isBSVUserAgent(userAgent string) bool {
+	return strings.Contains(userAgent, "Bitcoin SV") || strings.Contains(userAgent, "BSV")
 }
 
 // OnVersion is invoked when a peer receives a version bitcoin message
@@ -610,11 +808,15 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	// Only allow connections from peers running BSV Blockchain nodes
 	// This prevents connections from BCH/BTC/BTG and other incompatible forks
 	userAgent := msg.UserAgent
-	if !strings.Contains(userAgent, "Bitcoin SV") && !strings.Contains(userAgent, "BSV") {
-		sp.server.logger.Warnf("Rejecting and banning peer %s with non-BSV user agent: %s", sp.Peer, userAgent)
-
-		// Ban the peer to prevent repeated connection attempts from incompatible clients
-		sp.server.BanPeer(sp)
+	if !isBSVUserAgent(userAgent) {
+		// Ban the peer to prevent repeated connection attempts from incompatible
+		// clients, unless banning is disabled. The peer is rejected either way.
+		if cfg.DisableBanning {
+			sp.server.logger.Warnf("Rejecting peer %s with non-BSV user agent (banning disabled): %s", sp.Peer, userAgent)
+		} else {
+			sp.server.logger.Warnf("Rejecting and banning peer %s with non-BSV user agent: %s", sp.Peer, userAgent)
+			sp.server.BanPeer(sp)
+		}
 
 		reason := "Only BSV Blockchain clients are supported"
 
@@ -736,10 +938,11 @@ func (sp *serverPeer) OnProtoconf(p *peer.Peer, msg *wire.MsgProtoconf) {
 // first message on a new inbound TCP connection, requesting to join an
 // existing multistream association.
 func (sp *serverPeer) OnCreateStream(p *peer.Peer, msg *wire.MsgCreateStream) {
-	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnCreateStream",
+	_, _, deferFn := tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnCreateStream",
 		tracing.WithHistogram(peerServerMetrics["OnCreateStream"]),
-		tracing.WithLogMessage(sp.server.logger, "OnCreateStream from %s", p),
+		tracing.WithDebugLogMessage(sp.server.logger, "OnCreateStream from %s", p),
 	)
+	defer deferFn()
 
 	if !sp.server.settings.Legacy.AllowBlockPriority {
 		sp.server.logger.Warnf("Received createstream from %s but AllowBlockPriority is disabled", p)
@@ -787,10 +990,11 @@ func (sp *serverPeer) OnCreateStream(p *peer.Peer, msg *wire.MsgCreateStream) {
 // OnStreamAck is invoked when a peer sends a streamack message confirming
 // that our createstream request was accepted.
 func (sp *serverPeer) OnStreamAck(p *peer.Peer, msg *wire.MsgStreamAck) {
-	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnStreamAck",
+	_, _, deferFn := tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnStreamAck",
 		tracing.WithHistogram(peerServerMetrics["OnStreamAck"]),
-		tracing.WithLogMessage(sp.server.logger, "OnStreamAck from %s", p),
+		tracing.WithDebugLogMessage(sp.server.logger, "OnStreamAck from %s", p),
 	)
+	defer deferFn()
 
 	sp.server.logger.Infof("Received streamack for stream type %d from %s", msg.StreamType, p)
 }
@@ -833,7 +1037,7 @@ func (sp *serverPeer) openRequiredStreams() {
 
 	// Read STREAMACK response before creating the peer to avoid resource
 	// leaks if the remote side rejects or fails to acknowledge the stream.
-	_, msg, _, err := wire.ReadMessageWithEncodingN(conn, wire.ProtocolVersion, sp.server.settings.ChainCfgParams.Net, wire.BaseEncoding)
+	_, msg, _, err := peer.ReadHandshakeMessage(conn, nil, wire.ProtocolVersion, sp.server.settings.ChainCfgParams.Net, wire.BaseEncoding)
 	if err != nil {
 		sp.server.logger.Warnf("Failed to read streamack from %s: %v", peerAddr, err)
 		conn.Close()
@@ -846,21 +1050,45 @@ func (sp *serverPeer) openRequiredStreams() {
 		return
 	}
 
-	// Create a serverPeer wrapper for the stream connection, matching the
-	// pattern used by inboundPeerConnected/outboundPeerConnected so that
-	// callbacks reference the correct serverPeer instance.
-	streamSP := newServerPeer(sp.server, false)
-	streamPeerCfg := newPeerConfig(streamSP)
-	streamPeerCfg.AllowBlockPriority = true
-	streamSP.Peer = peer.NewInboundPeer(sp.server.logger, sp.server.settings, streamPeerCfg)
-
-	streamSP.Peer.SetAssociation(assoc)
-	streamSP.Peer.SetStreamType(wire.StreamTypeData1)
-	assoc.AddStream(wire.StreamTypeData1, streamSP.Peer)
+	streamSP := sp.server.newStreamServerPeer(assoc, conn, sp.addnode)
 	streamSP.AssociateConnection(conn)
 
 	go sp.server.peerDoneHandler(streamSP)
 	sp.server.logger.Infof("DATA1 stream established to %s for association %s", peerAddr, assoc.ID())
+}
+
+// newStreamServerPeer builds the serverPeer for an outbound DATA1 stream to the
+// remote at the other end of conn and registers it with assoc, matching the
+// pattern inboundPeerConnected and outboundPeerConnected use so every callback
+// references its own serverPeer. The caller associates the connection.
+//
+// The whitelist is read here, from the connection's remote address, as
+// inboundPeerConnected does for every inbound connection. newServerPeer leaves
+// isWhitelisted false, and this constructor used to leave it there, so a
+// whitelisted host's DATA1 sub-peer could be banned for a body it delivered
+// while its primary, whitelisted, could not. addnode is the primary's flag,
+// copied for the same reason: the sub-peer is built non-persistent, and it is
+// the peer whose read loop sees every block body.
+func (s *server) newStreamServerPeer(assoc *peer.Association, conn net.Conn, addnode bool) *serverPeer {
+	streamSP := newServerPeer(s, false)
+	streamSP.addnode = addnode
+
+	var err error
+
+	streamSP.isWhitelisted, err = isWhitelisted(conn.RemoteAddr())
+	if err != nil {
+		s.logger.Warnf("Cannot whitelist stream peer %v: %v", conn.RemoteAddr(), err)
+	}
+
+	streamPeerCfg := newPeerConfig(streamSP)
+	streamPeerCfg.AllowBlockPriority = true
+	streamSP.Peer = peer.NewInboundPeer(s.logger, s.settings, streamPeerCfg)
+
+	streamSP.Peer.SetAssociation(assoc)
+	streamSP.Peer.SetStreamType(wire.StreamTypeData1)
+	assoc.AddStream(wire.StreamTypeData1, streamSP.Peer)
+
+	return streamSP
 }
 
 // OnMemPool is invoked when a peer receives a mempool bitcoin message.
@@ -899,82 +1127,42 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 	iv := wire.NewInvVect(wire.InvTypeTx, tx.Hash())
 	sp.AddKnownInventory(iv)
 
-	// Queue the transaction up to be handled by the sync manager and
-	// intentionally block further receives until the transaction is fully
-	// processed and known good or bad.  This helps prevent a malicious peer
-	// from queuing up a bunch of bad transactions before disconnecting (or
-	// being disconnected) and wasting memory.
+	// Queue the transaction up to be handled by the sync manager. This does NOT
+	// wait for the transaction to be processed: no reply channel is passed, and
+	// waiting would hold this peer's read loop, which also carries its blocks.
+	// What stops a peer flooding the node with transactions is the sync
+	// manager's relay queue, which drops a transaction that arrives with the
+	// queue full or its byte budget (relayTxBytesBudget) spent.
 	sp.server.syncManager.QueueTx(tx, sp.Peer, nil)
 }
 
-// OnBlock is invoked when a peer receives a block bitcoin message. It
-// blocks until the bitcoin block has been fully processed.
-func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
-	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnBlock",
-		tracing.WithHistogram(peerServerMetrics["OnBlock"]),
-	)
-
-	// Check if this peer is banned
-	host, _, err := net.SplitHostPort(sp.Addr())
-	if err == nil {
-		// Use a channel to get the response from the query
-		respChan := make(chan bool)
-
-		// Create a proper query message to check if the peer is banned
-		sp.server.query <- &isPeerBannedMsg{
-			addr:  host,
-			reply: respChan,
-		}
-
-		// Wait for the response
-		isBanned := <-respChan
-		if isBanned {
-			sp.server.logger.Warnf("Ignoring block %s from banned legacy peer %s",
-				msg.BlockHash().String(), sp.Addr())
-			return
-		}
-	} else {
-		sp.server.logger.Errorf("Error splitting host and port in OnBlock: %v", err)
+// tearDownAssociationStreams closes the live connection of every stream
+// sub-peer in assoc except the given peer. It is the primary-disconnect
+// counterpart to peer.DisconnectAssociation, which disconnects a misbehaving
+// sub-peer's primary: when an association's PRIMARY goes away
+// (misbehaviour eviction, sync-peer rotation, remote hang-up), handleDonePeerMsg
+// removes only the association BOOKKEEPING, which left the DATA1 sub-peer's TCP
+// connection open reading blocks off the wire for a dead association, and left a
+// budget-parked sub-peer read-loop parked forever — AcquireBlockPrefetch waits
+// on the sub-peer's own serverPeer.quit, which only closes when the sub-peer's
+// own connection drops. Disconnecting the sub-peer closes its peer.Peer.quit,
+// unblocking its peerDoneHandler, which closes its serverPeer.quit and unparks
+// the waiter. StreamPeers() includes the primary (registered as the GENERAL
+// stream at construction), so callers pass it as except — it is already
+// disconnecting. DisconnectWithInfo is idempotent (atomic guard), so overlap
+// with DisconnectAssociation's own disconnect of the sub-peer it was called on,
+// or a sub-peer already mid-teardown, is safe.
+func tearDownAssociationStreams(assoc *peer.Association, except *peer.Peer) {
+	if assoc == nil {
+		return
 	}
 
-	// Convert the raw MsgBlock to a bsvutil.Block which provides some
-	// convenience methods and things such as hash caching.
-	block := bsvutil.NewBlockFromBlockAndBytes(msg, buf)
-
-	// Add the block to the known inventory for the peer.
-	iv := wire.NewInvVect(wire.InvTypeBlock, block.Hash())
-	sp.AddKnownInventory(iv)
-
-	// single round-trip: GetBlockHeader tells us both existence and validity
-	_, meta, err := sp.server.blockchainClient.GetBlockHeader(sp.ctx, block.Hash())
-	blockIsKnownValid := err == nil && !meta.Invalid
-
-	if !blockIsKnownValid {
-		// Queue the block up to be handled by the block
-		// manager and intentionally block further receives
-		// until the bitcoin block is fully processed and known
-		// good or bad.  This helps prevent a malicious peer
-		// from queuing up a bunch of bad blocks before
-		// disconnecting (or being disconnected) and wasting
-		// memory.  Additionally, this behavior is depended on
-		// by at least the block acceptance test tool as the
-		// reference implementation processes blocks in the same
-		// thread and therefore blocks further messages until
-		// the bitcoin block has been fully processed.
-		sp.server.syncManager.QueueBlock(block, sp.Peer, sp.blockProcessed)
-
-		err = <-sp.blockProcessed
-		if err != nil {
-			sp.server.logger.Errorf("block processing failed: %v", err)
-
-			// Only disconnect on block validation failures, not on local
-			// infrastructure issues (database, Kafka, etc.) which would
-			// just cause unnecessary sync peer rotation.
-			if !errors.Is(err, errors.ErrServiceError) && !errors.Is(err, errors.ErrStorageError) {
-				sp.DisconnectWithWarning(fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", block.Hash()))
-				return
-			}
+	for _, p := range assoc.StreamPeers() {
+		if p == nil || p == except {
+			continue
 		}
+
+		p.DisconnectWithInfo("association primary disconnected")
 	}
 }
 
@@ -1448,13 +1636,19 @@ func (sp *serverPeer) OnReject(p *peer.Peer, msg *wire.MsgReject) {
 	sp.server.logger.Warnf("Received reject message from peer %s, cmd: %s, code: %s, reason: %s, hash: %s", p, msg.Cmd, msg.Code.String(), msg.Reason, msg.Hash.String())
 }
 
-// OnNotFound logs all not found messages received from the remote peer.
+// OnNotFound handles a not found message received from the remote peer.
+//
+// It used to only log. A notfound naming a block we asked this peer for has to
+// reach the sync manager: the peer has told us its copy is never coming, so its
+// obligation for that block must be discharged and the block put back into the
+// download walk, or it is stranded behind a forward-only cursor with nobody
+// owing it.
 func (sp *serverPeer) OnNotFound(p *peer.Peer, msg *wire.MsgNotFound) {
 	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnNotFound",
 		tracing.WithHistogram(peerServerMetrics["OnNotFound"]),
 	)
 
-	sp.server.logger.Warnf("Received not found message from peer %s, %d not found invs", p, len(msg.InvList))
+	sp.server.syncManager.NotFound(msg, sp.Peer)
 }
 
 // OnRead is invoked when a peer receives a message and it is used to update
@@ -1477,70 +1671,6 @@ func (sp *serverPeer) OnWrite(_ *peer.Peer, bytesWritten int, msg wire.Message, 
 	sp.server.AddBytesSent(uint64(bytesWritten))
 }
 
-// randomUint16Number returns a random uint16 in a specified input range.  Note
-// that the range is in zeroth ordering; if you pass it 1800, you will get
-// values from 0 to 1800.
-func randomUint16Number(max uint16) uint16 {
-	// In order to avoid modulo bias and ensure every possible outcome in
-	// [0, max) has equal probability, the random number must be sampled
-	// from a random source that has a range limited to a multiple of the
-	// modulus.
-	var randomNumber uint16
-
-	var limitRange = (math.MaxUint16 / max) * max
-
-	for {
-		binary.Read(rand.Reader, binary.LittleEndian, &randomNumber)
-
-		if randomNumber < limitRange {
-			return randomNumber % max
-		}
-	}
-}
-
-// AddRebroadcastInventory adds 'iv' to the list of inventories to be
-// rebroadcasted at random intervals until they show up in a block.
-//
-// Best-effort: sends are non-blocking. If the rebroadcastHandler is
-// backlogged past the channel's buffer, the new add is dropped rather
-// than blocking the hot relay path. Drops are an acceptable trade —
-// the dropped tx still has its immediate RelayInventory dispatch, and
-// the queue already contains older entries (which are more likely to
-// actually be stuck) carrying their own retry budget.
-func (s *server) AddRebroadcastInventory(iv *wire.InvVect, data interface{}) {
-	// Ignore if shutting down.
-	if atomic.LoadInt32(&s.shutdown) != 0 {
-		return
-	}
-
-	select {
-	case s.modifyRebroadcastInv <- broadcastInventoryAdd{invVect: iv, data: data}:
-	default:
-		// Drop on full — see doc comment above. Bumped for operator
-		// visibility via RebroadcastDropCounts.
-		s.droppedRebroadcastAdds.Add(1)
-	}
-}
-
-// RemoveRebroadcastInventory removes 'iv' from the list of items to be
-// rebroadcasted if present.
-func (s *server) RemoveRebroadcastInventory(iv *wire.InvVect) {
-	// Ignore if shutting down.
-	if atomic.LoadInt32(&s.shutdown) != 0 {
-		return
-	}
-
-	select {
-	case s.modifyRebroadcastInv <- broadcastInventoryDel(iv):
-	default:
-		// Drop on full. A missed delete just means the entry ages out
-		// via maxRebroadcastAttempts instead of being purged on block
-		// inclusion — wasted retries, not a correctness issue. Not
-		// counted separately: a saturated channel already surfaces
-		// via droppedRebroadcastAdds.
-	}
-}
-
 // relayTransactions generates and relays inventory vectors for all of the
 // passed transactions to all connected peers and enqueues each iv on the
 // rebroadcast queue.
@@ -1548,15 +1678,23 @@ func (s *server) RemoveRebroadcastInventory(iv *wire.InvVect) {
 // The rebroadcast enqueue closes the gap from issue #942: the immediate
 // RelayInventory dispatch is best-effort — a peer that has not finished its
 // version handshake at this instant, or that is briefly disconnected, will
-// silently drop the inv. The rebroadcastHandler periodically replays
-// pendingInvs so the tx still reaches peers once they're ready, instead of
-// rotting in the local mempool with no retry path.
+// silently drop the inv, and an SV Node peer may reject it for a temporary
+// reason. The rebroadcastHandler replays the queue after each new block so
+// the tx still reaches peers once they're ready, instead of rotting in the
+// local mempool with no retry path.
+//
+// txns arrive parents first (see netsync's orderAnnounceBatch) and are sent
+// as one batch, so each peer is offered a parent before its children.
 func (s *server) relayTransactions(txns []*netsync.TxHashAndFee) {
+	batch := make([]relayMsg, 0, len(txns))
+
 	for _, txHashAndFee := range txns {
 		iv := wire.NewInvVect(wire.InvTypeTx, &txHashAndFee.TxHash)
-		s.RelayInventory(iv, txHashAndFee)
+		batch = append(batch, relayMsg{invVect: iv, data: txHashAndFee})
 		s.AddRebroadcastInventory(iv, txHashAndFee)
 	}
+
+	s.relayTxBatch(batch)
 }
 
 // AnnounceNewTransactions generates and relays inventory vectors and notifies
@@ -1612,8 +1750,35 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 		return err
 	}
 
+	// A record with no serialized body is a legal answer from the UTXO store — the
+	// tx_body partition has aged out, or utxostore_skipTxBodyBelowCheckpoint meant the
+	// bytes below the checkpoint were never written — and the peer asked for the
+	// transaction itself, which this node cannot produce. Refuse, and say why:
+	// "nil from transaction pool" reads like a store fault for something that is
+	// the store's ordinary steady state.
 	if txMeta == nil || txMeta.Tx == nil {
-		err = fmt.Errorf("[pushTxMsg] tx %v is nil from transaction pool", hash)
+		err = fmt.Errorf("[pushTxMsg] tx %v is in the store but its body is not retained by this node (aged out, or below the utxostore_skipTxBodyBelowCheckpoint boundary)", hash)
+
+		sp.server.logger.Warnf("%s", err.Error())
+
+		if doneChan != nil {
+			doneChan <- struct{}{}
+		}
+
+		return err
+	}
+
+	// A node bootstrapped from a UTXO-set snapshot stores transactions as their
+	// live outputs only, and the UTXO store hands that shape straight back for a
+	// reader that asked for fields.Tx. Bytes() below either panics on a nil output
+	// hole — swallowed by the deferred recover above, leaving the peer with silence
+	// — or serializes cleanly into a short, 0-input transaction that does not hash
+	// to what the peer asked for, which would then go on the wire as if it did.
+	// Same gate as the asset boundary (services/asset/repository.isRequestedTransaction):
+	// the predicate must come first, because TxIDChainHash() dereferences the same
+	// nil *bt.Output.
+	if !txMeta.TxIsSerializable() || !txMeta.Tx.TxIDChainHash().IsEqual(hash) {
+		err = fmt.Errorf("[pushTxMsg] tx %v is not retained in full by this node", hash)
 
 		sp.server.logger.Warnf("%s", err.Error())
 
@@ -1645,23 +1810,27 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 	return nil
 }
 
-func (s *server) getTxFromStore(hash *chainhash.Hash) (*bsvutil.Tx, int64, error) {
-	txMeta, err := s.utxoStore.Get(s.ctx, hash, fields.Tx)
-	if err != nil {
-		return nil, 0, err
+// legacyInternalTokenHeader carries asset_legacyPeerPoolToken to Asset's
+// GET /block_legacy/:hash?wire=1, so it can tell this node's own legacy peer
+// server apart from an anonymous caller who also sets ?wire=1 and admit this
+// request to its internal legacy-peer-server pool instead of the anonymous one.
+// Must match services/asset/httpimpl's legacyInternalTokenHeader - the two
+// services aren't in an import relationship, so this is duplicated by name, not
+// shared by reference.
+const legacyInternalTokenHeader = "X-Teranode-Internal-Token"
+
+// legacyPeerPoolHeaders returns the headers pushBlockMsg's internal ?wire=1
+// request to Asset should carry: the internal token header when
+// asset_legacyPeerPoolToken is configured, or nil when it is empty (the
+// default), in which case Asset falls back to the anonymous pool for this
+// request too - today's single-pool behaviour.
+func legacyPeerPoolHeaders(tSettings *settings.Settings) map[string]string {
+	token := tSettings.Asset.LegacyPeerPoolToken
+	if token == "" {
+		return nil
 	}
 
-	fee, err := util.GetFees(txMeta.Tx)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	tx, err := bsvutil.NewTxFromBytes(txMeta.Tx.Bytes())
-	if err != nil {
-		return nil, 0, err
-	}
-
-	return tx, int64(fee), nil // nolint:gosec
+	return map[string]string{legacyInternalTokenHeader: token}
 }
 
 // pushBlockMsg sends a block message for the provided block hash to the
@@ -1674,7 +1843,9 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	// 1. Writing the entire block to disk (slow, causes context deadline exceeded)
 	// 2. Reading it back from disk (additional I/O overhead)
 	url := fmt.Sprintf("%s/block_legacy/%s?wire=1", s.assetHTTPAddress, hash.String())
-	reader, err := util.DoHTTPRequestBodyReader(s.ctx, url)
+	// asset_httpAddress is this node's own asset service, from settings, and is routinely
+	// localhost or a private container address. The peer-URL client refuses both.
+	reader, err := util.DoLocalServiceHTTPRequestBodyReader(s.ctx, url, legacyPeerPoolHeaders(s.settings))
 	if err != nil {
 		sp.server.logger.Errorf("Unable to fetch requested block %v: %v", hash, err)
 
@@ -1915,8 +2086,16 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 	}
 
 	// Limit max number of total peers.
-	if state.Count() >= cfg.MaxPeers {
-		reason := fmt.Sprintf("Max peers reached [%d] - disconnecting peer", cfg.MaxPeers)
+	//
+	// Permanent (addnode) peers are excluded because they are budgeted
+	// separately by MaxAddnodePeers, following svnode: its inbound capacity is
+	// nMaxConnections minus the OUTBOUND and feeler budgets only, and its
+	// addnode semaphore is independent of nMaxConnections entirely. Counting
+	// them here would make named peers cost the node inbound capacity, which is
+	// the additive budget undone at the door.
+	ceiling := peerAdmissionCeiling(cfg.MaxPeers, s.feelerSlots)
+	if state.CountExcludingPermanent() >= ceiling {
+		reason := fmt.Sprintf("Max peers reached [%d] - disconnecting peer", ceiling)
 		sp.DisconnectWithInfo(reason)
 		// TODO: how to handle permanent peers here?
 		// they should be rescheduled.
@@ -1928,20 +2107,11 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 
 	if sp.Inbound() {
 		state.inboundPeers.Set(sp.ID(), sp)
-
-		count, _ := state.connectionCount.Get(host)
-		state.connectionCount.Set(host, count+1)
 	} else {
-		count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-		state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count+1)
-
 		if sp.persistent {
 			state.persistentPeers.Set(sp.ID(), sp)
 		} else {
 			state.outboundPeers.Set(sp.ID(), sp)
-
-			count, _ = state.connectionCount.Get(host)
-			state.connectionCount.Set(host, count+1)
 		}
 	}
 
@@ -1963,12 +2133,43 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 	// Clean up multistream association state.
 	if assoc := sp.Peer.AssociationRef(); assoc != nil {
 		if sp.Peer.IsStreamPeer() {
-			// Secondary stream disconnected - remove from association.
+			// A secondary stream disconnected. An association is one logical
+			// peer, so the primary goes with it. Nothing re-opens a lost DATA1
+			// (openRequiredStreams runs only from OnProtoconf), and under
+			// BlockPriority DATA1 is the stream block bodies arrive on, so an
+			// association without it can still be sync peer and still own
+			// blocks in the download ledger while being unable to deliver any.
+			// Netsync releases a peer's blocks and rotates the sync peer only
+			// for a primary (handleDonePeerMsg returns at once for a peer not in
+			// peerStates, which a sub-peer never is), so the primary's own done
+			// message is what carries that out, one peerHandler round trip
+			// from here. SV Node does the same: any one stream closing or
+			// erroring closes the whole node (net/stream.cpp
+			// CloseSocketDisconnect, net/net.cpp shutting the association), and
+			// an SV Node remote already does it to us when our DATA1 closes.
+			//
+			// Not gated on the primary still being connected:
+			// DisconnectWithLogFunc is idempotent, so when the primary went
+			// first and tearDownAssociationStreams is what closed this stream,
+			// this costs one debug line. Idle churn is not a risk: the idle
+			// timer consults HasRecentActivity across every stream before it
+			// fires, and under BlockPriority pings travel on DATA1.
 			assoc.RemoveStream(sp.Peer.StreamType())
 			s.logger.Debugf("Removed stream type %d from association %s",
 				sp.Peer.StreamType(), assoc.ID())
+
+			if primary := assoc.PrimaryPeer(); primary != nil && primary != sp.Peer {
+				primary.DisconnectWithInfo(fmt.Sprintf("stream %d closed; dropping the association", sp.Peer.StreamType()))
+			}
 		} else {
-			// Primary peer disconnected - remove the entire association.
+			// Primary peer disconnected - tear down the whole association:
+			// close every sub-peer's live connection, then remove the
+			// bookkeeping. Removing only the bookkeeping left the DATA1 sub-peer
+			// reading off the wire (or parked forever in AcquireBlockPrefetch) on
+			// a connection nothing would ever close. Teardown runs before Remove
+			// so stale sub-peer connections are already dropping by the time the
+			// association ID becomes free for a reconnecting peer to re-register.
+			tearDownAssociationStreams(assoc, sp.Peer)
 			s.associationMgr.Remove(assoc.RawID())
 			s.logger.Debugf("Removed association %s (primary peer disconnected)", assoc.ID())
 		}
@@ -1991,22 +2192,11 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 	}
 
 	if _, ok := list.Get(sp.ID()); ok {
-		if !sp.Inbound() && sp.VersionKnown() {
-			count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-			state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
-		}
-
 		if !sp.Inbound() && sp.connReq != nil {
 			s.connManager.Disconnect(sp.connReq.ID())
 		}
 
 		list.Delete(sp.ID())
-
-		host, _, err := net.SplitHostPort(sp.Addr())
-		if err == nil && !sp.persistent {
-			count, _ := state.connectionCount.Get(host)
-			state.connectionCount.Set(host, count-1)
-		}
 
 		sp.server.logger.Debugf("Removed peer %s", sp)
 
@@ -2031,7 +2221,7 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 func (s *server) handleBanPeerMsg(state *peerState, sp *serverPeer) {
 	host, _, err := net.SplitHostPort(sp.Addr())
 	if err != nil {
-		sp.server.logger.Debugf("can't split ban peer %s %v", sp.Addr(), err)
+		sp.server.logger.Debugf(cantSplitBanPeerMsg, sp.Addr(), err)
 		return
 	}
 
@@ -2040,11 +2230,10 @@ func (s *server) handleBanPeerMsg(state *peerState, sp *serverPeer) {
 	s.logger.Infof("Banned peer %s (%s) for %v", host, direction, cfg.BanDuration)
 
 	state.banned.Set(host, time.Now().Add(cfg.BanDuration))
-	s.banChan <- p2p.BanEvent{
-		Action: "add",
-		IP:     host,
-	}
 
+	// banList.Add publishes the ban event itself, without blocking. Never send
+	// one from here as well: this runs on the peer loop, and a blocking send on
+	// a ban channel the listener has fallen behind on would freeze it.
 	err = s.banList.Add(sp.ctx, host, time.Now().Add(cfg.BanDuration))
 	if err != nil {
 		s.logger.Errorf("Failed to add ban for peer %s: %v", host, err)
@@ -2056,7 +2245,7 @@ func (s *server) handleBanPeerMsg(state *peerState, sp *serverPeer) {
 func (s *server) handleBanPeerForDurationMsg(state *peerState, sp *serverPeer, banUntil int64) {
 	host, _, err := net.SplitHostPort(sp.Addr())
 	if err != nil {
-		sp.server.logger.Debugf("can't split ban peer %s %v", sp.Addr(), err)
+		sp.server.logger.Debugf(cantSplitBanPeerMsg, sp.Addr(), err)
 		return
 	}
 
@@ -2068,11 +2257,8 @@ func (s *server) handleBanPeerForDurationMsg(state *peerState, sp *serverPeer, b
 	banUntilTime := time.Unix(banUntil, 0)
 
 	state.banned.Set(host, banUntilTime)
-	s.banChan <- p2p.BanEvent{
-		Action: "add",
-		IP:     host,
-	}
 
+	// banList.Add publishes the ban event; see handleBanPeerMsg.
 	err = s.banList.Add(sp.ctx, host, banUntilTime)
 	if err != nil {
 		s.logger.Errorf("Failed to add ban for peer %s: %v", host, err)
@@ -2084,7 +2270,7 @@ func (s *server) handleBanPeerForDurationMsg(state *peerState, sp *serverPeer, b
 func (s *server) handleUnbanPeerMsg(state *peerState, spAddr bannedPeerAddr) {
 	host, _, err := net.SplitHostPort(string(spAddr))
 	if err != nil {
-		s.logger.Errorf("can't split ban peer %s %v", spAddr, err)
+		s.logger.Errorf(cantSplitBanPeerMsg, spAddr, err)
 		return
 	}
 
@@ -2114,6 +2300,13 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 			return
 		}
 
+		// Peers that have not negotiated sendheaders still need the block
+		// announced via a plain inventory message.
+		if msg.invVect.Type == wire.InvTypeBlock {
+			s.handleRelayBlockInvMsg(sp, msg)
+			return
+		}
+
 		if msg.invVect.Type == wire.InvTypeTx {
 			// Don't relay the transaction to the peer when it has
 			// transaction relaying disabled.
@@ -2140,6 +2333,7 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 
 type serverPeerQueueInventory interface {
 	QueueInventory(*wire.InvVect)
+	RequeueInventory(*wire.InvVect)
 }
 
 func (s *server) handleRelayTxMsg(sp serverPeerQueueInventory, msg relayMsg, feeFilter int64) {
@@ -2174,6 +2368,13 @@ func (s *server) handleRelayTxMsg(sp serverPeerQueueInventory, msg relayMsg, fee
 		}
 	}
 
+	// A rebroadcast must reach peers that already saw the first announce
+	// and then rejected or dropped the tx.
+	if msg.requeue {
+		sp.RequeueInventory(msg.invVect)
+		return
+	}
+
 	// Queue the inventory to be relayed with the next batch.
 	// It will be ignored if the peer is already known to
 	// have the inventory.
@@ -2194,6 +2395,13 @@ func (s *server) handleRelayBlockMsg(sp *serverPeer, msg relayMsg) {
 	}
 
 	sp.QueueMessage(msgHeaders, nil)
+}
+
+// handleRelayBlockInvMsg queues a plain inventory vector for a block to a peer
+// that has not negotiated sendheaders. Peers that did negotiate sendheaders are
+// announced via a headers message instead, in handleRelayBlockMsg.
+func (s *server) handleRelayBlockInvMsg(sp serverPeerQueueInventory, msg relayMsg) {
+	sp.QueueInventory(msg.invVect)
 }
 
 // handleBroadcastMsg deals with broadcasting messages to peers.  It is invoked
@@ -2222,9 +2430,24 @@ type getPeersMsg struct {
 	reply chan []*serverPeer
 }
 
-type getOutboundGroup struct {
-	key   string
-	reply chan int
+type getOutboundGroups struct {
+	reply chan map[string]struct{}
+}
+
+// feelerSnapshot is everything the feeler probe needs to know about the current
+// peer set, read in one pass so that a whole selection is judged against a
+// single consistent view.
+type feelerSnapshot struct {
+	// outboundGroups are the netgroups held by automatic outbound peers. A
+	// probe must not claim one, so it must not pick an address in one.
+	outboundGroups map[string]struct{}
+
+	// hosts is the host of every peer in any tier.
+	hosts map[string]struct{}
+}
+
+type getFeelerSnapshotMsg struct {
+	reply chan feelerSnapshot
 }
 
 type getAddedNodesMsg struct {
@@ -2251,16 +2474,6 @@ type removeNodeMsg struct {
 // goroutines related to peer state.
 func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 	switch msg := querymsg.(type) {
-	case *isPeerBannedMsg:
-		// Check if the peer is banned
-		banEnd, ok := state.banned.Get(msg.addr)
-		if ok && time.Now().Before(banEnd) {
-			// Peer is banned
-			msg.reply <- true
-		} else {
-			// Peer is not banned
-			msg.reply <- false
-		}
 	case getConnCountMsg:
 		nconnected := int32(0)
 
@@ -2292,9 +2505,27 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		// })
 	case connectNodeMsg:
 		// TODO: duplicate oneshots?
-		// Limit max number of total peers.
-		if state.Count() >= cfg.MaxPeers {
-			msg.reply <- errors.NewProcessingError("max peers reached")
+		// Each tier is checked against its own budget, the same way the startup
+		// list and the peer-admission door are. Before this, the runtime path
+		// compared every peer against MaxPeers, which disagreed with both: a
+		// node holding its full automatic quota plus a few named peers could
+		// never gain another named peer however small MaxAddnodePeers was, and
+		// nothing enforced MaxAddnodePeers here at all, so the startup budget
+		// could be walked straight past at runtime.
+		//
+		// The ceiling here is MaxPeers less the feeler reservation, the same
+		// figure the door in handleAddPeerMsg applies. A one-shot addnode
+		// becomes an ordinary automatic peer, so if the two disagreed the node
+		// would admit a peer through one path that the other had just refused.
+		ceiling := peerAdmissionCeiling(cfg.MaxPeers, s.feelerSlots)
+		if !connectNodeAdmitted(msg.permanent, state.persistentPeers.Length(),
+			state.CountExcludingPermanent(), s.settings.Legacy.MaxAddnodePeers, ceiling) {
+			if msg.permanent {
+				msg.reply <- errors.NewProcessingError("max addnode peers reached [%d]", s.settings.Legacy.MaxAddnodePeers)
+			} else {
+				msg.reply <- errors.NewProcessingError("max peers reached [%d]", ceiling)
+			}
+
 			return
 		}
 
@@ -2326,24 +2557,21 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 
 		msg.reply <- nil
 	case removeNodeMsg:
-		found := disconnectPeer(state.persistentPeers, msg.cmp, func(sp *serverPeer) {
-			// Keep group counts ok since we remove from
-			// the list now.
-			count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-			state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
-		})
+		// No group release here: this removes a permanent peer, and permanent
+		// peers no longer claim a netgroup when they are added.
+		found := disconnectPeer(state.persistentPeers, msg.cmp, nil)
 
 		if found {
 			msg.reply <- nil
 		} else {
 			msg.reply <- errors.NewProcessingError("peer not found")
 		}
-	case getOutboundGroup:
-		count, ok := state.outboundGroups.Get(msg.key)
-		if ok {
-			msg.reply <- count
-		} else {
-			msg.reply <- 0
+	case getOutboundGroups:
+		msg.reply <- state.outboundGroups()
+	case getFeelerSnapshotMsg:
+		msg.reply <- feelerSnapshot{
+			outboundGroups: state.outboundGroups(),
+			hosts:          state.connectedHosts(),
 		}
 	// Request a list of the persistent (added) peers.
 	case getAddedNodesMsg:
@@ -2363,21 +2591,13 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		}
 
 		// Check outbound peers.
-		found = disconnectPeer(state.outboundPeers, msg.cmp, func(sp *serverPeer) {
-			// Keep group counts ok since we remove from
-			// the list now.
-			count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-			state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
-		})
+		found = disconnectPeer(state.outboundPeers, msg.cmp, nil)
 		if found {
 			// If there are multiple outbound connections to the same
 			// ip:port, continue disconnecting them all until no such
 			// peers are found.
 			for found {
-				found = disconnectPeer(state.outboundPeers, msg.cmp, func(sp *serverPeer) {
-					count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-					state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
-				})
+				found = disconnectPeer(state.outboundPeers, msg.cmp, nil)
 			}
 			msg.reply <- nil
 
@@ -2414,45 +2634,146 @@ func disconnectPeer(peerList *txmap.SyncedMap[int32, *serverPeer], compareFunc f
 	return false
 }
 
+// automaticOutboundTarget returns how many automatic outbound peers the
+// connection manager should aim for, given the configured target and the
+// overall peer cap.
+//
+// Permanent (addnode) peers are NOT deducted here. They are budgeted
+// separately by MaxAddnodePeers, the way svnode gives them their own semaphore
+// (semAddnode) rather than a share of maxconnections: asking for named peers
+// buys them in addition to the node's ordinary capacity, and never at the cost
+// of an automatic slot. MaxPeers therefore bounds the automatic and inbound
+// tiers, which is exactly what svnode's nMaxInbound arithmetic does.
+func automaticOutboundTarget(configured uint32, maxPeers int) uint32 {
+	if maxPeers < 0 {
+		return 0
+	}
+
+	if maxPeers < int(configured) {
+		return uint32(maxPeers)
+	}
+
+	return configured
+}
+
+// addnodePeers caps the configured named peers at their own budget, returning
+// the peers to dial and how many were dropped.
+//
+// svnode enforces this with a semaphore of MaxAddnodePeers permits, so a long
+// -addnode list simply waits rather than growing the node without limit. The
+// list here is fixed at startup, so the equivalent is to take the first
+// budget-many and say plainly what was left out.
+func addnodePeers(configured []string, budget int) (dial []string, dropped int) {
+	if budget < 0 {
+		budget = 0
+	}
+
+	if len(configured) <= budget {
+		return configured, 0
+	}
+
+	return configured[:budget], len(configured) - budget
+}
+
+// permanentPeerList resolves the named peers to dial at startup, and applies
+// the addnode budget to the addnode list only.
+//
+// The two lists are not the same kind of thing. connectPeers is connect-only
+// mode: it is the node's ENTIRE connectivity, there is no address source at
+// all, and MaxPeers is set to the length of that very list — so capping it
+// would strand whatever an operator listed past the budget with nothing to
+// fall back on, and the node would run permanently below the capacity it just
+// sized itself for. addPeers is additive to a node that is already dialling
+// the network for itself, so a cap there costs it nothing it cannot replace.
+//
+// svnode draws the line in the same place: semAddnode gates
+// ThreadOpenAddedConnections (net.cpp:2021), while the -connect loop in
+// ThreadOpenConnections (net.cpp:1772) dials every entry with no semaphore at
+// all.
+func permanentPeerList(connectPeers, addPeers []string, budget int) (dial []string, dropped int) {
+	if len(connectPeers) > 0 {
+		return connectPeers, 0
+	}
+
+	return addnodePeers(addPeers, budget)
+}
+
+// connectNodeAdmitted reports whether a runtime addnode request has room in the
+// tier it will join.
+//
+// A permanent request joins the named tier and is bounded by MaxAddnodePeers; a
+// one-shot becomes an ordinary automatic outbound peer and is bounded by
+// MaxPeers alongside the inbound peers. Checking each against its own budget is
+// what keeps this path agreeing with the startup list and with the admission
+// check in handleAddPeerMsg — the budgets are only additive if every path that
+// spends them says so.
+func connectNodeAdmitted(permanent bool, persistentCount, automaticCount, maxAddnode, maxPeers int) bool {
+	if permanent {
+		return persistentCount < maxAddnode
+	}
+
+	return automaticCount < maxPeers
+}
+
 // newPeerConfig returns the configuration for the given serverPeer.
 func newPeerConfig(sp *serverPeer) *peer.Config {
 	return &peer.Config{
 		// This is a complete list including ignored messages.
 		Listeners: peer.MessageListeners{
-			OnVersion:      sp.OnVersion,
-			OnProtoconf:    sp.OnProtoconf,
-			OnMemPool:      sp.OnMemPool,
-			OnTx:           sp.OnTx,
-			OnBlock:        sp.OnBlock,
-			OnInv:          sp.OnInv,
-			OnHeaders:      sp.OnHeaders,
-			OnGetData:      sp.OnGetData,
-			OnGetBlocks:    sp.OnGetBlocks,
-			OnGetHeaders:   sp.OnGetHeaders,
-			OnGetCFilters:  sp.OnGetCFilters,  // not implemented, just logs a warning
-			OnGetCFHeaders: sp.OnGetCFHeaders, // not implemented, just logs a warning
-			OnGetCFCheckpt: sp.OnGetCFCheckpt, // not implemented, just logs a warning
-			OnFeeFilter:    sp.OnFeeFilter,    // being set, but not being enforced, could cause peer to disconnect
-			OnFilterAdd:    sp.OnFilterAdd,    // not implemented, just logs a warning
-			OnFilterClear:  sp.OnFilterClear,  // not implemented, just logs a warning
-			OnFilterLoad:   sp.OnFilterLoad,   // not implemented, just logs a warning
-			OnGetAddr:      sp.OnGetAddr,
-			OnAddr:         sp.OnAddr,
-			OnRead:         sp.OnRead,
-			OnWrite:        sp.OnWrite,
-			OnReject:       sp.OnReject,
-			OnNotFound:     sp.OnNotFound,
-			OnCreateStream: sp.OnCreateStream,
-			OnStreamAck:    sp.OnStreamAck,
+			OnVersion:     sp.OnVersion,
+			OnProtoconf:   sp.OnProtoconf,
+			OnMemPool:     sp.OnMemPool,
+			OnTx:          sp.OnTx,
+			OnBlockOnDisk: sp.OnBlockOnDisk,
+			// Set on every serverPeer, the DATA1 stream peer included
+			// (newStreamServerPeer builds it through this same function), since
+			// under BlockPriority that is the peer whose read loop sees the body.
+			OnBlockBodyRejected: sp.OnBlockBodyRejected,
+			OnInv:               sp.OnInv,
+			OnHeaders:           sp.OnHeaders,
+			OnGetData:           sp.OnGetData,
+			OnGetBlocks:         sp.OnGetBlocks,
+			OnGetHeaders:        sp.OnGetHeaders,
+			OnGetCFilters:       sp.OnGetCFilters,  // not implemented, just logs a warning
+			OnGetCFHeaders:      sp.OnGetCFHeaders, // not implemented, just logs a warning
+			OnGetCFCheckpt:      sp.OnGetCFCheckpt, // not implemented, just logs a warning
+			OnFeeFilter:         sp.OnFeeFilter,    // being set, but not being enforced, could cause peer to disconnect
+			OnFilterAdd:         sp.OnFilterAdd,    // not implemented, just logs a warning
+			OnFilterClear:       sp.OnFilterClear,  // not implemented, just logs a warning
+			OnFilterLoad:        sp.OnFilterLoad,   // not implemented, just logs a warning
+			OnGetAddr:           sp.OnGetAddr,
+			OnAddr:              sp.OnAddr,
+			OnRead:              sp.OnRead,
+			OnWrite:             sp.OnWrite,
+			OnReject:            sp.OnReject,
+			OnNotFound:          sp.OnNotFound,
+			OnCreateStream:      sp.OnCreateStream,
+			OnStreamAck:         sp.OnStreamAck,
 		},
-		AddrMe:             addrMe,
-		NewestBlock:        sp.newestBlock,
-		HostToNetAddress:   sp.server.addrManager.HostToNetAddress,
-		Proxy:              cfg.Proxy,
-		UserAgentName:      userAgentName,
-		UserAgentVersion:   version.String(),
-		UserAgentComments:  cfg.UserAgentComments,
-		ChainParams:        sp.server.settings.ChainCfgParams,
+		AddrMe:            addrMe,
+		NewestBlock:       sp.newestBlock,
+		HostToNetAddress:  sp.server.addrManager.HostToNetAddress,
+		Proxy:             cfg.Proxy,
+		UserAgentName:     userAgentName,
+		UserAgentVersion:  version.String(),
+		UserAgentComments: cfg.UserAgentComments,
+		Whitelisted:       sp.isWhitelisted,
+		ChainParams:       sp.server.settings.ChainCfgParams,
+		CatchingUp: func() bool {
+			if sp.server == nil || sp.server.syncManager == nil {
+				return false
+			}
+			// The cached answer, never the live one: this runs on the peer's
+			// stall handler, which must not block on a blockchain round trip.
+			return !sp.server.syncManager.IsCurrentCached()
+		},
+		PeersWithBlockDownloads: func() int {
+			if sp.server == nil || sp.server.syncManager == nil {
+				return 0
+			}
+			return sp.server.syncManager.PeersWithBlockDownloads()
+		},
+
 		Services:           sp.server.services,
 		DisableRelayTx:     cfg.BlocksOnly,
 		ProtocolVersion:    peer.MaxProtocolVersion,
@@ -2500,29 +2821,47 @@ func (s *server) outboundPeerConnected(c *connmgr.ConnReq, conn net.Conn) {
 	addr := conn.RemoteAddr().String()
 	if s.banList.IsBanned(addr) {
 		s.logger.Infof("Rejecting banned outbound peer %s", addr)
-		conn.Close()
+
+		// Remove, not only close the socket: the connection manager recorded this
+		// request as established before calling here, and without it the request
+		// stays counted forever. Four banned addresses dialled after a restart on
+		// 2026-09-24 held four of mainnet's eight outbound slots all night, and the
+		// node synced on four peers. Remove rather than Disconnect, because
+		// Disconnect dials the same address again, which is banned. Remove closes
+		// the connection and wakes the manager to dial a different address.
+		s.connManager.Remove(c.ID())
 
 		return
 	}
 
-	p, err := peer.NewOutboundPeer(s.logger, s.settings, newPeerConfig(sp), c.GetAddr().String())
-	if err != nil {
-		sp.server.logger.Debugf("Cannot create outbound peer %s: %v", c.GetAddr(), err)
-		s.connManager.Disconnect(c.ID())
-	}
-
-	sp.Peer = p
-	sp.connReq = c
+	// Read before newPeerConfig, which copies it into the peer's config.
+	var err error
 
 	sp.isWhitelisted, err = isWhitelisted(conn.RemoteAddr())
 	if err != nil {
 		s.logger.Warnf("Cannot whitelist peer %v: %v", conn.RemoteAddr(), err)
 	}
 
+	p, err := peer.NewOutboundPeer(s.logger, s.settings, newPeerConfig(sp), c.GetAddr().String())
+	if err != nil {
+		sp.server.logger.Debugf("Cannot create outbound peer %s: %v", c.GetAddr(), err)
+		s.connManager.Disconnect(c.ID())
+
+		// Without this the nil peer was assigned to sp.Peer and then used:
+		// AssociateConnection is a method on the embedded *peer.Peer, so the
+		// very next steps dereferenced it and brought the node down. Disconnect
+		// closes the connection for us, since the connection manager recorded
+		// it before invoking this callback.
+		return
+	}
+
+	sp.Peer = p
+	sp.connReq = c
+
 	sp.AssociateConnection(conn)
 
 	go s.peerDoneHandler(sp)
-	s.addrManager.Attempt(sp.NA())
+	s.addrManager.Attempt(sp.NA(), s.countFailedDial())
 }
 
 // peerDoneHandler handles peer disconnects by notifiying the server that it's
@@ -2567,8 +2906,6 @@ func (s *server) peerHandler() {
 		outboundPeers:   txmap.NewSyncedMap[int32, *serverPeer](),
 		persistentPeers: txmap.NewSyncedMap[int32, *serverPeer](),
 		banned:          txmap.NewSyncedMap[string, time.Time](),
-		outboundGroups:  txmap.NewSyncedMap[string, int](),
-		connectionCount: txmap.NewSyncedMap[string, int](),
 	}
 
 	if !cfg.DisableDNSSeed {
@@ -2585,6 +2922,13 @@ func (s *server) peerHandler() {
 	}
 
 	go s.connManager.Start()
+
+	// Started here, alongside the connection manager, because the two are two
+	// halves of the same job: the connection manager spends the outbound
+	// budget, and the feeler keeps the pool of addresses worth spending it on
+	// healthy. It also has to be here rather than in newServer, because it
+	// depends on s.query being served, which is this loop.
+	s.startFeeler()
 
 out:
 	for {
@@ -2667,7 +3011,7 @@ func (s *server) BanPeer(sp *serverPeer) {
 
 // canRelayTx reports whether the legacy server may emit transaction inventory
 // to its peers. Transactions must only be relayed once the node is fully
-// synced (FSM RUNNING). While syncing (LEGACYSYNCING/CATCHINGBLOCKS) the local
+// synced (FSM RUNNING). While syncing (CATCHINGBLOCKS) the local
 // chain tip may sit below the Genesis activation height, in which case the
 // validator accepts pre-Genesis-only outputs such as P2SH. Re-broadcasting
 // those to post-Genesis peers earns an instant ban for `bad-txns-vout-p2sh`.
@@ -2692,6 +3036,64 @@ func (s *server) canRelayTx() bool {
 // Note: not gated by `listen_mode`. See AnnounceNewTransactions for the
 // rationale.
 func (s *server) RelayInventory(invVect *wire.InvVect, data interface{}) {
+	s.relayInventory(relayMsg{invVect: invVect, data: data})
+}
+
+// relayTxBatch hands a batch of tx invs to the peerHandler in order, so each
+// peer is offered them in batch order. Unlike RelayInventory, which starts a
+// goroutine per inv, one goroutine sends the whole batch, and it waits for the
+// previous batch to finish first, so batches never interleave. It never blocks
+// the caller. Like RelayInventory, it checks canRelayTx before each send and
+// stops once the node has left RUNNING; a send already blocked on relayInv is
+// only interrupted by quit.
+//
+// The ordering has a cost: announce and rebroadcast batches share this one
+// chain, so a batch stuck on relayInv holds up every later batch until it
+// drains or the server quits. peerHandler is the only reader of relayInv, so
+// if it stalls no inv gets through either way; the per-inv goroutines
+// RelayInventory used to start all waited on the same channel. What changes
+// is that later batches wait in order behind the stuck one, one goroutine per
+// batch rather than one per inv.
+func (s *server) relayTxBatch(batch []relayMsg) {
+	if len(batch) == 0 {
+		return
+	}
+
+	done := make(chan struct{})
+
+	s.relayTxBatchMu.Lock()
+	prev := s.relayTxBatchTail
+	s.relayTxBatchTail = done
+	s.relayTxBatchMu.Unlock()
+
+	go func() {
+		defer close(done)
+
+		if prev != nil {
+			select {
+			case <-prev:
+			case <-s.quit:
+				return
+			}
+		}
+
+		for _, msg := range batch {
+			if !s.canRelayTx() {
+				return
+			}
+
+			select {
+			case s.relayInv <- msg:
+			case <-s.quit:
+				return
+			}
+		}
+	}()
+}
+
+func (s *server) relayInventory(msg relayMsg) {
+	invVect := msg.invVect
+
 	// Suppress tx invs while the node is not in RUNNING state. Block invs
 	// are still relayed (block sync is gated separately in netsync.manager).
 	if invVect != nil && invVect.Type == wire.InvTypeTx && !s.canRelayTx() {
@@ -2699,9 +3101,9 @@ func (s *server) RelayInventory(invVect *wire.InvVect, data interface{}) {
 	}
 
 	// dont' block on inv relay, losing invs on restart is fine.
-	go func(invVect *wire.InvVect, data interface{}) {
-		s.relayInv <- relayMsg{invVect: invVect, data: data}
-	}(invVect, data)
+	go func(msg relayMsg) {
+		s.relayInv <- msg
+	}(msg)
 }
 
 // BroadcastMessage sends msg to all peers currently connected to the server
@@ -2725,13 +3127,69 @@ func (s *server) ConnectedCount() int32 {
 	return <-replyChan
 }
 
-// OutboundGroupCount returns the number of peers connected to the given
-// outbound group key.
-func (s *server) OutboundGroupCount(key string) int {
-	replyChan := make(chan int)
-	s.query <- getOutboundGroup{key: key, reply: replyChan}
+// OutboundGroups returns the set of netgroups currently occupied by automatic
+// outbound peers, read from the peer list at the moment of the call.
+//
+// Returned as a set rather than queried one key at a time so a caller sifting
+// candidate addresses reads a single consistent snapshot, instead of asking
+// once per candidate and seeing the peer set shift underneath it. svnode builds
+// the same set once per pass of ThreadOpenConnections for the same reason.
+// Both halves of the exchange give up on shutdown. This runs on a dial
+// goroutine, and the peer handler stops serving queries the moment s.quit
+// closes — it then drains s.query without answering, so an unguarded send
+// would be accepted and the reply would never come, parking the dial goroutine
+// for the life of the process. An empty set is the safe answer at that point:
+// the connection manager is being stopped in the very next statement of the
+// peer handler, so at worst the caller picks one more address that is never
+// dialled.
+func (s *server) OutboundGroups() map[string]struct{} {
+	// Buffered so that abandoning the reply cannot wedge the peer handler:
+	// handleQuery sends the answer unguarded, and on an unbuffered channel a
+	// caller that had already given up would block it there for good.
+	replyChan := make(chan map[string]struct{}, 1)
 
-	return <-replyChan
+	select {
+	case s.query <- getOutboundGroups{reply: replyChan}:
+	case <-s.quit:
+		return nil
+	}
+
+	select {
+	case groups := <-replyChan:
+		return groups
+	case <-s.quit:
+		return nil
+	}
+}
+
+// feelerPeerSnapshot reads the peer set the feeler probe sifts candidates
+// against, in a single query.
+//
+// One query per selection pass, not one per candidate. The peer handler is a
+// single goroutine serving every peer-state question in the service, so a
+// hundred round trips to sift a hundred addresses would put the probe in its
+// way for no benefit, and would let the peer set shift under the sift.
+//
+// Both halves of the exchange give up on shutdown, for the reason spelled out
+// on OutboundGroups: the peer handler drains s.query without answering once
+// s.quit closes, so an unguarded send would be accepted and never replied to.
+// An empty snapshot is the safe answer, because the probe that reads it is
+// about to check s.quit itself.
+func (s *server) feelerPeerSnapshot() feelerSnapshot {
+	replyChan := make(chan feelerSnapshot, 1)
+
+	select {
+	case s.query <- getFeelerSnapshotMsg{reply: replyChan}:
+	case <-s.quit:
+		return feelerSnapshot{}
+	}
+
+	select {
+	case snap := <-replyChan:
+		return snap
+	case <-s.quit:
+		return feelerSnapshot{}
+	}
 }
 
 // AddBytesSent adds the passed number of bytes to the total bytes sent counter
@@ -2757,130 +3215,26 @@ func (s *server) NetTotals() (uint64, uint64) {
 // the latest connected main chain block, or a recognized orphan. These height
 // updates allow us to dynamically refresh peer heights, ensuring sync peer
 // selection has access to the latest block heights for each peer.
+//
+// It never blocks the caller. The Kafka blocks-final consumer calls it for every finalised
+// block, and peerHeightsUpdate is unbuffered and read only by peerHandler, so a plain send
+// would hold block processing behind whatever peerHandler is doing, and would block forever
+// once peerHandler has drained its channels and returned on s.quit. The send runs on its own
+// goroutine, as relayInventory's does, and gives up when the server quits. Order does not
+// matter: handleUpdatePeerHeights matches each peer's last announced block by hash.
 func (s *server) UpdatePeerHeights(latestBlkHash *chainhash.Hash, latestHeight int32, updateSource *peer.Peer) {
-	s.peerHeightsUpdate <- updatePeerHeightsMsg{
+	msg := updatePeerHeightsMsg{
 		newHash:    latestBlkHash,
 		newHeight:  latestHeight,
 		originPeer: updateSource,
 	}
-}
 
-// rebroadcastEntry is a pending rebroadcast inv: the original `data`
-// payload handed to RelayInventory, plus the number of retry ticks the
-// entry has survived. Once attempts reaches maxRebroadcastAttempts the
-// entry ages out — see processRebroadcastTick.
-type rebroadcastEntry struct {
-	data     interface{}
-	attempts int
-}
-
-// tryAddRebroadcast inserts iv→data into pending. If iv is already
-// present, its data payload is refreshed but the attempts counter is
-// preserved — without this, a duplicate Add (e.g. a Kafka replay) would
-// reset the retry budget of a tx that should have aged out.
-//
-// Returns false (and does not mutate pending) when iv is new and
-// pending is at capacity. The caller is responsible for any cap-hit
-// telemetry.
-func tryAddRebroadcast(pending map[wire.InvVect]*rebroadcastEntry, capacity int, iv wire.InvVect, data interface{}) bool {
-	if existing, ok := pending[iv]; ok {
-		existing.data = data
-		return true
-	}
-	if len(pending) >= capacity {
-		return false
-	}
-	pending[iv] = &rebroadcastEntry{data: data}
-	return true
-}
-
-// processRebroadcastTick re-emits every pending entry via the relay
-// callback, increments its attempt counter, and aging-deletes entries
-// that have reached maxAttempts. Returns the relay count for the tick
-// purely as a test affordance.
-func processRebroadcastTick(pending map[wire.InvVect]*rebroadcastEntry, maxAttempts int, relay func(*wire.InvVect, interface{})) int {
-	relayed := 0
-	for iv, entry := range pending {
-		ivCopy := iv
-		relay(&ivCopy, entry.data)
-		entry.attempts++
-		relayed++
-		if entry.attempts >= maxAttempts {
-			delete(pending, iv)
-		}
-	}
-	return relayed
-}
-
-// RebroadcastDropCounts returns the cumulative non-blocking-send drop and
-// map-cap-hit counters for the rebroadcast queue. Read by operator metrics
-// surfaces; never reset.
-func (s *server) RebroadcastDropCounts() (adds, capHits uint64) {
-	return s.droppedRebroadcastAdds.Load(), s.droppedRebroadcastCapHits.Load()
-}
-
-// rebroadcastHandler keeps track of inventories announced via
-// AnnounceNewTransactions that have not yet made it into a block. It
-// periodically re-emits them so a tx that hit a transient miss on first
-// announce (peer not yet handshaken, brief disconnect) still reaches the
-// network.
-//
-// Bounded because no TransactionConfirmed hook calls RemoveRebroadcastInventory
-// in this codebase — entries are aged out by attempt count, and new adds are
-// dropped once the map is full. This trades some retry coverage for hard
-// memory bounds, which is the right trade for an indefinite-lifetime queue
-// in a high-tx-rate node.
-func (s *server) rebroadcastHandler() {
-	// Wait 5 min before first tx rebroadcast.
-	timer := time.NewTimer(5 * time.Minute)
-
-	pendingInvs := make(map[wire.InvVect]*rebroadcastEntry)
-
-out:
-	for {
+	go func() {
 		select {
-		case riv := <-s.modifyRebroadcastInv:
-			switch msg := riv.(type) {
-			// Incoming InvVects are added to our retry map. Re-adds
-			// of existing entries refresh the data payload but keep
-			// the attempt counter — see tryAddRebroadcast.
-			case broadcastInventoryAdd:
-				if !tryAddRebroadcast(pendingInvs, maxRebroadcastInventory, *msg.invVect, msg.data) {
-					s.droppedRebroadcastCapHits.Add(1)
-				}
-
-			// When an InvVect has been added to a block, we can
-			// now remove it, if it was present.
-			case broadcastInventoryDel:
-				delete(pendingInvs, *msg)
-			}
-
-		case <-timer.C:
-			processRebroadcastTick(pendingInvs, maxRebroadcastAttempts, s.RelayInventory)
-
-			// Process at a random time up to 30mins (in seconds)
-			// in the future.
-			timer.Reset(time.Second *
-				time.Duration(randomUint16Number(1800)))
-
+		case s.peerHeightsUpdate <- msg:
 		case <-s.quit:
-			break out
 		}
-	}
-
-	timer.Stop()
-
-	// Drain channels before exiting so nothing is left waiting around
-	// to send.
-cleanup:
-	for {
-		select {
-		case <-s.modifyRebroadcastInv:
-		default:
-			break cleanup
-		}
-	}
-	s.wg.Done()
+	}()
 }
 
 // Start begins accepting connections from peers.
@@ -2893,16 +3247,27 @@ func (s *server) Start() {
 	s.wg.Add(1)
 	go s.rebroadcastHandler()
 
-	s.wg.Add(1)
-	s.peerHandler()
+	// Everything that must run alongside the peer loop is started before it,
+	// because the peer loop runs in the foreground here and only returns at
+	// shutdown. Started after it, the ban listener never ran while the server
+	// was up: nothing drained the ban list's subscription, so once its buffer
+	// filled every later ban left a goroutine blocked on the send for good, and
+	// a peer banned elsewhere was never disconnected. The listener's requests
+	// wait on s.query until the peer loop is serving it.
+	go s.listenForBanEvents(s.ctx)
 
 	if s.nat != nil {
 		s.wg.Add(1)
 		go s.upnpUpdateThread()
 	}
 
-	// Start listening for ban events
-	go s.listenForBanEvents(s.ctx)
+	s.wg.Add(1)
+
+	if s.runPeerLoop != nil {
+		s.runPeerLoop()
+	} else {
+		s.peerHandler()
+	}
 
 	s.WaitForShutdown()
 }
@@ -3037,9 +3402,13 @@ func (s *server) getPeers() []*serverPeer {
 	}
 }
 
+// upnpRenewInterval is how often upnpUpdateThread renews the port mapping,
+// well inside the 20-minute lease it asks for. A variable so tests can shorten it.
+var upnpRenewInterval = 15 * time.Minute
+
 func (s *server) upnpUpdateThread() {
 	// Go off immediately to prevent code duplication, thereafter we renew
-	// lease every 15 minutes.
+	// lease every upnpRenewInterval.
 	timer := time.NewTimer(0 * time.Second)
 	lport, _ := strconv.ParseInt(activeNetParams.DefaultPort, 10, 16)
 	first := true
@@ -3062,6 +3431,10 @@ out:
 				externalip, err := s.nat.GetExternalAddress()
 				if err != nil {
 					s.logger.Warnf("UPnP can't get external address: %v", err)
+					// The timer has fired; without a reset nothing renews the
+					// lease again. first stays true, so the next pass retries.
+					timer.Reset(upnpRenewInterval)
+
 					continue out
 				}
 				na := wire.NewNetAddressIPPort(externalip, uint16(listenPort),
@@ -3073,7 +3446,7 @@ out:
 				s.logger.Warnf("Successfully bound via UPnP to %s", addrmgr.NetAddressKey(na))
 				first = false
 			}
-			timer.Reset(time.Minute * 15)
+			timer.Reset(upnpRenewInterval)
 		case <-s.quit:
 			break out
 		}
@@ -3099,12 +3472,10 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	blockAssembly *blockassembly.Client,
 	listenAddrs []string, assetHTTPAddress string) (*server, error) {
 	// init config
-	c, _, err := loadConfig(logger)
+	c, _, err := loadConfig(logger, tSettings.Policy.ExcessiveBlockSize)
 	if err != nil {
 		return nil, err
 	}
-	// c.Upnp = true // TODO set from settings
-
 	cfg = c
 
 	// This is normally only done from file in bsvd, but we need to do it here, also happens inside loadConfig
@@ -3118,7 +3489,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	}
 
 	// overwrite any config options from settings, if applicable
-	setConfigValuesFromSettings(logger, config.GetAll(), cfg)
+	setConfigValuesFromSettings(logger, config, cfg)
 
 	// If Port was set via settings, update activeNetParams
 	if cfg.Port != "" {
@@ -3144,6 +3515,251 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	// /TERANODE CONFIG
 
+	services := advertisedServices(ctx, logger, tSettings, blockchainClient)
+
+	peersDir := cfg.DataDir
+	if !tSettings.Legacy.SavePeers {
+		peersDir = ""
+	}
+
+	amgr := addrmgr.New(logger, peersDir, bsvdLookup)
+
+	var listeners []net.Listener
+
+	var nat NAT
+
+	if !cfg.DisableListen {
+		var err error
+
+		listeners, nat, err = initListeners(logger, amgr, listenAddrs, services)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(listeners) == 0 {
+			return nil, errors.NewProcessingError("no valid listen address")
+		}
+	}
+
+	banList, banChan, err := p2p.GetBanList(ctx, logger, tSettings)
+	if err != nil {
+		return nil, errors.NewProcessingError("can't get banList")
+	}
+
+	s := server{
+		ctx:                  ctx,
+		settings:             tSettings,
+		startupTime:          time.Now().Unix(),
+		addrManager:          amgr,
+		newPeers:             make(chan *serverPeer, cfg.MaxPeers),
+		donePeers:            make(chan *serverPeer, cfg.MaxPeers),
+		banPeers:             make(chan *serverPeer, cfg.MaxPeers),
+		banPeerForDuration:   make(chan *banPeerForDurationMsg, cfg.MaxPeers),
+		unbanPeer:            make(chan unbanPeerReq, cfg.MaxPeers),
+		query:                make(chan interface{}),
+		relayInv:             make(chan relayMsg, cfg.MaxPeers),
+		broadcast:            make(chan broadcastMsg, cfg.MaxPeers),
+		quit:                 make(chan struct{}),
+		modifyRebroadcastInv: make(chan interface{}, modifyRebroadcastInvBuffer),
+		rebroadcastTip:       make(chan struct{}, 1),
+		rebroadcastTipDelay:  rebroadcastTipDelay,
+		peerHeightsUpdate:    make(chan updatePeerHeightsMsg),
+		nat:                  nat,
+		timeSource:           blockchain2.NewMedianTime(),
+		services:             services,
+		sigCache:             txscript.NewSigCache(cfg.SigCacheMaxSize),
+		hashCache:            txscript.NewHashCache(cfg.SigCacheMaxSize),
+		cfCheckptCaches:      make(map[wire.FilterType][]cfHeaderKV),
+		logger:               logger,
+		blockchainClient:     blockchainClient,
+		utxoStore:            utxoStore,
+		subtreeStore:         subtreeStore,
+		tempStore:            tempStore,
+		subtreeValidation:    subtreeValidation,
+		blockValidation:      blockValidation,
+		blockAssembly:        blockAssembly,
+		assetHTTPAddress:     assetHTTPAddress,
+		banList:              banList,
+		banChan:              banChan,
+		associationMgr:       peer.NewAssociationManager(),
+	}
+
+	s.syncManager, err = netsync.New(
+		ctx,
+		logger,
+		tSettings,
+		blockchainClient,
+		validationClient,
+		utxoStore,
+		subtreeStore,
+		tempStore,
+		subtreeValidation,
+		blockValidation,
+		blockAssembly,
+		&netsync.Config{
+			PeerNotifier:            &s,
+			ChainParams:             s.settings.ChainCfgParams,
+			DisableCheckpoints:      cfg.DisableCheckpoints,
+			MaxPeers:                cfg.MaxPeers,
+			MinSyncPeerNetworkSpeed: cfg.MinSyncPeerNetworkSpeed,
+			DataDir:                 cfg.DataDir,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add the peers that are defined in teranode settings...
+	// also retrieved in services/legacy/Server.go:118
+	addresses := s.settings.Legacy.ConnectPeers
+	if len(addresses) > 0 {
+		c.ConnectPeers = append(c.ConnectPeers, addresses...)
+		// set max peers to the number of connect peers
+		// this forces the server to only connect to the peers defined in the settings
+		c.MaxPeers = len(c.ConnectPeers)
+	}
+
+	// Only set up a function to return new addresses to connect to when
+	// not running in connect-only mode.  The simulation network is always
+	// in connect-only mode since it is only intended to connect to
+	// specified peers and actively avoid advertising and connecting to
+	// discovered peers in order to prevent it from becoming a public test
+	// network.
+	var newAddressFunc func() (net.Addr, error)
+	if len(cfg.ConnectPeers) == 0 {
+		newAddressFunc = s.nextConnectAddress
+	}
+
+	// Create a connection manager.
+	//
+	// permanentPeers is resolved before the target is computed because the two
+	// are related: the replenishment pass counts only the automatic tier, so
+	// the node's outbound total is the target PLUS its addnode peers. MaxPeers
+	// has to bound that total rather than the automatic half alone.
+	permanentPeers, droppedPeers := permanentPeerList(cfg.ConnectPeers, cfg.AddPeers, tSettings.Legacy.MaxAddnodePeers)
+	if droppedPeers > 0 {
+		logger.Warnf("More addnode peers configured than legacy_maxAddnodePeers allows [%d]: dialing the first %d, ignoring %d", tSettings.Legacy.MaxAddnodePeers, len(permanentPeers), droppedPeers)
+	}
+
+	targetOutbound := automaticOutboundTarget(cfg.TargetOutboundPeers, cfg.MaxPeers)
+
+	cmgr, err := connmgr.New(logger, &connmgr.Config{
+		Listeners:      listeners,
+		OnAccept:       s.inboundPeerConnected,
+		RetryDuration:  connectionRetryInterval,
+		TargetOutbound: targetOutbound,
+		Dial: func(addr net.Addr) (net.Conn, error) {
+			conn, err := bsvdDial(addr)
+			if err != nil {
+				// A dial that never produced a connection is the only evidence
+				// the address book ever gets that an address is dead. Without
+				// this it only ever learns that addresses are good, so an
+				// address that stopped answering keeps full selection weight
+				// for ever and the node spends dials on it indefinitely.
+				// svnode records the same thing in the failure arm of
+				// ConnectNode (net.cpp:425).
+				s.recordFailedDial(addr)
+			}
+
+			return conn, err
+		},
+		OnConnection:  s.outboundPeerConnected,
+		GetNewAddress: newAddressFunc,
+		// A minute between replenishment passes meant a peer lost early in an
+		// interval left the node running below target for the rest of it — during
+		// IBD that is a minute of lost download bandwidth per disconnect. Zero
+		// restores the historical one-minute cadence.
+		ReplenishInterval: tSettings.Legacy.ReplenishInterval,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	s.connManager = cmgr
+
+	// Set after the manager exists, because the reservation has to be judged
+	// against the target the manager will really chase rather than the one
+	// computed above — connmgr.New substitutes its own default for a configured
+	// zero. Note that the target itself is NOT reduced: the reservation comes
+	// out of the joint inbound/automatic ceiling, exactly as svnode takes its
+	// feeler budget out of nMaxInbound.
+	s.setFeelerBudget(logger, tSettings.Legacy.MaxFeelerPeers, len(cfg.ConnectPeers) > 0, cfg.MaxPeers)
+
+	// Start up persistent peers.
+	for _, addr := range permanentPeers {
+		netAddr, err := addrStringToNetAddr(addr)
+		if err != nil {
+			return nil, err
+		}
+
+		connReq := &connmgr.ConnReq{
+			Permanent: true,
+		}
+		connReq.SetAddr(netAddr)
+
+		go s.connManager.Connect(connReq)
+	}
+
+	go func() {
+		// wait for the ctx to be done
+		<-ctx.Done()
+		// stop the servers
+		_ = s.Stop()
+		_ = s.syncManager.Stop()
+	}()
+
+	return &s, nil
+}
+
+// nextConnectAddress picks the next address the connection manager should dial
+// from the address book, or an error when no candidate passes the filters.
+func (s *server) nextConnectAddress() (net.Addr, error) {
+	// One snapshot for the whole selection, so every candidate is
+	// judged against the same peer set. Asking per candidate would let
+	// the set shift mid-sift, and would pay for a peer walk on each of
+	// the hundred tries below rather than once.
+	occupiedGroups := s.OutboundGroups()
+
+	for tries := 0; tries < 100; tries++ {
+		addr := s.addrManager.GetAddress()
+		if addr == nil {
+			break
+		}
+
+		// Address will not be invalid, local or unroutable
+		// because addrmanager rejects those on addition.
+		// Just check that we don't already have an address
+		// in the same group so that we are not connecting
+		// to the same network segment at the expense of
+		// others.
+		if _, occupied := occupiedGroups[addrmgr.GroupKey(addr.NetAddress())]; occupied {
+			continue
+		}
+
+		// only allow recent nodes (10mins) after we failed 30
+		// times
+		if tries < 30 && time.Since(addr.LastAttempt()) < 10*time.Minute {
+			continue
+		}
+
+		// allow nondefault ports after 50 failed tries.
+		if tries < 50 && fmt.Sprintf("%d", addr.NetAddress().Port) !=
+			activeNetParams.DefaultPort {
+			continue
+		}
+
+		addrString := addrmgr.NetAddressKey(addr.NetAddress())
+
+		return addrStringToNetAddr(addrString)
+	}
+
+	return nil, errors.NewProcessingError("no valid connect address")
+}
+
+// advertisedServices returns the service flags this node advertises. It starts
+// from the defaults without bloom filters or compact filters, then advertises
+// full or pruned node type from the block persister status.
+func advertisedServices(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI) wire.ServiceFlag {
 	services := defaultServices
 	// cfg.NoPeerBloomFilters
 	services &^= wire.SFNodeBloom
@@ -3191,208 +3807,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		services |= wire.SFNodeNetworkLimited
 	}
 
-	peersDir := cfg.DataDir
-	if !tSettings.Legacy.SavePeers {
-		peersDir = ""
-	}
-
-	amgr := addrmgr.New(logger, peersDir, bsvdLookup)
-
-	var listeners []net.Listener
-
-	var nat NAT
-
-	if !cfg.DisableListen {
-		var err error
-
-		listeners, nat, err = initListeners(logger, amgr, listenAddrs, services)
-		if err != nil {
-			return nil, err
-		}
-
-		if len(listeners) == 0 {
-			return nil, errors.NewProcessingError("no valid listen address")
-		}
-	}
-
-	banList, banChan, err := p2p.GetBanList(ctx, logger, tSettings)
-	if err != nil {
-		return nil, errors.NewProcessingError("can't get banList")
-	}
-
-	s := server{
-		ctx:                  ctx,
-		settings:             tSettings,
-		startupTime:          time.Now().Unix(),
-		addrManager:          amgr,
-		newPeers:             make(chan *serverPeer, cfg.MaxPeers),
-		donePeers:            make(chan *serverPeer, cfg.MaxPeers),
-		banPeers:             make(chan *serverPeer, cfg.MaxPeers),
-		banPeerForDuration:   make(chan *banPeerForDurationMsg, cfg.MaxPeers),
-		unbanPeer:            make(chan unbanPeerReq, cfg.MaxPeers),
-		query:                make(chan interface{}),
-		relayInv:             make(chan relayMsg, cfg.MaxPeers),
-		broadcast:            make(chan broadcastMsg, cfg.MaxPeers),
-		quit:                 make(chan struct{}),
-		modifyRebroadcastInv: make(chan interface{}, modifyRebroadcastInvBuffer),
-		peerHeightsUpdate:    make(chan updatePeerHeightsMsg),
-		nat:                  nat,
-		timeSource:           blockchain2.NewMedianTime(),
-		services:             services,
-		sigCache:             txscript.NewSigCache(cfg.SigCacheMaxSize),
-		hashCache:            txscript.NewHashCache(cfg.SigCacheMaxSize),
-		cfCheckptCaches:      make(map[wire.FilterType][]cfHeaderKV),
-		logger:               logger,
-		blockchainClient:     blockchainClient,
-		utxoStore:            utxoStore,
-		subtreeStore:         subtreeStore,
-		tempStore:            tempStore,
-		concurrentStore: blob.NewConcurrentBlob[chainhash.Hash](
-			tempStore,
-			blob_options.WithDeleteAt(10),
-			blob_options.WithSubDirectory("blocks"),
-			blob_options.WithAllowOverwrite(true),
-		),
-		subtreeValidation: subtreeValidation,
-		blockValidation:   blockValidation,
-		blockAssembly:     blockAssembly,
-		assetHTTPAddress:  assetHTTPAddress,
-		banList:           banList,
-		banChan:           banChan,
-		associationMgr:    peer.NewAssociationManager(),
-	}
-
-	s.syncManager, err = netsync.New(
-		ctx,
-		logger,
-		tSettings,
-		blockchainClient,
-		validationClient,
-		utxoStore,
-		subtreeStore,
-		subtreeValidation,
-		blockValidation,
-		blockAssembly,
-		&netsync.Config{
-			PeerNotifier:            &s,
-			ChainParams:             s.settings.ChainCfgParams,
-			DisableCheckpoints:      cfg.DisableCheckpoints,
-			MaxPeers:                cfg.MaxPeers,
-			MinSyncPeerNetworkSpeed: cfg.MinSyncPeerNetworkSpeed,
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Add the peers that are defined in teranode settings...
-	// also retrieved in services/legacy/Server.go:118
-	addresses := s.settings.Legacy.ConnectPeers
-	if len(addresses) > 0 {
-		c.ConnectPeers = append(c.ConnectPeers, addresses...)
-		// set max peers to the number of connect peers
-		// this forces the server to only connect to the peers defined in the settings
-		c.MaxPeers = len(c.ConnectPeers)
-	}
-
-	// Only set up a function to return new addresses to connect to when
-	// not running in connect-only mode.  The simulation network is always
-	// in connect-only mode since it is only intended to connect to
-	// specified peers and actively avoid advertising and connecting to
-	// discovered peers in order to prevent it from becoming a public test
-	// network.
-	var newAddressFunc func() (net.Addr, error)
-	if len(cfg.ConnectPeers) == 0 {
-		newAddressFunc = func() (net.Addr, error) {
-			for tries := 0; tries < 100; tries++ {
-				addr := s.addrManager.GetAddress()
-				if addr == nil {
-					break
-				}
-
-				// Address will not be invalid, local or unroutable
-				// because addrmanager rejects those on addition.
-				// Just check that we don't already have an address
-				// in the same group so that we are not connecting
-				// to the same network segment at the expense of
-				// others.
-				key := addrmgr.GroupKey(addr.NetAddress())
-				if s.OutboundGroupCount(key) != 0 {
-					continue
-				}
-
-				// only allow recent nodes (10mins) after we failed 30
-				// times
-				if tries < 30 && time.Since(addr.LastAttempt()) < 10*time.Minute {
-					continue
-				}
-
-				// allow nondefault ports after 50 failed tries.
-				if tries < 50 && fmt.Sprintf("%d", addr.NetAddress().Port) !=
-					activeNetParams.DefaultPort {
-					continue
-				}
-
-				addrString := addrmgr.NetAddressKey(addr.NetAddress())
-
-				return addrStringToNetAddr(addrString)
-			}
-
-			return nil, errors.NewProcessingError("no valid connect address")
-		}
-	}
-
-	// Create a connection manager.
-	targetOutbound := cfg.TargetOutboundPeers
-	if cfg.MaxPeers < int(targetOutbound) {
-		targetOutbound = uint32(cfg.MaxPeers)
-	}
-
-	cmgr, err := connmgr.New(logger, &connmgr.Config{
-		Listeners:      listeners,
-		OnAccept:       s.inboundPeerConnected,
-		RetryDuration:  connectionRetryInterval,
-		TargetOutbound: targetOutbound,
-		Dial:           bsvdDial,
-		OnConnection:   s.outboundPeerConnected,
-		GetNewAddress:  newAddressFunc,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	s.connManager = cmgr
-
-	// Start up persistent peers.
-	permanentPeers := cfg.ConnectPeers
-
-	if len(permanentPeers) == 0 {
-		permanentPeers = cfg.AddPeers
-	}
-
-	for _, addr := range permanentPeers {
-		netAddr, err := addrStringToNetAddr(addr)
-		if err != nil {
-			return nil, err
-		}
-
-		connReq := &connmgr.ConnReq{
-			Permanent: true,
-		}
-		connReq.SetAddr(netAddr)
-
-		go s.connManager.Connect(connReq)
-	}
-
-	go func() {
-		// wait for the ctx to be done
-		<-ctx.Done()
-		// stop the servers
-		_ = s.Stop()
-		_ = s.syncManager.Stop()
-	}()
-
-	return &s, nil
+	return services
 }
 
 // initListeners initializes the configured net listeners and adds any bound
@@ -3731,28 +4146,190 @@ func (s *server) listenForBanEvents(ctx context.Context) {
 // handleBanEvent processes a ban event from the P2P service by disconnecting
 // peers that match the banned IP address or subnet. Only "add" ban actions
 // are processed; other actions are ignored.
-func (s *server) handleBanEvent(_ context.Context, event p2p.BanEvent) {
+func (s *server) handleBanEvent(ctx context.Context, event p2p.BanEvent) {
 	if event.Action != "add" {
 		return // We only care about new bans
 	}
 
 	s.logger.Infof("Received ban event for %s", event.IP)
 
-	// Create a message to send to the peer handler
-	disconnectMsg := disconnectNodeMsg{
-		cmp: func(sp *serverPeer) bool {
-			peerIP := net.ParseIP(sp.Addr())
-			return sp.Addr() == event.IP || (event.Subnet != nil && event.Subnet.Contains(peerIP))
-		},
-		reply: make(chan error),
+	// Ask the ban list, not the event. Add and Remove publish from separate
+	// goroutines, and Add accepts an expiry already in the past, so an "add"
+	// event can arrive for a ban that no longer holds. IsBanned also strips the
+	// peer's port and checks every active subnet.
+	covered := func(sp *serverPeer) bool {
+		return s.banList.IsBanned(sp.Addr())
 	}
 
-	// Send the message to the peer handler
-	s.query <- disconnectMsg
+	// One request disconnects one inbound peer, or every matching outbound
+	// peer, and answers "peer not found" once nothing matches. A subnet ban can
+	// cover several peers, so ask until nothing is left. Most bans cover no
+	// connected peer at all (the feeler bans hosts it only probed), so running
+	// out of matches is the normal outcome, not an error. Each round that
+	// matches removes its peers from the lists, so the loop ends.
+	for {
+		// Buffered so the peer loop never blocks replying to a listener that
+		// has already given up at shutdown.
+		msg := disconnectNodeMsg{cmp: covered, reply: make(chan error, 1)}
 
-	// Wait for the reply
-	err := <-disconnectMsg.reply
+		select {
+		case s.query <- msg:
+		case <-s.quit:
+			return
+		case <-ctx.Done():
+			return
+		}
+
+		select {
+		case err := <-msg.reply:
+			if err != nil {
+				return
+			}
+		case <-s.quit:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// OnBlockOnDisk handles a block whose body the wire layer streamed straight to
+// the park's store instead of decoding it.
+//
+// It is the counterpart of OnBlock and is deliberately much smaller. There is no
+// prefetch budget to reserve, because nothing about this block is in memory; no
+// reply channel, because there is no processing to wait on here; and no
+// hand-off, because the read loop is already free. All that is left is telling
+// the sync manager the bytes exist, which its consumer goroutine turns into a
+// park entry and a drain request.
+func (sp *serverPeer) OnBlockOnDisk(_ *peer.Peer, msg *peer.MsgBlockOnDisk) {
+	if msg == nil || sp.server == nil || sp.server.syncManager == nil {
+		return
+	}
+
+	// The histogram times the hand-off alone: QueueBlockOnDisk is a send on the sync
+	// manager's message channel, so a long tail here is that consumer falling behind,
+	// with the peer's read loop waiting on it.
+	_, _, deferFn := tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnBlockOnDisk",
+		tracing.WithHistogram(peerServerMetrics["OnBlockOnDisk"]),
+	)
+	defer deferFn()
+
+	sp.server.syncManager.QueueBlockOnDisk(msg.BlockBody, sp.Peer)
+}
+
+// OnBlockBodyRejected is invoked when the body this peer streamed for a block
+// was refused by the sink as the peer's fault. The peer package has already
+// decided the connection's fate (a reject naming the block, the association
+// dropped through its primary); this decides the ban, and only this.
+//
+// The ban rests on rejected.ProvenBad() and nothing else: the body arrived in
+// full, the sink raised ERR_BLOCK_BODY_MISMATCH, which only its three sites do
+// (a merkle root the header does not carry, a duplicate transaction, no
+// coinbase; services/legacy/netsync pipeline_sink.go, block_stream_builder.go,
+// block_tx_stream.go), and the wire checksum was verified. SV Node scores each
+// of those three 100 points, the first two as CorruptionOrDoS and
+// bad-cb-missing as a plain DoS(100) (validation.cpp CheckBlock), at a
+// threshold of 100, a 24 h ban (consensus/validation.h,
+// net/block_download_tracker.cpp BlockChecked, net_processing.cpp
+// SendRejectsAndCheckIfBanned). It scores them only after the message checksum
+// has passed and the whole message is deserialised; a message that fails the
+// checksum is dropped (one point only for a burst of more than 100 within
+// 500 ms) and one that ends early is a log-only deserialisation failure there.
+//
+// The streaming path cannot verify the checksum yet (peer.streamingBlockHandler
+// says why), so ProvenBad is never true today and this bans nobody: a
+// mismatched body costs the peer its connection and no more, which is the merge
+// base's behaviour. The ban comes back when go-wire passes the checksum to the
+// handler. Every other refusal (a corrupt delivery whose length and
+// transactions disagree, an invalid verdict without the marker, a body that was
+// cut short) costs the connection and nothing more either way, because a code
+// alone is not proof of conduct.
+//
+// An outright ban rather than a score: addBanScore bans only once the score
+// passes cfg.BanThreshold, and the score lives on this serverPeer, which dies
+// with the connection the peer package is about to drop, so a strike followed by
+// a disconnect never banned and a reconnecting peer started at zero. The ban is
+// what bounds the amplification: one wasted body per host per cfg.BanDuration
+// instead of one per download.
+func (sp *serverPeer) OnBlockBodyRejected(_ *peer.Peer, rejected *peer.BlockBodyRejectedError) {
+	if rejected == nil || sp.server == nil {
+		return
+	}
+
+	if !rejected.ProvenBad() {
+		sp.server.logger.Warnf("Peer %s delivered a body for block %s that was rejected (truncated=%t, checksumVerified=%t); dropping it without a ban: %v", sp, rejected.Hash, rejected.Truncated, rejected.ChecksumVerified, rejected.Err)
+
+		return
+	}
+
+	sp.banMisbehaving(fmt.Sprintf("block %s body is not the block its header names: %v", rejected.Hash, rejected.Err))
+}
+
+// banMisbehaving bans this peer's host for cfg.BanDuration, unless one of the
+// exemptions below applies. It does not disconnect; the caller has already
+// arranged that. BanPeer queues to the peerHandler, whose handleBanPeerMsg bans
+// by host from sp.Addr(), which both streams of an association share, so a ban
+// raised on the DATA1 sub-peer covers the primary's reconnect too
+// (handleAddPeerMsg refuses a banned host; the outbound dial sites check the
+// ban list).
+//
+// The exemptions are SV Node's, from SendRejectsAndCheckIfBanned
+// (net/net_processing.cpp): a whitelisted peer and an addnode peer are never
+// banned, and a local address (IPv4 127.0.0.0/8 or 0.0.0.0/8, IPv6 ::1, as
+// CNetAddr::IsLocal draws it) is disconnected but not banned. Banning disabled
+// is teranode's own. Two differences from SV Node, both on the side of not
+// banning: addnode here covers every permanent peer, which includes the
+// connect list, where SV Node sets fAddnode only for -addnode peers; and SV
+// Node does not disconnect a whitelisted or addnode peer at all, while this
+// node has already disconnected it by the time this runs, and the connection
+// manager redials a permanent peer.
+func (sp *serverPeer) banMisbehaving(reason string) {
+	if cfg.DisableBanning {
+		sp.server.logger.Warnf("Misbehaving peer %s: %s (banning disabled)", sp, reason)
+
+		return
+	}
+
+	if sp.isWhitelisted {
+		sp.server.logger.Warnf("Misbehaving whitelisted peer %s: %s (not banned)", sp, reason)
+
+		return
+	}
+
+	if sp.addnode {
+		sp.server.logger.Warnf("Misbehaving addnode peer %s: %s (not banned)", sp, reason)
+
+		return
+	}
+
+	if isLocalAddr(sp.Addr()) {
+		sp.server.logger.Warnf("Misbehaving local peer %s: %s (not banned)", sp, reason)
+
+		return
+	}
+
+	sp.server.logger.Warnf("Misbehaving peer %s: %s -- banning for %v", sp, reason, cfg.BanDuration)
+	sp.server.BanPeer(sp)
+}
+
+// isLocalAddr is SV Node's CNetAddr::IsLocal (net/netaddress.cpp) for a
+// host:port or bare host string: IPv4 127.0.0.0/8 or 0.0.0.0/8, or IPv6 ::1.
+// An address that does not parse is not local.
+func isLocalAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		s.logger.Errorf("Error disconnecting banned peers: %v", err)
+		host = addr
 	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4[0] == 127 || ip4[0] == 0
+	}
+
+	return ip.Equal(net.IPv6loopback)
 }

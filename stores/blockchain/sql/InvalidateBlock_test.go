@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -224,3 +225,43 @@ func TestSQLInvalidateBlock(t *testing.T) {
 // 	}
 // 	return err
 // }
+
+// TestSQLInvalidateBlock_GenesisGuard asserts that InvalidateBlock refuses to
+// invalidate the genesis block. Without the guard, the recursive descendant CTE
+// rooted at genesis would flip the entire chain (genesis -> block1 -> block2 ->
+// block3, since block1.HashPrevBlock is the regtest genesis) to invalid and off
+// the main chain in a single statement, and RevalidateBlock could not undo it.
+func TestSQLInvalidateBlock_GenesisGuard(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+
+	err = s.insertGenesisTransaction(ulogger.TestLogger{}, tSettings.ChainCfgParams)
+	require.NoError(t, err)
+
+	_, _, err = s.StoreBlock(context.Background(), block1, "", options.WithMinedSet(true))
+	require.NoError(t, err)
+	_, _, err = s.StoreBlock(context.Background(), block2, "", options.WithMinedSet(true))
+	require.NoError(t, err)
+	_, _, err = s.StoreBlock(context.Background(), block3, "", options.WithMinedSet(true))
+	require.NoError(t, err)
+
+	// Attempt to invalidate the genesis block - must be rejected.
+	hashes, err := s.InvalidateBlock(context.Background(), tSettings.ChainCfgParams.GenesisHash)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot invalidate the genesis block")
+	require.Empty(t, hashes)
+
+	// The chain must be untouched: no block flipped to invalid.
+	for _, b := range []*model.Block{block1, block2, block3} {
+		var invalid bool
+		err = s.db.QueryRowContext(context.Background(),
+			"SELECT invalid FROM blocks WHERE hash = $1", b.Hash().CloneBytes()).Scan(&invalid)
+		require.NoError(t, err)
+		assert.False(t, invalid, "block at height %d must remain valid after rejected genesis invalidation", b.Height)
+	}
+}

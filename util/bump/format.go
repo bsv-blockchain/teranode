@@ -34,8 +34,13 @@ type Level []Node
 // It contains the offset (position) and optionally the hash data,
 // with flags indicating the type of node and data present.
 type Node struct {
-	// Offset is the position of this node within its level of the tree
-	Offset uint32 `json:"offset"`
+	// Offset is the position of this node within its level of the tree.
+	// BUMP offsets are leaf indices in a single flat tree over the whole
+	// block, encoded as VarInt on the wire (BRC-74), so they are carried in
+	// 64 bits: at Teranode scale a block's padded leaf count can exceed 2^32,
+	// and 32-bit arithmetic silently wrapped the offset, producing a proof
+	// that points at the wrong transaction (issue 1427).
+	Offset uint64 `json:"offset"`
 
 	// Hash is the hex-encoded hash value for this node (optional, may be empty)
 	Hash string `json:"hash,omitempty"`
@@ -59,6 +64,11 @@ const (
 	FlagTxID = 0x02
 )
 
+// maxProofLevels is the deepest proof a BUMP can express. A leaf offset is a uint64,
+// so a tree taller than 64 levels has leaves no offset can address. ConvertToBUMP's
+// segment guards and Validate both bound on this, and must agree.
+const maxProofLevels = 64
+
 // hashToDisplayHex returns the hash as a display-order hex string (big-endian / byte-reversed),
 // which is the standard representation used in BRC-74 JSON and the go-bc reference implementation.
 // The binary BUMP format stores hashes in internal (little-endian) order; the conversion from
@@ -70,9 +80,22 @@ func hashToDisplayHex(h chainhash.Hash) string {
 // ConvertToBUMP converts a standard merkle proof to BUMP format.
 // This function takes the existing Teranode merkle proof structure and converts
 // it to the standardized BUMP format for compatibility with BSV ecosystem tools.
+//
+// Only transaction proofs can be converted: BRC-74 leaves are transaction IDs.
+// Subtree-only proofs are rejected because an interior subtree root cannot be
+// represented as a transaction leaf, and its stored root may contain the coinbase
+// placeholder rather than the real coinbase hash.
 func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 	if proof == nil {
 		return nil, errors.NewInvalidArgumentError("proof cannot be nil")
+	}
+
+	if proof.TxIndexInSubtree == -1 {
+		return nil, errors.NewInvalidArgumentError("BUMP proofs require a transaction ID; subtree-only proofs are unsupported")
+	}
+
+	if proof.TxID == (chainhash.Hash{}) {
+		return nil, errors.NewInvalidArgumentError("transaction ID must not be zero")
 	}
 
 	bump := &Format{
@@ -86,8 +109,40 @@ func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 	// of the transaction's global leaf offset, and the subtree index contributes the high bits. (The
 	// previous code numbered the two segments independently, which produced wrong offsets — and thus
 	// unverifiable BUMPs — for any block with more than one subtree.)
+	//
+	// All offset arithmetic is in uint64: BUMP offsets are unbounded leaf indices (VarInt on the
+	// wire), and a padded leaf count beyond 2^32 silently wrapped the previous 32-bit computation
+	// into a proof for the wrong transaction. The guards below reject inputs the arithmetic cannot
+	// represent, loudly, instead of wrapping.
 	subtreeLevels := len(proof.SubtreeProof)
-	globalOffset := (uint32(proof.SubtreeIndex) << uint(subtreeLevels)) | uint32(proof.TxIndexInSubtree) //nolint:gosec
+	totalLevels := subtreeLevels + len(proof.BlockProof)
+
+	if totalLevels > maxProofLevels {
+		return nil, errors.NewInvalidArgumentError("proof has %d levels, beyond the %d a leaf offset can address", totalLevels, maxProofLevels)
+	}
+
+	txIndex := proof.TxIndexInSubtree
+
+	// The tx index addresses a leaf within its subtree and the subtree index addresses a
+	// subtree within the block, so each must fit in its segment's bit width — otherwise the
+	// OR below would silently merge bits across the two segments and point at a different
+	// transaction. (When a segment spans all 64 bits any index fits, and totalLevels <=
+	// maxProofLevels makes the shifts below safe.)
+	blockLevels := len(proof.BlockProof)
+
+	if proof.SubtreeIndex < 0 || txIndex < 0 {
+		return nil, errors.NewInvalidArgumentError("negative proof position (subtree index %d, tx index %d)", proof.SubtreeIndex, txIndex)
+	}
+
+	if subtreeLevels < maxProofLevels && uint64(txIndex) >= 1<<uint(subtreeLevels) {
+		return nil, errors.NewInvalidArgumentError("tx index %d does not fit in a subtree of %d levels", txIndex, subtreeLevels)
+	}
+
+	if blockLevels < maxProofLevels && uint64(proof.SubtreeIndex) >= 1<<uint(blockLevels) {
+		return nil, errors.NewInvalidArgumentError("subtree index %d does not fit in a block of %d subtree levels", proof.SubtreeIndex, blockLevels)
+	}
+
+	globalOffset := (uint64(proof.SubtreeIndex) << uint(subtreeLevels)) | uint64(txIndex)
 
 	appendLevel := func(levelIdx int, siblingHash chainhash.Hash) {
 		// Sibling offset at this level: the working hash sits at globalOffset>>levelIdx; its sibling is
@@ -110,8 +165,7 @@ func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 
 	// BRC-74 requires level 0 to include the target txid (flag 0x02) alongside its sibling.
 	// Without this, go-bc's CalculateRootGivenTxid cannot find the starting transaction.
-	var zeroHash chainhash.Hash
-	if proof.TxID != zeroHash && len(bump.Path) > 0 {
+	if len(bump.Path) > 0 {
 		txidNode := Node{
 			Offset: globalOffset,
 			Hash:   hashToDisplayHex(proof.TxID),
@@ -161,7 +215,7 @@ func (b *Format) EncodeBinary() ([]byte, error) {
 		// Write each node in the level
 		for nodeIdx, node := range level {
 			// Write offset as VarInt
-			if err := writeVarInt(&buf, uint64(node.Offset)); err != nil {
+			if err := writeVarInt(&buf, node.Offset); err != nil {
 				return nil, errors.NewProcessingError("failed to write offset for level %d, node %d", levelIdx, nodeIdx, err)
 			}
 
@@ -248,8 +302,8 @@ func Validate(bump *Format) error {
 		return errors.NewInvalidArgumentError("BUMP path cannot be empty")
 	}
 
-	if len(bump.Path) > 64 {
-		return errors.NewInvalidArgumentError("BUMP path too long: %d levels (max 64)", len(bump.Path))
+	if len(bump.Path) > maxProofLevels {
+		return errors.NewInvalidArgumentError("BUMP path too long: %d levels (max %d)", len(bump.Path), maxProofLevels)
 	}
 
 	for levelIdx, level := range bump.Path {

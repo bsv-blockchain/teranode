@@ -21,11 +21,14 @@ type MockBlockProcessor struct {
 	callCount   int
 	returnError bool
 	blockDelay  time.Duration
+	slotTaken   bool
+	started     map[chainhash.Hash]bool
 }
 
 func NewMockBlockProcessor() *MockBlockProcessor {
 	return &MockBlockProcessor{
 		canProcess: make(map[chainhash.Hash]bool),
+		started:    make(map[chainhash.Hash]bool),
 	}
 }
 
@@ -35,7 +38,7 @@ func (m *MockBlockProcessor) SetCanProcess(hash *chainhash.Hash, can bool) {
 	m.canProcess[*hash] = can
 }
 
-func (m *MockBlockProcessor) CanProcessBlock(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+func (m *MockBlockProcessor) CanProcessBlock(ctx context.Context, hash *chainhash.Hash, _ BlockPriority) (bool, error) {
 	m.mu.Lock()
 	m.callCount++
 	if m.blockDelay > 0 {
@@ -55,6 +58,35 @@ func (m *MockBlockProcessor) CanProcessBlock(ctx context.Context, hash *chainhas
 		return true, nil // Default to processable
 	}
 	return can, nil
+}
+
+// StartProcessingBlock claims a slot unless the mock simulates that another worker took the
+// last slot after CanProcessBlock said yes.
+func (m *MockBlockProcessor) StartProcessingBlock(hash *chainhash.Hash, _ BlockPriority) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.slotTaken || m.started[*hash] {
+		return false
+	}
+
+	m.started[*hash] = true
+
+	return true
+}
+
+func (m *MockBlockProcessor) FinishProcessingBlock(hash *chainhash.Hash) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.started, *hash)
+}
+
+func (m *MockBlockProcessor) IsBlockInFlight(hash *chainhash.Hash, pending func(chainhash.Hash) bool) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return m.started[*hash] || pending(*hash)
 }
 
 func (m *MockBlockProcessor) GetCallCount() int {
@@ -93,6 +125,102 @@ func TestBlockPriorityQueue_Get_SingleProcessableBlock(t *testing.T) {
 	assert.Equal(t, GetOK, status)
 	assert.Equal(t, hash, block.hash)
 	assert.Equal(t, 0, pq.Size(), "Block should be removed from queue")
+}
+
+// TestBlockPriorityQueue_Get_SlotLostAfterCanProcessKeepsBlock pins the claim-then-take
+// order: when CanProcessBlock says yes but the slot is gone by the time it is claimed,
+// the block must stay queued instead of being handed to a worker that drops it.
+func TestBlockPriorityQueue_Get_SlotLostAfterCanProcessKeepsBlock(t *testing.T) {
+	initPrometheusMetrics()
+	pq := NewBlockPriorityQueue(ulogger.TestLogger{})
+	mockBP := NewMockBlockProcessor()
+	mockBP.slotTaken = true
+
+	hash1 := &chainhash.Hash{1}
+	hash2 := &chainhash.Hash{2}
+
+	pq.Add(processBlockFound{hash: hash1}, PriorityChainExtending, 1000)
+	pq.Add(processBlockFound{hash: hash2}, PriorityChainExtending, 1001)
+
+	_, status := pq.Get(context.Background(), mockBP)
+	require.Equal(t, GetAllBlocked, status)
+	require.Equal(t, 2, pq.Size(), "no block may leave the queue without a claimed slot")
+
+	mockBP.mu.Lock()
+	mockBP.slotTaken = false
+	mockBP.mu.Unlock()
+
+	block, status := pq.Get(context.Background(), mockBP)
+	require.Equal(t, GetOK, status)
+	require.Equal(t, hash1, block.hash)
+	require.True(t, mockBP.started[*hash1], "Get must return a block whose slot is already claimed")
+	require.Equal(t, 1, pq.Size())
+}
+
+// TestBlockPriorityQueue_Get_FastPathDeepQueue verifies the steady-state fast path:
+// when the highest-priority (front) block is processable, Get claims it after probing
+// only that one block, without scanning the rest of a deep queue.
+func TestBlockPriorityQueue_Get_FastPathDeepQueue(t *testing.T) {
+	initPrometheusMetrics()
+	logger := ulogger.TestLogger{}
+	pq := NewBlockPriorityQueue(logger)
+	mockBP := NewMockBlockProcessor()
+	ctx := context.Background()
+
+	// Highest-priority (front) block is processable.
+	front := &chainhash.Hash{}
+	front[0] = 1
+	pq.Add(processBlockFound{hash: front}, PriorityChainExtending, 1000)
+	mockBP.SetCanProcess(front, true)
+
+	// Many lower-priority followers queued behind it.
+	for i := 2; i <= 100; i++ {
+		h := &chainhash.Hash{}
+		h[0] = byte(i)
+		pq.Add(processBlockFound{hash: h}, PriorityDeepFork, uint32(1000+i))
+		mockBP.SetCanProcess(h, false)
+	}
+
+	block, status := pq.Get(ctx, mockBP)
+	require.Equal(t, GetOK, status)
+	require.Equal(t, front, block.hash)
+	require.Equal(t, 99, pq.Size(), "only the front block should be removed")
+	require.Equal(t, 1, mockBP.GetCallCount(), "fast path should probe only the front block")
+}
+
+// TestBlockPriorityQueue_Get_SlowPathFallbackDeepQueue verifies the fallback: when the
+// front block is blocked, Get still scans the rest of the queue and returns a deeper
+// processable block.
+func TestBlockPriorityQueue_Get_SlowPathFallbackDeepQueue(t *testing.T) {
+	initPrometheusMetrics()
+	logger := ulogger.TestLogger{}
+	pq := NewBlockPriorityQueue(logger)
+	mockBP := NewMockBlockProcessor()
+	ctx := context.Background()
+
+	// Front block is blocked, forcing the slow-path scan.
+	front := &chainhash.Hash{}
+	front[0] = 1
+	pq.Add(processBlockFound{hash: front}, PriorityChainExtending, 1000)
+	mockBP.SetCanProcess(front, false)
+
+	// Followers sorted by height; only the last (deepest) one is processable.
+	var processable *chainhash.Hash
+	for i := 2; i <= 20; i++ {
+		h := &chainhash.Hash{}
+		h[0] = byte(i)
+		pq.Add(processBlockFound{hash: h}, PriorityNearFork, uint32(1000+i))
+		last := i == 20
+		mockBP.SetCanProcess(h, last)
+		if last {
+			processable = h
+		}
+	}
+
+	block, status := pq.Get(ctx, mockBP)
+	require.Equal(t, GetOK, status)
+	require.Equal(t, processable, block.hash)
+	require.Equal(t, 19, pq.Size(), "only the processable block should be removed")
 }
 
 // TestBlockPriorityQueue_Get_AllBlocksBlocked tests Get when all blocks are blocked
@@ -308,6 +436,62 @@ func TestBlockPriorityQueue_WaitForBlock_Integration(t *testing.T) {
 	assert.Equal(t, hash, gotBlock.hash)
 }
 
+// TestBlockPriorityQueue_WaitForBlock_AllBlockedParks verifies that when every
+// queued block is fork-blocked (GetAllBlocked), WaitForBlock parks on the
+// condition variable instead of busy-looping. A spin would call CanProcessBlock
+// thousands of times; parking bounds the calls to a single Get() pass until a
+// Signal wakes the worker.
+func TestBlockPriorityQueue_WaitForBlock_AllBlockedParks(t *testing.T) {
+	initPrometheusMetrics()
+	logger := ulogger.TestLogger{}
+	pq := NewBlockPriorityQueue(logger)
+	mockBP := NewMockBlockProcessor()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	hash1 := &chainhash.Hash{}
+	hash1[0] = 1
+	hash2 := &chainhash.Hash{}
+	hash2[0] = 2
+
+	pq.Add(processBlockFound{hash: hash1}, PriorityChainExtending, 1000)
+	pq.Add(processBlockFound{hash: hash2}, PriorityNearFork, 1001)
+
+	// Every queued block is blocked -> Get() returns GetAllBlocked on a non-empty queue.
+	mockBP.SetCanProcess(hash1, false)
+	mockBP.SetCanProcess(hash2, false)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	var gotBlock processBlockFound
+	var gotStatus GetStatus
+
+	go func() {
+		defer wg.Done()
+		gotBlock, gotStatus = pq.WaitForBlock(ctx, mockBP)
+	}()
+
+	// Let the worker reach GetAllBlocked and park. If it spins, CanProcessBlock
+	// is hammered continuously during this window.
+	time.Sleep(150 * time.Millisecond)
+
+	// A parked worker performs at most a couple of full Get() passes before
+	// waiting; a spin would produce hundreds/thousands of calls in 150ms.
+	callsWhileWaiting := mockBP.GetCallCount()
+	require.LessOrEqual(t, callsWhileWaiting, 10,
+		"WaitForBlock should park on GetAllBlocked, not busy-loop calling CanProcessBlock")
+
+	// Unblock one block and Signal, mimicking a fork resolution / processing slot freeing up.
+	mockBP.SetCanProcess(hash1, true)
+	pq.Signal()
+
+	wg.Wait()
+
+	require.Equal(t, GetOK, gotStatus, "worker should wake and return the now-processable block")
+	require.Equal(t, hash1, gotBlock.hash)
+}
+
 // TestForkManager_CanProcessBlock_EdgeCases tests CanProcessBlock edge cases
 func TestForkManager_CanProcessBlock_EdgeCases(t *testing.T) {
 	initPrometheusMetrics()
@@ -327,11 +511,11 @@ func TestForkManager_CanProcessBlock_EdgeCases(t *testing.T) {
 		hash3[0] = 3
 
 		// Fill to capacity
-		require.True(t, fm.StartProcessingBlock(hash1))
-		require.True(t, fm.StartProcessingBlock(hash2))
+		require.True(t, fm.StartProcessingBlock(hash1, PriorityChainExtending))
+		require.True(t, fm.StartProcessingBlock(hash2, PriorityChainExtending))
 
 		// CanProcessBlock should use fast-path and return false
-		canProcess, err := fm.CanProcessBlock(ctx, hash3)
+		canProcess, err := fm.CanProcessBlock(ctx, hash3, PriorityChainExtending)
 		require.NoError(t, err)
 		assert.False(t, canProcess)
 
@@ -369,8 +553,80 @@ func TestForkManager_CanProcessBlock_EdgeCases(t *testing.T) {
 		fm.mu.Unlock()
 
 		// Second block in same fork should not be processable
-		canProcess, err := fm.CanProcessBlock(ctx, hash2)
+		canProcess, err := fm.CanProcessBlock(ctx, hash2, PriorityChainExtending)
 		require.NoError(t, err)
 		assert.False(t, canProcess, "Fork already has a processing block")
 	})
+}
+
+// signalDuringScanProcessor refuses the block on both of Get's passes (front probe and full
+// scan) and, on the second, makes it processable and signals the queue before Get returns.
+// That is a retry timer or a slot release firing while the worker is between Get and
+// cond.Wait, with no worker parked.
+type signalDuringScanProcessor struct {
+	*MockBlockProcessor
+	pq    *BlockPriorityQueue
+	calls int
+}
+
+func (p *signalDuringScanProcessor) CanProcessBlock(ctx context.Context, hash *chainhash.Hash, priority BlockPriority) (bool, error) {
+	p.mu.Lock()
+	p.calls++
+	calls := p.calls
+	p.mu.Unlock()
+
+	if calls == 2 {
+		p.pq.Signal()
+	}
+
+	if calls <= 2 {
+		return false, nil
+	}
+
+	return p.MockBlockProcessor.CanProcessBlock(ctx, hash, priority)
+}
+
+// TestBlockPriorityQueue_WaitForBlock_SignalDuringGetNotLost pins that a signal sent while a
+// worker is inside Get, before it parks, still wakes it. Otherwise the block waits for the
+// next unrelated Add or slot release, which on a quiet node is the next announcement.
+func TestBlockPriorityQueue_WaitForBlock_SignalDuringGetNotLost(t *testing.T) {
+	initPrometheusMetrics()
+	pq := NewBlockPriorityQueue(ulogger.TestLogger{})
+	bp := &signalDuringScanProcessor{MockBlockProcessor: NewMockBlockProcessor(), pq: pq}
+
+	hash := &chainhash.Hash{1}
+	pq.Add(processBlockFound{hash: hash}, PriorityChainExtending, 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	taken, status := pq.WaitForBlock(ctx, bp)
+	require.Equal(t, GetOK, status, "the signal sent during Get was lost")
+	require.Equal(t, hash, taken.hash)
+}
+
+// TestBlockPriorityQueue_WaitForBlock_ReturnsOnCancelWithQueuedBlocks pins that a worker stops
+// when its context is cancelled even though blocks are still queued. Get answers GetEmpty on a
+// cancelled context, and WaitForBlock used to read that as "items appeared" and loop forever.
+func TestBlockPriorityQueue_WaitForBlock_ReturnsOnCancelWithQueuedBlocks(t *testing.T) {
+	initPrometheusMetrics()
+	pq := NewBlockPriorityQueue(ulogger.TestLogger{})
+	pq.Add(processBlockFound{hash: &chainhash.Hash{1}}, PriorityChainExtending, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan GetStatus, 1)
+
+	go func() {
+		_, status := pq.WaitForBlock(ctx, NewMockBlockProcessor())
+		done <- status
+	}()
+
+	select {
+	case status := <-done:
+		require.Equal(t, GetEmpty, status)
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitForBlock kept looping after its context was cancelled")
+	}
 }

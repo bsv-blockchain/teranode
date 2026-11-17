@@ -67,7 +67,7 @@ func (s *SQL) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint
 	// Use operation-prefixed key to be consistent with other operations
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlocksByHeight-%d-%d", startHeight, endHeight)))
 
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 	cached := cacheOp.Get()
 	if cached != nil {
 		if blocks, ok := cached.Value().([]*model.Block); ok {
@@ -78,8 +78,7 @@ func (s *SQL) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	capacity := max(1, endHeight-startHeight+1)
-	blocks := make([]*model.Block, 0, capacity)
+	blocks := make([]*model.Block, 0, preallocForRange(startHeight, endHeight))
 
 	var q string
 	if s.mainChainRebuilding.Load() > 0 {
@@ -92,7 +91,7 @@ func (s *SQL) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint
 				SELECT b.hash
 				FROM blocks b
 				WHERE b.invalid = false
-				ORDER BY chain_work DESC, peer_id ASC, id ASC
+				ORDER BY chain_work DESC, id ASC
 				LIMIT 1
 			)
 			UNION ALL

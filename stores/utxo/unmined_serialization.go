@@ -17,7 +17,7 @@ var ErrInvalidSerializedData = errors.NewProcessingError("invalid serialized unm
 //   - Hash: 32 bytes
 //   - Fee: 8 bytes (uint64, little-endian)
 //   - SizeInBytes: 8 bytes (uint64, little-endian)
-//   - CreatedAt: 4 bytes (int32, little-endian)
+//   - CreatedAt: 8 bytes (int64, little-endian)
 //   - Flags: 1 byte (bit 0: Locked, bit 1: Skip)
 //   - UnminedSince: 4 bytes (int32, little-endian)
 //   - BlockIDs count: 4 bytes (uint32, little-endian)
@@ -26,7 +26,7 @@ var ErrInvalidSerializedData = errors.NewProcessingError("invalid serialized unm
 func SerializeUnminedTransaction(tx *UnminedTransaction) ([]byte, error) {
 	// Calculate size estimate
 	blockIDsSize := 4 + len(tx.BlockIDs)*4
-	estimatedSize := 32 + 8 + 8 + 4 + 1 + 4 + blockIDsSize + 256 // 256 for TxInpoints estimate
+	estimatedSize := 32 + 8 + 8 + 8 + 1 + 4 + blockIDsSize + 256 // 256 for TxInpoints estimate
 
 	buf := make([]byte, 0, estimatedSize)
 
@@ -42,10 +42,9 @@ func SerializeUnminedTransaction(tx *UnminedTransaction) ([]byte, error) {
 	binary.LittleEndian.PutUint64(b8, tx.Node.SizeInBytes)
 	buf = append(buf, b8...)
 
-	// CreatedAt (4 bytes)
-	b4 := make([]byte, 4)
-	binary.LittleEndian.PutUint32(b4, uint32(tx.CreatedAt))
-	buf = append(buf, b4...)
+	// CreatedAt (8 bytes)
+	binary.LittleEndian.PutUint64(b8, uint64(tx.CreatedAt))
+	buf = append(buf, b8...)
 
 	// Flags (1 byte)
 	var flags byte
@@ -58,6 +57,7 @@ func SerializeUnminedTransaction(tx *UnminedTransaction) ([]byte, error) {
 	buf = append(buf, flags)
 
 	// UnminedSince (4 bytes)
+	b4 := make([]byte, 4)
 	binary.LittleEndian.PutUint32(b4, uint32(tx.UnminedSince))
 	buf = append(buf, b4...)
 
@@ -85,7 +85,7 @@ func SerializeUnminedTransaction(tx *UnminedTransaction) ([]byte, error) {
 
 // DeserializeUnminedTransaction deserializes bytes into an UnminedTransaction.
 func DeserializeUnminedTransaction(data []byte) (*UnminedTransaction, error) {
-	if len(data) < 61 { // Minimum: 32+8+8+4+1+4+4 = 61 bytes
+	if len(data) < 65 { // Minimum: 32+8+8+8+1+4+4 = 65 bytes
 		return nil, ErrInvalidSerializedData
 	}
 
@@ -104,9 +104,9 @@ func DeserializeUnminedTransaction(data []byte) (*UnminedTransaction, error) {
 	sizeInBytes := binary.LittleEndian.Uint64(data[offset : offset+8])
 	offset += 8
 
-	// CreatedAt (4 bytes)
-	createdAt := int(binary.LittleEndian.Uint32(data[offset : offset+4]))
-	offset += 4
+	// CreatedAt (8 bytes)
+	createdAt := int(int64(binary.LittleEndian.Uint64(data[offset : offset+8])))
+	offset += 8
 
 	// Flags (1 byte)
 	flags := data[offset]

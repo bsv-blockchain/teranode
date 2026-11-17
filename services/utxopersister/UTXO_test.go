@@ -101,7 +101,8 @@ func TestTxWithOnlyOutputs(t *testing.T) {
 
 	assert.Equal(t, 476, len(uw.UTXOs))
 
-	utxos := PadUTXOsWithNil(uw.UTXOs)
+	utxos, err := PadUTXOsWithNil(uw.UTXOs)
+	require.NoError(t, err)
 	assert.NotNil(t, utxos)
 	assert.Equal(t, 1000, len(utxos))
 
@@ -115,4 +116,78 @@ func TestTxWithOnlyOutputs(t *testing.T) {
 	}
 
 	assert.Equal(t, 476, count)
+}
+
+// A decoded script must be backed by an exactly-sized slice: the seeder decodes
+// hundreds of millions of ~25-byte scripts, and an over-allocated backing array
+// (the old bytes.Buffer growth) costs ~1.5 KB of garbage per UTXO and retains
+// ~1 KB per script.
+func TestNewUTXOWrapperFromBytes_ScriptIsExactlySized(t *testing.T) {
+	script := []byte{0x76, 0xa9, 0x14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 0x88, 0xac}
+
+	in := &UTXOWrapper{
+		TxID:   chainhash.HashH([]byte("exact-script")),
+		Height: 7,
+		UTXOs:  []*UTXO{{Index: 3, Value: 42, Script: script}},
+	}
+
+	out, err := NewUTXOWrapperFromBytes(in.Bytes())
+	require.NoError(t, err)
+	require.Len(t, out.UTXOs, 1)
+
+	require.Equal(t, script, out.UTXOs[0].Script)
+	require.Equal(t, len(script), cap(out.UTXOs[0].Script))
+}
+
+// A script cut short inside the exact-size read must fail, not be returned
+// zero-padded: the record's claimed length is trusted up to the bound only
+// for the allocation, never for the content.
+func TestNewUTXOWrapperFromBytes_TruncatedSmallScriptFails(t *testing.T) {
+	in := &UTXOWrapper{
+		TxID:   chainhash.HashH([]byte("truncated-script")),
+		Height: 7,
+		UTXOs:  []*UTXO{{Index: 0, Value: 42, Script: make([]byte, 25)}},
+	}
+
+	b := in.Bytes()
+
+	_, err := NewUTXOWrapperFromBytes(b[:len(b)-10]) // drop the last 10 script bytes
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to read utxo script (25 bytes)")
+}
+
+// Scripts on either side of maxExactScriptAlloc take different read paths and
+// must decode to the same bytes.
+func TestNewUTXOWrapperFromBytes_ScriptAtExactAllocBoundary(t *testing.T) {
+	for _, size := range []int{maxExactScriptAlloc, maxExactScriptAlloc + 1} {
+		script := make([]byte, size)
+		for i := range script {
+			script[i] = byte(i)
+		}
+
+		in := &UTXOWrapper{
+			TxID:   chainhash.HashH([]byte("boundary-script")),
+			Height: 7,
+			UTXOs:  []*UTXO{{Index: 0, Value: 42, Script: script}},
+		}
+
+		out, err := NewUTXOWrapperFromBytes(in.Bytes())
+		require.NoError(t, err, "size %d", size)
+		require.Len(t, out.UTXOs, 1)
+		require.Equal(t, script, out.UTXOs[0].Script, "size %d", size)
+	}
+}
+
+// An output index no valid transaction can have must be rejected, not padded:
+// 0xFFFFFFFF wrapped maxIndex+1 to an empty slice and panicked on the first
+// placement, and an index just below it asked for a ~32 GiB slice.
+func TestPadUTXOsWithNil_RejectsImpossibleIndex(t *testing.T) {
+	for _, index := range []uint32{MaxOutputIndex + 1, 0xFFFFFFFE, 0xFFFFFFFF} {
+		_, err := PadUTXOsWithNil([]*UTXO{{Index: 0}, {Index: index}})
+		require.Error(t, err, "index %d", index)
+	}
+
+	padded, err := PadUTXOsWithNil([]*UTXO{{Index: 2}})
+	require.NoError(t, err)
+	require.Len(t, padded, 3)
 }

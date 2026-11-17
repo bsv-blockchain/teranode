@@ -97,7 +97,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 	// Try to get from response cache using derived cache key
 	// Use operation-prefixed key to avoid conflicts with other cached data
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeader-%s", blockHash.String())))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil {
@@ -134,6 +134,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		,b.inserted_at
 		,b.processed_at
 		,b.median_time_past
+		,b.mined_set_gen
 		FROM blocks b
 		WHERE b.hash = $1
 	`
@@ -171,6 +172,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		&insertedAt,
 		&processedAt,
 		&blockHeaderMeta.MedianTimePast,
+		&blockHeaderMeta.MinedSetGeneration,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, errors.NewBlockNotFoundError("error in GetBlockHeader", errors.ErrNotFound)
@@ -179,7 +181,11 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		return nil, nil, errors.NewStorageError("error in GetBlockHeader", err)
 	}
 
-	bits, _ := model.NewNBitFromSlice(nBits)
+	bits, err := model.NewNBitFromSlice(nBits)
+	if err != nil {
+		return nil, nil, errors.NewStorageError("error in GetBlockHeader: malformed n_bits (length %d, expected 4) for block %s height %d", len(nBits), blockHash.String(), blockHeaderMeta.Height, err)
+	}
+
 	blockHeader.Bits = *bits
 
 	blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
@@ -204,7 +210,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 			return nil, nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
 		}
 
-		miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
+		miner, err := util.ExtractCoinbaseMinerRaw(coinbaseTx, s.rawMinerTag)
 		if err != nil {
 			s.logger.Debugf("failed to extract miner in GetBlockHeader (block may be invalid): %v", err)
 		} else {

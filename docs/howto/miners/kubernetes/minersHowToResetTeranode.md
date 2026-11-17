@@ -1,6 +1,6 @@
 # How to Reset Teranode (Kubernetes)
 
-Last modified: 29-October-2025
+Last modified: 7-September-2026
 
 ## Index
 
@@ -101,8 +101,8 @@ TRUNCATE TABLE bans RESTART IDENTITY CASCADE;
 SELECT COUNT(*) FROM blocks;
 
 -- (Optional) Drop indexes for faster seeding
-DROP INDEX IF EXISTS idx_chain_work_id;
-DROP INDEX IF EXISTS idx_chain_work_peer_id;
+DROP INDEX IF EXISTS idx_chain_work_id_v2;
+DROP INDEX IF EXISTS idx_chain_work_id_valid;
 
 -- Exit
 \q
@@ -156,11 +156,12 @@ kubectl get pods -n teranode-operator
 
 ### Set FSM State
 
-Teranode starts in IDLE state. You need to transition to the appropriate state:
+The reset leaves a fresh store, so the `operator` context starts Teranode in
+IDLE. Start synchronization after verifying the reset:
 
 ```bash
 # Via teranode-cli
-kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate LEGACYSYNCING
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate catchingblocks
 ```
 
 ### Monitor Synchronization

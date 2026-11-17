@@ -53,7 +53,7 @@ func TestAerospikeReader(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new transaction in the store
-	_, err = store.Create(ctx, tx, 0)
+	_, _, err = store.SpendAndCreate(ctx, tx, 0, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Set the mined block info for the transaction

@@ -72,7 +72,9 @@ const (
 // Error Responses (all modes):
 //
 //   - 400 Bad Request: body length is not a multiple of 36 bytes.
-//   - 413 Request Entity Too Large: body exceeds the global asset_httpBodyLimit setting.
+//   - 413 Request Entity Too Large: body exceeds the global asset_httpBodyLimit setting,
+//     or the batch exceeds asset_maxBatchRecords (default 16384) or
+//     asset_maxBatchResponseBytes (default 0, off).
 //   - 429 Too Many Requests: heavy-route tiered rate limiter rejected the request
 //     (shared with /subtree/:hash/txs and other fan-out endpoints).
 //   - 500 Internal Server Error: transport error reading the body, an unrecoverable
@@ -94,7 +96,7 @@ func (h *HTTP) GetUTXOs(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetUTXOs_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithLogMessage(h.logger, "[Asset_http:GetUTXOs] in %s for %s", mode, c.Request().RemoteAddr),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http:GetUTXOs] in %s for %s", mode, c.Request().RemoteAddr),
 		)
 
 		defer deferFn()
@@ -109,12 +111,34 @@ func (h *HTTP) GetUTXOs(mode ReadMode) func(c echo.Context) error {
 			return writeUTXOsResponse(c, mode, nil)
 		}
 
+		// Admission budgets. asset_maxBatchRecords defaults to 16384 (enforced,
+		// see asset_maxBatchRecords longdesc); asset_maxBatchResponseBytes still
+		// defaults to 0 (unlimited). Unlike POST /subtree/:hash/txs these routes
+		// are not on the peer-catchup path, so no floor is applied to the record
+		// budget: the configured value (including the default) is enforced as-is.
+		if maxRecords := h.settings.Asset.MaxBatchRecords; maxRecords > 0 && numRecords > maxRecords {
+			return errBatchRecords(maxRecords)
+		}
+
+		h.observeBatchRecords("GetUTXOs", numRecords)
+
+		// The response is a fixed 48 bytes per record (doubled again by the hex
+		// mode), so the whole budget can be charged before any lookup runs.
+		responseBytes := int64(numRecords) * utxosResponseRecordSize
+		if mode == HEX {
+			responseBytes *= 2
+		}
+
+		if err := h.enforceBatchResponseBytes("GetUTXOs", responseBytes, h.settings.Asset.MaxBatchResponseBytes); err != nil {
+			return err
+		}
+
 		// Each goroutine writes its own slot — slice indexing is the
 		// happens-before barrier, no mutex required.
 		results := make([]*utxo.SpendResponse, numRecords)
 
 		g, gCtx := errgroup.WithContext(ctx)
-		util.SafeSetLimit(g, utxosFanoutLimit)
+		util.SafeSetLimit(h.logger, g, utxosFanoutLimit)
 
 		for i := 0; i < numRecords; i++ {
 			recOffset := i * utxosRequestRecordSize
@@ -155,7 +179,7 @@ func (h *HTTP) GetUTXOs(mode ReadMode) func(c echo.Context) error {
 
 		prometheusAssetHTTPGetUTXOs.WithLabelValues("OK", "200").Add(float64(numRecords))
 
-		h.logger.Infof("[Asset_http:GetUTXOs] served %d records in %s", numRecords, mode)
+		h.logger.Debugf("[Asset_http:GetUTXOs] served %d records in %s", numRecords, mode)
 
 		return writeUTXOsResponse(c, mode, results)
 	}

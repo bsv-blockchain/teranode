@@ -5,7 +5,16 @@ import (
 	"os"
 	"strings"
 
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/util"
+)
+
+const (
+	labelGRPCAdminAPIKey = "gRPC admin API key"
+	valueEmpty           = "(empty)"
+	labelDataFolder      = "Data folder"
 )
 
 func runConfigChecks(s *settings.Settings) []ConfigResult {
@@ -73,7 +82,6 @@ func checkPortConflicts(s *settings.Settings) []ConfigResult {
 		{"Propagation gRPC", s.Propagation.GRPCListenAddress},
 		{"Propagation HTTP", s.Propagation.HTTPListenAddress},
 		{"Asset HTTP", s.Asset.HTTPListenAddress},
-		{"Asset Centrifuge", s.Asset.CentrifugeListenAddress},
 		{"Block Persister HTTP", s.BlockPersister.HTTPListenAddress},
 		{"Faucet HTTP", s.Faucet.HTTPListenAddress},
 		{"Health Check HTTP", s.HealthCheckHTTPListenAddress},
@@ -201,7 +209,7 @@ func checkSecurity(s *settings.Settings) []ConfigResult {
 			Severity:    severity,
 			Check:       "gRPC TLS",
 			Value:       "disabled (level 0)",
-			Recommended: "Set securityLevelGRPC >= 1 for production",
+			Recommended: "Set security_level_grpc >= 1 for production",
 		})
 	} else {
 		results = append(results, ConfigResult{
@@ -238,22 +246,29 @@ func checkSecurity(s *settings.Settings) []ConfigResult {
 
 	if s.GRPCAdminAPIKey == "" {
 		results = append(results, ConfigResult{
-			Severity:    severity,
-			Check:       "gRPC admin API key",
-			Value:       "(empty)",
-			Recommended: "Set grpc_admin_api_key (32+ chars)",
+			Severity:    SeverityERROR,
+			Check:       labelGRPCAdminAPIKey,
+			Value:       valueEmpty,
+			Recommended: "Set grpc_admin_api_key on Blockchain and all clients (32+ random chars)",
+		})
+	} else if util.IsPlaceholderAdminAPIKey(s.GRPCAdminAPIKey) {
+		results = append(results, ConfigResult{
+			Severity:    SeverityERROR,
+			Check:       labelGRPCAdminAPIKey,
+			Value:       "well-known placeholder",
+			Recommended: "Replace the placeholder; Blockchain refuses startup without a valid shared service key",
 		})
 	} else if len(s.GRPCAdminAPIKey) < 16 {
 		results = append(results, ConfigResult{
-			Severity:    SeverityWARN,
-			Check:       "gRPC admin API key",
+			Severity:    SeverityERROR,
+			Check:       labelGRPCAdminAPIKey,
 			Value:       fmt.Sprintf("%d chars (weak)", len(s.GRPCAdminAPIKey)),
 			Recommended: "Use at least 16 characters, ideally 32+",
 		})
 	} else {
 		results = append(results, ConfigResult{
 			Severity: SeverityOK,
-			Check:    "gRPC admin API key",
+			Check:    labelGRPCAdminAPIKey,
 			Value:    fmt.Sprintf("%d chars", len(s.GRPCAdminAPIKey)),
 		})
 	}
@@ -268,7 +283,7 @@ func checkKafkaConfig(s *settings.Settings) []ConfigResult {
 		results = append(results, ConfigResult{
 			Severity:    SeverityERROR,
 			Check:       "Kafka hosts",
-			Value:       "(empty)",
+			Value:       valueEmpty,
 			Recommended: "Set KAFKA_HOSTS (e.g. localhost:9092)",
 		})
 	} else {
@@ -385,15 +400,60 @@ func checkRPCConfig(s *settings.Settings) []ConfigResult {
 	return results
 }
 
+// rootCause returns the message of the innermost error in a wrap chain, so
+// operator-facing cells show the reason rather than the rendered code chain.
+func rootCause(err error) string {
+	var tErr *errors.Error
+	if !errors.As(err, &tErr) || tErr == nil {
+		return err.Error()
+	}
+
+	for {
+		// Stop on a nil unwrap before calling As: errors.As(nil, ...) does not
+		// report false for this error type.
+		wrapped := tErr.Unwrap()
+		if wrapped == nil {
+			return tErr.Message()
+		}
+
+		var inner *errors.Error
+		if !errors.As(wrapped, &inner) || inner == nil {
+			return tErr.Message()
+		}
+
+		tErr = inner
+	}
+}
+
 func checkP2PConfig(s *settings.Settings) []ConfigResult {
 	var results []ConfigResult
 
-	if len(s.P2P.ListenAddresses) == 0 {
+	if s.P2P.Port == 0 {
+		results = append(results, ConfigResult{
+			Severity:    SeverityERROR,
+			Check:       "P2P port",
+			Value:       "0",
+			Recommended: "Set p2p_port (e.g. 9905); the P2P service refuses to start without it",
+		})
+	}
+
+	// Mirror the startup check in the P2P service: the bus always binds every
+	// interface on p2p_port, so a narrowed value is refused rather than ignored.
+	if err := settings.ValidateP2PListenAddresses(s.P2P.ListenAddresses, s.P2P.Port); err != nil {
+		value := strings.Join(s.P2P.ListenAddresses, ", ")
+		if value == "" {
+			value = valueEmpty
+		} else {
+			// Keep the operator-facing cell readable: the value plus the
+			// innermost reason, without the wrapped error chain.
+			value = fmt.Sprintf("%s (%s)", value, rootCause(err))
+		}
+
 		results = append(results, ConfigResult{
 			Severity:    SeverityERROR,
 			Check:       "P2P listen addresses",
-			Value:       "(empty)",
-			Recommended: "Set p2p_listen_addresses (e.g. /ip4/0.0.0.0/tcp/9905)",
+			Value:       value,
+			Recommended: fmt.Sprintf("libp2p always binds 0.0.0.0 and :: on p2p_port %d; set p2p_listen_addresses to 0.0.0.0 or /ip4/0.0.0.0/tcp/%d and restrict exposure with a firewall", s.P2P.Port, s.P2P.Port),
 		})
 	} else {
 		results = append(results, ConfigResult{
@@ -652,14 +712,14 @@ func checkDataFolder(s *settings.Settings) []ConfigResult {
 		if os.IsNotExist(err) {
 			results = append(results, ConfigResult{
 				Severity:    SeverityWARN,
-				Check:       "Data folder",
+				Check:       labelDataFolder,
 				Value:       dataFolder,
 				Recommended: "Create the data folder before starting the node",
 			})
 		} else {
 			results = append(results, ConfigResult{
 				Severity:    SeverityERROR,
-				Check:       "Data folder",
+				Check:       labelDataFolder,
 				Value:       fmt.Sprintf("%s (%v)", dataFolder, err),
 				Recommended: "Check permissions on data folder",
 			})
@@ -667,7 +727,7 @@ func checkDataFolder(s *settings.Settings) []ConfigResult {
 	} else if !info.IsDir() {
 		results = append(results, ConfigResult{
 			Severity:    SeverityERROR,
-			Check:       "Data folder",
+			Check:       labelDataFolder,
 			Value:       dataFolder,
 			Recommended: "Path exists but is not a directory",
 		})
@@ -678,7 +738,7 @@ func checkDataFolder(s *settings.Settings) []ConfigResult {
 		if err != nil {
 			results = append(results, ConfigResult{
 				Severity:    SeverityERROR,
-				Check:       "Data folder",
+				Check:       labelDataFolder,
 				Value:       fmt.Sprintf("%s (not writable)", dataFolder),
 				Recommended: "Check write permissions on data folder",
 			})
@@ -688,7 +748,7 @@ func checkDataFolder(s *settings.Settings) []ConfigResult {
 
 			results = append(results, ConfigResult{
 				Severity: SeverityOK,
-				Check:    "Data folder",
+				Check:    labelDataFolder,
 				Value:    fmt.Sprintf("%s (writable)", dataFolder),
 			})
 		}
@@ -704,13 +764,13 @@ func checkObservability(s *settings.Settings) []ConfigResult {
 	if s.TracingEnabled {
 		collectorURL := ""
 		if s.TracingCollectorURL != nil {
-			collectorURL = s.TracingCollectorURL.String()
+			collectorURL = urlutil.Redact(s.TracingCollectorURL)
 		}
 
 		results = append(results, ConfigResult{
 			Severity: SeverityINFO,
 			Check:    "Tracing",
-			Value:    fmt.Sprintf("enabled, sample_rate=%.2f, collector=%s", s.TracingSampleRate, collectorURL),
+			Value:    fmt.Sprintf("enabled, sample_rate=%.2f, collector=%s", s.TracingSampleRate, collectorURL), // urlsafe: collectorURL is urlutil.Redact output, six lines up
 		})
 	} else {
 		results = append(results, ConfigResult{

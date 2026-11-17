@@ -290,7 +290,7 @@ func TestChainHashPreservation(t *testing.T) {
 	// Test our reflection-based detection
 	typ := reflect.TypeOf(hash)
 	val := reflect.ValueOf(hash)
-	ptrType := reflect.PtrTo(typ)
+	ptrType := reflect.PointerTo(typ)
 	if ptrType.Implements(reflect.TypeOf((*json.Marshaler)(nil)).Elem()) {
 		t.Logf("Reflection detects that *chainhash.Hash implements json.Marshaler")
 	} else {

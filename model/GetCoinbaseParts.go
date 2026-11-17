@@ -44,6 +44,7 @@ import (
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	base58 "github.com/bsv-blockchain/go-sdk/compat/base58" //nolint:depguard
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // BuildCoinbase recombines the different parts of the coinbase transaction.
@@ -177,12 +178,11 @@ func makeCoinbaseOutputTransactions(coinbaseValue uint64, walletAddresses []stri
 func makeCoinbase1(height uint32, coinbaseText string) []byte {
 	spaceForExtraNonce := 12
 
-	blockHeightBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(blockHeightBytes, height) // Block height
-
 	arbitraryData := []byte{}
-	arbitraryData = append(arbitraryData, 0x03)
-	arbitraryData = append(arbitraryData, blockHeightBytes[:3]...)
+	// BIP34 block height, encoded canonically (CScript() << nHeight) so it is minimally encoded and
+	// accepted by SV Node and by Teranode's own coinbase-height parser. A fixed 3-byte push is
+	// non-minimal below height 32768 and truncates above 16777215.
+	arbitraryData = append(arbitraryData, util.EncodeCoinbaseHeightPush(height)...)
 	arbitraryData = append(arbitraryData, []byte(coinbaseText)...)
 
 	// Arbitrary data should leave enough space for the extra nonce

@@ -24,27 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ExtendedMockValidator extends TestMockValidator with additional methods
-type ExtendedMockValidator struct {
-	TestMockValidator
-	getBlockHeightFunc     func() uint32
-	getMedianBlockTimeFunc func() uint32
-}
-
-func (m *ExtendedMockValidator) GetBlockHeight() uint32 {
-	if m.getBlockHeightFunc != nil {
-		return m.getBlockHeightFunc()
-	}
-	return 101
-}
-
-func (m *ExtendedMockValidator) GetMedianBlockTime() uint32 {
-	if m.getMedianBlockTimeFunc != nil {
-		return m.getMedianBlockTimeFunc()
-	}
-	return uint32(time.Now().Unix())
-}
-
 // TestServerInit tests the Init method comprehensively
 func TestServerInit(t *testing.T) {
 	t.Run("successful init with disabled block assembly", func(t *testing.T) {
@@ -54,7 +33,7 @@ func TestServerInit(t *testing.T) {
 		utxoStore := &utxo.MockUtxostore{}
 		blockchainClient := &blockchain.Mock{}
 
-		server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil, nil, nil)
 
 		ctx := context.Background()
 		err := server.Init(ctx)
@@ -70,7 +49,7 @@ func TestServerInit(t *testing.T) {
 		utxoStore := &utxo.MockUtxostore{}
 		blockchainClient := &blockchain.Mock{}
 
-		server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil, nil, nil)
 
 		ctx := context.Background()
 		err := server.Init(ctx)
@@ -86,7 +65,7 @@ func TestServerInit(t *testing.T) {
 		blockchainClient := &blockchain.Mock{}
 		blockAssemblyClient := &blockassembly.Mock{}
 
-		server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil, blockAssemblyClient)
+		server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil, nil, blockAssemblyClient)
 
 		ctx := context.Background()
 		err := server.Init(ctx)
@@ -100,7 +79,7 @@ func TestServerStop(t *testing.T) {
 	t.Run("stop with kafka signal", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		server.kafkaSignal = make(chan os.Signal, 1)
 
@@ -124,7 +103,7 @@ func TestServerStop(t *testing.T) {
 	t.Run("stop without kafka signal or consumer", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		err := server.Stop(context.Background())
 		require.NoError(t, err)
@@ -136,7 +115,7 @@ func TestServerHealth(t *testing.T) {
 	t.Run("liveness check", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		status, msg, err := server.Health(context.Background(), true)
 		require.NoError(t, err)
@@ -150,7 +129,7 @@ func TestServerHealth(t *testing.T) {
 		tSettings.Validator.GRPCListenAddress = ""
 		tSettings.Validator.HTTPListenAddress = ""
 
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		status, _, err := server.Health(context.Background(), false)
 		require.NoError(t, err)
@@ -163,7 +142,7 @@ func TestServerHealth(t *testing.T) {
 		tSettings.Validator.GRPCListenAddress = "localhost:8081"
 		tSettings.Validator.HTTPListenAddress = ""
 
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		status, msg, _ := server.Health(context.Background(), false)
 		require.NotEqual(t, http.StatusOK, status)
@@ -177,7 +156,7 @@ func TestServerHealth(t *testing.T) {
 		// Use a port that's unlikely to be in use
 		tSettings.Validator.HTTPListenAddress = ":18999"
 
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		status, msg, _ := server.Health(context.Background(), false)
 		// When HTTP server is configured but not started, the health check will fail
@@ -194,7 +173,7 @@ func TestServerHealthGRPC(t *testing.T) {
 	tSettings.Validator.GRPCListenAddress = ""
 	tSettings.Validator.HTTPListenAddress = ""
 
-	server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+	server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 	response, err := server.HealthGRPC(context.Background(), &validator_api.EmptyMessage{})
 	require.NoError(t, err)
@@ -211,11 +190,11 @@ func TestServerValidateTransaction(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
 
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-		server.validator = &TestMockValidator{
-			validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+		server.validator = &MockValidator{
+			ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 				return &meta.Data{
 					Fee:         32279815860,
 					SizeInBytes: 245,
@@ -241,7 +220,7 @@ func TestServerValidateTransaction(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
 
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		req := &validator_api.ValidateTransactionRequest{
 			TransactionData: []byte("invalid"),
@@ -257,11 +236,11 @@ func TestServerValidateTransaction(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
 
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-		server.validator = &TestMockValidator{
-			validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+		server.validator = &MockValidator{
+			ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 				return &meta.Data{
 					Fee:         32279815860,
 					SizeInBytes: 245,
@@ -294,10 +273,10 @@ func TestServerValidateTransaction(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
 
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
-		server.validator = &TestMockValidator{
-			validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+		server.validator = &MockValidator{
+			ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 				return nil, errors.NewServiceError("validation failed")
 			},
 		}
@@ -319,11 +298,11 @@ func TestServerValidateTransactionBatch(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
 
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-		server.validator = &TestMockValidator{
-			validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+		server.validator = &MockValidator{
+			ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 				return &meta.Data{
 					Fee:         32279815860,
 					SizeInBytes: 245,
@@ -351,12 +330,12 @@ func TestServerValidateTransactionBatch(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
 
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		var callCount int32
 		txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-		server.validator = &TestMockValidator{
-			validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+		server.validator = &MockValidator{
+			ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 				count := atomic.AddInt32(&callCount, 1)
 				if count == 1 {
 					return &meta.Data{
@@ -401,13 +380,9 @@ func TestServerGetBlockHeight(t *testing.T) {
 	t.Run("valid height", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
-		server.validator = &ExtendedMockValidator{
-			getBlockHeightFunc: func() uint32 {
-				return 12345
-			},
-		}
+		server.validator = &MockValidator{BlockHeight: 12345}
 
 		response, err := server.GetBlockHeight(context.Background(), &validator_api.EmptyMessage{})
 		require.NoError(t, err)
@@ -418,13 +393,9 @@ func TestServerGetBlockHeight(t *testing.T) {
 	t.Run("zero height error", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
-		server.validator = &ExtendedMockValidator{
-			getBlockHeightFunc: func() uint32 {
-				return 0
-			},
-		}
+		server.validator = &MockValidator{BlockHeight: 0}
 
 		response, err := server.GetBlockHeight(context.Background(), &validator_api.EmptyMessage{})
 		require.Error(t, err)
@@ -438,13 +409,9 @@ func TestServerGetMedianBlockTime(t *testing.T) {
 	t.Run("valid median time", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
-		server.validator = &ExtendedMockValidator{
-			getMedianBlockTimeFunc: func() uint32 {
-				return 1609459200
-			},
-		}
+		server.validator = &MockValidator{MedianBlockTime: 1609459200}
 
 		response, err := server.GetMedianBlockTime(context.Background(), &validator_api.EmptyMessage{})
 		require.NoError(t, err)
@@ -455,13 +422,9 @@ func TestServerGetMedianBlockTime(t *testing.T) {
 	t.Run("zero median time error", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
-		server.validator = &ExtendedMockValidator{
-			getMedianBlockTimeFunc: func() uint32 {
-				return 0
-			},
-		}
+		server.validator = &MockValidator{MedianBlockTime: 0}
 
 		response, err := server.GetMedianBlockTime(context.Background(), &validator_api.EmptyMessage{})
 		require.Error(t, err)
@@ -470,73 +433,17 @@ func TestServerGetMedianBlockTime(t *testing.T) {
 	})
 }
 
-// TestExtractValidationParams tests parameter extraction
-func TestExtractValidationParams(t *testing.T) {
-	e := echo.New()
-
-	t.Run("no parameters", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/tx", nil)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-
-		height, options := extractValidationParams(c)
-		require.Equal(t, uint32(0), height)
-		require.False(t, options.SkipUtxoCreation)
-		require.True(t, options.AddTXToBlockAssembly) // Default is true
-		require.False(t, options.SkipPolicyChecks)
-		require.False(t, options.CreateConflicting)
-	})
-
-	t.Run("all parameters true", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/tx?blockHeight=100&skipUtxoCreation=true&addTxToBlockAssembly=true&skipPolicyChecks=true&createConflicting=true", nil)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-
-		height, options := extractValidationParams(c)
-		require.Equal(t, uint32(100), height)
-		require.True(t, options.SkipUtxoCreation)
-		require.True(t, options.AddTXToBlockAssembly)
-		require.True(t, options.SkipPolicyChecks)
-		require.True(t, options.CreateConflicting)
-	})
-
-	t.Run("parameters with 1", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/tx?skipUtxoCreation=1&addTxToBlockAssembly=1&skipPolicyChecks=1&createConflicting=1", nil)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-
-		_, options := extractValidationParams(c)
-		require.True(t, options.SkipUtxoCreation)
-		require.True(t, options.AddTXToBlockAssembly)
-		require.True(t, options.SkipPolicyChecks)
-		require.True(t, options.CreateConflicting)
-	})
-
-	t.Run("parameters explicitly false", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/tx?addTxToBlockAssembly=false", nil)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-
-		_, options := extractValidationParams(c)
-		require.False(t, options.AddTXToBlockAssembly)
-	})
-
-	t.Run("invalid block height", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/tx?blockHeight=invalid", nil)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-
-		height, _ := extractValidationParams(c)
-		require.Equal(t, uint32(0), height)
-	})
-}
+// The query-string parameter-extraction suite that used to live here is gone
+// with the function it tested: the /tx endpoint no longer reads validation
+// options from the query string. http_trust_flags_test.go replaces its
+// coverage, asserting that the parameters are ignored rather than parsed.
 
 // TestHandleSingleTx tests single transaction handling edge cases
 func TestHandleSingleTx(t *testing.T) {
 	t.Run("invalid body", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		e := echo.New()
 		req := httptest.NewRequest(http.MethodPost, "/tx", &failingReader{})
@@ -553,10 +460,10 @@ func TestHandleSingleTx(t *testing.T) {
 	t.Run("validation failure", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
-		server.validator = &TestMockValidator{
-			validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+		server.validator = &MockValidator{
+			ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 				return nil, errors.NewServiceError("validation error")
 			},
 		}
@@ -580,7 +487,7 @@ func TestHandleMultipleTx(t *testing.T) {
 	t.Run("invalid transaction format", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
-		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		e := echo.New()
 		req := httptest.NewRequest(http.MethodPost, "/txs", strings.NewReader("invalid"))
@@ -600,7 +507,7 @@ func TestStartHTTPServer(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Validator.HTTPRateLimit = 1000
-	server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
+	server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -15,14 +15,22 @@ type MockInvalidBlockHandler struct {
 	mock.Mock
 }
 
-func (m *MockInvalidBlockHandler) ReportInvalidBlock(ctx context.Context, blockHash string, reason string) error {
-	args := m.Called(ctx, blockHash, reason)
+func (m *MockInvalidBlockHandler) ReportInvalidBlock(ctx context.Context, blockHash string, peerURL string, reason string) error {
+	args := m.Called(ctx, blockHash, peerURL, reason)
 	return args.Error(0)
 }
 
 // MockBlockchainClient mocks the blockchain client for testing
 type MockBlockchainClient struct {
 	mock.Mock
+}
+
+func (m *MockBlockchainClient) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return m.GetBestBlockHeader(ctx)
+}
+
+func (m *MockBlockchainClient) GetBlockHeadersByParentLinks(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return m.GetBlockHeaders(ctx, hash, numberOfHeaders)
 }
 
 func (m *MockBlockchainClient) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
@@ -65,12 +73,6 @@ func (m *MockBlockchainClient) CatchUpBlocks(ctx context.Context) error {
 func (m *MockBlockchainClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	args := m.Called(ctx, blockIDs)
 	return args.Bool(0), args.Error(1)
-}
-
-// OffChainBlockIDs implements the blockchain.ClientI interface. It reports
-// rebuilding so callers fall back to per-block CheckBlockIsInCurrentChain.
-func (m *MockBlockchainClient) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
-	return nil, 0, true, nil
 }
 
 // GetBestBlockHeader implements the blockchain.ClientI interface
@@ -177,21 +179,6 @@ func (m *MockBlockchainClient) GetBlockHeadersByHeight(ctx context.Context, star
 // GetBlockHeadersFromHeight implements the blockchain.ClientI interface
 func (m *MockBlockchainClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	args := m.Called(ctx, height, limit)
-	if args.Get(0) == nil {
-		return nil, nil, args.Error(2)
-	}
-
-	var meta []*model.BlockHeaderMeta
-	if args.Get(1) != nil {
-		meta = args.Get(1).([]*model.BlockHeaderMeta)
-	}
-
-	return args.Get(0).([]*model.BlockHeader), meta, args.Error(2)
-}
-
-// GetBlockHeadersFromTill implements the blockchain.ClientI interface
-func (m *MockBlockchainClient) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	args := m.Called(ctx, blockHashFrom, blockHashTill)
 	if args.Get(0) == nil {
 		return nil, nil, args.Error(2)
 	}
@@ -371,12 +358,6 @@ func (m *MockBlockchainClient) IsFSMCurrentState(ctx context.Context, state bloc
 	return args.Bool(0), args.Error(1)
 }
 
-// LegacySync implements the blockchain.ClientI interface
-func (m *MockBlockchainClient) LegacySync(ctx context.Context) error {
-	args := m.Called(ctx)
-	return args.Error(0)
-}
-
 // LocateBlockHeaders implements the blockchain.ClientI interface
 func (m *MockBlockchainClient) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
 	args := m.Called(ctx, locator, hashStop, maxHashes)
@@ -412,8 +393,8 @@ func (m *MockBlockchainClient) SendNotification(ctx context.Context, notificatio
 }
 
 // SetBlockMinedSet implements the blockchain.ClientI interface
-func (m *MockBlockchainClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	args := m.Called(ctx, blockHash)
+func (m *MockBlockchainClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, minedSetGeneration uint64) error {
+	args := m.Called(ctx, blockHash, minedSetGeneration)
 	return args.Error(0)
 }
 
@@ -462,6 +443,24 @@ func (m *MockBlockchainClient) WaitUntilFSMTransitionFromIdleState(ctx context.C
 	return args.Error(0)
 }
 
+// GetNextBlockID implements the blockchain.ClientI interface
+func (m *MockBlockchainClient) GetNextBlockID(ctx context.Context) (uint64, error) {
+	args := m.Called(ctx)
+	if args.Error(1) != nil {
+		return 0, args.Error(1)
+	}
+	return args.Get(0).(uint64), nil
+}
+
+// AssignBlockID implements the blockchain.ClientI interface
+func (m *MockBlockchainClient) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	args := m.Called(ctx, blockHash)
+	if args.Error(1) != nil {
+		return 0, args.Error(1)
+	}
+	return args.Get(0).(uint64), nil
+}
+
 // MockKafkaAsyncProducer implements the KafkaAsyncProducerI interface for testing
 type MockKafkaAsyncProducer struct {
 	mock.Mock
@@ -469,6 +468,11 @@ type MockKafkaAsyncProducer struct {
 
 func (m *MockKafkaAsyncProducer) Publish(msg *kafka.Message) {
 	m.Called(msg)
+}
+
+func (m *MockKafkaAsyncProducer) TryPublish(msg *kafka.Message) bool {
+	m.Called(msg)
+	return true
 }
 
 func (m *MockKafkaAsyncProducer) Close() error {

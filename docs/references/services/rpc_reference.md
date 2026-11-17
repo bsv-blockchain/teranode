@@ -50,7 +50,7 @@
     - [version](#version) - Returns the server version information
     - [freeze](#freeze) - Freezes specified UTXOs or OUTPUTs
     - [unfreeze](#unfreeze) - Unfreezes specified UTXOs or OUTPUTs
-    - [reassign](#reassign) - Reassigns specified frozen UTXOs to a new address
+    - [reassign](#reassign) - Updates a frozen UTXO commitment; ownership-changing reassignment is currently unsafe
     - [getchaintips](#getchaintips) - Returns information about all known chain tips
 - [Unimplemented RPC Commands](#unimplemented-rpc-commands)
 - [Error Handling](#error-handling)
@@ -349,7 +349,7 @@ Some key handlers include:
 - `handleSubmitMiningSolution`: Submits a solved block to the network
 - `handleFreeze`: Freezes specified UTXOs to prevent spending
 - `handleUnfreeze`: Unfreezes previously frozen UTXOs
-- `handleReassign`: Reassigns specified frozen UTXOs to a new address
+- `handleReassign`: Updates a frozen UTXO commitment; ownership-changing reassignment is currently unsafe
 - `handleSetBan`: Adds or removes IP addresses/subnets from the node's ban list
 - `handleClearBanned`: Removes all bans from the node
 - `handleListBanned`: Lists all currently banned IP addresses and subnets
@@ -426,13 +426,13 @@ getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, cle
 
 For GRPC services, certain administrative operations require additional API key authentication:
 
-- **Protected Methods**: `BanPeer` and `UnbanPeer` operations in both P2P and Legacy GRPC services require API key authentication
-- **Configuration**: Set via `grpc_admin_api_key` setting in the configuration file
-- **Auto-generation**: If no API key is configured, the system generates a random 32-byte key at startup
-- **Usage**: API key must be included in GRPC requests as metadata with the key `x-api-key`
+- **Protected Methods**: state-mutating admin operations require API key authentication. On the P2P service these are `BanPeer`, `UnbanPeer`, `ClearBanned`, `AddBanScore`, `ResetReputation`, `ConnectPeer` and `DisconnectPeer`; on the Legacy service, `BanPeer` and `UnbanPeer`.
+- **Configuration**: Set via the `grpc_admin_api_key` setting. Source it from an environment variable or secret store, not committed configuration; well-known placeholders (e.g. `testkey`, `changeme`) are ignored at startup (logged and treated as unset).
+- **Fail-closed default**: if no API key is configured (or a placeholder is ignored), the server generates a random key at startup. This *generated* key is never logged, and it leaves the protected admin RPCs unreachable until an operator sets a shared key that both the server and its internal clients read.
+- **Usage**: API key must be included in GRPC requests as metadata with the key `x-api-key`.
 
 !!! warning "Security Note"
-    The API key provides administrative access to ban/unban operations. Ensure it is properly secured and not exposed in logs or configuration files in production environments.
+    The API key provides administrative access to peer-policy operations. Keep it secret, never commit it, and prefer `security_level_grpc >= 2` (verified TLS) when the gRPC listener is not loopback-bound so the key is not exposed in transit. A key set in a settings file is masked in the startup settings dumps but held in clear in the file, so prefer supplying the key via the environment or a secret store.
 
 ## General Format
 
@@ -888,7 +888,7 @@ Returns information for creating a new block.
 
 1. `parameters` (object, optional):
 
-   - `provideCoinbaseTx` (boolean, optional, default=false): If true, includes the coinbase transaction in the response
+   - `provideCoinbaseTx` (boolean, optional, default=false): If true, includes the coinbase transaction in the response. This is the coinbase block assembly keeps on the candidate's job, paying the configured `miner_wallet_private_keys` addresses, and the one a solution without its own coinbase is mined with. The call fails if block assembly could not build one, for example because no miner wallet keys are configured
    - `verbosity` (numeric, optional, default=0): 0 for standard response, 1 to include subtree hashes
 
 **Returns:**
@@ -947,11 +947,13 @@ Submits a solved block to the network.
    {
        "id": "string",          // Mining candidate ID
        "nonce": number,         // Block nonce
-       "coinbase": "string",    // Coinbase transaction
+       "coinbase": "string",    // Coinbase transaction (optional, see below)
        "time": number,          // Block time
        "version": number        // Block version
    }
    ```
+
+   If `coinbase` is omitted, the block is mined with the coinbase block assembly kept on the candidate's job, the one `getminingcandidate` returns with `provideCoinbaseTx`, as in bitcoin-sv. The miner must then have hashed that coinbase. `version` goes into the block header only. Omitting `coinbase` fails if block assembly could not build one, for example because no miner wallet keys are configured.
 
 **Returns:**
 
@@ -1535,19 +1537,29 @@ Unfreezes a previously frozen UTXO, allowing it to be spent.
 
 ### reassign
 
-Reassigns ownership of a specific UTXO to a new Bitcoin address.
+Replaces a frozen UTXO's commitment using its outpoint and the old and new hashes.
+No destination address or replacement locking script is accepted.
 
-**Parameters:**
+**Known regression:** do not reassign to a different owner. The RPC can succeed
+with a `null` result while leaving the output unspendable by both owners, even
+after maturity. See the [reassignment limitation](../../topics/services/alert.md#24-utxo-reassignment)
+and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
 
-1. `txid` (string, required) - Transaction ID of the output to reassign
-2. `vout` (numeric, required) - Output index to reassign
-3. `destination` (string, required) - Bitcoin address to reassign the UTXO to
+**Parameters** (positional, in this order):
+
+1. `oldtxid` (string, required) - Transaction ID of the frozen output, as a hex hash
+2. `oldvout` (numeric, required) - Output index
+3. `oldutxohash` (string, required) - Current UTXO commitment, as a hex hash
+4. `newutxohash` (string, required) - Replacement UTXO commitment, as a hex hash
 
 **Returns:**
 
-- `boolean` - True if the UTXO was successfully reassigned
+- `null` on success; an error if hash parsing or the store operation fails. Success does not establish spendability.
 
 **Example Request:**
+
+This illustrates self-reassignment with an unchanged commitment. Replace the
+outpoint and both hash values with those of an actual frozen output.
 
 ```json
 {
@@ -1557,7 +1569,8 @@ Reassigns ownership of a specific UTXO to a new Bitcoin address.
     "params": [
         "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
         1,
-        "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "1111111111111111111111111111111111111111111111111111111111111111"
     ]
 }
 ```
@@ -1566,7 +1579,7 @@ Reassigns ownership of a specific UTXO to a new Bitcoin address.
 
 ```json
 {
-    "result": true,
+    "result": null,
     "error": null,
     "id": "curltest"
 }
@@ -1806,14 +1819,15 @@ The RPC service uses a standardized error handling system based on the Bitcoin C
 Standard error codes include:
 
 - -1: General error during command handling
-- -3: Wallet error (wallet functionality not implemented)
-- -5: Invalid address or key
-- -8: Out of memory or other resource exhaustion
+- -3: Unexpected type passed as a parameter
+- -5: Invalid address or key, or the named block or transaction does not exist
+- -8: Invalid, missing or out-of-range parameter
 - -20: Database inconsistency or corruption
 - -22: Error parsing or validating a block or transaction
 - -25: Transaction or block validation error
 - -26: Transaction rejected by policy rules
 - -27: Transaction already in chain
+- -28: Node still warming up - retry shortly
 - -30: RPC timeout - request exceeded configured timeout limit
 - -32600: Invalid JSON-RPC request
 - -32601: Method not found
@@ -1846,11 +1860,28 @@ Common error codes that may be returned:
 | -3        | RPC_TYPE_ERROR             | Unexpected type was passed as parameter            |
 | -5        | RPC_INVALID_ADDRESS        | Invalid address or key                             |
 | -8        | RPC_INVALID_PARAMETER      | Invalid, missing or duplicate parameter            |
+| -22       | RPC_DESERIALIZATION_ERROR  | Error parsing a block or transaction               |
+| -25       | RPC_VERIFY_ERROR           | Transaction or block failed validation             |
+| -28       | RPC_IN_WARMUP              | Node is still warming up; retry shortly            |
 | -32600    | RPC_INVALID_REQUEST        | JSON request format error                          |
 | -32601    | RPC_METHOD_NOT_FOUND       | Method not found                                   |
 | -32602    | RPC_INVALID_PARAMS         | Invalid method parameters                          |
 | -32603    | RPC_INTERNAL_ERROR         | Internal RPC error                                 |
 | -32700    | RPC_PARSE_ERROR            | Error parsing JSON request                         |
+
+Conditions that return a bitcoind-compatible code and message:
+
+| Code | Message                                     | Returned by                                                        | When                                                                                              |
+| ---- | ------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| -5   | `Block not found`                           | `getblock`, `getblockheader`, `invalidateblock`, `reconsiderblock` | The named block does not exist                                                                    |
+| -5   | `No such mempool or blockchain transaction` | `getrawtransaction`                                                | The asset service reports it does not hold the transaction                                        |
+| -8   | `Block height out of range`                 | `getblockbyheight`                                                 | No block exists at the requested height                                                           |
+| -25  | `TX rejected: Missing inputs`               | `sendrawtransaction`                                               | A parent of the submitted transaction is not known yet                                            |
+| -28  | `Still loading, try again shortly`          | `submitminingsolution`, `generate`, `generatetoaddress`            | Block assembly is (re)loading unmined transactions: on startup, after a reset, during a reconcile |
+
+-28 is transient and clears on its own: retry the same request after a short delay rather than treating it as a failure. On these commands a store or service fault never returns -5, -8 or -28; it returns the command's fallback code (usually -32603) with a generic message, and the detail goes to the node's log.
+
+`getblockhash` does not follow this table yet: it answers a height with no block with -5 `Block not found`, where bitcoind and `getblockbyheight` answer -8 `Block height out of range`.
 
 ## Connection Limiting
 

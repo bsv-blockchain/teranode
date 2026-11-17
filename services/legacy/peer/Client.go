@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -15,6 +16,7 @@ import (
 // legacy service over gRPC.
 type Client struct {
 	client peer_api.PeerServiceClient
+	conn   *grpc.ClientConn // gRPC connection owned by this client; closed by Close()
 	logger ulogger.Logger
 }
 
@@ -36,7 +38,12 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, address string) (ClientI, error) {
 	// Include the admin API key in the connection options
 	apiKey := tSettings.GRPCAdminAPIKey
-	if apiKey != "" {
+	if apiKey == "" || util.IsPlaceholderAdminAPIKey(apiKey) {
+		// A placeholder is ignored by the server (which uses a random key), so a
+		// client that sent it would still be rejected; warn instead of logging a
+		// reassuring "using API key" line that contradicts the server.
+		logger.Warnf("[Legacy Client] grpc_admin_api_key is unset or a well-known placeholder; admin RPCs (ban, unban) will fail with Unauthenticated because the server ignores placeholders and uses a random key")
+	} else {
 		logger.Infof("[Legacy Client] Using API key for authentication")
 	}
 
@@ -52,10 +59,20 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 
 	c := &Client{
 		client: peer_api.NewPeerServiceClient(baConn),
+		conn:   baConn,
 		logger: logger,
 	}
 
 	return c, nil
+}
+
+// Close releases the gRPC connection owned by this client.
+func (c *Client) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+
+	return nil
 }
 
 // GetPeers retrieves information about all currently connected legacy peers.

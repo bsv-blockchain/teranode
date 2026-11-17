@@ -38,14 +38,14 @@ func newRemovalCollector() *removalCollector {
 func (e *env) flushCollector(ctx context.Context, c *removalCollector) error {
 	if len(c.blockIDTrims) > 0 {
 		if err := e.utxoStore.RemoveBlockIDs(ctx, c.blockIDTrims); err != nil {
-			return errors.NewStorageError("failed to flush block id trims: %w", err)
+			return errors.NewStorageError("failed to flush block id trims", err)
 		}
 		e.stats.TxsBlockIDsTrimmed += len(c.blockIDTrims)
 	}
 
 	if len(c.conflictingChildren) > 0 {
 		if err := e.utxoStore.RemoveFromConflictingChildren(ctx, c.conflictingChildren); err != nil {
-			return errors.NewStorageError("failed to flush conflicting-child removals: %w", err)
+			return errors.NewStorageError("failed to flush conflicting-child removals", err)
 		}
 		e.stats.ParentConflictsCleaned += len(c.conflictingChildren)
 	}
@@ -75,7 +75,7 @@ func (e *env) deleteTxWithParents(ctx context.Context, txHash *chainhash.Hash, p
 			// Already gone — idempotent.
 			return false, nil
 		}
-		return false, errors.NewStorageError("failed to Get tx %s: %w", txHash.String(), err)
+		return false, errors.NewStorageError("failed to Get tx %s", txHash.String(), err)
 	}
 
 	// Partition BlockIDs into surviving vs deleted.
@@ -109,14 +109,14 @@ func (e *env) deleteTxWithParents(ctx context.Context, txHash *chainhash.Hash, p
 	}
 
 	if err = e.utxoStore.PreviousOutputsDecorate(ctx, meta.Tx); err != nil {
-		return false, errors.NewStorageError("PreviousOutputsDecorate %s: %w", txHash.String(), err)
+		return false, errors.NewStorageError("PreviousOutputsDecorate %s", txHash.String(), err)
 	}
 
 	spends := make([]*utxo.Spend, 0, len(meta.Tx.Inputs))
 	for i, input := range meta.Tx.Inputs {
 		utxoHash, hErr := util.UTXOHashFromInput(input)
 		if hErr != nil {
-			return false, errors.NewProcessingError("UTXOHashFromInput tx %s idx %d: %w", txHash.String(), i, hErr)
+			return false, errors.NewProcessingError("UTXOHashFromInput tx %s idx %d", txHash.String(), i, hErr)
 		}
 		spends = append(spends, &utxo.Spend{
 			TxID:         input.PreviousTxIDChainHash(),
@@ -141,14 +141,14 @@ func (e *env) deleteTxWithParents(ctx context.Context, txHash *chainhash.Hash, p
 			// per-input partial-success semantics, switch to single-input
 			// calls and aggregate errors.
 			if !isNotFound(err) {
-				return false, errors.NewStorageError("Unspend tx %s: %w", txHash.String(), err)
+				return false, errors.NewStorageError("Unspend tx %s", txHash.String(), err)
 			}
 		}
 	}
 
 	if err = e.utxoStore.Delete(ctx, txHash); err != nil {
 		if !isNotFound(err) {
-			return false, errors.NewStorageError("Delete tx %s: %w", txHash.String(), err)
+			return false, errors.NewStorageError("Delete tx %s", txHash.String(), err)
 		}
 	}
 

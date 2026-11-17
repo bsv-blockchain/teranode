@@ -11,6 +11,7 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/safemap"
@@ -18,6 +19,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+const aerospikeInvalidValueMsg = "[Aerospike] Invalid value %s=%v"
 
 var aerospikeConnectionMutex sync.Mutex
 var aerospikeConnections map[string]*uaerospike.Client
@@ -67,6 +70,14 @@ var aerospikeHistogramLastBuckets = *safemap.New[string, []uint64]()
 
 func init() {
 	aerospikeConnections = make(map[string]*uaerospike.Client)
+
+	// Raise the aerospike client's read buffer to 512MB for large records.
+	// aerospike.MaxBufferSize is a package-global in the client library that its
+	// batch/read commands consult concurrently. Writing it here in init (once,
+	// before main and before any client or batch read exists) establishes a
+	// happens-before edge with those reads; writing it on every GetAerospikeClient
+	// call instead raced with in-flight batch reads on already-running clients.
+	aerospike.MaxBufferSize = 1024 * 1024 * 512 // 512MB
 }
 
 // GetAerospikeClient creates or retrieves a cached Aerospike client for the given URL.
@@ -94,10 +105,35 @@ func GetAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 		logger.Infof("[AEROSPIKE] Reusing aerospike client: %v", url.Host)
 	}
 
-	// increase buffer size to 256MB for large records
-	aerospike.MaxBufferSize = 1024 * 1024 * 512 // 512MB
-
 	return client, nil
+}
+
+// CloseAerospikeClient closes the cached aerospike client for the given host and
+// removes it from the process-wide connection cache. GetAerospikeClient hands
+// out a shared client per host, so closing the client without evicting it would
+// leave a closed client in the cache: a subsequent store for the same host (for
+// example an in-process daemon restart that reuses the same Aerospike container)
+// would "reuse" the closed client and fail with INVALID_NODE_ERROR. Evicting
+// here forces the next GetAerospikeClient to build a fresh client.
+//
+// host MUST be the exact key GetAerospikeClient cached under — i.e. url.Host
+// (which may include a port and is not just a hostname); pass the same
+// url.Host, not a bare hostname, or the eviction silently no-ops.
+//
+// IMPORTANT — assumes sole ownership of the host's client. Because the cache is
+// keyed per host with no reference counting, this closes the client for ALL
+// users of that host. That is correct for the current single-UTXO-store daemon
+// (one store owns the host), but if more than one store/namespace on the same
+// host ever shares this client, closing it here would break the others. Add
+// reference counting before relying on shared ownership.
+func CloseAerospikeClient(host string) {
+	aerospikeConnectionMutex.Lock()
+	defer aerospikeConnectionMutex.Unlock()
+
+	if client, found := aerospikeConnections[host]; found {
+		client.Close()
+		delete(aerospikeConnections, host)
+	}
 }
 
 func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings.Settings) (*uaerospike.Client, error) {
@@ -115,7 +151,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			return nil, errors.NewConfigurationError("no aerospike_readPolicy found")
 		}
 
-		logger.Infof("[Aerospike] readPolicy url %s", redactURL(readPolicyURL))
+		logger.Infof("[Aerospike] readPolicy url %s", urlutil.Redact(readPolicyURL))
 
 		var err error
 
@@ -154,7 +190,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			return nil, errors.NewConfigurationError("no aerospike_writePolicy setting found")
 		}
 
-		logger.Infof("[Aerospike] writePolicy url %s", redactURL(writePolicyURL))
+		logger.Infof("[Aerospike] writePolicy url %s", urlutil.Redact(writePolicyURL))
 
 		writeMaxRetries, err = getQueryInt(writePolicyURL, "MaxRetries", aerospike.NewWritePolicy(0, 0).MaxRetries, logger)
 		if err != nil {
@@ -192,7 +228,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			return nil, errors.NewConfigurationError("no aerospike_batchPolicy setting found")
 		}
 
-		logger.Infof("[Aerospike] batchPolicy url %s", redactURL(batchPolicyURL))
+		logger.Infof("[Aerospike] batchPolicy url %s", urlutil.Redact(batchPolicyURL))
 
 		batchTotalTimeout, err = getQueryDuration(batchPolicyURL, "TotalTimeout", aerospike.NewBatchPolicy().TotalTimeout, logger)
 		if err != nil {
@@ -239,7 +275,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			querySleepBetweenRetries = aerospike.NewQueryPolicy().SleepBetweenRetries
 			querySleepMultiplier = aerospike.NewQueryPolicy().SleepMultiplier
 		} else {
-			logger.Infof("[Aerospike] queryPolicy url %s", redactURL(queryPolicyURL))
+			logger.Infof("[Aerospike] queryPolicy url %s", urlutil.Redact(queryPolicyURL))
 
 			queryMaxRetries, err = getQueryInt(queryPolicyURL, "MaxRetries", aerospike.NewQueryPolicy().MaxRetries, logger)
 			if err != nil {
@@ -270,7 +306,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 		// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 		// todo optimize read policies
 		// todo optimize write policies
-		logger.Infof("[Aerospike] base/connection policy url %s", redactURL(url))
+		logger.Infof("[Aerospike] base/connection policy url %s", urlutil.Redact(url))
 
 		policy.LimitConnectionsToQueueSize, err = getQueryBool(url, "LimitConnectionsToQueueSize", policy.LimitConnectionsToQueueSize, logger)
 		if err != nil {
@@ -364,7 +400,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 		}
 	}
 
-	logger.Debugf("url %s policy %s\n", redactURL(url), aerospikePolicySummary(policy))
+	logger.Debugf("url %s policy %s\n", urlutil.Redact(url), aerospikePolicySummary(policy))
 
 	// Apply the aerospike_semaphore_multiplier setting to the in-process
 	// uaerospike connection-semaphore. 1.0 (default) preserves prior
@@ -373,6 +409,12 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 	// util/uaerospike.WithSemaphoreMultiplier for the precise contract.
 	clientOpts := []uaerospike.ClientOption{
 		uaerospike.WithSemaphoreMultiplier(tSettings.Aerospike.SemaphoreMultiplier),
+		uaerospike.WithOverloadRetry(
+			tSettings.Aerospike.OverloadRetryMaxElapsed,
+			tSettings.Aerospike.OverloadRetryBaseBackoff,
+			tSettings.Aerospike.OverloadRetryMaxBackoff,
+		),
+		uaerospike.WithLogger(logger),
 	}
 
 	// policy = aerospike.NewClientPolicy()
@@ -398,31 +440,6 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 	initStats(logger, client, tSettings)
 
 	return client, nil
-}
-
-// redactURL returns the URL string with the userinfo password component
-// masked. It does not mutate the input. A nil input returns "<nil>".
-//
-// The placeholder "REDACTED" is intentionally URL-safe; "***" would be
-// percent-encoded as %2A%2A%2A by url.UserPassword because '*' is a
-// reserved character in the userinfo subcomponent (RFC 3986).
-func redactURL(u *url.URL) string {
-	if u == nil {
-		return "<nil>"
-	}
-
-	if u.User == nil {
-		return u.String()
-	}
-
-	if _, hasPwd := u.User.Password(); !hasPwd {
-		return u.String()
-	}
-
-	clone := *u
-	clone.User = url.UserPassword(u.User.Username(), "REDACTED")
-
-	return clone.String()
 }
 
 // aerospikePolicySummary returns a log-safe summary of an aerospike.ClientPolicy.
@@ -460,6 +477,16 @@ func aerospikePolicySummary(p *aerospike.ClientPolicy) string {
 
 func initStats(logger ulogger.Logger, client *uaerospike.Client, tSettings *settings.Settings) {
 	if client == nil {
+		return
+	}
+
+	if !tSettings.Aerospike.EnableClientMetrics {
+		// Gated by aerospike_enable_client_metrics. This skips only the
+		// client.Stats() polling goroutine below. client.EnableMetrics(nil) is
+		// disabled unconditionally (see the comment further down, pending #1001),
+		// so this flag has no effect on the per-batch nodeStats contention either
+		// way — it cannot be used to relieve it.
+		logger.Infof("[Aerospike] client metrics disabled (aerospike_enable_client_metrics=false)")
 		return
 	}
 
@@ -697,7 +724,7 @@ func getQueryBool(url *url.URL, key string, defaultValue bool, logger ulogger.Lo
 
 	valueBool, err := strconv.ParseBool(value)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%t", key, valueBool)
@@ -714,7 +741,7 @@ func getQueryInt(url *url.URL, key string, defaultValue int, logger ulogger.Logg
 
 	valueInt, err := strconv.Atoi(value)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%d", key, valueInt)
@@ -731,7 +758,7 @@ func getQueryDuration(url *url.URL, key string, defaultValue time.Duration, logg
 
 	valueDuration, err := time.ParseDuration(value)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%s", key, valueDuration.String())
@@ -748,7 +775,7 @@ func getQueryFloat64(url *url.URL, key string, defaultValue float64, logger ulog
 
 	valueFloat64, err := strconv.ParseFloat(value, 64)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%f", key, valueFloat64)
@@ -843,6 +870,12 @@ func WithExpiration(ttlSeconds uint32) AerospikeWritePolicyOptions {
 // GetAerospikeWritePolicy creates a new Aerospike write policy with the provided options applied.
 // Used to manage default connection parameters for write operations with strong consistency.
 // If no options are provided, the policy will use the configured default values.
+//
+// CommitLevel is deliberately not configurable: every consumer writes state whose
+// loss is not self-healing (UTXO record creation, the tx-creation lock, the
+// conflict WAL, setMined, unspend, preserve/DAH writes), so a master-only ACK
+// would trade a resync for throughput. The pruner relaxes its own idempotent
+// removals instead — see stores/utxo/aerospike/pruner/prune_policies.go.
 func GetAerospikeWritePolicy(tSettings *settings.Settings, generation uint32, options ...AerospikeWritePolicyOptions) *aerospike.WritePolicy {
 	writePolicy := aerospike.NewWritePolicy(generation, aerospike.TTLDontExpire)
 
@@ -888,6 +921,7 @@ func GetAerospikeBatchPolicy(tSettings *settings.Settings) *aerospike.BatchPolic
 
 // GetAerospikeBatchWritePolicy creates a new Aerospike batch write policy with strong consistency.
 // Used for batch write operations to ensure data integrity across multiple records.
+// CommitLevel is deliberately not configurable — see GetAerospikeWritePolicy.
 func GetAerospikeBatchWritePolicy(tSettings *settings.Settings) *aerospike.BatchWritePolicy {
 	batchWritePolicy := aerospike.NewBatchWritePolicy()
 

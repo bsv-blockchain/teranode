@@ -25,7 +25,7 @@ log_warn() {
 }
 
 log_error() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ❌ ERROR: $*"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ❌ ERROR: $*" >&2
 }
 
 # Install ASMT tool if not present

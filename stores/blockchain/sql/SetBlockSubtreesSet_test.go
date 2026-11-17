@@ -22,7 +22,7 @@ func TestSetBlockSubtreesSet(t *testing.T) {
 
 	store, err := New(logger, dbURL, settings.NewSettings())
 	require.NoError(t, err)
-	defer store.Close()
+	defer store.Close(context.Background())
 
 	// Helper function to insert a test block
 	insertTestBlock := func(hash *chainhash.Hash, subtreesSet bool) error {
@@ -377,7 +377,7 @@ func TestSetBlockSubtreesSet(t *testing.T) {
 		require.NoError(t, err)
 
 		// Close the store
-		store2.Close()
+		store2.Close(context.Background())
 
 		// Try to update after close
 		err = store2.SetBlockSubtreesSet(context.Background(), &blockHash)
@@ -437,7 +437,7 @@ func BenchmarkSetBlockSubtreesSet(b *testing.B) {
 	logger := ulogger.TestLogger{}
 	dbURL, _ := url.Parse("sqlitememory:///")
 	store, _ := New(logger, dbURL, settings.NewSettings())
-	defer store.Close()
+	defer store.Close(context.Background())
 
 	// Create and insert test blocks
 	hashes := make([]*chainhash.Hash, b.N)

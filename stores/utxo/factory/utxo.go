@@ -24,7 +24,7 @@
 //	}
 //
 //	// Use the store
-//	metadata, err := store.Create(ctx, tx, blockHeight)
+//	metadata, _, err := store.SpendAndCreate(ctx, tx, blockHeight, utxo.WithCreateOnly())
 //
 // # Features
 //
@@ -75,6 +75,8 @@ import (
 	storelogger "github.com/bsv-blockchain/teranode/stores/utxo/logger"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
+
+const errGettingBestHeightAndTime = "[UTXOStore] error getting best height and time for %s: %v"
 
 var availableDatabases = map[string]func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, url *url.URL) (utxo.Store, error){}
 
@@ -137,21 +139,19 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 			blockHeight, medianBlockTime, err := blockchainClient.GetBestHeightAndTime(ctx)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					logger.Infof("[UTXOStore] error getting best height and time for %s: %v", source, err)
+					logger.Infof(errGettingBestHeightAndTime, source, err)
 				} else {
-					logger.Warnf("[UTXOStore] error getting best height and time for %s: %v", source, err)
+					logger.Warnf(errGettingBestHeightAndTime, source, err)
 				}
 			} else if blockHeight > 0 {
-				logger.Debugf("[UTXOStore] setting block height to %d", blockHeight)
+				logger.Debugf("[UTXOStore] setting block state to height %d, median time %d", blockHeight, medianBlockTime)
 
-				if err = utxoStore.SetBlockHeight(blockHeight); err != nil {
-					logger.Errorf("[UTXOStore] error setting block height for %s: %v", source, err)
-				}
-
-				logger.Debugf("[UTXOStore] setting median block time to %d", medianBlockTime)
-
-				if err = utxoStore.SetMedianBlockTime(medianBlockTime); err != nil {
-					logger.Errorf("[UTXOStore] error setting median block time for %s: %v", source, err)
+				// Both values come from the same chain tip, so publish them as
+				// one atomic snapshot (issue 1443): two separate setter calls
+				// leave a window where GetBlockState readers pair a new height
+				// with a stale median time.
+				if err = utxoStore.SetBlockState(blockHeight, medianBlockTime); err != nil {
+					logger.Errorf("[UTXOStore] error setting block state for %s: %v", source, err)
 				}
 			} else {
 				logger.Infof("[UTXOStore] skipping block height initialization for %s (height is 0)", source)
@@ -170,19 +170,17 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 							blockHeight, medianBlockTime, err = blockchainClient.GetBestHeightAndTime(ctx)
 							if err != nil {
 								if errors.Is(err, context.Canceled) {
-									logger.Infof("[UTXOStore] error getting best height and time for %s: %v", source, err)
+									logger.Infof(errGettingBestHeightAndTime, source, err)
 								} else {
-									logger.Errorf("[UTXOStore] error getting best height and time for %s: %v", source, err)
+									logger.Errorf(errGettingBestHeightAndTime, source, err)
 								}
 							} else if blockHeight > 0 {
 								logger.Debugf("[UTXOStore] updated block height to %d and median time to %d for %s", blockHeight, medianBlockTime, source)
 
-								if err = utxoStore.SetBlockHeight(blockHeight); err != nil {
-									logger.Errorf("[UTXOStore] error setting block height for %s: %v", source, err)
-								}
-
-								if err = utxoStore.SetMedianBlockTime(medianBlockTime); err != nil {
-									logger.Errorf("[UTXOStore] error setting median block time for %s: %v", source, err)
+								// One atomic snapshot per tip; see the comment on the
+								// initialisation path above (issue 1443).
+								if err = utxoStore.SetBlockState(blockHeight, medianBlockTime); err != nil {
+									logger.Errorf("[UTXOStore] error setting block state for %s: %v", source, err)
 								}
 							} else {
 								logger.Infof("[UTXOStore] skipping block height update for %s (height is 0)", source)
