@@ -83,5 +83,6 @@ func TestApplyLockClearWorkReportsEveryFailure(t *testing.T) {
 		})
 		require.ErrorContains(t, err, "readExtraRecordCounts")
 		require.ErrorContains(t, err, "clearLockedOnRecordsMulti")
+		require.ErrorContains(t, err, "setLocked")
 	})
 }
