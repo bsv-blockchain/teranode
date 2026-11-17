@@ -1678,7 +1678,7 @@ func (u *BlockValidation) reloadSubtreeForInvalidBlock(ctx context.Context, bloc
 		// The revert unmines the transactions this list names, so it must be the subtree the
 		// block commits to. A copy whose nodes hash to another root is as unusable as one that
 		// does not parse.
-		if root := subtree.RootHash(); root == nil || !subtreeHash.IsEqual(root) {
+		if root := subtreeRootFromNodes(subtree); root == nil || !subtreeHash.IsEqual(root) {
 			computed := "<nil>"
 			if root != nil {
 				computed = root.String()
@@ -1708,6 +1708,25 @@ func (u *BlockValidation) reloadSubtreeForInvalidBlock(ctx context.Context, bloc
 	u.logger.Errorf("[setTxMined][%s] manual_intervention_required: subtree %d/%s has no usable copy, its transactions keep this invalid block's tag: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), strings.Join(corrupt, "; "))
 
 	return nil, nil
+}
+
+// subtreeRootFromNodes hashes a subtree's node list to its merkle root, or nil
+// when it has no nodes. A deserialized subtree's RootHash returns the root field
+// stored in the file without hashing the nodes, so a file with damaged node bytes
+// and an intact root field would pass a RootHash comparison.
+func subtreeRootFromNodes(subtree *subtreepkg.Subtree) *chainhash.Hash {
+	if subtree == nil || len(subtree.Nodes) == 0 {
+		return nil
+	}
+
+	store, err := subtreepkg.BuildMerkleTreeStoreFromBytes(subtree.Nodes)
+	if err != nil || len(*store) == 0 {
+		return nil
+	}
+
+	root := (*store)[len(*store)-1]
+
+	return &root
 }
 
 // setTxMinedStatus marks all transactions within a block as mined in the blockchain system.

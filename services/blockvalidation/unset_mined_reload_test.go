@@ -272,7 +272,8 @@ func TestReloadSubtreesForInvalidBlock_ClosesLoadedSubtreesOnReadError(t *testin
 //
 // A bad header (the store's header check fails), a bad body (the header passes
 // and the subtree does not parse) and a foreign body (it parses, but its nodes hash
-// to another root than the key) are the same permanent fault: the store writes
+// to another root than the key, including a damaged node under an intact stored
+// root) are the same permanent fault: the store writes
 // whole files, so a retry reads the same bytes. Both now try the
 // FileTypeSubtreeToCheck copy, and when no copy is usable the subtree is skipped
 // with the corrupt-subtree counter raised, rather than returned for a retry that
@@ -362,6 +363,17 @@ func TestReloadSubtreesForInvalidBlock_CorruptCopyIsPermanent(t *testing.T) {
 
 	foreignBody := func(raw []byte) []byte { return append(append([]byte{}, raw[:8]...), foreignSerialized...) }
 
+	// Damaged node bytes under an intact root field. The serialized subtree starts with the
+	// root (32 bytes), fees, size and node count (8 bytes each), so the first node's hash
+	// begins 56 bytes into the body. Deserializing keeps the stored root, so only hashing the
+	// nodes shows that this copy no longer lists the subtree's transactions.
+	damagedNode := func(raw []byte) []byte {
+		out := append([]byte{}, raw...)
+		out[8+56] ^= 0xff
+
+		return out
+	}
+
 	for _, tc := range []struct {
 		name    string
 		corrupt func([]byte) []byte
@@ -369,6 +381,7 @@ func TestReloadSubtreesForInvalidBlock_CorruptCopyIsPermanent(t *testing.T) {
 		{name: "bad header", corrupt: badHeader},
 		{name: "bad body", corrupt: badBody},
 		{name: "foreign subtree", corrupt: foreignBody},
+		{name: "damaged node under an intact root", corrupt: damagedNode},
 	} {
 		t.Run(tc.name+" falls back to the subtree-to-check copy", func(t *testing.T) {
 			before := promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt)
@@ -377,7 +390,7 @@ func TestReloadSubtreesForInvalidBlock_CorruptCopyIsPermanent(t *testing.T) {
 			require.NoError(t, u.reloadSubtreesForInvalidBlock(ctx, block))
 			require.Len(t, block.SubtreeSlices, 1)
 			require.NotNil(t, block.SubtreeSlices[0], "the subtree-to-check copy must be used")
-			require.Equal(t, *st.RootHash(), *block.SubtreeSlices[0].RootHash())
+			require.Equal(t, *st.RootHash(), *subtreeRootFromNodes(block.SubtreeSlices[0]), "the nodes used must hash to the subtree hash")
 			require.Equal(t, before, promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt))
 
 			require.NoError(t, block.ReleaseSubtreeNodes(nil))
