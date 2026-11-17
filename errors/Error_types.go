@@ -571,8 +571,11 @@ func NewBlobError(message string, params ...interface{}) *Error {
 // NewBlobCorruptError creates an error for a stored blob whose bytes are present but unusable,
 // such as a missing, truncated or wrong-type header. Stores write blobs whole (temp file then
 // rename, or a single S3 put), so such a blob stays broken and a retry of the same read cannot
-// help. A store keeps its StorageError and adds this as the cause, so existing StorageError checks
-// are unchanged and only a caller that asks IsBlobCorrupt treats the read as permanent.
+// help. A store keeps its StorageError and adds this as the cause, so the StorageError and
+// IsRetryableError checks are unchanged. The rendered message now contains BLOB_CORRUPT, so the
+// substring match in IsMaliciousResponseError also catches a wrong-type header and an S3 Get
+// header failure. Block validation retries those a bounded number of times, as it already did for
+// "missing or invalid header".
 func NewBlobCorruptError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOB_CORRUPT, message, params...)
 }

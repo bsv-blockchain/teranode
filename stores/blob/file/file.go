@@ -1372,7 +1372,7 @@ func (s *File) validateFileHeader(f io.Reader, fileName string, fileType filefor
 				errors.NewBlobCorruptError("header unreadable", err))
 		}
 
-		return errors.NewStorageError("[File][GetIoReader] [%s] failed to read header", fileName, err)
+		return errors.NewStorageError("[File][GetIoReader] [%s] missing or invalid header", fileName, err)
 	}
 
 	if header.FileType() != fileType {
