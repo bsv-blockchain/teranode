@@ -305,11 +305,11 @@ A reorg changes state in three places: the chain tip in the Blockchain service, 
 
 ##### Restart After a Crash in a Reorg
 
-On start, Block Assembly does these steps in sequence:
+On start, Block Assembly does these reorg-relevant steps, in order. `BlockAssembler.Start` runs other steps between them.
 
 1. It loads its persisted tip (`initState`). After a crash in a reorg, this is the tip before the reorg.
 2. It waits for pending blocks (`WaitForPendingBlocks`).
-3. It replays each pending write-ahead intent, or heals the intent if its block changed chain since the crash (`replayPendingConflictIntents`).
+3. It replays each pending write-ahead intent, or heals the intent if its block changed chain since the crash (`replayPendingConflictIntents`). If a replay fails, or a recovery stays unresolved or stale, Block Assembly does not start (`checkConflictRecoveryReady`).
 4. It loads unmined transactions (`loadUnminedTransactions`).
 5. It checks for canonical coinbases that are missing from the UTXO store (`checkCoinbaseDivergenceOnStart`).
 6. It starts its listeners and runs a reconcile, which runs the reorg again from the persisted tip.
