@@ -3,6 +3,7 @@ package utxoset
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -232,10 +233,9 @@ func TestDeleteRemovesMembershipRows(t *testing.T) {
 		"a mined-only transaction's body must not survive Delete")
 }
 
-// TestDeleteRetriesADeadlockOnItsJournalRow: Delete removes the transaction's identity and
-// membership rows in its main query and the undo records for its spent outputs at the end of the
-// same statement, so a writer that holds one of those undo records and then asks for the
-// identity row crosses it. Unspend of the same transaction is that writer: it consumes the undo
+// TestDeleteRetriesADeadlockOnItsJournalRow: Delete takes the transaction's identity and
+// membership rows first and removes the undo records for its spent outputs after, so a writer that
+// holds one of those undo records and then asks for the identity row crosses it. Unspend of the same transaction is that writer: it consumes the undo
 // record first and share-locks the identity row after. The holder plays it, with its own
 // deadlock check pushed out where a superuser can do that, so Delete, which started waiting
 // first, is normally the one PostgreSQL stops. Delete must run again and succeed rather than hand
@@ -345,4 +345,100 @@ func TestDeleteWaitsForARestoreOfItsCoin(t *testing.T) {
 	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM utxo WHERE txid = $1`, h[:]),
 		"the coin the restore put back must not outlive its transaction")
 	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM tx_ident WHERE txid = $1`, h[:]))
+}
+
+// TestDeleteWaitsForARestoreOfAMinedCoin is TestDeleteWaitsForARestoreOfItsCoin for a block-path
+// transaction, which has containment rows in tx_mined and no identity row. The restore
+// share-locks the containment rows, so the delete has to take those to wait for it.
+func TestDeleteWaitsForARestoreOfAMinedCoin(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	require.NoError(t, s.SetBlockHeight(100))
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	h := parent.TxIDChainHash()
+	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM tx_ident WHERE txid = $1`, h[:]), "fixture: no identity row")
+	require.Equal(t, 1, countWhere(t, s, ctx, `SELECT count(*) FROM tx_mined WHERE txid = $1`, h[:]), "fixture: one containment row")
+
+	spends, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 1_000, 0), 101)
+	require.NoError(t, err)
+	require.Len(t, spends, 1)
+
+	req, err := newUnspendRequest(spends, false)
+	require.NoError(t, err)
+
+	restore, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = restore.Rollback(context.Background()) }()
+
+	res, err := s.restoreIn(ctx, restore, req)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.restored)
+
+	done := make(chan error, 1)
+
+	go func() { done <- s.Delete(ctx, h) }()
+
+	// Delete is the only backend that can wait here. "FROM" matches either of its statements:
+	// PostgreSQL reports only the first 1024 bytes of a query, and deleteTxSQL names tx_mined
+	// past that.
+	waitForLockWait(t, s, ctx, "FROM")
+	require.NoError(t, restore.Commit(ctx))
+	require.NoError(t, <-done)
+
+	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM utxo WHERE txid = $1`, h[:]),
+		"the coin the restore put back must not outlive its transaction")
+	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM tx_mined WHERE txid = $1`, h[:]))
+}
+
+// TestDeleteCutWhileWaitingForItsRowsDeletesNothing: Delete takes the transaction's rows before
+// it deletes anything, so a deadline that runs out while it waits for them returns an error and
+// leaves the transaction whole, its identity row, coins and undo records all still there.
+func TestDeleteCutWhileWaitingForItsRowsDeletesNothing(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, _ := mempoolParentSpent(t, s, ctx, false)
+	h := parent.TxIDChainHash()
+
+	holder, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = holder.Rollback(context.Background()) }()
+
+	_, err = holder.Exec(ctx, `SELECT 1 FROM tx_ident WHERE txid = $1 FOR UPDATE`, h[:])
+	require.NoError(t, err)
+
+	cut, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+
+	require.Error(t, s.Delete(cut, h), "the deadline cuts the wait for the rows")
+
+	require.NoError(t, holder.Rollback(ctx))
+
+	require.Equal(t, 1, countWhere(t, s, ctx, `SELECT count(*) FROM tx_ident WHERE txid = $1`, h[:]))
+	require.Equal(t, 1, countWhere(t, s, ctx, `SELECT count(*) FROM utxo WHERE txid = $1`, h[:]),
+		"the unspent output is still there")
+	require.Equal(t, 1, countWhere(t, s, ctx, `SELECT count(*) FROM spend_journal WHERE txid = $1`, h[:]),
+		"the undo record of the spent output is still there")
+}
+
+// TestDeleteWithACancelledContextFails: a Delete whose context is already done cannot open its
+// transaction, and says so rather than reporting the transaction gone.
+func TestDeleteWithACancelledContextFails(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100)
+	require.NoError(t, err)
+
+	done, cancel := context.WithCancel(ctx)
+	cancel()
+
+	require.Error(t, s.Delete(done, parent.TxIDChainHash()))
+	require.True(t, identExists(t, s, ctx, parent), "nothing was deleted")
 }

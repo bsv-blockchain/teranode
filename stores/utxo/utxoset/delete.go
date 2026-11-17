@@ -222,9 +222,12 @@ func (s *Store) deleteOnce(ctx context.Context, hashes []chainhash.Hash) error {
 	return nil
 }
 
-// deleteIn is Delete against an arbitrary querier and over a batch, so a future multi-delete
-// and any composition inside a database transaction share these predicates rather than growing
-// a second copy of them. A single Delete is a batch of one.
+// deleteIn is Delete's statement against an arbitrary querier and over a batch, so a future
+// multi-delete and any composition inside a database transaction share these predicates rather
+// than growing a second copy of them. A single Delete is a batch of one. It is not the whole of
+// Delete: run on its own, beside a restore of one of the transactions' coins, it can leave that
+// coin behind, so a caller first takes the rows with deleteLockSQL in the same transaction, as
+// deleteOnce does.
 //
 // It does not retry a deadlock itself. Inside a caller's transaction a deadlock has already
 // aborted that transaction, so only the caller can run it again from the start.
