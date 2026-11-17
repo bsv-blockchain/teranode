@@ -21,7 +21,7 @@ func initPrometheusMetrics() {
 				Namespace: "teranode",
 				Subsystem: "utxopersister",
 				Name:      "liveness_heartbeat_age_seconds",
-				Help:      "Seconds since the UTXO persister main loop last beat its liveness heartbeat (0 before the loop's first beat and once the service is stopping). While the loop runs, this is the age utxoPersister_livenessStallTimeout is compared against, so alert on it and learn its worst case before arming a restart on it (issue 1447).",
+				Help:      "Seconds since the UTXO persister main loop last beat its liveness heartbeat (0 before the loop's first beat and once the service is stopping). Until the service starts stopping, this is the age utxoPersister_livenessStallTimeout is compared against, so alert on it and learn its worst case before arming a restart on it (issue 1447).",
 			},
 		)
 	})

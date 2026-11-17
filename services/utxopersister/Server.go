@@ -735,8 +735,9 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	}
 
 	// Remove the previous block's UTXOSet and headers. A stop before this
-	// finishes leaves the previous set on disk: nothing reads it again and
-	// nothing deletes it later, so it stays until removed by hand.
+	// finishes leaves the previous set on disk. This loop never reads or
+	// deletes it again, so it stays until removed by hand; one-shot builds and
+	// the seeder may still read it (utxoPersister_livenessStallTimeout says when).
 	if lastWrittenUTXOSetHash.String() != s.settings.ChainCfgParams.GenesisHash.String() && !s.settings.BlockPersister.SkipUTXODelete {
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet); err != nil {
 			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
