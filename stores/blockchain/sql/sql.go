@@ -77,10 +77,13 @@ const rebuildOffChainSetTimeout = 30 * time.Second
 
 // migrationFullRebuildTimeout bounds the one-shot full-chain rebuildOnMainChainFlag
 // that runs at startup the first time the on_main_chain column is populated.
-// Unlike the bounded-window rebuilds (which touch at most 10×CoinbaseMaturity
-// blocks and always fit in rebuildOffChainSetTimeout), the migration walks the
-// full chain via a recursive CTE and its runtime scales with chain length. On a
-// multi-million-block chain on an undersized VM this can take several minutes,
+// Unlike a bounded-window rebuild, which walks 10×CoinbaseMaturity blocks below
+// the tip, extended down to any recorded floor, under rebuildOffChainSetTimeout,
+// the migration walks the full chain via a recursive CTE and its runtime scales
+// with chain length. A floor can lie as low as genesis, so the background repair
+// hands a bounded walk that runs out of rebuildOffChainSetTimeout to the full
+// walk and this budget (see attemptOnMainChainRepair). On a
+// multi-million-block chain on an undersized VM the full walk can take several minutes,
 // so the 30 s window used elsewhere is too short: if the migration times out,
 // the column is left unpopulated and CheckBlockIsInCurrentChain's fast path
 // returns no rows, silently breaking validation for any block below the

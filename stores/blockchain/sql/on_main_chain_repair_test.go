@@ -400,6 +400,7 @@ func TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime(t *testing.T) {
 			setRepairBackoff(t, s, time.Millisecond)
 
 			s.onMainChainRepair.mu.Lock()
+			require.Equal(t, rebuildOffChainSetTimeout, s.onMainChainRepair.boundedTimeout, "New gives a bounded attempt the 30 s budget")
 			s.onMainChainRepair.boundedTimeout = 50 * time.Millisecond
 			s.onMainChainRepair.mu.Unlock()
 
@@ -411,10 +412,11 @@ func TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime(t *testing.T) {
 			require.NoError(t, err)
 
 			var (
-				mu     sync.Mutex
-				fulls  []bool
-				floors []int64
-				locked []bool
+				mu         sync.Mutex
+				fulls      []bool
+				floors     []int64
+				locked     []bool
+				fullBudget time.Duration
 			)
 
 			s.rebuildTxHook = func(ctx context.Context, full bool, floor int64) error {
@@ -427,12 +429,18 @@ func TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime(t *testing.T) {
 				fulls = append(fulls, full)
 				floors = append(floors, floor)
 				locked = append(locked, held)
+
+				if deadline, ok := ctx.Deadline(); ok && full {
+					fullBudget = time.Until(deadline)
+				}
 				mu.Unlock()
 
 				if !full {
 					<-ctx.Done()
 
-					return errors.NewStorageError("bounded walk did not finish", ctx.Err())
+					// A driver reports a statement cancelled at the deadline as its own
+					// error, which does not wrap context.DeadlineExceeded.
+					return errors.NewStorageError("pq: canceling statement due to user request")
 				}
 
 				return s.rebuildOnMainChainFlagTx(ctx, full, floor)
@@ -449,6 +457,7 @@ func TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime(t *testing.T) {
 			require.Equal(t, []bool{false, true}, fulls, "one bounded attempt runs out of time, then the full walk lands")
 			require.Equal(t, int64(0), floors[0], "the bounded attempt walks down to the noted floor")
 			require.Equal(t, []bool{true, !tc.unlocked}, locked, "the bounded attempt holds slowPathMu; the full walk holds it only on SQLite")
+			require.Greater(t, fullBudget, rebuildOffChainSetTimeout, "the full walk runs under the full-walk budget, not the bounded one it escaped")
 
 			s.onMainChainRepair.mu.Lock()
 			defer s.onMainChainRepair.mu.Unlock()
@@ -457,6 +466,44 @@ func TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime(t *testing.T) {
 			require.Equal(t, noRepairFloor, s.onMainChainRepair.floor)
 		})
 	}
+}
+
+// TestOnMainChainRepairShutdownDoesNotEscalateABoundedWalk: Close cancels a bounded
+// attempt's context, which is not the budget running out. The record must stay bounded with
+// its floor, so a store that is shutting down does not decide its repair needs the full walk.
+func TestOnMainChainRepairShutdownDoesNotEscalateABoundedWalk(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	setRepairBackoff(t, s, time.Hour)
+
+	started := make(chan struct{})
+
+	s.rebuildTxHook = func(ctx context.Context, full bool, floor int64) error {
+		close(started)
+		<-ctx.Done()
+
+		return errors.NewStorageError("bounded walk cancelled", ctx.Err())
+	}
+
+	s.markOnMainChainDirty(false, 2, "test", errors.NewStorageError("injected"))
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the bounded attempt did not start")
+	}
+
+	close(s.backgroundDone)
+	select {
+	case <-s.onMainChainRepair.stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the repair loop did not stop")
+	}
+
+	s.onMainChainRepair.mu.Lock()
+	defer s.onMainChainRepair.mu.Unlock()
+
+	require.False(t, s.onMainChainRepair.full, "a shutdown is not a timeout, so the record stays bounded")
+	require.Equal(t, int64(2), s.onMainChainRepair.floor)
 }
 
 // TestOnMainChainRepairEscalatedWalkThatIsOverlappedNarrowsToTheWritesFloor: escalating a
