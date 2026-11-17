@@ -3131,9 +3131,13 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 // replaced, nobody releases it: heap-backed nodes go to the GC, and an mmap-backed
 // subtree keeps its mapping until the process exits and leaves its
 // subtree-nodes-* temp file in blockvalidation_subtreeMmapDir after that, since
-// nothing removes those files at startup. That needs an
-// operator invalidate and reconsider racing a lost SetBlockSubtreesSet reply, and a
-// leak is the safe side of that trade against tagging another block's hashes.
+// nothing removes those files at startup. Only the optimistic-mining goroutine
+// (blockvalidation_optimistic_mining_peer_blocks, off by default) caches outside
+// runOncePerBlock, so the overwrite needs that setting and an operator invalidate
+// and reconsider racing a failed SetBlockSubtreesSet. A lost reply is what lets the
+// worker take block first; the leak needs only the failure. A leak is the safe side
+// of that trade against tagging another block's hashes, and it is logged at Warn so
+// stray subtree-nodes-* files can be traced back to it.
 func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block, cached bool) bool {
 	if !cached {
 		releaseBlockNodes(block)
@@ -3148,7 +3152,12 @@ func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block,
 
 	releaseBlockNodes(taken)
 
-	return taken == block
+	if taken != block {
+		u.logger.Warnf("[ValidateBlock][%s] validated-blocks cache held another object for this block after a failed subtrees_set, released that one and left ours to the setMined worker; if no worker took it, its subtrees are never released", block.Hash().String())
+		return false
+	}
+
+	return true
 }
 
 // detachedBlockCopy returns a new *model.Block with block's header, coinbase and

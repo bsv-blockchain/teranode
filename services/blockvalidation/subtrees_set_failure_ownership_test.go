@@ -275,28 +275,32 @@ func TestSubtreesSetFailure_ValidateBlockReleasesAnUntakenBlock(t *testing.T) {
 // side that removes the block from the cache releases it, and a block that never
 // entered the cache stays with ValidateBlock.
 func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
-	newBV := func(t *testing.T) *BlockValidation {
+	newBV := func(t *testing.T) (*BlockValidation, *warnRecordingLogger) {
+		logger := &warnRecordingLogger{}
 		bv := &BlockValidation{
-			logger:              ulogger.TestLogger{},
+			logger:              logger,
 			lastValidatedBlocks: newTestLastValidatedBlocks(),
 		}
 		t.Cleanup(bv.lastValidatedBlocks.Stop)
 
-		return bv
+		return bv, logger
 	}
 
+	const otherObjectWarning = "[ValidateBlock][%s] validated-blocks cache held another object"
+
 	t.Run("cached and untaken: released here", func(t *testing.T) {
-		bv := newBV(t)
+		bv, logger := newBV(t)
 		block := blockWithLoadedSubtree(t)
 		bv.lastValidatedBlocks.Set(*block.Hash(), block)
 
 		require.True(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
 		require.False(t, block.SubtreesLoaded())
 		require.Zero(t, bv.lastValidatedBlocks.Len())
+		require.False(t, logger.warned(otherObjectWarning))
 	})
 
 	t.Run("cached and already taken: left alone", func(t *testing.T) {
-		bv := newBV(t)
+		bv, _ := newBV(t)
 		block := blockWithLoadedSubtree(t)
 		bv.lastValidatedBlocks.Set(*block.Hash(), block)
 
@@ -308,7 +312,7 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 	})
 
 	t.Run("never cached: released here", func(t *testing.T) {
-		bv := newBV(t)
+		bv, _ := newBV(t)
 		block := blockWithLoadedSubtree(t)
 
 		require.True(t, bv.reclaimBlockAfterFailedSubtreesSet(block, false))
@@ -321,7 +325,7 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 	// object was cached. The worker may still be reading ours, so only the
 	// object reclaim removed is released, and the caller must not reuse ours.
 	t.Run("entry replaced by another object: only the cached one released", func(t *testing.T) {
-		bv := newBV(t)
+		bv, logger := newBV(t)
 		block := blockWithLoadedSubtree(t)
 		other := detachedBlockCopy(block)
 		other.SubtreeSlices = loadedSubtrees(t)
@@ -331,10 +335,11 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 		require.True(t, block.SubtreesLoaded(), "a block the setMined worker may hold must not be released")
 		require.False(t, other.SubtreesLoaded())
 		require.Zero(t, bv.lastValidatedBlocks.Len())
+		require.True(t, logger.warned(otherObjectWarning), "leaving the block unreleased must be logged")
 	})
 
 	t.Run("worker took ours, then a revalidation cached another: ours left to the worker", func(t *testing.T) {
-		bv := newBV(t)
+		bv, logger := newBV(t)
 		block := blockWithLoadedSubtree(t)
 		bv.lastValidatedBlocks.Set(*block.Hash(), block)
 
@@ -349,6 +354,7 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 		require.False(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
 		require.True(t, workerBlock.SubtreesLoaded(), "reclaim released the block the setMined worker is reading")
 		require.False(t, revalidated.SubtreesLoaded())
+		require.True(t, logger.warned(otherObjectWarning))
 	})
 }
 
@@ -375,6 +381,34 @@ func TestDetachedBlockCopy(t *testing.T) {
 	// The subtree list is the copy's own: editing it must not reach the original.
 	copied.Subtrees[0] = &chainhash.Hash{0xff}
 	require.NotEqual(t, block.Subtrees[0], copied.Subtrees[0])
+}
+
+// warnRecordingLogger records the format string of every Warnf call, so a test can
+// check that a path which gives up a block without releasing it says so.
+type warnRecordingLogger struct {
+	ulogger.TestLogger
+	mu    sync.Mutex
+	warns []string
+}
+
+func (l *warnRecordingLogger) Warnf(format string, _ ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.warns = append(l.warns, format)
+}
+
+func (l *warnRecordingLogger) warned(prefix string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	for _, format := range l.warns {
+		if strings.HasPrefix(format, prefix) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func newTestLastValidatedBlocks() *expiringmap.ExpiringMap[chainhash.Hash, *model.Block] {
