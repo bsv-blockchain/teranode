@@ -3,7 +3,6 @@ package utxoset
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -420,10 +419,12 @@ func TestDeleteWaitsForARestoreOfAMinedCoin(t *testing.T) {
 	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM tx_mined WHERE txid = $1`, h[:]))
 }
 
-// TestDeleteCutWhileWaitingForItsRowsDeletesNothing: Delete takes the transaction's rows before
-// it deletes anything, so a deadline that runs out while it waits for them returns an error and
-// leaves the transaction whole, its identity row, coins and undo records all still there.
-func TestDeleteCutWhileWaitingForItsRowsDeletesNothing(t *testing.T) {
+// TestDeleteCutWhileWaitingOnARowDeletesNothing: a Delete cut while it waits on a row another
+// transaction holds returns an error, and the attempt rolls back whole, so the transaction's
+// identity row, coins and undo records are all still there. The lock-first order is pinned by the
+// restore races above, not here: a Delete without it would block on the same row and roll back
+// the same way.
+func TestDeleteCutWhileWaitingOnARowDeletesNothing(t *testing.T) {
 	s, ctx := newTestStore(t)
 
 	parent, _ := mempoolParentSpent(t, s, ctx, false)
@@ -437,10 +438,18 @@ func TestDeleteCutWhileWaitingForItsRowsDeletesNothing(t *testing.T) {
 	_, err = holder.Exec(ctx, `SELECT 1 FROM tx_ident WHERE txid = $1 FOR UPDATE`, h[:])
 	require.NoError(t, err)
 
-	cut, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	cut, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	require.Error(t, s.Delete(cut, h), "the deadline cuts the wait for the rows")
+	done := make(chan error, 1)
+
+	go func() { done <- s.Delete(cut, h) }()
+
+	waitForLockWait(t, s, ctx, "FROM")
+	cancel()
+
+	derr := <-done
+	require.True(t, errors.Is(derr, errors.ErrStorageError), "a Delete cut while it waits is a storage error, got %v", derr)
 
 	require.NoError(t, holder.Rollback(ctx))
 
