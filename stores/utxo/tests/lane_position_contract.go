@@ -141,11 +141,16 @@ func LanePositionMinedCreate(t *testing.T, db utxostore.Store) {
 	}
 }
 
-// ScriptedLanePositions is a LanePositionSource for tests: it hands out left in order, then reports
-// that it has none. It is safe to call from a store's concurrent writers.
+// ScriptedLanePositions is a LanePositionSource for tests: it hands out left in order, then fails
+// with service unavailable, as a source with no lease does. It is safe to call from a store's
+// concurrent writers.
 type ScriptedLanePositions struct {
-	mu   sync.Mutex
-	left []uint64
+	mu    sync.Mutex
+	left  []uint64
+	calls int
+
+	// OnNext, if set, runs at the start of every Next, outside the lock.
+	OnNext func()
 }
 
 // NewScriptedLanePositions returns a source that hands out positions in order.
@@ -154,22 +159,33 @@ func NewScriptedLanePositions(positions ...uint64) *ScriptedLanePositions {
 }
 
 // Next implements utxostore.LanePositionSource.
-func (s *ScriptedLanePositions) Next() (uint64, bool) {
+func (s *ScriptedLanePositions) Next(context.Context) (uint64, error) {
+	if s.OnNext != nil {
+		s.OnNext()
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.calls++
+
 	if len(s.left) == 0 {
-		return lane.None, false
+		return lane.None, errors.NewServiceUnavailableError("scripted lane positions: none left")
 	}
 
 	position := s.left[0]
 	s.left = s.left[1:]
 
-	return position, true
+	return position, nil
 }
 
-// Prime implements utxostore.LanePositionSource. A scripted source has nothing to wait for.
-func (s *ScriptedLanePositions) Prime() {}
+// Calls is how many times Next has been called.
+func (s *ScriptedLanePositions) Calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.calls
+}
 
 // Remaining is how many positions have not been handed out.
 func (s *ScriptedLanePositions) Remaining() int {
@@ -204,7 +220,7 @@ func lanePositionsFrom(laneNumber uint8, count int) []uint64 {
 // LanePositionFromSource: a store with a source gives each record it creates the next position, on
 // the create-only path, the spend-and-create path and the mined path. A spend-only call creates no
 // record, so it takes none. A position the caller names wins, and costs the source nothing. A source
-// with nothing to give leaves the record with no position, and the create still succeeds.
+// with nothing to give fails the create with service unavailable, and nothing is written or spent.
 func LanePositionFromSource(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 
@@ -257,14 +273,45 @@ func LanePositionFromSource(t *testing.T, db utxostore.Store) {
 		require.Equal(t, 1, source.Remaining(), "the source is not asked")
 	})
 
-	t.Run("a source with nothing to give leaves none", func(t *testing.T) {
+	t.Run("a create with no position fails and writes nothing", func(t *testing.T) {
 		w := BuildMultiWorkload(t, 0xf3, 1, 1)
 		useLanePositionSource(t, db, NewScriptedLanePositions())
 
 		_, _, err := db.SpendAndCreate(ctx, w.Roots[0], 930, utxostore.WithCreateOnly())
-		require.NoError(t, err, "a create never fails for want of a position")
+		require.ErrorIs(t, err, errors.ErrServiceUnavailable, "no create goes out without a position")
 
-		requireLanePosition(t, db, w.Roots[0], lane.None)
+		requireNotStored(t, db, w.Roots[0])
+	})
+
+	t.Run("a spend-and-create with no position spends nothing", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xf5, 1, 1)
+		w.StoreRoots(t, db, 930)
+
+		tx := w.Txs[0]
+		inputs, err := utxostore.GetSpends(tx)
+		require.NoError(t, err)
+
+		requireUnspent := func(when string) {
+			for i, in := range inputs {
+				resp, err := db.GetSpend(context.Background(), in)
+				require.NoError(t, err, "%s: input %d", when, i)
+				require.Equal(t, int(utxostore.Status_OK), resp.Status, "%s: input %d is spent", when, i)
+			}
+		}
+
+		// The position is taken before the first spend, so when the source is asked nothing is
+		// spent yet. Taken after, the inputs would be spent here and only rolled back later.
+		source := NewScriptedLanePositions()
+		source.OnNext = func() { requireUnspent("when the position was taken") }
+		useLanePositionSource(t, db, source)
+
+		_, spends, err := db.SpendAndCreate(ctx, tx, 931)
+		require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+		require.Empty(t, spends)
+		require.Equal(t, 1, source.Calls())
+
+		requireUnspent("after the call")
+		requireNotStored(t, db, tx)
 	})
 }
 

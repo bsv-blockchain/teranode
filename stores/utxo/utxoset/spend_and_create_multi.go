@@ -53,22 +53,46 @@ func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeig
 		return []utxo.SpendAndCreateMultiResult{}, nil
 	}
 
-	// Before any transaction: the writers below take their positions with one open.
-	s.PrimeLanePositions()
-
+	// The two netted routes take one position per transaction here, before any transaction is
+	// opened, and keep them through a rolled-back round. The default route goes through
+	// SpendAndCreate, which takes its own.
 	if below, err := s.nettedBelowGate(list.Options); below {
 		if err != nil {
 			return nil, err
 		}
 
-		return s.netBelow(ctx, txs, list, blockHeight)
+		positions, err := s.TakeLanePositions(ctx, len(txs))
+		if err != nil {
+			return nil, err
+		}
+
+		return s.netBelow(ctx, txs, list, blockHeight, positions)
 	}
 
 	if !s.canNet(list.Options) {
 		return utxo.DefaultSpendAndCreateMulti(ctx, s, utxo.SpendAndCreateMultiWidthsFor(s.settings), txs, blockHeight, opts...)
 	}
 
-	return s.newNettedWrite(txs, list, blockHeight).writeFamilies(ctx)
+	positions, err := s.TakeLanePositions(ctx, len(txs))
+	if err != nil {
+		return nil, err
+	}
+
+	w := s.newNettedWrite(txs, list, blockHeight)
+	w.positions = positions
+
+	return w.writeFamilies(ctx)
+}
+
+// listItemOptions are the options transaction pos of a list is written with, carrying the position
+// taken for it at the entry, if any.
+func listItemOptions(list *utxo.SpendAndCreateMultiList, positions []uint64, pos int) *utxo.CreateOptions {
+	o := list.Options.ItemOptions(pos)
+	if positions != nil {
+		o.LanePosition = positions[pos]
+	}
+
+	return o
 }
 
 // canNet reports whether the netted write models every option of the list.
@@ -152,6 +176,8 @@ type nettedWrite struct {
 	items       []*multiTx
 	// position is each transaction's index in items, by txid.
 	position map[chainhash.Hash]int
+	// positions are the lane positions taken at the entry, by list index; nil with no source.
+	positions []uint64
 }
 
 // multiSlowListLog is the write time above which a list gets an info log line saying where the

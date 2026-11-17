@@ -123,8 +123,16 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		opt(options)
 	}
 
-	// Before any transaction: the create path below takes its position with one open.
-	s.PrimeLanePositions()
+	// Before the batcher and before any transaction, so a wait for a position holds nothing, and a
+	// create that cannot get one fails having written nothing. createIn parses opts again, so the
+	// position goes there too.
+	position, err := s.Take(ctx, options)
+	if err != nil {
+		return nil, err
+	}
+
+	options.LanePosition = position
+	opts = utxo.WithTakenLanePosition(opts, position)
 
 	// Batched when configured, which is the normal path. The batcher collects calls arriving
 	// from many goroutines and sends them as one round trip, which is what the other two
@@ -402,7 +410,7 @@ func (s *Store) appendCreate(p *createPlan, item int, tx *bt.Tx, blockHeight uin
 	// flag on, and the flag adds the column at open, so this is a caller naming a position on a
 	// store opened with the flag off.
 	if s.laneColumn {
-		p.addLane(s.Take(options))
+		p.addLane(options.LanePosition)
 	}
 	p.bodies = append(p.bodies, body)
 	p.minedRows = append(p.minedRows, atBirth)

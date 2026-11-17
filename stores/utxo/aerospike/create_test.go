@@ -496,9 +496,7 @@ func BenchmarkStore_CreateLanePosition(b *testing.B) {
 
 type benchLanePositions struct{}
 
-func (benchLanePositions) Next() (uint64, bool) { return lane.Pack(7, 41_000), true }
-
-func (benchLanePositions) Prime() {}
+func (benchLanePositions) Next(context.Context) (uint64, error) { return lane.Pack(7, 41_000), nil }
 
 func benchmarkStoreCreate(b *testing.B, source utxo.LanePositionSource) {
 	teranodeaerospike.InitPrometheusMetrics()

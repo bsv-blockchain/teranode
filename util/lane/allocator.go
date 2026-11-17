@@ -156,7 +156,7 @@ func (a *Allocator) Close() error {
 // attempt to write a record, so it takes a lock and an add and allocates nothing. The first call of
 // a process starts the allocator and waits for the first range, at most firstRangeWait; no later
 // call waits.
-func (a *Allocator) Next() (uint64, bool) {
+func (a *Allocator) Next(_ context.Context) (uint64, error) {
 	if !a.started.Load() {
 		a.startOnFirstUse()
 	}
@@ -165,13 +165,15 @@ func (a *Allocator) Next() (uint64, bool) {
 	v, ok := a.nextLocked()
 	a.mu.Unlock()
 
-	if ok {
-		prometheusLanePositions.Inc()
-	} else {
+	if !ok {
 		prometheusLaneExhausted.Inc()
+
+		return None, errors.NewServiceUnavailableError("[lane] no range in hand for %s", a.holder)
 	}
 
-	return v, ok
+	prometheusLanePositions.Inc()
+
+	return v, nil
 }
 
 // Prime does the first call's wait without taking a position, so a caller about to open a database

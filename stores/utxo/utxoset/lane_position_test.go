@@ -2,6 +2,7 @@ package utxoset
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"sync/atomic"
 	"testing"
@@ -344,17 +345,17 @@ func TestAnExistingIdentityRowDecidesTheLanePosition(t *testing.T) {
 	}
 }
 
-// TestABlockPathCreateWithNoRangeInHandKeepsTheRecordsPosition: a database with the column and a source
-// with no range in hand takes no position for anything in the plan. The containment row must still
-// copy the position the record has, or the stored value would depend on whether a neighbour in the
-// batch got one, and Get would lose the position once the stamp deleted the identity row.
-func TestABlockPathCreateWithNoRangeInHandKeepsTheRecordsPosition(t *testing.T) {
-	want := lane.Pack(4, 100)
+// TestABlockPathCreateOfAStoredRecordKeepsItsPosition: a block-path create of a record the store
+// already holds takes a new position at the entry, which is burned. The containment row must copy
+// the position the record has, not the one just taken, or Get would return a position no identity
+// row ever carried once the stamp deleted the identity row.
+func TestABlockPathCreateOfAStoredRecordKeepsItsPosition(t *testing.T) {
+	want, burned := lane.Pack(4, 100), lane.Pack(4, 900)
 
 	for _, route := range blockPathCreateRoutes {
 		t.Run(route.name, func(t *testing.T) {
 			s, ctx := route.store(t)
-			s.SetLanePositionSource(tests.NewScriptedLanePositions())
+			s.SetLanePositionSource(tests.NewScriptedLanePositions(burned))
 
 			tx := mkTx(t, 1, 5_000)
 
@@ -372,7 +373,7 @@ func TestABlockPathCreateWithNoRangeInHandKeepsTheRecordsPosition(t *testing.T) 
 
 	t.Run("from an existing containment row", func(t *testing.T) {
 		s, ctx := newLaneStore(t)
-		s.SetLanePositionSource(tests.NewScriptedLanePositions())
+		s.SetLanePositionSource(tests.NewScriptedLanePositions(burned))
 
 		tx := mkTx(t, 3, 6_000)
 
@@ -497,52 +498,50 @@ func TestARefusedCreateCannotGiveARecordASecondLanePosition(t *testing.T) {
 	})
 }
 
-// primeOrderSource records what a transaction would have held when Prime ran: the connections the
-// pool had out, which on this otherwise idle store is the open transaction's. It also fails a Next
-// that comes before Prime, which is a position taken with the wait still to come.
-type primeOrderSource struct {
-	pool                                   *pgxpool.Pool
-	primes, nextsBeforePrime, connsAtPrime atomic.Int64
+// takeOrderSource records, at every Next, the connections the pool had out, which on this otherwise
+// idle store are an open transaction's. It hands out positions of lane 201.
+type takeOrderSource struct {
+	pool                          *pgxpool.Pool
+	nexts, connsAtNext, positions atomic.Int64
 }
 
-func (p *primeOrderSource) Prime() {
-	p.primes.Add(1)
-	p.connsAtPrime.Add(int64(p.pool.Stat().AcquiredConns()))
+func (p *takeOrderSource) Next(context.Context) (uint64, error) {
+	p.nexts.Add(1)
+	p.connsAtNext.Add(int64(p.pool.Stat().AcquiredConns()))
+
+	return lane.Pack(201, uint64(p.positions.Add(1))), nil //nolint:gosec // a test count
 }
 
-func (p *primeOrderSource) Next() (uint64, bool) {
-	if p.primes.Load() == 0 {
-		p.nextsBeforePrime.Add(1)
-	}
-
-	return lane.None, false
-}
-
-// TestUtxosetPrimesBeforeAnyTransaction: the first-range wait must not run with a Postgres transaction
-// and its locks held, so each entry point that creates primes first. A spend-only call does not,
-// because it takes no position and must not start the allocator.
+// TestUtxosetTakesPositionsBeforeItOpensATransaction: taking a position can wait, and must not wait
+// with a Postgres transaction and its locks held, so each entry point that creates takes its
+// positions before it opens one. A spend-only call takes none.
 //
-// Create has two paths. The batched one plans with no connection held, so it could take its
-// position there safely even without the prime. The direct one, taken by a conflicting create or a
-// store with no create batcher, plans inside its transaction (createIn), which is where a wait
-// would hold locks, so it has its own subtest.
-func TestUtxosetPrimesBeforeAnyTransaction(t *testing.T) {
+// Create has two paths. The batched one plans with no connection held. The direct one, taken by a
+// conflicting create or a store with no create batcher, plans inside its transaction (createIn),
+// which is where a wait would hold locks, so it has its own subtest.
+func TestUtxosetTakesPositionsBeforeItOpensATransaction(t *testing.T) {
 	ctx := t.Context()
 
-	entryOn := func(t *testing.T, s *Store, call func(s *Store, w *tests.MultiWorkload) error) *primeOrderSource {
+	entryOn := func(t *testing.T, s *Store, call func(s *Store, w *tests.MultiWorkload) error) *takeOrderSource {
 		t.Helper()
 
 		w := tests.BuildMultiWorkload(t, 0xf4, 1, 1)
 		w.StoreRoots(t, s, 900)
 
-		source := &primeOrderSource{pool: s.pool}
+		source := &takeOrderSource{pool: s.pool}
 		s.SetLanePositionSource(source)
 		require.NoError(t, call(s, w))
+
+		for _, tx := range w.Txs {
+			md, err := s.Get(ctx, tx.TxIDChainHash(), fields.LanePosition)
+			require.NoError(t, err)
+			require.Equal(t, uint8(201), lane.Lane(md.LanePosition), "the record carries the position taken at the entry")
+		}
 
 		return source
 	}
 
-	entry := func(t *testing.T, call func(s *Store, w *tests.MultiWorkload) error) *primeOrderSource {
+	entry := func(t *testing.T, call func(s *Store, w *tests.MultiWorkload) error) *takeOrderSource {
 		t.Helper()
 
 		s, _ := newUncheckpointedLaneStore(t)
@@ -555,11 +554,14 @@ func TestUtxosetPrimesBeforeAnyTransaction(t *testing.T) {
 		return err
 	}
 
+	requireTakenFirst := func(t *testing.T, source *takeOrderSource) {
+		t.Helper()
+		require.NotZero(t, source.nexts.Load())
+		require.Zero(t, source.connsAtNext.Load(), "a position was taken with a connection held")
+	}
+
 	t.Run("Create", func(t *testing.T) {
-		source := entry(t, createTx)
-		require.NotZero(t, source.primes.Load())
-		require.Zero(t, source.nextsBeforePrime.Load())
-		require.Zero(t, source.connsAtPrime.Load(), "the wait ran with a connection held")
+		requireTakenFirst(t, entry(t, createTx))
 	})
 
 	t.Run("Create on the direct path", func(t *testing.T) {
@@ -570,45 +572,42 @@ func TestUtxosetPrimesBeforeAnyTransaction(t *testing.T) {
 		})
 		require.Nil(t, s.createBatcher, "this subtest needs Create's direct path")
 
-		source := entryOn(t, s, createTx)
-		require.NotZero(t, source.primes.Load())
-		require.Zero(t, source.nextsBeforePrime.Load())
-		require.Zero(t, source.connsAtPrime.Load(), "the wait ran with a connection held")
+		requireTakenFirst(t, entryOn(t, s, createTx))
 	})
 
 	t.Run("SpendAndCreate", func(t *testing.T) {
-		source := entry(t, func(s *Store, w *tests.MultiWorkload) error {
+		requireTakenFirst(t, entry(t, func(s *Store, w *tests.MultiWorkload) error {
 			_, _, err := s.SpendAndCreate(ctx, w.Txs[0], 901)
 			return err
-		})
-		require.NotZero(t, source.primes.Load())
-		require.Zero(t, source.nextsBeforePrime.Load())
-		require.Zero(t, source.connsAtPrime.Load(), "the wait ran with a connection held")
+		}))
 	})
 
 	t.Run("SpendAndCreateMulti", func(t *testing.T) {
-		source := entry(t, func(s *Store, w *tests.MultiWorkload) error {
+		requireTakenFirst(t, entry(t, func(s *Store, w *tests.MultiWorkload) error {
 			_, err := s.SpendAndCreateMulti(ctx, w.Txs, 901, utxo.WithIgnoreLocked(true))
 			return err
-		})
-		require.NotZero(t, source.primes.Load())
-		require.Zero(t, source.nextsBeforePrime.Load())
-		require.Zero(t, source.connsAtPrime.Load(), "the wait ran with a connection held")
+		}))
 	})
 
-	t.Run("a spend-only call does not prime", func(t *testing.T) {
-		source := entry(t, func(s *Store, w *tests.MultiWorkload) error {
-			_, _, err := s.SpendAndCreate(ctx, w.Txs[0], 901, utxo.WithSpendOnly())
-			return err
-		})
-		require.Zero(t, source.primes.Load())
+	t.Run("a spend-only call takes none", func(t *testing.T) {
+		s, _ := newUncheckpointedLaneStore(t)
+
+		w := tests.BuildMultiWorkload(t, 0xf4, 1, 1)
+		w.StoreRoots(t, s, 900)
+
+		source := &takeOrderSource{pool: s.pool}
+		s.SetLanePositionSource(source)
+
+		_, _, err := s.SpendAndCreate(ctx, w.Txs[0], 901, utxo.WithSpendOnly())
+		require.NoError(t, err)
+		require.Zero(t, source.nexts.Load())
 	})
 }
 
 // TestLanePositionOnTheNettedBelowCheckpointWrite is the route quick validation and legacy sync take
 // below the checkpoint. It is its own statement, so the contract's below-the-checkpoint case, which
-// does not set the options that reach it, proves nothing about it. The source runs out partway through
-// the list, so one record goes without a position beside the others that have theirs.
+// does not set the options that reach it, proves nothing about it. Each record gets its own position,
+// taken for the whole list at the entry.
 func TestLanePositionOnTheNettedBelowCheckpointWrite(t *testing.T) {
 	s := newBodySkipLaneStore(t)
 	ctx := t.Context()
@@ -621,7 +620,7 @@ func TestLanePositionOnTheNettedBelowCheckpointWrite(t *testing.T) {
 	list := outpointOnly(nettedFamily(t, w))
 	require.Len(t, list, 4)
 
-	given := []uint64{lane.Pack(200, 1), lane.Pack(200, 2), lane.MaxPosition}
+	given := []uint64{lane.Pack(200, 1), lane.Pack(200, 2), lane.Pack(200, 3), lane.MaxPosition}
 	s.SetLanePositionSource(tests.NewScriptedLanePositions(given...))
 
 	results, err := s.SpendAndCreateMulti(ctx, list, height, belowCheckpointOptions(height)...)
@@ -640,15 +639,9 @@ func TestLanePositionOnTheNettedBelowCheckpointWrite(t *testing.T) {
 		require.NoError(t, err)
 
 		got = append(got, md.LanePosition)
-
-		if md.LanePosition == lane.None {
-			_, null, ok := storedLane(t, s, ctx, "tx_mined", tx)
-			require.True(t, ok)
-			require.True(t, null, "a record with no position stores NULL, not 0")
-		}
 	}
 
-	require.ElementsMatch(t, append(given, lane.None), got, "each record its own position, one with none")
+	require.ElementsMatch(t, given, got, "each record its own position")
 }
 
 // TestLanePositionInABatchMixingMinedAndUnmined: one flush can carry both create statements, which
@@ -1025,4 +1018,79 @@ func hasLaneColumn(t *testing.T, s *Store, ctx context.Context, table string) bo
 		                  AND is_nullable = 'YES' AND column_default IS NULL)`, table).Scan(&found))
 
 	return found
+}
+
+// TestUtxosetRolledBackRoundKeepsItsPositions: a batch whose first round is rolled back, here by a
+// forged claim among honest siblings, plans its creates again in the next round. Each surviving
+// record carries the position its caller took at the entry, and the round takes none of its own.
+func TestUtxosetRolledBackRoundKeepsItsPositions(t *testing.T) {
+	s, ctx := newLaneStore(t)
+
+	ps := parents(t, s, ctx, 3, 100)
+
+	source := tests.NewScriptedLanePositions()
+	s.SetLanePositionSource(source)
+
+	honestA := spendOutput(t, ps[0], 0, 1)
+	forged := spendOutput(t, ps[1], 0, 1)
+	forged.Inputs[0].PreviousTxSatoshis = 5_000_000_000
+	honestB := spendOutput(t, ps[2], 0, 1)
+
+	wantA, wantForged, wantB := lane.Pack(9, 1), lane.Pack(9, 2), lane.Pack(9, 3)
+
+	res := flush(t, s,
+		batchItem(honestA, 101, utxo.WithLanePosition(wantA)),
+		batchItem(forged, 101, utxo.WithLanePosition(wantForged)),
+		batchItem(honestB, 101, utxo.WithLanePosition(wantB)))
+
+	require.NoError(t, res[0].err)
+	require.Error(t, res[1].err)
+	require.NoError(t, res[2].err)
+
+	requireGetLane(t, s, ctx, honestA, wantA, "the first honest sibling")
+	requireGetLane(t, s, ctx, honestB, wantB, "the second honest sibling")
+	require.Zero(t, source.Calls(), "a round takes no positions of its own")
+}
+
+// TestUtxosetRerunChunkKeepsItsPositions: the netted write finds a transaction of the list already
+// stored under its lock, rolls the chunk back and runs it again without that one. The rerun plans
+// its creates again and must reuse the positions taken at the entry: one per transaction, never more.
+func TestUtxosetRerunChunkKeepsItsPositions(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+
+	w := tests.BuildMultiWorkload(t, 0xf6, 2, 2)
+	w.StoreRoots(t, s, 900)
+
+	stored := lane.Pack(8, 1)
+	_, err := s.Create(ctx, w.Txs[0], 901, utxo.WithLanePosition(stored))
+	require.NoError(t, err)
+
+	given := lanePositionsOf(9, len(w.Txs))
+	source := tests.NewScriptedLanePositions(given...)
+	s.SetLanePositionSource(source)
+
+	results, err := s.SpendAndCreateMulti(ctx, w.Txs, 901, utxo.WithIgnoreLocked(true))
+	require.NoError(t, err)
+	require.Equal(t, utxo.MultiTxExisted, results[0].Status, "%v", results[0].Err)
+
+	for i := 1; i < len(results); i++ {
+		require.Equal(t, utxo.MultiTxCreated, results[i].Status, "tx %d: %v", i, results[i].Err)
+	}
+
+	require.Equal(t, len(w.Txs), source.Calls(), "one position per transaction, taken once")
+
+	requireGetLane(t, s, ctx, w.Txs[0], stored, "the stored record keeps its own")
+
+	for i := 1; i < len(w.Txs); i++ {
+		requireGetLane(t, s, ctx, w.Txs[i], given[i], fmt.Sprintf("tx %d", i))
+	}
+}
+
+func lanePositionsOf(l uint8, n int) []uint64 {
+	out := make([]uint64, n)
+	for i := range out {
+		out[i] = lane.Pack(l, uint64(i)+1) //nolint:gosec // i counts up from 0
+	}
+
+	return out
 }

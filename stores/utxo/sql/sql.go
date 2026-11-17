@@ -414,7 +414,12 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		opt(options)
 	}
 
-	options.LanePosition = s.Take(options)
+	position, takeErr := s.Take(ctx, options)
+	if takeErr != nil {
+		return nil, takeErr
+	}
+
+	options.LanePosition = position
 
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "sql:Create")
 	defer deferFn()

@@ -1,27 +1,29 @@
 package utxo
 
-// LanePositionSource hands out lane positions (util/lane), one per record. Next reports false when
-// it has none to give, and the record is then created without one. *lane.Allocator implements it.
-type LanePositionSource interface {
-	Next() (uint64, bool)
+import "context"
 
-	// Prime does the one wait of a process, for its first positions, so a later Next cannot. A store
-	// that takes positions with a database transaction open primes before it opens one.
-	Prime()
+// LanePositionSource hands out lane positions (util/lane), one per record. Next waits a bounded time
+// for a position, then fails with a service-unavailable error, and the create fails with it: no
+// record goes out without a position. *lane.Allocator implements it.
+type LanePositionSource interface {
+	Next(ctx context.Context) (uint64, error)
 }
 
-// LanePositionTaker is a store that gives each record it creates a position from a source. A
-// store's create path calls this once per attempt to write a record, so taking a position costs one
-// call to Next per attempt. A store that plans a write again after a rollback, as utxoset does on a
-// deadlock retry or a rolled-back round, takes new positions and burns the old ones, which is
-// harmless at seven bytes a position. The store also writes the position, and that cost is the
-// store's. There is no wrapper around the store, because a wrapper has to scan and extend the
-// options on every create, and it hides what the wrapped store can do.
+// LanePositionTaker is a store that gives each record it creates a position from a source. A store
+// takes the position before it spends or opens a database transaction, so a wait for one holds
+// nothing, and a create that cannot get one fails having written nothing. A store that plans a write
+// again after a rollback keeps the positions it took. A position taken for a write that is then
+// refused, such as a transaction that exists already, is burned, which is safe: no record carries it.
+// There is no wrapper around the store, because a wrapper has to scan and extend the options on
+// every create, and it hides what the wrapped store can do.
 //
 // Find it with As, since the store may sit inside a logging wrapper. Set the source before the
 // first create, because it is not guarded against a concurrent create.
 type LanePositionTaker interface {
 	SetLanePositionSource(source LanePositionSource)
+
+	// TakeLanePosition returns the position for the record that o describes; see LanePositions.Take.
+	TakeLanePosition(ctx context.Context, o *CreateOptions) (uint64, error)
 }
 
 // LanePositions is the part of a store that implements LanePositionTaker. With no source set, which
@@ -35,21 +37,47 @@ func (l *LanePositions) SetLanePositionSource(source LanePositionSource) {
 	l.source = source
 }
 
-// PrimeLanePositions lets the source do its one wait now, before the caller holds anything.
-func (l *LanePositions) PrimeLanePositions() {
-	if l.source != nil {
-		l.source.Prime()
+// Take returns the position for the record that o describes: the caller's own if it named one,
+// zero with no source, otherwise the source's next. It fails when the source has none to give.
+func (l *LanePositions) Take(ctx context.Context, o *CreateOptions) (uint64, error) {
+	if o.LanePosition != 0 || l.source == nil {
+		return o.LanePosition, nil
 	}
+
+	return l.source.Next(ctx)
 }
 
-// Take returns the position for the record that o describes: the caller's own if it named one,
-// otherwise the source's next, otherwise zero, which the store writes as no lane position.
-func (l *LanePositions) Take(o *CreateOptions) uint64 {
-	if o.LanePosition != 0 || l.source == nil {
-		return o.LanePosition
+// TakeLanePosition implements LanePositionTaker.
+func (l *LanePositions) TakeLanePosition(ctx context.Context, o *CreateOptions) (uint64, error) {
+	return l.Take(ctx, o)
+}
+
+// TakeLanePositions takes n positions, one per transaction of a list, or returns nil with no source.
+func (l *LanePositions) TakeLanePositions(ctx context.Context, n int) ([]uint64, error) {
+	if l.source == nil {
+		return nil, nil
 	}
 
-	position, _ := l.source.Next()
+	positions := make([]uint64, n)
 
-	return position
+	for i := range positions {
+		p, err := l.source.Next(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		positions[i] = p
+	}
+
+	return positions, nil
+}
+
+// WithTakenLanePosition returns opts with the position appended, without writing into the caller's
+// backing array. A position of zero leaves opts as they are.
+func WithTakenLanePosition(opts []CreateOption, position uint64) []CreateOption {
+	if position == 0 {
+		return opts
+	}
+
+	return append(opts[:len(opts):len(opts)], WithLanePosition(position))
 }

@@ -58,10 +58,17 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		return nil, nil, errors.NewInvalidArgumentError("[utxoset][SpendAndCreate] no transaction")
 	}
 
-	// Before any transaction: the create path below takes its position with one open. A call that
-	// creates nothing takes no position, so it must not start the allocator.
+	// Before the batcher and before any transaction, so a wait for a position holds nothing, and a
+	// call that cannot get one fails having spent and written nothing. A call that creates nothing
+	// takes no position. createIn parses opts again, so the position goes there too.
 	if !options.SpendOnly {
-		s.PrimeLanePositions()
+		position, err := s.Take(ctx, options)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		options.LanePosition = position
+		opts = utxo.WithTakenLanePosition(opts, position)
 	}
 
 	// Batched when configured, which is the production path: see spend_and_create_batch.go.

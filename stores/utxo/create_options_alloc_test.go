@@ -1,6 +1,7 @@
 package utxo
 
 import (
+	"context"
 	"testing"
 	"unsafe"
 
@@ -125,9 +126,10 @@ func TestTakeDoesNotAllocate(t *testing.T) {
 	positions.SetLanePositionSource(constantLanePosition{})
 
 	options := &CreateOptions{}
+	ctx := context.Background()
 
 	require.Zero(t, testing.AllocsPerRun(1000, func() {
-		if positions.Take(options) == 0 {
+		if p, err := positions.Take(ctx, options); err != nil || p == 0 {
 			t.Fatal("no position")
 		}
 	}))
@@ -135,6 +137,4 @@ func TestTakeDoesNotAllocate(t *testing.T) {
 
 type constantLanePosition struct{}
 
-func (constantLanePosition) Next() (uint64, bool) { return 1, true }
-
-func (constantLanePosition) Prime() {}
+func (constantLanePosition) Next(context.Context) (uint64, error) { return 1, nil }

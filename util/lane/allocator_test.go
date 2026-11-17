@@ -101,7 +101,7 @@ func startAllocator(t *testing.T, src RangeSource, holder, file string) *Allocat
 func next(t *testing.T, a *Allocator) uint64 {
 	t.Helper()
 
-	v, ok := a.Next()
+	v, ok := nextOK(a)
 	require.True(t, ok, "the allocator has no range in hand")
 
 	return v
@@ -215,12 +215,12 @@ func TestAllocatorHoldsASpareRangeSoTheNextOneIsAlreadyInHand(t *testing.T) {
 		require.Equal(t, Pack(0, i), next(t, a))
 	}
 
-	_, ok := a.Next()
+	_, ok := nextOK(a)
 	require.False(t, ok, "with both ranges used and the service down there is nothing to hand out")
 
 	src.setDown(false)
 
-	require.Eventually(t, func() bool { _, ok := a.Next(); return ok }, 5*time.Second, 5*time.Millisecond,
+	require.Eventually(t, func() bool { _, ok := nextOK(a); return ok }, 5*time.Second, 5*time.Millisecond,
 		"once the service is back the allocator refills")
 }
 
@@ -242,7 +242,7 @@ func TestAllocatorNeverHandsOutAPositionTwice(t *testing.T) {
 
 			for i := 0; i < each; i++ {
 				for {
-					if v, ok := a.Next(); ok {
+					if v, ok := nextOK(a); ok {
 						got <- v
 						break
 					}
@@ -277,12 +277,12 @@ func TestAllocatorStartWithTheServiceDownStillRuns(t *testing.T) {
 	require.Error(t, a.Start(ctx), "Start reports that no range came")
 	t.Cleanup(func() { require.NoError(t, a.Close()) })
 
-	_, ok := a.Next()
+	_, ok := nextOK(a)
 	require.False(t, ok)
 
 	src.setDown(false)
 
-	require.Eventually(t, func() bool { _, ok := a.Next(); return ok }, 5*time.Second, 5*time.Millisecond,
+	require.Eventually(t, func() bool { _, ok := nextOK(a); return ok }, 5*time.Second, 5*time.Millisecond,
 		"the allocator keeps trying in the background")
 }
 
@@ -316,7 +316,7 @@ func TestAllocatorPositionsNeverGoBackwards(t *testing.T) {
 	a.install(r3)
 
 	for {
-		v, ok := a.Next()
+		v, ok := nextOK(a)
 		if !ok {
 			break
 		}
@@ -347,11 +347,11 @@ func TestAllocatorPositionsRiseUnderConcurrentCreates(t *testing.T) {
 			var last uint64
 
 			for i := 0; i < each; i++ {
-				v, ok := a.Next()
+				v, ok := nextOK(a)
 				for !ok {
 					time.Sleep(time.Microsecond)
 
-					v, ok = a.Next()
+					v, ok = nextOK(a)
 				}
 
 				if v <= last {
@@ -433,13 +433,13 @@ func TestAllocatorRefusesAnInvalidRangeAndKeepsTrying(t *testing.T) {
 	require.Eventually(t, func() bool { return src.callCount() > len(src.script) }, 10*time.Second, time.Millisecond,
 		"each invalid range is retried")
 
-	_, ok := a.Next()
+	_, ok := nextOK(a)
 	require.False(t, ok, "no invalid range was installed")
 
 	close(src.gate)
 
 	require.Eventually(t, func() bool {
-		v, ok := a.Next()
+		v, ok := nextOK(a)
 		if ok {
 			require.Equal(t, Pack(good.Lane, good.First), v)
 		}
@@ -524,7 +524,7 @@ func TestAllocatorMetrics(t *testing.T) {
 	require.Equal(t, positions+4, testutil.ToFloat64(prometheusLanePositions))
 	require.Equal(t, unstamped, testutil.ToFloat64(prometheusLaneExhausted), "every create so far had a position")
 
-	_, ok := a.Next()
+	_, ok := nextOK(a)
 	require.False(t, ok)
 
 	require.Equal(t, unstamped+1, testutil.ToFloat64(prometheusLaneExhausted), "this create goes out without a position")
@@ -568,7 +568,7 @@ func TestTheFirstNextStartsTheAllocatorAndGetsAPosition(t *testing.T) {
 
 	require.Zero(t, src.callCount(), "building an allocator asks for nothing")
 
-	v, ok := a.Next()
+	v, ok := nextOK(a)
 	require.True(t, ok, "the first call waits for the first range")
 	require.Equal(t, Pack(0, 1), v)
 }
@@ -584,12 +584,12 @@ func TestOnlyTheFirstNextWaitsWhenTheServiceIsDown(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, a.Close()) })
 
 	start := time.Now()
-	_, ok := a.Next()
+	_, ok := nextOK(a)
 	require.False(t, ok)
 	require.GreaterOrEqual(t, time.Since(start), a.firstRangeWait, "the first call waited")
 
 	start = time.Now()
-	_, ok = a.Next()
+	_, ok = nextOK(a)
 	require.False(t, ok)
 	require.Less(t, time.Since(start), a.firstRangeWait/2, "a later call does not wait")
 }
@@ -600,7 +600,7 @@ func TestNextDoesNotAllocate(t *testing.T) {
 	next(t, a)
 
 	require.Zero(t, testing.AllocsPerRun(1000, func() {
-		if _, ok := a.Next(); !ok {
+		if _, ok := nextOK(a); !ok {
 			t.Fatal("no range in hand")
 		}
 	}))
@@ -641,7 +641,7 @@ func TestPrimeWaitsForTheFirstRangeAndTakesNoPosition(t *testing.T) {
 		require.Fail(t, "Prime did not return once the range came")
 	}
 
-	v, ok := a.Next()
+	v, ok := nextOK(a)
 	require.True(t, ok)
 	require.Equal(t, Pack(good.Lane, good.First), v, "Prime took no position")
 }
@@ -661,7 +661,7 @@ func TestPrimeWaitsOnlyToItsBoundWhenTheServiceIsDown(t *testing.T) {
 	require.GreaterOrEqual(t, time.Since(start), a.firstRangeWait, "Prime waited")
 
 	start = time.Now()
-	_, ok := a.Next()
+	_, ok := nextOK(a)
 	require.False(t, ok)
 	require.Less(t, time.Since(start), a.firstRangeWait/2, "the Next after it does not wait")
 }
@@ -713,4 +713,11 @@ func TestAllocatorBacksOffBetweenFailedRequests(t *testing.T) {
 
 		backoff *= 2
 	}
+}
+
+// nextOK is Next with the error read as "none in hand".
+func nextOK(a *Allocator) (uint64, bool) {
+	v, err := a.Next(context.Background())
+
+	return v, err == nil
 }

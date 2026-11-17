@@ -229,7 +229,7 @@ type netBelowTx struct {
 }
 
 func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndCreateMultiList,
-	blockHeight uint32) ([]utxo.SpendAndCreateMultiResult, error) {
+	blockHeight uint32, positions []uint64) ([]utxo.SpendAndCreateMultiResult, error) {
 	mi, _ := minedBlock(list.Options.MinedBlockInfos)
 
 	for i, tx := range txs {
@@ -295,7 +295,7 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 	g.SetLimit(workers)
 
 	for _, chunk := range netBelowChunks(items, size, nettedBelowMaxChunkOutputs) {
-		g.Go(func() error { return s.netBelowChunk(gCtx, chunk, list, blockHeight, spender) })
+		g.Go(func() error { return s.netBelowChunk(gCtx, chunk, list, blockHeight, spender, positions) })
 	}
 
 	if err := g.Wait(); err != nil {
@@ -417,10 +417,10 @@ INSERT INTO tx_body (created_height, txid, raw_tx)
 SELECT * FROM unnest($1::int[], $2::bytea[], $3::bytea[])`
 
 func (s *Store) netBelowChunk(ctx context.Context, chunk []*netBelowTx, list *utxo.SpendAndCreateMultiList,
-	blockHeight uint32, spender map[nettedKey]nettedSpender) error {
+	blockHeight uint32, spender map[nettedKey]nettedSpender, positions []uint64) error {
 	createItems := make([]*createItem, len(chunk))
 	for k, it := range chunk {
-		createItems[k] = &createItem{tx: it.tx, blockHeight: blockHeight, options: list.Options.ItemOptions(it.pos)}
+		createItems[k] = &createItem{tx: it.tx, blockHeight: blockHeight, options: listItemOptions(list, positions, it.pos)}
 	}
 
 	plan := s.planCreates(createItems)

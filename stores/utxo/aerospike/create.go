@@ -197,6 +197,12 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	_, _, deferFn := tracing.Tracer("aerospike").Start(ctx, "aerospike:Create")
 	defer deferFn()
 
+	// First, so a create that cannot get a position writes nothing, not even a parent's conflict note.
+	lanePosition, err := s.Take(ctx, createOptions)
+	if err != nil {
+		return nil, err
+	}
+
 	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
 		return nil, errors.NewProcessingError("failed to get tx meta data", err)
@@ -257,7 +263,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		subtreeIdxs:  subtreeIdxs,
 		conflicting:  createOptions.Conflicting,
 		locked:       createOptions.Locked,
-		lanePosition: s.Take(createOptions),
+		lanePosition: lanePosition,
 		group:        group,
 	}
 
