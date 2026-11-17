@@ -2284,6 +2284,9 @@ type markingPlan struct {
 	superseded map[chainhash.Hash]int
 	// existing is the number of queued parent records that were present.
 	existing int
+	// nativeRefused holds, per record a native sub-op 15 write answered
+	// NOT_SPENDER, the children that write carried. See noteNativeRefusal.
+	nativeRefused map[string]*parentUpdateInfo
 }
 
 func (p *markingPlan) block(childHash chainhash.Hash) {
@@ -2292,6 +2295,49 @@ func (p *markingPlan) block(childHash chainhash.Hash) {
 	}
 
 	p.blocked[childHash] = struct{}{}
+}
+
+// noteNativeRefusal keeps a copy of the children a native marker write carried
+// to a record that answered NOT_SPENDER. That answer comes back with no error,
+// so the client never marks it in doubt, but a batch retry's first attempt may
+// have written the markers before the output's spender changed and the retry
+// was refused. The re-read then strips the child the output no longer names
+// from the record's entry, so without this copy the child, held back, would
+// have its marker withdrawn from every parent but this one, and the marker
+// left there would refuse its idempotent re-spend.
+func (p *markingPlan) noteNativeRefusal(source string, info *parentUpdateInfo) {
+	if p.nativeRefused == nil {
+		p.nativeRefused = make(map[string]*parentUpdateInfo)
+	}
+
+	p.nativeRefused[source] = &parentUpdateInfo{
+		key:         info.key,
+		childHashes: append([]*chainhash.Hash(nil), info.childHashes...),
+		// The write's outcome is not known, so a lasting refusal of the
+		// withdrawal is not counted; see withdrawMarkers.
+		markerFailed: true,
+	}
+}
+
+// withNativeRefusals returns updates plus the records a native write refused,
+// as noteNativeRefusal copied them, for a withdrawal. The copies go under keys
+// of their own, so a record in both is withdrawn from twice, which is harmless.
+func (p *markingPlan) withNativeRefusals(updates map[string]*parentUpdateInfo) map[string]*parentUpdateInfo {
+	if p == nil || len(p.nativeRefused) == 0 {
+		return updates
+	}
+
+	merged := make(map[string]*parentUpdateInfo, len(updates)+len(p.nativeRefused))
+
+	for source, info := range updates {
+		merged[source] = info
+	}
+
+	for source, info := range p.nativeRefused {
+		merged["native-refused:"+source] = info
+	}
+
+	return merged
 }
 
 // keepSpendHolders reads every queued parent record and keeps, per record, only
@@ -3153,7 +3199,8 @@ func (s *Service) markParentsWith(ctx context.Context, parentUpdates, all map[st
 
 	if len(refused) > 0 {
 		if err := s.verifyBeforeWrite(ctx, parentUpdates, refused, plan); err != nil {
-			s.withdrawMarkers(all, allChildren(all))
+			withRefusals := plan.withNativeRefusals(all)
+			s.withdrawMarkers(withRefusals, allChildren(withRefusals))
 
 			return nil, true, err
 		}
@@ -3165,7 +3212,8 @@ func (s *Service) markParentsWith(ctx context.Context, parentUpdates, all map[st
 		// children are held back for the next cycle.
 		again, failedAgain, _, err := s.writeVerifiedMarkers(ctx, refused, plan, nil)
 		if err != nil {
-			s.withdrawMarkers(all, allChildren(all))
+			withRefusals := plan.withNativeRefusals(all)
+			s.withdrawMarkers(withRefusals, allChildren(withRefusals))
 
 			return nil, true, err
 		}
@@ -3180,7 +3228,7 @@ func (s *Service) markParentsWith(ctx context.Context, parentUpdates, all map[st
 	}
 
 	if len(withdraw) > 0 {
-		s.withdrawMarkers(all, withdraw)
+		s.withdrawMarkers(plan.withNativeRefusals(all), withdraw)
 
 		for childHash := range withdraw {
 			plan.block(childHash)
@@ -3321,6 +3369,10 @@ func (s *Service) writeVerifiedMarkers(ctx context.Context, updates map[string]*
 
 		switch outcome {
 		case parentUpdateRefused:
+			if native[i] {
+				plan.noteNativeRefusal(sources[i], info)
+			}
+
 			if refused == nil {
 				refused = make(map[string]*parentUpdateInfo)
 			}

@@ -1699,3 +1699,48 @@ func TestDrainFlushTimeout(t *testing.T) {
 	require.Equal(t, 2*time.Minute+drainFlushMargin, drainFlushTimeout(2*time.Minute), "the default overload budget plus the margin")
 	require.Equal(t, drainFlushMargin, drainFlushTimeout(0), "no overload retry leaves the margin")
 }
+
+// TestMarkParents_NativeNotSpenderIsWithdrawnFrom: a native sub-op 15 write
+// answers NOT_SPENDER with no error, so the client never marks it in doubt.
+// A batch retry's first attempt may still have written C's marker on P before
+// P's output stopped naming C. The re-read then finds the output unspent and
+// holds C back. C's marker must come off P too, although the re-read stripped
+// C from P's entry: a marker left on P would refuse C's idempotent re-spend.
+func TestMarkParents_NativeNotSpenderIsWithdrawnFrom(t *testing.T) {
+	s, client := newFlushTestService(t)
+	s.buildVerifiedMarkerRecord = testNativeMarkerRecord
+
+	parent := chainhash.HashH([]byte{0xF1, 1})
+	child := chainhash.HashH([]byte{0xF1, 2})
+
+	// The output is unspent now, but the retried first attempt left C's marker.
+	parentKey := putRecord(t, client, &parent, aerospike.BinMap{
+		fields.Utxos.String():           []interface{}{make([]byte, 32)},
+		fields.DeletedChildren.String(): map[interface{}]interface{}{child.String(): true},
+	})
+
+	updates := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
+
+	notSpender := map[interface{}]interface{}{"status": "ERROR", "errorCode": "NOT_SPENDER", "message": "not the spender"}
+
+	call := 0
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		call++
+
+		if call == 1 {
+			for _, rec := range records {
+				nativeAnswer(rec.BatchRec(), notSpender, nil)
+			}
+
+			return nil
+		}
+
+		return client.BatchOperate(policy, records)
+	}
+
+	plan, err := s.markParents(context.Background(), updates)
+	require.NoError(t, err)
+	require.Contains(t, plan.blocked, child, "the re-read finds the output unspent and holds the child back")
+	require.False(t, hasMarker(t, client, parentKey, &child), "the marker a retried first attempt may have left is withdrawn")
+}
