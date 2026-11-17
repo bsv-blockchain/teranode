@@ -429,8 +429,8 @@ require (
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/jarcoal/httpmock v1.4.1
 	github.com/jellydator/ttlcache/v3 v3.3.0
-	github.com/labstack/echo/v4 v4.13.3
-	github.com/labstack/gommon v0.4.2
+	github.com/labstack/echo/v4 v4.16.2
+	github.com/labstack/gommon v0.5.0
 	github.com/lib/pq v1.10.9
 	github.com/libp2p/go-libp2p v0.52.0
 	github.com/libp2p/go-libp2p-pubsub v0.19.0
