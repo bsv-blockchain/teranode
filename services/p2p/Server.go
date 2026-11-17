@@ -2691,8 +2691,9 @@ func (s *Server) processBlockchainNotification(ctx context.Context, notification
 	return nil // For unhandled types, not an error that stops the listener
 }
 
-// notificationProcessTimeout bounds the work done for one queued
-// announcement notification (Block, BlockSubtreesSet, Subtree). It covers the
+// notificationProcessTimeout bounds the work done for one notification on the
+// announcement worker: Block, BlockSubtreesSet, Subtree, a PeerFailure that is
+// not a catchup failure, and any other type. It covers the
 // calls that take the notification's context: the FSM skip check, the
 // blockchain reads, the gossip publish and most of the node_status refresh.
 // The node_status sync-peer lookup (getPeer) still uses the service context,
@@ -2729,7 +2730,8 @@ var (
 // GetBlockHeader or Publish held the PeerFailure behind it, and once the
 // subscription channel filled, the blockchain client dropped it outright: the
 // node kept syncing from the peer that had just failed it. Other PeerFailure
-// types (block, subtree) are only logged, so they go with everything else to
+// types (today only "block", from the Kafka block-retry path) are only logged,
+// so they go with everything else to
 // the announcement worker and cannot fill the peer-failure queue ahead of a
 // catchup failure. The announcement worker keeps the order this listener
 // receives them in. The blockchain client sends each notification from its
@@ -2792,8 +2794,9 @@ func (s *Server) peerFailureWorker(ctx context.Context, queue <-chan *blockchain
 	}
 }
 
-// announcementWorker handles every non-PeerFailure notification in arrival
-// order, each under its own notificationProcessTimeout.
+// announcementWorker handles every notification except catchup PeerFailures,
+// in arrival order, each under its own notificationProcessTimeout. An
+// announcement that runs out of time is logged at Error and not retried.
 func (s *Server) announcementWorker(ctx context.Context, queue <-chan *blockchain.Notification) {
 	for {
 		select {

@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -22,7 +23,15 @@ import (
 func startListenerTestServer(t *testing.T, mockBlockchain *blockchain.Mock) (*Server, chan *blockchain.Notification) {
 	t.Helper()
 
-	s, _ := newAnnounceTestServer(t, mockBlockchain)
+	s, _, subscription := startListenerTestServerWithP2PClient(t, mockBlockchain)
+
+	return s, subscription
+}
+
+func startListenerTestServerWithP2PClient(t *testing.T, mockBlockchain *blockchain.Mock) (*Server, *MockServerP2PClient, chan *blockchain.Notification) {
+	t.Helper()
+
+	s, p2pClient := newAnnounceTestServer(t, mockBlockchain)
 
 	sc, _ := newTestSyncCoordinator(t)
 	sc.mu.Lock()
@@ -36,7 +45,59 @@ func startListenerTestServer(t *testing.T, mockBlockchain *blockchain.Mock) (*Se
 	subscription := make(chan *blockchain.Notification, 16)
 	go s.blockchainSubscriptionListener(ctx, subscription)
 
-	return s, subscription
+	return s, p2pClient, subscription
+}
+
+// droppedNotifications reads the drop counter by label name, so a test fails if
+// the label names change.
+func droppedNotifications(queue string, notificationType model.NotificationType) prometheus.Counter {
+	initPrometheusMetrics()
+
+	return prometheusP2PBlockchainNotificationsDropped.With(prometheus.Labels{"queue": queue, "type": notificationType.String()})
+}
+
+// A Block notification sent through the listener at the default
+// notificationProcessTimeout must be announced on the block topic. The header
+// read honours its context, as the gRPC client does, so a timeout that is
+// already over when the work starts would stop the announcement.
+func TestBlockchainSubscriptionListener_AnnouncesBlockAtDefaultTimeout(t *testing.T) {
+	announced := chainhash.HashH([]byte("announced block"))
+	barrier := chainhash.HashH([]byte("barrier block"))
+
+	barrierReached := make(chan struct{}, 1)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	ready := &model.BlockHeaderMeta{Height: 100, SubtreesSet: true}
+
+	mockBlockchain := &blockchain.Mock{}
+	// A context that has already ended fails the read, as it would over gRPC.
+	mockBlockchain.On("GetBlockHeader", mock.MatchedBy(func(ctx context.Context) bool { return ctx.Err() != nil }), mock.Anything).
+		Return(nil, nil, context.DeadlineExceeded).Maybe()
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool { return *hash == barrier })).
+		Run(func(mock.Arguments) {
+			barrierReached <- struct{}{}
+			<-release
+		}).Return(model.GenesisBlockHeader, ready, nil)
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(model.GenesisBlockHeader, ready, nil)
+
+	s, p2pClient, subscription := startListenerTestServerWithP2PClient(t, mockBlockchain)
+
+	subscription <- blockNotification(announced)
+	// The worker is serial: once the barrier block reaches GetBlockHeader, the
+	// first block's handling, publish included, has finished, and the parked
+	// barrier keeps the worker from publishing anything while the test reads.
+	subscription <- blockNotification(barrier)
+
+	select {
+	case <-barrierReached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the barrier block never reached GetBlockHeader")
+	}
+
+	published := publishedBlockMessages(p2pClient, s.blockTopicName)
+	require.Len(t, published, 1, "the block sent through the listener must be announced once")
+	require.Equal(t, announced.String(), published[0].Hash)
 }
 
 func blockNotification(hash chainhash.Hash) *blockchain.Notification {
@@ -271,8 +332,7 @@ func TestBlockchainSubscriptionListener_FullAnnouncementQueueDropsInsteadOfBlock
 	announcementQueueSize = 2
 	t.Cleanup(func() { announcementQueueSize = previous })
 
-	initPrometheusMetrics()
-	dropped := prometheusP2PBlockchainNotificationsDropped.WithLabelValues("announcement", model.NotificationType_Block.String())
+	dropped := droppedNotifications("announcement", model.NotificationType_Block)
 	droppedBefore := testutil.ToFloat64(dropped)
 
 	entered := make(chan struct{}, 1)
@@ -323,10 +383,8 @@ func TestBlockchainSubscriptionListener_FullPeerFailureQueueCountsDrop(t *testin
 	peerFailureQueueSize = 1
 	t.Cleanup(func() { peerFailureQueueSize = previous })
 
-	initPrometheusMetrics()
-	peerFailureType := model.NotificationType_PeerFailure.String()
-	droppedPeerFailure := prometheusP2PBlockchainNotificationsDropped.WithLabelValues("peer-failure", peerFailureType)
-	droppedAsAnnouncement := prometheusP2PBlockchainNotificationsDropped.WithLabelValues("announcement", peerFailureType)
+	droppedPeerFailure := droppedNotifications("peer-failure", model.NotificationType_PeerFailure)
+	droppedAsAnnouncement := droppedNotifications("announcement", model.NotificationType_PeerFailure)
 	peerFailureBefore := testutil.ToFloat64(droppedPeerFailure)
 	announcementBefore := testutil.ToFloat64(droppedAsAnnouncement)
 
@@ -356,6 +414,10 @@ func TestIsCatchupPeerFailure(t *testing.T) {
 	require.False(t, isCatchupPeerFailure(peerFailureNotification("subtree")))
 	require.False(t, isCatchupPeerFailure(&blockchain.Notification{Type: model.NotificationType_PeerFailure}))
 	require.False(t, isCatchupPeerFailure(blockNotification(chainhash.HashH([]byte("block")))))
+
+	blockWithCatchupMetadata := peerFailureNotification("catchup")
+	blockWithCatchupMetadata.Type = model.NotificationType_Block
+	require.False(t, isCatchupPeerFailure(blockWithCatchupMetadata), "only a PeerFailure notification is a catchup failure")
 }
 
 // PeerFailure reports that do not rotate the sync peer (block, subtree) must
@@ -366,8 +428,7 @@ func TestBlockchainSubscriptionListener_NonCatchupPeerFailuresBypassPeerFailureQ
 	peerFailureQueueSize = 1
 	t.Cleanup(func() { peerFailureQueueSize = previous })
 
-	initPrometheusMetrics()
-	dropped := prometheusP2PBlockchainNotificationsDropped.WithLabelValues("peer-failure", model.NotificationType_PeerFailure.String())
+	dropped := droppedNotifications("peer-failure", model.NotificationType_PeerFailure)
 	droppedBefore := testutil.ToFloat64(dropped)
 
 	blockReached := make(chan struct{}, 1)
