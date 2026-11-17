@@ -45,33 +45,43 @@ func hideStateTable(t *testing.T, s *SQL) {
 // TestChainWriteLockFailureStopsEachWriter_PostgreSQL: a chain write that cannot lock the
 // shared row must not go ahead without it, or a walk in another process could commit its
 // older view over the write. Each writer returns the error and leaves the blocks as they were.
+//
+// Each subtest acts on the fork block blockAlternative2, so the best tip never moves and
+// recordBestTipDrop never reads the state table: the lock is the only statement that can
+// fail. Each also has its own store, so no subtest leaves a block invalid for the next.
 func TestChainWriteLockFailureStopsEachWriter_PostgreSQL(t *testing.T) {
-	s := newPostgresChainWriteStore(t)
 	ctx := context.Background()
 
-	hideStateTable(t, s)
-
 	t.Run("DeleteBlock", func(t *testing.T) {
-		require.Error(t, s.DeleteBlock(ctx, block3.Hash()))
+		s := newPostgresChainWriteStore(t)
+		hideStateTable(t, s)
 
-		exists, err := s.GetBlockExists(ctx, block3.Hash())
+		require.Error(t, s.DeleteBlock(ctx, blockAlternative2.Hash()))
+
+		exists, err := s.GetBlockExists(ctx, blockAlternative2.Hash())
 		require.NoError(t, err)
 		require.True(t, exists, "the delete must roll back")
 	})
 
 	t.Run("InvalidateBlock", func(t *testing.T) {
-		_, err := s.InvalidateBlock(ctx, block3.Hash())
+		s := newPostgresChainWriteStore(t)
+		hideStateTable(t, s)
+
+		_, err := s.InvalidateBlock(ctx, blockAlternative2.Hash())
 		require.Error(t, err)
 
 		var invalid bool
-		require.NoError(t, s.db.QueryRow(`SELECT invalid FROM blocks WHERE hash = $1`, block3.Hash().CloneBytes()).Scan(&invalid))
+		require.NoError(t, s.db.QueryRow(`SELECT invalid FROM blocks WHERE hash = $1`, blockAlternative2.Hash().CloneBytes()).Scan(&invalid))
 		require.False(t, invalid, "the invalidation must roll back")
-		require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
 	})
 
 	t.Run("RevalidateBlock", func(t *testing.T) {
+		s := newPostgresChainWriteStore(t)
+
 		_, err := s.db.Exec(`UPDATE blocks SET invalid = true WHERE hash = $1`, blockAlternative2.Hash().CloneBytes())
 		require.NoError(t, err)
+
+		hideStateTable(t, s)
 
 		require.Error(t, s.RevalidateBlock(ctx, blockAlternative2.Hash()))
 
@@ -81,6 +91,9 @@ func TestChainWriteLockFailureStopsEachWriter_PostgreSQL(t *testing.T) {
 	})
 
 	t.Run("StoreBlock on a fork", func(t *testing.T) {
+		s := newPostgresChainWriteStore(t)
+		hideStateTable(t, s)
+
 		alt3 := createBlock3OnFork(blockAlternative2)
 
 		_, _, err := s.StoreBlock(ctx, alt3, "")
