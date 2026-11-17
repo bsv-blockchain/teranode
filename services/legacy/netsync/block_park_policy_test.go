@@ -441,9 +441,9 @@ func TestParkCommitFailure_AMissingParentOutputKeepsTheBlockAndBlamesNobody(t *t
 
 // TestParkCommitFailure_APrunedReplayAnswerIsALocalUtxoFault: the marker
 // answer a replay of a pruned transaction gets is the sibling of the code-30
-// miss above, and lands on the same row. A parked block is below the
-// checkpoint, so the replay says the store is ahead of the chain, not that the
-// peer sent a bad block.
+// miss above, and lands on the same row when it reaches the table unwrapped.
+// Below the checkpoint the block is certified, so the replay says the store is
+// ahead of the chain, not that the peer sent a bad block.
 func TestParkCommitFailure_APrunedReplayAnswerIsALocalUtxoFault(t *testing.T) {
 	replay := parkCommitChain(errors.NewProcessingError("transaction %s could not be applied", "abcd",
 		errors.NewUtxoSpendingTxPrunedError("[Spend] invalid spend for %s:%d: spending transaction was pruned", "ef01", 0)))
@@ -452,6 +452,15 @@ func TestParkCommitFailure_APrunedReplayAnswerIsALocalUtxoFault(t *testing.T) {
 	require.Equal(t, parkDispositionLocalUtxoFault, d)
 	require.False(t, d.markFailed, "the block is canonical below the checkpoint")
 	require.False(t, d.blamePeer, "the peer sent a good block")
+
+	// The row sits below the transient and verdict arms. The full route wraps
+	// the store's answer in a ServiceError, which the transient arm takes first,
+	// and a verdict that happens to wrap the answer stays a verdict.
+	pruned := errors.NewUtxoSpendingTxPrunedError("[Spend] invalid spend for %s:%d: spending transaction was pruned", "ef01", 0)
+	require.Equal(t, parkDispositionRetryLater, parkCommitFailure(parkCommitChain(errors.NewServiceError("[processBlockFound] failed", pruned))),
+		"the full route's ServiceError wrap is retried, not read as this node's UTXO fault")
+	require.Equal(t, parkDispositionBlockInvalid, parkCommitFailure(parkCommitChain(errors.NewBlockInvalidError("[ValidateBlock] invalid", pruned))),
+		"a verdict that wraps the answer is still a verdict")
 }
 
 // TestParkCommitFailure_TheFullRoutesInvalidTransactionVerdictIsAJudgement pins

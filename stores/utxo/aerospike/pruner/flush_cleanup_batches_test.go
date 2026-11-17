@@ -16,6 +16,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1113,11 +1115,21 @@ func TestIsTransientWriteFailure_UnansweredRecord(t *testing.T) {
 	refused.Err = &aerospike.AerospikeError{ResultCode: types.BIN_TYPE_ERROR}
 	require.False(t, isTransientWriteFailure(refused))
 
-	for _, code := range []types.ResultCode{types.ALWAYS_FORBIDDEN, types.ENTERPRISE_ONLY, types.TYPE_NOT_SUPPORTED, types.NOT_WHITELISTED} {
+	// Every lasting refusal, named one by one so dropping any from
+	// lastingWriteRefusals fails here.
+	for _, code := range []types.ResultCode{
+		types.TYPE_NOT_SUPPORTED, types.PARAMETER_ERROR, types.ALWAYS_FORBIDDEN, types.BIN_TYPE_ERROR,
+		types.RECORD_TOO_BIG, types.UNSUPPORTED_FEATURE, types.INVALID_NAMESPACE, types.BIN_NAME_TOO_LONG,
+		types.ENTERPRISE_ONLY, types.OP_NOT_APPLICABLE, types.FILTERED_OUT, types.NOT_AUTHENTICATED,
+		types.ROLE_VIOLATION, types.NOT_WHITELISTED,
+	} {
 		rec := aerospike.NewBatchWrite(nil, key).BatchRec()
 		rec.ResultCode = code
 		rec.Err = &aerospike.AerospikeError{ResultCode: code}
 		require.False(t, isTransientWriteFailure(rec), "code %v is a lasting refusal", code)
+
+		rec.Err = nil
+		require.False(t, isTransientWriteFailure(rec), "code %v with no error is a lasting refusal", code)
 	}
 
 	require.False(t, isBatchTransportError(&aerospike.AerospikeError{ResultCode: types.MAX_ERROR_RATE}),
@@ -1300,10 +1312,104 @@ func TestWithdrawMarkers_KeepsEveryParentWhenTheRoutableResendAlsoFails(t *testi
 	}
 }
 
+// withdrawFailures installs a fresh withdrawal-failure counter for one test
+// and returns a reader for it.
+func withdrawFailures(t *testing.T) func() float64 {
+	t.Helper()
+
+	prev := prometheusUtxoMarkerWithdrawFailures
+	counter := prometheus.NewCounter(prometheus.CounterOpts{Name: "test_marker_withdraw_failures_total"})
+	prometheusUtxoMarkerWithdrawFailures = counter
+
+	t.Cleanup(func() { prometheusUtxoMarkerWithdrawFailures = prev })
+
+	return func() float64 { return testutil.ToFloat64(counter) }
+}
+
+// answerEveryRecord makes every pruner batch call answer each record with code,
+// without reaching the server, and returns the call counter.
+func answerEveryRecord(s *Service, code types.ResultCode) *int {
+	calls := 0
+
+	s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		calls++
+
+		for _, rec := range records {
+			batchRec := rec.BatchRec()
+			batchRec.ResultCode = code
+			batchRec.Err = &aerospike.AerospikeError{ResultCode: code}
+		}
+
+		return nil
+	}
+
+	return &calls
+}
+
+// TestWithdrawMarkers_LastingRefusal: a withdrawal refused with a code that
+// answers the same way every time is sent once, not resent. It is counted when
+// the parent's marker write landed, since that marker then stays and refuses
+// the kept child's re-spend. It is not counted when the marker write itself
+// failed: a record that cannot take this write did not take the marker either.
+func TestWithdrawMarkers_LastingRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		markerFailed bool
+		counted      float64
+	}{
+		{name: "marker landed", counted: 1},
+		{name: "marker write failed", markerFailed: true, counted: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, client := newFlushTestService(t)
+			failures := withdrawFailures(t)
+
+			parent := chainhash.HashH([]byte{0xF4, 1})
+			child := chainhash.HashH([]byte{0xF4, 2})
+			putRecord(t, client, &parent, spentBy(&child))
+
+			updates := make(map[string]*parentUpdateInfo)
+			require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
+
+			for _, info := range updates {
+				info.markerFailed = tc.markerFailed
+			}
+
+			calls := answerEveryRecord(s, types.BIN_TYPE_ERROR)
+
+			s.withdrawMarkers(updates, map[chainhash.Hash]struct{}{child: {}})
+			require.Equal(t, 1, *calls, "a lasting refusal is not resent")
+			require.Equal(t, tc.counted, failures())
+		})
+	}
+}
+
+// TestWithdrawMarkers_NoMarkerBinIsNothingToWithdraw: a parent with no
+// deletedChildren bin has no marker to remove. It is not resent and not
+// counted as a failure.
+func TestWithdrawMarkers_NoMarkerBinIsNothingToWithdraw(t *testing.T) {
+	s, client := newFlushTestService(t)
+	failures := withdrawFailures(t)
+
+	parent := chainhash.HashH([]byte{0xF5, 1})
+	child := chainhash.HashH([]byte{0xF5, 2})
+	putRecord(t, client, &parent, spentBy(&child))
+
+	updates := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
+
+	calls := answerEveryRecord(s, types.BIN_NOT_FOUND)
+
+	s.withdrawMarkers(updates, map[chainhash.Hash]struct{}{child: {}})
+	require.Equal(t, 1, *calls, "nothing to withdraw is not resent")
+	require.Zero(t, failures(), "nothing to withdraw is not a failure")
+}
+
 // TestWithdrawMarkers_StopsAfterTheLastAttempt: a withdrawal that keeps failing
 // is sent withdrawMarkerAttempts times and then left, counted and logged.
 func TestWithdrawMarkers_StopsAfterTheLastAttempt(t *testing.T) {
 	s, client := newFlushTestService(t)
+	failures := withdrawFailures(t)
 
 	parent := chainhash.HashH([]byte{0xF3, 1})
 	child := chainhash.HashH([]byte{0xF3, 2})
@@ -1325,4 +1431,5 @@ func TestWithdrawMarkers_StopsAfterTheLastAttempt(t *testing.T) {
 	s.withdrawMarkers(updates, map[chainhash.Hash]struct{}{child: {}})
 	require.Equal(t, withdrawMarkerAttempts, calls)
 	require.True(t, hasMarker(t, client, parentKey, &child), "a withdrawal that never lands leaves the marker")
+	require.Equal(t, float64(1), failures(), "the parent left with its marker is counted")
 }

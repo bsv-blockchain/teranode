@@ -3,7 +3,9 @@ package sql
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -895,5 +897,79 @@ func TestRollbackKeepsAMatchMarkedAfterTheSpendRead(t *testing.T) {
 
 		require.Equal(t, historical, outputSpendingData(t, ctx, store, p, 0),
 			"a match whose parent carries the marker by the time of the probe is a confirmed spend and must stay")
+	})
+}
+
+// TestAbortedSpendKeepsAnIdempotentMatchWhileAnInputIsUnanswered: tx C spends
+// A:0, B:0 and E:0. A's batch never answers, so its wait times out, B:0 already
+// records C (an idempotent match) and E:0 answers ErrSpent. A's real answer is
+// unknown and may be the marker hit, so B:0 may be a confirmed historical
+// spend: the rollback must leave it. The Aerospike store pins the same case in
+// TestAbortPathNeverReversesAnIdempotentMatchWhileAnInputIsUnanswered.
+func TestAbortedSpendKeepsAnIdempotentMatchWhileAnInputIsUnanswered(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+		newParent := func(seed string) *bt.Tx {
+			parent := bt.NewTx()
+			require.NoError(t, parent.From(seed, 0, "51", 30000))
+			parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+			_, err := store.Create(ctx, parent, 1000)
+			require.NoError(t, err)
+
+			return parent
+		}
+
+		a := newParent("1111111111111111111111111111111111111111111111111111111111111111")
+		b := newParent("2222222222222222222222222222222222222222222222222222222222222222")
+		e := newParent("3333333333333333333333333333333333333333333333333333333333333333")
+
+		spender := func(parents ...*bt.Tx) *bt.Tx {
+			tx := bt.NewTx()
+			for _, parent := range parents {
+				require.NoError(t, tx.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+			}
+
+			for i := range tx.Inputs {
+				tx.Inputs[i].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			}
+
+			require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+
+			return tx
+		}
+
+		other := spender(e)
+		_, _, err := store.SpendAndCreate(ctx, other, 1000)
+		require.NoError(t, err, "fixture: E:0 is spent by another transaction")
+
+		c := spender(a, b, e)
+
+		recorded := spendpkg.NewSpendingData(c.TxIDChainHash(), 1).Bytes()
+		_, err = store.db.ExecContext(ctx,
+			"UPDATE outputs SET spending_data = $2 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
+			b.TxIDChainHash()[:], recorded)
+		require.NoError(t, err)
+
+		// A's spend is never answered.
+		store.settings.UtxoStore.SpendWaitTimeout = 500 * time.Millisecond
+		store.spendBatcher = batcher.NewWithPool(store.settings.UtxoStore.SpendBatcherSize, 10*time.Millisecond, func(batch []*batchSpend) {
+			answered := make([]*batchSpend, 0, len(batch))
+
+			for _, item := range batch {
+				if !item.spend.TxID.IsEqual(a.TxIDChainHash()) {
+					answered = append(answered, item)
+				}
+			}
+
+			if len(answered) > 0 {
+				store.sendSpendBatch(answered)
+			}
+		}, false)
+
+		_, err = store.Spend(ctx, c, 1000)
+		require.Error(t, err)
+
+		require.Equal(t, recorded, outputSpendingData(t, ctx, store, b, 0),
+			"an idempotent match must not be reversed while an input is unanswered")
 	})
 }

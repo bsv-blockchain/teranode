@@ -476,9 +476,12 @@ func parkCommitFailure(err error) parkDisposition {
 
 	case errors.Is(err, errors.ErrTxNotFound), errors.Is(err, errors.ErrUtxoSpendingTxPruned):
 		// The two answers a replay of a transaction this node already pruned
-		// gets. A parked block is below the checkpoint, so it cannot be
-		// replaying anything wrongly: the store is ahead of the chain, which is
-		// this node's state, not the peer's block.
+		// gets. Below the checkpoint the block is certified, so the store is
+		// ahead of the chain, which is this node's state, not the peer's block.
+		// Above it the full route wraps this answer in a ServiceError, which
+		// the transient arm has already taken. On neither route is a pruned
+		// replay a block verdict: the marker does not say which chain mined the
+		// transaction.
 		return parkDispositionLocalUtxoFault
 
 	default:
