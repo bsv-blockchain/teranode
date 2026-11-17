@@ -299,7 +299,7 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 		require.True(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
 		require.False(t, block.SubtreesLoaded())
 		require.Zero(t, bv.lastValidatedBlocks.Len())
-		require.False(t, logger.warned(otherObjectWarning))
+		logger.requireLeakWarnings(t, block)
 	})
 
 	t.Run("cached and already taken: left alone", func(t *testing.T) {
@@ -312,8 +312,7 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 
 		require.False(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
 		require.True(t, block.SubtreesLoaded())
-		require.True(t, logger.warnedAbout(alreadyTakenWarning, block))
-		require.False(t, logger.warned(otherObjectWarning))
+		logger.requireLeakWarnings(t, block, alreadyTakenWarning)
 	})
 
 	t.Run("never cached: released here", func(t *testing.T) {
@@ -322,8 +321,7 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 
 		require.True(t, bv.reclaimBlockAfterFailedSubtreesSet(block, false))
 		require.False(t, block.SubtreesLoaded())
-		require.False(t, logger.warned(otherObjectWarning))
-		require.False(t, logger.warned(alreadyTakenWarning))
+		logger.requireLeakWarnings(t, block)
 	})
 
 	// The cache holds another object for the same hash. Set overwrites without
@@ -342,7 +340,7 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 		require.True(t, block.SubtreesLoaded(), "a block the setMined worker may hold must not be released")
 		require.False(t, other.SubtreesLoaded())
 		require.Zero(t, bv.lastValidatedBlocks.Len())
-		require.True(t, logger.warnedAbout(otherObjectWarning, block), "leaving the block unreleased must be logged with its hash")
+		logger.requireLeakWarnings(t, block, otherObjectWarning)
 	})
 
 	t.Run("worker took ours, then a revalidation cached another: ours left to the worker", func(t *testing.T) {
@@ -361,7 +359,7 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 		require.False(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
 		require.True(t, workerBlock.SubtreesLoaded(), "reclaim released the block the setMined worker is reading")
 		require.False(t, revalidated.SubtreesLoaded())
-		require.True(t, logger.warnedAbout(otherObjectWarning, block))
+		logger.requireLeakWarnings(t, block, otherObjectWarning)
 	})
 }
 
@@ -410,29 +408,30 @@ func (l *warnRecordingLogger) Warnf(format string, args ...interface{}) {
 	l.warns = append(l.warns, recordedWarning{format: format, args: args})
 }
 
-func (l *warnRecordingLogger) warned(prefix string) bool {
-	return l.find(prefix) != nil
-}
+// requireLeakWarnings requires that exactly the warnings with these format
+// prefixes were logged, in order, none other. Each must name the block by its hash
+// and say its subtrees may never be released, since that clause is how an operator
+// traces a stray subtree-nodes-* file back to the exit that left it.
+func (l *warnRecordingLogger) requireLeakWarnings(t *testing.T, block *model.Block, prefixes ...string) {
+	t.Helper()
 
-// warnedAbout reports whether a warning with this format prefix was logged with the
-// block's hash as its first argument.
-func (l *warnRecordingLogger) warnedAbout(prefix string, block *model.Block) bool {
-	w := l.find(prefix)
-
-	return w != nil && len(w.args) > 0 && w.args[0] == block.Hash().String()
-}
-
-func (l *warnRecordingLogger) find(prefix string) *recordedWarning {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	for i := range l.warns {
-		if strings.HasPrefix(l.warns[i].format, prefix) {
-			return &l.warns[i]
-		}
+	formats := make([]string, 0, len(l.warns))
+	for _, w := range l.warns {
+		formats = append(formats, w.format)
 	}
 
-	return nil
+	require.Len(t, l.warns, len(prefixes), "warnings logged: %q", formats)
+
+	for i, prefix := range prefixes {
+		w := l.warns[i]
+		require.True(t, strings.HasPrefix(w.format, prefix), "warning %d: %q", i, w.format)
+		require.Contains(t, w.format, "its subtrees are never released", "warning %d must say the block may leak", i)
+		require.NotEmpty(t, w.args, "warning %d has no arguments", i)
+		require.Equal(t, block.Hash().String(), w.args[0], "warning %d must name the block", i)
+	}
 }
 
 func newTestLastValidatedBlocks() *expiringmap.ExpiringMap[chainhash.Hash, *model.Block] {
