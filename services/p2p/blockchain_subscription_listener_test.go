@@ -331,7 +331,9 @@ func TestBlockchainSubscriptionListener_StuckAnnouncementTimesOut(t *testing.T) 
 		mu.Lock()
 		previousReturned = true
 		mu.Unlock()
-	}).Return(nil, nil, context.DeadlineExceeded)
+		// An error that is not a context error, as a gRPC call returns, so only
+		// a check on the notification's own deadline counts it as a timeout.
+	}).Return(nil, nil, errors.NewServiceError("rpc call ran out of time"))
 
 	_, subscription := startListenerTestServer(t, mockBlockchain)
 

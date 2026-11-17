@@ -2801,8 +2801,9 @@ func (s *Server) peerFailureWorker(ctx context.Context, queue <-chan *blockchain
 
 // announcementWorker handles every notification except catchup PeerFailures,
 // in arrival order, each under its own notificationProcessTimeout. An
-// announcement that runs out of time is logged at Error, counted with
-// reason="timeout", and not retried.
+// announcement that fails after its deadline has passed is logged at Error,
+// counted with reason="timeout", and not retried. One that finishes past the
+// deadline without an error is not counted.
 func (s *Server) announcementWorker(ctx context.Context, queue <-chan *blockchain.Notification) {
 	for {
 		select {
