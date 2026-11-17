@@ -2,6 +2,7 @@ package utxopersister
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"runtime"
 	"strings"
@@ -782,12 +783,22 @@ func TestProcessNextBlock_RecordsHeightBeforeDeletingPreviousSet(t *testing.T) {
 
 	server, byH := restartTestChain(t, store)
 
+	// Give the previous set its sidecars, so the test can see they are kept.
+	require.NoError(t, store.Set(ctx, byH[1][:], fileformat.FileTypeUtxoSetHash, []byte("set-hash")))
+	require.NoError(t, store.Set(ctx, byH[1][:], fileformat.FileTypeUtxoHeaders, []byte("headers")))
+
+	logs := &recordingT{}
+	server.logger = ulogger.NewErrorTestLogger(logs)
+
 	_, err := server.processNextBlock(ctx)
 	require.NoError(t, err, "a failed delete of the previous set does not fail a pass that recorded the new one")
+	require.True(t, logs.contains("ERR_LEVEL", "not retried"), "a failed delete is logged at Error")
 
-	previous, err := store.Exists(ctx, byH[1][:], fileformat.FileTypeUtxoSet)
-	require.NoError(t, err)
-	require.True(t, previous, "the previous set stays on disk after a failed delete")
+	for _, ft := range []fileformat.FileType{fileformat.FileTypeUtxoSet, fileformat.FileTypeUtxoSetHash, fileformat.FileTypeUtxoHeaders} {
+		exists, err := store.Exists(ctx, byH[1][:], ft)
+		require.NoError(t, err)
+		require.True(t, exists, "the previous %s stays on disk after a failed delete, so the leftover set is whole", ft)
+	}
 
 	height, err := server.readLastHeight(ctx)
 	require.NoError(t, err)
@@ -1004,4 +1015,42 @@ func calledFrom(method string) bool {
 	}
 
 	return strings.HasSuffix(runtime.FuncForPC(pc).Name(), "(*Server)."+method)
+}
+
+// recordingT is a ulogger.TestingT that keeps every line logged through it.
+type recordingT struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (r *recordingT) Errorf(format string, args ...interface{}) { r.Logf(format, args...) }
+func (r *recordingT) FailNow()                                  {}
+func (r *recordingT) Logf(format string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.lines = append(r.lines, fmt.Sprintf(format, args...))
+}
+
+// contains reports whether one logged line holds every one of parts.
+func (r *recordingT) contains(parts ...string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, line := range r.lines {
+		all := true
+
+		for _, p := range parts {
+			if !strings.Contains(line, p) {
+				all = false
+				break
+			}
+		}
+
+		if all {
+			return true
+		}
+	}
+
+	return false
 }

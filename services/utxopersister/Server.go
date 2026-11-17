@@ -740,11 +740,14 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	// deletes it again and it stays until removed by hand; one-shot builds and
 	// the seeder may still read it (utxoPersister_livenessStallTimeout says when).
 	if lastWrittenUTXOSetHash.String() != s.settings.ChainCfgParams.GenesisHash.String() && !s.settings.BlockPersister.SkipUTXODelete {
-		// Logged here, not returned: the new set is already recorded, so no
-		// later pass comes back to this one, and returning the error would only
-		// reach handleTriggerError's "will retry" log and skip the sidecars below.
+		// A failed delete is logged here, not returned: the new set is already
+		// recorded, so no later pass comes back to this one, and the trigger
+		// handler would log it as "will retry". The sidecars are kept with it, so
+		// the leftover set stays whole, the same files a stop at this point leaves.
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet); err != nil {
-			s.logger.Errorf("[UTXOPersister] Error deleting previous UTXOSet for block %s height %d; the new set is recorded, so this one is not retried and stays on disk until removed by hand: %v", lastWrittenUTXOSetHash, metas[0].Height, err)
+			s.logger.Errorf("[UTXOPersister] Error deleting previous UTXOSet for block %s height %d; the new set is recorded, so this one and its sidecars are not retried and stay on disk until removed by hand: %v", lastWrittenUTXOSetHash, metas[0].Height, err)
+
+			return 0, nil
 		}
 
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSetHash); err != nil {
