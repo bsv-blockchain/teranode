@@ -534,8 +534,10 @@ func (s *Store) handleBatchRecordError(batchRecord aerospike.BatchRecordIfc, err
 
 // lockClearItem identifies a transaction whose pagination/extra records must
 // have the `locked` flag and the `creating` bin cleared as part of marking the
-// transaction mined. The master record's flags are cleared by the setMined UDF /
-// expression write itself.
+// transaction mined. When the setMined UDF or expression write runs, it clears
+// the master's `locked` and `creating` itself. On the expression path's
+// FILTERED_OUT branch the master's `locked` is cleared by SetLocked(false), and
+// its `creating` is not cleared.
 type lockClearItem struct {
 	txID       *chainhash.Hash
 	childCount int // number of pagination/extra records, cleared at indices 1..childCount
@@ -621,20 +623,31 @@ func (s *Store) readExtraRecordCounts(txIDs []chainhash.Hash) ([]lockClearItem, 
 		return nil, errors.NewStorageError("[readExtraRecordCounts] failed to read the extra record count of %d txs", len(ids), err)
 	}
 
+	return extraRecordItems(records, ids)
+}
+
+// extraRecordItems turns the batch read of readExtraRecordCounts into one
+// lockClearItem per transaction with extra records. A master that comes back
+// KEY_NOT_FOUND is skipped. Any other read error, or a record that came back
+// with neither data nor an error, is reported, so a transaction whose extra
+// records were not cleared is never dropped silently.
+func extraRecordItems(records []aerospike.BatchRecordIfc, ids []*chainhash.Hash) ([]lockClearItem, error) {
 	var (
 		items   []lockClearItem
-		readErr error
+		readErr []error
 	)
 
 	for i, rec := range records {
 		br := rec.BatchRec()
-		if br.Err != nil && !isKeyNotFound(br.Err) {
-			readErr = errors.JoinCapped(10, readErr, errors.NewStorageError("[readExtraRecordCounts][%s] failed to read the extra record count", ids[i].String(), br.Err))
-			continue
-		}
 
-		// A missing master comes back as KEY_NOT_FOUND with no record.
-		if br.Record == nil {
+		switch {
+		case br.Err != nil && isKeyNotFound(br.Err):
+			continue
+		case br.Err != nil:
+			readErr = append(readErr, errors.NewStorageError("[readExtraRecordCounts][%s] failed to read the extra record count", ids[i].String(), br.Err))
+			continue
+		case br.Record == nil:
+			readErr = append(readErr, errors.NewStorageError("[readExtraRecordCounts][%s] no record and no error returned for the extra record count", ids[i].String()))
 			continue
 		}
 
@@ -643,7 +656,7 @@ func (s *Store) readExtraRecordCounts(txIDs []chainhash.Hash) ([]lockClearItem, 
 		}
 	}
 
-	return items, readErr
+	return items, errors.JoinCapped(10, readErr...)
 }
 
 // clearLockedOnRecordsMulti clears the `locked` flag and deletes the `creating`
@@ -669,8 +682,10 @@ func (s *Store) readExtraRecordCounts(txIDs []chainhash.Hash) ([]lockClearItem, 
 // master only, so the master looks complete and nothing re-runs the create,
 // while every output on a stuck extra record is refused with CREATING. Deleting
 // the bin here, in the same write as the lock clear, makes those outputs
-// spendable once the transaction is mined. Every record exists with its full data
-// at this point, since create writes each record in one put.
+// spendable once the transaction is mined. Deleting the bin never exposes a
+// half-written record, since create writes each record with its full data in one
+// put and this write is UPDATE_ONLY. A record the create never wrote stays
+// missing and comes back KEY_NOT_FOUND below; this clear does not repair it.
 //
 // A KEY_NOT_FOUND on any record is treated as benign: a record that does not exist
 // cannot be holding a lock.

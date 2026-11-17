@@ -28,8 +28,10 @@ func markCreating(t *testing.T, client *uaerospike.Client, store *teranode_aeros
 	require.NoError(t, client.PutBins(nil, key, aerospike.NewBin(fields.Creating.String(), true)))
 }
 
-// recordCreating reports whether one record of txHash still carries the `creating` bin.
-func recordCreating(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, txHash *chainhash.Hash, recordIdx uint32) bool {
+// recordHasCreatingBin reports whether one record of txHash still has a `creating`
+// bin at all. Mining deletes the bin, as clearCreatingFlag does, rather than
+// setting it false.
+func recordHasCreatingBin(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, txHash *chainhash.Hash, recordIdx uint32) bool {
 	t.Helper()
 
 	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(txHash, recordIdx))
@@ -39,9 +41,9 @@ func recordCreating(t *testing.T, client *uaerospike.Client, store *teranode_aer
 	require.NoError(t, err)
 	require.NotNil(t, rec, "record %d for %s should exist", recordIdx, txHash.String())
 
-	v, ok := rec.Bins[fields.Creating.String()]
+	_, ok := rec.Bins[fields.Creating.String()]
 
-	return ok && v != nil && v != false
+	return ok
 }
 
 // spendOutput builds a child that spends one output of parent.
@@ -68,7 +70,9 @@ func spendOutput(t *testing.T, parent *bt.Tx, vout uint32) *bt.Tx {
 // The first-mine case forges the stuck state before the first SetMinedMulti.
 // The re-mine case forges it on the extra records after a first mine and mines
 // again with the same block ID, which sends the expression path down its
-// FILTERED_OUT branch, so a node that already has the stuck state heals.
+// FILTERED_OUT branch. A re-mine clears the state too, but only when something
+// mines the transaction again; a transaction already mined and settled with the
+// stuck state is not revisited.
 func TestSetMinedMultiClearsCreatingOnExtraRecords(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
@@ -141,8 +145,8 @@ func TestSetMinedMultiClearsCreatingOnExtraRecords(t *testing.T) {
 				require.NoError(t, err)
 
 				for i := uint32(0); i <= uint32(extras); i++ { // nolint:gosec
-					require.Falsef(t, recordCreating(t, client, store, parentHash, i),
-						"record %d must not carry creating once the transaction is mined", i)
+					require.Falsef(t, recordHasCreatingBin(t, client, store, parentHash, i),
+						"record %d must not have a creating bin once the transaction is mined", i)
 				}
 
 				// One output on each record: master, extra 1, extra 2.
