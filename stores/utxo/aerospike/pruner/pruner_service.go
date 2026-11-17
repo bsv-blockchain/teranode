@@ -2430,9 +2430,27 @@ func spendHolder(utxos []interface{}, offsets []uint32, childHash *chainhash.Has
 // A master's pages wait the same way: they ride the batch after the one that
 // deleted the master, so a refused master keeps its pages.
 //
-// One carry belongs to one partition worker. Its mutex serialises that
-// worker's flushes, which run one at a time anyway at the default chunk group
-// limit of 1.
+// One carry belongs to one partition worker, whose chunks run up to
+// pruner_utxoChunkGroupLimit at a time. Its mutex covers only taking the carry
+// at the start of a flush and adding back to it at the end, so those chunks
+// overlap their marker, delete, page and blob I/O. That is safe because:
+//
+//   - Each pending delete, blob, page and marker set sits in exactly one flush,
+//     and a child enters the carry only after its own marker batch answered, so
+//     a delete still never shares a batch with its own markers.
+//   - A marker write on a parent X that another chunk's batch deletes at the
+//     same time answers for itself. Landing before the delete, the marker goes
+//     with X. After it, the UPDATE_ONLY write answers KEY_NOT_FOUND, which
+//     counts as a parent that is gone. If the delete is refused, the marker
+//     lands on the X that stays. Those are the outcomes the same two flushes
+//     have run one after the other, where the later one does not hold X in its
+//     carry either; splitTiedUpdates is only for a tie inside one batch, whose
+//     rows run in no fixed order. In TTL mode the write is always sent, and with
+//     TTLDontUpdate it cannot give an expiring X a new lifetime.
+//   - A master's pages, and a child's blob, are added only after the batch that
+//     deleted the master answered, so they ride a later flush or the drain.
+//   - A flush whose batch never went out puts what it took back, after
+//     anything added meanwhile, so nothing is overwritten.
 type deleteCarry struct {
 	mu sync.Mutex
 	// deletions are cleared children, deleted by the next batch.
@@ -2448,7 +2466,33 @@ type deleteCarry struct {
 }
 
 func (c *deleteCarry) empty() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	return len(c.deletions) == 0 && len(c.pages) == 0
+}
+
+// take empties the carry and returns what it held.
+func (c *deleteCarry) take() *deleteCarry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	taken := &deleteCarry{deletions: c.deletions, files: c.files, updates: c.updates, pages: c.pages}
+	c.deletions, c.files, c.updates, c.pages = nil, nil, nil, nil
+
+	return taken
+}
+
+// add appends another flush's leftovers to the carry, after whatever other
+// chunks added meanwhile.
+func (c *deleteCarry) add(more *deleteCarry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.deletions = append(c.deletions, more.deletions...)
+	c.files = append(c.files, more.files...)
+	c.updates = append(c.updates, more.updates...)
+	c.pages = append(c.pages, more.pages...)
 }
 
 // drainCarry sends the carry's remaining deletes, and then the pages of the
@@ -2532,11 +2576,13 @@ func (s *Service) flushChunk(ctx context.Context, carry *deleteCarry, parentUpda
 		return len(deletions), 0, nil
 	}
 
-	carry.mu.Lock()
-	defer carry.mu.Unlock()
+	// The lock covers only taking the carry and adding back to it, so the
+	// chunks of one worker overlap their batches; see deleteCarry. What this
+	// flush owes the next batch collects in next and is added back on return.
+	prev := carry.take()
+	next := &deleteCarry{}
 
-	prev := &deleteCarry{deletions: carry.deletions, files: carry.files, updates: carry.updates, pages: carry.pages}
-	carry.deletions, carry.files, carry.updates, carry.pages = nil, nil, nil, nil
+	defer carry.add(next)
 
 	deleteRecords, masters, deleteSlots := s.buildCarriedDeletes(prev)
 
@@ -2551,14 +2597,14 @@ func (s *Service) flushChunk(ctx context.Context, carry *deleteCarry, parentUpda
 	plan, sent, markErr := s.markParentsWith(ctx, writeUpdates, parentUpdates, deleteRecords)
 	if markErr != nil && !sent {
 		// Nothing went out, so the carried deletes are still owed.
-		carry.deletions, carry.files, carry.updates, carry.pages = prev.deletions, prev.files, prev.updates, prev.pages
+		next.deletions, next.files, next.updates, next.pages = prev.deletions, prev.files, prev.updates, prev.pages
 
 		return 0, 0, markErr
 	}
 
 	results := classifyDeletionResults(deleteRecords, masters)
 
-	deleted, heldBack, deleteErr := s.settleCarriedDeletes(ctx, carry, prev, deleteRecords, masters, results)
+	deleted, heldBack, deleteErr := s.settleCarriedDeletes(ctx, next, prev, deleteRecords, masters, results)
 
 	if markErr != nil {
 		return deleted, heldBack, markErr
@@ -2611,13 +2657,13 @@ func (s *Service) flushChunk(ctx context.Context, carry *deleteCarry, parentUpda
 	// once the batch that deletes the record has answered.
 	for _, file := range externalFiles {
 		if _, ok := clearedSet[*file.txHash]; ok {
-			carry.files = append(carry.files, file)
+			next.files = append(next.files, file)
 		}
 	}
 
 	if len(cleared) > 0 {
-		carry.deletions = append(carry.deletions, cleared...)
-		carry.updates = append(carry.updates, parentUpdates)
+		next.deletions = append(next.deletions, cleared...)
+		next.updates = append(next.updates, parentUpdates)
 	}
 
 	return deleted, heldBack, deleteErr
@@ -2693,10 +2739,10 @@ func splitTiedUpdates(updates map[string]*parentUpdateInfo, deleteSlots map[stri
 // withdrawn; a child whose delete went unanswered keeps them, because
 // withdrawing after a delete that did land would leave the unmarked deletion
 // this package exists to prevent, and the next cycle re-finds it if it is
-// still there. A confirmed master's pages go in the carry for the next batch,
+// still there. A confirmed master's pages go in next, for the next batch,
 // and its blob is deleted now. Every record whose delete did not definitely
 // land is counted in the returned error.
-func (s *Service) settleCarriedDeletes(ctx context.Context, carry *deleteCarry, prev *deleteCarry, records []aerospike.BatchRecordIfc, masters map[int]*chainhash.Hash, results deletionResults) (deleted, heldBack int, err error) {
+func (s *Service) settleCarriedDeletes(ctx context.Context, next *deleteCarry, prev *deleteCarry, records []aerospike.BatchRecordIfc, masters map[int]*chainhash.Hash, results deletionResults) (deleted, heldBack int, err error) {
 	if len(records) == 0 {
 		return 0, 0, nil
 	}
@@ -2731,7 +2777,7 @@ func (s *Service) settleCarriedDeletes(ctx context.Context, carry *deleteCarry, 
 				continue
 			}
 		} else if len(deletion.keys) > 1 {
-			carry.pages = append(carry.pages, deletion.keys[1:]...)
+			next.pages = append(next.pages, deletion.keys[1:]...)
 		}
 
 		deleted++
