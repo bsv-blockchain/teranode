@@ -1154,7 +1154,11 @@ func (s *Store) storeExternallyWithLock(
 		// A held lock means another attempt is writing the records, or an earlier
 		// attempt's release failed and the lock waits out its TTL. Either way this
 		// call has not cleared the creating flag, so a mined create must not answer
-		// ErrTxExists, which its caller may read as done. See creatingNotClearedError.
+		// ErrTxExists, which the seeder and the coinbase store read as done. See
+		// creatingNotClearedError. The cost falls on quick validation: it used to
+		// stamp an existing transaction mined, and now its repeat meets the same
+		// lock, so the block fails as a local fault and is applied again once the
+		// lock's TTL (30 s plus 2 s per record, at most 300 s) runs out.
 		// The lock's ErrTxExists is carried as text, not wrapped: errors.Is walks the
 		// chain, so a wrapped one would still read as done.
 		if len(bItem.blockIDs) > 0 && errors.Is(err, errors.ErrTxExists) {
@@ -1288,8 +1292,8 @@ func (s *Store) storeExternallyWithLock(
 
 	clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore))
 	if clearErr != nil && len(bItem.blockIDs) > 0 {
-		// A create that carries mined block info has none of the recovery paths
-		// listed below. See creatingNotClearedError.
+		// A create that carries mined block info is not reliably reached by the
+		// recovery paths listed below. See creatingNotClearedError.
 		bItem.complete(creatingNotClearedError(funcName, bItem.txHash, clearErr))
 		return
 	}
@@ -1298,7 +1302,7 @@ func (s *Store) storeExternallyWithLock(
 		// PARTIAL SUCCESS: Transaction records created successfully, but creating flag cleanup failed
 		//
 		// This applies only to a create with no mined block info; a mined create returned
-		// creatingNotClearedError above, because the recovery paths below do not reach it.
+		// creatingNotClearedError above, because the recovery paths below do not reliably reach it.
 		//
 		// WHY WE RETURN SUCCESS DESPITE INCOMPLETE PHASE 2:
 		//

@@ -647,11 +647,11 @@ func TestSpendAndCreateKeepsSpendsWhenCreateInDoubt(t *testing.T) {
 // TestCreateMinedReportsCreatingNotCleared covers a paginated transaction
 // created already mined, as quick validation creates every transaction of a
 // block below the checkpoint, whose clear of the creating bin fails. Nothing
-// repeats a create that returned success, and setMined never runs for a
-// transaction created mined, so a success there left the records with the
-// creating bin for good and every output on them refused with CREATING. The
-// create must return an error its caller repeats, and keep the spends; the
-// repeat must finish the clear.
+// repeats a create that returned success, and setMined does not run for a
+// transaction created mined unless it is found existing, so a success there
+// could leave the records with the creating bin and every output on them
+// refused with CREATING. The create must return a retryable error and keep the
+// spends; a repeat must finish the clear.
 func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
