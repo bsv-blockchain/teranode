@@ -86,8 +86,12 @@ type Allocator struct {
 	halfAsked bool
 	spare     Grant
 	hasSpare  bool
-	// pending settles the grant last left, until a grant request or the release carries it.
-	pending Settles
+	// pending settles the grants left and not yet reported, oldest first, until grant requests or
+	// the release carry them. It holds at most two: a second grant is left only once the first was
+	// left with no spare to move to, and then no grant is current, so none can be left again until
+	// a request succeeds and carries the oldest.
+	pending  [2]Settles
+	npending int
 	// leaseTaken is the highest position this lease has given out; 0 for none.
 	leaseTaken uint64
 	// highest is the highest position this process has given out in each lane, across leases. A
@@ -183,7 +187,9 @@ func (a *Allocator) Ready() error {
 func (a *Allocator) Close() error {
 	a.mu.Lock()
 	a.released = true
-	leased, release := a.leased, Release{Lease: a.lease, Lane: a.lane, LastTaken: a.leaseTaken, Settles: a.pending}
+	// With two pairs held the release carries the older. The newer is the grant last left, and its
+	// final number is the LastTaken the release carries anyway.
+	leased, release := a.leased, Release{Lease: a.lease, Lane: a.lane, LastTaken: a.leaseTaken, Settles: a.pending[0]}
 	started := a.started
 	a.broadcastLocked()
 	a.mu.Unlock()
@@ -321,7 +327,8 @@ func (a *Allocator) leaveCurrentLocked(usedUp bool) {
 		final = a.cur.Last
 	}
 
-	a.pending = Settles{First: a.cur.First, LastTaken: final}
+	a.pending[a.npending] = Settles{First: a.cur.First, LastTaken: final}
+	a.npending++
 
 	if a.hasSpare {
 		a.installLocked(a.spare)
@@ -486,7 +493,7 @@ func (a *Allocator) open() error {
 
 	a.leased, a.lease, a.lane = true, id, g.Lane
 	a.installLocked(g)
-	a.hasSpare, a.pending, a.leaseTaken = false, Settles{}, 0
+	a.hasSpare, a.pending, a.npending, a.leaseTaken = false, [2]Settles{}, 0, 0
 	a.lastGood = sent
 	a.samples = [2]rateSample{{sent, a.taken}, {sent, a.taken}}
 	a.broadcastLocked()
@@ -505,7 +512,7 @@ func (a *Allocator) renew(want bool) error {
 	a.mu.Lock()
 	r := Renewal{Lease: a.lease, Lane: a.lane, Rate: a.rateLocked(sent), WantGrant: want}
 	if want {
-		r.Settles = a.pending
+		r.Settles = a.pending[0]
 	}
 	a.mu.Unlock()
 
@@ -527,7 +534,7 @@ func (a *Allocator) renew(want bool) error {
 	if res.Closed {
 		a.logger.Warnf("[lane] the blockchain service closed the lease of %s on lane %d; opening a new one", a.holder, a.lane)
 
-		a.leased, a.next, a.hasSpare, a.pending = false, 0, false, Settles{}
+		a.leased, a.next, a.hasSpare, a.pending, a.npending = false, 0, false, [2]Settles{}, 0
 		a.broadcastLocked()
 
 		return nil
@@ -536,8 +543,11 @@ func (a *Allocator) renew(want bool) error {
 	a.lastGood = sent
 	a.samples[0], a.samples[1] = a.samples[1], rateSample{sent, a.taken}
 
-	if want && a.pending == r.Settles {
-		a.pending = Settles{}
+	// The oldest pair is reported once a request that carried it succeeds. A pair recorded while the
+	// request was in flight stays for the next one.
+	if want && a.npending > 0 && a.pending[0] == r.Settles {
+		a.pending[0], a.pending[1] = a.pending[1], Settles{}
+		a.npending--
 	}
 
 	if want && !res.Granted {

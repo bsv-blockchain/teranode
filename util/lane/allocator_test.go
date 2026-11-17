@@ -491,3 +491,77 @@ func TestAllocatorBacksOffBetweenFailedRequests(t *testing.T) {
 		backoff *= 2
 	}
 }
+
+// Two grants can be left before a request carries the first one's pair: leave grant 1, the request
+// at half of grant 2 fails, and grant 2 is used up too. Neither pair may be lost.
+func TestAllocatorKeepsBothPairsWhenTwoGrantsAreLeftBeforeARequestSucceeds(t *testing.T) {
+	src := newFakeLeases(10)
+	a := newTestAllocator(t, src, Timings{Renew: time.Hour, Stop: time.Hour, GrantDuration: time.Hour}, nil)
+	a.takeWait = 50 * time.Millisecond
+
+	for i := 0; i < 10; i++ {
+		next(t, a)
+	}
+
+	require.Eventually(t, a.hasSpareGrant, 5*time.Second, time.Millisecond)
+
+	src.setDown(true)
+
+	for i := 0; i < 10; i++ {
+		next(t, a) // 11 to 20: leaves grant 1, and the request at half of grant 2 fails
+	}
+
+	_, err := a.Next(context.Background())
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable, "grant 2 is used up and no grant 3 came")
+
+	src.setDown(false)
+
+	a.takeWait = 5 * time.Second // the loop is in backoff after the outage
+	require.Equal(t, Pack(0, 21), next(t, a))
+
+	for i := 0; i < 5; i++ {
+		next(t, a)
+	}
+
+	require.Eventually(t, func() bool {
+		var sent []Settles
+		for _, r := range src.grantRequests() {
+			sent = append(sent, r.Settles)
+		}
+
+		return len(sent) >= 3 && sent[len(sent)-2] == (Settles{First: 1, LastTaken: 10}) && sent[len(sent)-1] == (Settles{First: 11, LastTaken: 20})
+	}, 5*time.Second, time.Millisecond, "grant 1's pair and then grant 2's travel on the next two requests")
+}
+
+// With two pairs held at the release, the release carries the older, and its LastTaken is the newer
+// one's final number.
+func TestAllocatorReleaseCarriesTheOlderOfTwoPairs(t *testing.T) {
+	src := newFakeLeases(10)
+	a := newTestAllocator(t, src, Timings{Renew: time.Hour, Stop: time.Hour, GrantDuration: time.Hour}, nil)
+	a.takeWait = 50 * time.Millisecond
+
+	for i := 0; i < 10; i++ {
+		next(t, a)
+	}
+
+	require.Eventually(t, a.hasSpareGrant, 5*time.Second, time.Millisecond)
+
+	src.setDown(true)
+
+	for i := 0; i < 10; i++ {
+		next(t, a)
+	}
+
+	_, err := a.Next(context.Background())
+	require.Error(t, err)
+
+	src.setDown(false)
+	require.NoError(t, a.Close())
+
+	src.mu.Lock()
+	defer src.mu.Unlock()
+
+	require.Len(t, src.releases, 1)
+	require.Equal(t, Settles{First: 1, LastTaken: 10}, src.releases[0].Settles)
+	require.Equal(t, uint64(20), src.releases[0].LastTaken)
+}

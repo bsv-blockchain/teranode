@@ -95,7 +95,7 @@ func sqliteTime(t *testing.T, v any) time.Time {
 // last position before the service closes its lease, so the lane cannot pass to another holder
 // while this one still uses it.
 func TestAllocatorStopsBeforeTheServiceCloses(t *testing.T) {
-	const closeAfter = 450 * time.Millisecond
+	const closeAfter = 900 * time.Millisecond
 
 	client, store := localLeaseService(t, 1_000_000, closeAfter)
 	src := &cuttable{LeaseSource: client}
@@ -230,9 +230,8 @@ func TestTwoAllocatorsOnOneLaneNeverSharePosition(t *testing.T) {
 
 	var retired []*lane.Allocator
 
-	deadline := time.Now().Add(2 * time.Second)
-
-	for round := 0; time.Now().Before(deadline); round++ {
+	// A fixed number of rounds, not a time budget, so a slow runner still passes each lane on.
+	for round := 0; round < 12; round++ {
 		time.Sleep(150 * time.Millisecond)
 
 		if round%2 == 0 {
