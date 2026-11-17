@@ -6,6 +6,7 @@ import (
 	"math"
 	"sync"
 	"testing"
+	"time"
 
 	batcher "github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -122,6 +123,37 @@ func batcherBatchSizeStats(t *testing.T, name string) (sum float64, count uint64
 	return sum, count
 }
 
+// settledBatchSizeStats is batcherBatchSizeStats taken only once every triggered batch has been
+// observed in the histogram.
+//
+// go-batcher bumps teranode_batcher_batches_total before it runs the batch fn, but observes
+// teranode_batcher_batch_size in a defer after the fn returns, and utxoset answers each caller
+// from inside the fn. So a caller can return before its batch reaches the histogram: a read
+// taken right after a load can miss its last batches, and a later window can pick them up.
+// Every dispatch records both, so the histogram has caught up once its count equals the
+// counter's total; polling for that makes the window boundaries exact.
+func settledBatchSizeStats(t *testing.T, name string) (sum float64, count uint64) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+
+	for {
+		sum, count = batcherBatchSizeStats(t, name)
+		triggered := batcherFlushCount(t, name)
+
+		if float64(count) == triggered {
+			return sum, count
+		}
+
+		if time.Now().After(deadline) {
+			require.Failf(t, "batch_size histogram never caught up with batches_total",
+				"batcher %q: %d batches observed, %v triggered", name, count, triggered)
+		}
+
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // driveSpendAndCreateLoad fires n concurrent CreateOnly SpendAndCreate calls through s, each its
 // own transaction, and waits for every one of them to land.
 //
@@ -221,12 +253,12 @@ func TestBatcherModeDrainProducesAdaptiveSmallBatches(t *testing.T) {
 			})
 
 			reasonsBefore := batcherReasonCounts(t, "utxoset_spend_and_create")
-			sumBefore, countBefore := batcherBatchSizeStats(t, "utxoset_spend_and_create")
+			sumBefore, countBefore := settledBatchSizeStats(t, "utxoset_spend_and_create")
 
 			driveSpendAndCreateLoad(t, s, ctx, batcherModeCallers, 100, uint64(1000+attempt)*10_000_000)
 
 			reasonsAfter := batcherReasonCounts(t, "utxoset_spend_and_create")
-			sumAfter, countAfter := batcherBatchSizeStats(t, "utxoset_spend_and_create")
+			sumAfter, countAfter := settledBatchSizeStats(t, "utxoset_spend_and_create")
 
 			drainFlushes := reasonsAfter[batcher.ReasonDrain] - reasonsBefore[batcher.ReasonDrain]
 			sizeFlushes := reasonsAfter[batcher.ReasonSize] - reasonsBefore[batcher.ReasonSize]
@@ -243,14 +275,14 @@ func TestBatcherModeDrainProducesAdaptiveSmallBatches(t *testing.T) {
 			// item is ever queued and drain must dispatch it on its own.
 			const sequentialCallers = 20
 
-			seqSumBefore, seqCountBefore := batcherBatchSizeStats(t, "utxoset_spend_and_create")
+			seqSumBefore, seqCountBefore := settledBatchSizeStats(t, "utxoset_spend_and_create")
 			seqReasonsBefore := batcherReasonCounts(t, "utxoset_spend_and_create")
 
 			for i := 0; i < sequentialCallers; i++ {
 				driveSpendAndCreateLoad(t, s, ctx, 1, 100, uint64(2000+attempt)*10_000_000+uint64(i)) //nolint:gosec // test id spread, no overflow at this scale
 			}
 
-			seqSumAfter, seqCountAfter := batcherBatchSizeStats(t, "utxoset_spend_and_create")
+			seqSumAfter, seqCountAfter := settledBatchSizeStats(t, "utxoset_spend_and_create")
 			seqReasonsAfter := batcherReasonCounts(t, "utxoset_spend_and_create")
 
 			require.Equalf(t, uint64(sequentialCallers), seqCountAfter-seqCountBefore,
