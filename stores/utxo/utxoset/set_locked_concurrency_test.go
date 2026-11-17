@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -178,4 +179,112 @@ func TestSetLockedConcurrentWithMiningDoesNotDeadlock(t *testing.T) {
 	wg.Wait()
 	require.Empty(t, errs, "a concurrent release or mine failed, which is how a deadlock shows")
 
+}
+
+// TestSetLockedConcurrentWithUnspendLeavesEveryCoinAgreeingWithItsTransaction: restores of coins
+// and lock changes of their transactions run at once, over overlapping sets in random orders.
+// The restore share-locks the rows it reads the lock from and the lock change updates them, so
+// the two can deadlock, and every call must still succeed through the retry. Five runs on a
+// laptop retried the restore four times. At the end every restored coin carries exactly its
+// transaction's lock, whichever call came last. That check rarely catches the race itself,
+// whose window is too narrow to hit this way: the Racing tests in unspend_test.go hold
+// each side open and are the proof of it.
+//
+// The lock changes take turns with each other. Two of them with opposite values, running at
+// once, can leave a coin no restore touched disagreeing with its transaction, which is a race of
+// SetLocked's own and not the restore's, so this test keeps it out.
+func TestSetLockedConcurrentWithUnspendLeavesEveryCoinAgreeingWithItsTransaction(t *testing.T) {
+	s, ctx := newTestStore(t)
+	require.NoError(t, s.SetBlockHeight(100))
+
+	const n = 40
+
+	parents := make([]chainhash.Hash, n)
+	spends := make([]*utxo.Spend, 0, n)
+	byParent := make(map[chainhash.Hash]*bt.Tx, n)
+
+	for i := range parents {
+		parent := mkTx(t, 2, uint64(10_000+i))
+		_, err := s.Create(ctx, parent, 100, utxo.WithLocked(true))
+		require.NoError(t, err)
+
+		got, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 1_000, 0), 101, utxo.WithIgnoreLocked(true))
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+
+		parents[i] = *parent.TxIDChainHash()
+		byParent[parents[i]] = parent
+		spends = append(spends, got...)
+	}
+
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		turn sync.Mutex
+		errs []error
+	)
+
+	record := func(err error) {
+		if err != nil {
+			mu.Lock()
+			errs = append(errs, err)
+			mu.Unlock()
+		}
+	}
+
+	for w := 0; w < 8; w++ {
+		w := w
+
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			rng := rand.New(rand.NewSource(int64(w))) //nolint:gosec // test ordering only
+
+			for round := 0; round < 20; round++ {
+				picks := rng.Perm(n)[:8]
+				hs := make([]chainhash.Hash, 0, len(picks))
+
+				for _, p := range picks {
+					hs = append(hs, parents[p])
+				}
+
+				turn.Lock()
+				err := s.SetLocked(ctx, hs, rng.Intn(2) == 0)
+				turn.Unlock()
+
+				record(err)
+			}
+		}()
+	}
+
+	rng := rand.New(rand.NewSource(99)) //nolint:gosec // test ordering only
+	order := rng.Perm(n)
+
+	for c := 0; c < n; c += 8 {
+		chunk := make([]*utxo.Spend, 0, 8)
+		for _, p := range order[c:min(c+8, n)] {
+			chunk = append(chunk, spends[p])
+		}
+
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			record(s.Unspend(ctx, chunk))
+		}()
+	}
+
+	wg.Wait()
+	require.Empty(t, errs, "a concurrent Unspend or SetLocked failed, which is how a deadlock shows")
+
+	for _, h := range parents {
+		got, err := s.Get(ctx, &h, fields.Locked)
+		require.NoError(t, err)
+
+		coinLocked := utxoFlagsOf(t, s, ctx, byParent[h], 0)&FlagLocked != 0
+		require.Equal(t, got.Locked, coinLocked, "the restored coin of %s disagrees with its transaction's lock", h)
+	}
 }

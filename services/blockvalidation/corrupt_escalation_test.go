@@ -55,8 +55,8 @@ func TestOptimisticCorrupt_InvalidateFailure_EscalatesNotSilentlyAccepted(t *tes
 	tSettings.BlockValidation.OptimisticMining = true
 	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
-	// Build a corrupt-body block: a real coinbase + subtree, but a zeroed merkle root, so the
-	// background block.Valid fails CheckMerkleRoot -> ERR_BLOCK_CORRUPT.
+	// Build a corrupt-body block: a real coinbase and a bound subtree that repeats a transaction, so
+	// the integrity floor lets it be added and the background block.Valid returns ERR_BLOCK_CORRUPT.
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	coinbaseTx := bt.NewTx()
@@ -64,9 +64,7 @@ func TestOptimisticCorrupt_InvalidateFailure_EscalatesNotSilentlyAccepted(t *tes
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	subtree, err := subtreepkg.NewTreeByLeafCount(2)
-	require.NoError(t, err)
-	require.NoError(t, subtree.AddCoinbaseNode())
+	subtree, merkleRoot := boundDuplicateTxSubtree(t, coinbaseTx)
 	nodeBytes, err := subtree.SerializeNodes()
 	require.NoError(t, err)
 	httpmock.RegisterResponder("GET", `=~^/subtree/[a-z0-9]+\z`, httpmock.NewBytesResponder(200, nodeBytes))
@@ -80,7 +78,7 @@ func TestOptimisticCorrupt_InvalidateFailure_EscalatesNotSilentlyAccepted(t *tes
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
-		HashMerkleRoot: &chainhash.Hash{},         // zeroed -> corrupt in the background
+		HashMerkleRoot: merkleRoot,
 		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 		Bits:           *nBits,
 		Nonce:          0,
@@ -114,7 +112,7 @@ func TestOptimisticCorrupt_InvalidateFailure_EscalatesNotSilentlyAccepted(t *tes
 	})
 
 	// The block carries a subtree, so validateBlockSubtrees runs before the optimistic AddBlock;
-	// let it pass so the corrupt verdict comes from the background block.Valid (zeroed merkle).
+	// let it pass so the corrupt verdict comes from the background block.Valid (repeated tx).
 	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
 	subtreeValidationClient.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -231,6 +229,27 @@ func coinbaseAtHeight(t *testing.T, height uint32) *bt.Tx {
 	return coinbaseTx
 }
 
+// boundDuplicateTxSubtree builds the corrupt body the optimistic invalidate route is tested with: a
+// subtree holding the coinbase placeholder and then one transaction twice, and the header merkle
+// root that commits to it with coinbaseTx in the placeholder's slot. The body is bound to its header
+// and its coinbase is sound, so the integrity floor passes it and the block is added early. The
+// background block.Valid then finds the repeated transaction (CVE-2012-2459) and returns corrupt,
+// which is the verdict only the background run can reach.
+func boundDuplicateTxSubtree(t *testing.T, coinbaseTx *bt.Tx) (*subtreepkg.Subtree, *chainhash.Hash) {
+	t.Helper()
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(chainhash.Hash{0xD0}, 1, 100))
+	require.NoError(t, subtree.AddNode(chainhash.Hash{0xD0}, 1, 100))
+
+	merkleRoot, err := subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
+	require.NoError(t, err)
+
+	return subtree, merkleRoot
+}
+
 // TestOptimisticCorrupt_ReValidationConvergesOnInvalidation is the end-to-end half of bitcoin-sv/teranode#4692. TestOptimisticCorrupt_InvalidateFailure_EscalatesNotSilentlyAccepted
 // proves the optimistic path RE-QUEUES when InvalidateBlock fails; this proves the re-queue actually
 // CONVERGES, which is what the promise in that path's comment claims and what the old reValidateBlock
@@ -261,7 +280,7 @@ func TestOptimisticCorrupt_ReValidationConvergesOnInvalidation(t *testing.T) {
 
 	// waitForPreviousBlocksToBeProcessed gates on the parent being mined, and the store writes
 	// genesis unmined; without this the optimistic AddBlock is never reached.
-	require.NoError(t, realClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash))
+	require.NoError(t, realClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash, 0))
 
 	blockchainClient := &invalidateFailsFirstNClient{ClientI: realClient, failFirst: 1}
 
@@ -271,17 +290,15 @@ func TestOptimisticCorrupt_ReValidationConvergesOnInvalidation(t *testing.T) {
 	// coinbase-height guard to that (non-invalid) write. Encode height 1 in the coinbase and carry the
 	// same height on the model block, so the model height, the store-derived height and the
 	// coinbase-encoded height all agree and the fixture does not depend on where BIP34 activates.
-	// The coinbase does NOT need to be bad: the corrupt verdict comes from the zeroed merkle root,
-	// which fails at the binding, well before the BIP34 and fee checks.
+	// The coinbase does NOT need to be bad: the corrupt verdict comes from the repeated
+	// transaction, which the duplicate check finds well before the BIP34 and fee checks.
 	const blockHeight = uint32(1)
 
 	coinbaseTx := coinbaseAtHeight(t, blockHeight)
 
-	// A real subtree, stored, but a ZEROED header merkle root: the body loads and binds far enough to
-	// reach CheckMerkleRoot, which then fails -> ERR_BLOCK_CORRUPT in the background block.Valid.
-	subtree, err := subtreepkg.NewTreeByLeafCount(2)
-	require.NoError(t, err)
-	require.NoError(t, subtree.AddCoinbaseNode())
+	// A bound subtree, stored, that repeats a transaction: the integrity floor passes it, so it is
+	// added, and the duplicate check returns ERR_BLOCK_CORRUPT in the background block.Valid.
+	subtree, merkleRoot := boundDuplicateTxSubtree(t, coinbaseTx)
 
 	subtreeStore := blobmemory.New()
 	subtreeBytes, err := subtree.Serialize()
@@ -289,7 +306,7 @@ func TestOptimisticCorrupt_ReValidationConvergesOnInvalidation(t *testing.T) {
 	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	// Mined to the regtest 207fffff target so the real GetNextWorkRequired/difficulty gate accepts it.
-	hdr := minedBIP34Header(t, 4, tSettings.ChainCfgParams.GenesisHash, &chainhash.Hash{})
+	hdr := minedBIP34Header(t, 4, tSettings.ChainCfgParams.GenesisHash, merkleRoot)
 
 	block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{subtree.RootHash()},
 		uint64(subtree.Length()), uint64(coinbaseTx.Size()), blockHeight, 0) //nolint:gosec
@@ -852,7 +869,7 @@ func TestOptimisticCorrupt_StrikeGatedOnRevalidation(t *testing.T) {
 	const announcingPeer = "announcing-peer"
 
 	// run drives ValidateBlockWithOptions down the OPTIMISTIC path (OptimisticMining on,
-	// DisableOptimisticMining off) with a body that fails the block-level merkle check in the
+	// DisableOptimisticMining off) with a body that fails the duplicate-transaction check in the
 	// background, and returns the strikes recorded plus whether the invalidate route ran.
 	run := func(isRevalidation bool) ([]corruptBanScoreCall, bool) {
 		tSettings := test.CreateBaseTestSettings(t)
@@ -868,7 +885,7 @@ func TestOptimisticCorrupt_StrikeGatedOnRevalidation(t *testing.T) {
 
 		// waitForPreviousBlocksToBeProcessed gates on the parent being mined, and the store writes
 		// genesis unmined; without this the optimistic AddBlock is never reached.
-		require.NoError(t, realClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash))
+		require.NoError(t, realClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash, 0))
 
 		// Height 1, so the model height, the store-derived height and the BIP34 coinbase-encoded
 		// height all agree (StoreBlock re-derives the height from the parent chain).
@@ -876,18 +893,16 @@ func TestOptimisticCorrupt_StrikeGatedOnRevalidation(t *testing.T) {
 
 		coinbaseTx := coinbaseAtHeight(t, blockHeight)
 
-		// A real, stored subtree but a ZEROED header merkle root: the body loads and binds far enough
-		// to reach CheckMerkleRoot, which then fails -> ERR_BLOCK_CORRUPT in the background.
-		subtree, err := subtreepkg.NewTreeByLeafCount(2)
-		require.NoError(t, err)
-		require.NoError(t, subtree.AddCoinbaseNode())
+		// A bound, stored subtree that repeats a transaction: the integrity floor passes it, so it is
+		// added, and the duplicate check returns ERR_BLOCK_CORRUPT in the background.
+		subtree, merkleRoot := boundDuplicateTxSubtree(t, coinbaseTx)
 
 		subtreeStore := blobmemory.New()
 		subtreeBytes, err := subtree.Serialize()
 		require.NoError(t, err)
 		require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
-		hdr := minedBIP34Header(t, 4, tSettings.ChainCfgParams.GenesisHash, &chainhash.Hash{})
+		hdr := minedBIP34Header(t, 4, tSettings.ChainCfgParams.GenesisHash, merkleRoot)
 
 		block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{subtree.RootHash()},
 			uint64(subtree.Length()), uint64(coinbaseTx.Size()), blockHeight, 0) //nolint:gosec

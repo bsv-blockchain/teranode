@@ -121,7 +121,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	// sequence — leaving two flagged siblings at the same height. The CAS
 	// only proves "I am at the head of the ID sequence", not "I have the
 	// chain_work tiebreak best": canonical selection is by chain_work DESC,
-	// peer_id ASC, id ASC, so a CAS-winning sibling can still be the loser.
+	// id ASC, so a CAS-winning sibling can still be the loser.
 	// Serializing forces the second writer to observe the first's row as the
 	// new best, which makes its onMainChain calculation false (parent !=
 	// preBestHash anymore), routes it through the slow-path classifier, and
@@ -196,10 +196,11 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	// SQLITE_BUSY, a failed reconcile or a cancelled context is not noted. A failed commit
 	// is, because a commit error does not prove nothing committed.
 	//
-	// The note carries the lowest height the reconcile can have moved the best chain at:
-	// the bottom of its own walk, maxDepth below this block. A reorg the reconcile can
-	// handle forks within that walk, and a block that does not take the tip moves no
-	// block's membership at all.
+	// The note carries the height just above the fork point of the old and new best
+	// blocks, found by parent_id alone, or the lowest row the reconcile changed when that
+	// is lower. The rows changed are not enough on their own: with stale flags the best
+	// chain can have changed below all of them. A block that does not take the tip moves
+	// no block's membership at all.
 	var (
 		membershipMoved bool
 		movedFloor      int64
@@ -215,9 +216,10 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 
 	// The fork path writes the row and repairs on_main_chain in ONE transaction, so a
 	// failure between them cannot leave a committed block carrying a flag nothing will
-	// revisit. The reconciliation is a single statement bounded to the recent lineage,
-	// so the transaction stays small however large the blocks are: it touches block
-	// rows only, never transactions or coins.
+	// revisit. The reconciliation walks at least reconcileMaxDepth blocks and on down to
+	// the fork point, and a reorg adds the parent_id walk reorgForkFloor runs, so the
+	// transaction grows with the fork's depth but not with the size of the blocks: it
+	// touches block rows only, never transactions or coins.
 	//
 	// The common extend keeps its single auto-committed INSERT, which already writes
 	// the correct flag and needs no repair.
@@ -248,6 +250,16 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 
 			reconcileErr = nil
 
+			// First, so a walk in any process sees the reconcile below; see
+			// chainWriteStateKey. A block stored as invalid skips the reconcile and
+			// moves no membership, so it takes no lock: otherwise a peer could keep
+			// rolling the walk back with blocks that change nothing it can see.
+			if !storeBlockOptions.Invalid {
+				if storeErr = s.lockChainWrites(ctx, tx); storeErr != nil {
+					return storeErr
+				}
+			}
+
 			newBlockID, height, _, storedInvalid, storeErr = s.storeBlock(ctx, tx, block, peerID, storeBlockOptions, onMainChain)
 			if storeErr != nil {
 				return storeErr
@@ -261,25 +273,47 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 				return nil
 			}
 
-			reconcile := func() (bool, error) {
-				changed, err := s.reconcileOnMainChainRows(ctx, tx)
+			reconcile := func() (bool, int64, error) {
+				changed, floor, err := s.reconcileOnMainChainRows(ctx, tx)
+				if err != nil || changed == 0 {
+					return changed > 0, floor, err
+				}
 
-				return changed > 0, err
+				// The rows the reconcile changed are not the whole of what moved: with stale
+				// flags the best chain can have changed below the lowest of them. Note the
+				// fork point too, whichever is lower.
+				forkFloor, err := s.reorgForkFloor(ctx, tx, newBlockID)
+				if err != nil {
+					return true, noRepairFloor, err
+				}
+
+				if forkFloor == noRepairFloor {
+					return true, noRepairFloor, nil
+				}
+
+				return true, lowerRepairFloor(floor, forkFloor), nil
 			}
 
 			if s.reconcileHook != nil {
-				// A test's stand-in cannot say what it changed, so count it as a change.
-				reconcile = func() (bool, error) { return true, s.reconcileHook() }
+				// A test's stand-in cannot say what it changed, so count it as a change that
+				// cannot name a floor.
+				reconcile = func() (bool, int64, error) { return true, noRepairFloor, s.reconcileHook() }
 			}
 
-			var moved bool
+			var (
+				moved bool
+				floor int64
+			)
 
-			moved, reconcileErr = reconcile()
+			moved, floor, reconcileErr = reconcile()
 			if reconcileErr == nil && moved {
 				// RetryTx commits next. Kept true if that commit fails, and across a retry
-				// whose earlier commit may have landed before it reported the error.
+				// whose earlier commit may have landed before it reported the error. A retry
+				// reaches this line only when the earlier attempt did not commit: if it had,
+				// the retry's INSERT would fail on ux_blocks_hash first. So the latest floor
+				// is the one that describes the committed rows.
 				membershipMoved = true
-				movedFloor = s.reconcileFloor(height)
+				movedFloor = floor
 			}
 
 			return reconcileErr
@@ -440,7 +474,16 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			//
 			// A clear that committed moves a row a walk without slowPathMu may already have
 			// read, so it is noted. A failed one is marked instead, which owes its own repair.
-			if _, clearErr := s.db.ExecContext(postBestCtx, `UPDATE blocks SET on_main_chain = false WHERE id = $1`, newBlockID); clearErr != nil {
+			clearErr := s.db.RetryTx(postBestCtx, nil, func(tx *sql.Tx) error {
+				if err := s.lockChainWrites(postBestCtx, tx); err != nil {
+					return err
+				}
+
+				_, err := tx.ExecContext(postBestCtx, `UPDATE blocks SET on_main_chain = false WHERE id = $1`, newBlockID)
+
+				return err
+			})
+			if clearErr != nil {
 				s.logger.Errorf("StoreBlock: clear sibling-fork on_main_chain: %v", clearErr)
 				s.markOnMainChainDirty(false, int64(height), "store_block_fork_clear", clearErr)
 			} else {
@@ -653,7 +696,29 @@ func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Blo
 	// block's transactions may already carry it in the UTXO store. See
 	// checkCallerSuppliedBlockID for the rules and the swept-reservation case.
 	if useCustomID && !genesis {
-		if err := s.checkCallerSuppliedBlockID(ctx, block.Hash(), storeBlockOptions.ID); err != nil {
+		alreadyStored, err := s.checkCallerSuppliedBlockID(ctx, block.Hash(), storeBlockOptions.ID)
+		if err != nil {
+			return 0, 0, nil, false, err
+		}
+
+		// A hash that is already stored goes on to the INSERT, which returns
+		// "block already exists". Callers that retry an AddBlock whose first
+		// attempt landed treat that as success, so a late caller still holding a
+		// refused id must not get the id-order refusal, nor drop a reservation.
+		//
+		// Checked before the INSERT, because the extend path auto-commits it. This
+		// runs for a block stored invalid too, unlike the BIP34 guard above: the
+		// rule is about the row's place in the parent_id graph, which the ancestry
+		// walks follow whatever the invalid flag says, not about the block's validity.
+		if err := checkBlockIDAboveParent(block, storeBlockOptions.ID, previousBlockID); err != nil && !alreadyStored {
+			// The reservation is stale. Drop it so the caller's next AssignBlockID
+			// takes a fresh id above the parent, rather than being refused with the
+			// same id until the age-based sweep removes it. A fallback that reuses
+			// the same *model.Block keeps its block.ID and is refused again; the
+			// fresh id comes on an attempt that decodes the block anew, such as the
+			// legacy park's retry.
+			s.dropBlockIDReservation(ctx, block.Hash(), storeBlockOptions.ID)
+
 			return 0, 0, nil, false, err
 		}
 	}
@@ -912,6 +977,24 @@ RETURNING id
 	// roll back.
 
 	return newBlockID, height, cumulativeChainWorkBytes, storeAsInvalid, nil
+}
+
+// checkBlockIDAboveParent refuses a block whose id is not above its parent's id.
+//
+// Ids come from one sequence that only grows, and a child's id is reserved only
+// after its parent is stored, so a child always sits above its parent. The ancestry
+// queries depend on that: CheckBlockIsAncestorOfBlock and CheckBlockIsInCurrentChain
+// bound their parent_id walk by the gap between two ids, so a child stored below its
+// parent would make them answer "not an ancestor" for a true ancestor. The one known
+// way to break the rule is a reservation that outlives a rewind: the parent is
+// deleted and stored again under a new, higher id, while the child keeps the lower
+// id it reserved before. Genesis has no parent and is never checked.
+func checkBlockIDAboveParent(block *model.Block, id, parentID uint64) error {
+	if id > parentID {
+		return nil
+	}
+
+	return errors.NewBlockIDOrderError("[StoreBlock][%s] refusing block id %d: its parent %s is stored under id %d, and a block's id must be above its parent's", block.Hash().String(), id, block.Header.HashPrevBlock.String(), parentID)
 }
 
 // typedStoreBlockError turns an error from storeBlock, or from the BEGIN and COMMIT

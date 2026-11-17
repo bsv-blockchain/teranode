@@ -34,6 +34,17 @@ read every section between yours and the target.
 - **A block assembly reset over more than 32M moveForward transactions needs scratch disk.** About
   32 bytes per transaction moved go to the first `blockassembly_txMapDirs` path, or the OS temp
   directory when unset; leave room. A failed mark or scratch write now fails the reset. (#2196)
+- **Between two blocks of equal chain work, the node now keeps the one it stored first.** It used
+  to switch to the block relayed by the lowest-sorting peer id, and a block this node mined, stored
+  with an empty peer id, won every tie. Until the blockchain service and block assembly both run
+  this version, block assembly follows the best header instead of replaying best-tip changes, so
+  upgrade them close together. Startup replaces the chain-work indexes on `blocks`, and every move
+  to or from an older version rebuilds them. (#2193)
+- **`ProcessBlock` refuses a `block_id` that is not the block's reservation on the quick route.**
+  An external caller that sends a non-zero ID other than what `AssignBlockID` returns for the hash
+  now gets an error before any UTXO is written, including an ID whose reservation was swept and a
+  coinbase-only block that used to be stored under the reservation instead. Send 0, or call
+  `AssignBlockID` again and send its answer. (#2191)
 - **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
   `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
   now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,
@@ -41,6 +52,9 @@ read every section between yours and the target.
   `teranode_blockchain_get_latest_block_header_from_block_locator` and
   `_get_block_headers_from_oldest`, which recorded only calls to the two removed RPCs; drop any
   panel or alert on them. (#2185)
+- **A block whose transaction spends an output mined only outside the block's own history is now
+  invalid.** Earlier versions accepted it when that output's block was on the main chain, so
+  upgrade every block validation pod together; a mixed fleet can disagree on such a fork block. (#2174)
 - **`blockassembly_storeTxInpointsForSubtreeMeta=false` now only skips the subtree meta files.**
   Block assembly keeps every unmined tx's parent links in memory in both modes. With it off, the
   restart reload and a block move-back now read each tx's inputs from the UTXO store (an external tx
@@ -100,6 +114,9 @@ read every section between yours and the target.
 - **PostgreSQL UTXO store: stop previous-release processes before upgrading.** One that starts while
   the new `px_transactions_conflicting` index builds blocks all `transactions` reads and writes until
   the build ends. Out-of-tree `utxo.Store` implementations add `ConflictingTxHashes`. (#2110)
+- **`SetBlockMinedSet` takes a mined-set generation and can refuse a write with `ERR_STATE_ERROR`.**
+  Out-of-tree blockchain store and client implementations add the parameter; a caller that sets
+  `mined_set_generation` must handle the refusal. Mixed versions keep working, in any order. (#2018)
 - **The Aerospike UTXO store adds a `<set>_conflictwal_startedAt` index, at least 16 MiB per node.**
   Check `indexes-memory-budget` has room first, or the namespace can stop writes. Without
   index-create rights, create it by hand ([conflict recovery](docs/topics/conflict-recovery.md)). (#2151)

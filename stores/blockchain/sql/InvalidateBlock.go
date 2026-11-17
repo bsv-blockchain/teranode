@@ -93,7 +93,8 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 
 	// recursively update all children blocks to invalid in 1 query.
 	// Also set mined_set = false (invalid blocks cannot be mined; this triggers
-	// block-validation to reset mining state) and on_main_chain = false so the
+	// block-validation to reset mining state), bump mined_set_gen so an in-flight
+	// tagging run cannot overwrite that reset, and on_main_chain = false so the
 	// invalidated subtree is removed from the canonical chain in the same
 	// transaction — no follow-up wide-window UPDATE needed.
 	q := `
@@ -107,7 +108,7 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 			INNER JOIN children c ON c.hash = b.previous_hash
 		)
 		UPDATE blocks
-		SET invalid = true, mined_set = false, on_main_chain = false
+		SET invalid = true, mined_set = false, mined_set_gen = mined_set_gen + 1, on_main_chain = false
 		WHERE id IN (SELECT id FROM children)
 		RETURNING hash
 	`
@@ -129,6 +130,11 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 	// the table, not from the flags the rebuild in the defer writes.
 	if err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
 		invalidatedHashes = invalidatedHashes[:0]
+
+		// First, so a walk in any process sees this write; see chainWriteStateKey.
+		if lockErr := s.lockChainWrites(ctx, tx); lockErr != nil {
+			return lockErr
+		}
 
 		before, hadBefore, beforeErr := bestTipKey(ctx, tx)
 		if beforeErr != nil {
@@ -181,9 +187,10 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		}
 
 		// InvalidateBlock can move the chain tip arbitrarily deep — an
-		// operator may invalidate a block far below the current tip, leaving
-		// the new winning branch's fork point well below the bounded walk
-		// in reconcileOnMainChain. Use the full rebuild here for correctness;
+		// operator may invalidate a block far below the current tip.
+		// reconcileOnMainChain trusts the flags below the first flagged
+		// block its walk meets, and the full rebuild trusts none. Use the
+		// full rebuild here for correctness;
 		// invalidations are rare admin operations and can afford the wider
 		// lock window. migrationFullRebuildTimeout matches the startup
 		// migration's bound, generous enough for multi-million-block chains.

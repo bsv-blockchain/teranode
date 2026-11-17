@@ -1961,6 +1961,8 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 		Invalid:        meta.Invalid,
 		ProcessedAt:    processedAt,
 		MedianTimePast: meta.MedianTimePast,
+
+		MinedSetGeneration: meta.MinedSetGeneration,
 	}, nil
 }
 
@@ -2129,7 +2131,7 @@ func (b *Blockchain) BlocksBetterThan(ctx context.Context, req *blockchain_api.B
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid limit %d, must be 1 to %d", req.Limit, b.maxBlockHeadersPerRequest()))
 	}
 
-	after, err := model.NewBestTipKeyFromBytes(req.After)
+	after, err := model.NewCurrentBestTipKeyFromBytes(req.After)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid after key", err))
 	}
@@ -2137,7 +2139,7 @@ func (b *Blockchain) BlocksBetterThan(ctx context.Context, req *blockchain_api.B
 	var from *model.BestTipKey
 
 	if len(req.From) > 0 {
-		key, keyErr := model.NewBestTipKeyFromBytes(req.From)
+		key, keyErr := model.NewCurrentBestTipKeyFromBytes(req.From)
 		if keyErr != nil {
 			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid from key", keyErr))
 		}
@@ -3014,7 +3016,9 @@ func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.S
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][SetBlockMinedSet] hash must be %d bytes, got %d", chainhash.HashSize, len(req.BlockHash)))
 	}
 
-	err = b.store.SetBlockMinedSet(ctx, blockHash)
+	// An absent generation comes from a blockvalidation that predates it; keep the
+	// unconditional write it relied on rather than refuse every call during a rolling upgrade.
+	err = b.store.SetBlockMinedSet(ctx, blockHash, req.MinedSetGeneration)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}

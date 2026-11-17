@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"encoding/binary"
 	"math"
 	"net"
 	"net/url"
@@ -264,4 +265,32 @@ func TestBlocksBetterThan_ClampsConfiguredPageSize(t *testing.T) {
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 	_, err = fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: []byte{9}, Limit: 1})
 	require.Equal(t, codes.InvalidArgument, status.Code(err), "a malformed key is rejected")
+}
+
+// A block assembly still on the order by peer id sends version 1 keys. The blockchain service
+// refuses them, in either field, so that block assembly follows the best header instead of
+// reading replies in an order it does not share.
+func TestBlocksBetterThan_RefusesLegacyKey(t *testing.T) {
+	fixture := setup(t)
+	genesis, genesisMeta, err := fixture.server.store.GetBestBlockHeader(t.Context())
+	require.NoError(t, err)
+
+	current := model.NewBestTipKey(genesis, genesisMeta)
+
+	legacy := []byte{1}
+	legacy = binary.LittleEndian.AppendUint32(legacy, uint32(len(current.ChainWork)))
+	legacy = append(legacy, current.ChainWork...)
+	legacy = binary.LittleEndian.AppendUint32(legacy, 4)
+	legacy = append(legacy, "peer"...)
+	legacy = binary.LittleEndian.AppendUint32(legacy, current.ID)
+	legacy = append(legacy, current.Hash[:]...)
+
+	_, err = fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: current.Bytes(), Limit: 1})
+	require.NoError(t, err)
+
+	_, err = fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: legacy, Limit: 1})
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "a version 1 after key is refused")
+
+	_, err = fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: current.Bytes(), From: legacy, Limit: 1})
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "a version 1 from key is refused")
 }
