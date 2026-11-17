@@ -1884,7 +1884,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 						return err
 					} else {
 						// Already logged at Debug above; the cause is tallied and reported once
-						// per block below, with counts and an example per cause (issue 2108).
+						// per call below, with counts and an example per cause (issue 2108).
 						firstErrMu.Lock()
 						if firstErr == nil {
 							firstErr = err

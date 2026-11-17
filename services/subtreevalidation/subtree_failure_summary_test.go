@@ -125,12 +125,12 @@ func TestBlessMissingTransactions_FailuresAreSummarisedOncePerSubtree(t *testing
 		"[validateSubtree]["+subtreeHash.String()+"] 2 of 2 missing txs failed: UTXO_SPENT=2 (e.g. "+example+")")
 }
 
-// TestProcessTransactionsInLevels_FailuresAreSummarisedOncePerBlock pins issue
+// TestProcessTransactionsInLevels_FailuresAreSummarisedOncePerBatch pins issue
 // 2108 on the block path: the per-transaction ERROR line is gone, one summary per
 // call (one load batch of the block) names each cause with its count and an
 // example, and the returned error carries the tally rather than only the first
 // cause.
-func TestProcessTransactionsInLevels_FailuresAreSummarisedOncePerBlock(t *testing.T) {
+func TestProcessTransactionsInLevels_FailuresAreSummarisedOncePerBatch(t *testing.T) {
 	server, _, txs, _ := newUnlockFailureServer(t, true, 0)
 	logger := &errorCaptureLogger{Logger: server.logger}
 	server.logger = logger
