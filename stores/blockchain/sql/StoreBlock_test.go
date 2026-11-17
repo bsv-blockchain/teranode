@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -1108,20 +1109,35 @@ func TestParseSQLError_NilError(t *testing.T) {
 	assert.Contains(t, result.Error(), "failed to store block")
 }
 
+// heavyForkBlock is a child of parent with far more work than a 207fffff block, so a
+// chain through it stays best over a main chain one block longer.
+func heavyForkBlock(parent *model.Block, nonce uint32) *model.Block {
+	block := createBlock3OnFork(parent)
+
+	bits, _ := model.NewNBitFromString("1d00ffff")
+	block.Header.Bits = *bits
+	block.Header.Nonce = nonce
+
+	return block
+}
+
 // TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL: a fork block whose
 // reconcile reaches a blocks row another transaction holds, as a full on_main_chain walk
 // without slowPathMu does, must not keep slowPathMu while it waits. An extend that
-// arrives meanwhile stores at once, and the fork block stores once the row is released.
+// arrives meanwhile stores at once. The fork block keeps retrying while the row is held,
+// a fork block whose caller gives up first stores nothing, and the waiting fork block
+// takes the tip once the row is released.
 func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T) {
 	s := newPostgresChainWriteStore(t)
 	ctx := context.Background()
 
 	// block1 to block3 are the main chain and blockAlternative2 a fork off block1. alt4
-	// takes the tip, so its reconcile clears block2 and block3.
+	// carries far more work than any 207fffff block, so it takes the tip and its reconcile
+	// has to clear block2 and block3, even after block4 extends the main chain below.
 	alt3 := createBlock3OnFork(blockAlternative2)
 	storeBlocks(t, s, alt3)
 
-	alt4 := createBlock3OnFork(alt3)
+	alt4 := heavyForkBlock(alt3, 7)
 
 	// Hold block3's row the way a walk's UPDATE does, until the test releases it.
 	holder, err := s.db.BeginTx(ctx, nil)
@@ -1164,17 +1180,43 @@ func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T
 	// keep it waiting.
 	block4 := createBlock3OnFork(block3)
 
-	extendCtx, cancelExtend := context.WithTimeout(ctx, 5*time.Second)
+	extendCtx, cancelExtend := context.WithTimeout(ctx, 2*time.Second)
 	defer cancelExtend()
 
 	_, _, err = s.StoreBlock(extendCtx, block4, "peer")
 	require.NoError(t, err, "an extend must store while a fork block waits on a row lock")
 
+	// A fork block whose caller gives up while the row is held returns a storage error and
+	// leaves no row behind. 1.2 s ends the context inside the first forkLockRetryDelay
+	// sleep: at most forkLockTimeout waiting for slowPathMu behind alt4's attempt, then
+	// forkLockTimeout on the row, is 1 s.
+	altGivesUp := heavyForkBlock(alt3, 8)
+	giveUpDone := make(chan error, 1)
+
+	go func() {
+		giveUpCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+		defer cancel()
+
+		_, _, storeErr := s.StoreBlock(giveUpCtx, altGivesUp, "peer")
+		giveUpDone <- storeErr
+	}()
+
 	select {
-	case forkErr := <-forkDone:
-		t.Fatalf("the fork block returned while the row was still held: %v", forkErr)
-	default:
+	case giveUpErr := <-giveUpDone:
+		require.Error(t, giveUpErr, "a fork block that could not lock its rows must not report success")
+		require.True(t, errors.Is(giveUpErr, errors.ErrStorageError), "want a storage error, got %v", giveUpErr)
+	case <-time.After(10 * time.Second):
+		t.Fatal("a fork block kept retrying after its context ended")
 	}
+
+	exists, err := s.GetBlockExists(ctx, altGivesUp.Hash())
+	require.NoError(t, err)
+	require.False(t, exists, "a fork block that gave up must not be stored")
+
+	// The fork block still needs block3's row, so it keeps retrying for as long as it is
+	// held: several rounds of forkLockTimeout and forkLockRetryDelay.
+	require.Never(t, func() bool { return len(forkDone) > 0 }, 3*(forkLockTimeout+forkLockRetryDelay), 50*time.Millisecond,
+		"the fork block returned while the row it needs was still held")
 
 	release()
 
@@ -1185,9 +1227,15 @@ func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T
 		t.Fatal("the fork block did not store after the row was released")
 	}
 
-	exists, err := s.GetBlockExists(ctx, alt4.Hash())
+	bestHeader, _, err := s.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
-	require.True(t, exists)
+	require.Equal(t, alt4.Hash().String(), bestHeader.Hash().String(), "the fork block must take the tip once it stores")
+
+	require.False(t, getOnMainChain(t, s, block3.Hash().CloneBytes()), "the reorg must clear block3")
+	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "the reorg must clear block2")
+	require.False(t, getOnMainChain(t, s, block4.Hash().CloneBytes()), "the reorg must clear block4")
+	require.True(t, getOnMainChain(t, s, alt3.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, alt4.Hash().CloneBytes()))
 }
 
 // TestForkLockWaitErrorIsNotRetriedByRetryTx: RetryTx retries a 55P03 in place, under
@@ -1207,6 +1255,8 @@ func TestForkLockWaitErrorIsNotRetriedByRetryTx(t *testing.T) {
 
 	lockTimeout := &pgconn.PgError{Code: usql.PgErrLockNotAvailable, Message: "canceling statement due to lock timeout"}
 	require.True(t, isLockNotAvailable(lockTimeout))
+	require.True(t, isLockNotAvailable(&pq.Error{Code: usql.PgErrLockNotAvailable}))
+	require.False(t, isLockNotAvailable(&pgconn.PgError{Code: usql.PgErrSerializationFail}))
 
 	calls := 0
 	err = s.db.RetryTx(context.Background(), nil, func(*sql.Tx) error {

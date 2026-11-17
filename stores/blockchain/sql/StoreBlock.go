@@ -131,7 +131,9 @@ const (
 	// Normal holders of those rows (another chain write, or an update of mined_set,
 	// persisted_at or processed_at) hold them for milliseconds, so a longer wait is almost
 	// always a walk without slowPathMu. PostgreSQL's deadlock_timeout defaults to 1 s, so
-	// a fork that deadlocks with a walk gives up through this bound first.
+	// when the fork is the first of the two to wait, it gives up through this bound before
+	// deadlock detection runs. When the walk waits first, PostgreSQL can still abort the
+	// walk as the deadlock victim, and the walk's own retry runs it again.
 	forkLockTimeout = 500 * time.Millisecond
 	// forkLockRetryDelay is how long a fork block that gave up a lock wait leaves
 	// slowPathMu free before it tries again. The fork holds the chain-write row for up to
@@ -155,7 +157,9 @@ const forkLockTimeoutStatement = `SET LOCAL lock_timeout = '500ms'`
 // (30 min). A fork block's reconcile that reaches such a row would wait there while it
 // holds slowPathMu, and every later StoreBlock, extends included, would wait behind it.
 // With the bound, StoreBlock releases slowPathMu and runs the whole attempt again, so
-// extends keep being stored while the fork block waits for the walk to finish.
+// extends keep being stored while the fork block retries. It retries until it stores or
+// its caller's context ends. Block validation gives AddBlock 30 s, so a fork block that
+// meets a longer walk fails as it did before this bound, and is stored when offered again.
 //
 // It neither unwraps to the driver error nor says "timeout" in its message, so RetryTx
 // treats it as not retriable and returns at once rather than retrying under slowPathMu,
@@ -196,7 +200,8 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 		opt(&storeBlockOptions)
 	}
 
-	// Acquire slowPathMu for the duration of every StoreBlock call. The cost is
+	// Acquire slowPathMu for the duration of every StoreBlock attempt. An attempt that
+	// releases it early has committed nothing (see forkLockWaitError). The cost is
 	// one uncontended mutex acquire on the common path; the benefit is that
 	// the read of preBestHash, the INSERT, the maxBlockID CAS, and any
 	// post-INSERT classification all observe a serialized view of the chain.
@@ -242,7 +247,7 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 		block.Header.HashPrevBlock != nil &&
 		*block.Header.HashPrevBlock == *preBestHash
 
-	// Raise the guard before the INSERT and hold it for the whole call: always on a node
+	// Raise the guard before the INSERT and hold it for the whole attempt: always on a node
 	// running the forked-set route, and only for a non-extend on every other node.
 	//
 	// On a forked-set node a common extend needs it too. The INSERT writes on_main_chain =
