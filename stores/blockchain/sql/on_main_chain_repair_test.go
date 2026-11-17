@@ -376,6 +376,88 @@ func TestOnMainChainRepairWithoutAFloorWalksToGenesis(t *testing.T) {
 	}
 }
 
+// TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime: a reorg whose reconcile
+// walked to genesis, because every flag was false, notes floor 0. A bounded repair down to
+// that floor walks the whole chain under slowPathMu and the 30 s budget. If it does not fit,
+// retrying the same walk would hold the lock for the full budget on every attempt and never
+// land, so the attempt that runs out of time must hand the repair to the full walk, which
+// on PostgreSQL runs without the lock.
+//
+// The bounded walk here stands in for one too long for its budget: it waits until its
+// context ends. The full walk is the real transaction.
+func TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		unlocked bool
+	}{
+		{name: "sqlite holds the lock", unlocked: false},
+		{name: "postgres runs the full walk without the lock", unlocked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newOnMainChainTestStore(t)
+			s.unlockedFullRepair = tc.unlocked
+
+			setRepairBackoff(t, s, time.Millisecond)
+
+			s.onMainChainRepair.mu.Lock()
+			s.onMainChainRepair.boundedTimeout = 50 * time.Millisecond
+			s.onMainChainRepair.mu.Unlock()
+
+			storeBlocks(t, s, block1, block2, block3)
+
+			// The stale row sits at the bottom of the chain, below any bounded window.
+			_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`, block1.Hash().CloneBytes())
+			require.NoError(t, err)
+
+			var (
+				mu     sync.Mutex
+				fulls  []bool
+				floors []int64
+				locked []bool
+			)
+
+			s.rebuildTxHook = func(ctx context.Context, full bool, floor int64) error {
+				held := !s.slowPathMu.TryLock()
+				if !held {
+					s.slowPathMu.Unlock()
+				}
+
+				mu.Lock()
+				fulls = append(fulls, full)
+				floors = append(floors, floor)
+				locked = append(locked, held)
+				mu.Unlock()
+
+				if !full {
+					<-ctx.Done()
+
+					return errors.NewStorageError("bounded walk did not finish", ctx.Err())
+				}
+
+				return s.rebuildOnMainChainFlagTx(ctx, full, floor)
+			}
+
+			s.markOnMainChainDirty(false, 0, "test", errors.NewStorageError("injected"))
+			waitForRepair(t, s)
+
+			require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "the full walk repairs the stale row")
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			require.Equal(t, []bool{false, true}, fulls, "one bounded attempt runs out of time, then the full walk lands")
+			require.Equal(t, int64(0), floors[0], "the bounded attempt walks down to the noted floor")
+			require.Equal(t, []bool{true, !tc.unlocked}, locked, "the bounded attempt holds slowPathMu; the full walk holds it only on SQLite")
+
+			s.onMainChainRepair.mu.Lock()
+			defer s.onMainChainRepair.mu.Unlock()
+
+			require.False(t, s.onMainChainRepair.full, "the landed repair clears the record")
+			require.Equal(t, noRepairFloor, s.onMainChainRepair.floor)
+		})
+	}
+}
+
 // TestOnMainChainRepairRerunsWhenAChainWriteOverlapsIt: a full walk that runs without
 // slowPathMu reads its rows from a snapshot taken when it began. RevalidateBlock can commit
 // in the meantime, its own rebuild can land and acknowledge the repair, and then the walk
