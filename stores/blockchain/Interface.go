@@ -30,6 +30,7 @@ package blockchain
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
@@ -466,6 +467,24 @@ type Store interface {
 	// See options.LaneRangeRequest for the request, and SQL.ReserveLaneRange for the lane choice rule
 	// an implementation must follow.
 	ReserveLaneRange(ctx context.Context, req options.LaneRangeRequest) (lane.Range, error)
+
+	// OpenLaneLease closes stale leases, then opens a lease on a free lane with its first grant.
+	// See SQL.OpenLaneLease for the lane choice rule an implementation must follow.
+	OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lane.LeaseID, lane.Grant, error)
+
+	// RenewLaneLease renews a lease and, if asked, records its next grant. closed reports a lease
+	// that is closed or no longer the lane's current one; nothing is written for it.
+	RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (grant lane.Grant, granted, closed bool, err error)
+
+	// ReleaseLaneLease closes a lease cleanly. alreadyClosed reports a lease closed before.
+	ReleaseLaneLease(ctx context.Context, req options.LaneLeaseRelease) (alreadyClosed bool, err error)
+
+	// CloseStaleLaneLeases closes, as lapsed, every open lease not renewed for closeAfter on the
+	// database clock, and returns how many it closed.
+	CloseStaleLaneLeases(ctx context.Context, closeAfter time.Duration) (int, error)
+
+	// RenewOpenLaneLeases treats every open lease as renewed now, and returns how many there were.
+	RenewOpenLaneLeases(ctx context.Context) (int, error)
 
 	// LocateBlockHeaders retrieves block headers using a locator and stop hash.
 	// Legacy endpoint.

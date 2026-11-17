@@ -16,6 +16,7 @@ import (
 	"context"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -693,6 +694,26 @@ func (m *MockStore) RevalidateBlock(ctx context.Context, blockHash *chainhash.Ha
 }
 
 func (m *MockStore) ReserveLaneRange(ctx context.Context, req options.LaneRangeRequest) (lane.Range, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lane.LeaseID, lane.Grant, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (lane.Grant, bool, bool, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) ReleaseLaneLease(ctx context.Context, req options.LaneLeaseRelease) (bool, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) CloseStaleLaneLeases(ctx context.Context, closeAfter time.Duration) (int, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) RenewOpenLaneLeases(ctx context.Context) (int, error) {
 	panic(implementMe)
 }
 

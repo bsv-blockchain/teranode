@@ -28,6 +28,8 @@ package lane
 import (
 	"context"
 	"fmt"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -108,4 +110,55 @@ func (r Range) Len() uint64 {
 // range names the lane actually given. The blockchain client implements it.
 type RangeSource interface {
 	ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (Range, error)
+}
+
+// LeaseID names one lease: one process's claim on one lane, which lapses unless renewed. It is
+// random, so a process that restarts can never be mistaken for its earlier self.
+type LeaseID [16]byte
+
+// String formats the lease ID as a UUID, the form the blockchain database keeps on Postgres.
+func (id LeaseID) String() string {
+	return uuid.UUID(id).String()
+}
+
+// IsZero reports whether id is the zero value, which no lease ever has.
+func (id LeaseID) IsZero() bool {
+	return id == LeaseID{}
+}
+
+// NewLeaseID returns a random lease ID.
+func NewLeaseID() (LeaseID, error) {
+	u, err := uuid.NewRandom()
+	if err != nil {
+		return LeaseID{}, err
+	}
+
+	return LeaseID(u), nil
+}
+
+// Grant is a stretch of positions in a leased lane that the holder may use: First to Last
+// inclusive. The blockchain service records it before the holder uses it, and each grant in a lane
+// starts one above that lane's last grant, whoever held it.
+type Grant struct {
+	Lane  uint8
+	First uint64
+	Last  uint64
+}
+
+// Len is the number of positions in the grant.
+func (g Grant) Len() uint64 {
+	if g.Last < g.First {
+		return 0
+	}
+
+	return g.Last - g.First + 1
+}
+
+// Settles finishes a grant the holder has moved on from: the grant's first position and the last
+// position the holder took from it. The holder learns this only when it switches to the next grant,
+// so it reports it on the renewals and the release that follow. A zero LastTaken means the grant
+// was never used. The zero value settles nothing.
+type Settles struct {
+	First     uint64
+	LastTaken uint64
 }
