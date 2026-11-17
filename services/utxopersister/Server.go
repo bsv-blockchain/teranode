@@ -741,7 +741,7 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 		// A failed delete is logged here, not returned: no later pass would retry
 		// it, and the trigger handler would log it as "will retry".
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet); err != nil {
-			s.logger.Errorf("[UTXOPersister] Error deleting previous UTXOSet for block %s height %d; the new set is recorded, so this is not retried and the previous set's files stay on disk until removed by hand: %v", lastWrittenUTXOSetHash, metas[0].Height, err)
+			s.logger.Errorf("[UTXOPersister] Error deleting previous UTXOSet for block %s height %d; the new set is recorded, so this is not retried and the previous set, or some of its side files, stay on disk until removed by hand: %v", lastWrittenUTXOSetHash, metas[0].Height, err)
 
 			return 0, nil
 		}
