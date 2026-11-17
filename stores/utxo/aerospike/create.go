@@ -1155,10 +1155,14 @@ func (s *Store) storeExternallyWithLock(
 		// attempt's release failed and the lock waits out its TTL. Either way this
 		// call has not cleared the creating flag, so a mined create must not answer
 		// ErrTxExists, which the seeder and the coinbase store read as done. See
-		// creatingNotClearedError. The cost falls on quick validation: it used to
-		// stamp an existing transaction mined, and now its repeat meets the same
-		// lock, so the block fails as a local fault and is applied again once the
-		// lock's TTL (30 s plus 2 s per record, at most 300 s) runs out.
+		// creatingNotClearedError. Every mined caller now fails while the lock is
+		// held, which lasts until the lock's TTL runs out when a release failed or
+		// a create crashed (30 s plus 2 s per record, at most 300 s). For the seeder,
+		// the coinbase store and the reorg restore that replaces carrying on with
+		// the creating bin set. Quick validation used to stamp an existing
+		// transaction mined instead, which clears the bin; now, if the lock is
+		// still held when its repeats run out, the block fails as a local fault
+		// and legacy sync applies it again later.
 		// The lock's ErrTxExists is carried as text, not wrapped: errors.Is walks the
 		// chain, so a wrapped one would still read as done.
 		if len(bItem.blockIDs) > 0 && errors.Is(err, errors.ErrTxExists) {
