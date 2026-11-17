@@ -2702,8 +2702,8 @@ var notificationProcessTimeout = 30 * time.Second
 
 // The queue sizes are vars so tests can shrink them.
 var (
-	// peerFailureQueueSize holds PeerFailure notifications waiting for the
-	// peer-failure worker. Each one rotates the sync peer, so a backlog this
+	// peerFailureQueueSize holds catchup PeerFailure notifications waiting for
+	// the peer-failure worker. Each one rotates the sync peer, so a backlog this
 	// deep already means rotation is behind; a drop past it loses nothing a
 	// queued entry will not redo.
 	peerFailureQueueSize = 64
@@ -2722,14 +2722,16 @@ var (
 // every notification to a worker without doing any work itself, so nothing it
 // reads can wait behind a slow blockchain call or gossip publish.
 //
-// PeerFailure notifications get a worker of their own. They are what drops a
-// sync peer after a failed catchup, and catchup restores RUNNING before it
-// reports the failure, so they arrive while Block notifications are being
+// Catchup PeerFailure notifications get a worker of their own. They are what
+// drops a sync peer after a failed catchup, and catchup restores RUNNING before
+// it reports the failure, so they arrive while Block notifications are being
 // announced. On a shared serial loop a block announcement parked in
 // GetBlockHeader or Publish held the PeerFailure behind it, and once the
 // subscription channel filled, the blockchain client dropped it outright: the
-// node kept syncing from the peer that had just failed it. Everything else
-// goes to the announcement worker, which keeps the order this listener
+// node kept syncing from the peer that had just failed it. Other PeerFailure
+// types (block, subtree) are only logged, so they go with everything else to
+// the announcement worker and cannot fill the peer-failure queue ahead of a
+// catchup failure. The announcement worker keeps the order this listener
 // receives them in. The blockchain client sends each notification from its
 // own goroutine, so that order is not guaranteed.
 func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainSubscription <-chan *blockchain.Notification) {
@@ -2752,7 +2754,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainS
 			}
 
 			queue, queueName := announcements, "announcement"
-			if notification.Type == model.NotificationType_PeerFailure {
+			if isCatchupPeerFailure(notification) {
 				queue, queueName = peerFailures, "peer-failure"
 			}
 
@@ -2766,7 +2768,15 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainS
 	}
 }
 
-// peerFailureWorker handles PeerFailure notifications one at a time, in
+// isCatchupPeerFailure reports whether the notification is a catchup
+// PeerFailure, the only kind handlePeerFailureNotification acts on.
+func isCatchupPeerFailure(notification *blockchain.Notification) bool {
+	return notification.Type == model.NotificationType_PeerFailure &&
+		notification.Metadata != nil &&
+		notification.Metadata.Metadata["failure_type"] == "catchup"
+}
+
+// peerFailureWorker handles catchup PeerFailure notifications one at a time, in
 // arrival order. HandleCatchupFailure bounds its own registry calls, so this
 // worker needs no deadline of its own.
 func (s *Server) peerFailureWorker(ctx context.Context, queue <-chan *blockchain.Notification) {

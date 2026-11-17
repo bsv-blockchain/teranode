@@ -44,13 +44,17 @@ func blockNotification(hash chainhash.Hash) *blockchain.Notification {
 }
 
 func catchupPeerFailureNotification() *blockchain.Notification {
+	return peerFailureNotification("catchup")
+}
+
+func peerFailureNotification(failureType string) *blockchain.Notification {
 	return &blockchain.Notification{
 		Type: model.NotificationType_PeerFailure,
 		Hash: (&chainhash.Hash{})[:],
 		Metadata: &blockchain_api.NotificationMetadata{Metadata: map[string]string{
 			"peer_id":      "peer-a",
-			"failure_type": "catchup",
-			"reason":       "test catchup failure",
+			"failure_type": failureType,
+			"reason":       "test " + failureType + " failure",
 		}},
 	}
 }
@@ -344,4 +348,61 @@ func TestBlockchainSubscriptionListener_FullPeerFailureQueueCountsDrop(t *testin
 	require.LessOrEqual(t, testutil.ToFloat64(droppedPeerFailure)-peerFailureBefore, 2.0)
 	require.Zero(t, testutil.ToFloat64(droppedAsAnnouncement)-announcementBefore,
 		"a dropped PeerFailure must not be counted under the announcement queue")
+}
+
+func TestIsCatchupPeerFailure(t *testing.T) {
+	require.True(t, isCatchupPeerFailure(peerFailureNotification("catchup")))
+	require.False(t, isCatchupPeerFailure(peerFailureNotification("block")))
+	require.False(t, isCatchupPeerFailure(peerFailureNotification("subtree")))
+	require.False(t, isCatchupPeerFailure(&blockchain.Notification{Type: model.NotificationType_PeerFailure}))
+	require.False(t, isCatchupPeerFailure(blockNotification(chainhash.HashH([]byte("block")))))
+}
+
+// PeerFailure reports that do not rotate the sync peer (block, subtree) must
+// not take room in the peer-failure queue, or a burst of them would push out
+// the catchup failure that does.
+func TestBlockchainSubscriptionListener_NonCatchupPeerFailuresBypassPeerFailureQueue(t *testing.T) {
+	previous := peerFailureQueueSize
+	peerFailureQueueSize = 1
+	t.Cleanup(func() { peerFailureQueueSize = previous })
+
+	initPrometheusMetrics()
+	dropped := prometheusP2PBlockchainNotificationsDropped.WithLabelValues("peer-failure", model.NotificationType_PeerFailure.String())
+	droppedBefore := testutil.ToFloat64(dropped)
+
+	blockReached := make(chan struct{}, 1)
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Run(func(mock.Arguments) {
+		select {
+		case blockReached <- struct{}{}:
+		default:
+		}
+	}).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100, SubtreesSet: true}, nil)
+
+	s, subscription := startListenerTestServer(t, mockBlockchain)
+
+	// Hold the peer-failure worker on the first catchup failure, so the
+	// one-slot queue has no room to spare.
+	s.syncCoordinator.decisionMu.Lock()
+	t.Cleanup(s.syncCoordinator.decisionMu.Unlock)
+
+	subscription <- catchupPeerFailureNotification()
+
+	for i := 0; i < 3; i++ {
+		subscription <- peerFailureNotification("block")
+	}
+
+	// The listener routes in order, so once this Block reaches GetBlockHeader
+	// every failure before it has been routed.
+	subscription <- blockNotification(chainhash.HashH([]byte("barrier block")))
+
+	select {
+	case <-blockReached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the barrier block never reached GetBlockHeader")
+	}
+
+	require.Zero(t, testutil.ToFloat64(dropped)-droppedBefore,
+		"block PeerFailure reports must not be dropped from, or fill, the peer-failure queue")
 }
