@@ -5758,7 +5758,9 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		// we skip the notifications for now and do them all at the end
 		// transactionMap is returned so we can check which transactions need to be marked as on the longest chain
 		//
-		// Every step drains the queue, not only the last. The drain above took
+		// Every step asks to drain the queue, not only the last. A step whose
+		// block has no subtrees, or only ones block assembly already holds,
+		// skips the drain, and has no mined tx to filter against. The drain above took
 		// the backlog from before the reorg; what arrived since is filtered
 		// against the block whose step drains it, and once in the subtrees,
 		// by each later block's remainder pass. Draining on the last step
