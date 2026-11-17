@@ -3,6 +3,7 @@ package utxoset
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -445,6 +446,38 @@ func TestUnspendRacingAConflictingClearBelowTheLookupFloorWaitsForIt(t *testing.
 	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
 	require.Zero(t, utxoFlagsOf(t, s, ctx, parent, 0)&FlagConflicting,
 		"the restored coin must not keep a conflicting mark its transaction lost while the restore waited")
+}
+
+// TestUnspendCutByItsDeadlineLeavesTheUndoRecord: nothing in the store bounds the restore's wait
+// for the rows it share-locks, so the caller's deadline does. A restore cut while it waits must
+// return an error and roll back whole, the coin still spent and its undo record still there, so a
+// later Unspend can restore it. The validator's shed unwind depends on that.
+func TestUnspendCutByItsDeadlineLeavesTheUndoRecord(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends := mempoolParentSpent(t, s, ctx, false)
+	h := parent.TxIDChainHash()
+
+	holder, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = holder.Rollback(context.Background()) }()
+
+	_, err = holder.Exec(ctx, `SELECT 1 FROM tx_ident WHERE txid = $1 FOR UPDATE`, h[:])
+	require.NoError(t, err)
+
+	cut, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+
+	require.Error(t, s.Unspend(cut, spends), "the deadline cuts the wait")
+	require.NotNil(t, spenderOf(t, s, ctx, parent, 0), "the coin is still spent")
+	require.Equal(t, 1, countWhere(t, s, ctx, `SELECT count(*) FROM spend_journal WHERE txid = $1`, h[:]),
+		"the undo record is still there")
+
+	require.NoError(t, holder.Rollback(ctx))
+
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0), "a later Unspend restores the coin")
 }
 
 // mempoolParentSpent is the fixture for the restore-against-lock-change race on a transaction
