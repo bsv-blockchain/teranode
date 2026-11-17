@@ -143,7 +143,7 @@ func TestRenewLaneLeaseWithoutAGrantWritesNoHandoutRow(t *testing.T) {
 		require.NoError(t, err)
 
 		r := leaseRenew(id, g)
-		r.Taken, r.Rate = g.First+5, 100
+		r.Rate = 100
 
 		_, granted, closed, err := s.RenewLaneLease(t.Context(), r)
 		require.NoError(t, err)
@@ -182,32 +182,41 @@ func TestRenewLaneLeaseRecordsTheSettlesPairOnTheNextHandoutRow(t *testing.T) {
 	})
 }
 
-func TestSweepRecordsTheLastReportedTakenOnALapsedClose(t *testing.T) {
+func TestSweepRecordsTheNewestHandoutOnALapsedClose(t *testing.T) {
 	runLaneHandoutTests(t, "lapsed", func(t *testing.T, s *SQL) {
 		id, g, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
 
 		r := leaseRenew(id, g)
-		r.Taken = 4_321
+		r.WantGrant = true
+		r.Settles = lane.Settles{First: 1, LastTaken: 10}
 
-		_, _, _, err = s.RenewLaneLease(t.Context(), r)
+		g2, _, _, err := s.RenewLaneLease(t.Context(), r)
 		require.NoError(t, err)
 
-		n, err := s.CloseStaleLaneLeases(t.Context(), 0)
+		// A second lease on another lane takes a grant after this one, so "newest" must mean this
+		// lease's newest hand-out, not the table's.
+		_, _, err = s.OpenLaneLease(t.Context(), leaseOpen("b"))
 		require.NoError(t, err)
-		require.Equal(t, 1, n)
+
+		ageLeases(t, s, time.Hour)
+
+		n, err := s.CloseStaleLaneLeases(t.Context(), 30*time.Minute)
+		require.NoError(t, err)
+		require.Equal(t, 2, n)
 
 		var (
-			kind     string
-			last     int64
-			reported sql.NullInt64
+			kind                       string
+			last                       int64
+			settlesFirst, settlesTaken sql.NullInt64
 		)
 
 		require.NoError(t, s.db.QueryRowContext(t.Context(),
-			`SELECT kind, last, last_reported_taken FROM lane_close WHERE lease_id = $1`, s.leaseParam(id)).Scan(&kind, &last, &reported))
+			`SELECT kind, last, settles_first, settles_last_taken FROM lane_close WHERE lease_id = $1`, s.leaseParam(id)).Scan(&kind, &last, &settlesFirst, &settlesTaken))
 		require.Equal(t, "lapsed", kind)
-		require.Equal(t, int64(g.Last), last) //nolint:gosec // test positions are small
-		require.Equal(t, int64(4_321), reported.Int64)
+		require.Equal(t, int64(g2.Last), last, "the lease's newest hand-out") //nolint:gosec // test positions are small
+		require.False(t, settlesFirst.Valid, "a lapsed close has no settles pair")
+		require.False(t, settlesTaken.Valid)
 	})
 }
 
@@ -323,7 +332,8 @@ func TestTwoLeasesOnOneLaneNeverSharePosition(t *testing.T) {
 
 					for k := 0; k < 2+rng.IntN(2); k++ {
 						r := leaseRenew(id, cur)
-						r.Taken, r.WantGrant, r.Rate = taken, true, 100
+						r.WantGrant, r.Rate = true, 100
+						r.Settles = lane.Settles{First: cur.First, LastTaken: taken}
 
 						next, granted, closed, err := s.RenewLaneLease(ctx, r)
 						if err != nil {
@@ -439,29 +449,26 @@ func TestTwoLeasesOnOneLaneNeverSharePosition(t *testing.T) {
 	})
 }
 
-func TestRenewOpenLaneLeasesClosesNothing(t *testing.T) {
-	runLaneHandoutTests(t, "restart renew", func(t *testing.T, s *SQL) {
-		for i := 0; i < 3; i++ {
-			_, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+func TestSweepClosesOnlyLeasesPastTheCloseTime(t *testing.T) {
+	runLaneHandoutTests(t, "close time", func(t *testing.T, s *SQL) {
+		for i := 0; i < 2; i++ {
+			_, _, err := s.OpenLaneLease(t.Context(), leaseOpen("old"))
 			require.NoError(t, err)
 		}
 
 		ageLeases(t, s, 10*time.Minute)
 
-		renewed, err := s.RenewOpenLaneLeases(t.Context())
+		// This open's own sweep must close nothing, so the sweep below is the one under test.
+		open := leaseOpen("new")
+		open.CloseAfter = time.Hour
+
+		fresh, _, err := s.OpenLaneLease(t.Context(), open)
 		require.NoError(t, err)
-		require.Equal(t, 3, renewed)
 
 		closed, err := s.CloseStaleLaneLeases(t.Context(), 3*time.Minute)
 		require.NoError(t, err)
-		require.Equal(t, 0, closed)
-
-		// The control: without the renew, all three close.
-		ageLeases(t, s, 10*time.Minute)
-
-		closed, err = s.CloseStaleLaneLeases(t.Context(), 3*time.Minute)
-		require.NoError(t, err)
-		require.Equal(t, 3, closed)
+		require.Equal(t, 2, closed)
+		require.Equal(t, 1, countRows(t, s, `SELECT COUNT(*) FROM lane_lease WHERE lease_id = $1 AND closed_at IS NULL`, s.leaseParam(fresh)))
 	})
 }
 

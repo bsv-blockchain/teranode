@@ -523,7 +523,6 @@ func (c *Client) RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.Renew
 	resp, err := c.client.RenewLaneLease(ctx, &blockchain_api.RenewLaneLeaseRequest{
 		LeaseId:          r.Lease[:],
 		Lane:             uint32(r.Lane),
-		Taken:            r.Taken,
 		Rate:             r.Rate,
 		WantGrant:        r.WantGrant,
 		SettlesFirst:     r.Settles.First,

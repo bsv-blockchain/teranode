@@ -22,13 +22,12 @@ type LaneLeaseOpen struct {
 type LaneLeaseRenew struct {
 	Lease lane.LeaseID
 	Lane  uint8
-	// Taken is the highest position the holder has taken in the lane so far; zero for none.
-	Taken uint64
 	// Rate is positions taken per second, measured by the holder.
 	Rate uint64
 	// WantGrant asks for the next grant.
 	WantGrant bool
-	// Settles finishes the grant before the current one, once the holder has switched.
+	// Settles finishes the grant the holder last left; recorded only with WantGrant, on the new
+	// grant's hand-out row.
 	Settles lane.Settles
 	// Height is the best block height at the time, recorded with a grant.
 	Height uint32

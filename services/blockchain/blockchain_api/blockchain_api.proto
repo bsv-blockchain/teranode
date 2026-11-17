@@ -1230,15 +1230,14 @@ message LaneLeaseGrant {
   uint64 last = 4;     // Last position, inclusive
 }
 
-// RenewLaneLeaseRequest renews a lease and reports what its holder has taken.
+// RenewLaneLeaseRequest renews a lease, reports the holder's rate and may ask for the next grant.
 message RenewLaneLeaseRequest {
   bytes lease_id = 1;
   uint32 lane = 2;
-  uint64 taken = 3;               // Highest position taken in the lane so far; 0 for none
-  uint64 rate = 4;                // Positions taken per second, as the holder measured it
-  bool want_grant = 5;            // Asks for the next grant
-  uint64 settles_first = 6;       // First position of the grant the holder moved on from; 0 for none
-  uint64 settles_last_taken = 7;  // Last position taken from that grant; 0 if it was never used
+  uint64 rate = 3;                // Positions taken per second, as the holder measured it
+  bool want_grant = 4;            // Asks for the next grant
+  uint64 settles_first = 5;       // With want_grant: first position of the grant the holder last left; 0 for none
+  uint64 settles_last_taken = 6;  // Its final number: its last position if used up, else the highest taken; 0 if never used
 }
 
 // RenewLaneLeaseResponse answers a renewal. closed means the lease is closed and nothing was recorded.

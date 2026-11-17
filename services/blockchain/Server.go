@@ -413,14 +413,6 @@ func (b *Blockchain) Init(ctx context.Context) error {
 		return err
 	}
 
-	// Lane leases are timed on the database clock. Treat every open lease as renewed now, so the
-	// time this service was down never closes a lease whose holder kept running.
-	if n, err := b.store.RenewOpenLaneLeases(ctx); err != nil {
-		return errors.NewStorageError("[Blockchain][Init] failed to renew the open lane leases", err)
-	} else if n > 0 {
-		b.logger.Infof("[Blockchain][Init] treated %d open lane leases as renewed at start", n)
-	}
-
 	b.finiteStateMachine = b.NewFiniteStateMachine()
 
 	// check if we are in local testing mode with a defined target state for the FSM
@@ -1735,7 +1727,6 @@ func (b *Blockchain) RenewLaneLease(ctx context.Context, req *blockchain_api.Ren
 	res, err := renewLaneLease(ctx, b.store, b.settings, lane.Renewal{
 		Lease:     id,
 		Lane:      l,
-		Taken:     req.GetTaken(),
 		Rate:      req.GetRate(),
 		WantGrant: req.GetWantGrant(),
 		Settles:   lane.Settles{First: req.GetSettlesFirst(), LastTaken: req.GetSettlesLastTaken()},
@@ -1827,7 +1818,6 @@ func renewLaneLease(ctx context.Context, store blockchain_store.Store, tSettings
 	req := blockchainoptions.LaneLeaseRenew{
 		Lease:         r.Lease,
 		Lane:          r.Lane,
-		Taken:         r.Taken,
 		Rate:          r.Rate,
 		WantGrant:     r.WantGrant,
 		Settles:       r.Settles,

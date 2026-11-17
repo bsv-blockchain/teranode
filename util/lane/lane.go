@@ -154,10 +154,11 @@ func (g Grant) Len() uint64 {
 	return g.Last - g.First + 1
 }
 
-// Settles finishes a grant the holder has moved on from: the grant's first position and the last
-// position the holder took from it. The holder learns this only when it switches to the next grant,
-// so it reports it on the renewals and the release that follow. A zero LastTaken means the grant
-// was never used. The zero value settles nothing.
+// Settles finishes a grant the holder has left: the grant's first position and its final number,
+// which is the grant's last position if it was used up, or the highest position taken if it aged
+// out. The holder sends it on its next grant request and on its release, and the service writes it
+// on that hand-out row or close row. A zero LastTaken means the grant was never used. The zero
+// value settles nothing.
 type Settles struct {
 	First     uint64
 	LastTaken uint64
@@ -168,13 +169,12 @@ type Settles struct {
 type Renewal struct {
 	Lease LeaseID
 	Lane  uint8
-	// Taken is the highest position taken in the lane so far; zero for none.
-	Taken uint64
 	// Rate is positions taken per second, measured by the holder.
 	Rate uint64
 	// WantGrant asks for the next grant.
 	WantGrant bool
-	// Settles finishes the grant before the current one.
+	// Settles finishes the grant the holder last left. It is sent with a grant request, and the
+	// service records it on the new grant's hand-out row.
 	Settles Settles
 }
 

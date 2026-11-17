@@ -483,9 +483,6 @@ type Store interface {
 	// database clock, and returns how many it closed.
 	CloseStaleLaneLeases(ctx context.Context, closeAfter time.Duration) (int, error)
 
-	// RenewOpenLaneLeases treats every open lease as renewed now, and returns how many there were.
-	RenewOpenLaneLeases(ctx context.Context) (int, error)
-
 	// LocateBlockHeaders retrieves block headers using a locator and stop hash.
 	// Legacy endpoint.
 	// Parameters:

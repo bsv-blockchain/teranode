@@ -68,7 +68,7 @@ func TestServerLaneLeaseOpenRenewRelease(t *testing.T) {
 	require.Equal(t, uint64(1), g.First)
 	require.Equal(t, uint64(500), g.Last)
 
-	r, err := tc.server.RenewLaneLease(ctx, &blockchain_api.RenewLaneLeaseRequest{LeaseId: g.LeaseId, Lane: g.Lane, Taken: 250, WantGrant: true})
+	r, err := tc.server.RenewLaneLease(ctx, &blockchain_api.RenewLaneLeaseRequest{LeaseId: g.LeaseId, Lane: g.Lane, WantGrant: true})
 	require.NoError(t, err)
 	require.Equal(t, &blockchain_api.RenewLaneLeaseResponse{Granted: true, First: 501, Last: 1000}, r)
 
@@ -119,11 +119,11 @@ func TestClientLaneLeaseOverGRPC(t *testing.T) {
 	require.False(t, id.IsZero())
 	require.Equal(t, lane.Grant{Lane: 0, First: 1, Last: 100}, g)
 
-	res, err := src.RenewLaneLease(ctx, lane.Renewal{Lease: id, Lane: g.Lane, Taken: 40, WantGrant: true})
+	res, err := src.RenewLaneLease(ctx, lane.Renewal{Lease: id, Lane: g.Lane, WantGrant: true})
 	require.NoError(t, err)
 	require.Equal(t, lane.RenewResult{Granted: true, Grant: lane.Grant{Lane: 0, First: 101, Last: 200}}, res)
 
-	res, err = src.RenewLaneLease(ctx, lane.Renewal{Lease: id, Lane: g.Lane, Taken: 120, Settles: lane.Settles{First: 1, LastTaken: 100}})
+	res, err = src.RenewLaneLease(ctx, lane.Renewal{Lease: id, Lane: g.Lane, Rate: 3})
 	require.NoError(t, err)
 	require.Equal(t, lane.RenewResult{Grant: lane.Grant{Lane: 0}}, res)
 
@@ -179,34 +179,6 @@ func TestLocalClientLaneLeaseClosesAStaleLeaseOnOpen(t *testing.T) {
 	res, err := client.RenewLaneLease(ctx, lane.Renewal{Lease: idA, Lane: gA.Lane})
 	require.NoError(t, err)
 	require.True(t, res.Closed)
-}
-
-// The blockchain service treats every open lease as renewed when it starts, so a restart longer
-// than the close time closes nothing.
-func TestServerInitRenewsEveryOpenLease(t *testing.T) {
-	tc := setup(t)
-	ctx := context.Background()
-
-	g, err := tc.server.OpenLaneLease(ctx, &blockchain_api.OpenLaneLeaseRequest{Holder: "validator-1"})
-	require.NoError(t, err)
-
-	var id lane.LeaseID
-
-	copy(id[:], g.LeaseId)
-
-	ageLaneLeases(t, tc.server.store, 10*time.Minute)
-
-	restarted, err := New(ctx, tc.logger, tc.server.settings, tc.server.store, nil)
-	require.NoError(t, err)
-	require.NoError(t, restarted.Init(ctx))
-
-	restarted.sweepLaneLeases(ctx)
-	require.Empty(t, closeKind(t, tc.server.store, id), "the lease survives the restart")
-
-	// The control: the same silence with no restart in between closes it.
-	ageLaneLeases(t, tc.server.store, 10*time.Minute)
-	restarted.sweepLaneLeases(ctx)
-	require.Equal(t, "lapsed", closeKind(t, tc.server.store, id))
 }
 
 func TestServerSweepClosesASilentLease(t *testing.T) {

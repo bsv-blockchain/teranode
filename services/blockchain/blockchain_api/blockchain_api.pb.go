@@ -7637,16 +7637,15 @@ func (x *LaneLeaseGrant) GetLast() uint64 {
 	return 0
 }
 
-// RenewLaneLeaseRequest renews a lease and reports what its holder has taken.
+// RenewLaneLeaseRequest renews a lease, reports the holder's rate and may ask for the next grant.
 type RenewLaneLeaseRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	LeaseId          []byte                 `protobuf:"bytes,1,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
 	Lane             uint32                 `protobuf:"varint,2,opt,name=lane,proto3" json:"lane,omitempty"`
-	Taken            uint64                 `protobuf:"varint,3,opt,name=taken,proto3" json:"taken,omitempty"`                                                 // Highest position taken in the lane so far; 0 for none
-	Rate             uint64                 `protobuf:"varint,4,opt,name=rate,proto3" json:"rate,omitempty"`                                                   // Positions taken per second, as the holder measured it
-	WantGrant        bool                   `protobuf:"varint,5,opt,name=want_grant,json=wantGrant,proto3" json:"want_grant,omitempty"`                        // Asks for the next grant
-	SettlesFirst     uint64                 `protobuf:"varint,6,opt,name=settles_first,json=settlesFirst,proto3" json:"settles_first,omitempty"`               // First position of the grant the holder moved on from; 0 for none
-	SettlesLastTaken uint64                 `protobuf:"varint,7,opt,name=settles_last_taken,json=settlesLastTaken,proto3" json:"settles_last_taken,omitempty"` // Last position taken from that grant; 0 if it was never used
+	Rate             uint64                 `protobuf:"varint,3,opt,name=rate,proto3" json:"rate,omitempty"`                                                   // Positions taken per second, as the holder measured it
+	WantGrant        bool                   `protobuf:"varint,4,opt,name=want_grant,json=wantGrant,proto3" json:"want_grant,omitempty"`                        // Asks for the next grant
+	SettlesFirst     uint64                 `protobuf:"varint,5,opt,name=settles_first,json=settlesFirst,proto3" json:"settles_first,omitempty"`               // With want_grant: first position of the grant the holder last left; 0 for none
+	SettlesLastTaken uint64                 `protobuf:"varint,6,opt,name=settles_last_taken,json=settlesLastTaken,proto3" json:"settles_last_taken,omitempty"` // Its final number: its last position if used up, else the highest taken; 0 if never used
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -7691,13 +7690,6 @@ func (x *RenewLaneLeaseRequest) GetLeaseId() []byte {
 func (x *RenewLaneLeaseRequest) GetLane() uint32 {
 	if x != nil {
 		return x.Lane
-	}
-	return 0
-}
-
-func (x *RenewLaneLeaseRequest) GetTaken() uint64 {
-	if x != nil {
-		return x.Taken
 	}
 	return 0
 }
@@ -8440,16 +8432,15 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\blease_id\x18\x01 \x01(\fR\aleaseId\x12\x12\n" +
 	"\x04lane\x18\x02 \x01(\rR\x04lane\x12\x14\n" +
 	"\x05first\x18\x03 \x01(\x04R\x05first\x12\x12\n" +
-	"\x04last\x18\x04 \x01(\x04R\x04last\"\xe2\x01\n" +
+	"\x04last\x18\x04 \x01(\x04R\x04last\"\xcc\x01\n" +
 	"\x15RenewLaneLeaseRequest\x12\x19\n" +
 	"\blease_id\x18\x01 \x01(\fR\aleaseId\x12\x12\n" +
-	"\x04lane\x18\x02 \x01(\rR\x04lane\x12\x14\n" +
-	"\x05taken\x18\x03 \x01(\x04R\x05taken\x12\x12\n" +
-	"\x04rate\x18\x04 \x01(\x04R\x04rate\x12\x1d\n" +
+	"\x04lane\x18\x02 \x01(\rR\x04lane\x12\x12\n" +
+	"\x04rate\x18\x03 \x01(\x04R\x04rate\x12\x1d\n" +
 	"\n" +
-	"want_grant\x18\x05 \x01(\bR\twantGrant\x12#\n" +
-	"\rsettles_first\x18\x06 \x01(\x04R\fsettlesFirst\x12,\n" +
-	"\x12settles_last_taken\x18\a \x01(\x04R\x10settlesLastTaken\"t\n" +
+	"want_grant\x18\x04 \x01(\bR\twantGrant\x12#\n" +
+	"\rsettles_first\x18\x05 \x01(\x04R\fsettlesFirst\x12,\n" +
+	"\x12settles_last_taken\x18\x06 \x01(\x04R\x10settlesLastTaken\"t\n" +
 	"\x16RenewLaneLeaseResponse\x12\x16\n" +
 	"\x06closed\x18\x01 \x01(\bR\x06closed\x12\x18\n" +
 	"\agranted\x18\x02 \x01(\bR\agranted\x12\x14\n" +

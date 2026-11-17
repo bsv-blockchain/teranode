@@ -1087,27 +1087,22 @@ func createPostgresLaneTables(db *usql.DB) error {
 			);`},
 		{"lane_lease", `
 			CREATE TABLE IF NOT EXISTS lane_lease (
-				lane                SMALLINT    PRIMARY KEY,
-				lease_id            UUID        NOT NULL,
-				holder              TEXT        NOT NULL,
-				opened_at           TIMESTAMPTZ NOT NULL,
-				renewed_at          TIMESTAMPTZ NOT NULL,
-				last_granted        BIGINT      NOT NULL,
-				last_reported_taken BIGINT,
-				settles_first       BIGINT,
-				settles_last_taken  BIGINT,
-				closed_at           TIMESTAMPTZ
+				lane       SMALLINT    PRIMARY KEY,
+				lease_id   UUID        NOT NULL,
+				holder     TEXT        NOT NULL,
+				opened_at  TIMESTAMPTZ NOT NULL,
+				renewed_at TIMESTAMPTZ NOT NULL,
+				closed_at  TIMESTAMPTZ
 			);`},
 		{"lane_close", `
 			CREATE TABLE IF NOT EXISTS lane_close (
-				lease_id            UUID        PRIMARY KEY,
-				lane                SMALLINT    NOT NULL,
-				kind                TEXT        NOT NULL,
-				last                BIGINT      NOT NULL,
-				last_reported_taken BIGINT,
-				settles_first       BIGINT,
-				settles_last_taken  BIGINT,
-				closed_at           TIMESTAMPTZ NOT NULL
+				lease_id           UUID        PRIMARY KEY,
+				lane               SMALLINT    NOT NULL,
+				kind               TEXT        NOT NULL,
+				last               BIGINT      NOT NULL,
+				settles_first      BIGINT,
+				settles_last_taken BIGINT,
+				closed_at          TIMESTAMPTZ NOT NULL
 			);`},
 	}
 
@@ -1456,16 +1451,12 @@ func createSqliteLaneTables(db *usql.DB) error {
 
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS lane_lease (
-			lane                INTEGER   PRIMARY KEY,
-			lease_id            BLOB      NOT NULL,
-			holder              TEXT      NOT NULL,
-			opened_at           TIMESTAMP NOT NULL,
-			renewed_at          TIMESTAMP NOT NULL,
-			last_granted        INTEGER   NOT NULL,
-			last_reported_taken INTEGER,
-			settles_first       INTEGER,
-			settles_last_taken  INTEGER,
-			closed_at           TIMESTAMP
+			lane       INTEGER   PRIMARY KEY,
+			lease_id   BLOB      NOT NULL,
+			holder     TEXT      NOT NULL,
+			opened_at  TIMESTAMP NOT NULL,
+			renewed_at TIMESTAMP NOT NULL,
+			closed_at  TIMESTAMP
 		);
 	`); err != nil {
 		return errors.NewStorageError("could not create lane_lease table", err)
@@ -1473,14 +1464,13 @@ func createSqliteLaneTables(db *usql.DB) error {
 
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS lane_close (
-			lease_id            BLOB      PRIMARY KEY,
-			lane                INTEGER   NOT NULL,
-			kind                TEXT      NOT NULL,
-			last                INTEGER   NOT NULL,
-			last_reported_taken INTEGER,
-			settles_first       INTEGER,
-			settles_last_taken  INTEGER,
-			closed_at           TIMESTAMP NOT NULL
+			lease_id           BLOB      PRIMARY KEY,
+			lane               INTEGER   NOT NULL,
+			kind               TEXT      NOT NULL,
+			last               INTEGER   NOT NULL,
+			settles_first      INTEGER,
+			settles_last_taken INTEGER,
+			closed_at          TIMESTAMP NOT NULL
 		);
 	`); err != nil {
 		return errors.NewStorageError("could not create lane_close table", err)

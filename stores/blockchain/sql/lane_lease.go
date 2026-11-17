@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -25,10 +26,12 @@ const (
 // The lease, in the blockchain database.
 //
 // A lease is one process's claim on one lane. lane_lease holds one row per lane, updated in place:
-// the lane's current lease or its last one. lane_handout gets one insert-only row per grant, and
-// lane_close one insert-only row per ended lease. Each grant in a lane starts one above the lane's
-// newest hand-out, whoever held it, so two leases on one lane can never hand out the same
-// position, even when one outlives its close.
+// the lane's current lease or its last one, with its times and no positions. lane_handout gets one
+// insert-only row per grant, and lane_close one insert-only row per ended lease. Each grant in a
+// lane starts one above the lane's newest hand-out, whoever held it, so two leases on one lane can
+// never hand out the same position, even when one outlives its close. The service holds nothing
+// between calls: a holder reports a grant's final number (its settles pair) on the request after it
+// leaves the grant, and that request's row records it.
 //
 // Times are on the database clock, so a sweep run from any blockchain pod judges every lease by
 // the same clock. Closing is one conditional UPDATE from open to closed, and only the caller whose
@@ -80,13 +83,12 @@ func (s *SQL) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lan
 		now := s.dbNow()
 
 		if _, err = tx.ExecContext(ctx, `
-			INSERT INTO lane_lease (lane, lease_id, holder, opened_at, renewed_at, last_granted, last_reported_taken, settles_first, settles_last_taken, closed_at)
-			VALUES ($1, $2, $3, `+now+`, `+now+`, $4, NULL, NULL, NULL, NULL)
+			INSERT INTO lane_lease (lane, lease_id, holder, opened_at, renewed_at, closed_at)
+			VALUES ($1, $2, $3, `+now+`, `+now+`, NULL)
 			ON CONFLICT (lane) DO UPDATE SET
 				lease_id = EXCLUDED.lease_id, holder = EXCLUDED.holder, opened_at = EXCLUDED.opened_at,
-				renewed_at = EXCLUDED.renewed_at, last_granted = EXCLUDED.last_granted,
-				last_reported_taken = NULL, settles_first = NULL, settles_last_taken = NULL, closed_at = NULL`,
-			int(chosen), s.leaseParam(id), req.Holder, lane.ToSigned(grant.Last),
+				renewed_at = EXCLUDED.renewed_at, closed_at = NULL`,
+			int(chosen), s.leaseParam(id), req.Holder,
 		); err != nil {
 			return errors.NewStorageError("could not record the lane lease", err)
 		}
@@ -100,20 +102,19 @@ func (s *SQL) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lan
 	return id, grant, nil
 }
 
-// RenewLaneLease records a renewal: the highest position taken and the settles pair, at the
-// database's now. With WantGrant it also records the next grant, sized at Rate × GrantDuration and
-// at least GrantMin. A lease that is closed, or is not the lane's current one, gets closed = true
-// and nothing is written.
+// RenewLaneLease records a renewal at the database's now. With WantGrant it also records the next
+// grant, sized at Rate × GrantDuration and at least GrantMin, with the request's settles pair on its
+// hand-out row. A lease that is closed, or is not the lane's current one, gets closed = true and
+// nothing is written.
 func (s *SQL) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (grant lane.Grant, granted, closed bool, err error) {
 	if req.WantGrant && req.GrantMin == 0 {
 		return lane.Grant{}, false, false, errors.NewInvalidArgumentError("lane grant size must be at least 1")
 	}
 
 	err = s.leaseTx(ctx, req.WantGrant, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `
-			UPDATE lane_lease SET renewed_at = `+s.dbNow()+`, last_reported_taken = $1, settles_first = $2, settles_last_taken = $3
-			WHERE lane = $4 AND lease_id = $5 AND closed_at IS NULL`,
-			nullPosition(req.Taken), settlesFirst(req.Settles), settlesLastTaken(req.Settles), int(req.Lane), s.leaseParam(req.Lease),
+		res, err := tx.ExecContext(ctx,
+			`UPDATE lane_lease SET renewed_at = `+s.dbNow()+` WHERE lane = $1 AND lease_id = $2 AND closed_at IS NULL`,
+			int(req.Lane), s.leaseParam(req.Lease),
 		)
 		if err != nil {
 			return errors.NewStorageError("could not renew the lane lease", err)
@@ -133,10 +134,6 @@ func (s *SQL) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (g
 		grant, err = s.recordGrant(ctx, tx, req.Lease, req.Lane, grantSize(req.Rate, req.GrantDuration, req.GrantMin), "", req.Height, req.Settles)
 		if err != nil {
 			return err
-		}
-
-		if _, err = tx.ExecContext(ctx, `UPDATE lane_lease SET last_granted = $1 WHERE lane = $2`, lane.ToSigned(grant.Last), int(req.Lane)); err != nil {
-			return errors.NewStorageError("could not record the lane grant on the lease", err)
 		}
 
 		granted = true
@@ -170,8 +167,8 @@ func (s *SQL) ReleaseLaneLease(ctx context.Context, req options.LaneLeaseRelease
 		}
 
 		if _, err = tx.ExecContext(ctx, `
-			INSERT INTO lane_close (lease_id, lane, kind, last, last_reported_taken, settles_first, settles_last_taken, closed_at)
-			VALUES ($1, $2, $3, $4, NULL, $5, $6, `+now+`)`,
+			INSERT INTO lane_close (lease_id, lane, kind, last, settles_first, settles_last_taken, closed_at)
+			VALUES ($1, $2, $3, $4, $5, $6, `+now+`)`,
 			s.leaseParam(req.Lease), int(req.Lane), closeClean, lane.ToSigned(req.LastTaken), settlesFirst(req.Settles), settlesLastTaken(req.Settles),
 		); err != nil {
 			return errors.NewStorageError("could not record the lane lease close", err)
@@ -206,28 +203,6 @@ func (s *SQL) CloseStaleLaneLeases(ctx context.Context, closeAfter time.Duration
 	return closed, nil
 }
 
-// RenewOpenLaneLeases treats every open lease as renewed now. The blockchain service runs it at
-// start, so its own downtime never counts against the leases it was away for.
-func (s *SQL) RenewOpenLaneLeases(ctx context.Context) (int, error) {
-	var renewed int64
-
-	err := s.leaseTx(ctx, false, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE lane_lease SET renewed_at = `+s.dbNow()+` WHERE closed_at IS NULL`)
-		if err != nil {
-			return errors.NewStorageError("could not renew the open lane leases", err)
-		}
-
-		renewed, err = res.RowsAffected()
-
-		return err
-	})
-	if err != nil {
-		return 0, leaseError("could not renew the open lane leases", err)
-	}
-
-	return int(renewed), nil
-}
-
 // leaseTx runs fn in a transaction. With grants true it holds the hand-out lock. On SQLite it
 // always holds it; see the comment at the top of this file.
 func (s *SQL) leaseTx(ctx context.Context, grants bool, fn func(tx *sql.Tx) error) error {
@@ -248,7 +223,9 @@ func (s *SQL) leaseTx(ctx context.Context, grants bool, fn func(tx *sql.Tx) erro
 }
 
 // closeStale is the sweep's statement. The staleness test sits in the UPDATE itself, so a renewal
-// that commits while the sweep waits for the row is seen, and that lease stays open.
+// that commits while the sweep waits for the row is seen, and that lease stays open. A lapsed close
+// records the lease's newest hand-out as its last position, and no settles pair: the holder never
+// reported one.
 func (s *SQL) closeStale(ctx context.Context, tx *sql.Tx, closeAfter time.Duration) (int, error) {
 	now := s.dbNow()
 
@@ -261,13 +238,13 @@ func (s *SQL) closeStale(ctx context.Context, tx *sql.Tx, closeAfter time.Durati
 		rows, err = tx.QueryContext(ctx, `
 			UPDATE lane_lease SET closed_at = `+now+`
 			WHERE closed_at IS NULL AND renewed_at <= `+now+` - $1::bigint * interval '1 microsecond'
-			RETURNING lease_id, lane, last_granted, last_reported_taken, settles_first, settles_last_taken`,
+			RETURNING lease_id, lane`,
 			closeAfter.Microseconds())
 	} else {
 		rows, err = tx.QueryContext(ctx, `
 			UPDATE lane_lease SET closed_at = `+now+`
 			WHERE closed_at IS NULL AND renewed_at <= strftime('%Y-%m-%d %H:%M:%f', 'now', $1)
-			RETURNING lease_id, lane, last_granted, last_reported_taken, settles_first, settles_last_taken`,
+			RETURNING lease_id, lane`,
 			sqliteOffset(-closeAfter))
 	}
 
@@ -276,10 +253,8 @@ func (s *SQL) closeStale(ctx context.Context, tx *sql.Tx, closeAfter time.Durati
 	}
 
 	type lapsed struct {
-		id                                  any
-		lane                                int
-		lastGranted                         int64
-		reported, settlesFirst, settlesLast sql.NullInt64
+		id   any
+		lane int
 	}
 
 	var closed []lapsed
@@ -290,7 +265,7 @@ func (s *SQL) closeStale(ctx context.Context, tx *sql.Tx, closeAfter time.Durati
 			id []byte
 		)
 
-		if err = rows.Scan(&id, &l.lane, &l.lastGranted, &l.reported, &l.settlesFirst, &l.settlesLast); err != nil {
+		if err = rows.Scan(&id, &l.lane); err != nil {
 			_ = rows.Close()
 			return 0, errors.NewStorageError("could not read a stale lane lease", err)
 		}
@@ -314,9 +289,11 @@ func (s *SQL) closeStale(ctx context.Context, tx *sql.Tx, closeAfter time.Durati
 
 	for _, l := range closed {
 		if _, err = tx.ExecContext(ctx, `
-			INSERT INTO lane_close (lease_id, lane, kind, last, last_reported_taken, settles_first, settles_last_taken, closed_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, `+now+`)`,
-			l.id, l.lane, closeLapsed, l.lastGranted, l.reported, l.settlesFirst, l.settlesLast,
+			INSERT INTO lane_close (lease_id, lane, kind, last, settles_first, settles_last_taken, closed_at)
+			SELECT $1, $2, $3, h.last, NULL, NULL, `+now+`
+			FROM lane_handout h WHERE h.lane = $2 AND h.lease_id = $1
+			ORDER BY h.first DESC LIMIT 1`,
+			l.id, l.lane, closeLapsed,
 		); err != nil {
 			return 0, errors.NewStorageError("could not record a lapsed lane lease", err)
 		}
@@ -327,30 +304,25 @@ func (s *SQL) closeStale(ctx context.Context, tx *sql.Tx, closeAfter time.Durati
 
 // chooseLeaseLane applies the lane choice rule. It runs under the hand-out lock.
 func (s *SQL) chooseLeaseLane(ctx context.Context, tx *sql.Tx) (uint8, error) {
-	type leaseRow struct {
-		closedAt    sql.NullTime
-		lastGranted int64
-	}
+	leases := make(map[int]sql.NullTime, grantableLanes)
 
-	leases := make(map[int]leaseRow, grantableLanes)
-
-	rows, err := tx.QueryContext(ctx, `SELECT lane, closed_at, last_granted FROM lane_lease`)
+	rows, err := tx.QueryContext(ctx, `SELECT lane, closed_at FROM lane_lease`)
 	if err != nil {
 		return 0, errors.NewStorageError("could not read the lane leases", err)
 	}
 
 	for rows.Next() {
 		var (
-			l int
-			r leaseRow
+			l        int
+			closedAt sql.NullTime
 		)
 
-		if err = rows.Scan(&l, &r.closedAt, &r.lastGranted); err != nil {
+		if err = rows.Scan(&l, &closedAt); err != nil {
 			_ = rows.Close()
 			return 0, errors.NewStorageError("could not read a lane lease", err)
 		}
 
-		leases[l] = r
+		leases[l] = closedAt
 	}
 
 	if err = rows.Close(); err != nil {
@@ -361,48 +333,60 @@ func (s *SQL) chooseLeaseLane(ctx context.Context, tx *sql.Tx) (uint8, error) {
 		return 0, errors.NewStorageError("could not read the lane leases", err)
 	}
 
-	var (
-		best      = -1
-		bestSince time.Time
-	)
+	type candidate struct {
+		lane   int
+		since  time.Time
+		leased bool
+	}
+
+	var candidates []candidate
 
 	for l := 0; l < grantableLanes; l++ {
-		var since time.Time
-
-		if r, ok := leases[l]; ok {
-			if !r.closedAt.Valid || lane.FromSigned(r.lastGranted) >= lane.MaxPosition {
-				continue
+		closedAt, leased := leases[l]
+		if leased {
+			if closedAt.Valid {
+				candidates = append(candidates, candidate{lane: l, since: closedAt.Time, leased: true})
 			}
 
-			since = r.closedAt.Time
-		} else {
-			st, err := readLaneState(ctx, tx, uint8(l)) //nolint:gosec // l is below 254
+			continue // an open lease holds it
+		}
+
+		// A lane with no lease row may still have hand-outs from before the lease.
+		st, err := readLaneState(ctx, tx, uint8(l)) //nolint:gosec // l is below 254
+		if err != nil {
+			return 0, err
+		}
+
+		if !st.used {
+			// A lane never used comes first, lowest number first.
+			return uint8(l), nil //nolint:gosec // l is below 254
+		}
+
+		if !st.exhausted {
+			candidates = append(candidates, candidate{lane: l, since: st.handedAt})
+		}
+	}
+
+	sort.SliceStable(candidates, func(a, b int) bool { return candidates[a].since.Before(candidates[b].since) })
+
+	// A closed lane is checked for positions left only once it is the one to choose, so an open
+	// reads one hand-out per lane only while lanes without a lease row remain.
+	for _, c := range candidates {
+		if c.leased {
+			st, err := readLaneState(ctx, tx, uint8(c.lane)) //nolint:gosec // c.lane is below 254
 			if err != nil {
 				return 0, err
-			}
-
-			if !st.used {
-				// A lane never used comes first, lowest number first.
-				return uint8(l), nil //nolint:gosec // l is below 254
 			}
 
 			if st.exhausted {
 				continue
 			}
-
-			since = st.handedAt
 		}
 
-		if best < 0 || since.Before(bestSince) {
-			best, bestSince = l, since
-		}
+		return uint8(c.lane), nil //nolint:gosec // c.lane is below 254
 	}
 
-	if best < 0 {
-		return 0, errors.NewServiceError("no free lane: all %d lanes hold an open lease or are exhausted", grantableLanes)
-	}
-
-	return uint8(best), nil //nolint:gosec // best is below 254
+	return 0, errors.NewServiceError("no free lane: all %d lanes hold an open lease or are exhausted", grantableLanes)
 }
 
 // recordGrant records the lane's next grant: size positions starting one above the lane's newest
