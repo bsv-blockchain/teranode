@@ -62,6 +62,30 @@ func TestDeleteOfATransactionTheStoreDoesNotHoldSucceeds(t *testing.T) {
 		"a transaction the store never held deletes nothing, and that is not an error")
 }
 
+// TestDeleteThatCannotStartLeavesTheTransaction. A Delete whose context is already done cannot
+// open its database transaction. It must say so as a storage error, not as success or not-found,
+// and remove nothing.
+func TestDeleteThatCannotStartLeavesTheTransaction(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	tx := mkTx(t, 2, 5_001)
+	_, err := s.Create(ctx, tx, 100)
+	require.NoError(t, err)
+
+	h := tx.TxIDChainHash()
+
+	done, cancel := context.WithCancel(ctx)
+	cancel()
+
+	derr := s.Delete(done, h)
+	require.True(t, errors.Is(derr, errors.ErrStorageError), "a Delete that never started is a storage error, got %v", derr)
+
+	require.Equal(t, 2, countWhere(t, s, ctx, `SELECT count(*) FROM utxo WHERE txid = $1`, h[:]),
+		"and every UTXO is still there")
+	require.Equal(t, 1, countWhere(t, s, ctx, `SELECT count(*) FROM tx_ident WHERE txid = $1`, h[:]),
+		"and so is the identity row")
+}
+
 // TestDeleteIsIdempotent, for the same reason: a reorg retried after a crash must not fail on
 // the work it already did.
 func TestDeleteIsIdempotent(t *testing.T) {
