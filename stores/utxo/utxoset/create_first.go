@@ -50,3 +50,18 @@ func (s *Store) ClearCreateFirstHold(ctx context.Context, hash *chainhash.Hash, 
 func (s *Store) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
 	return false, nil
 }
+
+// TakeSpendLease reports false and writes nothing. The store has no tentative state, so no spend needs a lease.
+func (s *Store) TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+// ReleaseSpendLease does nothing. The store has no tentative state, so no spend needs a lease.
+func (s *Store) ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error {
+	return nil
+}
+
+// SpendLeasesLive reports false. The store has no tentative state, so no spend needs a lease.
+func (s *Store) SpendLeasesLive(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	return false, nil
+}

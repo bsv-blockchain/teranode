@@ -52,8 +52,8 @@ func (b *batchFinalize) complete(err error) {
 // earlier attempt of the same txid cannot clear a later attempt's creating state. Returns
 // ErrTxNotFound if the record has vanished, is rolling back (BeginCreateFirstRollback) or
 // belongs to another attempt: all three mean this attempt's record will not be completed, and
-// the caller's spends of its inputs are its own to remove only if it can take the hold of its
-// attempt (TakeRollbackHold). A batch that completed cleanly returns nil even if
+// the owner of the rollback reverses the caller's spends of its inputs once the caller has released
+// its spend lease. A batch that completed cleanly returns nil even if
 // ctx was cancelled afterwards, because the record is finalized. Otherwise a cancelled ctx returns
 // its context error, then a recorded batch error, then a timeout error.
 func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
@@ -186,7 +186,10 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 		// Clear by writing nil (bin absence == not creating).
 		clearOp := aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))
 
-		singleRecords = append(singleRecords, aerospike.NewBatchWrite(writePolicy, key, clearOp, removeUnminedSinceIfMinedOp()))
+		// The spend leases end with the creating state.
+		leasesOp := aerospike.PutOp(aerospike.NewBin(fields.Spenders.String(), nil))
+
+		singleRecords = append(singleRecords, aerospike.NewBatchWrite(writePolicy, key, clearOp, leasesOp, removeUnminedSinceIfMinedOp()))
 		singleOwner = append(singleOwner, idx)
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -266,4 +267,114 @@ func TestTxMetaCache_HoldMethods_DelegateAndEvict(t *testing.T) {
 	}
 
 	require.NoError(t, cache.ReleaseRollbackHold(ctx, &chainhash.Hash{}, []byte{1}))
+}
+
+// spendLeaseStore decorates a REAL utxo.Store and scripts the three spend lease methods.
+type spendLeaseStore struct {
+	utxo.Store
+
+	lease   []byte
+	err     error
+	calls   []string
+	freed   []byte
+	attempt []byte
+}
+
+func (s *spendLeaseStore) TakeSpendLease(_ context.Context, _ *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	s.calls = append(s.calls, "take")
+	s.attempt = attempt
+
+	return s.lease, true, s.err
+}
+
+func (s *spendLeaseStore) ReleaseSpendLease(_ context.Context, _ *chainhash.Hash, _, lease []byte) error {
+	s.calls = append(s.calls, "release")
+	s.freed = lease
+
+	return s.err
+}
+
+func (s *spendLeaseStore) SpendLeasesLive(_ context.Context, _ *chainhash.Hash, _ []byte) (bool, error) {
+	s.calls = append(s.calls, "live")
+
+	return true, s.err
+}
+
+// TestTxMetaCache_SpendLeaseMethods_Delegate pins that the three spend lease calls reach the
+// underlying store with their arguments and return its answers unchanged.
+func TestTxMetaCache_SpendLeaseMethods_Delegate(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///txmetacache_spend_lease_delegate")
+	require.NoError(t, err)
+
+	underlying, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	leaseErr := errors.NewStorageError("lease boom")
+	scripted := &spendLeaseStore{Store: underlying, lease: []byte{5, 6}, err: leaseErr}
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, scripted, Unallocated)
+	require.NoError(t, err)
+
+	cache, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+
+	hash := testHash(40)
+
+	lease, took, err := cache.TakeSpendLease(ctx, &hash, []byte{1})
+	require.Equal(t, []byte{5, 6}, lease)
+	require.True(t, took)
+	require.ErrorIs(t, err, leaseErr)
+	require.Equal(t, []byte{1}, scripted.attempt)
+
+	require.ErrorIs(t, cache.ReleaseSpendLease(ctx, &hash, []byte{1}, lease), leaseErr)
+	require.Equal(t, []byte{5, 6}, scripted.freed)
+
+	live, err := cache.SpendLeasesLive(ctx, &hash, []byte{1})
+	require.True(t, live)
+	require.ErrorIs(t, err, leaseErr)
+
+	require.Equal(t, []string{"take", "release", "live"}, scripted.calls)
+}
+
+// boundedStore decorates a REAL utxo.Store and names its own rollback bound.
+type boundedStore struct {
+	utxo.Store
+
+	bound time.Duration
+}
+
+func (b *boundedStore) SpendRollbackTimeout() time.Duration { return b.bound }
+
+// TestTxMetaCache_SpendRollbackTimeout_ComesFromTheWrappedStore pins that the shared rollback and
+// roll-forward see the bound of the store behind the cache, and zero, which selects the shared
+// default, when that store names none.
+func TestTxMetaCache_SpendRollbackTimeout_ComesFromTheWrappedStore(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///txmetacache_rollback_bound")
+	require.NoError(t, err)
+
+	underlying, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, &boundedStore{Store: underlying, bound: 30 * time.Second}, Unallocated)
+	require.NoError(t, err)
+
+	bounded, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+	require.Equal(t, 30*time.Second, bounded.SpendRollbackTimeout())
+
+	// spendLeaseStore embeds the utxo.Store interface, which has no SpendRollbackTimeout.
+	c, err = NewTxMetaCache(ctx, settings.NewSettings(), logger, &spendLeaseStore{Store: underlying}, Unallocated)
+	require.NoError(t, err)
+
+	unbounded, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+	require.Equal(t, time.Duration(0), unbounded.SpendRollbackTimeout())
 }

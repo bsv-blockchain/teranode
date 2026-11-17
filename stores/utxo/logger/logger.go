@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -288,6 +289,38 @@ func (s *Store) ReleaseRollbackHold(ctx context.Context, hash *chainhash.Hash, a
 	s.logger.Debugf("[UTXOStore][logger][ReleaseRollbackHold] hash %s err %v : %s", hash.String(), err, caller())
 
 	return err
+}
+
+// SpendRollbackTimeout returns the rollback bound of the wrapped store, so that the shared
+// rollback and roll-forward run under the same bound through this wrapper. Zero when the wrapped
+// store names none.
+func (s *Store) SpendRollbackTimeout() time.Duration {
+	if b, ok := s.store.(interface{ SpendRollbackTimeout() time.Duration }); ok {
+		return b.SpendRollbackTimeout()
+	}
+
+	return 0
+}
+
+func (s *Store) TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	lease, took, err := s.store.TakeSpendLease(ctx, hash, attempt)
+	s.logger.Debugf("[UTXOStore][logger][TakeSpendLease] hash %s took %v err %v : %s", hash.String(), took, err, caller())
+
+	return lease, took, err
+}
+
+func (s *Store) ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error {
+	err := s.store.ReleaseSpendLease(ctx, hash, attempt, lease)
+	s.logger.Debugf("[UTXOStore][logger][ReleaseSpendLease] hash %s err %v : %s", hash.String(), err, caller())
+
+	return err
+}
+
+func (s *Store) SpendLeasesLive(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	live, err := s.store.SpendLeasesLive(ctx, hash, attempt)
+	s.logger.Debugf("[UTXOStore][logger][SpendLeasesLive] hash %s live %v err %v : %s", hash.String(), live, err, caller())
+
+	return live, err
 }
 
 func (s *Store) ClearCreateFirstHold(ctx context.Context, hash *chainhash.Hash, adopt bool) (bool, error) {

@@ -3,9 +3,12 @@ package aerospike
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -23,7 +26,143 @@ func (s *Store) holdSeconds() int64 {
 		d = defaultHoldDuration
 	}
 
-	return int64(d / time.Second)
+	return max(int64(d/time.Second), 1)
+}
+
+// spendLeaseUntil is the time by which a spend that starts now under a lease must end.
+func (s *Store) spendLeaseUntil() int {
+	return int(time.Now().Unix() + s.holdSeconds())
+}
+
+// spendLeaseOp returns the write that puts the lease of the attempt that creates a master record
+// into its spenders bin. The creator's lease is its attempt token.
+func (s *Store) spendLeaseOp(lease []byte) *aerospike.Operation {
+	return aerospike.PutOp(aerospike.NewBin(fields.Spenders.String(), map[interface{}]interface{}{
+		hex.EncodeToString(lease): s.spendLeaseUntil(),
+	}))
+}
+
+// TakeSpendLease registers the caller as a spender of the inputs of the attempt that carries the
+// token, before the caller spends. One UPDATE_ONLY write, filtered on the record still creating,
+// not rolling back and carrying the token, adds a random lease to the spenders bin with the time
+// by which the spend must end, now plus utxostore_spendRollbackTimeout. The owner of a rollback
+// sets its marker with a write the same filter refuses afterwards, and then waits until no lease is
+// live before it reverses a spend (SpendLeasesLive). A spend therefore either starts before the
+// marker and is waited for, or is refused here and never starts.
+//
+// It reports false, writing nothing, when the record is absent, final, rolling back or owned by
+// another attempt.
+func (s *Store) TakeSpendLease(_ context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
+	if err != nil {
+		return nil, false, errors.NewProcessingError("error in aerospike NewKey", err)
+	}
+
+	lease := make([]byte, attemptTokenLength)
+	if _, randErr := rand.Read(lease); randErr != nil {
+		return nil, false, errors.NewProcessingError("failed to generate the spend lease", randErr)
+	}
+
+	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
+	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	writePolicy.FilterExpression = finalizeFilter(attempt)
+
+	// The second write drops the leases that are stale, so that spenders that never released theirs
+	// do not make the bin grow.
+	_, putErr := s.client.Operate(writePolicy, key,
+		aerospike.MapPutOp(aerospike.DefaultMapPolicy(), fields.Spenders.String(), hex.EncodeToString(lease), s.spendLeaseUntil()),
+		aerospike.MapRemoveByValueRangeOp(fields.Spenders.String(), nil, int(time.Now().Unix()-s.holdSeconds()), aerospike.MapReturnType.NONE),
+	)
+	if putErr == nil {
+		return lease, true, nil
+	}
+
+	if errors.Is(putErr, aerospike.ErrKeyNotFound) || isFilteredOut(putErr) {
+		return nil, false, nil
+	}
+
+	prometheusUtxoMapErrors.WithLabelValues("TakeSpendLease", "error").Inc()
+
+	return nil, false, errors.NewStorageError("error taking a spend lease on %s", hash.String(), putErr)
+}
+
+// ReleaseSpendLease removes a lease from the spenders bin of the attempt that carries the token.
+// The caller calls it once its spend has returned with a known outcome. A record that is absent,
+// final, a hold or owned by another attempt carries no such lease and the call reports success.
+func (s *Store) ReleaseSpendLease(_ context.Context, hash *chainhash.Hash, attempt, lease []byte) error {
+	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
+	if err != nil {
+		return errors.NewProcessingError("error in aerospike NewKey", err)
+	}
+
+	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
+	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	writePolicy.FilterExpression = aerospike.ExpAnd(
+		aerospike.ExpBinExists(fields.Spenders.String()),
+		attemptFilter(attempt),
+	)
+
+	_, putErr := s.client.Operate(writePolicy, key,
+		aerospike.MapRemoveByKeyOp(fields.Spenders.String(), hex.EncodeToString(lease), aerospike.MapReturnType.NONE),
+	)
+	if putErr == nil || errors.Is(putErr, aerospike.ErrKeyNotFound) || isFilteredOut(putErr) {
+		return nil
+	}
+
+	prometheusUtxoMapErrors.WithLabelValues("ReleaseSpendLease", "error").Inc()
+
+	return errors.NewStorageError("error releasing a spend lease on %s", hash.String(), putErr)
+}
+
+// SpendLeasesLive reports whether a spender of the attempt that carries the token may still be
+// spending. A lease is live until the time it names has passed by a further
+// utxostore_spendRollbackTimeout: a spender that returned with an unknown outcome, or crashed,
+// never releases its lease, and its write can still land for as long as the store may apply it.
+// The owner of a rollback calls it after it has set the marker, so no lease can be added while it
+// waits. A record that is absent or owned by another attempt has none.
+func (s *Store) SpendLeasesLive(_ context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
+	if err != nil {
+		return false, errors.NewProcessingError("error in aerospike NewKey", err)
+	}
+
+	rec, getErr := s.client.Get(util.GetAerospikeReadPolicy(s.settings), key, fields.Attempt.String(), fields.Spenders.String())
+	if getErr != nil {
+		if errors.Is(getErr, aerospike.ErrKeyNotFound) {
+			return false, nil
+		}
+
+		return false, errors.NewStorageError("error reading the spend leases of %s", hash.String(), getErr)
+	}
+
+	if rec == nil || rec.Bins == nil {
+		return false, nil
+	}
+
+	if recAttempt, _ := rec.Bins[fields.Attempt.String()].([]byte); !bytes.Equal(recAttempt, attempt) {
+		return false, nil
+	}
+
+	raw, present := rec.Bins[fields.Spenders.String()]
+	if !present || raw == nil {
+		return false, nil
+	}
+
+	leases, ok := raw.(map[interface{}]interface{})
+	if !ok {
+		// A bin this code cannot read is not proof that nobody is spending.
+		return true, nil
+	}
+
+	staleBefore := time.Now().Unix() - s.holdSeconds()
+
+	for _, v := range leases {
+		if until, ok := v.(int); !ok || int64(until) >= staleBefore {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // BeginCreateFirstRollback claims the rollback of a master record that still carries the
@@ -32,7 +171,9 @@ func (s *Store) holdSeconds() int64 {
 // holdUntil to now plus utxostore_spendRollbackTimeout, so the caller that owns the rollback
 // holds the hold for its whole reversal of spends: no other actor can take it and reverse the
 // same spends, and a block-context create cannot adopt the record while it is busy. The owner
-// calls ReleaseRollbackHold once the reversal is done. The write is UPDATE_ONLY and filtered on the
+// calls ReleaseRollbackHold once the reversal is done. From this write on TakeSpendLease refuses
+// the record, so the owner waits for the leases it finds (SpendLeasesLive) and then knows that no
+// spend of the attempt can land after its reversal. The write is UPDATE_ONLY and filtered on the
 // creating bin being present, the rollingBack bin being absent and the attempt bin carrying the
 // token, so a finalized or absent record is never touched, a record of another attempt is never
 // claimed, and only one caller can set the marker.
@@ -85,32 +226,31 @@ func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash
 }
 
 // EndCreateFirstRollback ends the rollback of the attempt that carries the token. Its callers
-// call it only once every spend of the attempt is reversed, and its first write records that
-// on the master as the reversed bin, so that a recovery that finds the record after the external
-// blob is gone finishes the rollback without reading the transaction. It then removes the
-// pagination children, filtered on the token, then the external blobs, and last turns the master
-// record into a hold: one REPLACE_ONLY write that keeps the txid, the creating and rollingBack
-// markers, the token and the unminedSince selector, and adds the hold marker and holdUntil, now
-// plus utxostore_spendRollbackTimeout. The write is filtered on the record still rolling back
-// under the token, not already a hold and not busy with a live holder.
+// call it only once every spend of the attempt is reversed and no spend lease is live. Its first
+// write records that on the master as the reversed bin, so that a recovery that finds the record
+// after the external blob is gone finishes the rollback without reading the transaction. The same
+// write marks the record busy, so the call owns the cleanup: it is filtered on the record not being
+// busy with a live holder, and a second caller, or an actor that is still reversing spends under
+// TakeRollbackHold, makes it fail. The call then removes the pagination children, filtered on the
+// token, then the external blobs, and last turns the master record into a hold: one REPLACE_ONLY
+// write that keeps the txid, the creating and rollingBack markers, the token and the unminedSince
+// selector, and adds the hold marker and holdUntil, now plus utxostore_spendRollbackTimeout. The
+// hold is written with that time to live, so the server removes it on its own.
 //
-// The master record is in place for the whole cascade. A new attempt at the same txid finds it
-// and is refused, so it cannot create children or blobs that this call would then remove, and
-// the child and blob deletes cannot reach another attempt's records. The hold keeps refusing
-// creates after the cascade, and the spend gates, which key on the creating bin, keep refusing
-// spends of its outputs. The unminedSince bin stays so the pruner sweep, which selects by it,
-// finds an expired hold.
+// The master record is in place for the whole cascade and busy under this call. A new attempt at
+// the same txid finds it and is refused, so it cannot create children or blobs that this call would
+// then remove, and no second cleanup can run beside this one and delete the blobs of an attempt
+// that replaced the hold. The call runs under a context bounded by utxostore_spendRollbackTimeout,
+// half the time after which another caller may treat its busy marker as a crashed holder's. The hold
+// keeps refusing creates after the cascade, and the spend gates, which key on the creating bin, keep
+// refusing spends of its outputs. The unminedSince bin stays so the pruner sweep, which selects by
+// it, finds a hold on a namespace that does not expire records.
 //
 // A master that is absent, already a hold, no longer rolling back or owned by another attempt
 // means this attempt's rollback is already over: the call reports success and touches nothing. A
-// live holder that is reversing spends under TakeRollbackHold makes the conversion fail, because the
-// conversion would drop the busy marker that protects it. A holder that crashed, whose holdUntil has
-// passed by a further utxostore_spendRollbackTimeout, does not: the conversion proceeds over its
-// marker. After a refusal the record is left rolling back and the sweep ends the rollback on a
-// later pass. A cascade that fails leaves the master
-// rolling back for the same reason, so a retry finds the children and blobs by the master's
-// child count. A conversion that fails after the blob is deleted leaves the master rolling back
-// and reversed, and the sweep calls this method again for it without reading the transaction.
+// cascade or a conversion that fails releases the busy marker and leaves the master rolling back
+// and reversed, so a retry finds the children and blobs by the master's child count, and the sweep
+// calls this method again for it without reading the transaction.
 func (s *Store) EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
 	key, keyErr := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if keyErr != nil {
@@ -135,34 +275,62 @@ func (s *Store) EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash
 		return nil
 	}
 
-	if state.childCount > 0 {
-		if childErr := s.deleteChildRecordsWithRetry(ctx, hash, state.childCount, attemptFilter(attempt)); childErr != nil {
-			return errors.NewStorageError("ending the rollback of %s: the pagination child pass did not complete; the master record is left rolling back so a retry can find the %d child record(s)", hash.String(), state.childCount, childErr)
+	cleanupCtx, cancel := context.WithTimeout(ctx, time.Duration(s.holdSeconds())*time.Second)
+	defer cancel()
+
+	endErr := s.removeRolledBackData(cleanupCtx, hash, state.childCount, attempt)
+	if endErr == nil {
+		endErr = s.convertToHold(key, hash, state, attempt)
+	}
+
+	if endErr != nil {
+		if relErr := s.ReleaseRollbackHold(ctx, hash, attempt); relErr != nil {
+			s.logger.Errorf("[EndCreateFirstRollback] releasing the cleanup of %s failed, it expires on its own: %v", hash.String(), relErr)
 		}
 	}
 
-	if blobErr := s.deleteExternalBlobs(ctx, hash); blobErr != nil {
-		return blobErr
+	return endErr
+}
+
+// removeRolledBackData removes the pagination children that carry the token and the external
+// blobs of a rolled back attempt. The caller holds the busy marker of the master.
+func (s *Store) removeRolledBackData(ctx context.Context, hash *chainhash.Hash, childCount int, attempt []byte) error {
+	if childCount > 0 {
+		if childErr := s.deleteChildRecordsWithRetry(ctx, hash, childCount, attemptFilter(attempt)); childErr != nil {
+			return errors.NewStorageError("ending the rollback of %s: the pagination child pass did not complete; the master record is left rolling back so a retry can find the %d child record(s)", hash.String(), childCount, childErr)
+		}
 	}
 
-	return s.convertToHold(key, hash, state, attempt)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return errors.NewProcessingError("ending the rollback of %s: out of time before the external blobs were removed", hash.String(), ctxErr)
+	}
+
+	return s.deleteExternalBlobs(ctx, hash)
 }
 
 // markReversed records on the master that every spend of the rolling back attempt has been
 // reversed, so a recovery that finds the record after the blob is gone can finish the rollback
-// without the transaction data. One UPDATE_ONLY write, filtered on the record rolling back under
-// the token and not a hold. A record that is absent, a hold, no longer rolling back or owned by
-// another attempt means the rollback is already over: it reports false and is not an error.
+// without the transaction data, and takes the busy marker for the cleanup that follows. One
+// UPDATE_ONLY write, filtered on the record rolling back under the token, not a hold and not busy
+// with a live holder. A record that is absent, a hold, no longer rolling back or owned by another
+// attempt means the rollback is already over: it reports false and is not an error. A record that
+// is busy with a live holder is an error: that holder is reversing spends or running the cleanup,
+// and the record is left for it or for the sweep.
 func (s *Store) markReversed(key *aerospike.Key, hash *chainhash.Hash, attempt []byte) (bool, error) {
 	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
 	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 	writePolicy.FilterExpression = aerospike.ExpAnd(
 		aerospike.ExpBinExists(fields.RollingBack.String()),
 		aerospike.ExpNot(aerospike.ExpBinExists(fields.Hold.String())),
+		s.notBusyOrStale(time.Now().Unix()),
 		attemptFilter(attempt),
 	)
 
-	_, putErr := s.client.Operate(writePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.Reversed.String(), true)))
+	_, putErr := s.client.Operate(writePolicy, key,
+		aerospike.PutOp(aerospike.NewBin(fields.Reversed.String(), true)),
+		aerospike.PutOp(aerospike.NewBin(fields.Busy.String(), true)),
+		aerospike.PutOp(aerospike.NewBin(fields.HoldUntil.String(), int(time.Now().Unix()+s.holdSeconds()))),
+	)
 	if putErr == nil {
 		return true, nil
 	}
@@ -182,24 +350,21 @@ func (s *Store) markReversed(key *aerospike.Key, hash *chainhash.Hash, attempt [
 		return false, errors.NewStorageError("error reading record after the reversed marker was filtered out", getErr)
 	}
 
-	if after.absent || after.hold || !after.rollingBack || !bytes.Equal(after.attempt, attempt) {
+	switch {
+	case after.absent, after.hold, !after.rollingBack, !bytes.Equal(after.attempt, attempt):
 		return false, nil
+	case after.busy && time.Now().Unix() < after.holdUntil+s.holdSeconds():
+		return false, errors.NewProcessingError("ending the rollback of %s: a holder is reversing spends or removing its records; the record is left rolling back for the sweep", hash.String())
 	}
 
 	return false, errors.NewStorageError("reversed marker of %s was filtered out but the record is still rolling back", hash.String())
 }
 
-// convertToHold rewrites the master record of a rolled back attempt as its hold.
+// convertToHold rewrites the master record of a rolled back attempt as its hold. The caller holds
+// the busy marker that markReversed set, and the rewrite drops it. The hold is written with a time
+// to live of utxostore_spendRollbackTimeout. A namespace that forbids a time to live gets the hold
+// without one, and the pruner sweep removes it.
 func (s *Store) convertToHold(key *aerospike.Key, hash *chainhash.Hash, state creatingState, attempt []byte) error {
-	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
-	writePolicy.RecordExistsAction = aerospike.REPLACE_ONLY
-	writePolicy.FilterExpression = aerospike.ExpAnd(
-		aerospike.ExpBinExists(fields.RollingBack.String()),
-		aerospike.ExpNot(aerospike.ExpBinExists(fields.Hold.String())),
-		s.notBusyOrStale(time.Now().Unix()),
-		attemptFilter(attempt),
-	)
-
 	bins := []*aerospike.Bin{
 		aerospike.NewBin(fields.TxID.String(), aerospike.NewBytesValue(hash[:])),
 		aerospike.NewBin(fields.Creating.String(), true),
@@ -216,7 +381,13 @@ func (s *Store) convertToHold(key *aerospike.Key, hash *chainhash.Hash, state cr
 		bins = append(bins, aerospike.NewBin(fields.UnminedSince.String(), state.unminedSince))
 	}
 
-	putErr := s.client.PutBins(writePolicy, key, bins...)
+	putErr := s.client.PutBins(s.holdWritePolicy(attempt, true), key, bins...)
+	if putErr != nil && putErr.Matches(types.FAIL_FORBIDDEN) {
+		s.logger.Warnf("[EndCreateFirstRollback] the namespace forbids a time to live, the hold of %s is left for the pruner sweep: %v", hash.String(), putErr)
+
+		putErr = s.client.PutBins(s.holdWritePolicy(attempt, false), key, bins...)
+	}
+
 	if putErr == nil {
 		return nil
 	}
@@ -236,14 +407,33 @@ func (s *Store) convertToHold(key *aerospike.Key, hash *chainhash.Hash, state cr
 		return errors.NewStorageError("error reading record after the hold conversion was filtered out", getErr)
 	}
 
-	switch {
-	case after.absent, after.hold, !after.rollingBack, !bytes.Equal(after.attempt, attempt):
+	if after.absent || after.hold || !after.rollingBack || !bytes.Equal(after.attempt, attempt) {
 		return nil
-	case after.busy && time.Now().Unix() < after.holdUntil+s.holdSeconds():
-		return errors.NewProcessingError("ending the rollback of %s: a holder is reversing spends; the record is left rolling back for the sweep", hash.String())
 	}
 
 	return errors.NewStorageError("hold conversion of %s was filtered out but the record is still rolling back", hash.String())
+}
+
+// holdWritePolicy is the policy of the write that turns a rolled back master into a hold: filtered
+// on the record rolling back under the token, reversed and not already a hold, and with the life of
+// the hold as its time to live when expire is set.
+func (s *Store) holdWritePolicy(attempt []byte, expire bool) *aerospike.WritePolicy {
+	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
+	writePolicy.RecordExistsAction = aerospike.REPLACE_ONLY
+
+	// Set on the policy itself: the helper applies no option when the default policies are in use.
+	if expire {
+		writePolicy.Expiration = uint32(s.holdSeconds()) // #nosec G115 -- a timeout in seconds
+	}
+
+	writePolicy.FilterExpression = aerospike.ExpAnd(
+		aerospike.ExpBinExists(fields.RollingBack.String()),
+		aerospike.ExpBinExists(fields.Reversed.String()),
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.Hold.String())),
+		attemptFilter(attempt),
+	)
+
+	return writePolicy
 }
 
 // notBusyOrStale selects a record whose busy bin is absent, or whose holder has crashed: every
@@ -261,11 +451,14 @@ func (s *Store) notBusyOrStale(now int64) *aerospike.Expression {
 
 // TakeRollbackHold reports whether the caller may reverse the spends of the inputs of the
 // transaction whose attempt carries the token. One UPDATE_ONLY write, filtered on the record
-// rolling back, carrying the token and not busy, or busy with a holder that crashed (holdUntil
-// passed by a further utxostore_spendRollbackTimeout), marks the record busy and renews holdUntil
-// to now plus utxostore_spendRollbackTimeout, so a live holder is never taken over. A filtered-out write or an absent record reports
-// false and writes nothing: the record is gone, a later attempt owns the txid, or another actor
-// is reversing under the hold.
+// rolling back, carrying the token, not yet reversed, not a hold and not busy, or busy with a
+// holder that crashed (holdUntil passed by a further utxostore_spendRollbackTimeout), marks the
+// record busy and renews holdUntil to now plus utxostore_spendRollbackTimeout, so a live holder is
+// never taken over. A filtered-out write or an absent record reports false and writes nothing: the
+// record is gone, a later attempt owns the txid, another actor is reversing under the hold, or the
+// reversal is already recorded as done. A reversed record and a hold are refused because the
+// transaction data may be gone by then: a reversal that failed after such a take could not be
+// repeated by anyone.
 func (s *Store) TakeRollbackHold(_ context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
 	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if err != nil {
@@ -276,6 +469,8 @@ func (s *Store) TakeRollbackHold(_ context.Context, hash *chainhash.Hash, attemp
 	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 	writePolicy.FilterExpression = aerospike.ExpAnd(
 		aerospike.ExpBinExists(fields.RollingBack.String()),
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.Reversed.String())),
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.Hold.String())),
 		s.notBusyOrStale(time.Now().Unix()),
 		attemptFilter(attempt),
 	)

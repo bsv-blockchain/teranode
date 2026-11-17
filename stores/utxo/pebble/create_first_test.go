@@ -37,6 +37,16 @@ func TestCreateFirstContractWithoutTentativeState(t *testing.T) {
 	require.False(t, took, "no record is rolling back, so no hold can be taken")
 	require.NoError(t, s.ReleaseRollbackHold(ctx, hash, nil))
 
+	lease, leased, err := s.TakeSpendLease(ctx, hash, nil)
+	require.NoError(t, err)
+	require.False(t, leased, "no record is creating, so no spend needs a lease")
+	require.Nil(t, lease)
+	require.NoError(t, s.ReleaseSpendLease(ctx, hash, nil, []byte{1}))
+
+	live, err := s.SpendLeasesLive(ctx, hash, nil)
+	require.NoError(t, err)
+	require.False(t, live, "the store never holds a lease")
+
 	cleared, err := s.ClearCreateFirstHold(ctx, hash, true)
 	require.NoError(t, err)
 	require.False(t, cleared, "the store never leaves a hold")

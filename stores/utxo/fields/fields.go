@@ -55,6 +55,9 @@ const (
 	HoldUntil FieldName = "holdUntil"
 	// Busy marks a hold whose holder is reversing the spends of its inputs
 	Busy FieldName = "busy"
+	// Spenders maps the lease of each actor that may still be spending the inputs of a creating record
+	// to the unix time in seconds by which its spend must end
+	Spenders FieldName = "spenders"
 	// Reversed marks a rolling back record whose spends have all been reversed, so the rollback needs
 	// no transaction data to finish
 	Reversed FieldName = "reversed"

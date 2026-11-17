@@ -508,6 +508,9 @@ type hookedDelBlobStore struct {
 
 	onDel func()
 	fired bool
+
+	// failAfterFirst, when set, is returned by every Del after the first, which still delegates.
+	failAfterFirst error
 }
 
 func (b *hookedDelBlobStore) Del(ctx context.Context, key []byte, ft fileformat.FileType, opts ...options.FileOption) error {
@@ -517,6 +520,8 @@ func (b *hookedDelBlobStore) Del(ctx context.Context, key []byte, ft fileformat.
 		if b.onDel != nil {
 			b.onDel()
 		}
+	} else if b.failAfterFirst != nil {
+		return b.failAfterFirst
 	}
 
 	return b.Store.Del(ctx, key, ft, opts...)
@@ -676,11 +681,12 @@ func TestEndCreateFirstRollback_HoldsTxidThroughTheCascade(t *testing.T) {
 	})
 }
 
-// TestEndCreateFirstRollback_FailedConversionLeavesARecordThatNeedsNoBlob pins that a rollback whose
-// hold conversion fails after the external blob was deleted can still be finished: the master carries
-// the reversed marker, so a recovery reads only the markers, which does not touch the missing blob,
-// and ends the rollback.
-func TestEndCreateFirstRollback_FailedConversionLeavesARecordThatNeedsNoBlob(t *testing.T) {
+// TestEndCreateFirstRollback_FailedCleanupLeavesARecordThatNeedsNoBlob pins that a rollback whose
+// cleanup fails after the external transaction blob was deleted can still be finished: the master
+// carries the reversed marker, so a recovery reads only the markers, which does not touch the
+// missing blob, and ends the rollback. The failed cleanup releases its busy marker, so the recovery
+// does not wait for it to age out.
+func TestEndCreateFirstRollback_FailedCleanupLeavesARecordThatNeedsNoBlob(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -703,13 +709,12 @@ func TestEndCreateFirstRollback_FailedConversionLeavesARecordThatNeedsNoBlob(t *
 	require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
 
 	healthy := store.GetExternalStore()
-	store.SetExternalStore(&hookedDelBlobStore{Store: healthy, onDel: func() {
-		setBusy(t, client, store, hash, time.Now().Unix()+60)
-	}})
+	store.SetExternalStore(&hookedDelBlobStore{Store: healthy, failAfterFirst: errors.NewStorageError("blob store fault")})
 
 	t.Cleanup(func() { store.SetExternalStore(healthy) })
 
-	require.ErrorContains(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "holder is reversing spends", "the conversion is refused by the busy holder")
+	require.ErrorContains(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "blob store fault", "the cleanup fails after the transaction blob is gone")
+	require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Busy), fields.Busy.String(), "the failed cleanup released its busy marker")
 
 	_, err = store.Get(ctx, hash, fields.Tx)
 	require.Error(t, err, "precondition: the blob is gone, so the transaction cannot be read")
@@ -722,7 +727,8 @@ func TestEndCreateFirstRollback_FailedConversionLeavesARecordThatNeedsNoBlob(t *
 	require.False(t, got.Hold)
 	require.Equal(t, md.Attempt, got.Attempt)
 
-	require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
+	store.SetExternalStore(healthy)
+
 	require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "a recovery finishes the rollback without the blob")
 	requireHeld(t, ctx, store, hash)
 
