@@ -2692,12 +2692,16 @@ func (s *Server) processBlockchainNotification(ctx context.Context, notification
 }
 
 // notificationProcessTimeout bounds the work done for one queued
-// announcement notification (Block, BlockSubtreesSet, Subtree): the FSM skip
-// check, the blockchain reads, the gossip publish and the node_status refresh
-// it triggers. A var so tests can shorten it.
+// announcement notification (Block, BlockSubtreesSet, Subtree). It covers the
+// calls that take the notification's context: the FSM skip check, the
+// blockchain reads, the gossip publish and most of the node_status refresh.
+// The node_status sync-peer lookup (getPeer) still uses the service context,
+// so a hung registry call there is not bounded by it. A var so tests can
+// shorten it.
 var notificationProcessTimeout = 30 * time.Second
 
-const (
+// The queue sizes are vars so tests can shrink them.
+var (
 	// peerFailureQueueSize holds PeerFailure notifications waiting for the
 	// peer-failure worker. Each one rotates the sync peer, so a backlog this
 	// deep already means rotation is behind; a drop past it loses nothing a
@@ -2722,8 +2726,9 @@ const (
 // GetBlockHeader or Publish held the PeerFailure behind it, and once the
 // subscription channel filled, the blockchain client dropped it outright: the
 // node kept syncing from the peer that had just failed it. Everything else
-// goes, in order, to the announcement worker, so a Block is still processed
-// before the BlockSubtreesSet for the same hash.
+// goes to the announcement worker, which keeps the order this listener
+// receives them in. The blockchain client sends each notification from its
+// own goroutine, so that order is not guaranteed.
 func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainSubscription <-chan *blockchain.Notification) {
 	ctxLogger := s.logger.WithTraceContext(ctx)
 
