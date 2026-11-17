@@ -286,7 +286,10 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 		return bv, logger
 	}
 
-	const otherObjectWarning = "[ValidateBlock][%s] validated-blocks cache held another object"
+	const (
+		otherObjectWarning  = "[ValidateBlock][%s] validated-blocks cache held another object"
+		alreadyTakenWarning = "[ValidateBlock][%s] block already taken from the validated-blocks cache"
+	)
 
 	t.Run("cached and untaken: released here", func(t *testing.T) {
 		bv, logger := newBV(t)
@@ -300,7 +303,7 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 	})
 
 	t.Run("cached and already taken: left alone", func(t *testing.T) {
-		bv, _ := newBV(t)
+		bv, logger := newBV(t)
 		block := blockWithLoadedSubtree(t)
 		bv.lastValidatedBlocks.Set(*block.Hash(), block)
 
@@ -309,14 +312,18 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 
 		require.False(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
 		require.True(t, block.SubtreesLoaded())
+		require.True(t, logger.warnedAbout(alreadyTakenWarning, block))
+		require.False(t, logger.warned(otherObjectWarning))
 	})
 
 	t.Run("never cached: released here", func(t *testing.T) {
-		bv, _ := newBV(t)
+		bv, logger := newBV(t)
 		block := blockWithLoadedSubtree(t)
 
 		require.True(t, bv.reclaimBlockAfterFailedSubtreesSet(block, false))
 		require.False(t, block.SubtreesLoaded())
+		require.False(t, logger.warned(otherObjectWarning))
+		require.False(t, logger.warned(alreadyTakenWarning))
 	})
 
 	// The cache holds another object for the same hash. Set overwrites without
@@ -335,7 +342,7 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 		require.True(t, block.SubtreesLoaded(), "a block the setMined worker may hold must not be released")
 		require.False(t, other.SubtreesLoaded())
 		require.Zero(t, bv.lastValidatedBlocks.Len())
-		require.True(t, logger.warned(otherObjectWarning), "leaving the block unreleased must be logged")
+		require.True(t, logger.warnedAbout(otherObjectWarning, block), "leaving the block unreleased must be logged with its hash")
 	})
 
 	t.Run("worker took ours, then a revalidation cached another: ours left to the worker", func(t *testing.T) {
@@ -354,7 +361,7 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 		require.False(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
 		require.True(t, workerBlock.SubtreesLoaded(), "reclaim released the block the setMined worker is reading")
 		require.False(t, revalidated.SubtreesLoaded())
-		require.True(t, logger.warned(otherObjectWarning))
+		require.True(t, logger.warnedAbout(otherObjectWarning, block))
 	})
 }
 
@@ -383,32 +390,49 @@ func TestDetachedBlockCopy(t *testing.T) {
 	require.NotEqual(t, block.Subtrees[0], copied.Subtrees[0])
 }
 
-// warnRecordingLogger records the format string of every Warnf call, so a test can
-// check that a path which gives up a block without releasing it says so.
+// warnRecordingLogger records every Warnf call, so a test can check that a path
+// which gives up a block without releasing it says so, and names the block.
 type warnRecordingLogger struct {
 	ulogger.TestLogger
 	mu    sync.Mutex
-	warns []string
+	warns []recordedWarning
 }
 
-func (l *warnRecordingLogger) Warnf(format string, _ ...interface{}) {
+type recordedWarning struct {
+	format string
+	args   []interface{}
+}
+
+func (l *warnRecordingLogger) Warnf(format string, args ...interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.warns = append(l.warns, format)
+	l.warns = append(l.warns, recordedWarning{format: format, args: args})
 }
 
 func (l *warnRecordingLogger) warned(prefix string) bool {
+	return l.find(prefix) != nil
+}
+
+// warnedAbout reports whether a warning with this format prefix was logged with the
+// block's hash as its first argument.
+func (l *warnRecordingLogger) warnedAbout(prefix string, block *model.Block) bool {
+	w := l.find(prefix)
+
+	return w != nil && len(w.args) > 0 && w.args[0] == block.Hash().String()
+}
+
+func (l *warnRecordingLogger) find(prefix string) *recordedWarning {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	for _, format := range l.warns {
-		if strings.HasPrefix(format, prefix) {
-			return true
+	for i := range l.warns {
+		if strings.HasPrefix(l.warns[i].format, prefix) {
+			return &l.warns[i]
 		}
 	}
 
-	return false
+	return nil
 }
 
 func newTestLastValidatedBlocks() *expiringmap.ExpiringMap[chainhash.Hash, *model.Block] {

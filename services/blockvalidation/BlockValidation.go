@@ -3135,9 +3135,13 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 // (blockvalidation_optimistic_mining_peer_blocks, off by default) caches outside
 // runOncePerBlock, so the overwrite needs that setting and an operator invalidate
 // and reconsider racing a failed SetBlockSubtreesSet. A lost reply is what lets the
-// worker take block first; the leak needs only the failure. A leak is the safe side
-// of that trade against tagging another block's hashes, and it is logged at Warn so
-// stray subtree-nodes-* files can be traced back to it.
+// worker take block first; the leak needs only the failure. The overwrite can also
+// land before the other object is itself taken or evicted, and this call then finds
+// the entry gone, as if the worker had taken block. That case leaks the same way,
+// and the earlier paragraph's "has it and releases it" does not hold for it. A leak
+// is the safe side of that trade against tagging another block's hashes. Both exits
+// that leave block unreleased log at Warn with the block hash and say a leak is
+// possible, so stray subtree-nodes-* files can be traced back to one of them.
 func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block, cached bool) bool {
 	if !cached {
 		releaseBlockNodes(block)
@@ -3146,7 +3150,7 @@ func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block,
 
 	taken, removed := u.lastValidatedBlocks.GetAndDelete(*block.Hash())
 	if !removed {
-		u.logger.Warnf("[ValidateBlock][%s] block already taken from the validated-blocks cache after a failed subtrees_set, leaving its release to the taker", block.Hash().String())
+		u.logger.Warnf("[ValidateBlock][%s] block already taken from the validated-blocks cache after a failed subtrees_set, leaving its release to the taker; if another validation overwrote it first, its subtrees are never released", block.Hash().String())
 		return false
 	}
 
