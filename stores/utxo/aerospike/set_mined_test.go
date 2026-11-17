@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/require"
 )
 
@@ -97,6 +98,74 @@ func TestExtraRecordItemsReportsReadFailures(t *testing.T) {
 	require.Len(t, items, 1)
 	require.Equal(t, healthy, items[0].txID)
 	require.Equal(t, 3, items[0].childCount)
+}
+
+// TestApplyLockClearWorkClearsHealthyTxWhenASiblingReadFails checks the
+// FILTERED_OUT follow-up when one transaction's count read fails inside an
+// otherwise healthy batch: the failure reaches the caller with its txid, and
+// the other transaction's extra records still lose `creating`.
+func TestApplyLockClearWorkClearsHealthyTxWhenASiblingReadFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	ctx := context.Background()
+	store, client := setupStoreForLockTest(t)
+	store.utxoBatchSize = 4
+
+	healthy := txWithOutputs(t, 10)
+	failing := txWithOutputs(t, 9)
+
+	for _, tx := range []*bt.Tx{healthy, failing} {
+		_, err := store.Create(ctx, tx, 100)
+		require.NoError(t, err)
+	}
+
+	healthyHash := healthy.TxIDChainHash()
+
+	extraKey := func(idx uint32) *aerospike.Key {
+		key, err := aerospike.NewKey(store.namespace, store.setName, uaerospike.CalculateKeySourceInternal(healthyHash, idx))
+		require.NoError(t, err)
+
+		return key
+	}
+
+	for idx := uint32(1); idx <= 2; idx++ {
+		require.NoError(t, client.PutBins(nil, extraKey(idx), aerospike.NewBin(fields.Creating.String(), true)))
+	}
+
+	failingKey, keyErr := aerospike.NewKey(store.namespace, store.setName, failing.TxIDChainHash()[:])
+	require.NoError(t, keyErr)
+
+	// Fail only the count read of the second transaction, after a real batch.
+	store.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		if err := client.BatchOperate(policy, records); err != nil {
+			return err
+		}
+
+		for _, r := range records {
+			if _, isRead := r.(*aerospike.BatchRead); isRead && string(r.BatchRec().Key.Digest()) == string(failingKey.Digest()) {
+				r.BatchRec().Record = nil
+				r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+			}
+		}
+
+		return nil
+	}
+
+	t.Cleanup(func() { store.batchOperateFn = nil })
+
+	err := store.applyLockClearWork(ctx, lockClearWork{fullUnlock: []chainhash.Hash{*healthyHash, *failing.TxIDChainHash()}})
+	require.ErrorContains(t, err, "readExtraRecordCounts")
+	require.ErrorContains(t, err, failing.TxIDChainHash().String())
+
+	for idx := uint32(1); idx <= 2; idx++ {
+		rec, getErr := client.Get(nil, extraKey(idx))
+		require.NoError(t, getErr)
+
+		_, hasCreating := rec.Bins[fields.Creating.String()]
+		require.Falsef(t, hasCreating, "extra record %d of the healthy transaction must lose creating", idx)
+	}
 }
 
 // TestApplyLockClearWorkReportsEveryFailure checks that a failed read of the
