@@ -317,6 +317,13 @@ func streamLoad(ctx context.Context, cfg Config, blockID uint32) (created []chai
 		}
 
 		if err := loadWrapper(ctx, cfg.UTXOStore, w, blockID); err != nil {
+			// A create whose outcome is unknown may have stored the transaction,
+			// as when the store wrote it but could not clear its creating flag.
+			// Roll it back too, or a later import stops on it with ErrTxExists.
+			if utxo.IsCreateOutcomeUnknown(err) {
+				created = append(created, w.TxID)
+			}
+
 			return created, [32]byte{}, err
 		}
 

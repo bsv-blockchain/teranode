@@ -799,4 +799,21 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, hasCreatingBin(t, parent, 2))
 	})
+
+	t.Run("repeat with no mined info whose clear fails still reports exists", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		failClears(2)
+
+		_, err := store.Create(ctx, parent, blockHeight)
+		require.NoError(t, err)
+
+		// The repeat path keeps the same gate as the first write: only a
+		// mined create turns a failed clear into an error.
+		_, err = store.Create(ctx, parent, blockHeight)
+		require.ErrorIs(t, err, errors.ErrTxExists)
+		require.True(t, hasCreatingBin(t, parent, 2))
+	})
 }
