@@ -296,11 +296,8 @@ SELECT (SELECT count(*) FROM restored),
 // deadlock until PostgreSQL detects it, can run a short deadline out. A deadline that cuts the wait
 // returns a storage error and rolls the attempt back whole: no UTXO of the call is restored and
 // every undo record it would have consumed is still there, so a later Unspend of the same spends
-// can restore them. A deadline that runs out during the commit leaves the outcome unknown. A later
-// Unspend of the same spends then restores the coins, finds them already live or finds them taken
-// by another spender, and returns no error in all three, as long as the undo records are within
-// journal retention. The validator's shed unwind is the caller with a short deadline
-// (validator_shedUnwindTimeout).
+// can restore them. A deadline that runs out during the commit leaves the outcome unknown. The
+// validator's shed unwind is the caller with a short deadline (validator_shedUnwindTimeout).
 func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	req, err := newUnspendRequest(spends, len(flagAsLocked) > 0 && flagAsLocked[0])
 	if err != nil || len(req.ukeys) == 0 {
