@@ -121,9 +121,10 @@ import (
 // pays that on each row it reads the lock from.
 //
 // The containment arm locks from the dropped floor ($5), wider than the lookup floor ($8) the
-// lock bit is read from, because the conflicting bit is read from the dropped floor up, and
-// SetConflicting writes those rows too. Locking only from $8 would let a SetConflicting on a row
-// between the floors run beside the restore, the same race the lock bit had.
+// lock bit is read from, because the conflicting bit is read from the dropped floor up and
+// SetConflicting writes every containment row of the transaction, whatever its height. A row
+// between the floors read without the lock would show its bit from before a SetConflicting the
+// restore had waited out on another row, the same race the lock bit had.
 //
 // The restored UTXO's pair is the copy's own, verbatim, whenever it is non-zero: a non-zero
 // pair was final when it was copied and stays final. A copy at (0,0) is the REPAIR's case. The
@@ -292,10 +293,12 @@ SELECT (SELECT count(*) FROM restored),
 //
 // Nothing in the store bounds how long the restore waits for the rows it share-locks; the
 // caller's context does. A writer holding them, a mine of a whole batch until it commits or a
-// deadlock until PostgreSQL detects it, can run a short deadline out. The restore then returns a
-// storage error and rolls back whole: no UTXO of the call is restored and every undo record it
-// would have consumed is still there, so a later Unspend of the same spends can restore them. The
-// validator's shed unwind is the caller with a short deadline (validator_shedUnwindTimeout).
+// deadlock until PostgreSQL detects it, can run a short deadline out. A deadline that cuts the wait
+// returns a storage error and rolls the attempt back whole: no UTXO of the call is restored and
+// every undo record it would have consumed is still there, so a later Unspend of the same spends
+// can restore them. A deadline that runs out during the commit leaves the outcome unknown; a later
+// Unspend then either restores the coins or finds them already live. The validator's shed unwind
+// is the caller with a short deadline (validator_shedUnwindTimeout).
 func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	req, err := newUnspendRequest(spends, len(flagAsLocked) > 0 && flagAsLocked[0])
 	if err != nil || len(req.ukeys) == 0 {
@@ -308,8 +311,11 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 	// shared transaction (unMine deletes containment rows before it updates the identity rows),
 	// and a Delete of the restored coin's transaction (it removes the identity rows before the
 	// undo records).
-	// The attempt is one transaction that rolls back whole, so it runs again from the start, as
-	// SetLocked, the mine and Delete do. Each crossing costs at least PostgreSQL's
+	// SetConflicting, MarkTransactionsOnLongestChain and the stamp also write those rows, and can
+	// cross the restore when they name several of its transactions. The attempt is one transaction
+	// that rolls back whole, so it runs again from the start, as SetLocked, the mine, the un-mine,
+	// SetConflicting and Delete do; MarkTransactionsOnLongestChain and the stamp do not retry and
+	// hand the deadlock to their caller. Each crossing costs at least PostgreSQL's
 	// deadlock_timeout, a second by default, before the retry, and the shared fence lock is held
 	// for all of it.
 	var res unspendResult

@@ -354,6 +354,99 @@ func TestUnspendIgnoresALockOnAContainmentRowBelowTheLookupFloor(t *testing.T) {
 	require.NoError(t, err, "a lock below the lookup floor must not be copied onto the restored UTXO")
 }
 
+// setConflictingTo is SetConflicting's statements, without the note of children it writes first.
+func setConflictingTo(s *Store, tx *bt.Tx, value bool) lockChange {
+	return func(ctx context.Context, dbTx pgx.Tx) error {
+		named := []chainhash.Hash{*tx.TxIDChainHash()}
+
+		inpoints, err := s.readConflictingInputs(ctx, named)
+		if err != nil {
+			return err
+		}
+
+		_, _, err = s.runConflictingPlan(ctx, dbTx, s.planConflicting(named, inpoints), value)
+
+		return err
+	}
+}
+
+// TestUnspendReadsTheConflictingMarkBelowTheLookupFloor: the conflicting bit is read from
+// containment rows down to the dropped floor, not only from the lookup floor up as the lock bit
+// is. The parent's only row is at height 100. It was marked while still above the lookup floor,
+// after the loser had spent its coin, so the loser's journal row carries no mark. Once the floor
+// passes 100, a restore that read only from the lookup floor up would find no row, keep the
+// journal's bit and hand back a coin that is spendable while its transaction is a loser.
+func TestUnspendReadsTheConflictingMarkBelowTheLookupFloor(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	require.NoError(t, s.SetBlockHeight(100))
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100)
+	require.NoError(t, err)
+
+	spends, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 1_000, 0), 100)
+	require.NoError(t, err)
+	require.Len(t, spends, 1)
+
+	_, err = s.SetMinedMulti(ctx, []*chainhash.Hash{parent.TxIDChainHash()},
+		utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true})
+	require.NoError(t, err)
+
+	_, _, err = s.SetConflicting(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true)
+	require.NoError(t, err)
+
+	stampThrough(t, s, ctx, 0, map[uint32]uint32{100: 7})
+	require.False(t, identExists(t, s, ctx, parent), "fixture: the stamp deleted the identity row")
+	require.Equal(t, 1, minedRows(t, s, ctx, parent), "fixture: the containment row is the only record")
+
+	require.NoError(t, s.SetBlockHeight(864))
+	require.Equal(t, int32(TxMinedPartitionBlocks), s.lookupFloor(), "fixture: the lookup floor is above the row at 100")
+
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+	require.NotZero(t, utxoFlagsOf(t, s, ctx, parent, 0)&FlagConflicting,
+		"the restored coin must carry the mark on a containment row below the lookup floor")
+}
+
+// TestUnspendRacingAConflictingClearBelowTheLookupFloorWaitsForIt: the restore reads the
+// conflicting bit from containment rows down to the dropped floor, below the lookup floor the lock
+// bit stops at, so its share lock reaches that far too. Here the parent has its identity row and a
+// containment row at height 100, under a lookup floor of 288, both marked conflicting. A
+// SetConflicting clearing the mark has updated both rows and not committed. The restore waits on
+// the identity row either way, but a containment row it read without a lock would still show the
+// mark from before the wait, and the coin would come back conflicting after its transaction was
+// cleared.
+func TestUnspendRacingAConflictingClearBelowTheLookupFloorWaitsForIt(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100)
+	require.NoError(t, err)
+
+	_, err = s.SetMinedMulti(ctx, []*chainhash.Hash{parent.TxIDChainHash()},
+		utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true})
+	require.NoError(t, err)
+
+	require.NoError(t, s.SetBlockHeight(864))
+	require.Equal(t, int32(TxMinedPartitionBlocks), s.lookupFloor(), "fixture: the lookup floor is above the row at 100")
+	require.True(t, identExists(t, s, ctx, parent), "fixture: the identity row is still there")
+	require.Equal(t, 1, minedRows(t, s, ctx, parent), "fixture: the containment row at 100 is still there")
+
+	_, _, err = s.SetConflicting(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true)
+	require.NoError(t, err)
+
+	spends, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 1_000, 0), 865, utxo.WithIgnoreConflicting(true))
+	require.NoError(t, err)
+	require.Len(t, spends, 1)
+
+	changeWhileRestoreRuns(t, s, ctx, setConflictingTo(s, parent, false), spends)
+
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+	require.Zero(t, utxoFlagsOf(t, s, ctx, parent, 0)&FlagConflicting,
+		"the restored coin must not keep a conflicting mark its transaction lost while the restore waited")
+}
+
 // mempoolParentSpent is the fixture for the restore-against-lock-change race on a transaction
 // whose lock lives on its identity row: a parent created locked or not, its output 0 spent
 // through IgnoreLocked by an unmined loser, as block validation spends a locked parent. It
