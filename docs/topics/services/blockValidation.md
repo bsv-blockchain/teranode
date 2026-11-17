@@ -135,8 +135,8 @@ The optimistic path is implemented in `ValidateBlockWithOptions()` (services/blo
 4. **Background Validation**: Spawns goroutine with `optimisticMiningWg.Add(1)`
 5. **Decoupled Context**: Uses `tracing.DecoupleTracingSpan()` to prevent context cancellation from blocking background work
 6. **Rollback on Failure**: an invalid verdict invalidates the block (`markBlockAsInvalid`, or
-   `InvalidateBlock` for a corrupt body); any other failure re-queues it through
-   `reValidateOptimisticallyAddedBlock` and leaves it on the chain
+   `InvalidateBlock` directly for a corrupt body or an old-block-ID double spend); a transient
+   failure re-queues it for revalidation and leaves it on the chain
 
 **Configuration:**
 
