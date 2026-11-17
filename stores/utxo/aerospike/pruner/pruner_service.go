@@ -202,6 +202,10 @@ type Service struct {
 	// readMastersFn overrides readMasters; tests only.
 	readMastersFn func(keys []*aerospike.Key) ([]masterRead, error)
 
+	// drainFlushTimeout bounds the start of each batch a partition worker's
+	// drain sends; see drainCarryDetached.
+	drainFlushTimeout time.Duration
+
 	// Internally reused variables
 	queryPolicy *aerospike.QueryPolicy
 	writePolicy *aerospike.WritePolicy
@@ -434,6 +438,7 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		connectionPoolWarningThreshold: settings.Pruner.ConnectionPoolWarningThreshold,
 		utxoSetTTL:                     settings.Pruner.UTXOSetTTL,
 		removalCommitLevel:             removalCommitLevel(settings.Pruner.RelaxRemovalCommitLevel),
+		drainFlushTimeout:              drainFlushTimeout(settings.Aerospike.OverloadRetryMaxElapsed),
 		fieldTxID:                      fields.TxID.String(),
 		fieldUtxos:                     fields.Utxos.String(),
 		fieldInputs:                    fields.Inputs.String(),
@@ -715,9 +720,10 @@ func (s *Service) partitionWorker(
 
 	// Each chunk's deletes ride the next chunk's batch; whatever is left is
 	// sent when the worker stops, on every path. A worker stopping on an error
-	// or a cancellation still drains: the carried children are cleared and
-	// their markers have landed, so leaving them present behind those markers
-	// would refuse their own re-spend.
+	// or a cancellation still tries to drain: the carried children are cleared
+	// and their markers have landed, so leaving them present behind those
+	// markers would refuse their own re-spend. A drain that cannot send what is
+	// left logs it; see drainCarryDetached.
 	carry := &deleteCarry{blockHeight: blockHeight}
 
 	defer func() {
@@ -2537,10 +2543,16 @@ type deleteCarry struct {
 }
 
 func (c *deleteCarry) empty() bool {
+	return c.pending() == 0
+}
+
+// pending counts the deletes the carry still owes: cleared children and
+// pagination records.
+func (c *deleteCarry) pending() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	return len(c.deletions) == 0 && len(c.pages) == 0
+	return len(c.deletions) + len(c.pages)
 }
 
 // take empties the carry and returns what it held.
@@ -2583,20 +2595,67 @@ func (s *Service) drainCarry(ctx context.Context, carry *deleteCarry) (deleted, 
 	return deleted, heldBack, nil
 }
 
-// drainCarryDetached drains under a context that ignores ctx's cancellation,
-// bounded by drainTimeout. A partition worker drains this way whenever it
-// stops: the carried children are cleared, their markers have landed, and a
-// child left present behind its own markers would have its re-spend refused
-// as a pruned replay.
+// drainCarryDetached drains as drainCarry does, under contexts that ignore
+// ctx's cancellation. A partition worker drains this way whenever it stops:
+// the carried children are cleared, their markers have landed, and a child
+// left present behind its own markers would have its re-spend refused as a
+// pruned replay.
+//
+// Each batch of the drain gets its own s.drainFlushTimeout, which is the
+// client's overload retry budget plus a margin. The deadline only stops a
+// batch from starting: a BatchOperate does not watch ctx and may retry an
+// overloaded server for that whole budget, and the blob deletions after it
+// run under their own blobDeleteTimeout. One deadline for the whole drain ran
+// out during the delete batch and its blobs, so the batch for the deleted
+// masters' pages was never sent and the worker failed a cycle every chunk of
+// which had succeeded. So a drain takes up to about two batches' retry
+// budgets plus their blob deletions, minutes rather than seconds when the
+// server is overloaded.
+//
+// A drain that stops on an error leaves the rest of the carry unsent. Those
+// children stay present behind their markers until a later cycle finds them
+// again, and a child whose deleteAtHeight was cleared is not found again. That
+// is logged here at Error with the count, because the partition worker
+// returns the drain's error only when it has none of its own.
 func (s *Service) drainCarryDetached(ctx context.Context, carry *deleteCarry) (deleted, heldBack int, err error) {
-	drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
-	defer cancel()
+	detached := context.WithoutCancel(ctx)
 
-	return s.drainCarry(drainCtx, carry)
+	budget := s.drainFlushTimeout
+	if budget <= 0 {
+		budget = drainFlushTimeout(0)
+	}
+
+	for !carry.empty() {
+		flushCtx, cancel := context.WithTimeout(detached, budget)
+		d, h, flushErr := s.flushChunk(flushCtx, carry, nil, nil, nil)
+
+		cancel()
+
+		deleted += d
+		heldBack += h
+
+		if flushErr != nil {
+			if left := carry.pending(); left > 0 {
+				s.logger.Errorf("Pruner drain stopped with %d carried deletes unsent; their children stay present behind their replay markers until a later cycle finds them: %v", left, flushErr)
+			}
+
+			return deleted, heldBack, flushErr
+		}
+	}
+
+	return deleted, heldBack, nil
 }
 
-// drainTimeout bounds the drain of a partition worker.
-const drainTimeout = 30 * time.Second
+// drainFlushMargin is added to the client's overload retry budget to bound
+// the start of each drain batch; see drainFlushTimeout.
+const drainFlushMargin = 30 * time.Second
+
+// drainFlushTimeout is the deadline for starting each batch of a partition
+// worker's drain: the client's overload retry budget, during which the batch
+// before it may still be retrying, plus drainFlushMargin.
+func drainFlushTimeout(overloadRetryMaxElapsed time.Duration) time.Duration {
+	return max(overloadRetryMaxElapsed, 0) + drainFlushMargin
+}
 
 // blobDeleteTimeout bounds the external blob deletions of one batch's
 // confirmed deletes. They run detached from the batch's context; see
@@ -2881,7 +2940,7 @@ func (s *Service) settleCarriedDeletes(ctx context.Context, next *deleteCarry, p
 	//
 	// For the same reason they run under their own budget, detached from ctx.
 	// The batch call does not watch ctx and can answer after it has expired
-	// (the drain's drainTimeout, or a cancelled cycle), and a ctx that is done
+	// (a drain batch's drainFlushTimeout, or a cancelled cycle), and a ctx that is done
 	// by then would skip every blob of a master already gone.
 	var blobErr error
 	if len(remaining) > 0 {

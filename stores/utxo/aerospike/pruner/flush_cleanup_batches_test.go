@@ -1640,3 +1640,62 @@ func TestWithdrawMarkers_StopsAfterTheLastAttempt(t *testing.T) {
 	require.True(t, hasMarker(t, client, parentKey, &child), "a withdrawal that never lands leaves the marker")
 	require.Equal(t, float64(1), failures(), "the parent left with its marker is counted")
 }
+
+// TestDrainCarryDetached_EachBatchGetsItsOwnBudget: a worker's drain sends the
+// carried master deletes, then the pages of the masters they removed. The
+// delete batch may spend the client's whole overload retry budget, so the
+// pages batch must still be allowed to start after it. With one deadline for
+// the whole drain, the pages were never sent and the worker failed a cycle
+// whose every chunk had succeeded.
+func TestDrainCarryDetached_EachBatchGetsItsOwnBudget(t *testing.T) {
+	s := newTestService(t)
+	s.settings.Pruner.SkipDeletions = false
+	s.drainFlushTimeout = 100 * time.Millisecond
+
+	child := chainhash.HashH([]byte("drained child"))
+
+	masterKey, err := aerospike.NewKey(s.namespace, s.set, uaerospike.CalculateKeySourceInternal(&child, 0))
+	require.NoError(t, err)
+
+	pageKey, err := aerospike.NewKey(s.namespace, s.set, uaerospike.CalculateKeySourceInternal(&child, 1))
+	require.NoError(t, err)
+
+	var batches [][]string
+
+	s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		sent := make([]string, 0, len(records))
+
+		for _, rec := range records {
+			sent = append(sent, string(rec.BatchRec().Key.Digest()))
+			rec.BatchRec().ResultCode = types.OK
+		}
+
+		batches = append(batches, sent)
+
+		if len(batches) == 1 {
+			// The delete batch outlasts the per-batch budget, as an overload
+			// retry can.
+			time.Sleep(3 * s.drainFlushTimeout)
+		}
+
+		return nil
+	}
+
+	carry := &deleteCarry{
+		blockHeight: testPruneHeight,
+		deletions:   []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{masterKey, pageKey}}},
+		updates:     []map[string]*parentUpdateInfo{{}},
+	}
+
+	deleted, heldBack, drainErr := s.drainCarryDetached(context.Background(), carry)
+	require.NoError(t, drainErr, "the pages batch starts on a budget of its own")
+	require.Equal(t, 1, deleted)
+	require.Zero(t, heldBack)
+	require.Equal(t, [][]string{{string(masterKey.Digest())}, {string(pageKey.Digest())}}, batches, "the master goes first, then its page")
+	require.True(t, carry.empty())
+}
+
+func TestDrainFlushTimeout(t *testing.T) {
+	require.Equal(t, 2*time.Minute+drainFlushMargin, drainFlushTimeout(2*time.Minute), "the default overload budget plus the margin")
+	require.Equal(t, drainFlushMargin, drainFlushTimeout(0), "no overload retry leaves the margin")
+}
