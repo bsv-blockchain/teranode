@@ -2715,7 +2715,8 @@ var (
 	// drops at once. A backlog of more than 1,000 that would have drained
 	// within 30 s is therefore lost here, where the old serial listener
 	// delivered it. Each drop is counted in
-	// teranode_p2p_blockchain_notifications_dropped_total.
+	// teranode_p2p_blockchain_notifications_dropped_total with
+	// reason="queue_full".
 	announcementQueueSize = 1_000
 )
 
@@ -2763,7 +2764,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainS
 			select {
 			case queue <- notification:
 			default:
-				blockchainNotificationDropped(queueName, notification.Type.String())
+				blockchainNotificationDropped(queueName, notification.Type.String(), dropReasonQueueFull)
 				ctxLogger.Warnf("[blockchainSubscriptionListener] dropping notification (Type: %s, Hash: %x): %s queue full", notification.Type, notification.Hash, queueName)
 			}
 		}
@@ -2796,7 +2797,8 @@ func (s *Server) peerFailureWorker(ctx context.Context, queue <-chan *blockchain
 
 // announcementWorker handles every notification except catchup PeerFailures,
 // in arrival order, each under its own notificationProcessTimeout. An
-// announcement that runs out of time is logged at Error and not retried.
+// announcement that runs out of time is logged at Error, counted with
+// reason="timeout", and not retried.
 func (s *Server) announcementWorker(ctx context.Context, queue <-chan *blockchain.Notification) {
 	for {
 		select {
@@ -2819,6 +2821,10 @@ func (s *Server) processAnnouncementNotification(ctx context.Context, notificati
 	}
 
 	if err := s.processBlockchainNotification(notificationCtx, notification); err != nil {
+		if notificationCtx.Err() == context.DeadlineExceeded {
+			blockchainNotificationDropped("announcement", notification.Type.String(), dropReasonTimeout)
+		}
+
 		s.logger.Errorf("[announcementWorker] Error processing notification (Type: %s, Hash: %x): %v", notification.Type, notification.Hash, err)
 	}
 }

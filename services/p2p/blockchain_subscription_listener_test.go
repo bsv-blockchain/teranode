@@ -50,10 +50,18 @@ func startListenerTestServerWithP2PClient(t *testing.T, mockBlockchain *blockcha
 
 // droppedNotifications reads the drop counter by label name, so a test fails if
 // the label names change.
-func droppedNotifications(queue string, notificationType model.NotificationType) prometheus.Counter {
+func droppedNotifications(queue string, notificationType model.NotificationType, reason string) prometheus.Counter {
 	initPrometheusMetrics()
 
-	return prometheusP2PBlockchainNotificationsDropped.With(prometheus.Labels{"queue": queue, "type": notificationType.String()})
+	return prometheusP2PBlockchainNotificationsDropped.With(prometheus.Labels{"queue": queue, "type": notificationType.String(), "reason": reason})
+}
+
+// The tests shrink these values for themselves, so pin the shipped defaults
+// here: a short timeout or a zero queue would break the fix in production.
+func TestBlockchainSubscriptionListener_Defaults(t *testing.T) {
+	require.Equal(t, 30*time.Second, notificationProcessTimeout)
+	require.Equal(t, 1_000, announcementQueueSize)
+	require.Equal(t, 64, peerFailureQueueSize)
 }
 
 // A Block notification sent through the listener at the default
@@ -246,6 +254,9 @@ func TestBlockchainSubscriptionListener_StuckAnnouncementTimesOut(t *testing.T) 
 	notificationProcessTimeout = 100 * time.Millisecond
 	t.Cleanup(func() { notificationProcessTimeout = previous })
 
+	timedOut := droppedNotifications("announcement", model.NotificationType_Block, dropReasonTimeout)
+	timedOutBefore := testutil.ToFloat64(timedOut)
+
 	type headerCall struct {
 		hash                 chainhash.Hash
 		ctxErrOnEntry        error
@@ -321,6 +332,11 @@ func TestBlockchainSubscriptionListener_StuckAnnouncementTimesOut(t *testing.T) 
 		"the second announcement started before the first one's notificationProcessTimeout expired")
 	require.True(t, got[1].previousCallReturned,
 		"the second announcement started while the first GetBlockHeader was still running")
+
+	// The worker counts the first announcement's timeout before it takes the
+	// second, and the second is still waiting on its own deadline.
+	require.Equal(t, 1.0, testutil.ToFloat64(timedOut)-timedOutBefore,
+		"the announcement abandoned at notificationProcessTimeout must be counted as a timeout")
 }
 
 // When the announcement queue is full the listener must drop the new
@@ -332,7 +348,7 @@ func TestBlockchainSubscriptionListener_FullAnnouncementQueueDropsInsteadOfBlock
 	announcementQueueSize = 2
 	t.Cleanup(func() { announcementQueueSize = previous })
 
-	dropped := droppedNotifications("announcement", model.NotificationType_Block)
+	dropped := droppedNotifications("announcement", model.NotificationType_Block, dropReasonQueueFull)
 	droppedBefore := testutil.ToFloat64(dropped)
 
 	entered := make(chan struct{}, 1)
@@ -383,8 +399,8 @@ func TestBlockchainSubscriptionListener_FullPeerFailureQueueCountsDrop(t *testin
 	peerFailureQueueSize = 1
 	t.Cleanup(func() { peerFailureQueueSize = previous })
 
-	droppedPeerFailure := droppedNotifications("peer-failure", model.NotificationType_PeerFailure)
-	droppedAsAnnouncement := droppedNotifications("announcement", model.NotificationType_PeerFailure)
+	droppedPeerFailure := droppedNotifications("peer-failure", model.NotificationType_PeerFailure, dropReasonQueueFull)
+	droppedAsAnnouncement := droppedNotifications("announcement", model.NotificationType_PeerFailure, dropReasonQueueFull)
 	peerFailureBefore := testutil.ToFloat64(droppedPeerFailure)
 	announcementBefore := testutil.ToFloat64(droppedAsAnnouncement)
 
@@ -428,7 +444,7 @@ func TestBlockchainSubscriptionListener_NonCatchupPeerFailuresBypassPeerFailureQ
 	peerFailureQueueSize = 1
 	t.Cleanup(func() { peerFailureQueueSize = previous })
 
-	dropped := droppedNotifications("peer-failure", model.NotificationType_PeerFailure)
+	dropped := droppedNotifications("peer-failure", model.NotificationType_PeerFailure, dropReasonQueueFull)
 	droppedBefore := testutil.ToFloat64(dropped)
 
 	blockReached := make(chan struct{}, 1)

@@ -84,9 +84,9 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "p2p",
 			Name:      "blockchain_notifications_dropped_total",
-			Help:      "Number of blockchain notifications the p2p listener dropped because its worker queue was full, by queue and notification type",
+			Help:      "Number of blockchain notifications the p2p listener lost, by queue, notification type and reason (queue_full: the worker queue was full; timeout: the announcement ran past its per-notification bound)",
 		},
-		[]string{"queue", "type"},
+		[]string{"queue", "type", "reason"},
 	)
 
 	prometheusP2PGossipKafkaPublishDropped = promauto.NewCounterVec(
@@ -181,11 +181,18 @@ func notificationDropped(notificationType string) {
 	prometheusP2PWebsocketNotificationsDropped.WithLabelValues(notificationType).Inc()
 }
 
+// Reasons a blockchain notification is lost, the reason label of
+// teranode_p2p_blockchain_notifications_dropped_total.
+const (
+	dropReasonQueueFull = "queue_full"
+	dropReasonTimeout   = "timeout"
+)
+
 // blockchainNotificationDropped records a blockchain notification the
-// subscription listener dropped because the named worker queue was full.
-func blockchainNotificationDropped(queue, notificationType string) {
+// subscription listener lost on the named worker queue, for the given reason.
+func blockchainNotificationDropped(queue, notificationType, reason string) {
 	initPrometheusMetrics()
-	prometheusP2PBlockchainNotificationsDropped.WithLabelValues(queue, notificationType).Inc()
+	prometheusP2PBlockchainNotificationsDropped.WithLabelValues(queue, notificationType, reason).Inc()
 }
 
 // gossipPublishDropped records a gossip announcement dropped by TryPublish
