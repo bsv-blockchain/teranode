@@ -119,7 +119,8 @@ The `optimisticMining` setting provides a validation strategy that prioritizes b
    b. Run the full block validation (`block.Valid`)
    c. Update stores (subtree DAH, tx metadata)
    d. Mark transactions as mined
-6. If validation proves the block invalid → invalidate it; on any other failure → queue for revalidation
+6. If validation proves the block invalid (or its parent is missing once the node is running) →
+   invalidate it; on a transient failure → queue for revalidation
 ```
 
 **Technical Implementation:**

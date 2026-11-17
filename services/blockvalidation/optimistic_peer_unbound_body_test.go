@@ -303,9 +303,10 @@ func requireNotTip(ctx context.Context, t *testing.T, client blockchain.ClientI,
 // handed to block assembly. The floor itself strikes no peer and records nothing, so the store holds
 // exactly the one invalid record the full validation writes, and no corrupt strike goes to the
 // serving peer (the invalid verdict reaches the peer through the Kafka invalid-block notification,
-// which this harness does not wire). Block assembly must be told about the block before that
-// invalid record is written: the hint goes out from a goroutine, but the goroutine starts before the
-// full validation does, so the record waits for it with a deadline.
+// which this harness does not wire). The block assembly hint must be launched before the full
+// validation records its verdict. The hint goes out from a goroutine that production does not wait
+// for, so this harness holds the invalid record until the hint arrives (5 s deadline): a hint
+// launched only after the verdict fails the test.
 func TestValidateBlock_OptimisticPeerBlocks_NonFinalCoinbaseWithSubtreesNotAddedEarly(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -347,7 +348,7 @@ func TestValidateBlock_OptimisticPeerBlocks_NonFinalCoinbaseWithSubtreesNotAdded
 	require.Error(t, err, "the block is validated before it is added, so the verdict is synchronous")
 	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "got: %v", err)
 	require.Contains(t, err.Error(), "coinbase is not final")
-	require.True(t, preparedBeforeVerdict.Load(), "a block the floor turned away must be handed to block assembly before the full validation records its verdict")
+	require.True(t, preparedBeforeVerdict.Load(), "prepareBlockAssembly must be called before the full validation records its verdict")
 
 	require.False(t, client.addedValid(block.Hash()), "a block with a non-final coinbase must not be added before it is validated")
 	requireNotTip(ctx, t, client, tSettings, block.Hash())
