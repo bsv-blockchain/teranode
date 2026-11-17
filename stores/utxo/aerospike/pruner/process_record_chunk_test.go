@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -12,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -46,7 +48,7 @@ func newTestService(t *testing.T) *Service {
 // processRecordChunk processes one chunk on its own: its deletes are sent and
 // drained before it returns. processed counts the records confirmed deleted.
 func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, chunk []*aerospike.Result) (int, int, error) {
-	carry := &deleteCarry{blockHeight: testPruneHeight}
+	carry := &deleteCarry{blockHeight: blockHeight}
 
 	processed, skipped, err := s.processRecordChunkCarry(ctx, blockHeight, chunk, carry)
 	if err != nil {
@@ -264,4 +266,76 @@ func TestProcessRecordChunk_ClearsParentRefsOfConflictingRecords(t *testing.T) {
 		require.Equal(t, 1, processed)
 		require.Equal(t, 0, skipped)
 	})
+}
+
+// TestProcessRecordChunk_PageMasterIsReadOnce: a pagination record scanned on
+// its own has its master read by dropUnminedRecords. When that read finds the
+// master present, the page goes with the master's own deletion and flushChunk
+// drops it without reading the master again, so the chunk pays one master
+// read, not two. Only a master that the first read found missing is read again,
+// because it may have been recreated since.
+func TestProcessRecordChunk_PageMasterIsReadOnce(t *testing.T) {
+	notFound := &aerospike.AerospikeError{ResultCode: types.KEY_NOT_FOUND_ERROR}
+
+	for _, tc := range []struct {
+		name         string
+		first        masterRead
+		wantRereads  int
+		wantDeletion bool
+	}{
+		{name: "master present at the first read", first: masterRead{record: &aerospike.Record{Bins: aerospike.BinMap{}}}},
+		{name: "master missing at the first read", first: masterRead{err: notFound}, wantRereads: 1, wantDeletion: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newTestService(t)
+			svc.settings.Pruner.SkipDeletions = false
+			svc.fieldConflicting = fields.Conflicting.String()
+
+			txID := chainhash.HashH([]byte("paged"))
+
+			pageKey, err := aerospike.NewKey(svc.namespace, svc.set, uaerospike.CalculateKeySourceInternal(&txID, 1))
+			require.NoError(t, err)
+
+			firstReads := 0
+			svc.readMastersFn = func([]*aerospike.Key) ([]masterRead, error) {
+				firstReads++
+
+				return []masterRead{tc.first}, nil
+			}
+
+			rereads := 0
+			pageDeletes := 0
+			svc.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+				for _, rec := range records {
+					switch rec.(type) {
+					case *aerospike.BatchRead:
+						rereads++
+						rec.BatchRec().Err = notFound
+						rec.BatchRec().ResultCode = types.KEY_NOT_FOUND_ERROR
+					case *aerospike.BatchDelete:
+						pageDeletes++
+						rec.BatchRec().ResultCode = types.OK
+					}
+				}
+
+				return nil
+			}
+
+			chunk := []*aerospike.Result{{Record: &aerospike.Record{Key: pageKey, Bins: aerospike.BinMap{
+				svc.fieldTxID:   txID.CloneBytes(),
+				svc.fieldInputs: []interface{}{},
+			}}}}
+
+			_, _, chunkErr := svc.processRecordChunk(context.Background(), testPruneHeight, chunk)
+			require.NoError(t, chunkErr)
+			require.Equal(t, 1, firstReads, "dropUnminedRecords reads the page's master once")
+			require.Equal(t, tc.wantRereads, rereads, "flushChunk re-reads only a master the first read found missing")
+
+			if tc.wantDeletion {
+				require.Equal(t, 1, pageDeletes, "an orphan page is deleted")
+			} else {
+				require.Zero(t, pageDeletes, "a page of a present master goes with the master's own deletion")
+			}
+		})
+	}
 }

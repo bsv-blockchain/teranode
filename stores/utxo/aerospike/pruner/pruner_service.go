@@ -281,6 +281,10 @@ type pendingDeletion struct {
 	// own, so keys holds no master record. A refused page delete must not read
 	// as the master surviving: see buildCarriedDeletes.
 	page bool
+	// masterPresent is set on a page whose master record dropUnminedRecords
+	// read as present when the page was selected. dropPagesOfPresentMasters
+	// drops such a page without reading the master again.
+	masterPresent bool
 }
 
 // externalFileInfo holds information about external files to delete
@@ -1112,7 +1116,7 @@ func (s *Service) processRecordChunkCarry(ctx context.Context, blockHeight uint3
 
 	// Do not delete a record that is currently unmined, unless it is conflicting. Counted separately
 	// from the defensive skip count.
-	chunk, _, clears := s.dropUnminedRecords(chunk)
+	chunk, _, clears, masterPresent := s.dropUnminedRecords(chunk)
 	s.clearUnminedDAH(ctx, clears)
 
 	if len(chunk) == 0 {
@@ -1292,6 +1296,9 @@ func (s *Service) processRecordChunkCarry(ctx context.Context, blockHeight uint3
 		// transaction they belong to so flushChunk can hold back exactly
 		// the records whose parent markers did not land.
 		deletion := &pendingDeletion{txHash: txHash, keys: []*aerospike.Key{rec.Record.Key}, page: s.isPaginationRecord(rec.Record, txHash)}
+		if deletion.page {
+			_, deletion.masterPresent = masterPresent[rec]
+		}
 
 		if totalExtraRecs, hasExtraRecs := rec.Record.Bins[s.fieldTotalExtraRecs].(int); hasExtraRecs && totalExtraRecs > 0 {
 			for i := 1; i <= totalExtraRecs; i++ {
@@ -1400,7 +1407,11 @@ func (s *Service) readMasters(keys []*aerospike.Key) ([]masterRead, error) {
 // records would be deleted from under a protected master. The page is kept whenever the answer is
 // uncertain (batch failure, per-record error other than key-not-found, empty result, key build error);
 // the next prune cycle retries it. A page whose master does not exist (orphan) is deleted.
-func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Result, int, []*dahClear) {
+//
+// masterPresent holds the pages kept in the chunk whose master this read found present and not
+// protected. The page then goes with its master's own deletion, so flushChunk drops it without a
+// second read (see dropPagesOfPresentMasters).
+func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) (kept []*aerospike.Result, dropped int, clears []*dahClear, masterPresent map[*aerospike.Result]struct{}) {
 	isProtected := func(bins aerospike.BinMap) bool {
 		if v, ok := bins[s.fieldUnminedSince]; !ok || v == nil {
 			return false
@@ -1419,7 +1430,6 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 	var pages []pagination
 
 	protected := make([]bool, len(chunk))
-	dropped := 0
 
 	protect := func(i int) {
 		protected[i] = true
@@ -1544,6 +1554,12 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 					if keep {
 						// positively unmined: the master and this page lose their DAH
 						addClear(p.masterKey, chunk[p.idx].Record.Key)
+					} else {
+						if masterPresent == nil {
+							masterPresent = make(map[*aerospike.Result]struct{}, len(pages))
+						}
+
+						masterPresent[chunk[p.idx]] = struct{}{}
 					}
 				}
 			}
@@ -1555,24 +1571,24 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 	}
 
 	if dropped == 0 {
-		return chunk, 0, nil
+		return chunk, 0, nil, masterPresent
 	}
 
 	prometheusUtxoRecordsSkippedUnmined.Add(float64(dropped))
 
-	kept := make([]*aerospike.Result, 0, len(chunk)-dropped)
+	kept = make([]*aerospike.Result, 0, len(chunk)-dropped)
 	for i, rec := range chunk {
 		if !protected[i] {
 			kept = append(kept, rec)
 		}
 	}
 
-	clears := make([]*dahClear, 0, len(clearsByMaster))
+	clears = make([]*dahClear, 0, len(clearsByMaster))
 	for _, c := range clearsByMaster {
 		clears = append(clears, c)
 	}
 
-	return kept, dropped, clears
+	return kept, dropped, clears, masterPresent
 }
 
 // dahClear names a protected master whose deleteAtHeight, and that of the listed pagination
@@ -2450,10 +2466,13 @@ func spendHolder(utxos []interface{}, offsets []uint32, childHash *chainhash.Has
 // chunk 2's batch, next to chunk 2's own marker writes. So a delete never
 // shares a batch with the marker writes it depends on, which is the ordering
 // that keeps a pruned child from being deleted unprotected, and in a healthy
-// pass each chunk still costs one batch, as it did when markers and deletes
-// shared one. Draining a carry that deleted paginated masters takes a second
-// batch for their pages, and refused markers add more. The deletes left when a
-// worker runs out of chunks go in one more batch (drainCarry).
+// pass each chunk still costs one write batch, as it did when markers and
+// deletes shared one. Reads come on top, as on main: dropUnminedRecords reads
+// the masters of a chunk's pagination records once, and flushChunk reads a
+// page's master again only when that first read found it missing. Draining a
+// carry that deleted paginated masters takes a second batch for their pages,
+// and refused markers add more. The deletes left when a worker runs out of
+// chunks go in one more batch (drainCarry).
 //
 // A master's pages wait the same way: they ride the batch after the one that
 // deleted the master, so a refused master keeps its pages.
@@ -2910,6 +2929,11 @@ func pageKeysDone(records []aerospike.BatchRecordIfc, deletion *pendingDeletion,
 // page goes on its own only once its master is definitely gone, which is the
 // leftover of an earlier cycle whose page deletes failed. A master read that
 // fails keeps the page, because the master is not known to be gone.
+//
+// A page whose master dropUnminedRecords already read as present in this
+// chunk (masterPresent) is dropped without a second read. Only a page whose
+// master was missing at that read is read again here, so a master recreated
+// since then still keeps its pages.
 func (s *Service) dropPagesOfPresentMasters(deletions []*pendingDeletion) ([]*pendingDeletion, int) {
 	pages := make([]int, 0)
 	records := make([]aerospike.BatchRecordIfc, 0)
@@ -2922,6 +2946,12 @@ func (s *Service) dropPagesOfPresentMasters(deletions []*pendingDeletion) ([]*pe
 		keep[i] = true
 
 		if !deletion.page {
+			continue
+		}
+
+		if deletion.masterPresent {
+			keep[i] = false
+
 			continue
 		}
 
