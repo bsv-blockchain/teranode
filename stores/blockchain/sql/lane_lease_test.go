@@ -676,3 +676,90 @@ func TestOpenLaneLeaseSkipsAnExhaustedLane(t *testing.T) {
 		require.Equal(t, uint64(11), g2.First)
 	})
 }
+
+// useUpLanesFrom inserts one hand-out in each lane from first to 253, stamped a day ahead, so
+// none of them is never-used and each is a later pick than any lease closed now.
+func useUpLanesFrom(t *testing.T, s *SQL, first int) {
+	t.Helper()
+
+	at := time.Now().Add(24 * time.Hour)
+
+	for n := first; n < grantableLanes; n++ {
+		_, err := s.db.ExecContext(t.Context(),
+			`INSERT INTO lane_handout (lane, first, last, holder, height, handed_at) VALUES ($1, $2, $3, 'old', 1, $4)`,
+			n, int64(n)*10_000_000+1, int64(n+1)*10_000_000, at)
+		require.NoError(t, err)
+	}
+}
+
+func TestRenewAndReleaseOfAnOldLeaseLeaveTheLaneNewLeaseAlone(t *testing.T) {
+	runLaneHandoutTests(t, "old lease on reused lane", func(t *testing.T, s *SQL) {
+		oldID, oldGrant, _, err := s.OpenLaneLease(t.Context(), leaseOpen("old"))
+		require.NoError(t, err)
+		require.Equal(t, uint8(0), oldGrant.Lane)
+
+		// Lane 0 is the only closed lane and every other lane has been used, so the next open
+		// must reuse lane 0.
+		useUpLanesFrom(t, s, 1)
+		ageLeases(t, s, 10*time.Minute)
+
+		closed, err := s.CloseStaleLaneLeases(t.Context(), 3*time.Minute)
+		require.NoError(t, err)
+		require.Equal(t, 1, closed)
+
+		newID, newGrant, _, err := s.OpenLaneLease(t.Context(), leaseOpen("new"))
+		require.NoError(t, err)
+		require.Equal(t, uint8(0), newGrant.Lane, "the new lease reuses the lane")
+		require.NotEqual(t, oldID, newID)
+
+		handouts := countRows(t, s, `SELECT COUNT(*) FROM lane_handout WHERE lane = 0`)
+
+		r := leaseRenew(oldID, oldGrant)
+		r.WantGrant = true
+
+		_, granted, closedLease, err := s.RenewLaneLease(t.Context(), r)
+		require.NoError(t, err)
+		require.True(t, closedLease, "the old lease is not the lane's current one")
+		require.False(t, granted)
+		require.Equal(t, handouts, countRows(t, s, `SELECT COUNT(*) FROM lane_handout WHERE lane = 0`), "no grant for the old lease")
+
+		already, err := s.ReleaseLaneLease(t.Context(), options.LaneLeaseRelease{Lease: oldID, Lane: oldGrant.Lane, LastTaken: oldGrant.First})
+		require.NoError(t, err)
+		require.True(t, already)
+
+		require.Equal(t, 1, countRows(t, s, `SELECT COUNT(*) FROM lane_lease WHERE lane = 0 AND lease_id = $1 AND closed_at IS NULL`, s.leaseParam(newID)),
+			"the new lease is still open")
+		require.Equal(t, 0, countRows(t, s, `SELECT COUNT(*) FROM lane_close WHERE lease_id = $1 AND kind = $2`, s.leaseParam(newID), closeClean))
+	})
+}
+
+func TestOpenLaneLeaseTakesTheLaneClosedLongestAgo(t *testing.T) {
+	runLaneHandoutTests(t, "closed longest ago", func(t *testing.T, s *SQL) {
+		ids := make([]lane.LeaseID, 3)
+		grants := make([]lane.Grant, 3)
+
+		for i := range ids {
+			var err error
+
+			ids[i], grants[i], _, err = s.OpenLaneLease(t.Context(), leaseOpen("a"))
+			require.NoError(t, err)
+			require.Equal(t, uint8(i), grants[i].Lane) //nolint:gosec // i is below 3
+		}
+
+		// Lane 1 closes first, then lane 0; lane 2 stays open. Lane 0 is the lower number, so
+		// only the closing time can make lane 1 the choice.
+		for _, i := range []int{1, 0} {
+			already, err := s.ReleaseLaneLease(t.Context(), options.LaneLeaseRelease{Lease: ids[i], Lane: grants[i].Lane, LastTaken: grants[i].First})
+			require.NoError(t, err)
+			require.False(t, already)
+
+			time.Sleep(20 * time.Millisecond)
+		}
+
+		useUpLanesFrom(t, s, 3)
+
+		_, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("b"))
+		require.NoError(t, err)
+		require.Equal(t, uint8(1), g.Lane, "the lane closed longest ago comes first")
+	})
+}

@@ -75,8 +75,9 @@ type Data struct {
 	// below freed, so this struct, allocated per record read, stays the size it
 	// was. TestDataSize holds it. Zero (lane.None) means this read has no position:
 	// the field was not named, or the record was created with none (the lane
-	// migration off, before it existed, or a tool that opens its own store rather
-	// than going through the daemon), or the store no longer
+	// migration off, before it existed, a tool that opens its own store rather
+	// than going through the daemon, or a store that cannot write positions, such
+	// as pebble), or the store no longer
 	// holds it. On utxoset that last case is a read answered from a live UTXO, an
 	// undo copy or a thin preserved row, once the row is below the lookup floor or
 	// its tx_mined partition has dropped.

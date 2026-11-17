@@ -46,8 +46,12 @@ func CheckLaneMigration(m LaneMigration) error {
 // CheckLaneLease refuses lease timings that would let two processes hand out positions in one lane
 // at once. A process stops handing out positions LaneLeaseStopAfter after its last successful
 // renewal was sent, and the blockchain service closes the lease LaneLeaseCloseAfter after it
-// received the last renewal, so stop must come before close. A process renews every
-// LaneLeaseRenewInterval, so one renewal must fit inside the stop or the lease could never be kept.
+// received the last renewal, so stop must come before close. The check sees only this process's
+// settings, so it compares this process's stop with this process's close. The close that counts
+// is the blockchain service's, which may run in another pod: every pod must share both settings.
+// If they differ, positions stay unique, but two holders can hand out positions in one lane at
+// once. A process renews every LaneLeaseRenewInterval, so one renewal must fit inside the stop or
+// the lease could never be kept.
 func (s BlockChainSettings) CheckLaneLease() error {
 	if s.LaneLeaseRenewInterval <= 0 {
 		return errors.NewConfigurationError("blockchain_laneLeaseRenewInterval must be positive, got %s", s.LaneLeaseRenewInterval)

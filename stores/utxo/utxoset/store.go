@@ -240,6 +240,14 @@ var poolTracer pgx.QueryTracer
 // which surfaces as a baffling "unrecognized configuration parameter" against the wrong
 // host. So normalise it here, at the one place that owns the connection.
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, storeURL *url.URL) (*Store, error) {
+	// A stamping step this build does not implement is refused before any connection, so a tool
+	// that opens the store without the daemon never adds the lane columns for it.
+	if tSettings.UtxoStore.LaneMigration.Stamps() {
+		if err := settings.CheckLaneMigration(tSettings.UtxoStore.LaneMigration); err != nil {
+			return nil, err
+		}
+	}
+
 	dsn := *storeURL
 	if dsn.Scheme == "utxoset" {
 		dsn.Scheme = "postgres"

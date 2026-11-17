@@ -1826,8 +1826,21 @@ func (b *Blockchain) startLaneLeaseSweep(ctx context.Context) {
 	}
 }
 
+// laneSweepMinTimeout is the least time one sweep gets, however short the renewal interval is.
+const laneSweepMinTimeout = 10 * time.Second
+
+// sweepLaneLeases runs one sweep. It holds row locks that every lease open needs, so it gets a
+// deadline and a stalled sweep lets go of them.
 func (b *Blockchain) sweepLaneLeases(ctx context.Context) {
-	n, err := b.store.CloseStaleLaneLeases(ctx, b.settings.BlockChain.LaneLeaseCloseAfter)
+	timeout := b.settings.BlockChain.LaneLeaseRenewInterval
+	if timeout < laneSweepMinTimeout {
+		timeout = laneSweepMinTimeout
+	}
+
+	sweepCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	n, err := b.store.CloseStaleLaneLeases(sweepCtx, b.settings.BlockChain.LaneLeaseCloseAfter)
 	if err != nil {
 		if ctx.Err() == nil {
 			b.logger.Warnf("[Blockchain] could not close stale lane leases: %v", err)

@@ -23,11 +23,14 @@ type leaseLike struct {
 	started atomic.Bool
 	leased  atomic.Bool
 	n       atomic.Uint64
+
+	// startErr is what Start returns.
+	startErr error
 }
 
 func (s *leaseLike) Start(context.Context) error {
 	s.started.Store(true)
-	return nil
+	return s.startErr
 }
 
 func (s *leaseLike) Ready() error {
@@ -74,6 +77,18 @@ func TestValidatorIsNotReadyWithoutALease(t *testing.T) {
 	v, _ := newLaneLeaseValidator(t, source)
 
 	require.True(t, source.started.Load(), "a validator starts its lease when it is built")
+
+	_, msg, _ := v.Health(context.Background(), false)
+	require.Contains(t, msg, "LaneLease: BAD")
+}
+
+// A lease that cannot start does not stop the validator being built: the failure is logged, and
+// readiness reports a validator with no lease as not ready, so it takes no traffic.
+func TestValidatorIsBuiltWhenItsLeaseCannotStart(t *testing.T) {
+	source := &leaseLike{startErr: errors.NewServiceUnavailableError("blockchain service is down")}
+	v, _ := newLaneLeaseValidator(t, source)
+
+	require.True(t, source.started.Load())
 
 	_, msg, _ := v.Health(context.Background(), false)
 	require.Contains(t, msg, "LaneLease: BAD")

@@ -3,6 +3,7 @@ package lane
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -645,4 +646,169 @@ func TestCloseReleasesALeaseOpenedWhileItRuns(t *testing.T) {
 
 	require.Len(t, src.releases, 1, "the lease opened during Close is released")
 	require.Empty(t, src.open)
+}
+
+// slowLeases moves a step clock while a call is in flight, as a slow reply would: it steps the
+// clock by delay before it answers an open or a renewal.
+type slowLeases struct {
+	*fakeLeases
+	clk   *stepClock
+	delay atomic.Int64
+}
+
+func (s *slowLeases) setDelay(d time.Duration) { s.delay.Store(int64(d)) }
+
+func (s *slowLeases) OpenLaneLease(ctx context.Context, holder string) (LeaseID, Grant, error) {
+	s.clk.step(time.Duration(s.delay.Load()))
+
+	return s.fakeLeases.OpenLaneLease(ctx, holder)
+}
+
+func (s *slowLeases) RenewLaneLease(ctx context.Context, r Renewal) (RenewResult, error) {
+	s.clk.step(time.Duration(s.delay.Load()))
+
+	return s.fakeLeases.RenewLaneLease(ctx, r)
+}
+
+// requireStopsTwoMinutesAfter checks that a holder whose last good call went out at start gives out
+// a position one second before start plus two minutes, and none from then on.
+func requireStopsTwoMinutesAfter(t *testing.T, a *Allocator, clk *stepClock, start time.Time) {
+	t.Helper()
+
+	clk.step(start.Add(2*time.Minute - time.Second).Sub(clk.Now()))
+	next(t, a)
+
+	clk.step(time.Second)
+
+	_, err := a.Next(context.Background())
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable, "the stop counts from when the call was sent, not from its reply")
+}
+
+// The stop counts from when the open was sent. The reply came a minute later, which must not push
+// the stop out, because the service measures its close time from when it received the call.
+func TestAllocatorStopCountsFromWhenTheOpenWasSent(t *testing.T) {
+	clk := newStepClock()
+	start := clk.Now()
+	src := &slowLeases{fakeLeases: newFakeLeases(1_000_000), clk: clk}
+	src.setDelay(time.Minute)
+
+	a := newTestAllocator(t, src, Timings{Renew: time.Hour, Stop: 2 * time.Minute, GrantDuration: time.Hour}, clk)
+	a.takeWait = 200 * time.Millisecond
+
+	next(t, a)
+	require.Equal(t, time.Minute, clk.Now().Sub(start), "the open took a minute to answer")
+
+	requireStopsTwoMinutesAfter(t, a, clk, start)
+}
+
+// The same for a renewal: it went out at the start, its reply a minute later.
+func TestAllocatorStopCountsFromWhenTheRenewalWasSent(t *testing.T) {
+	clk := newStepClock()
+	start := clk.Now()
+	src := &slowLeases{fakeLeases: newFakeLeases(10), clk: clk}
+
+	a := newTestAllocator(t, src, Timings{Renew: time.Hour, Stop: 2 * time.Minute, GrantDuration: time.Hour}, clk)
+	a.takeWait = 200 * time.Millisecond
+
+	next(t, a)
+	src.setDelay(time.Minute)
+
+	for i := 0; i < 4; i++ {
+		next(t, a) // the fifth position is half of the grant, so a renewal with a grant request goes out
+	}
+
+	require.Eventually(t, a.hasSpareGrant, 5*time.Second, time.Millisecond, "the renewal succeeded")
+	require.Equal(t, time.Minute, clk.Now().Sub(start), "the renewal took a minute to answer")
+
+	requireStopsTwoMinutesAfter(t, a, clk, start)
+}
+
+// badGrantLeases answers with grant instead of the real one, on an open or on a renewal with a
+// grant request.
+type badGrantLeases struct {
+	*fakeLeases
+	onOpen  bool
+	onRenew bool
+	grant   Grant
+}
+
+func (b *badGrantLeases) OpenLaneLease(ctx context.Context, holder string) (LeaseID, Grant, error) {
+	id, g, err := b.fakeLeases.OpenLaneLease(ctx, holder)
+	if err == nil && b.onOpen {
+		return id, b.grant, nil
+	}
+
+	return id, g, err
+}
+
+func (b *badGrantLeases) RenewLaneLease(ctx context.Context, r Renewal) (RenewResult, error) {
+	res, err := b.fakeLeases.RenewLaneLease(ctx, r)
+	if err == nil && b.onRenew && res.Granted {
+		res.Grant = b.grant
+	}
+
+	return res, err
+}
+
+// A grant the allocator refuses is never used, on an open or a renewal: one with no positions, one
+// that starts at position 0 or ends above the largest position, one on the coinbase lane, and one
+// that does not start above what the process already gave out in the lane.
+func TestAllocatorRefusesABadGrant(t *testing.T) {
+	cases := []struct {
+		name      string
+		grant     Grant
+		renewOnly bool // a first grant is judged against nothing given out yet
+	}{
+		{"empty", Grant{Lane: 0, First: 20, Last: 19}, false},
+		{"starts at zero", Grant{Lane: 0, First: 0, Last: 5}, false},
+		{"ends above the largest position", Grant{Lane: 0, First: 20, Last: MaxPosition + 1}, false},
+		{"on the coinbase lane", Grant{Lane: firstUnleasedLane, First: 20, Last: 30}, false},
+		{"not above the highest given out", Grant{Lane: 0, First: 3, Last: 30}, true},
+	}
+
+	for _, tc := range cases {
+		// TestAllocatorRefusesAGrantNotAboveItsOwnHighest covers the open for the renewOnly case.
+		if !tc.renewOnly {
+			t.Run("open "+tc.name, func(t *testing.T) {
+				src := &badGrantLeases{fakeLeases: newFakeLeases(10), onOpen: true, grant: tc.grant}
+				a := newTestAllocator(t, src, Timings{Renew: 10 * time.Millisecond, Stop: time.Hour, GrantDuration: time.Hour}, nil)
+				a.takeWait = 300 * time.Millisecond
+
+				_, err := a.Next(context.Background())
+				require.ErrorIs(t, err, errors.ErrServiceUnavailable, "no position comes from a refused first grant")
+			})
+		}
+
+		t.Run("renewal "+tc.name, func(t *testing.T) {
+			src := &badGrantLeases{fakeLeases: newFakeLeases(10), onRenew: true, grant: tc.grant}
+			a := newTestAllocator(t, src, quiet, nil)
+			a.takeWait = 300 * time.Millisecond
+
+			for i := 0; i < 10; i++ {
+				next(t, a) // the fifth asks for the next grant, which the fake answers with the bad one
+			}
+
+			_, err := a.Next(context.Background())
+			require.ErrorIs(t, err, errors.ErrServiceUnavailable, "the refused spare is not moved to")
+			require.False(t, a.hasSpareGrant())
+		})
+	}
+}
+
+// The rate a renewal reports is the positions given out since the renewal before last, per second,
+// so the service can size the next grant to it.
+func TestAllocatorReportsItsRateOnAGrantRequest(t *testing.T) {
+	clk := newStepClock()
+	src := newFakeLeases(1000)
+	a := newTestAllocator(t, src, Timings{Renew: time.Hour, Stop: 2 * time.Hour, GrantDuration: time.Hour}, clk)
+
+	next(t, a)
+	clk.step(10 * time.Second)
+
+	for i := 1; i < 500; i++ {
+		next(t, a) // the 500th is half of the grant, so a grant request goes out
+	}
+
+	require.Eventually(t, func() bool { return len(src.grantRequests()) == 1 }, 5*time.Second, time.Millisecond)
+	require.Equal(t, uint64(50), src.grantRequests()[0].Rate, "500 positions in 10 seconds")
 }

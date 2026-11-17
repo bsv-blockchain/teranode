@@ -16,7 +16,8 @@
 //
 // Positions start at 1. Lane 0 is a real lane, so the packed value 0 can only
 // mean "no lane position": a record created with the migration off, before it
-// existed, or by a tool that opens its own store. A read
+// existed, by a tool that opens its own store, or by a UTXO store that cannot
+// write lane positions, such as pebble. A read
 // also returns 0 for a utxoset record whose row carrying the position has aged
 // out. Stores keep 0 as an absent bin or a NULL column.
 //
@@ -147,8 +148,8 @@ type Renewal struct {
 	Rate uint64
 	// WantGrant asks for the next grant.
 	WantGrant bool
-	// Settles finishes the grant the holder last left. It is sent with a grant request, and the
-	// service records it on the new grant's hand-out row.
+	// Settles finishes the oldest grant the holder has left and not yet reported. It is sent with a
+	// grant request, and the service records it on the new grant's hand-out row.
 	Settles Settles
 }
 
@@ -166,7 +167,8 @@ type Release struct {
 	Lane  uint8
 	// LastTaken is the last position taken in the lane; zero for none.
 	LastTaken uint64
-	// Settles finishes the grant before the current one.
+	// Settles finishes the oldest grant left and not yet reported; a newer one left after it is
+	// settled by LastTaken.
 	Settles Settles
 }
 

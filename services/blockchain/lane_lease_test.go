@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/url"
 	"strings"
@@ -174,10 +175,15 @@ func TestLocalClientLaneLeaseClosesAStaleLeaseOnOpen(t *testing.T) {
 
 	ageLaneLeases(t, store, 10*time.Minute)
 
+	lapsed := testutil.ToFloat64(prometheusBlockchainLaneLeaseCloses.WithLabelValues("lapsed"))
+	cleans := testutil.ToFloat64(prometheusBlockchainLaneLeaseCloses.WithLabelValues("clean"))
+
 	_, gB, err := client.OpenLaneLease(ctx, "holder-b")
 	require.NoError(t, err)
 	require.Equal(t, uint8(1), gB.Lane)
 	require.Equal(t, "lapsed", closeKind(t, store, idA))
+	require.Equal(t, lapsed+1, testutil.ToFloat64(prometheusBlockchainLaneLeaseCloses.WithLabelValues("lapsed")), "the open's lapsed close is counted")
+	require.Equal(t, cleans, testutil.ToFloat64(prometheusBlockchainLaneLeaseCloses.WithLabelValues("clean")))
 
 	res, err := client.RenewLaneLease(ctx, lane.Renewal{Lease: idA, Lane: gA.Lane})
 	require.NoError(t, err)
@@ -408,4 +414,113 @@ func TestLaneClientReleasesAfterItsContextEnds(t *testing.T) {
 	var kind string
 	require.NoError(t, b.store.GetDB().QueryRow(`SELECT kind FROM lane_close`).Scan(&kind))
 	require.Equal(t, "clean", kind)
+}
+
+// TestLaneLeaseRateSettlesAndLastTakenCrossTheWire sends a renewal and a release through a real
+// gRPC client and server and reads the rows they wrote. The rate and the grant time set the grant's
+// size, the settles pair lands on the grant's hand-out row, and the last position taken and the
+// settles pair land on the close row. A second release of the closed lease is not a clean close.
+func TestLaneLeaseRateSettlesAndLastTakenCrossTheWire(t *testing.T) {
+	server, s, _ := startTunedBlockchain(t, false, func(tuned *settings.Settings) {
+		tuned.BlockChain.LaneGrantMin = 100
+		tuned.BlockChain.LaneGrantDuration = 10 * time.Second
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	client, err := NewClient(ctx, ulogger.NewErrorTestLogger(t), s, "lane-wire-client")
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, client.(*Client).Close()) }()
+
+	var src lane.LeaseSource = client
+
+	cleans := testutil.ToFloat64(prometheusBlockchainLaneLeaseCloses.WithLabelValues("clean"))
+
+	id, opened, err := src.OpenLaneLease(ctx, "holder-wire")
+	require.NoError(t, err)
+	require.Equal(t, lane.Grant{Lane: 0, First: 1, Last: 100}, opened)
+
+	// 1,000 positions a second for 10 seconds is 10,000 positions, far above the minimum of 100.
+	res, err := src.RenewLaneLease(ctx, lane.Renewal{
+		Lease: id, Lane: opened.Lane, Rate: 1000, WantGrant: true,
+		Settles: lane.Settles{First: 1, LastTaken: 80},
+	})
+	require.NoError(t, err)
+	require.Equal(t, lane.RenewResult{Granted: true, Grant: lane.Grant{Lane: 0, First: 101, Last: 10100}}, res)
+
+	var settlesFirst, settlesLastTaken sql.NullInt64
+
+	err = server.store.GetDB().QueryRow(`SELECT settles_first, settles_last_taken FROM lane_handout WHERE lane = 0 AND first = 101`).
+		Scan(&settlesFirst, &settlesLastTaken)
+	require.NoError(t, err)
+	require.Equal(t, sql.NullInt64{Int64: 1, Valid: true}, settlesFirst)
+	require.Equal(t, sql.NullInt64{Int64: 80, Valid: true}, settlesLastTaken)
+
+	already, err := src.ReleaseLaneLease(ctx, lane.Release{
+		Lease: id, Lane: opened.Lane, LastTaken: 9000,
+		Settles: lane.Settles{First: 101, LastTaken: 9000},
+	})
+	require.NoError(t, err)
+	require.False(t, already)
+
+	var last int64
+
+	err = server.store.GetDB().QueryRow(`SELECT last, settles_first, settles_last_taken FROM lane_close WHERE lease_id = $1`, id[:]).
+		Scan(&last, &settlesFirst, &settlesLastTaken)
+	require.NoError(t, err)
+	require.Equal(t, int64(9000), last)
+	require.Equal(t, sql.NullInt64{Int64: 101, Valid: true}, settlesFirst)
+	require.Equal(t, sql.NullInt64{Int64: 9000, Valid: true}, settlesLastTaken)
+
+	already, err = src.ReleaseLaneLease(ctx, lane.Release{Lease: id, Lane: opened.Lane, LastTaken: 9000})
+	require.NoError(t, err)
+	require.True(t, already)
+
+	require.Equal(t, cleans+1, testutil.ToFloat64(prometheusBlockchainLaneLeaseCloses.WithLabelValues("clean")), "only the first release is a clean close")
+}
+
+// TestStartedServiceSweepsASilentLease checks that Start runs the sweep: a lease that nobody
+// renews is closed as lapsed with no call to the sweep from the test.
+func TestStartedServiceSweepsASilentLease(t *testing.T) {
+	server, _, _ := startTunedBlockchain(t, false, func(tuned *settings.Settings) {
+		tuned.BlockChain.LaneLeaseRenewInterval = 10 * time.Millisecond
+		tuned.BlockChain.LaneLeaseStopAfter = 30 * time.Millisecond
+		tuned.BlockChain.LaneLeaseCloseAfter = 60 * time.Millisecond
+	})
+
+	g, err := server.OpenLaneLease(context.Background(), &blockchain_api.OpenLaneLeaseRequest{Holder: "validator-silent"})
+	require.NoError(t, err)
+
+	var id lane.LeaseID
+
+	copy(id[:], g.LeaseId)
+
+	require.Eventually(t, func() bool { return closeKind(t, server.store, id) == "lapsed" }, 5*time.Second, 10*time.Millisecond)
+}
+
+// deadlineStore records whether the context of a sweep has a deadline.
+type deadlineStore struct {
+	blockchain_store.Store
+	hasDeadline atomic.Bool
+}
+
+func (s *deadlineStore) CloseStaleLaneLeases(ctx context.Context, _ time.Duration) (int, error) {
+	_, ok := ctx.Deadline()
+	s.hasDeadline.Store(ok)
+
+	return 0, nil
+}
+
+func TestLaneLeaseSweepHasADeadline(t *testing.T) {
+	tc := setup(t)
+
+	store := &deadlineStore{Store: tc.server.store}
+	b, err := New(context.Background(), tc.logger, tc.server.settings, store, nil)
+	require.NoError(t, err)
+
+	b.sweepLaneLeases(context.Background())
+
+	require.True(t, store.hasDeadline.Load(), "a sweep holds row locks, so it must not run without a deadline")
 }

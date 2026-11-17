@@ -103,6 +103,28 @@ func TestLaneColumnExistsOnlyWithTheFlagOn(t *testing.T) {
 	require.NoError(t, err, "the copy into tx_mined runs its plain form")
 }
 
+// A step this build refuses must not add the column, even for a tool that opens the store without
+// the daemon.
+func TestOpeningAtARefusedLaneStepAddsNoColumn(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	for _, step := range []settings.LaneMigration{settings.LaneMigrationRows, settings.LaneMigrationLanes} {
+		ts := *s.settings
+		ts.UtxoStore.LaneMigration = step
+
+		u, err := url.Parse(testDSN(t))
+		require.NoError(t, err)
+
+		refused, err := New(ctx, ulogger.TestLogger{}, &ts, u)
+		require.Error(t, err, "%s", step)
+		require.Nil(t, refused)
+
+		for _, table := range laneColumnTables {
+			require.False(t, hasLaneColumn(t, s, ctx, table), "%s: %s has no lane_position", step, table)
+		}
+	}
+}
+
 // Switching the flag on adds the column to a database in use. Records already there read as having no
 // position, new ones get one, and it survives the flag going off again, because the copies follow the
 // column and not the flag.

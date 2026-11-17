@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -20,7 +21,8 @@ import (
 
 // laneSource answers for the blockchain service: a lease on lane 9, grants of 1,000 positions.
 type laneSource struct {
-	high atomic.Uint64
+	high  atomic.Uint64
+	opens atomic.Int64
 }
 
 func (s *laneSource) grant() lane.Grant {
@@ -30,6 +32,8 @@ func (s *laneSource) grant() lane.Grant {
 }
 
 func (s *laneSource) OpenLaneLease(context.Context, string) (lane.LeaseID, lane.Grant, error) {
+	s.opens.Add(1)
+
 	return lane.LeaseID{9}, s.grant(), nil
 }
 
@@ -265,4 +269,104 @@ func TestGetUtxoStoreRefusesLeaseTimingsWhereStopIsNotBeforeClose(t *testing.T) 
 	_, err := d.GetUtxoStore(context.Background(), ulogger.TestLogger{}, appSettings)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "blockchain_laneLeaseStopAfter")
+}
+
+// closeLaneStore closes the allocator the daemon retained, then the store, when the test ends.
+func closeLaneStore(t *testing.T, d *Stores, store utxostore.Store) {
+	t.Helper()
+
+	t.Cleanup(func() {
+		for _, client := range d.constructedClients {
+			if allocator, ok := client.(*lane.Allocator); ok {
+				require.NoError(t, allocator.Close())
+			}
+		}
+
+		require.NoError(t, store.Close(context.Background()))
+	})
+}
+
+// The allocator goes to the real store, before any test wrapper. A wrapper that hides the store's
+// lane position hook must not leave the store without a source.
+func TestGetUtxoStoreGivesTheSourceToTheStoreBeneathAWrapper(t *testing.T) {
+	ctx := context.Background()
+
+	appSettings, opened := laneStoreFixture(t, "lane_wrapped", true, func() (lane.LeaseSource, error) {
+		return &laneSource{}, nil
+	})
+
+	d := &Stores{wrappers: StoreWrappers{UtxoStore: func(inner utxostore.Store) utxostore.Store {
+		return &plainStore{Store: inner}
+	}}}
+
+	store, err := d.GetUtxoStore(ctx, ulogger.TestLogger{}, appSettings)
+	require.NoError(t, err)
+	closeLaneStore(t, d, store)
+
+	root := tests.BuildMultiWorkload(t, 0xe7, 1, 1).Roots[0]
+
+	_, _, err = store.SpendAndCreate(ctx, root, 900, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	md, err := opened.Get(ctx, root.TxIDChainHash(), fields.LanePosition)
+	require.NoError(t, err)
+	require.Equal(t, lane.Pack(9, 1), md.LanePosition)
+}
+
+// The allocator takes its lease on the first create, so a process that never creates records
+// never takes a lane.
+func TestGetUtxoStoreTakesNoLeaseUntilTheFirstCreate(t *testing.T) {
+	ctx := context.Background()
+	source := &laneSource{}
+
+	appSettings, _ := laneStoreFixture(t, "lane_lazy", true, func() (lane.LeaseSource, error) {
+		return source, nil
+	})
+
+	d := &Stores{}
+
+	store, err := d.GetUtxoStore(ctx, ulogger.TestLogger{}, appSettings)
+	require.NoError(t, err)
+	closeLaneStore(t, d, store)
+
+	// Give an eager start time to reach the source.
+	time.Sleep(200 * time.Millisecond)
+	require.Zero(t, source.opens.Load(), "no create yet, so no lease")
+
+	root := tests.BuildMultiWorkload(t, 0xe8, 1, 1).Roots[0]
+
+	_, _, err = store.SpendAndCreate(ctx, root, 900, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+	require.Equal(t, int64(1), source.opens.Load(), "the first create opens the lease")
+}
+
+// The allocator is built with the grant duration setting. A grant must serve many creates inside
+// that duration: a duration of zero would age the first grant out at its first position.
+func TestGetUtxoStoreBuildsTheAllocatorWithTheGrantDuration(t *testing.T) {
+	ctx := context.Background()
+
+	appSettings, opened := laneStoreFixture(t, "lane_grant_duration", true, func() (lane.LeaseSource, error) {
+		return &laneSource{}, nil
+	})
+	appSettings.BlockChain.LaneGrantDuration = time.Hour
+
+	d := &Stores{}
+
+	store, err := d.GetUtxoStore(ctx, ulogger.TestLogger{}, appSettings)
+	require.NoError(t, err)
+	closeLaneStore(t, d, store)
+
+	for index, seed := range []byte{0xe9, 0xea} {
+		root := tests.BuildMultiWorkload(t, seed, 1, 1).Roots[0]
+
+		createCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, _, err = store.SpendAndCreate(createCtx, root, 900, utxostore.WithCreateOnly())
+
+		cancel()
+		require.NoError(t, err)
+
+		md, err := opened.Get(ctx, root.TxIDChainHash(), fields.LanePosition)
+		require.NoError(t, err)
+		require.Equal(t, lane.Pack(9, uint64(index)+1), md.LanePosition)
+	}
 }

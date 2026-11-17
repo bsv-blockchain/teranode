@@ -36,9 +36,11 @@ const (
 type Timings struct {
 	// Renew is how often the holder renews its lease.
 	Renew time.Duration
-	// Stop is how long after the last renewal that succeeded the holder stops giving out positions.
-	// It must be shorter than the service's close time, so the holder stops before its lane can go
-	// to another holder.
+	// Stop is how long after the last renewal that succeeded was sent the holder stops giving out
+	// positions. That renewal went out up to Renew before the service failed, so an outage stops
+	// creates up to Renew sooner than Stop. Set it shorter than the service's close time, on every
+	// process: each process can check only its own settings, so nothing here compares it with the
+	// close time the blockchain service runs on.
 	Stop time.Duration
 	// GrantDuration is how long a grant is used, counted from its first position taken.
 	GrantDuration time.Duration
@@ -87,9 +89,9 @@ type Allocator struct {
 	spare     Grant
 	hasSpare  bool
 	// pending settles the grants left and not yet reported, oldest first, until grant requests or
-	// the release carry them. It holds at most two: a second grant is left only once the first was
-	// left with no spare to move to, and then no grant is current, so none can be left again until
-	// a request succeeds and carries the oldest.
+	// the release carry them. It holds at most two: after a successful request at most the current
+	// grant and the spare can be left before the next one succeeds, and once two are left no grant
+	// is current, so none can be left again until a request succeeds and carries the oldest.
 	pending  [2]Settles
 	npending int
 	// leaseTaken is the highest position this lease has given out; 0 for none.
