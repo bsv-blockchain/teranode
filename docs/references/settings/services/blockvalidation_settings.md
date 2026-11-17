@@ -113,8 +113,9 @@ loader (0, false and false), so for these keys the two agree. The
   has run
 - The full block validation continues in the background - the merkle root over every subtree, the
   coinbase rules again, duplicate transactions, transaction ordering and parent-spend checks, and
-  the old-block-ID check that a parent mined below the recent-header window is in the block's own
-  history. If a background check proves the block invalid it is
+  the old-block-ID check that a parent not found among the block's recent ancestors
+  (`blockvalidation_maxPreviousBlockHeadersToCheck`) is in the block's own history. If a background
+  check proves the block invalid it is
   invalidated and its UTXO effects are rolled back; a transient storage or processing failure
   instead schedules a re-validation and leaves the block on the chain in the meantime
 - Can be overridden per-validation via the `DisableOptimisticMining` option
