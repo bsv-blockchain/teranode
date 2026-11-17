@@ -90,7 +90,7 @@ func TestLanePositionsOnNewRecordsUtxoset(t *testing.T) {
 
 // runLanePositionsScenario checks what the records carry: a transaction validated by the node gets a
 // lane position, a second process creating records against the same blockchain service gets a
-// different lane, and after a restart the node carries on in its lane above every position it used.
+// different lane, and after a restart the node takes a lease again and never reuses a position.
 func runLanePositionsScenario(t *testing.T, td *daemon.TestDaemon, restart func() *daemon.TestDaemon) {
 	t.Helper()
 
@@ -180,6 +180,15 @@ func runLanePositionsScenario(t *testing.T, td *daemon.TestDaemon, restart func(
 	}, 10*time.Second, 200*time.Millisecond)
 
 	afterLane, afterPos := lane.Unpack(lanePosition(td, tx1))
+
+	// Every record this run created carries a position, in a lane a lease can hold: never the
+	// coinbase lane 254 or the backfill lane 255. That includes the coinbases the node mined.
+	for i, tx := range []*bt.Tx{block1.CoinbaseTx, block2.CoinbaseTx, block4.CoinbaseTx, tx0, otherTx, tx1} {
+		v := lanePosition(td, tx)
+		require.True(t, lane.Valid(v), "record %d carries a lane position", i)
+		require.Less(t, int(lane.Lane(v)), 254, "record %d is in a leasable lane", i)
+	}
+
 	t.Logf("tx1 after restart %s: lane %d position %d", tx1.TxIDChainHash(), afterLane, afterPos)
 	// A restarted node takes a new lease, usually on another lane. In the same lane, it carries on
 	// above every position handed out before.

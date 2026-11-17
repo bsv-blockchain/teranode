@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -254,4 +255,129 @@ func TestServerLaneLeaseRecordsTheBestBlockHeight(t *testing.T) {
 			int(g.Lane), lane.ToSigned(first)).Scan(&height))
 		require.Equal(t, want, height)
 	}
+}
+
+// switchable is a lease source that a test can take down, as a blockchain service restart does.
+type switchable struct {
+	lane.LeaseSource
+	down atomic.Bool
+}
+
+func (s *switchable) OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
+	if s.down.Load() {
+		return lane.LeaseID{}, lane.Grant{}, errors.NewServiceUnavailableError("blockchain service restarting")
+	}
+
+	return s.LeaseSource.OpenLaneLease(ctx, holder)
+}
+
+func (s *switchable) RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error) {
+	if s.down.Load() {
+		return lane.RenewResult{}, errors.NewServiceUnavailableError("blockchain service restarting")
+	}
+
+	return s.LeaseSource.RenewLaneLease(ctx, r)
+}
+
+func (s *switchable) ReleaseLaneLease(ctx context.Context, r lane.Release) (bool, error) {
+	return s.LeaseSource.ReleaseLaneLease(ctx, r)
+}
+
+// TestLanePositionsSurviveABlockchainRestart takes the blockchain service away and builds a new one
+// over the same store, while an allocator keeps taking positions. There is no startup renewal: an
+// outage shorter than the stop costs nothing, and a longer one closes the lease, after which the
+// allocator opens a new one. Either way no position is given out twice.
+func TestLanePositionsSurviveABlockchainRestart(t *testing.T) {
+	timings := lane.Timings{Renew: 20 * time.Millisecond, Stop: 300 * time.Millisecond, GrantDuration: time.Minute}
+
+	run := func(t *testing.T, outage time.Duration) (taken []uint64, failures int, store blockchain_store.Store) {
+		t.Helper()
+
+		tc := setup(t)
+		tc.server.settings.BlockChain.LaneGrantMin = 1_000_000
+		tc.server.settings.BlockChain.LaneLeaseRenewInterval = timings.Renew
+		tc.server.settings.BlockChain.LaneLeaseStopAfter = timings.Stop
+		tc.server.settings.BlockChain.LaneLeaseCloseAfter = 450 * time.Millisecond
+
+		client, err := NewLocalClient(tc.logger, tc.server.settings, tc.server.store, nil, nil)
+		require.NoError(t, err)
+
+		src := &switchable{LeaseSource: client}
+		a := lane.NewAllocator(src, "validator-1", timings, nil)
+		t.Cleanup(func() { _ = a.Close() })
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go tc.server.startLaneLeaseSweep(ctx)
+
+		take := func(d time.Duration) {
+			for end := time.Now().Add(d); time.Now().Before(end); {
+				tctx, tcancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+				v, err := a.Next(tctx)
+
+				tcancel()
+
+				if err != nil {
+					failures++
+					continue
+				}
+
+				taken = append(taken, v)
+			}
+		}
+
+		take(100 * time.Millisecond)
+
+		// The service goes away; a new one is built over the same store and starts sweeping.
+		src.down.Store(true)
+
+		restarted, err := New(context.Background(), tc.logger, tc.server.settings, tc.server.store, nil)
+		require.NoError(t, err)
+		require.NoError(t, restarted.Init(context.Background()))
+
+		go restarted.startLaneLeaseSweep(ctx)
+
+		take(outage)
+		src.down.Store(false)
+
+		failures = 0 // only failures after the service is back count
+
+		take(time.Second)
+
+		return taken, failures, tc.server.store
+	}
+
+	requireUnique := func(t *testing.T, taken []uint64) {
+		t.Helper()
+
+		seen := make(map[uint64]bool, len(taken))
+		for _, v := range taken {
+			require.False(t, seen[v], "position %d given out twice", v)
+			seen[v] = true
+		}
+	}
+
+	t.Run("an outage shorter than the stop keeps the lease", func(t *testing.T) {
+		taken, failures, store := run(t, 150*time.Millisecond)
+		requireUnique(t, taken)
+
+		var closes int
+		require.NoError(t, store.GetDB().QueryRow(`SELECT COUNT(*) FROM lane_close`).Scan(&closes))
+		require.Zero(t, closes, "no lease closed")
+		require.LessOrEqual(t, failures, 2, "creates resume once the service is back")
+	})
+
+	t.Run("an outage longer than the close opens a new lease", func(t *testing.T) {
+		taken, _, store := run(t, 800*time.Millisecond)
+		requireUnique(t, taken)
+
+		var closes int
+		require.NoError(t, store.GetDB().QueryRow(`SELECT COUNT(*) FROM lane_close WHERE kind = 'lapsed'`).Scan(&closes))
+		require.Equal(t, 1, closes, "the silent lease lapsed")
+
+		var leases int
+		require.NoError(t, store.GetDB().QueryRow(`SELECT COUNT(*) FROM lane_lease WHERE closed_at IS NULL`).Scan(&leases))
+		require.Equal(t, 1, leases, "the allocator holds a new lease")
+	})
 }
