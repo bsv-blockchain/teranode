@@ -2743,6 +2743,32 @@ func maxMedianTimePastHeightsPerRequest(tSettings *settings.Settings) uint32 {
 // its context ends, and a process cancels its context before it closes its clients, so on ctx the
 // release at shutdown would go out over a closed connection and the lease would lapse instead.
 // Close still ends the client's subscription, so nothing outlives the allocator.
+//
+// Only the client's lifetime is detached. Its startup calls (the health check and the API key
+// check) still end when ctx does, so a blockchain service that accepts the connection and never
+// answers cannot hold up a process that is shutting down.
 func NewLaneClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (ClientI, error) {
-	return NewClient(context.WithoutCancel(ctx), logger, tSettings, "lane")
+	life, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	stop := context.AfterFunc(ctx, cancel)
+
+	client, err := NewClient(life, logger, tSettings, "lane")
+
+	if !stop() {
+		// ctx ended while the client was starting, so the process is shutting down.
+		cancel()
+
+		if err == nil {
+			_ = client.(*Client).Close()
+			err = errors.NewContextCanceledError("lane client start cut short by shutdown", ctx.Err())
+		}
+
+		return nil, err
+	}
+
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	return client, nil
 }

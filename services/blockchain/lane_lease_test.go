@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -418,6 +419,48 @@ func TestLaneClientReleasesAfterItsContextEnds(t *testing.T) {
 	var kind string
 	require.NoError(t, b.store.GetDB().QueryRow(`SELECT kind FROM lane_close`).Scan(&kind))
 	require.Equal(t, "clean", kind)
+}
+
+// A blockchain service that accepts the connection and never answers must not hold up a process
+// that is shutting down: the lane client's startup calls end with its context, even though the
+// client it would build is detached from that context.
+func TestLaneClientStartEndsWithItsContext(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+
+			t.Cleanup(func() { _ = conn.Close() }) // hold it open, answer nothing
+		}
+	}()
+
+	s := test.CreateBaseTestSettings(t)
+	s.BlockChain.GRPCAddress = ln.Addr().String()
+	s.BlockChain.MaxRetries = 0
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := NewLaneClient(ctx, ulogger.TestLogger{}, s)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("NewLaneClient did not return after its context ended")
+	}
 }
 
 // TestLaneLeaseRateSettlesAndLastTakenCrossTheWire sends a renewal and a release through a real
