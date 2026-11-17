@@ -1250,7 +1250,7 @@ func (s *Service) processRecordChunkCarry(ctx context.Context, blockHeight uint3
 		var updateErr error
 
 		for _, input := range inputs {
-			if updateErr = s.addParentUpdatesForInput(recordUpdates, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, txHash); updateErr != nil {
+			if updateErr = s.stageParentUpdatesForInput(recordUpdates, allParentUpdates, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, txHash); updateErr != nil {
 				break
 			}
 		}
@@ -2182,19 +2182,34 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 }
 
 // addParentUpdate accumulates replay protection for a surviving parent record.
-// It is the single producer of parentUpdateInfo values: processRecordChunkCarry and
-// ProcessSingleRecord both go through it, so the two cannot disagree about which
-// records get a marker.
+// It wraps stageParentUpdate, the single producer of parentUpdateInfo values:
+// processRecordChunkCarry and ProcessSingleRecord both go through it, so the two
+// cannot disagree about which records get a marker.
 func (s *Service) addParentUpdate(updates map[string]*parentUpdateInfo, source []byte, childHash *chainhash.Hash, offset uint32) error {
+	return s.stageParentUpdate(updates, nil, source, childHash, offset)
+}
+
+// stageParentUpdate is addParentUpdate for a record staged apart from the
+// chunk-wide set it is merged into later. A parent already in queued reuses
+// that entry's key, so the key digest (RIPEMD-160) is computed once per
+// distinct parent in a chunk, not once per child that spends it.
+func (s *Service) stageParentUpdate(updates, queued map[string]*parentUpdateInfo, source []byte, childHash *chainhash.Hash, offset uint32) error {
 	if existing, ok := updates[string(source)]; ok {
 		existing.add(childHash, offset)
 
 		return nil
 	}
 
-	key, err := aerospike.NewKey(s.namespace, s.set, source)
-	if err != nil {
-		return err
+	var key *aerospike.Key
+
+	if known, ok := queued[string(source)]; ok {
+		key = known.key
+	} else {
+		var err error
+
+		if key, err = aerospike.NewKey(s.namespace, s.set, source); err != nil {
+			return err
+		}
 	}
 
 	info := &parentUpdateInfo{key: key, seen: make(map[chainhash.Hash]struct{}, 1)}
@@ -2223,11 +2238,17 @@ func (s *Service) addParentUpdate(updates map[string]*parentUpdateInfo, source [
 // keepSpendHolders can drop the marker when that output does not record this
 // child as its spender, which is what a conflicting loser looks like.
 func (s *Service) addParentUpdatesForInput(updates map[string]*parentUpdateInfo, parentTxID *chainhash.Hash, vout uint32, childHash *chainhash.Hash) error {
+	return s.stageParentUpdatesForInput(updates, nil, parentTxID, vout, childHash)
+}
+
+// stageParentUpdatesForInput is addParentUpdatesForInput for a record staged
+// apart from queued, the chunk-wide set; see stageParentUpdate.
+func (s *Service) stageParentUpdatesForInput(updates, queued map[string]*parentUpdateInfo, parentTxID *chainhash.Hash, vout uint32, childHash *chainhash.Hash) error {
 	if s.utxoBatchSize <= 0 {
 		return errors.NewProcessingError("utxo batch size %d cannot address output %d of %s", s.utxoBatchSize, vout, parentTxID.String())
 	}
 
-	return s.addParentUpdate(updates, uaerospike.CalculateKeySource(parentTxID, vout, s.utxoBatchSize), childHash, vout%uint32(s.utxoBatchSize))
+	return s.stageParentUpdate(updates, queued, uaerospike.CalculateKeySource(parentTxID, vout, s.utxoBatchSize), childHash, vout%uint32(s.utxoBatchSize))
 }
 
 // spendHolderVerdict is what one parent record says about one queued child.

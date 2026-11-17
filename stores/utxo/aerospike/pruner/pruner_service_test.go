@@ -2,6 +2,7 @@ package pruner
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -733,4 +734,122 @@ func TestPartitionWorker_CancelledWorkerStillDrainsTheCarry(t *testing.T) {
 	}
 
 	require.NotZero(t, marked, "precondition: a marker landed before the cancel")
+}
+
+// TestStageParentUpdate_ReusesTheQueuedKey: a parent already queued for the
+// chunk keeps its key when a later record stages a marker on it, so the key
+// digest runs once per distinct parent in a chunk, not once per child.
+func TestStageParentUpdate_ReusesTheQueuedKey(t *testing.T) {
+	s := newTestService(t)
+
+	parent := chainhash.HashH([]byte("shared parent"))
+	first := chainhash.HashH([]byte("first child"))
+	second := chainhash.HashH([]byte("second child"))
+
+	queued := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.stageParentUpdatesForInput(queued, nil, &parent, 0, &first))
+
+	staged := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.stageParentUpdatesForInput(staged, queued, &parent, 1, &second))
+
+	source := string(uaerospike.CalculateKeySource(&parent, 1, s.utxoBatchSize))
+	require.Contains(t, staged, source)
+	require.Same(t, queued[source].key, staged[source].key, "the staged record reuses the queued parent's key")
+	require.Equal(t, []uint32{1}, staged[source].offsets[second], "staging still records the child's own offset")
+}
+
+// markerBenchChunk queues the marker writes of one chunk: children children,
+// each spending inputs outputs. Every input names output 0 of its own parent,
+// drawn from a pool of parents parents, so with parents < children*inputs the
+// same parent is spent by several children of the chunk, as a busy parent is.
+func markerBenchChunk(b *testing.B, s *Service, children, inputs, parents int, reuseKeys bool) map[string]*parentUpdateInfo {
+	b.Helper()
+
+	all := make(map[string]*parentUpdateInfo, children*inputs)
+
+	for c := 0; c < children; c++ {
+		child := chainhash.HashH([]byte{byte(c), byte(c >> 8), 0xC1})
+		record := make(map[string]*parentUpdateInfo, inputs)
+
+		queued := all
+		if !reuseKeys {
+			queued = nil
+		}
+
+		for i := 0; i < inputs; i++ {
+			n := (c*inputs + i) % parents
+			parent := chainhash.HashH([]byte{byte(n), byte(n >> 8), byte(n >> 16), 0xB1})
+
+			if err := s.stageParentUpdatesForInput(record, queued, &parent, 0, &child); err != nil {
+				b.Fatal(err)
+			}
+		}
+
+		for source, info := range record {
+			if existing, ok := all[source]; ok {
+				existing.merge(info)
+			} else {
+				all[source] = info
+			}
+		}
+	}
+
+	return all
+}
+
+// BenchmarkStageChunkParentUpdates measures queueing one chunk's marker
+// writes, as processRecordChunkCarry does: 1024 children, 1, 4 or 8 inputs
+// each, over 256 parents. "reuse" looks the parent up in the chunk's queue
+// before computing its key; "per-child" computes a key for every child that
+// spends the parent, which is what the branch did before.
+func BenchmarkStageChunkParentUpdates(b *testing.B) {
+	s := &Service{namespace: "test", set: "test", utxoBatchSize: 128}
+
+	for _, inputs := range []int{1, 4, 8} {
+		for _, mode := range []struct {
+			name  string
+			reuse bool
+		}{{"reuse", true}, {"per-child", false}} {
+			b.Run(fmt.Sprintf("inputs=%d/%s", inputs, mode.name), func(b *testing.B) {
+				b.ReportAllocs()
+
+				for i := 0; i < b.N; i++ {
+					_ = markerBenchChunk(b, s, 1024, inputs, 256, mode.reuse)
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkBuildVerifiedMarkerRecords measures building one chunk's marker
+// batch records on the client: 1024 children with 1, 4 or 8 inputs each, every
+// input on its own parent record. "filtered" is the MapPutItems write with its
+// filter expression, the fallback; "native" is the sub-op 15 write that
+// native-op deployments use, built by testNativeMarkerRecord, which encodes
+// the same payload and policy as the store's prunerVerifiedMarkerRecord. The
+// expression's wire packing happens later, in BatchOperate, and is not
+// measured here.
+func BenchmarkBuildVerifiedMarkerRecords(b *testing.B) {
+	for _, inputs := range []int{1, 4, 8} {
+		for _, mode := range []string{"filtered", "native"} {
+			b.Run(fmt.Sprintf("inputs=%d/%s", inputs, mode), func(b *testing.B) {
+				s := &Service{namespace: "test", set: "test", utxoBatchSize: 128, fieldUtxos: fields.Utxos.String(), fieldDeletedChildren: fields.DeletedChildren.String()}
+				if mode == "native" {
+					s.buildVerifiedMarkerRecord = testNativeMarkerRecord
+				}
+
+				updates := markerBenchChunk(b, s, 1024, inputs, 1024*inputs, true)
+
+				b.ReportAllocs()
+				b.ResetTimer()
+
+				for i := 0; i < b.N; i++ {
+					records, _, _ := s.buildVerifiedMarkerRecords(updates)
+					if len(records) != len(updates) {
+						b.Fatalf("built %d records for %d parents", len(records), len(updates))
+					}
+				}
+			})
+		}
+	}
 }
