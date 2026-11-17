@@ -12,6 +12,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"reflect"
 	"time"
 
@@ -97,10 +98,94 @@ const errBlockAlreadyExistsInDB = "block already exists in the database: %s"
 //   - BlockAlreadyExistsError for duplicate block submissions
 //   - StorageError for database failures
 //   - ProcessingError for internal processing failures
+//
+// On PostgreSQL a fork block that cannot get a row lock within forkLockTimeout gives up
+// slowPathMu and tries again after forkLockRetryDelay, until ctx ends. See
+// forkLockWaitError.
 func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, error) {
 	ctx, _, deferFn := tracing.Tracer("sql").Start(ctx, "sql:StoreBlock")
 	defer deferFn()
 
+	for attempt := 1; ; attempt++ {
+		id, height, err := s.storeBlockAttempt(ctx, block, peerID, opts...)
+
+		lockWait, waited := err.(*forkLockWaitError) //nolint:errorlint // storeBlockAttempt returns it unwrapped
+		if !waited {
+			return id, height, err
+		}
+
+		if attempt == 1 || attempt%forkLockWarnEvery == 0 {
+			s.logger.Warnf("[StoreBlock][%s] fork block could not lock a row within %s on attempt %d, retrying in %s without slowPathMu: %v",
+				block.Hash().String(), forkLockTimeout, attempt, forkLockRetryDelay, lockWait.cause)
+		}
+
+		select {
+		case <-ctx.Done():
+			return 0, height, errors.NewStorageError("[StoreBlock][%s] fork block gave up after %d attempts to lock its rows", block.Hash().String(), attempt, lockWait.cause)
+		case <-time.After(forkLockRetryDelay):
+		}
+	}
+}
+
+const (
+	// forkLockTimeout bounds each lock wait in the fork path's transaction on PostgreSQL.
+	// Normal holders of those rows (another chain write, or an update of mined_set,
+	// persisted_at or processed_at) hold them for milliseconds, so a longer wait is almost
+	// always a walk without slowPathMu. PostgreSQL's deadlock_timeout defaults to 1 s, so
+	// a fork that deadlocks with a walk gives up through this bound first.
+	forkLockTimeout = 500 * time.Millisecond
+	// forkLockRetryDelay is how long a fork block that gave up a lock wait leaves
+	// slowPathMu free before it tries again. The fork holds the chain-write row for up to
+	// forkLockTimeout of each round, so the longer this is the less often a walk meets it
+	// at its chain-write check and rolls back.
+	forkLockRetryDelay = time.Second
+	// forkLockWarnEvery logs one retry in this many, about one line every 45 s.
+	forkLockWarnEvery = 30
+)
+
+// forkLockTimeoutStatement sets forkLockTimeout for the rest of one transaction.
+var forkLockTimeoutStatement = fmt.Sprintf(`SET LOCAL lock_timeout = '%dms'`, forkLockTimeout.Milliseconds())
+
+// forkLockWaitError is the fork path's transaction giving up a lock wait after
+// forkLockTimeout (55P03, lock_not_available).
+//
+// A full on_main_chain walk on PostgreSQL runs without slowPathMu and holds a row lock on
+// every blocks row its UPDATEs change until it commits, up to migrationFullRebuildTimeout
+// (30 min). A fork block's reconcile that reaches such a row would wait there while it
+// holds slowPathMu, and every later StoreBlock, extends included, would wait behind it.
+// With the bound, StoreBlock releases slowPathMu and runs the whole attempt again, so
+// extends keep being stored while the fork block waits for the walk to finish.
+//
+// It neither unwraps to the driver error nor says "timeout" in its message, so RetryTx
+// treats it as not retriable and returns at once rather than retrying under slowPathMu,
+// and the pool's circuit breaker does not count it as a failure.
+type forkLockWaitError struct {
+	cause error
+}
+
+func (e *forkLockWaitError) Error() string {
+	return "fork block gave up waiting for a row lock"
+}
+
+// isLockNotAvailable reports whether err is PostgreSQL's 55P03, lock_not_available.
+func isLockNotAvailable(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == usql.PgErrLockNotAvailable
+	}
+
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return string(pqErr.Code) == usql.PgErrLockNotAvailable
+	}
+
+	return false
+}
+
+// storeBlockAttempt is one StoreBlock attempt under slowPathMu. It returns a
+// *forkLockWaitError, unwrapped, when the fork path gave up a lock wait and committed
+// nothing.
+func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -245,10 +330,20 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		// concrete type (SQLSTATE, SQLite result code), and a teranode error keeps
 		// only the message, so wrapping first would hide SQLITE_LOCKED or a 40001
 		// from it. The errors are typed after RetryTx returns.
-		err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+		forkTx := func(tx *sql.Tx) error {
 			var storeErr error
 
 			reconcileErr = nil
+
+			// Bound every lock wait below, so a row held by a walk without slowPathMu
+			// cannot keep this transaction, and slowPathMu with it, waiting; see
+			// forkLockWaitError. It changes no data, so lockChainWrites below is still
+			// the first statement a walk can see.
+			if s.engine == util.Postgres {
+				if _, storeErr = tx.ExecContext(ctx, forkLockTimeoutStatement); storeErr != nil {
+					return storeErr
+				}
+			}
 
 			// First, so a walk in any process sees the reconcile below; see
 			// chainWriteStateKey. A block stored as invalid skips the reconcile and
@@ -317,7 +412,21 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			}
 
 			return reconcileErr
+		}
+
+		err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+			txErr := forkTx(tx)
+			if s.engine == util.Postgres && isLockNotAvailable(txErr) {
+				return &forkLockWaitError{cause: txErr}
+			}
+
+			return txErr
 		})
+
+		if lockWait, ok := err.(*forkLockWaitError); ok { //nolint:errorlint // RetryTx returns the closure's error unchanged
+			return 0, height, lockWait
+		}
+
 		if err != nil {
 			// Label the error as the reconciliation's only when it is the very value the
 			// reconciliation returned. RetryTx hands back the closure's error unchanged, but

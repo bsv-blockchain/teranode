@@ -412,11 +412,10 @@ const (
 // while the database stays slow it is retried every 30 s, so holding the lock would stop
 // block storage for as long as the fault lasts. Without the lock, blocks keep being stored
 // while no chain write meets the walk. A fork block whose reconcile reaches a row the walk
-// has already updated waits on that row while it holds slowPathMu, so every StoreBlock
-// after it, extends included, waits too. The wait ends when one of the two gives way: the
-// walk rolls back at its chain-write check or on any earlier error, or PostgreSQL aborts
-// the fork's reconcile as a deadlock victim and RetryTx runs it again. It lasts at most
-// the rest of the walk's 30 min budget. Readers are on their flag-free walk
+// has already updated waits on that row for at most forkLockTimeout, then releases
+// slowPathMu and tries again (see forkLockWaitError), so extends keep being stored while
+// the fork block waits for the walk. DeleteBlock, InvalidateBlock and RevalidateBlock have
+// no such bound and still wait on the walk's rows under slowPathMu. Readers are on their flag-free walk
 // because of the guard, and rows a concurrent StoreBlock inserts are flagged by that
 // StoreBlock. A chain write that commits during the attempt can leave the attempt's older
 // view in place (see watchOnMainChainWrites), so the attempt watches for chain writes and

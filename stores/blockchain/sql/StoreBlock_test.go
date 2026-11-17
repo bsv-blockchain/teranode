@@ -15,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/usql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1104,4 +1105,118 @@ func TestParseSQLError_NilError(t *testing.T) {
 	result := s.parseSQLError(nil, block1)
 	assert.Error(t, result)
 	assert.Contains(t, result.Error(), "failed to store block")
+}
+
+// TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL: a fork block whose
+// reconcile reaches a blocks row another transaction holds, as a full on_main_chain walk
+// without slowPathMu does, must not keep slowPathMu while it waits. An extend that
+// arrives meanwhile stores at once, and the fork block stores once the row is released.
+func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T) {
+	s := newPostgresChainWriteStore(t)
+	ctx := context.Background()
+
+	// block1 to block3 are the main chain and blockAlternative2 a fork off block1. alt4
+	// takes the tip, so its reconcile clears block2 and block3.
+	alt3 := createBlock3OnFork(blockAlternative2)
+	storeBlocks(t, s, alt3)
+
+	alt4 := createBlock3OnFork(alt3)
+
+	// Hold block3's row the way a walk's UPDATE does, until the test releases it.
+	holder, err := s.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	_, err = holder.ExecContext(ctx, `UPDATE blocks SET on_main_chain = on_main_chain WHERE hash = $1`, block3.Hash().CloneBytes())
+	require.NoError(t, err)
+
+	released := false
+	release := func() {
+		if !released {
+			released = true
+
+			require.NoError(t, holder.Rollback())
+		}
+	}
+	t.Cleanup(release)
+
+	forkDone := make(chan error, 1)
+
+	go func() {
+		forkCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+
+		_, _, storeErr := s.StoreBlock(forkCtx, alt4, "peer")
+		forkDone <- storeErr
+	}()
+
+	// Wait until the fork's reconcile is queued on the held row.
+	require.Eventually(t, func() bool {
+		var waiting int
+		if qErr := s.db.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%new_path%'`).Scan(&waiting); qErr != nil {
+			return false
+		}
+
+		return waiting > 0
+	}, 10*time.Second, 20*time.Millisecond, "the fork block's reconcile never queued on the held row")
+
+	// An extend of the current tip touches no row the holder has, so only slowPathMu could
+	// keep it waiting.
+	block4 := createBlock3OnFork(block3)
+
+	extendCtx, cancelExtend := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelExtend()
+
+	_, _, err = s.StoreBlock(extendCtx, block4, "peer")
+	require.NoError(t, err, "an extend must store while a fork block waits on a row lock")
+
+	select {
+	case forkErr := <-forkDone:
+		t.Fatalf("the fork block returned while the row was still held: %v", forkErr)
+	default:
+	}
+
+	release()
+
+	select {
+	case forkErr := <-forkDone:
+		require.NoError(t, forkErr)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the fork block did not store after the row was released")
+	}
+
+	exists, err := s.GetBlockExists(ctx, alt4.Hash())
+	require.NoError(t, err)
+	require.True(t, exists)
+}
+
+// TestForkLockWaitErrorIsNotRetriedByRetryTx: RetryTx retries a 55P03 in place, under
+// slowPathMu, so the fork path hands it back as forkLockWaitError for StoreBlock to retry
+// without the lock. RetryTx must run the transaction once and return it unchanged.
+func TestForkLockWaitErrorIsNotRetriedByRetryTx(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+
+	defer s.Close(context.Background())
+
+	s.db.SetRetryConfig(usql.RetryConfig{Enabled: true, MaxAttempts: 3, BaseDelay: time.Millisecond})
+
+	lockTimeout := &pgconn.PgError{Code: usql.PgErrLockNotAvailable, Message: "canceling statement due to lock timeout"}
+	require.True(t, isLockNotAvailable(lockTimeout))
+
+	calls := 0
+	err = s.db.RetryTx(context.Background(), nil, func(*sql.Tx) error {
+		calls++
+
+		return &forkLockWaitError{cause: lockTimeout}
+	})
+
+	require.Equal(t, 1, calls, "RetryTx must not retry a forkLockWaitError under slowPathMu")
+
+	lockWait, ok := err.(*forkLockWaitError) //nolint:errorlint // StoreBlock matches it unwrapped
+	require.True(t, ok)
+	require.Same(t, lockTimeout, lockWait.cause)
 }
