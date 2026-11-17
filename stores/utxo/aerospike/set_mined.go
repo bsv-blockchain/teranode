@@ -628,26 +628,18 @@ func (s *Store) readExtraRecordCounts(txIDs []chainhash.Hash) ([]lockClearItem, 
 
 	for i, rec := range records {
 		br := rec.BatchRec()
-		if br.Err != nil {
-			if !isKeyNotFound(br.Err) {
-				readErr = errors.JoinCapped(10, readErr, errors.NewStorageError("[readExtraRecordCounts][%s] failed to read the extra record count", ids[i].String(), br.Err))
-			}
-
+		if br.Err != nil && !isKeyNotFound(br.Err) {
+			readErr = errors.JoinCapped(10, readErr, errors.NewStorageError("[readExtraRecordCounts][%s] failed to read the extra record count", ids[i].String(), br.Err))
 			continue
 		}
 
+		// A missing master comes back as KEY_NOT_FOUND with no record.
 		if br.Record == nil {
 			continue
 		}
 
-		state, err := s.parseSetMinedState(br.Record.Bins)
-		if err != nil {
-			readErr = errors.JoinCapped(10, readErr, errors.NewProcessingError("[readExtraRecordCounts][%s] failed to parse the extra record count", ids[i].String(), err))
-			continue
-		}
-
-		if state.TotalExtraRecs != nil && *state.TotalExtraRecs > 0 {
-			items = append(items, lockClearItem{txID: ids[i], childCount: *state.TotalExtraRecs})
+		if extraRecs, ok := br.Record.Bins[fields.TotalExtraRecs.String()].(int); ok && extraRecs > 0 {
+			items = append(items, lockClearItem{txID: ids[i], childCount: extraRecs})
 		}
 	}
 
