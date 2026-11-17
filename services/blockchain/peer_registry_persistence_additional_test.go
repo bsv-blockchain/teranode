@@ -16,8 +16,8 @@ import (
 )
 
 // TestCentralizedPeerRegistry_Persistence_AllFields verifies that Save then Load
-// preserves every PeerInfo field except the ones Load clears on purpose: the
-// advertised tip (Height, AdvertisedHeight, BlockHash) and IsConnected.
+// preserves every PeerInfo field of a wire peer except IsConnected, which Load
+// clears on purpose.
 func TestCentralizedPeerRegistry_Persistence_AllFields(t *testing.T) {
 	store := newTestBlobStore(t)
 	ctx := context.Background()
@@ -85,10 +85,9 @@ func TestCentralizedPeerRegistry_Persistence_AllFields(t *testing.T) {
 	require.Equal(t, "192.168.1.100:8333", got.NetworkAddress)
 	require.Equal(t, "aerospike", got.Storage)
 
-	// The advertised tip is persisted but not restored: it is stale until the
-	// peer's next node_status (see TestCentralizedPeerRegistry_Load_ClearsAdvertisedTip).
-	require.Zero(t, got.Height)
-	require.Nil(t, got.BlockHash)
+	require.Equal(t, uint32(12345), got.Height)
+	require.NotNil(t, got.BlockHash)
+	require.Equal(t, blockHash.String(), got.BlockHash.String())
 
 	require.Equal(t, uint64(999888), got.BytesSent)
 	require.Equal(t, uint64(777666), got.BytesReceived)
@@ -229,6 +228,35 @@ func TestCentralizedPeerRegistry_Load_ClearsAdvertisedTip(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, uint32(950), got.Height, "a live node_status repopulates the advertised tip")
 	require.Equal(t, freshHash.String(), got.BlockHash.String())
+}
+
+// TestCentralizedPeerRegistry_Load_KeepsWirePeerHeight covers a restart of the
+// blockchain service alone. The legacy service keeps running, so it sends
+// RegisterPeer only when a peer's snapshot changes, and its metrics update
+// carries height 0. A wire peer must keep its persisted height across the
+// reload, or the dashboard shows a live wire peer at height 0.
+func TestCentralizedPeerRegistry_Load_KeepsWirePeerHeight(t *testing.T) {
+	store := newTestBlobStore(t)
+	ctx := context.Background()
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	r.Register(&PeerInfo{
+		ID:               "legacy:10.0.0.1:8333",
+		TransportType:    blockchain_api.TransportType_TRANSPORT_WIRE_PROTOCOL,
+		TransportTypeSet: true,
+		NetworkAddress:   "10.0.0.1:8333",
+		Height:           800,
+	})
+	require.NoError(t, r.Save(ctx, store))
+
+	r2 := NewCentralizedPeerRegistry(DefaultBanConfig())
+	require.NoError(t, r2.Load(ctx, store, 24*time.Hour))
+	r2.UpdateMetrics("legacy:10.0.0.1:8333", 0, 100, 200, false, false, false, 0)
+
+	got, ok := r2.Get("legacy:10.0.0.1:8333")
+	require.True(t, ok)
+	require.Equal(t, uint32(800), got.Height)
+	require.Equal(t, uint64(100), got.BytesSent, "the legacy metrics update was applied")
 }
 
 func TestCentralizedPeerRegistry_Persistence_EmptyRegistrySave(t *testing.T) {
