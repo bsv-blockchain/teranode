@@ -1342,7 +1342,11 @@ func (s *File) GetIoReader(ctx context.Context, key []byte, fileType fileformat.
 		return nil, err
 	}
 
-	if err := s.validateFileHeader(f, fileName, fileType); err != nil {
+	// Only a reader opened from local disk proves a short header is short on disk. The
+	// longterm fallback can be a network stream, where a short read may be a dropped connection.
+	_, localFile := f.(*semaphoreReadCloser)
+
+	if err := s.validateFileHeader(f, fileName, fileType, localFile); err != nil {
 		if closeErr := f.Close(); closeErr != nil {
 			s.logger.Warnf("[File][GetIoReader] failed to close file after header validation error: %v", closeErr)
 		}
@@ -1359,15 +1363,18 @@ func (s *File) GetReader(ctx context.Context, key []byte, fileType fileformat.Fi
 
 // validateFileHeader reads and validates the file header.
 //
-// A header that is short, has unknown magic or names another file type is a corrupt file, and
-// the error carries a BlobCorrupt cause beside the StorageError. Writes go to a temp file that is
-// renamed into place, so a reader never sees a half-written file and a retry would read the same
-// bytes. Any other read failure (an I/O error from the disk) is left as a plain StorageError,
-// because the file itself may be fine.
-func (s *File) validateFileHeader(f io.Reader, fileName string, fileType fileformat.FileType) error {
+// A header that has unknown magic or names another file type is a corrupt file, and the error
+// carries a BlobCorrupt cause beside the StorageError. A short header is corrupt too when
+// localFile is true: writes go to a temp file that is renamed into place, so a reader never sees
+// a half-written file and a retry would read the same bytes. When the reader came from the
+// longterm client (localFile false) it may be a network stream, so a short header there stays a
+// plain StorageError, as in the S3 store's GetIoReader. Any other read failure (an I/O error) is
+// also left as a plain StorageError, because the file itself may be fine.
+func (s *File) validateFileHeader(f io.Reader, fileName string, fileType fileformat.FileType, localFile bool) error {
 	header := &fileformat.Header{}
 	if err := header.Read(f); err != nil {
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, fileformat.ErrUnknownMagic) {
+		shortHeader := errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+		if (shortHeader && localFile) || errors.Is(err, fileformat.ErrUnknownMagic) {
 			return errors.NewStorageError("[File][GetIoReader] [%s] missing or invalid header", fileName,
 				errors.NewBlobCorruptError("header unreadable", err))
 		}

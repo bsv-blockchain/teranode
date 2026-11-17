@@ -420,6 +420,13 @@ func TestGetErrorCategory(t *testing.T) {
 			expected: "block",
 		},
 		{
+			// A corrupt stored blob renders "BLOB_CORRUPT" and would match the same substring.
+			// It is a fault in this node's own storage, not a peer's, so it is "blob".
+			name:     "corrupt stored blob is categorised as blob, not malicious",
+			err:      NewStorageError("[File][GetIoReader] header filetype mismatch", NewBlobCorruptError("got a, want b")),
+			expected: "blob",
+		},
+		{
 			// The early-out must not over-reach: a genuinely malicious error still categorises
 			// as malicious.
 			name:     "network peer malicious error stays malicious",
