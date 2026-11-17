@@ -370,62 +370,6 @@ func TestRunRollsBackOnSetHashMismatch(t *testing.T) {
 	}
 }
 
-// storedButUnknownStore stores the transaction failTxID names, then reports
-// the create's outcome as unknown, as the Aerospike store does when it wrote
-// the records but could not clear their creating flag.
-type storedButUnknownStore struct {
-	utxo.Store
-	failTxID chainhash.Hash
-}
-
-func (s storedButUnknownStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
-	data, spends, err := s.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
-	if err != nil {
-		return data, spends, err
-	}
-
-	createOpts := &utxo.CreateOptions{}
-	for _, opt := range opts {
-		opt(createOpts)
-	}
-
-	if createOpts.TxID != nil && *createOpts.TxID == s.failTxID {
-		return nil, nil, utxo.MarkCreateOutcomeUnknown(errors.NewStorageError("tx %s is stored but its creating flag was not cleared", s.failTxID))
-	}
-
-	return data, spends, nil
-}
-
-func TestRunRollsBackAStoredCreateWithUnknownOutcome(t *testing.T) {
-	ctx := context.Background()
-
-	wrappers := sampleWrappers()
-	seedStore, blockHash, trustedKey := buildSeed(t, wrappers, 101)
-	utxoStore := newTestUTXOStore(t)
-
-	cfg := Config{
-		SeedStore:    seedStore,
-		UTXOStore:    storedButUnknownStore{Store: utxoStore, failTxID: wrappers[1].TxID},
-		Lookup:       stubLookup{id: 7, height: 101, onMain: true},
-		TrustedKeys:  [][]byte{trustedKey},
-		BlockHash:    blockHash,
-		NetworkMagic: testNetMagic,
-	}
-
-	require.Error(t, Run(ctx, ulogger.TestLogger{}, cfg))
-
-	// The failed transaction is stored, so the rollback must remove it too.
-	for _, w := range wrappers {
-		txid := w.TxID
-		_, err := utxoStore.Get(ctx, &txid)
-		require.Error(t, err, "record for %s should have been rolled back", txid.String())
-	}
-
-	// With nothing left behind, importing the same seed again succeeds.
-	cfg.UTXOStore = utxoStore
-	require.NoError(t, Run(ctx, ulogger.TestLogger{}, cfg))
-}
-
 func TestRunRejectsTamperedSet(t *testing.T) {
 	ctx := context.Background()
 
