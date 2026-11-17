@@ -745,8 +745,18 @@ func TestProcessNextBlock_RecordsASetAnEarlierRunPublished(t *testing.T) {
 	// The earlier run: the set for block 3 is published, lastProcessed still says 1.
 	require.NoError(t, server.BuildUTXOSetToHeight(ctx, 1, 3, false))
 
+	// Give the previous set its sidecars, so the test sees they go with it.
+	require.NoError(t, store.Set(ctx, byH[1][:], fileformat.FileTypeUtxoSetHash, []byte("set-hash")))
+	require.NoError(t, store.Set(ctx, byH[1][:], fileformat.FileTypeUtxoHeaders, []byte("headers")))
+
 	_, err := server.processNextBlock(ctx)
 	require.NoError(t, err)
+
+	for _, ft := range []fileformat.FileType{fileformat.FileTypeUtxoSetHash, fileformat.FileTypeUtxoHeaders} {
+		exists, err := store.Exists(ctx, byH[1][:], ft)
+		require.NoError(t, err)
+		require.False(t, exists, "the previous %s is deleted with the set", ft)
+	}
 
 	height, err := server.readLastHeight(ctx)
 	require.NoError(t, err)
