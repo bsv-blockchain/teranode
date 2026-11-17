@@ -405,7 +405,8 @@ func TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime(t *testing.T) {
 
 			storeBlocks(t, s, block1, block2, block3)
 
-			// The stale row sits at the bottom of the chain, below any bounded window.
+			// The stale row sits at the bottom of the chain, at the noted floor 0. The hook
+			// makes the bounded walk outlast its budget, so only the full walk repairs it.
 			_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`, block1.Hash().CloneBytes())
 			require.NoError(t, err)
 
@@ -456,6 +457,79 @@ func TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime(t *testing.T) {
 			require.Equal(t, noRepairFloor, s.onMainChainRepair.floor)
 		})
 	}
+}
+
+// TestOnMainChainRepairEscalatedWalkThatIsOverlappedNarrowsToTheWritesFloor: escalating a
+// bounded repair from floor 0 to the full walk must also drop floor 0. On PostgreSQL the
+// full walk runs without slowPathMu, so a StoreBlock reorg can overlap it, and the record is
+// then narrowed to the lower of its floor and the reorg's. A floor 0 left on the record would
+// win that and send the repair back to the locked bounded walk to genesis that has just run
+// out of time. The next walk must reach only the reorg's floor.
+func TestOnMainChainRepairEscalatedWalkThatIsOverlappedNarrowsToTheWritesFloor(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	s.unlockedFullRepair = true
+	setRepairBackoff(t, s, time.Millisecond)
+
+	s.onMainChainRepair.mu.Lock()
+	s.onMainChainRepair.boundedTimeout = 50 * time.Millisecond
+	s.onMainChainRepair.mu.Unlock()
+
+	alt3, alt4 := reorgFixture(t, s)
+
+	var (
+		mu     sync.Mutex
+		fulls  []bool
+		floors []int64
+		locked []bool
+	)
+
+	s.rebuildTxHook = func(ctx context.Context, full bool, floor int64) error {
+		held := !s.slowPathMu.TryLock()
+		if !held {
+			s.slowPathMu.Unlock()
+		}
+
+		mu.Lock()
+		fulls = append(fulls, full)
+		floors = append(floors, floor)
+		locked = append(locked, held)
+		call := len(fulls)
+		mu.Unlock()
+
+		switch call {
+		case 1:
+			// The bounded walk from floor 0 outlasts its budget.
+			<-ctx.Done()
+
+			return errors.NewStorageError("bounded walk did not finish", ctx.Err())
+		case 2:
+			// The full walk is overlapped by a reorg and commits its older view.
+			for _, b := range []*model.Block{alt3, alt4} {
+				if _, _, err := s.StoreBlock(ctx, b, "peer"); err != nil {
+					return err
+				}
+			}
+
+			_, err := s.db.ExecContext(ctx, `UPDATE blocks SET on_main_chain = (hash IN ($1, $2)) WHERE height IN (2, 3, 4)`,
+				block2.Hash().CloneBytes(), block3.Hash().CloneBytes())
+
+			return err
+		default:
+			return s.rebuildOnMainChainFlagTx(ctx, full, floor)
+		}
+	}
+
+	s.markOnMainChainDirty(false, 0, "test", errors.NewStorageError("injected"))
+	waitForRepair(t, s)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Equal(t, []bool{false, true, false}, fulls, "the bounded walk runs out of time, the full walk is overlapped, then one bounded walk lands")
+	require.Equal(t, []int64{0, noRepairFloor, int64(block2.Height)}, floors, "the last walk reaches the reorg's floor, not floor 0")
+	require.Equal(t, []bool{true, false, true}, locked, "only the bounded walks hold slowPathMu")
+
+	requireForkIsTheMainChain(t, s, alt3, alt4)
 }
 
 // TestOnMainChainRepairRerunsWhenAChainWriteOverlapsIt: a full walk that runs without
