@@ -181,6 +181,18 @@ func (c *LocalClient) ReserveLaneRange(ctx context.Context, holder string, wantL
 	return reserveLaneRange(ctx, c.store, c.settings, holder, wantLane, hasLane)
 }
 
+func (c *LocalClient) OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
+	return openLaneLease(ctx, c.store, c.settings, holder)
+}
+
+func (c *LocalClient) RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error) {
+	return renewLaneLease(ctx, c.store, c.settings, r)
+}
+
+func (c *LocalClient) ReleaseLaneLease(ctx context.Context, r lane.Release) (bool, error) {
+	return releaseLaneLease(ctx, c.store, r)
+}
+
 func (c *LocalClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	return c.store.GetBlockStats(ctx)
 }

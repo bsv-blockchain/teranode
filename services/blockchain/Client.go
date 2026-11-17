@@ -503,6 +503,59 @@ func (c *Client) ReserveLaneRange(ctx context.Context, holder string, wantLane u
 	return lane.Range{Lane: uint8(resp.Lane), First: resp.First, Last: resp.Last}, nil
 }
 
+// OpenLaneLease asks the blockchain service for a lease on a free lane, with its first grant.
+func (c *Client) OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
+	resp, err := c.client.OpenLaneLease(ctx, &blockchain_api.OpenLaneLeaseRequest{Holder: holder})
+	if err != nil {
+		return lane.LeaseID{}, lane.Grant{}, errors.UnwrapGRPC(err)
+	}
+
+	id, l, err := leaseFromRequest(resp.GetLeaseId(), resp.GetLane())
+	if err != nil {
+		return lane.LeaseID{}, lane.Grant{}, errors.NewServiceError("blockchain service returned a bad lane lease", err)
+	}
+
+	return id, lane.Grant{Lane: l, First: resp.GetFirst(), Last: resp.GetLast()}, nil
+}
+
+// RenewLaneLease renews a lane lease and, if asked, takes the next grant.
+func (c *Client) RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error) {
+	resp, err := c.client.RenewLaneLease(ctx, &blockchain_api.RenewLaneLeaseRequest{
+		LeaseId:          r.Lease[:],
+		Lane:             uint32(r.Lane),
+		Taken:            r.Taken,
+		Rate:             r.Rate,
+		WantGrant:        r.WantGrant,
+		SettlesFirst:     r.Settles.First,
+		SettlesLastTaken: r.Settles.LastTaken,
+	})
+	if err != nil {
+		return lane.RenewResult{}, errors.UnwrapGRPC(err)
+	}
+
+	return lane.RenewResult{
+		Closed:  resp.GetClosed(),
+		Granted: resp.GetGranted(),
+		Grant:   lane.Grant{Lane: r.Lane, First: resp.GetFirst(), Last: resp.GetLast()},
+	}, nil
+}
+
+// ReleaseLaneLease closes a lane lease cleanly.
+func (c *Client) ReleaseLaneLease(ctx context.Context, r lane.Release) (bool, error) {
+	resp, err := c.client.ReleaseLaneLease(ctx, &blockchain_api.ReleaseLaneLeaseRequest{
+		LeaseId:          r.Lease[:],
+		Lane:             uint32(r.Lane),
+		LastTaken:        r.LastTaken,
+		SettlesFirst:     r.Settles.First,
+		SettlesLastTaken: r.Settles.LastTaken,
+	})
+	if err != nil {
+		return false, errors.UnwrapGRPC(err)
+	}
+
+	return resp.GetAlreadyClosed(), nil
+}
+
 // blockFromResponse converts a gRPC GetBlockResponse into a model.Block.
 // This helper method deserializes the various components of a block response
 // from the blockchain service and reconstructs them into the internal Block model.

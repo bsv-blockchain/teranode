@@ -105,6 +105,17 @@ type ClientI interface {
 	// It returns an error when no lane is free.
 	ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (lane.Range, error)
 
+	// OpenLaneLease opens a lease on a free lane, never 254 or 255, with its first grant. It returns
+	// an error when no lane is free, and the caller retries.
+	OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error)
+
+	// RenewLaneLease renews a lease and, with WantGrant, records the next grant. A closed lease is
+	// answered with Closed set, not an error, and the holder opens a new lease.
+	RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error)
+
+	// ReleaseLaneLease closes a lease cleanly. alreadyClosed reports a lease that was closed before.
+	ReleaseLaneLease(ctx context.Context, r lane.Release) (alreadyClosed bool, err error)
+
 	// SendNotification broadcasts a notification to subscribers.
 	//
 	// This method publishes a notification message to all active subscribers of the

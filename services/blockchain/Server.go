@@ -409,6 +409,18 @@ func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockch
 // Returns:
 // - Error if initialization fails, nil on success
 func (b *Blockchain) Init(ctx context.Context) error {
+	if err := b.settings.BlockChain.CheckLaneLease(); err != nil {
+		return err
+	}
+
+	// Lane leases are timed on the database clock. Treat every open lease as renewed now, so the
+	// time this service was down never closes a lease whose holder kept running.
+	if n, err := b.store.RenewOpenLaneLeases(ctx); err != nil {
+		return errors.NewStorageError("[Blockchain][Init] failed to renew the open lane leases", err)
+	} else if n > 0 {
+		b.logger.Infof("[Blockchain][Init] treated %d open lane leases as renewed at start", n)
+	}
+
 	b.finiteStateMachine = b.NewFiniteStateMachine()
 
 	// check if we are in local testing mode with a defined target state for the FSM
@@ -749,6 +761,9 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start batch token cleanup
 	go b.cleanupExpiredBatchTokens()
+
+	// Close lane leases whose holders went silent.
+	go b.startLaneLeaseSweep(ctx)
 
 	if err := b.startHTTP(ctx); err != nil {
 		return errors.WrapGRPC(err)
@@ -1687,6 +1702,205 @@ func reserveLaneRange(ctx context.Context, store blockchain_store.Store, tSettin
 	prometheusBlockchainLaneHandouts.WithLabelValues(strconv.Itoa(int(r.Lane))).Inc()
 
 	return r, nil
+}
+
+// OpenLaneLease opens a lease on a free lane for a record-creating process, with its first grant.
+func (b *Blockchain) OpenLaneLease(ctx context.Context, req *blockchain_api.OpenLaneLeaseRequest) (*blockchain_api.LaneLeaseGrant, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "OpenLaneLease",
+		tracing.WithParentStat(b.stats),
+		tracing.WithDebugLogMessage(b.logger, "[OpenLaneLease] called by %s", req.GetHolder()),
+	)
+	defer deferFn()
+
+	id, g, err := openLaneLease(ctx, b.store, b.settings, req.GetHolder())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.LaneLeaseGrant{LeaseId: id[:], Lane: uint32(g.Lane), First: g.First, Last: g.Last}, nil
+}
+
+// RenewLaneLease renews a lane lease and, if asked, grants the next stretch of positions.
+func (b *Blockchain) RenewLaneLease(ctx context.Context, req *blockchain_api.RenewLaneLeaseRequest) (*blockchain_api.RenewLaneLeaseResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "RenewLaneLease",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	id, l, err := leaseFromRequest(req.GetLeaseId(), req.GetLane())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	res, err := renewLaneLease(ctx, b.store, b.settings, lane.Renewal{
+		Lease:     id,
+		Lane:      l,
+		Taken:     req.GetTaken(),
+		Rate:      req.GetRate(),
+		WantGrant: req.GetWantGrant(),
+		Settles:   lane.Settles{First: req.GetSettlesFirst(), LastTaken: req.GetSettlesLastTaken()},
+	})
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.RenewLaneLeaseResponse{Closed: res.Closed, Granted: res.Granted, First: res.Grant.First, Last: res.Grant.Last}, nil
+}
+
+// ReleaseLaneLease closes a lane lease cleanly.
+func (b *Blockchain) ReleaseLaneLease(ctx context.Context, req *blockchain_api.ReleaseLaneLeaseRequest) (*blockchain_api.ReleaseLaneLeaseResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "ReleaseLaneLease",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	id, l, err := leaseFromRequest(req.GetLeaseId(), req.GetLane())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	already, err := releaseLaneLease(ctx, b.store, lane.Release{
+		Lease:     id,
+		Lane:      l,
+		LastTaken: req.GetLastTaken(),
+		Settles:   lane.Settles{First: req.GetSettlesFirst(), LastTaken: req.GetSettlesLastTaken()},
+	})
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.ReleaseLaneLeaseResponse{AlreadyClosed: already}, nil
+}
+
+// leaseFromRequest checks the lease ID and lane a request names.
+func leaseFromRequest(leaseID []byte, l uint32) (lane.LeaseID, uint8, error) {
+	var id lane.LeaseID
+
+	if len(leaseID) != len(id) {
+		return id, 0, errors.NewInvalidArgumentError("lane lease id is %d bytes, not %d", len(leaseID), len(id))
+	}
+
+	if l > lane.MaxLane {
+		return id, 0, errors.NewInvalidArgumentError("lane %d is above %d", l, lane.MaxLane)
+	}
+
+	copy(id[:], leaseID)
+
+	return id, uint8(l), nil
+}
+
+// openLaneLease fills the grant size and close time from settings and the height from the best
+// block, then asks the store. The Server and the LocalClient share it and the two below.
+func openLaneLease(ctx context.Context, store blockchain_store.Store, tSettings *settings.Settings, holder string) (lane.LeaseID, lane.Grant, error) {
+	// A LocalClient reaches this with no Server or gRPC Client built, and neither of those
+	// registers the metrics for it.
+	initPrometheusMetrics()
+
+	if len(holder) > maxLaneHolderBytes {
+		return lane.LeaseID{}, lane.Grant{}, errors.NewInvalidArgumentError("lane lease holder is %d bytes, above %d", len(holder), maxLaneHolderBytes)
+	}
+
+	_, meta, err := store.GetBestBlockHeader(ctx)
+	if err != nil {
+		return lane.LeaseID{}, lane.Grant{}, err
+	}
+
+	id, g, err := store.OpenLaneLease(ctx, blockchainoptions.LaneLeaseOpen{
+		Holder:     holder,
+		Height:     meta.Height,
+		GrantMin:   tSettings.BlockChain.LaneGrantMin,
+		CloseAfter: tSettings.BlockChain.LaneLeaseCloseAfter,
+	})
+	if err != nil {
+		return lane.LeaseID{}, lane.Grant{}, err
+	}
+
+	prometheusBlockchainLaneLeaseOpens.Inc()
+	prometheusBlockchainLaneLeaseGrants.WithLabelValues(strconv.Itoa(int(g.Lane))).Inc()
+
+	return id, g, nil
+}
+
+func renewLaneLease(ctx context.Context, store blockchain_store.Store, tSettings *settings.Settings, r lane.Renewal) (lane.RenewResult, error) {
+	initPrometheusMetrics()
+
+	req := blockchainoptions.LaneLeaseRenew{
+		Lease:         r.Lease,
+		Lane:          r.Lane,
+		Taken:         r.Taken,
+		Rate:          r.Rate,
+		WantGrant:     r.WantGrant,
+		Settles:       r.Settles,
+		GrantMin:      tSettings.BlockChain.LaneGrantMin,
+		GrantDuration: tSettings.BlockChain.LaneGrantDuration,
+	}
+
+	if r.WantGrant {
+		_, meta, err := store.GetBestBlockHeader(ctx)
+		if err != nil {
+			return lane.RenewResult{}, err
+		}
+
+		req.Height = meta.Height
+	}
+
+	g, granted, closed, err := store.RenewLaneLease(ctx, req)
+	if err != nil {
+		return lane.RenewResult{}, err
+	}
+
+	if granted {
+		prometheusBlockchainLaneLeaseGrants.WithLabelValues(strconv.Itoa(int(g.Lane))).Inc()
+	}
+
+	return lane.RenewResult{Closed: closed, Granted: granted, Grant: g}, nil
+}
+
+func releaseLaneLease(ctx context.Context, store blockchain_store.Store, r lane.Release) (bool, error) {
+	initPrometheusMetrics()
+
+	already, err := store.ReleaseLaneLease(ctx, blockchainoptions.LaneLeaseRelease{Lease: r.Lease, Lane: r.Lane, LastTaken: r.LastTaken, Settles: r.Settles})
+	if err != nil {
+		return false, err
+	}
+
+	if !already {
+		prometheusBlockchainLaneLeaseCloses.WithLabelValues("clean").Inc()
+	}
+
+	return already, nil
+}
+
+// startLaneLeaseSweep closes silent leases every renewal interval until ctx ends. Several
+// blockchain pods may sweep at once; each lease still closes once.
+func (b *Blockchain) startLaneLeaseSweep(ctx context.Context) {
+	ticker := time.NewTicker(b.settings.BlockChain.LaneLeaseRenewInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			b.sweepLaneLeases(ctx)
+		}
+	}
+}
+
+func (b *Blockchain) sweepLaneLeases(ctx context.Context) {
+	n, err := b.store.CloseStaleLaneLeases(ctx, b.settings.BlockChain.LaneLeaseCloseAfter)
+	if err != nil {
+		if ctx.Err() == nil {
+			b.logger.Warnf("[Blockchain] could not close stale lane leases: %v", err)
+		}
+
+		return
+	}
+
+	if n > 0 {
+		b.logger.Infof("[Blockchain] closed %d lane leases with no renewal in %s", n, b.settings.BlockChain.LaneLeaseCloseAfter)
+		prometheusBlockchainLaneLeaseCloses.WithLabelValues("lapsed").Add(float64(n))
+	}
 }
 
 // GetBlockStats retrieves statistical information about the blockchain.

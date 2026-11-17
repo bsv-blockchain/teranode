@@ -162,3 +162,43 @@ type Settles struct {
 	First     uint64
 	LastTaken uint64
 }
+
+// Renewal renews a lease and reports what the holder has taken. It is the plain-Go form of the
+// blockchain service's renewal request.
+type Renewal struct {
+	Lease LeaseID
+	Lane  uint8
+	// Taken is the highest position taken in the lane so far; zero for none.
+	Taken uint64
+	// Rate is positions taken per second, measured by the holder.
+	Rate uint64
+	// WantGrant asks for the next grant.
+	WantGrant bool
+	// Settles finishes the grant before the current one.
+	Settles Settles
+}
+
+// RenewResult answers a renewal. Closed means the lease is closed, nothing was recorded, and the
+// holder must open a new lease. Granted means Grant is the next grant.
+type RenewResult struct {
+	Closed  bool
+	Granted bool
+	Grant   Grant
+}
+
+// Release ends a lease cleanly.
+type Release struct {
+	Lease LeaseID
+	Lane  uint8
+	// LastTaken is the last position taken in the lane; zero for none.
+	LastTaken uint64
+	// Settles finishes the grant before the current one.
+	Settles Settles
+}
+
+// LeaseSource opens, renews and releases lane leases. The blockchain client implements it.
+type LeaseSource interface {
+	OpenLaneLease(ctx context.Context, holder string) (LeaseID, Grant, error)
+	RenewLaneLease(ctx context.Context, r Renewal) (RenewResult, error)
+	ReleaseLaneLease(ctx context.Context, r Release) (alreadyClosed bool, err error)
+}

@@ -713,8 +713,10 @@ func (m *MockStore) CloseStaleLaneLeases(ctx context.Context, closeAfter time.Du
 	panic(implementMe)
 }
 
+// RenewOpenLaneLeases reports no open leases: the mock holds none, and the blockchain service calls
+// this from Init.
 func (m *MockStore) RenewOpenLaneLeases(ctx context.Context) (int, error) {
-	panic(implementMe)
+	return 0, nil
 }
 
 func (m *MockStore) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error {

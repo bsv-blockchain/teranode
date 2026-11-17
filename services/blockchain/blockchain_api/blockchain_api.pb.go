@@ -7523,6 +7523,404 @@ func (x *ReserveLaneRangeResponse) GetLast() uint64 {
 	return 0
 }
 
+// OpenLaneLeaseRequest asks for a lease on a free lane.
+type OpenLaneLeaseRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Holder        string                 `protobuf:"bytes,1,opt,name=holder,proto3" json:"holder,omitempty"` // Names the process asking; recorded with the lease and its grants
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OpenLaneLeaseRequest) Reset() {
+	*x = OpenLaneLeaseRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[130]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OpenLaneLeaseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OpenLaneLeaseRequest) ProtoMessage() {}
+
+func (x *OpenLaneLeaseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[130]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OpenLaneLeaseRequest.ProtoReflect.Descriptor instead.
+func (*OpenLaneLeaseRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{130}
+}
+
+func (x *OpenLaneLeaseRequest) GetHolder() string {
+	if x != nil {
+		return x.Holder
+	}
+	return ""
+}
+
+// LaneLeaseGrant is a new lease and its first grant.
+type LaneLeaseGrant struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	LeaseId       []byte                 `protobuf:"bytes,1,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"` // 16 random bytes naming the lease
+	Lane          uint32                 `protobuf:"varint,2,opt,name=lane,proto3" json:"lane,omitempty"`
+	First         uint64                 `protobuf:"varint,3,opt,name=first,proto3" json:"first,omitempty"` // First position, inclusive
+	Last          uint64                 `protobuf:"varint,4,opt,name=last,proto3" json:"last,omitempty"`   // Last position, inclusive
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LaneLeaseGrant) Reset() {
+	*x = LaneLeaseGrant{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[131]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LaneLeaseGrant) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LaneLeaseGrant) ProtoMessage() {}
+
+func (x *LaneLeaseGrant) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[131]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LaneLeaseGrant.ProtoReflect.Descriptor instead.
+func (*LaneLeaseGrant) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{131}
+}
+
+func (x *LaneLeaseGrant) GetLeaseId() []byte {
+	if x != nil {
+		return x.LeaseId
+	}
+	return nil
+}
+
+func (x *LaneLeaseGrant) GetLane() uint32 {
+	if x != nil {
+		return x.Lane
+	}
+	return 0
+}
+
+func (x *LaneLeaseGrant) GetFirst() uint64 {
+	if x != nil {
+		return x.First
+	}
+	return 0
+}
+
+func (x *LaneLeaseGrant) GetLast() uint64 {
+	if x != nil {
+		return x.Last
+	}
+	return 0
+}
+
+// RenewLaneLeaseRequest renews a lease and reports what its holder has taken.
+type RenewLaneLeaseRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	LeaseId          []byte                 `protobuf:"bytes,1,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	Lane             uint32                 `protobuf:"varint,2,opt,name=lane,proto3" json:"lane,omitempty"`
+	Taken            uint64                 `protobuf:"varint,3,opt,name=taken,proto3" json:"taken,omitempty"`                                                 // Highest position taken in the lane so far; 0 for none
+	Rate             uint64                 `protobuf:"varint,4,opt,name=rate,proto3" json:"rate,omitempty"`                                                   // Positions taken per second, as the holder measured it
+	WantGrant        bool                   `protobuf:"varint,5,opt,name=want_grant,json=wantGrant,proto3" json:"want_grant,omitempty"`                        // Asks for the next grant
+	SettlesFirst     uint64                 `protobuf:"varint,6,opt,name=settles_first,json=settlesFirst,proto3" json:"settles_first,omitempty"`               // First position of the grant the holder moved on from; 0 for none
+	SettlesLastTaken uint64                 `protobuf:"varint,7,opt,name=settles_last_taken,json=settlesLastTaken,proto3" json:"settles_last_taken,omitempty"` // Last position taken from that grant; 0 if it was never used
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *RenewLaneLeaseRequest) Reset() {
+	*x = RenewLaneLeaseRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[132]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenewLaneLeaseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewLaneLeaseRequest) ProtoMessage() {}
+
+func (x *RenewLaneLeaseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[132]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewLaneLeaseRequest.ProtoReflect.Descriptor instead.
+func (*RenewLaneLeaseRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{132}
+}
+
+func (x *RenewLaneLeaseRequest) GetLeaseId() []byte {
+	if x != nil {
+		return x.LeaseId
+	}
+	return nil
+}
+
+func (x *RenewLaneLeaseRequest) GetLane() uint32 {
+	if x != nil {
+		return x.Lane
+	}
+	return 0
+}
+
+func (x *RenewLaneLeaseRequest) GetTaken() uint64 {
+	if x != nil {
+		return x.Taken
+	}
+	return 0
+}
+
+func (x *RenewLaneLeaseRequest) GetRate() uint64 {
+	if x != nil {
+		return x.Rate
+	}
+	return 0
+}
+
+func (x *RenewLaneLeaseRequest) GetWantGrant() bool {
+	if x != nil {
+		return x.WantGrant
+	}
+	return false
+}
+
+func (x *RenewLaneLeaseRequest) GetSettlesFirst() uint64 {
+	if x != nil {
+		return x.SettlesFirst
+	}
+	return 0
+}
+
+func (x *RenewLaneLeaseRequest) GetSettlesLastTaken() uint64 {
+	if x != nil {
+		return x.SettlesLastTaken
+	}
+	return 0
+}
+
+// RenewLaneLeaseResponse answers a renewal. closed means the lease is closed and nothing was recorded.
+type RenewLaneLeaseResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Closed        bool                   `protobuf:"varint,1,opt,name=closed,proto3" json:"closed,omitempty"`
+	Granted       bool                   `protobuf:"varint,2,opt,name=granted,proto3" json:"granted,omitempty"` // first and last name a new grant
+	First         uint64                 `protobuf:"varint,3,opt,name=first,proto3" json:"first,omitempty"`
+	Last          uint64                 `protobuf:"varint,4,opt,name=last,proto3" json:"last,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenewLaneLeaseResponse) Reset() {
+	*x = RenewLaneLeaseResponse{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[133]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenewLaneLeaseResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewLaneLeaseResponse) ProtoMessage() {}
+
+func (x *RenewLaneLeaseResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[133]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewLaneLeaseResponse.ProtoReflect.Descriptor instead.
+func (*RenewLaneLeaseResponse) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{133}
+}
+
+func (x *RenewLaneLeaseResponse) GetClosed() bool {
+	if x != nil {
+		return x.Closed
+	}
+	return false
+}
+
+func (x *RenewLaneLeaseResponse) GetGranted() bool {
+	if x != nil {
+		return x.Granted
+	}
+	return false
+}
+
+func (x *RenewLaneLeaseResponse) GetFirst() uint64 {
+	if x != nil {
+		return x.First
+	}
+	return 0
+}
+
+func (x *RenewLaneLeaseResponse) GetLast() uint64 {
+	if x != nil {
+		return x.Last
+	}
+	return 0
+}
+
+// ReleaseLaneLeaseRequest ends a lease cleanly.
+type ReleaseLaneLeaseRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	LeaseId          []byte                 `protobuf:"bytes,1,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	Lane             uint32                 `protobuf:"varint,2,opt,name=lane,proto3" json:"lane,omitempty"`
+	LastTaken        uint64                 `protobuf:"varint,3,opt,name=last_taken,json=lastTaken,proto3" json:"last_taken,omitempty"` // Last position taken in the lane; 0 for none
+	SettlesFirst     uint64                 `protobuf:"varint,4,opt,name=settles_first,json=settlesFirst,proto3" json:"settles_first,omitempty"`
+	SettlesLastTaken uint64                 `protobuf:"varint,5,opt,name=settles_last_taken,json=settlesLastTaken,proto3" json:"settles_last_taken,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ReleaseLaneLeaseRequest) Reset() {
+	*x = ReleaseLaneLeaseRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[134]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseLaneLeaseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseLaneLeaseRequest) ProtoMessage() {}
+
+func (x *ReleaseLaneLeaseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[134]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseLaneLeaseRequest.ProtoReflect.Descriptor instead.
+func (*ReleaseLaneLeaseRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{134}
+}
+
+func (x *ReleaseLaneLeaseRequest) GetLeaseId() []byte {
+	if x != nil {
+		return x.LeaseId
+	}
+	return nil
+}
+
+func (x *ReleaseLaneLeaseRequest) GetLane() uint32 {
+	if x != nil {
+		return x.Lane
+	}
+	return 0
+}
+
+func (x *ReleaseLaneLeaseRequest) GetLastTaken() uint64 {
+	if x != nil {
+		return x.LastTaken
+	}
+	return 0
+}
+
+func (x *ReleaseLaneLeaseRequest) GetSettlesFirst() uint64 {
+	if x != nil {
+		return x.SettlesFirst
+	}
+	return 0
+}
+
+func (x *ReleaseLaneLeaseRequest) GetSettlesLastTaken() uint64 {
+	if x != nil {
+		return x.SettlesLastTaken
+	}
+	return 0
+}
+
+// ReleaseLaneLeaseResponse answers a release.
+type ReleaseLaneLeaseResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AlreadyClosed bool                   `protobuf:"varint,1,opt,name=already_closed,json=alreadyClosed,proto3" json:"already_closed,omitempty"` // The lease was closed before this release
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReleaseLaneLeaseResponse) Reset() {
+	*x = ReleaseLaneLeaseResponse{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[135]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseLaneLeaseResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseLaneLeaseResponse) ProtoMessage() {}
+
+func (x *ReleaseLaneLeaseResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[135]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseLaneLeaseResponse.ProtoReflect.Descriptor instead.
+func (*ReleaseLaneLeaseResponse) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{135}
+}
+
+func (x *ReleaseLaneLeaseResponse) GetAlreadyClosed() bool {
+	if x != nil {
+		return x.AlreadyClosed
+	}
+	return false
+}
+
 var File_services_blockchain_blockchain_api_blockchain_api_proto protoreflect.FileDescriptor
 
 const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" +
@@ -8035,7 +8433,37 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x18ReserveLaneRangeResponse\x12\x12\n" +
 	"\x04lane\x18\x01 \x01(\rR\x04lane\x12\x14\n" +
 	"\x05first\x18\x02 \x01(\x04R\x05first\x12\x12\n" +
-	"\x04last\x18\x03 \x01(\x04R\x04last*F\n" +
+	"\x04last\x18\x03 \x01(\x04R\x04last\".\n" +
+	"\x14OpenLaneLeaseRequest\x12\x16\n" +
+	"\x06holder\x18\x01 \x01(\tR\x06holder\"i\n" +
+	"\x0eLaneLeaseGrant\x12\x19\n" +
+	"\blease_id\x18\x01 \x01(\fR\aleaseId\x12\x12\n" +
+	"\x04lane\x18\x02 \x01(\rR\x04lane\x12\x14\n" +
+	"\x05first\x18\x03 \x01(\x04R\x05first\x12\x12\n" +
+	"\x04last\x18\x04 \x01(\x04R\x04last\"\xe2\x01\n" +
+	"\x15RenewLaneLeaseRequest\x12\x19\n" +
+	"\blease_id\x18\x01 \x01(\fR\aleaseId\x12\x12\n" +
+	"\x04lane\x18\x02 \x01(\rR\x04lane\x12\x14\n" +
+	"\x05taken\x18\x03 \x01(\x04R\x05taken\x12\x12\n" +
+	"\x04rate\x18\x04 \x01(\x04R\x04rate\x12\x1d\n" +
+	"\n" +
+	"want_grant\x18\x05 \x01(\bR\twantGrant\x12#\n" +
+	"\rsettles_first\x18\x06 \x01(\x04R\fsettlesFirst\x12,\n" +
+	"\x12settles_last_taken\x18\a \x01(\x04R\x10settlesLastTaken\"t\n" +
+	"\x16RenewLaneLeaseResponse\x12\x16\n" +
+	"\x06closed\x18\x01 \x01(\bR\x06closed\x12\x18\n" +
+	"\agranted\x18\x02 \x01(\bR\agranted\x12\x14\n" +
+	"\x05first\x18\x03 \x01(\x04R\x05first\x12\x12\n" +
+	"\x04last\x18\x04 \x01(\x04R\x04last\"\xba\x01\n" +
+	"\x17ReleaseLaneLeaseRequest\x12\x19\n" +
+	"\blease_id\x18\x01 \x01(\fR\aleaseId\x12\x12\n" +
+	"\x04lane\x18\x02 \x01(\rR\x04lane\x12\x1d\n" +
+	"\n" +
+	"last_taken\x18\x03 \x01(\x04R\tlastTaken\x12#\n" +
+	"\rsettles_first\x18\x04 \x01(\x04R\fsettlesFirst\x12,\n" +
+	"\x12settles_last_taken\x18\x05 \x01(\x04R\x10settlesLastTaken\"A\n" +
+	"\x18ReleaseLaneLeaseResponse\x12%\n" +
+	"\x0ealready_closed\x18\x01 \x01(\bR\ralreadyClosed*F\n" +
 	"\fFSMEventType\x12\b\n" +
 	"\x04STOP\x10\x00\x12\a\n" +
 	"\x03RUN\x10\x01\x12\x11\n" +
@@ -8047,7 +8475,7 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\fFSMStateType\x12\b\n" +
 	"\x04IDLE\x10\x00\x12\v\n" +
 	"\aRUNNING\x10\x01\x12\x12\n" +
-	"\x0eCATCHINGBLOCKS\x10\x02\"\x04\b\x03\x10\x03*\rLEGACYSYNCING2\xf66\n" +
+	"\x0eCATCHINGBLOCKS\x10\x02\"\x04\b\x03\x10\x03*\rLEGACYSYNCING2\x9b9\n" +
 	"\rBlockchainAPI\x12F\n" +
 	"\n" +
 	"HealthGRPC\x12\x16.google.protobuf.Empty\x1a\x1e.blockchain_api.HealthResponse\"\x00\x12E\n" +
@@ -8079,7 +8507,10 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x11GetBlocksByHeight\x12(.blockchain_api.GetBlocksByHeightRequest\x1a).blockchain_api.GetBlocksByHeightResponse\"\x00\x12\x88\x01\n" +
 	"\x1bFindBlocksContainingSubtree\x122.blockchain_api.FindBlocksContainingSubtreeRequest\x1a3.blockchain_api.FindBlocksContainingSubtreeResponse\"\x00\x12h\n" +
 	"\x11GetBlockHeaderIDs\x12&.blockchain_api.GetBlockHeadersRequest\x1a).blockchain_api.GetBlockHeaderIDsResponse\"\x00\x12g\n" +
-	"\x10ReserveLaneRange\x12'.blockchain_api.ReserveLaneRangeRequest\x1a(.blockchain_api.ReserveLaneRangeResponse\"\x00\x12V\n" +
+	"\x10ReserveLaneRange\x12'.blockchain_api.ReserveLaneRangeRequest\x1a(.blockchain_api.ReserveLaneRangeResponse\"\x00\x12W\n" +
+	"\rOpenLaneLease\x12$.blockchain_api.OpenLaneLeaseRequest\x1a\x1e.blockchain_api.LaneLeaseGrant\"\x00\x12a\n" +
+	"\x0eRenewLaneLease\x12%.blockchain_api.RenewLaneLeaseRequest\x1a&.blockchain_api.RenewLaneLeaseResponse\"\x00\x12g\n" +
+	"\x10ReleaseLaneLease\x12'.blockchain_api.ReleaseLaneLeaseRequest\x1a(.blockchain_api.ReleaseLaneLeaseResponse\"\x00\x12V\n" +
 	"\x12GetBestBlockHeader\x12\x16.google.protobuf.Empty\x1a&.blockchain_api.GetBlockHeaderResponse\"\x00\x12\x81\x01\n" +
 	"\x1aCheckBlockIsInCurrentChain\x12/.blockchain_api.CheckBlockIsCurrentChainRequest\x1a0.blockchain_api.CheckBlockIsCurrentChainResponse\"\x00\x12\x88\x01\n" +
 	"\x1bCheckBlockIsAncestorOfBlock\x122.blockchain_api.CheckBlockIsAncestorOfBlockRequest\x1a3.blockchain_api.CheckBlockIsAncestorOfBlockResponse\"\x00\x12N\n" +
@@ -8160,7 +8591,7 @@ func file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP() 
 }
 
 var file_services_blockchain_blockchain_api_blockchain_api_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes = make([]protoimpl.MessageInfo, 131)
+var file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes = make([]protoimpl.MessageInfo, 137)
 var file_services_blockchain_blockchain_api_blockchain_api_proto_goTypes = []any{
 	(FSMEventType)(0),                                // 0: blockchain_api.FSMEventType
 	(TransportType)(0),                               // 1: blockchain_api.TransportType
@@ -8295,59 +8726,65 @@ var file_services_blockchain_blockchain_api_blockchain_api_proto_goTypes = []any
 	(*LegacyPeerInfo)(nil),                           // 130: blockchain_api.LegacyPeerInfo
 	(*ReserveLaneRangeRequest)(nil),                  // 131: blockchain_api.ReserveLaneRangeRequest
 	(*ReserveLaneRangeResponse)(nil),                 // 132: blockchain_api.ReserveLaneRangeResponse
-	nil,                                              // 133: blockchain_api.NotificationMetadata.MetadataEntry
-	(*timestamppb.Timestamp)(nil),                    // 134: google.protobuf.Timestamp
-	(model.NotificationType)(0),                      // 135: model.NotificationType
-	(*model.BlockInfo)(nil),                          // 136: model.BlockInfo
-	(*model.SuitableBlock)(nil),                      // 137: model.SuitableBlock
-	(*model.ChainTip)(nil),                           // 138: model.ChainTip
-	(*emptypb.Empty)(nil),                            // 139: google.protobuf.Empty
-	(*model.BlockStats)(nil),                         // 140: model.BlockStats
-	(*model.BlockDataPoints)(nil),                    // 141: model.BlockDataPoints
+	(*OpenLaneLeaseRequest)(nil),                     // 133: blockchain_api.OpenLaneLeaseRequest
+	(*LaneLeaseGrant)(nil),                           // 134: blockchain_api.LaneLeaseGrant
+	(*RenewLaneLeaseRequest)(nil),                    // 135: blockchain_api.RenewLaneLeaseRequest
+	(*RenewLaneLeaseResponse)(nil),                   // 136: blockchain_api.RenewLaneLeaseResponse
+	(*ReleaseLaneLeaseRequest)(nil),                  // 137: blockchain_api.ReleaseLaneLeaseRequest
+	(*ReleaseLaneLeaseResponse)(nil),                 // 138: blockchain_api.ReleaseLaneLeaseResponse
+	nil,                                              // 139: blockchain_api.NotificationMetadata.MetadataEntry
+	(*timestamppb.Timestamp)(nil),                    // 140: google.protobuf.Timestamp
+	(model.NotificationType)(0),                      // 141: model.NotificationType
+	(*model.BlockInfo)(nil),                          // 142: model.BlockInfo
+	(*model.SuitableBlock)(nil),                      // 143: model.SuitableBlock
+	(*model.ChainTip)(nil),                           // 144: model.ChainTip
+	(*emptypb.Empty)(nil),                            // 145: google.protobuf.Empty
+	(*model.BlockStats)(nil),                         // 146: model.BlockStats
+	(*model.BlockDataPoints)(nil),                    // 147: model.BlockDataPoints
 }
 var file_services_blockchain_blockchain_api_blockchain_api_proto_depIdxs = []int32{
-	134, // 0: blockchain_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
-	134, // 1: blockchain_api.GetBlockHeaderResponse.processed_at:type_name -> google.protobuf.Timestamp
-	135, // 2: blockchain_api.Notification.type:type_name -> model.NotificationType
+	140, // 0: blockchain_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	140, // 1: blockchain_api.GetBlockHeaderResponse.processed_at:type_name -> google.protobuf.Timestamp
+	141, // 2: blockchain_api.Notification.type:type_name -> model.NotificationType
 	49,  // 3: blockchain_api.Notification.metadata:type_name -> blockchain_api.NotificationMetadata
-	133, // 4: blockchain_api.NotificationMetadata.metadata:type_name -> blockchain_api.NotificationMetadata.MetadataEntry
-	136, // 5: blockchain_api.GetLastNBlocksResponse.blocks:type_name -> model.BlockInfo
-	136, // 6: blockchain_api.GetLastNInvalidBlocksResponse.blocks:type_name -> model.BlockInfo
-	137, // 7: blockchain_api.GetSuitableBlockResponse.block:type_name -> model.SuitableBlock
+	139, // 4: blockchain_api.NotificationMetadata.metadata:type_name -> blockchain_api.NotificationMetadata.MetadataEntry
+	142, // 5: blockchain_api.GetLastNBlocksResponse.blocks:type_name -> model.BlockInfo
+	142, // 6: blockchain_api.GetLastNInvalidBlocksResponse.blocks:type_name -> model.BlockInfo
+	143, // 7: blockchain_api.GetSuitableBlockResponse.block:type_name -> model.SuitableBlock
 	2,   // 8: blockchain_api.GetFSMStateResponse.state:type_name -> blockchain_api.FSMStateType
 	0,   // 9: blockchain_api.SendFSMEventRequest.event:type_name -> blockchain_api.FSMEventType
 	1,   // 10: blockchain_api.PeerRegistryInfo.transport_type:type_name -> blockchain_api.TransportType
-	134, // 11: blockchain_api.PeerRegistryInfo.connected_at:type_name -> google.protobuf.Timestamp
-	134, // 12: blockchain_api.PeerRegistryInfo.last_message_time:type_name -> google.protobuf.Timestamp
-	134, // 13: blockchain_api.PeerRegistryInfo.last_interaction_attempt:type_name -> google.protobuf.Timestamp
-	134, // 14: blockchain_api.PeerRegistryInfo.last_interaction_success:type_name -> google.protobuf.Timestamp
-	134, // 15: blockchain_api.PeerRegistryInfo.last_interaction_failure:type_name -> google.protobuf.Timestamp
-	134, // 16: blockchain_api.PeerRegistryInfo.last_seen:type_name -> google.protobuf.Timestamp
-	134, // 17: blockchain_api.PeerRegistryInfo.last_block_time:type_name -> google.protobuf.Timestamp
-	134, // 18: blockchain_api.PeerRegistryInfo.last_sync_attempt:type_name -> google.protobuf.Timestamp
-	134, // 19: blockchain_api.PeerRegistryInfo.last_reputation_reset:type_name -> google.protobuf.Timestamp
-	134, // 20: blockchain_api.PeerRegistryInfo.last_catchup_error_time:type_name -> google.protobuf.Timestamp
-	134, // 21: blockchain_api.PeerRegistryInfo.last_validated_at:type_name -> google.protobuf.Timestamp
-	134, // 22: blockchain_api.PeerRegistryInfo.full_storage_penalty_until:type_name -> google.protobuf.Timestamp
+	140, // 11: blockchain_api.PeerRegistryInfo.connected_at:type_name -> google.protobuf.Timestamp
+	140, // 12: blockchain_api.PeerRegistryInfo.last_message_time:type_name -> google.protobuf.Timestamp
+	140, // 13: blockchain_api.PeerRegistryInfo.last_interaction_attempt:type_name -> google.protobuf.Timestamp
+	140, // 14: blockchain_api.PeerRegistryInfo.last_interaction_success:type_name -> google.protobuf.Timestamp
+	140, // 15: blockchain_api.PeerRegistryInfo.last_interaction_failure:type_name -> google.protobuf.Timestamp
+	140, // 16: blockchain_api.PeerRegistryInfo.last_seen:type_name -> google.protobuf.Timestamp
+	140, // 17: blockchain_api.PeerRegistryInfo.last_block_time:type_name -> google.protobuf.Timestamp
+	140, // 18: blockchain_api.PeerRegistryInfo.last_sync_attempt:type_name -> google.protobuf.Timestamp
+	140, // 19: blockchain_api.PeerRegistryInfo.last_reputation_reset:type_name -> google.protobuf.Timestamp
+	140, // 20: blockchain_api.PeerRegistryInfo.last_catchup_error_time:type_name -> google.protobuf.Timestamp
+	140, // 21: blockchain_api.PeerRegistryInfo.last_validated_at:type_name -> google.protobuf.Timestamp
+	140, // 22: blockchain_api.PeerRegistryInfo.full_storage_penalty_until:type_name -> google.protobuf.Timestamp
 	130, // 23: blockchain_api.PeerRegistryInfo.legacy:type_name -> blockchain_api.LegacyPeerInfo
 	74,  // 24: blockchain_api.RegisterPeerRequest.peer:type_name -> blockchain_api.PeerRegistryInfo
 	1,   // 25: blockchain_api.ListPeersRequest.transport_filter:type_name -> blockchain_api.TransportType
 	74,  // 26: blockchain_api.ListPeersResponse.peers:type_name -> blockchain_api.PeerRegistryInfo
 	74,  // 27: blockchain_api.GetPeerResponse.peer:type_name -> blockchain_api.PeerRegistryInfo
-	138, // 28: blockchain_api.GetChainTipsResponse.tips:type_name -> model.ChainTip
+	144, // 28: blockchain_api.GetChainTipsResponse.tips:type_name -> model.ChainTip
 	117, // 29: blockchain_api.ListScheduledDeletionsResponse.deletions:type_name -> blockchain_api.ScheduledDeletion
 	117, // 30: blockchain_api.GetPendingBlobDeletionsResponse.deletions:type_name -> blockchain_api.ScheduledDeletion
 	117, // 31: blockchain_api.AcquireBlobDeletionBatchResponse.deletions:type_name -> blockchain_api.ScheduledDeletion
-	134, // 32: blockchain_api.LegacyPeerInfo.time_connected:type_name -> google.protobuf.Timestamp
-	139, // 33: blockchain_api.BlockchainAPI.HealthGRPC:input_type -> google.protobuf.Empty
+	140, // 32: blockchain_api.LegacyPeerInfo.time_connected:type_name -> google.protobuf.Timestamp
+	145, // 33: blockchain_api.BlockchainAPI.HealthGRPC:input_type -> google.protobuf.Empty
 	4,   // 34: blockchain_api.BlockchainAPI.AddBlock:input_type -> blockchain_api.AddBlockRequest
 	5,   // 35: blockchain_api.BlockchainAPI.GetBlock:input_type -> blockchain_api.GetBlockRequest
 	6,   // 36: blockchain_api.BlockchainAPI.GetBlocks:input_type -> blockchain_api.GetBlocksRequest
 	8,   // 37: blockchain_api.BlockchainAPI.GetBlockByHeight:input_type -> blockchain_api.GetBlockByHeightRequest
 	9,   // 38: blockchain_api.BlockchainAPI.GetBlockByID:input_type -> blockchain_api.GetBlockByIDRequest
-	139, // 39: blockchain_api.BlockchainAPI.GetNextBlockID:input_type -> google.protobuf.Empty
+	145, // 39: blockchain_api.BlockchainAPI.GetNextBlockID:input_type -> google.protobuf.Empty
 	11,  // 40: blockchain_api.BlockchainAPI.AssignBlockID:input_type -> blockchain_api.AssignBlockIDRequest
-	139, // 41: blockchain_api.BlockchainAPI.GetBlockStats:input_type -> google.protobuf.Empty
+	145, // 41: blockchain_api.BlockchainAPI.GetBlockStats:input_type -> google.protobuf.Empty
 	16,  // 42: blockchain_api.BlockchainAPI.GetBlockGraphData:input_type -> blockchain_api.GetBlockGraphDataRequest
 	56,  // 43: blockchain_api.BlockchainAPI.GetLastNBlocks:input_type -> blockchain_api.GetLastNBlocksRequest
 	58,  // 44: blockchain_api.BlockchainAPI.GetLastNInvalidBlocks:input_type -> blockchain_api.GetLastNInvalidBlocksRequest
@@ -8356,7 +8793,7 @@ var file_services_blockchain_blockchain_api_blockchain_api_proto_depIdxs = []int
 	64,  // 47: blockchain_api.BlockchainAPI.GetNextWorkRequired:input_type -> blockchain_api.GetNextWorkRequiredRequest
 	5,   // 48: blockchain_api.BlockchainAPI.GetBlockExists:input_type -> blockchain_api.GetBlockRequest
 	19,  // 49: blockchain_api.BlockchainAPI.GetBlockHeaders:input_type -> blockchain_api.GetBlockHeadersRequest
-	139, // 50: blockchain_api.BlockchainAPI.GetBestBlockHeaderUncached:input_type -> google.protobuf.Empty
+	145, // 50: blockchain_api.BlockchainAPI.GetBestBlockHeaderUncached:input_type -> google.protobuf.Empty
 	19,  // 51: blockchain_api.BlockchainAPI.GetBlockHeadersByParentLinks:input_type -> blockchain_api.GetBlockHeadersRequest
 	20,  // 52: blockchain_api.BlockchainAPI.GetBlockHeadersToCommonAncestor:input_type -> blockchain_api.GetBlockHeadersToCommonAncestorRequest
 	21,  // 53: blockchain_api.BlockchainAPI.GetBlockHeadersFromCommonAncestor:input_type -> blockchain_api.GetBlockHeadersFromCommonAncestorRequest
@@ -8369,166 +8806,172 @@ var file_services_blockchain_blockchain_api_blockchain_api_proto_depIdxs = []int
 	34,  // 60: blockchain_api.BlockchainAPI.FindBlocksContainingSubtree:input_type -> blockchain_api.FindBlocksContainingSubtreeRequest
 	19,  // 61: blockchain_api.BlockchainAPI.GetBlockHeaderIDs:input_type -> blockchain_api.GetBlockHeadersRequest
 	131, // 62: blockchain_api.BlockchainAPI.ReserveLaneRange:input_type -> blockchain_api.ReserveLaneRangeRequest
-	139, // 63: blockchain_api.BlockchainAPI.GetBestBlockHeader:input_type -> google.protobuf.Empty
-	39,  // 64: blockchain_api.BlockchainAPI.CheckBlockIsInCurrentChain:input_type -> blockchain_api.CheckBlockIsCurrentChainRequest
-	45,  // 65: blockchain_api.BlockchainAPI.CheckBlockIsAncestorOfBlock:input_type -> blockchain_api.CheckBlockIsAncestorOfBlockRequest
-	139, // 66: blockchain_api.BlockchainAPI.GetChainTips:input_type -> google.protobuf.Empty
-	38,  // 67: blockchain_api.BlockchainAPI.GetBlockHeader:input_type -> blockchain_api.GetBlockHeaderRequest
-	40,  // 68: blockchain_api.BlockchainAPI.InvalidateBlock:input_type -> blockchain_api.InvalidateBlockRequest
-	42,  // 69: blockchain_api.BlockchainAPI.RevalidateBlock:input_type -> blockchain_api.RevalidateBlockRequest
-	47,  // 70: blockchain_api.BlockchainAPI.Subscribe:input_type -> blockchain_api.SubscribeRequest
-	48,  // 71: blockchain_api.BlockchainAPI.SendNotification:input_type -> blockchain_api.Notification
-	139, // 72: blockchain_api.BlockchainAPI.GetSubscribers:input_type -> google.protobuf.Empty
-	51,  // 73: blockchain_api.BlockchainAPI.GetState:input_type -> blockchain_api.GetStateRequest
-	53,  // 74: blockchain_api.BlockchainAPI.SetState:input_type -> blockchain_api.SetStateRequest
-	54,  // 75: blockchain_api.BlockchainAPI.GetBlockIsMined:input_type -> blockchain_api.GetBlockIsMinedRequest
-	66,  // 76: blockchain_api.BlockchainAPI.SetBlockMinedSet:input_type -> blockchain_api.SetBlockMinedSetRequest
-	67,  // 77: blockchain_api.BlockchainAPI.ClearBlockMinedSet:input_type -> blockchain_api.ClearBlockMinedSetRequest
-	139, // 78: blockchain_api.BlockchainAPI.GetBlocksMinedNotSet:input_type -> google.protobuf.Empty
-	69,  // 79: blockchain_api.BlockchainAPI.SetBlockSubtreesSet:input_type -> blockchain_api.SetBlockSubtreesSetRequest
-	139, // 80: blockchain_api.BlockchainAPI.GetBlocksSubtreesNotSet:input_type -> google.protobuf.Empty
-	71,  // 81: blockchain_api.BlockchainAPI.SetBlockProcessedAt:input_type -> blockchain_api.SetBlockProcessedAtRequest
-	109, // 82: blockchain_api.BlockchainAPI.SetBlockPersistedAt:input_type -> blockchain_api.SetBlockPersistedAtRequest
-	110, // 83: blockchain_api.BlockchainAPI.GetBlocksNotPersisted:input_type -> blockchain_api.GetBlocksNotPersistedRequest
-	73,  // 84: blockchain_api.BlockchainAPI.SendFSMEvent:input_type -> blockchain_api.SendFSMEventRequest
-	139, // 85: blockchain_api.BlockchainAPI.GetFSMCurrentState:input_type -> google.protobuf.Empty
-	139, // 86: blockchain_api.BlockchainAPI.WaitUntilFSMTransitionFromIdleState:input_type -> google.protobuf.Empty
-	139, // 87: blockchain_api.BlockchainAPI.Run:input_type -> google.protobuf.Empty
-	139, // 88: blockchain_api.BlockchainAPI.CatchUpBlocks:input_type -> google.protobuf.Empty
-	139, // 89: blockchain_api.BlockchainAPI.Idle:input_type -> google.protobuf.Empty
-	108, // 90: blockchain_api.BlockchainAPI.ReportPeerFailure:input_type -> blockchain_api.ReportPeerFailureRequest
-	102, // 91: blockchain_api.BlockchainAPI.GetBlockLocator:input_type -> blockchain_api.GetBlockLocatorRequest
-	104, // 92: blockchain_api.BlockchainAPI.LocateBlockHeaders:input_type -> blockchain_api.LocateBlockHeadersRequest
-	139, // 93: blockchain_api.BlockchainAPI.GetBestHeightAndTime:input_type -> google.protobuf.Empty
-	112, // 94: blockchain_api.BlockchainAPI.ScheduleBlobDeletion:input_type -> blockchain_api.ScheduleBlobDeletionRequest
-	114, // 95: blockchain_api.BlockchainAPI.CancelBlobDeletion:input_type -> blockchain_api.CancelBlobDeletionRequest
-	116, // 96: blockchain_api.BlockchainAPI.ListScheduledDeletions:input_type -> blockchain_api.ListScheduledDeletionsRequest
-	119, // 97: blockchain_api.BlockchainAPI.GetPendingBlobDeletions:input_type -> blockchain_api.GetPendingBlobDeletionsRequest
-	121, // 98: blockchain_api.BlockchainAPI.RemoveBlobDeletion:input_type -> blockchain_api.RemoveBlobDeletionRequest
-	122, // 99: blockchain_api.BlockchainAPI.IncrementBlobDeletionRetry:input_type -> blockchain_api.IncrementBlobDeletionRetryRequest
-	124, // 100: blockchain_api.BlockchainAPI.CompleteBlobDeletions:input_type -> blockchain_api.CompleteBlobDeletionsRequest
-	126, // 101: blockchain_api.BlockchainAPI.AcquireBlobDeletionBatch:input_type -> blockchain_api.AcquireBlobDeletionBatchRequest
-	128, // 102: blockchain_api.BlockchainAPI.CompleteBlobDeletionBatch:input_type -> blockchain_api.CompleteBlobDeletionBatchRequest
-	75,  // 103: blockchain_api.PeerRegistryService.RegisterPeer:input_type -> blockchain_api.RegisterPeerRequest
-	77,  // 104: blockchain_api.PeerRegistryService.UpdatePeerMetrics:input_type -> blockchain_api.UpdatePeerMetricsRequest
-	78,  // 105: blockchain_api.PeerRegistryService.RemovePeer:input_type -> blockchain_api.RemovePeerRequest
-	79,  // 106: blockchain_api.PeerRegistryService.ListPeers:input_type -> blockchain_api.ListPeersRequest
-	81,  // 107: blockchain_api.PeerRegistryService.GetPeer:input_type -> blockchain_api.GetPeerRequest
-	83,  // 108: blockchain_api.PeerRegistryService.AddBanScore:input_type -> blockchain_api.AddBanScoreRequest
-	85,  // 109: blockchain_api.PeerRegistryService.IsPeerBanned:input_type -> blockchain_api.IsPeerBannedRequest
-	139, // 110: blockchain_api.PeerRegistryService.ListBannedPeers:input_type -> google.protobuf.Empty
-	139, // 111: blockchain_api.PeerRegistryService.ClearBannedPeers:input_type -> google.protobuf.Empty
-	88,  // 112: blockchain_api.PeerRegistryService.UpdateConnectionState:input_type -> blockchain_api.UpdateConnectionStateRequest
-	89,  // 113: blockchain_api.PeerRegistryService.UpdateLastMessageTime:input_type -> blockchain_api.UpdateLastMessageTimeRequest
-	90,  // 114: blockchain_api.PeerRegistryService.UpdateStorage:input_type -> blockchain_api.UpdateStorageRequest
-	91,  // 115: blockchain_api.PeerRegistryService.RecordSyncAttempt:input_type -> blockchain_api.RecordSyncAttemptRequest
-	139, // 116: blockchain_api.PeerRegistryService.ClearAllSyncAttempts:input_type -> google.protobuf.Empty
-	93,  // 117: blockchain_api.PeerRegistryService.RecordBlockReceived:input_type -> blockchain_api.RecordReceivedRequest
-	93,  // 118: blockchain_api.PeerRegistryService.RecordSubtreeReceived:input_type -> blockchain_api.RecordReceivedRequest
-	93,  // 119: blockchain_api.PeerRegistryService.RecordTransactionReceived:input_type -> blockchain_api.RecordReceivedRequest
-	94,  // 120: blockchain_api.PeerRegistryService.RecordCatchupError:input_type -> blockchain_api.RecordCatchupErrorRequest
-	95,  // 121: blockchain_api.PeerRegistryService.RecordCatchupAttempt:input_type -> blockchain_api.RecordCatchupAttemptRequest
-	96,  // 122: blockchain_api.PeerRegistryService.RecordCatchupSuccess:input_type -> blockchain_api.RecordCatchupSuccessRequest
-	97,  // 123: blockchain_api.PeerRegistryService.RecordCatchupFailure:input_type -> blockchain_api.RecordCatchupFailureRequest
-	98,  // 124: blockchain_api.PeerRegistryService.ResetReputation:input_type -> blockchain_api.ResetReputationRequest
-	100, // 125: blockchain_api.PeerRegistryService.ReconsiderBadPeers:input_type -> blockchain_api.ReconsiderBadPeersRequest
-	76,  // 126: blockchain_api.PeerRegistryService.RecordValidatedPeerProgress:input_type -> blockchain_api.RecordValidatedPeerProgressRequest
-	3,   // 127: blockchain_api.BlockchainAPI.HealthGRPC:output_type -> blockchain_api.HealthResponse
-	139, // 128: blockchain_api.BlockchainAPI.AddBlock:output_type -> google.protobuf.Empty
-	14,  // 129: blockchain_api.BlockchainAPI.GetBlock:output_type -> blockchain_api.GetBlockResponse
-	7,   // 130: blockchain_api.BlockchainAPI.GetBlocks:output_type -> blockchain_api.GetBlocksResponse
-	14,  // 131: blockchain_api.BlockchainAPI.GetBlockByHeight:output_type -> blockchain_api.GetBlockResponse
-	14,  // 132: blockchain_api.BlockchainAPI.GetBlockByID:output_type -> blockchain_api.GetBlockResponse
-	10,  // 133: blockchain_api.BlockchainAPI.GetNextBlockID:output_type -> blockchain_api.GetNextBlockIDResponse
-	12,  // 134: blockchain_api.BlockchainAPI.AssignBlockID:output_type -> blockchain_api.AssignBlockIDResponse
-	140, // 135: blockchain_api.BlockchainAPI.GetBlockStats:output_type -> model.BlockStats
-	141, // 136: blockchain_api.BlockchainAPI.GetBlockGraphData:output_type -> model.BlockDataPoints
-	57,  // 137: blockchain_api.BlockchainAPI.GetLastNBlocks:output_type -> blockchain_api.GetLastNBlocksResponse
-	59,  // 138: blockchain_api.BlockchainAPI.GetLastNInvalidBlocks:output_type -> blockchain_api.GetLastNInvalidBlocksResponse
-	61,  // 139: blockchain_api.BlockchainAPI.GetSuitableBlock:output_type -> blockchain_api.GetSuitableBlockResponse
-	63,  // 140: blockchain_api.BlockchainAPI.GetHashOfAncestorBlock:output_type -> blockchain_api.GetHashOfAncestorBlockResponse
-	65,  // 141: blockchain_api.BlockchainAPI.GetNextWorkRequired:output_type -> blockchain_api.GetNextWorkRequiredResponse
-	17,  // 142: blockchain_api.BlockchainAPI.GetBlockExists:output_type -> blockchain_api.GetBlockExistsResponse
-	22,  // 143: blockchain_api.BlockchainAPI.GetBlockHeaders:output_type -> blockchain_api.GetBlockHeadersResponse
-	43,  // 144: blockchain_api.BlockchainAPI.GetBestBlockHeaderUncached:output_type -> blockchain_api.GetBlockHeaderResponse
-	22,  // 145: blockchain_api.BlockchainAPI.GetBlockHeadersByParentLinks:output_type -> blockchain_api.GetBlockHeadersResponse
-	22,  // 146: blockchain_api.BlockchainAPI.GetBlockHeadersToCommonAncestor:output_type -> blockchain_api.GetBlockHeadersResponse
-	22,  // 147: blockchain_api.BlockchainAPI.GetBlockHeadersFromCommonAncestor:output_type -> blockchain_api.GetBlockHeadersResponse
-	24,  // 148: blockchain_api.BlockchainAPI.GetBlockHeadersFromHeight:output_type -> blockchain_api.GetBlockHeadersFromHeightResponse
-	26,  // 149: blockchain_api.BlockchainAPI.BlocksBetterThan:output_type -> blockchain_api.BlocksBetterThanResponse
-	139, // 150: blockchain_api.BlockchainAPI.ClearBestTipLowWater:output_type -> google.protobuf.Empty
-	29,  // 151: blockchain_api.BlockchainAPI.GetBlockHeadersByHeight:output_type -> blockchain_api.GetBlockHeadersByHeightResponse
-	31,  // 152: blockchain_api.BlockchainAPI.GetMedianTimePastByHeights:output_type -> blockchain_api.GetMedianTimePastByHeightsResponse
-	33,  // 153: blockchain_api.BlockchainAPI.GetBlocksByHeight:output_type -> blockchain_api.GetBlocksByHeightResponse
-	35,  // 154: blockchain_api.BlockchainAPI.FindBlocksContainingSubtree:output_type -> blockchain_api.FindBlocksContainingSubtreeResponse
-	36,  // 155: blockchain_api.BlockchainAPI.GetBlockHeaderIDs:output_type -> blockchain_api.GetBlockHeaderIDsResponse
-	132, // 156: blockchain_api.BlockchainAPI.ReserveLaneRange:output_type -> blockchain_api.ReserveLaneRangeResponse
-	43,  // 157: blockchain_api.BlockchainAPI.GetBestBlockHeader:output_type -> blockchain_api.GetBlockHeaderResponse
-	44,  // 158: blockchain_api.BlockchainAPI.CheckBlockIsInCurrentChain:output_type -> blockchain_api.CheckBlockIsCurrentChainResponse
-	46,  // 159: blockchain_api.BlockchainAPI.CheckBlockIsAncestorOfBlock:output_type -> blockchain_api.CheckBlockIsAncestorOfBlockResponse
-	107, // 160: blockchain_api.BlockchainAPI.GetChainTips:output_type -> blockchain_api.GetChainTipsResponse
-	43,  // 161: blockchain_api.BlockchainAPI.GetBlockHeader:output_type -> blockchain_api.GetBlockHeaderResponse
-	41,  // 162: blockchain_api.BlockchainAPI.InvalidateBlock:output_type -> blockchain_api.InvalidateBlockResponse
-	139, // 163: blockchain_api.BlockchainAPI.RevalidateBlock:output_type -> google.protobuf.Empty
-	48,  // 164: blockchain_api.BlockchainAPI.Subscribe:output_type -> blockchain_api.Notification
-	139, // 165: blockchain_api.BlockchainAPI.SendNotification:output_type -> google.protobuf.Empty
-	50,  // 166: blockchain_api.BlockchainAPI.GetSubscribers:output_type -> blockchain_api.GetSubscribersResponse
-	52,  // 167: blockchain_api.BlockchainAPI.GetState:output_type -> blockchain_api.StateResponse
-	139, // 168: blockchain_api.BlockchainAPI.SetState:output_type -> google.protobuf.Empty
-	55,  // 169: blockchain_api.BlockchainAPI.GetBlockIsMined:output_type -> blockchain_api.GetBlockIsMinedResponse
-	139, // 170: blockchain_api.BlockchainAPI.SetBlockMinedSet:output_type -> google.protobuf.Empty
-	139, // 171: blockchain_api.BlockchainAPI.ClearBlockMinedSet:output_type -> google.protobuf.Empty
-	68,  // 172: blockchain_api.BlockchainAPI.GetBlocksMinedNotSet:output_type -> blockchain_api.GetBlocksMinedNotSetResponse
-	139, // 173: blockchain_api.BlockchainAPI.SetBlockSubtreesSet:output_type -> google.protobuf.Empty
-	70,  // 174: blockchain_api.BlockchainAPI.GetBlocksSubtreesNotSet:output_type -> blockchain_api.GetBlocksSubtreesNotSetResponse
-	139, // 175: blockchain_api.BlockchainAPI.SetBlockProcessedAt:output_type -> google.protobuf.Empty
-	139, // 176: blockchain_api.BlockchainAPI.SetBlockPersistedAt:output_type -> google.protobuf.Empty
-	111, // 177: blockchain_api.BlockchainAPI.GetBlocksNotPersisted:output_type -> blockchain_api.GetBlocksNotPersistedResponse
-	72,  // 178: blockchain_api.BlockchainAPI.SendFSMEvent:output_type -> blockchain_api.GetFSMStateResponse
-	72,  // 179: blockchain_api.BlockchainAPI.GetFSMCurrentState:output_type -> blockchain_api.GetFSMStateResponse
-	139, // 180: blockchain_api.BlockchainAPI.WaitUntilFSMTransitionFromIdleState:output_type -> google.protobuf.Empty
-	139, // 181: blockchain_api.BlockchainAPI.Run:output_type -> google.protobuf.Empty
-	139, // 182: blockchain_api.BlockchainAPI.CatchUpBlocks:output_type -> google.protobuf.Empty
-	139, // 183: blockchain_api.BlockchainAPI.Idle:output_type -> google.protobuf.Empty
-	139, // 184: blockchain_api.BlockchainAPI.ReportPeerFailure:output_type -> google.protobuf.Empty
-	103, // 185: blockchain_api.BlockchainAPI.GetBlockLocator:output_type -> blockchain_api.GetBlockLocatorResponse
-	105, // 186: blockchain_api.BlockchainAPI.LocateBlockHeaders:output_type -> blockchain_api.LocateBlockHeadersResponse
-	106, // 187: blockchain_api.BlockchainAPI.GetBestHeightAndTime:output_type -> blockchain_api.GetBestHeightAndTimeResponse
-	113, // 188: blockchain_api.BlockchainAPI.ScheduleBlobDeletion:output_type -> blockchain_api.ScheduleBlobDeletionResponse
-	115, // 189: blockchain_api.BlockchainAPI.CancelBlobDeletion:output_type -> blockchain_api.CancelBlobDeletionResponse
-	118, // 190: blockchain_api.BlockchainAPI.ListScheduledDeletions:output_type -> blockchain_api.ListScheduledDeletionsResponse
-	120, // 191: blockchain_api.BlockchainAPI.GetPendingBlobDeletions:output_type -> blockchain_api.GetPendingBlobDeletionsResponse
-	139, // 192: blockchain_api.BlockchainAPI.RemoveBlobDeletion:output_type -> google.protobuf.Empty
-	123, // 193: blockchain_api.BlockchainAPI.IncrementBlobDeletionRetry:output_type -> blockchain_api.IncrementBlobDeletionRetryResponse
-	125, // 194: blockchain_api.BlockchainAPI.CompleteBlobDeletions:output_type -> blockchain_api.CompleteBlobDeletionsResponse
-	127, // 195: blockchain_api.BlockchainAPI.AcquireBlobDeletionBatch:output_type -> blockchain_api.AcquireBlobDeletionBatchResponse
-	139, // 196: blockchain_api.BlockchainAPI.CompleteBlobDeletionBatch:output_type -> google.protobuf.Empty
-	139, // 197: blockchain_api.PeerRegistryService.RegisterPeer:output_type -> google.protobuf.Empty
-	139, // 198: blockchain_api.PeerRegistryService.UpdatePeerMetrics:output_type -> google.protobuf.Empty
-	139, // 199: blockchain_api.PeerRegistryService.RemovePeer:output_type -> google.protobuf.Empty
-	80,  // 200: blockchain_api.PeerRegistryService.ListPeers:output_type -> blockchain_api.ListPeersResponse
-	82,  // 201: blockchain_api.PeerRegistryService.GetPeer:output_type -> blockchain_api.GetPeerResponse
-	84,  // 202: blockchain_api.PeerRegistryService.AddBanScore:output_type -> blockchain_api.AddBanScoreResponse
-	86,  // 203: blockchain_api.PeerRegistryService.IsPeerBanned:output_type -> blockchain_api.IsPeerBannedResponse
-	87,  // 204: blockchain_api.PeerRegistryService.ListBannedPeers:output_type -> blockchain_api.ListBannedPeersResponse
-	139, // 205: blockchain_api.PeerRegistryService.ClearBannedPeers:output_type -> google.protobuf.Empty
-	139, // 206: blockchain_api.PeerRegistryService.UpdateConnectionState:output_type -> google.protobuf.Empty
-	139, // 207: blockchain_api.PeerRegistryService.UpdateLastMessageTime:output_type -> google.protobuf.Empty
-	139, // 208: blockchain_api.PeerRegistryService.UpdateStorage:output_type -> google.protobuf.Empty
-	139, // 209: blockchain_api.PeerRegistryService.RecordSyncAttempt:output_type -> google.protobuf.Empty
-	92,  // 210: blockchain_api.PeerRegistryService.ClearAllSyncAttempts:output_type -> blockchain_api.ClearAllSyncAttemptsResponse
-	139, // 211: blockchain_api.PeerRegistryService.RecordBlockReceived:output_type -> google.protobuf.Empty
-	139, // 212: blockchain_api.PeerRegistryService.RecordSubtreeReceived:output_type -> google.protobuf.Empty
-	139, // 213: blockchain_api.PeerRegistryService.RecordTransactionReceived:output_type -> google.protobuf.Empty
-	139, // 214: blockchain_api.PeerRegistryService.RecordCatchupError:output_type -> google.protobuf.Empty
-	139, // 215: blockchain_api.PeerRegistryService.RecordCatchupAttempt:output_type -> google.protobuf.Empty
-	139, // 216: blockchain_api.PeerRegistryService.RecordCatchupSuccess:output_type -> google.protobuf.Empty
-	139, // 217: blockchain_api.PeerRegistryService.RecordCatchupFailure:output_type -> google.protobuf.Empty
-	99,  // 218: blockchain_api.PeerRegistryService.ResetReputation:output_type -> blockchain_api.ResetReputationResponse
-	101, // 219: blockchain_api.PeerRegistryService.ReconsiderBadPeers:output_type -> blockchain_api.ReconsiderBadPeersResponse
-	139, // 220: blockchain_api.PeerRegistryService.RecordValidatedPeerProgress:output_type -> google.protobuf.Empty
-	127, // [127:221] is the sub-list for method output_type
-	33,  // [33:127] is the sub-list for method input_type
+	133, // 63: blockchain_api.BlockchainAPI.OpenLaneLease:input_type -> blockchain_api.OpenLaneLeaseRequest
+	135, // 64: blockchain_api.BlockchainAPI.RenewLaneLease:input_type -> blockchain_api.RenewLaneLeaseRequest
+	137, // 65: blockchain_api.BlockchainAPI.ReleaseLaneLease:input_type -> blockchain_api.ReleaseLaneLeaseRequest
+	145, // 66: blockchain_api.BlockchainAPI.GetBestBlockHeader:input_type -> google.protobuf.Empty
+	39,  // 67: blockchain_api.BlockchainAPI.CheckBlockIsInCurrentChain:input_type -> blockchain_api.CheckBlockIsCurrentChainRequest
+	45,  // 68: blockchain_api.BlockchainAPI.CheckBlockIsAncestorOfBlock:input_type -> blockchain_api.CheckBlockIsAncestorOfBlockRequest
+	145, // 69: blockchain_api.BlockchainAPI.GetChainTips:input_type -> google.protobuf.Empty
+	38,  // 70: blockchain_api.BlockchainAPI.GetBlockHeader:input_type -> blockchain_api.GetBlockHeaderRequest
+	40,  // 71: blockchain_api.BlockchainAPI.InvalidateBlock:input_type -> blockchain_api.InvalidateBlockRequest
+	42,  // 72: blockchain_api.BlockchainAPI.RevalidateBlock:input_type -> blockchain_api.RevalidateBlockRequest
+	47,  // 73: blockchain_api.BlockchainAPI.Subscribe:input_type -> blockchain_api.SubscribeRequest
+	48,  // 74: blockchain_api.BlockchainAPI.SendNotification:input_type -> blockchain_api.Notification
+	145, // 75: blockchain_api.BlockchainAPI.GetSubscribers:input_type -> google.protobuf.Empty
+	51,  // 76: blockchain_api.BlockchainAPI.GetState:input_type -> blockchain_api.GetStateRequest
+	53,  // 77: blockchain_api.BlockchainAPI.SetState:input_type -> blockchain_api.SetStateRequest
+	54,  // 78: blockchain_api.BlockchainAPI.GetBlockIsMined:input_type -> blockchain_api.GetBlockIsMinedRequest
+	66,  // 79: blockchain_api.BlockchainAPI.SetBlockMinedSet:input_type -> blockchain_api.SetBlockMinedSetRequest
+	67,  // 80: blockchain_api.BlockchainAPI.ClearBlockMinedSet:input_type -> blockchain_api.ClearBlockMinedSetRequest
+	145, // 81: blockchain_api.BlockchainAPI.GetBlocksMinedNotSet:input_type -> google.protobuf.Empty
+	69,  // 82: blockchain_api.BlockchainAPI.SetBlockSubtreesSet:input_type -> blockchain_api.SetBlockSubtreesSetRequest
+	145, // 83: blockchain_api.BlockchainAPI.GetBlocksSubtreesNotSet:input_type -> google.protobuf.Empty
+	71,  // 84: blockchain_api.BlockchainAPI.SetBlockProcessedAt:input_type -> blockchain_api.SetBlockProcessedAtRequest
+	109, // 85: blockchain_api.BlockchainAPI.SetBlockPersistedAt:input_type -> blockchain_api.SetBlockPersistedAtRequest
+	110, // 86: blockchain_api.BlockchainAPI.GetBlocksNotPersisted:input_type -> blockchain_api.GetBlocksNotPersistedRequest
+	73,  // 87: blockchain_api.BlockchainAPI.SendFSMEvent:input_type -> blockchain_api.SendFSMEventRequest
+	145, // 88: blockchain_api.BlockchainAPI.GetFSMCurrentState:input_type -> google.protobuf.Empty
+	145, // 89: blockchain_api.BlockchainAPI.WaitUntilFSMTransitionFromIdleState:input_type -> google.protobuf.Empty
+	145, // 90: blockchain_api.BlockchainAPI.Run:input_type -> google.protobuf.Empty
+	145, // 91: blockchain_api.BlockchainAPI.CatchUpBlocks:input_type -> google.protobuf.Empty
+	145, // 92: blockchain_api.BlockchainAPI.Idle:input_type -> google.protobuf.Empty
+	108, // 93: blockchain_api.BlockchainAPI.ReportPeerFailure:input_type -> blockchain_api.ReportPeerFailureRequest
+	102, // 94: blockchain_api.BlockchainAPI.GetBlockLocator:input_type -> blockchain_api.GetBlockLocatorRequest
+	104, // 95: blockchain_api.BlockchainAPI.LocateBlockHeaders:input_type -> blockchain_api.LocateBlockHeadersRequest
+	145, // 96: blockchain_api.BlockchainAPI.GetBestHeightAndTime:input_type -> google.protobuf.Empty
+	112, // 97: blockchain_api.BlockchainAPI.ScheduleBlobDeletion:input_type -> blockchain_api.ScheduleBlobDeletionRequest
+	114, // 98: blockchain_api.BlockchainAPI.CancelBlobDeletion:input_type -> blockchain_api.CancelBlobDeletionRequest
+	116, // 99: blockchain_api.BlockchainAPI.ListScheduledDeletions:input_type -> blockchain_api.ListScheduledDeletionsRequest
+	119, // 100: blockchain_api.BlockchainAPI.GetPendingBlobDeletions:input_type -> blockchain_api.GetPendingBlobDeletionsRequest
+	121, // 101: blockchain_api.BlockchainAPI.RemoveBlobDeletion:input_type -> blockchain_api.RemoveBlobDeletionRequest
+	122, // 102: blockchain_api.BlockchainAPI.IncrementBlobDeletionRetry:input_type -> blockchain_api.IncrementBlobDeletionRetryRequest
+	124, // 103: blockchain_api.BlockchainAPI.CompleteBlobDeletions:input_type -> blockchain_api.CompleteBlobDeletionsRequest
+	126, // 104: blockchain_api.BlockchainAPI.AcquireBlobDeletionBatch:input_type -> blockchain_api.AcquireBlobDeletionBatchRequest
+	128, // 105: blockchain_api.BlockchainAPI.CompleteBlobDeletionBatch:input_type -> blockchain_api.CompleteBlobDeletionBatchRequest
+	75,  // 106: blockchain_api.PeerRegistryService.RegisterPeer:input_type -> blockchain_api.RegisterPeerRequest
+	77,  // 107: blockchain_api.PeerRegistryService.UpdatePeerMetrics:input_type -> blockchain_api.UpdatePeerMetricsRequest
+	78,  // 108: blockchain_api.PeerRegistryService.RemovePeer:input_type -> blockchain_api.RemovePeerRequest
+	79,  // 109: blockchain_api.PeerRegistryService.ListPeers:input_type -> blockchain_api.ListPeersRequest
+	81,  // 110: blockchain_api.PeerRegistryService.GetPeer:input_type -> blockchain_api.GetPeerRequest
+	83,  // 111: blockchain_api.PeerRegistryService.AddBanScore:input_type -> blockchain_api.AddBanScoreRequest
+	85,  // 112: blockchain_api.PeerRegistryService.IsPeerBanned:input_type -> blockchain_api.IsPeerBannedRequest
+	145, // 113: blockchain_api.PeerRegistryService.ListBannedPeers:input_type -> google.protobuf.Empty
+	145, // 114: blockchain_api.PeerRegistryService.ClearBannedPeers:input_type -> google.protobuf.Empty
+	88,  // 115: blockchain_api.PeerRegistryService.UpdateConnectionState:input_type -> blockchain_api.UpdateConnectionStateRequest
+	89,  // 116: blockchain_api.PeerRegistryService.UpdateLastMessageTime:input_type -> blockchain_api.UpdateLastMessageTimeRequest
+	90,  // 117: blockchain_api.PeerRegistryService.UpdateStorage:input_type -> blockchain_api.UpdateStorageRequest
+	91,  // 118: blockchain_api.PeerRegistryService.RecordSyncAttempt:input_type -> blockchain_api.RecordSyncAttemptRequest
+	145, // 119: blockchain_api.PeerRegistryService.ClearAllSyncAttempts:input_type -> google.protobuf.Empty
+	93,  // 120: blockchain_api.PeerRegistryService.RecordBlockReceived:input_type -> blockchain_api.RecordReceivedRequest
+	93,  // 121: blockchain_api.PeerRegistryService.RecordSubtreeReceived:input_type -> blockchain_api.RecordReceivedRequest
+	93,  // 122: blockchain_api.PeerRegistryService.RecordTransactionReceived:input_type -> blockchain_api.RecordReceivedRequest
+	94,  // 123: blockchain_api.PeerRegistryService.RecordCatchupError:input_type -> blockchain_api.RecordCatchupErrorRequest
+	95,  // 124: blockchain_api.PeerRegistryService.RecordCatchupAttempt:input_type -> blockchain_api.RecordCatchupAttemptRequest
+	96,  // 125: blockchain_api.PeerRegistryService.RecordCatchupSuccess:input_type -> blockchain_api.RecordCatchupSuccessRequest
+	97,  // 126: blockchain_api.PeerRegistryService.RecordCatchupFailure:input_type -> blockchain_api.RecordCatchupFailureRequest
+	98,  // 127: blockchain_api.PeerRegistryService.ResetReputation:input_type -> blockchain_api.ResetReputationRequest
+	100, // 128: blockchain_api.PeerRegistryService.ReconsiderBadPeers:input_type -> blockchain_api.ReconsiderBadPeersRequest
+	76,  // 129: blockchain_api.PeerRegistryService.RecordValidatedPeerProgress:input_type -> blockchain_api.RecordValidatedPeerProgressRequest
+	3,   // 130: blockchain_api.BlockchainAPI.HealthGRPC:output_type -> blockchain_api.HealthResponse
+	145, // 131: blockchain_api.BlockchainAPI.AddBlock:output_type -> google.protobuf.Empty
+	14,  // 132: blockchain_api.BlockchainAPI.GetBlock:output_type -> blockchain_api.GetBlockResponse
+	7,   // 133: blockchain_api.BlockchainAPI.GetBlocks:output_type -> blockchain_api.GetBlocksResponse
+	14,  // 134: blockchain_api.BlockchainAPI.GetBlockByHeight:output_type -> blockchain_api.GetBlockResponse
+	14,  // 135: blockchain_api.BlockchainAPI.GetBlockByID:output_type -> blockchain_api.GetBlockResponse
+	10,  // 136: blockchain_api.BlockchainAPI.GetNextBlockID:output_type -> blockchain_api.GetNextBlockIDResponse
+	12,  // 137: blockchain_api.BlockchainAPI.AssignBlockID:output_type -> blockchain_api.AssignBlockIDResponse
+	146, // 138: blockchain_api.BlockchainAPI.GetBlockStats:output_type -> model.BlockStats
+	147, // 139: blockchain_api.BlockchainAPI.GetBlockGraphData:output_type -> model.BlockDataPoints
+	57,  // 140: blockchain_api.BlockchainAPI.GetLastNBlocks:output_type -> blockchain_api.GetLastNBlocksResponse
+	59,  // 141: blockchain_api.BlockchainAPI.GetLastNInvalidBlocks:output_type -> blockchain_api.GetLastNInvalidBlocksResponse
+	61,  // 142: blockchain_api.BlockchainAPI.GetSuitableBlock:output_type -> blockchain_api.GetSuitableBlockResponse
+	63,  // 143: blockchain_api.BlockchainAPI.GetHashOfAncestorBlock:output_type -> blockchain_api.GetHashOfAncestorBlockResponse
+	65,  // 144: blockchain_api.BlockchainAPI.GetNextWorkRequired:output_type -> blockchain_api.GetNextWorkRequiredResponse
+	17,  // 145: blockchain_api.BlockchainAPI.GetBlockExists:output_type -> blockchain_api.GetBlockExistsResponse
+	22,  // 146: blockchain_api.BlockchainAPI.GetBlockHeaders:output_type -> blockchain_api.GetBlockHeadersResponse
+	43,  // 147: blockchain_api.BlockchainAPI.GetBestBlockHeaderUncached:output_type -> blockchain_api.GetBlockHeaderResponse
+	22,  // 148: blockchain_api.BlockchainAPI.GetBlockHeadersByParentLinks:output_type -> blockchain_api.GetBlockHeadersResponse
+	22,  // 149: blockchain_api.BlockchainAPI.GetBlockHeadersToCommonAncestor:output_type -> blockchain_api.GetBlockHeadersResponse
+	22,  // 150: blockchain_api.BlockchainAPI.GetBlockHeadersFromCommonAncestor:output_type -> blockchain_api.GetBlockHeadersResponse
+	24,  // 151: blockchain_api.BlockchainAPI.GetBlockHeadersFromHeight:output_type -> blockchain_api.GetBlockHeadersFromHeightResponse
+	26,  // 152: blockchain_api.BlockchainAPI.BlocksBetterThan:output_type -> blockchain_api.BlocksBetterThanResponse
+	145, // 153: blockchain_api.BlockchainAPI.ClearBestTipLowWater:output_type -> google.protobuf.Empty
+	29,  // 154: blockchain_api.BlockchainAPI.GetBlockHeadersByHeight:output_type -> blockchain_api.GetBlockHeadersByHeightResponse
+	31,  // 155: blockchain_api.BlockchainAPI.GetMedianTimePastByHeights:output_type -> blockchain_api.GetMedianTimePastByHeightsResponse
+	33,  // 156: blockchain_api.BlockchainAPI.GetBlocksByHeight:output_type -> blockchain_api.GetBlocksByHeightResponse
+	35,  // 157: blockchain_api.BlockchainAPI.FindBlocksContainingSubtree:output_type -> blockchain_api.FindBlocksContainingSubtreeResponse
+	36,  // 158: blockchain_api.BlockchainAPI.GetBlockHeaderIDs:output_type -> blockchain_api.GetBlockHeaderIDsResponse
+	132, // 159: blockchain_api.BlockchainAPI.ReserveLaneRange:output_type -> blockchain_api.ReserveLaneRangeResponse
+	134, // 160: blockchain_api.BlockchainAPI.OpenLaneLease:output_type -> blockchain_api.LaneLeaseGrant
+	136, // 161: blockchain_api.BlockchainAPI.RenewLaneLease:output_type -> blockchain_api.RenewLaneLeaseResponse
+	138, // 162: blockchain_api.BlockchainAPI.ReleaseLaneLease:output_type -> blockchain_api.ReleaseLaneLeaseResponse
+	43,  // 163: blockchain_api.BlockchainAPI.GetBestBlockHeader:output_type -> blockchain_api.GetBlockHeaderResponse
+	44,  // 164: blockchain_api.BlockchainAPI.CheckBlockIsInCurrentChain:output_type -> blockchain_api.CheckBlockIsCurrentChainResponse
+	46,  // 165: blockchain_api.BlockchainAPI.CheckBlockIsAncestorOfBlock:output_type -> blockchain_api.CheckBlockIsAncestorOfBlockResponse
+	107, // 166: blockchain_api.BlockchainAPI.GetChainTips:output_type -> blockchain_api.GetChainTipsResponse
+	43,  // 167: blockchain_api.BlockchainAPI.GetBlockHeader:output_type -> blockchain_api.GetBlockHeaderResponse
+	41,  // 168: blockchain_api.BlockchainAPI.InvalidateBlock:output_type -> blockchain_api.InvalidateBlockResponse
+	145, // 169: blockchain_api.BlockchainAPI.RevalidateBlock:output_type -> google.protobuf.Empty
+	48,  // 170: blockchain_api.BlockchainAPI.Subscribe:output_type -> blockchain_api.Notification
+	145, // 171: blockchain_api.BlockchainAPI.SendNotification:output_type -> google.protobuf.Empty
+	50,  // 172: blockchain_api.BlockchainAPI.GetSubscribers:output_type -> blockchain_api.GetSubscribersResponse
+	52,  // 173: blockchain_api.BlockchainAPI.GetState:output_type -> blockchain_api.StateResponse
+	145, // 174: blockchain_api.BlockchainAPI.SetState:output_type -> google.protobuf.Empty
+	55,  // 175: blockchain_api.BlockchainAPI.GetBlockIsMined:output_type -> blockchain_api.GetBlockIsMinedResponse
+	145, // 176: blockchain_api.BlockchainAPI.SetBlockMinedSet:output_type -> google.protobuf.Empty
+	145, // 177: blockchain_api.BlockchainAPI.ClearBlockMinedSet:output_type -> google.protobuf.Empty
+	68,  // 178: blockchain_api.BlockchainAPI.GetBlocksMinedNotSet:output_type -> blockchain_api.GetBlocksMinedNotSetResponse
+	145, // 179: blockchain_api.BlockchainAPI.SetBlockSubtreesSet:output_type -> google.protobuf.Empty
+	70,  // 180: blockchain_api.BlockchainAPI.GetBlocksSubtreesNotSet:output_type -> blockchain_api.GetBlocksSubtreesNotSetResponse
+	145, // 181: blockchain_api.BlockchainAPI.SetBlockProcessedAt:output_type -> google.protobuf.Empty
+	145, // 182: blockchain_api.BlockchainAPI.SetBlockPersistedAt:output_type -> google.protobuf.Empty
+	111, // 183: blockchain_api.BlockchainAPI.GetBlocksNotPersisted:output_type -> blockchain_api.GetBlocksNotPersistedResponse
+	72,  // 184: blockchain_api.BlockchainAPI.SendFSMEvent:output_type -> blockchain_api.GetFSMStateResponse
+	72,  // 185: blockchain_api.BlockchainAPI.GetFSMCurrentState:output_type -> blockchain_api.GetFSMStateResponse
+	145, // 186: blockchain_api.BlockchainAPI.WaitUntilFSMTransitionFromIdleState:output_type -> google.protobuf.Empty
+	145, // 187: blockchain_api.BlockchainAPI.Run:output_type -> google.protobuf.Empty
+	145, // 188: blockchain_api.BlockchainAPI.CatchUpBlocks:output_type -> google.protobuf.Empty
+	145, // 189: blockchain_api.BlockchainAPI.Idle:output_type -> google.protobuf.Empty
+	145, // 190: blockchain_api.BlockchainAPI.ReportPeerFailure:output_type -> google.protobuf.Empty
+	103, // 191: blockchain_api.BlockchainAPI.GetBlockLocator:output_type -> blockchain_api.GetBlockLocatorResponse
+	105, // 192: blockchain_api.BlockchainAPI.LocateBlockHeaders:output_type -> blockchain_api.LocateBlockHeadersResponse
+	106, // 193: blockchain_api.BlockchainAPI.GetBestHeightAndTime:output_type -> blockchain_api.GetBestHeightAndTimeResponse
+	113, // 194: blockchain_api.BlockchainAPI.ScheduleBlobDeletion:output_type -> blockchain_api.ScheduleBlobDeletionResponse
+	115, // 195: blockchain_api.BlockchainAPI.CancelBlobDeletion:output_type -> blockchain_api.CancelBlobDeletionResponse
+	118, // 196: blockchain_api.BlockchainAPI.ListScheduledDeletions:output_type -> blockchain_api.ListScheduledDeletionsResponse
+	120, // 197: blockchain_api.BlockchainAPI.GetPendingBlobDeletions:output_type -> blockchain_api.GetPendingBlobDeletionsResponse
+	145, // 198: blockchain_api.BlockchainAPI.RemoveBlobDeletion:output_type -> google.protobuf.Empty
+	123, // 199: blockchain_api.BlockchainAPI.IncrementBlobDeletionRetry:output_type -> blockchain_api.IncrementBlobDeletionRetryResponse
+	125, // 200: blockchain_api.BlockchainAPI.CompleteBlobDeletions:output_type -> blockchain_api.CompleteBlobDeletionsResponse
+	127, // 201: blockchain_api.BlockchainAPI.AcquireBlobDeletionBatch:output_type -> blockchain_api.AcquireBlobDeletionBatchResponse
+	145, // 202: blockchain_api.BlockchainAPI.CompleteBlobDeletionBatch:output_type -> google.protobuf.Empty
+	145, // 203: blockchain_api.PeerRegistryService.RegisterPeer:output_type -> google.protobuf.Empty
+	145, // 204: blockchain_api.PeerRegistryService.UpdatePeerMetrics:output_type -> google.protobuf.Empty
+	145, // 205: blockchain_api.PeerRegistryService.RemovePeer:output_type -> google.protobuf.Empty
+	80,  // 206: blockchain_api.PeerRegistryService.ListPeers:output_type -> blockchain_api.ListPeersResponse
+	82,  // 207: blockchain_api.PeerRegistryService.GetPeer:output_type -> blockchain_api.GetPeerResponse
+	84,  // 208: blockchain_api.PeerRegistryService.AddBanScore:output_type -> blockchain_api.AddBanScoreResponse
+	86,  // 209: blockchain_api.PeerRegistryService.IsPeerBanned:output_type -> blockchain_api.IsPeerBannedResponse
+	87,  // 210: blockchain_api.PeerRegistryService.ListBannedPeers:output_type -> blockchain_api.ListBannedPeersResponse
+	145, // 211: blockchain_api.PeerRegistryService.ClearBannedPeers:output_type -> google.protobuf.Empty
+	145, // 212: blockchain_api.PeerRegistryService.UpdateConnectionState:output_type -> google.protobuf.Empty
+	145, // 213: blockchain_api.PeerRegistryService.UpdateLastMessageTime:output_type -> google.protobuf.Empty
+	145, // 214: blockchain_api.PeerRegistryService.UpdateStorage:output_type -> google.protobuf.Empty
+	145, // 215: blockchain_api.PeerRegistryService.RecordSyncAttempt:output_type -> google.protobuf.Empty
+	92,  // 216: blockchain_api.PeerRegistryService.ClearAllSyncAttempts:output_type -> blockchain_api.ClearAllSyncAttemptsResponse
+	145, // 217: blockchain_api.PeerRegistryService.RecordBlockReceived:output_type -> google.protobuf.Empty
+	145, // 218: blockchain_api.PeerRegistryService.RecordSubtreeReceived:output_type -> google.protobuf.Empty
+	145, // 219: blockchain_api.PeerRegistryService.RecordTransactionReceived:output_type -> google.protobuf.Empty
+	145, // 220: blockchain_api.PeerRegistryService.RecordCatchupError:output_type -> google.protobuf.Empty
+	145, // 221: blockchain_api.PeerRegistryService.RecordCatchupAttempt:output_type -> google.protobuf.Empty
+	145, // 222: blockchain_api.PeerRegistryService.RecordCatchupSuccess:output_type -> google.protobuf.Empty
+	145, // 223: blockchain_api.PeerRegistryService.RecordCatchupFailure:output_type -> google.protobuf.Empty
+	99,  // 224: blockchain_api.PeerRegistryService.ResetReputation:output_type -> blockchain_api.ResetReputationResponse
+	101, // 225: blockchain_api.PeerRegistryService.ReconsiderBadPeers:output_type -> blockchain_api.ReconsiderBadPeersResponse
+	145, // 226: blockchain_api.PeerRegistryService.RecordValidatedPeerProgress:output_type -> google.protobuf.Empty
+	130, // [130:227] is the sub-list for method output_type
+	33,  // [33:130] is the sub-list for method input_type
 	33,  // [33:33] is the sub-list for extension type_name
 	33,  // [33:33] is the sub-list for extension extendee
 	0,   // [0:33] is the sub-list for field type_name
@@ -8545,7 +8988,7 @@ func file_services_blockchain_blockchain_api_blockchain_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc), len(file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   131,
+			NumMessages:   137,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

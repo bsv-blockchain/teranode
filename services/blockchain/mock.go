@@ -674,6 +674,30 @@ func (m *Mock) ReserveLaneRange(ctx context.Context, holder string, wantLane uin
 	return args.Get(0).(lane.Range), nil
 }
 
+// OpenLaneLease mocks the OpenLaneLease method
+func (m *Mock) OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
+	args := m.Called(ctx, holder)
+	if args.Error(2) != nil {
+		return lane.LeaseID{}, lane.Grant{}, args.Error(2)
+	}
+	return args.Get(0).(lane.LeaseID), args.Get(1).(lane.Grant), nil
+}
+
+// RenewLaneLease mocks the RenewLaneLease method
+func (m *Mock) RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error) {
+	args := m.Called(ctx, r)
+	if args.Error(1) != nil {
+		return lane.RenewResult{}, args.Error(1)
+	}
+	return args.Get(0).(lane.RenewResult), nil
+}
+
+// ReleaseLaneLease mocks the ReleaseLaneLease method
+func (m *Mock) ReleaseLaneLease(ctx context.Context, r lane.Release) (bool, error) {
+	args := m.Called(ctx, r)
+	return args.Bool(0), args.Error(1)
+}
+
 type emptyStoreGetBlockHeader struct {
 	blockchain_store.MockStore
 }
