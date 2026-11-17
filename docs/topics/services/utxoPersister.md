@@ -145,7 +145,7 @@ The UTXO Persister processes blocks and creates UTXO sets as follows:
 8. **Cleanup**:
 
     - If not skipped (based on configuration), the service deletes the previous block's UTXO set to save space.
-    - A stop before the delete finishes, or a failed delete (logged at Error), leaves the previous set on disk, and nothing deletes it later.
+    - A stop or a failed delete here can leave the previous set, or some of its side files, on disk, and nothing deletes them later.
 
 9. **Trigger Next Block Processing**:
 

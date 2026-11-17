@@ -793,7 +793,7 @@ func TestProcessNextBlock_RecordsHeightBeforeDeletingPreviousSet(t *testing.T) {
 
 	server, byH := restartTestChain(t, store)
 
-	// Give the previous set its sidecars, so the test can see they are kept.
+	// Give the previous set its side files, so the test can see they are kept.
 	require.NoError(t, store.Set(ctx, byH[1][:], fileformat.FileTypeUtxoSetHash, []byte("set-hash")))
 	require.NoError(t, store.Set(ctx, byH[1][:], fileformat.FileTypeUtxoHeaders, []byte("headers")))
 
@@ -807,7 +807,7 @@ func TestProcessNextBlock_RecordsHeightBeforeDeletingPreviousSet(t *testing.T) {
 	for _, ft := range []fileformat.FileType{fileformat.FileTypeUtxoSet, fileformat.FileTypeUtxoSetHash, fileformat.FileTypeUtxoHeaders} {
 		exists, err := store.Exists(ctx, byH[1][:], ft)
 		require.NoError(t, err)
-		require.True(t, exists, "the previous %s stays on disk after a failed delete, so the leftover set is whole", ft)
+		require.True(t, exists, "the previous %s stays on disk after a failed delete", ft)
 	}
 
 	height, err := server.readLastHeight(ctx)
