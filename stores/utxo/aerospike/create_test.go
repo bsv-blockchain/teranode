@@ -755,6 +755,7 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 
 		_, err := store.Create(ctx, parent, blockHeight, mined)
 		requireCreatingNotCleared(t, err)
+		require.ErrorContains(t, err, "failed to unlock child records", "the error carries the clear's own failure")
 
 		require.True(t, hasCreatingBin(t, parent, 2), "the failed clear leaves the bin on the extra record")
 		require.ErrorIs(t, spendVout(parent, 9), errors.ErrTxCreating, "an output on the extra record is refused until the clear is done")
@@ -815,5 +816,36 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 		_, err = store.Create(ctx, parent, blockHeight)
 		require.ErrorIs(t, err, errors.ErrTxExists)
 		require.True(t, hasCreatingBin(t, parent, 2))
+	})
+
+	t.Run("held lock is not reported as exists to a mined create", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		// A lock record left in place, as when an earlier attempt's release
+		// failed: it lives out its TTL, and a repeat inside that window never
+		// reaches the clear.
+		lockKey, keyErr := aerospike.NewKey(store.GetNamespace(), store.GetName(),
+			uaerospike.CalculateKeySourceInternal(parent.TxIDChainHash(), teranodeaerospike.LockRecordIndex))
+		require.NoError(t, keyErr)
+		require.NoError(t, client.PutBins(nil, lockKey, aerospike.NewBin("lock_token", "left-behind")))
+
+		_, err := store.Create(ctx, parent, blockHeight, mined)
+		requireCreatingNotCleared(t, err)
+		require.ErrorContains(t, err, "transaction creation in progress or already exists", "the error carries the lock's own answer")
+
+		// Control: a validator create keeps today's answer.
+		_, err = store.Create(ctx, parent, blockHeight)
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		deleted, delErr := client.Delete(nil, lockKey)
+		require.Nil(t, delErr)
+		require.True(t, deleted)
+
+		_, err = store.Create(ctx, parent, blockHeight, mined)
+		require.NoError(t, err, "once the lock is gone the repeat writes and clears the records")
+
+		requireAllCleared(t, parent)
 	})
 }

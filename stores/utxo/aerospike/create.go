@@ -1118,8 +1118,11 @@ func classifyCreateBatchResults(batchRecords []aerospike.BatchRecordIfc) (master
 //
 // ERROR HANDLING PHILOSOPHY:
 //
-// The function returns success (nil error) as long as Phase 1 completes, even if Phase 2
-// fails. This is intentional and correct because:
+// For a create with no mined block info, the function returns success (nil error) as long
+// as Phase 1 completes, even if Phase 2 fails. A create carrying mined block info instead
+// returns creatingNotClearedError when Phase 2 fails, and a retryable error when the lock
+// is held, because these recovery scenarios do not reliably reach it. For the first case
+// returning success is intentional because:
 //
 // 1. TRANSACTION IS PERSISTED: Phase 1 success means all records exist with complete data
 // 2. SPEND PROTECTION: creating=true flags prevent premature UTXO spending (per-record Lua checks)
@@ -1148,6 +1151,17 @@ func (s *Store) storeExternallyWithLock(
 	// Acquire lock FIRST to prevent duplicate work
 	lockKey, lockToken, err := s.acquireLock(bItem.txHash, len(binsToStore))
 	if err != nil {
+		// A held lock means another attempt is writing the records, or an earlier
+		// attempt's release failed and the lock waits out its TTL. Either way this
+		// call has not cleared the creating flag, so a mined create must not answer
+		// ErrTxExists, which its caller may read as done. See creatingNotClearedError.
+		// The lock's ErrTxExists is carried as text, not wrapped: errors.Is walks the
+		// chain, so a wrapped one would still read as done.
+		if len(bItem.blockIDs) > 0 && errors.Is(err, errors.ErrTxExists) {
+			bItem.complete(createMayHaveCommittedError(errors.NewStorageError("[%s] tx %s is locked by another create attempt, so its creating flag may not be cleared: %s", funcName, bItem.txHash, err.Error())))
+			return
+		}
+
 		bItem.complete(err)
 		return
 	}
@@ -1259,8 +1273,8 @@ func (s *Store) storeExternallyWithLock(
 		// manual intervention. This ensures eventual consistency through automatic recovery.
 		clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore))
 		if clearErr != nil {
-			// A mined create's caller reads ErrTxExists as done, so it would never
-			// come back to finish the clear. See creatingNotClearedError.
+			// A mined create's caller may read ErrTxExists as done: the seeder and
+			// block assembly's coinbase store do. See creatingNotClearedError.
 			if len(bItem.blockIDs) > 0 {
 				bItem.complete(creatingNotClearedError(funcName, bItem.txHash, clearErr))
 				return
@@ -1549,16 +1563,18 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 
 // creatingNotClearedError is the error a create carrying mined block info
 // returns when its records are written but clearCreatingFlag failed. Such a
-// create comes from quick validation, the seeder or a block assembly restore,
-// and none of the recovery paths a validator create relies on reaches it: the
-// transaction is not seen again in a subtree, setMined does not run for a
-// transaction created already mined, and nothing repeats a create that returned
-// success. Returning success would leave the records with the creating bin for
-// good, so every output on them would be refused with CREATING.
+// create comes from quick validation, the seeder, seedimport, or block
+// assembly's coinbase store and reorg restore, and the recovery paths a
+// validator create relies on do not reliably reach it: the transaction is not
+// seen again in a subtree, and only quick validation runs setMined for a
+// transaction it created already mined. Returning success would leave the
+// records with the creating bin, and the seeder and the coinbase store would
+// carry on with every output on them refused with CREATING.
 //
-// The error is a storage error, which IsRetryableError accepts, so the caller
-// repeats the create; the repeat finds the master record and retries the clear.
-// It is also marked outcome-unknown, because the records are stored:
+// The error is a storage error, which IsRetryableError accepts. Quick
+// validation repeats the create, and the repeat finds the master record and
+// retries the clear; the other callers fail their operation instead of carrying
+// on. It is also marked outcome-unknown, because the records are stored:
 // utxo.SequentialSpendAndCreate must keep the spends rather than unspend the
 // inputs of a stored transaction.
 func creatingNotClearedError(funcName string, txHash *chainhash.Hash, clearErr error) error {

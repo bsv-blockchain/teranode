@@ -202,8 +202,8 @@ The protocol provides the following guarantees:
 
 **Lock Acquisition Failure:**
 
-- Another process holds the lock
-- Return `TxExistsError` immediately
+- Another process holds the lock, or an earlier attempt failed to release it and it waits out its TTL
+- Return `TxExistsError` immediately; a create carrying mined block info returns a retryable storage error instead, because this attempt has not cleared the creating flag
 - No cleanup needed
 
 **Blob Storage Failure:**
@@ -222,9 +222,8 @@ The protocol provides the following guarantees:
 **Phase 2 Failure:**
 
 - All records exist with `creating=true`
-- Return success (transaction is persisted)
-- Log error for monitoring
-- Auto-recovery will clear flags
+- Return success (transaction is persisted), log the error, and let auto-recovery clear the flags
+- A create carrying mined block info (quick validation, the seeders, block assembly's coinbase store and reorg restore) returns a retryable storage error instead, marked outcome-unknown so its spends stay. The auto-recovery paths below do not reliably reach it, so the caller repeats the create or fails its operation. The same applies when the repeat finds the master record and its clear fails again.
 
 ### 5.2. Auto-Recovery Mechanisms
 
