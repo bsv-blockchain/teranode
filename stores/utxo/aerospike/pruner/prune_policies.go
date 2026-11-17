@@ -51,24 +51,29 @@ func newPrunerTTLTouchPolicy(commitLevel aerospike.CommitLevel) *aerospike.Batch
 }
 
 // carriedMasterGuard is the server-side condition a carried master delete
-// must meet, the same rule dropUnminedRecords applies when the pruner selects
-// a record: the record is not locked, and it has no unmined_since bin unless it
-// is conflicting. The pruner selects a child while it is mined and fully spent,
-// and deletes it a batch later. In between, a block invalidation can strip its
-// block ids and stamp unmined_since, and a reorg's move-back can lock it while
-// it saves it for restoration. Deleting it then removes a live transaction from
-// under the reorg. A record that fails the guard answers FILTERED_OUT, which
-// classifyDeletionResults reads as a refusal: the child is held back and its
-// markers are withdrawn.
+// must meet, the same rules partitionWorker's scan and dropUnminedRecords apply
+// when the pruner selects a record: it still has a deleteAtHeight at or below
+// blockHeight, it is not locked, and it has no unmined_since bin unless it is
+// conflicting. The pruner selects a child while it is mined and fully spent,
+// and deletes it a batch later, or at the worker's final drain. In between, a
+// block invalidation can strip its block ids and stamp unmined_since, a reorg's
+// move-back can lock it while it saves it for restoration, and a conflict
+// resolution that releases one of its outputs clears its deleteAtHeight (Lua
+// setDeleteAtHeight clears it once the record is no longer all spent). Deleting
+// it then removes a live transaction, or a live output. A record that fails the
+// guard answers FILTERED_OUT, which classifyDeletionResults reads as a refusal:
+// the child is held back and its markers are withdrawn.
 //
 // Locking a record strips its deleteAtHeight (setLocked in teranode.lua), so a
-// locked record is never selected and the locked leg only ever meets a lock
-// taken after selection.
-func carriedMasterGuard() *aerospike.Expression {
+// locked record that kept the guard's height leg is one locked after selection.
+func carriedMasterGuard(blockHeight uint32) *aerospike.Expression {
 	locked := fields.Locked.String()
 	conflicting := fields.Conflicting.String()
+	deleteAtHeight := fields.DeleteAtHeight.String()
 
 	return aerospike.ExpAnd(
+		aerospike.ExpBinExists(deleteAtHeight),
+		aerospike.ExpLessEq(aerospike.ExpIntBin(deleteAtHeight), aerospike.ExpIntVal(int64(blockHeight))),
 		aerospike.ExpOr(
 			aerospike.ExpNot(aerospike.ExpBinExists(locked)),
 			aerospike.ExpNot(aerospike.ExpBoolBin(locked)),
@@ -89,14 +94,15 @@ func carriedMasterGuard() *aerospike.Expression {
 // path that removes a pruned record: a delete rides the batch after the one
 // that wrote its parent markers. The keys at the indices in masters are master
 // records and carry carriedMasterGuard; pagination records have no locked or
-// unmined_since bin and go unguarded.
-func buildDeletionBatchRecords(keys []*aerospike.Key, masters map[int]*chainhash.Hash, utxoSetTTL bool, commitLevel aerospike.CommitLevel) []aerospike.BatchRecordIfc {
+// unmined_since bin and go unguarded. blockHeight is the height the masters
+// were selected at; see carriedMasterGuard.
+func buildDeletionBatchRecords(keys []*aerospike.Key, masters map[int]*chainhash.Hash, blockHeight uint32, utxoSetTTL bool, commitLevel aerospike.CommitLevel) []aerospike.BatchRecordIfc {
 	batchRecords := make([]aerospike.BatchRecordIfc, len(keys))
 
 	if utxoSetTTL {
 		ttlWritePolicy := newPrunerTTLTouchPolicy(commitLevel)
 		guardedTTLPolicy := newPrunerTTLTouchPolicy(commitLevel)
-		guardedTTLPolicy.FilterExpression = carriedMasterGuard()
+		guardedTTLPolicy.FilterExpression = carriedMasterGuard(blockHeight)
 
 		for i, key := range keys {
 			policy := ttlWritePolicy
@@ -112,7 +118,7 @@ func buildDeletionBatchRecords(keys []*aerospike.Key, masters map[int]*chainhash
 
 	batchDeletePolicy := newPrunerDeletePolicy(commitLevel)
 	guardedDeletePolicy := newPrunerDeletePolicy(commitLevel)
-	guardedDeletePolicy.FilterExpression = carriedMasterGuard()
+	guardedDeletePolicy.FilterExpression = carriedMasterGuard(blockHeight)
 
 	for i, key := range keys {
 		policy := batchDeletePolicy

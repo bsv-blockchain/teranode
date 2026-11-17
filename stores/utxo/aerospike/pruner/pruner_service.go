@@ -714,7 +714,7 @@ func (s *Service) partitionWorker(
 	// or a cancellation still drains: the carried children are cleared and
 	// their markers have landed, so leaving them present behind those markers
 	// would refuse their own re-spend.
-	carry := &deleteCarry{}
+	carry := &deleteCarry{blockHeight: blockHeight}
 
 	defer func() {
 		// A chunk still in flight adds to the carry when it finishes, so the
@@ -2481,6 +2481,9 @@ func spendHolder(utxos []interface{}, offsets []uint32, childHash *chainhash.Has
 //     anything added meanwhile, so nothing is overwritten.
 type deleteCarry struct {
 	mu sync.Mutex
+	// blockHeight is the height the carried children were selected at. Their
+	// deletes re-check it on the server; see carriedMasterGuard.
+	blockHeight uint32
 	// deletions are cleared children, deleted by the next batch.
 	deletions []*pendingDeletion
 	// files are the external blobs of those children, deleted once their
@@ -2505,7 +2508,7 @@ func (c *deleteCarry) take() *deleteCarry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	taken := &deleteCarry{deletions: c.deletions, files: c.files, updates: c.updates, pages: c.pages}
+	taken := &deleteCarry{blockHeight: c.blockHeight, deletions: c.deletions, files: c.files, updates: c.updates, pages: c.pages}
 	c.deletions, c.files, c.updates, c.pages = nil, nil, nil, nil
 
 	return taken
@@ -2732,7 +2735,7 @@ func (s *Service) buildCarriedDeletes(prev *deleteCarry) ([]aerospike.BatchRecor
 		slots[string(key.Digest())] = i
 	}
 
-	return buildDeletionBatchRecords(keys, masters, s.utxoSetTTL, s.removalCommitLevel), masters, slots
+	return buildDeletionBatchRecords(keys, masters, prev.blockHeight, s.utxoSetTTL, s.removalCommitLevel), masters, slots
 }
 
 // splitTiedUpdates separates the queued marker writes on records the same

@@ -31,7 +31,7 @@ import (
 // if any master had pages. The partition worker instead keeps one carry across
 // its chunks, which folds each delete batch into the next chunk's marker batch.
 func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[string]*parentUpdateInfo, deletions []*pendingDeletion, externalFiles []*externalFileInfo) (heldBack int, err error) {
-	carry := &deleteCarry{}
+	carry := &deleteCarry{blockHeight: testPruneHeight}
 
 	_, heldBack, err = s.flushChunk(ctx, carry, parentUpdates, deletions, externalFiles)
 	if err != nil {
@@ -463,12 +463,25 @@ func spentBy(spender *chainhash.Hash) aerospike.BinMap {
 	return aerospike.BinMap{fields.Utxos.String(): []interface{}{spentUtxoElement(spender)}}
 }
 
+// testPruneHeight is the block height the flush tests prune at. putRecord
+// gives a record a deleteAtHeight below it unless bins sets one, so a carried
+// delete passes carriedMasterGuard's height leg as a scanned record would.
+const testPruneHeight = 1000
+
 func putRecord(t *testing.T, client *uaerospike.Client, txID *chainhash.Hash, bins aerospike.BinMap) *aerospike.Key {
 	t.Helper()
 
 	key, err := aerospike.NewKey("test", "test", uaerospike.CalculateKeySource(txID, 0, 128))
 	require.NoError(t, err)
-	require.NoError(t, client.Put(nil, key, bins))
+
+	withDAH := make(aerospike.BinMap, len(bins)+1)
+	withDAH[fields.DeleteAtHeight.String()] = testPruneHeight - 1
+
+	for name, value := range bins {
+		withDAH[name] = value
+	}
+
+	require.NoError(t, client.Put(nil, key, withDAH))
 
 	return key
 }
@@ -681,9 +694,10 @@ func TestFlushChunk_BlobsOfConfirmedDeletesOutliveTheContext(t *testing.T) {
 	}
 
 	carry := &deleteCarry{
-		deletions: []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{childKey}}},
-		files:     []*externalFileInfo{{txHash: &child, fileType: fileformat.FileTypeTx}},
-		updates:   []map[string]*parentUpdateInfo{{}},
+		blockHeight: testPruneHeight,
+		deletions:   []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{childKey}}},
+		files:       []*externalFileInfo{{txHash: &child, fileType: fileformat.FileTypeTx}},
+		updates:     []map[string]*parentUpdateInfo{{}},
 	}
 
 	deleted, _, err := s.flushChunk(ctx, carry, nil, nil, nil)
@@ -785,7 +799,7 @@ func TestFlushChunk_DeletesRideTheNextChunksBatch(t *testing.T) {
 	c1, p1Key, c1Key, updates1 := queue(1)
 	c2, p2Key, c2Key, updates2 := queue(2)
 
-	carry := &deleteCarry{}
+	carry := &deleteCarry{blockHeight: testPruneHeight}
 
 	deleted, heldBack, err := s.flushChunk(ctx, carry, updates1, []*pendingDeletion{{txHash: c1, keys: []*aerospike.Key{c1Key}}}, nil)
 	require.NoError(t, err)
@@ -848,7 +862,7 @@ func TestFlushChunk_ChunksOfOneWorkerOverlapTheirBatches(t *testing.T) {
 	updatesA := make(map[string]*parentUpdateInfo)
 	require.NoError(t, s.addParentUpdatesForInput(updatesA, &pA, 0, &cA))
 
-	carry := &deleteCarry{deletions: []*pendingDeletion{{txHash: &x, keys: []*aerospike.Key{xKey}}}, updates: []map[string]*parentUpdateInfo{{}}}
+	carry := &deleteCarry{blockHeight: testPruneHeight, deletions: []*pendingDeletion{{txHash: &x, keys: []*aerospike.Key{xKey}}}, updates: []map[string]*parentUpdateInfo{{}}}
 
 	// The first two batches wait until both are in flight, or give up.
 	var (
@@ -980,7 +994,7 @@ func TestFlushChunk_MarkerOnARecordTheSameBatchDeletes(t *testing.T) {
 
 			childKey := putRecord(t, client, &child, aerospike.BinMap{fields.TxID.String(): child.CloneBytes()})
 
-			carry := &deleteCarry{deletions: []*pendingDeletion{{txHash: &parent, keys: []*aerospike.Key{parentKey}}}, updates: []map[string]*parentUpdateInfo{{}}}
+			carry := &deleteCarry{blockHeight: testPruneHeight, deletions: []*pendingDeletion{{txHash: &parent, keys: []*aerospike.Key{parentKey}}}, updates: []map[string]*parentUpdateInfo{{}}}
 
 			info := &parentUpdateInfo{key: parentKey, seen: make(map[chainhash.Hash]struct{})}
 			info.add(&child, 0)
@@ -1029,7 +1043,7 @@ func TestFlushChunk_UnsentBatchKeepsTheCarry(t *testing.T) {
 	child := chainhash.HashH([]byte{0xE0, 2})
 	childKey := putRecord(t, client, &child, aerospike.BinMap{fields.TxID.String(): child.CloneBytes()})
 
-	carry := &deleteCarry{deletions: []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{childKey}}}, updates: []map[string]*parentUpdateInfo{{}}}
+	carry := &deleteCarry{blockHeight: testPruneHeight, deletions: []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{childKey}}}, updates: []map[string]*parentUpdateInfo{{}}}
 
 	done, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -1130,7 +1144,8 @@ func TestMarkerWritesKeepTheRecordsLifetime(t *testing.T) {
 // cleared by one batch whose record changes before the next batch carries its
 // delete. A block invalidation in between strips C's block ids and stamps
 // unmined_since, and a reorg's move-back can lock C while it saves C for
-// restoration. Either way C is no longer the mined, fully spent record the
+// restoration, and a conflict resolution that releases one of C's outputs
+// clears its deleteAtHeight. Each way C is no longer the mined, fully spent record the
 // pruner selected, so the carried delete is refused on the server, C stays,
 // and the marker naming C on its parent P is withdrawn. The refusal is the
 // designed outcome, so it is counted as held back and does not fail the flush.
@@ -1151,6 +1166,13 @@ func TestFlushChunk_CarriedDeleteSparesAChildThatLeftTheChain(t *testing.T) {
 		{name: "locked only", change: aerospike.BinMap{fields.Locked.String(): true}, wantSpare: true},
 		{name: "unmined only", change: aerospike.BinMap{fields.UnminedSince.String(): 100}, wantSpare: true},
 		{name: "locked and unmined, TTL mode", ttl: true, change: aerospike.BinMap{fields.Locked.String(): true, fields.UnminedSince.String(): 100}, wantSpare: true},
+		// A conflict resolution that releases one of the child's outputs
+		// clears its deleteAtHeight (Lua setDeleteAtHeight), so the output it
+		// released is live again and must not go with the child.
+		{name: "deleteAtHeight cleared", change: aerospike.BinMap{fields.DeleteAtHeight.String(): nil}, wantSpare: true},
+		{name: "deleteAtHeight cleared, TTL mode", ttl: true, change: aerospike.BinMap{fields.DeleteAtHeight.String(): nil}, wantSpare: true},
+		{name: "deleteAtHeight raised past the prune height", change: aerospike.BinMap{fields.DeleteAtHeight.String(): testPruneHeight + 1}, wantSpare: true},
+		{name: "deleteAtHeight at the prune height is deleted", change: aerospike.BinMap{fields.DeleteAtHeight.String(): testPruneHeight}},
 		{name: "unmined and conflicting is deleted", change: aerospike.BinMap{fields.UnminedSince.String(): 100, fields.Conflicting.String(): true}},
 		{name: "unchanged child is deleted", change: aerospike.BinMap{fields.Locked.String(): false}},
 	} {
@@ -1167,7 +1189,7 @@ func TestFlushChunk_CarriedDeleteSparesAChildThatLeftTheChain(t *testing.T) {
 			updates := make(map[string]*parentUpdateInfo)
 			require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
 
-			carry := &deleteCarry{}
+			carry := &deleteCarry{blockHeight: testPruneHeight}
 
 			_, heldBack, err := s.flushChunk(ctx, carry, updates, []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{childKey}}}, nil)
 			require.NoError(t, err)

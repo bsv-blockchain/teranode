@@ -46,7 +46,7 @@ func newTestService(t *testing.T) *Service {
 // processRecordChunk processes one chunk on its own: its deletes are sent and
 // drained before it returns. processed counts the records confirmed deleted.
 func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, chunk []*aerospike.Result) (int, int, error) {
-	carry := &deleteCarry{}
+	carry := &deleteCarry{blockHeight: testPruneHeight}
 
 	processed, skipped, err := s.processRecordChunkCarry(ctx, blockHeight, chunk, carry)
 	if err != nil {
