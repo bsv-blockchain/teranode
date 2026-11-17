@@ -3,6 +3,8 @@ package utxopersister
 import (
 	"context"
 	"net/http"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -667,6 +669,10 @@ func TestStart_PollTimerFiresBetweenIdleTicks(t *testing.T) {
 
 		return calls >= 3
 	}, 5*time.Second, 10*time.Millisecond, "the poll timer must run passes with no notification or trigger")
+
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(prometheusUTXOPersisterLivenessHeartbeatAge) > 0
+	}, 5*time.Second, 10*time.Millisecond, "the heartbeat age is published while the liveness timeout is off")
 }
 
 // The reproduction from issue 1447: a loop stuck inside a pass (here a
@@ -858,4 +864,139 @@ func TestRollUpAndSetWrite_BeatPerRecord(t *testing.T) {
 
 	// One record copied from block 1's set, and the two additions.
 	require.Equal(t, 1+2, beats, "set write beats")
+}
+
+// The idle tick falls back to its default when unset, which is every production
+// server: a zero interval would panic in time.NewTicker on every start.
+func TestEffectiveHeartbeatInterval(t *testing.T) {
+	require.Equal(t, defaultHeartbeatInterval, effectiveHeartbeatInterval(0))
+	require.Equal(t, defaultHeartbeatInterval, effectiveHeartbeatInterval(-time.Second))
+	require.Equal(t, 10*time.Millisecond, effectiveHeartbeatInterval(10*time.Millisecond))
+}
+
+// A timeout at or within twice the idle tick cannot tell an idle loop from a
+// wedged one; zero or less means the check is off.
+func TestLivenessTimeoutTooTight(t *testing.T) {
+	tick := 5 * time.Second
+
+	tests := []struct {
+		stall time.Duration
+		tight bool
+	}{
+		{stall: 0, tight: false},
+		{stall: -time.Second, tight: false},
+		{stall: tick, tight: true},
+		{stall: 2 * tick, tight: true},
+		{stall: 2*tick + time.Nanosecond, tight: false},
+	}
+
+	for _, tt := range tests {
+		require.Equal(t, tt.tight, livenessTimeoutTooTight(tt.stall, tick), "stall timeout %s", tt.stall)
+	}
+}
+
+// A shutdown during the wait for confirmations ends the pass at once and queues
+// no further pass, so the stop is not held up and no work starts after it.
+func TestTrigger_ShutdownDuringConfirmationWaitQueuesNoPass(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	mockClient := &blockchain.Mock{}
+	mockClient.On("GetBestBlockHeader", mock.Anything).Return(createTestBlockHeader(), createTestBlockHeaderMeta(150), nil)
+
+	server := New(context.Background(), ulogger.TestLogger{}, tSettings, memory.New(), mockClient)
+	server.lastHeight = 100
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+
+	require.NoError(t, server.trigger(ctx, "test"))
+	require.Less(t, time.Since(start), 10*time.Second, "the wait must end at shutdown, not after a minute")
+	require.Empty(t, server.triggerCh, "a pass stopped by shutdown must not queue another")
+}
+
+// The one-shot build renews a heartbeat the main loop owns but never arms one,
+// so a CLI build in a process with no main loop can never fail liveness.
+func TestBuildUTXOSetToHeight_DoesNotArmTheHeartbeat(t *testing.T) {
+	server, _ := restartTestChain(t, memory.New())
+
+	require.NoError(t, server.BuildUTXOSetToHeight(context.Background(), 1, 3, false))
+	require.Zero(t, server.heartbeat.Age(), "a one-shot build must leave an unarmed heartbeat unarmed")
+}
+
+// faultyStore fails the operations its flags name, standing in for a block
+// store that errors partway through a pass.
+type faultyStore struct {
+	blob.Store
+	existsFailsFor *chainhash.Hash // fail processNextBlock's own Exists check of this block's UTXO set
+	datWriteFails  bool            // fail writing lastProcessed.dat
+}
+
+func (s *faultyStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
+	if s.existsFailsFor != nil && fileType == fileformat.FileTypeUtxoSet && string(key) == string(s.existsFailsFor[:]) && calledFrom("processNextBlock") {
+		return false, terrors.NewStorageError("injected exists failure")
+	}
+
+	return s.Store.Exists(ctx, key, fileType, opts...)
+}
+
+func (s *faultyStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
+	if s.datWriteFails && fileType == fileformat.FileTypeDat {
+		return terrors.NewStorageError("injected lastProcessed write failure")
+	}
+
+	return s.Store.Set(ctx, key, fileType, value, opts...)
+}
+
+// A failed check for an existing target set fails the pass. Treating the error
+// as "no set" would go on to write a set that may already be there.
+func TestProcessNextBlock_ExistsCheckFailureFailsThePass(t *testing.T) {
+	ctx := context.Background()
+	store := &faultyStore{Store: memory.New()}
+
+	server, byH := restartTestChain(t, store)
+
+	// The roll-up also asks whether block 3's set exists; only the check made
+	// directly by processNextBlock, for an existing target set, fails.
+	store.existsFailsFor = byH[3]
+
+	_, err := server.processNextBlock(ctx)
+	require.ErrorContains(t, err, "injected exists failure")
+
+	height, err := server.readLastHeight(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), height)
+
+	exists, err := store.Store.Exists(ctx, byH[3][:], fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.False(t, exists, "no set is written when the existence check fails")
+}
+
+// When lastProcessed.dat cannot be written the previous set is kept, because it
+// is still the base the next pass verifies and builds on.
+func TestProcessNextBlock_FailedHeightWriteKeepsThePreviousSet(t *testing.T) {
+	ctx := context.Background()
+	store := &faultyStore{Store: memory.New()}
+
+	server, byH := restartTestChain(t, store)
+	store.datWriteFails = true
+
+	_, err := server.processNextBlock(ctx)
+	require.ErrorContains(t, err, "injected lastProcessed write failure")
+
+	exists, err := store.Exists(ctx, byH[1][:], fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.True(t, exists, "the previous set must survive a failed height write")
+}
+
+// calledFrom reports whether the caller of the faultyStore method running now
+// is the named Server method.
+func calledFrom(method string) bool {
+	pc, _, _, ok := runtime.Caller(2)
+	if !ok {
+		return false
+	}
+
+	return strings.HasSuffix(runtime.FuncForPC(pc).Name(), "(*Server)."+method)
 }

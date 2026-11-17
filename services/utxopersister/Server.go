@@ -412,8 +412,10 @@ func (s *Server) publishHeartbeatAge(ctx context.Context, interval time.Duration
 
 		select {
 		case <-ctx.Done():
-			// The loop has stopped and disabled its heartbeat, so the gauge
-			// reads 0 rather than freezing at its last age.
+			// The service context has ended, so the loop is stopping: it returns
+			// and disables its heartbeat once its current pass ends. The gauge
+			// reads 0 from here rather than freezing at its last age, even if
+			// that pass is still running, so a loop wedged at shutdown shows 0.
 			prometheusUTXOPersisterLivenessHeartbeatAge.Set(0)
 
 			return
@@ -677,7 +679,8 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	s.logger.Infof("Processing block %s height %d", c.lastBlockHash, c.lastBlockHeight)
 
 	// A set published by an earlier run that stopped before writing
-	// lastProcessed.dat: a crash, a deploy, or a liveness restart. The file store
+	// lastProcessed.dat (a crash, a deploy, or a liveness restart), or by a
+	// one-shot BuildUTXOSetToHeight with updateLastProcessed false. The file store
 	// publishes a set under its name only once it is complete, so an existing
 	// set is a finished one. CreateUTXOSet is not idempotent (NewFileStorer
 	// refuses an existing blob), so without this check every later pass would
@@ -692,7 +695,7 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 		// The set-hash sidecar is not rewritten: its digest is folded while the
 		// set is written, and the set is not being written. It is auxiliary and
 		// can be backfilled, as below.
-		s.logger.Infof("[UTXOPersister] UTXOSet already exists for block %s height %d, from a run that stopped before recording it; recording it now", c.lastBlockHash, c.lastBlockHeight)
+		s.logger.Infof("[UTXOPersister] UTXOSet already exists for block %s height %d but lastProcessed.dat is behind it (an earlier run stopped before recording it, or a one-shot build wrote it); recording it now", c.lastBlockHash, c.lastBlockHeight)
 	} else {
 		if err := us.CreateUTXOSet(ctx, c); err != nil {
 			return 0, err
@@ -732,7 +735,8 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	}
 
 	// Remove the previous block's UTXOSet and headers. A stop before this
-	// finishes leaves the previous set on disk; nothing reads it again.
+	// finishes leaves the previous set on disk: nothing reads it again and
+	// nothing deletes it later, so it stays until removed by hand.
 	if lastWrittenUTXOSetHash.String() != s.settings.ChainCfgParams.GenesisHash.String() && !s.settings.BlockPersister.SkipUTXODelete {
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet); err != nil {
 			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)

@@ -135,13 +135,17 @@ The UTXO Persister processes blocks and creates UTXO sets as follows:
         - Incorporates new UTXOs from the block's transactions.
         - Writes the new UTXO set to the Block Store.
 
-7. **Cleanup**:
+    - If the UTXO set for the target block is already in the Block Store, written by an earlier run that stopped before recording it or by a one-shot build, the service records it instead of writing it again.
 
-    - If not skipped (based on configuration), the service deletes the previous block's UTXO set to save space.
-
-8. **Update Last Processed Height**:
+7. **Update Last Processed Height**:
 
     - The service calls `writeLastHeight()` to update its record of the last processed block height.
+    - This happens before the cleanup below, so a stop between the two never leaves `lastProcessed.dat` pointing at a set that has been deleted.
+
+8. **Cleanup**:
+
+    - If not skipped (based on configuration), the service deletes the previous block's UTXO set to save space.
+    - A stop before the delete finishes leaves the previous set on disk, and nothing deletes it later.
 
 9. **Trigger Next Block Processing**:
 
@@ -339,7 +343,7 @@ These settings control how UTXO data is stored and retained.
 
 These settings determine the storage footprint and data persistence behavior of the service:
 
-- When `blockpersister_skipUTXODelete` is `false` (default), the service maintains minimal storage by only keeping the UTXO set for the most recent processed block
+- When `blockpersister_skipUTXODelete` is `false` (default), the service maintains minimal storage by deleting each previous UTXO set once the next one is recorded. A stop between recording the new set and deleting the old one leaves the old one on disk until it is removed by hand
 - When set to `true`, the service preserves all historical UTXO sets, which increases storage requirements but enables historical analysis and validation
 - The `blockstore` setting defines where all block-related data is stored, affecting both read and write performance based on the underlying storage system
 - The `txstore` and `txmeta_store` settings determine where transaction data and UTXO metadata are stored, respectively, which impacts performance and data availability
