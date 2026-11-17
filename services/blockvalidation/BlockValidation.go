@@ -1596,11 +1596,12 @@ func subtreeAbsent(err error) bool {
 
 // reloadSubtreesForInvalidBlock reloads an invalid block's subtrees from the
 // store. Each subtree is read as FileTypeSubtree and then as
-// FileTypeSubtreeToCheck, and the first copy that reads and parses is used. A
-// subtree with no usable copy is left nil, because a retry cannot bring one
-// back: an absent copy stays absent, and a corrupt one (a bad header or a body
-// that does not parse) reads the same bytes every time, since the stores write
-// blobs whole. Any other read failure is returned: it may be transient, and
+// FileTypeSubtreeToCheck, and the first copy that reads, parses and whose root
+// matches the subtree hash is used. A subtree with no usable copy is left nil,
+// because a retry cannot bring one back: an absent copy stays absent, and a
+// corrupt one (a bad header, a body that does not parse, or a body whose nodes
+// hash to another root) reads the same bytes every time, since the stores
+// write blobs whole. Any other read failure is returned: it may be transient, and
 // skipping it would let the revert finish with that subtree's tags in place.
 //
 // A skipped subtree whose copies were corrupt, not just absent, leaves its
@@ -1647,7 +1648,8 @@ func (u *BlockValidation) reloadSubtreesForInvalidBlock(ctx context.Context, blo
 
 // reloadSubtreeForInvalidBlock reads one subtree of an invalid block for the
 // revert, trying FileTypeSubtree and then FileTypeSubtreeToCheck. It returns
-// the first copy that reads and parses, nil with no error when no copy is
+// the first copy that reads, parses and whose root matches subtreeHash, nil
+// with no error when no copy is
 // usable, and an error only for a read failure a retry might clear. See
 // reloadSubtreesForInvalidBlock for the rule.
 func (u *BlockValidation) reloadSubtreeForInvalidBlock(ctx context.Context, block *model.Block, subtreeIdx int, subtreeHash *chainhash.Hash) (*subtreepkg.Subtree, error) {
