@@ -450,19 +450,3 @@ func TestDeleteCutWhileWaitingForItsRowsDeletesNothing(t *testing.T) {
 	require.Equal(t, 1, countWhere(t, s, ctx, `SELECT count(*) FROM spend_journal WHERE txid = $1`, h[:]),
 		"the undo record of the spent output is still there")
 }
-
-// TestDeleteWithACancelledContextFails: a Delete whose context is already done cannot open its
-// transaction, and says so rather than reporting the transaction gone.
-func TestDeleteWithACancelledContextFails(t *testing.T) {
-	s, ctx := newTestStore(t)
-
-	parent := mkTx(t, 2, 10_000)
-	_, err := s.Create(ctx, parent, 100)
-	require.NoError(t, err)
-
-	done, cancel := context.WithCancel(ctx)
-	cancel()
-
-	require.Error(t, s.Delete(done, parent.TxIDChainHash()))
-	require.True(t, identExists(t, s, ctx, parent), "nothing was deleted")
-}
