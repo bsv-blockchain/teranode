@@ -8,8 +8,11 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 )
 
-// chainWriteStateKey is the state row every chain-membership write on PostgreSQL locks,
-// and every on_main_chain walk checks before it commits.
+// chainWriteStateKey is the state row the chain-membership writes on PostgreSQL lock,
+// and every on_main_chain walk checks before it commits. The writes that lock it are
+// DeleteBlock, InvalidateBlock, RevalidateBlock and the fork path of StoreBlock. The
+// extend path of StoreBlock does not: it decides on_main_chain from this process's
+// best-block cache, which a lock taken inside its transaction could not correct.
 //
 // The walks read their rows from a REPEATABLE READ snapshot and most run without
 // slowPathMu, which in any case only orders writers in this process. A chain write that
@@ -76,12 +79,12 @@ func (s *SQL) ensureChainWriteRow(ctx context.Context) error {
 // lockChainWrites locks the shared row for a chain-membership write. Call it as the first
 // statement of the transaction that moves chain membership, before anything it reads.
 // The error is the driver's own, unwrapped, so RetryTx can classify it.
-func (s *SQL) lockChainWrites(ctx context.Context, exec execQuerier) error {
+func (s *SQL) lockChainWrites(ctx context.Context, tx *sql.Tx) error {
 	if !s.chainWriteLocking() {
 		return nil
 	}
 
-	_, err := exec.ExecContext(ctx,
+	_, err := tx.ExecContext(ctx,
 		`INSERT INTO state (key, data, updated_at) VALUES ($1, $2, CURRENT_TIMESTAMP)
 		 ON CONFLICT (key) DO UPDATE SET updated_at = CURRENT_TIMESTAMP`,
 		chainWriteStateKey, []byte{})
@@ -102,6 +105,10 @@ func (s *SQL) checkNoChainWriteSinceSnapshot(ctx context.Context, tx *sql.Tx) er
 
 	err := tx.QueryRowContext(ctx, `SELECT 1 FROM state WHERE key = $1 FOR UPDATE NOWAIT`, chainWriteStateKey).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
+		// New creates the row, so it is missing only if removed by hand. Writes re-create
+		// it, but a walk already in flight cannot see that, so it commits unchecked.
+		s.logger.Warnf("[checkNoChainWriteSinceSnapshot] the %s state row is missing; committing the on_main_chain walk without the cross-process check", chainWriteStateKey)
+
 		return nil
 	}
 
