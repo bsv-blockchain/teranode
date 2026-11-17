@@ -2710,8 +2710,11 @@ var (
 
 	// announcementQueueSize matches the blockchain client's per-subscriber
 	// channel buffer (services/blockchain/Client.go Subscribe). That client
-	// drops a notification after 30 s on a full channel, so dropping here on a
-	// full queue is the same loss moved one hop inward.
+	// waits up to 30 s for room before it drops a notification; this queue
+	// drops at once. A backlog of more than 1,000 that would have drained
+	// within 30 s is therefore lost here, where the old serial listener
+	// delivered it. Each drop is counted in
+	// teranode_p2p_blockchain_notifications_dropped_total.
 	announcementQueueSize = 1_000
 )
 
@@ -2756,6 +2759,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainS
 			select {
 			case queue <- notification:
 			default:
+				blockchainNotificationDropped(queueName, notification.Type.String())
 				ctxLogger.Warnf("[blockchainSubscriptionListener] dropping notification (Type: %s, Hash: %x): %s queue full", notification.Type, notification.Hash, queueName)
 			}
 		}

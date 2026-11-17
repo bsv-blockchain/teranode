@@ -20,6 +20,10 @@ var (
 	prometheusP2PGossipKafkaPublishDropped     *prometheus.CounterVec
 	prometheusP2PHTTPRateLimited               prometheus.Counter
 
+	// prometheusP2PBlockchainNotificationsDropped counts blockchain
+	// notifications the subscription listener dropped on a full worker queue.
+	prometheusP2PBlockchainNotificationsDropped *prometheus.CounterVec
+
 	// prometheusP2PConnectedPeers tracks the number of peers currently connected
 	// to this node over the libp2p network.
 	prometheusP2PConnectedPeers prometheus.Gauge
@@ -73,6 +77,16 @@ func _initPrometheusMetrics() {
 			Help:      "Number of websocket notifications dropped because the notification channel was full, by notification type",
 		},
 		[]string{"type"},
+	)
+
+	prometheusP2PBlockchainNotificationsDropped = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "p2p",
+			Name:      "blockchain_notifications_dropped_total",
+			Help:      "Number of blockchain notifications the p2p listener dropped because its worker queue was full, by queue and notification type",
+		},
+		[]string{"queue", "type"},
 	)
 
 	prometheusP2PGossipKafkaPublishDropped = promauto.NewCounterVec(
@@ -165,6 +179,13 @@ func _initPrometheusMetrics() {
 func notificationDropped(notificationType string) {
 	initPrometheusMetrics()
 	prometheusP2PWebsocketNotificationsDropped.WithLabelValues(notificationType).Inc()
+}
+
+// blockchainNotificationDropped records a blockchain notification the
+// subscription listener dropped because the named worker queue was full.
+func blockchainNotificationDropped(queue, notificationType string) {
+	initPrometheusMetrics()
+	prometheusP2PBlockchainNotificationsDropped.WithLabelValues(queue, notificationType).Inc()
 }
 
 // gossipPublishDropped records a gossip announcement dropped by TryPublish
