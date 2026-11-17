@@ -3,12 +3,15 @@ package sql
 import (
 	"context"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 )
 
@@ -234,5 +237,138 @@ func TestNewDoesNotWaitOnAnOpenChainWrite_PostgreSQL(t *testing.T) {
 		require.NoError(t, tx.Rollback(), "release the row so New can return")
 		_ = <-opened
 		t.Fatal("New waited on another process's open chain write")
+	}
+}
+
+// holdBlocksWrites makes the next transaction that inserts, updates or deletes a row of
+// blocks stop inside that statement, holding every lock it has taken so far, until the
+// returned release is called. It is a trigger rather than a hook in the store, so it holds
+// any writer at the same point without a seam in production code. Rows the on_main_chain
+// walk leaves unchanged fire no row trigger, so a walk is never held by it.
+func holdBlocksWrites(t *testing.T, s *SQL) (release func()) {
+	t.Helper()
+
+	ctx := context.Background()
+
+	_, err := s.db.Exec(`
+		CREATE FUNCTION hold_blocks_write() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			PERFORM pg_advisory_xact_lock(2218);
+			RETURN NULL;
+		END $$`)
+	require.NoError(t, err)
+
+	_, err = s.db.Exec(`CREATE TRIGGER hold_blocks_write AFTER INSERT OR UPDATE OR DELETE ON blocks
+		FOR EACH ROW EXECUTE FUNCTION hold_blocks_write()`)
+	require.NoError(t, err)
+
+	conn, err := s.db.Conn(ctx)
+	require.NoError(t, err)
+
+	_, err = conn.ExecContext(ctx, `SELECT pg_advisory_lock(2218)`)
+	require.NoError(t, err)
+
+	var once sync.Once
+
+	release = func() {
+		once.Do(func() {
+			_, _ = conn.ExecContext(ctx, `SELECT pg_advisory_unlock(2218)`)
+			_ = conn.Close()
+			_, _ = s.db.Exec(`DROP TRIGGER IF EXISTS hold_blocks_write ON blocks`)
+		})
+	}
+
+	t.Cleanup(release)
+
+	return release
+}
+
+// waitForHeldBlocksWrite waits until a writer is stopped by holdBlocksWrites.
+func waitForHeldBlocksWrite(t *testing.T, s *SQL) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		var waiting int
+		require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting))
+
+		return waiting > 0
+	}, 10*time.Second, 10*time.Millisecond, "the writer did not reach its blocks statement")
+}
+
+// TestChainWriteLockIsTakenBeforeTheWritersFlags_PostgreSQL: each chain writer must lock
+// the shared row before it writes blocks. A writer that locked last would leave a window,
+// between its flag writes and its lock, where a walk in another process passes its check
+// and commits the view it read before the write. Each writer here is stopped inside its
+// first write to blocks and held open, the way a writer queued behind a long walk is; a
+// walk run in that window must fail its check with 55P03 rather than commit.
+func TestChainWriteLockIsTakenBeforeTheWritersFlags_PostgreSQL(t *testing.T) {
+	writers := []struct {
+		name  string
+		setup func(t *testing.T, s *SQL)
+		write func(ctx context.Context, s *SQL) error
+	}{
+		{
+			name: "DeleteBlock",
+			write: func(ctx context.Context, s *SQL) error {
+				return s.DeleteBlock(ctx, block3.Hash())
+			},
+		},
+		{
+			name: "InvalidateBlock",
+			write: func(ctx context.Context, s *SQL) error {
+				_, err := s.InvalidateBlock(ctx, block3.Hash())
+				return err
+			},
+		},
+		{
+			name: "RevalidateBlock",
+			setup: func(t *testing.T, s *SQL) {
+				_, err := s.db.Exec(`UPDATE blocks SET invalid = true WHERE hash = $1`, blockAlternative2.Hash().CloneBytes())
+				require.NoError(t, err)
+			},
+			write: func(ctx context.Context, s *SQL) error {
+				return s.RevalidateBlock(ctx, blockAlternative2.Hash())
+			},
+		},
+		{
+			name: "StoreBlock on a fork",
+			write: func(ctx context.Context, s *SQL) error {
+				_, _, err := s.StoreBlock(ctx, createBlock3OnFork(blockAlternative2), "")
+				return err
+			},
+		},
+	}
+
+	for _, writer := range writers {
+		t.Run(writer.name, func(t *testing.T) {
+			walker, other := newPostgresStorePair(t)
+			ctx := context.Background()
+
+			storeBlocks(t, walker, block1, block2, block3, blockAlternative2)
+
+			if writer.setup != nil {
+				writer.setup(t, walker)
+			}
+
+			release := holdBlocksWrites(t, walker)
+
+			written := make(chan error, 1)
+
+			go func() { written <- writer.write(ctx, other) }()
+
+			waitForHeldBlocksWrite(t, walker)
+
+			walkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			walkErr := walker.rebuildOnMainChainFlagTx(walkCtx, true, noRepairFloor)
+
+			release()
+			require.NoError(t, <-written)
+
+			var pgErr *pgconn.PgError
+			require.True(t, errors.As(walkErr, &pgErr), "the walk must fail its chain-write check, got %v", walkErr)
+			require.Equal(t, "55P03", pgErr.Code)
+		})
 	}
 }
