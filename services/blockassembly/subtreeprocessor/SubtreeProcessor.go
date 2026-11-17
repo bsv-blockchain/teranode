@@ -8095,12 +8095,14 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	//     it with one), and that batch and everything behind it roll
 	//     forward to the next state-transition cycle. With no window, a
 	//     batch stamped in the drain's own millisecond can arrive during the
-	//     drain and is taken too, which the item bound below caps. The gRPC ingest handlers admit through AddBatchBounded,
-	//     which only refuses when blockassembly_maxQueueItems is positive;
-	//     with the default of 0 ingest is not backpressured, and even when
-	//     it is, the queue keeps filling up to its cap during the drain.
-	//     Either way this time cap is what stops the loop from chasing
-	//     ingest.
+	//     drain and is taken too, which the item bound below caps. The
+	//     gRPC ingest handlers admit through AddBatchBounded, which only
+	//     refuses when blockassembly_maxQueueItems is positive; with the
+	//     default of 0 ingest is not backpressured, and even when it is,
+	//     the queue keeps filling up to its cap during the drain. So
+	//     something other than backpressure must stop the loop from chasing
+	//     ingest: this time cap with a window, and the item bound within
+	//     the drain's own millisecond.
 	//
 	//  2. Items: queueLength snapshotted at entry, compared against items
 	//     drained. It caps total work at the snapshot, plus at most one
