@@ -69,9 +69,10 @@ func forkReorgFiltersQueueArrivals(t *testing.T, opts ...Options) {
 }
 
 // A batch that reaches the queue in the same millisecond as forward block A's
-// drain must be filtered against block A. Held back, a later step would drain
-// it against block B alone and bring back a tx that block A mined.
-func TestReorgBlocks_Fork_HeldBackBatchIsFilteredAgainstEarlierForwardBlock(t *testing.T) {
+// drain must be filtered against block A. The old exclusive cutoff held it
+// back, and block B's step then drained it against block B alone and brought
+// back a tx that block A mined.
+func TestReorgBlocks_Fork_SameMillisecondBatchIsFilteredAgainstItsForwardBlock(t *testing.T) {
 	cases := map[string]struct {
 		window     time.Duration
 		firstDrain time.Duration // the drain clock at block A's step, after the enqueue
@@ -88,7 +89,7 @@ func TestReorgBlocks_Fork_HeldBackBatchIsFilteredAgainstEarlierForwardBlock(t *t
 			minedInFirstTx, _ := createResetWALConflict(t, store, 23)
 			minedInLastTx, _ := createResetWALConflict(t, store, 24)
 			minedInFirst := *minedInFirstTx.TxIDChainHash()
-			unmined := chainhash.HashH([]byte("fork-reorg-held-back-not-mined"))
+			unmined := chainhash.HashH([]byte("fork-reorg-same-ms-not-mined"))
 
 			back := moveToBlockAbove(t, stp, chain)
 			chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedInFirstTx)}
@@ -97,8 +98,9 @@ func TestReorgBlocks_Fork_HeldBackBatchIsFilteredAgainstEarlierForwardBlock(t *t
 			enqueueAt := time.Now()
 			stp.queue.clock = fixedClock{t: enqueueAt}
 
-			// Before block A's step the batch arrives, at a drain clock that holds it
-			// back; before block B's step the clock moves on so B's drain takes it.
+			// Before block A's step the batch arrives, at a drain clock in the same
+			// millisecond, which the old exclusive cutoff held back. Before block B's
+			// step the clock moves on, so B's drain would take it if A's had not.
 			var enqueued, advanced bool
 
 			stp.SetProgressHook(func() {
@@ -120,8 +122,8 @@ func TestReorgBlocks_Fork_HeldBackBatchIsFilteredAgainstEarlierForwardBlock(t *t
 			require.True(t, enqueued && advanced, "the batch must arrive before block A's step and the clock move before block B's")
 
 			hashes := collectSubtreeHashes(stp)
-			require.NotContains(t, hashes, minedInFirst, "a held-back tx the first forward block mined must not re-enter block assembly")
-			require.Contains(t, hashes, unmined, "a held-back tx no block mined must be kept")
+			require.NotContains(t, hashes, minedInFirst, "a same-millisecond tx the first forward block mined must not re-enter block assembly")
+			require.Contains(t, hashes, unmined, "a same-millisecond tx no block mined must be kept")
 		})
 	}
 }
