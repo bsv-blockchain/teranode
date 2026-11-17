@@ -9,7 +9,7 @@ import (
 )
 
 func TestCheckLaneLeaseRefusesStopNotShorterThanClose(t *testing.T) {
-	s := BlockChainSettings{LaneLeaseRenewInterval: 30 * time.Second, LaneLeaseStopAfter: 3 * time.Minute, LaneLeaseCloseAfter: 3 * time.Minute}
+	s := BlockChainSettings{LaneLeaseRenewInterval: 30 * time.Second, LaneLeaseStopAfter: 3 * time.Minute, LaneLeaseCloseAfter: 3 * time.Minute, LaneGrantDuration: 2 * time.Minute}
 	require.Error(t, s.CheckLaneLease())
 
 	s.LaneLeaseStopAfter = 2 * time.Minute
@@ -17,8 +17,17 @@ func TestCheckLaneLeaseRefusesStopNotShorterThanClose(t *testing.T) {
 }
 
 func TestCheckLaneLeaseRefusesRenewNotShorterThanStop(t *testing.T) {
-	s := BlockChainSettings{LaneLeaseRenewInterval: 2 * time.Minute, LaneLeaseStopAfter: 2 * time.Minute, LaneLeaseCloseAfter: 3 * time.Minute}
+	s := BlockChainSettings{LaneLeaseRenewInterval: 2 * time.Minute, LaneLeaseStopAfter: 2 * time.Minute, LaneLeaseCloseAfter: 3 * time.Minute, LaneGrantDuration: 2 * time.Minute}
 	require.Error(t, s.CheckLaneLease())
+}
+
+// A grant duration of zero would leave every grant after its first position.
+func TestCheckLaneLeaseRefusesANonPositiveGrantDuration(t *testing.T) {
+	s := BlockChainSettings{LaneLeaseRenewInterval: 30 * time.Second, LaneLeaseStopAfter: 2 * time.Minute, LaneLeaseCloseAfter: 3 * time.Minute}
+	require.Error(t, s.CheckLaneLease())
+
+	s.LaneGrantDuration = 2 * time.Minute
+	require.NoError(t, s.CheckLaneLease())
 }
 
 func TestCheckLaneMigrationAcceptsOffAndShadowOnly(t *testing.T) {

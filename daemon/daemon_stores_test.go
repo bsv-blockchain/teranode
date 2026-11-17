@@ -227,8 +227,8 @@ func TestGetUtxoStoreClosesTheStoreWhenTheSourceFails(t *testing.T) {
 	require.NotNil(t, store)
 }
 
-// A step this build does not implement fails the store's open, and closes the store it opened, so a
-// node configured for a later step never runs a step it only half has.
+// A step this build does not implement fails before the store opens, so a node configured for a
+// later step never runs a step it only half has, and utxoset never gains its column for it.
 func TestGetUtxoStoreRefusesLaneMigrationRows(t *testing.T) {
 	appSettings, opened := laneStoreFixture(t, "lane_rows", false, func() (lane.LeaseSource, error) {
 		require.Fail(t, "a refused step asks for no lease source")
@@ -237,6 +237,12 @@ func TestGetUtxoStoreRefusesLaneMigrationRows(t *testing.T) {
 	})
 	appSettings.UtxoStore.LaneMigration = settings.LaneMigrationRows
 
+	newMainUtxoStore = func(context.Context, ulogger.Logger, *settings.Settings) (utxostore.Store, error) {
+		require.Fail(t, "a refused step opens no store")
+
+		return nil, nil
+	}
+
 	d := &Stores{}
 
 	store, err := d.GetUtxoStore(context.Background(), ulogger.TestLogger{}, appSettings)
@@ -244,7 +250,7 @@ func TestGetUtxoStoreRefusesLaneMigrationRows(t *testing.T) {
 	require.Contains(t, err.Error(), "utxostore_laneMigration=rows")
 	require.Nil(t, store)
 	require.Nil(t, d.mainUtxoStore)
-	require.Equal(t, int64(1), opened.closes.Load())
+	require.Zero(t, opened.closes.Load())
 }
 
 // Lease timings that would let two holders use one lane fail the store's open at shadow.

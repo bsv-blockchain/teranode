@@ -26,6 +26,7 @@ func setLaneLeaseTimings(s *settings.Settings) {
 	s.BlockChain.LaneLeaseRenewInterval = 30 * time.Second
 	s.BlockChain.LaneLeaseStopAfter = 2 * time.Minute
 	s.BlockChain.LaneLeaseCloseAfter = 3 * time.Minute
+	s.BlockChain.LaneGrantDuration = 2 * time.Minute
 }
 
 // ageLaneLeases moves every lease's last renewal back by d on a SQLite blockchain store.

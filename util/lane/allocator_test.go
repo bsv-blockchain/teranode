@@ -21,6 +21,8 @@ type fakeLeases struct {
 	open     map[LeaseID]uint8
 	down     bool
 	gate     chan struct{} // when set, a grant request waits for it to close
+	openGate chan struct{} // when set, an open waits for it to close, ignoring the caller's context
+	opening  chan struct{} // when set, closed as an open starts waiting on openGate
 	opens    int
 	renewals []Renewal
 	releases []Release
@@ -32,6 +34,15 @@ func newFakeLeases(size uint64) *fakeLeases {
 }
 
 func (f *fakeLeases) OpenLaneLease(context.Context, string) (LeaseID, Grant, error) {
+	f.mu.Lock()
+	gate, opening := f.openGate, f.opening
+	f.mu.Unlock()
+
+	if gate != nil {
+		close(opening)
+		<-gate
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -598,4 +609,31 @@ func TestAllocatorReleasesBeforeItsClientCloses(t *testing.T) {
 	src2 := &closingLeases{fakeLeases: newFakeLeases(1000)}
 	require.NoError(t, NewAllocator(src2, "pod-4", quiet, nil).Close())
 	require.Equal(t, []string{"close"}, src2.order)
+}
+
+// An open the service commits while Close runs is released, not left to lapse: Close stops the loop
+// before it reads the lease to release.
+func TestCloseReleasesALeaseOpenedWhileItRuns(t *testing.T) {
+	src := newFakeLeases(1000)
+	src.openGate, src.opening = make(chan struct{}), make(chan struct{})
+
+	a := NewAllocator(src, "pod-3", quiet, nil)
+	require.NoError(t, a.Start(context.Background()))
+
+	<-src.opening
+
+	closed := make(chan error, 1)
+
+	go func() { closed <- a.Close() }()
+
+	require.Never(t, func() bool { return len(closed) > 0 }, 50*time.Millisecond, 5*time.Millisecond, "Close waits for the loop")
+
+	close(src.openGate)
+	require.NoError(t, <-closed)
+
+	src.mu.Lock()
+	defer src.mu.Unlock()
+
+	require.Len(t, src.releases, 1, "the lease opened during Close is released")
+	require.Empty(t, src.open)
 }

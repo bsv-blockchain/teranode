@@ -187,18 +187,23 @@ func (a *Allocator) Ready() error {
 func (a *Allocator) Close() error {
 	a.mu.Lock()
 	a.released = true
-	// With two pairs held the release carries the older. The newer is the grant last left, and its
-	// final number is the LastTaken the release carries anyway.
-	leased, release := a.leased, Release{Lease: a.lease, Lane: a.lane, LastTaken: a.leaseTaken, Settles: a.pending[0]}
 	started := a.started
 	a.broadcastLocked()
 	a.mu.Unlock()
 
+	// The loop stops first, so a lease it opened or a grant it took while Close ran is in the state
+	// read below, and released with it.
 	a.cancel()
 
 	if started {
 		<-a.done
 	}
+
+	a.mu.Lock()
+	// With two pairs held the release carries the older. The newer is the grant last left, and its
+	// final number is the LastTaken the release carries anyway.
+	leased, release := a.leased, Release{Lease: a.lease, Lane: a.lane, LastTaken: a.leaseTaken, Settles: a.pending[0]}
+	a.mu.Unlock()
 
 	if leased {
 		ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
@@ -282,13 +287,16 @@ func (a *Allocator) takeLocked() (v uint64, ok bool, changed chan struct{}, err 
 		return None, false, nil, errors.NewServiceUnavailableError("[lane] %s has released its lane lease", a.holder)
 	}
 
-	if !a.leased || !a.withinStopLocked() {
+	// One clock read serves the stop, the grant age and the first take.
+	now := a.now()
+
+	if !a.leased || now.Sub(a.lastGood) >= a.t.Stop {
 		return None, false, a.changed, nil
 	}
 
 	if a.next != 0 {
 		usedUp := a.next > a.cur.Last
-		aged := !a.curFirstTake.IsZero() && a.now().Sub(a.curFirstTake) >= a.t.GrantDuration
+		aged := !a.curFirstTake.IsZero() && now.Sub(a.curFirstTake) >= a.t.GrantDuration
 
 		if usedUp || aged {
 			a.leaveCurrentLocked(usedUp)
@@ -302,7 +310,7 @@ func (a *Allocator) takeLocked() (v uint64, ok bool, changed chan struct{}, err 
 	v = Pack(a.cur.Lane, a.next)
 
 	if a.curFirstTake.IsZero() {
-		a.curFirstTake = a.now()
+		a.curFirstTake = now
 	}
 
 	a.highest[a.cur.Lane] = a.next
@@ -481,10 +489,7 @@ func (a *Allocator) open() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.released {
-		return nil
-	}
-
+	// Recorded even when Close has begun, so Close releases it rather than leaving it to lapse.
 	if err = a.acceptableLocked(g); err != nil {
 		// The lease is left to lapse; this process will not use it.
 		a.logger.Errorf("%v", err)
@@ -527,7 +532,7 @@ func (a *Allocator) renew(want bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.released || !a.leased || a.lease != r.Lease {
+	if !a.leased || a.lease != r.Lease {
 		return nil
 	}
 

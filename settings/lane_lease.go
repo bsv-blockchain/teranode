@@ -57,6 +57,10 @@ func (s BlockChainSettings) CheckLaneLease() error {
 		return errors.NewConfigurationError("blockchain_laneLeaseStopAfter (%s) must be shorter than blockchain_laneLeaseCloseAfter (%s)", s.LaneLeaseStopAfter, s.LaneLeaseCloseAfter)
 	}
 
+	if s.LaneGrantDuration <= 0 {
+		return errors.NewConfigurationError("blockchain_laneGrantDuration must be positive, got %s", s.LaneGrantDuration)
+	}
+
 	if s.LaneLeaseRenewInterval >= s.LaneLeaseStopAfter {
 		return errors.NewConfigurationError("blockchain_laneLeaseRenewInterval (%s) must be shorter than blockchain_laneLeaseStopAfter (%s)", s.LaneLeaseRenewInterval, s.LaneLeaseStopAfter)
 	}

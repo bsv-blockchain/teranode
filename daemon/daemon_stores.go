@@ -90,17 +90,14 @@ func (d *Stores) GetUtxoStore(ctx context.Context, logger ulogger.Logger,
 		return d.mainUtxoStore, nil
 	}
 
-	store, err := newMainUtxoStore(ctx, logger, appSettings)
-	if err != nil {
+	// A step this build does not implement, or an unknown one, fails before the store opens: at a
+	// stamping step utxoset adds its lane column at open, which a refused step must not do.
+	if err := settings.CheckLaneMigration(appSettings.UtxoStore.LaneMigration); err != nil {
 		return nil, err
 	}
 
-	// A step this build does not implement, or an unknown one, fails the open whatever it is.
-	if err := settings.CheckLaneMigration(appSettings.UtxoStore.LaneMigration); err != nil {
-		if closeErr := store.Close(ctx); closeErr != nil {
-			logger.Warnf("[lane] could not close the UTXO store after refusing its lane migration step: %v", closeErr)
-		}
-
+	store, err := newMainUtxoStore(ctx, logger, appSettings)
+	if err != nil {
 		return nil, err
 	}
 
