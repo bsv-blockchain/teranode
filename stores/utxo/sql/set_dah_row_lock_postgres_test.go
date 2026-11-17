@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 )
@@ -277,4 +279,135 @@ func TestSetDAHSeesConcurrentUnspend_Postgres(t *testing.T) {
 
 	pruneRowsAtHeight(ctx, t, store, floorMinedHeight+uint32(retention))
 	require.True(t, rowExists(ctx, t, store, hash), "the pruner must not delete a row with a live output")
+}
+
+// TestSpendOfAMarkedParentDoesNotWaitForThePrune_Postgres: the pruner writes a
+// deleted_children row for a parent P that survives, and its foreign key takes
+// FOR KEY SHARE on P until the prune commits, through the whole DELETE. A spend
+// of P's other output runs setDAH on P. Its row lock must be FOR NO KEY UPDATE,
+// which that KEY SHARE does not block: with FOR UPDATE every spend of a marked
+// parent waited for the entire prune, and the batcher queued every other spend
+// behind it.
+func TestSpendOfAMarkedParentDoesNotWaitForThePrune_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, ctx := setupPostgresStore(t)
+	floorRetention(t, store)
+
+	parent := bt.NewTx()
+	require.NoError(t, parent.From("5555555555555555555555555555555555555555555555555555555555555555", 0, "51", 30000))
+	parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+	_, err := store.Create(ctx, parent, 1000)
+	require.NoError(t, err)
+
+	// The prune in flight: a marker on P, written in a transaction that stays
+	// open, as the pruner's does until its DELETE commits.
+	prune, err := store.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = prune.Rollback() })
+
+	_, err = prune.ExecContext(ctx,
+		"INSERT INTO deleted_children (parent_id, child_hash) SELECT id, $2 FROM transactions WHERE hash = $1",
+		parent.TxIDChainHash()[:], bytes.Repeat([]byte{0xAB}, 32))
+	require.NoError(t, err)
+
+	spender := bt.NewTx()
+	require.NoError(t, spender.From(parent.TxID(), 1, parent.Outputs[1].LockingScript.String(), parent.Outputs[1].Satoshis))
+	spender.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+	require.NoError(t, spender.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+
+	done := make(chan error, 1)
+
+	go func() {
+		_, spendErr := store.Spend(ctx, spender, 1000)
+		done <- spendErr
+	}()
+
+	select {
+	case err = <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the spend of P:1 waited on the open prune's foreign-key lock on P")
+	}
+
+	require.NoError(t, prune.Rollback())
+}
+
+// TestCreateDeletedChildrenDoesNotQueueWritersBehindIt_Postgres: on the first
+// start of this version, creating deleted_children takes SHARE ROW EXCLUSIVE on
+// transactions for its foreign key. A running write holds ROW EXCLUSIVE there,
+// so the DDL waits, and Postgres queues every later write on transactions
+// behind the waiting DDL. Each attempt is bounded by a lock_timeout, so a write
+// arriving meanwhile goes through, and the DDL retries until the running write
+// commits.
+func TestCreateDeletedChildrenDoesNotQueueWritersBehindIt_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, ctx := setupPostgresStore(t)
+
+	prevTimeout, prevDelay := deletedChildrenLockTimeout, deletedChildrenRetryDelay
+	deletedChildrenLockTimeout, deletedChildrenRetryDelay = 300*time.Millisecond, 100*time.Millisecond
+
+	t.Cleanup(func() { deletedChildrenLockTimeout, deletedChildrenRetryDelay = prevTimeout, prevDelay })
+
+	_, err := store.Create(ctx, tests.ParentTx, 1000)
+	require.NoError(t, err)
+
+	_, err = store.db.ExecContext(ctx, "DROP TABLE deleted_children")
+	require.NoError(t, err)
+
+	// Cleanups run last first: the running write ends before the DDL's
+	// connection is closed, so a failing run does not wait on its own lock.
+	conn, err := store.db.Conn(ctx)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = conn.Close() })
+
+	running, err := store.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = running.Rollback() })
+
+	_, err = running.ExecContext(ctx, "LOCK TABLE transactions IN ROW EXCLUSIVE MODE")
+	require.NoError(t, err)
+
+	ddlDone := make(chan error, 1)
+
+	go func() {
+		ddlDone <- createDeletedChildrenTable(connExecutor{ctx: ctx, conn: conn}, ulogger.TestLogger{})
+	}()
+
+	waitBlockedOrDone(ctx, t, store, ddlDone)
+
+	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	_, err = store.db.ExecContext(writeCtx, "UPDATE transactions SET fee = fee WHERE hash = $1", tests.ParentTx.TxIDChainHash()[:])
+	require.NoError(t, err, "a write on transactions must not wait behind the DDL for the whole running write")
+
+	select {
+	case err = <-ddlDone:
+		t.Fatalf("the DDL finished while the running write still held its lock: %v", err)
+	default:
+	}
+
+	require.NoError(t, running.Rollback())
+
+	select {
+	case err = <-ddlDone:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the DDL did not retry once the running write ended")
+	}
+
+	var exists bool
+	require.NoError(t, store.db.QueryRowContext(ctx, "SELECT to_regclass('deleted_children') IS NOT NULL").Scan(&exists))
+	require.True(t, exists)
 }

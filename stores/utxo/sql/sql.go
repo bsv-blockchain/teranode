@@ -101,9 +101,11 @@ type batchSpend struct {
 	ignoreLocked      bool
 	skipUTXOHashCheck bool
 	// idempotent is set by the batch when the output already recorded exactly
-	// this spend, so nothing was written. Spend keeps such inputs out of the
-	// rollback list: the spend they matched is the confirmed, historical one,
-	// and reversing it would hand a confirmed output to any new spender.
+	// this spend, so nothing was written. Spend reverses such an input on a
+	// later failure only when utxo.RollbackSet allows it: no input of the call
+	// got the pruned-replay answer and none was left unanswered. Otherwise the
+	// match may be a confirmed historical spend, and reversing it would hand a
+	// confirmed output to any new spender.
 	idempotent bool
 }
 
@@ -2478,6 +2480,10 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 // checked for a replay marker again before it is reversed; see
 // withoutMarkedMatches.
 func (s *Store) probeAndRollbackPartialSpends(tx *bt.Tx, rollback, idempotent []*utxo.Spend) {
+	if spendBeforeRollbackProbe != nil {
+		spendBeforeRollbackProbe()
+	}
+
 	rbCtx, rbCancel := s.spendRollbackContext()
 	defer rbCancel()
 
@@ -3279,9 +3285,11 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				RETURNING 1
 			)
 			-- The two arms are reported apart, not unioned blind. upd_idem is a
-			-- row whose output ALREADY recorded exactly this spend, committed by
-			-- someone else between this statement's snapshot and its update, so
-			-- this call wrote nothing for it. Reported as a fresh write it would
+			-- row whose output already recorded exactly this spend at the
+			-- statement's snapshot (committed between the SELECT phase and this
+			-- statement), so this call wrote nothing for it. A match committed
+			-- after the snapshot is answered by the missed-row re-check below.
+			-- Reported as a fresh write it would
 			-- join the rollback set and a later failure on a sibling input would
 			-- reverse a spend this call never made. See utxo.RollbackSet.
 			SELECT batch_idx, false AS idempotent FROM upd_spent
@@ -4074,6 +4082,11 @@ var spendBeforeWrite func()
 // inside that gap.
 var spendBeforeRecheck func()
 
+// spendBeforeRollbackProbe runs when a failed Spend hands its rollback set to
+// probeAndRollbackPartialSpends, before the existence probe. It is nil outside
+// tests, which use it to commit a prune's marker after the spend's reads.
+var spendBeforeRollbackProbe func()
+
 // setDAHAfterLock runs in setDAH right after the Postgres row lock is taken and before
 // the eligibility read. It is nil outside tests, which use it to observe lock order and
 // to complete a lock cycle.
@@ -4089,7 +4102,7 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 	// transaction ends. SQLite takes no lock: its single writer and the caller's open
 	// write transaction already serialise these writers.
 	if s.engine == "postgres" {
-		if _, err := txn.ExecContext(ctx, "SELECT id FROM transactions WHERE id = $1 FOR UPDATE", transactionID); err != nil {
+		if _, err := txn.ExecContext(ctx, "SELECT id FROM transactions WHERE id = $1 FOR NO KEY UPDATE", transactionID); err != nil {
 			return errors.NewStorageError("[setDAH] error locking transaction %d", transactionID, err)
 		}
 
@@ -6301,7 +6314,7 @@ func createPostgresSchemaOnOneConn(ctx context.Context, logger ulogger.Logger, d
 		_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, utxoSchemaLockID)
 	}()
 
-	return createPostgresSchemaImpl(connExecutor{ctx: ctx, conn: conn})
+	return createPostgresSchemaImpl(connExecutor{ctx: ctx, conn: conn}, logger)
 }
 
 // connExecutor runs the schema statements on the connection that holds the
@@ -6320,7 +6333,7 @@ func (c connExecutor) Exec(query string, args ...interface{}) (sql.Result, error
 func (c connExecutor) Close() error { return nil }
 
 // createPostgresSchemaImpl contains the actual implementation, now testable
-func createPostgresSchemaImpl(db DBExecutor) error {
+func createPostgresSchemaImpl(db DBExecutor, logger ulogger.Logger) error {
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS transactions (
          id               BIGSERIAL PRIMARY KEY
@@ -6550,11 +6563,7 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 	}
 
 	// Markers outlive a pruned child, but disappear with the surviving parent.
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS deleted_children (
-  parent_id BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
-  child_hash BYTEA NOT NULL,
-  PRIMARY KEY (parent_id, child_hash)
- );`); err != nil {
+	if err := createDeletedChildrenTable(db, logger); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create deleted_children table - [%+v]", err)
 	}
@@ -6571,6 +6580,68 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 	// conflicting_index.go).
 
 	return nil
+}
+
+// deletedChildrenLockTimeout bounds each wait for the lock that creating the
+// deleted_children table takes on transactions, and deletedChildrenRetryDelay
+// is the pause before the next attempt. Variables so tests can shorten them.
+var (
+	deletedChildrenLockTimeout = 2 * time.Second
+	deletedChildrenRetryDelay  = time.Second
+)
+
+// createDeletedChildrenDDL creates the replay-marker table under a local
+// lock_timeout. Its foreign key takes SHARE ROW EXCLUSIVE on transactions,
+// which conflicts with the ROW EXCLUSIVE every write there holds, and Postgres
+// queues every later writer behind a waiting DDL. Unbounded, the first start of
+// this version would stall every spend and create for as long as a running
+// write, an older pruner's mass DELETE for one, takes to commit. set_config
+// with is_local applies only to the DO statement's own transaction.
+const createDeletedChildrenDDL = `DO $$
+BEGIN
+  PERFORM set_config('lock_timeout', '%dms', true);
+  CREATE TABLE IF NOT EXISTS deleted_children (
+    parent_id BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    child_hash BYTEA NOT NULL,
+    PRIMARY KEY (parent_id, child_hash)
+  );
+END $$;`
+
+// createDeletedChildrenTable runs createDeletedChildrenDDL until it succeeds,
+// retrying only when the lock wait timed out (SQLSTATE 55P03). Each wait is
+// bounded, so writers queued behind it run between attempts, and the retries
+// are not, so a busy database delays startup as before but never fails it on
+// this step. Once the table exists, CREATE TABLE IF NOT EXISTS takes no lock
+// on transactions, so this costs nothing after the first start. The caller's
+// context bounds the loop: a cancelled Exec fails with a different error.
+func createDeletedChildrenTable(db DBExecutor, logger ulogger.Logger) error {
+	ddl := fmt.Sprintf(createDeletedChildrenDDL, deletedChildrenLockTimeout.Milliseconds())
+
+	for attempt := 1; ; attempt++ {
+		_, err := db.Exec(ddl)
+		if err == nil || !isPgLockNotAvailable(err) {
+			return err
+		}
+
+		if logger != nil {
+			logger.Warnf("[createPostgresSchema] creating deleted_children waited %s for a lock on transactions held by a running write (attempt %d), retrying in %s", deletedChildrenLockTimeout, attempt, deletedChildrenRetryDelay)
+		}
+
+		time.Sleep(deletedChildrenRetryDelay)
+	}
+}
+
+// isPgLockNotAvailable reports whether err is Postgres's lock_not_available
+// (55P03), what a statement that hit its lock_timeout fails with.
+func isPgLockNotAvailable(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "55P03" {
+		return true
+	}
+
+	var pqErr *pq.Error
+
+	return errors.As(err, &pqErr) && pqErr.Code == "55P03"
 }
 
 func createSqliteSchema(db *usql.DB) error {
