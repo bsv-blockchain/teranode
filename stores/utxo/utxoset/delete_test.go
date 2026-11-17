@@ -420,11 +420,11 @@ func TestDeleteWaitsForARestoreOfAMinedCoin(t *testing.T) {
 	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM tx_mined WHERE txid = $1`, h[:]))
 }
 
-// TestDeleteCutWhileWaitingOnARowDeletesNothing: a Delete cut while it waits on a row another
-// transaction holds returns an error, and the attempt rolls back whole, so the transaction's
-// identity row, coins and undo records are all still there. The lock-first order is pinned by the
-// restore races above, not here: a Delete without it would block on the same row and roll back
-// the same way.
+// TestDeleteCutWhileWaitingOnARowDeletesNothing: a Delete cut while its lock statement waits on a
+// row another transaction holds returns a storage error before it has deleted anything, so the
+// transaction's identity row, coins and undo records are all still there. The cut is aimed at the
+// lock statement, so this test needs that statement; the restore races above are what show the
+// order matters.
 func TestDeleteCutWhileWaitingOnARowDeletesNothing(t *testing.T) {
 	s, ctx := newTestStore(t)
 
