@@ -292,8 +292,10 @@ func requireNotTip(ctx context.Context, t *testing.T, client blockchain.ClientI,
 // The floor's failure must fall through to that full validation, not return on its own: only the
 // full path records the block as invalid in the store, and a block that is not added early is
 // handed to block assembly. The floor itself strikes no peer and records nothing, so the store holds
-// exactly the one invalid record the full validation writes, and no peer is struck. The test checks
-// that block assembly is told about the block, not when: the hint is sent from a goroutine.
+// exactly the one invalid record the full validation writes, and no corrupt strike goes to the
+// serving peer (the invalid verdict reaches the peer through the Kafka invalid-block notification,
+// which this harness does not wire). The test checks that block assembly is told about the block,
+// not when: the hint is sent from a goroutine.
 func TestValidateBlock_OptimisticPeerBlocks_NonFinalCoinbaseWithSubtreesNotAddedEarly(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -333,7 +335,7 @@ func TestValidateBlock_OptimisticPeerBlocks_NonFinalCoinbaseWithSubtreesNotAdded
 	require.NoError(t, err, "the full validation stores the bound, condemned block")
 	require.True(t, meta.Invalid, "the floor's failure falls through to the full validation, which stores the block as invalid")
 	require.Equal(t, 1, client.invalidRecords(block.Hash()), "only the full validation records the block as invalid; the floor records nothing")
-	require.Empty(t, strikes.recorded(), "a bound, condemned block strikes no peer, and neither does the floor")
+	require.Empty(t, strikes.recorded(), "no corrupt strike: neither the floor nor the invalid verdict calls penalizeCorruptBlockPeer")
 
 	select {
 	case hash := <-prepared:
