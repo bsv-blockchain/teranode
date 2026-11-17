@@ -740,8 +740,11 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	// deletes it again and it stays until removed by hand; one-shot builds and
 	// the seeder may still read it (utxoPersister_livenessStallTimeout says when).
 	if lastWrittenUTXOSetHash.String() != s.settings.ChainCfgParams.GenesisHash.String() && !s.settings.BlockPersister.SkipUTXODelete {
+		// Logged here, not returned: the new set is already recorded, so no
+		// later pass comes back to this one, and returning the error would only
+		// reach handleTriggerError's "will retry" log and skip the sidecars below.
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet); err != nil {
-			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d; the new set is recorded, so this one is not retried and stays on disk until removed by hand", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
+			s.logger.Errorf("[UTXOPersister] Error deleting previous UTXOSet for block %s height %d; the new set is recorded, so this one is not retried and stays on disk until removed by hand: %v", lastWrittenUTXOSetHash, metas[0].Height, err)
 		}
 
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSetHash); err != nil {
@@ -751,7 +754,7 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 		// No separate delete for the ".sha256" sidecars: the Del calls above already remove the
 		// checksum file alongside the blob it describes.
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoHeaders); err != nil {
-			s.logger.Warnf("[UTXOPersister] Error deleting UTXOHeaders for block %s height %d: %v", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
+			s.logger.Warnf("[UTXOPersister] Error deleting UTXOHeaders for block %s height %d: %v", lastWrittenUTXOSetHash, metas[0].Height, err)
 		}
 	}
 

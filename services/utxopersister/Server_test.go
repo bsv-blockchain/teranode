@@ -774,7 +774,8 @@ func (s *delFailingStore) Del(ctx context.Context, key []byte, fileType fileform
 
 // The new height is recorded before the previous set is deleted. Otherwise a
 // stop between the two leaves lastProcessed pointing at a base set that is gone,
-// and every later pass fails to verify it.
+// and every later pass fails to verify it. A failed delete is logged, not
+// returned: nothing would retry it, and the pass has done its work.
 func TestProcessNextBlock_RecordsHeightBeforeDeletingPreviousSet(t *testing.T) {
 	ctx := context.Background()
 	store := &delFailingStore{Store: memory.New()}
@@ -782,7 +783,11 @@ func TestProcessNextBlock_RecordsHeightBeforeDeletingPreviousSet(t *testing.T) {
 	server, byH := restartTestChain(t, store)
 
 	_, err := server.processNextBlock(ctx)
-	require.Error(t, err, "the injected delete failure is still reported")
+	require.NoError(t, err, "a failed delete of the previous set does not fail a pass that recorded the new one")
+
+	previous, err := store.Exists(ctx, byH[1][:], fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.True(t, previous, "the previous set stays on disk after a failed delete")
 
 	height, err := server.readLastHeight(ctx)
 	require.NoError(t, err)
