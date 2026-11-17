@@ -309,3 +309,40 @@ func deleteCrossesAHolder(t *testing.T) bool {
 
 	return true
 }
+
+// TestDeleteWaitsForARestoreOfItsCoin: a restore of the transaction's coin that has run and not
+// committed holds a share lock on the transaction's identity row. Delete must wait for it and then
+// remove the coin it restored. When Delete was one statement, its snapshot was taken before the
+// coin committed: it waited on the identity row, deleted that row once the restore committed, and
+// left the coin behind, a live output whose transaction no longer exists and that nothing can
+// reclaim.
+func TestDeleteWaitsForARestoreOfItsCoin(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends := mempoolParentSpent(t, s, ctx, false)
+	h := parent.TxIDChainHash()
+
+	req, err := newUnspendRequest(spends, false)
+	require.NoError(t, err)
+
+	restore, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = restore.Rollback(context.Background()) }()
+
+	res, err := s.restoreIn(ctx, restore, req)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.restored)
+
+	done := make(chan error, 1)
+
+	go func() { done <- s.Delete(ctx, h) }()
+
+	waitForLockWait(t, s, ctx, "tx_ident")
+	require.NoError(t, restore.Commit(ctx))
+	require.NoError(t, <-done)
+
+	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM utxo WHERE txid = $1`, h[:]),
+		"the coin the restore put back must not outlive its transaction")
+	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM tx_ident WHERE txid = $1`, h[:]))
+}

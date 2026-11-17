@@ -104,7 +104,7 @@ func TestConflictingStatementsNeverScanTheirTables(t *testing.T) {
 	})
 }
 
-// TestDeleteStatementNeverScansItsTables pins deleteTxSQL's plan at 16 keys with nested loops
+// TestDeleteStatementNeverScansItsTables pins the plans of deleteTxSQL and deleteLockSQL at 16 keys with nested loops
 // off. Every arm used to join the keys with USING, the shape that on Hetzner mainnet on
 // 2026-10-23 hash-joined on the transaction id over a sequential scan of every UTXO partition.
 // Delete passes one hash today, but deleteIn takes a batch, so the plan is checked at the size a
@@ -149,6 +149,17 @@ func TestDeleteStatementNeverScansItsTables(t *testing.T) {
 		}
 
 		require.NotContains(t, n.NodeType, "Hash Join", "a delete arm joins")
+	})
+
+	lockRoot := explainUnderNoNestloop(t, s, ctx, deleteLockSQL, leaves, txids)
+
+	walkPlan(lockRoot, func(n planNode) {
+		for _, table := range []string{"tx_ident", "tx_mined"} {
+			if strings.HasPrefix(n.RelationName, table) {
+				require.NotEqual(t, "Seq Scan", n.NodeType, "seq scan of %s", n.RelationName)
+				require.NotEqual(t, "Parallel Seq Scan", n.NodeType, "seq scan of %s", n.RelationName)
+			}
+		}
 	})
 }
 

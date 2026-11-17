@@ -157,13 +157,69 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 		return errors.NewProcessingError("[utxoset][Delete] nil hash")
 	}
 
-	// The statement deletes the identity and membership rows in its main query and the undo
-	// records at its end, and a restore of the same transaction (Unspend) takes an undo record
-	// first and share-locks the identity row after, so the two can deadlock on one transaction.
-	// Against the pool the statement is its own transaction and rolls back whole, so it runs again.
+	// A restore of the same transaction (Unspend) takes an undo record first and share-locks the
+	// identity row after, and the delete takes them the other way round, so the two can deadlock on
+	// one transaction. Each attempt is one database transaction that rolls back whole, so it runs
+	// again.
 	return withDeadlockRetry(ctx, "delete", func() error {
-		return s.deleteIn(ctx, s.pool, []chainhash.Hash{*hash})
+		return s.deleteOnce(ctx, []chainhash.Hash{*hash})
 	})
+}
+
+// deleteLockSQL takes the identity and containment rows of the transactions being deleted, in a
+// statement of its own before deleteTxSQL.
+//
+// A restore (Unspend) of one of their coins share-locks these rows and inserts the coin in the
+// same database transaction. deleteTxSQL alone, run while such a restore was uncommitted, took its
+// snapshot without the coin, waited on the identity row, then deleted that row once the restore
+// committed and left the coin behind: a live output whose transaction no longer exists, which
+// nothing can reclaim. A deadlock retry of the delete lands in exactly that window, since the
+// restore it lost to is still running. Under READ COMMITTED each statement sees what had committed
+// when it began, so taking the rows first, and running deleteTxSQL only once they are held, gives
+// deleteTxSQL a snapshot in which any such restore has committed and its coin is there to delete.
+const deleteLockSQL = `
+SELECT (SELECT count(*) FROM (
+          SELECT 1 FROM tx_ident i
+           WHERE i.leaf = ANY ($1::smallint[]) AND i.txid = ANY ($2::bytea[])
+             FOR UPDATE OF i) AS a),
+       (SELECT count(*) FROM (
+          SELECT 1 FROM tx_mined m
+           WHERE m.txid = ANY ($2::bytea[])
+             FOR UPDATE OF m) AS b)`
+
+// deleteOnce is one attempt of Delete: the rows taken first, then the delete, in one database
+// transaction.
+func (s *Store) deleteOnce(ctx context.Context, hashes []chainhash.Hash) error {
+	dbTx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return errors.NewStorageError("[utxoset][Delete] begin", err)
+	}
+
+	defer func() { _ = dbTx.Rollback(ctx) }()
+
+	leaves := make([]int16, 0, len(hashes))
+	txids := make([][]byte, 0, len(hashes))
+
+	for i := range hashes {
+		leaves = append(leaves, LeafFor(hashes[i][:]))
+		txids = append(txids, hashes[i][:])
+	}
+
+	var idents, mined int64
+
+	if err := dbTx.QueryRow(ctx, deleteLockSQL, leaves, txids).Scan(&idents, &mined); err != nil {
+		return errors.NewStorageError("[utxoset][Delete] lock", err)
+	}
+
+	if err := s.deleteIn(ctx, dbTx, hashes); err != nil {
+		return err
+	}
+
+	if err := dbTx.Commit(ctx); err != nil {
+		return errors.NewStorageError("[utxoset][Delete] commit", err)
+	}
+
+	return nil
 }
 
 // deleteIn is Delete against an arbitrary querier and over a batch, so a future multi-delete

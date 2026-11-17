@@ -308,7 +308,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 	// writers lock those rows in another order, so PostgreSQL can stop the restore as a deadlock:
 	// a SetLocked or a mine naming several of the same transactions, an un-mine even on one
 	// shared transaction (unMine deletes containment rows before it updates the identity rows),
-	// and a Delete of the restored coin's transaction (it removes the identity rows before the
+	// and a Delete of the restored coin's transaction (it takes the identity rows before the
 	// undo records).
 	// SetConflicting, MarkTransactionsOnLongestChain and the stamp also write those rows, and can
 	// cross the restore when they name several of its transactions. The attempt is one transaction
