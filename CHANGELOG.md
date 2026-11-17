@@ -44,6 +44,11 @@ read every section between yours and the target.
   this version, block assembly follows the best header instead of replaying best-tip changes, so
   upgrade them close together. Startup replaces the chain-work indexes on `blocks`, and every move
   to or from an older version rebuilds them. (#2193)
+- **`ProcessBlock` refuses a `block_id` that is not the block's reservation on the quick route.**
+  An external caller that sends a non-zero ID other than what `AssignBlockID` returns for the hash
+  now gets an error before any UTXO is written, including an ID whose reservation was swept and a
+  coinbase-only block that used to be stored under the reservation instead. Send 0, or call
+  `AssignBlockID` again and send its answer. (#2191)
 - **Three unused blockchain gRPC methods and five metrics are gone.** An external client calling
   `GetBlockHeadersFromTill`, `GetLatestBlockHeaderFromBlockLocator` or `GetBlockHeadersFromOldest`
   now gets `Unimplemented`. Dashboards lose `teranode_blockvalidation_fork_resolved_total`,
@@ -113,6 +118,9 @@ read every section between yours and the target.
 - **PostgreSQL UTXO store: stop previous-release processes before upgrading.** One that starts while
   the new `px_transactions_conflicting` index builds blocks all `transactions` reads and writes until
   the build ends. Out-of-tree `utxo.Store` implementations add `ConflictingTxHashes`. (#2110)
+- **`SetBlockMinedSet` takes a mined-set generation and can refuse a write with `ERR_STATE_ERROR`.**
+  Out-of-tree blockchain store and client implementations add the parameter; a caller that sets
+  `mined_set_generation` must handle the refusal. Mixed versions keep working, in any order. (#2018)
 - **The Aerospike UTXO store adds a `<set>_conflictwal_startedAt` index, at least 16 MiB per node.**
   Check `indexes-memory-budget` has room first, or the namespace can stop writes. Without
   index-create rights, create it by hand ([conflict recovery](docs/topics/conflict-recovery.md)). (#2151)

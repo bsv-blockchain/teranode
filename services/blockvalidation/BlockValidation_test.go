@@ -242,13 +242,13 @@ func (t *trackingBlockchainClient) Subscribe(ctx context.Context, tag string) (c
 	return t.ClientI.Subscribe(ctx, tag)
 }
 
-func (t *trackingBlockchainClient) SetBlockMinedSet(ctx context.Context, hash *chainhash.Hash) error {
+func (t *trackingBlockchainClient) SetBlockMinedSet(ctx context.Context, hash *chainhash.Hash, minedSetGeneration uint64) error {
 	if t.setMinedCalled != nil {
 		t.setMinedOnce.Do(func() {
 			close(t.setMinedCalled)
 		})
 	}
-	return t.ClientI.SetBlockMinedSet(ctx, hash)
+	return t.ClientI.SetBlockMinedSet(ctx, hash, minedSetGeneration)
 }
 
 func (m *MockSubtreeValidationClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -3808,8 +3808,9 @@ func TestBlockValidation_RevalidateBlockChan_Retries(t *testing.T) {
 // tradeoff on the opt-in optimistic-background path (bitcoin-sv/teranode#4692): a corrupt body that
 // was already AddBlock'd BEFORE block.Valid ran must NOT be left silently accepted. On this one
 // opt-in path (both optimistic flags set) it takes the invalidate route — InvalidateBlock is
-// called directly (poison-loudly, never silently accept) until the block.Valid integrity-floor
-// split lands and removes this path.
+// called directly (poison-loudly, never silently accept). The integrity floor runs before the add,
+// so a body only reaches this route with a defect the floor does not check, here a repeated
+// transaction.
 func TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -3827,8 +3828,9 @@ func TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute(t *testing
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
-	require.NoError(t, subtree.AddCoinbaseNode())
+	// A bound body that repeats a transaction: the integrity floor passes it, so it is added, and
+	// the background block.Valid's duplicate check returns corrupt.
+	subtree, merkleRoot := boundDuplicateTxSubtree(t, coinbaseTx)
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 	nodeBytes, err := subtree.SerializeNodes()
 	require.NoError(t, err)
@@ -3839,7 +3841,7 @@ func TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute(t *testing
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
-		HashMerkleRoot: &chainhash.Hash{},
+		HashMerkleRoot: merkleRoot,
 		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 		Bits:           *nBits,
 		Nonce:          0,
@@ -3887,8 +3889,8 @@ func TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute(t *testing
 	defer deferFunc()
 
 	// Let subtree validation pass so the corrupt verdict comes from the background block.Valid.
-	// The real service binds a cached body to its header up front and would reject this one
-	// synchronously, before the optimistic AddBlock this test pins.
+	// The real service would find the repeated transaction while validating the subtree and reject
+	// the block synchronously, before the optimistic AddBlock this test pins.
 	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
 	subtreeValidationClient.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -3902,8 +3904,8 @@ func TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute(t *testing
 	err = bv.ValidateBlock(ctx, block, "test", false)
 	require.NoError(t, err)
 
-	// bitcoin-sv/teranode#4692: this block fails CheckMerkleRoot (its merkle root was zeroed), a
-	// tier-2 CORRUPT body. On the opt-in optimistic-background path the body was already AddBlock'd
+	// bitcoin-sv/teranode#4692: this block repeats a transaction, a tier-2 CORRUPT body that only
+	// the background block.Valid finds. On the opt-in optimistic-background path the body was already AddBlock'd
 	// before block.Valid ran, so leaving it accepted would be a silently-accepted corrupt tip. The
 	// guard therefore takes the invalidate route: InvalidateBlock is called.
 	select {
@@ -4854,6 +4856,82 @@ func TestSetMinedChanWorker_RetryPendingDedup(t *testing.T) {
 	attempts, ok := blockValidation.setMinedRetries.Load(retryHash)
 	require.True(t, ok, "retry counter must be tracked for the failing block")
 	require.Equal(t, uint64(1), attempts, "skipped re-triggers must not inflate the retry counter")
+}
+
+// setMinedRequeueClient is a decorator over a real blockchain.ClientI that drives every run
+// for one hash into setTxMinedStatus's re-queue path. The worker's GetBlockHeader (odd calls)
+// reports invalid=false; the run's own GetBlockHeader (even calls) reports invalid=true, so the
+// run sees the flag move before it started and asks the worker to re-queue.
+type setMinedRequeueClient struct {
+	blockchain.ClientI
+
+	hash        *chainhash.Hash
+	headerCalls atomic.Int32
+}
+
+func (c *setMinedRequeueClient) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	if hash.IsEqual(c.hash) {
+		n := c.headerCalls.Add(1)
+		return &model.BlockHeader{}, &model.BlockHeaderMeta{ID: 1, Invalid: n%2 == 0}, nil
+	}
+
+	return c.ClientI.GetBlockHeader(ctx, hash)
+}
+
+func (c *setMinedRequeueClient) GetBlock(ctx context.Context, hash *chainhash.Hash) (*model.Block, error) {
+	if hash.IsEqual(c.hash) {
+		return &model.Block{Header: &model.BlockHeader{}}, nil
+	}
+
+	return c.ClientI.GetBlock(ctx, hash)
+}
+
+// TestSetMinedChanWorker_RequeueKeepsRetryCounterAndBacksOff covers a run whose block state moved
+// under it. That run did not fail, so the worker must leave the retry counter exactly where it was:
+// resetting it would let one refusal wipe out the attempts a block with real storage errors has
+// already used, and charging it would drop a block whose state is merely busy. The re-queue must go
+// through the backoff path, not straight back on setMinedChan, so a generation that keeps moving
+// cannot drive back-to-back full re-tags.
+func TestSetMinedChanWorker_RequeueKeepsRetryCounterAndBacksOff(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	h := chainhash.HashH([]byte("requeue-hash"))
+	client := &setMinedRequeueClient{ClientI: blockchainClient, hash: &h}
+
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, client, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+	// The block has already used one charged attempt for a real failure.
+	blockValidation.setMinedRetries.Store(h, uint64(1))
+
+	blockValidation.setMinedChan <- &h
+
+	require.Eventually(t, func() bool {
+		_, pending := blockValidation.setMinedRetryPending.Load(h)
+		return pending
+	}, 2*time.Second, 5*time.Millisecond, "the re-queue must go through the backoff path")
+
+	require.Equal(t, int32(2), client.headerCalls.Load(), "exactly one run so far: the re-queue must wait out its backoff")
+
+	attempts, ok := blockValidation.setMinedRetries.Load(h)
+	require.True(t, ok, "a re-queue must not reset the retry counter")
+	require.Equal(t, uint64(1), attempts, "a re-queue must not charge the retry counter")
+
+	// After the 1s backoff the block is picked up again, and the counter is still untouched.
+	require.Eventually(t, func() bool {
+		return client.headerCalls.Load() >= 4
+	}, 3*time.Second, 20*time.Millisecond, "the re-queued block was never processed again")
+
+	attempts, ok = blockValidation.setMinedRetries.Load(h)
+	require.True(t, ok)
+	require.Equal(t, uint64(1), attempts, "repeated re-queues must leave the retry counter alone")
 }
 
 // TestIsParentFinalizing guards the child parent-wait fix: checkParentProcessingComplete

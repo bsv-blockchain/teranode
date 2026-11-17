@@ -328,7 +328,7 @@ func runHeaderContextRetryReachesAddBlock(t *testing.T, disableOptimisticMining 
 	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).
 		Return([]uint32{1, 0}, nil).Maybe()
-	mockBlockchain.On("SetBlockMinedSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockBlockchain.On("SetBlockMinedSet", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockBlockchain.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil).Maybe()
 	mockBlockchain.On("GetBlockHeadersFromHeight", mock.Anything, mock.Anything, mock.Anything).
 		Return(goodRun, goodMeta, nil).Maybe()
