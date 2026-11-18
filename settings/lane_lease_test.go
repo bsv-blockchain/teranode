@@ -137,8 +137,8 @@ func TestCheckLaneLeaseBoundaries(t *testing.T) {
 		{"grant duration one nanosecond", func(s *BlockChainSettings) { s.LaneGrantDuration = time.Nanosecond }, false},
 		{"renew equals stop", func(s *BlockChainSettings) { s.LaneLeaseRenewInterval = s.LaneLeaseStopAfter }, true},
 		{"renew one nanosecond before stop", func(s *BlockChainSettings) { s.LaneLeaseRenewInterval = s.LaneLeaseStopAfter - time.Nanosecond }, false},
-		{"grant minimum at the cap", func(s *BlockChainSettings) { s.LaneGrantMin = MaxLaneGrant }, false},
-		{"grant minimum one above the cap", func(s *BlockChainSettings) { s.LaneGrantMin = MaxLaneGrant + 1 }, true},
+		{"grant minimum at the documented cap", func(s *BlockChainSettings) { s.LaneGrantMin = 1 << 40 }, false},
+		{"grant minimum one above the documented cap", func(s *BlockChainSettings) { s.LaneGrantMin = 1<<40 + 1 }, true},
 	}
 
 	for _, test := range tests {
