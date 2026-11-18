@@ -82,10 +82,12 @@ func buildMapRows(lane uint8, taken *roaring64.Bitmap, limit uint64) ([]MapRow, 
 		return []MapRow{row}, nil
 	}
 
+	chunks := occupiedChunks(bm)
+
 	var rows []MapRow
 
-	for start := lowest; ; {
-		part, next, err := takeChunks(bm, start, highest, limit)
+	for i := 0; i < len(chunks); {
+		part, n, err := takeChunks(bm, chunks[i:], limit)
 		if err != nil {
 			return nil, errors.NewProcessingError("lane %d", lane, err)
 		}
@@ -96,70 +98,80 @@ func buildMapRows(lane uint8, taken *roaring64.Bitmap, limit uint64) ([]MapRow, 
 		}
 
 		rows = append(rows, row)
-
-		if next == 0 {
-			return rows, nil
-		}
-
-		start = next
+		i += n
 	}
+
+	return rows, nil
 }
 
-// takeChunks returns the bitmap of the most whole chunks, starting at start's chunk, whose
-// serialized size is at most limit, and the first taken position after them, or 0 when none is
-// left. Every chunk holds at most 65,536 positions, so one chunk is always below any limit a
-// caller uses outside tests.
-func takeChunks(bm *roaring64.Bitmap, start, highest, limit uint64) (*roaring64.Bitmap, uint64, error) {
-	firstChunk := start >> chunkBits
-	lastChunk := highest >> chunkBits
+// occupiedChunks returns the numbers of the chunks bm holds at least one position in, in rising
+// order. It visits each occupied chunk once and skips the empty ones between them, so a sparse
+// bitmap over a wide span costs what it holds, not what it spans.
+func occupiedChunks(bm *roaring64.Bitmap) []uint64 {
+	var chunks []uint64
 
-	part := func(endChunk uint64) *roaring64.Bitmap {
-		rng := roaring64.New()
-		rng.AddRange(firstChunk<<chunkBits, (endChunk+1)<<chunkBits)
-		rng.And(bm)
+	it := bm.Iterator()
 
-		return rng
+	for it.HasNext() {
+		chunk := it.Next() >> chunkBits
+		chunks = append(chunks, chunk)
+		it.AdvanceIfNeeded((chunk + 1) << chunkBits)
 	}
 
-	// The largest endChunk in [firstChunk, lastChunk] whose part fits.
-	lo, hi := firstChunk, lastChunk
-	best := uint64(0)
-	found := false
+	return chunks
+}
 
-	for lo <= hi {
-		mid := lo + (hi-lo)/2
+// takeChunks returns the bitmap of bm's positions in the longest leading run of chunks whose
+// serialized size is at most limit, and how many chunks that run holds. chunks are occupied chunk
+// numbers in rising order. Each candidate is built from its own occupied chunks only, and the run
+// length is found by doubling and then bisecting, so the work follows the chunks one row takes,
+// not the span of positions between them. Every chunk holds at most 65,536 positions, so one chunk
+// is always below any limit a caller uses outside tests.
+func takeChunks(bm *roaring64.Bitmap, chunks []uint64, limit uint64) (*roaring64.Bitmap, int, error) {
+	part := func(n int) *roaring64.Bitmap {
+		p := roaring64.New()
+		for _, c := range chunks[:n] {
+			p.AddRange(c<<chunkBits, (c+1)<<chunkBits)
+		}
 
-		if part(mid).GetSerializedSizeInBytes() <= limit {
-			best, found = mid, true
-			lo = mid + 1
+		p.And(bm)
+
+		return p
+	}
+
+	fits := func(n int) bool { return part(n).GetSerializedSizeInBytes() <= limit }
+
+	if !fits(1) {
+		return nil, 0, errors.NewProcessingError("one chunk at position %d is larger than the %d-byte row limit", chunks[0]<<chunkBits, limit)
+	}
+
+	// good runs fit; bad is the shortest run known not to fit, or one past the end.
+	good, bad := 1, len(chunks)+1
+
+	for n := 2; n <= len(chunks); n *= 2 {
+		if !fits(n) {
+			bad = n
+
+			break
+		}
+
+		good = n
+	}
+
+	for bad-good > 1 {
+		mid := good + (bad-good)/2
+
+		if fits(mid) {
+			good = mid
 		} else {
-			if mid == 0 {
-				break
-			}
-
-			hi = mid - 1
+			bad = mid
 		}
 	}
 
-	if !found {
-		return nil, 0, errors.NewProcessingError("one chunk at position %d is larger than the %d-byte row limit", start, limit)
-	}
-
-	p := part(best)
+	p := part(good)
 	p.RunOptimize()
 
-	if best == lastChunk {
-		return p, 0, nil
-	}
-
-	it := bm.Iterator()
-	it.AdvanceIfNeeded((best + 1) << chunkBits)
-
-	if !it.HasNext() {
-		return p, 0, nil
-	}
-
-	return p, it.Next(), nil
+	return p, good, nil
 }
 
 // isFullRange reports whether bm holds every position from lowest to highest.

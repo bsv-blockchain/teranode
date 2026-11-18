@@ -148,6 +148,39 @@ func TestBuildMapRowsSplitsOnWholeChunks(t *testing.T) {
 	require.True(t, union.Equals(bm))
 }
 
+// A sparse bitmap over a very wide span splits at a cost that follows the chunks it holds. Each
+// position sits in its own chunk 2^32 positions from the next, so the span holds about 10^11
+// chunks and only 4,000 of them are occupied. A split that builds every candidate row over its
+// whole span of chunks, empty ones included, needs gigabytes here.
+func TestBuildMapRowsSplitsASparseWideBitmap(t *testing.T) {
+	bm := roaring64.New()
+	for i := uint64(0); i < 4000; i++ {
+		bm.Add(1 + i<<32)
+	}
+
+	const limit = 4 << 10
+
+	require.Greater(t, bm.GetSerializedSizeInBytes(), uint64(limit))
+
+	rows, err := buildMapRows(9, bm, limit)
+	require.NoError(t, err)
+	require.Greater(t, len(rows), 1)
+	require.NoError(t, CheckMapRows(rows))
+
+	union := roaring64.New()
+
+	for _, r := range rows {
+		require.LessOrEqual(t, uint64(len(r.HoleData)), uint64(limit))
+
+		parsed, err := r.Check()
+		require.NoError(t, err)
+		require.False(t, union.Intersects(parsed))
+		union.Or(parsed)
+	}
+
+	require.True(t, union.Equals(bm))
+}
+
 func TestBuildMapRowsSplitFailsWhenOneChunkIsTooBig(t *testing.T) {
 	bm := roaring64.New()
 	for p := uint64(1); p < 1<<16; p += 2 {
