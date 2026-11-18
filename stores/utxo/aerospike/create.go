@@ -1162,11 +1162,26 @@ func (s *Store) storeExternallyWithLock(
 		// the creating bin set. Quick validation used to stamp an existing
 		// transaction mined instead, which clears the bin; now, if the lock is
 		// still held when its repeats run out, its validation of the block fails
-		// with this storage error.
+		// with this storage error. Its repeats stop after the first pass with no
+		// progress, which is well inside the lock's 30 s minimum TTL.
+		// A master record with no creating bin means the clear finished (the master
+		// is cleared last), so a lock left by a failed release still answers
+		// ErrTxExists, as it did before.
 		// The lock's ErrTxExists is carried as text, not wrapped: errors.Is walks the
 		// chain, so a wrapped one would still read as done.
 		if len(bItem.blockIDs) > 0 && errors.Is(err, errors.ErrTxExists) {
-			bItem.complete(createMayHaveCommittedError(errors.NewStorageError("[%s] tx %s is locked by another create attempt, so its creating flag may not be cleared: %s", funcName, bItem.txHash, err.Error())))
+			cleared, readErr := s.masterCreatingCleared(bItem.txHash)
+			if cleared {
+				bItem.complete(err)
+				return
+			}
+
+			lockedErr := errors.NewStorageError("[%s] tx %s is locked by another create attempt, so its creating flag may not be cleared: %s", funcName, bItem.txHash, err.Error())
+			if readErr != nil {
+				lockedErr = errors.NewStorageError("[%s] tx %s is locked by another create attempt, and reading its master record failed: %s", funcName, bItem.txHash, err.Error(), readErr)
+			}
+
+			bItem.complete(createMayHaveCommittedError(lockedErr))
 			return
 		}
 
@@ -1468,6 +1483,31 @@ func (s *Store) prepareRecordKeys(txHash *chainhash.Hash, numRecords int) ([]*ae
 	}
 
 	return recordKeys, nil
+}
+
+// masterCreatingCleared reports whether the master record of a paginated transaction
+// exists without the creating bin. clearCreatingFlag clears the master last, so a
+// master with no creating bin means every record was cleared. A missing master, a
+// master that still has the bin, and a failed read all return false; only a failed
+// read returns an error.
+func (s *Store) masterCreatingCleared(txHash *chainhash.Hash) (bool, error) {
+	key, err := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySourceInternal(txHash, 0))
+	if err != nil {
+		return false, err
+	}
+
+	record, getErr := s.client.Get(util.GetAerospikeReadPolicy(s.settings), key, fields.Creating.String())
+	if getErr != nil {
+		if getErr.Matches(types.KEY_NOT_FOUND_ERROR) {
+			return false, nil
+		}
+
+		return false, getErr
+	}
+
+	_, creating := record.Bins[fields.Creating.String()]
+
+	return !creating, nil
 }
 
 // ensureCreatingBin ensures the creating bin is set to the specified value

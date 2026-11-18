@@ -853,6 +853,48 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 		requireAllCleared(t, parent)
 	})
 
+	t.Run("held lock over a cleared transaction answers exists", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		_, err := store.Create(ctx, parent, blockHeight, mined)
+		require.NoError(t, err)
+		requireAllCleared(t, parent)
+
+		// The create finished but its lock release failed, so the lock waits out
+		// its TTL over records that are already cleared.
+		lockKey, keyErr := aerospike.NewKey(store.GetNamespace(), store.GetName(),
+			uaerospike.CalculateKeySourceInternal(parent.TxIDChainHash(), teranodeaerospike.LockRecordIndex))
+		require.NoError(t, keyErr)
+		require.NoError(t, client.PutBins(nil, lockKey, aerospike.NewBin("lock_token", "left-behind")))
+
+		_, err = store.Create(ctx, parent, blockHeight, mined)
+		require.ErrorIs(t, err, errors.ErrTxExists, "a master with no creating bin means the clear finished")
+		require.False(t, utxo.IsCreateOutcomeUnknown(err))
+	})
+
+	t.Run("held lock over a master still creating is reported", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		failClears(1)
+
+		_, err := store.Create(ctx, parent, blockHeight, mined)
+		requireCreatingNotCleared(t, err)
+		require.True(t, hasCreatingBin(t, parent, 0), "the failed clear leaves the bin on the master")
+
+		lockKey, keyErr := aerospike.NewKey(store.GetNamespace(), store.GetName(),
+			uaerospike.CalculateKeySourceInternal(parent.TxIDChainHash(), teranodeaerospike.LockRecordIndex))
+		require.NoError(t, keyErr)
+		require.NoError(t, client.PutBins(nil, lockKey, aerospike.NewBin("lock_token", "left-behind")))
+
+		_, err = store.Create(ctx, parent, blockHeight, mined)
+		requireCreatingNotCleared(t, err)
+		require.ErrorContains(t, err, "transaction creation in progress or already exists", "the error carries the lock's own answer")
+	})
+
 	t.Run("lock write that fails for another reason is not outcome-unknown", func(t *testing.T) {
 		cleanDB(t, client)
 
