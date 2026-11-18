@@ -29,6 +29,8 @@ type DiskTxMapUint64Options struct {
 	BasePaths      []string
 	Prefix         string
 	FilterCapacity uint // expected number of transactions
+	// GrowAt is mmaphash.Options.GrowAt for every table: 0 grows a table only when a segment fills.
+	GrowAt float64
 }
 
 // NewDiskTxMapUint64 creates one mmap table per base path.
@@ -55,6 +57,7 @@ func NewDiskTxMapUint64(opts DiskTxMapUint64Options) (*DiskTxMapUint64, error) {
 			KeySize:   dtmKeySize,
 			ValueSize: dtmValueSize,
 			Expected:  perDisk,
+			GrowAt:    opts.GrowAt,
 		})
 		if err != nil {
 			for j := 0; j < i; j++ {
@@ -117,6 +120,15 @@ func (m *DiskTxMapUint64) Length() int {
 		n += tbl.Len()
 	}
 	return int(n)
+}
+
+// FileBytes returns the combined size of the tables' backing files, the disk they can occupy.
+func (m *DiskTxMapUint64) FileBytes() int64 {
+	var n int64
+	for _, tbl := range m.tables {
+		n += tbl.FileBytes()
+	}
+	return n
 }
 
 // Flush is a no-op: the mmap table is synchronous (no write buffer).

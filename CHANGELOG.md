@@ -31,6 +31,10 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **A streamed legacy block's duplicate map moves to disk past `legacy_streamDedupMaxInMemoryEntries`
+  (default 1,048,576).** Nodes syncing larger blocks need room under `<dataFolder>/legacy-dedup`:
+  172 MB, then 55–110 B per transaction, for each block converting at once. A block the free disk
+  cannot cover fails as a local fault and is asked for again. (#2111)
 - **Between two blocks of equal chain work, the node now keeps the one it stored first.** It used
   to switch to the block relayed by the lowest-sorting peer id, and a block this node mined, stored
   with an empty peer id, won every tie. Until the blockchain service and block assembly both run
