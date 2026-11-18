@@ -1,6 +1,7 @@
 package aerospike
 
 import (
+	"fmt"
 	"testing"
 
 	aerospike "github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -20,11 +21,10 @@ func TestEncodeVerifiedMarkerPayload(t *testing.T) {
 	childA := chainhash.HashH([]byte("a"))
 	childB := chainhash.HashH([]byte("b"))
 
-	payload, err := encodeVerifiedMarkerPayload([]aeropruner.MarkerChild{
+	payload := encodeVerifiedMarkerPayload([]aeropruner.MarkerChild{
 		{Hash: &childA, Offsets: []uint32{0, 7}},
 		{Hash: &childB},
 	})
-	require.NoError(t, err)
 
 	var decoded []any
 	require.NoError(t, msgpack.Unmarshal(payload, &decoded))
@@ -155,4 +155,114 @@ func TestObservePrunerNativeOpError(t *testing.T) {
 	s.observePrunerNativeOpError(&aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR})
 	require.False(t, s.useNativeVerifiedMarkerWrite(), "PARAMETER_ERROR turns sub-op 15 off")
 	require.True(t, s.useNativeTeranodeOps.Load(), "every other native op stays on")
+}
+
+// reflectionVerifiedMarkerPayload is the reflection-based encoding the hand-written
+// encoder replaced: the entries as []any, each offset boxed as int64, through msgpack.
+func reflectionVerifiedMarkerPayload(t testing.TB, children []aeropruner.MarkerChild) []byte {
+	t.Helper()
+
+	entries := make([]any, len(children))
+
+	for i, child := range children {
+		offsets := make([]any, len(child.Offsets))
+		for j, offset := range child.Offsets {
+			offsets[j] = int64(offset)
+		}
+
+		entries[i] = []any{child.Hash.String(), child.Hash.CloneBytes(), offsets}
+	}
+
+	payload, err := encodeNativeOpPayload(subOpAddVerifiedDeleted, []any{entries})
+	require.NoError(t, err)
+
+	return payload
+}
+
+// TestEncodeVerifiedMarkerPayloadMatchesMsgpack pins the hand-written encoder byte for
+// byte against the reflection encoding, across every array-header and integer width.
+func TestEncodeVerifiedMarkerPayloadMatchesMsgpack(t *testing.T) {
+	hashes := make([]chainhash.Hash, 70000)
+	for i := range hashes {
+		hashes[i] = chainhash.HashH([]byte{byte(i), byte(i >> 8), byte(i >> 16)})
+	}
+
+	seq := func(n int, start uint32) []uint32 {
+		out := make([]uint32, n)
+		for i := range out {
+			out[i] = start + uint32(i)
+		}
+
+		return out
+	}
+
+	one := func(offsets []uint32) []aeropruner.MarkerChild {
+		return []aeropruner.MarkerChild{{Hash: &hashes[0], Offsets: offsets}}
+	}
+
+	many := func(n int, offsets []uint32) []aeropruner.MarkerChild {
+		out := make([]aeropruner.MarkerChild, n)
+		for i := range out {
+			out[i] = aeropruner.MarkerChild{Hash: &hashes[i], Offsets: offsets}
+		}
+
+		return out
+	}
+
+	for _, tc := range []struct {
+		name     string
+		children []aeropruner.MarkerChild
+	}{
+		{"no children", nil},
+		{"a child with no offsets", one(nil)},
+		{"one offset", one([]uint32{0})},
+		{"offsets 127 and 128", one([]uint32{127, 128})},
+		{"offsets 255 and 256", one([]uint32{255, 256})},
+		{"offsets 65535 and 65536", one([]uint32{65535, 65536})},
+		{"uint32 values", one([]uint32{1 << 24, 0xffffffff})},
+		{"fixarray offsets limit", one(seq(15, 0))},
+		{"array16 offsets", one(seq(16, 0))},
+		{"array32 offsets", one(seq(65536, 0))},
+		{"fixarray children limit", many(15, []uint32{3})},
+		{"array16 children", many(16, []uint32{3, 200})},
+		{"array32 children", many(65536, nil)},
+		{"mixed", []aeropruner.MarkerChild{
+			{Hash: &hashes[1], Offsets: []uint32{0, 7, 300}},
+			{Hash: &hashes[2]},
+			{Hash: &hashes[3], Offsets: seq(20, 120)},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, reflectionVerifiedMarkerPayload(t, tc.children), encodeVerifiedMarkerPayload(tc.children))
+		})
+	}
+}
+
+// BenchmarkEncodeVerifiedMarkerPayload measures the store's own sub-op 15 encoder, the one the
+// pruner calls once per parent record. children is how many pruned children name that parent;
+// offsets is how many of its outputs each one claims.
+func BenchmarkEncodeVerifiedMarkerPayload(b *testing.B) {
+	for _, shape := range []struct{ children, offsets int }{{1, 1}, {1, 8}, {4, 1}, {16, 4}} {
+		b.Run(fmt.Sprintf("children=%d/offsets=%d", shape.children, shape.offsets), func(b *testing.B) {
+			children := make([]aeropruner.MarkerChild, shape.children)
+
+			for i := range children {
+				h := chainhash.HashH([]byte{byte(i), 0x55})
+				children[i].Hash = &h
+
+				for j := 0; j < shape.offsets; j++ {
+					children[i].Offsets = append(children[i].Offsets, uint32(i*shape.offsets+j))
+				}
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				if len(encodeVerifiedMarkerPayload(children)) == 0 {
+					b.Fatal("empty payload")
+				}
+			}
+		})
+	}
 }

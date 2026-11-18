@@ -22,24 +22,72 @@ func (s *Store) useNativeVerifiedMarkerWrite() bool {
 	return s.useNativeTeranodeOps.Load() && s.useNativeVerifiedMarker.Load()
 }
 
-// encodeVerifiedMarkerPayload builds the sub-op 15 payload [15, [entries]].
+// encodeVerifiedMarkerPayload writes the sub-op 15 payload [15, [entries]] directly.
 // Each entry is [key, txid, offsets]: the child txid as the deletedChildren key
-// (chainhash.Hash.String()), the same txid as 32 bytes in internal order, which
-// the server compares with bytes 32 to 64 of the utxos element, and the utxos
-// indexes the child claims on this record.
-func encodeVerifiedMarkerPayload(children []aeropruner.MarkerChild) ([]byte, error) {
-	entries := make([]any, len(children))
+// (chainhash.Hash.String(), 64 hex digits in display order), the same txid as 32
+// bytes in internal order, which the server compares with bytes 32 to 64 of the
+// utxos element, and the utxos indexes the child claims on this record.
+//
+// The bytes are identical to encodeNativeOpPayload(subOpAddVerifiedDeleted,
+// []any{entries}) with the entries built as []any{hex, raw, []any{int64...}}.
+// Writing them into one pre-sized buffer avoids the hex strings, the []any
+// boxing and msgpack's reflection, which the pruner pays once per parent record.
+// TestEncodeVerifiedMarkerPayloadMatchesMsgpack pins the equality.
+func encodeVerifiedMarkerPayload(children []aeropruner.MarkerChild) []byte {
+	const hexDigits = "0123456789abcdef"
 
-	for i, child := range children {
-		offsets := make([]any, len(child.Offsets))
-		for j, offset := range child.Offsets {
-			offsets[j] = int64(offset)
-		}
+	const hexLen = chainhash.HashSize * 2
 
-		entries[i] = []any{child.Hash.String(), child.Hash.CloneBytes(), offsets}
+	// fixarray(2) + uint8(subOp) + fixarray(1) + array header (up to 5 bytes), then per
+	// child: fixarray(3) + str8 header and 64 hex digits + bin8 header and 32 bytes +
+	// offsets array header (up to 5 bytes) + 9 bytes per offset (int64).
+	size := 4 + 5
+
+	for _, child := range children {
+		size += 1 + (2 + hexLen) + (2 + chainhash.HashSize) + 5 + 9*len(child.Offsets)
 	}
 
-	return encodeNativeOpPayload(subOpAddVerifiedDeleted, []any{entries})
+	buf := make([]byte, 0, size)
+
+	buf = append(buf, 0x92, 0xcc, subOpAddVerifiedDeleted, 0x91)
+	buf = appendMsgpackArrayHeader(buf, len(children))
+
+	for _, child := range children {
+		buf = append(buf, 0x93, 0xd9, hexLen)
+
+		for i := chainhash.HashSize - 1; i >= 0; i-- {
+			buf = append(buf, hexDigits[child.Hash[i]>>4], hexDigits[child.Hash[i]&0x0f])
+		}
+
+		buf = append(buf, 0xc4, chainhash.HashSize)
+		buf = append(buf, child.Hash[:]...)
+
+		buf = appendMsgpackArrayHeader(buf, len(child.Offsets))
+
+		for _, offset := range child.Offsets {
+			buf = appendMsgpackInt64(buf, offset)
+		}
+	}
+
+	return buf
+}
+
+// appendMsgpackArrayHeader appends the shortest MessagePack array header for n elements.
+func appendMsgpackArrayHeader(buf []byte, n int) []byte {
+	switch {
+	case n < 16:
+		return append(buf, 0x90|byte(n))
+	case n <= 0xffff:
+		return append(buf, 0xdc, byte(n>>8), byte(n))
+	default:
+		return append(buf, 0xdd, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
+	}
+}
+
+// appendMsgpackInt64 appends v as a MessagePack int64, the width msgpack.Marshal gives an
+// int64 value, so the payload is byte for byte what the reflection encoding wrote.
+func appendMsgpackInt64(buf []byte, v uint32) []byte {
+	return append(buf, 0xd3, 0, 0, 0, 0, byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
 }
 
 // newVerifiedMarkerWrite builds the native marker write for one parent record.
@@ -57,19 +105,13 @@ func newVerifiedMarkerWrite(key *aerospike.Key, payload []byte) *aerospike.Batch
 
 // prunerVerifiedMarkerRecord is the pruner's Options.BuildVerifiedMarkerRecord.
 // It returns false when the marker write must take the filtered path: native
-// sub-op 15 is off, or the payload could not be encoded.
+// sub-op 15 is off.
 func (s *Store) prunerVerifiedMarkerRecord(key *aerospike.Key, children []aeropruner.MarkerChild) (aerospike.BatchRecordIfc, bool) {
 	if !s.useNativeVerifiedMarkerWrite() {
 		return nil, false
 	}
 
-	payload, err := encodeVerifiedMarkerPayload(children)
-	if err != nil {
-		s.logger.Warnf("[teranode-native-op] addVerifiedDeletedChildren payload encode failed: %v; this marker write uses the filtered path", err)
-		return nil, false
-	}
-
-	return newVerifiedMarkerWrite(key, payload), true
+	return newVerifiedMarkerWrite(key, encodeVerifiedMarkerPayload(children)), true
 }
 
 // observePrunerNativeOpError is the pruner's Options.ObserveNativeOpError. A
@@ -195,12 +237,7 @@ func (s *Store) detectNativeVerifiedMarkerSupport(ctx context.Context) bool {
 // the production record builder in a batch, as the pruner does. It returns the
 // response's error code, empty for OK, or the record's wire error.
 func (s *Store) probeVerifiedMarker(key *aerospike.Key, child *chainhash.Hash, offset uint32) (LuaErrorCode, error) {
-	payload, err := encodeVerifiedMarkerPayload([]aeropruner.MarkerChild{{Hash: child, Offsets: []uint32{offset}}})
-	if err != nil {
-		return "", err
-	}
-
-	record := newVerifiedMarkerWrite(key, payload)
+	record := newVerifiedMarkerWrite(key, encodeVerifiedMarkerPayload([]aeropruner.MarkerChild{{Hash: child, Offsets: []uint32{offset}}}))
 
 	batchPolicy := aerospike.NewBatchPolicy()
 	batchPolicy.TotalTimeout = 2 * time.Second
