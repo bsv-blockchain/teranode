@@ -1413,6 +1413,13 @@ The failure mode is not a crash and not a backlog; it is the coin archive stoppi
 node looks healthy. The asymmetry is intended and the mismatch of names is not, so this goes to
 open questions rather than being called a bug.
 
+**Correction after review.** The "legal block whose deletions ledger will never appear" does not
+exist: `NewUTXOSet` always creates the deletions file with its header, and `UTXOSet.Close`
+finalises additions before deletions. A missing deletions ledger means "not written yet" or
+"half written", never "spent nothing". Tolerating it would roll the block into the set with
+every spent output still present. The tolerance is removed and the error propagates, which is
+the stall `Server.go` documents as the "not written yet" signal.
+
 ## 43. The archive's lag and the retention that deletes working files are numbers in different repositories — and they apply to different files
 
 **Structural, and unmeasured.**

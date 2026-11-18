@@ -40,6 +40,10 @@ import (
 // partition-alignment promise is lost. A zero in these bytes is a batch
 // still on the topic from a pre-buckets producer: parse it as v2, skip the
 // comparison.
+//
+// Upgrade order: a receiver built before this field existed requires bytes 2:4
+// to be zero, reads a batch with a non-zero count as v1 and drops it. Upgrade
+// every receiver before any producer that publishes v2.
 
 const (
 	// WireActionADD signals that the entry's content carries a serialized
