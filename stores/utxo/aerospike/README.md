@@ -30,7 +30,7 @@ external - true if transaction data is in external store
 totalExtraRecs - total number of extra records for pagination
 spentExtraRecs - number of spent extra records
 utxoSpendableIn - map of UTXO-specific freeze heights
-creating - true while a transaction split across several records is being written (absent when not creating)
+creating - true while storeExternallyWithLock writes the transaction's records (absent when not creating)
 ```
 
 ### Large Transaction with External Storage (< 20,000 outputs)
@@ -86,22 +86,37 @@ end
 
 ## Multi-Record Creation (the `creating` bin)
 
-A transaction with many outputs is stored as a master record plus extra records. The store writes them in two phases, so a reader never sees a half-written transaction as spendable. The code is `storeExternallyWithLock` and `clearCreatingFlag` in `create.go`. A single-record create never sets the `creating` bin.
+A transaction with many outputs is stored as a master record plus extra records. The store writes them in two phases, so a reader never sees a half-written transaction as spendable. The code is `storeExternallyWithLock` and `clearCreatingFlag` in `create.go`.
+
+`storeExternallyWithLock` sets the `creating` bin on every record that it writes. It handles two cases:
+
+- A transaction split across several records.
+- A single-record transaction that `sendStoreBatch` retries after `RECORD_TOO_BIG`. The bin is then set on its only record.
+
+The plain single-record path, including a single-record `external` transaction, does not set the bin.
 
 1. **Write phase**: the store creates every record with `creating` set to `true`.
-2. **Clear phase**: the store deletes the `creating` bin from the extra records first, and from the master record last. A master record without the bin means the transaction is complete.
+2. **Clear phase**: `clearCreatingFlag` deletes the bin from the extra records first. It deletes the bin from the master record only if every extra record cleared. If an extra record fails, the master keeps the bin. The usual stuck state is therefore: some extra records clear, and the master is still marked.
 
 While `creating` is `true`, the Lua `spend` function refuses to spend the record and returns the error code `CREATING`.
 
 ### Recovery
 
-If the clear phase fails or the process stops, the records stay in the `creating` state. Three paths act on them:
+If the clear phase fails or the process stops, the records stay in the `creating` state. These paths act on them:
 
-1. **Validator retry**: a child transaction that hits `ErrTxCreating` on a parent retries validation with exponential backoff. It gives up after `maxRetries`. See `ValidateWithOptions` in `Validator.go`.
-2. **Subtree validation**: a transaction with `Creating == true` counts as missing, so subtree validation processes it again. See `processTxMetaUsingStore.go`.
-3. **setMined**: the Lua `setMined` function deletes the `creating` bin when the transaction is mined into a block.
+1. **Subtree validation**: subtree validation reads only the master record. If the master has `Creating == true`, the transaction counts as missing, and subtree validation processes it again. See `processTxMetaUsingStore.go`.
+2. **Re-create**: the create path tries once to clear the flag after a `KEY_EXISTS_ERROR`, before it reports the transaction as existing. A second store of the same transaction therefore repeats the clear phase.
+3. **setMined**: the Lua `setMined` function (and `set_mined_expressions.go`) deletes the `creating` bin from the master record when the transaction is mined. It does not touch the extra records.
 
-The create path also tries once to clear the flag after a `KEY_EXISTS_ERROR`, before it reports the transaction as existing.
+`setMined` can clear the master while an extra record still has the bin. In that state:
+
+- The outputs on that extra record still return `CREATING`.
+- Subtree validation sees a complete master and does not process the transaction again.
+- Only a re-create of the same transaction clears the extra record, and nothing schedules one.
+
+A master record without the bin therefore does not prove that every extra record is clear. Issue #2175 tracks this gap.
+
+The validator retry does not act on the records. A child transaction that hits `ErrTxCreating` on a parent retries validation with exponential backoff (see `ValidateWithOptions` in `Validator.go`). This covers only the window while the clear phase is still in flight. The setting `validator_txlocked_maxRetries` controls the retry count. The default is 3 (10/20/40ms, about 70ms in total), and values above 10 are clamped. The `TX_LOCKED` retry uses the same budget. If the clear phase failed for good, the child uses all of its retries and the validator rejects it. The metric `teranode_validator_parent_commit_exhausted` counts these rejections, with the label `condition="TX_CREATING"`.
 
 ## Lua Bridge Interface
 
