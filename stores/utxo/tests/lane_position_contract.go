@@ -283,6 +283,27 @@ func LanePositionFromSource(t *testing.T, db utxostore.Store) {
 		requireNotStored(t, db, w.Roots[0])
 	})
 
+	t.Run("invalid named position fails without allocating or writing", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xf6, 1, 1)
+		source := NewScriptedLanePositions(1)
+		useLanePositionSource(t, db, source)
+		_, _, err := db.SpendAndCreate(ctx, w.Roots[0], 930,
+			utxostore.WithCreateOnly(), utxostore.WithLanePosition(1<<56))
+		require.Error(t, err)
+		require.Zero(t, source.Calls(), "invalid explicit metadata must not be replaced")
+		requireNotStored(t, db, w.Roots[0])
+	})
+
+	t.Run("invalid source position fails without writing", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xf7, 1, 1)
+		source := NewScriptedLanePositions(0)
+		useLanePositionSource(t, db, source)
+		_, _, err := db.SpendAndCreate(ctx, w.Roots[0], 930, utxostore.WithCreateOnly())
+		require.ErrorIs(t, err, errors.ErrProcessing)
+		require.Equal(t, 1, source.Calls(), "invalid source output must not be retried")
+		requireNotStored(t, db, w.Roots[0])
+	})
+
 	t.Run("a spend-and-create with no position spends nothing", func(t *testing.T) {
 		w := BuildMultiWorkload(t, 0xf5, 1, 1)
 		w.StoreRoots(t, db, 930)

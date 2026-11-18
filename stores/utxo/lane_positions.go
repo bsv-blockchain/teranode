@@ -1,6 +1,11 @@
 package utxo
 
-import "context"
+import (
+	"context"
+
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/util/lane"
+)
 
 // LanePositionSource hands out lane positions (util/lane), one per record. Next waits a bounded time
 // for a position, then fails with a service-unavailable error, and the create fails with it: no
@@ -38,13 +43,27 @@ func (l *LanePositions) SetLanePositionSource(source LanePositionSource) {
 }
 
 // Take returns the position for the record that o describes: the caller's own if it named one,
-// zero with no source, otherwise the source's next. It fails when the source has none to give.
+// zero with no source, otherwise the source's next. With a source set, an invalid explicit or
+// returned position fails; it is never replaced by a fresh allocation or written as zero.
 func (l *LanePositions) Take(ctx context.Context, o *CreateOptions) (uint64, error) {
-	if o.LanePosition != 0 || l.source == nil {
+	if l.source == nil {
 		return o.LanePosition, nil
 	}
 
-	return l.source.Next(ctx)
+	position := o.LanePosition
+	if position == lane.None {
+		var err error
+		position, err = l.source.Next(ctx)
+		if err != nil {
+			return lane.None, err
+		}
+	}
+
+	if !lane.Valid(position) {
+		return lane.None, errors.NewProcessingError("lane positions enabled: invalid lane position %d", position)
+	}
+
+	return position, nil
 }
 
 // TakeLanePosition implements LanePositionTaker.
@@ -61,7 +80,7 @@ func (l *LanePositions) TakeLanePositions(ctx context.Context, n int) ([]uint64,
 	positions := make([]uint64, n)
 
 	for i := range positions {
-		p, err := l.source.Next(ctx)
+		p, err := l.Take(ctx, &CreateOptions{})
 		if err != nil {
 			return nil, err
 		}
