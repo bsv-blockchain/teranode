@@ -234,7 +234,26 @@ func TestSpendRollbackReversesOrphanWhenASiblingParentIsMissing(t *testing.T) {
 // and Spend must hand its idempotent matches to the rollback so the marker is
 // read again there and the match stays. The direct test of the rollback,
 // TestRollbackKeepsAMatchMarkedAfterTheSpendRead, does not go through Spend.
+//
+// The same prune is also committed after the probe and before the marker read, the window the
+// order of those two reads exists for: a probe that found no spender has already seen the marker,
+// because the prune commits the marker and the spender's delete together, so reading the marker
+// after the probe closes it, and reading it before would not.
 func TestSpendRollbackKeepsAMatchMarkedBeforeTheProbe(t *testing.T) {
+	for _, window := range []struct {
+		name string
+		hook *func()
+	}{
+		{name: "before the probe", hook: &spendBeforeRollbackProbe},
+		{name: "after the probe", hook: &spendAfterRollbackProbe},
+	} {
+		t.Run(window.name, func(t *testing.T) {
+			testSpendRollbackKeepsAMatchMarkedInWindow(t, window.hook)
+		})
+	}
+}
+
+func testSpendRollbackKeepsAMatchMarkedInWindow(t *testing.T, hook *func()) {
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		newParent := func(seed string, create bool) *bt.Tx {
 			parent := bt.NewTx()
@@ -286,7 +305,7 @@ func TestSpendRollbackKeepsAMatchMarkedBeforeTheProbe(t *testing.T) {
 			hookErr error
 		)
 
-		spendBeforeRollbackProbe = func() {
+		*hook = func() {
 			hookRan = true
 
 			_, hookErr = store.db.ExecContext(ctx,
@@ -294,7 +313,7 @@ func TestSpendRollbackKeepsAMatchMarkedBeforeTheProbe(t *testing.T) {
 				p.TxIDChainHash()[:], child.TxIDChainHash()[:])
 		}
 
-		t.Cleanup(func() { spendBeforeRollbackProbe = nil })
+		t.Cleanup(func() { *hook = nil })
 
 		_, err = store.Spend(ctx, child, 1000)
 		require.ErrorIs(t, err, errors.ErrSpent, "Q:0 is spent by D")

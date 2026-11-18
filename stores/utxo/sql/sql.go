@@ -2524,6 +2524,10 @@ func (s *Store) probeAndRollbackPartialSpends(tx *bt.Tx, rollback, idempotent []
 		return
 	}
 
+	if spendAfterRollbackProbe != nil {
+		spendAfterRollbackProbe()
+	}
+
 	if rollback = s.withoutMarkedMatches(rbCtx, tx, rollback, idempotent); len(rollback) == 0 {
 		return
 	}
@@ -4115,6 +4119,11 @@ var spendBeforeRecheck func()
 // probeAndRollbackPartialSpends, before the existence probe. It is nil outside
 // tests, which use it to commit a prune's marker after the spend's reads.
 var spendBeforeRollbackProbe func()
+
+// spendAfterRollbackProbe runs when the rollback's existence probe has found no spender, before the
+// replay markers are read again. It is nil outside tests, which use it to commit a prune's marker
+// after the probe, the one window the marker read has to close.
+var spendAfterRollbackProbe func()
 
 // setDAHAfterLock runs in setDAH right after the Postgres row lock is taken and before
 // the eligibility read. It is nil outside tests, which use it to observe lock order and
