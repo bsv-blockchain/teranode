@@ -183,11 +183,11 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr st
 // Retry budget for the pruning transaction. The transaction below is opened
 // with s.db.BeginTx, which resolves to the embedded stdlib method: every
 // txn.ExecContext on it is a raw *sql.Tx call that does NOT go through usql's
-// per-statement retry or its circuit breaker. On Postgres a SERIALIZABLE
-// transaction can abort with 40001 against the concurrent spend traffic, and on
-// SQLite a deferred transaction that starts as a reader can fail to upgrade with
-// SQLITE_BUSY_SNAPSHOT, which busy_timeout cannot wait out. Both are safe to
-// retry by re-running the whole transaction, so the retry lives here.
+// per-statement retry or its circuit breaker. On Postgres the transaction can be
+// chosen as the victim of a deadlock (40P01), and on SQLite a deferred transaction
+// that starts as a reader can fail to upgrade with SQLITE_BUSY_SNAPSHOT, which
+// busy_timeout cannot wait out. Both are safe to retry by re-running the whole
+// transaction, so the retry lives here.
 // Mirrors stores/blockchain/sql/sql.go rebuildOnMainChainFlag.
 const (
 	maxPruneAttempts   = 3
@@ -461,49 +461,61 @@ func (e *pruneStepError) Unwrap() error { return e.err }
 // from the chain. Anything narrower needs a source of truth this table does not
 // have: whether the absent spender was mined and pruned, or merely lost.
 func (s *Service) deleteTombstonedTx(ctx context.Context, blockHeight uint32) (deleted, heldBack int64, err error) {
-	// Every statement below is built from string constants only. The one
-	// runtime join appends the constant excludeConflicting, and no part of the
-	// SQL is ever built from data.
+	// Every statement below is built from string constants only. The runtime
+	// joins append the constants excludeConflicting and candidateLockSuffix, and
+	// no part of the SQL is ever built from data.
 	//
-	// Non-defensive mode (the deployed configuration) needs no candidates table:
-	// its predicate cannot be changed by anything inside this transaction, so
-	// the marker INSERT and the DELETE can share the same sub-select. That also
-	// makes the first statement a write, so SQLite takes its write lock straight
-	// away instead of upgrading later.
+	// The transaction runs at READ COMMITTED. Its three decisions (which rows are
+	// candidates, which of them are held back, and which markers to write) are
+	// each made once, into the utxo_prune_candidates temp table, and the marker
+	// INSERT and the DELETE are both driven from that table by id. They cannot
+	// disagree about the set: a child is deleted exactly when it is in the
+	// table and not held back, and it gets its markers in the same transaction.
 	//
-	// Defensive mode has to materialise, because the marker INSERT changes the
-	// defensive predicate: a newly marked parent becomes eligible, and
-	// re-evaluating in the DELETE would remove parents that never got markers of
-	// their own.
-	if !s.defensiveEnabled {
-		return s.pruneWithoutDefensiveCheck(ctx, blockHeight)
+	// What isolation alone could not give, the row locks do. On Postgres the
+	// candidate rows are locked (FOR NO KEY UPDATE, ascending id, SKIP LOCKED)
+	// by the statement that selects them, so a writer that touches a candidate
+	// afterwards, such as setDAH bumping the stamp of a parent whose child is
+	// replayed, waits for this transaction and then finds the row gone. A row
+	// another transaction already holds is skipped and tried again next block.
+	// SERIALIZABLE gave the same protection by aborting the whole prune with a
+	// serialization failure on the first such touch, which any caller could cause
+	// by resubmitting an already mined transaction. A locked row is skipped here
+	// instead, and no outside write can abort the transaction.
+	//
+	// The hold-back verdict is a later statement, so it reads the parents'
+	// outputs after the locks are held. It still reads rows this transaction does
+	// not lock (a parent output can be released between the verdict and the
+	// DELETE), which is the same state as an Unspend that lands just after the
+	// prune commits: the marker then names an output that no longer records its
+	// child, and the spend path only refuses a marked child while the output
+	// still names it.
+	if s.defensiveEnabled {
+		return s.pruneCandidates(ctx, blockHeight, defensiveCandidatesQuery(s.reapConflicting != nil), s.safetyWindow)
 	}
 
-	return s.pruneWithDefensiveCheck(ctx, blockHeight)
+	return s.pruneCandidates(ctx, blockHeight, nonDefensiveCandidatesQuery, nil)
 }
 
-// beginPruneTx opens the pruning transaction.
 // pruneTxOptions is the isolation the pruning transaction asks for.
 //
-// Isolation note, corrected. LevelSerializable is honoured by Postgres only.
-// modernc.org/sqlite's conn.BeginTx reads opts.ReadOnly and the DSN _txlock mode
-// and never inspects opts.Isolation, and because the driver implements
-// driver.ConnBeginTx, database/sql does not reject the level either. util/sql.go
-// builds the SQLite DSN with no _txlock, so what we actually get there is a
-// plain deferred BEGIN. The cross-statement atomicity the pruner needs still
-// holds on SQLite - one writer at a time, and the transaction rolls back as a
-// unit - but it holds because SQLite serialises writers, not because the level
-// was asked for. A deferred BEGIN that starts as a reader can also fail to
-// upgrade with SQLITE_BUSY_SNAPSHOT, which is why deleteTombstoned retries the
-// whole transaction.
-var pruneTxOptions = &sql.TxOptions{Isolation: sql.LevelSerializable}
+// READ COMMITTED, the default. See deleteTombstonedTx for what the temp table
+// and the row locks give in place of a serializable snapshot. modernc.org/sqlite's
+// conn.BeginTx reads opts.ReadOnly and the DSN _txlock mode and never inspects
+// opts.Isolation, and util/sql.go builds the SQLite DSN with no _txlock, so what
+// SQLite gets is a plain deferred BEGIN. The cross-statement atomicity the pruner
+// needs still holds there: one writer at a time, and the transaction rolls back as
+// a unit. A deferred BEGIN that starts as a reader can fail to upgrade with
+// SQLITE_BUSY_SNAPSHOT, which is why deleteTombstoned retries the whole
+// transaction.
+var pruneTxOptions = &sql.TxOptions{Isolation: sql.LevelReadCommitted}
 
 // finishPrune reads the delete's row count and commits. Nothing runs between
 // the DELETE and the COMMIT except RowsAffected, which reads a value the driver
 // already holds: any statement placed there would throw away a completed prune
 // if it failed, and on Postgres a failed statement aborts the transaction, so
-// even ignoring its error would not save the DELETE. That is why the candidate
-// count the held-back figure comes from runs before the DELETE, not after it.
+// even ignoring its error would not save the DELETE. That is why the held-back
+// count comes from the hold-back statement, which runs before the DELETE.
 func finishPrune(txn *sql.Tx, result sql.Result) (int64, error) {
 	deleted, err := result.RowsAffected()
 	if err != nil {
@@ -517,27 +529,83 @@ func finishPrune(txn *sql.Tx, result sql.Result) (int64, error) {
 	return deleted, nil
 }
 
-// The unverified-claim clause, written out in full in each query below so
-// every statement is one literal (TestUnverifiedClaimClauseIsIdentical keeps
-// the copies identical), selects an input of the transaction row in scope
-// whose parent record is present but whose output does not carry well-formed
-// spending data: no such output row, NULL spending data, or fewer than the 36
-// bytes of txid and vin.
-//
-// The clause gates the marker INSERT and the DELETE alike on both pruning paths,
-// so a held-back child gets no marker anywhere: the spend path refuses an
-// idempotent re-spend by a marked child, so a marker on a child that stays
-// would refuse that live child's own re-spend.
-//
-// A conflicting row never matches. ProcessConflicting releases every input of
-// a loser and of each descendant it cascades to, the uncontested ones too, so a
-// loser always has an input that looks like a rolled-back claim, and holding it
-// back would keep it forever. It needs no marker for those inputs: a replay of
-// it meets the winner's spend and is stored as conflicting again.
+// candidateLockSuffix is appended to a candidate selection on Postgres. It takes
+// the row lock the DELETE needs, in the order the SetMinedMulti lock uses, and
+// skips a row another transaction holds rather than waiting for it, so the prune
+// cannot join a lock cycle with a spend batch.
+const candidateLockSuffix = `
+ORDER BY t.id FOR NO KEY UPDATE OF t SKIP LOCKED`
 
-// pruneWithoutDefensiveCheck marks and deletes every transaction past its
-// expiration, with no child-stability verification.
-func (s *Service) pruneWithoutDefensiveCheck(ctx context.Context, blockHeight uint32) (deleted, heldBack int64, err error) {
+// nonDefensiveCandidatesQuery selects every record past its expiration.
+const nonDefensiveCandidatesQuery = `INSERT INTO utxo_prune_candidates (id)
+SELECT t.id
+FROM transactions t
+WHERE t.delete_at_height IS NOT NULL
+  AND t.delete_at_height <= $1
+  AND (t.unmined_since IS NULL OR t.conflicting)`
+
+// defensiveCandidatesQuery selects the records whose spending children are all
+// mined and stable. With a reap function, expired conflicting records are left
+// to reapExpiredConflicting, which clears the spends their parents hold to them
+// before deleting them. Both fragments are constants.
+func defensiveCandidatesQuery(reap bool) string {
+	q := `INSERT INTO utxo_prune_candidates (id)
+SELECT t.id
+FROM transactions t
+WHERE ` + DefensiveDeleteFilter
+
+	if reap {
+		q += excludeConflicting
+	}
+
+	return q
+}
+
+// pruneCandidates runs the pruning transaction: select and lock the candidates,
+// decide which of them are held back, write a marker for each parent output that
+// records a deleted candidate as its spender, then delete the candidates that
+// were not held back.
+//
+// candidatesQuery inserts the candidate ids into utxo_prune_candidates. Its
+// arguments are blockHeight followed by safetyWindow when one is given.
+func (s *Service) pruneCandidates(ctx context.Context, blockHeight uint32, candidatesQuery string, safetyWindow any) (deleted, heldBack int64, err error) {
+	const dropStale = `DROP TABLE IF EXISTS utxo_prune_candidates`
+
+	// held_back is 0 until the hold-back statement flags a candidate.
+	const createCandidatesPostgres = `CREATE TEMP TABLE utxo_prune_candidates (id BIGINT PRIMARY KEY, held_back INTEGER NOT NULL DEFAULT 0) ON COMMIT DROP`
+
+	const createCandidatesPortable = `CREATE TEMP TABLE utxo_prune_candidates (id BIGINT PRIMARY KEY, held_back INTEGER NOT NULL DEFAULT 0)`
+
+	// The unverified-claim clause. A candidate is held back when one of its
+	// inputs names a parent record that is present but whose output does not
+	// carry well-formed spending data: no such output row, NULL spending data, or
+	// fewer than the 36 bytes of txid and vin. That is what a rolled-back spend
+	// leaves. Such a child would get no marker, and a replay of it would then be
+	// recreated and spend that output cleanly, so it stays. A parent output
+	// naming a different, well-formed spender (a conflicting loser) does not hold
+	// the child back, and a parent that is gone needs no marker. The Aerospike
+	// pruner applies the same rule in keepSpendHolders.
+	//
+	// The one statement feeds both the marker INSERT and the DELETE, so a
+	// held-back child gets no marker anywhere: the spend path refuses an
+	// idempotent re-spend by a marked child, so a marker on a child that stays
+	// would refuse that live child's own re-spend.
+	//
+	// A conflicting row never matches. ProcessConflicting releases every input of
+	// a loser and of each descendant it cascades to, the uncontested ones too, so
+	// a loser always has an input that looks like a rolled-back claim, and holding
+	// it back would keep it forever. It needs no marker for those inputs: a replay
+	// of it meets the winner's spend and is stored as conflicting again.
+	const holdBackQuery = `UPDATE utxo_prune_candidates SET held_back = 1
+WHERE EXISTS (SELECT 1
+  FROM transactions child
+  JOIN inputs hi ON hi.transaction_id = child.id
+  JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
+  LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
+  WHERE child.id = utxo_prune_candidates.id
+    AND NOT child.conflicting
+    AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36))`
+
 	// The join to outputs is load-bearing, not a tidier way to reach the parent.
 	// An input naming a parent outpoint proves only that this child ASKED for it;
 	// a conflicting loser references the same outpoint and never won it, and
@@ -546,105 +614,10 @@ func (s *Service) pruneWithoutDefensiveCheck(ctx context.Context, blockHeight ui
 	// today, but it would refuse that loser's own spend if it ever won the output
 	// after an Unspend. Only the child the output actually records as its spender
 	// gets a marker, the rule the Aerospike pruner's filter applies.
-	const markerQuery = `INSERT INTO deleted_children (parent_id, child_hash)
-  SELECT DISTINCT parent.id, child.hash
-  FROM transactions child
-  JOIN inputs i ON i.transaction_id = child.id
-  JOIN transactions parent ON parent.hash = i.previous_transaction_hash
-  JOIN outputs o ON o.transaction_id = parent.id
-    AND o.idx = i.previous_tx_idx
-    AND substr(o.spending_data, 1, 32) = child.hash
-  WHERE child.delete_at_height IS NOT NULL
-    AND child.delete_at_height <= $1
-    AND (child.unmined_since IS NULL OR child.conflicting)
-    AND NOT EXISTS (SELECT 1
-      FROM inputs hi
-      JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
-      LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
-      WHERE hi.transaction_id = child.id
-        AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36) AND NOT child.conflicting)
-  ON CONFLICT (parent_id, child_hash) DO NOTHING`
-
-	// A candidate whose claimed parent output is present but unspent, or
-	// malformed, is held back: it would get no marker, and a replay of it would
-	// then be recreated and spend that output cleanly. That is what a
-	// rolled-back spend leaves. A parent output naming a different, well-formed
-	// spender (a conflicting loser) does not hold the child back, and a parent
-	// that is gone needs no marker. The Aerospike pruner applies the same rule
-	// in keepSpendHolders.
-	const deleteQuery = `DELETE FROM transactions
-  WHERE delete_at_height IS NOT NULL
-    AND delete_at_height <= $1
-    AND (unmined_since IS NULL OR conflicting)
-    AND NOT EXISTS (SELECT 1
-      FROM inputs hi
-      JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
-      LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
-      WHERE hi.transaction_id = transactions.id
-        AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36) AND NOT transactions.conflicting)`
-
-	// The rows the DELETE considers: its own predicate without the hold-back
-	// clause, an index range on delete_at_height with no per-input check. The
-	// candidates the DELETE does not remove are the held-back ones, so heldBack
-	// is this count minus the rows it deleted. It runs in the same transaction,
-	// so nothing can change the answer in between, and a failure here costs
-	// only the uncommitted marker INSERT, never a completed DELETE.
-	const candidatesQuery = `SELECT count(*) FROM transactions
-  WHERE delete_at_height IS NOT NULL
-    AND delete_at_height <= $1
-    AND (unmined_since IS NULL OR conflicting)`
-
-	txn, err := s.db.BeginTx(ctx, pruneTxOptions)
-	if err != nil {
-		return 0, 0, &pruneStepError{step: "failed to begin pruning transaction", err: err}
-	}
-
-	defer func() { _ = txn.Rollback() }()
-
-	if _, err := txn.ExecContext(ctx, markerQuery, blockHeight); err != nil {
-		return 0, 0, &pruneStepError{step: "failed to mark pruned children", err: err}
-	}
-
-	var candidates int64
-	if err := txn.QueryRowContext(ctx, candidatesQuery, blockHeight).Scan(&candidates); err != nil {
-		return 0, 0, &pruneStepError{step: "failed to count pruning candidates", err: err}
-	}
-
-	result, err := txn.ExecContext(ctx, deleteQuery, blockHeight)
-	if err != nil {
-		return 0, 0, &pruneStepError{step: "failed to delete transactions", err: err}
-	}
-
-	if deleted, err = finishPrune(txn, result); err != nil {
-		return 0, 0, err
-	}
-
-	return deleted, candidates - deleted, nil
-}
-
-// pruneWithDefensiveCheck verifies that every spending child of a candidate is
-// mined and stable before deleting it, so no child is orphaned.
-//
-// The candidates are materialised into a temp table first. Temporary tables are
-// connection-local and this transaction owns the connection until commit or
-// rollback. Postgres drops it at COMMIT via ON COMMIT DROP; SQLite has no such
-// clause and keeps a committed temp table on the connection, so the leading
-// DROP TABLE IF EXISTS clears any leftover. Neither adds a failure path AFTER
-// the delete has already happened, which is the point: an explicit DROP running
-// after RowsAffected throws away a completed prune if it errors.
-func (s *Service) pruneWithDefensiveCheck(ctx context.Context, blockHeight uint32) (deleted, heldBack int64, err error) {
-	const dropStale = `DROP TABLE IF EXISTS utxo_prune_candidates`
-
-	const createCandidatesPostgres = `CREATE TEMP TABLE utxo_prune_candidates ON COMMIT DROP AS
-			SELECT t.id
-			FROM transactions t
-			WHERE ` + DefensiveDeleteFilter
-
-	const createCandidatesPortable = `CREATE TEMP TABLE utxo_prune_candidates AS
-			SELECT t.id
-			FROM transactions t
-			WHERE ` + DefensiveDeleteFilter
-
+	//
+	// A parent that is itself deleted by this prune gets no marker: the cascade
+	// would remove it again before the commit, after a foreign-key lock and a
+	// heap write for nothing.
 	const markerQuery = `INSERT INTO deleted_children (parent_id, child_hash)
   SELECT DISTINCT parent.id, child.hash
   FROM utxo_prune_candidates candidate
@@ -654,37 +627,22 @@ func (s *Service) pruneWithDefensiveCheck(ctx context.Context, blockHeight uint3
   JOIN outputs o ON o.transaction_id = parent.id
     AND o.idx = i.previous_tx_idx
     AND substr(o.spending_data, 1, 32) = child.hash
-  WHERE NOT EXISTS (SELECT 1
-      FROM inputs hi
-      JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
-      LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
-      WHERE hi.transaction_id = child.id
-        AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36) AND NOT child.conflicting)
+  WHERE candidate.held_back = 0
+    AND NOT EXISTS (SELECT 1 FROM utxo_prune_candidates doomed
+      WHERE doomed.id = parent.id AND doomed.held_back = 0)
   ON CONFLICT (parent_id, child_hash) DO NOTHING`
 
-	const deleteQuery = `DELETE FROM transactions WHERE id IN (SELECT id FROM utxo_prune_candidates)
-    AND NOT EXISTS (SELECT 1
-      FROM inputs hi
-      JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
-      LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
-      WHERE hi.transaction_id = transactions.id
-        AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36) AND NOT transactions.conflicting)`
+	const deleteQuery = `DELETE FROM transactions
+  WHERE id IN (SELECT id FROM utxo_prune_candidates WHERE held_back = 0)`
 
-	// Every candidate the DELETE does not remove is held back, so heldBack is
-	// the table's size minus the rows deleted. A candidate the stability test
-	// excluded is not counted: it never made the table.
-	const candidatesQuery = `SELECT count(*) FROM utxo_prune_candidates`
-
-	createCandidates := createCandidatesPortable
+	createCandidates, lock := createCandidatesPortable, ""
 	if s.engine == "postgres" {
-		createCandidates = createCandidatesPostgres
+		createCandidates, lock = createCandidatesPostgres, candidateLockSuffix
 	}
 
-	// With a reap function, expired conflicting records are left to
-	// reapExpiredConflicting, which clears the spends their parents hold to them
-	// before deleting them. Both fragments are constants.
-	if s.reapConflicting != nil {
-		createCandidates += excludeConflicting
+	args := []any{blockHeight}
+	if safetyWindow != nil {
+		args = append(args, safetyWindow)
 	}
 
 	txn, err := s.db.BeginTx(ctx, pruneTxOptions)
@@ -694,21 +652,32 @@ func (s *Service) pruneWithDefensiveCheck(ctx context.Context, blockHeight uint3
 
 	defer func() { _ = txn.Rollback() }()
 
+	// Postgres drops the table at COMMIT. SQLite has no such clause and keeps a
+	// committed temp table on the connection, so this clears any leftover. Neither
+	// adds a failure path after the delete has already happened.
 	if _, err := txn.ExecContext(ctx, dropStale); err != nil {
 		return 0, 0, &pruneStepError{step: "failed to clear stale pruning candidates", err: err}
 	}
 
-	if _, err := txn.ExecContext(ctx, createCandidates, blockHeight, s.safetyWindow); err != nil {
+	if _, err := txn.ExecContext(ctx, createCandidates); err != nil {
+		return 0, 0, &pruneStepError{step: "failed to create the pruning candidates table", err: err}
+	}
+
+	if _, err := txn.ExecContext(ctx, candidatesQuery+lock, args...); err != nil {
 		return 0, 0, &pruneStepError{step: "failed to select pruning candidates", err: err}
+	}
+
+	held, err := txn.ExecContext(ctx, holdBackQuery)
+	if err != nil {
+		return 0, 0, &pruneStepError{step: "failed to hold back unverified children", err: err}
+	}
+
+	if heldBack, err = held.RowsAffected(); err != nil {
+		return 0, 0, &pruneStepError{step: "failed to count held-back children", err: err}
 	}
 
 	if _, err := txn.ExecContext(ctx, markerQuery); err != nil {
 		return 0, 0, &pruneStepError{step: "failed to mark pruned children", err: err}
-	}
-
-	var candidates int64
-	if err := txn.QueryRowContext(ctx, candidatesQuery).Scan(&candidates); err != nil {
-		return 0, 0, &pruneStepError{step: "failed to count pruning candidates", err: err}
 	}
 
 	result, err := txn.ExecContext(ctx, deleteQuery)
@@ -720,7 +689,7 @@ func (s *Service) pruneWithDefensiveCheck(ctx context.Context, blockHeight uint3
 		return 0, 0, err
 	}
 
-	return deleted, candidates - deleted, nil
+	return deleted, heldBack, nil
 }
 
 // clearUnminedDeleteAtHeight clears delete_at_height on unmined, non-conflicting, non-preserved records

@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/util/usql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -503,29 +504,6 @@ func TestService_EdgeCases(t *testing.T) {
 	})
 }
 
-// TestUnverifiedClaimClauseIsIdentical: the unverified-claim clause is written
-// out in full in each pruning query, so every statement is one literal. The
-// marker INSERT and the DELETE must hold back exactly the same children, or a
-// child would be deleted without its marker, or marked and kept. This pins the
-// copies to one text: twice scoped to child, twice to transactions.
-func TestUnverifiedClaimClauseIsIdentical(t *testing.T) {
-	src, err := os.ReadFile("pruner_service.go")
-	require.NoError(t, err)
-
-	clause := func(alias string) string {
-		return `SELECT 1
-      FROM inputs hi
-      JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
-      LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
-      WHERE hi.transaction_id = ` + alias + `.id
-        AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36) AND NOT ` + alias + `.conflicting`
-	}
-
-	require.Equal(t, 2, strings.Count(string(src), clause("child")))
-	require.Equal(t, 2, strings.Count(string(src), clause("transactions")))
-	require.Equal(t, 4, strings.Count(string(src), "LEFT JOIN outputs ho ON"), "every copy of the clause must match the text above")
-}
-
 func newSqlmockService(t *testing.T, defensive bool, reap func(ctx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error)) (*Service, sqlmock.Sqlmock, *[]string) {
 	t.Helper()
 
@@ -673,4 +651,100 @@ func TestReapExpiredConflicting(t *testing.T) {
 		require.Equal(t, int64(0), reaped)
 		require.Empty(t, *errorLogs)
 	})
+}
+
+// The tests below inject faults at the driver boundary, which a real store cannot do on
+// demand: a COMMIT that fails, a row count the driver cannot read, a BEGIN that fails with
+// a chosen code. Each pins the decision deleteTombstoned makes on that failure. The
+// statements themselves run against real SQLite and Postgres in stores/utxo/sql.
+
+func newFaultService(t *testing.T) (*Service, sqlmock.Sqlmock, *atomic.Int32) {
+	t.Helper()
+
+	sqlDB, mock, err := sqlmock.New()
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	var retries atomic.Int32
+
+	logger := &MockLogger{
+		WarnfFunc: func(format string, _ ...interface{}) {
+			if strings.Contains(format, "retrying") {
+				retries.Add(1)
+			}
+		},
+	}
+
+	tSettings := createTestSettings()
+	tSettings.Pruner.UTXODefensiveEnabled = false
+
+	service, err := NewService(tSettings, Options{Logger: logger, DB: &usql.DB{DB: sqlDB}})
+	require.NoError(t, err)
+
+	// Every prune starts by clearing the stamps of unmined records.
+	mock.ExpectExec("UPDATE transactions").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	return service, mock, &retries
+}
+
+// expectPruneStatements expects the statements of one pruning transaction up to the
+// DELETE, which the caller answers.
+func expectPruneStatements(mock sqlmock.Sqlmock) {
+	mock.ExpectBegin()
+	mock.ExpectExec("DROP TABLE IF EXISTS utxo_prune_candidates").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE TEMP TABLE utxo_prune_candidates").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO utxo_prune_candidates").WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec("UPDATE utxo_prune_candidates").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO deleted_children").WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
+func TestDeleteTombstonedDoesNotRetryAnOrdinaryError(t *testing.T) {
+	service, mock, retries := newFaultService(t)
+
+	mock.ExpectBegin().WillReturnError(errors.NewProcessingError("connection refused"))
+
+	_, _, err := service.deleteTombstoned(context.Background(), 1300)
+	require.Error(t, err)
+	require.Equal(t, int32(0), retries.Load(), "an error that is not a lock or serialization conflict must not be retried")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteTombstonedRetriesAConflictThenGivesUp(t *testing.T) {
+	service, mock, retries := newFaultService(t)
+
+	for i := 0; i < maxPruneAttempts; i++ {
+		mock.ExpectBegin().WillReturnError(&pgconn.PgError{Code: "40P01"})
+	}
+
+	_, _, err := service.deleteTombstoned(context.Background(), 1300)
+	require.Error(t, err)
+	require.Equal(t, int32(maxPruneAttempts-1), retries.Load(), "every attempt but the last logs a retry")
+	require.NoError(t, mock.ExpectationsWereMet(), "all attempts must have run")
+}
+
+func TestDeleteTombstonedReportsACommitFailure(t *testing.T) {
+	service, mock, _ := newFaultService(t)
+
+	expectPruneStatements(mock)
+	mock.ExpectExec("DELETE FROM transactions").WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectCommit().WillReturnError(errors.NewProcessingError("commit failed"))
+	mock.ExpectRollback()
+
+	deleted, _, err := service.deleteTombstoned(context.Background(), 1300)
+	require.Error(t, err, "a prune whose commit failed must not report success")
+	require.Contains(t, err.Error(), "commit")
+	require.Zero(t, deleted)
+}
+
+func TestDeleteTombstonedReportsAnUnreadableRowCount(t *testing.T) {
+	service, mock, _ := newFaultService(t)
+
+	expectPruneStatements(mock)
+	mock.ExpectExec("DELETE FROM transactions").WillReturnResult(sqlmock.NewErrorResult(errors.NewProcessingError("no row count")))
+	mock.ExpectRollback()
+
+	_, _, err := service.deleteTombstoned(context.Background(), 1300)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "rows affected", "the failure must be reported as the row count, before any commit is tried")
 }

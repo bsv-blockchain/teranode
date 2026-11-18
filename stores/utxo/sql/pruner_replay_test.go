@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -642,7 +643,17 @@ func TestSpendDoesNotBlessWithRequireParentOutputs(t *testing.T) {
 // the output records as its spender may be marked, as on Aerospike: a marker
 // for the loser would refuse the loser's own spend if it ever won the output.
 func TestPrunerMarksOnlyTheChildThatHeldTheSpend(t *testing.T) {
+	for _, defensive := range []bool{false, true} {
+		t.Run(fmt.Sprintf("defensive=%v", defensive), func(t *testing.T) {
+			testPrunerMarksOnlyTheChildThatHeldTheSpend(t, defensive)
+		})
+	}
+}
+
+func testPrunerMarksOnlyTheChildThatHeldTheSpend(t *testing.T, defensive bool) {
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+		store.settings.Pruner.UTXODefensiveEnabled = defensive
+
 		parent := bt.NewTx()
 		require.NoError(t, parent.From("1111111111111111111111111111111111111111111111111111111111111111", 0, "51", 30000))
 		parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
@@ -669,7 +680,10 @@ func TestPrunerMarksOnlyTheChildThatHeldTheSpend(t *testing.T) {
 		_, err = store.Create(ctx, loser, 1000)
 		require.NoError(t, err)
 
-		_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parent.TxIDChainHash(), winner.TxIDChainHash()},
+		// The loser is mined as well: the pruner keeps an unmined record that is not
+		// conflicting, so an unmined loser would not be a candidate and the test
+		// would pass whatever the marker query did with it.
+		_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parent.TxIDChainHash(), winner.TxIDChainHash(), loser.TxIDChainHash()},
 			utxo.MinedBlockInfo{BlockID: 1000, BlockHeight: 1000, OnLongestChain: true})
 		require.NoError(t, err)
 
@@ -689,8 +703,10 @@ func TestPrunerMarksOnlyTheChildThatHeldTheSpend(t *testing.T) {
 
 		svc, err := store.GetPrunerService()
 		require.NoError(t, err)
-		_, err = svc.Prune(ctx, 1300, "conflicting-loser")
+		pruned, err := svc.Prune(ctx, 1300, "conflicting-loser")
 		require.NoError(t, err)
+		require.GreaterOrEqual(t, pruned, int64(2), "fixture: the loser and the winner must both be pruned")
+		require.False(t, rowExists(ctx, t, store, *loser.TxIDChainHash()), "fixture: the loser must be a candidate")
 
 		var loserMarkers int
 		require.NoError(t, store.db.QueryRowContext(ctx,
@@ -988,5 +1004,114 @@ func TestAbortedSpendKeepsAnIdempotentMatchWhileAnInputIsUnanswered(t *testing.T
 
 		require.Equal(t, recorded, outputSpendingData(t, ctx, store, b, 0),
 			"an idempotent match must not be reversed while an input is unanswered")
+	})
+}
+
+// TestPrunerWritesNoMarkerOnAParentItDeletes: a marker on a parent the same prune deletes
+// would be removed again by the cascade before the commit, after a foreign-key lock and
+// a heap write for nothing, and it is common because chains mined together fall due in
+// the same block. A trigger records every marker row the prune inserts, because the
+// cascade hides the doomed ones from the final state. Only the marker on the surviving
+// parent may be written.
+func TestPrunerWritesNoMarkerOnAParentItDeletes(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+		const address = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+
+		newParent := func(prev string, outputs int) *bt.Tx {
+			tx := bt.NewTx()
+			require.NoError(t, tx.From(prev, 0, "51", 30000))
+			tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+
+			for i := 0; i < outputs; i++ {
+				require.NoError(t, tx.PayToAddress(address, 4000))
+			}
+
+			_, err := store.Create(ctx, tx, 1000)
+			require.NoError(t, err)
+
+			return tx
+		}
+
+		spendOf := func(parent *bt.Tx) *bt.Tx {
+			child := bt.NewTx()
+			require.NoError(t, child.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+			child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			require.NoError(t, child.PayToAddress(address, 3000))
+
+			_, _, err := store.SpendAndCreate(ctx, child, 1000)
+			require.NoError(t, err)
+
+			return child
+		}
+
+		// q survives (one output stays unspent) and k leaves a marker on it. g is spent by h,
+		// and both fall due in the same prune, so the marker h would leave on g is doomed.
+		q := newParent("1111111111111111111111111111111111111111111111111111111111111111", 2)
+		g := newParent("2222222222222222222222222222222222222222222222222222222222222222", 1)
+		k := spendOf(q)
+		h := spendOf(g)
+
+		_, err := store.SetMinedMulti(ctx,
+			[]*chainhash.Hash{q.TxIDChainHash(), g.TxIDChainHash(), k.TxIDChainHash(), h.TxIDChainHash()},
+			utxo.MinedBlockInfo{BlockID: 1000, BlockHeight: 1000, OnLongestChain: true})
+		require.NoError(t, err)
+
+		for _, tx := range []*bt.Tx{g, k, h} {
+			_, err = store.db.ExecContext(ctx, "UPDATE transactions SET delete_at_height = 1100 WHERE hash = $1", tx.TxIDChainHash()[:])
+			require.NoError(t, err)
+		}
+
+		_, err = store.db.ExecContext(ctx, "CREATE TABLE marker_insert_log (parent_id BIGINT, child_hash BYTEA)")
+		require.NoError(t, err)
+
+		if store.engine == "postgres" {
+			_, err = store.db.ExecContext(ctx, `CREATE FUNCTION log_marker_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+				BEGIN INSERT INTO marker_insert_log VALUES (NEW.parent_id, NEW.child_hash); RETURN NEW; END $$`)
+			require.NoError(t, err)
+			_, err = store.db.ExecContext(ctx, `CREATE TRIGGER log_marker_insert AFTER INSERT ON deleted_children
+				FOR EACH ROW EXECUTE FUNCTION log_marker_insert()`)
+		} else {
+			_, err = store.db.ExecContext(ctx, `CREATE TRIGGER log_marker_insert AFTER INSERT ON deleted_children
+				BEGIN INSERT INTO marker_insert_log VALUES (NEW.parent_id, NEW.child_hash); END`)
+		}
+
+		require.NoError(t, err)
+
+		svc, err := store.GetPrunerService()
+		require.NoError(t, err)
+		n, err := svc.Prune(ctx, 1300, "doomed-markers")
+		require.NoError(t, err)
+		require.Equal(t, int64(3), n, "fixture: g, k and h are the candidates")
+
+		var qID int64
+
+		require.NoError(t, store.db.QueryRowContext(ctx, "SELECT id FROM transactions WHERE hash = $1", q.TxIDChainHash()[:]).Scan(&qID))
+
+		rows, err := store.db.QueryContext(ctx, "SELECT parent_id, child_hash FROM marker_insert_log")
+		require.NoError(t, err)
+
+		defer rows.Close()
+
+		type marker struct {
+			parent int64
+			child  string
+		}
+
+		var written []marker
+
+		for rows.Next() {
+			var m marker
+
+			var child []byte
+
+			require.NoError(t, rows.Scan(&m.parent, &child))
+			m.child = string(child)
+
+			written = append(written, m)
+		}
+
+		require.NoError(t, rows.Err())
+		require.Equal(t, []marker{{parent: qID, child: string(k.TxIDChainHash()[:])}}, written,
+			"only k's marker on the surviving parent q may be written, not h's marker on the deleted g")
 	})
 }
