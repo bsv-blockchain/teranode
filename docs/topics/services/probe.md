@@ -167,11 +167,7 @@ A group that has subscribed but has not committed an offset shows the full topic
 The probe adds the queued blocks and the subtree queue to get one backlog.
 The block part is the count of waiting blocks, up to the persister limit of about 25. It is not limited to the heights that the panel shows. While the FSM is in `CATCHINGBLOCKS`, the block part is at least the gap between the median peer height and the tip.
 
-The median peer height is the lower median of the heights that the node accepts from peers that are not banned. Peers that report no height are skipped. The node caps each claim at the local height plus `p2p_max_unvalidated_advertised_height_lead` (default 10,000). No peer proves its height, so the limits are these:
-
-- With three or more peers, one peer cannot raise the median peer height.
-- With two peers, the lower height is used, so one peer can only lower it.
-- With one peer, that peer sets the height, up to the cap. The drain time can then show up to 10,000 extra blocks.
+The median peer height is the lower median of the heights that the node accepts from peers that are not banned. Peers that report no height are skipped. The node caps each claim at the local height plus `p2p_max_unvalidated_advertised_height_lead` (default 10,000) when it accepts the claim. No peer proves its height. The lower median limits the influence of a high claim when the other heights agree, but one peer can change it when the heights diverge. For example, heights 1,000 and 11,000 have a lower median of 1,000; adding a third peer at 11,000 raises it to 11,000. The median cannot exceed the highest accepted peer height. A high claim can therefore add up to the configured lead to the peer-gap estimate relative to the local height when that claim was accepted.
 
 When the backlog source fails, the probe skips the drain samples until the backlog is current again. The drain text keeps its last value.
 It fits a line through the backlog samples of the last 5 minutes. The drain time is the backlog divided by the drain rate.

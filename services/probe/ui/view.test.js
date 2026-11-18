@@ -513,10 +513,16 @@ test('a failed chain source greys the fsm and tip with their age', () => {
   assert.ok(home.includes('no data, 45 s ago'));
   assert.ok(!home.includes('RUNNING'));
 
+  const staleTip = one(renderLanes(s), 'data-key', 'lanes.blocks.tip');
+  assert.ok(texts(staleTip).includes('–'));
+  assert.ok(texts(staleTip).includes('no data, 45 s ago'));
+  assert.ok(!texts(staleTip).includes('1,000'));
+
   s.sources[1] = { name: 'chain', ok: true };
   const live = renderTopBar(s);
   assert.equal(one(live, 'data-chip', 'fsm').attrs['data-st'], 'g');
   assert.ok(texts(live).includes('FSM: RUNNING'));
+  assert.ok(texts(one(renderLanes(s), 'data-key', 'lanes.blocks.tip')).includes('1,000'));
 });
 
 test('a failed kafka source greys the lag with its age', () => {
