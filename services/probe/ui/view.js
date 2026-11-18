@@ -134,7 +134,7 @@ export const LABELS = {
   'chain.blocksWaiting': 'Blocks waiting',
   'chain.persisterBehind': 'Persister behind',
   'chain.subscribersDropped': 'Subscribers dropped',
-  'chain.peerHeight': 'Best peer height',
+  'chain.peerHeight': 'Median peer height',
   'chain.blocksWaitingCount': 'Blocks waiting, count',
   'stores.aerospike': 'Aerospike',
   'stores.postgres': 'Postgres',

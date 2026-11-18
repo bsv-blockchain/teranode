@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,7 +41,7 @@ func newChainRig(t *testing.T) *chainRig {
 	require.NoError(t, err)
 
 	rig := &chainRig{bc: bc, tip: tSettings.ChainCfgParams.GenesisHash}
-	rig.chain = NewChain(bc)
+	rig.chain = NewChain(bc, ulogger.TestLogger{})
 
 	return rig
 }
@@ -240,7 +242,7 @@ func newCountingRig(t *testing.T) (*chainRig, *countingClient, *time.Time) {
 
 	rig := newChainRig(t)
 	cc := &countingClient{ClientI: rig.bc}
-	rig.chain = NewChain(cc)
+	rig.chain = NewChain(cc, ulogger.TestLogger{})
 
 	clock := time.Unix(1_700_000_000, 0)
 	rig.chain.now = func() time.Time { return clock }
@@ -326,6 +328,116 @@ func TestBacklogFailureWaitsTenSecondsBeforeRetry(t *testing.T) {
 	require.Equal(t, snapshot.StatusOK, s.Chain.PersisterBehind.Status)
 }
 
+type chainLogger struct {
+	ulogger.TestLogger
+
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *chainLogger) add(level, format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.lines = append(l.lines, level+" "+fmt.Sprintf(format, args...))
+}
+
+func (l *chainLogger) Infof(format string, args ...interface{}) { l.add("INFO", format, args...) }
+func (l *chainLogger) Warnf(format string, args ...interface{}) { l.add("WARN", format, args...) }
+
+func (l *chainLogger) matching(level, text string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	var out []string
+
+	for _, line := range l.lines {
+		if strings.HasPrefix(line, level+" ") && strings.Contains(line, text) {
+			out = append(out, line)
+		}
+	}
+
+	return out
+}
+
+func TestBacklogFailureKeepsLastValuesStaleAndLogsOnce(t *testing.T) {
+	rig, cc, clock := newCountingRig(t)
+	logger := &chainLogger{}
+	rig.chain.logger = logger
+
+	rig.addBlock(t, 1)
+	rig.addBlock(t, 2)
+
+	good := collectSnapshot(t, rig.chain)
+	require.Contains(t, good.Chain.BlocksWaiting, uint32(2))
+	require.Positive(t, good.Chain.BlocksWaitingCount.Value)
+	require.Equal(t, snapshot.StatusOK, good.Chain.BlocksWaitingCount.Status)
+
+	cc.failBacklog = true
+
+	for i := 1; i <= 3; i++ {
+		*clock = clock.Add(chainBacklogEvery)
+
+		s := collectSnapshot(t, rig.chain)
+
+		require.Equal(t, good.Chain.BlocksWaiting, s.Chain.BlocksWaiting, "the height chips keep their last values")
+		require.Equal(t, good.Chain.BlocksWaitingCount.Value, s.Chain.BlocksWaitingCount.Value, "the count keeps its last value, not zero")
+		require.Equal(t, snapshot.StatusNoData, s.Chain.BlocksWaitingCount.Status)
+		require.Equal(t, snapshot.StatusNoData, s.Chain.PersisterBehind.Status)
+		require.Equal(t, good.Chain.PersisterBehind.Value, s.Chain.PersisterBehind.Value)
+		require.Equal(t, float64(i)*chainBacklogEvery.Seconds(), s.Chain.BlocksWaitingCount.AgeSec)
+		require.Equal(t, uint32(2), s.Tip)
+	}
+
+	warns := logger.matching("WARN", "chain backlog has no data")
+	require.Len(t, warns, 1)
+	require.Contains(t, warns[0], "backlog unavailable")
+
+	cc.failBacklog = false
+	*clock = clock.Add(chainBacklogEvery)
+
+	s := collectSnapshot(t, rig.chain)
+	require.Equal(t, snapshot.StatusOK, s.Chain.BlocksWaitingCount.Status)
+	require.Zero(t, s.Chain.BlocksWaitingCount.AgeSec)
+	require.Len(t, logger.matching("INFO", "chain backlog is back"), 1)
+}
+
+type cachedIdleClient struct {
+	blockchain.ClientI
+	fresh    blockchain.FSMStateType
+	freshErr error
+}
+
+func (c *cachedIdleClient) GetFSMCurrentState(context.Context) (*blockchain.FSMStateType, error) {
+	idle := blockchain.FSMStateIDLE
+	return &idle, nil
+}
+
+func (c *cachedIdleClient) FetchFSMCurrentState(context.Context) (*blockchain.FSMStateType, error) {
+	if c.freshErr != nil {
+		return nil, c.freshErr
+	}
+
+	return &c.fresh, nil
+}
+
+func TestFSMIsReadFromTheServerNotTheCachedPlaceholder(t *testing.T) {
+	rig := newChainRig(t)
+	rig.addBlock(t, 1)
+
+	client := &cachedIdleClient{ClientI: rig.bc, fresh: blockchain.FSMStateCATCHINGBLOCKS}
+	rig.chain = NewChain(client, ulogger.TestLogger{})
+
+	s := collectSnapshot(t, rig.chain)
+	require.Equal(t, "CATCHINGBLOCKS", s.FSM)
+
+	client.freshErr = errors.NewServiceError("blockchain unreachable")
+
+	patch, err := rig.chain.Collect(context.Background())
+	require.Error(t, err, "an unknown FSM state must fail the source, not show IDLE")
+	require.Nil(t, patch)
+}
+
 type noMinedNotSetClient struct {
 	blockchain.ClientI
 }
@@ -338,7 +450,7 @@ func TestBacklogNeverCallsTheUnboundedMinedNotSetQuery(t *testing.T) {
 	rig := newChainRig(t)
 	rig.addBlock(t, 1)
 
-	rig.chain = NewChain(&noMinedNotSetClient{ClientI: rig.bc})
+	rig.chain = NewChain(&noMinedNotSetClient{ClientI: rig.bc}, ulogger.TestLogger{})
 
 	s := collectSnapshot(t, rig.chain)
 

@@ -65,7 +65,7 @@ func collectPeers(t *testing.T, p *Peers) (snapshot.Snapshot, error) {
 	return s, nil
 }
 
-func TestPeersReportsMaxCappedPeerHeight(t *testing.T) {
+func TestPeersReportsLowerMedianOfCappedHeights(t *testing.T) {
 	p := NewPeers(&fakePeers{peers: []*p2p.PeerInfo{
 		{Height: 10, AdvertisedHeight: 50},
 		{Height: 70},
@@ -77,8 +77,29 @@ func TestPeersReportsMaxCappedPeerHeight(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, "p2p", p.Name())
-	require.Equal(t, uint32(70), s.PeerTip)
-	require.Equal(t, snapshot.Reading{Value: 70, Status: snapshot.StatusOK}, s.Chain.PeerHeight)
+	require.Equal(t, uint32(20), s.PeerTip)
+	require.Equal(t, snapshot.Reading{Value: 20, Status: snapshot.StatusOK}, s.Chain.PeerHeight)
+}
+
+func TestOneLyingPeerCannotRaiseThePeerHeight(t *testing.T) {
+	honest := []*p2p.PeerInfo{{Height: 1000}, {Height: 1001}, {Height: 1000}}
+	liar := &p2p.PeerInfo{Height: 11_000, AdvertisedHeight: 500_000_000}
+
+	for _, peers := range [][]*p2p.PeerInfo{
+		{honest[0], liar},
+		{honest[0], honest[1], liar},
+		{honest[0], honest[1], honest[2], liar},
+	} {
+		s, err := collectPeers(t, NewPeers(&fakePeers{peers: peers}))
+		require.NoError(t, err)
+		require.LessOrEqual(t, s.PeerTip, uint32(1001), "peers %d", len(peers))
+	}
+}
+
+func TestPeersWithoutAHeightAreSkipped(t *testing.T) {
+	s, err := collectPeers(t, NewPeers(&fakePeers{peers: []*p2p.PeerInfo{{Height: 0}, {Height: 0}, {Height: 500}}}))
+	require.NoError(t, err)
+	require.Equal(t, uint32(500), s.PeerTip)
 }
 
 func TestPeersIgnoresBannedPeers(t *testing.T) {

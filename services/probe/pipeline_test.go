@@ -234,6 +234,7 @@ func TestPipelineSetsDrainAndAlarms(t *testing.T) {
 	chain := newFake("chain", okPatch(func(s *snapshot.Snapshot) {
 		s.FSM = "RUNNING"
 		s.Chain.BlocksWaiting = []uint32{100, 101, 102}
+		s.Chain.BlocksWaitingCount = snapshot.Reading{Value: 3, Status: snapshot.StatusOK}
 	}))
 
 	srv := newProbe(t, probeOpts{
@@ -272,7 +273,11 @@ func TestPipelineReportsGrowingBacklog(t *testing.T) {
 		}, nil
 	})
 
-	srv := newProbe(t, probeOpts{fast: []Collector{metrics}, clock: clock.Now})
+	chain := newFake("chain", okPatch(func(s *snapshot.Snapshot) {
+		s.Chain.BlocksWaitingCount = snapshot.Reading{Value: 0, Status: snapshot.StatusOK}
+	}))
+
+	srv := newProbe(t, probeOpts{fast: []Collector{metrics, chain}, clock: clock.Now})
 	runProbe(t, srv)
 
 	require.Eventually(t, func() bool {
@@ -647,21 +652,70 @@ func TestDrainEstimatesShrinkingBlockBacklogAboveTwenty(t *testing.T) {
 func TestBlockBacklog(t *testing.T) {
 	s := snapshot.NewSnapshot("n")
 	s.Chain.BlocksWaiting = []uint32{1, 2, 3}
-	require.Equal(t, 3.0, blockBacklog(&s, s.FSM == fsmCatchingBlocks))
+
+	_, ok := blockBacklog(&s)
+	require.False(t, ok, "a backlog with no current count must not reach the drain estimator")
 
 	s.Chain.BlocksWaitingCount = snapshot.Reading{Value: 120, Status: snapshot.StatusOK}
-	require.Equal(t, 120.0, blockBacklog(&s, s.FSM == fsmCatchingBlocks))
+	v, ok := blockBacklog(&s)
+	require.True(t, ok)
+	require.Equal(t, 120.0, v)
 
 	s.Tip = 1000
 	s.Chain.PeerHeight = snapshot.Reading{Value: 1500, Status: snapshot.StatusOK}
-	require.Equal(t, 120.0, blockBacklog(&s, s.FSM == fsmCatchingBlocks))
+	v, _ = blockBacklog(&s)
+	require.Equal(t, 120.0, v)
 
 	s.FSM = "CATCHINGBLOCKS"
-	require.Equal(t, 500.0, blockBacklog(&s, s.FSM == fsmCatchingBlocks))
+	v, _ = blockBacklog(&s)
+	require.Equal(t, 500.0, v)
 
 	s.Chain.PeerHeight.Status = snapshot.StatusNoData
-	require.Equal(t, 120.0, blockBacklog(&s, s.FSM == fsmCatchingBlocks))
+	v, _ = blockBacklog(&s)
+	require.Equal(t, 120.0, v)
 
-	s.Chain.BlocksWaitingCount.Status = snapshot.StatusNoData
-	require.Equal(t, 3.0, blockBacklog(&s, s.FSM == fsmCatchingBlocks))
+	s.Chain.BlocksWaitingCount = snapshot.Reading{Value: 120, Status: snapshot.StatusNoData, AgeSec: 30}
+	_, ok = blockBacklog(&s)
+	require.False(t, ok, "a stale count must not reach the drain estimator")
+}
+
+func TestStaleBlockCountDoesNotShortenTheDrainTime(t *testing.T) {
+	const staleAfter = 30
+
+	clock := newFakeClock()
+
+	tick := newFake("metrics", func(context.Context, int) (snapshot.Patch, error) {
+		clock.Advance(5 * time.Second)
+
+		return func(*snapshot.Snapshot) {}, nil
+	})
+
+	heights := make([]uint32, 20)
+	for i := range heights {
+		heights[i] = uint32(1000 + i)
+	}
+
+	chain := newFake("chain", func(_ context.Context, call int) (snapshot.Patch, error) {
+		count := snapshot.Reading{Value: float64(2000 - 10*min(call, staleAfter)), Status: snapshot.StatusOK}
+		if call > staleAfter {
+			count.Status = snapshot.StatusNoData
+			count.Note = "backlog unavailable"
+		}
+
+		return func(s *snapshot.Snapshot) {
+			s.FSM = "RUNNING"
+			s.Chain.BlocksWaiting = append([]uint32(nil), heights...)
+			s.Chain.BlocksWaitingCount = count
+		}, nil
+	})
+
+	srv := newProbe(t, probeOpts{fast: []Collector{tick, chain}, clock: clock.Now})
+	runProbe(t, srv)
+
+	require.Eventually(t, func() bool { return chain.Calls() > 3*staleAfter }, 20*time.Second, 20*time.Millisecond)
+
+	snap := servedSnapshot(t, srv)
+	require.Equal(t, snapshot.StatusNoData, snap.Chain.BlocksWaitingCount.Status)
+	require.NotNil(t, snap.DrainSeconds, "the drain text keeps its last value")
+	require.Greater(t, *snap.DrainSeconds, 500.0, "a stale count must not read as a backlog of 20 blocks")
 }
