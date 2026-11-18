@@ -90,6 +90,28 @@ func TestServerLaneLeaseOpenRenewRelease(t *testing.T) {
 	require.Equal(t, cleans+1, testutil.ToFloat64(prometheusBlockchainLaneLeaseCloses.WithLabelValues("clean")))
 }
 
+// The grants counter is labelled by lane, for the open's first grant and for a renewal's grant.
+func TestServerLaneLeaseCountsGrantsByLane(t *testing.T) {
+	tc := setup(t)
+	ctx := context.Background()
+
+	_, err := tc.server.OpenLaneLease(ctx, &blockchain_api.OpenLaneLeaseRequest{Holder: "validator-1"})
+	require.NoError(t, err)
+
+	lane0 := testutil.ToFloat64(prometheusBlockchainLaneLeaseGrants.WithLabelValues("0"))
+	lane1 := testutil.ToFloat64(prometheusBlockchainLaneLeaseGrants.WithLabelValues("1"))
+
+	g, err := tc.server.OpenLaneLease(ctx, &blockchain_api.OpenLaneLeaseRequest{Holder: "validator-2"})
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), g.Lane, "lane 0 is held, so the second lease takes lane 1")
+
+	_, err = tc.server.RenewLaneLease(ctx, &blockchain_api.RenewLaneLeaseRequest{LeaseId: g.LeaseId, Lane: g.Lane, WantGrant: true})
+	require.NoError(t, err)
+
+	require.Equal(t, lane1+2, testutil.ToFloat64(prometheusBlockchainLaneLeaseGrants.WithLabelValues("1")))
+	require.Equal(t, lane0, testutil.ToFloat64(prometheusBlockchainLaneLeaseGrants.WithLabelValues("0")))
+}
+
 func TestServerLaneLeaseRefusesBadRequests(t *testing.T) {
 	tc := setup(t)
 	ctx := context.Background()

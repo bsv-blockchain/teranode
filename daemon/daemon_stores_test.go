@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"net/url"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,8 +22,9 @@ import (
 
 // laneSource answers for the blockchain service: a lease on lane 9, grants of 1,000 positions.
 type laneSource struct {
-	high  atomic.Uint64
-	opens atomic.Int64
+	high   atomic.Uint64
+	opens  atomic.Int64
+	holder atomic.Value // the holder named on the last open
 }
 
 func (s *laneSource) grant() lane.Grant {
@@ -31,8 +33,9 @@ func (s *laneSource) grant() lane.Grant {
 	return lane.Grant{Lane: 9, First: last - 999, Last: last}
 }
 
-func (s *laneSource) OpenLaneLease(context.Context, string) (lane.LeaseID, lane.Grant, error) {
+func (s *laneSource) OpenLaneLease(_ context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
 	s.opens.Add(1)
+	s.holder.Store(holder)
 
 	return lane.LeaseID{9}, s.grant(), nil
 }
@@ -258,8 +261,14 @@ func TestGetUtxoStoreRefusesLaneMigrationRows(t *testing.T) {
 }
 
 // Lease timings that would let two holders use one lane fail the store's open at shadow.
+// The timings are checked before the lease client is built, so a misconfigured process dials
+// nothing.
 func TestGetUtxoStoreRefusesLeaseTimingsWhereStopIsNotBeforeClose(t *testing.T) {
+	var built atomic.Int64
+
 	appSettings, _ := laneStoreFixture(t, "lane_timings", true, func() (lane.LeaseSource, error) {
+		built.Add(1)
+
 		return &laneSource{}, nil
 	})
 	appSettings.BlockChain.LaneLeaseStopAfter = appSettings.BlockChain.LaneLeaseCloseAfter
@@ -269,6 +278,7 @@ func TestGetUtxoStoreRefusesLeaseTimingsWhereStopIsNotBeforeClose(t *testing.T) 
 	_, err := d.GetUtxoStore(context.Background(), ulogger.TestLogger{}, appSettings)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "blockchain_laneLeaseStopAfter")
+	require.Zero(t, built.Load(), "no lease client is built for timings that are refused")
 }
 
 // closeLaneStore closes the allocator the daemon retained, then the store, when the test ends.
@@ -338,6 +348,12 @@ func TestGetUtxoStoreTakesNoLeaseUntilTheFirstCreate(t *testing.T) {
 	_, _, err = store.SpendAndCreate(ctx, root, 900, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 	require.Equal(t, int64(1), source.opens.Load(), "the first create opens the lease")
+
+	// The holder names the process and its host, so two pods with one client name stay apart in
+	// lane_lease and lane_handout.
+	hostname, err := os.Hostname()
+	require.NoError(t, err)
+	require.Equal(t, appSettings.ClientName+"@"+hostname, source.holder.Load())
 }
 
 // The allocator is built with the grant duration setting. A grant must serve many creates inside
