@@ -3,6 +3,7 @@ package utxoset
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -354,6 +355,131 @@ func TestUnspendIgnoresALockOnAContainmentRowBelowTheLookupFloor(t *testing.T) {
 	require.NoError(t, err, "a lock below the lookup floor must not be copied onto the restored UTXO")
 }
 
+// setConflictingTo is SetConflicting's statements, without the note of children it writes first.
+func setConflictingTo(s *Store, tx *bt.Tx, value bool) lockChange {
+	return func(ctx context.Context, dbTx pgx.Tx) error {
+		named := []chainhash.Hash{*tx.TxIDChainHash()}
+
+		inpoints, err := s.readConflictingInputs(ctx, named)
+		if err != nil {
+			return err
+		}
+
+		_, _, err = s.runConflictingPlan(ctx, dbTx, s.planConflicting(named, inpoints), value)
+
+		return err
+	}
+}
+
+// TestUnspendReadsTheConflictingMarkBelowTheLookupFloor: the conflicting bit is read from
+// containment rows down to the dropped floor, not only from the lookup floor up as the lock bit
+// is. The parent's only row is at height 100. It was marked while still above the lookup floor,
+// after the loser had spent its coin, so the loser's journal row carries no mark. Once the floor
+// passes 100, a restore that read only from the lookup floor up would find no row, keep the
+// journal's bit and hand back a coin that is spendable while its transaction is a loser.
+func TestUnspendReadsTheConflictingMarkBelowTheLookupFloor(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	require.NoError(t, s.SetBlockHeight(100))
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100)
+	require.NoError(t, err)
+
+	spends, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 1_000, 0), 100)
+	require.NoError(t, err)
+	require.Len(t, spends, 1)
+
+	_, err = s.SetMinedMulti(ctx, []*chainhash.Hash{parent.TxIDChainHash()},
+		utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true})
+	require.NoError(t, err)
+
+	_, _, err = s.SetConflicting(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true)
+	require.NoError(t, err)
+
+	stampThrough(t, s, ctx, 0, map[uint32]uint32{100: 7})
+	require.False(t, identExists(t, s, ctx, parent), "fixture: the stamp deleted the identity row")
+	require.Equal(t, 1, minedRows(t, s, ctx, parent), "fixture: the containment row is the only record")
+
+	require.NoError(t, s.SetBlockHeight(864))
+	require.Equal(t, int32(TxMinedPartitionBlocks), s.lookupFloor(), "fixture: the lookup floor is above the row at 100")
+
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+	require.NotZero(t, utxoFlagsOf(t, s, ctx, parent, 0)&FlagConflicting,
+		"the restored coin must carry the mark on a containment row below the lookup floor")
+}
+
+// TestUnspendRacingAConflictingClearBelowTheLookupFloorWaitsForIt: the restore reads the
+// conflicting bit from containment rows down to the dropped floor, below the lookup floor the lock
+// bit stops at, so its share lock reaches that far too. Here the parent has its identity row and a
+// containment row at height 100, under a lookup floor of 288, both marked conflicting. A
+// SetConflicting clearing the mark has updated both rows and not committed. The restore waits on
+// the identity row either way, but a containment row it read without a lock would still show the
+// mark from before the wait, and the coin would come back conflicting after its transaction was
+// cleared.
+func TestUnspendRacingAConflictingClearBelowTheLookupFloorWaitsForIt(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100)
+	require.NoError(t, err)
+
+	_, err = s.SetMinedMulti(ctx, []*chainhash.Hash{parent.TxIDChainHash()},
+		utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true})
+	require.NoError(t, err)
+
+	require.NoError(t, s.SetBlockHeight(864))
+	require.Equal(t, int32(TxMinedPartitionBlocks), s.lookupFloor(), "fixture: the lookup floor is above the row at 100")
+	require.True(t, identExists(t, s, ctx, parent), "fixture: the identity row is still there")
+	require.Equal(t, 1, minedRows(t, s, ctx, parent), "fixture: the containment row at 100 is still there")
+
+	_, _, err = s.SetConflicting(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true)
+	require.NoError(t, err)
+
+	spends, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 1_000, 0), 865, utxo.WithIgnoreConflicting(true))
+	require.NoError(t, err)
+	require.Len(t, spends, 1)
+
+	changeWhileRestoreRuns(t, s, ctx, setConflictingTo(s, parent, false), spends)
+
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+	require.Zero(t, utxoFlagsOf(t, s, ctx, parent, 0)&FlagConflicting,
+		"the restored coin must not keep a conflicting mark its transaction lost while the restore waited")
+}
+
+// TestUnspendCutByItsDeadlineLeavesTheUndoRecord: nothing in the store bounds the restore's wait
+// for the rows it share-locks, so the caller's deadline does. A restore cut while it waits must
+// return an error and roll back whole, the coin still spent and its undo record still there, so a
+// later Unspend can restore it. The validator's shed unwind depends on that.
+func TestUnspendCutByItsDeadlineLeavesTheUndoRecord(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends := mempoolParentSpent(t, s, ctx, false)
+	h := parent.TxIDChainHash()
+
+	holder, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = holder.Rollback(context.Background()) }()
+
+	_, err = holder.Exec(ctx, `SELECT 1 FROM tx_ident WHERE txid = $1 FOR UPDATE`, h[:])
+	require.NoError(t, err)
+
+	cut, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+
+	require.Error(t, s.Unspend(cut, spends), "the deadline cuts the wait")
+	require.NotNil(t, spenderOf(t, s, ctx, parent, 0), "the coin is still spent")
+	require.Equal(t, 1, countWhere(t, s, ctx, `SELECT count(*) FROM spend_journal WHERE txid = $1`, h[:]),
+		"the undo record is still there")
+
+	require.NoError(t, holder.Rollback(ctx))
+
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0), "a later Unspend restores the coin")
+}
+
 // mempoolParentSpent is the fixture for the restore-against-lock-change race on a transaction
 // whose lock lives on its identity row: a parent created locked or not, its output 0 spent
 // through IgnoreLocked by an unmined loser, as block validation spends a locked parent. It
@@ -569,7 +695,13 @@ func TestUnlockOfAContainmentRowRacingAnUnspendWaitsForIt(t *testing.T) {
 // When the restore had already share-locked second before it reached first, that last update
 // waits on the restore while the restore waits on it, and PostgreSQL stops the restore, which
 // started waiting first, as the deadlock victim. The Unspend must run again and succeed.
-func crossedLockChange(t *testing.T, s *Store, ctx context.Context, first, second *bt.Tx, spends []*utxo.Spend) {
+//
+// It reports false when the holder was the victim instead. That happens when more than the
+// restore's deadlock_timeout passes between the restore blocking and the holder blocking: the
+// restore's one deadlock check has already run and found no cycle, so the holder's check is the
+// one that finds it. The holder's change is then rolled back, so the caller redoes the iteration
+// on a fresh store rather than asserting on a lock that was never changed.
+func crossedLockChange(t *testing.T, s *Store, ctx context.Context, first, second *bt.Tx, spends []*utxo.Spend) bool {
 	t.Helper()
 
 	holder, err := s.pool.Begin(ctx)
@@ -598,9 +730,20 @@ func crossedLockChange(t *testing.T, s *Store, ctx context.Context, first, secon
 
 	waitForLockWait(t, s, ctx, "spend_journal")
 
-	require.NoError(t, setLockedTo(s, second, false)(ctx, holder))
+	err = setLockedTo(s, second, false)(ctx, holder)
+	if isDeadlock(err) {
+		require.NoError(t, holder.Rollback(ctx))
+		require.NoError(t, <-done)
+
+		return false
+	}
+
+	require.NoError(t, err)
+
 	require.NoError(t, holder.Commit(ctx))
 	require.NoError(t, <-done, "a deadlock is retried, not returned")
+
+	return true
 }
 
 // TestUnspendRetriesADeadlockWithALockChange: the restore share-locks each parent's identity
@@ -612,33 +755,51 @@ func TestUnspendRetriesADeadlockWithALockChange(t *testing.T) {
 	before := testutil.ToFloat64(deadlockRetried.WithLabelValues("unspend"))
 
 	for _, holdFirst := range []int{0, 1} {
-		s, ctx := newTestStore(t)
+		for attempt := 1; ; attempt++ {
+			if crossedLockChangeOnce(t, holdFirst) {
+				break
+			}
 
-		require.NoError(t, s.SetBlockHeight(100))
-
-		parents := make([]*bt.Tx, 2)
-
-		var spends []*utxo.Spend
-
-		for i := range parents {
-			parents[i] = mkTx(t, 2, uint64(10_000+i))
-			_, err := s.Create(ctx, parents[i], 100, utxo.WithLocked(true))
-			require.NoError(t, err)
-
-			spent, err := spendOnly(ctx, s, spendParentTx(t, parents[i], nil, 1_000, 0), 101, utxo.WithIgnoreLocked(true))
-			require.NoError(t, err)
-			require.Len(t, spent, 1)
-
-			spends = append(spends, spent...)
-		}
-
-		crossedLockChange(t, s, ctx, parents[holdFirst], parents[1-holdFirst], spends)
-
-		for _, parent := range parents {
-			requireRestoredCoinLock(t, s, ctx, parent, false)
+			require.Less(t, attempt, 3, "the holder, not the restore, was the deadlock victim on every attempt")
 		}
 	}
 
 	require.GreaterOrEqual(t, testutil.ToFloat64(deadlockRetried.WithLabelValues("unspend"))-before, 1.0,
 		"one of the two orders must cross the restore's share locks and be retried")
+}
+
+// crossedLockChangeOnce is one order of TestUnspendRetriesADeadlockWithALockChange on a fresh
+// store. It reports false when crossedLockChange had to give the iteration up.
+func crossedLockChangeOnce(t *testing.T, holdFirst int) bool {
+	t.Helper()
+
+	s, ctx := newTestStore(t)
+
+	require.NoError(t, s.SetBlockHeight(100))
+
+	parents := make([]*bt.Tx, 2)
+
+	var spends []*utxo.Spend
+
+	for i := range parents {
+		parents[i] = mkTx(t, 2, uint64(10_000+i))
+		_, err := s.Create(ctx, parents[i], 100, utxo.WithLocked(true))
+		require.NoError(t, err)
+
+		spent, err := spendOnly(ctx, s, spendParentTx(t, parents[i], nil, 1_000, 0), 101, utxo.WithIgnoreLocked(true))
+		require.NoError(t, err)
+		require.Len(t, spent, 1)
+
+		spends = append(spends, spent...)
+	}
+
+	if !crossedLockChange(t, s, ctx, parents[holdFirst], parents[1-holdFirst], spends) {
+		return false
+	}
+
+	for _, parent := range parents {
+		requireRestoredCoinLock(t, s, ctx, parent, false)
+	}
+
+	return true
 }

@@ -77,10 +77,13 @@ const rebuildOffChainSetTimeout = 30 * time.Second
 
 // migrationFullRebuildTimeout bounds the one-shot full-chain rebuildOnMainChainFlag
 // that runs at startup the first time the on_main_chain column is populated.
-// Unlike the bounded-window rebuilds (which touch at most 10×CoinbaseMaturity
-// blocks and always fit in rebuildOffChainSetTimeout), the migration walks the
-// full chain via a recursive CTE and its runtime scales with chain length. On a
-// multi-million-block chain on an undersized VM this can take several minutes,
+// Unlike a bounded-window rebuild, which walks 10×CoinbaseMaturity blocks below
+// the tip, extended down to any recorded floor, under rebuildOffChainSetTimeout,
+// the migration walks the full chain via a recursive CTE and its runtime scales
+// with chain length. A floor can lie as low as genesis, so the background repair
+// hands a bounded walk that runs out of rebuildOffChainSetTimeout to the full
+// walk and this budget (see attemptOnMainChainRepair). On a
+// multi-million-block chain on an undersized VM the full walk can take several minutes,
 // so the 30 s window used elsewhere is too short: if the migration times out,
 // the column is left unpopulated and CheckBlockIsInCurrentChain's fast path
 // returns no rows, silently breaking validation for any block below the
@@ -342,6 +345,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 	// the startup rebuild below can fail before the loop is started at the end of New.
 	s.onMainChainRepair.backoff = onMainChainRepairInitialBackoff
 	s.onMainChainRepair.startupLockWait = startupWatchLockWait
+	s.onMainChainRepair.boundedTimeout = rebuildOffChainSetTimeout
 	s.onMainChainRepair.wake = make(chan struct{}, 1)
 	s.onMainChainRepair.stopped = make(chan struct{})
 
@@ -1786,7 +1790,26 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 	return onMainChainCount != bestHeight+1, nil
 }
 
-// reconcileOnMainChain restores the invariant that on_main_chain is true on
+// reconcileMaxDepth is the least number of blocks below the best block reconcileOnMainChainRows
+// walks. It walks further when the fork point is deeper.
+func (s *SQL) reconcileMaxDepth() int64 {
+	maxDepth := int64(s.chainParams.CoinbaseMaturity) * 2
+	if maxDepth < 100 {
+		maxDepth = 100
+	}
+
+	return maxDepth
+}
+
+// reconcileOnMainChain is reconcileOnMainChainRows without the counts, for tests that
+// only need the flags reconciled.
+func (s *SQL) reconcileOnMainChain(ctx context.Context, exec execQuerier) error {
+	_, _, err := s.reconcileOnMainChainRows(ctx, exec)
+
+	return err
+}
+
+// reconcileOnMainChainRows restores the invariant that on_main_chain is true on
 // exactly the chain from genesis to the chain_work-best valid block. It is
 // the hot-path replacement for rebuildOnMainChainFlag's window scan and is
 // called from StoreBlock's reorg branch, where the walk runs down from the new
@@ -1794,8 +1817,8 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 //
 // InvalidateBlock and RevalidateBlock are administrative operations whose
 // fork point can lie arbitrarily deep below the current tip; reconciling
-// them with this bounded helper would silently leave incorrect flags below
-// the walked window. Those paths therefore use rebuildOnMainChainFlag with
+// them with this walk would leave incorrect flags in place below the first
+// flagged block it meets. Those paths therefore use rebuildOnMainChainFlag with
 // full=true, which is slower but unbounded and correct.
 //
 // The function takes no parameters: caller-supplied tips are unsafe under
@@ -1839,6 +1862,8 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 //  2. new_path CTE: walks best_block's lineage backward via parent_id at
 //     least maxDepth steps, and on past that until it reaches a block that
 //     is already flagged true, which is where the new chain meets the old.
+//     Each step must go down in height. Past maxDepth nothing else bounds the
+//     walk, so a parent_id loop would otherwise recurse forever.
 //  3. UPDATE in one go:
 //     a. blocks in new_path with on_main_chain=false → true
 //     (covers reorgs and the fast-path-descendant gap).
@@ -1860,8 +1885,10 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 // block ends at genesis, which is a full repair of the lineage.
 //
 // The rows this reconcile visits are the new chain's blocks from the fork
-// point up, or the top maxDepth blocks when the fork point is higher, so it
-// remains the cheap path. It does not repair
+// point up, or the top maxDepth blocks when the fork point is higher. That is
+// cheap for an ordinary reorg, and a walk to genesis when no block is flagged;
+// such a walk reports floor 0, which the background repair handles (see
+// attemptOnMainChainRepair). It does not repair
 // a flag that is wrong below the first flagged block it meets, because
 // nothing tells it the chain is broken there: the count of
 // on_main_chain=true against bestHeight+1 still matches when a stale flag
@@ -1878,33 +1905,14 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 // Idempotent: a no-op when on_main_chain already matches the chain_work
 // best's lineage within the walked window.
 //
-// It reports how many rows it changed and the lowest height among them, or
+// It reports how many rows it changed and the lowest height among them, so
+// StoreBlock can tell a reorg from a fork block that left the main chain where
+// it was, and can note how far down the reorg moved membership. floor is
 // noRepairFloor when it changed none.
 //
 // exec is the pool or an open transaction; StoreBlock passes its transaction so the
 // reconciliation commits or rolls back together with the INSERT. The error is the
 // driver's own, unwrapped, and the caller types it.
-func (s *SQL) reconcileOnMainChain(ctx context.Context, exec execQuerier) error {
-	_, _, err := s.reconcileOnMainChainRows(ctx, exec)
-
-	return err
-}
-
-// reconcileMaxDepth is the least number of blocks below the best block reconcileOnMainChain
-// walks. It walks further when the fork point is deeper.
-func (s *SQL) reconcileMaxDepth() int64 {
-	maxDepth := int64(s.chainParams.CoinbaseMaturity) * 2
-	if maxDepth < 100 {
-		maxDepth = 100
-	}
-
-	return maxDepth
-}
-
-// reconcileOnMainChainRows is reconcileOnMainChain returning how many rows the
-// reconciliation changed and the lowest height among them, so StoreBlock can tell a reorg
-// from a fork block that left the main chain where it was, and can note how far down the
-// reorg moved membership. floor is noRepairFloor when changed is zero.
 func (s *SQL) reconcileOnMainChainRows(ctx context.Context, exec execQuerier) (changed int64, floor int64, err error) {
 	maxDepth := s.reconcileMaxDepth()
 
@@ -1926,7 +1934,8 @@ func (s *SQL) reconcileOnMainChainRows(ctx context.Context, exec execQuerier) (c
 			SELECT b.id, b.parent_id, b.height, np.depth + 1, b.on_main_chain
 			FROM blocks b
 			INNER JOIN new_path np ON b.id = np.parent_id
-			WHERE b.id != np.id AND (np.depth < $1 OR np.on_main_chain = false)
+			WHERE b.id != np.id AND b.height < np.height
+				AND (np.depth < $1 OR np.on_main_chain = false)
 		),
 		window_floor(h) AS (
 			SELECT MIN(height) FROM new_path
