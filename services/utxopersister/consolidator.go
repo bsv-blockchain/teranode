@@ -284,20 +284,16 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 }
 
 // consumeDeletions fetches the per-block deletions reader, processes it, and
-// releases the read permit. A missing deletions ledger is tolerated and means
-// "no deletions for this block" - a block that spends only the coinbase reward
-// writes none. The tolerance must name the error the store actually reports:
-// the file store signals a missing blob with errors.ErrNotFound, while other
-// backends report errors.ErrBlobNotFound; accepting only the latter made the
-// tolerance dead where it ships, turning a legal spend-less block into a
-// stall that logged the same "No new block to process" line as real waits.
+// releases the read permit. A missing deletions ledger is an error, never "no
+// deletions": NewUTXOSet always creates the deletions file (header only, for a
+// block that spends nothing), and UTXOSet.Close finalises additions before
+// deletions. A missing ledger therefore means "not written yet" or "half
+// written". Treating it as zero spends would roll a block into the set with
+// every output it spent still present, and every later set would inherit that.
+// Propagating the error stalls the roll-up until the block persister finishes.
 func (c *consolidator) consumeDeletions(ctx context.Context, us *UTXOSet) error {
 	r, err := us.GetUTXODeletionsReader(ctx)
 	if err != nil {
-		if errors.Is(err, errors.ErrBlobNotFound) || errors.Is(err, errors.ErrNotFound) {
-			c.logger.Infof("No deletions ledger for block %s; treating as a block that spent nothing", us.blockHash.String())
-			return nil
-		}
 		return err
 	}
 	defer r.Close()
@@ -310,9 +306,6 @@ func (c *consolidator) consumeDeletions(ctx context.Context, us *UTXOSet) error 
 func (c *consolidator) consumeAdditions(ctx context.Context, us *UTXOSet) error {
 	r, err := us.GetUTXOAdditionsReader(ctx)
 	if err != nil {
-		if errors.Is(err, errors.ErrNotFound) || errors.Is(err, errors.ErrBlobNotFound) {
-			c.logger.Infof("Additions ledger for block %s has not been written yet; the block exists, its record does not", us.blockHash.String())
-		}
 		return err
 	}
 	defer r.Close()
