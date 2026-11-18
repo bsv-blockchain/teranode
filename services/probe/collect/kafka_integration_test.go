@@ -1,5 +1,3 @@
-//go:build test_kafka
-
 package collect
 
 import (
@@ -16,6 +14,16 @@ import (
 )
 
 const kafkaTestTimeout = 10 * time.Second
+
+func startKafka(t *testing.T) *kafkatest.Env {
+	t.Helper()
+
+	if testing.Short() {
+		t.Skip("skipping Kafka integration test in -short mode")
+	}
+
+	return kafkatest.MustStartEnv(t, context.Background())
+}
 
 func newTopic(t *testing.T, env *kafkatest.Env, topic string, messages int) {
 	t.Helper()
@@ -83,7 +91,7 @@ func newCollector(t *testing.T, env *kafkatest.Env, topics map[string]string) *K
 }
 
 func TestLagAfterProducingWithoutConsuming(t *testing.T) {
-	env := kafkatest.MustStartEnv(t, context.Background())
+	env := startKafka(t)
 	newTopic(t, env, "lagtopic", 50)
 	commit(t, env, "group-a", "lagtopic", 20)
 
@@ -95,7 +103,7 @@ func TestLagAfterProducingWithoutConsuming(t *testing.T) {
 }
 
 func TestLagSumsAcrossConsumerGroups(t *testing.T) {
-	env := kafkatest.MustStartEnv(t, context.Background())
+	env := startKafka(t)
 	newTopic(t, env, "sumtopic", 50)
 	commit(t, env, "group-a", "sumtopic", 20)
 	commit(t, env, "group-b", "sumtopic", 45)
@@ -108,7 +116,7 @@ func TestLagSumsAcrossConsumerGroups(t *testing.T) {
 }
 
 func TestLagZeroWhenCaughtUp(t *testing.T) {
-	env := kafkatest.MustStartEnv(t, context.Background())
+	env := startKafka(t)
 	newTopic(t, env, "caughtup", 50)
 	commit(t, env, "group-a", "caughtup", 50)
 
@@ -120,7 +128,7 @@ func TestLagZeroWhenCaughtUp(t *testing.T) {
 }
 
 func TestNoGroupsMeansNoLag(t *testing.T) {
-	env := kafkatest.MustStartEnv(t, context.Background())
+	env := startKafka(t)
 	newTopic(t, env, "nogroups", 50)
 
 	k := newCollector(t, env, map[string]string{snapshot.FlowSubtrees: "nogroups"})
@@ -129,7 +137,7 @@ func TestNoGroupsMeansNoLag(t *testing.T) {
 }
 
 func TestGroupOnOtherTopicContributesNothing(t *testing.T) {
-	env := kafkatest.MustStartEnv(t, context.Background())
+	env := startKafka(t)
 	newTopic(t, env, "mine", 10)
 	newTopic(t, env, "other", 40)
 	commit(t, env, "group-a", "other", 0)
@@ -140,7 +148,7 @@ func TestGroupOnOtherTopicContributesNothing(t *testing.T) {
 }
 
 func TestWatchedTopicsReportLagAndMissingConsumers(t *testing.T) {
-	env := kafkatest.MustStartEnv(t, context.Background())
+	env := startKafka(t)
 	newTopic(t, env, "watched-behind", 50)
 	newTopic(t, env, "watched-orphan", 10)
 	commit(t, env, "group-a", "watched-behind", 20)
@@ -165,7 +173,7 @@ func TestWatchedTopicsReportLagAndMissingConsumers(t *testing.T) {
 }
 
 func TestBrokerDown(t *testing.T) {
-	env := kafkatest.MustStartEnv(t, context.Background())
+	env := startKafka(t)
 	newTopic(t, env, "down", 5)
 	commit(t, env, "group-a", "down", 1)
 
@@ -185,7 +193,7 @@ func TestBrokerDown(t *testing.T) {
 }
 
 func TestUncommittedMemberCountsFullTopicAsLag(t *testing.T) {
-	env := kafkatest.MustStartEnv(t, context.Background())
+	env := startKafka(t)
 	newTopic(t, env, "uncommitted", 50)
 
 	cl, err := kgo.NewClient(
@@ -232,7 +240,7 @@ func TestUncommittedMemberCountsFullTopicAsLag(t *testing.T) {
 }
 
 func TestMultiPartitionLagSumsAcrossPartitionsAndGroups(t *testing.T) {
-	env := kafkatest.MustStartEnv(t, context.Background())
+	env := startKafka(t)
 
 	cl, err := kgo.NewClient(kgo.SeedBrokers(env.BrokerAddr), kgo.RecordPartitioner(kgo.ManualPartitioner()))
 	require.NoError(t, err)
