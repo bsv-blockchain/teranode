@@ -44,8 +44,12 @@ func TestSpendRefusesMarkerCommittedAfterSelect(t *testing.T) {
 		// call, so the SELECT itself answers idempotent and the bulk path never
 		// sends the row to the UPDATE; only the marker lands in the window.
 		spentBefore bool
+		// noRetention: the store keeps no delete-at-height, which gives the bulk UPDATE its
+		// own statement without the DAH CTEs, with its own marker guard on upd_idem.
+		noRetention bool
 	}{
 		{name: "bulk_idempotent", bulk: true, alsoSpent: true},
+		{name: "bulk_idempotent_no_retention", bulk: true, alsoSpent: true, noRetention: true},
 		{name: "per_row_idempotent", alsoSpent: true},
 		{name: "bulk_idempotent_at_select", bulk: true, spentBefore: true},
 		{name: "per_row_idempotent_at_select", spentBefore: true},
@@ -55,6 +59,13 @@ func TestSpendRefusesMarkerCommittedAfterSelect(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store, ctx := setupPostgresStore(t)
 			store.settings.UtxoStore.BatchSQLOperations = bulk
+
+			if tc.noRetention {
+				store.settings.GlobalBlockHeightRetention = 0
+				store.settings.UtxoStore.BlockHeightRetentionAdjustment = 0
+				require.Zero(t, store.settings.GetUtxoStoreBlockHeightRetention())
+			}
+
 			require.NoError(t, store.SetBlockHeight(1000))
 
 			parent := bt.NewTx()
