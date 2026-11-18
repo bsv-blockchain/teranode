@@ -187,9 +187,15 @@ read every section between yours and the target.
   still records it; a block refused on that code is retried, not marked invalid. utxoset and pebble
   write no marker and still accept the replay. (#1702)
 - **Aerospike clusters with `aerospike_use_native_teranode_ops` on need the mod-teranode build with
-  the idempotent report and sub-op 15 before or with this release.** On an older build `spendMulti`,
-  `spend` and the pruner's marker write stay on the UDF or filtered path for the life of the
-  process: slower, still correct. `teranode_aerospike_native_routing{route}` is 0 then. (#1702)
+  the idempotent report and sub-op 15 on every server node before this release.** On an older build
+  `spendMulti`, `spend` and the pruner's marker write stay on the UDF or filtered path for the life
+  of the process: slower, still correct. `teranode_aerospike_native_routing{route}` is 0 then. Do
+  not start this release while the cluster is mixed: the start-up probe samples one node, so it can
+  pass on a new node and then route spends natively to an old one, which neither checks the
+  replay marker nor reports idempotent matches. (#1702)
+- **The SQL pruner on Postgres needs the `TEMPORARY` privilege on the database.** Each prune creates
+  a temporary table, which Postgres grants to `PUBLIC` by default. A role where it was revoked fails
+  every prune with SQLSTATE 42501 until it is granted back. (#1702)
 - **Block assembly can fail to start while a skipped-fork mark is unfinished.** A restart finishes
   it before loading the pool, and fails if the subtree or UTXO store doesn't answer or
   `BlockAssemblerSkippedForkMark` is malformed: restart once they answer, or clear that key. (#2065)
