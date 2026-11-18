@@ -169,8 +169,9 @@ gh pr view <NNN> --json number,title,body,labels
 2. Match PR numbers against that range only. Older history reuses PR numbers from the previous repo.
 3. Read the PR diff for any PR touching `settings.conf`, `.proto` files, metric names, or consensus rules that has **no** `## Breaking` section. The author may have missed one. Ask the user; never add one silently.
 4. Legacy entries: PRs merged before `CHANGELOG.md` was deleted recorded their entries in that file. Find the deletion commit with `git log --diff-filter=D --format=%H -1 -- CHANGELOG.md`, then read the file with `git show <sha>^:CHANGELOG.md`. Use its `## [Unreleased]` entries whose PRs are in range. If only some of an entry's PRs are in range, split it.
-5. Keep only sections that meet the `AGENTS.md` definition of breaking: an operator or integrator must act, or something that worked stops working. Drop ordinary bug fixes, performance changes, log changes and error-message wording, even if the author listed them. List the dropped PRs for the user.
-6. Show the collected list to the user before publishing. Never paraphrase an author's text into a weaker claim.
+5. History before the deletion: the `[0.16.0]` section and earlier live only in git. Read them with `git show <sha>^:CHANGELOG.md`. Use them when a user upgrades from a version older than the deletion and the release body for an intermediate version lacks "Before you upgrade". Quote them; do not edit published release bodies unasked.
+6. Keep only sections that meet the `AGENTS.md` definition of breaking: an operator or integrator must act, or something that worked stops working. Drop ordinary bug fixes, performance changes, log changes and error-message wording, even if the author listed them. List the dropped PRs for the user.
+7. Show the collected list to the user before publishing. Never paraphrase an author's text into a weaker claim.
 
 ## Discussion announcement
 
@@ -282,6 +283,7 @@ git diff --stat <prev-tag>..<new-tag>
 
 After tagging a stable patch:
 1. Verify release URL (`gh release view <tag>`).
+   Then verify the Announcements discussion exists for the stable tag: `gh api graphql -f query='{ repository(owner: "bsv-blockchain", name: "teranode") { discussions(first: 5, categoryId: "<announcements-id>", orderBy: {field: CREATED_AT, direction: DESC}) { nodes { title url } } } }'`. Look for `vX.Y.Z` in the titles. If it is missing, offer the draft again.
 2. Ask user if any deployment / monitoring follow-up is needed (e.g. update fleet, watch Coralogix for the next 30 min).
 3. Offer to run `triage` for the next round on the same release branch.
 
