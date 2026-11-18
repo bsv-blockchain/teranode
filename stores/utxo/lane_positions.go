@@ -130,3 +130,12 @@ func WithTakenLanePosition(opts []CreateOption, position uint64) []CreateOption 
 
 	return append(opts[:len(opts):len(opts)], WithLanePosition(position))
 }
+
+// LaneSchemaPreparer is a store whose database needs lane columns installed before the historical
+// conversion numbers anything. PrepareLaneSchema installs them, nullable and empty, at any lane
+// migration step, off included; it writes no row and is safe to run again. Restart every process
+// of the node afterwards so each one sees the same schema. Find it with As. Aerospike has no
+// schema to install: its lane bins are written by the records that carry them.
+type LaneSchemaPreparer interface {
+	PrepareLaneSchema(ctx context.Context) error
+}

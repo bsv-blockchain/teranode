@@ -194,6 +194,23 @@ func requireOldRowReadsNoLanePosition(t *testing.T, inspect *sql.DB, store *Stor
 	md, err = store.Get(ctx, w.Txs[0].TxIDChainHash(), fields.LanePosition)
 	require.NoError(t, err)
 	require.Equal(t, want, md.LanePosition)
+
+	// The other lane columns arrived with it, empty: the spend above wrote its spending data and
+	// no spender position, and no child got parent positions. Running the explicit schema
+	// preparation again changes nothing.
+	for _, c := range sqlLaneColumns[1:] {
+		var n int
+		require.NoError(t, inspect.QueryRow(`SELECT count(*) FROM `+c.table+` WHERE `+c.column+` IS NOT NULL`).Scan(&n), "%s.%s exists", c.table, c.column)
+		require.Zero(t, n, "%s.%s holds nothing", c.table, c.column)
+	}
+
+	var spent int
+	require.NoError(t, inspect.QueryRow(`SELECT count(*) FROM outputs WHERE spending_data IS NOT NULL`).Scan(&spent))
+	require.Positive(t, spent)
+
+	preparer, ok := utxostore.As[utxostore.LaneSchemaPreparer](store)
+	require.True(t, ok)
+	require.NoError(t, preparer.PrepareLaneSchema(ctx))
 }
 
 func TestLanePositionMigrationSQLite(t *testing.T) {

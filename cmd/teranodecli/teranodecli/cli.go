@@ -70,12 +70,14 @@ var commandHelp = map[string]string{
 	"logs":                    "Interactive log viewer with filtering and search",
 	"diagnose":                "Diagnose node health and validate configuration",
 	"audit-mined-set":         "List blocks stored with mined_set true whose transactions lack the block id or are still locked (read-only; remedy is a resync)",
+	"prepare-lane-schema":     "Install the UTXO store's lane columns, empty, at lane migration step off (node must be stopped)",
 }
 
 // commandLongHelp is printed by <command> --help above the flags, for a command whose
 // one-line description in commandHelp is not enough to use it safely.
 var commandLongHelp = map[string]string{
-	"audit-mined-set": minedSetAuditLongHelp,
+	"audit-mined-set":     minedSetAuditLongHelp,
+	"prepare-lane-schema": laneSchemaLongHelp,
 }
 
 var dangerousCommands = map[string]bool{}
@@ -508,6 +510,8 @@ func Start(args []string, version, commit string) {
 		cmd.Execute = rewindExecute(logger, tSettings, registerRewindFlags(cmd.FlagSet))
 	case "audit-mined-set":
 		cmd.Execute = minedSetAuditExecute(logger, tSettings, registerMinedSetAuditFlags(cmd.FlagSet))
+	case "prepare-lane-schema":
+		cmd.Execute = laneSchemaExecute(logger, tSettings, os.Stdout)
 	case "validate-utxo-set":
 		verbose := cmd.FlagSet.Bool("verbose", false, "verbose output showing individual UTXOs")
 

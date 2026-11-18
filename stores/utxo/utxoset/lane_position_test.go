@@ -1172,3 +1172,120 @@ func lanePositionsOf(l uint8, n int) []uint64 {
 
 	return out
 }
+
+// hasColumn reports whether table has column, nullable with no default.
+func hasColumn(t *testing.T, s *Store, ctx context.Context, table, column string) bool {
+	t.Helper()
+
+	var found bool
+
+	require.NoError(t, s.pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		                WHERE table_schema = current_schema() AND table_name = $1
+		                  AND column_name = $2 AND is_nullable = 'YES' AND column_default IS NULL)`, table, column).Scan(&found))
+
+	return found
+}
+
+// The lane schema is installed at off, on a database holding outputs, journal rows and mined
+// records, before any historical numbering. It rewrites no row, every attached partition gets the
+// columns, and every disabled writer keeps working against it: create, spend, mine, the journal
+// copy-forward and drop, Unspend and lookup, in the process that installed it and after a restart.
+func TestLaneSchemaInstalledAtOffKeepsDisabledWritersWorking(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent := mkTx(t, 3, 5_000)
+	_, err := s.Create(ctx, parent, 1_000, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1_000, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	waiting := spendOneOutput(t, s, ctx, parent, 0, 1_010)
+	spendOneOutputInBlock(t, s, ctx, parent, 1, 1_010, 2)
+
+	installed, err := s.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.False(t, installed, "off adds nothing on open")
+
+	var before string
+	require.NoError(t, s.pool.QueryRow(ctx, `SELECT string_agg(encode(ukey::text::bytea, 'hex') || satoshis::text, ',' ORDER BY ukey) FROM utxo`).Scan(&before))
+
+	require.NoError(t, s.PrepareLaneSchema(ctx))
+	require.NoError(t, s.PrepareLaneSchema(ctx), "a second run is a no-op")
+
+	installed, err = s.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.True(t, installed)
+
+	for _, c := range laneSchemaColumns {
+		require.True(t, hasColumn(t, s, ctx, c.table, c.column), "%s.%s", c.table, c.column)
+	}
+
+	for _, leaf := range []string{"utxo_p0", "utxo_p7", "tx_ident_l0"} {
+		require.True(t, hasColumn(t, s, ctx, leaf, "lane_position"), "partition %s", leaf)
+	}
+
+	var journalLeaves []string
+
+	rows, err := s.pool.Query(ctx, `SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid WHERE i.inhparent = 'spend_journal'::regclass`)
+	require.NoError(t, err)
+
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+
+		journalLeaves = append(journalLeaves, name)
+	}
+
+	rows.Close()
+	require.NotEmpty(t, journalLeaves)
+
+	for _, leaf := range journalLeaves {
+		require.True(t, hasColumn(t, s, ctx, leaf, "lane_position"), "journal partition %s", leaf)
+	}
+
+	// No row was rewritten or given a value.
+	var after string
+	require.NoError(t, s.pool.QueryRow(ctx, `SELECT string_agg(encode(ukey::text::bytea, 'hex') || satoshis::text, ',' ORDER BY ukey) FROM utxo`).Scan(&after))
+	require.Equal(t, before, after)
+
+	for _, c := range laneSchemaColumns {
+		var n int
+		require.NoError(t, s.pool.QueryRow(ctx, `SELECT count(*) FROM `+c.table+` WHERE `+c.column+` IS NOT NULL`).Scan(&n))
+		require.Zero(t, n, "%s.%s holds no value", c.table, c.column)
+	}
+
+	// The process that installed the schema still runs main's statements, and a restart at off
+	// sees the columns and carries on.
+	for name, store := range map[string]*Store{"installing process": s, "restarted at off": reopenWithFlag(t, s, false)} {
+		fresh := mkTx(t, 2, 6_000+uint64(len(name)))
+		_, err = store.Create(ctx, fresh, 1_020)
+		require.NoError(t, err, name)
+
+		spender := spendOneOutput(t, store, ctx, fresh, 0, 1_021)
+
+		_, err = store.SetMinedMulti(ctx, hashes(fresh), utxo.MinedBlockInfo{BlockID: 3, BlockHeight: 1_022, OnLongestChain: true})
+		require.NoError(t, err, name)
+
+		spends, err := utxo.GetSpends(spender)
+		require.NoError(t, err)
+		require.NoError(t, store.Unspend(ctx, spends), name)
+		require.Equal(t, 2, utxoCount(t, store, ctx, fresh), "%s: Unspend restores from the journal", name)
+
+		_, err = store.Get(ctx, fresh.TxIDChainHash())
+		require.NoError(t, err, name)
+	}
+
+	// The journal partition holding the waiting spend is retired: its row is copied forward into
+	// a live partition and survives with the new column present.
+	require.NoError(t, s.SetBlockHeight(1_728))
+
+	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
+	require.NoError(t, err)
+	require.Positive(t, dropped)
+	require.Equal(t, 1, journalRowsFor(t, s, ctx, parent, 0), "the waiting spend is carried forward")
+
+	spends, err := utxo.GetSpends(waiting)
+	require.NoError(t, err)
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Equal(t, 2, utxoCount(t, s, ctx, parent), "the carried row rebuilds the coin")
+}
