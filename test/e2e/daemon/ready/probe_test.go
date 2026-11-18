@@ -196,9 +196,23 @@ func probeServesLiveNodeState(t *testing.T, withP2P bool) {
 	pc := newProbeClient(t, td)
 
 	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t, td.Ctx)
+	require.Eventually(t, func() bool {
+		snap, err := pc.fetchSnapshot(t.Context())
+		return err == nil && !snap.Time.IsZero() && hasData(snap.Ingress.PropagationTxPerSec)
+	}, probeTestTimeout, 100*time.Millisecond, "probe never sampled ingress before transactions")
 
-	_, txHashes, err := td.CreateAndSendTxs(t, coinbaseTx, 20)
+	first, txHashes, err := td.CreateAndSendTxs(t, coinbaseTx, 1)
 	require.NoError(t, err)
+	current := first[0]
+	pace := time.NewTicker(250 * time.Millisecond)
+	defer pace.Stop()
+	for i := 1; i < 20; i++ {
+		<-pace.C
+		batch, hashes, err := td.CreateAndSendTxs(t, current, 1)
+		require.NoError(t, err)
+		current = batch[0]
+		txHashes = append(txHashes, hashes...)
+	}
 	require.Len(t, txHashes, 20)
 
 	td.MineAndWait(t, 2)
@@ -305,14 +319,25 @@ func probeServesLiveNodeState(t *testing.T, withP2P bool) {
 	})
 
 	t.Run("history saw the transactions arrive at ingress", func(t *testing.T) {
-		positive, err := historyHasPositive(t.Context(), pc, "ingress", "ingress.propagationTxPerSec")
-		require.NoError(t, err)
-		require.True(t, positive)
+		var history []byte
+		positive := false
+		defer func() {
+			if !positive {
+				t.Logf("ingress history at failure: %s", history)
+			}
+		}()
+		require.Eventually(t, func() bool {
+			var raw []byte
+			var err error
+			positive, raw, err = historyHasPositive(t.Context(), pc, "ingress", "ingress.propagationTxPerSec")
+			history = raw
+			return err == nil && positive
+		}, probeTestTimeout, 500*time.Millisecond, "ingress history never saw transactions")
 	})
 
 	t.Run("history saw the transactions validated", func(t *testing.T) {
 		require.Eventually(t, func() bool {
-			positive, err := historyHasPositive(t.Context(), pc, "validator", "validator.validatedPerSec")
+			positive, _, err := historyHasPositive(t.Context(), pc, "validator", "validator.validatedPerSec")
 			return err == nil && positive
 		}, probeTestTimeout, 500*time.Millisecond)
 	})
@@ -420,14 +445,14 @@ func probeServesLiveNodeState(t *testing.T, withP2P bool) {
 	})
 }
 
-func historyHasPositive(ctx context.Context, pc *probeClient, stage, key string) (bool, error) {
+func historyHasPositive(ctx context.Context, pc *probeClient, stage, key string) (bool, []byte, error) {
 	status, raw, err := pc.request(ctx, http.MethodGet, "/api/history?stage="+stage+"&minutes=10", pc.token, nil)
 	if err != nil {
-		return false, err
+		return false, raw, err
 	}
 
 	if status != http.StatusOK {
-		return false, errors.NewServiceError("history status %d", status)
+		return false, raw, errors.NewServiceError("history status %d", status)
 	}
 
 	var hist struct {
@@ -440,7 +465,7 @@ func historyHasPositive(ctx context.Context, pc *probeClient, stage, key string)
 	}
 
 	if err := json.Unmarshal(raw, &hist); err != nil {
-		return false, err
+		return false, raw, err
 	}
 
 	for _, series := range hist.Series {
@@ -450,12 +475,12 @@ func historyHasPositive(ctx context.Context, pc *probeClient, stage, key string)
 
 		for _, p := range series.Points {
 			if p.V != nil && *p.V > 0 {
-				return true, nil
+				return true, raw, nil
 			}
 		}
 	}
 
-	return false, nil
+	return false, raw, nil
 }
 
 func stateSnoozes(path string) map[string]bool {
