@@ -78,8 +78,8 @@ The `PeerRegistry` is a thread-safe data store that maintains comprehensive info
 |-------|------|-------------|
 | `ID` | `peer.ID` | Unique peer identifier |
 | `ClientName` | `string` | Human-readable client software name |
-| `Height` | `int32` | Peer's reported blockchain height |
-| `BlockHash` | `string` | Hash of peer's best block |
+| `Height` | `int32` | Peer's reported blockchain height. For a libp2p peer it is persisted but not restored: it is zero after a restart until the peer's next `node_status`. A wire-protocol peer keeps it |
+| `BlockHash` | `string` | Hash of peer's best block. For a libp2p peer it is persisted but not restored: it is empty after a restart until the peer's next `node_status`. A sync trigger toward a peer with no `BlockHash` uses `ValidatedBlockHash` instead |
 | `DataHubURL` | `string` | URL for fetching blocks/subtrees from peer |
 | `Storage` | `string` | Storage mode: "full", "pruned", or empty |
 | `ReputationScore` | `float64` | Overall reliability score (0-100) |
@@ -324,6 +324,10 @@ The peer registry persists its data to `teranode_peer_registry.json`:
 - Reads cache file if present
 - Validates version compatibility
 - Restores peer metrics to registry
+- Clears `IsConnected` on every peer, because it is stale after a restart
+- Clears the advertised tip (`Height`, `AdvertisedHeight`, `BlockHash`) of libp2p peers, because it is stale after a restart. The next `node_status` from the peer sets the tip again
+- Keeps the tip of wire-protocol peers. Sync decisions never read it, and a running legacy service re-registers a peer only when the peer's state changes
+- Keeps the validated progress (`ValidatedHeight`, `ValidatedBlockHash`, `ValidatedChainWork`), because it records what this node validated from the peer
 - Handles legacy field formats for backward compatibility
 
 ### 7.2. Reputation Recovery
