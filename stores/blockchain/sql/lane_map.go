@@ -186,8 +186,9 @@ const laneMapSqliteDDL = `
 	);
 `
 
-// The two timestamped inserts are written out whole, once per engine, so that no query text is
-// built at run time: each reads the database clock in the form that engine stores.
+// The two timestamped inserts are written out whole, once per engine, and each call site passes
+// the constant itself, so no query text is built or chosen through a helper at run time: each
+// reads the database clock in the form that engine stores.
 const (
 	insertConversionSegmentPostgres = `INSERT INTO lane_conversion_segment (segment, first, prefix_last, last, source_tip_block_id, source_tip_hash, manifest_digest, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp())`
@@ -197,24 +198,6 @@ const (
 	insertConversionCompletePostgres = `INSERT INTO lane_conversion_complete (segment, audit_digest, completed_at) VALUES ($1, $2, clock_timestamp())`
 	insertConversionCompleteSQLite   = `INSERT INTO lane_conversion_complete (segment, audit_digest, completed_at) VALUES ($1, $2, strftime('%Y-%m-%d %H:%M:%f', 'now'))`
 )
-
-// insertConversionSegmentSQL is the segment insert for this store's engine.
-func (s *SQL) insertConversionSegmentSQL() string {
-	if s.engine == util.Postgres {
-		return insertConversionSegmentPostgres
-	}
-
-	return insertConversionSegmentSQLite
-}
-
-// insertConversionCompleteSQL is the completion insert for this store's engine.
-func (s *SQL) insertConversionCompleteSQL() string {
-	if s.engine == util.Postgres {
-		return insertConversionCompletePostgres
-	}
-
-	return insertConversionCompleteSQLite
-}
 
 // InsertLaneMapRows records the map rows of one block. Rows are insert-only: the first call for a
 // block inserts all of them in one transaction; a retry with rows that say the same thing, by
@@ -444,9 +427,15 @@ func (s *SQL) InsertLaneConversionSegment(ctx context.Context, seg lane.Conversi
 		}
 	}
 
-	if _, err = tx.ExecContext(ctx, s.insertConversionSegmentSQL(),
-		int64(seg.ID), positionArg(seg.First), positionArg(seg.PrefixLast), positionArg(seg.Last), int64(seg.SourceTipBlockID), seg.SourceTipHash[:], seg.ManifestDigest[:],
-	); err != nil {
+	args := []any{int64(seg.ID), positionArg(seg.First), positionArg(seg.PrefixLast), positionArg(seg.Last), int64(seg.SourceTipBlockID), seg.SourceTipHash[:], seg.ManifestDigest[:]}
+
+	if s.engine == util.Postgres {
+		_, err = tx.ExecContext(ctx, insertConversionSegmentPostgres, args...)
+	} else {
+		_, err = tx.ExecContext(ctx, insertConversionSegmentSQLite, args...)
+	}
+
+	if err != nil {
 		return errors.NewStorageError("insert conversion segment %d", seg.ID, err)
 	}
 
@@ -708,9 +697,13 @@ func (s *SQL) CompleteLaneConversionSegment(ctx context.Context, segment uint32,
 		return errors.NewProcessingError("conversion segment %d cannot complete", segment, err)
 	}
 
-	if _, err = tx.ExecContext(ctx, s.insertConversionCompleteSQL(),
-		int64(segment), auditDigest[:],
-	); err != nil {
+	if s.engine == util.Postgres {
+		_, err = tx.ExecContext(ctx, insertConversionCompletePostgres, int64(segment), auditDigest[:])
+	} else {
+		_, err = tx.ExecContext(ctx, insertConversionCompleteSQLite, int64(segment), auditDigest[:])
+	}
+
+	if err != nil {
 		return errors.NewStorageError("insert completion of segment %d", segment, err)
 	}
 
