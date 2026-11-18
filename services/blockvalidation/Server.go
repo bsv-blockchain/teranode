@@ -2672,7 +2672,7 @@ func (u *Server) blockRetryDelay(hash *chainhash.Hash, err error) (time.Duration
 		// A corrupt blob in this node's own store is permanent: the file is written atomically,
 		// and it exists, so a retry skips the fetch and reads the same bytes. It comes first
 		// because its rendered text matches IsMaliciousResponseError ("corrupt", "invalid
-		// header") and its innermost cause, an EOF, matches isTransportFailure.
+		// header"), and a truncated header's innermost cause, an EOF, matches isTransportFailure.
 		return 0, false
 	case errors.Is(err, context.DeadlineExceeded):
 		delay = blockDeadlineRetryDelay
@@ -2732,7 +2732,8 @@ func isTransportFailure(err error) bool {
 // isPeerFetchFailure reports whether err looks like a failure to fetch the block from its peer,
 // which another source might not repeat. A corrupt blob in this node's own store is excluded:
 // it is not the peer's doing, and every alternative source would read the same local file. Its
-// rendered text would otherwise match IsMaliciousResponseError and its EOF cause IsNetworkError.
+// rendered text would otherwise match IsMaliciousResponseError, and a truncated header's EOF
+// cause IsNetworkError.
 func isPeerFetchFailure(err error) bool {
 	if errors.IsBlobCorrupt(err) {
 		return false

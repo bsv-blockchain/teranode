@@ -279,9 +279,10 @@ func TestBlockRetryDelay_LocalCorruptBlobIsNotRetried(t *testing.T) {
 	}
 }
 
-// TestIsPeerFetchFailure_LocalCorruptBlobIsNotAPeerFailure pins that processBlockWithPriority does
-// not walk alternative sources for a corrupt local blob: every source would read the same file.
-// The control shows a real fetch failure still does.
+// TestIsPeerFetchFailure_LocalCorruptBlobIsNotAPeerFailure pins the decision processBlockWithPriority
+// uses to walk alternative sources: a corrupt local blob is not a peer failure, because every
+// source would read the same file. The controls show a real fetch failure still is one. The call
+// site itself is pinned by TestProcessBlockWithPriority_LocalCorruptBlob_DoesNotWalkAlternatives.
 func TestIsPeerFetchFailure_LocalCorruptBlobIsNotAPeerFailure(t *testing.T) {
 	for _, tt := range corruptSubtreeContents {
 		t.Run(tt.name, func(t *testing.T) {
