@@ -79,14 +79,45 @@ func TestPrunerHoldsBackChildWhoseParentOutputIsUnspent(t *testing.T) {
 				SpendingData: spendpkg.NewSpendingData(child.TxIDChainHash(), 0),
 			}}))
 
+			// D is an unrelated candidate the same prune deletes: mined,
+			// fully spent by E and buried, with its parent R surviving. With
+			// it the held-back count must be candidates minus deleted, not
+			// every candidate.
+			parentR := newParent("5555555555555555555555555555555555555555555555555555555555555555")
+			deletable := bt.NewTx()
+			require.NoError(t, deletable.From(parentR.TxID(), 0, parentR.Outputs[0].LockingScript.String(), parentR.Outputs[0].Satoshis))
+			deletable.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			require.NoError(t, deletable.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+			_, _, err = store.SpendAndCreate(ctx, deletable, 1000)
+			require.NoError(t, err)
+			_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parentR.TxIDChainHash(), deletable.TxIDChainHash()},
+				utxo.MinedBlockInfo{BlockID: 1000, BlockHeight: 1000, OnLongestChain: true})
+			require.NoError(t, err)
+
+			spenderE := bt.NewTx()
+			require.NoError(t, spenderE.From(deletable.TxID(), 0, deletable.Outputs[0].LockingScript.String(), deletable.Outputs[0].Satoshis))
+			spenderE.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			require.NoError(t, spenderE.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 2000))
+			_, _, err = store.SpendAndCreate(ctx, spenderE, 1001)
+			require.NoError(t, err)
+			_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{spenderE.TxIDChainHash()},
+				utxo.MinedBlockInfo{BlockID: 1001, BlockHeight: 1001, OnLongestChain: true})
+			require.NoError(t, err)
+
 			svc, err := store.GetPrunerService()
 			require.NoError(t, err)
 
 			heldBefore := heldBackCounter(t)
-			_, err = svc.Prune(ctx, 1300, "unverified-claim")
+			pruned, err := svc.Prune(ctx, 1300, "unverified-claim")
 			require.NoError(t, err)
+			require.Equal(t, int64(1), pruned, "fixture: D is deleted and C is held back (defensive=%v)", defensive)
 			require.Equal(t, float64(1), heldBackCounter(t)-heldBefore,
-				"the held-back child must be counted, or it cannot be told apart from nothing to prune (defensive=%v)", defensive)
+				"exactly the held-back child must be counted, not the deleted one beside it (defensive=%v)", defensive)
+
+			var deletableExists bool
+			require.NoError(t, store.db.QueryRowContext(ctx,
+				"SELECT EXISTS(SELECT 1 FROM transactions WHERE hash = $1)", deletable.TxIDChainHash()[:]).Scan(&deletableExists))
+			require.False(t, deletableExists, "D must be pruned (defensive=%v)", defensive)
 
 			var childExists, marked bool
 			require.NoError(t, store.db.QueryRowContext(ctx,

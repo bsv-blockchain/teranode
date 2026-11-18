@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/stretchr/testify/assert"
 )
@@ -271,7 +272,7 @@ func TestCreatePostgresSchema_ErrorAtDeletedChildrenTable(t *testing.T) {
 // Helper function that calls the ACTUAL extracted implementation
 func createPostgresSchemaWithMockDB(_ *usql.DB, mockDB *MockDB) error {
 	// Now we can call the actual implementation function with our mock!
-	return createPostgresSchemaImpl(mockDB)
+	return createPostgresSchemaImpl(mockDB, ulogger.TestLogger{})
 }
 
 // createPostgresSchemaTestWrapper delegates to the real implementation.
@@ -279,7 +280,7 @@ func createPostgresSchemaTestWrapper(db interface {
 	Exec(query string, args ...interface{}) (sql.Result, error)
 	Close() error
 }) error {
-	return createPostgresSchemaImpl(db)
+	return createPostgresSchemaImpl(db, ulogger.TestLogger{})
 }
 
 // Direct test of our wrapper function to show coverage
