@@ -3168,10 +3168,38 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 //
 // So the block goes to whichever side removes it from the cache. If this call
 // removes it, it releases it, as the old Delete-then-release did. If the entry is
-// already gone, the setMined worker or the cache's eviction function has it and
-// releases it, and the caller must not touch the block's subtrees again. A block
-// that was never cached (cached false) is still only ValidateBlock's, so it is
-// released directly.
+// already gone, the caller must not touch the block's subtrees again. The setMined
+// worker, the cache's eviction function, or a reclaim call for another object
+// with the same hash may have removed it. Another validation may also have
+// overwritten it. Some worker early returns skip release (a separate cleanup
+// bug). A block that was never cached (cached false) is still only ValidateBlock's,
+// so it is released directly.
+//
+// The cache can also hold a different object for the same hash: a revalidation of
+// the block, or the optimistic-mining goroutine, which runs outside
+// runOncePerBlock, cached its own. Set overwrites without calling the eviction
+// function, so this call cannot tell whether block was replaced while it sat in
+// the cache or the setMined worker took it first and the other object was cached
+// after. The worker may still be reading block's subtrees, so only the object this
+// call removed is released, and block is left as if taken. If it was really
+// replaced, nobody releases it: heap-backed nodes go to the GC, and an mmap-backed
+// subtree keeps its mapping until the process exits and leaves its
+// subtree-nodes-* temp file in blockvalidation_subtreeMmapDir after that, since
+// nothing removes those files at startup. An operator invalidate and reconsider
+// can cache a second object before the worker takes the first, even when the
+// validation calls do not overlap and optimistic mining is disabled. The
+// optimistic-mining goroutine also caches outside runOncePerBlock, so it can
+// overwrite an entry while another validation is still running. An overwrite
+// does not need a failed SetBlockSubtreesSet: if both calls succeed, this helper
+// never runs and an overwritten, untaken block leaks without a warning. A lost
+// reply can instead let the worker take block before the overwrite, in which
+// case the worker owns block.
+// After an overwrite, the other object can itself be taken or evicted before this
+// call, which then finds the entry gone, as if the worker had taken block.
+// A possible leak is the safe side of the trade against tagging another block's
+// hashes. Both exits here that leave block unreleased log at Warn with the block
+// hash and say a leak is possible. These warnings do not trace overwrites on the
+// successful validation path.
 func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block, cached bool) bool {
 	if !cached {
 		releaseBlockNodes(block)
@@ -3180,16 +3208,15 @@ func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block,
 
 	taken, removed := u.lastValidatedBlocks.GetAndDelete(*block.Hash())
 	if !removed {
-		u.logger.Warnf("[ValidateBlock][%s] block already taken from the validated-blocks cache after a failed subtrees_set, leaving its release to the taker", block.Hash().String())
+		u.logger.Warnf("[ValidateBlock][%s] block already taken from the validated-blocks cache after a failed subtrees_set, leaving its release to the taker; if another validation overwrote it first, its subtrees are never released", block.Hash().String())
 		return false
 	}
 
 	releaseBlockNodes(taken)
 
-	// Another Set for the same hash replaced our entry: ours left the cache without
-	// an owner, so it is still ours to release.
 	if taken != block {
-		releaseBlockNodes(block)
+		u.logger.Warnf("[ValidateBlock][%s] validated-blocks cache held another object for this block after a failed subtrees_set, released that one and left ours to the setMined worker; if no worker took it, its subtrees are never released", block.Hash().String())
+		return false
 	}
 
 	return true

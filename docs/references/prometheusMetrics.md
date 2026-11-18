@@ -360,6 +360,12 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_subtreevalidation_peer_subtree_admission_wait` | Histogram | Seconds a peer subtree waited for a `subtreevalidation_peerSubtreeConcurrency` slot |
 | `teranode_subtreevalidation_peer_subtree_admission_waiting` | Gauge | Peer subtrees waiting for a `subtreevalidation_peerSubtreeConcurrency` slot |
 
+## UTXO Persister Service Metrics
+
+| Metric                                                  | Type  | Description |
+|---------------------------------------------------------|-------|-------------|
+| `teranode_utxopersister_liveness_heartbeat_age_seconds` | Gauge | Seconds since the main loop last beat its liveness heartbeat (0 before the loop's first beat and once the service is stopping); until the service starts stopping, the value `utxoPersister_livenessStallTimeout` is compared against |
+
 ## Validator Service Metrics
 
 | Metric Name                                | Type      | Description                                                             |
