@@ -72,8 +72,8 @@ func (s MemorySeen) Add(txid chainhash.Hash) (bool, error) {
 // BlockOrder returns the transactions of a source block that take new backfill positions, in the
 // order they take them: subtree by subtree, node by node, leaving out the coinbase placeholder, the
 // coinbase, every transaction no copy holds any more, and every transaction that already has a
-// position. It is the one definition of a block's order: numbering, resumption and import all use
-// it.
+// position. It is the one definition of a block's order: numbering and its resumption use it.
+// ImportBlock does not: it places whatever the assignment holds, in subtree and node order.
 func BlockOrder(b SourceBlock, facts Facts) ([]chainhash.Hash, error) {
 	var out []chainhash.Hash
 

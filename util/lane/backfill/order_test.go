@@ -155,6 +155,108 @@ func TestNumberRefusesAChangedSource(t *testing.T) {
 
 	_, err = Number(context.Background(), m, src, facts, MemorySeen{})
 	require.Error(t, err)
+
+	// The same transactions recorded for another block, or at another height, are a changed
+	// source too.
+	order, err := BlockOrder(src.Blocks[0], facts)
+	require.NoError(t, err)
+
+	for name, at := range map[string][2]uint32{
+		"another block ID": {src.Blocks[0].BlockID + 100, src.Blocks[0].Height},
+		"another height":   {src.Blocks[0].BlockID, src.Blocks[0].Height - 1},
+	} {
+		mm, err := CreateManifest(filepath.Join(t.TempDir(), "m"), testHeader())
+		require.NoError(t, err)
+
+		_, err = mm.AppendBlock(at[0], at[1], order)
+		require.NoError(t, err)
+
+		_, err = Number(context.Background(), mm, src, facts, MemorySeen{})
+		require.Error(t, err, name)
+		require.NoError(t, mm.Close())
+	}
+}
+
+// numberedPart writes the source's blocks, all of them or the first n, into a new manifest, and
+// optionally a suffix, as a run that crashed before finishing would leave it.
+func numberedPart(t *testing.T, path string, src Source, facts Facts, n int, suffix []chainhash.Hash) {
+	t.Helper()
+
+	m, err := CreateManifest(path, testHeader())
+	require.NoError(t, err)
+
+	for _, b := range src.Blocks[:n] {
+		order, err := BlockOrder(b, facts)
+		require.NoError(t, err)
+
+		_, err = m.AppendBlock(b.BlockID, b.Height, order)
+		require.NoError(t, err)
+	}
+
+	if suffix != nil {
+		_, err = m.AppendSuffix(suffix)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, m.Close())
+}
+
+// A crash after the suffix record resumes to the same segment and bytes when the suffix matches,
+// and is refused when the recorded suffix differs from the source's.
+func TestNumberResumesAfterTheSuffix(t *testing.T) {
+	src, facts := exampleSource()
+	dir := t.TempDir()
+
+	whole, err := CreateManifest(filepath.Join(dir, "whole"), testHeader())
+	require.NoError(t, err)
+	want, err := Number(context.Background(), whole, src, facts, MemorySeen{})
+	require.NoError(t, err)
+	require.NoError(t, whole.Close())
+
+	suffix, err := SuffixOrder(src.Suffix, facts)
+	require.NoError(t, err)
+
+	numberedPart(t, filepath.Join(dir, "same"), src, facts, len(src.Blocks), suffix)
+
+	resumed, err := ResumeManifest(filepath.Join(dir, "same"))
+	require.NoError(t, err)
+	got, err := Number(context.Background(), resumed, src, facts, MemorySeen{})
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.NoError(t, resumed.Close())
+
+	a, err := os.ReadFile(filepath.Join(dir, "whole"))
+	require.NoError(t, err)
+	b, err := os.ReadFile(filepath.Join(dir, "same"))
+	require.NoError(t, err)
+	require.Equal(t, a, b)
+
+	numberedPart(t, filepath.Join(dir, "other"), src, facts, len(src.Blocks), []chainhash.Hash{h("not F")})
+
+	resumed, err = ResumeManifest(filepath.Join(dir, "other"))
+	require.NoError(t, err)
+	_, err = Number(context.Background(), resumed, src, facts, MemorySeen{})
+	require.Error(t, err, "the recorded suffix differs from the source's")
+	require.NoError(t, resumed.Close())
+}
+
+// A manifest holding more blocks than the source is refused: the source lost a block.
+func TestNumberRefusesAManifestLongerThanTheSource(t *testing.T) {
+	src, facts := exampleSource()
+	path := filepath.Join(t.TempDir(), "m")
+
+	numberedPart(t, path, src, facts, len(src.Blocks), nil)
+
+	short := src
+	short.Blocks = src.Blocks[:1]
+
+	m, err := ResumeManifest(path)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, m.Close()) }()
+
+	_, err = Number(context.Background(), m, short, facts, MemorySeen{})
+	require.Error(t, err)
 }
 
 func TestNumberRefusesATransactionPlacedTwice(t *testing.T) {
@@ -195,8 +297,14 @@ func TestBackfillImportsNothingLive(t *testing.T) {
 			"github.com/bsv-blockchain/teranode/stores/blockchain",
 			"github.com/bsv-blockchain/teranode/stores/utxo/aerospike",
 			"github.com/bsv-blockchain/teranode/stores/utxo/utxoset",
+			"github.com/bsv-blockchain/teranode/stores/utxo/sql",
+			"github.com/bsv-blockchain/teranode/stores/utxo/pebble",
+			"github.com/bsv-blockchain/teranode/stores/blob",
 		} {
 			require.False(t, strings.HasPrefix(dep, banned), "backfill depends on %s", dep)
 		}
+
+		// The UTXO store interface package itself, whose prefix the helper packages share.
+		require.NotEqual(t, "github.com/bsv-blockchain/teranode/stores/utxo", dep, "backfill depends on the UTXO store package")
 	}
 }

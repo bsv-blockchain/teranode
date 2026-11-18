@@ -41,6 +41,10 @@ func (a MapAssignment) AddSuffix(first uint64, txids []chainhash.Hash) error {
 }
 
 func (a MapAssignment) addRun(first uint64, txids []chainhash.Hash) error {
+	if first < 1 || first > lane.MaxPosition || uint64(len(txids)) > lane.MaxPosition-first+1 {
+		return errors.NewProcessingError("a run of %d txids from position %d does not fit 1 to %d", len(txids), first, lane.MaxPosition)
+	}
+
 	for i, txid := range txids {
 		if err := a.Add(txid, lane.Pack(lane.BackfillLane, first+uint64(i))); err != nil {
 			return err
@@ -91,20 +95,38 @@ type ImportedBlock struct {
 // ImportBlock builds a historical block's map rows and proof file from an explicit assignment:
 // each transaction of each subtree the assignment holds is placed at its position, in its lane, in
 // that subtree's bitmap. A transaction it does not hold is left out. It reads no store, decoder,
-// lease or bitmap, and fails if two of the block's transactions share a position or one appears
-// twice.
+// lease or bitmap, and fails if any transaction appears twice in the block, held or not, or if two
+// of its transactions share a position.
+//
+// A coinbase whose assigned position is in the coinbase lane but names another block is left out:
+// that coinbase is the same transaction as a later block's (BSV has two such historical pairs,
+// the BIP30 exceptions), the assignment is keyed by txid, and the position belongs to the other
+// block, which places it.
 func ImportBlock(b SourceBlock, assign Assignment) (ImportedBlock, error) {
 	out := ImportedBlock{BlockID: b.BlockID, Proof: lane.ProofFile{BlockHash: b.Hash}}
 
+	total := 0
+	for _, st := range b.Subtrees {
+		total += len(st.TxIDs)
+	}
+
+	seen := make(map[chainhash.Hash]struct{}, total)
 	placed := map[uint64]chainhash.Hash{}
 
 	for si, st := range b.Subtrees {
 		lanes := lane.LaneBitmaps{}
 
 		for ni, txid := range st.TxIDs {
-			if txid == subtreepkg.CoinbasePlaceholderHashValue {
+			isCoinbase := txid == subtreepkg.CoinbasePlaceholderHashValue
+			if isCoinbase {
 				txid = b.Coinbase
 			}
+
+			if _, dup := seen[txid]; dup {
+				return ImportedBlock{}, errors.NewProcessingError("block %d holds %s twice", b.BlockID, txid.String())
+			}
+
+			seen[txid] = struct{}{}
 
 			pos, ok := assign.Position(txid)
 			if !ok {
@@ -115,11 +137,13 @@ func ImportBlock(b SourceBlock, assign Assignment) (ImportedBlock, error) {
 				return ImportedBlock{}, errors.NewProcessingError("block %d subtree %d node %d", b.BlockID, si, ni, err)
 			}
 
-			if other, dup := placed[pos]; dup {
-				if other == txid {
-					return ImportedBlock{}, errors.NewProcessingError("block %d holds %s twice", b.BlockID, txid.String())
+			if isCoinbase || txid == b.Coinbase {
+				if l, p := lane.Unpack(pos); l == lane.CoinbaseLane && p != uint64(b.BlockID) {
+					continue
 				}
+			}
 
+			if other, dup := placed[pos]; dup {
 				return ImportedBlock{}, errors.NewProcessingError("block %d: %s and %s share position %#x", b.BlockID, other.String(), txid.String(), pos)
 			}
 
@@ -159,10 +183,12 @@ func ImportBlock(b SourceBlock, assign Assignment) (ImportedBlock, error) {
 	return out, nil
 }
 
-// CheckBackfillStretch verifies an imported block against its manifest record: the block's
-// backfill-lane positions are exactly the record's stretch, First to First+Count-1, each held by
-// the transaction the manifest assigned it, in the subtree that holds it. Positions outside the
-// stretch, which an earlier segment gave, are not this record's to check.
+// CheckBackfillStretch verifies an imported block against its manifest record: the block is the
+// record's block, its backfill-lane positions within the record's stretch are exactly First to
+// First+Count-1, and each manifest transaction sits in a subtree whose bitmap holds the position
+// the manifest assigned it. It checks subtrees, not nodes: two transactions of one subtree whose
+// positions were swapped pass. Positions outside the stretch, which an earlier segment gave, are
+// not this record's to check.
 func CheckBackfillStretch(imported ImportedBlock, rec lane.ConversionBlock, txids []chainhash.Hash, b SourceBlock) error {
 	if imported.BlockID != rec.BlockID || b.BlockID != rec.BlockID {
 		return errors.NewProcessingError("manifest block %d is block %d, not %d", rec.Seq, rec.BlockID, imported.BlockID)
@@ -203,7 +229,12 @@ func CheckBackfillStretch(imported ImportedBlock, rec lane.ConversionBlock, txid
 			return errors.NewProcessingError("block %d does not hold manifest transaction %s", rec.BlockID, txid.String())
 		}
 
-		if imported.Proof.SubtreeOf(lane.Pack(lane.BackfillLane, rec.First+uint64(i))) != si {
+		var bm *roaring64.Bitmap
+		if si < len(imported.Proof.Subtrees) {
+			bm = imported.Proof.Subtrees[si].Lanes[lane.BackfillLane]
+		}
+
+		if bm == nil || !bm.Contains(rec.First+uint64(i)) {
 			return errors.NewProcessingError("block %d: %s is not in the subtree holding its position", rec.BlockID, txid.String())
 		}
 	}

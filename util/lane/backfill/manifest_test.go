@@ -253,6 +253,8 @@ func TestManifestRefusesRecordsThatDisagreeWithThemselves(t *testing.T) {
 		"suffix at the wrong start": craft(headerRecord(), blockRecord(2, 2), suffixRecord(1_000_004, 1, 1)),
 		"suffix count wrong":        craft(headerRecord(), blockRecord(2, 2), suffixRecord(1_000_003, 2, 1)),
 		"block before header":       craft(blockRecord(2, 2)),
+		"block after the end":       craft(headerRecord(), blockRecord(2, 2), endRecord(1_000_002, 1_000_002), blockRecord(0, 0)),
+		"suffix after the end":      craft(headerRecord(), blockRecord(2, 2), endRecord(1_000_002, 1_000_002), suffixRecord(1_000_003, 0, 0)),
 	} {
 		path := filepath.Join(dir, "bad")
 		require.NoError(t, os.WriteFile(path, b, 0o600))
@@ -260,4 +262,189 @@ func TestManifestRefusesRecordsThatDisagreeWithThemselves(t *testing.T) {
 		_, err := ResumeManifest(path)
 		require.Error(t, err, name)
 	}
+
+	ended := craft(headerRecord(), blockRecord(2, 2), endRecord(1_000_002, 1_000_002))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ended"), ended, 0o600))
+
+	m, err = OpenManifest(filepath.Join(dir, "ended"))
+	require.NoError(t, err)
+	require.True(t, m.Finished(), "the same file without the record after the end loads")
+	require.NoError(t, m.Close())
+}
+
+func endRecord(prefixLast, last uint64) []byte {
+	r := []byte{recordEnd}
+	r = binary.LittleEndian.AppendUint64(r, prefixLast)
+
+	return binary.LittleEndian.AppendUint64(r, last)
+}
+
+// A last record whose length reaches exactly to the end of the file but whose body fails its CRC
+// is what a crash leaves when the payload was only partly written to disk: ResumeManifest cuts it
+// and keeps every record before it, and OpenManifest refuses it.
+func TestManifestCutsALastRecordWhoseBodyFailsItsCRC(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m")
+
+	m, err := CreateManifest(path, testHeader())
+	require.NoError(t, err)
+	_, err = m.AppendBlock(10, 10, txids(1, 4))
+	require.NoError(t, err)
+	_, err = m.AppendBlock(11, 11, txids(2, 4))
+	require.NoError(t, err)
+	require.NoError(t, m.Close())
+
+	full, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	damaged := append([]byte{}, full...)
+	damaged[len(damaged)-frameTail-5] ^= 0xFF // a txid byte of the last record
+	require.NoError(t, os.WriteFile(path, damaged, 0o600))
+
+	_, err = OpenManifest(path)
+	require.Error(t, err)
+
+	m, err = ResumeManifest(path)
+	require.NoError(t, err)
+	require.Len(t, m.Blocks(), 1)
+	require.NoError(t, m.Close())
+
+	cut, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Less(t, len(cut), len(full))
+	require.Equal(t, full[:len(cut)], cut)
+}
+
+// A manifest that assigns no position is refused before its end record is written, so the file
+// stays open to blocks and a resume does not find it finished.
+func TestManifestFinishRefusesAnEmptySegment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m")
+
+	m, err := CreateManifest(path, testHeader())
+	require.NoError(t, err)
+
+	_, err = m.Finish()
+	require.Error(t, err)
+	require.False(t, m.Finished())
+	require.NoError(t, m.Close())
+
+	m, err = ResumeManifest(path)
+	require.NoError(t, err)
+	require.False(t, m.Finished(), "no end record reached the disk")
+
+	_, err = m.AppendBlock(10, 10, txids(1, 2))
+	require.NoError(t, err)
+
+	seg, err := m.Finish()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1_000_002), seg.Last)
+	require.NoError(t, m.Close())
+}
+
+// A write that fails leaves the manifest refusing every later append, even once the disk would
+// take it, so a retry cannot write a second copy of a record that may already be there. Resuming
+// reloads the file and appends again.
+func TestManifestRefusesAppendsAfterAFailedWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m")
+
+	m, err := CreateManifest(path, testHeader())
+	require.NoError(t, err)
+	_, err = m.AppendBlock(10, 10, txids(1, 2))
+	require.NoError(t, err)
+
+	require.NoError(t, m.f.Close())
+
+	_, err = m.AppendBlock(11, 11, txids(2, 2))
+	require.Error(t, err, "the file is closed")
+
+	// The disk is writable again, but this Manifest no longer knows what is on it.
+	m.f, err = os.OpenFile(path, os.O_RDWR, 0)
+	require.NoError(t, err)
+
+	_, err = m.AppendBlock(11, 11, txids(2, 2))
+	require.Error(t, err)
+	_, err = m.AppendSuffix(nil)
+	require.Error(t, err)
+	_, err = m.Finish()
+	require.Error(t, err)
+	require.NoError(t, m.Close())
+
+	m, err = ResumeManifest(path)
+	require.NoError(t, err)
+	require.Len(t, m.Blocks(), 1)
+
+	b, err := m.AppendBlock(11, 11, txids(2, 2))
+	require.NoError(t, err)
+	require.Equal(t, uint64(1_000_003), b.First)
+	require.NoError(t, m.Close())
+}
+
+// Creating a manifest writes it beside the path and links it into place: a stale ".tmp" an
+// earlier crash left is overwritten, none is left behind, and an existing manifest is never
+// replaced.
+func TestManifestCreateIsAllOrNothing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m")
+
+	// A crash part-way through an earlier create left a longer, torn file at the temporary name.
+	require.NoError(t, os.WriteFile(path+".tmp", make([]byte, 4096), 0o600))
+
+	m, err := CreateManifest(path, testHeader())
+	require.NoError(t, err)
+	require.NoError(t, m.Close())
+
+	_, err = os.Stat(path + ".tmp")
+	require.True(t, os.IsNotExist(err), "the temporary file is gone")
+
+	m, err = OpenManifest(path)
+	require.NoError(t, err, "the manifest holds a whole header and nothing of the stale file")
+	require.Equal(t, testHeader(), m.Header())
+	require.NoError(t, m.Close())
+
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	_, err = CreateManifest(path, Header{Segment: 2, First: 5_000_000})
+	require.Error(t, err)
+
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "the existing manifest is untouched")
+}
+
+// FuzzOpenManifest loads arbitrary bytes as a manifest. Loading never panics, and a manifest that
+// loads reads back every txid its records name, and loads again the same after a resume.
+func FuzzOpenManifest(f *testing.F) {
+	f.Add(craft(headerRecord(), blockRecord(2, 2), suffixRecord(1_000_003, 1, 1)))
+	f.Add(craft(headerRecord(), blockRecord(2, 2), endRecord(1_000_002, 1_000_002)))
+	f.Add(append([]byte(manifestMagic), manifestVersion))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		path := filepath.Join(t.TempDir(), "m")
+		require.NoError(t, os.WriteFile(path, data, 0o600))
+
+		m, err := OpenManifest(path)
+		if err != nil {
+			return
+		}
+
+		blocks := m.Blocks()
+
+		for _, b := range blocks {
+			ids, err := m.BlockTxIDs(b.Seq)
+			require.NoError(t, err)
+			require.Len(t, ids, int(b.Count))
+		}
+
+		if m.HasSuffix() {
+			_, _, err = m.SuffixTxIDs()
+			require.NoError(t, err)
+		}
+
+		require.NoError(t, m.Close())
+
+		resumed, err := ResumeManifest(path)
+		require.NoError(t, err, "a manifest that opens also resumes")
+		require.Equal(t, blocks, resumed.Blocks())
+		require.NoError(t, resumed.Close())
+	})
 }

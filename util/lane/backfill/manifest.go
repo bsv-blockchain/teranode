@@ -16,6 +16,7 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -61,6 +62,8 @@ const (
 	blockFixed    = 4 + 4 + 4 + 8 + 8
 	suffixFixed   = 8 + 8
 	endPayload    = 8 + 8
+
+	readRecordAt = "read manifest record at %d"
 )
 
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
@@ -95,24 +98,38 @@ type Manifest struct {
 	next     uint64 // the next position to assign
 	size     int64
 	readOnly bool
+	// failed is set when a write or sync of a record failed: what is on disk past the last good
+	// record is unknown, so nothing more is appended until ResumeManifest reloads the file.
+	failed bool
 }
 
-// CreateManifest starts a new manifest for a segment. The file must not exist.
+// CreateManifest starts a new manifest for a segment. The file must not exist. The magic and the
+// header record are written to path+".tmp", synced, and linked to path, so a crash during creation
+// leaves either no manifest or a whole header, never one ResumeManifest refuses and CreateManifest
+// cannot replace. A ".tmp" file an earlier crash left is overwritten.
 func CreateManifest(path string, h Header) (*Manifest, error) {
 	if h.Segment == 0 || h.First < lane.BackfillFirstPosition || h.First > lane.MaxPosition {
 		return nil, errors.NewProcessingError("manifest header: segment %d first %d is not a valid start", h.Segment, h.First)
 	}
 
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // an operator-supplied maintenance path
+	tmp := path + ".tmp"
+
+	f, err := os.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // an operator-supplied maintenance path
 	if err != nil {
-		return nil, errors.NewStorageError("create manifest %s", path, err)
+		return nil, errors.NewStorageError("create manifest %s", tmp, err)
 	}
 
 	m := &Manifest{path: path, f: f, digest: sha256.New(), header: h, next: h.First}
 
-	if err = m.write(append([]byte(manifestMagic), manifestVersion)); err != nil {
+	fail := func(err error) (*Manifest, error) {
 		_ = f.Close()
+		_ = os.Remove(tmp)
+
 		return nil, err
+	}
+
+	if err = m.write(append([]byte(manifestMagic), manifestVersion)); err != nil {
+		return fail(err)
 	}
 
 	payload := binary.LittleEndian.AppendUint32(nil, h.Segment)
@@ -121,11 +138,40 @@ func CreateManifest(path string, h Header) (*Manifest, error) {
 	payload = append(payload, h.SourceTipHash[:]...)
 
 	if err = m.appendRecord(recordHeader, payload); err != nil {
+		return fail(err)
+	}
+
+	// A link, unlike a rename, refuses to replace a manifest another run created meanwhile.
+	if err = os.Link(tmp, path); err != nil {
+		return fail(errors.NewStorageError("create manifest %s", path, err))
+	}
+
+	if err = os.Remove(tmp); err != nil {
+		return fail(errors.NewStorageError("remove %s", tmp, err))
+	}
+
+	if err = syncDir(filepath.Dir(path)); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
 
 	return m, nil
+}
+
+// syncDir syncs a directory, so a file linked or removed in it survives a crash.
+func syncDir(dir string) error {
+	d, err := os.Open(dir) //nolint:gosec // the manifest's own directory
+	if err != nil {
+		return errors.NewStorageError("open directory %s", dir, err)
+	}
+
+	defer func() { _ = d.Close() }()
+
+	if err = d.Sync(); err != nil {
+		return errors.NewStorageError("sync directory %s", dir, err)
+	}
+
+	return nil
 }
 
 // OpenManifest opens a manifest to read it. It changes nothing on disk, and refuses a manifest
@@ -285,18 +331,18 @@ func (m *Manifest) readBody(r *bufio.Reader, typ byte, payloadLen uint64, pos in
 
 	body := make([]byte, keep)
 	if _, err := io.ReadFull(r, body); err != nil {
-		return nil, false, errors.NewStorageError("read manifest record at %d", pos, err)
+		return nil, false, errors.NewStorageError(readRecordAt, pos, err)
 	}
 
 	crc.Write(body)
 
 	if _, err := io.CopyN(crc, r, int64(payloadLen-keep)); err != nil { //nolint:gosec // bounded by the file size
-		return nil, false, errors.NewStorageError("read manifest record at %d", pos, err)
+		return nil, false, errors.NewStorageError(readRecordAt, pos, err)
 	}
 
 	var tail [frameTail]byte
 	if _, err := io.ReadFull(r, tail[:]); err != nil {
-		return nil, false, errors.NewStorageError("read manifest record at %d", pos, err)
+		return nil, false, errors.NewStorageError(readRecordAt, pos, err)
 	}
 
 	return body, crc.Sum32() == binary.LittleEndian.Uint32(tail[:]), nil
@@ -442,10 +488,17 @@ func (m *Manifest) write(b []byte) error {
 	return nil
 }
 
-// appendRecord writes one framed record and syncs it.
+// appendRecord writes one framed record and syncs it. When either fails the record may be partly
+// on disk or wholly there, so the manifest is marked failed and refuses every later append, rather
+// than write the record a second time after a copy that may already be there; ResumeManifest
+// reloads the file and cuts a partial record.
 func (m *Manifest) appendRecord(typ byte, payload []byte) error {
 	if m.readOnly {
 		return errors.NewProcessingError("manifest %s was opened to read; resume it to write", m.path)
+	}
+
+	if m.failed {
+		return errors.NewProcessingError("manifest %s failed an earlier write; resume it before writing again", m.path)
 	}
 
 	frame := make([]byte, 0, frameHead+len(payload)+frameTail)
@@ -460,10 +513,12 @@ func (m *Manifest) appendRecord(typ byte, payload []byte) error {
 	frame = binary.LittleEndian.AppendUint32(frame, body.Sum32())
 
 	if err := m.write(frame); err != nil {
+		m.failed = true
 		return err
 	}
 
 	if err := m.f.Sync(); err != nil {
+		m.failed = true
 		return errors.NewStorageError("sync manifest %s", m.path, err)
 	}
 
@@ -538,13 +593,19 @@ func (m *Manifest) AppendSuffix(txids []chainhash.Hash) (uint64, error) {
 }
 
 // Finish writes the end record and returns the segment the manifest describes, with its digest.
-// Nothing can be appended after it.
+// Nothing can be appended after it. A manifest that assigns no position, or whose segment is not
+// valid, is refused before the end record is written, so nothing durable marks it finished.
 func (m *Manifest) Finish() (lane.ConversionSegment, error) {
 	if m.end {
 		return m.Segment()
 	}
 
 	seg := m.pendingSegment()
+
+	// Check refuses an empty segment too: Last below First.
+	if err := seg.Check(); err != nil {
+		return lane.ConversionSegment{}, errors.NewProcessingError("manifest %s", m.path, err)
+	}
 
 	payload := binary.LittleEndian.AppendUint64(nil, seg.PrefixLast)
 	payload = binary.LittleEndian.AppendUint64(payload, seg.Last)
