@@ -1225,7 +1225,7 @@ message RenewLaneLeaseRequest {
   uint64 rate = 3;                // Positions taken per second, as the holder measured it
   bool want_grant = 4;            // Asks for the next grant
   uint64 settles_first = 5;       // With want_grant: first position of the oldest grant the holder has left and not yet reported; 0 for none
-  uint64 settles_last_taken = 6;  // Its final number: its last position if used up, else the highest taken; 0 if never used
+  uint64 settles_last_taken = 6;  // Its final number: its last position if used up, else the highest taken. Never 0 when settles_first is set: a grant never used is not settled
 }
 
 // RenewLaneLeaseResponse answers a renewal. closed means the lease is closed and nothing was recorded.

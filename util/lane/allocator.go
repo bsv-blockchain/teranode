@@ -190,8 +190,9 @@ func (a *Allocator) Ready() error {
 	}
 }
 
-// Close stops the allocator, releases its lease with the last position it took, and then closes
-// src if src is an io.Closer. Positions not handed out are lost, which is safe: the service never
+// Close stops the allocator, tries to release its lease with the last position it took, and then
+// closes src if src is an io.Closer. A release that fails, such as one sent to a blockchain service
+// that has already stopped, is logged and the lease lapses at the service's close time. Positions not handed out are lost, which is safe: the service never
 // hands them out again.
 func (a *Allocator) Close() error {
 	a.mu.Lock()

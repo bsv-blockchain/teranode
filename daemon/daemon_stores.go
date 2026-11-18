@@ -142,8 +142,10 @@ var laneLeaseSource = func(ctx context.Context, _ *Stores, logger ulogger.Logger
 // giveLanePositions hands the process's one UTXO store its lane position source. Every service in
 // the process creates records through that store, so that is one allocator and one lane lease per
 // process, with no change at any call site. The allocator starts on the first create unless
-// something starts it sooner, so a process that never creates records never takes a lane. A store
-// that cannot write lane positions, such as the null store, gets none.
+// something starts it sooner. A validator starts it when it is built, so a process holding a local
+// validator takes a lane at start whether or not it ever creates a record; any other process that
+// never creates records never takes one. A store that cannot write lane positions, such as the null
+// store, gets none.
 func (d *Stores) giveLanePositions(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings,
 	store utxostore.Store) error {
 	taker, ok := utxostore.As[utxostore.LanePositionTaker](store)
@@ -176,7 +178,9 @@ func (d *Stores) giveLanePositions(ctx context.Context, logger ulogger.Logger, a
 		Stop:          appSettings.BlockChain.LaneLeaseStopAfter,
 		GrantDuration: appSettings.BlockChain.LaneGrantDuration,
 	}, logger)
-	// Retained so the daemon closes it, which releases the lease and then closes its client.
+	// Retained so the daemon closes it, which releases the lease and then closes its client. In a
+	// process that also runs the blockchain service, that service has stopped by then, so the
+	// release fails, is logged, and the lease lapses after blockchain_laneLeaseCloseAfter.
 	d.retainClient(allocator)
 	taker.SetLanePositionSource(allocator)
 
