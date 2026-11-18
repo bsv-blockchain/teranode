@@ -769,6 +769,8 @@ Only failures that are not a verdict on the block are retried. The worker puts t
 
 Invalid blocks are never retried.
 
+A block that failed on a corrupt blob in this node's own store (`ERR_BLOB_CORRUPT`) is not retried or fetched from another source either, even though its error text matches the malicious-response check. The file already exists, so every attempt would read the same bytes. Repair or remove the file first.
+
 ##### Alternative Source Handling
 
 The `GetAlternativeSource()` method:
