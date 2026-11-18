@@ -2126,15 +2126,17 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 				}
 
 				// Both blobs are gone, so the inputs are unrecoverable and no
-				// parent can be marked now. A blob is deleted only after the
-				// markers of the batch that deletes its record have landed (here
-				// and on main, where a failed parent update stopped the blob
-				// delete), and a record is left behind only when its record
-				// delete did not land: pruner_skipDeletions on main still deleted
-				// the blobs, and a record delete that answered with no response
-				// was read as done. In every such case the parents were marked
-				// already, so the record carries nothing more to protect and is
-				// deleted, as on main. Retaining it would rescan it, at two blob
+				// parent can be marked now. The record is deleted, as on main.
+				// This pruner deletes a blob only with its record, after the
+				// markers of the batch that deletes the record have landed,
+				// and so did main's (a failed parent update stopped the blob
+				// delete). A record main left behind by pruner_skipDeletions,
+				// which still deleted the blob, or by a record delete that
+				// answered without a response, therefore has its parents marked
+				// already. A blob lost any other way (a blob store that lost
+				// the file, an operator) leaves a record whose parents may be
+				// unmarked, and deleting it does not refuse a replay of it,
+				// exactly as on main. Retaining it would rescan it, at two blob
 				// calls, on every block for good.
 				s.logger.Debugf("external tx %s already deleted from blob store at height %d, proceeding to delete the record", txHash.String(), blockHeight)
 
