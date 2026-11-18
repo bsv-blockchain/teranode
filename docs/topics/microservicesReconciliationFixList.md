@@ -66,9 +66,13 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       response body itself still lists only failures because
       `AddToConsensusBlacklistResponse` lives in the external `go-bn` module — adding a
       `processed` field there is a separate upstream change
-- [x] Distinguish a missing deletions ledger from being caught-up — three situations share
+- [ ] Distinguish a missing deletions ledger from being caught-up — three situations share
       one log line, and the tolerance for one is keyed to an error the shipped file store
-      never emits (§42, Q23)
+      never emits (§42, Q23) — premise disproven in review: `NewUTXOSet` always writes the
+      deletions file, header only for a block that spends nothing, so a missing ledger is
+      never "no deletions" and the tolerance would roll a half-written block into the set.
+      The tolerance is removed and the missing-ledger error propagates (test pinned); the
+      shared log line stays open
 - [x] Log the coin archive's fixed 100-block lag at start-up (or make it a setting) so the
       coupling is visible before downtime (§43, Q24) — start-up line in `Start()`; turning
       the constant into a setting stays open as the heavier option
@@ -111,9 +115,10 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       (`alert_confiscationAllowReassignWithoutScript`); persistence deferred to upstream
       issue 1725, which is a storage-format change touching both stores' read paths
 - [x] `getchaintips`: shorten the five-minute cache, invalidate on chain update, or
-      document the staleness (§61, Q40) — invalidated on chain update by construction:
-      the cache entry is keyed by the best block hash, so a new block, reorg, or
-      invalidation retires it instantly; polling inside one tip still hits
+      document the staleness (§61, Q40) — the cache entry records the best block hash it was
+      computed at, so a new block or reorg retires it instantly, and `invalidateblock` or
+      `reconsiderblock` through this node clear it. A side-branch block arriving under an
+      unchanged best tip shows when the 10-second TTL expires
 - [x] RPC door: bound-and-queue instead of refuse + `Connection: close` if machine traffic
       is in scope, else rename "maximum clients" and say what it limits (§58, Q38)
       — took the rename-and-say branch: key label, longdesc, field comment and settings.conf
