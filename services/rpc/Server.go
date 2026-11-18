@@ -291,7 +291,8 @@ const (
 	// rpcAccessAdmin methods are callable only with the admin credential.
 	rpcAccessAdmin rpcAccess = iota
 
-	// rpcAccessReadOnly methods never change node state and are callable by the limited credential.
+	// rpcAccessReadOnly methods are queries callable by the limited credential. A query may
+	// have a side effect: getrawmempool with verbose=true requests a mining candidate.
 	rpcAccessReadOnly
 
 	// rpcAccessLimitedWrite methods change node or network state but are

@@ -425,8 +425,7 @@ getgenerate, gethashespersec, getmempoolinfo, getmininginfo, getpeerinfo, invali
 listbanned, node, ping, reassign, reconsiderblock, setban, setgenerate, stop, unfreeze, verifychain
 
 The classification lives in `rpcAccessPolicy` in `services/rpc/Server.go`. Every registered handler must
-have an entry. A method with no entry is denied to limited users. The WebSocket notification methods
-(`loadtxfilter, notifyblocks, notifynewtransactions, notifyreceived, notifyspent, rescan, rescanblocks, session`) are also read-only and available to limited users.
+have an entry. A method with no entry is denied to limited users.
 
 ### GRPC API Key Authentication
 

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,17 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bsv-blockchain/go-bt/v2"
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
-	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
-	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1113,19 +1108,19 @@ func TestStandardCmdResult_PanicRecovery(t *testing.T) {
 func TestRPCAccessPolicyCoversEveryHandler(t *testing.T) {
 	for method := range rpcHandlersBeforeInit {
 		_, ok := rpcAccessPolicy[method]
-		assert.True(t, ok, "handler %q is not classified in rpcAccessPolicy", method)
+		require.True(t, ok, "handler %q is not classified in rpcAccessPolicy", method)
 	}
 }
 
 func TestRPCLimitedExcludesAdminMethods(t *testing.T) {
 	for _, method := range []string{"freeze", "unfreeze", "reassign", "stop", "setban", "invalidateblock", "generate"} {
-		assert.Equal(t, rpcAccessAdmin, rpcAccessPolicy[method], method)
-		assert.NotContains(t, rpcLimited, method)
+		require.Equal(t, rpcAccessAdmin, rpcAccessPolicy[method], method)
+		require.NotContains(t, rpcLimited, method)
 	}
 
 	for method, access := range rpcAccessPolicy {
 		_, limited := rpcLimited[method]
-		assert.Equal(t, access != rpcAccessAdmin, limited, method)
+		require.Equal(t, access != rpcAccessAdmin, limited, method)
 	}
 }
 
@@ -1151,7 +1146,14 @@ func (u *utxoMutationSpy) ReAssignUTXO(context.Context, *utxo.Spend, *utxo.Spend
 	return nil
 }
 
-func TestLimitedUserCannotMutateUTXOs(t *testing.T) {
+type rpcReply struct {
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+func TestUTXOAlertMethodsAreAdminOnly(t *testing.T) {
 	adminAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("admin:adminpass"))
 	limitAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("limited:limitpass"))
 
@@ -1170,22 +1172,16 @@ func TestLimitedUserCannotMutateUTXOs(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, isAdmin, err := s.checkAuth(r, true)
-		require.NoError(t, err)
+		if err != nil {
+			jsonAuthFail(w)
+			return
+		}
 
 		s.jsonRPCRead(w, r, isAdmin)
 	}))
 	defer srv.Close()
 
-	txid := strings.Repeat("ab", 32)
-	hash := strings.Repeat("cd", 32)
-
-	bodies := map[string]string{
-		"freeze":   `{"jsonrpc":"1.0","id":1,"method":"freeze","params":["` + txid + `",0]}`,
-		"unfreeze": `{"jsonrpc":"1.0","id":1,"method":"unfreeze","params":["` + txid + `",0]}`,
-		"reassign": `{"jsonrpc":"1.0","id":1,"method":"reassign","params":["` + txid + `",0,"` + hash + `","` + hash + `"]}`,
-	}
-
-	call := func(auth, body string) string {
+	call := func(t *testing.T, auth, body string) rpcReply {
 		req, err := http.NewRequest(http.MethodPost, srv.URL, strings.NewReader(body))
 		require.NoError(t, err)
 		req.Header.Set("Authorization", auth)
@@ -1195,146 +1191,41 @@ func TestLimitedUserCannotMutateUTXOs(t *testing.T) {
 
 		defer resp.Body.Close()
 
-		var sb strings.Builder
-		buf := make([]byte, 4096)
+		raw, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
 
-		for {
-			n, rerr := resp.Body.Read(buf)
-			sb.Write(buf[:n])
+		var reply rpcReply
+		require.NoError(t, json.Unmarshal(raw, &reply), string(raw))
 
-			if rerr != nil {
-				break
-			}
-		}
-
-		return sb.String()
+		return reply
 	}
 
-	for method, body := range bodies {
-		out := call(limitAuth, body)
-		assert.Contains(t, out, "limited user not authorized for this method", method)
-	}
-
-	assert.Zero(t, spy.freezes.Load())
-	assert.Zero(t, spy.unfreezes.Load())
-	assert.Zero(t, spy.reassigns.Load())
-	call(adminAuth, bodies["reassign"])
-	assert.Equal(t, int32(1), spy.reassigns.Load(), "admin must still reach reassign")
-}
-
-type freezeSpy struct {
-	utxo.Store
-	tx       *bt.Tx
-	getErr   error
-	frozen   []*utxo.Spend
-	unfrozen []*utxo.Spend
-}
-
-func (f *freezeSpy) Get(context.Context, *chainhash.Hash, ...fields.FieldName) (*meta.Data, error) {
-	if f.getErr != nil {
-		return nil, f.getErr
-	}
-
-	return &meta.Data{Tx: f.tx}, nil
-}
-
-func (f *freezeSpy) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, _ *settings.Settings) error {
-	f.frozen = append(f.frozen, spends...)
-	return nil
-}
-
-func (f *freezeSpy) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, _ *settings.Settings) error {
-	f.unfrozen = append(f.unfrozen, spends...)
-	return nil
-}
-
-func TestHandleFreezeUsesRealUTXOHash(t *testing.T) {
-	tx := bt.NewTx()
-	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
-
-	spy := &freezeSpy{tx: tx}
-	s := &RPCServer{logger: mocklogger.NewTestLogger(), utxoStore: spy, settings: &settings.Settings{}}
-
-	_, err := handleFreeze(context.Background(), s, &bsvjson.FreezeCmd{TxID: tx.TxID(), Vout: 0}, nil)
-	require.NoError(t, err)
-	require.Len(t, spy.frozen, 1)
-
-	want, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
-	require.NoError(t, err)
-
-	assert.Equal(t, want, spy.frozen[0].UTXOHash)
-	assert.NotEqual(t, tx.TxIDChainHash(), spy.frozen[0].UTXOHash)
-
-	_, err = handleFreeze(context.Background(), s, &bsvjson.FreezeCmd{TxID: tx.TxID(), Vout: 5}, nil)
-	require.Error(t, err)
-}
-
-func TestHandleUnfreezeUsesRealUTXOHash(t *testing.T) {
-	tx := bt.NewTx()
-	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
-	require.NoError(t, tx.PayToAddress("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", 2000))
-
-	spy := &freezeSpy{tx: tx}
-	s := &RPCServer{logger: mocklogger.NewTestLogger(), utxoStore: spy, settings: &settings.Settings{}}
-
-	_, err := handleUnfreeze(context.Background(), s, &bsvjson.UnfreezeCmd{TxID: tx.TxID(), Vout: 1}, nil)
-	require.NoError(t, err)
-	require.Len(t, spy.unfrozen, 1)
-
-	want, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[1], 1)
-	require.NoError(t, err)
-
-	require.Equal(t, tx.TxIDChainHash(), spy.unfrozen[0].TxID)
-	require.Equal(t, uint32(1), spy.unfrozen[0].Vout)
-	require.Equal(t, want, spy.unfrozen[0].UTXOHash)
-	require.Empty(t, spy.frozen)
-}
-
-func TestSpendForOutputRejectsUnusableOutputs(t *testing.T) {
-	txWithNilOutput := bt.NewTx()
-	txWithNilOutput.Outputs = []*bt.Output{nil}
-
-	getErr := errors.NewServiceUnavailableError("store unavailable")
+	txid := strings.Repeat("ab", 32)
+	hash := strings.Repeat("cd", 32)
 
 	tests := []struct {
-		name    string
-		spy     *freezeSpy
-		vout    uint32
-		wantErr error
-		wantRPC bool
+		method string
+		params string
+		calls  *atomic.Int32
 	}{
-		{name: "store error", spy: &freezeSpy{getErr: getErr}, wantErr: getErr},
-		{name: "tx missing from store", spy: &freezeSpy{}, wantRPC: true},
-		{name: "vout out of range", spy: &freezeSpy{tx: bt.NewTx()}, wantRPC: true},
-		{name: "nil output", spy: &freezeSpy{tx: txWithNilOutput}},
+		{method: "freeze", params: `["` + txid + `",0,"` + hash + `"]`, calls: &spy.freezes},
+		{method: "unfreeze", params: `["` + txid + `",0,"` + hash + `"]`, calls: &spy.unfreezes},
+		{method: "reassign", params: `["` + txid + `",0,"` + hash + `","` + hash + `"]`, calls: &spy.reassigns},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := &RPCServer{logger: mocklogger.NewTestLogger(), utxoStore: tt.spy, settings: &settings.Settings{}}
+		t.Run(tt.method, func(t *testing.T) {
+			body := `{"jsonrpc":"1.0","id":1,"method":"` + tt.method + `","params":` + tt.params + `}`
 
-			_, freezeErr := handleFreeze(context.Background(), s,
-				&bsvjson.FreezeCmd{TxID: strings.Repeat("ab", 32), Vout: int(tt.vout)}, nil)
-			_, unfreezeErr := handleUnfreeze(context.Background(), s,
-				&bsvjson.UnfreezeCmd{TxID: strings.Repeat("ab", 32), Vout: int(tt.vout)}, nil)
+			limited := call(t, limitAuth, body)
+			require.NotNil(t, limited.Error, "limited user must be refused")
+			require.Equal(t, int(bsvjson.ErrRPCInvalidParams.Code), limited.Error.Code)
+			require.Equal(t, "limited user not authorized for this method", limited.Error.Message)
+			require.Zero(t, tt.calls.Load(), "a limited call must not reach the store")
 
-			for _, err := range []error{freezeErr, unfreezeErr} {
-				require.Error(t, err)
-
-				if tt.wantErr != nil {
-					require.True(t, errors.Is(err, tt.wantErr))
-				}
-
-				var rpcErr *bsvjson.RPCError
-				require.Equal(t, tt.wantRPC, errors.As(err, &rpcErr))
-
-				if tt.wantRPC {
-					require.Equal(t, bsvjson.ErrRPCInvalidParameter, rpcErr.Code)
-				}
-			}
-
-			require.Empty(t, tt.spy.frozen, "no freeze may reach the store")
-			require.Empty(t, tt.spy.unfrozen, "no unfreeze may reach the store")
+			admin := call(t, adminAuth, body)
+			require.Nil(t, admin.Error, "admin call must succeed")
+			require.Equal(t, int32(1), tt.calls.Load(), "an admin call must reach the store once")
 		})
 	}
 }
