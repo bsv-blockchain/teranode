@@ -168,8 +168,20 @@ gh pr view <NNN> --json number,title,body,labels
 1. Take the text under `## Breaking` in each PR body, and every PR with the `breaking` label.
 2. Match PR numbers against that range only. Older history reuses PR numbers from the previous repo.
 3. Read the PR diff for any PR touching `settings.conf`, `.proto` files, metric names, or consensus rules that has **no** `## Breaking` section. The author may have missed one. Ask the user; never add one silently.
-4. Legacy entries: PRs merged before `CHANGELOG.md` was deleted recorded their entries in that file. Find the deletion commit with `git log --diff-filter=D --format=%H -1 -- CHANGELOG.md`, then read the file with `git show <sha>^:CHANGELOG.md`. Use its `## [Unreleased]` entries whose PRs are in range. If only some of an entry's PRs are in range, split it.
-5. History before the deletion: the `[0.16.0]` section and earlier live only in git. Read them with `git show <sha>^:CHANGELOG.md`. Use them when a user upgrades from a version older than the deletion and the release body for an intermediate version lacks "Before you upgrade". Quote them; do not edit published release bodies unasked.
+4. Legacy entries: PRs merged before `CHANGELOG.md` was deleted recorded their entries in that file. Fetch canonical main explicitly and search that fetched history, even when checked out on a release branch or using a fork. Stop release preparation if the fetch fails or no deletion is found:
+
+   ```bash
+   git fetch https://github.com/bsv-blockchain/teranode.git main || exit 1
+   sha=$(git log FETCH_HEAD --diff-filter=D --format=%H -1 -- CHANGELOG.md) || exit 1
+   if [ -z "$sha" ]; then
+     echo "No CHANGELOG.md deletion found on canonical main; stop release preparation." >&2
+     exit 1
+   fi
+   git show "$sha^:CHANGELOG.md"
+   ```
+
+   Use its `## [Unreleased]` entries whose PRs are in range. If only some of an entry's PRs are in range, split it.
+5. History before the deletion: the `[0.16.0]` section and earlier live only in git. Read them with `git show "$sha^:CHANGELOG.md"`, using the deletion SHA resolved in step 4. Use them when a user upgrades from a version older than the deletion and the release body for an intermediate version lacks "Before you upgrade". Quote them; do not edit published release bodies unasked.
 6. Keep only sections that meet the `AGENTS.md` definition of breaking: an operator or integrator must act, or something that worked stops working. Drop ordinary bug fixes, performance changes, log changes and error-message wording, even if the author listed them. List the dropped PRs for the user.
 7. Show the collected list to the user before publishing. Never paraphrase an author's text into a weaker claim.
 
