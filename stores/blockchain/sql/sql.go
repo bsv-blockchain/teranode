@@ -1079,8 +1079,8 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 	return nil
 }
 
-// createPostgresLaneTables creates the lane tables: lane_handout, lane_lease and lane_close, and
-// the lease columns on a lane_handout from before the lease. It touches no other table, so
+// createPostgresLaneTables creates the lane tables: lane_handout, lane_lease and lane_close, the
+// map, floor, gap and conversion tables of lane_map.go, and the lease columns on a lane_handout from before the lease. It touches no other table, so
 // createPostgresSchema runs it ahead of the fast-path probe: a database from before the lane tables
 // gains them without taking the full DDL path, whose peer_id ALTER takes ACCESS EXCLUSIVE on blocks.
 //
@@ -1123,6 +1123,9 @@ func createPostgresLaneTables(db *usql.DB) error {
 				closed_at          TIMESTAMPTZ NOT NULL
 			);`},
 	}
+
+	// The map, floor, gap and conversion tables, and the map's index, go behind the same check.
+	tables = append(tables, laneMapPostgresTables...)
 
 	for _, table := range tables {
 		var exists bool
@@ -1525,6 +1528,10 @@ func createSqliteLaneTables(db *usql.DB) error {
 		);
 	`); err != nil {
 		return errors.NewStorageError("could not create lane_close table", err)
+	}
+
+	if _, err := db.Exec(laneMapSqliteDDL); err != nil {
+		return errors.NewStorageError("could not create the lane map tables", err)
 	}
 
 	return nil

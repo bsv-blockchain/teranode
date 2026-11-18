@@ -482,6 +482,36 @@ type Store interface {
 	// database clock, and returns how many it closed.
 	CloseStaleLaneLeases(ctx context.Context, closeAfter time.Duration) (int, error)
 
+	// InsertLaneMapRows records the map rows of one block, insert-only: a retry with rows that say
+	// the same thing writes nothing, and rows that differ from those stored fail.
+	InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane.MapRow) error
+
+	// GetLaneMapRows returns one block's map rows, checked, by lane and first position.
+	GetLaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error)
+
+	// GetLaneMapRowsEndingAbove returns every map row of a lane whose range ends above a position.
+	GetLaneMapRowsEndingAbove(ctx context.Context, laneNum uint8, above uint64) ([]lane.BlockMapRow, error)
+
+	// InsertLaneConversionSegment records a historical conversion segment, insert-only.
+	InsertLaneConversionSegment(ctx context.Context, seg lane.ConversionSegment) error
+
+	// GetLaneConversionSegments returns every recorded conversion segment by ID.
+	GetLaneConversionSegments(ctx context.Context) ([]lane.ConversionSegment, error)
+
+	// InsertLaneConversionBlocks appends to a segment's prefix block list; a resumed conversion
+	// repeats blocks already recorded, which must match.
+	InsertLaneConversionBlocks(ctx context.Context, segment uint32, blocks []lane.ConversionBlock) error
+
+	// GetLaneConversionBlocks returns a segment's recorded prefix blocks in order.
+	GetLaneConversionBlocks(ctx context.Context, segment uint32) ([]lane.ConversionBlock, error)
+
+	// CompleteLaneConversionSegment records that a segment passed every audit. It requires the
+	// segment's complete block list.
+	CompleteLaneConversionSegment(ctx context.Context, segment uint32, auditDigest chainhash.Hash) error
+
+	// LaneConversionComplete reports whether a segment is complete.
+	LaneConversionComplete(ctx context.Context, segment uint32) (bool, error)
+
 	// LocateBlockHeaders retrieves block headers using a locator and stop hash.
 	// Legacy endpoint.
 	// Parameters:

@@ -709,6 +709,42 @@ func (m *MockStore) CloseStaleLaneLeases(ctx context.Context, closeAfter time.Du
 	panic(implementMe)
 }
 
+func (m *MockStore) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane.MapRow) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) GetLaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) GetLaneMapRowsEndingAbove(ctx context.Context, laneNum uint8, above uint64) ([]lane.BlockMapRow, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) InsertLaneConversionSegment(ctx context.Context, seg lane.ConversionSegment) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) GetLaneConversionSegments(ctx context.Context) ([]lane.ConversionSegment, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) InsertLaneConversionBlocks(ctx context.Context, segment uint32, blocks []lane.ConversionBlock) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) GetLaneConversionBlocks(ctx context.Context, segment uint32) ([]lane.ConversionBlock, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) CompleteLaneConversionSegment(ctx context.Context, segment uint32, auditDigest chainhash.Hash) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) LaneConversionComplete(ctx context.Context, segment uint32) (bool, error) {
+	panic(implementMe)
+}
+
 func (m *MockStore) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	panic(implementMe)
 }
