@@ -24,7 +24,6 @@ const (
 	warmingSamples      = 30
 
 	fsmCatchingBlocks = "CATCHINGBLOCKS"
-	fsmIdle           = "IDLE"
 	keyCacheHitRate   = "cache.hitRate"
 	keyCacheFill      = "cache.fill"
 	keyCachePrevGen   = "cache.previousGenFrac"
@@ -91,7 +90,6 @@ type Engine struct {
 	now           func() time.Time
 	states        map[string]*ruleState
 	samples       map[string]int
-	catching      bool
 	sourceStages  map[string][]string
 	lastSave      time.Time
 	lastPrune     time.Time
@@ -159,13 +157,6 @@ func (e *Engine) FlushState() error {
 	return errors.Join(errs...)
 }
 
-func (e *Engine) CatchingUp() bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	return e.catching
-}
-
 func (e *Engine) Evaluate(now time.Time, s *snapshot.Snapshot) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -182,11 +173,6 @@ func (e *Engine) Evaluate(now time.Time, s *snapshot.Snapshot) {
 	}
 
 	catching := s.FSM == fsmCatchingBlocks
-	if s.FSM == fsmIdle {
-		catching = e.catching
-	}
-
-	e.catching = catching
 	e.judgeCatchup(now, catching)
 
 	chain := ChainThroughput

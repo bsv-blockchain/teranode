@@ -415,7 +415,7 @@ func TestStartOfChainIsFirstBadStageInCauseOrder(t *testing.T) {
 	})
 }
 
-func TestIdleFSMHoldsThePreviousCatchupDecision(t *testing.T) {
+func TestOperatorStopToIdleEndsTheCatchup(t *testing.T) {
 	floors := map[string]float64{keyLatency: 2}
 	r := newRig(t, floors)
 
@@ -423,15 +423,9 @@ func TestIdleFSMHoldsThePreviousCatchupDecision(t *testing.T) {
 
 	s := r.evalFSM(e0, "CATCHINGBLOCKS", bad)
 	require.NotNil(t, find(s, CatchupInProgressID))
-	require.True(t, r.e.CatchingUp())
 
 	s = r.evalFSM(e0.Add(tick), "IDLE", bad)
-	require.NotNil(t, find(s, CatchupInProgressID))
-	require.True(t, r.e.CatchingUp())
-
-	s = r.evalFSM(e0.Add(2*tick), "RUNNING", bad)
 	require.Nil(t, find(s, CatchupInProgressID))
-	require.False(t, r.e.CatchingUp())
 }
 
 func TestIdleFSMDoesNotStartACatchup(t *testing.T) {
@@ -439,7 +433,6 @@ func TestIdleFSMDoesNotStartACatchup(t *testing.T) {
 
 	s := r.evalFSM(e0, "IDLE", nil)
 	require.Nil(t, find(s, CatchupInProgressID))
-	require.False(t, r.e.CatchingUp())
 }
 
 func TestCatchupChainUsedWhenFSMCatchingBlocks(t *testing.T) {

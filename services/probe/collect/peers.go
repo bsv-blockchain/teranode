@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"slices"
 
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
@@ -30,15 +31,7 @@ func (p *Peers) Collect(ctx context.Context) (snapshot.Patch, error) {
 		return nil, err
 	}
 
-	var tip uint32
-
-	for _, peer := range peers {
-		if peer == nil || peer.IsBanned {
-			continue
-		}
-
-		tip = max(tip, peer.Height)
-	}
+	tip := medianHeight(peers)
 
 	height := snapshot.Reading{Value: float64(tip), Status: snapshot.StatusOK}
 	if len(peers) == 0 {
@@ -49,4 +42,24 @@ func (p *Peers) Collect(ctx context.Context) (snapshot.Patch, error) {
 		s.PeerTip = tip
 		s.Chain.PeerHeight = height
 	}, nil
+}
+
+func medianHeight(peers []*p2p.PeerInfo) uint32 {
+	heights := make([]uint32, 0, len(peers))
+
+	for _, peer := range peers {
+		if peer == nil || peer.IsBanned || peer.Height == 0 {
+			continue
+		}
+
+		heights = append(heights, peer.Height)
+	}
+
+	if len(heights) == 0 {
+		return 0
+	}
+
+	slices.Sort(heights)
+
+	return heights[(len(heights)-1)/2]
 }

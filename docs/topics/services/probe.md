@@ -117,7 +117,7 @@ Colour shows only status:
 - Red: a critical alarm is active.
 - Grey: no data. The panel shows the age of the last good sample.
 
-When a source fails, every value from that source goes grey with the age of its last good sample. This includes the FSM chip and the tip chip (Blockchain source), the best peer height (P2P source), the Kafka lag on the flow strips and in the Kafka topics panel (Kafka source) and the Aerospike and PostgreSQL tanks. The block height chips and the drain text keep their last values during an outage.
+When a source fails, every value from that source goes grey with the age of its last good sample. This includes the FSM chip and the tip chip (Blockchain source), the median peer height (P2P source), the Kafka lag on the flow strips and in the Kafka topics panel (Kafka source) and the Aerospike and PostgreSQL tanks. The block height chips and the drain text keep their last values during an outage.
 
 ### 4.1 The Six Stages
 
@@ -127,13 +127,15 @@ When a source fails, every value from that source goes grey with the age of its 
 | Validator | Validated tx/s, latency p99, queue fill, spend batch fill, errors/s | Validator metrics (see the note below the table), Aerospike spend batch metrics |
 | Tx meta cache | Hit rate, misses/s, evictions/s, inserts/s, fill, current and previous generation share, entries, size, capacity | Tx meta cache metrics |
 | Block Assembly | State (running or paused), tip lag in blocks, age of the oldest queued transaction, ingest queue fill, subtree fill | Block Assembly metrics |
-| Blockchain | FSM state, tip height, best peer height, fork depth, blocks not yet persisted, dropped subscribers, heights of queued blocks | Blockchain gRPC, P2P gRPC (best peer height), Block Validation and Blockchain metrics |
+| Blockchain | FSM state, tip height, median peer height, fork depth, blocks not yet persisted, dropped subscribers, heights of queued blocks | Blockchain gRPC, P2P gRPC (median peer height), Block Validation and Blockchain metrics |
 | Data stores | Aerospike and PostgreSQL disk fill, size, read latency, reads/s, writes/s, PostgreSQL commits/s | Aerospike info protocol, PostgreSQL statistics views, UTXO store metrics |
 
 A reading shows `no data` when its metric does not exist on this node. For example, the Data stores stage shows no data for a store that the node does not use.
 The persister backlog is a lower bound. The probe asks for at most 25 blocks and shows "25 or more" at that limit. The waiting blocks are the blocks that the persister has not written yet.
 The Blockchain panel shows the count of waiting blocks and the lowest three heights. A "+N more" marker shows how many waiting blocks the panel does not list.
-The probe reads the peer heights from the P2P service as its own `p2p` source. When that call fails, the best peer height goes grey with its age, and the tip chip turns grey. The FSM state, the tip and the backlog stay live. After 90 seconds the Blockchain stage raises its source alarm.
+The probe reads the FSM state from the Blockchain service on each sample. It does not use the cached state of the Blockchain client, because that cache shows `IDLE` while its subscription is broken or stale. So `IDLE` on the dashboard means that the FSM is idle. When the read fails, the FSM chip and the tip chip go grey with the age of the last good sample. The alarms keep using the last FSM state that the probe read.
+
+The probe reads the peer heights from the P2P service as its own `p2p` source. When that call fails, the median peer height goes grey with its age, and the tip chip turns grey. The FSM state, the tip and the backlog stay live. After 90 seconds the Blockchain stage raises its source alarm.
 
 The Data stores tanks show reads and writes on separate lines:
 
@@ -153,17 +155,25 @@ The probe also reads the consumer-group lag of the matching Kafka topic. The lag
 The probe reads these topics from the Kafka settings:
 
 - `tx-input`: the topic in `kafka_validatortxsConfig`
-- `subtrees`: `kafka_subtreesTopic`
-- `txmeta`: `kafka_txmetaTopic`
-- `blocks`: `kafka_blocksTopic`
-- `blocks-final`: `kafka_blocksFinalTopic`
+- `subtrees`: `KAFKA_SUBTREES`
+- `txmeta`: `KAFKA_TXMETA`
+- `blocks`: `KAFKA_BLOCKS`
+- `blocks-final`: `KAFKA_BLOCKS_FINAL`
 
 A group that has subscribed but has not committed an offset shows the full topic length as lag.
 
 ### 4.3 Drain Time
 
 The probe adds the queued blocks and the subtree queue to get one backlog.
-The block part is the count of waiting blocks, up to the persister limit of about 25. It is not limited to the heights that the panel shows. While the FSM is in `CATCHINGBLOCKS`, the block part is at least the gap between the best peer height and the tip. The best peer height is the highest height that the node accepts from a peer that is not banned. The node caps the height that a peer claims, so one peer cannot inflate the drain time.
+The block part is the count of waiting blocks, up to the persister limit of about 25. It is not limited to the heights that the panel shows. While the FSM is in `CATCHINGBLOCKS`, the block part is at least the gap between the median peer height and the tip.
+
+The median peer height is the lower median of the heights that the node accepts from peers that are not banned. Peers that report no height are skipped. The node caps each claim at the local height plus `p2p_max_unvalidated_advertised_height_lead` (default 10,000). No peer proves its height, so the limits are these:
+
+- With three or more peers, one peer cannot raise the median peer height.
+- With two peers, the lower height is used, so one peer can only lower it.
+- With one peer, that peer sets the height, up to the cap. The drain time can then show up to 10,000 extra blocks.
+
+When the backlog source fails, the probe skips the drain samples until the backlog is current again. The drain text keeps its last value.
 It fits a line through the backlog samples of the last 5 minutes. The drain time is the backlog divided by the drain rate.
 When the backlog grows, the dashboard shows "growing" and no time.
 
@@ -349,7 +359,19 @@ The probe shows fill as bytes divided by capacity.
 
 ## 8. Fault Behaviour
 
-A fault in the probe never stops the node.
+A fault in a running probe never stops the node.
+
+A probe that cannot start stops the node at startup, as any other enabled service does. These faults stop the node:
+
+- `probe_authToken` is empty.
+- An entry in `probe_floors` is not valid.
+- The probe cannot listen on `probe_httpListenAddress`, for example because the port is in use.
+- The directory of the state file cannot be created or is not writable.
+- The state file cannot be read.
+
+A corrupt state file does not stop the node. The probe moves it aside and starts with an empty store.
+
+After a start, these rules apply:
 
 - The probe recovers every panic in its own goroutines and logs it.
 - A slow or hung source times out. It cannot stop a sampling tick.
@@ -379,7 +401,7 @@ The probe accepts at most 16 WebSocket clients at the same time. A further clien
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `startProbe` | bool | `false` | Start the Probe service. The `-probe=1` flag does the same |
-| `probe_authToken` | string | empty | Bearer token for every request. Required. An empty value stops the probe at startup |
+| `probe_authToken` | string | empty | Bearer token for every request. Required. An empty value stops the node at startup |
 | `probe_httpListenAddress` | string | `localhost:8100` | Bind address of the dashboard and the API |
 | `probe_sampleInterval` | duration | `2s` | Interval between samples of the service metrics, the Blockchain and P2P |
 | `probe_slowSampleInterval` | duration | `15s` | Interval between samples of Aerospike, Kafka and PostgreSQL |

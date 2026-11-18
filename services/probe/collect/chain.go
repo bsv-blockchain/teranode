@@ -3,13 +3,16 @@ package collect
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
+	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
 const (
@@ -17,22 +20,26 @@ const (
 	chainMaxWaiting     = 20
 	chainPersisterLimit = 25
 	chainBacklogEvery   = 10 * time.Second
+	noteBacklogStale    = "backlog unavailable"
 )
 
 type Chain struct {
-	bc  blockchain.ClientI
-	now func() time.Time
+	bc     blockchain.ClientI
+	logger ulogger.Logger
+	now    func() time.Time
 
 	mu         sync.Mutex
 	haveLast   bool
 	lastAt     time.Time
+	goodAt     time.Time
+	failing    bool
 	lastWait   []uint32
 	lastCount  snapshot.Reading
 	lastBehind snapshot.Reading
 }
 
-func NewChain(bc blockchain.ClientI) *Chain {
-	return &Chain{bc: bc, now: time.Now}
+func NewChain(bc blockchain.ClientI, logger ulogger.Logger) *Chain {
+	return &Chain{bc: bc, logger: logger, now: time.Now}
 }
 
 func (c *Chain) Name() string {
@@ -71,24 +78,56 @@ func (c *Chain) backlog(ctx context.Context) ([]uint32, snapshot.Reading, snapsh
 
 	now := c.now()
 	if c.haveLast && now.Sub(c.lastAt) < chainBacklogEvery {
-		return append([]uint32{}, c.lastWait...), c.lastCount, c.lastBehind
+		return c.backlogReadings(now)
 	}
 
 	c.haveLast = true
 	c.lastAt = now
 
 	notPersisted, err := c.notPersisted(ctx)
-	if err == nil {
-		c.setBacklog(notPersisted)
+	if err != nil {
+		if !c.failing {
+			c.logger.Warnf("[Probe] chain backlog has no data: %s", urlutil.RedactText(strings.Join(strings.Fields(err.Error()), " ")))
+		}
 
-		return append([]uint32{}, c.lastWait...), c.lastCount, c.lastBehind
+		c.failing = true
+
+		return c.backlogReadings(now)
 	}
 
-	c.lastWait = []uint32{}
-	c.lastCount = snapshot.Reading{Status: snapshot.StatusNoData, Note: "no data"}
-	c.lastBehind = snapshot.Reading{Status: snapshot.StatusNoData, Note: "no data"}
+	if c.failing {
+		c.logger.Infof("[Probe] chain backlog is back")
+	}
 
-	return []uint32{}, c.lastCount, c.lastBehind
+	c.failing = false
+	c.goodAt = now
+	c.setBacklog(notPersisted)
+
+	return c.backlogReadings(now)
+}
+
+func (c *Chain) backlogReadings(now time.Time) ([]uint32, snapshot.Reading, snapshot.Reading) {
+	waiting := append([]uint32{}, c.lastWait...)
+	count, behind := c.lastCount, c.lastBehind
+
+	if c.failing {
+		var age float64
+		if !c.goodAt.IsZero() {
+			age = now.Sub(c.goodAt).Seconds()
+		}
+
+		count, behind = staleReading(count, age), staleReading(behind, age)
+	}
+
+	return waiting, count, behind
+}
+
+func staleReading(r snapshot.Reading, age float64) snapshot.Reading {
+	r.Status = snapshot.StatusNoData
+	r.Note = noteBacklogStale
+	r.AgeSec = age
+
+	return r
 }
 
 func (c *Chain) setBacklog(notPersisted []*model.Block) {
@@ -151,11 +190,20 @@ func (c *Chain) Events(ctx context.Context, rec guard.Recorder) <-chan struct{} 
 	return out
 }
 
+type fsmFetcher interface {
+	FetchFSMCurrentState(ctx context.Context) (*blockchain.FSMStateType, error)
+}
+
 func (c *Chain) fsmState(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, chainCallTimeout)
 	defer cancel()
 
-	state, err := c.bc.GetFSMCurrentState(ctx)
+	read := c.bc.GetFSMCurrentState
+	if f, ok := c.bc.(fsmFetcher); ok {
+		read = f.FetchFSMCurrentState
+	}
+
+	state, err := read(ctx)
 	if err != nil {
 		return "", err
 	}
