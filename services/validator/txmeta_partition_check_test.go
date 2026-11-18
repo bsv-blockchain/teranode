@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -65,6 +66,14 @@ func (p *partCheckProducer) Publish(*kafka.Message)                     {}
 func (p *partCheckProducer) TryPublish(*kafka.Message) bool             { return true }
 func (p *partCheckProducer) TopicPartitionCount(context.Context) (int32, error) {
 	return p.count, p.err
+}
+
+type partCheckBlockingProducer struct{ partCheckProducer }
+
+func (p *partCheckBlockingProducer) TopicPartitionCount(ctx context.Context) (int32, error) {
+	<-ctx.Done()
+
+	return 0, ctx.Err()
 }
 
 func partCheckValidator(t *testing.T, cap *partCheckCapture, topicURL string, numPartitions int, producer kafka.KafkaAsyncProducerI) *Validator {
@@ -143,4 +152,29 @@ func TestCheckTxMetaPartitionAgreementBucketDivisibility(t *testing.T) {
 	v.checkTxMetaPartitionAgreement(context.Background())
 
 	require.Contains(t, cap.joined(), "does not divide")
+}
+
+func TestCheckTxMetaPartitionAgreementBoundsBrokerWait(t *testing.T) {
+	old := txmetaTopicMetadataTimeout
+	txmetaTopicMetadataTimeout = 50 * time.Millisecond
+
+	t.Cleanup(func() { txmetaTopicMetadataTimeout = old })
+
+	cap := &partCheckCapture{}
+	v := partCheckValidator(t, cap, "kafka://localhost:9092/txmeta?partitions=32", 32, &partCheckBlockingProducer{})
+
+	done := make(chan struct{})
+
+	go func() {
+		v.checkTxMetaPartitionAgreement(context.Background())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("checkTxMetaPartitionAgreement did not return: an unreachable broker stalls start-up")
+	}
+
+	require.Contains(t, cap.joined(), "cannot verify txmeta topic partition count")
 }
