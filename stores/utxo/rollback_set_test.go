@@ -3,6 +3,7 @@ package utxo
 import (
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -68,4 +69,37 @@ func TestIsReplayAnswerIsTheMarkerOnly(t *testing.T) {
 	require.False(t, IsReplayAnswer(errors.NewTxNotFoundError("parent missing")))
 	require.False(t, IsReplayAnswer(nil))
 	require.False(t, AnyPrunedReplay([]*Spend{{Err: errors.NewTxNotFoundError("parent missing")}}))
+}
+
+// TestIsPrunedReplayRejectionIsTheMarkerOnly: the SQL bulk spend gives a duplicate input its
+// representative's refusal only for the marker rejection. A missing parent, a spent output or any
+// other error is not one, and the answer is read through a wrapping error as well.
+func TestIsPrunedReplayRejectionIsTheMarkerOnly(t *testing.T) {
+	pruned := errors.NewUtxoSpendingTxPrunedError("pruned")
+
+	require.True(t, IsPrunedReplayRejection(pruned))
+	require.True(t, IsPrunedReplayRejection(errors.NewProcessingError("wrapped", pruned)))
+	require.False(t, IsPrunedReplayRejection(errors.NewTxNotFoundError("parent missing")), "a missing parent is not a replay answer")
+	require.False(t, IsPrunedReplayRejection(errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil)))
+	require.False(t, IsPrunedReplayRejection(nil))
+}
+
+// TestAnyPrunedReplayAndNeedsSpendRollbackSkipNilSpends: a spend list can hold nil entries, which
+// neither helper may dereference, and an entry with no error says nothing.
+func TestAnyPrunedReplayAndNeedsSpendRollbackSkipNilSpends(t *testing.T) {
+	pruned := &Spend{Err: errors.NewUtxoSpendingTxPrunedError("pruned")}
+	spent := &Spend{Err: errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil)}
+	missing := &Spend{Err: errors.NewTxNotFoundError("parent missing")}
+	clean := &Spend{}
+
+	require.False(t, AnyPrunedReplay([]*Spend{nil}))
+	require.False(t, AnyPrunedReplay([]*Spend{nil, clean}))
+	require.True(t, AnyPrunedReplay([]*Spend{nil, clean, pruned}))
+
+	require.False(t, NeedsSpendRollback([]*Spend{nil}, false))
+	require.False(t, NeedsSpendRollback([]*Spend{nil, clean}, false), "an entry with no error needs no rollback")
+	require.True(t, NeedsSpendRollback([]*Spend{nil, clean, spent}, false))
+	require.True(t, NeedsSpendRollback([]*Spend{nil, pruned}, false), "the marker rejection reverses what the call wrote")
+	require.False(t, NeedsSpendRollback([]*Spend{nil, missing}, false), "a missing parent is a failure only for a RequireParentOutputs caller")
+	require.True(t, NeedsSpendRollback([]*Spend{nil, missing}, true))
 }
