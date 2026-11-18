@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -239,5 +240,86 @@ func TestPrunerDeletesConflictingLoserWithReleasedUncontestedInput(t *testing.T)
 				"a conflicting loser past its delete_at_height (%d) must be pruned even though its uncontested input Q:0 was released (defensive=%v, held-back counter rose by %v)",
 				*dah, defensive, heldBackCounter(t)-heldBefore)
 		})
+	}
+}
+
+// TestPrunerHoldsBackChildWhoseParentOutputIsMalformed: the hold-back rule keeps a candidate when
+// an input names a parent record that is present but whose output does not record well-formed
+// spending data. Besides a NULL (a rolled-back spend), that is spending data shorter than the 36
+// bytes of txid and vin, and a parent with no such output row at all. Neither can name the child,
+// so no marker would be written for it and a replay of it would be recreated and spend that
+// output cleanly. Each is held back, in both pruning modes.
+func TestPrunerHoldsBackChildWhoseParentOutputIsMalformed(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tamper string
+	}{
+		{name: "spending data shorter than a txid and vin", tamper: "UPDATE outputs SET spending_data = $2 WHERE idx = 0 AND transaction_id = $1"},
+		{name: "no such output row", tamper: "DELETE FROM outputs WHERE idx = 0 AND transaction_id = $1"},
+	} {
+		for _, defensive := range []bool{false, true} {
+			t.Run(tc.name, func(t *testing.T) {
+				forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+					store.settings.Pruner.UTXODefensiveEnabled = defensive
+
+					parent := bt.NewTx()
+					require.NoError(t, parent.From("7777777777777777777777777777777777777777777777777777777777777777", 0, "51", 30000))
+					parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+					// Output 1 stays unspent so the parent survives the prune.
+					require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+					require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+					_, err := store.Create(ctx, parent, 1000)
+					require.NoError(t, err)
+
+					child := bt.NewTx()
+					require.NoError(t, child.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+					child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+					require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+					_, _, err = store.SpendAndCreate(ctx, child, 1000)
+					require.NoError(t, err)
+					_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parent.TxIDChainHash(), child.TxIDChainHash()},
+						utxo.MinedBlockInfo{BlockID: 1000, BlockHeight: 1000, OnLongestChain: true})
+					require.NoError(t, err)
+
+					grandchild := bt.NewTx()
+					require.NoError(t, grandchild.From(child.TxID(), 0, child.Outputs[0].LockingScript.String(), child.Outputs[0].Satoshis))
+					grandchild.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+					require.NoError(t, grandchild.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 2000))
+					_, _, err = store.SpendAndCreate(ctx, grandchild, 1001)
+					require.NoError(t, err)
+					_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{grandchild.TxIDChainHash()},
+						utxo.MinedBlockInfo{BlockID: 1001, BlockHeight: 1001, OnLongestChain: true})
+					require.NoError(t, err)
+
+					var parentID int
+					require.NoError(t, store.db.QueryRowContext(ctx, "SELECT id FROM transactions WHERE hash = $1", parent.TxIDChainHash()[:]).Scan(&parentID))
+
+					if strings.HasPrefix(tc.tamper, "UPDATE") {
+						_, err = store.db.ExecContext(ctx, tc.tamper, parentID, []byte{0x01, 0x02, 0x03})
+					} else {
+						_, err = store.db.ExecContext(ctx, tc.tamper, parentID)
+					}
+
+					require.NoError(t, err)
+
+					svc, err := store.GetPrunerService()
+					require.NoError(t, err)
+
+					heldBefore := heldBackCounter(t)
+					_, err = svc.Prune(ctx, 1300, "malformed-claim")
+					require.NoError(t, err)
+
+					var childExists, marked bool
+					require.NoError(t, store.db.QueryRowContext(ctx,
+						"SELECT EXISTS(SELECT 1 FROM transactions WHERE hash = $1)", child.TxIDChainHash()[:]).Scan(&childExists))
+					require.True(t, childExists, "C must be held back while P:0 does not record its spend (defensive=%v)", defensive)
+					require.Equal(t, float64(1), heldBackCounter(t)-heldBefore, "C is counted as held back (defensive=%v)", defensive)
+
+					require.NoError(t, store.db.QueryRowContext(ctx,
+						"SELECT EXISTS(SELECT 1 FROM deleted_children WHERE child_hash = $1)", child.TxIDChainHash()[:]).Scan(&marked))
+					require.False(t, marked, "a held-back child carries no marker")
+				})
+			})
+		}
 	}
 }
