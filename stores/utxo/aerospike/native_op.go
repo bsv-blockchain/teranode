@@ -759,6 +759,23 @@ func (s *Store) buildProbeRecord(policy *aerospike.WritePolicy, label string, bl
 	return key, utxoHashes, func() { _, _ = s.client.Delete(policy, key) }, true
 }
 
+// probeSpendIdx is the batch index the probe gives its one spend. It is deliberately not 0:
+// the probe record's offset and vOut are both 0, and a dispatcher that reports a match or an
+// error under the offset or the vout instead of the idx would otherwise read as correct. The
+// store keys everything a spendMulti reports by this idx, so the probe has to tell them apart.
+const probeSpendIdx = 7
+
+// probeSpendItem builds the probe's one spend item. Its idx differs from its offset and vOut.
+func (s *Store) probeSpendItem(utxoHash *chainhash.Hash, spendingData *spendpkg.SpendingData, vout uint32) aerospike.MapValue {
+	return aerospike.NewMapValue(map[any]any{
+		"idx":          probeSpendIdx,
+		"offset":       s.calculateOffsetForOutput(vout),
+		"vOut":         vout,
+		"utxoHash":     utxoHash[:],
+		"spendingData": spendingData.Bytes(),
+	})
+}
+
 // nativeProbeSpend issues one spendMulti through the native dispatcher against a
 // probe record and returns the parsed response.
 func (s *Store) nativeProbeSpend(ctx context.Context, policy *aerospike.WritePolicy, label string, key *aerospike.Key,
@@ -768,13 +785,7 @@ func (s *Store) nativeProbeSpend(ctx context.Context, policy *aerospike.WritePol
 		return nil, false
 	}
 
-	items := []aerospike.MapValue{aerospike.NewMapValue(map[any]any{
-		"idx":          0,
-		"offset":       s.calculateOffsetForOutput(vout),
-		"vOut":         vout,
-		"utxoHash":     utxoHash[:],
-		"spendingData": spendingData.Bytes(),
-	})}
+	items := []aerospike.MapValue{s.probeSpendItem(utxoHash, spendingData, vout)}
 
 	payload, encErr := encodeNativeOpPayload(subOpSpendMulti, []any{
 		items, false, false, blockHeight, s.settings.GetUtxoStoreBlockHeightRetention(),
@@ -941,7 +952,7 @@ func (s *Store) probeNativeReplayProtectionVerdict(ctx context.Context, policy *
 		return replayProbeMismatch
 	}
 
-	if !rejectsWith(markerRes, LuaErrorCodeInvalidSpend) {
+	if !rejectsItemWith(markerRes, probeSpendIdx, LuaErrorCodeInvalidSpend) {
 		s.logger.Warnf("[teranode-native-op] replay-marker probe: pruned-child spend rejected with the wrong error (%+v), want %s; falling back to UDF path",
 			markerRes, LuaErrorCodeInvalidSpend)
 		return replayProbeMismatch
@@ -977,7 +988,7 @@ func (s *Store) probeNativeReplayProtectionVerdict(ctx context.Context, policy *
 		return replayProbeMismatch
 	}
 
-	if !reportsIdempotent(repeatRes, 0) {
+	if !reportsIdempotent(repeatRes, probeSpendIdx) {
 		s.logger.Warnf("[teranode-native-op] idempotent-report probe: a re-spend by the same spender was accepted but not reported as idempotent (%+v); "+
 			"the rollback would reverse a confirmed spend on this dispatcher; falling back to UDF path", repeatRes)
 		return replayProbeMismatch
@@ -1026,6 +1037,20 @@ func rejectsWith(res *LuaMapResponse, code LuaErrorCode) bool {
 	}
 
 	return false
+}
+
+// rejectsItemWith reports whether a spend response is a rejection that carries code against
+// the spend at idx, the way teranode.lua reports it. A whole-response code, or an entry under
+// any other key, does not count: the store reads per-spend errors by idx, so a dispatcher that
+// keys them differently has to fail the probe.
+func rejectsItemWith(res *LuaMapResponse, idx int, code LuaErrorCode) bool {
+	if res == nil || res.Status != LuaStatusError {
+		return false
+	}
+
+	e, ok := res.Errors[idx]
+
+	return ok && e.ErrorCode == code
 }
 
 // reportsIdempotent reports whether a successful spend response says the spend
