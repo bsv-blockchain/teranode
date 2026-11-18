@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranodeaerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -167,4 +168,40 @@ func TestLanePositionBin(t *testing.T) {
 			require.Equal(t, lane.None, got.LanePosition, name)
 		}
 	})
+}
+
+// TestLanePositionCreateConflictingWithNoPositionLeavesParentsAlone pins that Create takes its
+// position before it writes a conflicting transaction's note onto the parents. A conflicting create
+// that cannot get a position must fail with the parents untouched, or they would name a child that
+// was never written. SpendAndCreate takes its position before it calls Create, so only a direct
+// Create reaches this order.
+func TestLanePositionCreateConflictingWithNoPositionLeavesParentsAlone(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, _, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	cleanDB(t, client)
+
+	parent := createTransactionWithOutputs(1)
+	_, err := store.Create(ctx, parent, 1)
+	require.NoError(t, err)
+
+	child := &bt.Tx{}
+	require.NoError(t, child.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	require.NoError(t, child.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
+
+	source := tests.NewScriptedLanePositions()
+	store.SetLanePositionSource(source)
+	t.Cleanup(func() { store.SetLanePositionSource(nil) })
+
+	_, err = store.Create(ctx, child, 2, utxo.WithConflicting(true))
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.Equal(t, 1, source.Calls(), "the create asked for a position")
+
+	got, err := store.Get(ctx, parent.TxIDChainHash(), fields.ConflictingChildren)
+	require.NoError(t, err)
+	require.Empty(t, got.ConflictingChildren, "a create with no position wrote a conflict note onto its parent")
 }
