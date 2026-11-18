@@ -3,9 +3,7 @@ package repairmissingparents
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
@@ -14,20 +12,22 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -101,6 +101,72 @@ func readBins(t *testing.T, client *uaerospike.Client, store *teranode_aerospike
 	return rec.Bins
 }
 
+// peerItemsFromStore builds the /utxos response the asset service would send for tx,
+// from the store's own GetSpend, exactly as GetUTXOsByTXID does.
+func peerItemsFromStore(t *testing.T, store utxo.Store, tx *bt.Tx) []peerUTXO {
+	t.Helper()
+
+	items := make([]peerUTXO, 0, len(tx.Outputs))
+
+	for i, out := range tx.Outputs {
+		vout := uint32(i) //nolint:gosec
+
+		utxoHash, err := util.UTXOHash(tx.TxIDChainHash(), vout, out.LockingScript, out.Satoshis)
+		require.NoError(t, err)
+
+		item := peerUTXO{Vout: vout, Status: utxo.Status_NOT_FOUND.String()}
+
+		res, _ := store.GetSpend(context.Background(), &utxo.Spend{TxID: tx.TxIDChainHash(), Vout: vout, UTXOHash: utxoHash})
+		if res != nil && res.Status != int(utxo.Status_NOT_FOUND) {
+			item.Status = utxo.Status(res.Status).String() //nolint:gosec
+			item.SpendingData = res.SpendingData
+		}
+
+		items = append(items, item)
+	}
+
+	return items
+}
+
+func servePeer(t *testing.T, txs []*bt.Tx, parent *bt.Tx, blockHash chainhash.Hash, height uint32, items []peerUTXO) *httptest.Server {
+	t.Helper()
+
+	p := &peer{
+		txs: map[string][]byte{},
+		metas: map[string]any{parent.TxID(): map[string]any{
+			"blockHeights": []uint32{height}, "blockHashes": []string{blockHash.String()}, "subtreeIdxs": []int{0}, "mainChainIndex": 0,
+		}},
+		utxos: map[string]any{parent.TxID(): items},
+	}
+
+	for _, tx := range txs {
+		p.txs[tx.TxID()] = tx.ExtendedBytes()
+	}
+
+	return p.serve(t)
+}
+
+func childRecordExists(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, parent *chainhash.Hash, n uint32) bool {
+	t.Helper()
+
+	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(parent, n))
+	require.NoError(t, err)
+
+	exists, err := client.Exists(nil, key)
+	require.NoError(t, err)
+
+	return exists
+}
+
+func newIntegrationRepairer(t *testing.T, store utxo.Store, chain blockchain.ClientI, peerURL string, opts Options) (*Repairer, *bytes.Buffer) {
+	t.Helper()
+
+	out := &bytes.Buffer{}
+	opts.Stdout = out
+
+	return NewRepairer(ulogger.NewErrorTestLogger(t), test.CreateBaseTestSettings(t), store, chain, NewHTTPPeer(peerURL, nil), opts), out
+}
+
 // TestIntegration_RepairRestoresPrunedParentExactly replays the issue-1768 damage on a
 // real store: a mined parent with one mined child and one unmined child is deleted, then
 // rebuilt from a peer that still holds it. The rebuilt record must equal the original in
@@ -133,26 +199,19 @@ func TestIntegration_RepairRestoresPrunedParentExactly(t *testing.T) {
 	before := readBins(t, client, store, f.parent.TxIDChainHash())
 	require.NotNil(t, before[fields.Utxos.String()])
 
+	// The peer still holds the parent as it was; its /utxos answer comes from the real store.
+	items := peerItemsFromStore(t, store, f.parent)
+	require.Equal(t, f.spentItems(), items)
+
 	// The damage: the parent is pruned while unminedChild still references it.
 	require.NoError(t, store.Delete(ctx, f.parent.TxIDChainHash()))
 	_, err = store.Get(ctx, f.parent.TxIDChainHash(), fields.BlockIDs)
 	require.Error(t, err)
 
-	// The peer still holds the parent as it was.
-	peer := f.peerServer(t, f.spentItems())
+	peer := f.peerServer(t, items)
+	chain := idleChainFor(f.blockHash, f.blockID, f.blockHeight)
 
-	chain := &blockchain.Mock{}
-	idle := blockchain.FSMStateIDLE
-	chain.On("GetFSMCurrentState", mock.Anything).Return(&idle, nil)
-	chain.On("GetBestHeightAndTime", mock.Anything).Return(int(f.blockHeight+1500), 0, nil)
-	chain.On("GetBlockHeader", mock.Anything, hashPtr(f.blockHash)).
-		Return(&model.BlockHeader{}, &model.BlockHeaderMeta{ID: f.blockID, Height: f.blockHeight}, nil)
-
-	out := &bytes.Buffer{}
-	r := NewRepairer(ulogger.NewErrorTestLogger(t), store, chain, NewHTTPPeer(peer.URL, nil), Options{
-		Scan:   true,
-		Stdout: out,
-	})
+	r, out := newIntegrationRepairer(t, store, chain, peer.URL, Options{Scan: true})
 
 	report, err := r.Run(ctx)
 	require.NoError(t, err, out.String())
@@ -185,6 +244,12 @@ func TestIntegration_RepairRestoresPrunedParentExactly(t *testing.T) {
 	report, err = r.Run(ctx)
 	require.NoError(t, err)
 	require.Len(t, report.Results, 0, "no missing parents remain after the repair")
+
+	// Naming the repaired parent compares it with the peer and finds it matching.
+	r2, _ := newIntegrationRepairer(t, store, chain, peer.URL, Options{TxIDs: []chainhash.Hash{*f.parent.TxIDChainHash()}})
+	report, err = r2.Run(ctx)
+	require.NoError(t, err)
+	require.Equal(t, OutcomeAlreadyPresent, report.Results[0].Outcome, report.Results[0].Detail)
 }
 
 // TestIntegration_RepairRestoresPaginatedParent covers a parent whose outputs span the
@@ -202,14 +267,19 @@ func TestIntegration_RepairRestoresPaginatedParent(t *testing.T) {
 
 	require.NoError(t, store.SetBlockHeight(height))
 
-	// Five outputs over three records (2 + 2 + 1).
+	// Six outputs over three records (2 + 2 + 2); output 5 is OP_FALSE OP_RETURN data,
+	// which the store never keeps as a UTXO.
 	parent := bt.NewTx()
 	require.NoError(t, parent.From(chainhash.HashH([]byte("gp-paginated")).String(), 0, "51", 60000))
 	for i := 0; i < 5; i++ {
 		require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 10000))
 	}
 
-	_, _, err := store.SpendAndCreate(ctx, parent, height, utxo.WithCreateOnly(), utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+	dataScript, err := bscript.NewFromASM("OP_FALSE OP_RETURN 68656c6c6f")
+	require.NoError(t, err)
+	parent.AddOutput(&bt.Output{LockingScript: dataScript, Satoshis: 0})
+
+	_, _, err = store.SpendAndCreate(ctx, parent, height, utxo.WithCreateOnly(), utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
 		BlockID: blockID, BlockHeight: height, OnLongestChain: true,
 	}))
 	require.NoError(t, err)
@@ -228,56 +298,21 @@ func TestIntegration_RepairRestoresPaginatedParent(t *testing.T) {
 	masterBefore := readBins(t, client, store, parent.TxIDChainHash())
 	require.Equal(t, 2, masterBefore[fields.TotalExtraRecs.String()])
 
+	items := peerItemsFromStore(t, store, parent)
+
 	require.NoError(t, store.Delete(ctx, parent.TxIDChainHash()))
 
-	// Peer: tx bytes for parent and spenders, mined meta, per-output state.
-	txs := map[string]*bt.Tx{parent.TxID(): parent}
+	txs := make([]*bt.Tx, 0, 1+len(spenders))
+	txs = append(txs, parent)
+
 	for _, c := range spenders {
-		txs[c.TxID()] = c
+		txs = append(txs, c)
 	}
 
-	items := make([]peerUTXO, 0, 5)
-	for i := uint32(0); i < 5; i++ {
-		item := peerUTXO{Vout: i, Status: "OK"}
-		if c, ok := spenders[i]; ok {
-			item.Status = statusSpent
-			item.SpendingData = spend.NewSpendingData(c.TxIDChainHash(), 0)
-		}
-		items = append(items, item)
-	}
+	peer := servePeer(t, txs, parent, blockHash, height, items)
+	chain := idleChainFor(blockHash, blockID, height)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/tx/", func(w http.ResponseWriter, r *http.Request) {
-		tx, ok := txs[r.URL.Path[len("/api/v1/tx/"):]]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		_, _ = w.Write(tx.ExtendedBytes())
-	})
-	mux.HandleFunc("/api/v1/txmeta/"+parent.TxID()+"/json", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"blockHeights": []uint32{height}, "blockHashes": []string{blockHash.String()}, "subtreeIdxs": []int{0}, "isCoinbase": false,
-		})
-	})
-	mux.HandleFunc("/api/v1/utxos/"+parent.TxID()+"/json", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(items)
-	})
-	peer := httptest.NewServer(mux)
-	t.Cleanup(peer.Close)
-
-	chain := &blockchain.Mock{}
-	idle := blockchain.FSMStateIDLE
-	chain.On("GetFSMCurrentState", mock.Anything).Return(&idle, nil)
-	chain.On("GetBestHeightAndTime", mock.Anything).Return(int(height+10), 0, nil)
-	chain.On("GetBlockHeader", mock.Anything, hashPtr(blockHash)).
-		Return(&model.BlockHeader{}, &model.BlockHeaderMeta{ID: blockID, Height: height}, nil)
-
-	out := &bytes.Buffer{}
-	r := NewRepairer(ulogger.NewErrorTestLogger(t), store, chain, NewHTTPPeer(peer.URL, nil), Options{
-		TxIDs:  []chainhash.Hash{*parent.TxIDChainHash()},
-		Stdout: out,
-	})
+	r, out := newIntegrationRepairer(t, store, chain, peer.URL, Options{TxIDs: []chainhash.Hash{*parent.TxIDChainHash()}})
 
 	report, err := r.Run(ctx)
 	require.NoError(t, err, out.String())
@@ -293,13 +328,295 @@ func TestIntegration_RepairRestoresPaginatedParent(t *testing.T) {
 
 	got, err := store.Get(ctx, parent.TxIDChainHash(), fields.Utxos)
 	require.NoError(t, err)
-	require.Len(t, got.SpendingDatas, 5)
-	for i := uint32(0); i < 5; i++ {
+	require.Len(t, got.SpendingDatas, 6)
+	for i := uint32(0); i < 6; i++ {
 		if c, ok := spenders[i]; ok {
 			require.NotNil(t, got.SpendingDatas[i], "output %d must be spent", i)
 			require.True(t, got.SpendingDatas[i].TxID.IsEqual(c.TxIDChainHash()), "output %d spender", i)
 		} else {
 			require.Nil(t, got.SpendingDatas[i], "output %d must stay unspent", i)
 		}
+	}
+}
+
+// paginatedParent stores a mined five-output parent over three records (batch size 2)
+// with outputs 1 and 4 spent, then deletes only its master, as a master-only prune does.
+func paginatedParent(t *testing.T, store *teranode_aerospike.Store, seed string, height, blockID uint32) (*bt.Tx, []*bt.Tx, []peerUTXO) {
+	t.Helper()
+
+	ctx := context.Background()
+
+	parent := bt.NewTx()
+	require.NoError(t, parent.From(chainhash.HashH([]byte(seed)).String(), 0, "51", 60000))
+
+	for i := 0; i < 5; i++ {
+		require.NoError(t, parent.PayToAddress(payAddress, 10000))
+	}
+
+	_, _, err := store.SpendAndCreate(ctx, parent, height, utxo.WithCreateOnly(), utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+		BlockID: blockID, BlockHeight: height, OnLongestChain: true,
+	}))
+	require.NoError(t, err)
+
+	spenders := make([]*bt.Tx, 0, 2)
+
+	for _, vout := range []uint32{1, 4} {
+		child := bt.NewTx()
+		require.NoError(t, child.From(parent.TxID(), vout, parent.Outputs[vout].LockingScript.String(), parent.Outputs[vout].Satoshis))
+		require.NoError(t, child.PayToAddress(payAddress, 9000))
+		_, _, err = store.SpendAndCreate(ctx, child, height+1)
+		require.NoError(t, err)
+
+		spenders = append(spenders, child)
+	}
+
+	items := peerItemsFromStore(t, store, parent)
+
+	require.NoError(t, store.Delete(ctx, parent.TxIDChainHash()))
+
+	return parent, spenders, items
+}
+
+// failingReplayStore fails every spend replay after a successful create.
+type failingReplayStore struct {
+	*teranode_aerospike.Store
+}
+
+func (s failingReplayStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	o, err := utxo.ParseCreateOptions(opts...)
+	if err == nil && o.SpendOnly {
+		return nil, nil, errors.NewStorageError("injected replay failure")
+	}
+
+	return s.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+}
+
+// A replay failure after the create must leave neither the master nor any pagination
+// record behind, so a rerun starts from a clean hole instead of a partial record.
+func TestIntegration_ReplayFailureRollsBackPaginatedParent(t *testing.T) {
+	client, store := startAerospike(t, func(s *settings.Settings) { s.UtxoStore.UtxoBatchSize = 2 })
+	ctx := context.Background()
+
+	const height = uint32(600000)
+	const blockID = uint32(88)
+	blockHash := chainhash.HashH([]byte("block-600000"))
+
+	require.NoError(t, store.SetBlockHeight(height))
+
+	parent, spenders, items := paginatedParent(t, store, "gp-rollback", height, blockID)
+	parentHash := parent.TxIDChainHash()
+
+	peer := servePeer(t, append([]*bt.Tx{parent}, spenders...), parent, blockHash, height, items)
+	chain := idleChainFor(blockHash, blockID, height)
+
+	r, out := newIntegrationRepairer(t, failingReplayStore{store}, chain, peer.URL, Options{TxIDs: []chainhash.Hash{*parentHash}})
+
+	report, err := r.Run(ctx)
+	require.NoError(t, err, out.String())
+	require.Equal(t, OutcomeFailed, report.Results[0].Outcome)
+	require.Contains(t, report.Results[0].Detail, "injected replay failure")
+	require.Contains(t, report.Results[0].Detail, "record rolled back")
+
+	_, err = store.Get(ctx, parentHash, fields.BlockIDs)
+	require.Error(t, err, "the master must be gone after the rollback")
+	require.False(t, childRecordExists(t, client, store, parentHash, 1), "pagination record 1 must be gone")
+	require.False(t, childRecordExists(t, client, store, parentHash, 2), "pagination record 2 must be gone")
+
+	// The rerun against a healthy store repairs it from scratch.
+	r2, out2 := newIntegrationRepairer(t, store, chain, peer.URL, Options{TxIDs: []chainhash.Hash{*parentHash}})
+	report, err = r2.Run(ctx)
+	require.NoError(t, err, out2.String())
+	require.Equal(t, OutcomeRepaired, report.Results[0].Outcome, report.Results[0].Detail)
+}
+
+// A dry run reports the stale pagination records but must not remove them.
+func TestIntegration_DryRunLeavesStaleChildren(t *testing.T) {
+	client, store := startAerospike(t, func(s *settings.Settings) { s.UtxoStore.UtxoBatchSize = 2 })
+	ctx := context.Background()
+
+	const height = uint32(610000)
+	const blockID = uint32(89)
+	blockHash := chainhash.HashH([]byte("block-610000"))
+
+	require.NoError(t, store.SetBlockHeight(height))
+
+	parent, spenders, items := paginatedParent(t, store, "gp-dryrun", height, blockID)
+	parentHash := parent.TxIDChainHash()
+
+	require.True(t, childRecordExists(t, client, store, parentHash, 1))
+
+	peer := servePeer(t, append([]*bt.Tx{parent}, spenders...), parent, blockHash, height, items)
+
+	r, out := newIntegrationRepairer(t, store, idleChainFor(blockHash, blockID, height), peer.URL, Options{TxIDs: []chainhash.Hash{*parentHash}, DryRun: true})
+
+	report, err := r.Run(ctx)
+	require.NoError(t, err, out.String())
+	require.Equal(t, OutcomePlanned, report.Results[0].Outcome, report.Results[0].Detail)
+	require.Contains(t, report.Results[0].Detail, "2 stale pagination record(s) would be removed")
+
+	require.True(t, childRecordExists(t, client, store, parentHash, 1), "a dry run must not remove pagination record 1")
+	require.True(t, childRecordExists(t, client, store, parentHash, 2), "a dry run must not remove pagination record 2")
+
+	_, err = store.Get(ctx, parentHash, fields.BlockIDs)
+	require.Error(t, err, "a dry run must not create the master")
+}
+
+// The review's scenario on a real store: the peer says P:0 is spent by X, which this
+// node never received, and X also spends Q:0, a healthy unspent output here. Replaying X
+// would mark Q:0 spent by a transaction we do not hold. The tool must refuse and leave
+// Q:0 unspent and P unwritten.
+func TestIntegration_SpenderTouchingHealthyOutputIsRefused(t *testing.T) {
+	_, store := startAerospike(t)
+	ctx := context.Background()
+
+	const height = uint32(620000)
+	const blockID = uint32(90)
+	blockHash := chainhash.HashH([]byte("block-620000"))
+
+	require.NoError(t, store.SetBlockHeight(height))
+
+	mined := utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: blockID, BlockHeight: height, OnLongestChain: true})
+
+	q := bt.NewTx()
+	require.NoError(t, q.From(chainhash.HashH([]byte("gp-q")).String(), 0, "51", 10000))
+	require.NoError(t, q.PayToAddress(payAddress, 9000))
+	_, _, err := store.SpendAndCreate(ctx, q, height, utxo.WithCreateOnly(), mined)
+	require.NoError(t, err)
+
+	p := bt.NewTx()
+	require.NoError(t, p.From(chainhash.HashH([]byte("gp-p")).String(), 0, "51", 10000))
+	require.NoError(t, p.PayToAddress(payAddress, 9000))
+
+	x := bt.NewTx()
+	require.NoError(t, x.From(p.TxID(), 0, p.Outputs[0].LockingScript.String(), p.Outputs[0].Satoshis))
+	require.NoError(t, x.From(q.TxID(), 0, q.Outputs[0].LockingScript.String(), q.Outputs[0].Satoshis))
+	require.NoError(t, x.PayToAddress(payAddress, 17000))
+
+	items := []peerUTXO{{Vout: 0, Status: statusSpent, SpendingData: spend.NewSpendingData(x.TxIDChainHash(), 0)}}
+	peer := servePeer(t, []*bt.Tx{p, x}, p, blockHash, height, items)
+
+	r, out := newIntegrationRepairer(t, store, idleChainFor(blockHash, blockID, height), peer.URL, Options{TxIDs: []chainhash.Hash{*p.TxIDChainHash()}})
+
+	report, err := r.Run(ctx)
+	require.NoError(t, err, out.String())
+	require.Equal(t, OutcomeUnsafeSpender, report.Results[0].Outcome, report.Results[0].Detail)
+
+	qState := peerItemsFromStore(t, store, q)
+	require.Equal(t, statusOK, qState[0].Status, "Q:0 must stay unspent")
+	require.Nil(t, qState[0].SpendingData)
+
+	_, err = store.Get(ctx, p.TxIDChainHash(), fields.BlockIDs)
+	require.Error(t, err, "P must not be written")
+}
+
+// The txid does not cover a spender's extended input data. A peer that serves X with a
+// wrong value on its P input would make the replay fail the store's hash check, and the
+// store's rollback of that failure would unspend X's other input Q:0. The tool must
+// refuse before any write and leave Q:0 spent by X.
+func TestIntegration_SpenderWithWrongInputDataIsRefused(t *testing.T) {
+	_, store := startAerospike(t)
+	ctx := context.Background()
+
+	const height = uint32(630000)
+	const blockID = uint32(91)
+	blockHash := chainhash.HashH([]byte("block-630000"))
+
+	require.NoError(t, store.SetBlockHeight(height))
+
+	mined := utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: blockID, BlockHeight: height, OnLongestChain: true})
+
+	newParent := func(seed string) *bt.Tx {
+		tx := bt.NewTx()
+		require.NoError(t, tx.From(chainhash.HashH([]byte(seed)).String(), 0, "51", 10000))
+		require.NoError(t, tx.PayToAddress(payAddress, 9000))
+		_, _, err := store.SpendAndCreate(ctx, tx, height, utxo.WithCreateOnly(), mined)
+		require.NoError(t, err)
+
+		return tx
+	}
+
+	p := newParent("gp-p-wrongdata")
+	q := newParent("gp-q-wrongdata")
+
+	x := bt.NewTx()
+	require.NoError(t, x.From(p.TxID(), 0, p.Outputs[0].LockingScript.String(), p.Outputs[0].Satoshis))
+	require.NoError(t, x.From(q.TxID(), 0, q.Outputs[0].LockingScript.String(), q.Outputs[0].Satoshis))
+	require.NoError(t, x.PayToAddress(payAddress, 17000))
+	_, _, err := store.SpendAndCreate(ctx, x, height+1)
+	require.NoError(t, err)
+
+	items := peerItemsFromStore(t, store, p)
+	require.NoError(t, store.Delete(ctx, p.TxIDChainHash()))
+
+	tampered, err := bt.NewTxFromBytes(x.ExtendedBytes())
+	require.NoError(t, err)
+	tampered.Inputs[0].PreviousTxSatoshis++
+	require.Equal(t, x.TxID(), tampered.TxID(), "the txid must not cover the extended input data")
+
+	pr := &peer{
+		txs: map[string][]byte{p.TxID(): p.ExtendedBytes(), x.TxID(): tampered.ExtendedBytes()},
+		metas: map[string]any{p.TxID(): map[string]any{
+			"blockHeights": []uint32{height}, "blockHashes": []string{blockHash.String()}, "subtreeIdxs": []int{0}, "mainChainIndex": 0,
+		}},
+		utxos: map[string]any{p.TxID(): items},
+	}
+
+	r, out := newIntegrationRepairer(t, store, idleChainFor(blockHash, blockID, height), pr.serve(t).URL, Options{TxIDs: []chainhash.Hash{*p.TxIDChainHash()}})
+
+	report, err := r.Run(ctx)
+	require.NoError(t, err, out.String())
+	require.Equal(t, OutcomeUnsafeSpender, report.Results[0].Outcome, report.Results[0].Detail)
+
+	qState := peerItemsFromStore(t, store, q)
+	require.Equal(t, statusSpent, qState[0].Status, "Q:0 must stay spent")
+	require.True(t, qState[0].SpendingData.TxID.IsEqual(x.TxIDChainHash()), "Q:0 must stay spent by X")
+
+	_, err = store.Get(ctx, p.TxIDChainHash(), fields.BlockIDs)
+	require.Error(t, err, "P must not be written")
+}
+
+// A coinbase parent is rebuilt from its EF bytes with the coinbase flag and maturity
+// height the store derives from the transaction, never from the peer.
+func TestIntegration_RepairRestoresCoinbaseParent(t *testing.T) {
+	client, store := startAerospike(t)
+	ctx := context.Background()
+
+	const height = uint32(640000)
+	const blockID = uint32(92)
+	blockHash := chainhash.HashH([]byte("block-640000"))
+
+	coinbase, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17032dff0c2f71646c6e6b2f5e931c7f7b6199adf35e1300ffffffff01d15fa012000000001976a91417db35d440a673a218e70a5b9d07f895facf50d288ac00000000")
+	require.NoError(t, err)
+	require.True(t, coinbase.IsCoinbase())
+
+	require.NoError(t, store.SetBlockHeight(height))
+	_, _, err = store.SpendAndCreate(ctx, coinbase, height, utxo.WithCreateOnly(), utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+		BlockID: blockID, BlockHeight: height, OnLongestChain: true,
+	}))
+	require.NoError(t, err)
+
+	require.NoError(t, store.SetBlockHeight(height+1))
+
+	before := readBins(t, client, store, coinbase.TxIDChainHash())
+	require.Equal(t, true, before[fields.IsCoinbase.String()])
+	require.NotNil(t, before[fields.SpendingHeight.String()], "a coinbase record carries its maturity height")
+
+	items := peerItemsFromStore(t, store, coinbase)
+	// Maturity is enforced through the SpendingHeight bin; GetSpend reports OK here.
+	require.Contains(t, []string{statusOK, statusImmature}, items[0].Status)
+
+	require.NoError(t, store.Delete(ctx, coinbase.TxIDChainHash()))
+
+	peer := servePeer(t, []*bt.Tx{coinbase}, coinbase, blockHash, height, items)
+
+	r, out := newIntegrationRepairer(t, store, idleChainFor(blockHash, blockID, height), peer.URL, Options{TxIDs: []chainhash.Hash{*coinbase.TxIDChainHash()}})
+
+	report, err := r.Run(ctx)
+	require.NoError(t, err, out.String())
+	require.Equal(t, OutcomeRepaired, report.Results[0].Outcome, report.Results[0].Detail)
+
+	after := readBins(t, client, store, coinbase.TxIDChainHash())
+	for _, bin := range []fields.FieldName{fields.IsCoinbase, fields.SpendingHeight, fields.Utxos, fields.BlockIDs, fields.BlockHeights, fields.Tx} {
+		require.Equal(t, before[bin.String()], after[bin.String()], "bin %s must be restored exactly", bin)
 	}
 }

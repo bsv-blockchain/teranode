@@ -63,7 +63,7 @@ var commandHelp = map[string]string{
 	"resetblockassembly":      "Reset block assembly state",
 	"checkblockassembly":      "Check block assembly state by validating unmined transaction inputs (read-only)",
 	"fix-chainwork":           "Fix incorrect chainwork values in blockchain database",
-	"repair-missing-parents":  "Rebuild UTXO-store parent records pruned while a child still referenced them (issue 1768), from a healthy peer's asset service (node must be stopped)",
+	"repair-missing-parents":  "Rebuild UTXO-store parent records pruned while a child still referenced them (issue 1768), from a healthy peer's asset service (blockchain service running, FSM IDLE, other services stopped; dry-run by default)",
 	"rewindblockchain":        "Rewind blockchain DB, UTXO store and subtree blobs to Block Assembly's persisted height (DESTRUCTIVE, node must be stopped)",
 	"validate-utxo-set":       "Validate UTXO set file",
 	"subtreebench":            "Benchmark SubtreeProcessor throughput with CPU and memory profiling",
@@ -713,7 +713,7 @@ func registerRepairMissingParentsFlags(fs *flag.FlagSet) *repairMissingParentsFl
 		peer:      fs.String("peer", "", "Healthy peer asset service base URL, e.g. http://peer:8090 (required)"),
 		txids:     fs.String("txids", "", "Comma-separated parent txids known to be missing"),
 		scan:      fs.Bool("scan", false, "Walk every unmined transaction and queue any absent parent it references"),
-		dryRun:    fs.Bool("dry-run", false, "Print the plan and write nothing"),
+		dryRun:    fs.Bool("dry-run", true, "Print the plan and write nothing; pass --dry-run=false to write"),
 		forceLive: fs.Bool("force-live", false, "Proceed even if the FSM is not IDLE (DANGEROUS: races block validation)"),
 	}
 }
@@ -732,6 +732,10 @@ func (f *repairMissingParentsFlags) options() (repairmissingparents.Options, err
 		s = strings.TrimSpace(s)
 		if s == "" {
 			continue
+		}
+
+		if len(s) != chainhash.MaxHashStringSize {
+			return opts, errors.NewInvalidArgumentError("invalid txid %q: want %d hex characters, got %d", s, chainhash.MaxHashStringSize, len(s))
 		}
 
 		h, err := chainhash.NewHashFromStr(s)

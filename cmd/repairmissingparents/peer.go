@@ -28,12 +28,15 @@ type Peer interface {
 
 // peerTxMeta is the subset of GET /api/v1/txmeta/:hash/json the repair reads.
 // blockHashes is aligned with blockHeights and subtreeIdxs; an empty hash means the
-// peer could not resolve that block ID.
+// peer could not resolve that block ID. MainChainIndex points at the entry on the
+// peer's main chain, or is -1 when the peer could not determine it; it is nil when
+// the peer predates the field. isCoinbase is deliberately not read: the store derives
+// it from the transaction.
 type peerTxMeta struct {
-	BlockHeights []uint32 `json:"blockHeights"`
-	BlockHashes  []string `json:"blockHashes"`
-	SubtreeIdxs  []int    `json:"subtreeIdxs"`
-	IsCoinbase   bool     `json:"isCoinbase"`
+	BlockHeights   []uint32 `json:"blockHeights"`
+	BlockHashes    []string `json:"blockHashes"`
+	SubtreeIdxs    []int    `json:"subtreeIdxs"`
+	MainChainIndex *int     `json:"mainChainIndex"`
 }
 
 // peerUTXO is one element of GET /api/v1/utxos/:hash/json. Status is the utxo.Status
@@ -44,12 +47,21 @@ type peerUTXO struct {
 	SpendingData *spend.SpendingData `json:"spendingData,omitempty"`
 }
 
-const statusSpent = "SPENT"
+const (
+	// maxPeerResponseBytes caps one peer response. BSV transactions can be large, so
+	// the cap is generous; a response over it fails with an explicit size error.
+	maxPeerResponseBytes = 1 << 30
+	peerAttempts         = 3
+	peerRetryDelay       = time.Second
+)
 
 // HTTPPeer reads from an asset service over HTTP.
 type HTTPPeer struct {
-	baseURL string
-	client  *http.Client
+	baseURL    string
+	client     *http.Client
+	maxBody    int64
+	attempts   int
+	retryDelay time.Duration
 }
 
 // NewHTTPPeer returns a Peer for the asset service at baseURL (scheme://host[:port],
@@ -59,34 +71,79 @@ func NewHTTPPeer(baseURL string, client *http.Client) *HTTPPeer {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
 
-	return &HTTPPeer{baseURL: strings.TrimRight(baseURL, "/"), client: client}
+	return &HTTPPeer{
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		client:     client,
+		maxBody:    maxPeerResponseBytes,
+		attempts:   peerAttempts,
+		retryDelay: peerRetryDelay,
+	}
 }
 
+// get fetches path from the peer. A transport error, a 5xx or a 404 is retried with
+// a growing delay, so a peer that is restarting is not mistaken for one that has
+// pruned the record. A 404 that persists is returned as errors.ErrNotFound.
 func (p *HTTPPeer) get(ctx context.Context, path string) ([]byte, error) {
+	var lastErr error
+
+	for attempt := 0; attempt < p.attempts; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(time.Duration(attempt) * p.retryDelay)
+
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, errors.NewContextCanceledError("peer request %s", path, ctx.Err())
+			case <-timer.C:
+			}
+		}
+
+		body, retry, err := p.getOnce(ctx, path)
+		if err == nil {
+			return body, nil
+		}
+
+		lastErr = err
+
+		if !retry {
+			break
+		}
+	}
+
+	return nil, lastErr
+}
+
+func (p *HTTPPeer) getOnce(ctx context.Context, path string) ([]byte, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+path, nil)
 	if err != nil {
-		return nil, errors.NewProcessingError("build request %s", path, err)
+		return nil, false, errors.NewProcessingError("build request %s", path, err)
 	}
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return nil, errors.NewServiceError("peer request %s", path, err)
+		return nil, true, errors.NewServiceError("peer request %s", path, err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, p.maxBody+1))
 	if err != nil {
-		return nil, errors.NewServiceError("read peer response %s", path, err)
+		return nil, true, errors.NewServiceError("read peer response %s", path, err)
+	}
+
+	if int64(len(body)) > p.maxBody {
+		return nil, false, errors.NewProcessingError("peer response %s exceeds %d bytes", path, p.maxBody)
 	}
 
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
-		return nil, errors.NewNotFoundError("peer has no record for %s", path)
+		return nil, true, errors.NewNotFoundError("peer has no record for %s", path)
+	case resp.StatusCode >= http.StatusInternalServerError:
+		return nil, true, errors.NewServiceError("peer %s returned %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
 	case resp.StatusCode != http.StatusOK:
-		return nil, errors.NewServiceError("peer %s returned %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, false, errors.NewServiceError("peer %s returned %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	return body, nil
+	return body, false, nil
 }
 
 func (p *HTTPPeer) GetTx(ctx context.Context, hash *chainhash.Hash) (*bt.Tx, error) {

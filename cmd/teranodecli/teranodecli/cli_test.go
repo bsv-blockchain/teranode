@@ -179,7 +179,9 @@ func TestRepairMissingParentsRegistration(t *testing.T) {
 	t.Run("listed in commandHelp so printUsage shows it", func(t *testing.T) {
 		desc, ok := commandHelp["repair-missing-parents"]
 		require.True(t, ok)
-		require.Contains(t, desc, "node must be stopped")
+		require.Contains(t, desc, "blockchain service running")
+		require.Contains(t, desc, "FSM IDLE")
+		require.NotContains(t, desc, "node must be stopped", "the tool needs the blockchain service, so the node cannot be fully stopped")
 	})
 
 	t.Run("not gated pre-parse as a dangerous command", func(t *testing.T) {
@@ -196,6 +198,42 @@ func TestRepairMissingParentsRegistration(t *testing.T) {
 		_, err := f.options()
 		require.Error(t, err, "--peer is required")
 		require.Contains(t, err.Error(), "--peer")
+	})
+
+	t.Run("dry run is the default", func(t *testing.T) {
+		fs := flag.NewFlagSet("repair-missing-parents", flag.ContinueOnError)
+		fs.SetOutput(&nopWriter{})
+
+		f := registerRepairMissingParentsFlags(fs)
+		require.NoError(t, fs.Parse([]string{"--peer", "http://peer:8090", "--scan"}))
+
+		opts, err := f.options()
+		require.NoError(t, err)
+		require.True(t, opts.DryRun, "a write must be asked for explicitly with --dry-run=false")
+	})
+
+	t.Run("dry-run=false enables writes", func(t *testing.T) {
+		fs := flag.NewFlagSet("repair-missing-parents", flag.ContinueOnError)
+		fs.SetOutput(&nopWriter{})
+
+		f := registerRepairMissingParentsFlags(fs)
+		require.NoError(t, fs.Parse([]string{"--peer", "http://peer:8090", "--scan", "--dry-run=false"}))
+
+		opts, err := f.options()
+		require.NoError(t, err)
+		require.False(t, opts.DryRun)
+	})
+
+	t.Run("rejects a truncated txid instead of zero-padding it", func(t *testing.T) {
+		fs := flag.NewFlagSet("repair-missing-parents", flag.ContinueOnError)
+		fs.SetOutput(&nopWriter{})
+
+		f := registerRepairMissingParentsFlags(fs)
+		require.NoError(t, fs.Parse([]string{"--peer", "http://peer:8090", "--txids", "c42cdee0b76ee5c1f0475a37bf9df2cd77021e3a9b74441c5cc6862ceaf5023"}))
+
+		_, err := f.options()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "want 64 hex characters, got 63")
 	})
 
 	t.Run("requires txids or scan", func(t *testing.T) {
