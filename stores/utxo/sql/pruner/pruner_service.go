@@ -492,7 +492,10 @@ func (s *Service) deleteTombstonedTx(ctx context.Context, blockHeight uint32) (d
 	// SERIALIZABLE gave the same protection by aborting the whole prune with a
 	// serialization failure on the first such touch, which any caller could cause
 	// by resubmitting an already mined transaction. A locked row is skipped here
-	// instead, and no outside write can abort the transaction.
+	// instead, so a write to a candidate row no longer aborts the transaction.
+	// The DELETE's cascade into outputs can still wait on a spend batch, and that
+	// batch can then wait for a candidate: Postgres ends the cycle with 40P01,
+	// and both sides retry (see candidateLockSuffix).
 	//
 	// SQLite has one writer. The transaction opens with a statement that writes
 	// nothing and takes the write lock (takeSQLiteWriteLock), so no other writer
@@ -547,8 +550,13 @@ func finishPrune(txn *sql.Tx, result sql.Result) (int64, error) {
 
 // candidateLockSuffix is appended to a candidate selection on Postgres. It takes
 // the row lock the DELETE needs, in the order the SetMinedMulti lock uses, and
-// skips a row another transaction holds rather than waiting for it, so the prune
-// cannot join a lock cycle with a spend batch.
+// skips a row another transaction holds rather than waiting for it, so selecting
+// the candidates never waits. The DELETE can still join a lock cycle with a spend
+// batch through its cascade into outputs: a batch that spends an unspent output
+// of a conflicting candidate holds that output row, then waits in setDAH for the
+// candidate this prune holds, while the cascade waits for the output row.
+// Postgres breaks the cycle with 40P01, and both sides retry: the prune through
+// isPruneRetryable, the batch through its deadlock retry.
 const candidateLockSuffix = `
 ORDER BY t.id FOR NO KEY UPDATE OF t SKIP LOCKED`
 
@@ -631,9 +639,14 @@ func (s *Service) pruneCandidates(ctx context.Context, blockHeight uint32, candi
 	//
 	// A conflicting row never matches. ProcessConflicting releases every input of
 	// a loser and of each descendant it cascades to, the uncontested ones too, so
-	// a loser always has an input that looks like a rolled-back claim, and holding
+	// such a loser has an input that looks like a rolled-back claim, and holding
 	// it back would keep it forever. It needs no marker for those inputs: a replay
-	// of it meets the winner's spend and is stored as conflicting again.
+	// of it meets the winner's spend and is stored as conflicting again. Not every
+	// path that marks a record conflicting releases its claims: SetConflicting
+	// returns the parent spends without clearing them, and the callers of
+	// MarkConflictingRecursively in block assembly and the validator drop them.
+	// A parent output that still names such a loser gets a marker from the
+	// query below, like any other output that names a deleted child.
 	const holdBackQuery = `UPDATE utxo_prune_candidates SET held_back = 1
 WHERE EXISTS (SELECT 1
   FROM transactions child

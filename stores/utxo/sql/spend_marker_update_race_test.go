@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -228,6 +229,19 @@ func TestRollbackKeepsAMatchAnotherWriterRecordedBeforeTheUpdate(t *testing.T) {
 
 			plantReplayMarker(t, ctx, store, m, c, 1)
 
+			// C's two inputs must reach the store in one batch. If the batcher sends M on
+			// its own, the hook fires in M's batch and A's batch then reads A:0 as already
+			// recorded at the SELECT, so the UPDATE never meets the other writer and the
+			// test passes without reaching the path it is about. A batch of exactly two,
+			// with a fallback far beyond the test's run time, sends them together.
+			var batchSizes []int
+
+			store.spendBatcher.Close()
+			store.spendBatcher = batcher.NewWithPool(2, time.Minute, func(batch []*batchSpend) {
+				batchSizes = append(batchSizes, len(batch))
+				store.sendSpendBatch(batch)
+			}, false)
+
 			recorded := spendpkg.NewSpendingData(c.TxIDChainHash(), 0).Bytes()
 			const writeA = "UPDATE outputs SET spending_data = $2 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)"
 
@@ -270,10 +284,92 @@ func TestRollbackKeepsAMatchAnotherWriterRecordedBeforeTheUpdate(t *testing.T) {
 			spends, err := store.Spend(ctx, c, 1000)
 			store.afterSpendSelect = nil
 
+			require.Equal(t, []int{2}, batchSizes, "fixture: both of C's inputs must be in one batch")
 			require.Error(t, err)
 			require.ErrorIs(t, spends[1].Err, errors.ErrUtxoSpendingTxPruned, "fixture: M refuses the replay")
 			require.Equal(t, recorded, outputSpendingData(t, ctx, store, a, 0),
 				"an output that already recorded this spend when the call wrote it is an idempotent match and stays")
 		})
 	}
+}
+
+// TestRollbackKeepsADuplicateOfAMatchAnotherWriterRecorded: two concurrent Spend calls of
+// the same C land in one batch, so A:0 appears twice with the same spending data and the
+// batch updates it once, for its representative. As in
+// TestRollbackKeepsAMatchAnotherWriterRecordedBeforeTheUpdate, another attempt at C records
+// A:0 between the SELECT and the UPDATE, so the representative is an idempotent match, and
+// M:0's marker answers both calls with a pruned replay. The duplicate wrote nothing either:
+// it must be an idempotent match too, or its call reverses A:0 as a spend it wrote and
+// releases what may be a confirmed historical spend.
+//
+// Postgres only, for the same reason as TestSpendRefusesMarkerCommittedAfterSelect.
+func TestRollbackKeepsADuplicateOfAMatchAnotherWriterRecorded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, ctx := setupPostgresStore(t)
+	store.settings.UtxoStore.BatchSQLOperations = true
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	a := replayParent(t, ctx, store, "3333333333333333333333333333333333333333333333333333333333333333")
+	m := replayParent(t, ctx, store, "4444444444444444444444444444444444444444444444444444444444444444")
+	c := replaySpender(t, a, m)
+
+	plantReplayMarker(t, ctx, store, m, c, 1)
+
+	// Both calls' inputs, A:0 and M:0 twice, must be in one batch, or there is no
+	// duplicate to inherit anything.
+	var batchSizes []int
+
+	store.spendBatcher.Close()
+	store.spendBatcher = batcher.NewWithPool(4, time.Minute, func(batch []*batchSpend) {
+		batchSizes = append(batchSizes, len(batch))
+		store.sendSpendBatch(batch)
+	}, false)
+
+	recorded := spendpkg.NewSpendingData(c.TxIDChainHash(), 0).Bytes()
+
+	var once sync.Once
+
+	store.afterSpendSelect = func() {
+		once.Do(func() {
+			_, err := store.db.ExecContext(context.Background(),
+				"UPDATE outputs SET spending_data = $2 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
+				a.TxIDChainHash()[:], recorded)
+			require.NoError(t, err)
+		})
+	}
+	t.Cleanup(func() { store.afterSpendSelect = nil })
+
+	var (
+		wg    sync.WaitGroup
+		calls [2]struct {
+			spends []*utxo.Spend
+			err    error
+		}
+	)
+
+	for i := range calls {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			calls[i].spends, calls[i].err = store.Spend(ctx, c, 1000)
+		}()
+	}
+
+	wg.Wait()
+	store.afterSpendSelect = nil
+
+	require.Equal(t, []int{4}, batchSizes, "fixture: both calls' inputs must be in one batch")
+
+	for i, call := range calls {
+		require.Error(t, call.err, "call %d", i)
+		require.ErrorIs(t, call.spends[1].Err, errors.ErrUtxoSpendingTxPruned, "fixture: M refuses call %d as a replay", i)
+	}
+
+	require.Equal(t, recorded, outputSpendingData(t, ctx, store, a, 0),
+		"neither call wrote A:0, so neither may reverse it")
 }

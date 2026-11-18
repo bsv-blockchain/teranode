@@ -780,8 +780,8 @@ func httpStatusForTxError(err error) int {
 		errors.Is(err, errors.ErrSpent),
 		errors.Is(err, errors.ErrTxLocked),
 		errors.Is(err, errors.ErrTxCreating),
-		// The spending transaction was pruned by this node after it was mined and
-		// fully spent. It is this node's record, not a consensus verdict, but
+		// The spending transaction was pruned by this node, usually after it was
+		// mined and fully spent. It is this node's record, not a consensus verdict, but
 		// resubmitting it here gets the same answer while the parent output
 		// still names it, so it answers 409 like ErrSpent rather than 500.
 		errors.Is(err, errors.ErrUtxoSpendingTxPruned):

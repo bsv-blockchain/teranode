@@ -480,8 +480,8 @@ func parkCommitFailure(err error) parkDisposition {
 		// ahead of the chain, which is this node's state, not the peer's block.
 		// Above it the full route wraps this answer in a ServiceError, which
 		// the transient arm has already taken. On neither route is a pruned
-		// replay a block verdict: the marker does not say which chain mined the
-		// transaction.
+		// replay a block verdict: the marker does not say whether, or on which
+		// chain, the transaction was mined.
 		return parkDispositionLocalUtxoFault
 
 	default:

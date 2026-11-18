@@ -780,10 +780,12 @@ var publicCauseCodes = map[ERR]struct{}{
 	ERR_UTXO_SPENT:              {},
 	ERR_TX_LOCKED:               {},
 	// ERR_UTXO_SPENDING_TX_PRUNED is answered like ERR_UTXO_SPENT, but it is this
-	// node's record and not a consensus verdict: this transaction was mined,
-	// fully spent and pruned here, so the output it is reaching for is long
-	// consumed, and it keeps that answer while the parent output still records
-	// it as the spender. Every producer's message names the transaction, and
+	// node's record and not a consensus verdict: this node pruned this
+	// transaction, usually after it was mined, fully spent and buried, and it
+	// keeps that answer while the parent output still records it as the
+	// spender. The pruner also deletes conflicting records that were never
+	// mined, so the answer does not by itself say the transaction confirmed.
+	// Every producer's message names the transaction, and
 	// the outpoint where the answer is per input, both of which the submitter
 	// already sent, and carries no node-internal state; the stores log the
 	// detail instead.

@@ -896,7 +896,7 @@ func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospi
 	return s.probeNativeReplayProtectionVerdict(ctx, policy) == replayProbeProven
 }
 
-// probeNativeReplayProtection proves the native dispatcher honours the two
+// probeNativeReplayProtectionVerdict proves the native dispatcher honours the two
 // spendMulti semantics the pruner's replay protection depends on, before
 // spendMulti is allowed onto the native path.
 //

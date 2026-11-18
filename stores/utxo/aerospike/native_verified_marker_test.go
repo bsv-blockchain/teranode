@@ -393,10 +393,19 @@ func TestJudgeVerifiedMarkerProbe(t *testing.T) {
 			logger := &levelLogger{}
 			s := &Store{logger: logger}
 
-			var nextSend, nextRead int
+			type probeCall struct {
+				child  chainhash.Hash
+				offset uint32
+			}
+
+			var (
+				nextSend, nextRead int
+				sent               []probeCall
+			)
 
 			verdict := s.judgeVerifiedMarkerProbe(verifiedMarkerProbeIO{
-				send: func(*chainhash.Hash, uint32) (LuaErrorCode, error) {
+				send: func(child *chainhash.Hash, offset uint32) (LuaErrorCode, error) {
+					sent = append(sent, probeCall{child: *child, offset: offset})
 					a := sends[nextSend]
 					nextSend++
 
@@ -417,6 +426,14 @@ func TestJudgeVerifiedMarkerProbe(t *testing.T) {
 			require.Equal(t, tc.want, verdict)
 			require.Len(t, logger.errs, tc.wantErrs)
 			require.Len(t, logger.warns, tc.wantWarns)
+
+			if verdict == replayProbeProven {
+				// The fake answers by call order, so a proven verdict means only as much as the
+				// writes it was given: the child the output names, a child it does not name, and
+				// an output that names no spender, in that order.
+				require.Equal(t, []probeCall{{childA, 0}, {childB, 0}, {childA, 1}}, sent,
+					"a proven verdict must rest on these three probes")
+			}
 		})
 	}
 }

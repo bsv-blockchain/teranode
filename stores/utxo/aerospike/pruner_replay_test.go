@@ -1003,6 +1003,48 @@ func TestWithoutMarkedMatchesDropsOnlyMarkedMatches(t *testing.T) {
 		"only the marked match leaves the rollback: a fresh write on the marked parent, an unmarked match and a match on a gone parent stay")
 }
 
+// TestWithoutMarkedMatchesReadsTheMarkerOnTheOutputsPage: the pruner writes a
+// replay marker on the record that holds the output, which for a paged parent
+// is not the master record. With two outputs per record, P:3 lives on page 1
+// and P:1 on the master. Only page 1 carries C's marker, so only the match on
+// P:3 is a marked match to keep out of the rollback. A re-read built from
+// the wrong vout or batch size reads the master, finds no marker, and the
+// rollback would release P:3.
+func TestWithoutMarkedMatchesReadsTheMarkerOnTheOutputsPage(t *testing.T) {
+	s := test.CreateBaseTestSettings(t)
+	s.UtxoStore.UtxoBatchSize = 2
+
+	client, store, ctx, cleanup := initAerospike(t, s, ulogger.New("without-marked-matches-paged-test"))
+	t.Cleanup(cleanup)
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	p := rollbackFixtureParent(t, ctx, store, 0x61, 4)
+
+	c := bt.NewTx()
+	for _, vout := range []uint32{1, 3} {
+		out := p.Outputs[vout]
+		require.NoError(t, c.From(p.TxID(), vout, out.LockingScript.String(), out.Satoshis))
+	}
+
+	require.NoError(t, c.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+	_, _, err := store.SpendAndCreate(ctx, c, 1000)
+	require.NoError(t, err)
+
+	masterKey := parentKeyForOutput(t, store, p.TxIDChainHash(), 1, 2)
+	pageKey := parentKeyForOutput(t, store, p.TxIDChainHash(), 3, 2)
+	require.NotEqual(t, masterKey.Digest(), pageKey.Digest(), "fixture: P:3 must live on a page record, apart from P:1")
+
+	require.NoError(t, client.PutBins(nil, pageKey, aerospike.NewBin(fields.DeletedChildren.String(),
+		map[interface{}]interface{}{c.TxID(): true})))
+
+	onMaster := spendOf(t, p, 1, c, 0)
+	onPage := spendOf(t, p, 3, c, 1)
+
+	kept := store.WithoutMarkedMatchesForTest(c, []*utxo.Spend{onMaster, onPage}, []*utxo.Spend{onMaster, onPage})
+	require.Equal(t, []*utxo.Spend{onMaster}, kept,
+		"the match on the page that carries the marker leaves the rollback; the match on the unmarked master stays")
+}
+
 // TestWithoutMarkedMatchesCountsAMatchItCannotRead: when the re-read of a parent's replay marker
 // cannot run, the idempotent match is dropped from the rollback and the output stays spent by a
 // transaction the store may not hold. Nothing but an Error line said so. Each such match now

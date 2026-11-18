@@ -25,10 +25,14 @@ func IsPrunedReplayRejection(err error) bool {
 //
 // One rejection makes the match historical: the marker answer a pruned replay
 // gets (IsReplayAnswer). The marker fires only for a transaction this store
-// pruned, which happens only once that transaction was mined, fully spent and
-// buried, so any output recording it as spender is recording a confirmed spend.
-// Reversing it would hand a confirmed output to the next spender, which is the
-// double-spend this exclusion was added to prevent.
+// pruned. A mined transaction is pruned once it is fully spent and buried, so
+// an output recording it as spender is recording a confirmed spend, and
+// reversing it would hand a confirmed output to the next spender, which is the
+// double-spend this exclusion was added to prevent. The pruner also deletes
+// conflicting records that were never mined, and one whose parent claims were
+// never released is marked like a mined one. Its match is not a confirmed
+// spend, but it is held back all the same, so the output stays spent by a
+// transaction that never confirmed.
 //
 // Every other rejection leaves the match reversible, and reversing it is what
 // keeps the store self-healing. The store leaves partial spends committed when

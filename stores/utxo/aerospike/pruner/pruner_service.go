@@ -229,9 +229,10 @@ type parentUpdateInfo struct {
 	// markerFailed records that this record's marker write did not land, or
 	// that its outcome could not be read. Set by writeVerifiedMarkers.
 	markerFailed bool
-	// released holds the children that are conflicting losers. ProcessConflicting
-	// released every input they spent, the uncontested ones too, so an unspent
-	// output they name does not hold them back: see keepSpendHolders.
+	// released holds the children that are conflicting losers. A loser that went
+	// through ProcessConflicting had every input released, the uncontested ones
+	// too, so an unspent output they name does not hold them back: see
+	// keepSpendHolders.
 	released map[chainhash.Hash]struct{}
 }
 
@@ -2397,11 +2398,15 @@ func (p *markingPlan) withNativeRefusals(updates map[string]*parentUpdateInfo) m
 // spend cleanly. Held-back children are counted, so a record that stays held
 // back is visible rather than silently retained.
 //
-// A conflicting loser is the exception: ProcessConflicting released every
-// input it spent, the uncontested ones too, so it is never held back for an
-// output that does not name it, and a replay of it meets the winner's spend and
-// is stored as conflicting again. The SQL pruner exempts conflicting rows the
-// same way. It holds a child back per input where this decides per parent
+// A conflicting loser is the exception: a loser that went through
+// ProcessConflicting had every input released, the uncontested ones too, so it
+// is never held back for an output that does not name it, and a replay of it
+// meets the winner's spend and is stored as conflicting again. Not every path
+// that marks a record conflicting releases its claims (SetConflicting returns
+// the parent spends without clearing them, and some of its callers drop them),
+// so an output can still name a loser; that loser is a holder like any other
+// child and gets a marker. The SQL pruner exempts conflicting rows from its
+// hold-back the same way. It holds a child back per input where this decides per parent
 // record: see holdBackQuery.
 //
 // A parent record that is gone needs no marker and is dropped. Any other read

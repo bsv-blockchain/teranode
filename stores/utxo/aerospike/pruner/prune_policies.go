@@ -54,8 +54,8 @@ func newPrunerTTLTouchPolicy(commitLevel aerospike.CommitLevel) *aerospike.Batch
 // must meet, the same rules partitionWorker's scan and dropUnminedRecords apply
 // when the pruner selects a record: it still has a deleteAtHeight at or below
 // blockHeight, it is not locked, and it has no unmined_since bin unless it is
-// conflicting. The pruner selects a child while it is mined and fully spent,
-// and deletes it a batch later, or at the worker's final drain. In between, a
+// conflicting. The pruner selects a child while it is mined and fully spent, or
+// conflicting, and deletes it a batch later, or at the worker's final drain. In between, a
 // block invalidation can strip its block ids and stamp unmined_since, a reorg's
 // move-back can lock it while it saves it for restoration, and a conflict
 // resolution that releases one of its outputs clears its deleteAtHeight (Lua

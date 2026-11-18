@@ -955,7 +955,8 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 // spender), and only once that write has answered does it delete the spender.
 // The input read before the marker answered as an idempotent match, a sibling
 // whose parent was already gone failed, and the probe then finds no spender.
-// The match is then a confirmed spend by a pruned transaction, and reversing it
+// The match is then a spend by a pruned transaction. When that transaction
+// was mined, which is the usual case, it is a confirmed spend, and reversing it
 // would release a confirmed output. Because the marker lands before the delete,
 // a probe that found no spender comes after it, so reading it here closes the
 // window.

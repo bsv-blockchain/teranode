@@ -29,7 +29,7 @@ Settings are organized under the `Pruner` struct in `settings.Settings`.
 | SkipPreserveParents | bool | false | pruner_skipPreserveParents | Skip Phase 1 - parent preservation for unmined transactions |
 | SkipProcessExpiredPreservations | bool | false | pruner_skipProcessExpiredPreservations | Skip Phase 1b - expiry of old parent preservations |
 | MinBlockHeight | uint32 | 0 | pruner_min_block_height | Skip all pruning until block height exceeds this value |
-| SkipDeletions | bool | false | pruner_skipDeletions | Skip deletion operations during pruning |
+| SkipDeletions | bool | false | pruner_skipDeletions | Aerospike deletion-phase dry run: no record deletes, parent replay markers, external blob deletes or unmined delete-height clears. Parent preservation and expiry still run. Not read by the SQL pruner |
 
 ### Service Control
 

@@ -2545,8 +2545,9 @@ func (s *Store) probeAndRollbackPartialSpends(tx *bt.Tx, rollback, idempotent []
 // commit in between: it writes the marker for (parent, spender) and deletes the
 // spender in one transaction. The input read before that commit answered as an
 // idempotent match, a sibling whose parent was already gone found no spender,
-// and the probe then finds none either. The match is then a confirmed spend by
-// a pruned transaction, and reversing it would release a confirmed output.
+// and the probe then finds none either. The match is then a spend by a pruned
+// transaction. When that transaction was mined, which is the usual case, it is a
+// confirmed spend, and reversing it would release a confirmed output.
 // Because the marker and the delete commit together, a probe that found no
 // spender has already seen the marker, so reading it here closes the window.
 //
