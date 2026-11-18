@@ -2721,10 +2721,6 @@ func (stp *SubtreeProcessor) ProcessRemainderTransactionsAndDequeue(ctx context.
 	return stp.processRemainderTransactionsAndDequeue(ctx, params)
 }
 
-// TxCount returns the total number of transactions processed.
-//
-// Returns:
-//   - uint64: Total transaction count
 // TemplateEmpty reports whether the template holds no transaction besides the coinbase. It is
 // answered on the processor's goroutine between dequeue iterations, so a batch admitted under
 // the previous transaction rules is either in the template already or still queued, where the
@@ -2753,6 +2749,10 @@ func (stp *SubtreeProcessor) TemplateEmpty() bool {
 	}
 }
 
+// TxCount returns the total number of transactions processed.
+//
+// Returns:
+//   - uint64: Total transaction count
 func (stp *SubtreeProcessor) TxCount() uint64 {
 	return stp.txCount.Load()
 }
