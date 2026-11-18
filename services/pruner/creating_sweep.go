@@ -165,7 +165,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 		// bypassed. The rule takes a spend lease first, which the store refuses for a record
 		// that is rolling back, and a rollback that begins later waits for the lease and then
 		// reverses the spends this pass made.
-		_, rfErr := utxo.RollForwardCreating(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt, blockHeight)
+		_, completed, rfErr := utxo.RollForwardCreating(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt, blockHeight)
 		if rfErr != nil {
 			if isUnwinnableSpendError(rfErr) {
 				// A lease that is still live belongs to a spender that returned with an unknown
@@ -192,6 +192,14 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 
 			s.logger.Warnf("[pruner][creating-sweep][%d] roll-forward of %s failed, will retry next block: %v", blockHeight, hash, rfErr)
 			prunerCreatingSweepFailures.Inc()
+
+			continue
+		}
+
+		if !completed {
+			// Another actor's finalize completed the record. That actor owns the hand-off to block
+			// assembly and the unlock after it.
+			progressed++
 
 			continue
 		}

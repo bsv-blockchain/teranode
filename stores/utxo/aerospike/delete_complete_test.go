@@ -564,7 +564,7 @@ func TestEndCreateFirstRollback_HoldsTxidThroughTheCascade(t *testing.T) {
 		md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
 		require.NoError(t, err)
 
-		began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
+		began, err := beginAsCreator(ctx, store, hash, md.Attempt)
 		require.NoError(t, err)
 		require.True(t, began)
 
@@ -611,7 +611,7 @@ func TestEndCreateFirstRollback_HoldsTxidThroughTheCascade(t *testing.T) {
 		require.Positive(t, masterChildCount(t, client, store, hash), "precondition: the record really paginates")
 		require.True(t, childRecordExists(t, client, store, hash, 1), "precondition: the first child page exists")
 
-		began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
+		began, err := beginAsCreator(ctx, store, hash, md.Attempt)
 		require.NoError(t, err)
 		require.True(t, began)
 
@@ -653,7 +653,7 @@ func TestEndCreateFirstRollback_HoldsTxidThroughTheCascade(t *testing.T) {
 		first, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
 		require.NoError(t, err)
 
-		began, err := store.BeginCreateFirstRollback(ctx, hash, first.Attempt)
+		began, err := beginAsCreator(ctx, store, hash, first.Attempt)
 		require.NoError(t, err)
 		require.True(t, began)
 
@@ -703,7 +703,7 @@ func TestEndCreateFirstRollback_FailedCleanupLeavesARecordThatNeedsNoBlob(t *tes
 	md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
 	require.NoError(t, err)
 
-	began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
+	began, err := beginAsCreator(ctx, store, hash, md.Attempt)
 	require.NoError(t, err)
 	require.True(t, began)
 	require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -37,9 +38,14 @@ type fakeSweepStore struct {
 	spendSpends     []*utxo.Spend
 	finalizeErr     error
 	beginDeclined   bool
-	takeDeclined    bool
-	clearResult     bool
-	clearErr        error
+	// beginErr is what BeginCreateFirstRollback fails with, and spendWait what SpendWaitTimeout
+	// answers, which is how long a rollback keeps trying a claim that a live lease refuses.
+	beginErr  error
+	spendWait time.Duration
+
+	takeDeclined bool
+	clearResult  bool
+	clearErr     error
 
 	spendOpts []utxo.CreateOption
 	events    []string
@@ -215,8 +221,14 @@ func (f *fakeSweepStore) BeginCreateFirstRollback(_ context.Context, hash *chain
 	f.record("begin")
 	f.began = append(f.began, *hash)
 
+	if f.beginErr != nil {
+		return false, f.beginErr
+	}
+
 	return !f.beginDeclined, nil
 }
+
+func (f *fakeSweepStore) SpendWaitTimeout() time.Duration { return f.spendWait }
 
 func (f *fakeSweepStore) Unspend(_ context.Context, spends []*utxo.Spend, _ ...bool) error {
 	f.record("unspend")
@@ -513,8 +525,8 @@ func TestSweepCreatingTxsDoubleSpendRollsBack(t *testing.T) {
 	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
 
 	require.Equal(t, []string{"begin", "unspend", "release", "end"}, store.events, "a loser is marked rolling back, unspent, then its rollback ends")
-	require.Equal(t, []string{"lease", "spend", "unlease", "leases", "begin", "leases", "unspend", "release", "end"}, store.trace,
-		"the pass releases its own lease, reads the leases before it claims the rollback, and the rollback reads them again before it unspends")
+	require.Equal(t, []string{"lease", "spend", "unlease", "leases", "begin", "unspend", "release", "end"}, store.trace,
+		"the pass releases its own lease and reads the leases before it claims the rollback; the store decides inside the claim, so the rollback reads none")
 	require.Equal(t, [][]byte{fakeLease}, store.leasesFreed, "the lease the pass took is the one it releases")
 	require.Equal(t, []chainhash.Hash{hashA}, store.began)
 	require.Len(t, store.unspent, 1)
@@ -1267,4 +1279,99 @@ func TestSweepCreatingTxsCountsARollbackAsFinishedOnlyWhenItEnded(t *testing.T) 
 	require.Equal(t, []chainhash.Hash{hashA}, store.ended, "precondition: the second pass ended the rollback")
 	require.True(t, recorder.contains("finished abandoned rollback"))
 	require.False(t, recorder.contains("rolled forward 0 of 1"))
+}
+
+// TestSweepCreatingTxsLeavesTheHandOffToTheActorThatFinalized pins that the sweep hands a record to
+// block assembly, and unlocks it, only when its own finalize cleared the creating state. A finalize
+// that finds the record already final lost to another actor's finalize of the same attempt. That
+// actor owns the hand-off and any unwind of it, so a second hand-off here could leave block assembly
+// holding a transaction that actor then deletes.
+func TestSweepCreatingTxsLeavesTheHandOffToTheActorThatFinalized(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore:   ns,
+		stale:       []chainhash.Hash{hashA},
+		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA, Fee: 7, SizeInBytes: 99}},
+		finalizeErr: utxo.MarkAlreadyFinal(errors.NewTxExistsError("already final")),
+	}
+
+	ba := blockassembly.NewMock()
+
+	srv := newSweepServer(t, store)
+	srv.blockAssemblyClient = ba
+
+	before := sweepFailures()
+
+	srv.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"lease", "spend", "finalize"}, store.trace, "the finalize removed the leases, so none is released, and nothing is rolled back")
+	ba.AssertNotCalled(t, "Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	require.Empty(t, store.unlocked, "the lock belongs to the actor that hands the transaction off")
+	require.Empty(t, store.began)
+	require.Equal(t, before, sweepFailures(), "a record another actor completed is healed, not a failure")
+}
+
+// TestSweepCreatingTxsRollbackRefusedForALiveLeaseLeavesTheRecordCreating pins what the sweep does
+// when a spender takes a lease between the sweep's read of the leases and its claim of the rollback:
+// the store refuses the claim, the sweep reverses nothing and the record stays creating.
+func TestSweepCreatingTxsRollbackRefusedForALiveLeaseLeavesTheRecordCreating(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore:   ns,
+		stale:       []chainhash.Hash{hashA},
+		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		spendErr:    errors.ErrSpent,
+		spendSpends: []*utxo.Spend{{Err: errors.ErrSpent}},
+		beginErr:    utxo.MarkSpendLeaseLive(errors.NewProcessingError("a spender of the attempt holds a live lease")),
+		spendWait:   30 * time.Millisecond,
+	}
+
+	srv := newSweepServer(t, store)
+	before := sweepFailures()
+
+	srv.sweepCreatingTxs(context.Background(), 100)
+
+	require.NotEmpty(t, store.began, "the claim was tried")
+	require.Empty(t, store.unspent, "a spend of the attempt may still land, so nothing is reversed")
+	require.Empty(t, store.ended)
+	require.Zero(t, store.releaseCalls, "no claim was made, so there is no hold to release")
+	require.Equal(t, before+1, sweepFailures())
+
+	for _, event := range store.events {
+		require.Equal(t, "begin", event)
+	}
+}
+
+// TestSweepCreatingTxsKeepsLeaseOfSpendWithAnInputInDoubt pins that a re-spend whose per-input error
+// is not a verdict of the store keeps its lease: the write of that input may still land.
+func TestSweepCreatingTxsKeepsLeaseOfSpendWithAnInputInDoubt(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore:   ns,
+		stale:       []chainhash.Hash{hashA},
+		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		spendErr:    errors.NewUtxoError("spend failed"),
+		spendSpends: []*utxo.Spend{{Err: errors.NewStorageError("write timed out")}},
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"lease", "spend"}, store.trace, "the lease stays live and no rollback is claimed")
+	require.Empty(t, store.leasesFreed)
+	require.Empty(t, store.began)
 }

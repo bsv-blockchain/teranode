@@ -302,6 +302,15 @@ func (s *Store) SpendRollbackTimeout() time.Duration {
 	return 0
 }
 
+// SpendWaitTimeout returns the spend wait of the wrapped store, zero when it names none.
+func (s *Store) SpendWaitTimeout() time.Duration {
+	if b, ok := s.store.(interface{ SpendWaitTimeout() time.Duration }); ok {
+		return b.SpendWaitTimeout()
+	}
+
+	return 0
+}
+
 func (s *Store) TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
 	lease, took, err := s.store.TakeSpendLease(ctx, hash, attempt)
 	s.logger.Debugf("[UTXOStore][logger][TakeSpendLease] hash %s took %v err %v : %s", hash.String(), took, err, caller())

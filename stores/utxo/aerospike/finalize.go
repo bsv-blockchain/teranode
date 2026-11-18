@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
@@ -46,8 +47,10 @@ func (b *batchFinalize) complete(err error) {
 
 // FinalizeTransaction clears the tentative creating state set by
 // Create(..., WithCreating(true)), making the transaction's outputs spendable.
-// Idempotent: finalizing an already-final tx (creating bin already absent) is a
-// no-op success. attempt is the token of the attempt the caller created or read: the clear is
+// It returns nil only to the call whose write cleared the state. A call that finds the tx
+// already final (creating bin already absent) changes nothing and returns an ErrTxExists for
+// which utxo.IsAlreadyFinal is true: the transaction is stored, and the call that cleared the
+// state owns its hand-off. attempt is the token of the attempt the caller created or read: the clear is
 // filtered on it, on the master and on every pagination child, so a finalize left over from an
 // earlier attempt of the same txid cannot clear a later attempt's creating state. Returns
 // ErrTxNotFound if the record has vanished, is rolling back (BeginCreateFirstRollback) or
@@ -254,7 +257,8 @@ func attemptFilter(attempt []byte) *aerospike.Expression {
 }
 
 // finalizeFilteredOutResult reads the master record after a finalize write was filtered out
-// and returns the finalize result: nil when the creating bin is gone (already final), and
+// and returns the finalize result: an error marked with utxo.MarkAlreadyFinal when the creating
+// bin is gone, because another write cleared it, and
 // ErrTxNotFound when the record is rolling back, has vanished or is creating under another
 // attempt.
 func (s *Store) finalizeFilteredOutResult(txHash *chainhash.Hash, attempt []byte) error {
@@ -274,7 +278,7 @@ func (s *Store) finalizeFilteredOutResult(txHash *chainhash.Hash, attempt []byte
 	case state.rollingBack:
 		return errors.NewTxNotFoundError("[sendFinalizeBatch] tx %s is rolling back", txHash.String())
 	case !state.creating:
-		return nil
+		return utxo.MarkAlreadyFinal(errors.NewTxExistsError("[sendFinalizeBatch] tx %s is already final", txHash.String()))
 	case !bytes.Equal(state.attempt, attempt):
 		return errors.NewTxNotFoundError("[sendFinalizeBatch] tx %s is creating under another attempt", txHash.String())
 	}

@@ -1530,3 +1530,25 @@ func TestSpendRollbackTimeout_ComesFromTheWrappedStore(t *testing.T) {
 	unbounded := New(ctx, ulogger.TestLogger{}, &MockStore{}).(*Store)
 	require.Equal(t, time.Duration(0), unbounded.SpendRollbackTimeout())
 }
+
+// waitBoundedMockStore is a wrapped store that names its own spend wait.
+type waitBoundedMockStore struct {
+	*MockStore
+
+	wait time.Duration
+}
+
+func (b *waitBoundedMockStore) SpendWaitTimeout() time.Duration { return b.wait }
+
+// TestSpendWaitTimeout_ComesFromTheWrappedStore pins that a create-first rollback sees the spend
+// wait of the store behind the wrapper, and zero, which selects the shared default, when that store
+// names none.
+func TestSpendWaitTimeout_ComesFromTheWrappedStore(t *testing.T) {
+	ctx := context.Background()
+
+	bounded := New(ctx, ulogger.TestLogger{}, &waitBoundedMockStore{MockStore: &MockStore{}, wait: 45 * time.Second}).(*Store)
+	require.Equal(t, 45*time.Second, bounded.SpendWaitTimeout())
+
+	unbounded := New(ctx, ulogger.TestLogger{}, &MockStore{}).(*Store)
+	require.Equal(t, time.Duration(0), unbounded.SpendWaitTimeout())
+}
