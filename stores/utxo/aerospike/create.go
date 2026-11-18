@@ -1493,6 +1493,11 @@ func (s *Store) storeExternallyWithLock(
 
 		if !s.settings.UtxoStore.UseCreateFirstOrder {
 			clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore), s.masterAttempt(bItem.txHash))
+			if utxo.IsAlreadyFinal(clearErr) {
+				// The flag is already clear: another caller finalized the record.
+				clearErr = nil
+			}
+
 			if clearErr != nil {
 				// A mined create's caller may read ErrTxExists as done: the seeder and
 				// block assembly's coinbase store do. See creatingNotClearedError.
@@ -1518,6 +1523,11 @@ func (s *Store) storeExternallyWithLock(
 	}
 
 	clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore), bItem.attempt)
+	if utxo.IsAlreadyFinal(clearErr) {
+		// The flag is already clear: another caller finalized the record.
+		clearErr = nil
+	}
+
 	if clearErr != nil && len(bItem.blockIDs) > 0 {
 		// A create that carries mined block info is not reliably reached by the
 		// recovery paths listed below. See creatingNotClearedError.

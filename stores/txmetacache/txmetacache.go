@@ -1222,6 +1222,15 @@ func (t *TxMetaCache) SpendRollbackTimeout() time.Duration {
 	return 0
 }
 
+// SpendWaitTimeout returns the spend wait of the wrapped store, zero when it names none.
+func (t *TxMetaCache) SpendWaitTimeout() time.Duration {
+	if b, ok := t.utxoStore.(interface{ SpendWaitTimeout() time.Duration }); ok {
+		return b.SpendWaitTimeout()
+	}
+
+	return 0
+}
+
 // TakeSpendLease delegates to the wrapped store.
 func (t *TxMetaCache) TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
 	return t.utxoStore.TakeSpendLease(ctx, hash, attempt)
@@ -1317,13 +1326,14 @@ func (t *TxMetaCache) SupportsCreateFirst() bool { return t.utxoStore.SupportsCr
 // FinalizeTransaction delegates and invalidates the cached meta so a stale
 // Creating=true entry cannot be served after the flag is cleared.
 func (t *TxMetaCache) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
-	if err := t.utxoStore.FinalizeTransaction(ctx, tx, attempt); err != nil {
+	err := t.utxoStore.FinalizeTransaction(ctx, tx, attempt)
+	if err != nil && !utxo.IsAlreadyFinal(err) {
 		return err
 	}
 
 	_ = t.Delete(ctx, tx.TxIDChainHash())
 
-	return nil
+	return err
 }
 
 // QueryStaleCreatingTxs delegates to the wrapped store.

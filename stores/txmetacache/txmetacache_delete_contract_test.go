@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -377,4 +378,116 @@ func TestTxMetaCache_SpendRollbackTimeout_ComesFromTheWrappedStore(t *testing.T)
 	unbounded, ok := c.(*TxMetaCache)
 	require.True(t, ok)
 	require.Equal(t, time.Duration(0), unbounded.SpendRollbackTimeout())
+}
+
+// waitBoundedStore decorates a REAL utxo.Store and names its own spend wait.
+type waitBoundedStore struct {
+	utxo.Store
+
+	wait time.Duration
+}
+
+func (b *waitBoundedStore) SpendWaitTimeout() time.Duration { return b.wait }
+
+// TestTxMetaCache_SpendWaitTimeout_ComesFromTheWrappedStore pins that a create-first rollback sees
+// the spend wait of the store behind the cache, and zero, which selects the shared default, when
+// that store names none.
+func TestTxMetaCache_SpendWaitTimeout_ComesFromTheWrappedStore(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///txmetacache_spend_wait")
+	require.NoError(t, err)
+
+	underlying, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, &waitBoundedStore{Store: underlying, wait: 45 * time.Second}, Unallocated)
+	require.NoError(t, err)
+
+	bounded, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+	require.Equal(t, 45*time.Second, bounded.SpendWaitTimeout())
+
+	// spendLeaseStore embeds the utxo.Store interface, which has no SpendWaitTimeout.
+	c, err = NewTxMetaCache(ctx, settings.NewSettings(), logger, &spendLeaseStore{Store: underlying}, Unallocated)
+	require.NoError(t, err)
+
+	unbounded, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+	require.Equal(t, time.Duration(0), unbounded.SpendWaitTimeout())
+}
+
+// finalizeAnswerStore decorates a REAL utxo.Store and scripts FinalizeTransaction.
+type finalizeAnswerStore struct {
+	utxo.Store
+
+	err   error
+	calls int
+}
+
+func (s *finalizeAnswerStore) FinalizeTransaction(_ context.Context, _ *bt.Tx, _ []byte) error {
+	s.calls++
+
+	return s.err
+}
+
+// TestTxMetaCache_FinalizeTransaction_EvictsWhenTheRecordIsFinal pins what the cache does with each
+// answer of a finalize. The record is final after a finalize that cleared the creating state and
+// after one that found it already final, so both drop the cached entry, which may still say
+// creating. The already-final answer is passed on unchanged, because the caller needs it to know
+// that another actor owns the hand-off. Any other error leaves the entry: the record did not change.
+func TestTxMetaCache_FinalizeTransaction_EvictsWhenTheRecordIsFinal(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///txmetacache_finalize_answers")
+	require.NoError(t, err)
+
+	underlying, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	alreadyFinal := utxo.MarkAlreadyFinal(errors.NewTxExistsError("already final"))
+	failed := errors.NewStorageError("finalize boom")
+
+	for name, tc := range map[string]struct {
+		answer  error
+		evicted bool
+	}{
+		"cleared by this call": {nil, true},
+		"already final":        {alreadyFinal, true},
+		"failed":               {failed, false},
+	} {
+		answering := &finalizeAnswerStore{Store: underlying, err: tc.answer}
+
+		c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, answering, Unallocated)
+		require.NoError(t, err, name)
+
+		cache, ok := c.(*TxMetaCache)
+		require.True(t, ok, name)
+
+		tx := bt.NewTx()
+		hash := *tx.TxIDChainHash()
+
+		require.NoError(t, cache.SetCache(&hash, testMeta()), name)
+
+		_, found := cache.GetMetaCached(ctx, hash)
+		require.True(t, found, "%s: precondition: the entry is in the cache", name)
+
+		got := cache.FinalizeTransaction(ctx, tx, []byte{1})
+		require.Equal(t, 1, answering.calls, name)
+
+		if tc.answer == nil {
+			require.NoError(t, got, name)
+		} else {
+			require.Same(t, tc.answer, got, "%s: the answer of the store is passed on unchanged", name)
+		}
+
+		require.Equal(t, tc.answer == alreadyFinal, utxo.IsAlreadyFinal(got), name)
+
+		_, found = cache.GetMetaCached(ctx, hash)
+		require.Equal(t, !tc.evicted, found, name)
+	}
 }

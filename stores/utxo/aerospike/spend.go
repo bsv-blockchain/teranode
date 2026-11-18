@@ -756,7 +756,9 @@ func decideRollback(getErr error) rollbackDecision {
 // and permanently wedges block validation on any later block that spends the
 // same output (#1214).
 //
-// It IS gated on the spending tx having no record. With a record present the ref
+// It IS gated on the spending tx having no record, or only the record of a
+// create-first rollback, which is handled under its hold (see below). With a
+// record present the ref
 // is not dangling and rolling back would be the harmful move: it would clear a
 // slot a live (possibly mined) tx legitimately owns. That case is reachable
 // because the record-level locked/conflicting checks run before the per-UTXO
@@ -849,9 +851,34 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	rbCtx, cancel := context.WithTimeout(context.Background(), rbTimeout)
 	defer cancel()
 
-	_, getErr := s.Get(rbCtx, tx.TxIDChainHash(), fields.Fee)
+	spender, getErr := s.Get(rbCtx, tx.TxIDChainHash(), fields.Fee, fields.Creating, fields.RollingBack, fields.Attempt)
 
 	decision := decideRollback(getErr)
+
+	// A record that is rolling back, a hold included, is not a spender: its rollback reverses the
+	// inputs of the txid once, and the hold it leaves carries no transaction and expires. A spend
+	// this call made beside it would then name a txid with no record, so it is reverted, but only
+	// while this call holds the hold of the attempt. Under the hold no create can adopt the record
+	// and no other actor reverses, so the revert cannot clear the spends of a replacement. A take
+	// that is refused leaves the spends in place and is counted as indeterminate.
+	if getErr == nil && spender != nil && spender.RollingBack {
+		took, takeErr := s.TakeRollbackHold(rbCtx, tx.TxIDChainHash(), spender.Attempt)
+
+		switch {
+		case takeErr != nil:
+			decision, getErr = rollbackSkipIndeterminate, takeErr
+		case !took:
+			decision, getErr = rollbackSkipIndeterminate, errors.NewProcessingError("the spender record is rolling back and its hold is not free")
+		default:
+			decision = rollbackFire
+
+			defer func() {
+				if relErr := s.ReleaseRollbackHold(rbCtx, tx.TxIDChainHash(), spender.Attempt); relErr != nil {
+					s.logger.Errorf("[SPEND][%s] releasing the hold of the rolling back spender record failed, it expires on its own: %v", tx.TxID(), relErr)
+				}
+			}()
+		}
+	}
 
 	if prometheusUtxoPartialSpendRollbacks != nil {
 		prometheusUtxoPartialSpendRollbacks.WithLabelValues(decision.String()).Inc()

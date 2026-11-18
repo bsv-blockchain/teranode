@@ -44,11 +44,17 @@ func TestFinalizeTransaction(t *testing.T) {
 	_, err = store.Spend(ctx, child, 101)
 	require.NoError(t, err)
 
-	// Idempotent: finalizing again is a no-op success.
-	require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash())))
+	// Finalizing again changes nothing and says that this call did not clear the state: only the
+	// call that did owns the hand-off of the transaction.
+	again := store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()))
+	require.ErrorIs(t, again, errors.ErrTxExists)
+	require.True(t, utxo.IsAlreadyFinal(again), "a second finalize reports the record as already final, got: %v", again)
 
-	// Finalizing a tx that was never created in the creating state is also a no-op.
-	require.NoError(t, store.FinalizeTransaction(ctx, tests.ParentTx, nil))
+	require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
+	require.False(t, got.Creating)
+
+	// A tx that was never created in the creating state is already final too.
+	require.True(t, utxo.IsAlreadyFinal(store.FinalizeTransaction(ctx, tests.ParentTx, nil)))
 }
 
 // cancelledAfterStartContext reports itself cancelled through Err but never closes Done, so a
@@ -155,7 +161,7 @@ func TestFinalizeTransaction_RollingBack(t *testing.T) {
 			_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
 			require.NoError(t, err)
 
-			began, err := store.BeginCreateFirstRollback(ctx, tx.TxIDChainHash(), attemptOf(t, ctx, store, tx.TxIDChainHash()))
+			began, err := beginAsCreator(ctx, store, tx.TxIDChainHash(), attemptOf(t, ctx, store, tx.TxIDChainHash()))
 			require.NoError(t, err)
 			require.True(t, began)
 
@@ -346,7 +352,7 @@ func TestFinalizeTransaction_StaleAttemptIsRefused(t *testing.T) {
 			first, err := store.Create(ctx, tx, 100, utxo.WithCreating(true))
 			require.NoError(t, err)
 
-			began, err := store.BeginCreateFirstRollback(ctx, hash, first.Attempt)
+			began, err := beginAsCreator(ctx, store, hash, first.Attempt)
 			require.NoError(t, err)
 			require.True(t, began)
 			require.NoError(t, store.ReleaseRollbackHold(ctx, hash, first.Attempt))

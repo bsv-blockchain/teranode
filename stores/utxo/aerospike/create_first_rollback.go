@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
 )
@@ -45,10 +46,14 @@ func (s *Store) spendLeaseOp(lease []byte) *aerospike.Operation {
 // TakeSpendLease registers the caller as a spender of the inputs of the attempt that carries the
 // token, before the caller spends. One UPDATE_ONLY write, filtered on the record still creating,
 // not rolling back and carrying the token, adds a random lease to the spenders bin with the time
-// by which the spend must end, now plus utxostore_spendRollbackTimeout. The owner of a rollback
-// sets its marker with a write the same filter refuses afterwards, and then waits until no lease is
-// live before it reverses a spend (SpendLeasesLive). A spend therefore either starts before the
-// marker and is waited for, or is refused here and never starts.
+// by which the spend must end, now plus utxostore_spendRollbackTimeout. A rollback sets its marker
+// with a write that is refused while a lease is live, and this write is refused once the marker is
+// set. A spend therefore either starts before the marker, and the rollback waits to begin until
+// the lease is released or stale, or is refused here and never starts.
+//
+// Lease times are the unix clocks of the hosts that write and read them. A lease is treated as
+// live for a further utxostore_spendRollbackTimeout past its time, so the hosts of one store must
+// agree on the time to within that setting. The same holds for the busy marker.
 //
 // It reports false, writing nothing, when the record is absent, final, rolling back or owned by
 // another attempt.
@@ -171,9 +176,13 @@ func (s *Store) SpendLeasesLive(_ context.Context, hash *chainhash.Hash, attempt
 // holdUntil to now plus utxostore_spendRollbackTimeout, so the caller that owns the rollback
 // holds the hold for its whole reversal of spends: no other actor can take it and reverse the
 // same spends, and a block-context create cannot adopt the record while it is busy. The owner
-// calls ReleaseRollbackHold once the reversal is done. From this write on TakeSpendLease refuses
-// the record, so the owner waits for the leases it finds (SpendLeasesLive) and then knows that no
-// spend of the attempt can land after its reversal. The write is UPDATE_ONLY and filtered on the
+// calls ReleaseRollbackHold once the reversal is done. The write is also filtered on the record
+// carrying no live spend lease, and from this write on TakeSpendLease refuses the record. The two
+// are single-record writes, so the server orders them: while a spender holds a lease no rollback
+// begins, and once a rollback has begun no spender starts. No spend of the attempt can therefore
+// land after the owner's reversal, and no rollback can remove the records of an attempt while a
+// lease holder is clearing their creating state. A refusal for a live lease returns an error for
+// which utxo.IsSpendLeaseLive is true, and the record stays creating. The write is UPDATE_ONLY and filtered on the
 // creating bin being present, the rollingBack bin being absent and the attempt bin carrying the
 // token, so a finalized or absent record is never touched, a record of another attempt is never
 // claimed, and only one caller can set the marker.
@@ -192,7 +201,7 @@ func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash
 
 	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
 	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-	writePolicy.FilterExpression = finalizeFilter(attempt)
+	writePolicy.FilterExpression = aerospike.ExpAnd(finalizeFilter(attempt), s.noLiveSpendLease(time.Now().Unix()))
 
 	_, putErr := s.client.Operate(writePolicy, key,
 		aerospike.PutOp(aerospike.NewBin(fields.RollingBack.String(), true)),
@@ -222,7 +231,20 @@ func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash
 		return false, nil
 	}
 
-	return false, errors.NewStorageError("rolling back marker for %s was filtered out but the record is still creating", hash.String())
+	return false, utxo.MarkSpendLeaseLive(errors.NewProcessingError("rolling back marker for %s was refused: a spender of the attempt holds a live lease", hash.String()))
+}
+
+// noLiveSpendLease selects a record with no live spend lease: no spenders bin, or no lease whose
+// time is at or after now minus utxostore_spendRollbackTimeout. The server evaluates it inside the
+// write it filters, so a lease cannot be added between the check and the write.
+func (s *Store) noLiveSpendLease(now int64) *aerospike.Expression {
+	return aerospike.ExpOr(
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.Spenders.String())),
+		aerospike.ExpEq(
+			aerospike.ExpMapGetByValueRange(aerospike.MapReturnType.COUNT, aerospike.ExpIntVal(now-s.holdSeconds()), nil, aerospike.ExpMapBin(fields.Spenders.String())),
+			aerospike.ExpIntVal(0),
+		),
+	)
 }
 
 // EndCreateFirstRollback ends the rollback of the attempt that carries the token. Its callers
@@ -451,29 +473,61 @@ func (s *Store) notBusyOrStale(now int64) *aerospike.Expression {
 
 // TakeRollbackHold reports whether the caller may reverse the spends of the inputs of the
 // transaction whose attempt carries the token. One UPDATE_ONLY write, filtered on the record
-// rolling back, carrying the token, not yet reversed, not a hold and not busy, or busy with a
-// holder that crashed (holdUntil passed by a further utxostore_spendRollbackTimeout), marks the
-// record busy and renews holdUntil to now plus utxostore_spendRollbackTimeout, so a live holder is
-// never taken over. A filtered-out write or an absent record reports false and writes nothing: the
-// record is gone, a later attempt owns the txid, another actor is reversing under the hold, or the
-// reversal is already recorded as done. A reversed record and a hold are refused because the
-// transaction data may be gone by then: a reversal that failed after such a take could not be
-// repeated by anyone.
+// rolling back, carrying the token and not busy, or busy with a holder that crashed (holdUntil
+// passed by a further utxostore_spendRollbackTimeout), marks the record busy and renews holdUntil
+// to now plus utxostore_spendRollbackTimeout, so a live holder is never taken over. A filtered-out
+// write or an absent record reports false and writes nothing: the record is gone, a later attempt
+// owns the txid, another actor holds the hold, or the cleanup of the rollback is running.
+//
+// Two states can be taken. An open rollback that is not yet recorded as reversed is taken by the
+// actor that reverses the spends of the attempt. A hold is taken by a spend-first caller that has
+// to reverse spends it made itself beside the hold: while it is busy no create can adopt the hold,
+// so the caller cannot clear the spends of a replacement. A record that is reversed and not yet a
+// hold is refused: its cleanup is running, and its transaction data may be gone, so the reversal
+// of the attempt must not be reopened.
 func (s *Store) TakeRollbackHold(_ context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
 	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if err != nil {
 		return false, errors.NewProcessingError("error in aerospike NewKey", err)
 	}
 
-	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
-	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-	writePolicy.FilterExpression = aerospike.ExpAnd(
-		aerospike.ExpBinExists(fields.RollingBack.String()),
+	// An open rollback first. Its record never expires, and the write leaves that as it is.
+	took, takeErr := s.takeHold(key, aerospike.TTLDontUpdate,
 		aerospike.ExpNot(aerospike.ExpBinExists(fields.Reversed.String())),
 		aerospike.ExpNot(aerospike.ExpBinExists(fields.Hold.String())),
-		s.notBusyOrStale(time.Now().Unix()),
 		attemptFilter(attempt),
 	)
+	if takeErr != nil || took {
+		return took, wrapTakeErr(hash, takeErr)
+	}
+
+	// Then a hold. The take renews its time to live for twice the bound of the reversal it covers,
+	// so the hold cannot expire under the holder.
+	took, takeErr = s.takeHold(key, uint32(2*s.holdSeconds()), // #nosec G115 -- a timeout in seconds
+		aerospike.ExpBinExists(fields.Hold.String()),
+		attemptFilter(attempt),
+	)
+	if takeErr != nil && takeErr.Matches(types.FAIL_FORBIDDEN) {
+		took, takeErr = s.takeHold(key, aerospike.TTLDontUpdate,
+			aerospike.ExpBinExists(fields.Hold.String()),
+			attemptFilter(attempt),
+		)
+	}
+
+	return took, wrapTakeErr(hash, takeErr)
+}
+
+// takeHold is one take: an UPDATE_ONLY write with the given time to live, filtered on the record
+// rolling back, not busy with a live holder, and on the extra conditions. It marks the record busy
+// and renews holdUntil. An absent record and a filtered-out write report false.
+func (s *Store) takeHold(key *aerospike.Key, expiration uint32, conditions ...*aerospike.Expression) (bool, aerospike.Error) {
+	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
+	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	writePolicy.Expiration = expiration
+	writePolicy.FilterExpression = aerospike.ExpAnd(append([]*aerospike.Expression{
+		aerospike.ExpBinExists(fields.RollingBack.String()),
+		s.notBusyOrStale(time.Now().Unix()),
+	}, conditions...)...)
 
 	_, putErr := s.client.Operate(writePolicy, key,
 		aerospike.PutOp(aerospike.NewBin(fields.Busy.String(), true)),
@@ -487,9 +541,18 @@ func (s *Store) TakeRollbackHold(_ context.Context, hash *chainhash.Hash, attemp
 		return false, nil
 	}
 
+	return false, putErr
+}
+
+// wrapTakeErr turns the store error of a take into the error TakeRollbackHold returns.
+func wrapTakeErr(hash *chainhash.Hash, takeErr aerospike.Error) error {
+	if takeErr == nil {
+		return nil
+	}
+
 	prometheusUtxoMapErrors.WithLabelValues("TakeRollbackHold", "error").Inc()
 
-	return false, errors.NewStorageError("error taking the hold of %s", hash.String(), putErr)
+	return errors.NewStorageError("error taking the hold of %s", hash.String(), takeErr)
 }
 
 // ReleaseRollbackHold clears the busy bin that TakeRollbackHold set. The write is filtered on the
@@ -509,6 +572,9 @@ func (s *Store) ReleaseRollbackHold(_ context.Context, hash *chainhash.Hash, att
 		aerospike.ExpBinExists(fields.Busy.String()),
 		attemptFilter(attempt),
 	)
+
+	// A hold keeps its time to live.
+	writePolicy.Expiration = aerospike.TTLDontUpdate
 
 	_, putErr := s.client.Operate(writePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.Busy.String(), nil)))
 	if putErr == nil || errors.Is(putErr, aerospike.ErrKeyNotFound) || isFilteredOut(putErr) {

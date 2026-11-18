@@ -35,3 +35,13 @@ func (s *Store) SpendRollbackTimeout() time.Duration {
 
 	return s.settings.UtxoStore.SpendRollbackTimeout
 }
+
+// SpendWaitTimeout is the longest one spend may run, utxostore_spendWaitTimeout. A create-first
+// rollback waits that long for the spenders of its attempt. Zero leaves the shared default in force.
+func (s *Store) SpendWaitTimeout() time.Duration {
+	if s.settings == nil {
+		return 0
+	}
+
+	return s.settings.UtxoStore.SpendWaitTimeout
+}

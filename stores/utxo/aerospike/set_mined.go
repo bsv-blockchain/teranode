@@ -859,7 +859,7 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 		// WithIgnoreLocked: a mined tx's parents may still be locked (e.g. their own
 		// create-first tentative lock); the roll-forward completes an already-committed
 		// spend, so a locked parent must not fail-close setMined for the whole block.
-		if _, err := utxo.RollForwardCreating(ctx, s.logger, s, md.Tx, md.Attempt, blockHeight, utxo.WithIgnoreLocked(true)); err != nil {
+		if _, _, err := utxo.RollForwardCreating(ctx, s.logger, s, md.Tx, md.Attempt, blockHeight, utxo.WithIgnoreLocked(true)); err != nil {
 			return errors.NewProcessingError("[setMined] create-first pre-flight: roll-forward of %s failed", item.Hash.String(), err)
 		}
 	}
