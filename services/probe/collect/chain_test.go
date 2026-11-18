@@ -3,9 +3,11 @@ package collect
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,12 +17,15 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type chainRig struct {
@@ -436,6 +441,57 @@ func TestFSMIsReadFromTheServerNotTheCachedPlaceholder(t *testing.T) {
 	patch, err := rig.chain.Collect(context.Background())
 	require.Error(t, err, "an unknown FSM state must fail the source, not show IDLE")
 	require.Nil(t, patch)
+}
+
+type fsmServer struct {
+	blockchain_api.UnimplementedBlockchainAPIServer
+	state atomic.Int32
+	reads atomic.Int32
+}
+
+func (s *fsmServer) HealthGRPC(context.Context, *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
+	return &blockchain_api.HealthResponse{Ok: true}, nil
+}
+
+func (s *fsmServer) GetFSMCurrentState(context.Context, *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
+	state := blockchain_api.FSMStateType(s.state.Load())
+	s.reads.Add(1)
+	return &blockchain_api.GetFSMStateResponse{State: state}, nil
+}
+
+func (s *fsmServer) Subscribe(_ *blockchain_api.SubscribeRequest, stream blockchain_api.BlockchainAPI_SubscribeServer) error {
+	<-stream.Context().Done()
+	return nil
+}
+
+func TestRealBlockchainClientFetchesFSMInsteadOfCachedIdle(t *testing.T) {
+	server := &fsmServer{}
+	server.state.Store(int32(blockchain.FSMStateIDLE))
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	grpcServer := grpc.NewServer()
+	blockchain_api.RegisterBlockchainAPIServer(grpcServer, server)
+	go func() { _ = grpcServer.Serve(lis) }()
+	t.Cleanup(grpcServer.Stop)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockChain.MaxRetries = 0
+	bc, err := blockchain.NewClientWithAddress(ctx, ulogger.TestLogger{}, tSettings, lis.Addr().String(), "probe-test")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, bc.(*blockchain.Client).Close()) })
+
+	require.Eventually(t, func() bool { return server.reads.Load() >= 2 }, time.Second, 10*time.Millisecond)
+	server.state.Store(int32(blockchain.FSMStateCATCHINGBLOCKS))
+	require.Eventually(t, func() bool {
+		state, err := bc.GetFSMCurrentState(ctx)
+		return err == nil && *state == blockchain.FSMStateIDLE
+	}, time.Second, 10*time.Millisecond, "the real client must still hold the cached placeholder")
+
+	got, err := NewChain(bc, ulogger.TestLogger{}).fsmState(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "CATCHINGBLOCKS", got)
 }
 
 type noMinedNotSetClient struct {
