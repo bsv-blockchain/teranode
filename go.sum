@@ -53,6 +53,8 @@ github.com/RaduBerinde/axisds v0.1.0 h1:YItk/RmU5nvlsv/awo2Fjx97Mfpt4JfgtEVAGPrL
 github.com/RaduBerinde/axisds v0.1.0/go.mod h1:UHGJonU9z4YYGKJxSaC6/TNcLOBptpmM5m2Cksbnw0Y=
 github.com/RaduBerinde/btreemap v0.0.0-20250419174037-3d62b7205d54 h1:bsU8Tzxr/PNz75ayvCnxKZWEYdLMPDkUgticP4a4Bvk=
 github.com/RaduBerinde/btreemap v0.0.0-20250419174037-3d62b7205d54/go.mod h1:0tr7FllbE9gJkHq7CVeeDDFAFKQVy5RnCSSNBOvdqbc=
+github.com/RoaringBitmap/roaring/v2 v2.30.0 h1:1sD4xsCenNd9n/gOWaExCWanP9WTyiNuqLAvaDQ5jkY=
+github.com/RoaringBitmap/roaring/v2 v2.30.0/go.mod h1:BZufmFbox589n3j5eOmyTaLSGXbRLc2LmQvjKjzSEGU=
 github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d h1:licZJFw2RwpHMqeKTCYkitsPqHNxTmd4SNR5r94FGM8=
 github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d/go.mod h1:asat636LX7Bqt5lYEZ27JNDcqxfjdBQuJ/MM4CN/Lzo=
 github.com/aclements/go-perfevent v0.0.0-20240301234650-f7843625020f h1:JjxwchlOepwsUWcQwD2mLUAGE9aCp0/ehy6yCHFBOvo=
@@ -121,6 +123,8 @@ github.com/bitcoinsv/bsvlog v0.0.0-20181216181007-cb81b076bf2e h1:6f+gRvaPE/4h0g
 github.com/bitcoinsv/bsvlog v0.0.0-20181216181007-cb81b076bf2e/go.mod h1:WPrWor6cSeuGQZ15qPe+jqFmblJEFrJHYfr5cD7cmyk=
 github.com/bitcoinsv/bsvutil v0.0.0-20181216182056-1d77cf353ea9 h1:hFI8rT84FCA0FFy3cFrkW5Nz4FyNKlIdCvEvvTNySKg=
 github.com/bitcoinsv/bsvutil v0.0.0-20181216182056-1d77cf353ea9/go.mod h1:p44KuNKUH5BC8uX4ONEODaHUR4+ibC8todEAOGQEJAM=
+github.com/bits-and-blooms/bitset v1.24.4 h1:95H15Og1clikBrKr/DuzMXkQzECs1M6hhoGXLwLQOZE=
+github.com/bits-and-blooms/bitset v1.24.4/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
 github.com/blang/semver v3.5.1+incompatible h1:cQNTCjp13qL8KC3Nbxr/y2Bqb63oX6wdnnjpJbkM4JQ=
 github.com/blang/semver v3.5.1+incompatible/go.mod h1:kRBLl5iJ+tD4TcOOxsy/0fnwebNt5EWlYSAyrTnjyyk=
 github.com/bsv-blockchain/aerospike-client-go/v8 v8.7.1-bsv6 h1:VOwFflA87NUUj+FkJApz9DIN4TYfm6gM8UFZG1mDyZk=
@@ -735,6 +739,8 @@ github.com/mrz1836/go-logger v1.0.6 h1:5eGbtlMEX/5DDUyESTTqzbOggWTuCNkLGJ/CxJpo0
 github.com/mrz1836/go-logger v1.0.6/go.mod h1:4OX+yIkLiY4rcM26gZJZjly/f7fyhOEiRVHecZSyTTs=
 github.com/mrz1836/go-whatsonchain v1.3.0 h1:uOq5mHPTMUfiyMAFv+wqRgZXZ5L3CrObaIdShnX/yzU=
 github.com/mrz1836/go-whatsonchain v1.3.0/go.mod h1:SAMQltVzWjjBSSIM9KBoLRTFuv9fIrejyEUK95qPDZI=
+github.com/mschoch/smat v0.2.0 h1:8imxQsjDm8yFEAVBe7azKmKSgzSkZXDuKkSq9374khM=
+github.com/mschoch/smat v0.2.0/go.mod h1:kc9mz7DoBKqDyiRL7VZN8KvXQMWeTaVnttLRXOlotKw=
 github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 h1:ZK8zHtRHOkbHy6Mmr5D264iyp3TiX5OmNcI5cIARiQI=
 github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6/go.mod h1:CJlz5H+gyd6CUWT45Oy4q24RdLyn7Md9Vj2/ldJBSIo=
 github.com/muesli/cancelreader v0.2.2 h1:3I4Kt4BQjOR54NavqnDogx/MIoWBFa0StPA8ELUXHmA=
