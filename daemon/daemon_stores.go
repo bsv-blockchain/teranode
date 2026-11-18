@@ -144,15 +144,13 @@ var laneLeaseSource = func(ctx context.Context, _ *Stores, logger ulogger.Logger
 // process, with no change at any call site. The allocator starts on the first create unless
 // something starts it sooner. A validator starts it when it is built, so a process holding a local
 // validator takes a lane at start whether or not it ever creates a record; any other process that
-// never creates records never takes one. A store that cannot write lane positions, such as the null
-// store, gets none.
+// never creates records never takes one. A store that cannot write lane positions, such as null or
+// pebble, makes startup fail at shadow.
 func (d *Stores) giveLanePositions(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings,
 	store utxostore.Store) error {
 	taker, ok := utxostore.As[utxostore.LanePositionTaker](store)
 	if !ok {
-		logger.Warnf("[lane] lane positions are on, but this UTXO store cannot write them")
-
-		return nil
+		return errors.NewConfigurationError("utxostore_laneMigration=%s requires a UTXO store that can write lane positions", appSettings.UtxoStore.LaneMigration)
 	}
 
 	if err := appSettings.BlockChain.CheckLaneLease(); err != nil {

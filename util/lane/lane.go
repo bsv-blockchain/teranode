@@ -16,8 +16,8 @@
 //
 // Positions start at 1. Lane 0 is a real lane, so the packed value 0 can only
 // mean "no lane position": a record created with the migration off, before it
-// existed, by a tool that opens its own store, or by a UTXO store that cannot
-// write lane positions, such as pebble. A read
+// existed, or by a tool that opens its own store. At shadow, the daemon refuses
+// to start with a UTXO store that cannot write positions, such as null or pebble. A read
 // also returns 0 for a utxoset record whose row carrying the position has aged
 // out. Stores keep 0 as an absent bin or a NULL column.
 //

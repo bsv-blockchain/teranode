@@ -16,6 +16,7 @@ import (
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pebble"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -181,30 +182,98 @@ type plainStore struct {
 	utxostore.Store
 }
 
-// Shadow with a store that cannot write them, such as the null store, is not an error.
-// That store takes no lane, because nothing asks for a lease source.
-func TestGetUtxoStoreWithLaneMigrationShadowLeavesAStoreThatCannotTakeThem(t *testing.T) {
-	appSettings, _ := laneStoreFixture(t, "lane_no_taker", true, func() (lane.LeaseSource, error) {
-		require.Fail(t, "a store that cannot write lane positions asks for no lease source")
+func storeWithoutLanePositions(t *testing.T, name string, appSettings *settings.Settings) utxostore.Store {
+	t.Helper()
 
-		return nil, nil
-	})
+	if name == "null" {
+		store, err := nullstore.NewNullStore()
+		require.NoError(t, err)
 
-	inner, err := nullstore.NewNullStore()
-	require.NoError(t, err)
-
-	plain := &plainStore{Store: inner}
-
-	newMainUtxoStore = func(context.Context, ulogger.Logger, *settings.Settings) (utxostore.Store, error) {
-		return plain, nil
+		return store
 	}
 
-	d := &Stores{}
-
-	store, err := d.GetUtxoStore(context.Background(), ulogger.TestLogger{}, appSettings)
+	storeURL, err := url.Parse("pebble:///lane_no_taker")
 	require.NoError(t, err)
-	require.Same(t, plain, store)
-	require.Empty(t, d.constructedClients, "there is no allocator to close")
+
+	store, err := pebble.New(context.Background(), ulogger.TestLogger{}, appSettings, storeURL)
+	require.NoError(t, err)
+
+	return store
+}
+
+func TestGetUtxoStoreWithLaneMigrationShadowRefusesAStoreThatCannotTakeThem(t *testing.T) {
+	for _, name := range []string{"null", "pebble"} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			var built int
+
+			appSettings, supported := laneStoreFixture(t, "lane_retry_"+name, true, func() (lane.LeaseSource, error) {
+				built++
+
+				return &laneSource{}, nil
+			})
+			t.Cleanup(func() { require.NoError(t, supported.Close(ctx)) })
+
+			opened := &closeCountingStore{Store: storeWithoutLanePositions(t, name, appSettings)}
+			t.Cleanup(func() {
+				if opened.closes.Load() == 0 {
+					require.NoError(t, opened.Close(ctx))
+				}
+			})
+			newMainUtxoStore = func(context.Context, ulogger.Logger, *settings.Settings) (utxostore.Store, error) {
+				return opened, nil
+			}
+
+			d := &Stores{}
+			store, err := d.GetUtxoStore(ctx, ulogger.TestLogger{}, appSettings)
+			require.Error(t, err)
+			require.ErrorIs(t, err, errors.ErrConfiguration)
+			require.Contains(t, err.Error(), "utxostore_laneMigration=shadow")
+			require.Nil(t, store)
+			require.Nil(t, d.mainUtxoStore, "a refused store must not become the singleton")
+			require.Nil(t, d.rawUtxoStore)
+			require.Equal(t, int64(1), opened.closes.Load(), "the refused store is closed")
+			require.Zero(t, built, "no lease client is built for an unsupported store")
+			require.Empty(t, d.constructedClients, "no allocator is retained")
+
+			newMainUtxoStore = func(context.Context, ulogger.Logger, *settings.Settings) (utxostore.Store, error) {
+				return supported, nil
+			}
+			store, err = d.GetUtxoStore(ctx, ulogger.TestLogger{}, appSettings)
+			require.NoError(t, err, "a retry can open a supported store")
+			require.Same(t, supported, store)
+			require.Equal(t, 1, built)
+			require.Len(t, d.constructedClients, 1)
+			require.NoError(t, d.constructedClients[0].Close())
+		})
+	}
+}
+
+func TestGetUtxoStoreWithLaneMigrationOffAllowsAStoreThatCannotTakeThem(t *testing.T) {
+	for _, name := range []string{"null", "pebble"} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			appSettings, unused := laneStoreFixture(t, "lane_off_"+name, false, func() (lane.LeaseSource, error) {
+				require.Fail(t, "migration off must not build a lease client")
+
+				return nil, nil
+			})
+			t.Cleanup(func() { require.NoError(t, unused.Close(ctx)) })
+
+			opened := &closeCountingStore{Store: storeWithoutLanePositions(t, name, appSettings)}
+			t.Cleanup(func() { require.NoError(t, opened.Close(ctx)) })
+			newMainUtxoStore = func(context.Context, ulogger.Logger, *settings.Settings) (utxostore.Store, error) {
+				return opened, nil
+			}
+
+			d := &Stores{}
+			store, err := d.GetUtxoStore(ctx, ulogger.TestLogger{}, appSettings)
+			require.NoError(t, err)
+			require.Same(t, opened, store)
+			require.Zero(t, opened.closes.Load(), "the accepted store remains open")
+			require.Empty(t, d.constructedClients)
+		})
+	}
 }
 
 // A failure to get a lease source must close the store it opened and leave the singleton unset, so a retry

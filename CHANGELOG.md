@@ -38,6 +38,9 @@ read every section between yours and the target.
   the three tables with the owner role before upgrading, and grant the node role `SELECT, INSERT, UPDATE`
   on `lane_lease` and `SELECT, INSERT` on the other two, or startup fails. A `lane_handout` left by a soak
   of this PR also needs its new columns added by the owner (DDL in #2136).
+- **`utxostore_laneMigration=shadow` requires a store that writes lane positions.** Daemon
+  startup now refuses null and experimental Pebble stores at shadow. Use a supported store or
+  keep `utxostore_laneMigration=off`. (#2136)
 - **Between two blocks of equal chain work, the node now keeps the one it stored first.** It used
   to switch to the block relayed by the lowest-sorting peer id, and a block this node mined, stored
   with an empty peer id, won every tie. Until the blockchain service and block assembly both run
