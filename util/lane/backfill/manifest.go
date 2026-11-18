@@ -104,20 +104,22 @@ type Manifest struct {
 }
 
 // CreateManifest starts a new manifest for a segment. The file must not exist. The magic and the
-// header record are written to path+".tmp", synced, and linked to path, so a crash during creation
-// leaves either no manifest or a whole header, never one ResumeManifest refuses and CreateManifest
-// cannot replace. A ".tmp" file an earlier crash left is overwritten.
+// header record are written to a temporary file this call creates exclusively, under a name of its
+// own beside path, synced, and linked to path, so a crash during creation leaves either no
+// manifest or a whole header, never one ResumeManifest refuses and CreateManifest cannot replace.
+// It never opens, truncates or removes a file it did not create: a temporary file an earlier crash
+// left stays as it is, and may be a second name of a manifest in use.
 func CreateManifest(path string, h Header) (*Manifest, error) {
 	if h.Segment == 0 || h.First < lane.BackfillFirstPosition || h.First > lane.MaxPosition {
 		return nil, errors.NewProcessingError("manifest header: segment %d first %d is not a valid start", h.Segment, h.First)
 	}
 
-	tmp := path + ".tmp"
-
-	f, err := os.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // an operator-supplied maintenance path
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
 	if err != nil {
-		return nil, errors.NewStorageError("create manifest %s", tmp, err)
+		return nil, errors.NewStorageError("create a temporary file for manifest %s", path, err)
 	}
+
+	tmp := f.Name()
 
 	m := &Manifest{path: path, f: f, digest: sha256.New(), header: h, next: h.First}
 
@@ -146,8 +148,10 @@ func CreateManifest(path string, h Header) (*Manifest, error) {
 		return fail(errors.NewStorageError("create manifest %s", path, err))
 	}
 
+	// The manifest is in place; from here a failure must not remove it through fail.
 	if err = os.Remove(tmp); err != nil {
-		return fail(errors.NewStorageError("remove %s", tmp, err))
+		_ = f.Close()
+		return nil, errors.NewStorageError("remove %s after creating manifest %s", tmp, path, err)
 	}
 
 	if err = syncDir(filepath.Dir(path)); err != nil {

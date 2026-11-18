@@ -5,6 +5,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -378,22 +379,39 @@ func TestManifestRefusesAppendsAfterAFailedWrite(t *testing.T) {
 	require.NoError(t, m.Close())
 }
 
-// Creating a manifest writes it beside the path and links it into place: a stale ".tmp" an
-// earlier crash left is overwritten, none is left behind, and an existing manifest is never
-// replaced.
+// tempFiles lists the temporary files CreateManifest could leave beside path.
+func tempFiles(t *testing.T, path string) []string {
+	t.Helper()
+
+	names, err := filepath.Glob(path + ".*.tmp")
+	require.NoError(t, err)
+
+	return names
+}
+
+// Creating a manifest writes it to a temporary file of its own and links it into place: a file an
+// earlier crash left at a temporary-looking name is not touched, this call leaves no temporary
+// file behind, and an existing manifest is never replaced.
 func TestManifestCreateIsAllOrNothing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "m")
 
-	// A crash part-way through an earlier create left a longer, torn file at the temporary name.
-	require.NoError(t, os.WriteFile(path+".tmp", make([]byte, 4096), 0o600))
+	// Files an earlier crash could have left at temporary names.
+	stale := make([]byte, 4096)
+	require.NoError(t, os.WriteFile(path+".tmp", stale, 0o600))
+	require.NoError(t, os.WriteFile(path+".123.tmp", stale, 0o600))
 
 	m, err := CreateManifest(path, testHeader())
 	require.NoError(t, err)
 	require.NoError(t, m.Close())
 
-	_, err = os.Stat(path + ".tmp")
-	require.True(t, os.IsNotExist(err), "the temporary file is gone")
+	for _, name := range []string{path + ".tmp", path + ".123.tmp"} {
+		kept, err := os.ReadFile(name)
+		require.NoError(t, err)
+		require.Equal(t, stale, kept, "%s is left as it was", name)
+	}
+
+	require.Equal(t, []string{path + ".123.tmp"}, tempFiles(t, path), "this call left no temporary file")
 
 	m, err = OpenManifest(path)
 	require.NoError(t, err, "the manifest holds a whole header and nothing of the stale file")
@@ -409,6 +427,92 @@ func TestManifestCreateIsAllOrNothing(t *testing.T) {
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Equal(t, before, after, "the existing manifest is untouched")
+}
+
+// A crash between linking a new manifest into place and removing its temporary name leaves two
+// names for one file. Once that manifest is finished, creating it again must fail without
+// emptying it through either name.
+func TestManifestCreateLeavesAFinishedManifestAlone(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "segment-1.manifest")
+
+	seg := writeSample(t, path)
+
+	require.NoError(t, os.Link(path, path+".tmp"))
+	require.NoError(t, os.Link(path, path+".4242.tmp"))
+
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	_, err = CreateManifest(path, testHeader())
+	require.Error(t, err)
+
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "the finished manifest is unchanged")
+
+	m, err := OpenManifest(path)
+	require.NoError(t, err)
+
+	got, err := m.Segment()
+	require.NoError(t, err)
+	require.Equal(t, seg, got)
+	require.NoError(t, m.Close())
+}
+
+// Creators racing for one path leave exactly one manifest, whole and holding the winner's header,
+// and no temporary file.
+func TestManifestConcurrentCreatorsLeaveOneManifest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m")
+
+	const creators = 8
+
+	type result struct {
+		header Header
+		err    error
+	}
+
+	results := make(chan result, creators)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < creators; i++ {
+		wg.Add(1)
+
+		go func(i int) {
+			defer wg.Done()
+
+			h := testHeader()
+			h.SourceTipBlockID = uint32(1_000 + i)
+
+			m, err := CreateManifest(path, h)
+			if err == nil {
+				err = m.Close()
+			}
+
+			results <- result{header: h, err: err}
+		}(i)
+	}
+
+	wg.Wait()
+	close(results)
+
+	var winners []Header
+
+	for r := range results {
+		if r.err == nil {
+			winners = append(winners, r.header)
+		}
+	}
+
+	require.Len(t, winners, 1)
+
+	m, err := OpenManifest(path)
+	require.NoError(t, err)
+	require.Equal(t, winners[0], m.Header())
+	require.NoError(t, m.Close())
+
+	require.Empty(t, tempFiles(t, path))
 }
 
 // FuzzOpenManifest loads arbitrary bytes as a manifest. Loading never panics, and a manifest that
