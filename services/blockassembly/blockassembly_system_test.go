@@ -1168,7 +1168,8 @@ func TestCheckTemplateFinality_MovedBackBlocks(t *testing.T) {
 
 // TestSettleTemplate_UnsettledTemplateIsRetriedOnTheSameTip pins what follows a failed settle:
 // the template may hold a transaction the next block cannot mine, so mining candidates are
-// empty, and the settle is retried on the same tip, which no new block announcement would do.
+// empty, and the settle is retried on its own on the same tip, which no new block announcement
+// would do.
 func TestSettleTemplate_UnsettledTemplateIsRetriedOnTheSameTip(t *testing.T) {
 	_, ba, ctx, cancel, cleanup := setupTest(t)
 	defer cancel()
@@ -1205,8 +1206,12 @@ func TestSettleTemplate_UnsettledTemplateIsRetriedOnTheSameTip(t *testing.T) {
 
 	require.Eventually(t, candidateHolds, 5*time.Second, 50*time.Millisecond)
 
-	// As a settle that failed after the last block move leaves it.
-	ba.blockAssembler.templateUnsettled.Store(true)
+	// A settle that fails: the median time past of a block the store does not hold cannot be
+	// read. It leaves the template unsettled and schedules the retry, which settles on the tip.
+	tip, tipHeight := ba.blockAssembler.CurrentBlock()
+	unknown := &model.BlockHeader{Version: 1, HashPrevBlock: tip.Hash(), HashMerkleRoot: &chainhash.Hash{}, Nonce: 424242, Bits: tip.Bits, Timestamp: tip.Timestamp + 1}
+	require.False(t, ba.blockAssembler.settleTemplate(ctx, unknown, tipHeight+1))
+	require.True(t, ba.blockAssembler.templateUnsettled.Load())
 
 	_, subtrees, err := ba.blockAssembler.GetMiningCandidate(context.Background())
 	require.NoError(t, err)

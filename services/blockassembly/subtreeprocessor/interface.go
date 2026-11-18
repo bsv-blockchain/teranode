@@ -107,6 +107,10 @@ type Interface interface {
 	// the candidate, among those whose nLockTime can hold them back.
 	NotFinalTemplateTxs() int
 
+	// OfferLockHeldTxs queues again the transactions held back for their lock time that are
+	// still unmined and not conflicting, after the candidate moved. See tx_finality.go.
+	OfferLockHeldTxs(ctx context.Context) error
+
 	// RestartDroppedTxs starts a reload's own record of the transactions kept out; finish
 	// keeps it when the reload succeeded and restores the previous one when it did not.
 	RestartDroppedTxs() (finish func(reloaded bool))

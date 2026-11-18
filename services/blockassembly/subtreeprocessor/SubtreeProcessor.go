@@ -223,9 +223,10 @@ type SubtreeProcessor struct {
 
 	// lockHeldTxs holds, under droppedMu and in queue order, the transactions their lock time
 	// holds back at the candidate and their descendants, to offer again when the candidate
-	// moves; lockHeldSet indexes them.
+	// moves. lockHeldSet holds every held transaction until admitTxLocked decides it again:
+	// true while in lockHeldTxs, false once offered (holdForLockTimeLocked).
 	lockHeldTxs   []lockHeldTx
-	lockHeldSet   map[chainhash.Hash]struct{}
+	lockHeldSet   map[chainhash.Hash]bool
 	lockHeldCount atomic.Int64
 
 	// currentItemsPerFile specifies the maximum number of items per subtree file
@@ -7706,6 +7707,7 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 	}
 
 	stp.forgetMinedDroppedTxs(transactionMap)
+	stp.pruneLockedTxs()
 
 	if stp.reorgForwardTxMapSubtrees != nil {
 		for subtreeHash := range blockSubtreesMap {

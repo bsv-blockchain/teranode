@@ -345,12 +345,13 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 
 	// Step 5.2: Refuse a chain that forks below a checkpoint the tip has passed (bitcoin-sv's
 	// bad-fork-prior-to-checkpoint), on any route, before any of its blocks is fetched or
-	// skipped as already stored, and whatever its work.
+	// skipped as already stored. It runs before the less-work check, so such a chain is the
+	// peer's fault even when it is lighter than ours.
 	if err = u.validateForkBelowCheckpoint(catchupCtx); err != nil {
 		return err
 	}
 
-	// Step 5.1: Refuse a chain with less work than ours, before anything is fetched or
+	// Step 5.3: Refuse a chain with less work than ours, before anything is fetched or
 	// un-stamped. Both Bitcoin nodes treat such a peer as offering nothing of interest, so
 	// this ends the run as a no-op and charges no one (issue 2067). findCommonAncestor has
 	// already refused offered headers that do not link up, so the weight here is a chain's weight.

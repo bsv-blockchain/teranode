@@ -9,6 +9,8 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,13 +51,25 @@ func nextFinalityHeader() *model.BlockHeader {
 	}
 }
 
-// moveFinalityCandidate moves the processor to the next block and the candidate with it, as
-// block assembly does after a block.
-func moveFinalityCandidate(stp *SubtreeProcessor, height, medianTimePast uint32) {
+// moveFinalityCandidate moves the processor to the next block and the candidate with it, and
+// offers the held transactions again, as block assembly does after a block.
+func moveFinalityCandidate(t *testing.T, stp *SubtreeProcessor, height, medianTimePast uint32) {
+	t.Helper()
+
 	next := nextFinalityHeader()
 	stp.currentBlockHeader.Store(next)
 	stp.SetTxCandidate(next.Hash(), height, medianTimePast)
+	require.NoError(t, stp.OfferLockHeldTxs(context.Background()))
 }
+
+// storeAnswers makes the processor's mock UTXO store answer every read with data, as the store
+// holding the held transactions would.
+func storeAnswers(stp *SubtreeProcessor, data *meta.Data, err error) {
+	stp.utxoStore.(*utxostore.MockUtxostore).On("Get", mock.Anything, mock.Anything, mock.Anything).Return(data, err)
+}
+
+// unminedInStore is how the store holds a mempool transaction.
+var unminedInStore = &meta.Data{UnminedSince: finalityTestHeight}
 
 // TestTxFinality_DequeueHoldsNotFinalAndDescendants pins the queue path: a transaction whose
 // nLockTime holds it back at the candidate is held with its descendants, whatever height it
@@ -100,7 +114,8 @@ func TestTxFinality_DequeueHoldsNotFinalAndDescendants(t *testing.T) {
 	require.False(t, inTemplate(stp, ahead), "a transaction validated ahead is held until block assembly catches up")
 	require.True(t, inTemplate(stp, final), "height lock 599 is final at height 600")
 
-	moveFinalityCandidate(stp, finalityTestHeight+1, finalityTestMTP+1)
+	storeAnswers(stp, unminedInStore, nil)
+	moveFinalityCandidate(t, stp, finalityTestHeight+1, finalityTestMTP+1)
 
 	for _, hash := range []chainhash.Hash{heightLocked, timeLocked, child, ahead} {
 		require.Eventually(t, func() bool { return inTemplate(stp, hash) }, 2*time.Second, 5*time.Millisecond,
@@ -229,13 +244,101 @@ func TestTxFinality_NotFinalTemplateTxs(t *testing.T) {
 	stp.forgetMinedDroppedTxs(minedSet)
 	require.Equal(t, 1, stp.NotFinalTemplateTxs(), "a mined transaction is no longer tracked")
 
-	// One that left the template some other way (this node's own block, a conflict) is
-	// forgotten when the template is checked, so the tracked set stays the template's.
+	// One tracked but not in the template: the dequeue loop tracks a transaction before it
+	// places it, so the check skips it and keeps it. A block move forgets it once it is still
+	// not there (this node's own block mined it, or it was removed).
 	stp.droppedMu.Lock()
 	stp.trackLockTimeLocked(chainhash.HashH([]byte("finality-template-gone")), finalityTestMTP-50)
 	stp.droppedMu.Unlock()
 	require.Equal(t, int64(2), stp.lockedCount.Load())
 
 	require.Equal(t, 1, stp.NotFinalTemplateTxs())
-	require.Equal(t, int64(1), stp.lockedCount.Load(), "a tracked transaction no longer in the template is forgotten")
+	require.Equal(t, int64(2), stp.lockedCount.Load(), "the check does not forget a transaction about to be placed")
+
+	stp.pruneLockedTxs()
+	require.Equal(t, int64(1), stp.lockedCount.Load(), "the block move forgets a tracked transaction not in the template")
+}
+
+// TestTxFinality_QueuedChildWaitsForItsOfferedParent pins the order: a child still in the queue
+// when its held parent is offered again is dequeued first, and must not go in without its
+// parent. The parent stays held until it is decided again, so the child is held, and both go
+// in by the next candidate.
+func TestTxFinality_QueuedChildWaitsForItsOfferedParent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stp := newFinalityTestProcessor(t, ctx)
+	storeAnswers(stp, unminedInStore, nil)
+
+	parent := chainhash.HashH([]byte("finality-offered-parent"))
+	child := chainhash.HashH([]byte("finality-queued-child"))
+
+	require.Empty(t, stp.FilterUnminedTxEra([]*utxostore.UnminedTransaction{
+		{Node: &subtreepkg.Node{Hash: parent, Fee: 1, SizeInBytes: 1}, TxInpoints: &subtreepkg.TxInpoints{}, LockTime: finalityTestHeight},
+	}, []uint32{0}))
+
+	// The child is queued before the candidate moves and the parent is offered.
+	require.Equal(t, Admitted, stp.AddBatchBounded(
+		[]subtreepkg.Node{{Hash: child, Fee: 1, SizeInBytes: 1}},
+		[]*subtreepkg.TxInpoints{inpointsWithParent(parent)},
+		false,
+		[]uint32{finalityTestHeight + 1},
+		nil,
+	))
+
+	moveFinalityCandidate(t, stp, finalityTestHeight+1, finalityTestMTP)
+
+	stp.Start(ctx)
+	t.Cleanup(func() { stp.Stop(ctx) })
+
+	require.Eventually(t, func() bool { return stp.queue.length() == 0 && inTemplate(stp, parent) }, 2*time.Second, 5*time.Millisecond)
+	require.False(t, inTemplate(stp, child), "the child was dequeued while its parent was still held")
+
+	require.NoError(t, stp.OfferLockHeldTxs(ctx))
+	require.Eventually(t, func() bool { return inTemplate(stp, child) }, 2*time.Second, 5*time.Millisecond,
+		"the child goes in once its parent is in the template")
+}
+
+// TestTxFinality_ConflictingHeldTxIsNotOfferedAgain pins the store check before an offer: a held
+// transaction a block displaced in a conflict is marked conflicting, with its descendants, and
+// offering it again would put a double spend in the template. It is dropped, and so is its held
+// child.
+func TestTxFinality_ConflictingHeldTxIsNotOfferedAgain(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stp := newFinalityTestProcessor(t, ctx)
+
+	loser := chainhash.HashH([]byte("finality-held-loser"))
+	child := chainhash.HashH([]byte("finality-held-loser-child"))
+
+	require.Empty(t, stp.FilterUnminedTxEra([]*utxostore.UnminedTransaction{
+		{Node: &subtreepkg.Node{Hash: loser}, TxInpoints: &subtreepkg.TxInpoints{}, LockTime: finalityTestHeight},
+		{Node: &subtreepkg.Node{Hash: child}, TxInpoints: inpointsWithParent(loser)},
+	}, []uint32{0, 0}))
+
+	mockStore := stp.utxoStore.(*utxostore.MockUtxostore)
+	mockStore.On("Get", mock.Anything, &loser, mock.Anything).Return(&meta.Data{Conflicting: true, UnminedSince: finalityTestHeight}, nil)
+	mockStore.On("Get", mock.Anything, &child, mock.Anything).Return(unminedInStore, nil)
+
+	moveFinalityCandidate(t, stp, finalityTestHeight+1, finalityTestMTP)
+
+	require.Equal(t, int64(1), stp.queue.length(), "only the child is offered again")
+
+	stp.Start(ctx)
+	t.Cleanup(func() { stp.Stop(ctx) })
+
+	require.Eventually(t, func() bool { return stp.queue.length() == 0 }, 2*time.Second, 5*time.Millisecond)
+
+	require.False(t, inTemplate(stp, loser), "a conflict loser must not go back into the template")
+	require.False(t, inTemplate(stp, child), "nor its child")
+	require.Zero(t, stp.lockHeldTxCount())
+
+	stp.droppedMu.Lock()
+	_, loserDropped := stp.droppedTxs[loser]
+	_, childDropped := stp.droppedTxs[child]
+	stp.droppedMu.Unlock()
+
+	require.True(t, loserDropped)
+	require.True(t, childDropped, "the child is dropped for its dropped parent")
 }

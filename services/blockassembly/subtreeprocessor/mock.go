@@ -250,6 +250,9 @@ func (m *MockSubtreeProcessor) SetTxCandidate(*chainhash.Hash, uint32, uint32) {
 // NotFinalTemplateTxs implements Interface.NotFinalTemplateTxs: none.
 func (m *MockSubtreeProcessor) NotFinalTemplateTxs() int { return 0 }
 
+// OfferLockHeldTxs implements Interface.OfferLockHeldTxs. A no-op.
+func (m *MockSubtreeProcessor) OfferLockHeldTxs(context.Context) error { return nil }
+
 // RestartDroppedTxs implements Interface.RestartDroppedTxs. A no-op.
 func (m *MockSubtreeProcessor) RestartDroppedTxs() func(bool) {
 	return func(bool) {}

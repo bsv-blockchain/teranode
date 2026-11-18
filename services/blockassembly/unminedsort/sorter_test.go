@@ -250,6 +250,9 @@ func TestSorter_RunEncodingIsCompact(t *testing.T) {
 
 	addAll(t, s, in, false)
 
+	// A spill writes in the background; measure the runs once it is done.
+	require.NoError(t, s.waitSpill())
+
 	var total int64
 
 	err = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
@@ -268,8 +271,10 @@ func TestSorter_RunEncodingIsCompact(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// About 37 bytes for the timestamp delta, hash, fee and size, plus 3 for a mainnet
+	// validated height and 1 for no lock time.
 	perRecord := float64(total) / float64(len(in)-s.buffered())
-	require.Less(t, perRecord, 40.0)
+	require.Less(t, perRecord, 44.0)
 }
 
 // Every drained tx must get its own TxInpoints: the subtree processor keeps the

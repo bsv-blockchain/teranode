@@ -1,8 +1,12 @@
 package subtreeprocessor
 
 import (
+	"context"
+
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 )
 
 // lockTimeThreshold separates a height nLockTime from a time one (bitcoin-sv's LOCKTIME_THRESHOLD).
@@ -23,13 +27,8 @@ type txCandidate struct {
 // block's transaction checked against one tip, a mempool transaction against the tip a reorg
 // replaced). Block assembly sets the candidate after every block move, and rebuilds the
 // template when NotFinalTemplateTxs then finds one.
-//
-// Setting it offers the held transactions again, through the queue and in the order they were
-// held, so the ones now final go in and the rest are held again.
 func (stp *SubtreeProcessor) SetTxCandidate(tip *chainhash.Hash, height, medianTimePast uint32) {
 	stp.txCandidate.Store(&txCandidate{tip: *tip, height: height, medianTimePast: medianTimePast})
-
-	stp.offerLockHeldTxs()
 }
 
 // lockHeldTx is a transaction kept back until the candidate makes it final, with what it was
@@ -41,20 +40,35 @@ type lockHeldTx struct {
 	lockTime uint32
 }
 
-// holdForLockTimeLocked keeps a transaction back to offer again when the candidate moves. The caller
-// holds droppedMu.
+// holdForLockTimeLocked keeps a transaction back to offer again when the candidate moves.
+//
+// lockHeldSet keeps every held transaction until admitTxLocked has decided it again: true while
+// it waits in lockHeldTxs, false once OfferLockHeldTxs has queued it. A queued child that is
+// dequeued before its offered parent therefore still sees the parent held, and is held too.
+// The caller holds droppedMu.
 func (stp *SubtreeProcessor) holdForLockTimeLocked(node subtreepkg.Node, inpoints *subtreepkg.TxInpoints, height, lockTime uint32) {
-	if _, ok := stp.lockHeldSet[node.Hash]; ok {
+	if inList, ok := stp.lockHeldSet[node.Hash]; ok && inList {
 		return
 	}
 
 	if stp.lockHeldSet == nil {
-		stp.lockHeldSet = make(map[chainhash.Hash]struct{})
+		stp.lockHeldSet = make(map[chainhash.Hash]bool)
 	}
 
-	stp.lockHeldSet[node.Hash] = struct{}{}
+	stp.lockHeldSet[node.Hash] = true
 	stp.lockHeldTxs = append(stp.lockHeldTxs, lockHeldTx{node: node, inpoints: inpoints, height: height, lockTime: lockTime})
-	stp.lockHeldCount.Store(int64(len(stp.lockHeldTxs)))
+	stp.lockHeldCount.Store(int64(len(stp.lockHeldSet)))
+}
+
+// releaseLockHeldLocked forgets that hash is held: admitTxLocked decided it, or a block mined
+// it. The caller holds droppedMu.
+func (stp *SubtreeProcessor) releaseLockHeldLocked(hash chainhash.Hash) {
+	if _, ok := stp.lockHeldSet[hash]; !ok {
+		return
+	}
+
+	delete(stp.lockHeldSet, hash)
+	stp.lockHeldCount.Store(int64(len(stp.lockHeldSet)))
 }
 
 // clearLockHeldLocked forgets every held transaction. The caller holds droppedMu.
@@ -64,37 +78,111 @@ func (stp *SubtreeProcessor) clearLockHeldLocked() {
 	stp.lockHeldCount.Store(0)
 }
 
-// lockHeldTxCount returns how many transactions are held for their lock time.
+// lockHeldTxCount returns how many transactions are held for their lock time, offered ones
+// included.
 func (stp *SubtreeProcessor) lockHeldTxCount() int {
 	return int(stp.lockHeldCount.Load())
 }
 
-// offerLockHeldTxs queues every held transaction again, in the order they were held, so parents
-// come before their children.
-func (stp *SubtreeProcessor) offerLockHeldTxs() {
+// OfferLockHeldTxs queues the held transactions again, in the order they were held, so parents
+// come before their children, for admitTxLocked to decide against the candidate. Block
+// assembly calls it after it sets the candidate for a new block.
+//
+// The UTXO store decides first which of them are still unmined mempool transactions: a held
+// transaction can lose a conflict to a block, which marks it and every descendant conflicting,
+// and offering it again would put a double spend in the template. A conflicting or missing one
+// is dropped, so its held descendants are dropped too; a mined one is forgotten. A store error
+// keeps every held transaction held and is returned.
+func (stp *SubtreeProcessor) OfferLockHeldTxs(ctx context.Context) error {
 	if stp.lockHeldCount.Load() == 0 {
-		return
+		return nil
 	}
 
 	stp.droppedMu.Lock()
-	held := stp.lockHeldTxs
-	stp.clearLockHeldLocked()
+	held := append([]lockHeldTx(nil), stp.lockHeldTxs...)
 	stp.droppedMu.Unlock()
 
 	if len(held) == 0 {
-		return
+		return nil
 	}
 
-	nodes := make([]subtreepkg.Node, len(held))
-	inpoints := make([]*subtreepkg.TxInpoints, len(held))
-	heights := make([]uint32, len(held))
-	lockTimes := make([]uint32, len(held))
+	const (
+		offer = iota
+		drop
+		forget
+	)
+
+	verdicts := make([]int, len(held))
 
 	for i, h := range held {
-		nodes[i], inpoints[i], heights[i], lockTimes[i] = h.node, h.inpoints, h.height, h.lockTime
+		hash := h.node.Hash
+
+		data, err := stp.utxoStore.Get(ctx, &hash, fields.Conflicting, fields.UnminedSince)
+
+		switch {
+		case errors.Is(err, errors.ErrTxNotFound):
+			verdicts[i] = drop
+		case err != nil:
+			return errors.NewProcessingError("[OfferLockHeldTxs] error reading held transaction %s", hash.String(), err)
+		case data.Conflicting:
+			verdicts[i] = drop
+		case data.UnminedSince == 0:
+			verdicts[i] = forget
+		}
 	}
 
-	stp.queue.enqueueTaggedBatch(nodes, inpoints, heights, lockTimes)
+	nodes := make([]subtreepkg.Node, 0, len(held))
+	inpoints := make([]*subtreepkg.TxInpoints, 0, len(held))
+	heights := make([]uint32, 0, len(held))
+	lockTimes := make([]uint32, 0, len(held))
+
+	stp.droppedMu.Lock()
+
+	offered := make(map[chainhash.Hash]struct{}, len(held))
+
+	for i, h := range held {
+		hash := h.node.Hash
+		offered[hash] = struct{}{}
+
+		// Forgotten since the read: a block mined it.
+		if _, ok := stp.lockHeldSet[hash]; !ok {
+			continue
+		}
+
+		switch verdicts[i] {
+		case drop:
+			stp.releaseLockHeldLocked(hash)
+			stp.recordDroppedLocked(hash)
+		case forget:
+			stp.releaseLockHeldLocked(hash)
+		default:
+			stp.lockHeldSet[hash] = false
+			nodes = append(nodes, h.node)
+			inpoints = append(inpoints, h.inpoints)
+			heights = append(heights, h.height)
+			lockTimes = append(lockTimes, h.lockTime)
+		}
+	}
+
+	// Keep what the processor held since the read.
+	kept := stp.lockHeldTxs[:0]
+
+	for _, h := range stp.lockHeldTxs {
+		if _, ok := offered[h.node.Hash]; !ok {
+			kept = append(kept, h)
+		}
+	}
+
+	clear(stp.lockHeldTxs[len(kept):])
+	stp.lockHeldTxs = kept
+
+	stp.droppedMu.Unlock()
+
+	if len(nodes) > 0 {
+		stp.queue.enqueueTaggedBatch(nodes, inpoints, heights, lockTimes)
+	}
+
+	return nil
 }
 
 // freshTxCandidate returns the candidate when it describes the block after the processor's
@@ -153,10 +241,11 @@ func (stp *SubtreeProcessor) trackLockTimeLocked(hash chainhash.Hash, lockTime u
 	stp.lockedTxs[hash] = lockTime
 }
 
-// NotFinalTemplateTxs returns how many tracked transactions still in the template are not
-// final at the candidate, and forgets the tracked ones no longer in it (mined in this node's
-// own block, or removed). Block assembly reads it after every block move; it is 0 while the
-// candidate is not set for the current block.
+// NotFinalTemplateTxs returns how many tracked transactions in the template are not final at
+// the candidate. Block assembly reads it after every block move; it is 0 while the candidate is
+// not set for the current block. A tracked transaction not in the template is skipped, not
+// forgotten: the dequeue loop tracks one before it places it, and may be between the two.
+// pruneLockedTxs forgets them on the processor's goroutine.
 func (stp *SubtreeProcessor) NotFinalTemplateTxs() int {
 	if stp.lockedCount.Load() == 0 {
 		return 0
@@ -176,9 +265,6 @@ func (stp *SubtreeProcessor) NotFinalTemplateTxs() int {
 		// Block assembly calls this between block moves, which it hands to the processor and
 		// waits for, so the map is not swapped while it is read.
 		if _, ok := stp.currentTxMap.Get(hash); !ok {
-			delete(stp.lockedTxs, hash)
-			stp.lockedCount.Add(-1)
-
 			continue
 		}
 
@@ -188,4 +274,24 @@ func (stp *SubtreeProcessor) NotFinalTemplateTxs() int {
 	}
 
 	return notFinal
+}
+
+// pruneLockedTxs forgets the tracked lock times of transactions no longer in the template: mined
+// in this node's own block, which has no mined set for forgetMinedDroppedTxs, or removed. It runs
+// on the processor's goroutine during a block move, when the dequeue loop is not placing
+// transactions it has already tracked.
+func (stp *SubtreeProcessor) pruneLockedTxs() {
+	if stp.lockedCount.Load() == 0 {
+		return
+	}
+
+	stp.droppedMu.Lock()
+	defer stp.droppedMu.Unlock()
+
+	for hash := range stp.lockedTxs {
+		if _, ok := stp.currentTxMap.Get(hash); !ok {
+			delete(stp.lockedTxs, hash)
+			stp.lockedCount.Add(-1)
+		}
+	}
 }

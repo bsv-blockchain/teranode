@@ -120,6 +120,9 @@ type BlockAssembler struct {
 	movedBackFloor    atomic.Pointer[reorgFinalityCheck]
 	templateUnsettled atomic.Bool
 
+	// settleRetryScheduled is set while a retry of a failed settleTemplate is scheduled.
+	settleRetryScheduled atomic.Bool
+
 	// undecidedMu guards undecidedSince: each unmined transaction whose input check the store
 	// has not answered, with the time it was first left undecided. One undecided for longer than
 	// undecidedExcludeAfter is left out of a load instead of failing it (see undecidedLoad).
@@ -1815,10 +1818,9 @@ func (b *BlockAssembler) moveToBlock(ctx context.Context, bestBlockchainBlockHea
 
 	b.setBestBlockHeader(bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height)
 
-	// settleTemplate logs and counts its own failure, and queues the retry.
-	if !b.settleTemplate(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height) {
-		return errors.NewProcessingError("[BlockAssembler][%s] the template is not settled on the new block", bestBlockchainBlockHeader.Hash())
-	}
+	// The move itself succeeded, so a failed settle does not fail it: settleTemplate logs and
+	// counts its own failure, keeps candidates empty and queues the retry.
+	b.settleTemplate(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height)
 
 	// Block assembly advanced to the chain tip we observed this round: it is no longer
 	// behind, so clear the lag gauge (issue #980, Bug B).
@@ -2108,11 +2110,16 @@ func (b *BlockAssembler) retryUnsettledTemplate(ctx context.Context) {
 		return
 	}
 
-	b.settleTemplate(ctx, header, height)
+	if b.settleTemplate(ctx, header, height) {
+		if err := b.SetState(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			b.logger.Errorf("[BlockAssembler][%s] error setting state: %v", header.Hash(), err)
+		}
+	}
 }
 
-// settleTemplateRetryDelay is how long a failed settleTemplate waits before it is retried on the
-// same tip.
+// settleTemplateRetryDelay is how long a failed settleTemplate check waits before it is retried
+// on the same tip. A failed rebuild waits as long as main's unmined reload retry
+// (defaultUnminedReloadRetryInterval), so the two do not stack resets.
 const settleTemplateRetryDelay = 5 * time.Second
 
 // settleTemplate brings the template in line with the block it is now mined on, after a block
@@ -2124,10 +2131,17 @@ const settleTemplateRetryDelay = 5 * time.Second
 func (b *BlockAssembler) settleTemplate(ctx context.Context, header *model.BlockHeader, height uint32) bool {
 	ctxLogger := b.logger.WithTraceContext(ctx)
 
-	fail := func(reason string) bool {
+	// One retry is scheduled at a time, however often settling fails.
+	fail := func(reason string, delay time.Duration) bool {
 		b.templateUnsettled.Store(true)
 		prometheusBlockAssemblyProcessingStuck.WithLabelValues(reason).Inc()
-		time.AfterFunc(settleTemplateRetryDelay, b.triggerReconcile)
+
+		if b.settleRetryScheduled.CompareAndSwap(false, true) {
+			time.AfterFunc(delay, func() {
+				b.settleRetryScheduled.Store(false)
+				b.triggerReconcile()
+			})
+		}
 
 		return false
 	}
@@ -2135,7 +2149,7 @@ func (b *BlockAssembler) settleTemplate(ctx context.Context, header *model.Block
 	needsReset, err := b.checkTemplateFinality(ctx, header, height)
 	if err != nil {
 		ctxLogger.Errorf("[BlockAssembler][%s] error checking the template's transactions are final at the next block: %v", header.Hash(), err)
-		return fail("tx_finality")
+		return fail("tx_finality", settleTemplateRetryDelay)
 	}
 
 	if needsReset {
@@ -2143,7 +2157,7 @@ func (b *BlockAssembler) settleTemplate(ctx context.Context, header *model.Block
 
 		if err = b.reset(ctx); err != nil {
 			ctxLogger.Errorf("[BlockAssembler][%s] error rebuilding the template for transactions the next block cannot mine: %v", header.Hash(), err)
-			return fail("tx_finality_reset")
+			return fail("tx_finality_reset", defaultUnminedReloadRetryInterval)
 		}
 	}
 
@@ -2155,7 +2169,16 @@ func (b *BlockAssembler) settleTemplate(ctx context.Context, header *model.Block
 
 		if err = b.reset(ctx); err != nil {
 			ctxLogger.Errorf("[BlockAssembler][%s] error rebuilding the template for new transaction rules: %v", header.Hash(), err)
-			return fail("tx_rules_reset")
+			return fail("tx_rules_reset", defaultUnminedReloadRetryInterval)
+		}
+	}
+
+	// The transactions held back for their lock time go back to the queue, against the block
+	// just set; the ones a block mined or a conflict displaced are not.
+	if b.subtreeProcessor != nil {
+		if err = b.subtreeProcessor.OfferLockHeldTxs(ctx); err != nil {
+			ctxLogger.Errorf("[BlockAssembler][%s] error offering the transactions held back for their lock time again: %v", header.Hash(), err)
+			return fail("tx_finality_offer", settleTemplateRetryDelay)
 		}
 	}
 
@@ -3247,10 +3270,9 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	}
 
 	// The template may hold transactions the next block cannot mine until settleTemplate
-	// succeeds on this tip. Hand out an empty block meanwhile, and ask for the retry.
+	// succeeds on this tip, which retries on its own. Hand out an empty block meanwhile.
 	if b.templateUnsettled.Load() || b.templateTxEraIsStale() {
 		b.logger.Warnf("[GetMiningCandidate] the template is not yet settled on %s, returning empty block template", baBestBlockHeader.Hash())
-		b.triggerReconcile()
 
 		return b.generateEmptyBlockCandidate(ctx, baBestBlockHeader, baBestBlockHeight)
 	}

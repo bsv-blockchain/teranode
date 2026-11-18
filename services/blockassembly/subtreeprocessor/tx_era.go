@@ -56,14 +56,18 @@ func (stp *SubtreeProcessor) admitTxLocked(node subtreepkg.Node, inpoints *subtr
 	hash := node.Hash
 
 	if era := stp.txEra.Load(); era != nil && height != 0 && (height < era.lo || height > era.hi) {
+		stp.releaseLockHeldLocked(hash)
 		stp.recordDroppedLocked(hash)
+
 		return false
 	}
 
 	if inpoints != nil && (len(stp.droppedTxs) != 0 || len(stp.lockHeldSet) != 0) {
 		for _, parent := range inpoints.ParentTxHashes {
 			if _, dropped := stp.droppedTxs[parent]; dropped {
+				stp.releaseLockHeldLocked(hash)
 				stp.recordDroppedLocked(hash)
+
 				return false
 			}
 		}
@@ -88,6 +92,7 @@ func (stp *SubtreeProcessor) admitTxLocked(node subtreepkg.Node, inpoints *subtr
 		stp.droppedCount.Add(-1)
 	}
 
+	stp.releaseLockHeldLocked(hash)
 	stp.trackLockTimeLocked(hash, lockTime)
 
 	return true
@@ -223,6 +228,7 @@ func (stp *SubtreeProcessor) RestartDroppedTxs() (finish func(reloaded bool)) {
 	prev := stp.droppedTxs
 	prevLocked := stp.lockedTxs
 	prevHeld := stp.lockHeldTxs
+	prevHeldSet := stp.lockHeldSet
 	stp.droppedTxs = nil
 	stp.droppedCount.Store(0)
 	stp.lockedTxs = nil
@@ -245,6 +251,19 @@ func (stp *SubtreeProcessor) RestartDroppedTxs() (finish func(reloaded bool)) {
 		for _, h := range prevHeld {
 			stp.holdForLockTimeLocked(h.node, h.inpoints, h.height, h.lockTime)
 		}
+
+		// Offered ones are in the queue: they stay held until admitTxLocked decides them.
+		for hash, inList := range prevHeldSet {
+			if _, ok := stp.lockHeldSet[hash]; !ok && !inList {
+				if stp.lockHeldSet == nil {
+					stp.lockHeldSet = make(map[chainhash.Hash]bool)
+				}
+
+				stp.lockHeldSet[hash] = false
+			}
+		}
+
+		stp.lockHeldCount.Store(int64(len(stp.lockHeldSet)))
 
 		// Not through recordDroppedLocked: these drops were counted when they happened.
 		if stp.droppedTxs == nil {
@@ -289,21 +308,25 @@ func (stp *SubtreeProcessor) forgetMinedDroppedTxs(mined *SortedHashSet) {
 		}
 	}
 
-	if len(stp.lockHeldTxs) != 0 {
+	if len(stp.lockHeldSet) != 0 {
 		kept := stp.lockHeldTxs[:0]
 
 		for _, h := range stp.lockHeldTxs {
-			if mined.Exists(h.node.Hash) {
-				delete(stp.lockHeldSet, h.node.Hash)
-				continue
+			if !mined.Exists(h.node.Hash) {
+				kept = append(kept, h)
 			}
-
-			kept = append(kept, h)
 		}
 
 		clear(stp.lockHeldTxs[len(kept):])
 		stp.lockHeldTxs = kept
-		stp.lockHeldCount.Store(int64(len(kept)))
+
+		for hash := range stp.lockHeldSet {
+			if mined.Exists(hash) {
+				delete(stp.lockHeldSet, hash)
+			}
+		}
+
+		stp.lockHeldCount.Store(int64(len(stp.lockHeldSet)))
 	}
 }
 
