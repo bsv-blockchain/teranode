@@ -237,15 +237,15 @@ Before the baseline is ready, the reading shows the note `Calibrating` and raise
 After a restart, the tx meta cache is cold. For its first 30 samples, or while the cache is less than 10% full, the hit rate shows `Warming` and raises no alarm.
 
 **The baseline freezes while an alarm is pending or active.** The probe learns only from normal samples. This stops an alarm from teaching the probe that the bad value is normal.
-If the node moves to a new normal level for good, the alarm stays. Use one of these ways out:
+If the node moves to a new normal level for good, the alarm stays. The baseline does not learn the new level.
 
-1. Snooze the alarm.
-2. Set a floor for the reading (see [5.3 Floors](#53-floors)).
-3. Stop the node, delete the state file, and start the node again. This resets all baselines, and calibration starts again.
+- To recalibrate, stop the node, delete the state file, and start the node again. This resets all baselines, and calibration starts again. It is the only way to recalibrate.
+- A snooze hides the alarm until the snooze expires. It does not change the baseline, so the alarm shows again after the snooze.
+- A floor adds a fixed limit (see [5.3 Floors](#53-floors)). It does not replace the baseline check, so it cannot clear a baseline alarm.
 
 ### 5.3 Floors
 
-A floor is a fixed limit that you set for one reading. A reading beyond its floor for 60 s raises a red alarm, also during calibration.
+A floor is a fixed limit that you set for one reading. A reading beyond its floor for 60 s raises a red alarm, also during calibration. A floor is an extra limit. The baseline check still applies.
 
 Set floors in `probe_floors` as a pipe-separated list of `metric=value` entries:
 
@@ -433,7 +433,7 @@ The probe accepts at most 16 WebSocket clients at the same time. A further clien
 | The tip chip is grey and says "no peers" | The P2P service has no peers | Check the peer connections of the node |
 | Aerospike read latency is grey | Read benchmarks are off | Set `enable-benchmarks-read true` on the namespace |
 | PostgreSQL disk fill says "disk capacity not set" | `probe_postgresDiskCapacityGB` is 0 | Set the volume size in GB |
-| An alarm stays after the node changed for good | The baseline is frozen while the alarm is active | Snooze the alarm, set a floor, or reset the baselines (see [5.2](#52-learned-baselines)) |
+| An alarm stays after the node changed for good | The baseline is frozen while the alarm is active | Reset the baselines: stop the node, delete the state file and start it again (see [5.2](#52-learned-baselines)). A snooze only hides the alarm until it expires |
 | The log shows `state file was corrupt; moved it to ...` | The state file was not valid JSON | No action needed. The old file stays next to the new one |
 | The health check says "probe stopped after repeated failures" | Five consecutive panics stopped the probe | Collect the log, then restart the node |
 | A 17th or later browser tab gets no data, and the API returns `503` on `/ws` | More than 16 WebSocket clients | Close unused tabs |
