@@ -830,118 +830,177 @@ func TestFlushChunk_DeletesRideTheNextChunksBatch(t *testing.T) {
 // in flight at the same time, not queued behind the carry's lock. It also runs
 // the overlap that lock used to rule out: chunk A's batch deletes X, a child
 // cleared earlier, while chunk B's batch writes the marker for X's own child on
-// X. Whichever lands first, X ends up gone and B's child is cleared and deleted.
+// X. Once both batches are in flight, each row forces one order on the server:
+// the marker first, so it goes with X, or the delete first, so the UPDATE_ONLY
+// marker answers KEY_NOT_FOUND and counts as a parent that is gone. Either way
+// X ends up gone and B's child is cleared and deleted. In TTL mode the delete
+// is a one-second touch: the marker still lands on X, and with TTLDontUpdate it
+// leaves X expiring.
 func TestFlushChunk_ChunksOfOneWorkerOverlapTheirBatches(t *testing.T) {
 	s, client := newFlushTestService(t)
 	s.chunkGroupLimit = 2
 	ctx := context.Background()
 
-	exists := func(key *aerospike.Key) bool {
-		found, err := client.Exists(nil, key)
-		require.NoError(t, err)
+	for i, tc := range []struct {
+		name        string
+		deleteFirst bool
+		ttl         bool
+	}{
+		{name: "marker lands first"},
+		{name: "delete lands first", deleteFirst: true},
+		{name: "marker lands first, TTL mode", ttl: true},
+		{name: "delete lands first, TTL mode", deleteFirst: true, ttl: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s.utxoSetTTL = tc.ttl
+			t.Cleanup(func() { s.utxoSetTTL = false })
 
-		return found
-	}
+			// gone reports whether a record's delete took effect: removed, or in
+			// TTL mode still expiring within the one-second touch.
+			gone := func(key *aerospike.Key) bool {
+				record, err := client.GetHeader(nil, key)
+				if err != nil {
+					var aeroErr *aerospike.AerospikeError
+					require.ErrorAs(t, err, &aeroErr)
+					require.True(t, aeroErr.Matches(types.KEY_NOT_FOUND_ERROR))
 
-	// X was cleared by an earlier chunk and waits in the carry. B's child cB
-	// spends X:0.
-	x := chainhash.HashH([]byte{0xC5, 1})
-	cB := chainhash.HashH([]byte{0xC5, 2})
-	xKey := putRecord(t, client, &x, spentBy(&cB))
-	cBKey := putRecord(t, client, &cB, aerospike.BinMap{fields.TxID.String(): cB.CloneBytes()})
+					return true
+				}
 
-	updatesB := make(map[string]*parentUpdateInfo)
-	require.NoError(t, s.addParentUpdatesForInput(updatesB, &x, 0, &cB))
+				// A header read of a missing key answers no record and no error.
+				if record == nil {
+					return true
+				}
 
-	// A's own chunk: cA on parent pA.
-	pA := chainhash.HashH([]byte{0xC5, 3})
-	cA := chainhash.HashH([]byte{0xC5, 4})
-	putRecord(t, client, &pA, spentBy(&cA))
-	cAKey := putRecord(t, client, &cA, aerospike.BinMap{fields.TxID.String(): cA.CloneBytes()})
+				return tc.ttl && record.Expiration <= 1
+			}
 
-	updatesA := make(map[string]*parentUpdateInfo)
-	require.NoError(t, s.addParentUpdatesForInput(updatesA, &pA, 0, &cA))
+			// X was cleared by an earlier chunk and waits in the carry. B's child
+			// cB spends X:0.
+			x := chainhash.HashH([]byte{0xC5, byte(i), 1})
+			cB := chainhash.HashH([]byte{0xC5, byte(i), 2})
+			xKey := putRecord(t, client, &x, spentBy(&cB))
+			cBKey := putRecord(t, client, &cB, aerospike.BinMap{fields.TxID.String(): cB.CloneBytes()})
 
-	carry := &deleteCarry{blockHeight: testPruneHeight, deletions: []*pendingDeletion{{txHash: &x, keys: []*aerospike.Key{xKey}}}, updates: []map[string]*parentUpdateInfo{{}}}
+			updatesB := make(map[string]*parentUpdateInfo)
+			require.NoError(t, s.addParentUpdatesForInput(updatesB, &x, 0, &cB))
 
-	// The first two batches wait until both are in flight, or give up.
-	var (
-		mu       sync.Mutex
-		entered  int
-		bothIn   = make(chan struct{})
-		overlap  bool
-		firstIn  = make(chan struct{})
-		released bool
-	)
+			// A's own chunk: cA on parent pA.
+			pA := chainhash.HashH([]byte{0xC5, byte(i), 3})
+			cA := chainhash.HashH([]byte{0xC5, byte(i), 4})
+			putRecord(t, client, &pA, spentBy(&cA))
+			cAKey := putRecord(t, client, &cA, aerospike.BinMap{fields.TxID.String(): cA.CloneBytes()})
 
-	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
-		mu.Lock()
-		entered++
-		n := entered
+			updatesA := make(map[string]*parentUpdateInfo)
+			require.NoError(t, s.addParentUpdatesForInput(updatesA, &pA, 0, &cA))
 
-		// Overlap only while the first batch is still waiting.
-		if n == 2 && !released {
-			overlap = true
-			released = true
-			close(bothIn)
-		}
-		mu.Unlock()
+			carry := &deleteCarry{blockHeight: testPruneHeight, deletions: []*pendingDeletion{{txHash: &x, keys: []*aerospike.Key{xKey}}}, updates: []map[string]*parentUpdateInfo{{}}}
 
-		if n == 1 {
-			close(firstIn)
+			// The first two batches wait until both are in flight, or give up.
+			// Then the one chosen to land first runs, and the other waits for it.
+			var (
+				mu       sync.Mutex
+				entered  int
+				bothIn   = make(chan struct{})
+				overlap  bool
+				firstIn  = make(chan struct{})
+				released bool
+				landed   = [2]chan struct{}{make(chan struct{}), make(chan struct{})}
+			)
 
-			select {
-			case <-bothIn:
-			case <-time.After(5 * time.Second):
+			// Batch 1 is A's: it deletes X. Batch 2 is B's: it marks X.
+			first, second := 1, 0
+			if tc.deleteFirst {
+				first, second = 0, 1
+			}
+
+			s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
 				mu.Lock()
-				if !released {
+				entered++
+				n := entered
+
+				// Overlap only while the first batch is still waiting.
+				if n == 2 && !released {
+					overlap = true
 					released = true
 					close(bothIn)
 				}
 				mu.Unlock()
+
+				if n > 2 {
+					return client.BatchOperate(policy, records)
+				}
+
+				if n == 1 {
+					close(firstIn)
+				}
+
+				select {
+				case <-bothIn:
+				case <-time.After(5 * time.Second):
+					mu.Lock()
+					if !released {
+						released = true
+						close(bothIn)
+					}
+					mu.Unlock()
+				}
+
+				if n-1 == second {
+					select {
+					case <-landed[first]:
+					case <-time.After(5 * time.Second):
+					}
+				}
+
+				err := client.BatchOperate(policy, records)
+
+				close(landed[n-1])
+
+				return err
 			}
-		}
 
-		return client.BatchOperate(policy, records)
+			var wg sync.WaitGroup
+
+			errs := make([]error, 2)
+
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+
+				_, _, errs[0] = s.flushChunk(ctx, carry, updatesA, []*pendingDeletion{{txHash: &cA, keys: []*aerospike.Key{cAKey}}}, nil)
+			}()
+
+			<-firstIn
+
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+
+				_, _, errs[1] = s.flushChunk(ctx, carry, updatesB, []*pendingDeletion{{txHash: &cB, keys: []*aerospike.Key{cBKey}}}, nil)
+			}()
+
+			wg.Wait()
+			require.NoError(t, errs[0])
+			require.NoError(t, errs[1])
+
+			mu.Lock()
+			require.True(t, overlap, "the second chunk's batch must go out while the first one's is still in flight")
+			mu.Unlock()
+
+			require.True(t, gone(xKey), "chunk A's batch deleted X, and B's marker did not give it a new lifetime")
+
+			deleted, heldBack, err := s.drainCarry(ctx, carry)
+			require.NoError(t, err)
+			require.True(t, carry.empty())
+			require.Equal(t, 2, deleted, "the drain deletes both chunks' children")
+			require.Zero(t, heldBack)
+			require.True(t, gone(cAKey), "A's child is deleted by the drain")
+			require.True(t, gone(cBKey), "B's child is cleared whichever of the two writes on X landed first, and the drain deletes it")
+		})
 	}
-
-	var wg sync.WaitGroup
-
-	errs := make([]error, 2)
-
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-
-		_, _, errs[0] = s.flushChunk(ctx, carry, updatesA, []*pendingDeletion{{txHash: &cA, keys: []*aerospike.Key{cAKey}}}, nil)
-	}()
-
-	<-firstIn
-
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-
-		_, _, errs[1] = s.flushChunk(ctx, carry, updatesB, []*pendingDeletion{{txHash: &cB, keys: []*aerospike.Key{cBKey}}}, nil)
-	}()
-
-	wg.Wait()
-	require.NoError(t, errs[0])
-	require.NoError(t, errs[1])
-
-	mu.Lock()
-	require.True(t, overlap, "the second chunk's batch must go out while the first one's is still in flight")
-	mu.Unlock()
-
-	require.False(t, exists(xKey), "chunk A's batch deleted X")
-
-	_, _, err := s.drainCarry(ctx, carry)
-	require.NoError(t, err)
-	require.True(t, carry.empty())
-	require.False(t, exists(cAKey), "A's child is deleted by the drain")
-	require.False(t, exists(cBKey), "B's child is cleared whichever of the two writes on X landed first, and the drain deletes it")
 }
 
 // TestFlushChunk_MarkerOnARecordTheSameBatchDeletes covers a parent P that is
