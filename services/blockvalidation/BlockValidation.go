@@ -3116,10 +3116,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 //
 // So the block goes to whichever side removes it from the cache. If this call
 // removes it, it releases it, as the old Delete-then-release did. If the entry is
-// already gone, the setMined worker or the cache's eviction function has it and
-// releases it, and the caller must not touch the block's subtrees again. A block
-// that was never cached (cached false) is still only ValidateBlock's, so it is
-// released directly.
+// already gone, the caller must not touch the block's subtrees again. The setMined
+// worker or the cache's eviction function releases it unless another validation
+// overwrote it first, as described below. A block that was never cached (cached
+// false) is still only ValidateBlock's, so it is released directly.
 //
 // The cache can also hold a different object for the same hash: a revalidation of
 // the block, or the optimistic-mining goroutine, which runs outside
@@ -3134,14 +3134,16 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 // nothing removes those files at startup. Only the optimistic-mining goroutine
 // (blockvalidation_optimistic_mining_peer_blocks, off by default) caches outside
 // runOncePerBlock, so the overwrite needs that setting and an operator invalidate
-// and reconsider racing a failed SetBlockSubtreesSet. A lost reply is what lets the
-// worker take block first; the leak needs only the failure. The overwrite can also
-// land before the other object is itself taken or evicted, and this call then finds
-// the entry gone, as if the worker had taken block. That case leaks the same way,
-// and the earlier paragraph's "has it and releases it" does not hold for it. A leak
-// is the safe side of that trade against tagging another block's hashes. Both exits
-// that leave block unreleased log at Warn with the block hash and say a leak is
-// possible, so stray subtree-nodes-* files can be traced back to one of them.
+// and reconsider racing another validation. It does not need a failed
+// SetBlockSubtreesSet: if both calls succeed, this helper never runs and the
+// overwritten block leaks without a warning. A lost reply can instead let the
+// worker take block before the overwrite, in which case the worker owns block.
+// After an overwrite, the other object can itself be taken or evicted before this
+// call, which then finds the entry gone, as if the worker had taken block.
+// A possible leak is the safe side of the trade against tagging another block's
+// hashes. Both exits here that leave block unreleased log at Warn with the block
+// hash and say a leak is possible. These warnings do not trace overwrites on the
+// successful validation path.
 func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block, cached bool) bool {
 	if !cached {
 		releaseBlockNodes(block)
