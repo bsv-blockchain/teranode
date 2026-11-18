@@ -2198,18 +2198,14 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 	return inputs, nil
 }
 
-// addParentUpdate accumulates replay protection for a surviving parent record.
-// It wraps stageParentUpdate, the single producer of parentUpdateInfo values:
-// processRecordChunkCarry and ProcessSingleRecord both go through it, so the two
-// cannot disagree about which records get a marker.
-func (s *Service) addParentUpdate(updates map[string]*parentUpdateInfo, source []byte, childHash *chainhash.Hash, offset uint32) error {
-	return s.stageParentUpdate(updates, nil, source, childHash, offset)
-}
-
-// stageParentUpdate is addParentUpdate for a record staged apart from the
-// chunk-wide set it is merged into later. A parent already in queued reuses
-// that entry's key, so the key digest (RIPEMD-160) is computed once per
-// distinct parent in a chunk, not once per child that spends it.
+// stageParentUpdate accumulates replay protection for a surviving parent record, staged apart
+// from the chunk-wide set it is merged into later. It is the producer of every queued
+// parentUpdateInfo: processRecordChunkCarry (through stageParentUpdatesForInput) and
+// ProcessSingleRecord (through addParentUpdatesForInput) both reach it, so the two cannot
+// disagree about which records get a marker. noteNativeRefusal builds the one other kind, a copy
+// that only withdraws a marker. A parent already in queued reuses that entry's key, so the key
+// digest (RIPEMD-160) is computed once per distinct parent in a chunk, not once per child that
+// spends it.
 func (s *Service) stageParentUpdate(updates, queued map[string]*parentUpdateInfo, source []byte, childHash *chainhash.Hash, offset uint32) error {
 	if existing, ok := updates[string(source)]; ok {
 		existing.add(childHash, offset)
