@@ -194,6 +194,8 @@ type fsmFetcher interface {
 	FetchFSMCurrentState(ctx context.Context) (*blockchain.FSMStateType, error)
 }
 
+var _ fsmFetcher = (*blockchain.Client)(nil)
+
 func (c *Chain) fsmState(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, chainCallTimeout)
 	defer cancel()
