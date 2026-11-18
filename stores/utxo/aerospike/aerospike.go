@@ -300,6 +300,10 @@ type Store struct {
 	// namespace/setName never crosses Store instances.
 	batchKeysPool sync.Pool
 
+	// nativeProbes is a test-only override for the start-up probes initNativeTeranodeOps runs; nil
+	// means the store's own.
+	nativeProbes *nativeSupportProbes
+
 	// batchOperateFn is a test-only override for s.client.BatchOperate; nil means use the real client.
 	batchOperateFn func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
 

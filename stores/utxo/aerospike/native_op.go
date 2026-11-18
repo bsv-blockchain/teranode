@@ -665,6 +665,13 @@ func (s *Store) probeNativeSpendSemantics(ctx context.Context, policy *aerospike
 	return true
 }
 
+// nativeSupportProbes are the start-up probes initNativeTeranodeOps runs: the native opcode and the
+// spend semantics behind it (which also records the replay-protection verdict), then the
+// longest-chain mark and sub-op 15, each run only when the one before it passed.
+type nativeSupportProbes struct {
+	ops, markLongestChain, verifiedMarker func(ctx context.Context) bool
+}
+
 // initNativeTeranodeOps caches the native-op decision on the store and
 // allocates the shared BatchWritePolicy used by every record the native-op
 // path emits. Idempotent; safe to call from store construction.
@@ -674,10 +681,20 @@ func (s *Store) probeNativeSpendSemantics(ctx context.Context, policy *aerospike
 // client only reads from this policy during BatchOperate, so concurrent reads
 // from many goroutines are safe. Do NOT mutate the policy after this call.
 func (s *Store) initNativeTeranodeOps(ctx context.Context) {
-	supported := s.detectNativeTeranodeOpSupport(ctx)
+	probes := nativeSupportProbes{
+		ops:              s.detectNativeTeranodeOpSupport,
+		markLongestChain: s.detectNativeMarkLongestChainSupport,
+		verifiedMarker:   s.detectNativeVerifiedMarkerSupport,
+	}
+
+	if s.nativeProbes != nil {
+		probes = *s.nativeProbes
+	}
+
+	supported := probes.ops(ctx)
 	s.useNativeTeranodeOps.Store(supported)
-	s.useNativeMarkLongestChain.Store(supported && s.detectNativeMarkLongestChainSupport(ctx))
-	s.useNativeVerifiedMarker.Store(supported && s.detectNativeVerifiedMarkerSupport(ctx))
+	s.useNativeMarkLongestChain.Store(supported && probes.markLongestChain(ctx))
+	s.useNativeVerifiedMarker.Store(supported && probes.verifiedMarker(ctx))
 	s.nativeOpBatchWritePolicy = aerospike.NewBatchWritePolicy()
 	// UPDATE_ONLY: a mod-teranode invocation must never create a record. On
 	// the UDF path a missing key runs the Lua function against no record and
@@ -829,12 +846,14 @@ const (
 	replayProbeUnavailable
 )
 
-// recordReplayProtection stores the probe's verdict, publishes the routing and says what
-// happened. The verdict is final for the life of the process, so a mismatch is an Error that
-// names the cost, and a probe that could not finish is a Warn that says it is not retried.
+// recordReplayProtection stores the probe's verdict and says what happened. The verdict is final
+// for the life of the process, so a mismatch is an Error that names the cost, and a probe that
+// could not finish is a Warn that says it is not retried. It does not publish the routing gauge:
+// it runs inside the probe, before initNativeTeranodeOps has stored useNativeTeranodeOps and
+// useNativeVerifiedMarker, so a publish here would write 0 for both routes. initNativeTeranodeOps
+// publishes once the whole decision is made.
 func (s *Store) recordReplayProtection(verdict replayProbeVerdict) {
 	s.nativeReplayProtection.Store(verdict == replayProbeProven)
-	s.publishNativeRouting()
 
 	switch verdict {
 	case replayProbeMismatch:

@@ -1,6 +1,7 @@
 package aerospike
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/vmihailenco/msgpack/v5"
@@ -290,12 +292,11 @@ func nativeRoutingGauge(route string) float64 {
 
 // TestRecordReplayProtection: a native-ops deployment whose server fails the replay-protection
 // probe runs spendMulti, spend and addDeletedChildren on the UDF path for the life of the
-// process, and nothing but a log line used to say so. The verdict now drives a routing gauge, and
-// the log level says which failure it was: a server that answered wrongly is an Error, because
-// the build has to be replaced, and a probe that could not finish is a Warn.
+// process, and nothing but a log line used to say so. The verdict decides the routing, and the
+// log level says which failure it was: a server that answered wrongly is an Error, because the
+// build has to be replaced, and a probe that could not finish is a Warn. The routing gauge is
+// published by initNativeTeranodeOps, not here: see TestInitNativeTeranodeOpsPublishesRouting.
 func TestRecordReplayProtection(t *testing.T) {
-	InitPrometheusMetrics()
-
 	for _, tc := range []struct {
 		name      string
 		verdict   replayProbeVerdict
@@ -310,21 +311,68 @@ func TestRecordReplayProtection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			logger := &levelLogger{}
 			s := &Store{logger: logger}
-			s.useNativeTeranodeOps.Store(true)
 
 			s.recordReplayProtection(tc.verdict)
 
 			require.Equal(t, tc.wantNativ, s.nativeReplayProtection.Load())
-			require.Equal(t, tc.wantNativ, s.useNativeForSubOp(subOpSpendMulti))
 			require.Len(t, logger.errs, tc.wantErrs)
 			require.Len(t, logger.warns, tc.wantWarns)
+		})
+	}
+}
 
-			want := 0.0
-			if tc.wantNativ {
-				want = 1
+// TestInitNativeTeranodeOpsPublishesRouting: the replay probe records its verdict from inside
+// detectNativeTeranodeOpSupport, before initNativeTeranodeOps stores useNativeTeranodeOps and
+// useNativeVerifiedMarker, so only the publish at the end of initNativeTeranodeOps sees the whole
+// decision. The probes are stubbed in the order production runs them. A healthy native cluster
+// reports 1 for both routes, a server that fails a probe reports 0 for that route, and native
+// ops off reports 0 for both, whatever the gauge held before.
+func TestInitNativeTeranodeOpsPublishesRouting(t *testing.T) {
+	InitPrometheusMetrics()
+
+	yes := func(context.Context) bool { return true }
+	no := func(context.Context) bool { return false }
+
+	for _, tc := range []struct {
+		name       string
+		ops        bool
+		replay     replayProbeVerdict
+		marker     bool
+		wantReplay float64
+		wantMarker float64
+	}{
+		{name: "native ops and both probes proven", ops: true, replay: replayProbeProven, marker: true, wantReplay: 1, wantMarker: 1},
+		{name: "replay protection not proven", ops: true, replay: replayProbeMismatch, marker: true, wantReplay: 0, wantMarker: 1},
+		{name: "sub-op 15 not proven", ops: true, replay: replayProbeProven, marker: false, wantReplay: 1, wantMarker: 0},
+		{name: "native ops off", ops: false, replay: replayProbeProven, marker: true, wantReplay: 0, wantMarker: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Store{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t)}
+
+			// The opposite of what the run should publish, so a missing publish shows.
+			prometheusAerospikeNativeRouting.WithLabelValues(nativeRouteReplayProtection).Set(1 - tc.wantReplay)
+			prometheusAerospikeNativeRouting.WithLabelValues(nativeRouteVerifiedMarker).Set(1 - tc.wantMarker)
+
+			opsProbe := no
+			if tc.ops {
+				opsProbe = func(context.Context) bool {
+					s.recordReplayProtection(tc.replay)
+
+					return true
+				}
 			}
 
-			require.Equal(t, want, nativeRoutingGauge(nativeRouteReplayProtection))
+			markerProbe := no
+			if tc.marker {
+				markerProbe = yes
+			}
+
+			s.nativeProbes = &nativeSupportProbes{ops: opsProbe, markLongestChain: yes, verifiedMarker: markerProbe}
+
+			s.initNativeTeranodeOps(context.Background())
+
+			require.Equal(t, tc.wantReplay, nativeRoutingGauge(nativeRouteReplayProtection))
+			require.Equal(t, tc.wantMarker, nativeRoutingGauge(nativeRouteVerifiedMarker))
 		})
 	}
 }
