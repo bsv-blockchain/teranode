@@ -1075,6 +1075,28 @@ func TestReorg_KeepsOutTxsNoLongerFinal(t *testing.T) {
 	require.False(t, inCandidate(child), "the child of a transaction that left the template must leave with it")
 }
 
+// TestTxRulesChange_EmptyTemplateIsNotRebuilt pins that a rules change does not reload an empty
+// template: there is nothing to keep out, and the reload refuses generate while it runs, which a
+// fresh regtest chain would hit at its first block (P2SH at 2). The store's unmined iterator is
+// down, so a reload would fail and leave the template unsettled.
+func TestTxRulesChange_EmptyTemplateIsNotRebuilt(t *testing.T) {
+	_, ba, ctx, cancel, cleanup := setupTest(t)
+	defer cancel()
+	defer cleanup()
+
+	// Up to Genesis-2: the next block, 99, is the last before Genesis.
+	mineBlocks(t, ctx, ba, 98)
+
+	down := &iteratorDownStore{Store: ba.blockAssembler.utxoStore}
+	down.iteratorDown.Store(true)
+	ba.blockAssembler.utxoStore = down
+
+	mineBlocks(t, ctx, ba, 1)
+
+	require.False(t, ba.blockAssembler.templateTxEraIsStale(), "the template follows the new rules")
+	require.False(t, ba.blockAssembler.templateUnsettled.Load(), "no reload was attempted")
+}
+
 // TestCheckTemplateFinality_MovedBackBlocks pins the rule for the transactions of the blocks a
 // reorg moves back, which block assembly does not track: each was final in its block, so all
 // of them stay final at a next block not behind the highest moved-back block holding

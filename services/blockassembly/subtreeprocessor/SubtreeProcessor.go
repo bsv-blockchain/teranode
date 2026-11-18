@@ -318,6 +318,9 @@ type SubtreeProcessor struct {
 	// lengthCh receives requests for the current length of the processor
 	lengthCh chan chan int
 
+	// templateEmptyCh receives requests for whether the template holds no transaction
+	templateEmptyCh chan chan bool
+
 	// checkSubtreeProcessorCh is used to check the subtree processor state
 	checkSubtreeProcessorCh chan chan error
 
@@ -764,6 +767,7 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 		reconcileCoinbasesCh:         make(chan reconcileCoinbasesMsg),
 		removeTxCh:                   make(chan chainhash.Hash, 100),
 		lengthCh:                     make(chan chan int),
+		templateEmptyCh:              make(chan chan bool),
 		checkSubtreeProcessorCh:      make(chan chan error),
 		newSubtreeChan:               newSubtreeChan,
 		chainedSubtrees:              make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees),
@@ -1111,6 +1115,11 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 				case lengthCh := <-stp.lengthCh:
 					// return the length of the current subtree
 					lengthCh <- stp.currentSubtree.Load().Length()
+
+				case emptyCh := <-stp.templateEmptyCh:
+					// Answered between dequeue iterations, so no dequeued batch is half placed.
+					current := stp.currentSubtree.Load()
+					emptyCh <- len(stp.chainedSubtrees) == 0 && (current == nil || current.Length() <= 1)
 
 				case errCh := <-stp.checkSubtreeProcessorCh:
 					errCh <- stp.runHandlerWithRecover("checkSubtreeProcessor", func() error {
@@ -2716,6 +2725,34 @@ func (stp *SubtreeProcessor) ProcessRemainderTransactionsAndDequeue(ctx context.
 //
 // Returns:
 //   - uint64: Total transaction count
+// TemplateEmpty reports whether the template holds no transaction besides the coinbase. It is
+// answered on the processor's goroutine between dequeue iterations, so a batch admitted under
+// the previous transaction rules is either in the template already or still queued, where the
+// current rules decide it. A processor that is not running answers false, so the caller
+// rebuilds as it would for a template with transactions.
+func (stp *SubtreeProcessor) TemplateEmpty() bool {
+	p := stp.processorCtx.Load()
+	if p == nil {
+		return false
+	}
+
+	ctx := *p
+	emptyCh := make(chan bool, 1)
+
+	select {
+	case stp.templateEmptyCh <- emptyCh:
+	case <-ctx.Done():
+		return false
+	}
+
+	select {
+	case empty := <-emptyCh:
+		return empty
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (stp *SubtreeProcessor) TxCount() uint64 {
 	return stp.txCount.Load()
 }

@@ -342,3 +342,36 @@ func TestTxFinality_ConflictingHeldTxIsNotOfferedAgain(t *testing.T) {
 	require.True(t, loserDropped)
 	require.True(t, childDropped, "the child is dropped for its dropped parent")
 }
+
+// TestTemplateEmpty_AnswersWhateverTheProcessorState pins that TemplateEmpty never waits on a
+// processor that is not serving requests: block assembly asks it after every block move, and a
+// processor not started, or stopped, would otherwise hold it for good. It answers false there,
+// so the caller rebuilds as before.
+func TestTemplateEmpty_AnswersWhateverTheProcessorState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stp := newTestSubtreeProcessorForDequeueStaleness(t, ctx)
+	stp.InitCurrentBlockHeader(blockHeader)
+
+	answer := func() bool {
+		done := make(chan bool, 1)
+		go func() { done <- stp.TemplateEmpty() }()
+
+		select {
+		case empty := <-done:
+			return empty
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "TemplateEmpty did not answer")
+			return false
+		}
+	}
+
+	require.False(t, answer(), "a processor not started answers false")
+
+	stp.Start(ctx)
+	require.True(t, answer(), "a running processor with nothing in the template answers true")
+
+	stp.Stop(ctx)
+	require.False(t, answer(), "a stopped processor answers false")
+}
