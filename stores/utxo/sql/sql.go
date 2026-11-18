@@ -4072,6 +4072,16 @@ func flooredDAHSQL(txIDExpr, newDAHExpr string, retention uint32) string {
 // outside tests, which use it to interleave a competing writer.
 var setDAHBeforeWrite func()
 
+// setDAHAfterRead runs in setDAH right after the eligibility read, before any decision.
+// It is nil outside tests. Unlike setDAHBeforeWrite it also runs when setDAH decides to
+// write nothing.
+var setDAHAfterRead func()
+
+// setMinedAfterBlockIDs runs in setMinedMultiChunk between the block_ids write and the
+// transactions UPDATE. It is nil outside tests, which use it to run a spend's setDAH
+// inside that window.
+var setMinedAfterBlockIDs func()
+
 // spendBeforeWrite runs in both spend paths after the outputs have been read and
 // checked and before the spend is written. It is nil outside tests, which use it to
 // commit a freeze inside that gap.
@@ -4140,6 +4150,10 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 
 	if err := txn.QueryRowContext(ctx, qUnspent, transactionID).Scan(&unspent, &conflicting, &hasPreserveUntil, &hasBlocks, &isOnLongestChain, &existingDAH, &maxBlockHeight); err != nil {
 		return errors.NewStorageError("[setDAH] error checking for unspent outputs for %d", transactionID, err)
+	}
+
+	if setDAHAfterRead != nil {
+		setDAHAfterRead()
 	}
 
 	// If preserve_until is set, don't touch DAH (mirrors aerospike)
@@ -4550,9 +4564,24 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 		}
 	}()
 
-	// Step 1: Check which transactions exist using IN clause
+	// Step 1: Check which transactions exist using IN clause.
+	//
+	// Postgres: take the row locks here, in ascending id, before anything is
+	// written. The block_ids INSERT below only takes FOR KEY SHARE on each row
+	// through its foreign key, and setDAH's FOR NO KEY UPDATE does not conflict
+	// with that. Without this lock a spend of a parent's last output could run
+	// setDAH between the INSERT and the UPDATE below, read the uncommitted
+	// block_ids as absent, write nothing, and then make the UPDATE's own
+	// stale snapshot still see the output unspent, leaving a mined, fully spent
+	// parent with no delete_at_height for good. Taking the lock first makes
+	// setDAH and this call serialise on the row in both orders, and the writes
+	// below start from a snapshot that includes every committed spend.
 	inClause, inArgs := buildINClause(hashBytes, 1)
 	qCheckExists := fmt.Sprintf(`SELECT hash FROM transactions WHERE hash IN %s`, inClause)
+
+	if s.engine == "postgres" {
+		qCheckExists = fmt.Sprintf(`SELECT hash FROM transactions WHERE hash IN %s ORDER BY id FOR NO KEY UPDATE`, inClause)
+	}
 
 	rows, err := txn.QueryContext(ctx, qCheckExists, inArgs...)
 	if err != nil {
@@ -4621,6 +4650,10 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 		if _, err = txn.ExecContext(ctx, qInsert, args...); err != nil {
 			return nil, errors.NewStorageError("SQL error inserting block_ids: %v", err)
 		}
+	}
+
+	if setMinedAfterBlockIDs != nil {
+		setMinedAfterBlockIDs()
 	}
 
 	// Step 3: Update transaction fields (locked, unmined_since, delete_at_height)

@@ -3,6 +3,8 @@ package sql
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -410,4 +412,177 @@ func TestCreateDeletedChildrenDoesNotQueueWritersBehindIt_Postgres(t *testing.T)
 	var exists bool
 	require.NoError(t, store.db.QueryRowContext(ctx, "SELECT to_regclass('deleted_children') IS NOT NULL").Scan(&exists))
 	require.True(t, exists)
+}
+
+// SetMinedMulti must hold its row locks before it writes block_ids. The block_ids INSERT
+// only takes FOR KEY SHARE on the parent through its foreign key, which setDAH's
+// FOR NO KEY UPDATE does not conflict with. A spend of the parent's last output that ran
+// setDAH inside SetMinedMulti's write window read the uncommitted block_ids as absent
+// and wrote nothing, and SetMinedMulti's UPDATE then kept its own earlier view of the
+// output as unspent, leaving a mined, fully spent parent with no stamp for good.
+//
+// The test runs the spend inside that window: SetMinedMulti pauses after its block_ids
+// INSERT, the spend starts, and the spend is held after its eligibility read until
+// SetMinedMulti's UPDATE has reached the row. With the lock the spend waits for
+// SetMinedMulti to commit and then stamps; without it the stamp is lost.
+func TestSetMinedMultiSerialisesWithSetDAHOnTheRow_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, ctx := setupPostgresStore(t)
+	retention := floorRetention(t, store)
+
+	require.NoError(t, store.SetBlockHeight(floorCachedTip))
+
+	parent := bt.NewTx()
+	require.NoError(t, parent.From("1111111111111111111111111111111111111111111111111111111111111111", 0, "51", 30000))
+	parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+	_, err := store.Create(ctx, parent, floorCachedTip)
+	require.NoError(t, err)
+
+	hash := *parent.TxIDChainHash()
+
+	child := bt.NewTx()
+	require.NoError(t, child.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+
+	reached := make(chan struct{})
+	resume := make(chan struct{})
+
+	var once, releaseOnce sync.Once
+
+	release := func() { releaseOnce.Do(func() { close(resume) }) }
+
+	// Pause the spend after its eligibility read, which is where a stale read is taken.
+	setDAHAfterRead = func() {
+		once.Do(func() {
+			close(reached)
+			<-resume
+		})
+	}
+
+	t.Cleanup(func() {
+		release()
+
+		setDAHAfterRead = nil
+	})
+
+	spendDone := make(chan error, 1)
+
+	// The hook runs inside SetMinedMulti, after its block_ids INSERT. With the row lock
+	// the spend blocks on it; without, the spend reaches its write hook.
+	setMinedAfterBlockIDs = func() {
+		go func() {
+			_, err := store.Spend(ctx, child, floorCachedTip+1)
+			spendDone <- err
+		}()
+
+		select {
+		case <-reached:
+		case <-time.After(3 * time.Second):
+		}
+	}
+
+	t.Cleanup(func() { setMinedAfterBlockIDs = nil })
+
+	minedDone := make(chan error, 1)
+
+	go func() {
+		_, err := store.SetMinedMulti(ctx, []*chainhash.Hash{&hash}, utxo.MinedBlockInfo{
+			BlockID: 100, BlockHeight: floorMinedHeight, OnLongestChain: true,
+		})
+		minedDone <- err
+	}()
+
+	// Hold the spend at its write hook until SetMinedMulti's UPDATE waits on its row lock.
+	go func() {
+		<-reached
+
+		deadline := time.Now().Add(3 * time.Second)
+
+		for time.Now().Before(deadline) {
+			var waiting int
+
+			if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_locks WHERE NOT granted").Scan(&waiting); err == nil && waiting > 0 {
+				break
+			}
+
+			time.Sleep(10 * time.Millisecond)
+		}
+
+		release()
+	}()
+
+	select {
+	case err := <-minedDone:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("SetMinedMulti did not finish")
+	}
+
+	select {
+	case err := <-spendDone:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the spend did not finish")
+	}
+
+	var unspent int
+
+	require.NoError(t, store.db.QueryRowContext(ctx,
+		"SELECT count(*) FROM outputs o JOIN transactions t ON t.id = o.transaction_id WHERE t.hash = $1 AND o.spending_data IS NULL",
+		hash[:]).Scan(&unspent))
+	require.Zero(t, unspent, "setup: the spend must have taken the last output")
+
+	dah := readDAH(ctx, t, store, hash)
+	require.NotNil(t, dah, "a mined, fully spent parent must carry a delete_at_height whichever writer ran first")
+	require.GreaterOrEqual(t, *dah, int64(floorMinedHeight)+retention)
+}
+
+// TestSetMinedMultiTiming_Postgres times SetMinedMulti over n stored transactions, the
+// cost the up-front row lock adds to it. It only measures: it runs when
+// TERANODE_SQL_TIMING is set and logs the best of three runs, each over fresh rows.
+func TestSetMinedMultiTiming_Postgres(t *testing.T) {
+	if os.Getenv("TERANODE_SQL_TIMING") == "" {
+		t.Skip("set TERANODE_SQL_TIMING=1 to run the SetMinedMulti timing")
+	}
+
+	store, ctx := setupPostgresStore(t)
+
+	const n = 2000
+
+	best := time.Duration(1<<63 - 1)
+
+	for run := 0; run < 3; run++ {
+		hashes := make([]*chainhash.Hash, 0, n)
+
+		for i := 0; i < n; i++ {
+			tx := bt.NewTx()
+			prev := chainhash.HashH([]byte(fmt.Sprintf("setmined-timing-%d-%d", run, i)))
+			require.NoError(t, tx.From(prev.String(), 0, "51", 10000))
+			tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+			_, err := store.Create(ctx, tx, 1000)
+			require.NoError(t, err)
+
+			hashes = append(hashes, tx.TxIDChainHash())
+		}
+
+		start := time.Now()
+
+		_, err := store.SetMinedMulti(ctx, hashes, utxo.MinedBlockInfo{
+			BlockID: uint32(100 + run), BlockHeight: 1001, OnLongestChain: true,
+		})
+		require.NoError(t, err)
+
+		if d := time.Since(start); d < best {
+			best = d
+		}
+	}
+
+	t.Logf("SetMinedMulti n=%d best of 3: %s", n, best)
 }
