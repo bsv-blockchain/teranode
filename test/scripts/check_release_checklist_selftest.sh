@@ -37,6 +37,8 @@ checklist v1.0.7 's/^(- \*\*Approver \(maintainer\):\*\*).*/$1/;'
 checklist v1.0.8 's/^(- \*\*Date:\*\*).*/$1 16 November/;'
 checklist v1.0.9 's/\n/\r\n/;'
 checklist v1.0.10 's/^\*\*Decision:\*\* Go$/**Decision:** Gone/;'
+checklist v1.0.11 's/^\*\*Decision:\*\* Go$/**Decision:** Go\n\n**Decision:**/;'
+checklist v1.0.12 's/^\*\*Decision:\*\* Go$/**Decision:** No-Go/;'
 git -C "$work" add docs
 git -C "$work" -c user.email=selftest@example.com -c user.name=selftest commit -q -m checklists
 
@@ -58,6 +60,8 @@ expect 0 "branch push" branch main
 expect 0 "branch name with command substitution" branch 'release/x$(touch pwned)'
 expect 0 "beta tag" tag v1.0.0-beta-1
 expect 0 "rc tag" tag v1.0.0-rc-2
+expect 0 "variant beta tag" tag v0.16.1-beta-txmeta-2
+expect 0 "variant rc tag" tag v1.0.0-rc-scale-1
 expect 0 "non-version tag" tag v-scaling-test-20260506-1
 expect 0 "non-version tag with command substitution" tag 'v$(touch pwned)'
 expect 1 "version-shaped hotfix tag" tag v0.16.3-hotfix1
@@ -75,6 +79,8 @@ expect 1 "no approver" tag v1.0.7
 expect 1 "date not in YYYY-MM-DD form" tag v1.0.8
 expect 0 "CRLF line endings" tag v1.0.9
 expect 1 "decision that only starts with Go" tag v1.0.10
+expect 1 "Go followed by a blank Decision line" tag v1.0.11
+expect 1 "sole No-Go with full metadata" tag v1.0.12
 
 if [ -e "$work/pwned" ]; then
   echo "FAIL: a ref name ran a command"

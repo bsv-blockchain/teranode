@@ -4,9 +4,10 @@
 #
 # Usage: check-release-checklist.sh <ref-type> <ref-name> [checklist-ref] [tagged-sha]
 #
-# A stable tag is vX.Y.Z with no suffix. Branches, beta tags (vX.Y.Z-beta-N), rc
-# tags (vX.Y.Z-rc-N) and tags that are not version-shaped (such as
-# v-scaling-test-*) pass. Any other tag that starts with vN. fails.
+# A stable tag is vX.Y.Z with no suffix. Branches, beta tags (vX.Y.Z-beta-N, and
+# variants such as vX.Y.Z-beta-txmeta-N), rc tags (vX.Y.Z-rc-...) and tags that
+# are not version-shaped (such as v-scaling-test-*) pass. Any other tag that
+# starts with vN. fails.
 #
 # For a stable tag, docs/releases/<tag>-checklist.md must exist at checklist-ref
 # (default origin/main) and record:
@@ -48,13 +49,13 @@ if [[ ! "$ref_name" =~ ^v[0-9]+\. ]]; then
 	exit 0
 fi
 
-if [[ "$ref_name" =~ ${version_re}-(beta|rc)-[0-9]+$ ]]; then
+if [[ "$ref_name" =~ ${version_re}-(beta|rc)-.+$ ]]; then
 	echo "Pre-release tag ($ref_name): no release checklist required."
 	exit 0
 fi
 
 if [[ ! "$ref_name" =~ ${version_re}$ ]]; then
-	fail "${ref_name} is not a stable (vX.Y.Z), beta (vX.Y.Z-beta-N) or rc (vX.Y.Z-rc-N) tag."
+	fail "${ref_name} is not a stable (vX.Y.Z), beta (vX.Y.Z-beta-...) or rc (vX.Y.Z-rc-...) tag."
 fi
 
 path="docs/releases/${ref_name}-checklist.md"
@@ -63,15 +64,16 @@ if ! content="$(git show "${checklist_ref}:${path}" 2>/dev/null)"; then
 	fail "${path} is not on ${checklist_ref}. Merge the completed release checklist to main before tagging ${ref_name}."
 fi
 
-decisions="$(field 'Decision')"
-decision_count="$(grep -c . <<<"$decisions" || true)"
+decision_count="$(grep -cE '^(- )?\*\*Decision:\*\*' <<<"$content" || true)"
 
 if [[ "$decision_count" -ne 1 ]]; then
 	fail "${path} on ${checklist_ref} has ${decision_count} '**Decision:**' lines. It must have exactly one."
 fi
 
-if [[ "$decisions" != "Go" ]]; then
-	fail "${path} on ${checklist_ref} records '**Decision:** ${decisions}'. A release ships only on a recorded Go decision."
+decision="$(field 'Decision')"
+
+if [[ "$decision" != "Go" ]]; then
+	fail "${path} on ${checklist_ref} records '**Decision:** ${decision}'. A release ships only on a recorded Go decision."
 fi
 
 beta_sha="$(field 'Beta SHA' | head -n 1)"

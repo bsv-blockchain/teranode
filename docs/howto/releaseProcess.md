@@ -41,7 +41,7 @@ The `release-checklist` job in `teranode_main_build.yaml` enforces steps 4 and 5
 - The `**Beta SHA:**` in the file is not the commit that the tag points at.
 - The approver or the date is missing.
 
-The check reads the file from `main`, because the tagged beta commit cannot contain a checklist written after its soak. Branches, beta tags (`vX.Y.Z-beta-N`) and rc tags (`vX.Y.Z-rc-N`) are not checked. Any other tag that starts with a version number, such as `v0.16.3-hotfix1`, fails. Tags that do not start with a version number, such as `v-scaling-test-*`, are not checked.
+The check reads the file from `main`, because the tagged beta commit cannot contain a checklist written after its soak. Branches, beta tags (`vX.Y.Z-beta-N`, and variants such as `v0.16.1-beta-txmeta-2`) and rc tags (`vX.Y.Z-rc-...`) are not checked. Any other tag that starts with a version number, such as `v0.16.3-hotfix1`, fails. Tags that do not start with a version number, such as `v-scaling-test-*`, are not checked.
 
 The job blocks the image build and deploy. It cannot stop a tag push, so the GitHub Release is created only after the run passes (step 7).
 
