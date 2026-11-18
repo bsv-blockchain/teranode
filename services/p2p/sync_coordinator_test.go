@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
@@ -438,6 +440,25 @@ func TestSyncCoordinator_SendSyncMessage_NoBlockHashErrors(t *testing.T) {
 	require.Contains(t, err.Error(), "no block hash")
 }
 
+func TestSyncCoordinator_SendSyncMessage_PrefersAdvertisedBlockHash(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	producer := kafka.NewKafkaAsyncProducerMockWithBuffer(1)
+	sc.blocksKafkaProducerClient = producer
+
+	advertisedHash, err := chainhash.NewHashFromStr("00000000000000000000000000000000000000000000000000000000000000aa")
+	require.NoError(t, err)
+	reg.Register(&blockchain.PeerInfo{ID: "p", DataHubURL: "http://p", Height: 100, BlockHash: advertisedHash,
+		ValidatedHeight: 50, ValidatedBlockHash: syncCoordinatorTestHash(t), ValidatedChainWork: []byte{0x03}})
+
+	_, err = sc.sendSyncMessage("p")
+	require.NoError(t, err)
+
+	require.Len(t, producer.PublishChannel(), 1)
+	var msg kafkamessage.KafkaBlockTopicMessage
+	require.NoError(t, proto.Unmarshal((<-producer.PublishChannel()).Value, &msg))
+	require.Equal(t, advertisedHash.String(), msg.Hash, "a live advertised tip is the catchup target when the peer has one")
+}
+
 func TestSyncCoordinator_EvaluateSyncPeer_NoSyncPeerReturns(t *testing.T) {
 	sc, _ := newTestSyncCoordinator(t)
 	require.NotPanics(t, func() { sc.evaluateSyncPeer() })
@@ -499,6 +520,7 @@ func TestSyncCoordinator_SelectAndActivateNewPeer_ActivatesEligible(t *testing.T
 func TestSyncCoordinator_SelectAndActivateNewPeer_StoresIDEvenIfSendFails(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	setSyncCoordinatorLocalTip(t, sc, 10, []byte{0x02})
+	sc.registry = &failingGetPeerRegistry{PeerRegistryClientI: sc.registry, fail: true}
 
 	reg.Register(&blockchain.PeerInfo{
 		ID:                 "doomed-peer",
@@ -1220,6 +1242,48 @@ func TestSyncCoordinator_ProactiveInCatchingBlocks(t *testing.T) {
 // to return and release decisionMu, and the trigger it could not hand over
 // must be re-sent on a later tick once the producer drains, because nothing
 // else re-sends it while the peer holds the slot.
+// A restart during a catchup restores a peer whose validated work is ahead of
+// the local tip, but Load clears its advertised BlockHash. The first tick picks
+// that peer and claims the slot before any node_status arrives, so the trigger
+// must target the hash this node validated from the peer. Otherwise the slot is
+// held with no trigger until the no-progress timeout.
+func TestSyncCoordinator_RestartDuringCatchup_TriggersSyncTowardValidatedHash(t *testing.T) {
+	ctx := context.Background()
+	u, err := url.Parse("memory://")
+	require.NoError(t, err)
+	store, err := blob.NewStore(ulogger.TestLogger{}, u)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close(ctx) })
+
+	validatedHash := syncCoordinatorTestHash(t)
+	advertisedHash, err := chainhash.NewHashFromStr("00000000000000000000000000000000000000000000000000000000000000aa")
+	require.NoError(t, err)
+
+	before := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	before.Register(&blockchain.PeerInfo{ID: "ahead", DataHubURL: "http://ahead", Height: 900, BlockHash: advertisedHash,
+		ValidatedHeight: 500, ValidatedBlockHash: validatedHash, ValidatedChainWork: []byte{0x03}})
+	require.NoError(t, before.Save(ctx, store))
+
+	sc, reg, _ := newTestSyncCoordinatorWithFSM(t, blockchain_api.FSMStateType_CATCHINGBLOCKS)
+	require.NoError(t, reg.Load(ctx, store, 24*time.Hour))
+	producer := kafka.NewKafkaAsyncProducerMockWithBuffer(1)
+	sc.blocksKafkaProducerClient = producer
+
+	restored, ok := reg.Get("ahead")
+	require.True(t, ok)
+	require.Nil(t, restored.BlockHash, "Load drops the stale advertised tip")
+	require.Equal(t, validatedHash.String(), restored.ValidatedBlockHash.String())
+
+	sc.checkFSMState()
+
+	require.Equal(t, "ahead", sc.GetCurrentSyncPeer())
+	require.Len(t, producer.PublishChannel(), 1, "the first tick after a restart must send a sync trigger")
+	var msg kafkamessage.KafkaBlockTopicMessage
+	require.NoError(t, proto.Unmarshal((<-producer.PublishChannel()).Value, &msg))
+	require.Equal(t, validatedHash.String(), msg.Hash)
+	require.Equal(t, "http://ahead", msg.URL)
+}
+
 func TestSyncCoordinator_BackloggedProducerDoesNotWedgeDecisionLock(t *testing.T) {
 	sc, reg, _ := newTestSyncCoordinatorWithFSM(t, blockchain_api.FSMStateType_CATCHINGBLOCKS)
 	producer := kafka.NewKafkaAsyncProducerMockWithBuffer(1)
