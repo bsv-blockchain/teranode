@@ -50,10 +50,23 @@ type mtpFloorEntry struct {
 // clock — or a run of forward-stamped blocks dragging the median above
 // wall-clock time — makes the assembler hand miners a candidate that the
 // network refuses once mined. SV Node applies the same floor in UpdateTime, as
-// max(median-time-past+1, GetAdjustedTime()); note it floors against
-// network-adjusted time where this floors against the raw local clock, so a
-// skewed node here has nothing pulling it back towards its peers. Consulting
-// the MedianTimeSource in services/legacy/blockchain would close that gap.
+// max(median-time-past+1, GetAdjustedTime()). It floors against
+// network-adjusted time where this floors against the raw local clock, and the
+// difference is deliberately left in place. GetAdjustedTime moves the local
+// clock by the median peer offset only when that offset is within 70 minutes,
+// and applies no offset at all beyond it. It recomputes that median as new peers
+// are sampled. Its 200-entry filter includes a local zero, so four peers
+// suffice for the first offset and updates freeze after 199 peers. A long-running
+// node therefore stops following drift. On a chain whose median-time-past trails
+// real time by about an hour, the clock-skew failure below needs the local clock
+// roughly three hours behind, and at that skew SV Node's adjustment is zero too,
+// so its own template build fails the same consensus check. Forward-stamped blocks
+// that push median-time-past ahead of real time can trigger the failure at a smaller
+// skew. There a node whose clock was already slow while it sampled its first
+// peers can be rescued by SV Node's capped offset, where this code refuses the
+// poll; that gap is accepted. Otherwise peer time would only nudge a candidate
+// by under 70 minutes, at the cost of a call into the legacy service and a
+// clock that peers can influence.
 //
 // The two consensus bounds on a block timestamp are a pair, and this function
 // honours both. The median rule is the floor; the two-hours-in-the-future rule

@@ -123,3 +123,24 @@ make sequentialtest-sqlite TEST_RETRY_COUNT=3
 ```shell
 go test -v -race -tags "testtxmetacache" -run TestNameHere ./path/to/package
 ```
+
+## Consensus-Critical Coverage Gate
+
+These packages implement consensus rules, or apply them to the UTXO set and the chain tip:
+
+- `services/blockvalidation`
+- `services/validator`
+- `services/subtreevalidation`
+- `services/blockchain` (chain selection, reorg and catch-up)
+- `services/blockassembly` and `services/blockassembly/subtreeprocessor` (reorg and conflict handling)
+- `stores/utxo`, `stores/utxo/aerospike` and `stores/utxo/sql`
+
+Each of these packages has a minimum statement coverage, in `.github/consensus-coverage.txt`. Every pull request checks the `coverage.out` that `make test` writes against these minimums, in the `Check consensus package coverage` step of `teranode_pr_tests.yaml`. The step fails when a package is below its minimum, or when the profile has no statements for it. The rest of the codebase has no minimum.
+
+To run the check on a profile:
+
+```shell
+go run ./cmd/coveragegate -profile coverage.out -thresholds .github/consensus-coverage.txt
+```
+
+The minimums are CI values. A local `make test` profile reports different statement counts, so use the `coverage-report` artifact of a CI run to set a minimum. To add or remove a package, or to lower a minimum, change `.github/consensus-coverage.txt` in the pull request that needs it and give the reason in that pull request.

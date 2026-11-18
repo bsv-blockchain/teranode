@@ -500,8 +500,8 @@ func TestReorgBlocks_RequeuedForwardTxIsNotMarkedFalse(t *testing.T) {
 	chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, sharedTx)}
 	chain.moveForward[1].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, otherTx)}
 
-	// A drain only takes batches stamped before it starts, so stamp the batch a millisecond earlier
-	// than any drain can start. Then the last forward block's drain always takes it.
+	// Stamp the batch a millisecond before any drain, so the last forward block's drain always
+	// takes it.
 	enqueueAt := time.Now()
 	stp.queue.clock = fixedClock{t: enqueueAt}
 	stp.clock = fixedClock{t: enqueueAt.Add(time.Millisecond)}
