@@ -104,6 +104,7 @@ const (
 	ERR_BLOB_EXISTS               ERR = 90
 	ERR_BLOB_NOT_FOUND            ERR = 91
 	ERR_BLOB_FOOTER_SIZE_MISMATCH ERR = 92
+	ERR_BLOB_CORRUPT              ERR = 93
 	ERR_BLOB_ERROR                ERR = 99
 	// State errors 100-109
 	ERR_STATE_INITIALIZATION ERR = 100
@@ -203,6 +204,7 @@ var (
 		90:  "BLOB_EXISTS",
 		91:  "BLOB_NOT_FOUND",
 		92:  "BLOB_FOOTER_SIZE_MISMATCH",
+		93:  "BLOB_CORRUPT",
 		99:  "BLOB_ERROR",
 		100: "STATE_INITIALIZATION",
 		101: "CATCHUP_IN_PROGRESS",
@@ -285,6 +287,7 @@ var (
 		"BLOB_EXISTS":                   90,
 		"BLOB_NOT_FOUND":                91,
 		"BLOB_FOOTER_SIZE_MISMATCH":     92,
+		"BLOB_CORRUPT":                  93,
 		"BLOB_ERROR":                    99,
 		"STATE_INITIALIZATION":          100,
 		"CATCHUP_IN_PROGRESS":           101,
@@ -434,7 +437,7 @@ const file_errors_error_proto_rawDesc = "" +
 	"\fwrappedError\x18\x04 \x01(\v2\x0e.errors.TErrorR\fwrappedError\x12\x12\n" +
 	"\x04file\x18\x05 \x01(\tR\x04file\x12\x12\n" +
 	"\x04line\x18\x06 \x01(\x05R\x04line\x12\x1a\n" +
-	"\bfunction\x18\a \x01(\tR\bfunction*\xbb\r\n" +
+	"\bfunction\x18\a \x01(\tR\bfunction*\xcd\r\n" +
 	"\x03ERR\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x14\n" +
 	"\x10INVALID_ARGUMENT\x10\x01\x12\x16\n" +
@@ -505,7 +508,8 @@ const file_errors_error_proto_rawDesc = "" +
 	"\vKAFKA_ERROR\x10Y\x12\x0f\n" +
 	"\vBLOB_EXISTS\x10Z\x12\x12\n" +
 	"\x0eBLOB_NOT_FOUND\x10[\x12\x1d\n" +
-	"\x19BLOB_FOOTER_SIZE_MISMATCH\x10\\\x12\x0e\n" +
+	"\x19BLOB_FOOTER_SIZE_MISMATCH\x10\\\x12\x10\n" +
+	"\fBLOB_CORRUPT\x10]\x12\x0e\n" +
 	"\n" +
 	"BLOB_ERROR\x10c\x12\x18\n" +
 	"\x14STATE_INITIALIZATION\x10d\x12\x17\n" +

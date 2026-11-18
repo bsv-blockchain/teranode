@@ -1595,10 +1595,20 @@ func subtreeAbsent(err error) bool {
 }
 
 // reloadSubtreesForInvalidBlock reloads an invalid block's subtrees from the
-// store. A subtree that is absent or does not parse is left nil, because an
-// invalid block legitimately may not have all of them and a retry cannot bring
-// one back. Any other read failure is returned: it may be transient, and
+// store. Each subtree is read as FileTypeSubtree and then as
+// FileTypeSubtreeToCheck, and the first copy that reads, parses and whose root
+// matches the subtree hash is used. A subtree with no usable copy is left nil,
+// because a retry cannot bring one back: an absent copy stays absent, and a
+// corrupt one (a bad header, a body that does not parse, or a body whose nodes
+// hash to another root) reads the same bytes every time, since the stores
+// write blobs whole. Any other read failure is returned: it may be transient, and
 // skipping it would let the revert finish with that subtree's tags in place.
+//
+// A skipped subtree whose copies were corrupt, not just absent, leaves its
+// transactions tagged with the invalid block, so it is logged with
+// manual_intervention_required and counted in revert_subtree_corrupt_total.
+// Retrying instead would keep the block at mined_set=false and hold block
+// assembly's WaitForPendingBlocks until an operator repaired the file.
 //
 // On that error the subtrees already loaded are closed before returning. They
 // never reach the block, and an mmap-backed subtree has no finalizer, so they
@@ -1619,32 +1629,12 @@ func (u *BlockValidation) reloadSubtreesForInvalidBlock(ctx context.Context, blo
 	}()
 
 	for subtreeIdx, subtreeHash := range block.Subtrees {
-		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+		subtree, err := u.reloadSubtreeForInvalidBlock(ctx, block, subtreeIdx, subtreeHash)
 		if err != nil {
-			if !subtreeAbsent(err) {
-				return errors.NewProcessingError("[setTxMined][%s] failed to read subtree %d/%s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
-			}
-
-			subtreeBytes, err = u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
-			if err != nil {
-				if !subtreeAbsent(err) {
-					return errors.NewProcessingError("[setTxMined][%s] failed to read subtree %d/%s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
-				}
-
-				u.logger.Warnf("[setTxMined][%s] subtree %d/%s not in store: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
-				continue
-			}
-		}
-
-		subtree, err := u.newSubtreeFromBytes(subtreeBytes)
-		if err != nil {
-			u.logger.Warnf("[setTxMined][%s] failed to parse subtree %d/%s: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
-			continue
+			return err
 		}
 
 		reloaded[subtreeIdx] = subtree
-
-		u.logger.Debugf("[setTxMined][%s] loaded subtree %d/%s from store", block.Hash().String(), subtreeIdx, subtreeHash.String())
 	}
 
 	// Built locally and swapped in under the block's mutex. The store reads above
@@ -1654,6 +1644,67 @@ func (u *BlockValidation) reloadSubtreesForInvalidBlock(ctx context.Context, blo
 	block.ReplaceSubtreeSlices(reloaded)
 
 	return nil
+}
+
+// reloadSubtreeForInvalidBlock reads one subtree of an invalid block for the
+// revert, trying FileTypeSubtree and then FileTypeSubtreeToCheck. It returns
+// the first copy that reads, parses and whose root matches subtreeHash, nil
+// with no error when no copy is
+// usable, and an error only for a read failure a retry might clear. See
+// reloadSubtreesForInvalidBlock for the rule.
+func (u *BlockValidation) reloadSubtreeForInvalidBlock(ctx context.Context, block *model.Block, subtreeIdx int, subtreeHash *chainhash.Hash) (*subtreepkg.Subtree, error) {
+	var corrupt []string
+
+	for _, fileType := range []fileformat.FileType{fileformat.FileTypeSubtree, fileformat.FileTypeSubtreeToCheck} {
+		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], fileType)
+		if err != nil {
+			switch {
+			case errors.IsBlobCorrupt(err):
+				corrupt = append(corrupt, fmt.Sprintf("%s: %v", fileType, err))
+				continue
+			case subtreeAbsent(err):
+				continue
+			default:
+				return nil, errors.NewProcessingError("[setTxMined][%s] failed to read subtree %d/%s as %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), fileType, err)
+			}
+		}
+
+		subtree, err := u.newSubtreeFromBytes(subtreeBytes)
+		if err != nil {
+			corrupt = append(corrupt, fmt.Sprintf("%s: failed to parse: %v", fileType, err))
+			continue
+		}
+
+		// The revert unmines the transactions this list names, so it must be the subtree the
+		// block commits to. A copy whose nodes hash to another root is as unusable as one that
+		// does not parse.
+		// ValidateSubtreeNodesMatchKey hashes the node list: a deserialized subtree's RootHash
+		// is the root field stored in the file, which damaged node bytes would leave intact.
+		if err := model.ValidateSubtreeNodesMatchKey(subtree, subtreeHash); err != nil {
+			corrupt = append(corrupt, fmt.Sprintf("%s: %v", fileType, err))
+
+			if closeErr := subtree.Close(); closeErr != nil {
+				u.logger.Warnf("[setTxMined][%s] failed closing mismatched subtree %d/%s: %v", block.Hash().String(), subtreeIdx, subtreeHash.String(), closeErr)
+			}
+
+			continue
+		}
+
+		u.logger.Debugf("[setTxMined][%s] loaded subtree %d/%s from store as %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), fileType)
+
+		return subtree, nil
+	}
+
+	if len(corrupt) == 0 {
+		u.logger.Warnf("[setTxMined][%s] subtree %d/%s not in store", block.Hash().String(), subtreeIdx, subtreeHash.String())
+		return nil, nil
+	}
+
+	prometheusBlockValidationRevertSubtreeCorrupt.Inc()
+
+	u.logger.Errorf("[setTxMined][%s] manual_intervention_required: subtree %d/%s has no usable copy, its transactions keep this invalid block's tag: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), strings.Join(corrupt, "; "))
+
+	return nil, nil
 }
 
 // setTxMinedStatus marks all transactions within a block as mined in the blockchain system.
