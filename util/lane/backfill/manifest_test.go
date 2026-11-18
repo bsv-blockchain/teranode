@@ -1,6 +1,8 @@
 package backfill
 
 import (
+	"encoding/binary"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"testing"
@@ -104,7 +106,14 @@ func TestManifestCutsOnlyAPartialLastRecord(t *testing.T) {
 	// A crash part-way through the second block record.
 	require.NoError(t, os.WriteFile(path, full[:len(full)-20], 0o600))
 
-	m, err = OpenManifest(path)
+	_, err = OpenManifest(path)
+	require.Error(t, err, "reading refuses a partial record and cuts nothing")
+
+	torn, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Len(t, torn, len(full)-20)
+
+	m, err = ResumeManifest(path)
 	require.NoError(t, err)
 	require.Len(t, m.Blocks(), 1, "the torn record is dropped")
 
@@ -129,11 +138,26 @@ func TestManifestRefusesDamage(t *testing.T) {
 	// Flip a txid byte inside the first block record: its CRC no longer matches and more records
 	// follow it, so this is damage, not a torn tail.
 	damaged := append([]byte{}, full...)
-	damaged[5+9+headerPayload+4+9+blockFixed+3] ^= 0xFF
+	damaged[5+frameHead+headerPayload+frameTail+frameHead+blockFixed+3] ^= 0xFF
 	require.NoError(t, os.WriteFile(path, damaged, 0o600))
 
 	_, err = OpenManifest(path)
 	require.Error(t, err)
+	_, err = ResumeManifest(path)
+	require.Error(t, err)
+
+	// A flipped bit in the first block record's length field is damage, not a torn tail: nothing
+	// after it is cut.
+	lengthHit := append([]byte{}, full...)
+	lengthHit[5+frameHead+headerPayload+frameTail+8] ^= 0x01
+	require.NoError(t, os.WriteFile(path, lengthHit, 0o600))
+
+	_, err = ResumeManifest(path)
+	require.Error(t, err)
+
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, lengthHit, after, "no committed record is cut")
 
 	require.NoError(t, os.WriteFile(path, append([]byte("XXXX"), full[4:]...), 0o600))
 	_, err = OpenManifest(path)
@@ -161,4 +185,79 @@ func TestManifestRefusesFallingHeight(t *testing.T) {
 
 	_, err = m.Segment()
 	require.Error(t, err, "not finished")
+}
+
+// craft builds a manifest whose records all carry good CRCs, so only the loader's own checks can
+// refuse it.
+func craft(records ...[]byte) []byte {
+	out := append([]byte(manifestMagic), manifestVersion)
+
+	for _, r := range records {
+		head := append([]byte{r[0]}, binary.LittleEndian.AppendUint64(nil, uint64(len(r)-1))...)
+		head = binary.LittleEndian.AppendUint32(head, crc32.Checksum(head, crcTable))
+
+		body := crc32.New(crcTable)
+		body.Write(head[:9])
+		body.Write(r[1:])
+
+		out = append(out, head...)
+		out = append(out, r[1:]...)
+		out = binary.LittleEndian.AppendUint32(out, body.Sum32())
+	}
+
+	return out
+}
+
+func headerRecord() []byte {
+	r := []byte{recordHeader}
+	r = binary.LittleEndian.AppendUint32(r, 1)
+	r = binary.LittleEndian.AppendUint64(r, 1_000_001)
+	r = binary.LittleEndian.AppendUint32(r, 900_000)
+
+	return append(r, make([]byte, 32)...)
+}
+
+func blockRecord(count uint64, txids int) []byte {
+	r := []byte{recordBlock}
+	r = binary.LittleEndian.AppendUint32(r, 0)
+	r = binary.LittleEndian.AppendUint32(r, 7)
+	r = binary.LittleEndian.AppendUint32(r, 700_000)
+	r = binary.LittleEndian.AppendUint64(r, 1_000_001)
+	r = binary.LittleEndian.AppendUint64(r, count)
+
+	return append(r, make([]byte, txids*chainhash.HashSize)...)
+}
+
+func suffixRecord(first, count uint64, txids int) []byte {
+	r := []byte{recordSuffix}
+	r = binary.LittleEndian.AppendUint64(r, first)
+	r = binary.LittleEndian.AppendUint64(r, count)
+
+	return append(r, make([]byte, txids*chainhash.HashSize)...)
+}
+
+func TestManifestRefusesRecordsThatDisagreeWithThemselves(t *testing.T) {
+	dir := t.TempDir()
+
+	good := craft(headerRecord(), blockRecord(2, 2), suffixRecord(1_000_003, 1, 1))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "good"), good, 0o600))
+
+	m, err := OpenManifest(filepath.Join(dir, "good"))
+	require.NoError(t, err)
+	require.Len(t, m.Blocks(), 1)
+	require.NoError(t, m.Close())
+
+	for name, b := range map[string][]byte{
+		"count above its txids":     craft(headerRecord(), blockRecord(1<<40, 0)),
+		"count below its txids":     craft(headerRecord(), blockRecord(1, 2)),
+		"suffix at the wrong start": craft(headerRecord(), blockRecord(2, 2), suffixRecord(1_000_004, 1, 1)),
+		"suffix count wrong":        craft(headerRecord(), blockRecord(2, 2), suffixRecord(1_000_003, 2, 1)),
+		"block before header":       craft(blockRecord(2, 2)),
+	} {
+		path := filepath.Join(dir, "bad")
+		require.NoError(t, os.WriteFile(path, b, 0o600))
+
+		_, err := ResumeManifest(path)
+		require.Error(t, err, name)
+	}
 }

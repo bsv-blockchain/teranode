@@ -125,7 +125,7 @@ func TestNumberResumesAfterACrash(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, part.Close())
 
-	resumed, err := OpenManifest(filepath.Join(dir, "part"))
+	resumed, err := ResumeManifest(filepath.Join(dir, "part"))
 	require.NoError(t, err)
 
 	defer func() { require.NoError(t, resumed.Close()) }()

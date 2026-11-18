@@ -75,6 +75,10 @@ func TestCheckSubtreePositionsRejectsMismatch(t *testing.T) {
 
 	require.Error(t, CheckSubtreePositions(samplePositions(st), nil, meta))
 
+	positioned := samplePositions(st)
+	positioned.Nodes[0].Own = Pack(254, 9)
+	require.Error(t, CheckSubtreePositions(positioned, st, meta), "the coinbase placeholder has no position yet")
+
 	// Node 0 may be position-less only when it is the coinbase placeholder.
 	plain, err := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, err)

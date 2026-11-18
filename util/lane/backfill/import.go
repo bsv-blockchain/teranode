@@ -161,8 +161,8 @@ func ImportBlock(b SourceBlock, assign Assignment) (ImportedBlock, error) {
 
 // CheckBackfillStretch verifies an imported block against its manifest record: the block's
 // backfill-lane positions are exactly the record's stretch, First to First+Count-1, each held by
-// the transaction the manifest assigned it. This proves the import placed every transaction the
-// manifest numbered for the block, in its actual subtrees, and nothing else in the lane.
+// the transaction the manifest assigned it, in the subtree that holds it. Positions outside the
+// stretch, which an earlier segment gave, are not this record's to check.
 func CheckBackfillStretch(imported ImportedBlock, rec lane.ConversionBlock, txids []chainhash.Hash, b SourceBlock) error {
 	if imported.BlockID != rec.BlockID || b.BlockID != rec.BlockID {
 		return errors.NewProcessingError("manifest block %d is block %d, not %d", rec.Seq, rec.BlockID, imported.BlockID)
@@ -172,14 +172,19 @@ func CheckBackfillStretch(imported ImportedBlock, rec lane.ConversionBlock, txid
 		return errors.NewProcessingError("manifest block %d holds %d txids, its record says %d", rec.Seq, len(txids), rec.Count)
 	}
 
-	got := imported.Proof.LaneUnion()[lane.BackfillLane]
-
+	// Only the record's own stretch is compared: the block may also hold transactions an earlier
+	// segment numbered, which keep their positions in the same lane.
 	want := roaring64.New()
 	if rec.Count > 0 {
 		want.AddRange(rec.First, rec.First+rec.Count)
 	}
 
-	if (got == nil && !want.IsEmpty()) || (got != nil && !got.Equals(want)) {
+	got := roaring64.New()
+	if all := imported.Proof.LaneUnion()[lane.BackfillLane]; all != nil && rec.Count > 0 {
+		got = roaring64.And(all, want)
+	}
+
+	if !got.Equals(want) {
 		return errors.NewProcessingError("block %d: imported backfill positions are not the manifest's stretch %d to %d", rec.BlockID, rec.First, rec.First+rec.Count-1)
 	}
 

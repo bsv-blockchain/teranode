@@ -105,6 +105,10 @@ func CheckConversionBlocks(s ConversionSegment, blocks []ConversionBlock) error 
 			return errors.NewProcessingError("conversion segment %d: block %d starts at %d, want %d", s.ID, i, b.First, next)
 		}
 
+		if b.Count > MaxPosition-next+1 {
+			return errors.NewProcessingError("conversion segment %d: block %d's %d positions run past the lane", s.ID, i, b.Count)
+		}
+
 		next += b.Count
 	}
 

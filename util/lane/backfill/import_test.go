@@ -98,6 +98,23 @@ func TestImportBlockKeepsAnExistingPosition(t *testing.T) {
 	require.NoError(t, CheckBackfillStretch(imported, m.Blocks()[1], ids, src.Blocks[1]))
 }
 
+// A transaction an earlier segment numbered keeps its backfill position; it shares the lane with
+// this segment's stretch and is not this record's to check.
+func TestCheckBackfillStretchIgnoresAnEarlierSegment(t *testing.T) {
+	src, m, assign := numberedExample(t)
+
+	src.Blocks[0].Subtrees[1].TxIDs = append(src.Blocks[0].Subtrees[1].TxIDs, h("earlier"))
+	require.NoError(t, assign.Add(h("earlier"), lane.Pack(lane.BackfillLane, 5)))
+
+	imported, err := ImportBlock(src.Blocks[0], assign)
+	require.NoError(t, err)
+	require.Equal(t, 5, imported.Members)
+
+	ids, err := m.BlockTxIDs(0)
+	require.NoError(t, err)
+	require.NoError(t, CheckBackfillStretch(imported, m.Blocks()[0], ids, src.Blocks[0]))
+}
+
 func TestCheckBackfillStretchCatchesAWrongAssignment(t *testing.T) {
 	src, m, assign := numberedExample(t)
 

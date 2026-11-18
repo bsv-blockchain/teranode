@@ -39,6 +39,7 @@ func TestCheckConversionBlocks(t *testing.T) {
 		"block twice":         mutate(func(b []ConversionBlock) []ConversionBlock { b[2].BlockID = 7; return b }),
 		"gap":                 mutate(func(b []ConversionBlock) []ConversionBlock { b[2].First++; return b }),
 		"past the prefix":     mutate(func(b []ConversionBlock) []ConversionBlock { b[2].Count = 3; return b }),
+		"count wraps":         {{Seq: 0, BlockID: 1, Height: 1, First: 1_000_001, Count: ^uint64(0)}, {Seq: 1, BlockID: 2, Height: 2, First: 1_000_000, Count: 6}},
 	} {
 		require.Error(t, CheckConversionBlocks(seg, blocks), name)
 	}

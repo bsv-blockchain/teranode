@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"sync"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -93,6 +94,43 @@ var laneMapPostgresTables = []struct{ name, ddl string }{
 		);`},
 }
 
+// Advisory lock classes that serialise lane map and conversion writes on Postgres, in the
+// two-key form pg_advisory_xact_lock(class, key), so they cannot collide with the single-key
+// hand-out lock. A retry racing the first insert then waits for it and finds its rows.
+const (
+	laneMapLockClass     int32 = 726_573
+	laneSegmentLockClass int32 = 726_574
+)
+
+// laneWriteMu does the same on SQLite, where one process owns the file.
+var laneWriteMu sync.Mutex
+
+// lockLaneProcess holds laneWriteMu on SQLite and returns its release; on Postgres the advisory
+// lock does the job, per block, and this does nothing.
+func (s *SQL) lockLaneProcess() func() {
+	if s.engine == util.Postgres {
+		return func() {}
+	}
+
+	laneWriteMu.Lock()
+
+	return laneWriteMu.Unlock
+}
+
+// lockLaneWrite takes the lock for one block's rows or for the segment tables, for the rest of tx
+// on Postgres. On SQLite the caller holds laneWriteMu instead.
+func (s *SQL) lockLaneWrite(ctx context.Context, tx *sql.Tx, class int32, key uint32) error {
+	if s.engine != util.Postgres {
+		return nil
+	}
+
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, class, int32(key)); err != nil { //nolint:gosec // the key is a block ID, bit for bit
+		return errors.NewStorageError("take the lane write lock", err)
+	}
+
+	return nil
+}
+
 // laneMapSqliteDDL is the same schema for SQLite.
 const laneMapSqliteDDL = `
 	CREATE TABLE IF NOT EXISTS lane_map (
@@ -161,11 +199,15 @@ func (s *SQL) nowSQL() string {
 // block inserts all of them in one transaction; a retry with rows that say the same thing, by
 // lane.SameRow, succeeds and writes nothing; a call whose rows differ from what is stored, by one
 // row or by the set of rows, fails and writes nothing. The rows are checked with
-// lane.CheckMapRows first. A block with no rows records nothing.
+// lane.CheckMapRows first. A block with no rows records nothing, so a later call with rows for it
+// is a first insert: a live block always has rows, at least its coinbase's, and a historical block
+// with none has no readable transaction to place.
 func (s *SQL) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane.MapRow) error {
 	if err := lane.CheckMapRows(rows); err != nil {
 		return errors.NewProcessingError("block %d", blockID, err)
 	}
+
+	defer s.lockLaneProcess()()
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -174,7 +216,7 @@ func (s *SQL) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane
 
 	defer func() { _ = tx.Rollback() }()
 
-	if err = insertLaneMapRowsTx(ctx, tx, blockID, rows); err != nil {
+	if err = s.insertLaneMapRowsTx(ctx, tx, blockID, rows); err != nil {
 		return err
 	}
 
@@ -186,8 +228,13 @@ func (s *SQL) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane
 }
 
 // insertLaneMapRowsTx is InsertLaneMapRows inside a caller's transaction, so the block gate can
-// commit a block's rows with the block itself.
-func insertLaneMapRowsTx(ctx context.Context, tx *sql.Tx, blockID uint32, rows []lane.MapRow) error {
+// commit a block's rows with the block itself. It takes the block's lane write lock first, so two
+// writers of one block never both see no rows and insert different ones.
+func (s *SQL) insertLaneMapRowsTx(ctx context.Context, tx *sql.Tx, blockID uint32, rows []lane.MapRow) error {
+	if err := s.lockLaneWrite(ctx, tx, laneMapLockClass, blockID); err != nil {
+		return err
+	}
+
 	existing, err := queryLaneMapRows(ctx, tx, `SELECT block_id, lane, first, last, first_hole, tag, hole_data FROM lane_map WHERE block_id = $1 ORDER BY lane, first`, int64(blockID))
 	if err != nil {
 		return err
@@ -344,12 +391,18 @@ func (s *SQL) InsertLaneConversionSegment(ctx context.Context, seg lane.Conversi
 		return err
 	}
 
+	defer s.lockLaneProcess()()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return errors.NewStorageError("begin conversion segment %d", seg.ID, err)
 	}
 
 	defer func() { _ = tx.Rollback() }()
+
+	if err = s.lockLaneWrite(ctx, tx, laneSegmentLockClass, 0); err != nil {
+		return err
+	}
 
 	segments, err := querySegments(ctx, tx)
 	if err != nil {
@@ -443,12 +496,18 @@ func querySegments(ctx context.Context, q queryer) ([]lane.ConversionSegment, er
 // and a new block must continue the stored list without a gap. It fails for an unknown or
 // completed segment.
 func (s *SQL) InsertLaneConversionBlocks(ctx context.Context, segment uint32, blocks []lane.ConversionBlock) error {
+	defer s.lockLaneProcess()()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return errors.NewStorageError("begin conversion blocks of segment %d", segment, err)
 	}
 
 	defer func() { _ = tx.Rollback() }()
+
+	if err = s.lockLaneWrite(ctx, tx, laneSegmentLockClass, 0); err != nil {
+		return err
+	}
 
 	seg, complete, err := segmentState(ctx, tx, segment)
 	if err != nil {
@@ -590,12 +649,18 @@ func segmentState(ctx context.Context, q queryer, segment uint32) (lane.Conversi
 // segment's complete block list, tiling its prefix exactly; completing it again with the same
 // digest is a no-op, with another digest an error. The conversion publishes this last.
 func (s *SQL) CompleteLaneConversionSegment(ctx context.Context, segment uint32, auditDigest chainhash.Hash) error {
+	defer s.lockLaneProcess()()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return errors.NewStorageError("begin completion of segment %d", segment, err)
 	}
 
 	defer func() { _ = tx.Rollback() }()
+
+	if err = s.lockLaneWrite(ctx, tx, laneSegmentLockClass, 0); err != nil {
+		return err
+	}
 
 	seg, complete, err := segmentState(ctx, tx, segment)
 	if err != nil {

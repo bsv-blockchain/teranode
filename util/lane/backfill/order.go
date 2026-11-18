@@ -48,7 +48,8 @@ type Facts interface {
 }
 
 // Seen records the transactions a numbering has placed, to refuse one placed twice. A conversion
-// over a store too large for memory supplies a disk-backed one.
+// over a store too large for memory supplies a disk-backed one. Each call to Number needs an empty
+// one, a resume included: Number places the blocks already written again as it checks them.
 type Seen interface {
 	// Add records txid and reports whether it was already recorded.
 	Add(txid chainhash.Hash) (bool, error)

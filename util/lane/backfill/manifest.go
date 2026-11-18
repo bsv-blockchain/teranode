@@ -25,8 +25,8 @@ import (
 // The assignment manifest of one conversion segment is one append-only file:
 //
 //	[4] magic "LNAM", [1] version 1
-//	records, each [1] type, [8] payload length uint64 LE, payload, [4] CRC-32C of type, length
-//	and payload
+//	records, each [1] type, [8] payload length uint64 LE, [4] CRC-32C of type and length,
+//	payload, [4] CRC-32C of type, length and payload
 //
 // Records, in order:
 //
@@ -37,9 +37,13 @@ import (
 //	'E' end, once, last: [8] prefix last, [8] last
 //
 // The transaction at index i of a block or suffix record holds position first+i of the backfill
-// lane. Every record is written and synced before the next. A crash can only leave a partial last
-// record, which reopening drops; any other damage is an error. The manifest digest is SHA-256 over
-// the whole file once the end record is written.
+// lane, and a block or suffix payload is exactly its fixed part plus count txids. Every record is
+// written and synced before the next, so a crash can only leave a partial last record: a frame
+// head shorter than its 13 bytes, or a head whose own CRC is good with a payload that runs past
+// the end of the file or, ending exactly there, fails its CRC. ResumeManifest cuts such a record;
+// OpenManifest refuses it; both refuse any other damage, a corrupt length field included, since
+// its own CRC then fails. The manifest digest is SHA-256 over the whole file once the end record
+// is written.
 
 const (
 	manifestMagic   = "LNAM"
@@ -50,7 +54,7 @@ const (
 	recordSuffix = 'S'
 	recordEnd    = 'E'
 
-	frameHead = 1 + 8
+	frameHead = 1 + 8 + 4
 	frameTail = 4
 
 	headerPayload = 4 + 8 + 4 + chainhash.HashSize
@@ -90,6 +94,7 @@ type Manifest struct {
 	last     uint64
 	next     uint64 // the next position to assign
 	size     int64
+	readOnly bool
 }
 
 // CreateManifest starts a new manifest for a segment. The file must not exist.
@@ -123,18 +128,32 @@ func CreateManifest(path string, h Header) (*Manifest, error) {
 	return m, nil
 }
 
-// OpenManifest opens an existing manifest to read or resume it. A partial last record, which only
-// a crash mid-write leaves, is cut off; a damaged record anywhere else, or a record out of order,
-// is an error.
+// OpenManifest opens a manifest to read it. It changes nothing on disk, and refuses a manifest
+// with a partial last record, which ResumeManifest cuts, or with any damage.
 func OpenManifest(path string) (*Manifest, error) {
-	f, err := os.OpenFile(path, os.O_RDWR, 0) //nolint:gosec // an operator-supplied maintenance path
+	return openManifest(path, false)
+}
+
+// ResumeManifest opens a manifest to extend it after a crash: a partial last record, the only
+// thing a crash mid-write leaves, is cut off. Any other damage is an error.
+func ResumeManifest(path string) (*Manifest, error) {
+	return openManifest(path, true)
+}
+
+func openManifest(path string, resume bool) (*Manifest, error) {
+	flag := os.O_RDONLY
+	if resume {
+		flag = os.O_RDWR
+	}
+
+	f, err := os.OpenFile(path, flag, 0) //nolint:gosec // an operator-supplied maintenance path
 	if err != nil {
 		return nil, errors.NewStorageError("open manifest %s", path, err)
 	}
 
-	m := &Manifest{path: path, f: f, digest: sha256.New()}
+	m := &Manifest{path: path, f: f, digest: sha256.New(), readOnly: !resume}
 
-	if err = m.load(); err != nil {
+	if err = m.load(resume); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -142,7 +161,7 @@ func OpenManifest(path string) (*Manifest, error) {
 	return m, nil
 }
 
-func (m *Manifest) load() error {
+func (m *Manifest) load(resume bool) error {
 	info, err := m.f.Stat()
 	if err != nil {
 		return errors.NewStorageError("stat manifest", err)
@@ -159,15 +178,17 @@ func (m *Manifest) load() error {
 	m.digest.Write(magic)
 	pos := int64(len(magic))
 	first := true
+	torn := false
 
 	for pos < total {
-		typ, payloadLen, ok, err := readFrame(r, total-pos)
+		typ, payloadLen, ok, err := readFrame(r, total-pos, m.path, pos)
 		if err != nil {
 			return err
 		}
 
 		if !ok {
-			break // a partial last record
+			torn = true
+			break
 		}
 
 		body, crcOK, err := m.readBody(r, typ, payloadLen, pos)
@@ -175,29 +196,39 @@ func (m *Manifest) load() error {
 			return err
 		}
 
+		recordLen := frameHead + int64(payloadLen) + frameTail //nolint:gosec // bounded by the file size
+
 		if !crcOK {
-			if pos+frameHead+int64(payloadLen)+frameTail == total {
-				break // the last record was cut short mid-write
+			if pos+recordLen == total {
+				torn = true
+				break
 			}
 
 			return errors.NewProcessingError("manifest %s: damaged record at offset %d", m.path, pos)
 		}
 
-		if err = m.apply(typ, body, pos, first); err != nil {
+		if err = m.apply(typ, payloadLen, body, pos, first); err != nil {
 			return err
 		}
 
 		first = false
-		recordLen := frameHead + int64(payloadLen) + frameTail
-		m.hashFrame(typ, payloadLen, pos, recordLen)
+
+		if _, err = io.Copy(m.digest, io.NewSectionReader(m.f, pos, recordLen)); err != nil {
+			return errors.NewStorageError("read manifest %s", m.path, err)
+		}
+
 		pos += recordLen
 	}
 
 	if first {
-		return errors.NewProcessingError("manifest %s has no header", m.path)
+		return errors.NewProcessingError("manifest %s has no complete header", m.path)
 	}
 
-	if pos != total {
+	if torn {
+		if !resume {
+			return errors.NewProcessingError("manifest %s ends in a partial record at offset %d; resume it to cut the record", m.path, pos)
+		}
+
 		if err = m.f.Truncate(pos); err != nil {
 			return errors.NewStorageError("cut the partial last record of manifest %s", m.path, err)
 		}
@@ -208,9 +239,10 @@ func (m *Manifest) load() error {
 	return nil
 }
 
-// readFrame reads a record's type and length. ok is false when fewer bytes remain than the frame
-// claims, which is a partial last record.
-func readFrame(r *bufio.Reader, remaining int64) (byte, uint64, bool, error) {
+// readFrame reads a record's type and length and checks the head's own CRC. ok is false for a
+// partial last record: fewer bytes left than a head, or a good head whose payload and tail run
+// past the end of the file. A head that fails its CRC is damage.
+func readFrame(r *bufio.Reader, remaining int64, path string, pos int64) (byte, uint64, bool, error) {
 	if remaining < frameHead {
 		return 0, 0, false, nil
 	}
@@ -220,8 +252,12 @@ func readFrame(r *bufio.Reader, remaining int64) (byte, uint64, bool, error) {
 		return 0, 0, false, errors.NewStorageError("read manifest record", err)
 	}
 
-	payloadLen := binary.LittleEndian.Uint64(head[1:])
-	if payloadLen > uint64(remaining) || uint64(remaining)-payloadLen < frameHead+frameTail {
+	if crc32.Checksum(head[:9], crcTable) != binary.LittleEndian.Uint32(head[9:]) {
+		return 0, 0, false, errors.NewProcessingError("manifest %s: damaged record head at offset %d", path, pos)
+	}
+
+	payloadLen := binary.LittleEndian.Uint64(head[1:9])
+	if payloadLen > uint64(remaining-frameHead-frameTail) || remaining < frameHead+frameTail {
 		return 0, 0, false, nil
 	}
 
@@ -233,7 +269,7 @@ func readFrame(r *bufio.Reader, remaining int64) (byte, uint64, bool, error) {
 func (m *Manifest) readBody(r *bufio.Reader, typ byte, payloadLen uint64, pos int64) ([]byte, bool, error) {
 	crc := crc32.New(crcTable)
 
-	var head [frameHead]byte
+	var head [9]byte
 	head[0] = typ
 	binary.LittleEndian.PutUint64(head[1:], payloadLen)
 	crc.Write(head[:])
@@ -266,12 +302,7 @@ func (m *Manifest) readBody(r *bufio.Reader, typ byte, payloadLen uint64, pos in
 	return body, crc.Sum32() == binary.LittleEndian.Uint32(tail[:]), nil
 }
 
-// hashFrame adds a verified record's bytes to the digest, re-reading them from the file.
-func (m *Manifest) hashFrame(_ byte, _ uint64, pos, recordLen int64) {
-	_, _ = io.Copy(m.digest, io.NewSectionReader(m.f, pos, recordLen))
-}
-
-func (m *Manifest) apply(typ byte, body []byte, pos int64, first bool) error {
+func (m *Manifest) apply(typ byte, payloadLen uint64, body []byte, pos int64, first bool) error {
 	if first != (typ == recordHeader) {
 		return errors.NewProcessingError("manifest %s: record %q at %d is out of order", m.path, typ, pos)
 	}
@@ -309,6 +340,10 @@ func (m *Manifest) apply(typ byte, body []byte, pos int64, first bool) error {
 			Count:   binary.LittleEndian.Uint64(body[20:]),
 		}
 
+		if b.Count > (payloadLen-blockFixed)/chainhash.HashSize || payloadLen != blockFixed+b.Count*chainhash.HashSize {
+			return errors.NewProcessingError("manifest %s: block %d claims %d txids in a %d-byte record", m.path, b.Seq, b.Count, payloadLen)
+		}
+
 		if err := m.checkBlock(b); err != nil {
 			return err
 		}
@@ -325,6 +360,14 @@ func (m *Manifest) apply(typ byte, body []byte, pos int64, first bool) error {
 		first, count := binary.LittleEndian.Uint64(body), binary.LittleEndian.Uint64(body[8:])
 		if first != m.next {
 			return errors.NewProcessingError("manifest %s: suffix starts at %d, want %d", m.path, first, m.next)
+		}
+
+		if count > (payloadLen-suffixFixed)/chainhash.HashSize || payloadLen != suffixFixed+count*chainhash.HashSize {
+			return errors.NewProcessingError("manifest %s: suffix claims %d txids in a %d-byte record", m.path, count, payloadLen)
+		}
+
+		if count > lane.MaxPosition-m.next+1 {
+			return errors.NewProcessingError("manifest %s: the suffix overflows the backfill lane", m.path)
 		}
 
 		m.suffix = &recordRef{offset: pos + frameHead + suffixFixed, count: count}
@@ -401,11 +444,20 @@ func (m *Manifest) write(b []byte) error {
 
 // appendRecord writes one framed record and syncs it.
 func (m *Manifest) appendRecord(typ byte, payload []byte) error {
+	if m.readOnly {
+		return errors.NewProcessingError("manifest %s was opened to read; resume it to write", m.path)
+	}
+
 	frame := make([]byte, 0, frameHead+len(payload)+frameTail)
 	frame = append(frame, typ)
 	frame = binary.LittleEndian.AppendUint64(frame, uint64(len(payload)))
-	frame = append(frame, payload...)
 	frame = binary.LittleEndian.AppendUint32(frame, crc32.Checksum(frame, crcTable))
+	frame = append(frame, payload...)
+
+	body := crc32.New(crcTable)
+	body.Write(frame[:9])
+	body.Write(payload)
+	frame = binary.LittleEndian.AppendUint32(frame, body.Sum32())
 
 	if err := m.write(frame); err != nil {
 		return err

@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -222,4 +223,45 @@ func TestLaneMapTablesAreAddedToAnOlderSchema(t *testing.T) {
 	var n int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM lane_handout`).Scan(&n))
 	require.Equal(t, 1, n, "existing hand-outs are kept")
+}
+
+// A writer of a block's rows takes that block's lane write lock before it looks at what is
+// stored, so a second writer waits for the first and then compares with its rows, instead of both
+// seeing none and inserting different ones. Held here from another transaction, the lock must hold
+// the insert back until it is released.
+func TestLaneMapRowsWaitForTheBlockLock(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	s, cleanup := setupLanePostgresStore(t)
+	defer cleanup()
+
+	ctx := t.Context()
+
+	holder, err := s.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	defer func() { _ = holder.Rollback() }()
+
+	_, err = holder.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, laneMapLockClass, int32(77))
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+
+	go func() {
+		done <- s.InsertLaneMapRows(ctx, 77, []lane.MapRow{{Lane: 1, First: 1, Last: 10, Tag: lane.RowTagRange}})
+	}()
+
+	select {
+	case err = <-done:
+		require.Failf(t, "the insert did not wait for the block lock", "returned %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	// Another block's rows are not held back.
+	require.NoError(t, s.InsertLaneMapRows(ctx, 78, []lane.MapRow{{Lane: 1, First: 1, Last: 10, Tag: lane.RowTagRange}}))
+
+	require.NoError(t, holder.Rollback())
+	require.NoError(t, <-done)
 }

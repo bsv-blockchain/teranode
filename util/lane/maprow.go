@@ -217,8 +217,9 @@ func firstHole(bm *roaring64.Bitmap, lowest, highest uint64) uint64 {
 	return lo
 }
 
-// DecodeHoleData parses a row's hole data and checks it: canonical encoding, exact length, no
-// empty bucket, and every position within 1 to MaxPosition.
+// DecodeHoleData parses a row's hole data and checks it: canonical encoding, which is the
+// run-optimized form every writer here produces, exact length, no empty bucket, and every position
+// within 1 to MaxPosition.
 func DecodeHoleData(data []byte) (*roaring64.Bitmap, error) {
 	if len(data) < 8 {
 		return nil, errors.NewProcessingError("lane hole data is %d bytes, too short", len(data))
@@ -239,9 +240,12 @@ func DecodeHoleData(data []byte) (*roaring64.Bitmap, error) {
 		return nil, errors.NewProcessingError("lane hole data is inconsistent", err)
 	}
 
-	again, err := bm.ToBytes()
+	canonical := bm.Clone()
+	canonical.RunOptimize()
+
+	again, err := canonical.ToBytes()
 	if err != nil || !bytes.Equal(again, data) {
-		return nil, errors.NewProcessingError("lane hole data is not in canonical form", err)
+		return nil, errors.NewProcessingError("lane hole data is not in canonical run-optimized form", err)
 	}
 
 	if bm.IsEmpty() {
@@ -272,6 +276,10 @@ func (r MapRow) Check() (*roaring64.Bitmap, error) {
 		return nil, nil
 
 	case RowTagRoaring64:
+		if len(r.HoleData) > MaxRowHoleDataBytes {
+			return nil, errors.NewProcessingError("lane %d map row %d to %d: hole data of %d bytes is over the row limit", r.Lane, r.First, r.Last, len(r.HoleData))
+		}
+
 		bm, err := DecodeHoleData(r.HoleData)
 		if err != nil {
 			return nil, errors.NewProcessingError("lane %d map row %d to %d", r.Lane, r.First, r.Last, err)

@@ -6028,7 +6028,9 @@ var sqlLaneColumns = []sqlLaneColumn{
 	{"outputs", "spending_lane_position", "BIGINT", "BIGINT"},
 }
 
-// addLaneColumnSQL adds one lane column when it is missing. lock_timeout bounds the wait for the
+// addLaneColumnSQL adds one lane column when it is missing. The catalog check skips the lock on a
+// current schema; IF NOT EXISTS makes a second process that passed the check at the same moment a
+// no-op instead of a duplicate-column error. lock_timeout bounds the wait for the
 // table lock: ADD COLUMN needs ACCESS EXCLUSIVE, and while it waits behind an open transaction on
 // the table (a pruner batch on a pod still running the old build, say) every later read and write
 // on the table queues behind it.
@@ -6038,7 +6040,7 @@ func addLaneColumnSQL(c sqlLaneColumn) string {
 		BEGIN
 			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '` + c.table + `'::regclass AND attname = '` + c.column + `' AND NOT attisdropped) THEN
 				PERFORM set_config('lock_timeout', '200ms', true);
-				ALTER TABLE ` + c.table + ` ADD COLUMN ` + c.column + ` ` + c.postgresType + `;
+				ALTER TABLE ` + c.table + ` ADD COLUMN IF NOT EXISTS ` + c.column + ` ` + c.postgresType + `;
 			END IF;
 		END $$;
 	`

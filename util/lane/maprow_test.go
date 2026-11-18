@@ -203,14 +203,28 @@ func TestSameRow(t *testing.T) {
 	built, err := BuildMapRows(4, bitmapOf(1, 2, 4, 5))
 	require.NoError(t, err)
 
-	// The same set serialized from a bitmap that was built differently and not run-optimized.
+	// The same set built another way serializes to the same canonical bytes.
 	other := bitmapOf(5, 4, 2, 1)
+	other.RunOptimize()
 	alt := built[0]
 	alt.HoleData = mustBytes(t, other)
 
 	same, err := SameRow(built[0], alt)
 	require.NoError(t, err)
 	require.True(t, same)
+
+	// A row whose bytes are not the canonical form is refused, not compared.
+	sparse := roaring64.New()
+	for p := uint64(1); p < 5_000; p++ {
+		if p != 3 {
+			sparse.Add(p) // one by one: a plain bitmap container, where runs are smaller
+		}
+	}
+	loose := MapRow{Lane: 4, First: 1, Last: 4_999, FirstHole: 3, Tag: RowTagRoaring64, HoleData: mustBytes(t, sparse)}
+	_, err = loose.Check()
+	require.Error(t, err)
+	_, err = SameRow(MapRow{Lane: 4, First: 1, Last: 4_999, FirstHole: 3, Tag: RowTagRoaring64, HoleData: []byte{1}}, loose)
+	require.Error(t, err)
 
 	diff := built[0]
 	diff.HoleData = mustBytes(t, bitmapOf(1, 2, 3, 5))

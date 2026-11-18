@@ -177,9 +177,15 @@ func CheckSubtreePositions(s SubtreePositions, st *subtreepkg.Subtree, meta *sub
 	}
 
 	for i, n := range s.Nodes {
-		if n.Own == None {
-			if i != 0 || st.Nodes[0].Hash != subtreepkg.CoinbasePlaceholderHashValue {
-				return errors.NewProcessingError("subtree node %d has no lane position and is not the coinbase placeholder", i)
+		placeholder := i == 0 && st.Nodes[0].Hash == subtreepkg.CoinbasePlaceholderHashValue
+
+		if placeholder != (n.Own == None) {
+			return errors.NewProcessingError("subtree node %d: only the coinbase placeholder has no lane position, and it has none", i)
+		}
+
+		if placeholder {
+			if len(n.Parents) != 0 {
+				return errors.NewProcessingError("subtree node 0, the coinbase placeholder, has parent positions")
 			}
 
 			continue
