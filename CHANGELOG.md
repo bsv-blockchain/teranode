@@ -41,9 +41,6 @@ read every section between yours and the target.
 - **`utxostore_laneMigration=shadow` requires a store that writes lane positions.** Daemon
   startup now refuses null and experimental Pebble stores at shadow. Use a supported store or
   keep `utxostore_laneMigration=off`. (#2136)
-- **Unused lane grants expire after `blockchain_laneGrantDuration` from sending their request.**
-  At `shadow`, creates after idle may wait for a fresh grant and fail if the blockchain service is
-  unavailable. Keep that service reachable; a lease renewal does not extend a grant's age. (#2136)
 - **The limited RPC credential can no longer call `freeze`, `unfreeze` or `reassign`.** A call with
   `rpc_limit_user`/`rpc_limit_pass` now answers "limited user not authorized for this method". Tools
   that call these methods, such as an alert-system client, must use `rpc_user`/`rpc_pass`. (#2095)
