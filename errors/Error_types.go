@@ -574,8 +574,9 @@ func NewBlobError(message string, params ...interface{}) *Error {
 // help. A store keeps its StorageError and adds this as the cause, so the StorageError and
 // IsRetryableError checks are unchanged. The rendered message contains BLOB_CORRUPT, which the
 // substring match in IsMaliciousResponseError catches, so a caller that must not retry checks
-// IsBlobCorrupt first. Block validation does: it neither requeues a block that failed on one nor
-// tries another source for it.
+// IsBlobCorrupt first. Block validation's priority-queue worker does: it neither requeues a block
+// that failed on one nor tries another source for it. Catchup and the legacy park do not check it
+// yet; they treat it as a local storage fault and retry the block later.
 func NewBlobCorruptError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOB_CORRUPT, message, params...)
 }

@@ -3,6 +3,7 @@ package blockvalidation
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"testing"
 	"time"
 
@@ -162,10 +163,11 @@ func TestProcessBlockWithPriority_LocalCorruptBlob_DoesNotWalkAlternatives(t *te
 	tests := []struct {
 		name      string
 		err       func(t *testing.T) error
+		isClass   func(error) bool
 		walksAlts bool
 	}{
-		{"corrupt local blob", func(t *testing.T) error { return localCorruptSubtreeError(t, corruptSubtreeContents[0].contents) }, false},
-		{"network failure", func(*testing.T) error { return errors.NewNetworkError("connection reset") }, true},
+		{"corrupt local blob", func(t *testing.T) error { return localCorruptSubtreeError(t, corruptSubtreeContents[0].contents) }, errors.IsBlobCorrupt, false},
+		{"network failure", func(*testing.T) error { return errors.NewNetworkError("connection reset") }, func(err error) bool { return errors.Is(err, errors.ErrNetworkError) }, true},
 	}
 
 	for _, tt := range tests {
@@ -174,7 +176,11 @@ func TestProcessBlockWithPriority_LocalCorruptBlob_DoesNotWalkAlternatives(t *te
 			logger := ulogger.TestLogger{}
 			tSettings := test.CreateBaseTestSettings(t)
 
-			realClient, err := blockchain.NewLocalClient(logger, tSettings, blockchain_store.NewMockStore(), nil, nil)
+			blockchainStore, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, blockchainStore.Close(ctx)) })
+
+			realClient, err := blockchain.NewLocalClient(logger, tSettings, blockchainStore, nil, nil)
 			require.NoError(t, err)
 
 			h := &chainhash.Hash{0xc0}
@@ -201,7 +207,7 @@ func TestProcessBlockWithPriority_LocalCorruptBlob_DoesNotWalkAlternatives(t *te
 
 			err = server.processBlockWithPriority(ctx, primary)
 			require.Error(t, err)
-			require.True(t, errors.Is(err, injected), "the injected failure must come back, got: %v", err)
+			require.True(t, tt.isClass(err), "the injected failure's class must come back, got: %v", err)
 
 			_, hasAlt := server.blockPriorityQueue.GetAlternativeSource(h)
 			require.Equal(t, !tt.walksAlts, hasAlt, "alternative left in the queue")

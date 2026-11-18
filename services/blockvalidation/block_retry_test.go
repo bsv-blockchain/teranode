@@ -294,3 +294,22 @@ func TestIsPeerFetchFailure_LocalCorruptBlobIsNotAPeerFailure(t *testing.T) {
 	require.True(t, isPeerFetchFailure(errors.NewProcessingError("peer sent a malformed subtree")))
 	require.False(t, isPeerFetchFailure(errors.NewBlockInvalidError("bad block")))
 }
+
+// TestFinishProcessedBlock_LocalCorruptBlobIsNotRequeued pins the worker end of the retry
+// decision: a block that failed on a corrupt local blob is not put back on the queue, while a
+// network failure is.
+func TestFinishProcessedBlock_LocalCorruptBlobIsNotRequeued(t *testing.T) {
+	initPrometheusMetrics()
+
+	server := newRetryTestServer(t, 3)
+	server.forkManager = NewForkManager(ulogger.TestLogger{}, server.settings)
+	server.processBlockNotify = ttlcache.New[chainhash.Hash, bool]()
+
+	corrupt := &chainhash.Hash{0xc1}
+	server.finishProcessedBlock(0, processBlockFound{hash: corrupt}, localCorruptSubtreeError(t, corruptSubtreeContents[0].contents))
+	require.False(t, server.blockPriorityQueue.Contains(*corrupt), "a corrupt local blob must not be requeued")
+
+	network := &chainhash.Hash{0xc2}
+	server.finishProcessedBlock(0, processBlockFound{hash: network}, errors.NewNetworkError("connection reset"))
+	require.True(t, server.blockPriorityQueue.Contains(*network), "control: a network failure is requeued")
+}

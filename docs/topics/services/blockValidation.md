@@ -769,7 +769,7 @@ Only failures that are not a verdict on the block are retried. The worker puts t
 
 Invalid blocks are never retried.
 
-A block that failed on a corrupt blob in this node's own store (`ERR_BLOB_CORRUPT`) is not retried or fetched from another source either, even though its error text matches the malicious-response check. The file already exists, so every attempt would read the same bytes. Repair or remove the file first.
+The priority-queue worker does not retry a block that failed on a corrupt blob in this node's own store (`ERR_BLOB_CORRUPT`) or fetch it from another source, even though its error text matches the malicious-response check. The file already exists, so every attempt would read the same bytes. Repair or remove the file. Repair alone does not requeue the block: validation needs a later peer announcement (after the in-flight marker expires) or catchup from a later block. Catchup and the legacy park still treat the error as a local storage fault and may retry it.
 
 ##### Alternative Source Handling
 
