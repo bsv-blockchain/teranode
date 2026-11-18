@@ -58,6 +58,20 @@ git fetch upstream && git rebase upstream/main && git push origin <branch>
 - **NEVER auto-resolve merge conflicts** — show the conflicting files and wait for
   approval on the resolution strategy.
 
+## Reviewing a Team PR
+
+Full process: [`docs/references/reviewProcess.md`](docs/references/reviewProcess.md). Agent steps: the `review-fix-forward` skill in `.claude/skills/`.
+
+- P0: request changes. The assignee fixes it. Never fix a P0 yourself.
+- P1–P3: finish the review first. Then fix them in separate `review-fix:` commits.
+- Before fixing, read the PR comments for an open `Fixing review findings:` claim. If one is open, do not push fixes.
+- If no claim is open, post a claim comment before the first fix.
+- Push to the PR branch only when the user asks in this session. Fast-forward only.
+- Fix only what the review found. Never rebase, force-push, or resolve conflicts.
+- Post one hand-back comment: findings, fixing commits, open items, questions.
+- In that comment, advise the assignee whether each existing approver should re-review. Criteria are in the process file. Do not ask the approver yourself.
+- The assignee still owns the PR. The other reviewer approves the final head commit.
+
 ## Go Conventions
 
 - No `Get` prefix on getters: `Name()`, not `GetName()`.
