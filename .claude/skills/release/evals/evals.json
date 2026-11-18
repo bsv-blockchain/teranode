@@ -28,6 +28,13 @@
       "prompt": "I'm cherry-picking PR #850 (a single-line nil-guard in services/validator/txvalidator.go) onto release/v0.14. Git aborted with conflict markers where the <<<<<<< HEAD section is empty and my new code sits inside the markers. What now?",
       "expected_output": "Recognizes anchor-drift signature (HEAD-empty hunks = missing prerequisite refactor on the release branch). Lists candidate prereq commits via `git log release/v0.14..origin/main -- services/validator/txvalidator.go`. Recommends evaluating each candidate as a standalone backport. Does NOT propose auto-resolving. Suggests `git cherry-pick --abort` if abandoning.",
       "files": []
+    },
+    {
+      "id": 4,
+      "name": "legacy-changelog-from-release-branch",
+      "prompt": "Prepare the Before you upgrade notes for v0.16.1 from its tested beta. The checkout is release/v0.16, whose history has no CHANGELOG.md deletion. origin points to my fork, upstream is absent, and canonical main deleted CHANGELOG.md after this release branch diverged. The release range includes PR 2110, whose PostgreSQL upgrade warning is only in the old changelog. How do you recover it? What if fetching canonical main fails or its history contains no deletion?",
+      "expected_output": "Fetches main explicitly from bsv-blockchain/teranode and searches that fetched history for the CHANGELOG.md deletion, independently of the checkout and fork remotes. Reads the deletion parent's changelog and retains the PostgreSQL warning only if its PR is in the release range. Stops release preparation if the fetch fails or no deletion is found, before constructing git show with an empty SHA; does not publish incomplete notes.",
+      "files": []
     }
   ]
 }
