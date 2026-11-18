@@ -2,6 +2,11 @@ package lane
 
 import (
 	"context"
+	"fmt"
+	"maps"
+	"math/rand/v2"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -899,4 +904,449 @@ func TestAllocatorReportsItsRateOnAGrantRequest(t *testing.T) {
 
 	require.Eventually(t, func() bool { return len(src.grantRequests()) == 1 }, 5*time.Second, time.Millisecond)
 	require.Equal(t, uint64(50), src.grantRequests()[0].Rate, "500 positions in 10 seconds")
+}
+
+// scriptedLeases is the lease source of the invariant test. The test sets how it answers the next
+// open or renewal; an "ok" answer follows the service's rules. It records what it was sent.
+type scriptedLeases struct {
+	clk      *stepClock
+	rng      *rand.Rand
+	highest  map[uint8]uint64 // the model's highest position given out in each lane
+	high     map[uint8]uint64
+	open     map[LeaseID]uint8
+	seq      byte
+	answer   string // ok, slow, error, closed, bad or nogrant
+	during   func() // runs while a renewal is in flight
+	last     Grant  // the grant last answered
+	sent     []Renewal
+	answers  []string // the answer to each renewal sent
+	releases []Release
+	closedAt int // releases sent before the first Close, -1 until then
+}
+
+func (f *scriptedLeases) grant(l uint8) Grant {
+	g := Grant{Lane: l, First: f.high[l] + 1, Last: f.high[l] + 1 + f.rng.Uint64N(8)}
+	f.high[l] = g.Last
+
+	return g
+}
+
+// badGrant is a grant the allocator must refuse: malformed, on the coinbase lane, or, once the
+// process has given out a position in the lane, not above it.
+func (f *scriptedLeases) badGrant(l uint8) Grant {
+	bad := []Grant{
+		{Lane: l, First: 20, Last: 19}, {Lane: l, First: 0, Last: 5}, {Lane: l, First: 20, Last: MaxPosition + 1},
+		{Lane: firstUnleasedLane, First: 20, Last: 30},
+	}
+	if h := f.highest[l]; h > 0 {
+		bad = append(bad, Grant{Lane: l, First: h, Last: h + 3})
+	}
+
+	return bad[f.rng.IntN(len(bad))]
+}
+
+func (f *scriptedLeases) OpenLaneLease(context.Context, string) (LeaseID, Grant, error) {
+	switch f.answer {
+	case "slow":
+		f.clk.step(time.Minute)
+	case "error":
+		return LeaseID{}, Grant{}, errors.NewServiceUnavailableError("blockchain service down")
+	}
+
+	var l uint8
+	for slices.Contains(slices.Collect(maps.Values(f.open)), l) {
+		l++
+	}
+
+	f.seq++
+	id := LeaseID{f.seq}
+	f.open[id] = l
+
+	f.last = f.grant(l)
+	if f.answer == "bad" {
+		f.last = f.badGrant(l)
+	}
+
+	return id, f.last, nil
+}
+
+func (f *scriptedLeases) RenewLaneLease(_ context.Context, r Renewal) (RenewResult, error) {
+	f.sent, f.answers = append(f.sent, r), append(f.answers, f.answer)
+
+	if f.during != nil {
+		f.during()
+	}
+
+	switch f.answer {
+	case "slow":
+		f.clk.step(time.Minute)
+	case "error":
+		return RenewResult{}, errors.NewServiceUnavailableError("blockchain service down")
+	case "closed":
+		delete(f.open, r.Lease)
+		return RenewResult{Closed: true}, nil
+	}
+
+	if !r.WantGrant || f.answer == "nogrant" {
+		return RenewResult{}, nil
+	}
+
+	f.last = f.grant(r.Lane)
+	if f.answer == "bad" {
+		f.last = f.badGrant(r.Lane)
+	}
+
+	return RenewResult{Granted: true, Grant: f.last}, nil
+}
+
+func (f *scriptedLeases) ReleaseLaneLease(_ context.Context, r Release) (bool, error) {
+	f.releases = append(f.releases, r)
+	delete(f.open, r.Lease)
+
+	return false, nil
+}
+
+func (f *scriptedLeases) Close() error {
+	if f.closedAt < 0 {
+		f.closedAt = len(f.releases)
+	}
+
+	return nil
+}
+
+// allocModel is what the allocator should do, kept by the test from the rules alone.
+type allocModel struct {
+	t         Timings
+	leased    bool
+	lease     LeaseID
+	lane      uint8
+	cur       Grant
+	next      uint64
+	firstTake time.Time
+	spare     Grant
+	hasSpare  bool
+	pending   []Settles
+	taken     uint64 // the highest position this lease gave out
+	highest   map[uint8]uint64
+	lastGood  time.Time
+	released  bool
+	releases  []Release
+}
+
+func (m *allocModel) install(g Grant) { m.cur, m.next, m.firstTake = g, g.First, time.Time{} }
+
+func (m *allocModel) acceptable(g Grant) bool {
+	return g.Len() > 0 && g.First > 0 && g.Last <= MaxPosition && g.Lane < firstUnleasedLane && g.First > m.highest[g.Lane]
+}
+
+// take is the position a Next at now gives out, or None.
+func (m *allocModel) take(now time.Time) uint64 {
+	if m.released || !m.leased || now.Sub(m.lastGood) >= m.t.Stop {
+		return None
+	}
+
+	if m.next != 0 && (m.next > m.cur.Last || (!m.firstTake.IsZero() && now.Sub(m.firstTake) >= m.t.GrantDuration)) {
+		m.pending = append(m.pending, Settles{First: m.cur.First, LastTaken: m.next - 1})
+		m.next = 0
+
+		if m.hasSpare {
+			m.install(m.spare)
+			m.hasSpare = false
+		}
+	}
+
+	if m.next == 0 {
+		return None
+	}
+
+	if m.firstTake.IsZero() {
+		m.firstTake = now
+	}
+
+	m.highest[m.cur.Lane], m.taken = m.next, m.next
+	m.next++
+
+	return Pack(m.cur.Lane, m.next-1)
+}
+
+// want reports whether the allocator should ask for the next grant: no spare, and the current grant
+// missing, half used, used up or aged out.
+func (m *allocModel) want(now time.Time) bool {
+	return m.leased && !m.hasSpare && (m.next == 0 || m.next > m.cur.Last || m.next-m.cur.First >= (m.cur.Len()+1)/2 ||
+		(!m.firstTake.IsZero() && now.Sub(m.firstTake) >= m.t.GrantDuration))
+}
+
+func (m *allocModel) oldestPending() Settles {
+	if len(m.pending) == 0 {
+		return Settles{}
+	}
+
+	return m.pending[0]
+}
+
+// TestAllocatorKeepsItsInvariants drives seeded random sequences of takes, clock steps and loop
+// turns with every kind of answer from the service: a grant, a slow reply, an error, a closed lease,
+// a grant the allocator must refuse, a renewal without the grant asked for, and takes while a
+// request is in flight. The test turns the loop itself, so the seed fixes every interleaving. It
+// checks each answer and each request against a model kept from the rules, and then the invariants.
+func TestAllocatorKeepsItsInvariants(t *testing.T) {
+	for seed := uint64(1); seed <= 40; seed++ {
+		runAllocModel(t, seed, 300)
+	}
+}
+
+func runAllocModel(t *testing.T, seed uint64, steps int) {
+	rng := rand.New(rand.NewPCG(seed, seed)) //nolint:gosec // test randomness
+	clk := newStepClock()
+	tm := Timings{Renew: time.Hour, Stop: 2 * time.Minute, GrantDuration: 90 * time.Second}
+	m := &allocModel{t: tm, highest: map[uint8]uint64{}}
+	src := &scriptedLeases{clk: clk, rng: rng, highest: m.highest, high: map[uint8]uint64{}, open: map[LeaseID]uint8{}, closedAt: -1}
+
+	// The test turns the loop, so the loop never starts and Close has none to wait for.
+	a := NewAllocator(src, "pod-3", tm, nil)
+	a.now, a.started = clk.Now, true
+	close(a.done)
+
+	type leaseGrant struct {
+		lease LeaseID
+		g     Grant
+	}
+
+	type takeAt struct {
+		v     uint64
+		lease LeaseID
+		at    time.Time
+	}
+
+	var (
+		ops    []string
+		takes  []takeAt
+		grants = map[LeaseID][]Grant{} // the grants each lease accepted, in order
+	)
+
+	defer func() {
+		if t.Failed() {
+			t.Logf("seed %d, ops:\n%s", seed, strings.Join(ops, "\n"))
+		}
+	}()
+
+	noWait, cancel := context.WithCancel(context.Background())
+	cancel() // so a Next with no position fails at once
+
+	takeOne := func() {
+		now, lease := clk.Now(), m.lease
+		want := m.take(now)
+		v, err := a.Next(noWait)
+		ops = append(ops, fmt.Sprintf("next at %s -> %d:%d", now.Format("15:04:05"), Lane(v), v&MaxPosition))
+
+		if want == None {
+			require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+			return
+		}
+
+		require.NoError(t, err)
+		require.Equal(t, want, v)
+
+		takes = append(takes, takeAt{v, lease, now})
+	}
+
+	for step := 0; step <= steps && !m.released; step++ {
+		now := clk.Now()
+		require.Equal(t, !m.released && m.leased && now.Sub(m.lastGood) < tm.Stop, a.Ready() == nil, "ready")
+
+		op := rng.IntN(100)
+		if step == steps {
+			op = 99 // every run ends with a Close
+		}
+
+		switch {
+		case op < 45:
+			takeOne()
+
+		case op < 65:
+			d := []time.Duration{0, 10 * time.Second, 40 * time.Second, 70 * time.Second, 3 * time.Minute}[rng.IntN(5)]
+			ops = append(ops, fmt.Sprintf("step %s", d))
+			clk.step(d)
+
+		case op < 99:
+			// One turn of the allocator's loop, as run takes it.
+			src.answer = []string{"ok", "ok", "ok", "ok", "slow", "error", "closed", "bad", "nogrant"}[rng.IntN(9)]
+			src.during = nil
+			tick := rng.IntN(4) == 0
+
+			a.mu.Lock()
+			leased, want := a.leased, a.leased && a.wantGrantLocked()
+			a.mu.Unlock()
+
+			ops = append(ops, fmt.Sprintf("loop at %s leased %v want %v tick %v answer %s", now.Format("15:04:05"), leased, want, tick, src.answer))
+			require.Equal(t, m.leased, leased)
+			require.Equal(t, m.want(now), want, "want a grant")
+
+			if !leased {
+				err := a.open()
+
+				switch {
+				case src.answer == "error":
+					require.Error(t, err)
+				case !m.acceptable(src.last):
+					require.Error(t, err)
+					m.releases = append(m.releases, Release{Lease: LeaseID{src.seq}, Lane: src.last.Lane})
+				default:
+					require.NoError(t, err)
+
+					m.leased, m.lease, m.lane, m.hasSpare, m.pending, m.taken, m.lastGood = true, LeaseID{src.seq}, src.last.Lane, false, nil, 0, now
+					m.install(src.last)
+					grants[m.lease] = append(grants[m.lease], src.last)
+				}
+
+				break
+			}
+
+			if !want && !tick {
+				break
+			}
+
+			req := Renewal{Lease: m.lease, Lane: m.lane, WantGrant: want}
+			if want {
+				req.Settles = m.oldestPending()
+			}
+
+			if rng.IntN(4) == 0 {
+				src.during = func() { // takes while the request is in flight
+					for range 1 + rng.IntN(3) {
+						takeOne()
+					}
+				}
+			}
+
+			sent := len(src.sent)
+			err := a.renew(want)
+
+			require.Len(t, src.sent, sent+1)
+			got := src.sent[sent]
+			got.Rate = 0 // TestAllocatorReportsItsRateOnAGrantRequest covers the rate
+			require.Equal(t, req, got, "the renewal sent")
+
+			switch {
+			case src.answer == "error":
+				require.Error(t, err)
+			case src.answer == "closed":
+				require.NoError(t, err)
+
+				m.leased, m.next, m.hasSpare, m.pending = false, 0, false, nil
+			case !want:
+				require.NoError(t, err)
+
+				m.lastGood = now
+			default:
+				m.lastGood = now
+				if len(m.pending) > 0 && m.pending[0] == req.Settles {
+					m.pending = m.pending[1:]
+				}
+
+				if src.answer == "nogrant" || !m.acceptable(src.last) {
+					require.Error(t, err)
+					break
+				}
+
+				require.NoError(t, err)
+
+				grants[m.lease] = append(grants[m.lease], src.last)
+
+				if m.next == 0 {
+					m.install(src.last)
+				} else {
+					m.spare, m.hasSpare = src.last, true
+				}
+			}
+
+		default:
+			ops = append(ops, "close")
+
+			m.released = true
+			if m.leased {
+				m.releases = append(m.releases, Release{Lease: m.lease, Lane: m.lane, LastTaken: m.taken, Settles: m.oldestPending()})
+			}
+
+			require.NoError(t, a.Close())
+			require.Equal(t, len(src.releases), src.closedAt, "the release goes out before the client closes")
+			takeOne()
+		}
+	}
+
+	require.Equal(t, m.releases, src.releases)
+
+	// The invariants, from what the allocator gave out and sent alone. No position lies outside a
+	// grant its lease accepted, or comes twice in a lane, or comes once GrantDuration has passed
+	// since the grant's first take. (The model checks the stop on every take.)
+	var (
+		highest    = map[uint8]uint64{}
+		firstTake  = map[leaseGrant]time.Time{}
+		takenIn    = map[leaseGrant]uint64{} // the highest position taken in each grant
+		leaseTaken = map[LeaseID]uint64{}
+	)
+
+	for _, tk := range takes {
+		l, p := Unpack(tk.v)
+		require.Greater(t, p, highest[l], "lane %d: position %d is not above every earlier one", l, p)
+		highest[l] = p
+
+		i := slices.IndexFunc(grants[tk.lease], func(g Grant) bool { return g.Lane == l && g.First <= p && p <= g.Last })
+		require.GreaterOrEqual(t, i, 0, "position %d:%d lies in no grant its lease accepted", l, p)
+
+		key := leaseGrant{tk.lease, grants[tk.lease][i]}
+		if _, ok := firstTake[key]; !ok {
+			firstTake[key] = tk.at
+		}
+
+		require.Less(t, tk.at.Sub(firstTake[key]), tm.GrantDuration, "a grant is used past GrantDuration from its first take")
+
+		takenIn[key], leaseTaken[tk.lease] = p, p
+	}
+
+	// Every grant left is settled once and oldest first, on a grant request that was answered, or on
+	// the release. The release carries the highest position its lease took, which settles the grant
+	// in use. A lease the service closed may lose the pairs it still held.
+	for id, gs := range grants {
+		used := []Settles{}
+
+		for _, g := range gs {
+			if p := takenIn[leaseGrant{id, g}]; p != 0 {
+				used = append(used, Settles{First: g.First, LastTaken: p})
+			}
+		}
+
+		settled := []Settles{}
+
+		for i, r := range src.sent {
+			if r.Lease == id && r.WantGrant && r.Settles != (Settles{}) && src.answers[i] != "error" && src.answers[i] != "closed" {
+				settled = append(settled, r.Settles)
+			}
+		}
+
+		i := slices.IndexFunc(src.releases, func(r Release) bool { return r.Lease == id })
+		if i >= 0 {
+			require.Equal(t, leaseTaken[id], src.releases[i].LastTaken, "the release carries the highest position taken")
+
+			if st := src.releases[i].Settles; st != (Settles{}) {
+				settled = append(settled, st)
+			}
+
+			if n := len(used); n > 0 && len(settled) < n {
+				used = used[:n-1] // the grant in use is settled by the release's LastTaken
+			}
+
+			require.Equal(t, used, settled, "lease %x: the pairs settled", id[0])
+		} else {
+			require.LessOrEqual(t, len(settled), len(used))
+			require.Equal(t, used[:len(settled)], settled, "lease %x: the pairs settled", id[0])
+		}
+	}
+
+	// A first grant the allocator refused is released with nothing taken.
+	for _, r := range src.releases {
+		if _, ok := grants[r.Lease]; !ok {
+			require.Equal(t, Release{Lease: r.Lease, Lane: r.Lane}, r)
+		}
+	}
 }

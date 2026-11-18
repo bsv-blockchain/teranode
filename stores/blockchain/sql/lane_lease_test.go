@@ -3,9 +3,11 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"math/rand/v2"
 	"net/url"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +24,9 @@ import (
 )
 
 const leaseTestGrantMin = 10_000
+
+// leasableLanes is lanes 0 to 253, written out so a change to the store's own count is caught.
+const leasableLanes = 254
 
 // runLaneHandoutTests runs fn against SQLite in memory and, unless -short, Postgres.
 func runLaneHandoutTests(t *testing.T, name string, fn func(t *testing.T, s *SQL)) {
@@ -780,4 +785,491 @@ func TestOpenLaneLeaseTakesTheLaneClosedLongestAgo(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint8(1), g.Lane, "the lane closed longest ago comes first")
 	})
+}
+
+// checkLaneInvariants checks what must hold however the lease calls interleave: no position is
+// handed out twice in a lane, a later hand-out never starts below an earlier one, a lease has at
+// most one close row and its last lies inside the lease's own grants, and a lane's lease row has a
+// close row exactly when it is closed.
+func checkLaneInvariants(t *testing.T, s *SQL) {
+	t.Helper()
+
+	type row struct {
+		first, last int64
+		handedAt    time.Time
+	}
+
+	rows, err := s.db.QueryContext(t.Context(), `SELECT lane, first, last, handed_at FROM lane_handout`)
+	require.NoError(t, err)
+
+	byLane := map[int][]row{}
+
+	for rows.Next() {
+		var (
+			l int
+			r row
+		)
+
+		require.NoError(t, rows.Scan(&l, &r.first, &r.last, &r.handedAt))
+		require.Less(t, l, leasableLanes)
+		byLane[l] = append(byLane[l], r)
+	}
+
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+
+	for l, rs := range byLane {
+		sort.Slice(rs, func(i, j int) bool { return rs[i].first < rs[j].first })
+
+		for i := 1; i < len(rs); i++ {
+			require.Greater(t, rs[i].first, rs[i-1].last, "lane %d: two hand-outs overlap", l)
+		}
+
+		sort.SliceStable(rs, func(i, j int) bool { return rs[i].handedAt.Before(rs[j].handedAt) })
+
+		for i := 1; i < len(rs); i++ {
+			require.True(t, rs[i].handedAt.Equal(rs[i-1].handedAt) || rs[i].first > rs[i-1].first, "lane %d: a later hand-out starts below an earlier one", l)
+		}
+	}
+
+	require.Zero(t, countRows(t, s, `SELECT COUNT(*) FROM lane_close c WHERE (SELECT COUNT(*) FROM lane_handout h WHERE h.lease_id = c.lease_id AND c.last BETWEEN h.first AND h.last) <> 1`),
+		"a close row's last lies outside its own lease's grants")
+	require.Zero(t, countRows(t, s, `SELECT COUNT(*) - COUNT(DISTINCT lease_id) FROM lane_close`), "a lease has two close rows")
+	require.Zero(t, countRows(t, s, `SELECT COUNT(*) FROM lane_lease l WHERE (l.closed_at IS NOT NULL) <> EXISTS (SELECT 1 FROM lane_close c WHERE c.lease_id = l.lease_id)`),
+		"a lease row is closed without a close row, or open with one")
+}
+
+// leaseModel is what the lease tables should hold after a sequence of lease calls, kept by the
+// test from the rules alone.
+type leaseModel struct {
+	s         *SQL
+	leases    []*modelLease
+	current   map[uint8]*modelLease // each lane's lease row
+	high      map[uint8]uint64      // each lane's newest hand-out, 0 for none
+	prefillAt map[uint8]time.Time   // when the hand-outs from before the lease were made
+	handouts  []modelHandout        // the hand-out rows with a lease
+	closes    []modelClose
+}
+
+type modelLease struct {
+	id     lane.LeaseID
+	lane   uint8
+	holder string
+	closed bool
+	age    time.Duration // how far ageLeases has moved its last renewal back
+	grants []lane.Grant
+}
+
+type modelHandout struct {
+	lane                     uint8
+	first, last              int64
+	holder                   string
+	height                   int64
+	lease                    string
+	settlesFirst, settlesTkn sql.NullInt64
+}
+
+type modelClose struct {
+	lease                    string
+	lane                     uint8
+	kind                     string
+	last                     int64
+	settlesFirst, settlesTkn sql.NullInt64
+}
+
+type modelLeaseRow struct {
+	lane          uint8
+	lease, holder string
+	closed        bool
+}
+
+func (m *leaseModel) key(id lane.LeaseID) string {
+	if m.s.engine == util.Postgres {
+		return id.String()
+	}
+
+	return string(id[:])
+}
+
+func (m *leaseModel) exhausted(l uint8) bool { return m.high[l] >= lane.MaxPosition }
+
+func (m *leaseModel) stale(ls *modelLease) bool { return ls.closed || m.current[ls.lane] != ls }
+
+// grant is the next grant in lane l: size positions from one above the lane's newest hand-out.
+func (m *leaseModel) grant(l uint8, size uint64) lane.Grant {
+	g := lane.Grant{Lane: l, First: m.high[l] + 1, Last: lane.MaxPosition}
+	if size-1 < lane.MaxPosition-g.First {
+		g.Last = g.First + size - 1
+	}
+
+	return g
+}
+
+func (m *leaseModel) record(ls *modelLease, g lane.Grant, height uint32, st lane.Settles) {
+	m.high[g.Lane] = g.Last
+	ls.grants = append(ls.grants, g)
+	m.handouts = append(m.handouts, modelHandout{g.Lane, lane.ToSigned(g.First), lane.ToSigned(g.Last), ls.holder, int64(height), m.key(ls.id), settlesFirst(st), settlesLastTaken(st)})
+}
+
+// lapsing is the open leases a sweep with close time closeAfter closes.
+func (m *leaseModel) lapsing(closeAfter time.Duration) []*modelLease {
+	var out []*modelLease
+
+	for _, ls := range m.current {
+		if !ls.closed && ls.age >= closeAfter {
+			out = append(out, ls)
+		}
+	}
+
+	return out
+}
+
+func (m *leaseModel) lapse(swept []*modelLease) {
+	for _, ls := range swept {
+		ls.closed = true
+		last := ls.grants[len(ls.grants)-1].Last
+		m.closes = append(m.closes, modelClose{m.key(ls.id), ls.lane, closeLapsed, lane.ToSigned(last), sql.NullInt64{}, sql.NullInt64{}})
+	}
+}
+
+// choose is the lanes an open may take: the lowest never-used lane, else the lane closed longest
+// ago, skipping exhausted lanes. Leases the open's own sweep closes share one close time, so any of
+// them may come first; closedAt is the close time the store recorded for each earlier close.
+func (m *leaseModel) choose(swept []*modelLease, closedAt map[uint8]time.Time) []uint8 {
+	type candidate struct {
+		lane  uint8
+		since time.Time
+	}
+
+	justClosed := map[uint8]bool{}
+	for _, ls := range swept {
+		justClosed[ls.lane] = true
+	}
+
+	var cands []candidate
+
+	for n := 0; n < leasableLanes; n++ {
+		l := uint8(n) //nolint:gosec // n is below 254
+		ls := m.current[l]
+
+		switch {
+		case ls == nil && m.high[l] == 0:
+			return []uint8{l}
+		case m.exhausted(l) || (ls != nil && !ls.closed && !justClosed[l]):
+		case justClosed[l]:
+			cands = append(cands, candidate{l, time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)})
+		case ls != nil:
+			cands = append(cands, candidate{l, closedAt[l]})
+		default:
+			cands = append(cands, candidate{l, m.prefillAt[l]})
+		}
+	}
+
+	if len(cands) == 0 {
+		return nil
+	}
+
+	sort.SliceStable(cands, func(a, b int) bool { return cands[a].since.Before(cands[b].since) })
+
+	if !justClosed[cands[0].lane] {
+		return []uint8{cands[0].lane}
+	}
+
+	var out []uint8
+
+	for _, c := range cands {
+		if justClosed[c.lane] {
+			out = append(out, c.lane)
+		}
+	}
+
+	return out
+}
+
+// scanAll reads every row of query with scan.
+func scanAll[T any](t *testing.T, s *SQL, query string, scan func(rows *sql.Rows, v *T, id *[]byte) error, setID func(v *T, id []byte)) []T {
+	t.Helper()
+
+	rows, err := s.db.QueryContext(t.Context(), query)
+	require.NoError(t, err)
+
+	var out []T
+
+	for rows.Next() {
+		var (
+			v  T
+			id []byte
+		)
+
+		require.NoError(t, scan(rows, &v, &id))
+		setID(&v, id)
+		out = append(out, v)
+	}
+
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+
+	return out
+}
+
+// checkTables compares every lease, hand-out and close row with the model.
+func (m *leaseModel) checkTables(t *testing.T) {
+	t.Helper()
+
+	require.ElementsMatch(t, m.handouts, scanAll(t, m.s,
+		`SELECT lane, first, last, holder, height, lease_id, settles_first, settles_last_taken FROM lane_handout WHERE lease_id IS NOT NULL`,
+		func(rows *sql.Rows, h *modelHandout, id *[]byte) error {
+			return rows.Scan(&h.lane, &h.first, &h.last, &h.holder, &h.height, id, &h.settlesFirst, &h.settlesTkn)
+		},
+		func(h *modelHandout, id []byte) { h.lease = string(id) }), "lane_handout")
+
+	require.ElementsMatch(t, m.closes, scanAll(t, m.s,
+		`SELECT lease_id, lane, kind, last, settles_first, settles_last_taken FROM lane_close`,
+		func(rows *sql.Rows, c *modelClose, id *[]byte) error {
+			return rows.Scan(id, &c.lane, &c.kind, &c.last, &c.settlesFirst, &c.settlesTkn)
+		},
+		func(c *modelClose, id []byte) { c.lease = string(id) }), "lane_close")
+
+	want := make([]modelLeaseRow, 0, len(m.current))
+	for l, ls := range m.current {
+		want = append(want, modelLeaseRow{l, m.key(ls.id), ls.holder, ls.closed})
+	}
+
+	require.ElementsMatch(t, want, scanAll(t, m.s,
+		`SELECT lane, lease_id, holder, closed_at IS NOT NULL FROM lane_lease`,
+		func(rows *sql.Rows, r *modelLeaseRow, id *[]byte) error {
+			return rows.Scan(&r.lane, id, &r.holder, &r.closed)
+		},
+		func(r *modelLeaseRow, id []byte) { r.lease = string(id) }), "lane_lease")
+}
+
+// closeTimes reads the close time the store recorded for each closed lane lease.
+func (m *leaseModel) closeTimes(t *testing.T) map[uint8]time.Time {
+	t.Helper()
+
+	type closedLane struct {
+		lane uint8
+		at   time.Time
+	}
+
+	out := map[uint8]time.Time{}
+
+	for _, c := range scanAll(t, m.s, `SELECT lane, closed_at FROM lane_lease WHERE closed_at IS NOT NULL`,
+		func(rows *sql.Rows, c *closedLane, _ *[]byte) error { return rows.Scan(&c.lane, &c.at) },
+		func(*closedLane, []byte) {}) {
+		out[c.lane] = c.at
+	}
+
+	return out
+}
+
+// prefill makes lanes free to 253 used before the lease, so leases must pass a few lanes between
+// them. Three keep positions, at scrambled times; the rest are exhausted and older still, so an
+// open that took an exhausted lane would take one of them first.
+func (m *leaseModel) prefill(t *testing.T, rng *rand.Rand, free int) {
+	t.Helper()
+
+	usable := map[int]bool{}
+	for len(usable) < 3 {
+		usable[free+rng.IntN(leasableLanes-free)] = true
+	}
+
+	for n := free; n < leasableLanes; n++ {
+		first, last := int64(n)*10_000_000+1, lane.ToSigned(lane.MaxPosition)
+		at := time.Date(1999, 1, 1, 0, n, 0, 0, time.UTC)
+
+		if usable[n] {
+			last, at = int64(n+1)*10_000_000, time.Date(2000, 1, 1, 0, rng.IntN(1000), n, 0, time.UTC)
+		}
+
+		_, err := m.s.db.ExecContext(t.Context(),
+			`INSERT INTO lane_handout (lane, first, last, holder, height, handed_at) VALUES ($1, $2, $3, 'old', 1, $4)`, n, first, last, at)
+		require.NoError(t, err)
+
+		m.high[uint8(n)], m.prefillAt[uint8(n)] = lane.FromSigned(last), at //nolint:gosec // n is below 254
+	}
+}
+
+// TestLaneLeaseStoreKeepsItsInvariants drives seeded random sequences of opens, renewals with and
+// without a grant, releases, sweeps and the passing of time against the store. After every call it
+// checks the store's answer and every lease, hand-out and close row against a model kept from the
+// rules, and then the invariants. Odd seeds leave only a few lanes usable, so lanes pass from one
+// lease to the next while the old holder still renews and releases.
+func TestLaneLeaseStoreKeepsItsInvariants(t *testing.T) {
+	runLaneHandoutTests(t, "invariants", func(t *testing.T, s *SQL) {
+		for seed := uint64(1); seed <= 6; seed++ {
+			for _, table := range []string{"lane_close", "lane_handout", "lane_lease"} {
+				_, err := s.db.ExecContext(t.Context(), `DELETE FROM `+table)
+				require.NoError(t, err)
+			}
+
+			runLeaseModel(t, s, seed, 150)
+		}
+	})
+}
+
+func runLeaseModel(t *testing.T, s *SQL, seed uint64, steps int) {
+	rng := rand.New(rand.NewPCG(seed, seed)) //nolint:gosec // test randomness
+	m := &leaseModel{s: s, current: map[uint8]*modelLease{}, high: map[uint8]uint64{}, prefillAt: map[uint8]time.Time{}}
+
+	var ops []string
+
+	defer func() {
+		if t.Failed() {
+			t.Logf("seed %d, ops:\n%s", seed, strings.Join(ops, "\n"))
+		}
+	}()
+
+	if seed%2 == 1 {
+		m.prefill(t, rng, 1+rng.IntN(3))
+	}
+
+	ctx := t.Context()
+	closeAfters := []time.Duration{90 * time.Second, 150 * time.Second, time.Hour, time.Hour}
+	rates := []uint64{0, 3, 100, 90_000, 0, 3, 100, 90_000, lane.MaxPosition}
+
+	// pick returns a lease that is still open nine times in ten, else any lease ever opened.
+	pick := func() *modelLease {
+		var open []*modelLease
+
+		for _, ls := range m.leases {
+			if !m.stale(ls) {
+				open = append(open, ls)
+			}
+		}
+
+		if len(open) > 0 && rng.IntN(10) < 9 {
+			return open[rng.IntN(len(open))]
+		}
+
+		return m.leases[rng.IntN(len(m.leases))]
+	}
+
+	// pair is a settles pair inside one of the lease's grants, or none.
+	pair := func(ls *modelLease) lane.Settles {
+		if rng.IntN(3) == 0 {
+			return lane.Settles{}
+		}
+
+		g := ls.grants[rng.IntN(len(ls.grants))]
+
+		return lane.Settles{First: g.First, LastTaken: g.First + rng.Uint64N(g.Len())}
+	}
+
+	for step := 0; step < steps; step++ {
+		op := rng.IntN(100)
+		if len(m.leases) == 0 {
+			op = 0
+		}
+
+		switch {
+		case op < 20:
+			req := options.LaneLeaseOpen{
+				Holder: fmt.Sprintf("h%d", step), Height: rng.Uint32N(1000), GrantMin: []uint64{1, 7, leaseTestGrantMin}[rng.IntN(3)],
+				CloseAfter: closeAfters[rng.IntN(len(closeAfters))],
+			}
+			swept := m.lapsing(req.CloseAfter)
+			allowed := m.choose(swept, m.closeTimes(t))
+			ops = append(ops, fmt.Sprintf("%d open %+v -> lanes %v", step, req, allowed))
+
+			id, g, lapsed, err := s.OpenLaneLease(ctx, req)
+			if allowed == nil {
+				require.ErrorIs(t, err, errors.ErrServiceError, "no lane is free")
+				break
+			}
+
+			require.NoError(t, err)
+			require.Contains(t, allowed, g.Lane)
+			require.Equal(t, m.grant(g.Lane, req.GrantMin), g)
+			require.Equal(t, len(swept), lapsed)
+			m.lapse(swept)
+
+			ls := &modelLease{id: id, lane: g.Lane, holder: req.Holder}
+			m.leases = append(m.leases, ls)
+			m.current[g.Lane] = ls
+			m.record(ls, g, req.Height, lane.Settles{})
+
+		case op < 55:
+			ls := pick()
+			req := options.LaneLeaseRenew{
+				Lease: ls.id, Lane: ls.lane, Rate: rates[rng.IntN(len(rates))], WantGrant: rng.IntN(3) > 0, Settles: pair(ls),
+				Height: rng.Uint32N(1000), GrantMin: []uint64{1, leaseTestGrantMin}[rng.IntN(2)], GrantDuration: 2 * time.Minute,
+			}
+			ops = append(ops, fmt.Sprintf("%d renew lane %d %+v", step, ls.lane, req))
+
+			stale := m.stale(ls)
+
+			g, granted, closed, err := s.RenewLaneLease(ctx, req)
+			if !stale && req.WantGrant && m.exhausted(ls.lane) {
+				require.ErrorIs(t, err, errors.ErrServiceError, "an exhausted lane grants nothing")
+				break
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, stale, closed, "a renewal is refused exactly when its lease is stale")
+			require.Equal(t, !stale && req.WantGrant, granted)
+
+			if stale {
+				break
+			}
+
+			ls.age = 0
+
+			if req.WantGrant {
+				size := req.GrantMin // two minutes at the rate, and at least the minimum
+				if req.Rate > lane.MaxPosition/120 {
+					size = lane.MaxPosition
+				} else if req.Rate > 0 {
+					size = max(size, req.Rate*120)
+				}
+
+				require.Equal(t, m.grant(ls.lane, size), g)
+				m.record(ls, g, req.Height, req.Settles)
+			}
+
+		case op < 70:
+			ls := pick()
+			g := ls.grants[rng.IntN(len(ls.grants))]
+			req := options.LaneLeaseRelease{Lease: ls.id, Lane: ls.lane, LastTaken: g.First + rng.Uint64N(g.Len()), Settles: pair(ls)}
+			ops = append(ops, fmt.Sprintf("%d release lane %d %+v", step, ls.lane, req))
+
+			stale := m.stale(ls)
+
+			already, err := s.ReleaseLaneLease(ctx, req)
+			require.NoError(t, err)
+			require.Equal(t, stale, already, "a release is refused exactly when its lease is stale")
+
+			if !stale {
+				ls.closed = true
+				m.closes = append(m.closes, modelClose{m.key(ls.id), ls.lane, closeClean, lane.ToSigned(req.LastTaken), settlesFirst(req.Settles), settlesLastTaken(req.Settles)})
+			}
+
+		case op < 85:
+			d := time.Duration(1+rng.IntN(3)) * time.Minute
+			ops = append(ops, fmt.Sprintf("%d age %s", step, d))
+
+			ageLeases(t, s, d)
+
+			for _, ls := range m.current {
+				ls.age += d
+			}
+
+		default:
+			closeAfter := closeAfters[rng.IntN(len(closeAfters))]
+			ops = append(ops, fmt.Sprintf("%d sweep %s", step, closeAfter))
+
+			swept := m.lapsing(closeAfter)
+
+			n, err := s.CloseStaleLaneLeases(ctx, closeAfter)
+			require.NoError(t, err)
+			require.Equal(t, len(swept), n)
+			m.lapse(swept)
+		}
+
+		m.checkTables(t)
+		checkLaneInvariants(t, s)
+
+		// SQLite keeps times to the millisecond, and two closes in one would tie on their close time.
+		time.Sleep(2 * time.Millisecond)
+	}
 }
