@@ -29,6 +29,8 @@ type leaseLike struct {
 	startCtx atomic.Bool
 	leased   atomic.Bool
 	n        atomic.Uint64
+	// readies counts Ready calls.
+	readies atomic.Int64
 
 	// startErr is what Start returns.
 	startErr error
@@ -41,6 +43,8 @@ func (s *leaseLike) Start(ctx context.Context) error {
 }
 
 func (s *leaseLike) Ready() error {
+	s.readies.Add(1)
+
 	if !s.leased.Load() {
 		return errors.NewServiceUnavailableError("no lane lease yet")
 	}
@@ -91,6 +95,7 @@ func TestValidatorIsNotReadyWithoutALease(t *testing.T) {
 
 	require.True(t, source.started.Load(), "a validator starts its lease when it is built")
 	require.True(t, source.startCtx.Load(), "the lease starts on the validator's context")
+	require.Zero(t, source.readies.Load(), "New starts the lease and does not wait for it")
 
 	_, msg, _ := v.Health(context.Background(), false)
 	require.Contains(t, msg, "LaneLease: BAD")
@@ -187,4 +192,28 @@ func TestValidateFailsWithServiceUnavailableWithoutALanePosition(t *testing.T) {
 
 	_, err = store.Get(context.Background(), w.Txs[0].TxIDChainHash(), fields.Fee)
 	require.ErrorIs(t, err, errors.ErrTxNotFound)
+}
+
+// A New that fails takes no lease: the lease starts only once everything else in New has succeeded,
+// so a validator that is never built holds no lane.
+func TestValidatorNewThatFailsStartsNoLease(t *testing.T) {
+	ctx := context.Background()
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BatcherDrainMode = true
+	tSettings.Kafka.TxMetaConfig = nil
+
+	storeURL, err := url.Parse("sqlitememory:///laneleasefail")
+	require.NoError(t, err)
+
+	store, err := sql.New(ctx, ulogger.TestLogger{}, tSettings, storeURL)
+	require.NoError(t, err)
+
+	source := &leaseLike{}
+	taker, ok := utxo.As[utxo.LanePositionTaker](store)
+	require.True(t, ok)
+	taker.SetLanePositionSource(source)
+
+	_, err = New(ctx, ulogger.TestLogger{}, tSettings, store, nil, nil, nil, nil, nil)
+	require.Error(t, err, "pre-condition: New fails with no txmeta Kafka URL")
+	require.False(t, source.started.Load(), "a New that fails started the lane lease")
 }
