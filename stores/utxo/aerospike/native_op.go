@@ -226,6 +226,7 @@ func (s *Store) demoteNativeOnUnsupported(err error) {
 		// useNativeTeranodeOps first, so this is not load-bearing today, but a
 		// stale true would re-arm the fenced sub-ops if that order ever changed.
 		s.nativeReplayProtection.Store(false)
+		s.publishNativeRouting()
 		s.logger.Errorf("[teranode-native-op] server rejected a native op with PARAMETER_ERROR; demoting to the UDF path for the rest of this process")
 	}
 }
@@ -579,12 +580,7 @@ func (s *Store) detectNativeTeranodeOpSupport(ctx context.Context) bool {
 		// enforced in teranode.lua, and neither is exercised above. A dispatcher
 		// that fails this keeps the native path for every other sub-op; only the
 		// replay-protection sub-ops are fenced (useNativeForSubOp).
-		replayProtected := s.probeNativeReplayProtection(ctx, policy)
-		s.nativeReplayProtection.Store(replayProtected)
-
-		if !replayProtected {
-			s.logger.Warnf("[teranode-native-op] native dispatcher does not prove replay protection; spendMulti, spend and addDeletedChildren stay on the UDF path, every other sub-op keeps its routing (unspend is always UDF)")
-		}
+		s.recordReplayProtection(s.probeNativeReplayProtectionVerdict(ctx, policy))
 
 		return true
 	}
@@ -698,6 +694,8 @@ func (s *Store) initNativeTeranodeOps(ctx context.Context) {
 		s.logger.Infof("[teranode-native-op] enabled (op type 200, sub_op_id wire format)")
 	}
 
+	s.publishNativeRouting()
+
 	if s.useNativeVerifiedMarker.Load() {
 		s.logger.Infof("[teranode-native-op] the pruner writes replay markers with native sub-op 15 (addVerifiedDeletedChildren)")
 	} else {
@@ -806,6 +804,67 @@ func (s *Store) nativeProbeSpend(ctx context.Context, policy *aerospike.WritePol
 	return res, true
 }
 
+// replayProbeVerdict is what probeNativeReplayProtectionVerdict concluded.
+type replayProbeVerdict uint8
+
+const (
+	// replayProbeProven: the dispatcher enforces the replay marker and reports idempotent matches.
+	replayProbeProven replayProbeVerdict = iota
+	// replayProbeMismatch: the server answered the probe, and the answer says the dispatcher
+	// predates one of the semantics. That is a server build older than this release.
+	replayProbeMismatch
+	// replayProbeUnavailable: the probe could not finish, for a setup or transport failure, a
+	// refused opcode or a cancelled context. It says nothing about the server build.
+	replayProbeUnavailable
+)
+
+// recordReplayProtection stores the probe's verdict, publishes the routing and says what
+// happened. The verdict is final for the life of the process, so a mismatch is an Error that
+// names the cost, and a probe that could not finish is a Warn that says it is not retried.
+func (s *Store) recordReplayProtection(verdict replayProbeVerdict) {
+	s.nativeReplayProtection.Store(verdict == replayProbeProven)
+	s.publishNativeRouting()
+
+	switch verdict {
+	case replayProbeMismatch:
+		s.logger.Errorf("[teranode-native-op] native ops are enabled but the dispatcher does not prove replay protection (it predates the idempotent report or sub-op 15); spendMulti, spend and addDeletedChildren run on the UDF path for the life of this process, slower but correct. Deploy the mod-teranode build that carries both. Every other sub-op keeps its routing and unspend is always UDF")
+	case replayProbeUnavailable:
+		s.logger.Warnf("[teranode-native-op] the replay-protection probe could not finish (see the probe message above); spendMulti, spend and addDeletedChildren run on the UDF path for the life of this process because the verdict is not retried, every other sub-op keeps its routing and unspend is always UDF")
+	}
+}
+
+// The routes of the native routing gauge.
+const (
+	nativeRouteReplayProtection = "replay_protection"
+	nativeRouteVerifiedMarker   = "verified_marker"
+)
+
+// publishNativeRouting sets the native routing gauge from the store's current decisions.
+// It is called wherever one of them changes.
+func (s *Store) publishNativeRouting() {
+	if prometheusAerospikeNativeRouting == nil {
+		return
+	}
+
+	set := func(route string, native bool) {
+		value := 0.0
+		if native {
+			value = 1
+		}
+
+		prometheusAerospikeNativeRouting.WithLabelValues(route).Set(value)
+	}
+
+	set(nativeRouteReplayProtection, s.useNativeTeranodeOps.Load() && s.nativeReplayProtection.Load())
+	set(nativeRouteVerifiedMarker, s.useNativeVerifiedMarkerWrite())
+}
+
+// probeNativeReplayProtection reports whether probeNativeReplayProtectionVerdict proved the
+// dispatcher.
+func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospike.WritePolicy) bool {
+	return s.probeNativeReplayProtectionVerdict(ctx, policy) == replayProbeProven
+}
+
 // probeNativeReplayProtection proves the native dispatcher honours the two
 // spendMulti semantics the pruner's replay protection depends on, before
 // spendMulti is allowed onto the native path.
@@ -834,7 +893,7 @@ func (s *Store) nativeProbeSpend(ctx context.Context, policy *aerospike.WritePol
 // and unspend is always UDF. That is the whole point: the native path stays
 // available to a fork build that implements them, rather than being fenced off
 // for everyone.
-func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospike.WritePolicy) bool {
+func (s *Store) probeNativeReplayProtectionVerdict(ctx context.Context, policy *aerospike.WritePolicy) replayProbeVerdict {
 	const (
 		probeBlockHeight = uint32(1)
 		probeVout        = uint32(0)
@@ -843,7 +902,7 @@ func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospi
 	// Stage 1: a spend by a child the parent records as already pruned.
 	markerKey, markerHashes, markerCleanup, built := s.buildProbeRecord(policy, "replay-marker probe", probeBlockHeight, probeVout)
 	if !built {
-		return false
+		return replayProbeUnavailable
 	}
 
 	defer markerCleanup()
@@ -855,43 +914,43 @@ func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospi
 	spentRes, ok := s.nativeProbeSpend(ctx, policy, "replay-marker probe", markerKey, markerHashes[0],
 		prunedChild, probeBlockHeight, probeVout)
 	if !ok {
-		return false
+		return replayProbeUnavailable
 	}
 
 	if spentRes.Status != LuaStatusOK || len(spentRes.Errors) != 0 {
 		s.logger.Warnf("[teranode-native-op] replay-marker probe: the child's first spend was not accepted (%+v); falling back to UDF path", spentRes)
-		return false
+		return replayProbeMismatch
 	}
 
 	// Planted with the pruner's own write, so the probe proves the native spend
 	// reads the marker in the key format and value the pruner writes.
 	if !s.probePlantMarker(ctx, policy, markerKey, prunedChild.TxID) {
-		return false
+		return replayProbeUnavailable
 	}
 
 	markerRes, ok := s.nativeProbeSpend(ctx, policy, "replay-marker probe", markerKey, markerHashes[0],
 		prunedChild, probeBlockHeight, probeVout)
 	if !ok {
-		return false
+		return replayProbeUnavailable
 	}
 
 	if markerRes.Status != LuaStatusError {
 		s.logger.Warnf("[teranode-native-op] replay-marker probe: a spend by an already-pruned child was NOT rejected (%+v); "+
 			"the native dispatcher does not enforce %q, so pruning is not replay-safe on it; falling back to UDF path",
 			markerRes, fields.DeletedChildren.String())
-		return false
+		return replayProbeMismatch
 	}
 
 	if !rejectsWith(markerRes, LuaErrorCodeInvalidSpend) {
 		s.logger.Warnf("[teranode-native-op] replay-marker probe: pruned-child spend rejected with the wrong error (%+v), want %s; falling back to UDF path",
 			markerRes, LuaErrorCodeInvalidSpend)
-		return false
+		return replayProbeMismatch
 	}
 
 	// Stage 2: a re-spend by the same spender must be reported as idempotent.
 	idemKey, idemHashes, idemCleanup, built := s.buildProbeRecord(policy, "idempotent-report probe", probeBlockHeight, probeVout)
 	if !built {
-		return false
+		return replayProbeUnavailable
 	}
 
 	defer idemCleanup()
@@ -900,31 +959,31 @@ func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospi
 
 	firstRes, ok := s.nativeProbeSpend(ctx, policy, "idempotent-report probe", idemKey, idemHashes[0], spender, probeBlockHeight, probeVout)
 	if !ok {
-		return false
+		return replayProbeUnavailable
 	}
 
 	if firstRes.Status != LuaStatusOK || len(firstRes.Errors) != 0 {
 		s.logger.Warnf("[teranode-native-op] idempotent-report probe: first spend not accepted (%+v); falling back to UDF path", firstRes)
-		return false
+		return replayProbeMismatch
 	}
 
 	repeatRes, ok := s.nativeProbeSpend(ctx, policy, "idempotent-report probe", idemKey, idemHashes[0], spender, probeBlockHeight, probeVout)
 	if !ok {
-		return false
+		return replayProbeUnavailable
 	}
 
 	if repeatRes.Status != LuaStatusOK || len(repeatRes.Errors) != 0 {
 		s.logger.Warnf("[teranode-native-op] idempotent-report probe: re-spend by the same spender was not accepted (%+v); falling back to UDF path", repeatRes)
-		return false
+		return replayProbeMismatch
 	}
 
 	if !reportsIdempotent(repeatRes, 0) {
 		s.logger.Warnf("[teranode-native-op] idempotent-report probe: a re-spend by the same spender was accepted but not reported as idempotent (%+v); "+
 			"the rollback would reverse a confirmed spend on this dispatcher; falling back to UDF path", repeatRes)
-		return false
+		return replayProbeMismatch
 	}
 
-	return true
+	return replayProbeProven
 }
 
 // probePlantMarker records child as pruned on a probe record with the marker

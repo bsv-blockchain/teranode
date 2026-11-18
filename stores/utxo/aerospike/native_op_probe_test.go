@@ -106,6 +106,16 @@ func TestNativeTeranodeOpProbe_Container(t *testing.T) {
 			"replay-protection probe must accept a dispatcher that enforces deletedChildren and reports idempotent matches, and reject one that does not")
 	})
 
+	// A stock server refuses the opcode, so the probe could not finish. That says nothing about
+	// the build's semantics and must not be reported as the mismatch an older fork build gives.
+	t.Run("replay_protection_probe_verdict_on_a_server_that_refuses_the_opcode", func(t *testing.T) {
+		if expectNative {
+			t.Skip("the fork image serves the opcode")
+		}
+
+		require.Equal(t, replayProbeUnavailable, store.probeNativeReplayProtectionVerdict(ctx, probePolicy()))
+	})
+
 	t.Run("replay_protection_probe_honours_cancelled_context", func(t *testing.T) {
 		cancelled, cancel := context.WithCancel(ctx)
 		cancel()

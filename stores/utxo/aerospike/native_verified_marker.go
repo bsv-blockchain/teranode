@@ -85,6 +85,7 @@ func (s *Store) observePrunerNativeOpError(err error) {
 	}
 
 	if s.useNativeVerifiedMarker.CompareAndSwap(true, false) {
+		s.publishNativeRouting()
 		s.logger.Warnf("[teranode-native-op] server rejected sub-op 15 (addVerifiedDeletedChildren); the pruner writes replay markers with the filtered map write from now on")
 	}
 }

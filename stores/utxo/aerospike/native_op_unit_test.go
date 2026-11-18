@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -267,4 +268,88 @@ func TestParseLuaMapResponseOldMarkFields(t *testing.T) {
 	require.NoError(t, s.parseLuaMapResponseInto(map[interface{}]interface{}{"status": "OK"}, &res))
 	require.False(t, res.HasOldDeleteAtHeight)
 	require.False(t, res.HasOldUnminedSince)
+}
+
+// levelLogger records what a store logs at Warn and at Error.
+type levelLogger struct {
+	ulogger.TestLogger
+	warns, errs []string
+}
+
+func (l *levelLogger) Warnf(format string, args ...interface{}) {
+	l.warns = append(l.warns, fmt.Sprintf(format, args...))
+}
+
+func (l *levelLogger) Errorf(format string, args ...interface{}) {
+	l.errs = append(l.errs, fmt.Sprintf(format, args...))
+}
+
+func nativeRoutingGauge(route string) float64 {
+	return testutil.ToFloat64(prometheusAerospikeNativeRouting.WithLabelValues(route))
+}
+
+// TestRecordReplayProtection: a native-ops deployment whose server fails the replay-protection
+// probe runs spendMulti, spend and addDeletedChildren on the UDF path for the life of the
+// process, and nothing but a log line used to say so. The verdict now drives a routing gauge, and
+// the log level says which failure it was: a server that answered wrongly is an Error, because
+// the build has to be replaced, and a probe that could not finish is a Warn.
+func TestRecordReplayProtection(t *testing.T) {
+	InitPrometheusMetrics()
+
+	for _, tc := range []struct {
+		name      string
+		verdict   replayProbeVerdict
+		wantNativ bool
+		wantErrs  int
+		wantWarns int
+	}{
+		{name: "proven", verdict: replayProbeProven, wantNativ: true},
+		{name: "the server answered wrongly", verdict: replayProbeMismatch, wantErrs: 1},
+		{name: "the probe could not finish", verdict: replayProbeUnavailable, wantWarns: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logger := &levelLogger{}
+			s := &Store{logger: logger}
+			s.useNativeTeranodeOps.Store(true)
+
+			s.recordReplayProtection(tc.verdict)
+
+			require.Equal(t, tc.wantNativ, s.nativeReplayProtection.Load())
+			require.Equal(t, tc.wantNativ, s.useNativeForSubOp(subOpSpendMulti))
+			require.Len(t, logger.errs, tc.wantErrs)
+			require.Len(t, logger.warns, tc.wantWarns)
+
+			want := 0.0
+			if tc.wantNativ {
+				want = 1
+			}
+
+			require.Equal(t, want, nativeRoutingGauge(nativeRouteReplayProtection))
+		})
+	}
+}
+
+// TestNativeRoutingGaugeFollowsDemotion: a runtime PARAMETER_ERROR turns native ops off, and
+// a sub-op 15 rejection turns the native marker write off on its own. The gauge follows both.
+func TestNativeRoutingGaugeFollowsDemotion(t *testing.T) {
+	InitPrometheusMetrics()
+
+	s := &Store{logger: ulogger.TestLogger{}}
+	s.useNativeTeranodeOps.Store(true)
+	s.nativeReplayProtection.Store(true)
+	s.useNativeVerifiedMarker.Store(true)
+	s.publishNativeRouting()
+
+	require.Equal(t, 1.0, nativeRoutingGauge(nativeRouteReplayProtection))
+	require.Equal(t, 1.0, nativeRoutingGauge(nativeRouteVerifiedMarker))
+
+	s.observePrunerNativeOpError(aeroErr(types.PARAMETER_ERROR))
+
+	require.Equal(t, 1.0, nativeRoutingGauge(nativeRouteReplayProtection), "sub-op 15 is separate from replay protection")
+	require.Equal(t, 0.0, nativeRoutingGauge(nativeRouteVerifiedMarker), "the marker write is back on the filtered path")
+
+	s.demoteNativeOnUnsupported(aeroErr(types.PARAMETER_ERROR))
+
+	require.Equal(t, 0.0, nativeRoutingGauge(nativeRouteReplayProtection), "native ops are off")
+	require.Equal(t, 0.0, nativeRoutingGauge(nativeRouteVerifiedMarker))
 }
