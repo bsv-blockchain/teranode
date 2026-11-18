@@ -420,3 +420,31 @@ func TestJudgeVerifiedMarkerProbe(t *testing.T) {
 		})
 	}
 }
+
+// TestPrunerOptionsWireTheNativeMarkerHooks: the pruner is built with the store's marker builder and
+// its sub-op 15 error observer. Without the observer a PARAMETER_ERROR from a node that does not
+// serve sub-op 15 never turns the native marker write off, and the pruner keeps sending it.
+func TestPrunerOptionsWireTheNativeMarkerHooks(t *testing.T) {
+	s := &Store{logger: ulogger.TestLogger{}}
+	s.useNativeTeranodeOps.Store(true)
+	s.useNativeVerifiedMarker.Store(true)
+
+	opts := s.prunerOptions()
+	require.NotNil(t, opts.BuildVerifiedMarkerRecord)
+	require.NotNil(t, opts.ObserveNativeOpError, "the pruner must report its marker write errors to the store")
+
+	key, err := aerospike.NewKey("test", "test", "wired")
+	require.NoError(t, err)
+
+	child := chainhash.HashH([]byte("wired child"))
+	children := []aeropruner.MarkerChild{{Hash: &child, Offsets: []uint32{0}}}
+
+	_, native := opts.BuildVerifiedMarkerRecord(key, children)
+	require.True(t, native, "native sub-op 15 is on")
+
+	opts.ObserveNativeOpError(&aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR})
+
+	_, native = opts.BuildVerifiedMarkerRecord(key, children)
+	require.False(t, native, "a PARAMETER_ERROR turns the native marker write off")
+	require.True(t, s.useNativeTeranodeOps.Load(), "the other native ops stay on")
+}
