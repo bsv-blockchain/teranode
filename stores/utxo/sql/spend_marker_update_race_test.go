@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -179,4 +180,89 @@ func TestBulkSpendDuplicateTakesRepresentativesRefusal(t *testing.T) {
 	require.ErrorIs(t, <-representative.errCh, errors.ErrUtxoSpendingTxPruned, "precondition: the representative is refused as a pruned replay")
 	require.ErrorIs(t, <-duplicate.errCh, errors.ErrUtxoSpendingTxPruned,
 		"the duplicate must take its representative's refusal, not a success")
+}
+
+// TestRollbackKeepsAMatchAnotherWriterRecordedBeforeTheUpdate: C spends A:0, which is free
+// when the SELECT reads it, and M:0, which records C and carries C's marker, so the call fails
+// with a pruned-replay answer. Another attempt at C commits its own spend of A:0 inside the
+// window between the SELECT and the UPDATE, so by the time this call writes A:0 the output
+// already records exactly this spend. That is an idempotent match, not a spend this call
+// wrote, and with a pruned-replay answer in the batch it may be a confirmed historical spend:
+// the rollback must leave it. Both ways the UPDATE learns about it are run: the write is
+// already committed when the UPDATE starts, or it commits while the UPDATE waits for the row.
+//
+// Postgres only, for the same reason as TestSpendRefusesMarkerCommittedAfterSelect.
+func TestRollbackKeepsAMatchAnotherWriterRecordedBeforeTheUpdate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	for _, tc := range []struct {
+		name string
+		// commitsWhileUpdateWaits: the other writer holds A:0's row lock when the UPDATE
+		// starts and commits once the UPDATE is waiting on it.
+		commitsWhileUpdateWaits bool
+	}{
+		{name: "committed_before_the_update"},
+		{name: "committed_while_the_update_waits", commitsWhileUpdateWaits: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, ctx := setupPostgresStore(t)
+			store.settings.UtxoStore.BatchSQLOperations = true
+			require.NoError(t, store.SetBlockHeight(1000))
+
+			a := replayParent(t, ctx, store, "1111111111111111111111111111111111111111111111111111111111111111")
+			m := replayParent(t, ctx, store, "2222222222222222222222222222222222222222222222222222222222222222")
+			c := replaySpender(t, a, m)
+
+			plantReplayMarker(t, ctx, store, m, c, 1)
+
+			recorded := spendpkg.NewSpendingData(c.TxIDChainHash(), 0).Bytes()
+			const writeA = "UPDATE outputs SET spending_data = $2 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)"
+
+			var once sync.Once
+
+			store.afterSpendSelect = func() {
+				once.Do(func() {
+					if !tc.commitsWhileUpdateWaits {
+						_, err := store.db.ExecContext(context.Background(), writeA, a.TxIDChainHash()[:], recorded)
+						require.NoError(t, err)
+
+						return
+					}
+
+					holder, err := store.db.BeginTx(context.Background(), nil)
+					require.NoError(t, err)
+
+					_, err = holder.ExecContext(context.Background(), writeA, a.TxIDChainHash()[:], recorded)
+					require.NoError(t, err)
+
+					go func() {
+						deadline := time.Now().Add(10 * time.Second)
+
+						for time.Now().Before(deadline) {
+							var waiting int
+
+							if err := store.db.QueryRowContext(context.Background(), "SELECT count(*) FROM pg_locks WHERE NOT granted").Scan(&waiting); err == nil && waiting > 0 {
+								break
+							}
+
+							time.Sleep(10 * time.Millisecond)
+						}
+
+						_ = holder.Commit()
+					}()
+				})
+			}
+			t.Cleanup(func() { store.afterSpendSelect = nil })
+
+			spends, err := store.Spend(ctx, c, 1000)
+			store.afterSpendSelect = nil
+
+			require.Error(t, err)
+			require.ErrorIs(t, spends[1].Err, errors.ErrUtxoSpendingTxPruned, "fixture: M refuses the replay")
+			require.Equal(t, recorded, outputSpendingData(t, ctx, store, a, 0),
+				"an output that already recorded this spend when the call wrote it is an idempotent match and stays")
+		})
+	}
 }

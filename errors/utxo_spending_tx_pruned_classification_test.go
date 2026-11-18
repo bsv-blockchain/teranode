@@ -8,13 +8,14 @@ import (
 )
 
 // TestUtxoSpendingTxPrunedIsClassified pins ERR_UTXO_SPENDING_TX_PRUNED on the
-// two client-facing classifiers in this package. It is a permanent, deterministic
-// rejection about chain state: the spending transaction was mined, fully spent
-// and pruned. Unclassified it fell to codes.Internal with no verdict in the body,
-// reporting a settled answer to a submitter as a server fault.
+// two client-facing classifiers in this package. It is this node's record, not a
+// consensus verdict: the spending transaction was mined, fully spent and pruned
+// here, and it keeps that answer while the parent output still names it.
+// Unclassified it fell to codes.Internal with no verdict in the body, reporting a
+// settled answer to a submitter as a server fault.
 func TestUtxoSpendingTxPrunedIsClassified(t *testing.T) {
 	require.Equal(t, codes.FailedPrecondition, ErrorCodeToGRPCCode(ERR_UTXO_SPENDING_TX_PRUNED),
-		"a terminal verdict about chain state, like ERR_UTXO_SPENT beside it")
+		"answered like ERR_UTXO_SPENT beside it")
 
 	require.True(t, isPublicCause(ERR_UTXO_SPENDING_TX_PRUNED),
 		"the submitter needs the verdict, and the message carries only their own txid and outpoint")
@@ -23,4 +24,6 @@ func TestUtxoSpendingTxPrunedIsClassified(t *testing.T) {
 	cause := DeepestPublicCause(NewProcessingError("wrapped", err))
 	require.NotNil(t, cause, "the verdict must survive wrapping so the response body carries it")
 	require.Contains(t, cause.Error(), "spending transaction was pruned")
+	require.Contains(t, cause.Error(), "invalid spend for abc:0", "the producer's %s and %d are formatted, not left in the message")
+	require.NotContains(t, cause.Error(), "%", "no unformatted verb")
 }

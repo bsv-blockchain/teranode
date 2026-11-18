@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -939,7 +941,23 @@ func TestRollbackKeepsAMatchMarkedAfterTheSpendRead(t *testing.T) {
 // unknown and may be the marker hit, so B:0 may be a confirmed historical
 // spend: the rollback must leave it. The Aerospike store pins the same case in
 // TestAbortPathNeverReversesAnIdempotentMatchWhileAnInputIsUnanswered.
+//
+// The per-input wait ends two ways, each with its own arm that counts the input as
+// unresolved: the wait timeout, and the caller's context being cancelled. Both are run.
 func TestAbortedSpendKeepsAnIdempotentMatchWhileAnInputIsUnanswered(t *testing.T) {
+	for _, byCancel := range []bool{false, true} {
+		name := "timeout"
+		if byCancel {
+			name = "context_cancel"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			testAbortedSpendKeepsIdempotentMatch(t, byCancel)
+		})
+	}
+}
+
+func testAbortedSpendKeepsIdempotentMatch(t *testing.T, byCancel bool) {
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		newParent := func(seed string) *bt.Tx {
 			parent := bt.NewTx()
@@ -983,8 +1001,17 @@ func TestAbortedSpendKeepsAnIdempotentMatchWhileAnInputIsUnanswered(t *testing.T
 			b.TxIDChainHash()[:], recorded)
 		require.NoError(t, err)
 
-		// A's spend is never answered.
+		// A's spend is never answered. The timeout variant lets the per-input wait run
+		// out. The cancel variant waits a minute and cancels the caller's context with A
+		// in flight, after B and E have been answered.
+		callCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
 		store.settings.UtxoStore.SpendWaitTimeout = 500 * time.Millisecond
+		if byCancel {
+			store.settings.UtxoStore.SpendWaitTimeout = time.Minute
+		}
+
 		store.spendBatcher = batcher.NewWithPool(store.settings.UtxoStore.SpendBatcherSize, 10*time.Millisecond, func(batch []*batchSpend) {
 			answered := make([]*batchSpend, 0, len(batch))
 
@@ -997,9 +1024,16 @@ func TestAbortedSpendKeepsAnIdempotentMatchWhileAnInputIsUnanswered(t *testing.T
 			if len(answered) > 0 {
 				store.sendSpendBatch(answered)
 			}
+
+			if byCancel {
+				// Let the workers of B and E take their answers first, so only A's wait
+				// ends on the cancel.
+				time.Sleep(300 * time.Millisecond)
+				cancel()
+			}
 		}, false)
 
-		_, err = store.Spend(ctx, c, 1000)
+		_, err = store.Spend(callCtx, c, 1000)
 		require.Error(t, err)
 
 		require.Equal(t, recorded, outputSpendingData(t, ctx, store, b, 0),
@@ -1114,4 +1148,236 @@ func TestPrunerWritesNoMarkerOnAParentItDeletes(t *testing.T) {
 		require.Equal(t, []marker{{parent: qID, child: string(k.TxIDChainHash()[:])}}, written,
 			"only k's marker on the surviving parent q may be written, not h's marker on the deleted g")
 	})
+}
+
+// replayParent stores a parent with one output, unspent.
+func replayParent(t *testing.T, ctx context.Context, store *Store, seed string) *bt.Tx {
+	t.Helper()
+
+	parent := bt.NewTx()
+	require.NoError(t, parent.From(seed, 0, "51", 30000))
+	parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+	_, err := store.Create(ctx, parent, 1000)
+	require.NoError(t, err)
+
+	return parent
+}
+
+// replaySpender builds a transaction that spends output 0 of each parent, in order. It stores
+// nothing.
+func replaySpender(t *testing.T, parents ...*bt.Tx) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+
+	for _, parent := range parents {
+		require.NoError(t, tx.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	}
+
+	for i := range tx.Inputs {
+		tx.Inputs[i].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+	}
+
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+
+	return tx
+}
+
+// plantReplayMarker makes output 0 of parent record spender at vin, as it did before the pruner
+// removed spender, and writes the pruner's marker for it.
+func plantReplayMarker(t *testing.T, ctx context.Context, store *Store, parent, spender *bt.Tx, vin int) {
+	t.Helper()
+
+	_, err := store.db.ExecContext(ctx,
+		"UPDATE outputs SET spending_data = $2 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
+		parent.TxIDChainHash()[:], spendpkg.NewSpendingData(spender.TxIDChainHash(), vin).Bytes())
+	require.NoError(t, err)
+
+	_, err = store.db.ExecContext(ctx,
+		"INSERT INTO deleted_children (parent_id, child_hash) SELECT id, $2 FROM transactions WHERE hash = $1",
+		parent.TxIDChainHash()[:], spender.TxIDChainHash()[:])
+	require.NoError(t, err)
+}
+
+func rollbackOutcomeCount(outcome string) float64 {
+	return testutil.ToFloat64(prometheusUtxoPartialSpendRollbacks.WithLabelValues(outcome))
+}
+
+// TestSpendBlessesInputsOfParentsThatAreGone: C is already stored, and three of its parents
+// have been pruned, so spending them answers TxNotFound. Each such input counts as succeeded
+// because C's record proves it was validated, but it wrote nothing and has no row to reverse,
+// so it goes into neither rollback list. A fourth input fails on an output another
+// transaction spent, so the call fails and takes the rollback path: with the blessed inputs
+// left out there is nothing this call wrote, and the rollback must not even start. Spends
+// answered one at a time make the later blessed inputs take the memo of the first, the
+// other arm of the bless.
+func TestSpendBlessesInputsOfParentsThatAreGone(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+		parents := make([]*bt.Tx, 0, 3)
+		for _, seed := range []string{"4", "5", "6"} {
+			parents = append(parents, replayParentNotStored(t, strings.Repeat(seed, 64)))
+		}
+
+		f := replayParent(t, ctx, store, "7777777777777777777777777777777777777777777777777777777777777777")
+
+		other := replaySpender(t, f)
+		_, _, err := store.SpendAndCreate(ctx, other, 1000)
+		require.NoError(t, err, "fixture: F:0 is spent by another transaction")
+
+		c := replaySpender(t, append(parents, f)...)
+
+		_, err = store.Create(ctx, c, 1000)
+		require.NoError(t, err, "fixture: C is stored")
+
+		store.settings.UtxoStore.SpendWaitTimeout = time.Minute
+		store.spendBatcher = batcher.NewWithPool(store.settings.UtxoStore.SpendBatcherSize, 10*time.Millisecond, func(batch []*batchSpend) {
+			for i, item := range batch {
+				if i > 0 {
+					time.Sleep(150 * time.Millisecond)
+				}
+
+				store.sendSpendBatch([]*batchSpend{item})
+			}
+		}, false)
+
+		before := rollbackOutcomeCount(utxo.RollbackOutcomeSpenderExists)
+
+		spends, err := store.Spend(ctx, c, 1000)
+		require.Error(t, err)
+		require.ErrorIs(t, err, errors.ErrSpent)
+
+		for i := range parents {
+			require.NoError(t, spends[i].Err, "input %d: C's record blesses a spend of a parent that is gone", i)
+		}
+
+		require.Equal(t, before, rollbackOutcomeCount(utxo.RollbackOutcomeSpenderExists),
+			"a blessed input wrote nothing, so no rollback may be attempted for it")
+	})
+}
+
+// replayParentNotStored builds a parent that is never stored, whose txid a spender can name.
+func replayParentNotStored(t *testing.T, seed string) *bt.Tx {
+	t.Helper()
+
+	parent := bt.NewTx()
+	require.NoError(t, parent.From(seed, 0, "51", 30000))
+	parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+	return parent
+}
+
+// TestRequireParentOutputsRollsBackWhatItWrote: the second wave of DefaultSpendAndCreateMulti
+// spends a record its first wave stored, so the existence probe would always find the spender
+// and never fire. Such a call takes spendRollbackSet's rule instead: when an input fails, what
+// the call wrote is reversed. X:0 is written, Y:0 is spent by another transaction, and X:0
+// must be free again.
+func TestRequireParentOutputsRollsBackWhatItWrote(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+		x := replayParent(t, ctx, store, "1111111111111111111111111111111111111111111111111111111111111111")
+		y := replayParent(t, ctx, store, "2222222222222222222222222222222222222222222222222222222222222222")
+
+		_, _, err := store.SpendAndCreate(ctx, replaySpender(t, y), 1000)
+		require.NoError(t, err, "fixture: Y:0 is spent by another transaction")
+
+		c := replaySpender(t, x, y)
+
+		_, err = store.Create(ctx, c, 1000)
+		require.NoError(t, err, "fixture: the first wave stored C")
+
+		_, err = store.Spend(ctx, c, 1000, utxo.IgnoreFlags{RequireParentOutputs: true})
+		require.ErrorIs(t, err, errors.ErrSpent)
+
+		require.Empty(t, outputSpendingData(t, ctx, store, x, 0),
+			"the spend of X:0 this call wrote is reversed, although C is stored")
+	})
+}
+
+// TestTransientLockDoesNotHideAPrunedReplay: C spends L:0, whose parent is locked, M:0, which
+// records C and carries C's marker, and F:0, which is free and written by this call. The lock
+// is a transient window and would suppress the rollback, but the marker means C can never
+// win: a replay of a pruned transaction meets it on every attempt. F:0 is spent by a
+// transaction that is never created and must be reversed, or its legitimate spender gets
+// ErrSpent naming a txid this node never stored.
+func TestTransientLockDoesNotHideAPrunedReplay(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+		l := replayParent(t, ctx, store, "1111111111111111111111111111111111111111111111111111111111111111")
+		m := replayParent(t, ctx, store, "2222222222222222222222222222222222222222222222222222222222222222")
+		f := replayParent(t, ctx, store, "3333333333333333333333333333333333333333333333333333333333333333")
+
+		c := replaySpender(t, l, m, f)
+
+		plantReplayMarker(t, ctx, store, m, c, 1)
+
+		require.NoError(t, store.SetLocked(ctx, []chainhash.Hash{*l.TxIDChainHash()}, true))
+
+		spends, err := store.Spend(ctx, c, 1000)
+		require.Error(t, err)
+		require.ErrorIs(t, spends[0].Err, errors.ErrTxLocked, "fixture: L is locked")
+		require.ErrorIs(t, spends[1].Err, errors.ErrUtxoSpendingTxPruned, "fixture: M carries the marker")
+
+		require.Empty(t, outputSpendingData(t, ctx, store, f, 0),
+			"the spend of F:0 this call wrote is reversed: a pruned replay can never win, whatever else is locked")
+		require.NotEmpty(t, outputSpendingData(t, ctx, store, m, 0), "M:0 is a confirmed spend and stays")
+	})
+}
+
+func TestHasUnwinnableFailure(t *testing.T) {
+	require.True(t, hasUnwinnableFailure([]*utxo.Spend{
+		{Err: errors.NewTxLockedError("locked")},
+		{Err: errors.NewUtxoSpendingTxPrunedError("pruned")},
+	}), "a pruned-replay refusal is unwinnable")
+	require.False(t, hasUnwinnableFailure([]*utxo.Spend{{Err: errors.NewTxLockedError("locked")}}), "a lock alone is transient")
+	require.False(t, hasUnwinnableFailure([]*utxo.Spend{nil, {}}))
+}
+
+// TestRefusedReplayLeavesTheParentsStampAlone: an outsider can resubmit a pruned transaction
+// whose parent survives. The refusal must come before the idempotent bookkeeping, which runs
+// setDAH on the parent and moves its delete_at_height forward: that write is what the caller
+// controls, and a refused replay has to leave the parent as it was. Runs the bulk path and the
+// per-row path.
+func TestRefusedReplayLeavesTheParentsStampAlone(t *testing.T) {
+	for _, bulk := range []bool{true, false} {
+		t.Run(fmt.Sprintf("bulk=%v", bulk), func(t *testing.T) {
+			forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+				store.settings.UtxoStore.BatchSQLOperations = bulk
+
+				p := replayParent(t, ctx, store, "1111111111111111111111111111111111111111111111111111111111111111")
+				c := replaySpender(t, p)
+
+				_, err := store.Spend(ctx, c, 1000)
+				require.NoError(t, err, "fixture: C spends P:0")
+
+				_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{p.TxIDChainHash()},
+					utxo.MinedBlockInfo{BlockID: 1000, BlockHeight: 1000, OnLongestChain: true})
+				require.NoError(t, err)
+
+				plantReplayMarker(t, ctx, store, p, c, 0)
+
+				stamp := readDAH(ctx, t, store, *p.TxIDChainHash())
+				require.NotNil(t, stamp, "fixture: P is fully spent and mined, so it carries a stamp")
+
+				require.NoError(t, store.SetBlockHeight(2000))
+
+				// A replay the marker refuses at the read never reaches the write. The
+				// per-row path would otherwise refuse it at the UPDATE's marker re-check.
+				writes := 0
+				spendBeforeWrite = func() { writes++ }
+
+				t.Cleanup(func() { spendBeforeWrite = nil })
+
+				spends, err := store.Spend(ctx, c, 2000)
+				spendBeforeWrite = nil
+
+				require.Error(t, err)
+				require.ErrorIs(t, spends[0].Err, errors.ErrUtxoSpendingTxPruned)
+				require.Zero(t, writes, "a replay refused at the read must not reach the write")
+
+				require.Equal(t, stamp, readDAH(ctx, t, store, *p.TxIDChainHash()),
+					"a refused replay must not move the parent's delete_at_height")
+			})
+		})
+	}
 }

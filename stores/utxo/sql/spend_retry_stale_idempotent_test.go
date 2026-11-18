@@ -305,3 +305,83 @@ func TestSpendRollbackKeepsAMatchMarkedBeforeTheProbe(t *testing.T) {
 			"a match whose parent gained C's marker before the probe is a confirmed spend and must stay")
 	})
 }
+
+// TestSpendRetryReversesAFreshWriteWhenAReplayAnswerFollows is the variant of the test above
+// that tells the rollback sets apart. A replay answer in the batch (here Q:0, which records C
+// and carries C's marker) makes the rollback leave idempotent matches alone and reverse only what
+// the call wrote. P:0 is an idempotent match on attempt 1, is released inside the retry window,
+// and is written fresh on attempt 2. A stale idempotent flag would keep it out of the
+// rollback, leaving P:0 spent by a transaction that is never created.
+func TestSpendRetryReversesAFreshWriteWhenAReplayAnswerFollows(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+		p := replayParent(t, ctx, store, strings.Repeat("1", 63)+"1")
+		q := replayParent(t, ctx, store, strings.Repeat("1", 63)+"2")
+		child := replaySpender(t, p, q)
+
+		// History: C spent both outputs and both parents were mined.
+		spends, err := store.Spend(ctx, child, 1000)
+		require.NoError(t, err)
+		require.Len(t, spends, 2)
+		p0 := spends[0]
+
+		_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{p.TxIDChainHash(), q.TxIDChainHash()},
+			utxo.MinedBlockInfo{BlockID: 1000, BlockHeight: 1000, OnLongestChain: true})
+		require.NoError(t, err)
+
+		// Q:0 records C and carries C's marker: a replay of C is refused on it.
+		_, err = store.db.ExecContext(ctx,
+			"INSERT INTO deleted_children (parent_id, child_hash) SELECT id, $2 FROM transactions WHERE hash = $1",
+			q.TxIDChainHash()[:], child.TxIDChainHash()[:])
+		require.NoError(t, err)
+
+		require.NoError(t, store.SetBlockHeight(1100))
+
+		createTrigger := "CREATE TRIGGER retry_once BEFORE UPDATE ON transactions BEGIN SELECT RAISE(ABORT, 'database is locked'); END"
+		dropTrigger := "DROP TRIGGER retry_once"
+
+		if store.engine == "postgres" {
+			_, err = store.db.ExecContext(ctx, `CREATE FUNCTION raise_database_is_locked() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'database is locked'; END $$`)
+			require.NoError(t, err)
+
+			createTrigger = "CREATE TRIGGER retry_once BEFORE UPDATE ON transactions FOR EACH ROW EXECUTE FUNCTION raise_database_is_locked()"
+			dropTrigger = "DROP TRIGGER retry_once ON transactions"
+		}
+
+		_, err = store.db.ExecContext(ctx, createTrigger)
+		require.NoError(t, err)
+
+		var (
+			mu        sync.Mutex
+			hookFired bool
+			hookErr   error
+		)
+
+		store.logger = &spendRetryHook{onRetry: func() {
+			mu.Lock()
+			defer mu.Unlock()
+
+			hookFired = true
+
+			if _, hookErr = store.db.ExecContext(ctx, dropTrigger); hookErr != nil {
+				return
+			}
+
+			// The concurrent writer: C's spend of P:0 is reversed inside the retry window.
+			hookErr = store.Unspend(ctx, []*utxo.Spend{p0})
+		}}
+
+		replay, err := store.Spend(ctx, child, 1200)
+		require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is refused on Q:0")
+		require.Len(t, replay, 2)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		require.True(t, hookFired, "attempt 1 must fail retryably after classifying P:0 as idempotent")
+		require.NoError(t, hookErr)
+
+		require.NotEmpty(t, outputSpendingData(t, ctx, store, q, 0), "Q:0 is a confirmed spend and stays")
+		require.Empty(t, outputSpendingData(t, ctx, store, p, 0),
+			"the retry wrote a fresh spend of P:0 for a call that was then refused; the rollback must reverse it")
+	})
+}
