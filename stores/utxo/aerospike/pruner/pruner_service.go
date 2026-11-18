@@ -376,7 +376,7 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		})
 		prometheusUtxoMarkerWithdrawFailures = promauto.NewCounter(prometheus.CounterOpts{
 			Name: "utxo_pruner_marker_withdraw_failures_total",
-			Help: "Total number of parent records from which the replay markers of a held-back child could not be withdrawn; retried next cycle",
+			Help: "Total number of parent records from which the replay markers of a held-back child could not be withdrawn after the in-call resends; nothing retries them later, so the marker stays until the child is pruned, and a child that lost its deleteAtHeight to a reorg is not found again",
 		})
 		prometheusUtxoExternalFilesDeleted = promauto.NewCounter(prometheus.CounterOpts{
 			Name: "utxo_pruner_external_files_deleted_total",
@@ -2345,9 +2345,9 @@ func (p *markingPlan) withNativeRefusals(updates map[string]*parentUpdateInfo) m
 // returned plan lists the children that must be held back rather than deleted
 // unmarked.
 //
-// The Aerospike spend path honours a marker only while the output names the
-// child, but nothing in it ever clears one, and the SQL spend path checks the
-// transaction ASKING to spend. Marking only the named child keeps a conflicting
+// Both spend paths honour a marker only while the output records the child as
+// its spender, and nothing in either ever clears one. Marking only the named
+// child keeps a conflicting
 // loser, which names the winner's outpoint in its inputs and is a pruning
 // candidate like any other tombstoned record, free to spend that output once
 // the winner's spend is released (a reorg, ReverseProcessConflicting). The SQL
@@ -2738,8 +2738,9 @@ const blobDeleteTimeout = 2 * time.Minute
 // anyway, so NotifyPruneComplete would never fire again.
 func (s *Service) flushChunk(ctx context.Context, carry *deleteCarry, parentUpdates map[string]*parentUpdateInfo, deletions []*pendingDeletion, externalFiles []*externalFileInfo) (deleted, heldBack int, err error) {
 	// SkipDeletions is checked before any marker is written, not only before the
-	// deletions. The spend path consults a marker for the transaction asking to
-	// spend, so a marker for a child that is then deliberately NOT deleted turns
+	// deletions. The spend path refuses a marked child whose output still
+	// records it as the spender, so a marker for a child that is then
+	// deliberately NOT deleted turns
 	// that live, mined child's own idempotent re-spend into a pruned-replay
 	// rejection, so a block that re-includes it is refused and retried.
 	//
@@ -3188,8 +3189,9 @@ func (s *Service) markParentsWith(ctx context.Context, parentUpdates, all map[st
 
 		// Nothing is known about which records took the write, so withdraw
 		// every child's marker. Best effort: a withdrawal that fails leaves a
-		// marker on a child that is still present, and the next cycle, which
-		// reconsiders that child, withdraws it again.
+		// marker on a child that is still present until a later cycle prunes
+		// that child, which never happens if the child lost its
+		// deleteAtHeight. See withdrawMarkers.
 		s.withdrawMarkers(all, allChildren(all))
 
 		return nil, true, err
@@ -4247,7 +4249,10 @@ func (s *Service) executeBatchExternalFileDeletions(ctx context.Context, files [
 	return nil
 }
 
-// ProcessSingleRecord processes a single transaction for cleanup (for testing/manual cleanup)
+// ProcessSingleRecord writes the replay markers for one transaction's parents.
+// Only tests call it. It never deletes or withdraws for txHash, so a marker it
+// writes names a child that is still present, which refuses that child's own
+// idempotent re-spend: use it only on a child that is deleted afterwards.
 // This is a simplified wrapper around the batch operations for single-record processing
 func (s *Service) ProcessSingleRecord(txHash *chainhash.Hash, inputs []*bt.Input) error {
 	if len(inputs) == 0 {
@@ -4275,9 +4280,9 @@ func (s *Service) ProcessSingleRecord(txHash *chainhash.Hash, inputs []*bt.Input
 		return err
 	}
 
-	// ProcessSingleRecord is the manual entry point an operator reaches for
-	// after an incident, so a per-record marker failure has to surface here
-	// rather than being isolated the way the batch pruner isolates it.
+	// ProcessSingleRecord has no production caller; tests use it. A per-record
+	// marker failure surfaces here as an error rather than being isolated the
+	// way the batch pruner isolates it.
 	if _, held := plan.blocked[*txHash]; held {
 		return errors.NewStorageError("parent replay markers for %s could not be written", txHash.String())
 	}

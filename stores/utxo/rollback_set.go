@@ -6,8 +6,9 @@ import (
 
 // IsPrunedReplayRejection reports whether a spend-phase error carries the
 // pruner's marker rejection, ErrUtxoSpendingTxPruned, which names the spending
-// transaction as a replay of one the pruner removed. The validator uses it: it
-// never wrote the spender's record, so a missing parent says nothing there.
+// transaction as a replay of one the pruner removed. Its one production caller
+// is the SQL store's bulk spend, which gives a duplicate input the same answer
+// as its refused representative.
 func IsPrunedReplayRejection(err error) bool {
 	return errors.Is(err, errors.ErrUtxoSpendingTxPruned)
 }
@@ -119,8 +120,12 @@ func NeedsSpendRollback(spends []*Spend, requireParentOutputs bool) bool {
 // it is also what an ordinary retry sees: an earlier attempt that wrote one
 // input and failed left that input spent by a transaction with no record, and
 // treating the missing sibling parent as a replay kept that orphan spent for
-// good. A pruned replay whose surviving parent still records it meets that
-// parent's marker, so the marker answer alone covers it. A prune that lands
+// good. For a child this code pruned, the surviving parent carries the marker,
+// so the marker answer alone covers it. A child pruned before this upgrade, or
+// one whose marker write failed under the old pruner, has no marker: a replay
+// of it beside a missing sibling parent still reverses the confirmed spend, as
+// on main (see the LIMITATION in stores/utxo/sql/pruner/pruner_service.go). A
+// prune that lands
 // after an input's marker read is caught by the rollback instead, which reads
 // the marker again once the spender is gone (withoutMarkedMatches in each
 // store).

@@ -118,10 +118,12 @@ type batchSpend struct {
 	// (spendCompletionResult.rollbackSet).
 	requireParentOutput bool
 	// idempotent is set from the Lua response when the utxo already recorded
-	// exactly this spend, so nothing was written. resolveSpendCompletions keeps
-	// such inputs out of the rollback list: the spend they matched is the
-	// confirmed, historical one, and reversing it would hand a confirmed output
-	// to any new spender.
+	// exactly this spend, so nothing was written. A failed call reverses such an
+	// input only when utxo.RollbackSet allows it: no input of the call got the
+	// pruned-replay answer, none was left unanswered, and the call is not a
+	// RequireParentOutputs one. Otherwise the match may be a confirmed,
+	// historical spend, and reversing it would hand a confirmed output to any
+	// new spender.
 	idempotent bool
 }
 
@@ -1119,9 +1121,9 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 		spend := item.spend
 
 		// A blessed input wrote nothing: its parent record is gone. It counts as
-		// succeeded but goes into neither rollback list, because Unspend fails on
-		// it and stops there, leaving the sibling spends this call did write in
-		// place.
+		// succeeded but goes into neither rollback list, because there is no
+		// output left to reverse: an unspend of it would only fail and be counted
+		// in utxo_spend_rollback_failed as a dangling ref.
 		blessed := false
 
 		if spend.Err != nil && errors.Is(spend.Err, errors.ErrTxNotFound) && !item.requireParentOutput {

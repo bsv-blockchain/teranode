@@ -368,8 +368,9 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
     local blockIDs = rec[BIN_BLOCK_IDS]
     local errors = map()
     -- Indexes whose utxo already recorded exactly this spend. Nothing is written
-    -- for them, and the caller must not roll them back on a later failure: the
-    -- spend they matched is the confirmed, historical one.
+    -- for them. The caller decides whether a later failure reverses them
+    -- (utxo.RollbackSet): the match may be a confirmed, historical spend or an
+    -- earlier failed attempt's orphan.
     local idempotent = list()
     local deletedChildren = rec[BIN_DELETED_CHILDREN]
     local spendableIn = rec[BIN_UTXO_SPENDABLE_IN]

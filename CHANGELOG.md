@@ -182,9 +182,10 @@ read every section between yours and the target.
   Count those 429s with `teranode_asset_http_rate_limited_total{scope="global"}`. (#1793)
 - **Out-of-tree `utxo.Store` implementations must add `SpendAndCreateMulti` and
   `ParentOutputsForValidation`.** `utxo.DefaultSpendAndCreateMulti` provides the first. (#1875)
-- **A replay of a pruned transaction is refused** with `ERR_UTXO_SPENDING_TX_PRUNED` (code 78; HTTP
-  409, gRPC `FailedPrecondition`) where it was accepted before, while the parent output still
-  records it as the spender. A block refused on that code is retried, not marked invalid. (#1702)
+- **The Aerospike and SQL stores refuse a replay of a pruned transaction** with
+  `ERR_UTXO_SPENDING_TX_PRUNED` (code 78; HTTP 409, gRPC `FailedPrecondition`) while the parent output
+  still records it; a block refused on that code is retried, not marked invalid. utxoset and pebble
+  write no marker and still accept the replay. (#1702)
 - **Block assembly can fail to start while a skipped-fork mark is unfinished.** A restart finishes
   it before loading the pool, and fails if the subtree or UTXO store doesn't answer or
   `BlockAssemblerSkippedForkMark` is malformed: restart once they answer, or clear that key. (#2065)
