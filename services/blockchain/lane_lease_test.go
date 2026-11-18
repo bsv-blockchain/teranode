@@ -166,6 +166,15 @@ func TestClientLaneLeaseOverGRPC(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, id, id2)
 	require.Equal(t, lane.Grant{Lane: 1, First: 1, Last: 100}, g2, "a never-used lane comes before a closed one")
+
+	// On a lane other than 0, so a lane dropped on the way out or back reads as a wrong lane.
+	res, err = src.RenewLaneLease(ctx, lane.Renewal{Lease: id2, Lane: g2.Lane, WantGrant: true})
+	require.NoError(t, err)
+	require.Equal(t, lane.RenewResult{Granted: true, Grant: lane.Grant{Lane: 1, First: 101, Last: 200}}, res)
+
+	already, err = src.ReleaseLaneLease(ctx, lane.Release{Lease: id2, Lane: g2.Lane, LastTaken: 150})
+	require.NoError(t, err)
+	require.False(t, already, "the lease on lane 1 closes clean")
 }
 
 func newLocalLeaseClient(t *testing.T) (*LocalClient, blockchain_store.Store) {
