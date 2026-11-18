@@ -952,7 +952,7 @@ func (s *Store) probeNativeReplayProtectionVerdict(ctx context.Context, policy *
 		return replayProbeMismatch
 	}
 
-	if !rejectsItemWith(markerRes, probeSpendIdx, LuaErrorCodeInvalidSpend) {
+	if !probeReplayRejected(markerRes) {
 		s.logger.Warnf("[teranode-native-op] replay-marker probe: pruned-child spend rejected with the wrong error (%+v), want %s; falling back to UDF path",
 			markerRes, LuaErrorCodeInvalidSpend)
 		return replayProbeMismatch
@@ -988,7 +988,7 @@ func (s *Store) probeNativeReplayProtectionVerdict(ctx context.Context, policy *
 		return replayProbeMismatch
 	}
 
-	if !reportsIdempotent(repeatRes, probeSpendIdx) {
+	if !probeReportsIdempotent(repeatRes) {
 		s.logger.Warnf("[teranode-native-op] idempotent-report probe: a re-spend by the same spender was accepted but not reported as idempotent (%+v); "+
 			"the rollback would reverse a confirmed spend on this dispatcher; falling back to UDF path", repeatRes)
 		return replayProbeMismatch
@@ -1051,6 +1051,18 @@ func rejectsItemWith(res *LuaMapResponse, idx int, code LuaErrorCode) bool {
 	e, ok := res.Errors[idx]
 
 	return ok && e.ErrorCode == code
+}
+
+// probeReplayRejected is the replay-marker stage's verdict on the reply to the replayed spend: the
+// marker rejection, under the probe spend's idx.
+func probeReplayRejected(res *LuaMapResponse) bool {
+	return rejectsItemWith(res, probeSpendIdx, LuaErrorCodeInvalidSpend)
+}
+
+// probeReportsIdempotent is the idempotent-report stage's verdict on the reply to the repeated
+// spend: a match reported under the probe spend's idx.
+func probeReportsIdempotent(res *LuaMapResponse) bool {
+	return reportsIdempotent(res, probeSpendIdx)
 }
 
 // reportsIdempotent reports whether a successful spend response says the spend

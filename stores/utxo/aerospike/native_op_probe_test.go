@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	aeropruner "github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
@@ -187,6 +188,48 @@ func TestNativeTeranodeOpProbe_Container(t *testing.T) {
 		store.observePrunerNativeOpError(record.BatchRec().Err)
 		require.False(t, store.useNativeVerifiedMarkerWrite())
 		require.True(t, store.useNativeTeranodeOps.Load(), "the other native ops stay on")
+	})
+
+	// The probe reads the dispatcher's answers under probeSpendIdx, which differs from the probe
+	// record's offset and vout. Whatever serves spendMulti here, the UDF on a stock image or the
+	// native dispatcher on the fork image, must key what it reports by that idx.
+	t.Run("spend_multi_reports_by_the_probe_idx", func(t *testing.T) {
+		key, hashes, cleanup, built := store.buildProbeRecord(probePolicy(), "idx test", 1000, 0)
+		require.True(t, built)
+
+		defer cleanup()
+
+		spender := spendpkg.NewSpendingData(&chainhash.Hash{0x04}, 0)
+
+		spend := func(data *spendpkg.SpendingData) *LuaMapResponse {
+			raw, aerr := store.executeTeranodeOp(probePolicy(), key, subOpSpendMulti, "spendMulti",
+				[]aerospike.MapValue{store.probeSpendItem(hashes[0], data, 0)}, false, false, uint32(1000), store.settings.GetUtxoStoreBlockHeightRetention())
+			require.Nil(t, aerr)
+
+			res, err := store.ParseLuaMapResponse(raw)
+			require.NoError(t, err)
+
+			return res
+		}
+
+		first := spend(spender)
+		require.Equal(t, LuaStatusOK, first.Status)
+		require.Empty(t, first.Idempotent, "the spend that wrote is not idempotent")
+
+		repeat := spend(spender)
+		require.Equal(t, LuaStatusOK, repeat.Status)
+		require.Equal(t, []int{probeSpendIdx}, repeat.Idempotent, "the match is reported under the spend's idx")
+		require.True(t, probeReportsIdempotent(repeat))
+
+		other := spend(spendpkg.NewSpendingData(&chainhash.Hash{0x05}, 0))
+		require.Equal(t, LuaStatusError, other.Status)
+		require.Contains(t, other.Errors, probeSpendIdx, "a rejection is reported under the spend's idx")
+		require.Equal(t, LuaErrorCodeSpent, other.Errors[probeSpendIdx].ErrorCode)
+
+		require.True(t, store.probePlantMarker(ctx, probePolicy(), key, spender.TxID))
+
+		replayed := spend(spender)
+		require.True(t, probeReplayRejected(replayed), "the replay-marker rejection is reported under the spend's idx: %+v", replayed)
 	})
 
 	t.Run("probe_honours_cancelled_context", func(t *testing.T) {

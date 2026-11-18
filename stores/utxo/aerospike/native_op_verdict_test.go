@@ -54,20 +54,19 @@ func TestProbeVerdicts(t *testing.T) {
 	t.Run("a dispatcher that keys its report by offset or vout fails the probe", func(t *testing.T) {
 		// The probe record's offset and vout are both 0.
 		keyedByOffset := &LuaMapResponse{Status: LuaStatusOK, Idempotent: []int{0}}
-		require.False(t, reportsIdempotent(keyedByOffset, probeSpendIdx))
-
-		require.True(t, reportsIdempotent(&LuaMapResponse{Status: LuaStatusOK, Idempotent: []int{probeSpendIdx}}, probeSpendIdx))
+		require.False(t, probeReportsIdempotent(keyedByOffset))
+		require.True(t, probeReportsIdempotent(&LuaMapResponse{Status: LuaStatusOK, Idempotent: []int{probeSpendIdx}}))
 
 		wrongKey := &LuaMapResponse{Status: LuaStatusError, Errors: map[int]LuaErrorInfo{0: {ErrorCode: LuaErrorCodeInvalidSpend}}}
-		require.False(t, rejectsItemWith(wrongKey, probeSpendIdx, LuaErrorCodeInvalidSpend), "an error keyed by offset or vout is not keyed by idx")
+		require.False(t, probeReplayRejected(wrongKey), "an error keyed by offset or vout is not keyed by idx")
 
 		wholeResponse := &LuaMapResponse{Status: LuaStatusError, ErrorCode: LuaErrorCodeInvalidSpend}
-		require.False(t, rejectsItemWith(wholeResponse, probeSpendIdx, LuaErrorCodeInvalidSpend), "the store reads rejections per spend")
+		require.False(t, probeReplayRejected(wholeResponse), "the store reads rejections per spend")
 
 		right := &LuaMapResponse{Status: LuaStatusError, Errors: map[int]LuaErrorInfo{probeSpendIdx: {ErrorCode: LuaErrorCodeInvalidSpend}}}
-		require.True(t, rejectsItemWith(right, probeSpendIdx, LuaErrorCodeInvalidSpend))
+		require.True(t, probeReplayRejected(right))
 		require.False(t, rejectsItemWith(right, probeSpendIdx, LuaErrorCodeSpent), "the code has to match")
-		require.False(t, rejectsItemWith(&LuaMapResponse{Status: LuaStatusOK, Errors: right.Errors}, probeSpendIdx, LuaErrorCodeInvalidSpend))
-		require.False(t, rejectsItemWith(nil, probeSpendIdx, LuaErrorCodeInvalidSpend))
+		require.False(t, probeReplayRejected(&LuaMapResponse{Status: LuaStatusOK, Errors: right.Errors}))
+		require.False(t, probeReplayRejected(nil))
 	})
 }
