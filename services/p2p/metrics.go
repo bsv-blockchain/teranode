@@ -20,6 +20,12 @@ var (
 	prometheusP2PGossipKafkaPublishDropped     *prometheus.CounterVec
 	prometheusP2PHTTPRateLimited               prometheus.Counter
 
+	// prometheusP2PBlockchainNotificationsDropped counts blockchain
+	// notifications the p2p listener lost: dropped on a full worker queue
+	// (reason=queue_full) or failed on the announcement worker after its
+	// notificationProcessTimeout deadline had passed (reason=timeout).
+	prometheusP2PBlockchainNotificationsDropped *prometheus.CounterVec
+
 	// prometheusP2PConnectedPeers tracks the number of peers currently connected
 	// to this node over the libp2p network.
 	prometheusP2PConnectedPeers prometheus.Gauge
@@ -73,6 +79,16 @@ func _initPrometheusMetrics() {
 			Help:      "Number of websocket notifications dropped because the notification channel was full, by notification type",
 		},
 		[]string{"type"},
+	)
+
+	prometheusP2PBlockchainNotificationsDropped = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "p2p",
+			Name:      "blockchain_notifications_dropped_total",
+			Help:      "Number of blockchain notifications the p2p listener lost, by queue, notification type and reason (queue_full: the worker queue was full; timeout: the announcement failed after its per-notification bound passed)",
+		},
+		[]string{"queue", "type", "reason"},
 	)
 
 	prometheusP2PGossipKafkaPublishDropped = promauto.NewCounterVec(
@@ -165,6 +181,20 @@ func _initPrometheusMetrics() {
 func notificationDropped(notificationType string) {
 	initPrometheusMetrics()
 	prometheusP2PWebsocketNotificationsDropped.WithLabelValues(notificationType).Inc()
+}
+
+// Reasons a blockchain notification is lost, the reason label of
+// teranode_p2p_blockchain_notifications_dropped_total.
+const (
+	dropReasonQueueFull = "queue_full"
+	dropReasonTimeout   = "timeout"
+)
+
+// blockchainNotificationDropped records a blockchain notification lost on the
+// named worker queue, for the given reason.
+func blockchainNotificationDropped(queue, notificationType, reason string) {
+	initPrometheusMetrics()
+	prometheusP2PBlockchainNotificationsDropped.WithLabelValues(queue, notificationType, reason).Inc()
 }
 
 // gossipPublishDropped records a gossip announcement dropped by TryPublish
