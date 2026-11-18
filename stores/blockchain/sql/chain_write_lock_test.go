@@ -372,9 +372,10 @@ func waitForHeldBlocksWrite(t *testing.T, s *SQL) {
 // walk run in that window must fail its check with 55P03 rather than commit.
 func TestChainWriteLockIsTakenBeforeTheWritersFlags_PostgreSQL(t *testing.T) {
 	writers := []struct {
-		name  string
-		setup func(t *testing.T, s *SQL)
-		write func(ctx context.Context, s *SQL) error
+		name                string
+		setup               func(t *testing.T, s *SQL)
+		write               func(ctx context.Context, s *SQL) error
+		holdPastLockTimeout bool
 	}{
 		{
 			name: "DeleteBlock",
@@ -400,7 +401,8 @@ func TestChainWriteLockIsTakenBeforeTheWritersFlags_PostgreSQL(t *testing.T) {
 			},
 		},
 		{
-			name: "StoreBlock on a fork",
+			name:                "StoreBlock on a fork",
+			holdPastLockTimeout: true,
 			write: func(ctx context.Context, s *SQL) error {
 				_, _, err := s.StoreBlock(ctx, createBlock3OnFork(blockAlternative2), "")
 				return err
@@ -427,7 +429,7 @@ func TestChainWriteLockIsTakenBeforeTheWritersFlags_PostgreSQL(t *testing.T) {
 
 			waitForHeldBlocksWrite(t, walker)
 
-			if writer.name == "StoreBlock on a fork" {
+			if writer.holdPastLockTimeout {
 				// Keep this ordering check independent of the fork path's bounded wait.
 				// The trigger must still hold the same attempt when the walk checks it.
 				require.Never(t, func() bool {

@@ -414,10 +414,10 @@ const (
 // while no chain write meets the walk. A fork block whose reconcile reaches a row the walk
 // has already updated waits on that row for at most forkLockTimeout, then releases
 // slowPathMu and tries again until its caller's context ends (see forkLockWaitError), so
-// extends keep being stored while the fork block retries. DeleteBlock, InvalidateBlock and RevalidateBlock have
-// no such bound and still wait on the walk's rows under slowPathMu. Readers are on their flag-free walk
-// because of the guard, and rows a concurrent StoreBlock inserts are flagged by that
-// StoreBlock. A chain write that commits during the attempt can leave the attempt's older
+// extends keep being stored while the fork block retries. DeleteBlock, InvalidateBlock
+// and RevalidateBlock have no such bound and still wait on the walk's rows under
+// slowPathMu. Readers are on their flag-free walk because of the guard, and rows a
+// concurrent StoreBlock inserts are flagged by that StoreBlock. A chain write that commits during the attempt can leave the attempt's older
 // view in place (see watchOnMainChainWrites), so the attempt watches for chain writes and
 // reports an overlap when one was noted. When every noted write named the lowest height it
 // can have moved, and no mark owing a full walk arrived meanwhile, the walk left every row

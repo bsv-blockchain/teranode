@@ -1109,6 +1109,24 @@ func TestParseSQLError_NilError(t *testing.T) {
 	assert.Contains(t, result.Error(), "failed to store block")
 }
 
+// forkRetryCancelLogger cancels one caller after its timed-out attempt has returned,
+// before StoreBlock selects between that context and its retry delay.
+type forkRetryCancelLogger struct {
+	ulogger.TestLogger
+	hash   string
+	cancel context.CancelFunc
+}
+
+func (l *forkRetryCancelLogger) Warnf(format string, args ...interface{}) {
+	if len(args) > 0 {
+		if hash, ok := args[0].(string); ok && hash == l.hash {
+			l.cancel()
+		}
+	}
+
+	l.TestLogger.Warnf(format, args...)
+}
+
 // heavyForkBlock is a child of parent with far more work than a 207fffff block, so a
 // chain through it stays best over a main chain one block longer.
 func heavyForkBlock(parent *model.Block, nonce uint32) *model.Block {
@@ -1129,7 +1147,6 @@ func heavyForkBlock(parent *model.Block, nonce uint32) *model.Block {
 // takes the tip once the row is released.
 func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T) {
 	s := newPostgresChainWriteStore(t)
-	s.useInMemoryChainCheck = true
 	ctx := context.Background()
 
 	// block1 to block3 are the main chain and blockAlternative2 a fork off block1. alt4
@@ -1139,6 +1156,11 @@ func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T
 	storeBlocks(t, s, alt3)
 
 	alt4 := heavyForkBlock(alt3, 7)
+	altGivesUp := heavyForkBlock(alt3, 8)
+	giveUpCtx, cancelGiveUp := context.WithCancel(ctx)
+	defer cancelGiveUp()
+
+	s.logger = &forkRetryCancelLogger{hash: altGivesUp.Hash().String(), cancel: cancelGiveUp}
 
 	// Hold block3's row the way a walk's UPDATE does, until the test releases it.
 	holder, err := s.db.BeginTx(ctx, nil)
@@ -1177,7 +1199,7 @@ func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T
 		return waiting > 0 && s.mainChainRebuilding.Load() > 0
 	}, 10*time.Second, 20*time.Millisecond, "the fork block's reconcile never queued on the held row with the guard raised")
 
-	// Readers can use the forked set during the retry pause. Require a sustained
+	// Readers need not stay on flag-free walks during the retry pause. Require a sustained
 	// unguarded window, so a brief gap between attempts cannot satisfy the check.
 	var unguardedSince time.Time
 	require.Eventually(t, func() bool {
@@ -1203,17 +1225,11 @@ func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T
 	_, _, err = s.StoreBlock(extendCtx, block4, "peer")
 	require.NoError(t, err, "an extend must store while a fork block waits on a row lock")
 
-	// A fork block whose caller gives up while the row is held returns a storage error and
-	// leaves no row behind. 1.2 s ends the context inside the first forkLockRetryDelay
-	// sleep: at most forkLockTimeout waiting for slowPathMu behind alt4's attempt, then
-	// forkLockTimeout on the row, is 1 s.
-	altGivesUp := heavyForkBlock(alt3, 8)
+	// Cancel the second fork at its first retry warning, after the attempt released
+	// its locks. This deterministically exercises the between-attempt cancellation.
 	giveUpDone := make(chan error, 1)
 
 	go func() {
-		giveUpCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
-		defer cancel()
-
 		_, _, storeErr := s.StoreBlock(giveUpCtx, altGivesUp, "peer")
 		giveUpDone <- storeErr
 	}()
@@ -1222,6 +1238,8 @@ func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T
 	case giveUpErr := <-giveUpDone:
 		require.Error(t, giveUpErr, "a fork block that could not lock its rows must not report success")
 		require.True(t, errors.Is(giveUpErr, errors.ErrStorageError), "want a storage error, got %v", giveUpErr)
+		require.ErrorContains(t, giveUpErr, "gave up after")
+		require.ErrorIs(t, giveUpErr, context.Canceled)
 	case <-time.After(10 * time.Second):
 		t.Fatal("a fork block kept retrying after its context ended")
 	}

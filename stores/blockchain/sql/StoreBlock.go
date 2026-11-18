@@ -120,7 +120,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 
 		select {
 		case <-ctx.Done():
-			return 0, height, errors.NewStorageError("[StoreBlock][%s] fork block gave up after %d attempts to lock its rows", block.Hash().String(), attempt, lockWait.cause)
+			return 0, height, errors.NewStorageError("[StoreBlock][%s] fork block gave up after %d attempts to lock its rows: %v", block.Hash().String(), attempt, lockWait.cause, ctx.Err())
 		case <-time.After(forkLockRetryDelay):
 		}
 	}
@@ -275,8 +275,8 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 	//
 	// The forked-set node does pay that cost on those other readers. That is the trade the
 	// route asks for, and it is scoped to the nodes that opted into the route.
-	guardWholeCall := s.useInMemoryChainCheck || !onMainChain
-	if guardWholeCall {
+	guardWholeAttempt := s.useInMemoryChainCheck || !onMainChain
+	if guardWholeAttempt {
 		s.mainChainRebuilding.Add(1)
 		defer s.mainChainRebuilding.Add(-1)
 	}
@@ -426,7 +426,7 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 
 		err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
 			txErr := forkTx(tx)
-			if s.engine == util.Postgres && isLockNotAvailable(txErr) {
+			if isLockNotAvailable(txErr) {
 				return &forkLockWaitError{cause: txErr}
 			}
 
@@ -540,7 +540,7 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 		// The defensive on_main_chain clear Case 1 would have done is deliberately not
 		// attempted. Which flag to write depends on the classification we could not read,
 		// and the rebuild does not need the flag: mainChainRebuilding is still held for the
-		// whole call, so rebuildOffChainSet takes its flag-free parent_id CTE branch. A
+		// whole attempt, so rebuildOffChainSet takes its flag-free parent_id CTE branch. A
 		// fork-path insert already reconciled the column inside its own transaction, so
 		// only an extend can leave a stale flag here: its INSERT wrote true, and nothing
 		// has confirmed it. Record that, with this block's height as the floor, so the
@@ -577,12 +577,12 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 		// the CTE for the brief inconsistency window. A fork-path insert
 		// (onMainChain false) was already reconciled inside its transaction.
 		//
-		// On a forked-set node the guard is already held for the whole call, which is what
+		// On a forked-set node the guard is already held for the whole attempt, which is what
 		// this clear and the rebuild below both need. On any other node it was not raised
 		// for an extend and there is no rebuild to cover, so bracket just the UPDATE, as
 		// this branch always did there.
 		if onMainChain {
-			if !guardWholeCall {
+			if !guardWholeAttempt {
 				s.mainChainRebuilding.Add(1)
 			}
 
@@ -609,7 +609,7 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 				s.noteOnMainChainWrite(int64(height))
 			}
 
-			if !guardWholeCall {
+			if !guardWholeAttempt {
 				s.mainChainRebuilding.Add(-1)
 			}
 		}
