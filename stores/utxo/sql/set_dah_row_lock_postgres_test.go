@@ -15,8 +15,10 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
+	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 )
@@ -585,4 +587,116 @@ func TestSetMinedMultiTiming_Postgres(t *testing.T) {
 	}
 
 	t.Logf("SetMinedMulti n=%d best of 3: %s", n, best)
+}
+
+// TestSpendBatchSurvivesAParentThePruneDeletes_Postgres: the pruner locks every candidate
+// parent until it commits, and a replay of a mined child is an idempotent match that sends
+// setDAH to that parent's row. The batch waits for the lock, and when the prune commits the
+// parent is gone. Only the spend of that parent is answered, as a parent that was already
+// gone is answered, and the honest spend in the same batch still commits. It used to fail
+// every spend of the batch with a storage error.
+//
+// The prune is a transaction the test holds open, so the wait is observed in pg_locks and
+// ended by the test, with no sleeps in between.
+func TestSpendBatchSurvivesAParentThePruneDeletes_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, ctx := setupPostgresStore(t)
+	floorRetention(t, store)
+
+	store.settings.UtxoStore.BatchSQLOperations = true
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	newParent := func(prev string) *bt.Tx {
+		parent := bt.NewTx()
+		require.NoError(t, parent.From(prev, 0, "51", 30000))
+		parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+		require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+		_, err := store.Create(ctx, parent, 1000)
+		require.NoError(t, err)
+
+		return parent
+	}
+
+	spenderOf := func(parent *bt.Tx) *bt.Tx {
+		child := bt.NewTx()
+		require.NoError(t, child.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+		child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+		require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+
+		return child
+	}
+
+	itemOf := func(parent, child *bt.Tx) *batchSpend {
+		utxoHash, err := util.UTXOHashFromOutput(parent.TxIDChainHash(), parent.Outputs[0], 0)
+		require.NoError(t, err)
+
+		return &batchSpend{
+			spend: &utxo.Spend{
+				TxID:         parent.TxIDChainHash(),
+				Vout:         0,
+				UTXOHash:     utxoHash,
+				SpendingData: spendpkg.NewSpendingData(child.TxIDChainHash(), 0),
+			},
+			blockHeight: 1000,
+			errCh:       make(chan error, 1),
+		}
+	}
+
+	candidate := newParent("5555555555555555555555555555555555555555555555555555555555555555")
+	bystander := newParent("6666666666666666666666666666666666666666666666666666666666666666")
+
+	replayed := spenderOf(candidate)
+	honest := spenderOf(bystander)
+
+	// The replayed child's own spend, committed earlier, so the replay is an idempotent match.
+	_, err := store.Spend(ctx, replayed, 1000)
+	require.NoError(t, err)
+
+	prune, err := store.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = prune.Rollback() })
+
+	var lockedID int
+	require.NoError(t, prune.QueryRowContext(ctx,
+		"SELECT id FROM transactions WHERE hash = $1 FOR NO KEY UPDATE", candidate.TxIDChainHash()[:]).Scan(&lockedID))
+
+	replayItem, honestItem := itemOf(candidate, replayed), itemOf(bystander, honest)
+
+	done := make(chan error, 1)
+
+	go func() {
+		store.sendSpendBatch([]*batchSpend{replayItem, honestItem})
+		done <- nil
+	}()
+
+	waitBlockedOrDone(ctx, t, store, done)
+
+	select {
+	case err = <-done:
+		t.Fatalf("the batch finished while the prune held the parent's row: %v", err)
+	default:
+	}
+
+	_, err = prune.ExecContext(ctx, "DELETE FROM transactions WHERE id = $1", lockedID)
+	require.NoError(t, err)
+	require.NoError(t, prune.Commit())
+
+	select {
+	case err = <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the batch did not finish once the prune committed")
+	}
+
+	require.NoError(t, <-honestItem.errCh, "an honest spend in the batch must not fail for another parent's deletion")
+	require.ErrorIs(t, <-replayItem.errCh, errors.ErrTxNotFound, "the replay is answered as a parent that is gone")
+
+	require.False(t, rowExists(ctx, t, store, *candidate.TxIDChainHash()), "the prune deleted the candidate")
+	require.Equal(t, spendpkg.NewSpendingData(honest.TxIDChainHash(), 0).Bytes(), outputSpendingData(t, ctx, store, bystander, 0),
+		"the honest spend committed")
 }

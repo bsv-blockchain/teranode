@@ -3598,12 +3598,29 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		}
 		sort.Ints(sortedParents)
 		for _, parentID := range sortedParents {
-			if err := s.setDAH(ctx, txn, parentID); err != nil {
+			present, err := s.setDAHIfPresent(ctx, txn, parentID)
+			if err != nil {
 				if isDeadlock(err) {
 					return true
 				}
 				failSpendBatch(batch, validationErrors, "[Spend] failed to recompute DAH for bulk spend fallback", err)
 				return false
+			}
+
+			if !present {
+				// The pruner deleted this parent while the batch waited for its row lock.
+				// Only the spends of that parent are affected: they get the answer a
+				// parent that was already gone gives, and the rest of the batch commits.
+				for i, item := range batch {
+					if _, answered := validationErrors[i]; answered {
+						continue
+					}
+
+					if r, ok := resultMap[i]; ok && r.transactionID == parentID {
+						validationErrors[i] = errors.NewTxNotFoundError(errOutputNotFound, item.spend.TxID, item.spend.Vout)
+						item.idempotent = false
+					}
+				}
 			}
 		}
 	}
@@ -4102,9 +4119,23 @@ var spendBeforeRollbackProbe func()
 // to complete a lock cycle.
 var setDAHAfterLock func(transactionID int)
 
+// setDAH recomputes the delete_at_height of one transaction row. A row that is gone has
+// nothing to stamp, so that is not an error: see setDAHIfPresent.
 func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) error {
+	_, err := s.setDAHIfPresent(ctx, txn, transactionID)
+
+	return err
+}
+
+// setDAHIfPresent is setDAH, and reports whether the row was there. The row is gone when the
+// pruner deleted it while this transaction waited for the row lock (the pruner locks every
+// candidate until it commits), or on SQLite when it was deleted before the read. A deleted
+// row has nothing to stamp. Failing on it would answer every other spend of a batch with a
+// storage error for a parent that only one of them touched, so the caller decides what the
+// spends on that parent get.
+func (s *Store) setDAHIfPresent(ctx context.Context, txn *sql.Tx, transactionID int) (present bool, err error) {
 	if s.settings.GetUtxoStoreBlockHeightRetention() == 0 {
-		return nil
+		return true, nil
 	}
 
 	// Postgres: lock the row in its own statement before the read below, so the read
@@ -4112,8 +4143,14 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 	// transaction ends. SQLite takes no lock: its single writer and the caller's open
 	// write transaction already serialise these writers.
 	if s.engine == "postgres" {
-		if _, err := txn.ExecContext(ctx, "SELECT id FROM transactions WHERE id = $1 FOR NO KEY UPDATE", transactionID); err != nil {
-			return errors.NewStorageError("[setDAH] error locking transaction %d", transactionID, err)
+		var lockedID int
+
+		if lockErr := txn.QueryRowContext(ctx, "SELECT id FROM transactions WHERE id = $1 FOR NO KEY UPDATE", transactionID).Scan(&lockedID); lockErr != nil {
+			if errors.Is(lockErr, sql.ErrNoRows) {
+				return false, nil
+			}
+
+			return false, errors.NewStorageError("[setDAH] error locking transaction %d", transactionID, lockErr)
 		}
 
 		if setDAHAfterLock != nil {
@@ -4148,8 +4185,12 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 		deleteAtHeightOrNull sql.NullInt64
 	)
 
-	if err := txn.QueryRowContext(ctx, qUnspent, transactionID).Scan(&unspent, &conflicting, &hasPreserveUntil, &hasBlocks, &isOnLongestChain, &existingDAH, &maxBlockHeight); err != nil {
-		return errors.NewStorageError("[setDAH] error checking for unspent outputs for %d", transactionID, err)
+	if scanErr := txn.QueryRowContext(ctx, qUnspent, transactionID).Scan(&unspent, &conflicting, &hasPreserveUntil, &hasBlocks, &isOnLongestChain, &existingDAH, &maxBlockHeight); scanErr != nil {
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			return false, nil
+		}
+
+		return false, errors.NewStorageError("[setDAH] error checking for unspent outputs for %d", transactionID, scanErr)
 	}
 
 	if setDAHAfterRead != nil {
@@ -4158,7 +4199,7 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 
 	// If preserve_until is set, don't touch DAH (mirrors aerospike)
 	if hasPreserveUntil {
-		return nil
+		return true, nil
 	}
 
 	retention := s.settings.GetUtxoStoreBlockHeightRetention()
@@ -4206,18 +4247,18 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 	// Write only to raise or clear. A decision at or below the stored stamp, or a NULL
 	// over a NULL, writes nothing, which saves a needless write on the bulk path.
 	if !deleteAtHeightOrNull.Valid && !existingDAH.Valid {
-		return nil
+		return true, nil
 	}
 
 	if deleteAtHeightOrNull.Valid && existingDAH.Valid && existingDAH.Int64 >= deleteAtHeightOrNull.Int64 {
-		return nil
+		return true, nil
 	}
 
 	if setDAHBeforeWrite != nil {
 		setDAHBeforeWrite()
 	}
 
-	return s.writeDAH(ctx, txn, transactionID, deleteAtHeightOrNull, retention)
+	return true, s.writeDAH(ctx, txn, transactionID, deleteAtHeightOrNull, retention)
 }
 
 // writeDAH stores a delete_at_height decision taken under the row lock (Postgres). A

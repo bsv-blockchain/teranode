@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -1380,4 +1382,47 @@ func TestRefusedReplayLeavesTheParentsStampAlone(t *testing.T) {
 			})
 		})
 	}
+}
+
+// TestSetDAHOfARowThePruneDeletedHasNothingToStamp: a row the pruner deleted before setDAH reads
+// it, or while setDAH waited for its lock, has no stamp to recompute. setDAH answers nil and
+// setDAHIfPresent says the row is gone, so a caller never fails a whole batch for one parent.
+func TestSetDAHOfARowThePruneDeletedHasNothingToStamp(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+		floorRetention(t, store)
+
+		_, err := store.Create(ctx, tests.ParentTx, 1000)
+		require.NoError(t, err)
+
+		var id int
+		require.NoError(t, store.db.QueryRowContext(ctx, "SELECT id FROM transactions WHERE hash = $1", tests.ParentTx.TxIDChainHash()[:]).Scan(&id))
+
+		inTxn := func(body func(txn *sql.Tx)) {
+			txn, beginErr := store.db.BeginTx(ctx, nil)
+			require.NoError(t, beginErr)
+
+			defer func() { _ = txn.Rollback() }()
+
+			body(txn)
+		}
+
+		inTxn(func(txn *sql.Tx) {
+			present, setErr := store.setDAHIfPresent(ctx, txn, id)
+			require.NoError(t, setErr)
+			require.True(t, present, "a row that is there is present")
+		})
+
+		_, err = store.db.ExecContext(ctx, "DELETE FROM transactions WHERE id = $1", id)
+		require.NoError(t, err)
+
+		inTxn(func(txn *sql.Tx) {
+			present, setErr := store.setDAHIfPresent(ctx, txn, id)
+			require.NoError(t, setErr)
+			require.False(t, present, "a deleted row is reported gone, not as an error")
+		})
+
+		inTxn(func(txn *sql.Tx) {
+			require.NoError(t, store.setDAH(ctx, txn, id), "setDAH has nothing to stamp on a deleted row")
+		})
+	})
 }
