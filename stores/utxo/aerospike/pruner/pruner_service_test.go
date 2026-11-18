@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -18,6 +20,7 @@ import (
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 // createTestSettings creates default settings for testing
@@ -852,4 +855,115 @@ func BenchmarkBuildVerifiedMarkerRecords(b *testing.B) {
 			})
 		}
 	}
+}
+
+// TestFinishPartitionWorker pins the end of a partition worker, which runs on every path: it waits
+// for the chunks still in flight, because each adds its deletes to the carry when it finishes, then
+// drains the carry and adds the result to the worker's counts. A drain that fails is returned only
+// when the worker has no error of its own.
+func TestFinishPartitionWorker(t *testing.T) {
+	newWorker := func(t *testing.T) (*Service, *deleteCarry, chainhash.Hash, *[][]string) {
+		t.Helper()
+
+		s := newTestService(t)
+		s.settings.Pruner.SkipDeletions = false
+		s.drainFlushTimeout = 200 * time.Millisecond
+
+		child := chainhash.HashH([]byte("finish partition worker child"))
+
+		masterKey, err := aerospike.NewKey(s.namespace, s.set, uaerospike.CalculateKeySourceInternal(&child, 0))
+		require.NoError(t, err)
+
+		sent := &[][]string{}
+
+		s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+			batch := make([]string, 0, len(records))
+
+			for _, rec := range records {
+				batch = append(batch, string(rec.BatchRec().Key.Digest()))
+				rec.BatchRec().ResultCode = types.OK
+			}
+
+			*sent = append(*sent, batch)
+
+			return nil
+		}
+
+		carry := &deleteCarry{blockHeight: testPruneHeight}
+		carry.add(&deleteCarry{
+			deletions: []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{masterKey}}},
+			updates:   []map[string]*parentUpdateInfo{{}},
+		})
+
+		return s, carry, child, sent
+	}
+
+	t.Run("it waits for a chunk still in flight before it drains", func(t *testing.T) {
+		s, _, child, sent := newWorker(t)
+
+		// The chunk owes its delete to the carry only once it finishes.
+		inFlight := &deleteCarry{blockHeight: testPruneHeight}
+
+		masterKey, err := aerospike.NewKey(s.namespace, s.set, uaerospike.CalculateKeySourceInternal(&child, 0))
+		require.NoError(t, err)
+
+		release := make(chan struct{})
+
+		var group errgroup.Group
+
+		group.Go(func() error {
+			<-release
+			inFlight.add(&deleteCarry{
+				deletions: []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{masterKey}}},
+				updates:   []map[string]*parentUpdateInfo{{}},
+			})
+
+			return nil
+		})
+
+		time.AfterFunc(150*time.Millisecond, func() { close(release) })
+
+		var processed, skipped int64
+
+		var finishErr error
+
+		s.finishPartitionWorker(context.Background(), &group, inFlight, &processed, &skipped, &finishErr)
+
+		require.NoError(t, finishErr)
+		require.Equal(t, int64(1), processed, "the delete the chunk added when it finished is drained, not left behind its marker")
+		require.Len(t, *sent, 1)
+	})
+
+	t.Run("a drain error is returned when the worker has none of its own", func(t *testing.T) {
+		s, carry, _, _ := newWorker(t)
+		s.batchOperateFn = func(_ *aerospike.BatchPolicy, _ []aerospike.BatchRecordIfc) error {
+			return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+		}
+
+		var processed, skipped int64
+
+		var err error
+
+		s.finishPartitionWorker(context.Background(), &errgroup.Group{}, carry, &processed, &skipped, &err)
+
+		require.Error(t, err, "a drain that could not send what the worker owes must not read as success")
+		require.Zero(t, processed)
+	})
+
+	t.Run("the worker's own error wins over the drain's", func(t *testing.T) {
+		s, carry, _, _ := newWorker(t)
+		s.batchOperateFn = func(_ *aerospike.BatchPolicy, _ []aerospike.BatchRecordIfc) error {
+			return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+		}
+
+		own := errors.NewProcessingError("the worker's own failure")
+
+		var processed, skipped int64
+
+		err := error(own)
+
+		s.finishPartitionWorker(context.Background(), &errgroup.Group{}, carry, &processed, &skipped, &err)
+
+		require.Same(t, own, err)
+	})
 }

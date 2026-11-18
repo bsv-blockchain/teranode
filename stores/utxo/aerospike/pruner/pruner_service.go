@@ -727,30 +727,7 @@ func (s *Service) partitionWorker(
 	carry := &deleteCarry{blockHeight: blockHeight}
 
 	defer func() {
-		// A chunk still in flight adds to the carry when it finishes, so the
-		// drain waits for every chunk first. Wait returns the same error again
-		// when the body already waited.
-		_ = chunkGroup.Wait()
-
-		// Detached on every path, not only after an error: a cancellation
-		// landing between any check here and the drain's send would discard
-		// a carry whose markers have landed.
-		deleted, heldBack, drainErr := s.drainCarryDetached(ctx, carry)
-
-		processed += int64(deleted)
-		skipped += int64(heldBack)
-
-		if deleted > 0 {
-			prometheusUtxoRecordsDeleted.Add(float64(deleted))
-		}
-
-		if heldBack > 0 {
-			prometheusUtxoRecordsDeletedSkipped.Add(float64(heldBack))
-		}
-
-		if drainErr != nil && err == nil {
-			err = drainErr
-		}
+		s.finishPartitionWorker(ctx, chunkGroup, carry, &processed, &skipped, &err)
 	}()
 
 	submitChunk := func(chunkToProcess []*aerospike.Result) {
@@ -807,6 +784,34 @@ func (s *Service) partitionWorker(
 	}
 
 	return totalProcessed, totalSkipped, nil
+}
+
+// finishPartitionWorker is the end of partitionWorker on every path. A chunk still in flight adds
+// to the carry when it finishes, so the drain waits for every chunk first. It then sends what the
+// carry still owes, adds the result to the worker's counts, and returns the drain's error only
+// when the worker has none of its own.
+func (s *Service) finishPartitionWorker(ctx context.Context, chunkGroup *errgroup.Group, carry *deleteCarry, processed, skipped *int64, err *error) {
+	// Wait returns the same error again when the body already waited.
+	_ = chunkGroup.Wait()
+
+	// Detached on every path, not only after an error: a cancellation landing between any
+	// check in the worker and the drain's send would discard a carry whose markers have landed.
+	deleted, heldBack, drainErr := s.drainCarryDetached(ctx, carry)
+
+	*processed += int64(deleted)
+	*skipped += int64(heldBack)
+
+	if deleted > 0 {
+		prometheusUtxoRecordsDeleted.Add(float64(deleted))
+	}
+
+	if heldBack > 0 {
+		prometheusUtxoRecordsDeletedSkipped.Add(float64(heldBack))
+	}
+
+	if drainErr != nil && *err == nil {
+		*err = drainErr
+	}
 }
 
 // partitionRange represents a contiguous range of Aerospike partitions assigned to a worker
