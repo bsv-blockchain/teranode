@@ -410,8 +410,7 @@ func (l *warnRecordingLogger) Warnf(format string, args ...interface{}) {
 
 // requireLeakWarnings requires that exactly the warnings with these format
 // prefixes were logged, in order, none other. Each must name the block by its hash
-// and say its subtrees may never be released, since that clause is how an operator
-// traces a stray subtree-nodes-* file back to the exit that left it.
+// and say its subtrees may never be released.
 func (l *warnRecordingLogger) requireLeakWarnings(t *testing.T, block *model.Block, prefixes ...string) {
 	t.Helper()
 
