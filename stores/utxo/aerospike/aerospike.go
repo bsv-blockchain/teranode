@@ -307,6 +307,10 @@ type Store struct {
 	// batchOperateFn is a test-only override for s.client.BatchOperate; nil means use the real client.
 	batchOperateFn func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
 
+	// rollbackBeforeProbe is a test-only hook that rollbackPartialSpends runs right before its
+	// spender-existence probe; nil outside tests. A test uses it to prune the spender in that gap.
+	rollbackBeforeProbe func()
+
 	// batcherWait bounds how long a submitter waits for a batcher to deliver a
 	// result before giving up, so a wedged dispatch fn can never park a caller
 	// for the life of the process. Computed once from the batch policy.

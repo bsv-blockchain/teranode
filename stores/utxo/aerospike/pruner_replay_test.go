@@ -682,7 +682,9 @@ func TestPrunerDeletesConflictingLoserWithReleasedUncontestedInput(t *testing.T)
 // pruner deletes nothing, so it must mark nothing either. A marker for a child
 // that stays in the store turns that live, mined child's own idempotent re-spend
 // into a pruned-replay rejection, which the block paths then delete as a ghost.
-// Reproduced by review.
+// Reproduced by review. Every transaction here is stored externally, so the
+// retained child's blob must stay too: deleting it would leave a record whose
+// transaction can never be read back.
 func TestPrunerSkipDeletionsWritesNoMarkers(t *testing.T) {
 	logger := ulogger.New("pruner-skip-deletions-test")
 	s := test.CreateBaseTestSettings(t)
@@ -690,6 +692,7 @@ func TestPrunerSkipDeletionsWritesNoMarkers(t *testing.T) {
 	s.Pruner.UTXODefensiveEnabled = false
 	s.Pruner.SkipDeletions = true
 	s.Aerospike.EnableSpendFilterExpressions = true
+	s.UtxoStore.ExternalizeAllTransactions = true
 
 	client, store, ctx, cleanup := initAerospike(t, s, logger)
 	t.Cleanup(cleanup)
@@ -718,6 +721,10 @@ func TestPrunerSkipDeletionsWritesNoMarkers(t *testing.T) {
 	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{grandchild.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 1001, BlockHeight: 1001, OnLongestChain: true})
 	require.NoError(t, err)
 
+	blobExists, err := store.GetExternalStore().Exists(ctx, child.TxIDChainHash()[:], fileformat.FileTypeTx)
+	require.NoError(t, err)
+	require.True(t, blobExists, "fixture: the child is stored externally")
+
 	astore.ResetPrunerServiceForTests()
 	t.Cleanup(astore.ResetPrunerServiceForTests)
 	require.NoError(t, store.CreateIndexIfNotExists(ctx, apruner.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC))
@@ -728,6 +735,15 @@ func TestPrunerSkipDeletionsWritesNoMarkers(t *testing.T) {
 
 	_, err = svc.(*apruner.Service).PruneWithPartitions(ctx, 1300, "skip-deletions", 1)
 	require.NoError(t, err)
+
+	blobExists, err = store.GetExternalStore().Exists(ctx, child.TxIDChainHash()[:], fileformat.FileTypeTx)
+	require.NoError(t, err)
+	require.True(t, blobExists, "SkipDeletions must keep the external blob of a record it keeps")
+
+	readBack, err := store.Get(ctx, child.TxIDChainHash())
+	require.NoError(t, err, "the retained child must still read back from its blob")
+	require.NotNil(t, readBack.Tx)
+	require.Equal(t, child.TxID(), readBack.Tx.TxID())
 
 	childKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), child.TxIDChainHash().CloneBytes())
 	require.NoError(t, err)
@@ -877,9 +893,12 @@ func TestPrunerMarkersStayOnTheOutputPageThatHoldsTheChild(t *testing.T) {
 // P:0 before C's marker landed, so it answered as an idempotent match, and a
 // sibling input whose parent was gone failed. The pruner then wrote the marker
 // and deleted C, so the probe finds no spender. The rollback must read the
-// marker again: P:0 is a confirmed spend by the pruned C, and reversing it
-// would release a confirmed output. The test drives the rollback directly with
-// the state that interleaving leaves behind.
+// marker again, after the probe: P:0 is a confirmed spend by the pruned C, and
+// reversing it would release a confirmed output. The rollback starts with C
+// present and no marker on P, and the prune runs in the gap right before the
+// existence probe, marker first and then the delete, as the pruner orders them.
+// A marker read taken before the probe sees no marker, so it would keep the
+// match in the rollback and release P:0.
 func TestRollbackKeepsAMatchMarkedAfterTheSpendRead(t *testing.T) {
 	logger := ulogger.New("rollback-marker-reread-test")
 	s := test.CreateBaseTestSettings(t)
@@ -905,18 +924,32 @@ func TestRollbackKeepsAMatchMarkedAfterTheSpendRead(t *testing.T) {
 	require.NoError(t, err)
 	match := &utxo.Spend{TxID: p.TxIDChainHash(), Vout: 0, UTXOHash: p0Hash, SpendingData: spendpkg.NewSpendingData(c.TxIDChainHash(), 0)}
 
-	// The prune: the marker first, then the child's delete.
 	pKey := parentKeyForOutput(t, store, p.TxIDChainHash(), 0, s.UtxoStore.UtxoBatchSize)
-	require.NoError(t, client.PutBins(nil, pKey, aerospike.NewBin(fields.DeletedChildren.String(),
-		map[interface{}]interface{}{c.TxID(): true})))
+	before, err := client.Get(nil, pKey, fields.DeletedChildren.String())
+	require.NoError(t, err)
+	require.Nil(t, before.Bins[fields.DeletedChildren.String()], "fixture: P carries no marker when the rollback starts")
 
 	cKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), c.TxIDChainHash().CloneBytes())
 	require.NoError(t, err)
-	existed, err := client.Delete(nil, cKey)
-	require.NoError(t, err)
-	require.True(t, existed, "fixture: C existed before it was pruned")
+
+	// The prune, in the gap right before the existence probe: the marker first,
+	// then the child's delete.
+	pruned := false
+
+	store.SetRollbackBeforeProbeForTest(func() {
+		require.NoError(t, client.PutBins(nil, pKey, aerospike.NewBin(fields.DeletedChildren.String(),
+			map[interface{}]interface{}{c.TxID(): true})))
+
+		existed, delErr := client.Delete(nil, cKey)
+		require.NoError(t, delErr)
+		require.True(t, existed, "fixture: C existed until it was pruned")
+
+		pruned = true
+	})
+	t.Cleanup(func() { store.SetRollbackBeforeProbeForTest(nil) })
 
 	store.RollbackIdempotentMatchesForTest(c, []*utxo.Spend{match})
+	require.True(t, pruned, "fixture: the prune ran before the existence probe")
 
 	after, err := store.GetSpend(ctx, match)
 	require.NoError(t, err)

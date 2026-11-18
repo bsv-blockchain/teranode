@@ -911,6 +911,10 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	rbCtx, cancel := s.spendRollbackContext()
 	defer cancel()
 
+	if s.rollbackBeforeProbe != nil {
+		s.rollbackBeforeProbe()
+	}
+
 	_, getErr := s.Get(rbCtx, tx.TxIDChainHash(), fields.Fee)
 
 	decision := decideRollback(getErr)

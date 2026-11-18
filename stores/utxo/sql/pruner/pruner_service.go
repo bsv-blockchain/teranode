@@ -646,7 +646,11 @@ func (s *Service) pruneCandidates(ctx context.Context, blockHeight uint32, candi
 	// returns the parent spends without clearing them, and the callers of
 	// MarkConflictingRecursively in block assembly and the validator drop them.
 	// A parent output that still names such a loser gets a marker from the
-	// query below, like any other output that names a deleted child.
+	// query below, like any other output that names a deleted child. In
+	// defensive mode a conflicting record never reaches these statements: the
+	// candidate query leaves it out, and reapExpiredConflicting deletes it
+	// afterwards in its own transaction, clearing the parent outputs that name
+	// it, with no marker.
 	const holdBackQuery = `UPDATE utxo_prune_candidates SET held_back = 1
 WHERE EXISTS (SELECT 1
   FROM transactions child

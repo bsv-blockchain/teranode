@@ -95,6 +95,12 @@ func (s *Store) RollbackIdempotentMatchesForTest(tx *bt.Tx, idempotent []*utxo.S
 	s.rollbackPartialSpends(tx, &spendCompletionResult{idempotentSpends: idempotent, rollbackNeeded: true, sawUnwinnable: true}, "test")
 }
 
+// SetRollbackBeforeProbeForTest installs the hook rollbackPartialSpends runs right before its
+// spender-existence probe, and clears it when given nil.
+func (s *Store) SetRollbackBeforeProbeForTest(f func()) {
+	s.rollbackBeforeProbe = f
+}
+
 // WithoutMarkedMatchesForTest runs the rollback's replay-marker re-read on its
 // own and returns the spends it leaves in the rollback.
 func (s *Store) WithoutMarkedMatchesForTest(tx *bt.Tx, rollback, idempotent []*utxo.Spend) []*utxo.Spend {

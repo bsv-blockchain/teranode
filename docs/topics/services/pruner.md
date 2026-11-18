@@ -237,7 +237,7 @@ When a transaction remains unmined for a long time, its parent transactions (UTX
 
     - If defensive mode enabled: Verify all spending children are stable
     - Hold back a non-conflicting record whose parent claim cannot be verified: SQL checks each claimed output, while Aerospike checks whether any claimed output on each parent record names the child. If an output is unspent or malformed and no other claimed output on that record verifies the child (Aerospike), or that input cannot be verified (SQL), keep the child for another cycle. Conflicting records are exempt from this hold-back
-    - Write a replay marker on each parent output that still records the record as its spender, before the delete. On Aerospike a record whose marker cannot be written is held back; on SQL the markers and the delete commit in one transaction
+    - Write a replay marker on each parent output that still records the record as its spender, before the delete. On Aerospike a record whose marker cannot be written is held back; on SQL the markers and the delete commit in one transaction. In SQL defensive mode expired conflicting records are reaped separately: each reap transaction clears the parent outputs that name the record and deletes it without writing a marker
     - Delete UTXO record from database
     - If external transaction data exists: Delete `.tx` or `.outputs` file from Blob Store once the record delete is confirmed (Aerospike)
 
@@ -466,7 +466,7 @@ For large transactions stored externally:
 #### SQL Implementation
 
 - **Location**: `/stores/utxo/sql/pruner/`
-- **Query**: One READ COMMITTED transaction per prune. It selects the candidates into a temporary table (on Postgres it locks them `FOR NO KEY UPDATE` in ascending id and skips rows another transaction holds), holds back a candidate that is not conflicting and whose claimed parent output is present but unspent or malformed, writes a `deleted_children` replay marker for each surviving parent output that records a deleted candidate as its spender, then deletes the candidates that were not held back. On Postgres the role needs the `TEMPORARY` privilege
+- **Query**: One READ COMMITTED transaction per prune for the candidates. In defensive mode expired conflicting records are left out of it and reaped afterwards, one transaction each: the reap clears the parent outputs that name the record and deletes it, with no marker. The main transaction selects the candidates into a temporary table (on Postgres it locks them `FOR NO KEY UPDATE` in ascending id and skips rows another transaction holds), holds back a candidate that is not conflicting and whose claimed parent output is present but unspent or malformed, writes a `deleted_children` replay marker for each surviving parent output that records a deleted candidate as its spender, then deletes the candidates that were not held back. On Postgres the role needs the `TEMPORARY` privilege
 - **Workers**: 2 goroutines (configurable)
 - **No External Dependencies**: All data inline
 - **Max Job History**: 10 jobs
