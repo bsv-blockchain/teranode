@@ -1993,7 +1993,9 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 //     nonGenesisBlockIDs);
 //   - at least one of those blocks on the current chain (a block that lost a
 //     reorg keeps its stale ID; only invalidated blocks get BlockIDs cleared);
-//   - the record is not conflicting, not locked and not creating.
+//   - the record is not conflicting, not locked and not creating;
+//   - the record lists exactly this tx's outpoints (see recordSpendsTxInputs),
+//     which UTXO-set snapshot records from cmd/seeder and cmd/seedimport do not.
 //
 // A bless returns the stored record and writes nothing. The txid commits to the
 // whole transaction, so the record is for these exact bytes. Scripts are not
@@ -2001,11 +2003,12 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 // record to spend against.
 //
 // BlockIDs do not prove that the spends were recorded, and the stores do not
-// enforce that DAH eviction leaves only fully spent parents. A create-only record
-// (seedimport, quick-validate wave 1) can carry BlockIDs with no spends behind
-// it, and a conflicting record can be DAH-evicted with unspent outputs. The
-// grace accepts this: with every parent absent, this node holds no output the tx
-// could double-spend, and the record claims a block on the current chain.
+// enforce that DAH eviction leaves only fully spent parents. A quick-validate
+// wave-1 record is created before its spends and can carry BlockIDs with no
+// spends behind it, and a conflicting record can be DAH-evicted with unspent
+// outputs. The grace accepts this: with every parent absent, this node holds no
+// output the tx could double-spend, and the record claims a block on the current
+// chain.
 //
 // The stores' own not-found-parent check (resolveSpendCompletions and its SQL
 // and Pebble mirrors) needs only that the record exists. It is looser than this
@@ -2043,6 +2046,10 @@ func (v *Validator) dahEvictedParentGrace(ctx context.Context, tx *bt.Tx, txID s
 		return nil, nil
 	}
 
+	if !recordSpendsTxInputs(txMetaData, tx) {
+		return nil, nil
+	}
+
 	onCurrentChain, chainErr := v.blockchainClient.CheckBlockIsInCurrentChain(ctx, minedBlockIDs)
 	if chainErr != nil {
 		if ctx.Err() != nil {
@@ -2062,6 +2069,33 @@ func (v *Validator) dahEvictedParentGrace(ctx context.Context, tx *bt.Tx, txID s
 	v.logger.Debugf("[Validate][%s] all parents absent, tx mined on current chain and not conflicting/locked/creating, assuming blessed (BlockIDs=%v)", txID, txMetaData.BlockIDs)
 
 	return txMetaData, nil
+}
+
+// recordSpendsTxInputs reports whether the stored record lists exactly the
+// outpoints this tx spends. A record built from a UTXO-set snapshot (cmd/seeder,
+// cmd/seedimport) stores outputs only, so it has no inpoints: it carries a block
+// id without ever having been created from these inputs.
+func recordSpendsTxInputs(record *meta.Data, tx *bt.Tx) bool {
+	stored := record.TxInpoints.GetTxInpoints()
+	if len(stored) != len(tx.Inputs) {
+		return false
+	}
+
+	remaining := make(map[subtree.Inpoint]int, len(stored))
+	for _, inpoint := range stored {
+		remaining[inpoint]++
+	}
+
+	for _, input := range tx.Inputs {
+		inpoint := subtree.Inpoint{Hash: *input.PreviousTxIDChainHash(), Index: input.PreviousTxOutIndex}
+		if remaining[inpoint] == 0 {
+			return false
+		}
+
+		remaining[inpoint]--
+	}
+
+	return true
 }
 
 // nonGenesisBlockIDs drops block id 0. Genesis holds id 0 and is on every chain,

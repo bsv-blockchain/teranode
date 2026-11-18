@@ -15,7 +15,6 @@ import (
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
-	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -896,11 +895,13 @@ func TestValidator_ValidateInternal_UTXOError_ConflictingTxCreation(t *testing.T
 // even for a child that is mined on the current chain, and the validator reads
 // neither the child record nor the chain. The only grace is the ingest extend step.
 func TestValidate_SpendStepTxNotFoundNotBlessed(t *testing.T) {
+	graceChain := newGraceChain(t)
+
 	for _, inBlock := range []bool{false, true} {
 		t.Run(fmt.Sprintf("inBlock=%v", inBlock), func(t *testing.T) {
 			ctx := context.Background()
 			mockStore := &utxo.MockUtxostore{}
-			chain := &blockchain.Mock{}
+			chain := &graceChainClient{ClientI: graceChain.client}
 
 			validator, err := New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), mockStore, nil, nil, nil, nil, chain)
 			require.NoError(t, err)
@@ -924,10 +925,10 @@ func TestValidate_SpendStepTxNotFoundNotBlessed(t *testing.T) {
 			mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
 			mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).
 				Run(func(args mock.Arguments) {
-					*args.Get(2).(*meta.Data) = meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
+					// A record the grace would bless: mined on the current chain, with inpoints.
+					*args.Get(2).(*meta.Data) = *minedRecord(t, tx, graceChain.mainIDs[1])
 				}).
 				Return(nil).Maybe()
-			chain.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil).Maybe()
 
 			txMetaData, err := v.validateInternal(ctx, tx, 100, &Options{InBlock: inBlock})
 
@@ -935,7 +936,7 @@ func TestValidate_SpendStepTxNotFoundNotBlessed(t *testing.T) {
 			require.ErrorIs(t, err, errors.ErrTxNotFound)
 			require.Contains(t, err.Error(), "error spending utxos")
 			mockStore.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
-			chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
+			require.Empty(t, chain.asked)
 		})
 	}
 }
