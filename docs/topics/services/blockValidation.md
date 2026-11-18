@@ -116,21 +116,29 @@ The `optimisticMining` setting provides a validation strategy that prioritizes b
 4. Mark block as existing in cache
 5. Validate in background goroutine:
    a. Fetch block headers for validation context
-   b. Validate subtrees and transactions
+   b. Run the full block validation (`block.Valid`)
    c. Update stores (subtree DAH, tx metadata)
    d. Mark transactions as mined
-6. If validation fails → Queue for revalidation
+6. If validation proves the block invalid (or, once the node is running, a transaction spends a
+   parent that is in no block) → invalidate it; on a transient failure → queue for revalidation
 ```
 
 **Technical Implementation:**
 
-The optimistic path is implemented in `ValidateBlock()` (services/blockvalidation/BlockValidation.go:1187-1220):
+The optimistic path is implemented in `ValidateBlockWithOptions()` (services/blockvalidation/BlockValidation.go):
 
-1. **Immediate Block Addition**: Calls `blockchainClient.AddBlock()` before subtree validation completes
-2. **Block Exists Cache**: Sets block as existing to prevent reprocessing
-3. **Background Validation**: Spawns goroutine with `optimisticMiningWg.Add(1)`
-4. **Decoupled Context**: Uses `tracing.DecoupleTracingSpan()` to prevent context cancellation from blocking background work
-5. **Rollback on Failure**: Calls `ReValidateBlock()` if background validation fails
+1. **Checks Before the Add**: Subtree validation has already run synchronously. The header-context
+   checks, the coinbase-only binding for a body with no subtrees, and `model.Block.CheckIntegrityFloor`
+   (merkle binding through the first and last subtrees, then the coinbase rules) run next. A block
+   that fails the floor is not added early and is validated fully first
+2. **Block Addition**: Calls `blockchainClient.AddBlock()` before the full `block.Valid()` runs
+3. **Block Exists Cache**: Sets block as existing to prevent reprocessing
+4. **Background Validation**: Spawns goroutine with `optimisticMiningWg.Add(1)`
+5. **Decoupled Context**: Uses `tracing.DecoupleTracingSpan()` to prevent context cancellation from blocking background work
+6. **Rollback on Failure**: an invalid verdict invalidates the block (`markBlockAsInvalid`, or
+   `InvalidateBlock` directly for a corrupt body, or when `checkOldBlockIDs` finds a transaction
+   whose parent is mined only outside the block's own history); a transient failure re-queues it
+   for revalidation and leaves it on the chain
 
 **Configuration:**
 
@@ -769,6 +777,8 @@ Only failures that are not a verdict on the block are retried. The worker puts t
 
 Invalid blocks are never retried.
 
+The priority-queue worker does not retry a block that failed on a corrupt blob in this node's own store (`ERR_BLOB_CORRUPT`) or fetch it from another source, even though its error text matches the malicious-response check. The file already exists, so every attempt would read the same bytes. Repair or remove the file. Repair alone does not requeue the block: validation needs a later peer announcement or catchup from a later block. Catchup and the legacy park still treat the error as a local storage fault and may retry it.
+
 ##### Alternative Source Handling
 
 The `GetAlternativeSource()` method:
@@ -1074,7 +1084,7 @@ After **10 consecutive failures** (total worst-case budget: 111s) the worker emi
 - `teranode_blockvalidation_setmined_drops_total` (counter, aggregate across all blocks) — incremented when the worker drops a block after exceeding retries. Any non-zero value (or an increase over a window) is page-worthy.
 - Log marker: grep `manual_intervention_required` in the blockvalidation service logs for the dropped block hashes; this is the authoritative source for the specific block, since the metrics are no longer labeled by `blockhash`.
 
-**Operator runbook for `manual_intervention_required`.**
+**Operator runbook for `manual_intervention_required` (setMined drops).** This covers the line the worker logs when it drops a block. The invalid-block revert also logs this marker when a subtree has no usable copy; that case has its own repair steps under "Unusable Subtree Files When Reverting an Invalid Block" below.
 
 1. Identify the block hash from the log line.
 2. Pull the block's tx hashes via the asset service and spot-check a sample against the UTXO store: each non-coinbase tx MUST have the block's `blockID` in its `blockIDs` slice. Drift here is the signal.
@@ -1083,6 +1093,16 @@ After **10 consecutive failures** (total worst-case budget: 111s) the worker emi
 5. If `teranode_blockvalidation_setmined_drops_total` keeps incrementing across a cluster after deploy, **stop the rollout** and audit `block_ids` data drift before continuing; the new postcondition is surfacing pre-existing corruption that needs a one-shot repair pass before the stricter check is safe to flip on.
 
 These counters are deliberately unlabeled (no `{blockhash}`) to avoid unbounded Prometheus cardinality — a per-block label series would grow without limit and never be reclaimed. Operators alert on the aggregate rate / non-zero total instead, and resolve the specific unrecoverable block from the `manual_intervention_required` log line. Do not attempt to build a per-block alert on these metrics: there is no `blockhash` label, so such an alert would silently never fire.
+
+#### Unusable Subtree Files When Reverting an Invalid Block
+
+When a block is marked invalid, `setTxMinedStatus` removes its tag from its transactions. To find them it reloads each of the block's subtrees, first as `.subtree` and then as `.subtreeToCheck`, and uses the first copy that reads, parses and whose nodes hash to the subtree's own hash. A subtree with no usable copy is skipped, because no retry can bring one back:
+
+- **Absent** (no copy in the store): skipped with a warning. An invalid block need not have all its subtrees.
+- **Corrupt** (a copy with a missing, truncated or wrong-type header, a body that does not parse, or a body whose nodes hash to another root): skipped. The stores write blobs whole, so a retry would read the same bytes, and returning it would leave the block at `mined_set=false` and hold block assembly's `WaitForPendingBlocks` indefinitely. The skip logs an `ERROR` containing `manual_intervention_required` with the block and subtree hashes, and increments `teranode_blockvalidation_revert_subtree_corrupt_total` (once per revert attempt that reaches the subtree, so a revert retried for another subtree's read failure counts it again). That subtree's transactions keep the invalid block's tag and stay out of block assembly. The revert still finishes and sets the block's `mined_set`, so restoring the file alone does nothing. To repair, put back a good `.subtree` or `.subtreeToCheck` file for that subtree hash, then clear the block's `mined_set` (the blockchain service's `ClearBlockMinedSet`), and the mined-not-set sweep runs the revert again.
+- **Any other read failure** (an I/O error, an unreachable store): returned, and the revert is retried.
+
+The corrupt classification comes from the file and S3 stores. A subtree store reached through the blob HTTP server answers every non-miss failure with a 500, so a corrupt header behind it is still retried.
 
 > **For a comprehensive explanation of the two-phase commit process across the entire system, including how Block Validation plays a role in the second phase, see the [Two-Phase Transaction Commit Process](../features/two_phase_commit.md) documentation.**
 >

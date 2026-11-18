@@ -1595,10 +1595,20 @@ func subtreeAbsent(err error) bool {
 }
 
 // reloadSubtreesForInvalidBlock reloads an invalid block's subtrees from the
-// store. A subtree that is absent or does not parse is left nil, because an
-// invalid block legitimately may not have all of them and a retry cannot bring
-// one back. Any other read failure is returned: it may be transient, and
+// store. Each subtree is read as FileTypeSubtree and then as
+// FileTypeSubtreeToCheck, and the first copy that reads, parses and whose root
+// matches the subtree hash is used. A subtree with no usable copy is left nil,
+// because a retry cannot bring one back: an absent copy stays absent, and a
+// corrupt one (a bad header, a body that does not parse, or a body whose nodes
+// hash to another root) reads the same bytes every time, since the stores
+// write blobs whole. Any other read failure is returned: it may be transient, and
 // skipping it would let the revert finish with that subtree's tags in place.
+//
+// A skipped subtree whose copies were corrupt, not just absent, leaves its
+// transactions tagged with the invalid block, so it is logged with
+// manual_intervention_required and counted in revert_subtree_corrupt_total.
+// Retrying instead would keep the block at mined_set=false and hold block
+// assembly's WaitForPendingBlocks until an operator repaired the file.
 //
 // On that error the subtrees already loaded are closed before returning. They
 // never reach the block, and an mmap-backed subtree has no finalizer, so they
@@ -1619,32 +1629,12 @@ func (u *BlockValidation) reloadSubtreesForInvalidBlock(ctx context.Context, blo
 	}()
 
 	for subtreeIdx, subtreeHash := range block.Subtrees {
-		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+		subtree, err := u.reloadSubtreeForInvalidBlock(ctx, block, subtreeIdx, subtreeHash)
 		if err != nil {
-			if !subtreeAbsent(err) {
-				return errors.NewProcessingError("[setTxMined][%s] failed to read subtree %d/%s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
-			}
-
-			subtreeBytes, err = u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
-			if err != nil {
-				if !subtreeAbsent(err) {
-					return errors.NewProcessingError("[setTxMined][%s] failed to read subtree %d/%s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
-				}
-
-				u.logger.Warnf("[setTxMined][%s] subtree %d/%s not in store: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
-				continue
-			}
-		}
-
-		subtree, err := u.newSubtreeFromBytes(subtreeBytes)
-		if err != nil {
-			u.logger.Warnf("[setTxMined][%s] failed to parse subtree %d/%s: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
-			continue
+			return err
 		}
 
 		reloaded[subtreeIdx] = subtree
-
-		u.logger.Debugf("[setTxMined][%s] loaded subtree %d/%s from store", block.Hash().String(), subtreeIdx, subtreeHash.String())
 	}
 
 	// Built locally and swapped in under the block's mutex. The store reads above
@@ -1654,6 +1644,67 @@ func (u *BlockValidation) reloadSubtreesForInvalidBlock(ctx context.Context, blo
 	block.ReplaceSubtreeSlices(reloaded)
 
 	return nil
+}
+
+// reloadSubtreeForInvalidBlock reads one subtree of an invalid block for the
+// revert, trying FileTypeSubtree and then FileTypeSubtreeToCheck. It returns
+// the first copy that reads, parses and whose root matches subtreeHash, nil
+// with no error when no copy is
+// usable, and an error only for a read failure a retry might clear. See
+// reloadSubtreesForInvalidBlock for the rule.
+func (u *BlockValidation) reloadSubtreeForInvalidBlock(ctx context.Context, block *model.Block, subtreeIdx int, subtreeHash *chainhash.Hash) (*subtreepkg.Subtree, error) {
+	var corrupt []string
+
+	for _, fileType := range []fileformat.FileType{fileformat.FileTypeSubtree, fileformat.FileTypeSubtreeToCheck} {
+		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], fileType)
+		if err != nil {
+			switch {
+			case errors.IsBlobCorrupt(err):
+				corrupt = append(corrupt, fmt.Sprintf("%s: %v", fileType, err))
+				continue
+			case subtreeAbsent(err):
+				continue
+			default:
+				return nil, errors.NewProcessingError("[setTxMined][%s] failed to read subtree %d/%s as %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), fileType, err)
+			}
+		}
+
+		subtree, err := u.newSubtreeFromBytes(subtreeBytes)
+		if err != nil {
+			corrupt = append(corrupt, fmt.Sprintf("%s: failed to parse: %v", fileType, err))
+			continue
+		}
+
+		// The revert unmines the transactions this list names, so it must be the subtree the
+		// block commits to. A copy whose nodes hash to another root is as unusable as one that
+		// does not parse.
+		// ValidateSubtreeNodesMatchKey hashes the node list: a deserialized subtree's RootHash
+		// is the root field stored in the file, which damaged node bytes would leave intact.
+		if err := model.ValidateSubtreeNodesMatchKey(subtree, subtreeHash); err != nil {
+			corrupt = append(corrupt, fmt.Sprintf("%s: %v", fileType, err))
+
+			if closeErr := subtree.Close(); closeErr != nil {
+				u.logger.Warnf("[setTxMined][%s] failed closing mismatched subtree %d/%s: %v", block.Hash().String(), subtreeIdx, subtreeHash.String(), closeErr)
+			}
+
+			continue
+		}
+
+		u.logger.Debugf("[setTxMined][%s] loaded subtree %d/%s from store as %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), fileType)
+
+		return subtree, nil
+	}
+
+	if len(corrupt) == 0 {
+		u.logger.Warnf("[setTxMined][%s] subtree %d/%s not in store", block.Hash().String(), subtreeIdx, subtreeHash.String())
+		return nil, nil
+	}
+
+	prometheusBlockValidationRevertSubtreeCorrupt.Inc()
+
+	u.logger.Errorf("[setTxMined][%s] manual_intervention_required: subtree %d/%s has no usable copy, its transactions keep this invalid block's tag: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), strings.Join(corrupt, "; "))
+
+	return nil, nil
 }
 
 // setTxMinedStatus marks all transactions within a block as mined in the blockchain system.
@@ -2606,7 +2657,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// would otherwise be added first: from BIP34 activation the store's coinbase height read
 		// fails AddBlock as a storage error, and below activation the block is published and only
 		// condemned later in the background. Validate it synchronously. This keys on coinbase
-		// shape only; a correctly shaped coinbase whose height the store rejects is not covered.
+		// shape only; a correctly shaped coinbase with the wrong BIP34 height passes here and is
+		// caught by the integrity floor below.
 		//
 		// The same goes for a coinbase-only body claiming more than one transaction, because Valid
 		// checks the count last: a peer's count must not turn a condemnable body into a corrupt one.
@@ -3116,10 +3168,38 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 //
 // So the block goes to whichever side removes it from the cache. If this call
 // removes it, it releases it, as the old Delete-then-release did. If the entry is
-// already gone, the setMined worker or the cache's eviction function has it and
-// releases it, and the caller must not touch the block's subtrees again. A block
-// that was never cached (cached false) is still only ValidateBlock's, so it is
-// released directly.
+// already gone, the caller must not touch the block's subtrees again. The setMined
+// worker, the cache's eviction function, or a reclaim call for another object
+// with the same hash may have removed it. Another validation may also have
+// overwritten it. Some worker early returns skip release (a separate cleanup
+// bug). A block that was never cached (cached false) is still only ValidateBlock's,
+// so it is released directly.
+//
+// The cache can also hold a different object for the same hash: a revalidation of
+// the block, or the optimistic-mining goroutine, which runs outside
+// runOncePerBlock, cached its own. Set overwrites without calling the eviction
+// function, so this call cannot tell whether block was replaced while it sat in
+// the cache or the setMined worker took it first and the other object was cached
+// after. The worker may still be reading block's subtrees, so only the object this
+// call removed is released, and block is left as if taken. If it was really
+// replaced, nobody releases it: heap-backed nodes go to the GC, and an mmap-backed
+// subtree keeps its mapping until the process exits and leaves its
+// subtree-nodes-* temp file in blockvalidation_subtreeMmapDir after that, since
+// nothing removes those files at startup. An operator invalidate and reconsider
+// can cache a second object before the worker takes the first, even when the
+// validation calls do not overlap and optimistic mining is disabled. The
+// optimistic-mining goroutine also caches outside runOncePerBlock, so it can
+// overwrite an entry while another validation is still running. An overwrite
+// does not need a failed SetBlockSubtreesSet: if both calls succeed, this helper
+// never runs and an overwritten, untaken block leaks without a warning. A lost
+// reply can instead let the worker take block before the overwrite, in which
+// case the worker owns block.
+// After an overwrite, the other object can itself be taken or evicted before this
+// call, which then finds the entry gone, as if the worker had taken block.
+// A possible leak is the safe side of the trade against tagging another block's
+// hashes. Both exits here that leave block unreleased log at Warn with the block
+// hash and say a leak is possible. These warnings do not trace overwrites on the
+// successful validation path.
 func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block, cached bool) bool {
 	if !cached {
 		releaseBlockNodes(block)
@@ -3128,16 +3208,15 @@ func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block,
 
 	taken, removed := u.lastValidatedBlocks.GetAndDelete(*block.Hash())
 	if !removed {
-		u.logger.Warnf("[ValidateBlock][%s] block already taken from the validated-blocks cache after a failed subtrees_set, leaving its release to the taker", block.Hash().String())
+		u.logger.Warnf("[ValidateBlock][%s] block already taken from the validated-blocks cache after a failed subtrees_set, leaving its release to the taker; if another validation overwrote it first, its subtrees are never released", block.Hash().String())
 		return false
 	}
 
 	releaseBlockNodes(taken)
 
-	// Another Set for the same hash replaced our entry: ours left the cache without
-	// an owner, so it is still ours to release.
 	if taken != block {
-		releaseBlockNodes(block)
+		u.logger.Warnf("[ValidateBlock][%s] validated-blocks cache held another object for this block after a failed subtrees_set, released that one and left ours to the setMined worker; if no worker took it, its subtrees are never released", block.Hash().String())
+		return false
 	}
 
 	return true

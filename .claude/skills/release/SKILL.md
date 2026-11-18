@@ -108,9 +108,9 @@ Steps:
 If all pass:
 1. **Resolve the beta SHA**: `git rev-parse vX.Y.Z-beta-N`. This is what gets tagged — never the branch tip.
 2. **Verify nothing has landed on top of the beta**: `git rev-parse release/vX.Y` must equal the beta SHA. If they differ, **refuse to tag**: a hotfix landed after the beta soak and that commit hasn't been validated. Tell the user; require a fresh beta cut.
-3. **Build release notes** from `<prev-stable-tag>..<beta-tag>` (never `..HEAD`); see "Release notes format". For "Before you upgrade", select the `## [Unreleased]` entries in `CHANGELOG.md` on `main` whose PRs are all in that range. Match their `(#NNN)` against `git log --format=%s <prev-stable-tag>..<beta-tag>` and only that range: older history reuses PR numbers from the previous repo. If only some of an entry's PRs are in range, split it and select the in-range part.
+3. **Build release notes** from `<prev-stable-tag>..<beta-tag>` (never `..HEAD`); see "Release notes format". For "Before you upgrade", collect breaking changes (see "Collect breaking changes") for that range only.
 4. `gh release create vX.Y.Z --target <beta-sha> --title vX.Y.Z --notes-file <path>`. Explicit SHA target — bypasses branch-tip resolution entirely.
-5. **Cut the changelog section** (stable only, after the release is published). On a branch from `main`, move the step 3 selection under `## [X.Y.Z] - <YYYY-MM-DD>` / `### Breaking` above the previous version, dated with the published release date (UTC); split entries leave their other part under `[Unreleased]`. Nothing selected: the heading plus `No breaking changes.`. Open it as a docs PR against `main`. Never edit `CHANGELOG.md` on the release branch.
+5. **Do not edit any file in the repo for the release notes.** The repo has no `CHANGELOG.md`. The GitHub release is the only record.
 6. Return tag URL.
 7. Offer to draft an Announcements discussion post (see "Discussion announcement" section below). Don't post automatically — show the draft, let user edit, confirm before publishing.
 
@@ -139,9 +139,9 @@ GitHub's "Generate release notes" emits an empty body for release branches built
 ```markdown
 ## Before you upgrade
 
-<The `[Unreleased]` entries selected in `stable` step 3, quoted verbatim, or "No breaking changes.">
+<The breaking changes collected in `stable` step 3, or "No breaking changes.">
 
-Upgrading from an earlier version than <prev-stable-tag>? Read every section between yours and this one: https://github.com/bsv-blockchain/teranode/blob/main/CHANGELOG.md
+Upgrading from an earlier version than <prev-stable-tag>? Read "Before you upgrade" in every release between yours and this one: https://github.com/bsv-blockchain/teranode/releases
 
 ## What's Changed
 
@@ -151,10 +151,39 @@ Upgrading from an earlier version than <prev-stable-tag>? Read every section bet
 **Full Changelog**: https://github.com/bsv-blockchain/teranode/compare/<prev-tag>...<new-tag>
 ```
 
-- "Before you upgrade" is required on stable releases and quotes the entries selected in `stable` step 3, the same ones step 5 moves to `[X.Y.Z]`; never paraphrase or drop one. Betas omit it.
+- "Before you upgrade" is required on stable releases and lists the breaking changes collected in `stable` step 3, one bullet per PR, each ending with `(#NNN)`; never drop one. Betas omit it.
 - Pull commit headlines from `git log --pretty='%s' <prev-tag>..<new-tag>`.
 - PR numbers come from the `(#NNN)` suffix already present in cherry-pick titles.
 - Author: `gh pr view <NNN> --json author -q .author.login`.
+
+## Collect breaking changes
+
+The repo has no changelog file. Each PR that breaks something carries a `## Breaking` section in its description (rule in `AGENTS.md`: Engineering Rules). Collect them from the release range only:
+
+```bash
+git log --format=%s <prev-stable-tag>..<beta-tag> | grep -o '(#[0-9]*)' | tr -d '(#)' | sort -un
+gh pr view <NNN> --json number,title,body,labels
+```
+
+1. Take the text under `## Breaking` in each PR body, and every PR with the `breaking` label.
+2. Match PR numbers against that range only. Older history reuses PR numbers from the previous repo.
+3. Read the PR diff for any PR touching `settings.conf`, `.proto` files, metric names, or consensus rules that has **no** `## Breaking` section. The author may have missed one. Ask the user; never add one silently.
+4. Legacy entries: PRs merged before `CHANGELOG.md` was deleted recorded their entries in that file. Fetch canonical main explicitly and search that fetched history, even when checked out on a release branch or using a fork. Stop release preparation if the fetch fails or no deletion is found:
+
+   ```bash
+   git fetch https://github.com/bsv-blockchain/teranode.git main || exit 1
+   sha=$(git log FETCH_HEAD --diff-filter=D --format=%H -1 -- CHANGELOG.md) || exit 1
+   if [ -z "$sha" ]; then
+     echo "No CHANGELOG.md deletion found on canonical main; stop release preparation." >&2
+     exit 1
+   fi
+   git show "$sha^:CHANGELOG.md"
+   ```
+
+   Use its `## [Unreleased]` entries whose PRs are in range. If only some of an entry's PRs are in range, split it.
+5. History before the deletion: the `[0.16.0]` section and earlier live only in git. Read them with `git show "$sha^:CHANGELOG.md"`, using the deletion SHA resolved in step 4. Use them when a user upgrades from a version older than the deletion and the release body for an intermediate version lacks "Before you upgrade". Quote them; do not edit published release bodies unasked.
+6. Keep only sections that meet the `AGENTS.md` definition of breaking: an operator or integrator must act, or something that worked stops working. Drop ordinary bug fixes, performance changes, log changes and error-message wording, even if the author listed them. List the dropped PRs for the user.
+7. Show the collected list to the user before publishing. Never paraphrase an author's text into a weaker claim.
 
 ## Discussion announcement
 
@@ -266,6 +295,7 @@ git diff --stat <prev-tag>..<new-tag>
 
 After tagging a stable patch:
 1. Verify release URL (`gh release view <tag>`).
+   Then verify the Announcements discussion exists for the stable tag: `gh api graphql -f query='{ repository(owner: "bsv-blockchain", name: "teranode") { discussions(first: 5, categoryId: "<announcements-id>", orderBy: {field: CREATED_AT, direction: DESC}) { nodes { title url } } } }'`. Look for `vX.Y.Z` in the titles. If it is missing, offer the draft again.
 2. Ask user if any deployment / monitoring follow-up is needed (e.g. update fleet, watch Coralogix for the next 30 min).
 3. Offer to run `triage` for the next round on the same release branch.
 

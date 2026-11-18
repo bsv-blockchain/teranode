@@ -70,12 +70,11 @@ func Test_propertyDequeueBatchAdmitPredicate(t *testing.T) {
 //
 // The expected predicate composes both call sites:
 //
-//	validFromMillis = drain_clock.UnixMilli()                if window == 0
-//	validFromMillis = (drain_clock - window).UnixMilli()     otherwise
-//	admit iff batch.time < validFromMillis
+//	admit iff batch.time <= drain_clock.UnixMilli()              if window == 0
+//	admit iff batch.time <  (drain_clock - window).UnixMilli()   otherwise
 //
-// (validFromMillis is always non-zero in dequeueDuringBlockMovement so
-// the LockFreeQueue.dequeueBatch zero-guard never triggers from this call site; the
+// (the cutoff is always non-zero in dequeueDuringBlockMovement so the
+// LockFreeQueue.dequeueBatch zero-guard never triggers from this call site; the
 // zero-guard still applies to the Start-loop default-case dequeue.)
 func Test_propertyDrainAdmitInvariant(outerT *testing.T) {
 	rapid.Check(outerT, func(t *rapid.T) {
@@ -114,6 +113,9 @@ func Test_propertyDrainAdmitInvariant(outerT *testing.T) {
 			validFromMillis = drainTime.UnixMilli()
 		}
 		wantAdmit := enqueueMs < validFromMillis
+		if window == 0 {
+			wantAdmit = enqueueMs <= validFromMillis
+		}
 
 		ctx := fmt.Sprintf("window=%v, enqueueMs=%d, drainMs=%d, validFromMillis=%d",
 			window, enqueueMs, drainTime.UnixMilli(), validFromMillis)

@@ -275,28 +275,35 @@ func TestSubtreesSetFailure_ValidateBlockReleasesAnUntakenBlock(t *testing.T) {
 // side that removes the block from the cache releases it, and a block that never
 // entered the cache stays with ValidateBlock.
 func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
-	newBV := func(t *testing.T) *BlockValidation {
+	newBV := func(t *testing.T) (*BlockValidation, *warnRecordingLogger) {
+		logger := &warnRecordingLogger{}
 		bv := &BlockValidation{
-			logger:              ulogger.TestLogger{},
+			logger:              logger,
 			lastValidatedBlocks: newTestLastValidatedBlocks(),
 		}
 		t.Cleanup(bv.lastValidatedBlocks.Stop)
 
-		return bv
+		return bv, logger
 	}
 
+	const (
+		otherObjectWarning  = "[ValidateBlock][%s] validated-blocks cache held another object"
+		alreadyTakenWarning = "[ValidateBlock][%s] block already taken from the validated-blocks cache"
+	)
+
 	t.Run("cached and untaken: released here", func(t *testing.T) {
-		bv := newBV(t)
+		bv, logger := newBV(t)
 		block := blockWithLoadedSubtree(t)
 		bv.lastValidatedBlocks.Set(*block.Hash(), block)
 
 		require.True(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
 		require.False(t, block.SubtreesLoaded())
 		require.Zero(t, bv.lastValidatedBlocks.Len())
+		logger.requireLeakWarnings(t, block)
 	})
 
 	t.Run("cached and already taken: left alone", func(t *testing.T) {
-		bv := newBV(t)
+		bv, logger := newBV(t)
 		block := blockWithLoadedSubtree(t)
 		bv.lastValidatedBlocks.Set(*block.Hash(), block)
 
@@ -305,26 +312,54 @@ func TestReclaimBlockAfterFailedSubtreesSet(t *testing.T) {
 
 		require.False(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
 		require.True(t, block.SubtreesLoaded())
+		logger.requireLeakWarnings(t, block, alreadyTakenWarning)
 	})
 
 	t.Run("never cached: released here", func(t *testing.T) {
-		bv := newBV(t)
+		bv, logger := newBV(t)
 		block := blockWithLoadedSubtree(t)
 
 		require.True(t, bv.reclaimBlockAfterFailedSubtreesSet(block, false))
 		require.False(t, block.SubtreesLoaded())
+		logger.requireLeakWarnings(t, block)
 	})
 
-	t.Run("entry replaced by another object: both released", func(t *testing.T) {
-		bv := newBV(t)
+	// The cache holds another object for the same hash. Set overwrites without
+	// calling the eviction function, so reclaim cannot tell whether ours was
+	// replaced while cached or taken by the setMined worker before the other
+	// object was cached. The worker may still be reading ours, so only the
+	// object reclaim removed is released, and the caller must not reuse ours.
+	t.Run("entry replaced by another object: only the cached one released", func(t *testing.T) {
+		bv, logger := newBV(t)
 		block := blockWithLoadedSubtree(t)
 		other := detachedBlockCopy(block)
 		other.SubtreeSlices = loadedSubtrees(t)
 		bv.lastValidatedBlocks.Set(*block.Hash(), other)
 
-		require.True(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
-		require.False(t, block.SubtreesLoaded())
+		require.False(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
+		require.True(t, block.SubtreesLoaded(), "a block the setMined worker may hold must not be released")
 		require.False(t, other.SubtreesLoaded())
+		require.Zero(t, bv.lastValidatedBlocks.Len())
+		logger.requireLeakWarnings(t, block, otherObjectWarning)
+	})
+
+	t.Run("worker took ours, then a revalidation cached another: ours left to the worker", func(t *testing.T) {
+		bv, logger := newBV(t)
+		block := blockWithLoadedSubtree(t)
+		bv.lastValidatedBlocks.Set(*block.Hash(), block)
+
+		workerBlock, took := bv.lastValidatedBlocks.GetAndDelete(*block.Hash())
+		require.True(t, took)
+		require.Same(t, block, workerBlock)
+
+		revalidated := detachedBlockCopy(block)
+		revalidated.SubtreeSlices = loadedSubtrees(t)
+		bv.lastValidatedBlocks.Set(*block.Hash(), revalidated)
+
+		require.False(t, bv.reclaimBlockAfterFailedSubtreesSet(block, true))
+		require.True(t, workerBlock.SubtreesLoaded(), "reclaim released the block the setMined worker is reading")
+		require.False(t, revalidated.SubtreesLoaded())
+		logger.requireLeakWarnings(t, block, otherObjectWarning)
 	})
 }
 
@@ -351,6 +386,51 @@ func TestDetachedBlockCopy(t *testing.T) {
 	// The subtree list is the copy's own: editing it must not reach the original.
 	copied.Subtrees[0] = &chainhash.Hash{0xff}
 	require.NotEqual(t, block.Subtrees[0], copied.Subtrees[0])
+}
+
+// warnRecordingLogger records every Warnf call, so a test can check that a path
+// which gives up a block without releasing it says so, and names the block.
+type warnRecordingLogger struct {
+	ulogger.TestLogger
+	mu    sync.Mutex
+	warns []recordedWarning
+}
+
+type recordedWarning struct {
+	format string
+	args   []interface{}
+}
+
+func (l *warnRecordingLogger) Warnf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.warns = append(l.warns, recordedWarning{format: format, args: args})
+}
+
+// requireLeakWarnings requires that exactly the warnings with these format
+// prefixes were logged, in order, none other. Each must name the block by its hash
+// and say its subtrees may never be released.
+func (l *warnRecordingLogger) requireLeakWarnings(t *testing.T, block *model.Block, prefixes ...string) {
+	t.Helper()
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	formats := make([]string, 0, len(l.warns))
+	for _, w := range l.warns {
+		formats = append(formats, w.format)
+	}
+
+	require.Len(t, l.warns, len(prefixes), "warnings logged: %q", formats)
+
+	for i, prefix := range prefixes {
+		w := l.warns[i]
+		require.True(t, strings.HasPrefix(w.format, prefix), "warning %d: %q", i, w.format)
+		require.Contains(t, w.format, "its subtrees are never released", "warning %d must say the block may leak", i)
+		require.NotEmpty(t, w.args, "warning %d has no arguments", i)
+		require.Equal(t, block.Hash().String(), w.args[0], "warning %d must name the block", i)
+	}
 }
 
 func newTestLastValidatedBlocks() *expiringmap.ExpiringMap[chainhash.Hash, *model.Block] {
@@ -500,12 +580,16 @@ func TestSubtreesSetFailure_SetTxMinedStatusTakesTheBlockOnce(t *testing.T) {
 		f := newSetMinedOwnershipFixture(ctx, t)
 		cached := f.cacheFreshBlock(ctx, t)
 
-		var reclaimOwned atomic.Bool
+		var (
+			reclaimOwned atomic.Bool
+			hookRan      atomic.Bool
+		)
 
 		// The hook runs inside setTxMinedStatus, after it has looked the block up
 		// and decided to use it. A worker that had not yet removed the entry by
 		// then would leave reclaim free to take and release the same object.
 		f.logger.onCachedBlock = func() {
+			hookRan.Store(true)
 			reclaimOwned.Store(f.bv.reclaimBlockAfterFailedSubtreesSet(cached, true))
 		}
 
@@ -514,6 +598,9 @@ func TestSubtreesSetFailure_SetTxMinedStatusTakesTheBlockOnce(t *testing.T) {
 		f.logger.onCachedBlock = nil
 		require.NoError(t, err)
 
+		// The hook keys on a log format string. If that line is reworded the hook
+		// never runs and the race goes unexercised, so fail rather than pass.
+		require.True(t, hookRan.Load(), "the cached-block hook never ran; the setTxMinedStatus debug line it matches has changed")
 		require.False(t, reclaimOwned.Load(), "reclaim took a block the setMined worker had already chosen to use")
 		require.Equal(t, before, f.client.getBlockCalls.Load(), "the worker owned the cached block, so it must not fetch another")
 		require.Contains(t, f.store.recordedHashes(), *f.childTx.TxIDChainHash())
