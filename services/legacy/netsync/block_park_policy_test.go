@@ -439,6 +439,29 @@ func TestParkCommitFailure_AMissingParentOutputKeepsTheBlockAndBlamesNobody(t *t
 	require.NotEqual(t, parkDispositionLocalUtxoFault, parkCommitFailure(fileMiss), "a missing file is not a missing output")
 }
 
+// TestParkCommitFailure_AMissingFileOutranksAMissingOutput: one failure can
+// name both a missing subtree file and a missing parent output, as a join of
+// two subtrees' errors does. The files go first. Dropping the record makes the
+// sink rewrite them on the next download, and an output that is still missing
+// then lands on the LocalUtxoFault row. Keeping the record for the UTXO fault
+// instead would retry a block whose files are gone for as long as it stays
+// parked, and never download them again.
+func TestParkCommitFailure_AMissingFileOutranksAMissingOutput(t *testing.T) {
+	both := parkCommitChain(errors.Join(
+		errors.NewNotFoundError("[readSubtree/hash] failed to get subtree data", errors.ErrNotFound),
+		errors.NewTxNotFoundError("output %d of %s not found", 0, "abcd"),
+	))
+
+	require.True(t, errors.Is(both, errors.ErrTxNotFound), "fixture: the failure carries the missing output")
+	require.Equal(t, parkDispositionFilesGone, parkCommitFailure(both))
+
+	withReplay := parkCommitChain(errors.Join(
+		errors.NewNotFoundError("[readSubtree/hash] failed to get subtree data", errors.ErrNotFound),
+		errors.NewUtxoSpendingTxPrunedError("[Spend] invalid spend for %s:%d: spending transaction was pruned", "ef01", 0),
+	))
+	require.Equal(t, parkDispositionFilesGone, parkCommitFailure(withReplay), "and the pruned-replay answer")
+}
+
 // TestParkCommitFailure_APrunedReplayAnswerIsALocalUtxoFault: the marker
 // answer a replay of a pruned transaction gets is the sibling of the code-30
 // miss above, and lands on the same row when it reaches the table unwrapped.
