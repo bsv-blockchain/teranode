@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"testing"
 	"time"
 
@@ -477,4 +479,76 @@ func stateSnoozes(path string) map[string]bool {
 	}
 
 	return out
+}
+
+// TestProbeInteractive starts a node with the probe and keeps it busy so you can use the dashboard by hand.
+// It sends a short chain of transactions and mines one block every few seconds until you press Ctrl+C.
+//
+// To run:
+//
+//	INTERACTIVE=true go test -v -timeout 0 -run TestProbeInteractive ./test/e2e/daemon/ready/
+//
+// PROBE_LISTEN sets the listen address (default 127.0.0.1:8100).
+func TestProbeInteractive(t *testing.T) {
+	if os.Getenv("INTERACTIVE") != "true" {
+		t.Skip("Skipping interactive test. Set INTERACTIVE=true to run this test for manual UI testing.")
+	}
+
+	listen := os.Getenv("PROBE_LISTEN")
+	if listen == "" {
+		listen = "127.0.0.1:8100"
+	}
+
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		EnableValidator: true,
+		EnableP2P:       true,
+		EnableProbe:     true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			probeSettings(),
+			func(s *settings.Settings) {
+				s.Probe.HTTPListenAddress = listen
+				s.Probe.BaselineWarmup = 2 * time.Minute
+			},
+		),
+		FSMState: blockchain.FSMStateRUNNING,
+	})
+
+	defer td.Stop(t, true)
+
+	addr := td.ProbeAddress(t)
+	parent := td.MineToMaturityAndGetSpendableCoinbaseTx(t, td.Ctx)
+
+	t.Log("\n===========================================")
+	t.Log("PROBE DASHBOARD READY")
+	t.Log("===========================================")
+	t.Logf("Dashboard URL: http://%s/", addr)
+	t.Logf("Access token:  %s", probeTestToken)
+	t.Log("Baselines calibrate for 2 minutes; then alarms can fire.")
+	t.Log("The test sends 10 transactions and mines 1 block every 5 seconds.")
+	t.Log("Press Ctrl+C when done testing...")
+	t.Log("===========================================\n")
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	defer signal.Stop(sigChan)
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-sigChan:
+			t.Log("\nReceived interrupt signal, cleaning up...")
+			return
+		case <-ticker.C:
+			txs, _, err := td.CreateAndSendTxs(t, parent, 10)
+			require.NoError(t, err)
+
+			parent = txs[len(txs)-1]
+
+			td.MineAndWait(t, 1)
+		}
+	}
 }
