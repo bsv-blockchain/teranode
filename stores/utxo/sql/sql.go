@@ -3806,8 +3806,10 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 		WHERE o.transaction_id = $1 AND o.idx = $2 AND o.spending_data = $3)`
 
 	successItems := make([]*batchSpend, 0, len(batch))
-	spentParentIDs := make(map[int]struct{}, len(batch)) // distinct parent tx ids whose outputs were just spent
-	validationErrors := make(map[int]error)              // index -> validation error (non-retryable)
+	spentParentIDs := make(map[int]struct{}, len(batch))  // distinct parent tx ids whose outputs were just spent
+	parentOfItem := make(map[*batchSpend]int, len(batch)) // the parent each success item spends
+	vanished := make(map[*batchSpend]error)               // success items whose parent the prune deleted
+	validationErrors := make(map[int]error)               // index -> validation error (non-retryable)
 	aborted := false
 
 	// Phase 1: SELECT + validate + UPDATE outputs
@@ -3950,6 +3952,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 			if len(spendingDataBytes) > 0 && spend.SpendingData != nil && bytes.Equal(spendingDataBytes, spend.SpendingData.Bytes()) {
 				item.idempotent = true
 				successItems = append(successItems, item)
+				parentOfItem[item] = transactionID
 				spentParentIDs[transactionID] = struct{}{}
 				continue
 			}
@@ -3997,6 +4000,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 		}
 
 		successItems = append(successItems, item)
+		parentOfItem[item] = transactionID
 		spentParentIDs[transactionID] = struct{}{}
 	}
 
@@ -4029,7 +4033,8 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 	}
 	sort.Ints(sortedSpentParents)
 	for _, parentID := range sortedSpentParents {
-		if err := s.setDAH(ctx, txn, parentID); err != nil {
+		present, err := s.setDAHIfPresent(ctx, txn, parentID)
+		if err != nil {
 			if isDeadlock(err) {
 				return true
 			}
@@ -4042,6 +4047,18 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 				item.errCh <- errors.NewStorageError("[Spend] failed to recompute DAH", err)
 			}
 			return false
+		}
+
+		if !present {
+			// The pruner deleted this parent while the batch waited for its row lock. Only
+			// the spends of that parent are affected: they get the answer a parent that was
+			// already gone gives, and the rest of the batch commits.
+			for _, item := range successItems {
+				if parentOfItem[item] == parentID {
+					vanished[item] = errors.NewTxNotFoundError(errOutputNotFound, item.spend.TxID, item.spend.Vout)
+					item.idempotent = false
+				}
+			}
 		}
 	}
 
@@ -4068,7 +4085,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 		}
 	}
 	for _, item := range successItems {
-		item.errCh <- nil
+		item.errCh <- vanished[item]
 	}
 	return false
 }

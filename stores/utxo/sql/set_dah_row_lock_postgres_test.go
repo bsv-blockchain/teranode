@@ -597,16 +597,28 @@ func TestSetMinedMultiTiming_Postgres(t *testing.T) {
 // every spend of the batch with a storage error.
 //
 // The prune is a transaction the test holds open, so the wait is observed in pg_locks and
-// ended by the test, with no sleeps in between.
+// ended by the test, with no sleeps in between. Both Postgres spend paths are run: the bulk one
+// and the per-row one, which also sends an idempotent match to setDAH.
 func TestSpendBatchSurvivesAParentThePruneDeletes_Postgres(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
 
+	for _, path := range []struct {
+		name string
+		bulk bool
+	}{{"bulk", true}, {"per_row", false}} {
+		t.Run(path.name, func(t *testing.T) {
+			testSpendBatchSurvivesAParentThePruneDeletes(t, path.bulk)
+		})
+	}
+}
+
+func testSpendBatchSurvivesAParentThePruneDeletes(t *testing.T, bulk bool) {
 	store, ctx := setupPostgresStore(t)
 	floorRetention(t, store)
 
-	store.settings.UtxoStore.BatchSQLOperations = true
+	store.settings.UtxoStore.BatchSQLOperations = bulk
 	require.NoError(t, store.SetBlockHeight(1000))
 
 	newParent := func(prev string) *bt.Tx {
