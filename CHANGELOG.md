@@ -31,6 +31,9 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **The limited RPC credential can no longer call `freeze`, `unfreeze` or `reassign`.** A call with
+  `rpc_limit_user`/`rpc_limit_pass` now answers "limited user not authorized for this method". Tools
+  that call these methods, such as an alert-system client, must use `rpc_user`/`rpc_pass`. (#2095)
 - **Between two blocks of equal chain work, the node now keeps the one it stored first.** It used
   to switch to the block relayed by the lowest-sorting peer id, and a block this node mined, stored
   with an empty peer id, won every tie. Until the blockchain service and block assembly both run
