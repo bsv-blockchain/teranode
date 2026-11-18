@@ -74,6 +74,8 @@ func TestCacheBytesPublicationWaitsForSnapshot(t *testing.T) {
 	newBytesTestCache(t, Lockfree)
 
 	txMetaCacheMetricsRegistry.publishMu.Lock()
+	prometheusBlockValidationTxMetaCacheBytes.Set(0)
+	prometheusBlockValidationTxMetaCacheCapacityBytes.Set(0)
 	done := make(chan struct{})
 	started := make(chan struct{})
 	go func() {
@@ -83,6 +85,21 @@ func TestCacheBytesPublicationWaitsForSnapshot(t *testing.T) {
 	}()
 	<-started
 
+	changed := false
+	deadline := time.After(50 * time.Millisecond)
+	check := time.NewTicker(time.Millisecond)
+	defer check.Stop()
+	waiting := true
+	for waiting {
+		select {
+		case <-check.C:
+			changed = changed || testutil.ToFloat64(prometheusBlockValidationTxMetaCacheBytes) != 0 ||
+				testutil.ToFloat64(prometheusBlockValidationTxMetaCacheCapacityBytes) != 0
+		case <-deadline:
+			waiting = false
+		}
+	}
+
 	select {
 	case <-done:
 		txMetaCacheMetricsRegistry.publishMu.Unlock()
@@ -90,6 +107,7 @@ func TestCacheBytesPublicationWaitsForSnapshot(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 	txMetaCacheMetricsRegistry.publishMu.Unlock()
+	require.False(t, changed, "gauges changed before the publication lock was acquired")
 
 	select {
 	case <-done:
