@@ -2606,7 +2606,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// would otherwise be added first: from BIP34 activation the store's coinbase height read
 		// fails AddBlock as a storage error, and below activation the block is published and only
 		// condemned later in the background. Validate it synchronously. This keys on coinbase
-		// shape only; a correctly shaped coinbase whose height the store rejects is not covered.
+		// shape only; a correctly shaped coinbase with the wrong BIP34 height passes here and is
+		// caught by the integrity floor below.
 		//
 		// The same goes for a coinbase-only body claiming more than one transaction, because Valid
 		// checks the count last: a peer's count must not turn a condemnable body into a corrupt one.
