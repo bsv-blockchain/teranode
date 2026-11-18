@@ -1431,3 +1431,28 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 		}
 	}
 }
+
+// BenchmarkAllocatorNextParallel measures Next with every goroutine of the run contending on the
+// allocator's one mutex, as concurrent creates in one process do. The grants are large enough that
+// a run never waits on the lease loop, so it measures the lock and the take alone. Run it with
+// -cpu 1,4,8,16 to see how the per-take cost grows with contention.
+func BenchmarkAllocatorNextParallel(b *testing.B) {
+	a := NewAllocator(newFakeLeases(1<<40), "pod-3", quiet, nil)
+	require.NoError(b, a.Start(context.Background()))
+
+	b.Cleanup(func() { _ = a.Close() })
+
+	_, err := a.Next(context.Background())
+	require.NoError(b, err)
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		ctx := context.Background()
+		for pb.Next() {
+			if _, err := a.Next(ctx); err != nil {
+				b.Error(err)
+				return
+			}
+		}
+	})
+}
