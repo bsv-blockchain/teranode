@@ -1000,6 +1000,50 @@ func TestWithoutMarkedMatchesDropsOnlyMarkedMatches(t *testing.T) {
 		"only the marked match leaves the rollback: a fresh write on the marked parent, an unmarked match and a match on a gone parent stay")
 }
 
+// TestWithoutMarkedMatchesCountsAMatchItCannotRead: when the re-read of a parent's replay marker
+// cannot run, the idempotent match is dropped from the rollback and the output stays spent by a
+// transaction the store may not hold. Nothing but an Error line said so. Each such match now
+// counts on utxo_spend_rollback_marker_unread, for both ways the read can fail: the rollback
+// budget is spent, and the read itself errors. A match whose marker is read, with none there,
+// stays in the rollback and counts nothing.
+func TestWithoutMarkedMatchesCountsAMatchItCannotRead(t *testing.T) {
+	s := test.CreateBaseTestSettings(t)
+
+	_, store, ctx, cleanup := initAerospike(t, s, ulogger.New("without-marked-matches-unread-test"))
+	t.Cleanup(cleanup)
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	p := rollbackFixtureParent(t, ctx, store, 0x71, 2)
+
+	c := bt.NewTx()
+	require.NoError(t, c.From(p.TxID(), 0, p.Outputs[0].LockingScript.String(), p.Outputs[0].Satoshis))
+	require.NoError(t, c.From(p.TxID(), 1, p.Outputs[1].LockingScript.String(), p.Outputs[1].Satoshis))
+	require.NoError(t, c.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+	_, _, err := store.SpendAndCreate(ctx, c, 1000)
+	require.NoError(t, err)
+
+	match, fresh := spendOf(t, p, 0, c, 0), spendOf(t, p, 1, c, 1)
+
+	before := astore.RollbackMarkerUnread()
+
+	kept := store.WithoutMarkedMatchesInForTest(ctx, c, []*utxo.Spend{match, fresh}, []*utxo.Spend{match})
+	require.Equal(t, []*utxo.Spend{match, fresh}, kept, "a readable, unmarked match stays in the rollback")
+	require.Equal(t, before, astore.RollbackMarkerUnread(), "a match whose marker was read counts nothing")
+
+	spent, cancel := context.WithCancel(ctx)
+	cancel()
+
+	kept = store.WithoutMarkedMatchesInForTest(spent, c, []*utxo.Spend{match, fresh}, []*utxo.Spend{match})
+	require.Equal(t, []*utxo.Spend{fresh}, kept, "a spent rollback budget drops the match and keeps the spend this call wrote")
+	require.Equal(t, before+1, astore.RollbackMarkerUnread(), "the dropped match is counted")
+
+	store.CloseClient()
+
+	kept = store.WithoutMarkedMatchesInForTest(ctx, c, []*utxo.Spend{match, fresh}, []*utxo.Spend{match})
+	require.Equal(t, []*utxo.Spend{fresh}, kept, "a failed read drops the match and keeps the spend this call wrote")
+	require.Equal(t, before+2, astore.RollbackMarkerUnread(), "the dropped match is counted")
+}
+
 // TestRollbackOfARequireParentOutputsCall: the second wave of
 // DefaultSpendAndCreateMulti spends with RequireParentOutputs, so the
 // spender-existence probe would always find the first wave's record. That call

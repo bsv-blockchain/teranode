@@ -58,6 +58,10 @@ var (
 	prometheusUtxoSpendRollbackFailed   prometheus.Counter
 	prometheusUtxoSpendAbortInFlight    prometheus.Counter
 
+	// prometheusUtxoSpendRollbackMarkerUnread counts idempotent matches a rollback left spent
+	// because it could not re-read the parent's replay marker.
+	prometheusUtxoSpendRollbackMarkerUnread prometheus.Counter
+
 	prometheusSQLUtxoGetCounterConflicting prometheus.Histogram
 	prometheusSQLUtxoGetConflicting        prometheus.Histogram
 
@@ -125,6 +129,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "sql",
 			Name:      "utxo_spend_rollback_failed",
 			Help:      "Spends that could not be reverted by a partial-spend rollback, i.e. potential dangling spender refs left behind (a count of spends, not of calls)",
+		},
+	)
+
+	prometheusUtxoSpendRollbackMarkerUnread = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "sql",
+			Name:      "utxo_spend_rollback_marker_unread",
+			Help:      "Idempotent matches a rollback left spent because it could not re-read the parent's replay marker; the output stays spent by a transaction the store may not hold until a retry heals it (a count of spends, not of calls)",
 		},
 	)
 

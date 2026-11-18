@@ -101,6 +101,18 @@ func (s *Store) WithoutMarkedMatchesForTest(tx *bt.Tx, rollback, idempotent []*u
 	return s.withoutMarkedMatches(context.Background(), tx, rollback, idempotent, "test")
 }
 
+// WithoutMarkedMatchesInForTest is WithoutMarkedMatchesForTest under ctx, so a test can spend
+// the rollback budget before the re-read.
+func (s *Store) WithoutMarkedMatchesInForTest(ctx context.Context, tx *bt.Tx, rollback, idempotent []*utxo.Spend) []*utxo.Spend {
+	return s.withoutMarkedMatches(ctx, tx, rollback, idempotent, "test")
+}
+
+// RollbackMarkerUnread is the number of idempotent matches a rollback left spent because it
+// could not re-read the parent's replay marker, for this process.
+func RollbackMarkerUnread() float64 {
+	return testutil.ToFloat64(prometheusUtxoSpendRollbackMarkerUnread)
+}
+
 // RollbackRequiredParentSpendsForTest runs the rollback of a failed
 // RequireParentOutputs call (the second wave of DefaultSpendAndCreateMulti)
 // that wrote the given spends. rollbackNeeded says whether its failure was a

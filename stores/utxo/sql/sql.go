@@ -2548,7 +2548,8 @@ func (s *Store) probeAndRollbackPartialSpends(tx *bt.Tx, rollback, idempotent []
 // A spend this call wrote is never dropped: its output was free before the
 // call, so a marker naming this spender says nothing about it. A lookup that
 // fails drops the match too, leaving the output spent by a transaction the store
-// does not hold, which the next attempt heals (utxo.RollbackSet).
+// does not hold, which the next attempt heals (utxo.RollbackSet), and each one
+// counts on utxo_spend_rollback_marker_unread.
 func (s *Store) withoutMarkedMatches(ctx context.Context, tx *bt.Tx, rollback, idempotent []*utxo.Spend) []*utxo.Spend {
 	if len(idempotent) == 0 {
 		return rollback
@@ -2575,6 +2576,7 @@ func (s *Store) withoutMarkedMatches(ctx context.Context, tx *bt.Tx, rollback, i
 		var marked bool
 		if err := s.db.QueryRowContext(ctx, q, spend.TxID[:], tx.TxIDChainHash()[:]).Scan(&marked); err != nil {
 			s.logger.Errorf("[SPEND][%s] cannot read the replay marker on %s:%d, leaving its idempotent match in place: %v", tx.TxID(), spend.TxID, spend.Vout, err)
+			prometheusUtxoSpendRollbackMarkerUnread.Inc()
 
 			continue
 		}

@@ -1426,3 +1426,40 @@ func TestSetDAHOfARowThePruneDeletedHasNothingToStamp(t *testing.T) {
 		})
 	})
 }
+
+// TestWithoutMarkedMatchesCountsAMatchItCannotRead: when the re-read of a parent's replay marker
+// fails, the idempotent match is dropped from the rollback, so the output stays spent by a
+// transaction the store may not hold. Each such match counts on
+// utxo_spend_rollback_marker_unread, and a spend this call wrote is never dropped. A match whose
+// marker is read, with none there, stays in the rollback and counts nothing.
+func TestWithoutMarkedMatchesCountsAMatchItCannotRead(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+		_, err := store.Create(ctx, tests.ParentTx, 1000)
+		require.NoError(t, err)
+
+		spendOutput := func(vout uint32) *utxo.Spend {
+			hash, hashErr := util.UTXOHashFromOutput(tests.ParentTx.TxIDChainHash(), tests.ParentTx.Outputs[vout], vout)
+			require.NoError(t, hashErr)
+
+			return &utxo.Spend{
+				TxID: tests.ParentTx.TxIDChainHash(), Vout: vout, UTXOHash: hash,
+				SpendingData: spendpkg.NewSpendingData(tests.Tx.TxIDChainHash(), int(vout)),
+			}
+		}
+
+		match, fresh := spendOutput(0), spendOutput(1)
+
+		before := testutil.ToFloat64(prometheusUtxoSpendRollbackMarkerUnread)
+
+		kept := store.withoutMarkedMatches(ctx, tests.Tx, []*utxo.Spend{match, fresh}, []*utxo.Spend{match})
+		require.Equal(t, []*utxo.Spend{match, fresh}, kept, "a readable, unmarked match stays in the rollback")
+		require.Equal(t, before, testutil.ToFloat64(prometheusUtxoSpendRollbackMarkerUnread), "a match whose marker was read counts nothing")
+
+		spent, cancel := context.WithCancel(ctx)
+		cancel()
+
+		kept = store.withoutMarkedMatches(spent, tests.Tx, []*utxo.Spend{match, fresh}, []*utxo.Spend{match})
+		require.Equal(t, []*utxo.Spend{fresh}, kept, "a failed read drops the match and keeps the spend this call wrote")
+		require.Equal(t, before+1, testutil.ToFloat64(prometheusUtxoSpendRollbackMarkerUnread), "the dropped match is counted")
+	})
+}

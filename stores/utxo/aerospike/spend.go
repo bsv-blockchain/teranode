@@ -962,8 +962,9 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 // A spend this call wrote is never dropped: its output was free before the
 // call, so a marker naming this spender says nothing about it. A read that
 // fails drops the match too, leaving the output spent by a transaction the store
-// does not hold, which the next attempt heals (utxo.RollbackSet). A parent that
-// is gone keeps its match: there is no output left to release.
+// does not hold, which the next attempt heals (utxo.RollbackSet), and each one
+// counts on utxo_spend_rollback_marker_unread. A parent that is gone keeps its
+// match: there is no output left to release.
 func (s *Store) withoutMarkedMatches(ctx context.Context, tx *bt.Tx, rollback, idempotent []*utxo.Spend, phase string) []*utxo.Spend {
 	if len(idempotent) == 0 {
 		return rollback
@@ -978,6 +979,12 @@ func (s *Store) withoutMarkedMatches(ctx context.Context, tx *bt.Tx, rollback, i
 	bin := fields.DeletedChildren.String()
 	kept := make([]*utxo.Spend, 0, len(rollback))
 
+	countMarkerUnread := func() {
+		if prometheusUtxoSpendRollbackMarkerUnread != nil {
+			prometheusUtxoSpendRollbackMarkerUnread.Inc()
+		}
+	}
+
 	for _, spend := range rollback {
 		if _, ok := isIdempotent[spend]; !ok {
 			kept = append(kept, spend)
@@ -988,12 +995,14 @@ func (s *Store) withoutMarkedMatches(ctx context.Context, tx *bt.Tx, rollback, i
 		key, err := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySource(spend.TxID, spend.Vout, s.utxoBatchSize))
 		if err != nil {
 			s.logger.Errorf("[SPEND][%s] cannot read the replay marker on %s:%d (%s), leaving its idempotent match in place: %v", tx.TxID(), spend.TxID, spend.Vout, phase, err)
+			countMarkerUnread()
 
 			continue
 		}
 
 		if ctx.Err() != nil {
 			s.logger.Errorf("[SPEND][%s] rollback budget spent before reading the replay marker on %s:%d (%s), leaving its idempotent match in place", tx.TxID(), spend.TxID, spend.Vout, phase)
+			countMarkerUnread()
 
 			continue
 		}
@@ -1007,6 +1016,7 @@ func (s *Store) withoutMarkedMatches(ctx context.Context, tx *bt.Tx, rollback, i
 			}
 
 			s.logger.Errorf("[SPEND][%s] cannot read the replay marker on %s:%d (%s), leaving its idempotent match in place: %v", tx.TxID(), spend.TxID, spend.Vout, phase, getErr)
+			countMarkerUnread()
 
 			continue
 		}
