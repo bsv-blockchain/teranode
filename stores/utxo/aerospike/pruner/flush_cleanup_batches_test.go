@@ -1051,6 +1051,21 @@ func TestFlushChunk_MarkerOnARecordTheSameBatchDeletes(t *testing.T) {
 				require.NoError(t, err)
 			}
 
+			// Count the marker writes (as opposed to the delete) that reach the parent's key.
+			// The parent's end state cannot tell a write that was held back from one that ran
+			// beside its own delete, so the batch is read.
+			markerWrites := 0
+			counted := s.batchOperateFn
+			s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+				for _, rec := range records {
+					if _, isWrite := rec.(*aerospike.BatchWrite); isWrite && string(rec.BatchRec().Key.Digest()) == string(parentKey.Digest()) {
+						markerWrites++
+					}
+				}
+
+				return counted(policy, records)
+			}
+
 			childKey := putRecord(t, client, &child, aerospike.BinMap{fields.TxID.String(): child.CloneBytes()})
 
 			carry := &deleteCarry{blockHeight: testPruneHeight, deletions: []*pendingDeletion{{txHash: &parent, keys: []*aerospike.Key{parentKey}}}, updates: []map[string]*parentUpdateInfo{{}}}
@@ -1060,6 +1075,13 @@ func TestFlushChunk_MarkerOnARecordTheSameBatchDeletes(t *testing.T) {
 			updates := map[string]*parentUpdateInfo{string(parentKey.Digest()): info}
 
 			_, heldBack, err := s.flushChunk(ctx, carry, updates, []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{childKey}}}, nil)
+
+			if tc.ttl {
+				// The parent's expiry touch is a write too, so there are two.
+				require.Positive(t, markerWrites, "the marker on the expiring parent is sent")
+			} else if !tc.refused {
+				require.Zero(t, markerWrites, "the marker on a record the same batch deletes is not sent")
+			}
 
 			if tc.refused {
 				require.Equal(t, 2, *calls, "the batch, then the withdrawal of the held-back child's markers")
@@ -1853,4 +1875,297 @@ func TestMarkParents_NativeNotSpenderTwiceKeepsEveryChild(t *testing.T) {
 	require.Contains(t, plan.blocked, childB, "the second refusal holds B back")
 	require.False(t, hasMarker(t, client, parentKey, &childA), "A's marker comes off P although the second send no longer carried A")
 	require.False(t, hasMarker(t, client, parentKey, &childB))
+}
+
+// refuseNativeMarkerWritesTo answers the sub-op 15 marker write to each key in refused as
+// the server does for a record whose output names another spender (NOT_SPENDER), the
+// ones in written as OK, and sends every other record of the first batch through the
+// real client. Later batches all go to the client.
+func refuseNativeMarkerWritesTo(s *Service, client *uaerospike.Client, refused, written []*aerospike.Key) {
+	notSpender := map[interface{}]interface{}{"status": "ERROR", "errorCode": "NOT_SPENDER", "message": "not the spender"}
+	ok := map[interface{}]interface{}{"status": "OK"}
+
+	in := func(keys []*aerospike.Key, key *aerospike.Key) bool {
+		for _, k := range keys {
+			if string(k.Digest()) == string(key.Digest()) {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	first := true
+
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		if !first {
+			return client.BatchOperate(policy, records)
+		}
+
+		first = false
+
+		var real []aerospike.BatchRecordIfc
+
+		for _, rec := range records {
+			switch key := rec.BatchRec().Key; {
+			case in(refused, key):
+				nativeAnswer(rec.BatchRec(), notSpender, nil)
+			case in(written, key):
+				nativeAnswer(rec.BatchRec(), ok, nil)
+			default:
+				real = append(real, rec)
+			}
+		}
+
+		if len(real) == 0 {
+			return nil
+		}
+
+		return client.BatchOperate(policy, real)
+	}
+}
+
+// TestFlushChunk_RefusedCarriedDeleteWithdrawsANativeRefusedMarker: child A is queued on
+// parents P and Q. The native marker write to P answers NOT_SPENDER, after a retried
+// first attempt has already left A's marker on P, because P's output now names another
+// spender. The re-read strips A from P's entry, and A is not held back, so it is cleared
+// and carried. When its delete is then refused (a reorg cleared its deleteAtHeight), the
+// withdrawal must still reach P: the carry has to keep the copy of P's entry the plan
+// made before the strip, or A's marker stays on P for good. A is present and unmined by
+// then and no later scan finds it, and the marker would refuse A's idempotent re-spend.
+func TestFlushChunk_RefusedCarriedDeleteWithdrawsANativeRefusedMarker(t *testing.T) {
+	s, client := newFlushTestService(t)
+	s.buildVerifiedMarkerRecord = testNativeMarkerRecord
+
+	ctx := context.Background()
+
+	p := chainhash.HashH([]byte{0xF3, 1})
+	q := chainhash.HashH([]byte{0xF3, 2})
+	a := chainhash.HashH([]byte{0xF3, 3})
+	other := chainhash.HashH([]byte{0xF3, 4})
+
+	// P's output names another spender, with A's marker left by the retried attempt.
+	pKey := putRecord(t, client, &p, aerospike.BinMap{
+		fields.Utxos.String():           []interface{}{spentUtxoElement(&other)},
+		fields.DeletedChildren.String(): map[interface{}]interface{}{a.String(): true},
+	})
+	qKey := putRecord(t, client, &q, spentBy(&a))
+	aKey := putRecord(t, client, &a, aerospike.BinMap{fields.TxID.String(): a.CloneBytes()})
+
+	updates := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.addParentUpdatesForInput(updates, &p, 0, &a))
+	require.NoError(t, s.addParentUpdatesForInput(updates, &q, 0, &a))
+
+	refuseNativeMarkerWritesTo(s, client, []*aerospike.Key{pKey}, []*aerospike.Key{qKey})
+
+	carry := &deleteCarry{blockHeight: testPruneHeight}
+
+	_, heldBack, err := s.flushChunk(ctx, carry, updates, []*pendingDeletion{{txHash: &a, keys: []*aerospike.Key{aKey}}}, nil)
+	require.NoError(t, err)
+	require.Zero(t, heldBack, "the re-read does not hold A back: P's output names another spender")
+	require.True(t, hasMarker(t, client, pKey, &a), "fixture: the retried attempt's marker is still on P")
+
+	// A reorg clears A's deleteAtHeight before its carried delete goes out.
+	require.NoError(t, client.Put(nil, aKey, aerospike.BinMap{fields.DeleteAtHeight.String(): nil}))
+
+	deleted, heldBack, err := s.drainCarry(ctx, carry)
+	require.NoError(t, err, "a refused delete of a changed child is not a failure")
+	require.Zero(t, deleted)
+	require.Equal(t, 1, heldBack, "A is spared")
+
+	_, err = client.Get(nil, aKey)
+	require.NoError(t, err, "A is still present")
+	require.False(t, hasMarker(t, client, pKey, &a), "A's marker comes off P with the refused delete, although the re-read stripped A from P's entry")
+}
+
+// TestFlushChunk_TiedBlockedChildWithdrawsANativeRefusedMarker: child A is queued on R and
+// on P, and child B on R as well. The batch also deletes P, so A's marker on P waits for
+// that delete. The native marker write to R answers NOT_SPENDER with A's marker already
+// left there by a retried attempt: R's output 0 names another spender and its output 1
+// names B. The re-read strips A from R's entry, which keeps B, and the second write to R
+// carries B only. P's delete is refused, so A is held back and its marker must come off R,
+// which only the plan's copy of R's entry still lists.
+func TestFlushChunk_TiedBlockedChildWithdrawsANativeRefusedMarker(t *testing.T) {
+	s, client := newFlushTestService(t)
+	s.buildVerifiedMarkerRecord = testNativeMarkerRecord
+
+	ctx := context.Background()
+
+	r := chainhash.HashH([]byte{0xF4, 1})
+	p := chainhash.HashH([]byte{0xF4, 2})
+	a := chainhash.HashH([]byte{0xF4, 3})
+	b := chainhash.HashH([]byte{0xF4, 5})
+	other := chainhash.HashH([]byte{0xF4, 4})
+
+	rKey := putRecord(t, client, &r, aerospike.BinMap{
+		fields.Utxos.String():           []interface{}{spentUtxoElement(&other), spentUtxoElement(&b)},
+		fields.DeletedChildren.String(): map[interface{}]interface{}{a.String(): true},
+	})
+	pKey := putRecord(t, client, &p, spentBy(&a))
+	aKey := putRecord(t, client, &a, aerospike.BinMap{fields.TxID.String(): a.CloneBytes()})
+	bKey := putRecord(t, client, &b, aerospike.BinMap{fields.TxID.String(): b.CloneBytes()})
+
+	updates := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.addParentUpdatesForInput(updates, &r, 0, &a))
+	require.NoError(t, s.addParentUpdatesForInput(updates, &r, 1, &b))
+	require.NoError(t, s.addParentUpdatesForInput(updates, &p, 0, &a))
+
+	// P's carried delete is refused: a reorg cleared its deleteAtHeight.
+	require.NoError(t, client.Put(nil, pKey, aerospike.BinMap{fields.DeleteAtHeight.String(): nil}))
+
+	notSpender := map[interface{}]interface{}{"status": "ERROR", "errorCode": "NOT_SPENDER", "message": "not the spender"}
+	ok := map[interface{}]interface{}{"status": "OK"}
+
+	// Batch 1 carries R's marker write and P's delete, 2 is the re-read, 3 is the second
+	// write to R. R's writes are answered as a native server would, the rest is real.
+	call := 0
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		call++
+
+		if call != 1 && call != 3 {
+			return client.BatchOperate(policy, records)
+		}
+
+		var real []aerospike.BatchRecordIfc
+
+		for _, rec := range records {
+			switch {
+			case call == 3:
+				nativeAnswer(rec.BatchRec(), ok, nil)
+			case string(rec.BatchRec().Key.Digest()) == string(rKey.Digest()):
+				nativeAnswer(rec.BatchRec(), notSpender, nil)
+			default:
+				real = append(real, rec)
+			}
+		}
+
+		if len(real) == 0 {
+			return nil
+		}
+
+		return client.BatchOperate(policy, real)
+	}
+
+	carry := &deleteCarry{
+		blockHeight: testPruneHeight,
+		deletions:   []*pendingDeletion{{txHash: &p, keys: []*aerospike.Key{pKey}}},
+		updates:     []map[string]*parentUpdateInfo{{}},
+	}
+
+	_, heldBack, err := s.flushChunk(ctx, carry, updates, []*pendingDeletion{
+		{txHash: &a, keys: []*aerospike.Key{aKey}},
+		{txHash: &b, keys: []*aerospike.Key{bKey}},
+	}, nil)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, call, 3, "fixture: R was written twice")
+	require.Equal(t, 2, heldBack, "P's refused delete and A, which waits on it")
+
+	_, getErr := client.Get(nil, pKey)
+	require.NoError(t, getErr, "fixture: P is still present")
+	require.False(t, hasMarker(t, client, rKey, &a), "A's marker comes off R, which the re-read stripped A from")
+}
+
+// TestFlushChunk_BlobOfAnUnansweredDeleteStays: a master delete the server never answered
+// (NO_RESPONSE, or in doubt) may or may not have landed, so the child's blob must stay.
+// The next cycle re-finds the record if it is still there; a blob deleted under a record
+// that survived would be an orphaned pointer.
+func TestFlushChunk_BlobOfAnUnansweredDeleteStays(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	ctx := context.Background()
+
+	child := chainhash.HashH([]byte("unanswered-blob-child"))
+	childKey := putRecord(t, client, &child, aerospike.BinMap{fields.TxID.String(): child.CloneBytes()})
+
+	require.NoError(t, s.external.Set(ctx, child.CloneBytes(), fileformat.FileTypeTx, []byte("blob")))
+
+	s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		for _, rec := range records {
+			br := rec.BatchRec()
+			br.ResultCode = types.NO_RESPONSE
+			br.InDoubt = true
+			br.Err = &aerospike.AerospikeError{ResultCode: types.NO_RESPONSE, InDoubt: true}
+		}
+
+		return nil
+	}
+
+	_, flushErr := s.flushCleanupBatches(ctx,
+		map[string]*parentUpdateInfo{},
+		[]*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{childKey}}},
+		[]*externalFileInfo{{txHash: &child, fileType: fileformat.FileTypeTx}})
+	require.Error(t, flushErr, "an unanswered delete fails the batch")
+
+	blobExists, err := s.external.Exists(ctx, child.CloneBytes(), fileformat.FileTypeTx)
+	require.NoError(t, err)
+	require.True(t, blobExists, "the blob of a child whose master delete went unanswered must stay")
+}
+
+// TestFlushChunk_PageWhoseMasterReadFailedIsKept: a pagination record is deleted only once
+// its master is known to be gone. A master read that failed with anything but
+// KEY_NOT_FOUND (a timeout, an overloaded node) says nothing about the master, so the page
+// must not be deleted and not carried: the next cycle finds it again.
+func TestFlushChunk_PageWhoseMasterReadFailedIsKept(t *testing.T) {
+	s, _ := newFlushTestService(t)
+
+	ctx := context.Background()
+
+	child := chainhash.HashH([]byte("page-master-read-failed"))
+
+	pageKey, keyErr := aerospike.NewKey(s.namespace, s.set, uaerospike.CalculateKeySourceInternal(&child, 1))
+	require.NoError(t, keyErr)
+
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		for _, rec := range records {
+			br := rec.BatchRec()
+			br.ResultCode = types.TIMEOUT
+			br.Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+		}
+
+		return nil
+	}
+
+	carry := &deleteCarry{blockHeight: testPruneHeight}
+
+	deleted, heldBack, err := s.flushChunk(ctx, carry, map[string]*parentUpdateInfo{},
+		[]*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{pageKey}, page: true}}, nil)
+	require.NoError(t, err)
+	require.Zero(t, deleted)
+	require.Equal(t, 1, heldBack, "the page whose master could not be read is counted as held back")
+	require.True(t, carry.empty(), "and is not carried to be deleted")
+}
+
+// TestMarkParents_TransportFailureWithdrawsEveryMarker: a marker batch that went out and
+// then failed in transport may have written any of its markers, so every child's marker is
+// withdrawn from every record. A marker left on a child that stays would refuse the child's
+// idempotent re-spend.
+func TestMarkParents_TransportFailureWithdrawsEveryMarker(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	parent := chainhash.HashH([]byte{0xF5, 1})
+	child := chainhash.HashH([]byte{0xF5, 2})
+	parentKey := putRecord(t, client, &parent, spentBy(&child))
+
+	updates := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
+
+	call := 0
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		call++
+
+		if err := client.BatchOperate(policy, records); err != nil {
+			return err
+		}
+
+		if call == 1 {
+			// The batch landed, and the answer was lost on the way back.
+			return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+		}
+
+		return nil
+	}
+
+	_, err := s.markParents(context.Background(), updates)
+	require.Error(t, err, "the transport failure is returned")
+	require.False(t, hasMarker(t, client, parentKey, &child), "a marker the lost batch may have written is withdrawn")
 }

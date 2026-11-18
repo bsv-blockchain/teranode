@@ -2824,7 +2824,10 @@ func (s *Service) flushChunk(ctx context.Context, carry *deleteCarry, parentUpda
 		}
 
 		if len(tiedBlocked) > 0 {
-			s.withdrawMarkers(parentUpdates, tiedBlocked)
+			// With the native refusals the plan copied: the re-read may already have
+			// stripped a child from parentUpdates whose marker an earlier attempt of a
+			// refused native write left on the record.
+			s.withdrawMarkers(plan.withNativeRefusals(parentUpdates), tiedBlocked)
 			blocked = unionChildren(blocked, tiedBlocked)
 		}
 	}
@@ -2859,7 +2862,11 @@ func (s *Service) flushChunk(ctx context.Context, carry *deleteCarry, parentUpda
 
 	if len(cleared) > 0 {
 		next.deletions = append(next.deletions, cleared...)
-		next.updates = append(next.updates, parentUpdates)
+		// The carry keeps the updates to withdraw their markers if a delete is
+		// refused, so it keeps the native refusals the plan copied as well: the
+		// re-read has stripped a child from parentUpdates whose marker an earlier
+		// attempt of a refused native write may have left on the record.
+		next.updates = append(next.updates, plan.withNativeRefusals(parentUpdates))
 	}
 
 	return deleted, heldBack, deleteErr
