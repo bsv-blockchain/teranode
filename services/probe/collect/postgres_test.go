@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 )
 
@@ -345,4 +347,10 @@ func TestCollectAfterCloseFails(t *testing.T) {
 	patch, err := p.Collect(context.Background())
 	require.Error(t, err)
 	require.Nil(t, patch)
+}
+
+func TestIsPostgresServerError(t *testing.T) {
+	require.True(t, isPostgresServerError(&pgconn.PgError{Code: "42P01"}))
+	require.False(t, isPostgresServerError(errors.NewServiceError("network down")))
+	require.False(t, isPostgresServerError(context.DeadlineExceeded))
 }

@@ -483,3 +483,106 @@ func TestRepeatedFailedCollectsDoNotLeakGoroutines(t *testing.T) {
 	hung.Close()
 	down.Close()
 }
+
+func TestAerospikeHosts(t *testing.T) {
+	hosts, err := aerospikeHosts("a:3100,b")
+	require.NoError(t, err)
+	require.Len(t, hosts, 2)
+	require.Equal(t, "a", hosts[0].Name)
+	require.Equal(t, 3100, hosts[0].Port)
+	require.Equal(t, "b", hosts[1].Name)
+	require.Equal(t, aerospikeDefaultPort, hosts[1].Port)
+
+	for _, bad := range []string{"", "a,,b", ":3000", "a:b:c", "a:"} {
+		_, err := aerospikeHosts(bad)
+		require.Error(t, err, bad)
+	}
+}
+
+func TestNewAerospikeReadsNamespaceAndCredentials(t *testing.T) {
+	u, err := url.Parse("aerospike://probe:secret@a,b:3100/utxo-store/extra?set=utxo")
+	require.NoError(t, err)
+
+	a, err := NewAerospike(u, time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "utxo-store", a.namespace)
+	require.Equal(t, "probe", a.user)
+	require.Equal(t, "secret", a.password)
+	require.Len(t, a.hosts, 2)
+
+	noPassword, err := url.Parse("aerospike://probe@a:3100/ns")
+	require.NoError(t, err)
+
+	a, err = NewAerospike(noPassword, time.Second)
+	require.NoError(t, err)
+	require.Empty(t, a.user, "a user without a password must not switch on internal auth")
+}
+
+func TestReadLatencyCommand(t *testing.T) {
+	require.Equal(t, "latencies:hist={utxo}-read;back=30;duration=30", readLatencyCommand("utxo"))
+}
+
+func TestParseLatencyThreshold(t *testing.T) {
+	cases := map[string]float64{">1ms": 1e-3, "8ms": 8e-3, ">64us": 64e-6, ">2s": 2, " >0.5ms ": 0.5e-3}
+
+	for label, want := range cases {
+		got, ok := parseLatencyThreshold(label)
+		require.True(t, ok, label)
+		require.InDelta(t, want, got, 1e-12, label)
+	}
+
+	for _, bad := range []string{"", ">", ">xms", ">0ms", ">-1ms", ">5min", "12"} {
+		_, ok := parseLatencyThreshold(bad)
+		require.False(t, ok, bad)
+	}
+}
+
+func TestLatencyUnitScale(t *testing.T) {
+	for unit, want := range map[string]float64{"msec": 1e-3, "usec": 1e-6, "sec": 1, " msec ": 1e-3} {
+		got, ok := latencyUnitScale(unit)
+		require.True(t, ok, unit)
+		require.Equal(t, want, got, unit)
+	}
+
+	_, ok := latencyUnitScale("min")
+	require.False(t, ok)
+}
+
+func TestCollectAppliesReadings(t *testing.T) {
+	u := &url.URL{Scheme: "aerospike", Host: "127.0.0.1:3000", Path: "/test"}
+
+	a, err := NewAerospike(u, time.Second)
+	require.NoError(t, err)
+
+	want := aerospikeReadings{
+		size: snapshot.Reading{Value: 12.5, Status: snapshot.StatusOK},
+		fill: snapshot.Reading{Value: 0.4, Status: snapshot.StatusOK},
+		p99:  snapshot.Reading{Value: 0.002, Status: snapshot.StatusOK},
+	}
+	a.readFn = func() (aerospikeReadings, error) { return want, nil }
+
+	patch, err := a.Collect(context.Background())
+	require.NoError(t, err)
+
+	s := snapshot.NewSnapshot("n")
+	patch(&s)
+
+	st := s.Stores.Aerospike
+	require.True(t, st.Configured)
+	require.Equal(t, want.size, st.SizeGB)
+	require.Equal(t, want.fill, st.DiskFill)
+	require.Equal(t, want.p99, st.ReadP99Sec)
+}
+
+func TestCollectReturnsReadError(t *testing.T) {
+	u := &url.URL{Scheme: "aerospike", Host: "127.0.0.1:3000", Path: "/test"}
+
+	a, err := NewAerospike(u, time.Second)
+	require.NoError(t, err)
+
+	a.readFn = func() (aerospikeReadings, error) { return aerospikeReadings{}, context.DeadlineExceeded }
+
+	patch, err := a.Collect(context.Background())
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, patch)
+}

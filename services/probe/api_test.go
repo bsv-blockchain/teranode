@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -341,5 +342,28 @@ func TestTokenNeverLogged(t *testing.T) {
 
 	for _, l := range lines {
 		require.NotContains(t, l, secret)
+	}
+}
+
+func TestAPIBeforeStartAnswersServiceUnavailable(t *testing.T) {
+	srv := newProbe(t, probeOpts{})
+	router := srv.newRouter()
+
+	for _, r := range restRoutes {
+		if r.path == "/health" {
+			continue
+		}
+
+		raw, err := json.Marshal(r.body)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(r.method, r.path, strings.NewReader(string(raw)))
+		req.Header.Set("Authorization", "Bearer "+testToken)
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusServiceUnavailable, rec.Code, "%s %s", r.method, r.path)
+		require.JSONEq(t, `{"error":"probe is not running"}`, rec.Body.String(), "%s %s", r.method, r.path)
 	}
 }
