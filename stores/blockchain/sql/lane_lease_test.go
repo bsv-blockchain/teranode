@@ -1323,3 +1323,77 @@ func TestOpenLaneLeaseCapsTheFirstGrant(t *testing.T) {
 		require.Equal(t, settings.MaxLaneGrant, g.Last-g.First+1)
 	})
 }
+
+// A renewal that gets the lease row before a sweep keeps its lease, though the lease was stale when
+// the sweep started: the staleness test sits in the sweep's UPDATE, which Postgres re-checks on the
+// row the renewal committed. A held row lock fixes the order: the renewal queues first, then the
+// sweep, and both go when the lock is let go. SQLite runs every lease call under one mutex, so
+// there the two cannot overlap at all.
+func TestARenewalThatGetsTheRowFirstKeepsItsLease(t *testing.T) {
+	runLaneHandoutTests(t, "renewal before sweep", func(t *testing.T, s *SQL) {
+		if s.engine != util.Postgres {
+			t.Skip("lease calls never overlap on SQLite")
+		}
+
+		ctx := t.Context()
+
+		id, g, _, err := s.OpenLaneLease(ctx, leaseOpen("a"))
+		require.NoError(t, err)
+
+		ageLeases(t, s, 10*time.Minute)
+
+		hold, err := s.db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+
+		defer func() { _ = hold.Rollback() }()
+
+		_, err = hold.ExecContext(ctx, `SELECT 1 FROM lane_lease WHERE lane = $1 FOR UPDATE`, int(g.Lane))
+		require.NoError(t, err)
+
+		waiting := func(n int) func() bool {
+			return func() bool {
+				return countRows(t, s, `SELECT COUNT(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`) == n
+			}
+		}
+
+		type renewed struct {
+			closed bool
+			err    error
+		}
+
+		renewDone := make(chan renewed, 1)
+
+		go func() {
+			_, _, closed, err := s.RenewLaneLease(context.Background(), leaseRenew(id, g))
+			renewDone <- renewed{closed, err}
+		}()
+
+		require.Eventually(t, waiting(1), 10*time.Second, 5*time.Millisecond, "the renewal waits on the row")
+
+		type swept struct {
+			n   int
+			err error
+		}
+
+		sweepDone := make(chan swept, 1)
+
+		go func() {
+			n, err := s.CloseStaleLaneLeases(context.Background(), 3*time.Minute)
+			sweepDone <- swept{n, err}
+		}()
+
+		require.Eventually(t, waiting(2), 10*time.Second, 5*time.Millisecond, "the sweep waits behind it")
+		require.NoError(t, hold.Rollback())
+
+		r := <-renewDone
+		require.NoError(t, r.err)
+		require.False(t, r.closed, "the renewal got the row first")
+
+		sw := <-sweepDone
+		require.NoError(t, sw.err)
+		require.Equal(t, 0, sw.n, "the sweep re-checks staleness on the renewed row")
+
+		require.Equal(t, 1, countRows(t, s, `SELECT COUNT(*) FROM lane_lease WHERE lease_id = $1 AND closed_at IS NULL`, s.leaseParam(id)))
+		require.Equal(t, 0, countRows(t, s, `SELECT COUNT(*) FROM lane_close WHERE lease_id = $1`, s.leaseParam(id)))
+	})
+}
