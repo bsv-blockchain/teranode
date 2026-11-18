@@ -2668,6 +2668,12 @@ func (u *Server) blockRetryDelay(hash *chainhash.Hash, err error) (time.Duration
 	// A final verdict is then never retried, whatever its text: the proof-of-work limit
 	// rejection says "network proof-of-work limit", which IsNetworkError matches.
 	switch {
+	case errors.IsBlobCorrupt(err):
+		// A corrupt blob in this node's own store is permanent: the file is written atomically,
+		// and it exists, so a retry skips the fetch and reads the same bytes. It comes first
+		// because its rendered text matches IsMaliciousResponseError ("corrupt", "invalid
+		// header") and its innermost cause, an EOF, matches isTransportFailure.
+		return 0, false
 	case errors.Is(err, context.DeadlineExceeded):
 		delay = blockDeadlineRetryDelay
 	case isTransportFailure(err):
@@ -2721,6 +2727,18 @@ func isTransportFailure(err error) bool {
 
 		current = wrapped
 	}
+}
+
+// isPeerFetchFailure reports whether err looks like a failure to fetch the block from its peer,
+// which another source might not repeat. A corrupt blob in this node's own store is excluded:
+// it is not the peer's doing, and every alternative source would read the same local file. Its
+// rendered text would otherwise match IsMaliciousResponseError and its EOF cause IsNetworkError.
+func isPeerFetchFailure(err error) bool {
+	if errors.IsBlobCorrupt(err) {
+		return false
+	}
+
+	return errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err)
 }
 
 func (u *Server) clearBlockRetryAttempts(hash *chainhash.Hash) {
@@ -3899,7 +3917,7 @@ func (u *Server) processBlockWithPriority(ctx context.Context, blockFound proces
 	}
 
 	// If fetch failed and it's not a validation error, try alternative sources
-	if err != nil && (errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err)) {
+	if err != nil && isPeerFetchFailure(err) {
 		u.logger.Warnf("[processBlockWithPriority] Failed to fetch block %s from %s (peer: %s), trying alternative sources: %v", blockFound.hash.String(), blockFound.baseURL, blockFound.peerID, err)
 
 		// Try alternative sources

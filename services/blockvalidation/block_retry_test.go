@@ -4,7 +4,12 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"io/fs"
 	"net"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"testing/iotest"
@@ -13,6 +18,9 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	blobfile "github.com/bsv-blockchain/teranode/stores/blob/file"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jellydator/ttlcache/v3"
@@ -194,4 +202,94 @@ func TestBlockRetryDelay_BrokenDownloadIsRetried(t *testing.T) {
 			require.Equal(t, tt.delay, delay)
 		})
 	}
+}
+
+// localCorruptSubtreeError returns the error a block-validation read of a corrupt subtree file in
+// this node's own store produces, wrapped as readSubtreeBoundToKey and the block path wrap it.
+func localCorruptSubtreeError(t *testing.T, contents func() []byte) error {
+	t.Helper()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	storeURL, err := url.Parse("file://" + dir)
+	require.NoError(t, err)
+
+	store, err := blobfile.New(ulogger.TestLogger{}, storeURL, options.WithBlobDeletionScheduler(noopBlobDeletionScheduler{}))
+	require.NoError(t, err)
+
+	key := chainhash.HashH([]byte("subtree"))
+	require.NoError(t, store.Set(ctx, key[:], fileformat.FileTypeSubtree, []byte("subtree-bytes")))
+
+	var subtreeFile string
+
+	require.NoError(t, filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(path, "."+string(fileformat.FileTypeSubtree)) {
+			subtreeFile = path
+		}
+
+		return err
+	}))
+	require.NotEmpty(t, subtreeFile)
+	require.NoError(t, os.WriteFile(subtreeFile, contents(), 0o600))
+
+	_, readErr := store.GetIoReader(ctx, key[:], fileformat.FileTypeSubtree)
+	require.Error(t, readErr)
+
+	return errors.NewServiceError("failed block validation BlockFound",
+		errors.NewStorageError("failed to get subtree %s", key.String(), readErr))
+}
+
+// corruptSubtreeContents are the ways a stored subtree file can be permanently unreadable.
+var corruptSubtreeContents = []struct {
+	name     string
+	contents func() []byte
+}{
+	{"truncated header", func() []byte { return []byte("abc") }},
+	{"unknown magic", func() []byte { return bytes.Repeat([]byte{0xff}, 64) }},
+	{"another file type's header", func() []byte {
+		header := fileformat.NewHeader(fileformat.FileTypeSubtreeMeta)
+
+		var buf bytes.Buffer
+		if err := header.Write(&buf); err != nil {
+			panic(err)
+		}
+
+		return append(buf.Bytes(), []byte("meta-bytes")...)
+	}},
+}
+
+// TestBlockRetryDelay_LocalCorruptBlobIsNotRetried pins that a block which failed on a corrupt
+// subtree file in this node's own store is not requeued. The file exists, so a retry skips the
+// fetch and reads the same bytes. Without the guard, the error's text matches the
+// network/malicious pair and its EOF cause matches isTransportFailure, so it was retried.
+func TestBlockRetryDelay_LocalCorruptBlobIsNotRetried(t *testing.T) {
+	for _, tt := range corruptSubtreeContents {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newRetryTestServer(t, 3)
+
+			err := localCorruptSubtreeError(t, tt.contents)
+			require.True(t, errors.IsBlobCorrupt(err), "precondition: the store marks the file corrupt, got: %v", err)
+			require.True(t, errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err),
+				"precondition: without the guard the text classifiers would retry it, got: %v", err)
+
+			_, ok := server.blockRetryDelay(&chainhash.Hash{1}, err)
+			require.False(t, ok)
+		})
+	}
+}
+
+// TestIsPeerFetchFailure_LocalCorruptBlobIsNotAPeerFailure pins that processBlockWithPriority does
+// not walk alternative sources for a corrupt local blob: every source would read the same file.
+// The control shows a real fetch failure still does.
+func TestIsPeerFetchFailure_LocalCorruptBlobIsNotAPeerFailure(t *testing.T) {
+	for _, tt := range corruptSubtreeContents {
+		t.Run(tt.name, func(t *testing.T) {
+			require.False(t, isPeerFetchFailure(localCorruptSubtreeError(t, tt.contents)))
+		})
+	}
+
+	require.True(t, isPeerFetchFailure(errors.NewNetworkError("eof")))
+	require.True(t, isPeerFetchFailure(errors.NewProcessingError("peer sent a malformed subtree")))
+	require.False(t, isPeerFetchFailure(errors.NewBlockInvalidError("bad block")))
 }
