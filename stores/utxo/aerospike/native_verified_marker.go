@@ -150,11 +150,9 @@ func (s *Store) detectNativeVerifiedMarkerSupport(ctx context.Context) bool {
 		return false
 	}
 
-	const keep = "the pruner keeps the filtered marker write"
-
 	key, err := aerospike.NewKey(s.namespace, s.setName, fmt.Sprintf("_teranode-native-marker-probe-%d-%d", os.Getpid(), time.Now().UnixNano()))
 	if err != nil {
-		s.logger.Warnf("[teranode-native-op] addVerifiedDeletedChildren probe key creation failed: %v; %s", err, keep)
+		s.logger.Warnf("[teranode-native-op] addVerifiedDeletedChildren probe key creation failed: %v; %s", err, verifiedMarkerProbeKeep)
 		return false
 	}
 
@@ -168,13 +166,11 @@ func (s *Store) detectNativeVerifiedMarkerSupport(ctx context.Context) bool {
 
 	unspent := make([]byte, 32)
 
-	const probeTTL = 60
-
-	policy := aerospike.NewWritePolicy(0, probeTTL)
+	policy := aerospike.NewWritePolicy(0, verifiedMarkerProbeTTL)
 	policy.TotalTimeout = 2 * time.Second
 
 	if err = s.client.PutBins(policy, key, aerospike.NewBin(fields.Utxos.String(), []any{spent, unspent})); err != nil {
-		s.logger.Warnf("[teranode-native-op] addVerifiedDeletedChildren probe record setup failed: %v; %s", err, keep)
+		s.logger.Warnf("[teranode-native-op] addVerifiedDeletedChildren probe record setup failed: %v; %s", err, verifiedMarkerProbeKeep)
 		return false
 	}
 	defer func() {
@@ -184,53 +180,108 @@ func (s *Store) detectNativeVerifiedMarkerSupport(ctx context.Context) bool {
 	readPolicy := aerospike.NewPolicy()
 	readPolicy.TotalTimeout = 2 * time.Second
 
+	return s.judgeVerifiedMarkerProbe(verifiedMarkerProbeIO{
+		send: func(child *chainhash.Hash, offset uint32) (LuaErrorCode, error) {
+			return s.probeVerifiedMarker(key, child, offset)
+		},
+		read: func() (*aerospike.Record, error) {
+			rec, getErr := s.client.Get(readPolicy, key, fields.DeletedChildren.String())
+			if getErr != nil {
+				return nil, getErr
+			}
+
+			return rec, nil
+		},
+	}, &childA, &childB) == replayProbeProven
+}
+
+const (
+	verifiedMarkerProbeKeep = "the pruner keeps the filtered marker write"
+	verifiedMarkerProbeTTL  = 60
+)
+
+// verifiedMarkerProbeIO is what the sub-op 15 probe asks of the server: one marker write, and
+// the probe record's deletedChildren bin read back. A test supplies fake answers.
+type verifiedMarkerProbeIO struct {
+	send func(child *chainhash.Hash, offset uint32) (LuaErrorCode, error)
+	read func() (*aerospike.Record, error)
+}
+
+// judgeVerifiedMarkerProbe runs the three probe steps against srv and says what the server proved.
+// It splits the two ways a step can fail the way recordReplayProtection does, because the verdict
+// is final for the life of the process: a server that answered wrongly is an Error, since its
+// build has to be replaced, and a probe that could not finish is a Warn. A server without sub-op
+// 15 answers step 1 with PARAMETER_ERROR, which says nothing about its semantics, so it is a Warn.
+func (s *Store) judgeVerifiedMarkerProbe(srv verifiedMarkerProbeIO, childA, childB *chainhash.Hash) replayProbeVerdict {
+	const (
+		mismatch    = "the server answered the sub-op 15 probe wrongly, so the pruner writes replay markers with the filtered map write for the life of this process; replace it with a mod-teranode build whose sub-op 15 matches"
+		unavailable = "the pruner writes replay markers with the filtered map write for the life of this process because the verdict is not retried"
+	)
+
+	unfinished := func(format string, args ...any) replayProbeVerdict {
+		s.logger.Warnf("[teranode-native-op] "+format+"; "+unavailable, args...)
+
+		return replayProbeUnavailable
+	}
+
+	wrong := func(format string, args ...any) replayProbeVerdict {
+		s.logger.Errorf("[teranode-native-op] addVerifiedDeletedChildren probe "+format+"; "+mismatch, args...)
+
+		return replayProbeMismatch
+	}
+
 	// Step 1: a child the output names.
-	code, opErr := s.probeVerifiedMarker(key, &childA, 0)
+	code, opErr := srv.send(childA, 0)
 	if opErr != nil {
 		if hasResultCode(opErr, types.PARAMETER_ERROR) {
-			s.logger.Warnf("[teranode-native-op] server does not serve sub-op 15 (addVerifiedDeletedChildren); %s", keep)
-		} else {
-			s.logger.Warnf("[teranode-native-op] addVerifiedDeletedChildren probe failed: %v; %s", opErr, keep)
+			return unfinished("server does not serve sub-op 15 (addVerifiedDeletedChildren)")
 		}
 
-		return false
+		return unfinished("addVerifiedDeletedChildren probe failed: %v", opErr)
 	}
 
 	if code != "" {
-		s.logger.Warnf("[teranode-native-op] addVerifiedDeletedChildren probe refused a child the output names (%s); %s", code, keep)
-		return false
+		return wrong("refused a child the output names (%s)", code)
 	}
 
-	after, err := s.client.Get(readPolicy, key, fields.DeletedChildren.String())
-	if err != nil || after == nil || !markerSet(after.Bins[fields.DeletedChildren.String()], childA.String()) {
-		s.logger.Warnf("[teranode-native-op] addVerifiedDeletedChildren probe did not write the marker (%v); %s", err, keep)
-		return false
+	after, err := srv.read()
+	if err != nil || after == nil {
+		return unfinished("addVerifiedDeletedChildren probe could not read the marker back (%v)", err)
 	}
 
-	if after.Expiration == 0 || after.Expiration > probeTTL {
-		s.logger.Warnf("[teranode-native-op] addVerifiedDeletedChildren probe changed the record's TTL to %d; %s", after.Expiration, keep)
-		return false
+	if !markerSet(after.Bins[fields.DeletedChildren.String()], childA.String()) {
+		return wrong("did not write the marker")
+	}
+
+	if after.Expiration == 0 || after.Expiration > verifiedMarkerProbeTTL {
+		return wrong("changed the record's TTL to %d", after.Expiration)
 	}
 
 	// Steps 2 and 3: a child the output does not name, and an unspent output.
 	for _, refusal := range []struct {
 		child  *chainhash.Hash
 		offset uint32
-	}{{&childB, 0}, {&childA, 1}} {
-		code, opErr = s.probeVerifiedMarker(key, refusal.child, refusal.offset)
-		if opErr != nil || code != LuaErrorCodeNotSpender {
-			s.logger.Warnf("[teranode-native-op] addVerifiedDeletedChildren probe answered %q (%v) for a child output %d does not name; %s", code, opErr, refusal.offset, keep)
-			return false
+	}{{childB, 0}, {childA, 1}} {
+		code, opErr = srv.send(refusal.child, refusal.offset)
+		if opErr != nil {
+			return unfinished("addVerifiedDeletedChildren probe failed for a child output %d does not name: %v", refusal.offset, opErr)
+		}
+
+		if code != LuaErrorCodeNotSpender {
+			return wrong("answered %q for a child output %d does not name", code, refusal.offset)
 		}
 	}
 
-	after, err = s.client.Get(readPolicy, key, fields.DeletedChildren.String())
-	if err != nil || after == nil || markerSet(after.Bins[fields.DeletedChildren.String()], childB.String()) {
-		s.logger.Warnf("[teranode-native-op] addVerifiedDeletedChildren probe wrote a marker it refused (%v); %s", err, keep)
-		return false
+	after, err = srv.read()
+	if err != nil || after == nil {
+		return unfinished("addVerifiedDeletedChildren probe could not read the marker back (%v)", err)
 	}
 
-	return true
+	if markerSet(after.Bins[fields.DeletedChildren.String()], childB.String()) {
+		return wrong("wrote a marker it refused")
+	}
+
+	return replayProbeProven
 }
 
 // probeVerifiedMarker sends one sub-op 15 write for child at offset through

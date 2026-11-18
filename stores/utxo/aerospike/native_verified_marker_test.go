@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	aeropruner "github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 	"github.com/vmihailenco/msgpack/v5"
@@ -263,6 +264,159 @@ func BenchmarkEncodeVerifiedMarkerPayload(b *testing.B) {
 					b.Fatal("empty payload")
 				}
 			}
+		})
+	}
+}
+
+// TestJudgeVerifiedMarkerProbe: the sub-op 15 verdict is final for the life of the process, so the
+// log level says which failure it was, as for the replay-protection probe: a server that answered
+// wrongly is an Error, since its build has to be replaced, and a probe that could not finish is a
+// Warn. A server without sub-op 15 answers PARAMETER_ERROR, which says nothing about semantics.
+func TestJudgeVerifiedMarkerProbe(t *testing.T) {
+	childA := chainhash.HashH([]byte("a"))
+	childB := chainhash.HashH([]byte("b"))
+
+	record := func(expiration uint32, written ...chainhash.Hash) *aerospike.Record {
+		markers := map[interface{}]interface{}{}
+		for _, h := range written {
+			markers[h.String()] = true
+		}
+
+		return &aerospike.Record{Expiration: expiration, Bins: aerospike.BinMap{fields.DeletedChildren.String(): markers}}
+	}
+
+	type answer struct {
+		code LuaErrorCode
+		err  error
+	}
+
+	// A correct server: step 1 writes A, the two refusals answer NOT_SPENDER and write nothing.
+	correct := func() (sends []answer, reads []*aerospike.Record, readErr error) {
+		return []answer{{}, {code: LuaErrorCodeNotSpender}, {code: LuaErrorCodeNotSpender}},
+			[]*aerospike.Record{record(30, childA), record(30, childA)}, nil
+	}
+
+	for _, tc := range []struct {
+		name      string
+		change    func(sends []answer, reads []*aerospike.Record) ([]answer, []*aerospike.Record, error)
+		want      replayProbeVerdict
+		wantErrs  int
+		wantWarns int
+	}{
+		{name: "a server that serves sub-op 15 correctly", want: replayProbeProven},
+		{
+			name: "a server without sub-op 15",
+			change: func(s []answer, r []*aerospike.Record) ([]answer, []*aerospike.Record, error) {
+				s[0] = answer{err: aeroErr(types.PARAMETER_ERROR)}
+				return s, r, nil
+			},
+			want: replayProbeUnavailable, wantWarns: 1,
+		},
+		{
+			name: "a transport failure on the first write",
+			change: func(s []answer, r []*aerospike.Record) ([]answer, []*aerospike.Record, error) {
+				s[0] = answer{err: aeroErr(types.TIMEOUT)}
+				return s, r, nil
+			},
+			want: replayProbeUnavailable, wantWarns: 1,
+		},
+		{
+			name: "a failed read of the marker",
+			change: func(s []answer, r []*aerospike.Record) ([]answer, []*aerospike.Record, error) {
+				return s, r, aeroErr(types.TIMEOUT)
+			},
+			want: replayProbeUnavailable, wantWarns: 1,
+		},
+		{
+			name: "a transport failure on a refusal",
+			change: func(s []answer, r []*aerospike.Record) ([]answer, []*aerospike.Record, error) {
+				s[1] = answer{err: aeroErr(types.TIMEOUT)}
+				return s, r, nil
+			},
+			want: replayProbeUnavailable, wantWarns: 1,
+		},
+		{
+			name: "a refusal of the child the output names",
+			change: func(s []answer, r []*aerospike.Record) ([]answer, []*aerospike.Record, error) {
+				s[0] = answer{code: LuaErrorCodeNotSpender}
+				return s, r, nil
+			},
+			want: replayProbeMismatch, wantErrs: 1,
+		},
+		{
+			name: "no marker written",
+			change: func(s []answer, r []*aerospike.Record) ([]answer, []*aerospike.Record, error) {
+				r[0] = record(30)
+				return s, r, nil
+			},
+			want: replayProbeMismatch, wantErrs: 1,
+		},
+		{
+			name: "the record's TTL changed",
+			change: func(s []answer, r []*aerospike.Record) ([]answer, []*aerospike.Record, error) {
+				r[0] = record(0, childA)
+				return s, r, nil
+			},
+			want: replayProbeMismatch, wantErrs: 1,
+		},
+		{
+			name: "a child the output does not name is accepted",
+			change: func(s []answer, r []*aerospike.Record) ([]answer, []*aerospike.Record, error) {
+				s[1] = answer{}
+				return s, r, nil
+			},
+			want: replayProbeMismatch, wantErrs: 1,
+		},
+		{
+			name: "an unspent output is refused with the wrong code",
+			change: func(s []answer, r []*aerospike.Record) ([]answer, []*aerospike.Record, error) {
+				s[2] = answer{code: LuaErrorCodeInvalidSpend}
+				return s, r, nil
+			},
+			want: replayProbeMismatch, wantErrs: 1,
+		},
+		{
+			name: "a refused marker is written",
+			change: func(s []answer, r []*aerospike.Record) ([]answer, []*aerospike.Record, error) {
+				r[1] = record(30, childA, childB)
+				return s, r, nil
+			},
+			want: replayProbeMismatch, wantErrs: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sends, reads, readErr := correct()
+			if tc.change != nil {
+				sends, reads, readErr = tc.change(sends, reads)
+			}
+
+			logger := &levelLogger{}
+			s := &Store{logger: logger}
+
+			var nextSend, nextRead int
+
+			verdict := s.judgeVerifiedMarkerProbe(verifiedMarkerProbeIO{
+				send: func(*chainhash.Hash, uint32) (LuaErrorCode, error) {
+					a := sends[nextSend]
+					nextSend++
+
+					return a.code, a.err
+				},
+				read: func() (*aerospike.Record, error) {
+					r := reads[nextRead]
+					nextRead++
+
+					if readErr != nil {
+						return nil, readErr
+					}
+
+					return r, nil
+				},
+			}, &childA, &childB)
+
+			require.Equal(t, tc.want, verdict)
+			require.Len(t, logger.errs, tc.wantErrs)
+			require.Len(t, logger.warns, tc.wantWarns)
 		})
 	}
 }
