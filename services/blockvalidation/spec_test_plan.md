@@ -17,7 +17,7 @@ It ends with a prioritised test backlog and the test infrastructure needed to bu
 > - GAP-BV-005 (bsv-blockchain/teranode#2021)
 > - GAP-BV-020 and GAP-BV-021 (bsv-blockchain/teranode#2034)
 > - GAP-BV-029 and GAP-BV-056 (bsv-blockchain/teranode#2011)
-> - GAP-BV-043, partly (bsv-blockchain/teranode#2033): still open when the parent is off the main chain, and a failed `markBlockAsInvalid` is swallowed
+> - GAP-BV-043, partly (bsv-blockchain/teranode#2033, bsv-blockchain/teranode#2174): only a failed `markBlockAsInvalid` is still swallowed
 > - GAP-BV-045 (bsv-blockchain/teranode#2017)
 > - GAP-BV-054 (bsv-blockchain/teranode#2012, bsv-blockchain/teranode#2035)
 > - GAP-BV-057 (bsv-blockchain/teranode#2016)
@@ -176,7 +176,7 @@ Status codes: **C** covered, **P** partial, **G** pins a gap, **N** none. Unless
 | QUEUE-007 | C | `TestBlockRetryDelay_CappedByMaxRetries` and the other `TestBlockRetryDelay_*` tests (`block_retry_test.go`, bsv-blockchain/teranode#1997) | — |
 | QUEUE-008 | C | `TestAddBlockToPriorityQueue_RateLimitedFetchDoesNotChargeAnnouncer` | 429 on alternative and retry paths |
 | QUEUE-009 | P | `TestForkManager_BlockProcessing` (parallel cap) | one-per-fork at start not enforced (GAP-BV-008) |
-| QUEUE-010 | P | `TestForkManager_BlockProcessing/Already processing block` | refused duplicate dropped with its sources (GAP-BV-008) |
+| QUEUE-010 | P | `TestForkManager_BlockProcessing/Already processing block` | a refused block stays queued with its sources (met since bsv-blockchain/teranode#1997) |
 | QUEUE-011 | P | `TestForkManager_PerformCleanup` (custom 100 ms config) | default 1 h; 1000 cap; GAP-BV-037 |
 
 ### Header
@@ -487,10 +487,10 @@ A crash point is a moment where the process can stop, or a call can fail, betwee
 | O5 | sweep runs while background validation is in progress, which then invalidates | race | none | invalid ⇒ no tags |
 | I1 | invalidation written, before tag revert | invalid block still tagged | sweep (b) if `subtrees_set` | tags reverted, `mined_set` true |
 | I2 | descendants of an invalidated block | only the root gets a notification | sweep (b) | every descendant reverted |
-| I3 | invalidation concurrent with in-flight tagging | `mined_set` overwritten to true; unset skipped | **none** (GAP-BV-058) | invalid ⇒ no tags |
+| I3 | invalidation concurrent with in-flight tagging | tagging's `mined_set` write refused (generation check, bsv-blockchain/teranode#2018) | unset queued | invalid ⇒ no tags |
 | I4 | revert fails or a subtree file is missing | errors swallowed, `mined_set` set | **none** (GAP-BV-057) | invalid block with `mined_set` has no tags |
 | V1 | revalidation written, before re-tagging | valid, `mined_set` false | sweep (b) if `subtrees_set` | re-tagged |
-| V2 | revalidation concurrent with in-flight revert | `mined_set` true with tags gone | **none** (GAP-BV-058) | `mined_set` ⇒ every transaction tagged |
+| V2 | revalidation concurrent with in-flight revert | `mined_set` write refused (bsv-blockchain/teranode#2018); `subtrees_set` can still be overwritten (GAP-BV-058) | sweep re-tags | `mined_set` ⇒ every transaction tagged |
 
 ### Quick validation of one block
 
@@ -519,8 +519,8 @@ The chain-reconciliation oracle in bsv-blockchain/teranode#1958 (branch `test/ch
 | # | Invariant | Spec IDs | Violated by |
 |---|---|---|---|
 | I-1 | `subtrees_set` and not invalid ⇒ every subtree file exists (within retention) | COMMIT-002, QUICK-021 | GAP-BV-029, 056 |
-| I-2 | `mined_set` and not invalid ⇒ every transaction carries the block ID and height | COMMIT-005 | GAP-BV-058 |
-| I-3 | invalid and `mined_set` ⇒ no transaction carries the block ID | COMMIT-011 | GAP-BV-057, 058 |
+| I-2 | `mined_set` and not invalid ⇒ every transaction carries the block ID and height | COMMIT-005 | — |
+| I-3 | invalid and `mined_set` ⇒ no transaction carries the block ID | COMMIT-011 | GAP-BV-057 |
 | I-4 | not `subtrees_set` (full-validation route) ⇒ no transaction carries the block ID | COMMIT-004 | — |
 | I-5 | `mined_set` ⇒ `subtrees_set` (except pre-assigned-ID blocks) | COMMIT-004, 005 | — |
 | I-6 | no block awaits mined-tagging; only blocks with a missing file await `subtrees_set` | COMMIT-008, NFR-004 | sweep failures |
@@ -578,7 +578,7 @@ Priorities: **P0** catches a consensus divergence, data loss or state corruption
 | # | P | Type | Test | Asserts | IDs |
 |---|---|---|---|---|---|
 | 20 | P0 | property + fail-point | Sweep convergence generator | random fault step (AddBlock, `subtrees_set`, `SetMinedMulti` batch k, `mined_set`, invalidate, revalidate) × kill position × restart; after two intervals all section 8 invariants hold. Covers N3, N5, N10, N14, I1, V1 | COMMIT-*, NFR-004 |
-| 21 | P0 | race | Invalidate or revalidate vs in-flight tagging (fails today, GAP-BV-058) | block tagging inside the store; invalidate; release. Invalid ⇒ no tags; revalidated ⇒ `mined_set` implies tags | COMMIT-011, REVALIDATE-003 |
+| 21 | P0 | race | Invalidate or revalidate vs in-flight tagging (mined_set part fixed by bsv-blockchain/teranode#2018; regression `TestGapBV058_*`; subtrees_set part open, GAP-BV-058) | block tagging inside the store; invalidate; release. Invalid ⇒ no tags; revalidated ⇒ `mined_set` implies tags | COMMIT-011, REVALIDATE-003 |
 | 22 | P0 | fail-point | Revert failure (fails today, GAP-BV-057) | `SetMinedMulti` fails during revert ⇒ `mined_set` stays false and the sweep retries | COMMIT-011 |
 | 23 | P0 | fail-point | Optimistic restart (fails today, GAP-BV-013) | optimistic add, crash before background validation, restart; block is not marked until validated | OPTIMISTIC-008 |
 | 24 | P0 | e2e | Optimistic mining end to end | daemon with both optimistic flags true: a peer block that fails in the background (double spend, floater, bad merkle) is reorged out, tags reverted, notification published | OPTIMISTIC-005–007 |
@@ -636,7 +636,7 @@ Priorities: **P0** catches a consensus divergence, data loss or state corruption
 | 61 | P0 | fail-point | Kafka redelivery (fails today, GAP-BV-003) | in-memory Kafka; message 1 fails locally, message 2 succeeds: message 1 is reprocessed; an unparseable hash does not panic | INGRESS-009 |
 | 62 | P0 | chaos | Panic recovery on every worker path (fails today, GAP-BV-054) | a panic in the priority worker, catchup consumer and Kafka handler: process survives, caller gets `ERR_PROCESSING`, next block processed | STARTUP-007 |
 | 63 | P0 | invariant | Announcement paths agree | one random set of announcements through `BlockFound`, `ProcessBlock` and Kafka gives identical stored state, queue state, charges and error class; announcing twice equals once | INGRESS-001, 003, 004 |
-| 64 | P0 | race | Fork limit and duplicate merge (fails today, GAP-BV-008) | real workers, blocking validator: one block per fork, one validation per hash, refused duplicate's sources merged | QUEUE-009, 010 |
+| 64 | P0 | race | Fork limit and refused blocks (one-per-fork fails today, GAP-BV-008) | real workers, blocking validator: one block per fork, one validation per hash, a refused block stays queued with its sources | QUEUE-009, 010 |
 | 65 | P0 | property | Classifier never underflows (fails today, GAP-BV-009) | random best, parent and threshold, including best < threshold | QUEUE-001, 002 |
 | 66 | P0 | fail-point | Alternatives then bounded retries (fails today, GAP-BV-006, 007) | primary fails, alternative serves; retries bounded (met since bsv-blockchain/teranode#1997); at most 3 sources | QUEUE-005–007 |
 | 67 | P0 | unit | State matrix as a table | each FSM state (real blockchain service on sqlite) × each operation asserts its cell, generated from the spec table | STATE-001 |
@@ -733,7 +733,7 @@ Each was confirmed by reading the code, and is now recorded in the spec's Confor
 | GAP-BV-055 | The chained create wave of quick validation can be cancelled while a store call is in flight. Resolved by bsv-blockchain/teranode#1909 after this assessment. | Medium |
 | GAP-BV-056 | On the quick route, an error after `AddBlock` (e.g. unlock fails) deletes the committed block's subtree files and leaves its outputs locked. Resolved by bsv-blockchain/teranode#2011. | High |
 | GAP-BV-057 | Errors while reverting an invalid block's mined tags are swallowed, and `mined_set` is set anyway, so stale tags are never revisited. Resolved by bsv-blockchain/teranode#2016. | High |
-| GAP-BV-058 | `SetBlockMinedSet` and `SetBlockSubtreesSet` are unconditional updates. A tagging run in flight can overwrite an invalidation or revalidation. Derived from the code; not reproduced. | High |
+| GAP-BV-058 | Partly resolved by bsv-blockchain/teranode#2018: `SetBlockMinedSet` is now generation-checked (regression `TestGapBV058_*`). `SetBlockSubtreesSet` is still an unconditional update. | Medium |
 | GAP-BV-059 | The subtrees sweep is not single-flight, unlike the mined sweep. | Low |
 | GAP-BV-060 | On the default non-optimistic path, a contextual header failure (median time past, version floor) is not published as an invalid-block notification, so the peer is never struck. Found in review; proven by `TestKnownDefect_HeaderFinalVerdict_PublishesInvalidBlockNotification`. | Medium |
 | GAP-BV-061 | Catchup logs and continues when reading or clearing `mined_set` on the old branch fails, leaving stale mined tags after the reorg. Found in review; proven by `TestKnownDefect_Catchup_AbortsWhenOldBranchMinedSetClearFails`. | High |

@@ -52,11 +52,11 @@ The service sits between block announcement (P2P, legacy netsync, Block Assembly
 
 **BV-INGRESS-002.** A `BlockFound` request whose `hash` is not exactly 32 bytes MUST be rejected with `ERR_PROCESSING`. No work is queued.
 
-**BV-INGRESS-003.** An announcement of a block already stored in the Blockchain store, whether stored valid or stored invalid, SHALL be acknowledged as success with no further fetch or validation work. A stored-invalid block is re-examined only through `RevalidateBlock` (BV-REVALIDATE-001).
+**BV-INGRESS-003.** An announcement of a block already stored in the Blockchain store, whether stored valid or stored invalid, SHALL be acknowledged as success with no further fetch or validation work. With `wait_to_complete = true`, a stored-invalid block MUST instead be answered with `ERR_BLOCK_INVALID`. A stored-invalid block is re-examined only through `RevalidateBlock` (BV-REVALIDATE-001).
 
 **BV-INGRESS-004.** An announcement whose base URL is neither an `http`/`https` URL nor the literal `legacy` MUST be rejected with `ERR_PROCESSING` and message `invalid baseURL - not a valid http/https URL`. On `BlockFound` this check runs after the call is acknowledged, so the caller sees the error only with `wait_to_complete = true`. On the Kafka path the message is `invalid URL scheme '<scheme>' - expected http or https`, and the message is committed with a peer failure reported. `ProcessBlock` additionally MUST reject a non-`legacy` base URL that fails the shared URL validator with `ERR_INVALID_ARGUMENT` and message `invalid base URL`.
 
-**BV-INGRESS-005.** When `BlockFound` is called with `wait_to_complete = true`, the RPC MUST NOT return until the block has been validated and either committed or rejected, and MUST return the validation outcome. A return before that point is permitted only if the request's context is cancelled.
+**BV-INGRESS-005.** When `BlockFound` is called with `wait_to_complete = true`, the RPC MUST NOT return until the worker's first attempt at the block has ended, and MUST return that attempt's outcome: nil only if the block is then stored and not invalid; the validation error if it was rejected; the fetch error if the fetch failed (the block MAY still be retried in the background, BV-QUEUE-007); `ERR_SERVICE_ERROR` if the block was handed to catchup or dropped. With optimistic peer-block mining, nil means the block was added, not that its block-level checks have finished. A return before the attempt ends is permitted only if the request's context is cancelled.
 
 **BV-INGRESS-006.** The number of announcements accepted by `BlockFound` but not yet placed on the internal block-found buffer (sized by `blockvalidation_blockFoundCh_buffer_size`, default 1000) MUST be bounded. A full buffer MAY block the caller; it MUST NOT accumulate unbounded pending work.
 
@@ -64,7 +64,7 @@ The service sits between block announcement (P2P, legacy netsync, Block Assembly
 
 **BV-INGRESS-008.** A Kafka block message that cannot be decoded SHALL be committed and dropped.
 
-**BV-INGRESS-009.** A Kafka block message whose processing fails for a local or transient reason (storage, service, threshold-exceeded, context-cancelled, external) MUST NOT be committed, so that it is redelivered. A message whose processing fails for any other reason SHALL be committed, and the failure SHALL be reported against the announcing peer to the Blockchain service as a `block` peer failure.
+**BV-INGRESS-009.** A Kafka block message whose processing fails for a local or transient reason (storage, service, threshold-exceeded, context-cancelled, external) SHALL be committed and retried in-process, with a bounded number of attempts (8) and of pending retries (1000 hashes, 32 per peer), and MUST NOT be reported against the peer. Committing is required because the consumer commits the highest marked offset per partition, so an uncommitted message would be passed by a later success and never redelivered. A message left uncommitted at shutdown is redelivered. A message whose processing fails for any other reason SHALL be committed, and the failure SHALL be reported against the announcing peer to the Blockchain service as a `block` peer failure.
 
 **BV-INGRESS-010.** The announcing peer's identifier (`peer_id`) SHALL be carried through every stage of processing and SHALL be the identity used for every peer-accountability action in BV-PEER. The service's Go client MUST allow a caller to supply `peer_id` to `BlockFound`.
 
@@ -72,7 +72,7 @@ The service sits between block announcement (P2P, legacy netsync, Block Assembly
 
 **BV-INGRESS-012.** When `ProcessBlock` is called with `height = 0`, the service SHALL derive the height as the stored parent's height + 1. If the parent cannot be read the call MUST fail with `ERR_SERVICE_ERROR`. If the height is still 0 the call MUST fail with `ERR_PROCESSING` and message `invalid height: 0`.
 
-**BV-INGRESS-013.** When `ProcessBlock` is called with `block_id ≠ 0`, that ID SHALL be the ID under which the block is stored, whether it is stored valid or stored invalid. `block_id = 0` means the Blockchain service assigns the ID.
+**BV-INGRESS-013.** When `ProcessBlock` is called with `block_id ≠ 0`, that ID SHALL be the ID under which the block is stored, whether it is stored valid or stored invalid. `block_id = 0` means the Blockchain service assigns the ID. On the quick route, a non-zero `block_id` MUST equal the block's ID reservation (BV-QUICK-019); any other value MUST be refused with `ERR_PROCESSING` before any transaction is stamped.
 
 **BV-INGRESS-014.** `ProcessBlock` with an empty `base_url` SHALL treat the block as arriving from `legacy`.
 
@@ -88,7 +88,7 @@ The service sits between block announcement (P2P, legacy netsync, Block Assembly
 
 ### Queue and Prioritisation Contract (`BV-QUEUE-NNN`)
 
-**BV-QUEUE-001.** The service SHALL classify every announced block whose parent is stored into exactly one of three priorities:
+**BV-QUEUE-001.** The service SHALL classify every announced block whose parent is stored, or in flight (BV-INGRESS-016), into exactly one of three priorities. A block whose parent is queued or being validated SHALL take the parent's class, because it extends whatever the parent extends once the parent is stored. When a block finishes, its queued children SHALL be raised to its class if that is higher; a class is never lowered. Otherwise:
 
 - **ChainExtending** — the parent is the current best block.
 - **NearFork** — not ChainExtending, and parent height + 1 ≥ best height − near-fork threshold.
@@ -106,9 +106,9 @@ The service sits between block announcement (P2P, legacy netsync, Block Assembly
 
 **BV-QUEUE-007.** A block fetch that fails for a network or transient reason SHALL be retried. Retries per hash MUST be bounded, and the bound MUST be configurable.
 
-**BV-QUEUE-008.** A fetch that fails with HTTP 429 (`ERR_SERVICE_RATE_LIMITED`) MUST NOT be charged to the announcer.
+**BV-QUEUE-008.** A fetch that fails with HTTP 429 (`ERR_SERVICE_RATE_LIMITED`) MUST NOT be charged to the announcer while the announcer is within a bounded allowance: 3 such responses per fixed 10-minute window. Beyond the allowance, a 429 SHALL be charged like any other fetch failure.
 
-**BV-QUEUE-009.** At most `blockvalidation_max_parallel_forks` (default 4) blocks SHALL be validated concurrently. At most one block per fork branch SHALL be validated at a time. When `blockvalidation_max_parallel_forks` > 1, blocks that do not extend the tip SHALL hold at most `blockvalidation_max_parallel_forks` − 1 of those slots, so one slot stays free for a chain-extending block. A block's class is the one recorded when it was queued.
+**BV-QUEUE-009.** At most `blockvalidation_max_parallel_forks` (default 4) blocks SHALL be validated concurrently. At most one block per fork branch SHALL be validated at a time. When `blockvalidation_max_parallel_forks` > 1, blocks that do not extend the tip SHALL hold at most `blockvalidation_max_parallel_forks` − 1 of those slots, so one slot stays free for a chain-extending block. A block's class is the one it holds when it starts: the class recorded when it was queued, or the higher class BV-QUEUE-001 raised it to since.
 
 **BV-QUEUE-010.** The same hash MUST NOT be validated by two concurrent validations. A dequeued block that cannot start because its hash or fork is already being processed MUST be re-queued, not dropped.
 
@@ -149,13 +149,13 @@ This rule SHALL apply at every height. No checkpoint, quick-validation route or 
 **BV-BODY-001.** Before any consensus verdict is reached on a block's body, the body MUST be proven bound to the header:
 
 - with subtrees: the merkle root of the subtree roots, with the coinbase transaction substituted for the coinbase placeholder, MUST equal the header's merkle root;
-- with no subtrees: the header's merkle root MUST equal the coinbase transaction's txid, and the declared transaction count MUST be ≤ 1.
+- with no subtrees: the header's merkle root MUST equal the coinbase transaction's txid. A 64-byte coinbase that is not consensus-shaped (BV-BODY-006) MUST NOT bind, because those 64 bytes may be the two child hashes under an honest block's merkle root.
 
-A failure MUST be classified `ERR_BLOCK_CORRUPT`.
+A failure MUST be classified `ERR_BLOCK_CORRUPT`. Separately, after every consensus check, a body with no subtrees whose declared transaction count is not exactly 1 MUST be rejected with `ERR_BLOCK_CORRUPT`; the count is not part of the binding, so a bound body that breaks a consensus rule is INVALID whatever count it declares.
 
 **BV-BODY-002.** The first transaction slot of the first subtree MUST hold the coinbase placeholder, and no other slot of any subtree may hold it. A violation MUST be classified `ERR_BLOCK_CORRUPT`.
 
-**BV-BODY-003.** In a block with more than one subtree, every subtree except the last MUST have the same number of transaction slots as the first, and that number MUST be a power of two. A violation MUST be classified `ERR_BLOCK_CORRUPT`.
+**BV-BODY-003.** In a block with more than one subtree, every subtree except the last MUST have the same number of transaction slots as the first, and that number MUST be a power of two. The last subtree MUST NOT have more slots than the first, and no subtree root may appear twice in the block. A violation MUST be classified `ERR_BLOCK_CORRUPT`.
 
 **BV-BODY-004.** A block in which any transaction ID appears more than once MUST be rejected. A duplicate produced by merkle odd-node duplication (the CVE-2012-2459 pattern, which leaves the root unchanged and so admits an honest body for the same header) MUST be classified `ERR_BLOCK_CORRUPT`. Any other duplicate in a bound body MUST be classified `ERR_BLOCK_INVALID`.
 
@@ -178,7 +178,7 @@ A failure MUST be classified `ERR_BLOCK_CORRUPT`.
 
 - the body is bound;
 - the UTXO store supports outpoint-only spends;
-- the block descends from a checkpoint-confirmed ancestor;
+- the block is already stored, and it is the stored block with the highest hardcoded checkpoint's hash or one of that block's ancestors: following parent links down from the checkpoint block reaches it at its own height (`checkpointConfirmedAncestor`). A block above such an ancestor, or on a fork beside it, does not qualify;
 - the height is ≤ the highest hardcoded checkpoint.
 
 **BV-BODY-011.** A violation of BV-BODY-006 through BV-BODY-010 SHALL be classified `ERR_BLOCK_INVALID` when the body is bound and `ERR_BLOCK_CORRUPT` when it is not.
@@ -206,7 +206,7 @@ A failure MUST be classified `ERR_BLOCK_CORRUPT`.
 **BV-BODY-016.** A transaction-invalid result from Subtree Validation SHALL be classified as follows:
 
 - if it wraps a cancellation, deadline, storage or service error, it is transient and retryable;
-- if the block arrived from `legacy`, `ERR_BLOCK_INVALID`, not persisted;
+- if the block arrived from `legacy`, `ERR_BLOCK_INVALID`, not persisted and not published: the legacy service remembers the hash in its own park policy and judges the fault itself;
 - otherwise `ERR_BLOCK_CORRUPT`, because the subtree list is not yet bound.
 
 A missing-parent or not-found transaction result SHALL be classified as a transient `ERR_BLOCK_INCOMPLETE`.
@@ -238,6 +238,8 @@ A missing-parent or not-found transaction result SHALL be classified as a transi
 | LOCAL | service / storage / processing / context | never | no | no | yes |
 | CLOCK-DEFERRED (BV-HEADER-006) | to be assigned (today `ERR_BLOCK_INVALID`, GAP-BV-050) | never | no | no | yes, on re-announcement |
 
+One exception to the INVALID row: the `legacy` transaction-invalid outcome of BV-BODY-016 is `ERR_BLOCK_INVALID` but is neither persisted nor published; the legacy service remembers the hash and judges the fault.
+
 **BV-VERDICT-002.** A CORRUPT outcome MUST NOT add the block to the Blockchain store in any form, MUST NOT set the invalid flag for the hash, and MUST NOT mark the hash as existing in any cache that gates re-announcement.
 
 **BV-VERDICT-003.** A CORRUPT error MUST NOT wrap an INVALID error. A caller testing the returned error for invalidity MUST NOT see a corrupt body as invalid.
@@ -248,11 +250,11 @@ A missing-parent or not-found transaction result SHALL be classified as a transi
 
 **BV-VERDICT-006.** CORRUPT and INVALID outcomes MUST be returned to callers with their error code intact, not rewrapped as a generic service or processing error.
 
-**BV-VERDICT-007.** A failed validation attempt MUST remove the subtree-to-check blobs it newly created for the block, and MUST NOT remove any blob that existed before the attempt.
+**BV-VERDICT-007.** A validation attempt that ends CORRUPT MUST remove the subtree-to-check blobs it newly created for the block, and MUST NOT remove any blob that existed before the attempt. An attempt with any other outcome SHALL leave the blobs, so a retry can reuse them.
 
 **BV-VERDICT-008.** A LOCAL outcome MUST NOT be charged to any peer and MUST NOT be persisted.
 
-**BV-VERDICT-009.** When `KAFKA_INVALID_BLOCKS` (the topic name, default `invalid-blocks`) is non-empty, the service SHALL create the invalid-block producer from `kafka_invalidBlocksConfig` and SHALL publish a `KafkaInvalidBlockTopicMessage{blockHash, reason, peer_id, peer_url}`, keyed by the block hash, for every INVALID and HEADER-FINAL outcome, on every validation path including the optimistic background path.
+**BV-VERDICT-009.** When `KAFKA_INVALID_BLOCKS` (the topic name, default `invalid-blocks`) is non-empty, the service SHALL create the invalid-block producer from `kafka_invalidBlocksConfig` and SHALL publish a `KafkaInvalidBlockTopicMessage{blockHash, reason, peer_id, peer_url}`, keyed by the block hash, for every INVALID and HEADER-FINAL outcome, on every validation path including the optimistic background path. The one exception is the `legacy` transaction-invalid outcome of BV-BODY-016, which is not published.
 
 **BV-VERDICT-010.** In an invalid-block notification, a `peer_url` of `legacy` and a `peer_id` in the `legacy:` namespace MUST be published as empty strings.
 
@@ -266,7 +268,7 @@ A missing-parent or not-found transaction result SHALL be classified as a transi
 
 **BV-OPTIMISTIC-003.** In non-optimistic mode, the block MUST NOT be added to the Blockchain store until subtree validation, every rule in BV-HEADER and BV-BODY, and the ancestor-membership check of BV-BODY-013 have all passed.
 
-**BV-OPTIMISTIC-004.** In optimistic mode, before adding the block, the service MUST synchronously evaluate BV-HEADER-001 through BV-HEADER-008 and, for a body without subtrees, the coinbase-only binding of BV-BODY-001.
+**BV-OPTIMISTIC-004.** In optimistic mode, before adding the block, the service MUST synchronously evaluate BV-HEADER-001 through BV-HEADER-008, bind the body (the coinbase-only binding of BV-BODY-001, or, for a body with subtrees, the first and last subtrees against the header), and apply BV-BODY-006 through BV-BODY-009 and BV-BODY-019 to the coinbase (`model.Block.CheckIntegrityFloor`). If any of these cannot be shown to pass, the block SHALL NOT be added optimistically; it SHALL be validated non-optimistically first.
 
 **BV-OPTIMISTIC-005.** In optimistic mode, when background validation reaches an INVALID outcome, or a floater outcome while `RUNNING`, the block MUST be invalidated in the Blockchain service and the invalid-block notification published.
 
@@ -288,7 +290,7 @@ A missing-parent or not-found transaction result SHALL be classified as a transi
 
 **BV-COMMIT-004.** The tagging of a block's transactions as mined in the UTXO store SHALL be triggered by the Blockchain service's `BlockSubtreesSet` notification. It MUST NOT be triggered by the `Block` notification.
 
-**BV-COMMIT-005.** `mined_set` MUST be set only after every transaction in the block has been durably tagged with the block's ID. The tagging SHALL record whether the block is on the longest chain.
+**BV-COMMIT-005.** `mined_set` MUST be set only after every transaction in the block has been durably tagged with the block's ID. The tagging SHALL record whether the block is on the longest chain. The `mined_set` write MUST be refused if `mined_set` was cleared since the tagging run started (a generation compare on `mined_set_gen`, which `ClearBlockMinedSet`, `InvalidateBlock` and `RevalidateBlock` bump); the block is then re-queued, and that does not count as an attempt under BV-COMMIT-007.
 
 **BV-COMMIT-006.** Accepting a mined-tagging request from a notification MUST NOT block the notification consumer.
 
@@ -303,7 +305,7 @@ Each pass SHALL be single-flight.
 
 **BV-COMMIT-009.** A block MUST NOT be validated until its parent has `mined_set`. The wait SHALL use linear backoff: before retry *i* (from 0) it waits (`blockvalidation_isParentMined_retry_backoff_multiplier` × *i* + 1) × `blockvalidation_isParentMined_retry_backoff_duration`, for `blockvalidation_isParentMined_retry_max_retry` retries. On exhaustion the service SHALL re-trigger the parent's mined-tagging and wait one more full round. If the parent is still not mined, validation MUST fail with `ERR_BLOCK_PARENT_NOT_MINED`.
 
-**BV-COMMIT-010.** A block stored with a pre-assigned ID on the legacy route at or below the hardcoded checkpoint MAY be inserted with `mined_set` already true, in which case mined-tagging is not run for it. Any other block MUST go through mined-tagging (BV-COMMIT-005), whether or not its ID was supplied by the caller.
+**BV-COMMIT-010.** A quick-validated block is inserted with `mined_set` already true (BV-QUICK-020), because quick validation has stamped its transactions; mined-tagging is not run for it. Any other block MUST go through mined-tagging (BV-COMMIT-005), whether or not its ID was supplied by the caller or reserved earlier.
 
 **BV-COMMIT-011.** When a block is invalidated, the mined tags of its transactions SHALL be reverted in the UTXO store, after which `mined_set` is set for the block.
 
@@ -321,7 +323,7 @@ Each pass SHALL be single-flight.
 
 **BV-REVALIDATE-005.** A `RevalidateBlock` failure SHALL be returned as `ERR_SERVICE_ERROR` with message `failed block re-validation`, wrapping the underlying outcome.
 
-**BV-REVALIDATE-006.** The service's internal revalidation of a previously added block (BV-OPTIMISTIC-007) SHALL be attempted at most 4 times in total. It MUST NOT call AddBlock.
+**BV-REVALIDATE-006.** The service's internal revalidation of a previously added block (BV-OPTIMISTIC-007) SHALL be attempted at most 4 times that reach a verdict. While the block's parent lacks `mined_set`, the block SHALL be re-checked up to 32 times, 5 s apart, without spending an attempt. It MUST NOT call AddBlock.
 
 **BV-REVALIDATE-007.** `ValidateBlock` SHALL evaluate a supplied block without changing chain state: it MUST NOT add the block, MUST NOT set any invalid flag, and MUST NOT strike any peer.
 
@@ -344,25 +346,25 @@ On success it returns `ok = true` with a message of the form `Block <summary> is
 
 ### Catchup Contract (`BV-CATCHUP-NNN`)
 
-**BV-CATCHUP-001.** Catchup SHALL be initiated for an announced block whose parent is not stored locally, using the announcer as the primary peer. Catchup MUST NOT be initiated with a primary peer that the P2P service flags as malicious.
+**BV-CATCHUP-001.** Catchup SHALL be initiated for an announced block whose parent is neither stored locally nor in flight (BV-INGRESS-016), using the announcer as the primary peer. A block on the `legacy` base URL MUST NOT be diverted to catchup (BV-INGRESS-017). Catchup MUST NOT be initiated with a primary peer that the P2P service flags as malicious.
 
 **BV-CATCHUP-002.** At most one catchup SHALL be in progress per service instance. A catchup request that arrives while one is in progress MUST be retained and processed after the current one ends; it MUST NOT be dropped.
 
-**BV-CATCHUP-003.** When `blockvalidation_useCatchupWhenBehind` is `true` and the service is backlogged, blocks that are not ChainExtending SHALL be routed through catchup. Backlogged means the priority queue holds more than 10 blocks or the block-found buffer holds more than 3.
+**BV-CATCHUP-003.** When `blockvalidation_useCatchupWhenBehind` is `true` and the service is backlogged, blocks that are not ChainExtending and whose parent is not in flight SHALL be routed through catchup. Backlogged means the priority queue holds more than 10 blocks or the block-found buffer holds more than 3.
 
 **BV-CATCHUP-004.** Each header request SHALL carry a block locator built from the local best chain (capped at the UTXO store's height when the Blockchain store is ahead of it). It SHALL ask for at most 10,000 headers, and MUST bound the accepted response to (10,000 + 1) × 80 bytes.
 
 **BV-CATCHUP-005.** Each header-request iteration MUST be bounded by `blockvalidation_catchup_iteration_timeout` (default 30 s) and retried at most `blockvalidation_catchup_max_retries` (default 3) times. The header phase as a whole MUST be bounded by `blockvalidation_catchup_operation_timeout` (default 300 s).
 
-**BV-CATCHUP-006.** A single catchup MUST NOT accumulate more than `blockvalidation_max_accumulated_headers` (default 100,000) headers.
+**BV-CATCHUP-006.** A single catchup MUST NOT accumulate more than `blockvalidation_max_accumulated_headers` (default 100,000) headers. On the netted route (BV-QUICK-032) the limit SHALL instead be the headers up to and including the next hardcoded checkpoint above the tip, counted from the locator start, whatever the setting says.
 
 **BV-CATCHUP-007.** Every fetched header MUST meet the target of its own nBits. A violation MUST abort the catchup and be treated as a malicious response from the peer. The service MAY additionally apply two sanity heuristics that are not consensus rules: a non-zero merkle root (unless the previous hash is zero), and a timestamp no earlier than 2009-01-03; a violation MUST abort the catchup. A header timestamped more than 7200 s ahead of the local clock MUST abort the catchup without a malicious report (BV-HEADER-006). The `powLimit` bound and version floors are deferred to per-block validation.
 
 **BV-CATCHUP-008.** The headers after the common ancestor MUST form a chain linked by previous-hash, and the first of them MUST link to the common ancestor. A violation MUST abort the catchup.
 
-**BV-CATCHUP-009.** For every fetched header from `DaaHeight` whose difficulty-adjustment window lies entirely inside the fetched chain, the service MUST recompute the required nBits. A mismatch MUST abort the catchup and report the peer malicious. Headers before `DaaHeight`, headers whose window reaches past the fetched chain, and headers on chains with no retargeting are deferred to per-block validation (BV-HEADER-004).
+**BV-CATCHUP-009.** For every fetched header, the service MUST compute the required nBits as full validation does (BV-HEADER-004), reading any ancestry below the common ancestor from the store, and covering pre-DAA, minimum-difficulty and no-retarget chains. A mismatch MUST abort the catchup and report the peer malicious. A failure to compute the required nBits MUST abort the catchup as LOCAL.
 
-**BV-CATCHUP-010.** The common ancestor SHALL be the newest offered header that is stored locally at or below the local best height, measured against a single read of the local best block for the whole catchup. If no ancestor is found the catchup MUST fail. If the ancestor is stored invalid the catchup MUST fail with `ERR_BLOCK_INVALID`.
+**BV-CATCHUP-010.** The common ancestor SHALL be the newest offered header that is stored locally, at or below the local best height, and on the local current chain. A stored block on a side branch the node never adopted MUST NOT be taken as the ancestor, because the fork depth and the `mined_set` clearing (BV-CATCHUP-013) are measured from it. The best block SHALL be read once for the whole catchup. If no ancestor is found, the catchup MUST fail. If the ancestor, or any stored offered header after it, is stored invalid, the catchup MUST fail with `ERR_BLOCK_INVALID`.
 
 **BV-CATCHUP-011.** A catchup whose fork depth is strictly greater than `CoinbaseMaturity` MUST be rejected. This is a local safety policy, not consensus: bitcoin-sv has no maximum reorg depth and follows the valid chain with most work. A rejected deeper chain with more work than the local tip MUST be surfaced to the operator (log and metric), who can act on it through the invalidate / reconsider tools. BV-CATCHUP-011 takes precedence over BV-CATCHUP-012.
 
@@ -370,7 +372,7 @@ On success it returns `ok = true` with a message of the form `Block <summary> is
 
 **BV-CATCHUP-013.** When fork depth > 0, the service SHALL clear `mined_set` on the local blocks above the common ancestor and emit `BlockMinedUnset` for each. This clearing MUST NOT happen until every header-chain check in BV-CATCHUP-007 through BV-CATCHUP-012 and BV-CATCHUP-014 has passed. If reading the fork-side headers or clearing `mined_set` on any of them fails, the catchup MUST abort before any catchup block is validated, without charging the peer (the fault is local); it MUST NOT proceed with the reorg. (Today it logs and proceeds: GAP-BV-061.)
 
-**BV-CATCHUP-014.** When quick validation is allowed (`blockvalidation_catchup_allow_quick_validation`) and fork depth is 0, every checkpoint whose height falls within the fetched header range MUST match the fetched header's hash. A mismatch MUST abort the catchup.
+**BV-CATCHUP-014.** When quick validation is allowed (`blockvalidation_catchup_allow_quick_validation`, or the netted route, BV-QUICK-032) and fork depth is 0, every checkpoint whose height falls within the fetched header range MUST match the fetched header's hash. A mismatch MUST abort the catchup.
 
 **BV-CATCHUP-015.** Before fetching or validating any catchup block, the service MUST request the `CATCHUPBLOCKS` transition from the Blockchain service. A refusal (`ERR_STATE`, including refusal from `IDLE`) MUST end the catchup without charging any peer and without counting an attempt against the block.
 
@@ -405,18 +407,24 @@ A breaker MUST always be able to return to closed.
 
 **BV-CATCHUP-027.** A catchup whose target block already exists when the catchup starts SHALL succeed immediately without fetching.
 
+**BV-CATCHUP-028.** When every offered header is one the node already holds at or below its tip, the list shows no fork, so the catchup MUST NOT compute a fork depth from it or apply BV-CATCHUP-011 through BV-CATCHUP-013. It SHALL end as a run with no new headers: success when the announced block is stored, otherwise a failure so another peer is tried. When the list was cut by this node's own header cap and starts at the first entry of the block locator it sent, the failure MUST be LOCAL (`ERR_SERVICE_ERROR`) and charge no peer. A capped list that starts anywhere else MUST be charged to the peer as an invalid response.
+
+**BV-CATCHUP-029.** On the netted route (heights at or below the highest checkpoint where the UTXO store writes blocks that only quick validation may validate, `model.NettedRouteAt`), a fork whose first block is on that route MUST be refused before any block is fetched and before `mined_set` is cleared, and charged to the peer as an invalid response. A fork rejected by BV-CATCHUP-011 on that route SHALL be refused this way instead, so the peer is rotated.
+
+**BV-CATCHUP-030.** When the header fetch reached the announced block and the offered chain carries less cumulative work than the local tip, the catchup SHALL end as a no-op before any block is fetched or `mined_set` is cleared, and MUST charge no peer. A chain with equal work SHALL still be fetched. A fetch that stopped on a cap before the announced block MUST NOT be weighed this way.
+
 ### Quick Validation Contract (`BV-QUICK-NNN`)
 
-**BV-QUICK-001.** In catchup, a block SHALL be quick-validated only when all of the following hold:
+**BV-QUICK-001.** In catchup, a block SHALL be quick-validated only when all of the following hold (on the netted route, BV-QUICK-032 overrides the setting condition):
 
 - `blockvalidation_catchup_allow_quick_validation` is `true`;
 - fork depth is 0;
 - at least one checkpoint was hash-matched against the fetched header run in this catchup;
 - the block's height is ≤ the highest checkpoint height matched in this catchup.
 
-**BV-QUICK-002.** If Block Assembly is not ready for a catchup block (BV-INGRESS-018), the block SHALL fall back to full validation. The catchup MUST NOT fail on that account.
+**BV-QUICK-002.** If Block Assembly is not ready for a catchup block (BV-INGRESS-018), the block SHALL fall back to full validation. The catchup MUST NOT fail on that account. On the netted route the catchup SHALL instead end with a LOCAL `ERR_SERVICE_ERROR` and no peer charge (BV-QUICK-032).
 
-**BV-QUICK-003.** On the legacy route, a block SHALL be quick-validated only when all of the following hold:
+**BV-QUICK-003.** On the legacy route, a block SHALL be quick-validated only when all of the following hold (on the netted route, BV-QUICK-032 overrides the setting conditions):
 
 - `blockvalidation_legacy_unified_below_checkpoint` is `true`;
 - `blockvalidation_outpoint_only_below_checkpoint` is `true`;
@@ -425,7 +433,7 @@ A breaker MUST always be able to return to closed.
 - 0 < height ≤ the highest hardcoded checkpoint;
 - `header_proven` is `true`.
 
-**BV-QUICK-004.** A legacy block that meets every condition of BV-QUICK-003 except `header_proven` MUST take full validation.
+**BV-QUICK-004.** A legacy block that meets every condition of BV-QUICK-003 except `header_proven` MUST take full validation, except on the netted route, where it MUST be refused with a LOCAL `ERR_SERVICE_ERROR` (retry once the header proof arrives) and never fully validated (BV-QUICK-032).
 
 **BV-QUICK-005.** A legacy block meeting the setting, store and height conditions of BV-QUICK-003 whose parent is not stored MUST fail with `ERR_SERVICE_ERROR` (retry later). It MUST NOT be diverted to catchup.
 
@@ -455,7 +463,7 @@ A breaker MUST always be able to return to closed.
 
 **BV-QUICK-018.** A UTXO-store call already started MUST NOT be abandoned mid-call because of a sibling failure or shutdown. No new store call may start after cancellation.
 
-**BV-QUICK-019.** Re-applying a partially applied block MUST be idempotent: transactions already created SHALL be restamped with this block's ID and height, and nothing is created twice. The block ID MUST be stable across retries of the same block.
+**BV-QUICK-019.** Re-applying a partially applied block MUST be idempotent: transactions already created SHALL be restamped with this block's ID and height, and nothing is created twice. A retry SHALL use the same block ID while the block's ID reservation exists. A retry MAY get a new ID when the reservation is gone: swept after an hour without a commit (`sweepStaleReservations`), or cleared on a rewind and then refused because the ID is not above the parent's (`ERR_BLOCK_ID_ORDER`, bsv-blockchain/teranode#2184). The retry then restamps every existing transaction with the new ID. Those transactions keep the old ID as well, which no stored block holds; it MUST NOT be read as a block on any chain.
 
 **BV-QUICK-020.** A quick-validated block SHALL be added to the Blockchain store with `subtrees_set` and `mined_set` true and its assigned ID in a single insert. It MUST NOT emit a separate `BlockSubtreesSet` notification.
 
@@ -471,19 +479,27 @@ A breaker MUST always be able to return to closed.
 
 **BV-QUICK-026.** A local subtree blob that does not match its key MUST be quarantined: deleted, with the deletion confirmed. Every mismatching blob in the block MUST be identified, not only the first. If the deletion cannot be confirmed, catchup MUST abort and MUST NOT fall back to full validation. On the legacy route, a quarantined mismatch SHALL be returned as `ERR_BLOCK_CORRUPT` and an unconfirmed one as `ERR_SERVICE_ERROR`.
 
-**BV-QUICK-027.** In catchup, a quick-validation outcome SHALL be handled as follows:
+**BV-QUICK-027.** In catchup, a quick-validation outcome SHALL be handled as follows (on the netted route, BV-QUICK-032 replaces every fall-back to full validation):
 
 - INVALID: SHALL be re-judged by full validation, and MUST NOT be persisted on the quick verdict alone;
 - CORRUPT: SHALL abort the catchup for re-download;
 - INCOMPLETE: SHALL abort the catchup and keep the files.
 
-**BV-QUICK-028.** `blockvalidation_legacy_unified_below_checkpoint`, `blockvalidation_outpoint_only_below_checkpoint` and the UTXO store type MUST be configured identically for the Legacy and Block Validation services. Any disagreement MUST degrade to full validation, never to an unproven quick route.
+**BV-QUICK-028.** `blockvalidation_legacy_unified_below_checkpoint`, `blockvalidation_outpoint_only_below_checkpoint` and the UTXO store type MUST be configured identically for the Legacy and Block Validation services on a UTXO store that does not net below the checkpoint. Any disagreement MUST degrade to full validation, never to an unproven quick route. On a netting store both services reach the same route whatever these settings say (BV-QUICK-032).
 
 **BV-QUICK-029.** Every below-checkpoint decision in this service SHALL derive its boundary from the single shared definition of the highest hardcoded checkpoint.
 
 **BV-QUICK-030.** At or below the highest hardcoded checkpoint, quick validation SHALL trust the checkpoint for every consensus rule it does not evaluate. That is wider than bitcoin-sv's `assumevalid`, which skips only script verification. The rules trusted rather than checked are: scripts; finality (BV-BODY-015, BV-BODY-019); relative lock times; per-transaction and per-block sigops (BV-BODY-021); fees and the coinbase reward (BV-BODY-010); and, in outpoint-only mode, input values. Coinbase maturity is NOT trusted: the UTXO store enforces it on outpoint-only spends too (pinned by `TestMinimalCreate_CoinbaseMaturity_OutpointOnlySpend`).
 
 **BV-QUICK-031.** Quick validation of blocks above the highest hardcoded checkpoint, which only the operator catchup-checkpoint override enables (BV-CONFIG-005), is an operator trust assumption. On that range quick validation SHOULD still enforce coinbase finality (BV-BODY-019), coinbase maturity and transaction finality.
+
+**BV-QUICK-032.** The netted route is the below-checkpoint write of a UTXO store that nets below the checkpoint (`utxoset`): a block at or below the highest hardcoded checkpoint on such a store may only be written through quick validation, because the store keeps no spend-journal rows that full validation would read (`model.NettedRouteAt`). On it:
+
+- the settings conditions of BV-QUICK-001 and BV-QUICK-003 (`blockvalidation_catchup_allow_quick_validation`, `blockvalidation_legacy_unified_below_checkpoint`, `blockvalidation_outpoint_only_below_checkpoint`) SHALL be treated as satisfied;
+- a block MUST NOT fall back to full validation for any reason. Block Assembly not ready, a missing header proof, a block above the verified checkpoint in catchup, or a failed quick validation SHALL end the attempt as a LOCAL `ERR_SERVICE_ERROR`, charge no peer, and be retried through quick validation only;
+- a catchup fork whose first block is on the route MUST be refused (BV-CATCHUP-029), and a header window on the route that holds no verified checkpoint MUST be refused as LOCAL;
+- the catchup header window SHALL run to the next hardcoded checkpoint (BV-CATCHUP-006);
+- `Init` MUST fail with `ERR_CONFIGURATION` when both catchup-checkpoint override settings are set, or when `blockvalidation_quick_validate_net_range` is not a positive power of two (`model.CheckNettedRouteCatchupSettings`).
 
 ### Peer Accountability Contract (`BV-PEER-NNN`)
 
@@ -493,7 +509,7 @@ A breaker MUST always be able to return to closed.
 - MUST NOT poison the hash;
 - MUST NOT be rejected to the peer.
 
-A successful validation SHALL clear the corrupt counter of the (hash, peer ID) pair that delivered it; other peers' counters for the hash expire with their own windows. Policy-decline counters (BV-PEER-002) expire only with their window. An empty peer ID MUST NOT be counted or capped. Blocks from `legacy` MUST NOT be counted. A cap of 0 disables the rule.
+A successful validation SHALL clear the corrupt counter of the (hash, peer ID) pair that delivered it; other peers' counters for the hash expire with their own windows. Policy-decline counters (BV-PEER-002) expire with their window, and a catchup cycle that validated at least one block SHALL clear the serving peer's decline counter for the hash. An empty peer ID MUST NOT be counted or capped. Blocks from `legacy` MUST NOT be counted. A cap of 0 disables the rule.
 
 **BV-PEER-002.** The service SHALL cap POLICY-DECLINED outcomes per (block hash, serving peer ID) in a budget separate from BV-PEER-001, sized by the same two settings. A policy decline:
 
@@ -554,7 +570,7 @@ In catchup, a peer past its decline budget SHALL be skipped and alternative peer
 
 **BV-CONFIG-004.** `blockvalidation_secret_mining_threshold` SHALL default to `CoinbaseMaturity − 1`.
 
-**BV-CONFIG-005.** When both `blockvalidation_catchup_checkpoint_hash` and `blockvalidation_catchup_checkpoint_height` are set, they SHALL replace the checkpoint list used by catchup for header-chain verification (BV-CATCHUP-014) and quick-validation eligibility (BV-QUICK-001), with a warning logged. They MUST NOT affect BV-HEADER-003 or BV-QUICK-006.
+**BV-CONFIG-005.** When both `blockvalidation_catchup_checkpoint_hash` and `blockvalidation_catchup_checkpoint_height` are set, they SHALL replace the checkpoint list used by catchup for header-chain verification (BV-CATCHUP-014) and quick-validation eligibility (BV-QUICK-001), with a warning logged. They MUST NOT affect BV-HEADER-003 or BV-QUICK-006. On a UTXO store that nets below the checkpoint, `Init` MUST fail with `ERR_CONFIGURATION` when both are set (BV-QUICK-032).
 
 **BV-CONFIG-006.** Every setting documented under the `BlockValidation` category MUST have the effect its documentation describes. A setting with no effect MUST be removed or have its documentation corrected.
 
@@ -636,8 +652,8 @@ The service exposes 6 gRPC operations (`BlockValidationAPI`), plus one Kafka ing
 | **Operation** | `BlockFound(BlockFoundRequest{hash, base_url, wait_to_complete, peer_id}) → EmptyMessage` |
 | **Valid states** | All FSM states (see [State Machine](#state-machine)) |
 | **Request validation** | `hash` is 32 bytes; `base_url` is `http`/`https` or `legacy` |
-| **Success effect** | Block queued for validation (async), or validated and committed (`wait_to_complete`); already-stored block → no-op |
-| **Error responses** | Synchronously: `ERR_PROCESSING` on bad hash; `ERR_SERVICE_ERROR` if the existence check fails. With `wait_to_complete` only: `ERR_PROCESSING` on bad base URL; `ERR_PROCESSING` `peer <id> is marked as malicious`; the validation outcome code (BV-VERDICT-001); `ERR_SERVICE_ERROR` when the parent is missing (BV-INGRESS-017) |
+| **Success effect** | Block queued for validation (async), or the worker's first attempt finished with the block stored (`wait_to_complete`, BV-INGRESS-005); already-stored block → no-op, except that with `wait_to_complete` a block stored invalid returns `ERR_BLOCK_INVALID` (BV-INGRESS-003) |
+| **Error responses** | Synchronously: `ERR_PROCESSING` on bad hash; `ERR_SERVICE_ERROR` if the existence check fails. With `wait_to_complete` only: `ERR_PROCESSING` on bad base URL; `ERR_PROCESSING` `peer <id> is marked as malicious`; the validation outcome code (BV-VERDICT-001); `ERR_SERVICE_ERROR` when the parent is missing (BV-INGRESS-017); `ERR_BLOCK_INVALID` `block is stored as invalid`; `ERR_CONTEXT_CANCELED` when the caller stops waiting; `ERR_PROCESSING` when the per-(hash, peer) recovered-panic cap is exhausted |
 | **Idempotency** | Yes per hash (BV-INGRESS-003, BV-QUEUE-005) |
 | **Concurrency** | Safe; pending work bounded (BV-INGRESS-006) |
 | **Persistence** | Through the commit path (BV-COMMIT) |
@@ -651,7 +667,7 @@ The service exposes 6 gRPC operations (`BlockValidationAPI`), plus one Kafka ing
 | **Valid states** | All FSM states |
 | **Request validation** | `block` deserializes; `height` 0 or parent + 1; non-`legacy` `base_url` passes the URL validator; empty `base_url` means `legacy` |
 | **Success effect** | Block validated and committed, under `block_id` if non-zero |
-| **Error responses** | `ERR_PROCESSING` `failed to create block from bytes` / `invalid height: 0`; `ERR_INVALID_ARGUMENT` `invalid base URL`; `ERR_BLOCK_INVALID` `rejecting block with peer-inconsistent height`; `ERR_PROCESSING` `peer <id> is malicious`; `ERR_BLOCK_CORRUPT` when the corrupt cap is reached (BV-PEER-001); `ERR_BLOCK_POLICY_DECLINED` from the pre-fetch size gate or the decline cap; `ERR_SERVICE_ERROR` when the parent is missing (BV-INGRESS-017, BV-QUICK-005) or Block Assembly is not ready for a unified-route-eligible block; `ERR_BLOCK_INVALID` and `ERR_BLOCK_CORRUPT` from validation as-is (BV-VERDICT-006); every other validation failure wrapped as `ERR_SERVICE_ERROR` `failed block validation BlockFound` |
+| **Error responses** | `ERR_PROCESSING` `failed to create block from bytes` / `invalid height: 0`; `ERR_INVALID_ARGUMENT` `invalid base URL`; `ERR_BLOCK_INVALID` `rejecting block with peer-inconsistent height`; `ERR_PROCESSING` `peer <id> is malicious`; `ERR_BLOCK_CORRUPT` when the corrupt cap is reached (BV-PEER-001); `ERR_BLOCK_POLICY_DECLINED` from the pre-fetch size gate or the decline cap; `ERR_SERVICE_ERROR` when the parent is missing (BV-INGRESS-017, BV-QUICK-005) or Block Assembly is not ready for a unified-route-eligible block; `ERR_BLOCK_INVALID` and `ERR_BLOCK_CORRUPT` from validation as-is (BV-VERDICT-006); on the unified quick route, quick-validation errors as-is, including `ERR_PROCESSING` `refusing caller-supplied block id` (BV-INGRESS-013); the netted-route refusal (`ERR_SERVICE_ERROR`, BV-QUICK-032); `ERR_SERVICE_ERROR` `failed to get previous block header`; the recovered-panic cap (`ERR_SERVICE_ERROR` for `legacy`, `ERR_PROCESSING` otherwise); every other validation failure wrapped as `ERR_SERVICE_ERROR` `failed block validation BlockFound` |
 | **Idempotency** | Yes per hash |
 | **Concurrency** | Safe; the same hash is never validated twice concurrently (BV-QUEUE-010) |
 | **Persistence** | Block record (valid or invalid) under `block_id`; UTXO mutations on the quick route |
@@ -765,7 +781,7 @@ stateDiagram-v2
 
 **BV-NFR-002.** Memory bounds on peer input. The service MUST bound each of the following by the setting named, independent of what a peer declares:
 
-- accumulated headers per catchup (`blockvalidation_max_accumulated_headers`);
+- accumulated headers per catchup (`blockvalidation_max_accumulated_headers`; on the netted route, up to the next hardcoded checkpoint above the tip);
 - bytes per block message (`blockvalidation_max_incoming_block_message_bytes`);
 - declared bytes admitted to prefetch concurrently (`blockvalidation_catchup_prefetch_budget_bytes`);
 - tracked forks (`blockvalidation_max_tracked_forks`).
@@ -784,15 +800,15 @@ stateDiagram-v2
 
 ## Conformance Test Matrix
 
-**AC-BV-INGRESS-003.1.** Given block B is stored with invalid = true, when `BlockFound(B)` is called, then the call MUST return success, no fetch MUST be issued, and B MUST remain invalid.
+**AC-BV-INGRESS-003.1.** Given block B is stored with invalid = true, when `BlockFound(B)` is called with `wait_to_complete = false`, then the call MUST return success, no fetch MUST be issued, and B MUST remain invalid.
 
 **AC-BV-INGRESS-004.1.** Given the service is running, when `BlockFound` arrives with `base_url = "ftp://x"` and `wait_to_complete = true`, then the outcome MUST be `ERR_PROCESSING` containing `invalid baseURL - not a valid http/https URL`.
 
-**AC-BV-INGRESS-005.1.** Given a peer serves a block whose subtree validation takes 5 s, when `BlockFound(wait_to_complete = true)` is called, then the call MUST NOT return before the block is committed, and MUST return nil only if the block is then stored valid.
+**AC-BV-INGRESS-005.1.** Given a peer serves a block whose subtree validation takes 5 s, when `BlockFound(wait_to_complete = true)` is called, then the call MUST NOT return before the worker's attempt at the block has ended, and MUST return nil only if the block is then stored valid.
 
 **AC-BV-INGRESS-007.1.** Given the FSM is `IDLE` at start, when a block message is produced to the blocks topic, then it MUST NOT be consumed until the FSM reaches `RUNNING` or `CATCHINGBLOCKS`.
 
-**AC-BV-INGRESS-009.1.** Given the Blockchain store returns a storage error while a Kafka block message is processed, then the message offset MUST NOT be committed, and the message MUST be redelivered.
+**AC-BV-INGRESS-009.1.** Given the Blockchain store returns a storage error while a Kafka block message is processed, then no peer failure MUST be reported, and the block MUST be re-attempted in-process until the store recovers or the retry bound is reached.
 
 **AC-BV-INGRESS-013.1.** Given `ProcessBlock` is called with `block_id = 7` for a block that fails a bound-body rule, then the stored invalid record MUST have ID 7.
 
@@ -808,7 +824,7 @@ stateDiagram-v2
 
 **AC-BV-QUEUE-007.1.** Given every source of H returns a network error, then the number of fetch retries for H MUST NOT exceed the configured bound.
 
-**AC-BV-QUEUE-008.1.** Given an announcer answers the block fetch with HTTP 429, then no reputation or ban-score charge MUST be issued against it.
+**AC-BV-QUEUE-008.1.** Given an announcer within its 429 allowance answers the block fetch with HTTP 429, then no reputation or ban-score charge MUST be issued against it.
 
 **AC-BV-QUEUE-010.1.** Given hash H is being validated, when H is announced again and its new queue entry is dequeued, then the new entry's sources MUST be retained for H, and H MUST NOT be validated twice concurrently.
 
@@ -816,7 +832,7 @@ stateDiagram-v2
 
 **AC-BV-HEADER-001.1.** Given a header with nBits easier than `powLimit` and a hash meeting it, then validation MUST fail with `ERR_BLOCK_INVALID`, no subtree MUST be fetched, no block record MUST be written, and an invalid-block notification MUST be published.
 
-**AC-BV-HEADER-004.1.** Given a block below the highest hardcoded checkpoint whose nBits differs from the next required work, then validation MUST fail with `ERR_BLOCK_INVALID` on every route, including quick validation and the legacy unified route. (Exercising those routes needs a test checkpoint table, since they accept only checkpoint-linked blocks.)
+**AC-BV-HEADER-004.1.** Given a block below the highest hardcoded checkpoint whose nBits differs from the next required work, then the block MUST be refused on every route: full validation fails with `ERR_BLOCK_INVALID`; on the quick routes the block is refused before quick validation runs (catchup's header difficulty check aborts the catchup and reports the peer; the legacy unified route's header rules reject the header). (Exercising those routes needs a test checkpoint table, since they accept only checkpoint-linked blocks.)
 
 **AC-BV-HEADER-006.1.** Given a header timestamp of now + 3 h, then the block MUST NOT be accepted, no invalid record MUST be persisted, no invalid-block notification MUST be published, and the announcing peer MUST NOT be struck or reported. Given the same block is re-announced once the local clock has passed its timestamp − 7200 s, then it MUST be validated normally.
 
@@ -930,7 +946,7 @@ stateDiagram-v2
 
 **AC-BV-QUICK-017.1.** Given the UTXO store returns a retryable error on the chained create wave, then the create MUST be retried before the block fails.
 
-**AC-BV-QUICK-019.1.** Given a quick-validated block is applied twice, then the UTXO store MUST contain each transaction once, stamped with the same block ID both times.
+**AC-BV-QUICK-019.1.** Given a quick-validated block is applied twice while its ID reservation exists, then the UTXO store MUST contain each transaction once, stamped with the same block ID both times. Given the reservation was swept between the two attempts, then each transaction MUST still be stored once, and MUST carry the block ID the block is stored under.
 
 **AC-BV-QUICK-021.1.** Given a subtree-file write worker fails during catchup, then no block whose subtree file was not written MUST be stored with `subtrees_set = true`.
 
@@ -960,7 +976,7 @@ stateDiagram-v2
 
 **AC-BV-CONFIG-001.1.** Given `blockvalidation_previous_block_header_count = 5`, then the effective value MUST be 11 and a warning MUST be logged.
 
-**AC-BV-CONFIG-006.1.** For each of `blockvalidation_validation_retry_sleep`, `blockvalidation_check_subtree_from_block_timeout`, `blockvalidation_skipCheckParentMined`, `blockvalidation_catchupConcurrency`, `blockvalidation_catchup_min_throughput_kbps` and `blockvalidation_catchup_parallel_fetch_workers`, changing it from its default MUST produce the behaviour change its documentation describes, or the setting MUST no longer exist. (This is the GAP-BV-024 / GAP-BV-033 list; other settings are covered by their own scenarios.)
+**AC-BV-CONFIG-006.1.** For each of `blockvalidation_validation_retry_sleep`, `blockvalidation_check_subtree_from_block_timeout`, `blockvalidation_skipCheckParentMined`, `blockvalidation_catchupConcurrency`, `blockvalidation_catchup_min_throughput_kbps`, `blockvalidation_catchup_parallel_fetch_workers` and the ten further keys listed in GAP-BV-033, changing it from its default MUST produce the behaviour change its documentation describes, or the setting MUST no longer exist. (This is the GAP-BV-024 / GAP-BV-033 list; other settings are covered by their own scenarios.)
 
 **AC-BV-OBSERVABILITY-005.1.** Given a catchup has fetched 50 blocks, then `GetCatchupStatus.blocks_fetched` MUST be 50.
 
@@ -1071,28 +1087,40 @@ flowchart TD
 
 ### Catchup flow
 
-The diagram shows the order this spec requires. The code follows it since bsv-blockchain/teranode#2034, which moved the `mined_set` clearing after every header-chain check (GAP-BV-021, resolved).
+The diagram shows the order this spec requires, with the step numbers `catchup.go` uses. The code follows it since bsv-blockchain/teranode#2034, which moved the `mined_set` clearing after every header-chain check (GAP-BV-021, resolved).
 
 ```mermaid
 flowchart TD
     A[catchup request] --> B{per-block cap exhausted?}
     B -- yes --> SKIP[skip]
-    B -- no --> C{primary malicious or<br/>past decline budget?}
+    B -- no --> C{primary bad or malicious,<br/>or past decline budget?}
     C -- yes --> ALT[try alternatives]
-    C -- no --> D[acquire catchup slot]
-    D --> E[fetch headers — locator, 10000 per request,<br/>PoW, merkle, time checks]
-    E --> F[find common ancestor]
-    F --> G{fork depth over<br/>coinbase maturity?}
+    C -- no --> D[1 acquire catchup slot]
+    D --> E[2 fetch headers — locator, 10000 per request,<br/>PoW, merkle, time checks]
+    E --> F[3 find common ancestor<br/>on the current chain, link check]
+    F --> X{3.1 every header<br/>already held?}
+    X -- yes --> NONEW[no new headers —<br/>end, BV-CATCHUP-028]
+    X -- no --> G{4 fork depth over<br/>coinbase maturity?}
     G -- yes --> REJ[reject, report peer malicious]
-    G -- no --> H{deep and not heavier?}
+    G -- no --> H{5 deep and not heavier?}
     H -- yes --> SM[secret mining — reject, report]
-    H -- no --> I[link check, checkpoints, DAA]
-    I --> J[clear mined_set on local fork blocks]
-    J --> K[FSM CATCHUPBLOCKS]
-    K --> L[fetch blocks in batches,<br/>prewarm subtree data under budget]
+    H -- no --> NR{5.1 fork on the<br/>netted route?}
+    NR -- yes --> NREF[refuse, charge peer,<br/>BV-CATCHUP-029]
+    NR -- no --> LW{5.1 offered chain<br/>has less work?}
+    LW -- yes --> NOOP[no-op, no charge,<br/>BV-CATCHUP-030]
+    LW -- no --> FI{6 any headers<br/>left to fetch?}
+    FI -- no --> NONEW
+    FI -- yes --> I[7-9.5 header cache, continuity,<br/>checkpoints, DAA]
+    I --> NW{9.5 netted window<br/>without a checkpoint?}
+    NW -- yes --> NWR[refuse, LOCAL, no charge]
+    NW -- no --> J[9.6 clear mined_set on local fork blocks]
+    J --> ST{all blocks stored<br/>since the header phase?}
+    ST -- yes --> N
+    ST -- no --> K[FSM CATCHUPBLOCKS]
+    K --> L[10 fetch blocks in batches,<br/>prewarm subtree data under budget]
     L --> M[validate in order —<br/>quick at or below verified checkpoint,<br/>else full non-optimistic]
     M --> N[FSM RUN]
-    N --> O[release slot, classify outcome,<br/>charge or credit peers]
+    N --> O[11 release slot, classify outcome,<br/>charge or credit peers]
 ```
 
 ### Implementation mechanisms (background)
@@ -1169,14 +1197,15 @@ When a worker takes a block off the queue, the other announcers' sources are dro
 *Work required:* cap the sources at 3.
 *Resolved part:* the retry bound. A failure that is not a verdict (a fetch failure, or a deadline) now requeues the block after 5 s (fetch) or 1 min (deadline), at most `blockValidationMaxRetries` times, default 3 (`Server.go` `blockRetryDelay`, ~2657-2700). BV-QUEUE-007 is met. The text before the fix said a fetch failure got one retry with base URL `retry` and was then dropped.
 
-**GAP-BV-008.** Duplicate entries are dropped, and the one-block-per-fork rule is not enforced at start.
-*Affects:* BV-QUEUE-009, BV-QUEUE-010.
-`StartProcessingBlock` refuses only when the hash is already being processed (`fork_manager.go` ~330-355). Slot exhaustion cannot occur, because the worker count equals `blockvalidation_max_parallel_forks`. The refused item is a re-announced duplicate; the worker continues and the duplicate's sources are lost (`Server.go` ~2135). Separately, whether the fork is busy is checked only by the advisory `CanProcessBlock`, never at start, so two blocks of one fork can be validated concurrently.
-*Work required:* merge a refused duplicate's sources into the in-flight item instead of dropping them; enforce one block per fork when processing starts.
+**GAP-BV-008.** The one-block-per-fork rule is not enforced at start. **Partly resolved** by bsv-blockchain/teranode#1997.
+*Affects:* BV-QUEUE-009.
+`StartProcessingBlock` refuses a block when its hash is already being processed, when every slot is taken, or when the tip slot is reserved (`fork_manager.go` `StartProcessingBlock`, `tipSlotReserved`). It does not check whether the block's fork already has a block in progress: only the advisory `CanProcessBlock` does, and `StartProcessingBlock` then overwrites the fork's `ProcessingBlock`. So two blocks of one fork can be validated concurrently.
+*Work required:* enforce one block per fork when processing starts.
+*Resolved part:* a refused block is no longer dropped with its sources. `claimAndTake` (`block_priority.go` ~239-251) claims the slot before it takes the block off the queue, so a refused block stays queued. The text before the fix said slot exhaustion could not occur and a refused duplicate's sources were lost; neither holds since #1997.
 
 **GAP-BV-009.** Near-fork classification underflows at low heights.
 *Affects:* BV-QUEUE-002.
-`bestHeight - threshold` is uint32 arithmetic, so it wraps when best height < threshold (`block_priority.go` ~470).
+`bestHeight - threshold` is uint32 arithmetic, so it wraps when best height < threshold (`block_priority.go` `BlockClassifier.ClassifyBlock`).
 *Work required:* saturate at 0.
 
 **GAP-BV-010.** Policy size check uses only the peer-declared size.
@@ -1192,7 +1221,7 @@ A transaction already mined in an ancestor is detected during mined-tagging, aft
 
 **GAP-BV-012.** Some optimistic-path invalidations skip the invalid-block notification.
 *Affects:* BV-VERDICT-009, BV-OPTIMISTIC-005.
-On the optimistic background path, an old-block-ID INVALID verdict calls `InvalidateBlock` without publishing (`BlockValidation.go` ~2394). The internal revalidation path also invalidates without publishing (~3400, ~3439). (The corrupt-body invalidation at ~2336 is CORRUPT, which BV-VERDICT-009 does not require to be published.)
+On the optimistic background path, an old-block-ID INVALID verdict calls `InvalidateBlock` without publishing (`BlockValidation.go` ~2394). The internal revalidation path also invalidates without publishing when `block.Valid` returns INVALID (`reValidateBlock`, the `block.Valid` branch). (Its subtree-validation branch invalidates only a CORRUPT body, which is not required to publish.) (The corrupt-body invalidation at ~2336 is CORRUPT, which BV-VERDICT-009 does not require to be published.)
 *Work required:* publish on those paths.
 
 **GAP-BV-013.** Optimistic crash and sweep race.
@@ -1225,10 +1254,10 @@ When the previous-header run cannot be read, the service calls `ReValidateBlock`
 The server never reads the field, which the client sets (`Client.go` ~214).
 *Work required:* honour the field or remove it from the proto under the versioning rules.
 
-**GAP-BV-019.** A catchup request that loses the slot is dropped.
+**GAP-BV-019.** A catchup request is dropped when the catchup channel is full.
 *Affects:* BV-CATCHUP-002.
-On `ERR_CATCHUP_IN_PROGRESS`, `processCatchupChItem` logs "requeueing" but requeues nothing, and leaves the in-flight marker set for 10 minutes. Re-announcements in that window are absorbed as alternatives (`Server.go` ~2288).
-*Work required:* requeue the item, or clear the marker.
+All four sends to the catchup channel are non-blocking, and drop the request with a warning when the buffer (`blockvalidation_catchupCh_buffer_size`, default 100) is full (`Server.go`, "Catchup channel full, dropping block"). The `ERR_CATCHUP_IN_PROGRESS` branch this entry used to describe cannot be reached: one goroutine drains the channel, so catchups never overlap. Verified against main.
+*Work required:* never drop a request; park overflow keyed by hash.
 
 **GAP-BV-020.** First header not linked to the ancestor is only a warning. **Resolved** by bsv-blockchain/teranode#2034.
 *Affects:* BV-CATCHUP-008.
@@ -1255,7 +1284,7 @@ Failures of the node's own `GetBlockExists`, `GetBestBlockHeader` and `GetBlockL
 
 **GAP-BV-024.** Throughput-based peer switching and the parallel-fetch worker limit are not implemented.
 *Affects:* BV-CATCHUP-023, BV-CATCHUP-024, BV-CONFIG-006.
-`blockvalidation_catchup_min_throughput_kbps` configures a performance monitor whose `ShouldSwitchPeer` / `RecordBytes` are never called. `blockvalidation_catchup_parallel_fetch_workers` is stored but never read; distribution uses every eligible peer.
+`blockvalidation_catchup_min_throughput_kbps` configures a performance monitor whose `ShouldSwitchPeer` / `RecordBytes` are never called. `blockvalidation_catchup_parallel_fetch_workers` is copied into the catchup context but never used; distribution uses every eligible peer.
 *Work required:* wire both, or remove them under BV-CONFIG-006.
 
 **GAP-BV-025.** Invalid catchup blocks are reported malicious up to three times.
@@ -1267,6 +1296,7 @@ Reports come from `validateBlocksOnChannel`, `releaseCatchupLock` and `processCa
 *Affects:* BV-PEER-006.
 `releaseCatchupLock` treats it as local (by string match). `processCatchupChItem` treats it as a generic failure that charges the peer and rotates the sync peer.
 *Work required:* give it a typed local error and classify it in one place.
+*Partly resolved* by bsv-blockchain/teranode#2022: both `releaseCatchupLock` and `processCatchupChItem` now treat it as LOCAL, because it is an untyped `ERR_PROCESSING` with no peer-fault code (`isLocalProcessingFault`). Regression test: `TestProcessCatchupChItem_LocalProcessingErrorIsNotCharged`. *Still open:* it is local only because it is untyped, and the `"block assembly is behind"` string match in `releaseCatchupLock` no longer fires. *Work required (remaining):* give it a typed local error and remove the string match.
 
 **GAP-BV-027.** `legacy` base URL is accepted, then rejected, in catchup.
 *Affects:* BV-CATCHUP-001, BV-PEER-006.
@@ -1300,7 +1330,7 @@ Nothing prevents `blockvalidation_skipUnspendableTxStorageDuringCatchup` with th
 
 **GAP-BV-033.** Settings that have no effect.
 *Affects:* BV-CONFIG-006.
-`blockvalidation_validation_retry_sleep`, `blockvalidation_check_subtree_from_block_timeout` and `blockvalidation_skipCheckParentMined` are read into settings but never used. (`blockValidationMaxRetries` was on this list; since bsv-blockchain/teranode#1997 it bounds block requeues, see GAP-BV-007.) `blockvalidation_catchupConcurrency` is likewise unused. See also GAP-BV-024. Verified by grep.
+`blockvalidation_validation_retry_sleep`, `blockvalidation_check_subtree_from_block_timeout` and `blockvalidation_skipCheckParentMined` are read into settings but never used. (`blockValidationMaxRetries` was on this list; since bsv-blockchain/teranode#1997 it bounds block requeues, see GAP-BV-007.) `blockvalidation_catchupConcurrency` is likewise unused, and so are ten more keys read into `settings.BlockValidation` that no production code reads (Subtree Validation reads its own `SubtreeValidation.*` copies): `blockvalidation_localSetTxMinedConcurrency`, `blockvalidation_missingTransactionsBatchSize`, `blockvalidation_processTxMetaUsingCache_BatchSize`, `blockvalidation_processTxMetaUsingCache_Concurrency`, `blockvalidation_processTxMetaUsingCache_MissingTxThreshold`, `blockvalidation_subtreeFoundChConcurrency`, `blockvalidation_validateBlockSubtreesConcurrency`, `blockvalidation_batch_missing_transactions`, `blockvalidation_extend_transaction_timeout` and `blockvalidation_get_block_transactions_concurrency`. See also GAP-BV-024. Verified by grep against main.
 *Work required:* implement or remove each, and correct the `longdesc` text.
 
 **GAP-BV-034.** Invalid-block producer failure: process exit in the common case, silent in a corner case.
@@ -1315,13 +1345,15 @@ When the producer cannot be created after its retries (e.g. unreachable broker),
 
 **GAP-BV-036.** Metric defects.
 *Affects:* BV-OBSERVABILITY-008, BV-OBSERVABILITY-009.
-`catchup_ch`, `catchup`, `catchup_blocks_fetched_total` and `fork_blocks_processed_total` are registered but never written. `fork_resolved_total` and `fork_resolution_depth_blocks` are written only by fork-resolution code that is never called (GAP-BV-037). The catchup metrics' `peer_id` label carries the base URL (`catchup.go` ~819, ~1149). The processed-count `priority` label is always `unknown`. The revalidate histograms observe whole seconds by integer division (`BlockValidation.go` ~845, ~883).
+`catchup_ch`, `catchup`, `catchup_blocks_fetched_total` and `fork_blocks_processed_total` are registered but never written (`metrics.go`). The catchup duration and headers-fetched metrics' peer label carries the base URL (`catchup.go` `prometheusCatchupDuration`, `prometheusCatchupHeadersFetched`). The revalidate histograms observe whole seconds by integer division (`BlockValidation.go` `reValidateBlock`, `Microseconds() / 1_000_000`). Verified against main after bsv-blockchain/teranode#2185.
 *Work required:* fix each.
+*No longer part of this gap:* bsv-blockchain/teranode#2185 deleted `fork_resolved_total` and `fork_resolution_depth_blocks` with the fork-resolution code (GAP-BV-037). Since bsv-blockchain/teranode#1997 the processed-count `priority` label is the class the block held when it was taken off the queue (`Server.go` `finishProcessedBlock`), not always `unknown`.
 
-**GAP-BV-037.** Fork manager parts are unwired.
+**GAP-BV-037.** Fork manager parts are unwired. **Retired** by bsv-blockchain/teranode#2185.
 *Affects:* BV-QUEUE-011.
 `CheckForkResolution` is never called, so forks are never Resolved or Orphaned and only the 1-hour inactivity eviction runs. Exceeding `blockvalidation_max_tracked_forks` logs a warning but still queues the block.
 *Work required:* decide on the resolution semantics (Open Question 10) and wire them in.
+*Retired:* bsv-blockchain/teranode#2185 deleted `CheckForkResolution` and the `fork_resolved_total`, `fork_resolution_depth_blocks` and `fork_orphaned_total` metrics, which answers Open Question 10: the fork manager is a concurrency limiter with inactivity eviction, which is what BV-QUEUE-011 requires. Nothing sets the Resolved or Orphaned states any more; they survive only as cleanup cases in `fork_manager.go` `performCleanup`. A block whose fork would exceed `blockvalidation_max_tracked_forks` is still queued, untracked (`Server.go` `queueFetchedBlock`), which BV-QUEUE-011 allows. The text above describes the code before #2185.
 
 **GAP-BV-038.** Documentation drift.
 *Affects:* none normatively; tracked so readers are not misled.
@@ -1357,7 +1389,7 @@ Any error from the ancestor-membership check, including a storage or service fai
 
 **GAP-BV-041.** Queue ageing and skip promotion are evaluated lazily.
 *Affects:* BV-QUEUE-004.
-Effective priority is recomputed only when the queue is re-sorted, and a re-sort is triggered only by an add or a re-queue, not by a skip (`block_priority.go` ~76-93, ~199, ~279-290). A block can therefore age or pass the skip threshold without being promoted until something else is enqueued.
+Effective priority is recomputed only when the queue is re-sorted, and a re-sort is triggered only by an add, a re-queue or a child promotion (`PromoteChildren`, since bsv-blockchain/teranode#1997), not by a skip (`block_priority.go` `sortItems`, `Get`). A block can therefore age or pass the skip threshold without being promoted until something else is enqueued.
 *Work required:* re-sort, or recompute effective priority, on each dequeue.
 
 **GAP-BV-042.** Kafka consumer close is not bounded by the stop deadline.
@@ -1365,13 +1397,13 @@ Effective priority is recomputed only when the queue is re-sorted, and a re-sort
 The invalid-block producer close is raced against the stop context, but the block consumer's `Close()` is not; it is bounded only by the consumer's internal drain timeout (`Server.go` ~1323; `util/kafka/kafka_consumer.go` ~198-229). Not fully confirmed: the internal bound may be short enough in practice.
 *Work required:* race the consumer close against the stop context as well.
 
-**GAP-BV-043.** Internal revalidation leaves a block on the chain after an INVALID ancestor verdict. **Partly resolved** by bsv-blockchain/teranode#2033.
+**GAP-BV-043.** Internal revalidation leaves a block on the chain after an INVALID ancestor verdict. **Partly resolved** by bsv-blockchain/teranode#2033 and bsv-blockchain/teranode#2174.
 *Affects:* BV-OPTIMISTIC-005, BV-VERDICT-009.
 The internal revalidation path ends by returning the ancestor-membership check's result without acting on it (`BlockValidation.go` ~3447). An INVALID verdict from that check is retried 3 times (~856), then logged as "retries exhausted". An optimistically added block found invalid this way stays on the chain, and nothing is published. Verified by reading the code.
 *Work required:* invalidate and publish on an INVALID verdict from that check, as the other branches of the same function do.
-*Resolved part:* bsv-blockchain/teranode#2033 invalidates and publishes when the parent is on the main chain; regression test: `TestReValidateBlock_InvalidAncestorVerdictInvalidatesAndPublishes` and the other `TestReValidateBlock_InvalidAncestorVerdict*` tests.
-*Still open:* the fix acts only when `ancestorVerdictIsSound` holds, that is when the parent is on the main chain (`BlockValidation.go` ~3882, ~3901). Otherwise the INVALID verdict is still returned unacted, and the block stays on the chain with no notification, which BV-OPTIMISTIC-005 and BV-VERDICT-009 forbid. On the acted branch, a failed `markBlockAsInvalid` is only logged (~3883-3885), so a storage error is swallowed and the block stays on the chain.
-*Work required (remaining):* decide the INVALID verdict off the main chain from the block's own ancestor chain, not the main chain, and act on it; return a failed `markBlockAsInvalid` to the caller.
+*Resolved part:* bsv-blockchain/teranode#2033 invalidates and publishes on an INVALID ancestor verdict, and bsv-blockchain/teranode#2174 removed its main-chain condition (`ancestorVerdictIsSound`): `reValidateBlock` now acts on the verdict whichever chain the parent is on, because `checkOldBlockIDs` asks whether a parent's block is an ancestor of this block. Regression tests: `TestReValidateBlock_InvalidAncestorVerdictInvalidatesAndPublishes` and the other `TestReValidateBlock_InvalidAncestorVerdict*` tests.
+*Still open:* a failed `markBlockAsInvalid` is only logged (`BlockValidation.go` `reValidateBlock`, the `checkOldBlockIDs` branch), so a storage error is swallowed and the block stays on the chain with no notification.
+*Work required (remaining):* return a failed `markBlockAsInvalid` to the caller, so the worker retries.
 
 **GAP-BV-044.** Catchup tries alternatives after an INVALID verdict on an unbound transaction list.
 *Affects:* BV-PEER-005.
@@ -1404,7 +1436,7 @@ No block-level sigop accumulator exists outside the legacy service. On mainnet e
 
 **GAP-BV-049.** BIP30 and coinbase-collision handling differ from bitcoin-sv.
 *Affects:* BV-BODY-022.
-Teranode does not enforce BIP30 below `BIP0034Height`, and when a coinbase's ID collides with an existing one, it silently skips re-creating it (`services/blockassembly/subtreeprocessor/SubtreeProcessor.go` ~6596-6601), leaving the earlier outputs in place where bitcoin-sv would overwrite them. Reachable only below the checkpoints or at the known future coinbase-collision heights (from ~1,983,702). Low impact.
+Teranode does not enforce BIP30 below `BIP0034Height`, and when a coinbase's ID collides with an existing one, it silently skips re-creating it (`services/blockassembly/subtreeprocessor/SubtreeProcessor.go` `processCoinbaseUtxos`), leaving the earlier outputs in place where bitcoin-sv would overwrite them. Reachable only below the checkpoints or at the known future coinbase-collision heights (from ~1,983,702). Low impact.
 *Work required:* match bitcoin-sv's behaviour at those heights.
 *Proof:* not on this branch. The failing proofs are `TestKnownDefect_BlockRepeatingUnspentAncestorTxIDBelowBIP34_IsRejected` and `TestKnownDefect_CollidingCoinbase_LeavesNoEarlierCoinbaseOutputs` in bsv-blockchain/teranode#2124 (test task T08), `services/blockvalidation/bip30_duplicate_txid_test.go`. Not covered: the 91842/91880 exemption (a faked height cannot match the block hashes) and re-creation of a fully spent transaction (Open Question 23).
 
@@ -1422,8 +1454,8 @@ Any duplicate transaction ID yields `ERR_BLOCK_CORRUPT`, including duplicates in
 
 **GAP-BV-052.** The fork-depth limit reports peers malicious and is not surfaced.
 *Affects:* BV-CATCHUP-011.
-A fork deeper than `CoinbaseMaturity` is reported malicious regardless of its work (`catchup.go` ~1040), and nothing tells the operator that a heavier chain was refused. A comment in the Blockchain SQL store calls such reorgs "consensus-invalid" (`stores/blockchain/sql/sql.go` ~1553), which is incorrect: bitcoin-sv has no maximum reorg depth.
-*Work required:* surface the refusal (log and metric); decide on the malicious report (Open Question 4); correct the comment.
+A fork deeper than `CoinbaseMaturity` is reported malicious regardless of its work (`catchup.go` ~1040), and nothing tells the operator that a heavier chain was refused. (The misleading Blockchain SQL store comment that called such reorgs "consensus-invalid" was removed by bsv-blockchain/teranode#2204.)
+*Work required:* surface the refusal (log and metric); decide on the malicious report (Open Question 4).
 
 **GAP-BV-053.** Scaling Test Network difficulty differs from bitcoin-sv.
 *Affects:* BV-HEADER-001, BV-HEADER-004.
@@ -1452,11 +1484,13 @@ When reverting an invalid block's mined tags, `UpdateTxMinedStatus` logs `SetMin
 *Work required:* return the error on the revert path, so `mined_set` stays false and the sweep retries.
 *Resolved:* fixed by bsv-blockchain/teranode#2016; regression test: `TestMinedTagRevertFailure_LeavesMinedSetUnsetAndSurfacesError`. The text above describes the behaviour before the fix.
 
-**GAP-BV-058.** Flag updates are unconditional and can overwrite an invalidation or revalidation.
+**GAP-BV-058.** Flag updates are unconditional and can overwrite an invalidation or revalidation. **Partly resolved** by bsv-blockchain/teranode#2018.
 *Affects:* BV-COMMIT-005, BV-COMMIT-011, BV-REVALIDATE-003.
 `SetBlockMinedSet` and `SetBlockSubtreesSet` are plain `UPDATE … WHERE hash = $1` (`stores/blockchain/sql/SetBlockMinedSet.go`, `SetBlockSubtreesSet.go`). A tagging run in flight when the block is invalidated or revalidated sets `mined_set = true` after `InvalidateBlock` or `RevalidateBlock` cleared it. The `BlockMinedUnset` notification for a hash already being processed is skipped and not re-queued, and the sweep no longer lists the block. Result: an invalid block with stale tags, or a revalidated block with no tags, both with `mined_set = true`. Derived from the code; not reproduced.
 *Work required:* make the flag write conditional on the block's state at the start of the run (e.g. compare-and-set on `invalid` and a generation counter), and re-queue a skipped unset.
-*Proof:* confirmed by `TestKnownDefect_InFlightMinedTagging_DoesNotOverwriteInvalidation`, which fails today (`make test-bvgaps`).
+*Resolved part:* the `mined_set` write. Since bsv-blockchain/teranode#2018, `SetBlockMinedSet` takes the `mined_set_gen` the tagging run read when it started, and refuses the write once `ClearBlockMinedSet`, `InvalidateBlock` or `RevalidateBlock` has bumped it (`stores/blockchain/sql/SetBlockMinedSet.go`). A `BlockMinedUnset` notification is now always queued (`enqueueSetMined`, which never blocks). Regression tests: the `TestGapBV058_*` tests (`gap_bv058_test.go`). The proof test this spec carried passes now and was removed as a duplicate.
+*Still open:* `SetBlockSubtreesSet` is still a plain `UPDATE … WHERE hash = $1` (`stores/blockchain/sql/SetBlockSubtreesSet.go`), so a write in flight can still overwrite a reset of `subtrees_set`.
+*Work required (remaining):* make the `subtrees_set` write conditional in the same way.
 
 **GAP-BV-059.** The subtrees sweep is not single-flight.
 *Affects:* BV-COMMIT-008.
@@ -1481,6 +1515,16 @@ The mined-not-set sweep is guarded by a compare-and-swap (`BlockValidation.go` ~
 *Work required:* on the override range, compute the parent's median-time-past for quick validation (or route those blocks through full validation), and enforce the post-CSV cutoff.
 *Proof:* not on this branch. The failing proof is `TestKnownDefect_QuickValidationAboveCheckpointOverride_RejectsNonFinalCoinbaseTimeLock` in bsv-blockchain/teranode#2124 (test task T08), `services/blockvalidation/quick_validate_override_coinbase_time_lock_test.go`. Tracked as bitcoin-sv/teranode#5001.
 
+**GAP-BV-063.** No startup floor on `excessiveblocksize`.
+*Affects:* BV-BODY-018.
+A limit between 1 and 999,999 bytes is accepted and applied: nothing checks it at startup, and `excessiveBlockSizeDeclined` (`Server.go`) declines every block above it, including blocks bitcoin-sv must accept. Verified against main.
+*Work required:* refuse to start when 0 < `excessiveblocksize` < 1,000,000.
+
+**GAP-BV-064.** `ProcessBlock` with a non-legacy `base_url` and a missing parent returns success.
+*Affects:* BV-INGRESS-017.
+`processBlockFound` hands the block to catchup and returns nil (`Server.go` `processBlockFound`, the missing-parent branch); only `base_url = legacy` gets `ERR_SERVICE_ERROR`. A synchronous `ProcessBlock` caller with an http(s) `base_url` therefore sees success for a block that was not stored. `BlockFound` with `wait_to_complete` is not affected, because its answer is read from the store. No in-tree caller sends a non-legacy URL, but the gRPC API accepts one. Verified against main.
+*Work required:* return the not-committed catchup error for every synchronous caller.
+
 ---
 
 ## Open Questions
@@ -1496,7 +1540,7 @@ These are unresolved design questions, distinct from Conformance Gaps.
 7. `header_proven` and the `legacy` default for an empty `base_url` are trusted from any caller that can reach the gRPC port, which has no application-level authentication (mutual TLS is available through `securityLevelGRPC` ≥ 2 but is not required). Should `ProcessBlock` be restricted to authenticated internal callers, given that a fabricated below-checkpoint block on that route gets only the version-floor and binding checks?
 8. Should mismatched Legacy / Block Validation route settings (BV-QUICK-028) be detected at startup? In a single-process deployment both services read one settings object, so a mismatch needs separate settings contexts or separate processes; in that case neither service can read the other's settings today.
 9. Should `RevalidateBlock` also clear descendants that are invalid only by inheritance? `InvalidateBlock` is recursive and `RevalidateBlock` is not.
-10. Is the fork manager's Resolved / Orphaned lifecycle wanted at all, or should the spec reduce it to "concurrency limiter plus inactivity eviction"?
+10. Is the fork manager's Resolved / Orphaned lifecycle wanted at all, or should the spec reduce it to "concurrency limiter plus inactivity eviction"? **Answered:** limiter plus eviction. bsv-blockchain/teranode#2185 deleted the resolution code (GAP-BV-037, retired).
 11. The hard-coded values (10 block-found workers, the 10 / 3 backlog trigger, the 5 s retry delay, the 3-alternative cap, the 10-minute per-block catchup cooldown, the 5 s malicious-status cache, the 30 s block-fetch timeout, the 1024-pair cap tracking): which should become settings?
 12. Should a block-found or Kafka base URL be validated with the same SSRF-guarding URL validator as `ProcessBlock`, rather than relying on the dial-time guard?
 13. The Go client maps readiness failure to HTTP 424 while the server reports 503. Which code is the contract for callers of `Client.Health`?

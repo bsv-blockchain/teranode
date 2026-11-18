@@ -102,7 +102,7 @@ func newMinedTagHarness(t *testing.T, ctx context.Context, utxoStoreName string)
 	require.NoError(t, err)
 
 	// The store writes genesis unmined, and ValidateBlock waits for the parent to be mined.
-	require.NoError(t, chain.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash))
+	require.NoError(t, chain.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash, 0))
 
 	validation := &BlockValidation{
 		logger:                        logger,
