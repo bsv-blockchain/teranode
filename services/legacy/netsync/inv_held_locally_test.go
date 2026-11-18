@@ -257,6 +257,35 @@ func TestHandleInvMsg_ARecentlyFailedBlockIsNotAskedFor(t *testing.T) {
 	requireAskedOnceTheMarkIsGone(t, sm, rec, failed)
 }
 
+// The re-ask a skip leaves is due when the mark expires, measured from when the
+// block was marked, not from when the skipped announcement arrived. A block marked
+// at minute zero whose one announcement arrives at minute nine is otherwise not
+// asked for until minute nineteen. The mark here lasts a minute, so the block must
+// be asked for within a sweep of that minute, not ten minutes after the skip.
+func TestHandleInvMsg_AMarkedBlockIsAskedForWhenItsMarkExpires(t *testing.T) {
+	failed := chainhash.Hash{0x80}
+	control := chainhash.Hash{0x81}
+
+	sm, announcer, _, rec, _ := newInvPathManager(t)
+	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](time.Minute)
+	t.Cleanup(sm.recentlyFailedBlocks.Stop)
+
+	markedAt := time.Now()
+	sm.recentlyFailedBlocks.Set(failed, struct{}{})
+
+	sm.handleInvMsg(&invMsg{inv: blockInv(failed, control), peer: announcer})
+	requireOnlyControlAsked(t, sm, rec, failed, control)
+
+	// The mark has gone by the sweep after its expiry.
+	sm.recentlyFailedBlocks.Delete(failed)
+
+	before := rec.getDataCount()
+
+	sm.sendDueReAsks(markedAt.Add(time.Minute + time.Second))
+	require.True(t, WaitUntil(func() bool { return rec.askedForSince(before, failed) }, 5*time.Second),
+		"asked for at the first sweep after the mark expires")
+}
+
 // The end-to-end test above passes on the drain's check alone, so this pins
 // processInvMsg's own: a marked block is never queued, which spares every
 // announcement the chain round trip and the disk read before the queue. The

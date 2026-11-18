@@ -962,19 +962,6 @@ func (sm *SyncManager) takeLocalFaultDrain(hash chainhash.Hash) bool {
 	return true
 }
 
-// recentlyFailed reports whether hash is marked in recentlyFailedBlocks. A block
-// marked there is not asked for again while the mark stands: a drain of a copy that
-// met a panic the mark was set for (recoveredSinkPanic) must not ask for it anew.
-func (sm *SyncManager) recentlyFailed(hash chainhash.Hash) bool {
-	if sm.recentlyFailedBlocks == nil {
-		return false
-	}
-
-	_, failed := sm.recentlyFailedBlocks.Get(hash)
-
-	return failed
-}
-
 // reAskBlockFromPeer asks peer for one block again with a getdata, recording the
 // request in the ledger first so the body passes the gate when it comes. Used above
 // the final checkpoint, where the headers-first scheduler is off and an inv is not

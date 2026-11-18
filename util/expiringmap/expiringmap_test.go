@@ -430,3 +430,32 @@ func TestExpiringMap_GetAndDelete(t *testing.T) {
 		require.Equal(t, int32(1), winners.Load())
 	})
 }
+
+// Expiry reports when a key set now stops being returned, which is what a caller
+// waiting on the key's expiry needs, and reports nothing for a key that is absent
+// or has expired.
+func TestExpiringMap_Expiry(t *testing.T) {
+	m := New[string, int](time.Hour)
+	defer m.Stop()
+
+	before := time.Now()
+	m.Set("a", 1)
+	after := time.Now()
+
+	expiry, ok := m.Expiry("a")
+	require.True(t, ok)
+	require.False(t, expiry.Before(before.Add(time.Hour)))
+	require.False(t, expiry.After(after.Add(time.Hour)))
+
+	_, ok = m.Expiry("missing")
+	require.False(t, ok, "an absent key has no expiry")
+
+	short := New[string, int](time.Millisecond)
+	defer short.Stop()
+
+	short.Set("a", 1)
+	time.Sleep(5 * time.Millisecond)
+
+	_, ok = short.Expiry("a")
+	require.False(t, ok, "an expired key has no expiry, as Get does not return it")
+}
