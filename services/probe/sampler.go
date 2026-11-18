@@ -642,6 +642,18 @@ func (s *Sampler) record(snap snapshot.Snapshot) {
 	s.ringNext = (s.ringNext + 1) % s.ringCap
 }
 
+func (s *Sampler) recordEvaluated(snap snapshot.Snapshot) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.ring {
+		if s.ring[i].Time.Equal(snap.Time) {
+			s.ring[i] = cloneSnapshot(snap)
+			return
+		}
+	}
+}
+
 func (s *Sampler) offer(snap snapshot.Snapshot) {
 	select {
 	case s.updates <- snap:
