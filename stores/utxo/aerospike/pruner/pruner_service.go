@@ -452,7 +452,8 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 	}
 
 	// Every parent of a deleted record whose output still names the child gets
-	// one filtered deletedChildren map write (buildVerifiedMarkerRecords); a
+	// one marker write, native sub-op 15 or the filtered deletedChildren map
+	// write (buildVerifiedMarkerRecords); a
 	// parent whose output names a different spender gets none. Do not skip
 	// parents through a probabilistic "already pruned" set: a false positive
 	// drops the replay marker on a live parent (see #1701). A missing parent
@@ -2398,7 +2399,8 @@ func (p *markingPlan) withNativeRefusals(updates map[string]*parentUpdateInfo) m
 // input it spent, the uncontested ones too, so it is never held back for an
 // output that does not name it, and a replay of it meets the winner's spend and
 // is stored as conflicting again. The SQL pruner exempts conflicting rows the
-// same way.
+// same way. It holds a child back per input where this decides per parent
+// record: see holdBackQuery.
 //
 // A parent record that is gone needs no marker and is dropped. Any other read
 // failure, including a record the batch never answered, holds back that record's
