@@ -166,30 +166,32 @@ func utxoMarkerFileOptions() []options.FileOption {
 // block store. known is true when the marker is present and decodes as the
 // decimal height the persister writes; parseErr is true when it is present but
 // undecodable (which bricks the persister's next start until removed). A missing
-// marker, an absent block store, or a read failure all return (0,false,false):
-// nothing actionable. Read in preflight so the operator learns the plan before
-// the destructive phases run, not after.
-func (e *env) readUTXOPersisterMarker(ctx context.Context) (height uint64, raw string, known, parseErr bool) {
+// marker returns (0,"",false,false,nil): nothing actionable. An absent block
+// store or a read failure other than not-found also returns nothing actionable
+// but sets readErr, so a caller that must delete the marker can refuse to go on.
+// Read in preflight so the operator learns the plan before the destructive
+// phases run, not after.
+func (e *env) readUTXOPersisterMarker(ctx context.Context) (height uint64, raw string, known, parseErr bool, readErr error) {
 	if e.blockStore == nil {
-		return 0, "", false, false
+		return 0, "", false, false, errors.NewConfigurationError("the block store is not open")
 	}
 
 	b, err := e.blockStore.Get(ctx, nil, fileformat.FileTypeDat, utxoMarkerFileOptions()...)
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
-			return 0, "", false, false
+			return 0, "", false, false, nil
 		}
 		e.logger.Warnf("could not read the utxo-persister lastProcessed marker: %v", err)
-		return 0, "", false, false
+		return 0, "", false, false, err
 	}
 
 	raw = strings.TrimSpace(string(b))
 
 	h, perr := strconv.ParseUint(raw, 10, 32)
 	if perr != nil {
-		return 0, raw, false, true
+		return 0, raw, false, true, nil
 	}
-	return h, raw, true, false
+	return h, raw, true, false, nil
 }
 
 // deleteUTXOPersisterLastProcessed removes the UTXO persister's lastProcessed
@@ -240,7 +242,7 @@ func (e *env) deleteUTXOPersisterLastProcessed(ctx context.Context, pf *prefligh
 
 	raw := strings.TrimSpace(string(b))
 	if raw != pf.utxoMarkerRaw {
-		e.logger.Warnf("the utxo-persister lastProcessed marker changed after preflight reported it (was %q, now %q); NOT deleting it. Re-run the rewind to act on the current value", pf.utxoMarkerRaw, raw)
+		e.logger.Warnf("the utxo-persister lastProcessed marker changed after preflight reported it (was %q, now %q); NOT deleting it. Re-run the rewind to act on the current value", pf.utxoMarkerRaw, raw) // urlsafe: raw is the utxo-persister lastProcessed marker (a block height), not a URL
 		return nil
 	}
 
@@ -252,7 +254,7 @@ func (e *env) deleteUTXOPersisterLastProcessed(ctx context.Context, pf *prefligh
 	// has the same safe outcome as the above-target case.
 	if !e.opts.ResetUTXOPersister {
 		if parseErr != nil {
-			e.logger.Warnf("utxo-persister lastProcessed marker %q is unparseable and will block the persister's next start; re-run with --reset-utxo-persister to delete it (safe only with full delta history to genesis), or fix <blockstore>/lastProcessed.dat by hand", raw)
+			e.logger.Warnf("utxo-persister lastProcessed marker %q is unparseable and will block the persister's next start; re-run with --reset-utxo-persister to delete it (safe only with full delta history to genesis), or fix <blockstore>/lastProcessed.dat by hand", raw) // urlsafe: raw is the utxo-persister lastProcessed marker (a block height), not a URL
 		} else {
 			e.logger.Warnf("utxo-persister lastProcessed marker is %d, above target %d; LEAVING it in place. If this node re-syncs the same blocks the marker recovers by itself once the tip passes it; a reset is needed only if the chain at that height changes. Deleting it forces a rebuild from genesis, safe ONLY if this node has full per-block delta history to genesis (a seeded node has none below its seed height and will stall), so pass --reset-utxo-persister only in that case; otherwise reset the persister by hand.", existing, pf.target)
 		}
@@ -265,7 +267,7 @@ func (e *env) deleteUTXOPersisterLastProcessed(ctx context.Context, pf *prefligh
 	}
 
 	if parseErr != nil {
-		e.logger.Infof("deleted the unparseable utxo-persister lastProcessed marker %q; the persister will rebuild from genesis on its next start", raw)
+		e.logger.Infof("deleted the unparseable utxo-persister lastProcessed marker %q; the persister will rebuild from genesis on its next start", raw) // urlsafe: raw is the utxo-persister lastProcessed marker (a block height), not a URL
 	} else {
 		e.logger.Infof("deleted the utxo-persister lastProcessed marker (was %d, above target %d); the persister will rebuild from genesis on its next start", existing, pf.target)
 	}

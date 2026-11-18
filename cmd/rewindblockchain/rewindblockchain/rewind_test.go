@@ -1891,7 +1891,8 @@ func TestReportUTXOPersisterPlan_ResolvesMainChainHashAndStaleFlag(t *testing.T)
 
 	t.Run("above target resolves the main-chain hash and is stale", func(t *testing.T) {
 		writeLastProcessed(t, ctx, blockStore, "7")
-		stale, hash, raw := e.reportUTXOPersisterPlan(ctx, 4)
+		stale, hash, raw, err := e.reportUTXOPersisterPlan(ctx, 4)
+		require.NoError(t, err)
 		require.True(t, stale)
 		require.Equal(t, "7", raw, "Phase 3 checks the marker still holds this value")
 		require.NotNil(t, hash)
@@ -1901,7 +1902,8 @@ func TestReportUTXOPersisterPlan_ResolvesMainChainHashAndStaleFlag(t *testing.T)
 
 	t.Run("unparseable marker is stale with no hash", func(t *testing.T) {
 		writeLastProcessed(t, ctx, blockStore, "banana")
-		stale, hash, raw := e.reportUTXOPersisterPlan(ctx, 4)
+		stale, hash, raw, err := e.reportUTXOPersisterPlan(ctx, 4)
+		require.NoError(t, err)
 		require.True(t, stale)
 		require.Equal(t, "banana", raw)
 		require.Nil(t, hash)
@@ -1909,10 +1911,65 @@ func TestReportUTXOPersisterPlan_ResolvesMainChainHashAndStaleFlag(t *testing.T)
 
 	t.Run("marker at or below target is not stale", func(t *testing.T) {
 		writeLastProcessed(t, ctx, blockStore, "3")
-		stale, hash, raw := e.reportUTXOPersisterPlan(ctx, 4)
+		stale, hash, raw, err := e.reportUTXOPersisterPlan(ctx, 4)
+		require.NoError(t, err)
 		require.False(t, stale)
 		require.Empty(t, raw)
 		require.Nil(t, hash)
+	})
+}
+
+// getFailsStore is a block store whose Get fails with something other than
+// not-found, as a permission or I/O error would.
+type getFailsStore struct{ blob.Store }
+
+func (getFailsStore) Get(context.Context, []byte, fileformat.FileType, ...options.FileOption) ([]byte, error) {
+	return nil, errors.NewStorageError("input/output error")
+}
+
+// With --reset-utxo-persister the operator asked for the marker to be reset, so a
+// marker that cannot be read (no block store, or a read failure that is not
+// "not found") fails preflight before any destructive phase. Without the flag the
+// marker is best-effort and the plan just reports "nothing to reset".
+func TestReportUTXOPersisterPlan_ResetFlagRefusesAnUnreadableMarker(t *testing.T) {
+	ctx := context.Background()
+	reset := Options{ResetUTXOPersister: true}
+
+	t.Run("no block store, flag set, is an error", func(t *testing.T) {
+		e := &env{logger: logger(), opts: reset}
+		_, _, _, err := e.reportUTXOPersisterPlan(ctx, 4)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "--reset-utxo-persister")
+	})
+
+	t.Run("read failure, flag set, is an error", func(t *testing.T) {
+		e := &env{logger: logger(), blockStore: getFailsStore{memory.New()}, opts: reset}
+		_, _, _, err := e.reportUTXOPersisterPlan(ctx, 4)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "input/output error")
+	})
+
+	t.Run("no block store, no flag, is best-effort", func(t *testing.T) {
+		e := &env{logger: logger()}
+		stale, hash, raw, err := e.reportUTXOPersisterPlan(ctx, 4)
+		require.NoError(t, err)
+		require.False(t, stale)
+		require.Nil(t, hash)
+		require.Empty(t, raw)
+	})
+
+	t.Run("read failure, no flag, is best-effort", func(t *testing.T) {
+		e := &env{logger: logger(), blockStore: getFailsStore{memory.New()}}
+		stale, _, _, err := e.reportUTXOPersisterPlan(ctx, 4)
+		require.NoError(t, err)
+		require.False(t, stale)
+	})
+
+	t.Run("a missing marker with the flag set is not an error", func(t *testing.T) {
+		e := &env{logger: logger(), blockStore: memory.New(), opts: reset}
+		stale, _, _, err := e.reportUTXOPersisterPlan(ctx, 4)
+		require.NoError(t, err)
+		require.False(t, stale)
 	})
 }
 
