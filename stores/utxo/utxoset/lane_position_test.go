@@ -670,6 +670,58 @@ func TestLanePositionOnTheNettedBelowCheckpointWrite(t *testing.T) {
 	require.ElementsMatch(t, given, got, "each record its own position")
 }
 
+// Ignoring either netted route's position error must not let a list spend its roots or create
+// records without positions.
+func TestNettedMultiWithoutLanePositionsWritesNothing(t *testing.T) {
+	for _, belowCheckpoint := range []bool{false, true} {
+		name := "families"
+		if belowCheckpoint {
+			name = "below checkpoint"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			var s *Store
+			if belowCheckpoint {
+				s = newBodySkipLaneStore(t)
+			} else {
+				s, _ = newUncheckpointedLaneStore(t)
+			}
+
+			const height = 831
+			w := tests.BuildMultiWorkload(t, 0xda, 1, 1)
+			w.StoreRoots(t, s, height-1)
+			list := nettedFamily(t, w)
+			opts := []utxo.CreateOption{utxo.WithIgnoreLocked(true)}
+			if belowCheckpoint {
+				list = outpointOnly(list)
+				opts = belowCheckpointOptions(height)
+			}
+
+			prepared, err := utxo.PrepareSpendAndCreateMulti(list, opts...)
+			require.NoError(t, err)
+			below, err := s.nettedBelowGate(prepared.Options)
+			require.NoError(t, err)
+			require.Equal(t, belowCheckpoint, below, "the list selects the intended route")
+			require.True(t, s.canNet(prepared.Options))
+
+			before := readNetState(t, s, ctx, w.Roots, list, height)
+			require.Equal(t, []string{"", ""}, w.RootSpends(t, s), "the root starts unspent")
+			s.SetLanePositionSource(tests.NewScriptedLanePositions())
+
+			results, err := s.SpendAndCreateMulti(ctx, list, height, opts...)
+			require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+			require.Empty(t, results)
+			require.Equal(t, before, readNetState(t, s, ctx, w.Roots, list, height), "no coins, journal or mined records changed")
+			require.Equal(t, []string{"", ""}, w.RootSpends(t, s), "the root stays unspent")
+			for _, tx := range list {
+				_, err := s.Get(ctx, tx.TxIDChainHash(), fields.LanePosition)
+				require.ErrorIs(t, err, errors.ErrTxNotFound, "no transaction of the list was stored")
+			}
+		})
+	}
+}
+
 // TestLanePositionInABatchMixingMinedAndUnmined: one flush can carry both create statements, which
 // makes each half a projection of the plan. Each half must keep its own positions.
 func TestLanePositionInABatchMixingMinedAndUnmined(t *testing.T) {

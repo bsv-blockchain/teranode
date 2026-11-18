@@ -71,10 +71,11 @@ const (
 // On SQLite every lease call takes it, because one process owns the file and concurrent writers on
 // a shared cache fail with a table lock instead of waiting.
 
-// OpenLaneLease closes stale leases, then takes a free lane with a first grant of GrantMin
-// positions. A lane with no lease row and no hand-out comes first, lowest number first; after that
-// the lane closed longest ago, where a lane that has hand-outs but no lease row counts as closed at
-// its newest hand-out. With no lane free it returns a service error, and the caller retries.
+// OpenLaneLease closes stale leases, then takes a free lane with a first grant targeting GrantMin
+// positions, capped by settings.MaxLaneGrant and the positions remaining in the lane. A lane with
+// no lease row and no hand-out comes first, lowest number first; after that the lane closed longest
+// ago, where a lane that has hand-outs but no lease row counts as closed at its newest hand-out.
+// With no lane free it returns a service error, and the caller retries.
 // lapsed is how many stale leases it closed first, for the same metric the sweep feeds.
 func (s *SQL) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lane.LeaseID, lane.Grant, int, error) {
 	if req.Holder == "" {
@@ -140,9 +141,9 @@ func (s *SQL) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lan
 }
 
 // RenewLaneLease records a renewal at the database's now. With WantGrant it also records the next
-// grant, sized at Rate × GrantDuration and at least GrantMin, with the request's settles pair on its
-// hand-out row. A lease that is closed, or is not the lane's current one, gets closed = true and
-// nothing is written.
+// grant, targeting Rate × GrantDuration and at least GrantMin, capped by settings.MaxLaneGrant and
+// the positions remaining in the lane, with the request's settles pair on its hand-out row. A lease
+// that is closed, or is not the lane's current one, gets closed = true and nothing is written.
 func (s *SQL) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (grant lane.Grant, granted, closed bool, err error) {
 	if req.WantGrant && req.GrantMin == 0 {
 		return lane.Grant{}, false, false, errors.NewInvalidArgumentError("lane grant size must be at least 1")
@@ -444,9 +445,9 @@ func (s *SQL) recordGrant(ctx context.Context, tx *sql.Tx, id lane.LeaseID, l ui
 	return lane.Grant{Lane: l, First: first, Last: last}, nil
 }
 
-// grantSize is two minutes of the reported rate, by default, and never less than the minimum. It
-// sizes on whole seconds of d, so a d under one second gives the minimum. No grant holds more than
-// settings.MaxLaneGrant, so neither a huge reported rate nor a huge minimum can use up a lane at once.
+// grantSize targets two minutes of the reported rate, by default, and at least the minimum, capped
+// by settings.MaxLaneGrant. It sizes on whole seconds of d, so a positive d under one second gives
+// the capped minimum. recordGrant also caps the result at the positions remaining in the lane.
 func grantSize(rate uint64, d time.Duration, minimum uint64) uint64 {
 	minimum = min(minimum, settings.MaxLaneGrant)
 

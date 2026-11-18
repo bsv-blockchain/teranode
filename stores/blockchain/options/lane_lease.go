@@ -12,7 +12,7 @@ type LaneLeaseOpen struct {
 	Holder string
 	// Height is the best block height at the time, recorded for operators.
 	Height uint32
-	// GrantMin is the size of the first grant.
+	// GrantMin requests the first grant's size, capped by the grant limit and positions left.
 	GrantMin uint64
 	// CloseAfter is the close time of the sweep that runs, under the hand-out lock, before a lane is chosen.
 	CloseAfter time.Duration
@@ -31,7 +31,7 @@ type LaneLeaseRenew struct {
 	Settles lane.Settles
 	// Height is the best block height at the time, recorded with a grant.
 	Height uint32
-	// GrantMin is the fewest positions in a grant.
+	// GrantMin requests a minimum grant size, capped by the grant limit and positions left.
 	GrantMin uint64
 	// GrantDuration is how long a grant should last at Rate.
 	GrantDuration time.Duration
