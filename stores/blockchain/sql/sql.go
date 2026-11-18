@@ -2007,7 +2007,8 @@ func (s *SQL) rebuildOnMainChainFlagFrom(ctx context.Context, full bool, floor i
 	// writes. Two callers run without slowPathMu held: the startup goroutine (see
 	// New) and, on PostgreSQL, the background repair's full walk (see
 	// attemptOnMainChainRepair); Invalidate/Revalidate hold slowPathMu and StoreBlock
-	// holds it for its whole duration, so in this process they cannot conflict. Those
+	// holds it for each attempt, releasing it only from an attempt that committed nothing,
+	// so in this process they cannot conflict. Those
 	// two can, however, race a slow-path write to the same rows, and any walk can race a
 	// chain write from another process, which the check of the shared chain-write row
 	// turns into 40001 or 55P03 (see chainWriteStateKey) — so retry the whole
