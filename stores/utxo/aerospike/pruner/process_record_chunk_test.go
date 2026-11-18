@@ -97,70 +97,88 @@ func TestProcessRecordChunk_RecordWithoutInputs(t *testing.T) {
 	require.Equal(t, 0, skipped)
 }
 
-// TestProcessRecordChunk_MissingExternalTxIsSkippedNotFatal proves that a record
-// whose external blob has vanished is retained on its own without aborting the
-// chunk. Before the fix this returned a ProcessingError, which PruneWithPartitions
-// classifies as a non-timeout error and never retries, so one bad record stopped
-// all pruning permanently.
-func TestProcessRecordChunk_MissingExternalTxIsSkippedNotFatal(t *testing.T) {
+// TestProcessRecordChunk_UnresolvableInputs covers a record whose input references cannot be
+// read. A record whose external blobs are both gone is deleted, as on main: it was left behind
+// by pruner_skipDeletions or an unanswered delete, after its parents were marked, and retaining
+// it would rescan it on every block for good. Any other failure retains the record on its own,
+// without aborting the chunk, and counts it. Before the retention fix such a failure returned a
+// ProcessingError, which PruneWithPartitions classifies as a non-timeout error and never
+// retries, so one bad record stopped all pruning permanently.
+func TestProcessRecordChunk_UnresolvableInputs(t *testing.T) {
 	ctx := context.Background()
-	svc := newTestService(t)
-	svc.external = memory.New()
 
-	var missingTxID, healthyTxID chainhash.Hash
-	for i := range missingTxID {
-		missingTxID[i] = 0x11
+	var externalTxID, healthyTxID chainhash.Hash
+	for i := range externalTxID {
+		externalTxID[i] = 0x11
 		healthyTxID[i] = 0x22
 	}
 
-	missingKey, keyErr := aerospike.NewKey(svc.namespace, svc.set, missingTxID[:])
-	require.NoError(t, keyErr)
+	chunkOf := func(t *testing.T, svc *Service, bad aerospike.BinMap) []*aerospike.Result {
+		t.Helper()
 
-	healthyKey, keyErr := aerospike.NewKey(svc.namespace, svc.set, healthyTxID[:])
-	require.NoError(t, keyErr)
+		badKey, keyErr := aerospike.NewKey(svc.namespace, svc.set, externalTxID[:])
+		require.NoError(t, keyErr)
 
-	// Neither the .tx nor the .outputs blob exists for missingTxID, so its input
-	// references cannot be recovered and its parents cannot be marked.
-	exists, err := svc.external.Exists(ctx, missingTxID[:], fileformat.FileTypeOutputs)
-	require.NoError(t, err)
-	require.False(t, exists)
+		healthyKey, keyErr := aerospike.NewKey(svc.namespace, svc.set, healthyTxID[:])
+		require.NoError(t, keyErr)
 
-	chunk := []*aerospike.Result{
-		{
-			Record: &aerospike.Record{
-				Key: missingKey,
-				Bins: aerospike.BinMap{
-					svc.fieldTxID:     missingTxID.CloneBytes(),
-					svc.fieldExternal: true,
-				},
-			},
-		},
-		{
-			Record: &aerospike.Record{
-				Key: healthyKey,
-				Bins: aerospike.BinMap{
-					svc.fieldTxID:     healthyTxID.CloneBytes(),
-					svc.fieldInputs:   []interface{}{},
-					svc.fieldExternal: false,
-				},
-			},
-		},
+		return []*aerospike.Result{
+			{Record: &aerospike.Record{Key: badKey, Bins: bad}},
+			{Record: &aerospike.Record{Key: healthyKey, Bins: aerospike.BinMap{
+				svc.fieldTxID:     healthyTxID.CloneBytes(),
+				svc.fieldInputs:   []interface{}{},
+				svc.fieldExternal: false,
+			}}},
+		}
 	}
 
-	before := testutil.ToFloat64(prometheusUtxoInputResolutionErrors)
+	t.Run("a record whose external blobs are both gone is deleted", func(t *testing.T) {
+		svc := newTestService(t)
+		svc.external = memory.New()
 
-	processed, skipped, err := svc.processRecordChunk(ctx, 1000, chunk)
-	require.NoError(t, err, "an unresolvable record must not fail the whole chunk")
-	require.Equal(t, 1, processed, "the healthy record in the same chunk must still be pruned")
+		exists, err := svc.external.Exists(ctx, externalTxID[:], fileformat.FileTypeOutputs)
+		require.NoError(t, err)
+		require.False(t, exists)
 
-	// Deliberately NOT counted as skipped: skippedCount feeds the pre-existing
-	// utxo_pruner_records_deleted_skipped_total, which has always meant "the
-	// defensive check refused to delete this". An unresolvable record is a
-	// different condition and gets its own counter, so the old one keeps its
-	// meaning.
-	require.Equal(t, 0, skipped, "an input-resolution retention must not be reported as a defensive deletion skip")
-	require.Equal(t, float64(1), testutil.ToFloat64(prometheusUtxoInputResolutionErrors)-before,
-		"the retained record must be reported on utxo_pruner_input_resolution_errors_total")
+		exists, err = svc.external.Exists(ctx, externalTxID[:], fileformat.FileTypeTx)
+		require.NoError(t, err)
+		require.False(t, exists)
+
+		before := testutil.ToFloat64(prometheusUtxoInputResolutionErrors)
+
+		processed, skipped, err := svc.processRecordChunk(ctx, 1000, chunkOf(t, svc, aerospike.BinMap{
+			svc.fieldTxID:     externalTxID.CloneBytes(),
+			svc.fieldExternal: true,
+		}))
+		require.NoError(t, err)
+		require.Equal(t, 2, processed, "the record with no blobs is pruned with the healthy one")
+		require.Equal(t, 0, skipped)
+		require.Equal(t, before, testutil.ToFloat64(prometheusUtxoInputResolutionErrors), "nothing is retained, so nothing is counted")
+	})
+
+	t.Run("a blob that will not parse retains its record and not the chunk", func(t *testing.T) {
+		svc := newTestService(t)
+		svc.external = memory.New()
+		require.NoError(t, svc.external.Set(ctx, externalTxID[:], fileformat.FileTypeTx, []byte{0x01, 0x02, 0x03}))
+
+		before := testutil.ToFloat64(prometheusUtxoInputResolutionErrors)
+
+		processed, skipped, err := svc.processRecordChunk(ctx, 1000, chunkOf(t, svc, aerospike.BinMap{
+			svc.fieldTxID:     externalTxID.CloneBytes(),
+			svc.fieldExternal: true,
+		}))
+		require.NoError(t, err, "an unresolvable record must not fail the whole chunk")
+		require.Equal(t, 1, processed, "the healthy record in the same chunk must still be pruned")
+
+		// Deliberately NOT counted as skipped: skippedCount feeds the pre-existing
+		// utxo_pruner_records_deleted_skipped_total, which has always meant "the
+		// defensive check refused to delete this". An unresolvable record is a
+		// different condition and gets its own counter, so the old one keeps its
+		// meaning.
+		require.Equal(t, 0, skipped, "an input-resolution retention must not be reported as a defensive deletion skip")
+		require.Equal(t, float64(1), testutil.ToFloat64(prometheusUtxoInputResolutionErrors)-before,
+			"the retained record must be reported on utxo_pruner_input_resolution_errors_total")
+	})
 }
 
 func TestProcessRecordChunk_ClearsParentRefsOfConflictingRecords(t *testing.T) {

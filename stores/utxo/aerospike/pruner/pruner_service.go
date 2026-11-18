@@ -1229,10 +1229,12 @@ func (s *Service) processRecordChunkCarry(ctx context.Context, blockHeight uint3
 		// A record whose input references cannot be resolved is retained, not
 		// fatal. Retention is the safe outcome: the record itself carries the
 		// replay protection its parents would otherwise inherit. Every later
-		// cycle reconsiders it, but a transaction whose external blob is gone
-		// for good will fail here every time, so for those records retention is
-		// permanent and utxo_pruner_input_resolution_errors_total is the signal
-		// to act on. Failing the chunk instead would unwind through
+		// cycle reconsiders it, so a record that keeps failing here (a blob
+		// store that errors, a blob that will not parse) is retained until that
+		// is fixed and utxo_pruner_input_resolution_errors_total is the signal
+		// to act on. A record whose external blobs are both gone is not such a
+		// case: getTxInputsFromBins returns no inputs for it and it is deleted.
+		// Failing the chunk instead would unwind through
 		// partitionWorker into PruneWithPartitions, where a non-TimeoutError is
 		// never retried, so a single unresolvable record would block pruning
 		// node-wide forever.
@@ -2118,10 +2120,19 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 				}
 
 				// Both blobs are gone, so the inputs are unrecoverable and no
-				// parent can be marked. The caller retains the record instead:
-				// its own presence is the replay protection the markers would
-				// have provided.
-				return nil, errors.NewProcessingError("missing external tx %s at height %d: cannot safely prune without input references", txHash.String(), blockHeight)
+				// parent can be marked now. A blob is deleted only after the
+				// markers of the batch that deletes its record have landed (here
+				// and on main, where a failed parent update stopped the blob
+				// delete), and a record is left behind only when its record
+				// delete did not land: pruner_skipDeletions on main still deleted
+				// the blobs, and a record delete that answered with no response
+				// was read as done. In every such case the parents were marked
+				// already, so the record carries nothing more to protect and is
+				// deleted, as on main. Retaining it would rescan it, at two blob
+				// calls, on every block for good.
+				s.logger.Debugf("external tx %s already deleted from blob store at height %d, proceeding to delete the record", txHash.String(), blockHeight)
+
+				return []*bt.Input{}, nil
 			}
 			// Other errors should still be reported
 			return nil, errors.NewProcessingError("error getting external tx %s at height %d: %v", txHash.String(), blockHeight, err)
