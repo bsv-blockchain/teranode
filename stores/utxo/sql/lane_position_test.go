@@ -248,3 +248,82 @@ func TestLanePositionMigrationPostgres(t *testing.T) {
 	requireOldRowReadsNoLanePosition(t, oldDB, store, oldHash)
 	require.NoError(t, oldDB.Close())
 }
+
+// On a database from before lane_position, an open transaction on transactions
+// keeps the ADD COLUMN from getting its lock. The store retries within
+// laneColumnMigrationLimit and then refuses to open, rather than waiting with
+// no deadline while every query on transactions queues behind it; a reader on
+// another connection is never held for long. Once the transaction ends, the
+// next attempt adds the column.
+func TestLanePositionMigrationPostgresBoundsTheLockWait(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	dbURL := startLanePositionPostgres(t)
+
+	oldDB, err := sql.Open("pgx", dbURL.String())
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, oldDB.Close()) }()
+
+	_, err = oldDB.Exec(oldPostgresTransactionsTable)
+	require.NoError(t, err)
+
+	saved := laneColumnMigrationLimit
+	t.Cleanup(func() { laneColumnMigrationLimit = saved })
+
+	holder, err := oldDB.Begin()
+	require.NoError(t, err)
+
+	_, err = holder.Exec(`SELECT count(*) FROM transactions`)
+	require.NoError(t, err)
+
+	// A reader on its own connection, polling while the store retries. Each
+	// read may queue behind one ALTER attempt, so at most about the 200ms
+	// lock_timeout.
+	readerDone := make(chan time.Duration)
+
+	go func() {
+		var worst time.Duration
+
+		for end := time.Now().Add(1500 * time.Millisecond); time.Now().Before(end); {
+			started := time.Now()
+
+			var n int
+			if err := oldDB.QueryRow(`SELECT count(*) FROM transactions`).Scan(&n); err != nil {
+				worst = time.Hour
+				break
+			}
+
+			worst = max(worst, time.Since(started))
+			time.Sleep(20 * time.Millisecond)
+		}
+		readerDone <- worst
+	}()
+
+	laneColumnMigrationLimit = time.Second
+	started := time.Now()
+
+	_, err = New(context.Background(), ulogger.TestLogger{}, lanePositionSettings(t), dbURL)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "could not add lane_position column")
+	require.Less(t, time.Since(started), 30*time.Second)
+	require.Less(t, <-readerDone, time.Second)
+
+	// The holder ends while the store is retrying: the column goes in.
+	laneColumnMigrationLimit = time.Minute
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		_ = holder.Rollback()
+	}()
+
+	store, err := New(context.Background(), ulogger.TestLogger{}, lanePositionSettings(t), dbURL)
+	require.NoError(t, err)
+
+	var columns int
+	require.NoError(t, oldDB.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'lane_position'`).Scan(&columns))
+	require.Equal(t, 1, columns)
+	require.NotNil(t, store)
+}

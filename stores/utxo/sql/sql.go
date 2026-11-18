@@ -6007,6 +6007,71 @@ func (c connExecutor) Exec(query string, args ...interface{}) (sql.Result, error
 
 func (c connExecutor) Close() error { return nil }
 
+// addLanePositionColumnSQL adds the nullable lane_position column to transactions when it is
+// missing. With no default, Postgres only changes its catalog and does not rewrite the table, and
+// every row already stored reads NULL, meaning no lane position. lock_timeout bounds the wait for
+// the table lock: ADD COLUMN needs ACCESS EXCLUSIVE, and while it waits behind an open transaction
+// on transactions (a pruner batch on a pod still running the old build, say) every later read and
+// write on the table queues behind it.
+const addLanePositionColumnSQL = `
+		DO $$
+		BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'transactions'::regclass AND attname = 'lane_position' AND NOT attisdropped) THEN
+				PERFORM set_config('lock_timeout', '200ms', true);
+				ALTER TABLE transactions ADD COLUMN lane_position BIGINT;
+			END IF;
+		END $$;
+	`
+
+// laneColumnMigrationLimit is how long addLanePositionColumn retries before the store refuses to
+// open. It only matters on the first start of this build against a database from before it,
+// beside a process that keeps a transaction open on transactions for all of this time. Other
+// processes opening the store wait on the schema lock for at most this long too.
+var laneColumnMigrationLimit = 5 * time.Minute
+
+// addLanePositionColumn runs addLanePositionColumnSQL, and when the table lock is not granted
+// within the lock_timeout it backs off and tries again, until limit has passed. Each attempt is its
+// own statement, so between attempts nothing holds or waits for a lock on transactions.
+func addLanePositionColumn(db DBExecutor, limit time.Duration) error {
+	ctx := context.Background()
+	if c, ok := db.(connExecutor); ok {
+		ctx = c.ctx
+	}
+
+	deadline := time.Now().Add(limit)
+	backoff := 50 * time.Millisecond
+
+	for {
+		_, err := db.Exec(addLanePositionColumnSQL)
+		if err == nil || !isLockNotAvailable(err) || time.Now().After(deadline) {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		backoff = min(2*backoff, 2*time.Second)
+	}
+}
+
+// isLockNotAvailable reports a Postgres lock_timeout (55P03) from either driver.
+func isLockNotAvailable(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == usql.PgErrLockNotAvailable
+	}
+
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == usql.PgErrLockNotAvailable
+	}
+
+	return false
+}
+
 // createPostgresSchemaImpl contains the actual implementation, now testable
 func createPostgresSchemaImpl(db DBExecutor) error {
 	if _, err := db.Exec(`
@@ -6174,18 +6239,7 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 		return errors.NewStorageError("could not add preserve_until column to transactions table - [%+v]", err)
 	}
 
-	// Add lane_position column to transactions table if it doesn't exist. The
-	// column is nullable with no default, so on postgres this is a catalog-only
-	// change that does not rewrite the table. NULL means no lane position was
-	// recorded, which is what every pre-existing row reads as.
-	if _, err := db.Exec(`
-		DO $$
-		BEGIN
-			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'transactions'::regclass AND attname = 'lane_position' AND NOT attisdropped) THEN
-				ALTER TABLE transactions ADD COLUMN lane_position BIGINT;
-			END IF;
-		END $$;
-	`); err != nil {
+	if err := addLanePositionColumn(db, laneColumnMigrationLimit); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not add lane_position column to transactions table - [%+v]", err)
 	}
