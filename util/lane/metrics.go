@@ -24,7 +24,7 @@ func initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "current",
-			Help:      "Lane this process holds a lease on",
+			Help:      "Lane of the lease this process opened last: 0 before its first lease, and not cleared when that lease closes or is released",
 		})
 		prometheusLanePositions = promauto.NewCounter(prometheus.CounterOpts{
 			Namespace: "teranode",

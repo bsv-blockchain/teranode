@@ -608,8 +608,9 @@ func (a *Allocator) renew(want bool) error {
 	return nil
 }
 
-// rateLocked is positions given out per second since the renewal before last: about the last
-// minute at a 30-second renewal.
+// rateLocked is positions given out per second since the request before last that succeeded,
+// renewal or grant request alike: between 30 and 60 seconds at a 30-second renewal with no grant
+// request in between, and shorter when grant requests come close together.
 func (a *Allocator) rateLocked(at time.Time) uint64 {
 	base := a.samples[0]
 

@@ -424,6 +424,87 @@ func TestNextFailsAfterClose(t *testing.T) {
 
 	_, err := a.Next(context.Background())
 	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.ErrorIs(t, a.Ready(), errors.ErrServiceUnavailable, "a closed allocator is not ready, though its lease was recent")
+}
+
+// laneMetrics reads the per-process lane counters, which are process-wide, so tests compare deltas.
+type laneMetrics struct{ positions, grants, waits, failures float64 }
+
+func readLaneMetrics() laneMetrics {
+	return laneMetrics{
+		positions: testutil.ToFloat64(prometheusLanePositions),
+		grants:    testutil.ToFloat64(prometheusLaneGrants),
+		waits:     testutil.ToFloat64(prometheusLaneWaits),
+		failures:  testutil.ToFloat64(prometheusLaneTakeFailures),
+	}
+}
+
+func (m laneMetrics) since(before laneMetrics) laneMetrics {
+	return laneMetrics{m.positions - before.positions, m.grants - before.grants, m.waits - before.waits, m.failures - before.failures}
+}
+
+// Every way a take can end moves the counters: a take served at once or after a wait counts a
+// position, a take that waits counts a wait, and each way of failing (the wait running out, the
+// caller giving up, a close while waiting, a close before the take) counts a failure. The open and
+// the spare each count a grant, and the current-lane gauge shows the lane leased.
+func TestAllocatorCountsEveryTakeAndGrant(t *testing.T) {
+	src := newFakeLeases(10)
+	src.open[LeaseID{0xff}] = 0 // lane 0 is held elsewhere, so this allocator leases lane 1
+
+	a := newTestAllocator(t, src, quiet, nil)
+	a.takeWait = 100 * time.Millisecond
+
+	before := readLaneMetrics()
+
+	for i := uint64(1); i <= 10; i++ {
+		require.Equal(t, Pack(1, i), next(t, a))
+	}
+
+	require.Eventually(t, a.hasSpareGrant, 5*time.Second, time.Millisecond)
+	require.Equal(t, laneMetrics{positions: 10, grants: 2, waits: 1}, readLaneMetrics().since(before),
+		"the first take waits for the open; the open and the spare are two grants")
+	require.Equal(t, float64(1), testutil.ToFloat64(prometheusLaneCurrent))
+
+	// With the service down, the spare is used up and the next take waits out takeWait.
+	src.setDown(true)
+
+	for i := 0; i < 10; i++ {
+		next(t, a)
+	}
+
+	before = readLaneMetrics()
+	_, err := a.Next(context.Background())
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.Equal(t, laneMetrics{waits: 1, failures: 1}, readLaneMetrics().since(before), "the wait ran out")
+
+	// The caller gives up while it waits.
+	a.takeWait = time.Hour
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	before = readLaneMetrics()
+	_, err = a.Next(ctx)
+	cancel()
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.Equal(t, laneMetrics{waits: 1, failures: 1}, readLaneMetrics().since(before), "the caller gave up")
+
+	// A close while a take waits fails that take.
+	before = readLaneMetrics()
+	failed := make(chan error)
+
+	go func() {
+		_, err := a.Next(context.Background())
+		failed <- err
+	}()
+
+	require.Eventually(t, func() bool { return readLaneMetrics().since(before).waits == 1 }, 5*time.Second, time.Millisecond)
+	require.NoError(t, a.Close())
+	require.ErrorIs(t, <-failed, errors.ErrServiceUnavailable)
+	require.Equal(t, laneMetrics{waits: 1, failures: 1}, readLaneMetrics().since(before), "closed while waiting")
+
+	// A take after the close fails at once, with no wait.
+	before = readLaneMetrics()
+	_, err = a.Next(context.Background())
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.Equal(t, laneMetrics{failures: 1}, readLaneMetrics().since(before), "closed before the take")
 }
 
 // Next runs at least once per record created, so with a grant in hand it must allocate nothing.
