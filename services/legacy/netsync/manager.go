@@ -5348,6 +5348,21 @@ func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.UR
 	}, &sm.settings.Kafka)
 }
 
+// lastTxmetaBucketsWarnNano throttles the BucketsCount-mismatch warning to one
+// line per minute per process: the warning fires from the per-message path.
+var lastTxmetaBucketsWarnNano atomic.Int64
+
+func (sm *SyncManager) warnBucketsMismatch(producerBuckets uint16) {
+	now := time.Now().UnixNano()
+
+	last := lastTxmetaBucketsWarnNano.Load()
+	if now-last < int64(time.Minute) || !lastTxmetaBucketsWarnNano.CompareAndSwap(last, now) {
+		return
+	}
+
+	sm.logger.Warnf("txmeta v2 batch from producer with BucketsCount=%d, this receiver compiled with BucketsCount=%d: cache bucket ranges overlap, partitions contend; rebuild both sides with matching txmetacache build tags", producerBuckets, txmetacache.BucketsCount)
+}
+
 // processTXmetaBatchMessage processes a binary batch message from the txmeta Kafka topic.
 // It parses the batch format, deserializes metadata for ADD entries, and announces
 // non-coinbase transactions to peers via the txAnnounceBatcher.
@@ -5361,11 +5376,11 @@ func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.UR
 //	  per entry: [32 hash][1 action][4 contentLen][N content]
 //
 //	v2 (partition-aware)
-//	  [1 byte magic=0xFF][1 byte version=0x02][2 reserved=0][4 entry count LE]
+//	  [1 byte magic=0xFF][1 byte version=0x02][2 bytes uint16 LE BucketsCount][4 entry count LE]
 //	  per entry: [8 xxhash][32 hash][1 action][4 contentLen][N content]
 //
-// v2 detection requires the full 4-byte header signature AND a plausible
-// entry count for the buffer length, otherwise the message is parsed as v1.
+// v2 detection requires the header signature (magic, version and a zero or
+// power-of-two BucketsCount) AND a plausible entry count for the buffer length, otherwise the message is parsed as v1.
 // This avoids misclassifying v1 messages whose entry count happens to begin
 // with 0xFF (counts 255, 511, 767, ...).
 //
@@ -5400,8 +5415,9 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 				entryCount = candidateCount
 				offset = txmetacache.WireV2HeaderLen
 				isV2 = true
-				if int(wireBuckets) != txmetacache.BucketsCount {
-					sm.logger.Warnf("txmeta v2 batch from producer with BucketsCount=%d, this receiver compiled with BucketsCount=%d: cache bucket ranges overlap, partitions contend; rebuild both sides with matching txmetacache build tags", wireBuckets, txmetacache.BucketsCount)
+				// Zero is a batch from a pre-buckets producer: nothing to compare.
+				if wireBuckets != 0 && int(wireBuckets) != txmetacache.BucketsCount {
+					sm.warnBucketsMismatch(wireBuckets)
 				}
 			}
 		}
