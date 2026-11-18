@@ -79,8 +79,8 @@ type SelectionCriteria struct {
 	PreviousPeer                 string        // The previously selected peer (canonical libp2p ID string), if any
 	SyncAttemptCooldown          time.Duration // Cooldown period before retrying a peer
 
-	// PreviousPeerFailed reports that PreviousPeer failed (catchup failure or a
-	// no-progress stall) and the caller wants it rotated off. When false the
+	// PreviousPeerFailed reports that PreviousPeer failed (a no-progress
+	// stall) and the caller wants it rotated off. When false the
 	// previous peer is sticky: it is re-selected as long as no challenger is
 	// materially better than it (see peersNearEqual), which stops two
 	// near-equal peers from alternating the sync slot every cycle and

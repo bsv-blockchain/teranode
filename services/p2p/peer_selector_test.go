@@ -269,6 +269,29 @@ func TestPeerSelector_PeersNearEqual(t *testing.T) {
 	require.True(t, ps.peersNearEqual(base, base, now, window), "must be reflexive")
 }
 
+func TestPeerSelector_ResponseTimesNearEqual(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b int64
+		want bool
+	}{
+		{"absolute margin only, at boundary", 50, 75, true},
+		{"absolute margin only, past boundary", 50, 76, false},
+		{"relative margin only, inside", 200, 240, true},
+		{"relative margin only, at boundary", 200, 250, true},
+		{"relative margin only, past boundary", 200, 251, false},
+		{"both margins exceeded", 100, 126, false},
+		{"identical", 100, 100, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, responseTimesNearEqual(tt.a, tt.b))
+			require.Equal(t, tt.want, responseTimesNearEqual(tt.b, tt.a), "must be symmetric")
+		})
+	}
+}
+
 func TestPeerSelector_SelectSyncPeer_SkipsLowReputation(t *testing.T) {
 	ps := newSelectorForTest()
 

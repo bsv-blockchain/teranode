@@ -110,7 +110,7 @@ type SelectionCriteria struct {
     LocalHeight         int32         // Current local blockchain height
     ForcedPeerID        peer.ID       // Force selection of specific peer
     PreviousPeer        peer.ID       // Previously selected peer (kept unless a challenger is materially better)
-    PreviousPeerFailed  bool          // PreviousPeer failed (catchup failure / no-progress stall): rotate it off
+    PreviousPeerFailed  bool          // PreviousPeer failed (no-progress stall): rotate it off
     SyncAttemptCooldown time.Duration // Cooldown before retrying a peer
 }
 ```
@@ -228,7 +228,7 @@ The peer selector uses a two-phase approach for optimal selection:
    - Ban score (lowest first) - **quinary**
    - Validated block height (highest first) - **senary**
 3. Exclude the previously selected peer only when the coordinator reports it
-   failed (catchup failure or no-progress stall) and an alternative exists
+   failed (a no-progress stall) and an alternative exists
 4. Form the **top band**: the highest-ranked candidate plus every following
    candidate that is *near-equal* to it. Proven-delivery tier, validated chain
    work and validated height must match exactly; reputation (±5), average
