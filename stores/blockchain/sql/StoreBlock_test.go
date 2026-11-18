@@ -1109,18 +1109,18 @@ func TestParseSQLError_NilError(t *testing.T) {
 	assert.Contains(t, result.Error(), "failed to store block")
 }
 
-// forkRetryCancelLogger cancels one caller after its timed-out attempt has returned,
-// before StoreBlock selects between that context and its retry delay.
-type forkRetryCancelLogger struct {
+// forkRetryLogger runs a hook after a timed-out attempt has released its locks,
+// before StoreBlock selects between the caller context and its retry delay.
+type forkRetryLogger struct {
 	ulogger.TestLogger
-	hash   string
-	cancel context.CancelFunc
+	hash        string
+	beforeRetry func()
 }
 
-func (l *forkRetryCancelLogger) Warnf(format string, args ...interface{}) {
+func (l *forkRetryLogger) Warnf(format string, args ...interface{}) {
 	if len(args) > 0 {
 		if hash, ok := args[0].(string); ok && hash == l.hash {
-			l.cancel()
+			l.beforeRetry()
 		}
 	}
 
@@ -1143,8 +1143,7 @@ func heavyForkBlock(parent *model.Block, nonce uint32) *model.Block {
 // reconcile reaches a blocks row another transaction holds, as a full on_main_chain walk
 // without slowPathMu does, must not keep slowPathMu while it waits. An extend that
 // arrives meanwhile stores at once. The fork block keeps retrying while the row is held,
-// a fork block whose caller gives up first stores nothing, and the waiting fork block
-// takes the tip once the row is released.
+// and the waiting fork block takes the tip once the row is released.
 func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T) {
 	s := newPostgresChainWriteStore(t)
 	ctx := context.Background()
@@ -1156,12 +1155,6 @@ func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T
 	storeBlocks(t, s, alt3)
 
 	alt4 := heavyForkBlock(alt3, 7)
-	altGivesUp := heavyForkBlock(alt3, 8)
-	giveUpCtx, cancelGiveUp := context.WithCancel(ctx)
-	defer cancelGiveUp()
-
-	s.logger = &forkRetryCancelLogger{hash: altGivesUp.Hash().String(), cancel: cancelGiveUp}
-
 	// Hold block3's row the way a walk's UPDATE does, until the test releases it.
 	holder, err := s.db.BeginTx(ctx, nil)
 	require.NoError(t, err)
@@ -1225,29 +1218,6 @@ func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T
 	_, _, err = s.StoreBlock(extendCtx, block4, "peer")
 	require.NoError(t, err, "an extend must store while a fork block waits on a row lock")
 
-	// Cancel the second fork at its first retry warning, after the attempt released
-	// its locks. This deterministically exercises the between-attempt cancellation.
-	giveUpDone := make(chan error, 1)
-
-	go func() {
-		_, _, storeErr := s.StoreBlock(giveUpCtx, altGivesUp, "peer")
-		giveUpDone <- storeErr
-	}()
-
-	select {
-	case giveUpErr := <-giveUpDone:
-		require.Error(t, giveUpErr, "a fork block that could not lock its rows must not report success")
-		require.True(t, errors.Is(giveUpErr, errors.ErrStorageError), "want a storage error, got %v", giveUpErr)
-		require.ErrorContains(t, giveUpErr, "gave up after")
-		require.ErrorIs(t, giveUpErr, context.Canceled)
-	case <-time.After(10 * time.Second):
-		t.Fatal("a fork block kept retrying after its context ended")
-	}
-
-	exists, err := s.GetBlockExists(ctx, altGivesUp.Hash())
-	require.NoError(t, err)
-	require.False(t, exists, "a fork block that gave up must not be stored")
-
 	// The fork block still needs block3's row, so it keeps retrying for as long as it is
 	// held: several rounds of forkLockTimeout and forkLockRetryDelay.
 	require.Never(t, func() bool { return len(forkDone) > 0 }, 3*(forkLockTimeout+forkLockRetryDelay), 50*time.Millisecond,
@@ -1271,6 +1241,85 @@ func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T
 	require.False(t, getOnMainChain(t, s, block4.Hash().CloneBytes()), "the reorg must clear block4")
 	require.True(t, getOnMainChain(t, s, alt3.Hash().CloneBytes()))
 	require.True(t, getOnMainChain(t, s, alt4.Hash().CloneBytes()))
+}
+
+// TestStoreBlockForkGiveUpContext_PostgreSQL checks that either kind of caller
+// cancellation interrupts the retry pause promptly and leaves no block behind.
+func TestStoreBlockForkGiveUpContext_PostgreSQL(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		name := "cancel"
+		if deadline {
+			name = "deadline"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			s := newPostgresChainWriteStore(t)
+			ctx := context.Background()
+			alt3 := createBlock3OnFork(blockAlternative2)
+			storeBlocks(t, s, alt3)
+			fork := heavyForkBlock(alt3, 8)
+
+			holder, err := s.db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, holder.Rollback()) }()
+
+			_, err = holder.ExecContext(ctx, `UPDATE blocks SET on_main_chain = on_main_chain WHERE hash = $1`, block3.Hash().CloneBytes())
+			require.NoError(t, err)
+
+			var callerCtx context.Context
+			var cancel context.CancelFunc
+			want, other := context.Canceled, context.DeadlineExceeded
+			if deadline {
+				callerCtx, cancel = context.WithTimeout(ctx, 4*forkLockTimeout)
+				want, other = other, want
+			} else {
+				callerCtx, cancel = context.WithCancel(ctx)
+			}
+			defer cancel()
+
+			endedAt := make(chan time.Time, 1)
+			s.logger = &forkRetryLogger{hash: fork.Hash().String(), beforeRetry: func() {
+				if deadline {
+					at, _ := callerCtx.Deadline()
+					// Let the deadline expire halfway through the upcoming pause. The
+					// hook runs after rollback, with no transaction or mutex held.
+					time.Sleep(max(time.Until(at)-forkLockRetryDelay/2, 0))
+					endedAt <- at
+				} else {
+					time.AfterFunc(forkLockRetryDelay/8, func() {
+						endedAt <- time.Now()
+						cancel()
+					})
+				}
+			}}
+
+			type result struct {
+				err error
+				at  time.Time
+			}
+			done := make(chan result, 1)
+			go func() {
+				_, _, storeErr := s.StoreBlock(callerCtx, fork, "peer")
+				done <- result{err: storeErr, at: time.Now()}
+			}()
+
+			select {
+			case got := <-done:
+				require.ErrorIs(t, got.err, errors.ErrStorageError)
+				require.ErrorContains(t, got.err, "gave up after")
+				require.ErrorIs(t, got.err, want)
+				require.NotErrorIs(t, got.err, other)
+				require.Less(t, got.at.Sub(<-endedAt), forkLockRetryDelay/2,
+					"context cancellation must interrupt the retry pause")
+			case <-time.After(10 * time.Second):
+				t.Fatal("a fork block kept retrying after its context ended")
+			}
+
+			exists, err := s.GetBlockExists(ctx, fork.Hash())
+			require.NoError(t, err)
+			require.False(t, exists, "a fork block that gave up must not be stored")
+		})
+	}
 }
 
 // TestForkLockWaitErrorIsNotRetriedByRetryTx: RetryTx retries a 55P03 in place, under
