@@ -123,7 +123,7 @@ export function createClient({ fetch, WebSocket, storage, setTimeout, clearTimeo
     if (!wantedStage || !token() || historyTimer !== null) return;
     if (!state.history || state.history.stage !== wantedStage) state.history = { stage: wantedStage, data: null, error: false };
     historyTimer = setInterval(fetchHistory, HISTORY_POLL_MS);
-    fetchHistory();
+    void fetchHistory();
   }
 
   function openStage(stage) {
@@ -444,7 +444,7 @@ function mount(doc, win) {
     if (action === 'snooze' || action === 'unsnooze') {
       target.disabled = true;
       const done = action === 'snooze' ? client.snooze(id, SNOOZE_MINUTES) : client.unsnooze(id);
-      done.finally(() => { target.disabled = false; });
+      void done.finally(() => { target.disabled = false; });
     }
   });
 

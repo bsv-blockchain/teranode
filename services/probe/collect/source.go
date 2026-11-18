@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -17,7 +18,11 @@ import (
 	"github.com/prometheus/common/model"
 )
 
-const maxBodyBytes = 64 << 20
+const (
+	maxBodyBytes         = 64 << 20
+	defaultMetricsScheme = "http"
+	defaultMetricsPath   = "/metrics"
+)
 
 type MetricSet map[string]*dto.MetricFamily
 
@@ -112,12 +117,14 @@ func MetricsTargetURLs(targets []string) []string {
 		}
 
 		hostPort, path, found := strings.Cut(target, "/")
+		base := (&url.URL{Scheme: defaultMetricsScheme, Host: hostPort}).String()
+
 		if !found || path == "" {
-			urls = append(urls, "http://"+hostPort+"/metrics")
+			urls = append(urls, base+defaultMetricsPath)
 			continue
 		}
 
-		urls = append(urls, "http://"+target)
+		urls = append(urls, base+"/"+path)
 	}
 
 	return urls
