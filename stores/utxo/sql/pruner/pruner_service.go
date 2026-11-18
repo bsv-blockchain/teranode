@@ -540,6 +540,12 @@ func finishPrune(txn *sql.Tx, result sql.Result) (int64, error) {
 const candidateLockSuffix = `
 ORDER BY t.id FOR NO KEY UPDATE OF t SKIP LOCKED`
 
+// withCandidateLock appends candidateLockSuffix to a candidate selection. Both
+// parts are constants.
+func withCandidateLock(candidatesQuery string) string {
+	return candidatesQuery + candidateLockSuffix
+}
+
 // nonDefensiveCandidatesQuery selects every record past its expiration.
 const nonDefensiveCandidatesQuery = `INSERT INTO utxo_prune_candidates (id)
 SELECT t.id
@@ -647,9 +653,10 @@ WHERE EXISTS (SELECT 1
 	const deleteQuery = `DELETE FROM transactions
   WHERE id IN (SELECT id FROM utxo_prune_candidates WHERE held_back = 0)`
 
-	createCandidates, lock := createCandidatesPortable, ""
+	createCandidates := createCandidatesPortable
 	if s.engine == "postgres" {
-		createCandidates, lock = createCandidatesPostgres, candidateLockSuffix
+		createCandidates = createCandidatesPostgres
+		candidatesQuery = withCandidateLock(candidatesQuery)
 	}
 
 	args := []any{blockHeight}
@@ -681,7 +688,7 @@ WHERE EXISTS (SELECT 1
 		return 0, 0, &pruneStepError{step: "failed to create the pruning candidates table", err: err}
 	}
 
-	if _, err := txn.ExecContext(ctx, candidatesQuery+lock, args...); err != nil {
+	if _, err := txn.ExecContext(ctx, candidatesQuery, args...); err != nil {
 		return 0, 0, &pruneStepError{step: "failed to select pruning candidates", err: err}
 	}
 
