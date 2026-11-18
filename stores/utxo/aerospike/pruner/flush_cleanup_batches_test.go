@@ -1803,3 +1803,54 @@ func TestMarkParents_NativeNotSpenderIsWithdrawnFrom(t *testing.T) {
 	require.Contains(t, plan.blocked, child, "the re-read finds the output unspent and holds the child back")
 	require.False(t, hasMarker(t, client, parentKey, &child), "the marker a retried first attempt may have left is withdrawn")
 }
+
+// TestMarkParents_NativeNotSpenderTwiceKeepsEveryChild: children A and B claim
+// outputs 0 and 1 of P, and the native write to P answers NOT_SPENDER on both
+// sends. A retried first attempt may have written both markers. The re-read
+// between the sends finds output 0 unspent, strips A, and holds it back, so the
+// second send carries only B. The copy noteNativeRefusal keeps must still name
+// A, or A's marker stays on P and refuses A's idempotent re-spend.
+func TestMarkParents_NativeNotSpenderTwiceKeepsEveryChild(t *testing.T) {
+	s, client := newFlushTestService(t)
+	s.buildVerifiedMarkerRecord = testNativeMarkerRecord
+
+	parent := chainhash.HashH([]byte{0xF2, 1})
+	childA := chainhash.HashH([]byte{0xF2, 2})
+	childB := chainhash.HashH([]byte{0xF2, 3})
+
+	parentKey := putRecord(t, client, &parent, aerospike.BinMap{
+		fields.Utxos.String():           []interface{}{make([]byte, 32), spentUtxoElement(&childB)},
+		fields.DeletedChildren.String(): map[interface{}]interface{}{childA.String(): true, childB.String(): true},
+	})
+
+	updates := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &childA))
+	require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 1, &childB))
+
+	notSpender := map[interface{}]interface{}{"status": "ERROR", "errorCode": "NOT_SPENDER", "message": "not the spender"}
+
+	// Batch 1 is the first marker write, 2 the re-read, 3 the second marker
+	// write, and the rest are withdrawals.
+	call := 0
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		call++
+
+		if call == 1 || call == 3 {
+			for _, rec := range records {
+				nativeAnswer(rec.BatchRec(), notSpender, nil)
+			}
+
+			return nil
+		}
+
+		return client.BatchOperate(policy, records)
+	}
+
+	plan, err := s.markParents(context.Background(), updates)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, call, 3, "fixture: the record was written twice")
+	require.Contains(t, plan.blocked, childA, "the re-read holds A back")
+	require.Contains(t, plan.blocked, childB, "the second refusal holds B back")
+	require.False(t, hasMarker(t, client, parentKey, &childA), "A's marker comes off P although the second send no longer carried A")
+	require.False(t, hasMarker(t, client, parentKey, &childB))
+}

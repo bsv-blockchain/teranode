@@ -2310,6 +2310,25 @@ func (p *markingPlan) noteNativeRefusal(source string, info *parentUpdateInfo) {
 		p.nativeRefused = make(map[string]*parentUpdateInfo)
 	}
 
+	// A record refused on both sends keeps every child either send carried:
+	// the re-read between them strips a child the output no longer names, and
+	// that child's marker may still be on the record from the first send.
+	if existing, ok := p.nativeRefused[source]; ok {
+		seen := make(map[chainhash.Hash]struct{}, len(existing.childHashes))
+		for _, childHash := range existing.childHashes {
+			seen[*childHash] = struct{}{}
+		}
+
+		for _, childHash := range info.childHashes {
+			if _, dup := seen[*childHash]; !dup {
+				seen[*childHash] = struct{}{}
+				existing.childHashes = append(existing.childHashes, childHash)
+			}
+		}
+
+		return
+	}
+
 	p.nativeRefused[source] = &parentUpdateInfo{
 		key:         info.key,
 		childHashes: append([]*chainhash.Hash(nil), info.childHashes...),
