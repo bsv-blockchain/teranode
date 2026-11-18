@@ -2,8 +2,11 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"os"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -418,4 +421,71 @@ func TestGetUtxoStoreBuildsTheAllocatorFromItsLeaseSettings(t *testing.T) {
 	allocator, ok := d.constructedClients[0].(*lane.Allocator)
 	require.True(t, ok)
 	require.Equal(t, lane.Timings{Renew: 7 * time.Second, Stop: 11 * time.Second, GrantDuration: 17 * time.Second}, allocator.Timings())
+}
+
+// refusingReleaseSource is laneSource whose release always fails, as one sent to a blockchain
+// service that has already stopped does.
+type refusingReleaseSource struct {
+	laneSource
+}
+
+func (s *refusingReleaseSource) ReleaseLaneLease(context.Context, lane.Release) (bool, error) {
+	return false, errors.NewServiceUnavailableError("blockchain service stopped")
+}
+
+// lockedWarnRecorder keeps every warning logged through it. Unlike warnRecorder it is safe to log
+// to from the allocator's own goroutine.
+type lockedWarnRecorder struct {
+	ulogger.TestLogger
+	mu    sync.Mutex
+	warns []string
+}
+
+func (l *lockedWarnRecorder) Warnf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.warns = append(l.warns, fmt.Sprintf(format, args...))
+}
+
+func (l *lockedWarnRecorder) warnings() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string(nil), l.warns...)
+}
+
+// The allocator logs through the daemon's logger, so a release that fails at shutdown, the case of a
+// process that also runs the blockchain service, is seen in the log rather than lost.
+func TestGetUtxoStoreGivesTheAllocatorTheDaemonLogger(t *testing.T) {
+	ctx := context.Background()
+
+	appSettings, _ := laneStoreFixture(t, "lane_logger", true, func() (lane.LeaseSource, error) {
+		return &refusingReleaseSource{}, nil
+	})
+
+	logger := &lockedWarnRecorder{}
+	d := &Stores{}
+
+	store, err := d.GetUtxoStore(ctx, logger, appSettings)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { require.NoError(t, store.Close(ctx)) })
+
+	root := tests.BuildMultiWorkload(t, 0xe7, 1, 1).Roots[0]
+	_, _, err = store.SpendAndCreate(ctx, root, 900, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	require.Len(t, d.constructedClients, 1)
+	require.NoError(t, d.constructedClients[0].(*lane.Allocator).Close())
+
+	require.Condition(t, func() bool {
+		for _, w := range logger.warnings() {
+			if strings.Contains(w, "could not release the lease on lane 9") {
+				return true
+			}
+		}
+
+		return false
+	}, "the failed release is logged through the daemon's logger, got %q", logger.warnings())
 }
