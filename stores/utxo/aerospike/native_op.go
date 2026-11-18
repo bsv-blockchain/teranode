@@ -827,7 +827,7 @@ func (s *Store) recordReplayProtection(verdict replayProbeVerdict) {
 
 	switch verdict {
 	case replayProbeMismatch:
-		s.logger.Errorf("[teranode-native-op] native ops are enabled but the dispatcher does not prove replay protection (it predates the idempotent report or sub-op 15); spendMulti, spend and addDeletedChildren run on the UDF path for the life of this process, slower but correct. Deploy the mod-teranode build that carries both. Every other sub-op keeps its routing and unspend is always UDF")
+		s.logger.Errorf("[teranode-native-op] native ops are enabled but the dispatcher does not prove replay protection (it does not enforce the replay marker or does not report idempotent matches); spendMulti, spend and addDeletedChildren run on the UDF path for the life of this process, slower but correct. Deploy the mod-teranode build that carries them and sub-op 15. Every other sub-op keeps its routing and unspend is always UDF")
 	case replayProbeUnavailable:
 		s.logger.Warnf("[teranode-native-op] the replay-protection probe could not finish (see the probe message above); spendMulti, spend and addDeletedChildren run on the UDF path for the life of this process because the verdict is not retried, every other sub-op keeps its routing and unspend is always UDF")
 	}
