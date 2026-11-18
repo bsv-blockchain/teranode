@@ -59,9 +59,10 @@ var (
 )
 
 var txMetaCacheMetricsRegistry = struct {
-	mu     sync.Mutex
-	caches map[*TxMetaCache]struct{}
-	cancel context.CancelFunc
+	mu        sync.Mutex
+	publishMu sync.Mutex
+	caches    map[*TxMetaCache]struct{}
+	cancel    context.CancelFunc
 }{}
 
 const txMetaCachePrometheusUpdateInterval = 5 * time.Second
@@ -122,6 +123,13 @@ func txMetaCacheMetricsSnapshot() []*TxMetaCache {
 }
 
 func updateTxMetaCachePrometheusMetrics() {
+	txMetaCacheMetricsRegistry.publishMu.Lock()
+	defer txMetaCacheMetricsRegistry.publishMu.Unlock()
+
+	updateTxMetaCachePrometheusMetricsLocked()
+}
+
+func updateTxMetaCachePrometheusMetricsLocked() {
 	if prometheusBlockValidationTxMetaCacheInsertions == nil {
 		return
 	}

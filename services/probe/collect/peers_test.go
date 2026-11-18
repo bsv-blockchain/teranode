@@ -96,6 +96,25 @@ func TestOneLyingPeerCannotRaiseThePeerHeight(t *testing.T) {
 	}
 }
 
+func TestPeersMedianWithDivergentHeights(t *testing.T) {
+	low := &p2p.PeerInfo{Height: 1000}
+	high := &p2p.PeerInfo{Height: 11_000}
+	secondHigh := &p2p.PeerInfo{Height: 11_000}
+
+	for _, tc := range []struct {
+		peers []*p2p.PeerInfo
+		want  uint32
+	}{
+		{[]*p2p.PeerInfo{low, high}, 1000},
+		{[]*p2p.PeerInfo{low, high, secondHigh}, 11_000},
+	} {
+		s, err := collectPeers(t, NewPeers(&fakePeers{peers: tc.peers}))
+		require.NoError(t, err)
+		require.Equal(t, tc.want, s.PeerTip)
+		require.Equal(t, float64(tc.want), s.Chain.PeerHeight.Value)
+	}
+}
+
 func TestPeersWithoutAHeightAreSkipped(t *testing.T) {
 	s, err := collectPeers(t, NewPeers(&fakePeers{peers: []*p2p.PeerInfo{{Height: 0}, {Height: 0}, {Height: 500}}}))
 	require.NoError(t, err)

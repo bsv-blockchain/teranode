@@ -6,6 +6,7 @@ import (
 	"context"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -43,6 +44,9 @@ func newBytesTestCache(t *testing.T, bucket BucketType) (*TxMetaCache, *settings
 func publishedBytes(t *testing.T, c *TxMetaCache) (uint64, uint64) {
 	t.Helper()
 
+	txMetaCacheMetricsRegistry.publishMu.Lock()
+	defer txMetaCacheMetricsRegistry.publishMu.Unlock()
+
 	txMetaCacheMetricsRegistry.mu.Lock()
 	saved := txMetaCacheMetricsRegistry.caches
 	txMetaCacheMetricsRegistry.caches = map[*TxMetaCache]struct{}{c: {}}
@@ -54,7 +58,7 @@ func publishedBytes(t *testing.T, c *TxMetaCache) (uint64, uint64) {
 		txMetaCacheMetricsRegistry.mu.Unlock()
 	}()
 
-	updateTxMetaCachePrometheusMetrics()
+	updateTxMetaCachePrometheusMetricsLocked()
 
 	bytes := testutil.ToFloat64(prometheusBlockValidationTxMetaCacheBytes)
 	capacity := testutil.ToFloat64(prometheusBlockValidationTxMetaCacheCapacityBytes)
@@ -64,6 +68,34 @@ func publishedBytes(t *testing.T, c *TxMetaCache) (uint64, uint64) {
 	require.InDelta(t, float64(stats.CapacityBytes), capacity, 0)
 
 	return uint64(bytes), uint64(capacity)
+}
+
+func TestCacheBytesPublicationWaitsForSnapshot(t *testing.T) {
+	newBytesTestCache(t, Lockfree)
+
+	txMetaCacheMetricsRegistry.publishMu.Lock()
+	done := make(chan struct{})
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		updateTxMetaCachePrometheusMetrics()
+		close(done)
+	}()
+	<-started
+
+	select {
+	case <-done:
+		txMetaCacheMetricsRegistry.publishMu.Unlock()
+		t.Fatal("metric publication completed while a snapshot held the publication lock")
+	case <-time.After(50 * time.Millisecond):
+	}
+	txMetaCacheMetricsRegistry.publishMu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("metric publication did not resume after the snapshot released the lock")
+	}
 }
 
 func insertBytesTestEntries(t *testing.T, c *TxMetaCache, from, to int) {

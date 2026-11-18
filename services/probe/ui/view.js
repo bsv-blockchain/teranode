@@ -986,7 +986,11 @@ const LANE_PANELS = [
 ];
 
 function laneReading(s, key) {
-  if (key === 'lanes.blocks.tip') return finite(s.tip) > 0 ? { v: s.tip, st: 'ok' } : { st: 'nodata' };
+  if (key === 'lanes.blocks.tip') {
+    const outage = sourceOutage(s, 'chain');
+    if (outage) return { st: 'nodata', note: outage };
+    return finite(s.tip) > 0 ? { v: s.tip, st: 'ok' } : { st: 'nodata' };
+  }
   return readingAt(s, key);
 }
 
