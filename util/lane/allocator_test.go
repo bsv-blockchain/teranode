@@ -274,16 +274,20 @@ func TestAllocatorAsksForTheNextGrantAtHalf(t *testing.T) {
 // spare, and the grant it left is settled at the highest position it took, which the release carries.
 func TestAllocatorMovesToTheSpareTwoMinutesAfterTheFirstTake(t *testing.T) {
 	clk := newStepClock()
+	start := clk.Now()
 	src := newFakeLeases(100)
 	a := newTestAllocator(t, src, Timings{Renew: time.Hour, Stop: 10 * time.Minute, GrantDuration: 2 * time.Minute}, clk)
 
 	for i := uint64(1); i <= 50; i++ {
+		if i == 50 {
+			clk.step(time.Minute) // the spare is requested after the current grant has been in use
+		}
 		require.Equal(t, Pack(0, i), next(t, a))
 	}
 
 	require.Eventually(t, a.hasSpareGrant, 5*time.Second, time.Millisecond)
 
-	clk.step(2*time.Minute - time.Second)
+	clk.step(start.Add(2*time.Minute - time.Second).Sub(clk.Now()))
 	require.Equal(t, Pack(0, 51), next(t, a), "still inside two minutes")
 
 	clk.step(time.Second)
@@ -297,6 +301,86 @@ func TestAllocatorMovesToTheSpareTwoMinutesAfterTheFirstTake(t *testing.T) {
 	require.Len(t, src.releases, 1)
 	require.Equal(t, uint64(101), src.releases[0].LastTaken)
 	require.Equal(t, Settles{First: 1, LastTaken: 51}, src.releases[0].Settles, "an aged grant settles at the highest position taken")
+}
+
+// A grant must start being used within two minutes of its request, even if the lease stays live.
+// A delayed reply must not move that deadline, and an unused spare must not escape it on promotion.
+func TestAllocatorDiscardsUnusedGrantsAfterIdle(t *testing.T) {
+	for _, spare := range []bool{false, true} {
+		for _, delay := range []time.Duration{0, time.Minute} {
+			t.Run(fmt.Sprintf("spare=%v/reply=%s", spare, delay), func(t *testing.T) {
+				clk := newStepClock()
+				start := clk.Now()
+				src := &slowLeases{fakeLeases: newFakeLeases(10), clk: clk}
+				if !spare {
+					src.setDelay(delay)
+				}
+				a := newTestAllocator(t, src, quiet, clk)
+				require.NoError(t, a.Start(context.Background()))
+				require.Eventually(t, func() bool { return a.Ready() == nil }, time.Second, time.Millisecond)
+				want := Pack(0, 11)
+				if spare {
+					src.setDelay(delay)
+					for range 5 {
+						next(t, a)
+					}
+					require.Eventually(t, a.hasSpareGrant, time.Second, time.Millisecond)
+					want = Pack(0, 21)
+				}
+				idle := 2 * time.Minute
+				if delay == 0 {
+					idle = time.Hour
+				}
+				clk.step(start.Add(idle).Sub(clk.Now()))
+				// Successful routine renewals keep the lease, not an old grant's date, alive.
+				src.setDelay(0)
+				require.NoError(t, a.renew(false))
+				src.setDelay(delay)
+				require.Equal(t, want, next(t, a), "no position may come from an unused expired grant")
+				require.NoError(t, a.Close())
+				require.Equal(t, Settles{}, src.releases[0].Settles, "no unused grant is settled on release")
+				for _, r := range src.grantRequests() {
+					if spare && r.Settles != (Settles{}) {
+						require.Equal(t, Settles{First: 1, LastTaken: 5}, r.Settles)
+					} else {
+						require.Equal(t, Settles{}, r.Settles, "unused grants get no settles pair")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestAllocatorUnusedGrantExpiryWaitsForAFreshGrant(t *testing.T) {
+	clk := newStepClock()
+	src := newFakeLeases(100)
+	a := newTestAllocator(t, src, quiet, clk)
+	a.takeWait = 30 * time.Millisecond
+	require.NoError(t, a.Start(context.Background()))
+	require.Eventually(t, func() bool { return a.Ready() == nil }, time.Second, time.Millisecond)
+	src.setDown(true)
+	clk.step(2 * time.Minute)
+	_, err := a.Next(context.Background())
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.NoError(t, a.Ready(), "the grant expired, not the lease")
+	src.setDown(false)
+	a.signal()
+	a.takeWait = time.Second
+	require.Equal(t, Pack(0, 101), next(t, a), "recovery skips the unused old grant")
+}
+
+func TestAllocatorLateFirstTakeKeepsItsTwoMinuteUseWindow(t *testing.T) {
+	clk := newStepClock()
+	src := newFakeLeases(100)
+	a := newTestAllocator(t, src, quiet, clk)
+	require.NoError(t, a.Start(context.Background()))
+	require.Eventually(t, func() bool { return a.Ready() == nil }, time.Second, time.Millisecond)
+	clk.step(2*time.Minute - time.Nanosecond)
+	require.Equal(t, Pack(0, 1), next(t, a), "first take just before unused expiry")
+	clk.step(2*time.Minute - time.Nanosecond)
+	require.Equal(t, Pack(0, 2), next(t, a), "use continues for two minutes from the first take")
+	clk.step(time.Nanosecond)
+	require.Equal(t, Pack(0, 101), next(t, a), "switch exactly at the used-grant boundary")
 }
 
 // A used-up grant settles at its last position, and the pair travels on the next grant request.
@@ -1104,7 +1188,9 @@ type allocModel struct {
 	cur       Grant
 	next      uint64
 	firstTake time.Time
+	requested time.Time
 	spare     Grant
+	spareSent time.Time
 	hasSpare  bool
 	pending   []Settles
 	taken     uint64 // the highest position this lease gave out
@@ -1114,7 +1200,9 @@ type allocModel struct {
 	releases  []Release
 }
 
-func (m *allocModel) install(g Grant) { m.cur, m.next, m.firstTake = g, g.First, time.Time{} }
+func (m *allocModel) install(g Grant, sent time.Time) {
+	m.cur, m.next, m.firstTake, m.requested = g, g.First, time.Time{}, sent
+}
 
 func (m *allocModel) acceptable(g Grant) bool {
 	return g.Len() > 0 && g.First > 0 && g.Last <= MaxPosition && g.Lane < firstUnleasedLane && g.First > m.highest[g.Lane]
@@ -1126,12 +1214,15 @@ func (m *allocModel) take(now time.Time) uint64 {
 		return None
 	}
 
-	if m.next != 0 && (m.next > m.cur.Last || (!m.firstTake.IsZero() && now.Sub(m.firstTake) >= m.t.GrantDuration)) {
-		m.pending = append(m.pending, Settles{First: m.cur.First, LastTaken: m.next - 1})
+	for m.next != 0 && (m.next > m.cur.Last || now.Sub(m.requested) >= m.t.GrantDuration && m.firstTake.IsZero() ||
+		!m.firstTake.IsZero() && now.Sub(m.firstTake) >= m.t.GrantDuration) {
+		if !m.firstTake.IsZero() {
+			m.pending = append(m.pending, Settles{First: m.cur.First, LastTaken: m.next - 1})
+		}
 		m.next = 0
 
 		if m.hasSpare {
-			m.install(m.spare)
+			m.install(m.spare, m.spareSent)
 			m.hasSpare = false
 		}
 	}
@@ -1200,9 +1291,10 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 	}
 
 	var (
-		ops    []string
-		takes  []takeAt
-		grants = map[LeaseID][]Grant{} // the grants each lease accepted, in order
+		ops       []string
+		takes     []takeAt
+		grants    = map[LeaseID][]Grant{} // the grants each lease accepted, in order
+		requested = map[leaseGrant]time.Time{}
 	)
 
 	defer func() {
@@ -1276,8 +1368,9 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 					require.NoError(t, err)
 
 					m.leased, m.lease, m.lane, m.hasSpare, m.pending, m.taken, m.lastGood = true, LeaseID{src.seq}, src.last.Lane, false, nil, 0, now
-					m.install(src.last)
+					m.install(src.last, now)
 					grants[m.lease] = append(grants[m.lease], src.last)
+					requested[leaseGrant{m.lease, src.last}] = now
 				}
 
 				break
@@ -1333,11 +1426,13 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 				require.NoError(t, err)
 
 				grants[m.lease] = append(grants[m.lease], src.last)
+				requested[leaseGrant{m.lease, src.last}] = now
 
 				if m.next == 0 {
-					m.install(src.last)
+					m.install(src.last, now)
 				} else {
 					m.spare, m.hasSpare = src.last, true
+					m.spareSent = now
 				}
 			}
 
@@ -1376,6 +1471,7 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 		require.GreaterOrEqual(t, i, 0, "position %d:%d lies in no grant its lease accepted", l, p)
 
 		key := leaseGrant{tk.lease, grants[tk.lease][i]}
+		require.Less(t, tk.at.Sub(requested[key]), 2*tm.GrantDuration, "a take must date within two grant durations of its request")
 		if _, ok := firstTake[key]; !ok {
 			firstTake[key] = tk.at
 		}

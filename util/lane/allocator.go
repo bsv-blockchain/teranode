@@ -44,7 +44,8 @@ type Timings struct {
 	// process: each process can check only its own settings, so nothing here compares it with the
 	// close time the blockchain service runs on.
 	Stop time.Duration
-	// GrantDuration is how long a grant is used, counted from its first position taken.
+	// GrantDuration bounds both the wait for a grant's first take, from sending its request,
+	// and its use after that first take. No position comes from a grant older than twice this.
 	GrantDuration time.Duration
 }
 
@@ -54,7 +55,8 @@ type Timings struct {
 // It holds the grant it is handing out and one spare. At half the current grant used it asks for
 // the next grant and keeps it as the spare. It takes from the current grant until the grant is used
 // up or GrantDuration has passed since its first position was taken, and only then moves to the
-// spare. The grant it leaves is settled by the next request: the grant's first position and its
+// spare. An unused grant expires GrantDuration after its request was sent, including a spare.
+// The grant it leaves is settled by the next request: the grant's first position and its
 // final number, which is the grant's last position if used up or the highest position taken if it
 // aged out, travel on the next grant request or on the release.
 //
@@ -117,6 +119,11 @@ type Allocator struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	// Keep grant dates separate from the frequently read take/lease fields. They date grants from
+	// request send, before the service records them; renewal alone never changes them.
+	curRequested   time.Time
+	spareRequested time.Time
 }
 
 type rateSample struct {
@@ -306,13 +313,16 @@ func (a *Allocator) takeLocked() (v uint64, ok bool, changed chan struct{}, err 
 		return None, false, a.changed, nil
 	}
 
-	if a.next != 0 {
+	for a.next != 0 {
 		usedUp := a.next > a.cur.Last
 		aged := !a.curFirstTake.IsZero() && now.Sub(a.curFirstTake) >= a.t.GrantDuration
+		unusedExpired := a.curFirstTake.IsZero() && now.Sub(a.curRequested) >= a.t.GrantDuration
 
-		if usedUp || aged {
-			a.leaveCurrentLocked(usedUp)
+		if !usedUp && !aged && !unusedExpired {
+			break
 		}
+
+		a.leaveCurrentLocked(usedUp)
 	}
 
 	if a.next == 0 {
@@ -347,11 +357,13 @@ func (a *Allocator) leaveCurrentLocked(usedUp bool) {
 		final = a.cur.Last
 	}
 
-	a.pending[a.npending] = Settles{First: a.cur.First, LastTaken: final}
-	a.npending++
+	if !a.curFirstTake.IsZero() {
+		a.pending[a.npending] = Settles{First: a.cur.First, LastTaken: final}
+		a.npending++
+	}
 
 	if a.hasSpare {
-		a.installLocked(a.spare)
+		a.installLocked(a.spare, a.spareRequested)
 		a.hasSpare = false
 	} else {
 		a.next = 0
@@ -361,8 +373,9 @@ func (a *Allocator) leaveCurrentLocked(usedUp bool) {
 }
 
 // installLocked makes g the current grant.
-func (a *Allocator) installLocked(g Grant) {
+func (a *Allocator) installLocked(g Grant, requested time.Time) {
 	a.cur, a.next, a.curFirstTake, a.halfAsked = g, g.First, time.Time{}, false
+	a.curRequested = requested
 }
 
 func (a *Allocator) withinStopLocked() bool {
@@ -513,7 +526,7 @@ func (a *Allocator) open() error {
 	defer a.mu.Unlock()
 
 	a.leased, a.lease, a.lane = true, id, g.Lane
-	a.installLocked(g)
+	a.installLocked(g, sent)
 	a.hasSpare, a.pending, a.npending, a.leaseTaken = false, [2]Settles{}, 0, 0
 	a.lastGood = sent
 	a.samples = [2]rateSample{{sent, a.taken}, {sent, a.taken}}
@@ -596,9 +609,10 @@ func (a *Allocator) renew(want bool) error {
 		}
 
 		if a.next == 0 {
-			a.installLocked(res.Grant)
+			a.installLocked(res.Grant, sent)
 		} else {
 			a.spare, a.hasSpare = res.Grant, true
+			a.spareRequested = sent
 		}
 
 		prometheusLaneGrants.Inc()
