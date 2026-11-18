@@ -8,6 +8,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -28,6 +29,16 @@ func TestIsPruneRetryableSeesTheDriverErrorThroughAStepError(t *testing.T) {
 		"control: NewStorageError loses the driver type, which is why it is not used inside the attempt")
 	require.False(t, isPruneRetryable(&pruneStepError{step: "x", err: &pgconn.PgError{Code: "23505"}}, "postgres"),
 		"a non-conflict code is not retried")
+}
+
+// TestIsPruneRetryableSeesALibpqError: the store opens Postgres through pgx, but a *pq.Error that
+// reaches the predicate carries the same SQLSTATE and is read the same way. On Postgres the message
+// fallback is off, so only the typed branch can make it retryable.
+func TestIsPruneRetryableSeesALibpqError(t *testing.T) {
+	require.True(t, isPruneRetryable(&pq.Error{Code: "40001"}, "postgres"), "serialization failure")
+	require.True(t, isPruneRetryable(&pq.Error{Code: "40P01"}, "postgres"), "deadlock")
+	require.True(t, isPruneRetryable(&pruneStepError{step: "x", err: &pq.Error{Code: "40001"}}, "postgres"), "through a step error")
+	require.False(t, isPruneRetryable(&pq.Error{Code: "23505"}, "postgres"), "a non-conflict code is not retried")
 }
 
 // TestIsPruneRetryableMessageFallbackIsSQLiteOnly: the "database is locked"
@@ -82,6 +93,11 @@ func TestIsPruneRetryableSeesASQLiteWriterUpgradeConflict(t *testing.T) {
 	require.Equal(t, sqlite3.SQLITE_BUSY_SNAPSHOT, sqliteErr.Code(), "setup: the writer upgrade must fail as BUSY_SNAPSHOT")
 
 	require.True(t, isPruneRetryable(&pruneStepError{step: "failed to mark pruned children", err: err}, "sqlite"))
+
+	// The driver's message for this code also says "database is locked", so on a SQLite engine
+	// the message fallback would retry it alone. The Postgres engine has no fallback, so this
+	// isolates the typed code: dropping SQLITE_BUSY_SNAPSHOT from the switch fails here.
+	require.True(t, isPruneRetryable(err, "postgres"), "the typed code must be retryable without the message fallback")
 }
 
 // TestTakeSQLiteWriteLockMakesTheTransactionAWriter: the statement that opens a pruning
