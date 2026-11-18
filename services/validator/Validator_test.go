@@ -980,6 +980,7 @@ type txFeeSize struct {
 	size            uint64
 	txInpoints      subtree.TxInpoints
 	validatedHeight uint32
+	lockTime        uint32
 }
 
 // MockBlockAssemblyStore provides a test double for block assembly storage operations.
@@ -990,7 +991,7 @@ type MockBlockAssemblyStore struct {
 	removedTxs   []chainhash.Hash
 }
 
-func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32) (bool, error) {
+func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight, lockTime uint32) (bool, error) {
 	if s.panicOnStore {
 		// Simulates a nil/misconfigured block-assembly client panicking mid-delivery,
 		// e.g. inside the real gRPC client's Store() call.
@@ -1011,6 +1012,7 @@ func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, 
 		size:            size,
 		txInpoints:      txInpoints,
 		validatedHeight: validatedHeight,
+		lockTime:        lockTime,
 	})
 
 	return true, nil

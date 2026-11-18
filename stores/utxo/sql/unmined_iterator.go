@@ -37,6 +37,7 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 		,t.locked
 		,t.coinbase
 		,t.unmined_since
+		,t.lock_time
 		FROM transactions t
 		WHERE t.unmined_since IS NOT NULL
 		  AND t.conflicting = false
@@ -103,9 +104,10 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 		locked       bool
 		isCoinbase   bool
 		unminedSince uint32
+		lockTime     uint32
 	)
 
-	if err := it.rows.Scan(&id, &txID, &fee, &sizeInBytes, &insertedAt, &locked, &isCoinbase, &unminedSince); err != nil {
+	if err := it.rows.Scan(&id, &txID, &fee, &sizeInBytes, &insertedAt, &locked, &isCoinbase, &unminedSince, &lockTime); err != nil {
 		if err := it.Close(); err != nil {
 			it.store.logger.Warnf(errFailedCloseIterator, err)
 		}
@@ -227,6 +229,28 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 		blockIds = append(blockIds, blockId)
 	}
 
+	// Block assembly keeps out a transaction its next block cannot mine. The lock time holds
+	// a transaction back only while one of its input sequences is not final.
+	if lockTime != 0 {
+		var holding bool
+
+		q4 := `SELECT EXISTS (SELECT 1 FROM inputs WHERE transaction_id = $1 AND sequence_number <> $2)`
+
+		if err = it.store.db.QueryRowContext(ctx, q4, id, bt.DefaultSequenceNumber).Scan(&holding); err != nil {
+			if closeErr := it.Close(); closeErr != nil {
+				it.store.logger.Warnf(errFailedCloseIterator, closeErr)
+			}
+
+			it.err = err
+
+			return nil, it.err
+		}
+
+		if !holding {
+			lockTime = 0
+		}
+	}
+
 	return &utxo.UnminedTransaction{
 		Node: &subtree.Node{
 			Hash:        *txID,
@@ -238,6 +262,7 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 		Locked:       locked,
 		BlockIDs:     blockIds,
 		UnminedSince: int(unminedSince),
+		LockTime:     lockTime,
 	}, nil
 }
 
@@ -280,6 +305,7 @@ func newPrunableUnminedTxIterator(store *Store, cutoffBlockHeight uint32) (*unmi
 		,t.locked
 		,t.coinbase
 		,t.unmined_since
+		,t.lock_time
 		FROM transactions t
 		WHERE t.unmined_since IS NOT NULL
 		  AND t.unmined_since <= $1

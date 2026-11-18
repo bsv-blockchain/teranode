@@ -213,6 +213,13 @@ type SubtreeProcessor struct {
 	droppedTxs   map[chainhash.Hash]struct{}
 	droppedCount atomic.Int64
 
+	// txCandidate is the block the template is mined in. lockedTxs holds, under droppedMu,
+	// the nLockTime of every admitted transaction it can hold back, so a reorg that lowers
+	// the candidate can find the ones it no longer lets in (tx_finality.go).
+	txCandidate atomic.Pointer[txCandidate]
+	lockedTxs   map[chainhash.Hash]uint32
+	lockedCount atomic.Int64
+
 	// currentItemsPerFile specifies the maximum number of items per subtree file
 	currentItemsPerFile atomic.Int32
 
@@ -3064,11 +3071,12 @@ func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*sub
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 //   - validatedHeights: Height each node was validated at, or nil when untagged
+//   - lockTimes: Each node's nLockTime where it can hold the node back, or nil
 //
 // Returns:
 //   - bool: true if the batch was enqueued, false if it was refused for room
-func (stp *SubtreeProcessor) AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, validatedHeights []uint32) bool {
-	return stp.queue.enqueueBatchIfRoom(nodes, txInpoints, validatedHeights)
+func (stp *SubtreeProcessor) AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, validatedHeights, lockTimes []uint32) bool {
+	return stp.queue.enqueueBatchIfRoom(nodes, txInpoints, validatedHeights, lockTimes)
 }
 
 // AddDirectly adds a transaction node directly to the subtree processor without going through the queue.
@@ -5599,6 +5607,8 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 
 	// The block's transactions were validated at its height: keep out the ones under other
 	// rules than the next block's, as on every other way into the template.
+	droppedFromBlock := false
+
 	stp.droppedMu.Lock()
 	for idx, subtreeNodes := range subtreesNodes {
 		startIdx := 0
@@ -5606,7 +5616,8 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 			startIdx = 1 // skip coinbase in first subtree
 		}
 		for i := startIdx; i < len(subtreeNodes); i++ {
-			if !stp.admitTxLocked(subtreeNodes[i].Hash, &subtreeMetaTxInpoints[idx][i], block.Height) {
+			if !stp.admitTxLocked(subtreeNodes[i].Hash, &subtreeMetaTxInpoints[idx][i], block.Height, 0, false) {
+				droppedFromBlock = true
 				continue
 			}
 
@@ -5633,10 +5644,15 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 		}
 	}
 
-	// Step 4: Collect previous mempool nodes (already in currentTxMap)
+	// Step 4: Collect previous mempool nodes (already in currentTxMap). One that spends a
+	// transaction Step 3 kept out goes too, with its own descendants: the template would
+	// otherwise hold a child without its parent. Previous nodes are in template order,
+	// parents first, so one pass finds every descendant.
+	keepPrevious := stp.keepPreviousNodeFunc(droppedFromBlock)
+
 	for _, st := range previousChainedSubtrees {
 		for _, node := range st.Nodes {
-			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node.Hash) {
 				continue
 			}
 			allNodes = append(allNodes, node)
@@ -5644,7 +5660,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	}
 	if previousCurrentSubtree != nil {
 		for _, node := range previousCurrentSubtree.Nodes {
-			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node.Hash) {
 				continue
 			}
 			allNodes = append(allNodes, node)

@@ -60,7 +60,7 @@ type Interface interface {
 	//
 	// Returns:
 	//   - bool: true if the batch was enqueued, false if it was refused for room
-	AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, validatedHeights []uint32) bool
+	AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, validatedHeights, lockTimes []uint32) bool
 
 	// SetTxEra sets the transaction rules the template admits to those of the next
 	// block's height. See tx_era.go.
@@ -73,6 +73,14 @@ type Interface interface {
 	// FilterUnminedTxEra returns the reloaded transactions the template admits, given the
 	// height each was validated at.
 	FilterUnminedTxEra(txs []*utxostore.UnminedTransaction, validatedHeights []uint32) []*utxostore.UnminedTransaction
+
+	// SetTxCandidate sets the block the template is mined in: the tip it extends, its
+	// height and the tip's median time past. See tx_finality.go.
+	SetTxCandidate(tip *chainhash.Hash, height, medianTimePast uint32)
+
+	// NotFinalTemplateTxs returns how many transactions in the template are not final at
+	// the candidate, among those whose nLockTime can hold them back.
+	NotFinalTemplateTxs() int
 
 	// RestartDroppedTxs starts a reload's own record of the transactions kept out; finish
 	// keeps it when the reload succeeded and restores the previous one when it did not.

@@ -110,6 +110,11 @@ type BlockAssembler struct {
 	// templateTxEraIsStale.
 	templateTxEra atomic.Pointer[txEraRange]
 
+	// finalityCheck is set by a reorg and cleared once the template is known to hold no
+	// transaction the new next block cannot mine (checkTemplateFinality). A failed check
+	// keeps it, so the next block retries it.
+	finalityCheck atomic.Pointer[reorgFinalityCheck]
+
 	// staleTip remembers since when block assembly has differed from the same chain tip, so a
 	// candidate is only reported as stale once the gap outlasts the normal new-block notification delay.
 	staleTip staleTipTracker
@@ -1021,6 +1026,12 @@ func (b *BlockAssembler) resetWithResponse(ctx context.Context, validateInputs .
 		// The reload rebuilds the template under the target's rules and keeps out every
 		// transaction validated under other ones, re-deriving which from the UTXO store.
 		b.subtreeProcessor.SetTxEra(currentHeight + 1)
+
+		// The reload keeps out the transactions the target's next block cannot mine.
+		if _, err := b.updateTxCandidate(ctx, bestBlockchainBlockHeader, currentHeight); err != nil {
+			return errors.NewProcessingError("[Reset] error setting the block the template is mined in", err)
+		}
+
 		finishDropped := b.subtreeProcessor.RestartDroppedTxs()
 
 		// reload the unmined transactions
@@ -1127,6 +1138,9 @@ func (b *BlockAssembler) resetWithResponse(ctx context.Context, validateInputs .
 	}
 
 	b.setBestBlockHeader(bestBlockchainBlockHeader, currentHeight)
+
+	// The reload filtered the whole template against the new next block.
+	b.finalityCheck.Store(nil)
 
 	if err = b.SetState(ctx); err != nil {
 		return resp, errors.NewProcessingError("[Reset] error setting state", err)
@@ -1333,6 +1347,8 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 			ctxLogger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), bestBlockAccordingToBlockAssembly.Hash())
 			b.setCurrentRunningState(StateReorging)
 
+			b.recordReorgFinalityCheck(moveBackBlocksWithMeta)
+
 			if err = b.handleReorg(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height); err != nil {
 				if errors.Is(err, errors.ErrBlockAssemblyReset) {
 					// only warn about the reset
@@ -1366,6 +1382,30 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	}
 
 	b.setBestBlockHeader(bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height)
+
+	// A reorg can lower the next block's height or median time past below what a
+	// transaction in the template was checked against. Rebuild the template when it holds
+	// one the next block cannot mine; the reload keeps such transactions out.
+	needsReset, err := b.checkTemplateFinality(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height)
+	if err != nil {
+		ctxLogger.Errorf("[BlockAssembler][%s] error checking the template's transactions are final at the next block: %v", bestBlockchainBlockHeader.Hash(), err)
+		prometheusBlockAssemblyProcessingStuck.WithLabelValues("tx_finality").Inc()
+
+		return
+	}
+
+	if needsReset {
+		ctxLogger.Warnf("[BlockAssembler][%s] the reorg left transactions in the template that the next block cannot mine; rebuilding the template", bestBlockchainBlockHeader.Hash())
+
+		if err = b.reset(ctx); err != nil {
+			ctxLogger.Errorf("[BlockAssembler][%s] error rebuilding the template for the reorg: %v", bestBlockchainBlockHeader.Hash(), err)
+			prometheusBlockAssemblyProcessingStuck.WithLabelValues("tx_finality_reset").Inc()
+
+			return
+		}
+	}
+
+	b.finalityCheck.Store(nil)
 
 	// The template holds transactions validated for an earlier next height. When the next
 	// height falls under other transaction rules (an activation height), rebuild it from the
@@ -1465,8 +1505,9 @@ func (b *BlockAssembler) currentTxEra() txEraRange {
 // than the next block's, and their descendants (subtreeprocessor.FilterUnminedTxEra).
 // blockHeights caches block id to height across the calls of one reload.
 func (b *BlockAssembler) filterReloadByTxEra(ctx context.Context, txs []*utxo.UnminedTransaction, blockHeights map[uint32]uint32) ([]*utxo.UnminedTransaction, error) {
+	// Without an era the heights are not needed, but the lock times still are.
 	if _, _, ok := b.subtreeProcessor.TxEra(); !ok {
-		return txs, nil
+		return b.subtreeProcessor.FilterUnminedTxEra(txs, nil), nil
 	}
 
 	heights, err := b.reloadValidatedHeights(ctx, txs, blockHeights)
@@ -1545,6 +1586,89 @@ func (b *BlockAssembler) templateTxEraIsStale() bool {
 	built := b.templateTxEra.Load()
 
 	return built != nil && *built != b.currentTxEra()
+}
+
+// reorgFinalityCheck is what a reorg leaves for checkTemplateFinality: the highest block it
+// moved back that held transactions besides the coinbase, nil when there was none.
+type reorgFinalityCheck struct {
+	movedBack       *model.BlockHeader
+	movedBackHeight uint32
+}
+
+// recordReorgFinalityCheck marks the template for checkTemplateFinality after a reorg that moved
+// back moveBack. A check still pending from an earlier reorg is merged, keeping the higher
+// moved-back block, so a failed check is not narrowed by the next reorg.
+func (b *BlockAssembler) recordReorgFinalityCheck(moveBack []blockWithMeta) {
+	next := &reorgFinalityCheck{}
+
+	for _, m := range moveBack {
+		if m.block == nil || m.meta == nil || m.block.TransactionCount <= 1 {
+			continue
+		}
+
+		if next.movedBack == nil || m.meta.Height > next.movedBackHeight {
+			next.movedBack, next.movedBackHeight = m.block.Header, m.meta.Height
+		}
+	}
+
+	if prev := b.finalityCheck.Load(); prev != nil && prev.movedBack != nil &&
+		(next.movedBack == nil || prev.movedBackHeight > next.movedBackHeight) {
+		next.movedBack, next.movedBackHeight = prev.movedBack, prev.movedBackHeight
+	}
+
+	b.finalityCheck.Store(next)
+}
+
+// updateTxCandidate tells the subtree processor which block the template is mined in: the one
+// after header, at height+1, whose time locks are measured against header's median time past,
+// which it returns.
+func (b *BlockAssembler) updateTxCandidate(ctx context.Context, header *model.BlockHeader, height uint32) (uint32, error) {
+	medianTimePast, err := b.ParentMedianTimePast(ctx, header.Hash())
+	if err != nil {
+		return 0, err
+	}
+
+	if b.subtreeProcessor != nil {
+		b.subtreeProcessor.SetTxCandidate(header.Hash(), height+1, medianTimePast)
+	}
+
+	return medianTimePast, nil
+}
+
+// checkTemplateFinality sets the block the template is mined in after a block move, and after a
+// reorg reports whether the template must be rebuilt because it holds a transaction that block
+// cannot mine. A transaction is final at the candidate it was checked against, and a forward
+// block only raises the height and the median time past, so only a reorg can make one non-final.
+//
+// The subtree processor tracks the transactions whose nLockTime can hold them back
+// (NotFinalTemplateTxs). The transactions of the blocks a reorg moved back are not tracked:
+// each was final in its block, at that block's height and its parent's median time past, so
+// all of them are still final at a candidate not behind the highest moved-back block holding
+// transactions. A reorg that falls behind it rebuilds. One block moved back never does: the new
+// tip is above its parent, so neither the height nor the median time past can be behind.
+func (b *BlockAssembler) checkTemplateFinality(ctx context.Context, header *model.BlockHeader, height uint32) (bool, error) {
+	medianTimePast, err := b.updateTxCandidate(ctx, header, height)
+	if err != nil {
+		return false, err
+	}
+
+	pending := b.finalityCheck.Load()
+	if pending == nil || b.subtreeProcessor == nil {
+		return false, nil
+	}
+
+	if pending.movedBack != nil {
+		movedBackParentMedianTimePast, err := b.ParentMedianTimePast(ctx, pending.movedBack.HashPrevBlock)
+		if err != nil {
+			return false, err
+		}
+
+		if height+1 < pending.movedBackHeight || medianTimePast < movedBackParentMedianTimePast {
+			return true, nil
+		}
+	}
+
+	return b.subtreeProcessor.NotFinalTemplateTxs() > 0, nil
 }
 
 // setCurrentRunningState sets the current operational state.
@@ -2115,6 +2239,13 @@ func (b *BlockAssembler) initState(ctx context.Context) error {
 		}
 	}
 
+	// The unmined reload that follows keeps out the transactions the next block cannot mine.
+	if header, height := b.CurrentBlock(); header != nil {
+		if _, err = b.updateTxCandidate(ctx, header, height); err != nil {
+			return errors.NewProcessingError("[BlockAssembler] error setting the block the template is mined in", err)
+		}
+	}
+
 	if err = b.SetState(ctx); err != nil {
 		b.logger.Errorf("[BlockAssembler] error setting state: %v", err)
 	}
@@ -2189,11 +2320,12 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 //   - validatedHeights: Height each node was validated at, or nil when untagged
+//   - lockTimes: Each node's nLockTime where it can hold the node back, or nil
 //
 // Returns:
 //   - bool: true if the batch was enqueued, false if it was refused for room
-func (b *BlockAssembler) AddTxBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, validatedHeights []uint32) bool {
-	return b.subtreeProcessor.AddBatchIfRoom(nodes, txInpoints, validatedHeights)
+func (b *BlockAssembler) AddTxBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, validatedHeights, lockTimes []uint32) bool {
+	return b.subtreeProcessor.AddBatchIfRoom(nodes, txInpoints, validatedHeights, lockTimes)
 }
 
 // RemoveTx removes a transaction from the block assembler.
@@ -4440,7 +4572,7 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 				}
 			}
 
-			if err = sorter.Add(int64(unminedTx.CreatedAt), *unminedTx.Node, unminedTx.TxInpoints, validatedHeight); err != nil {
+			if err = sorter.Add(int64(unminedTx.CreatedAt), *unminedTx.Node, unminedTx.TxInpoints, validatedHeight, unminedTx.LockTime); err != nil {
 				return errors.NewProcessingError("error buffering unmined transaction %s for sorting", unminedTx.Node.Hash, err)
 			}
 
@@ -4497,9 +4629,7 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 			orderEqualCreatedAtRunsParentsFirst(batch)
 		}
 
-		if eraOn {
-			batch = b.subtreeProcessor.FilterUnminedTxEra(batch, validatedHeights)
-		}
+		batch = b.subtreeProcessor.FilterUnminedTxEra(batch, validatedHeights)
 
 		var addErr error
 		if isReload {

@@ -88,11 +88,13 @@ func TestTxEra_DequeueDropsOtherRulesAndDescendants(t *testing.T) {
 		[]subtreepkg.Node{{Hash: f.parent, Fee: 1, SizeInBytes: 1}, {Hash: f.inEra, Fee: 1, SizeInBytes: 1}, {Hash: f.untagged, Fee: 1, SizeInBytes: 1}},
 		[]*subtreepkg.TxInpoints{{}, {}, {}},
 		[]uint32{99, 150, 0},
+		nil,
 	))
 	require.True(t, stp.AddBatchIfRoom(
 		[]subtreepkg.Node{{Hash: f.child, Fee: 1, SizeInBytes: 1}, {Hash: f.grandchild, Fee: 1, SizeInBytes: 1}},
 		[]*subtreepkg.TxInpoints{inpointsWithParent(f.parent), inpointsWithParent(f.child)},
 		[]uint32{150, 150},
+		nil,
 	))
 
 	stp.Start(ctx)
@@ -186,11 +188,13 @@ func TestTxEra_BlockMovementDrainDropsOtherRulesAndDescendants(t *testing.T) {
 		[]subtreepkg.Node{{Hash: f.parent, Fee: 1, SizeInBytes: 1}, {Hash: f.inEra, Fee: 1, SizeInBytes: 1}, {Hash: f.untagged, Fee: 1, SizeInBytes: 1}},
 		[]*subtreepkg.TxInpoints{{}, {}, {}},
 		[]uint32{99, 150, 0},
+		nil,
 	))
 	require.True(t, stp.AddBatchIfRoom(
 		[]subtreepkg.Node{{Hash: f.child, Fee: 1, SizeInBytes: 1}, {Hash: f.grandchild, Fee: 1, SizeInBytes: 1}},
 		[]*subtreepkg.TxInpoints{inpointsWithParent(f.parent), inpointsWithParent(f.child)},
 		[]uint32{150, 150},
+		nil,
 	))
 
 	// The queue's double-spend window holds back batches younger than it.
@@ -241,6 +245,13 @@ func TestTxEra_MoveBackKeepsOutABlockUnderOtherRules(t *testing.T) {
 			_, _ = utxoStore.Create(t.Context(), coinbaseTx, 0)
 			stp.InitCurrentBlockHeader(blockHeader)
 
+			// A child of one of the block's transactions, already in the template: if its
+			// parent is kept out, it must go too.
+			child := chainhash.HashH([]byte("tx-era-template-child-of-moved-back"))
+			require.NoError(t, stp.AddNodesDirectly([]*utxostore.UnminedTransaction{
+				{Node: &subtreepkg.Node{Hash: child, Fee: 1, SizeInBytes: 1}, TxInpoints: inpointsWithParent(st.Nodes[1].Hash)},
+			}, true))
+
 			_, _, err = stp.moveBackBlock(t.Context(), &model.Block{
 				Header:     prevBlockHeader,
 				Height:     tt.blockHeight,
@@ -253,6 +264,10 @@ func TestTxEra_MoveBackKeepsOutABlockUnderOtherRules(t *testing.T) {
 				_, ok := stp.currentTxMap.Get(node.Hash)
 				require.Equal(t, tt.returned, ok, "tx %s", node.Hash)
 			}
+
+			_, ok := stp.currentTxMap.Get(child)
+			require.Equal(t, tt.returned, ok, "the template child of a moved-back transaction")
+			require.Equal(t, tt.returned, templateHolds(stp, child), "the template child of a moved-back transaction")
 		})
 	}
 }
@@ -352,4 +367,22 @@ func TestReset_RemoveMapReadDuringReset(t *testing.T) {
 	<-done
 
 	require.Zero(t, stp.GetRemoveMapLength(), "the reset empties the remove map")
+}
+
+// templateHolds reports whether hash is in one of the template's subtrees.
+func templateHolds(stp *SubtreeProcessor, hash chainhash.Hash) bool {
+	subtrees := append([]*subtreepkg.Subtree{}, stp.chainedSubtrees...)
+	if cs := stp.currentSubtree.Load(); cs != nil {
+		subtrees = append(subtrees, cs)
+	}
+
+	for _, st := range subtrees {
+		for _, node := range st.Nodes {
+			if node.Hash.Equal(hash) {
+				return true
+			}
+		}
+	}
+
+	return false
 }

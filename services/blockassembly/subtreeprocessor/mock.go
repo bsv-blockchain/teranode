@@ -237,6 +237,12 @@ func (m *MockSubtreeProcessor) TxEra() (lo, hi uint32, ok bool) {
 	return 0, 0, false
 }
 
+// SetTxCandidate implements Interface.SetTxCandidate. A no-op.
+func (m *MockSubtreeProcessor) SetTxCandidate(*chainhash.Hash, uint32, uint32) {}
+
+// NotFinalTemplateTxs implements Interface.NotFinalTemplateTxs: none.
+func (m *MockSubtreeProcessor) NotFinalTemplateTxs() int { return 0 }
+
 // RestartDroppedTxs implements Interface.RestartDroppedTxs. A no-op.
 func (m *MockSubtreeProcessor) RestartDroppedTxs() func(bool) {
 	return func(bool) {}
@@ -248,7 +254,7 @@ func (m *MockSubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransa
 }
 
 // AddBatchIfRoom implements Interface.AddBatchIfRoom
-func (m *MockSubtreeProcessor) AddBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, _ []uint32) bool {
+func (m *MockSubtreeProcessor) AddBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, _, _ []uint32) bool {
 	args := m.Called(nodes, txInpoints)
 	return args.Bool(0)
 }

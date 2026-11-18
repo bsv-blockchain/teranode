@@ -26,6 +26,7 @@ func newConflictingTxIterator(store *Store) (*unminedTxIterator, error) {
 		,t.locked
 		,t.coinbase
 		,COALESCE(t.unmined_since, 0)
+		,t.lock_time
 		FROM transactions t
 		WHERE t.conflicting = true
 		ORDER BY t.id ASC

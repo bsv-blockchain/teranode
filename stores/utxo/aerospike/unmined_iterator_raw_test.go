@@ -110,6 +110,21 @@ func TestRawUnminedHandler_DecodesMainRecord(t *testing.T) {
 	require.False(t, tx.Skip)
 	require.NotNil(t, tx.TxInpoints)
 	require.Empty(t, tx.BlockIDs)
+	require.Zero(t, tx.LockTime, "a record without the locktime bin reads 0")
+}
+
+// TestRawUnminedHandler_DecodesLockTime pins that the reload hands block assembly the stored
+// nLockTime, so it can keep out a transaction the next block cannot mine.
+func TestRawUnminedHandler_DecodesLockTime(t *testing.T) {
+	it, h := newRawTestHandler(t)
+
+	bins := append(rawMainRecordBins(1), rawBin{fields.LockTime.String(), particle_type.INTEGER, encInt(800_000)})
+	require.NoError(t, feed(t, h, bins))
+	require.NoError(t, h.flush())
+
+	txs := collectResults(it)
+	require.Len(t, txs, 1)
+	require.Equal(t, uint32(800_000), txs[0].LockTime)
 }
 
 // Paginated child records carry no createdAt and must not be yielded.

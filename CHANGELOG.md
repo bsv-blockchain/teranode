@@ -150,8 +150,11 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   stores a block that does not extend the best block, and `reconsiderblock` leaves such
   a fork invalid. A catch-up refuses an offered chain that forks below a passed
   checkpoint before it fetches any block, and a stored valid block below a passed
-  checkpoint that is not on the main chain is no longer reported as already validated.
-  Nothing to configure. (#2069)
+  checkpoint that is not on the main chain is no longer reported as already validated,
+  nor credited as a catch-up target. When the SQL store refuses a block because the tip
+  passed the checkpoint while it was validated, block validation reports it as an
+  invalid block and the peer that served it is struck, as for the check before
+  validation. Nothing to configure. (#2069)
 
 - **Block assembly keeps out transactions validated under other consensus rules than
   the next block's.** Block assembly mines a transaction without checking it again.
@@ -177,19 +180,32 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
       once a block mines the transaction or a reload no longer finds it unmined, so its
       descendants that arrive after that are admitted. A descendant dropped before stays
       out until the next reload. A new counter,
-      `teranode_subtreeprocessor_tx_era_dropped_total`, counts the drops.
+      `teranode_subtreeprocessor_tx_era_dropped_total`, counts the drops, including the
+      lock time drops below.
     - When a new block moves the next height under other rules, block assembly rebuilds
       its template from the UTXO store. Mining candidates stay empty while it does. On
       regtest this also happens once at block 1, because the script engine enables P2SH
       at height 2.
+    - Block assembly also keeps out a transaction whose nLockTime the next block has not
+      reached, and its descendants. The validator sends the lock time of each transaction
+      with an input sequence that is not final: the `locktime` field of `AddTxRequest`,
+      unused until now, and a new `lock_times` on `AddTxBatchColumnarRequest`. A reload
+      reads it from the UTXO store. A reorg can lower the next block's height or median
+      time past; when it leaves such a transaction in the template, or lands on a next
+      block behind the highest block it moved back that held transactions, block assembly
+      rebuilds the template from the UTXO store.
     - The validator gRPC request has two new fields, `block_assembly_candidate_height`
       and `block_assembly_candidate_median_time`. The HTTP `/tx` endpoint refuses both.
   In a mixed-version deploy, an older validator sends no height and its transactions
   are admitted as before, and an older block assembly ignores the field. With
   `blockassembly_storeTxInpointsForSubtreeMeta` off, block assembly has no parent
   hashes, so it cannot find the descendants of a dropped transaction. A dropped
-  transaction stays in the UTXO store and is not resubmitted. Nothing to configure.
-  (#2069)
+  transaction stays in the UTXO store and is not resubmitted. The Aerospike store's
+  reload does not read input sequences, so it also keeps out a transaction whose
+  sequences are all final but whose nLockTime is still ahead. A transaction validated
+  against a higher tip that a reorg replaced by a shorter chain, and still on its way to
+  block assembly when the reorg completes, is admitted without the lock time check.
+  Nothing to configure. (#2069)
 
 - **A failed `on_main_chain` write in the SQL blockchain store is now repaired in the
   background, and block storage can wait for the repair.** `InvalidateBlock`,

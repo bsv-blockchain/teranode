@@ -268,6 +268,9 @@ func (it *unminedTxIterator) partitionWorker(ctx context.Context, policy *as.Que
 			fields.BlockIDs.String(),
 			fields.UnminedSince.String(),
 			fields.IsCoinbase.String(),
+			// Block assembly keeps out a transaction the next block cannot mine. The
+			// input sequences are not read, so it checks every stored lock time.
+			fields.LockTime.String(),
 		}
 
 		if it.store.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {

@@ -129,11 +129,13 @@ func (q *LockFreeQueue) length() int64 {
 //   - nodes: The transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 //   - validatedHeights: Height each node was validated at, or nil when untagged
-func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, validatedHeights []uint32) {
+//   - lockTimes: Each node's nLockTime where it can hold the node back, or nil
+func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, validatedHeights, lockTimes []uint32) {
 	batch := &TxBatch{
 		nodes:            nodes,
 		txInpoints:       txInpoints,
 		validatedHeights: validatedHeights,
+		lockTimes:        lockTimes,
 		time:             q.clock.Now().UnixMilli(),
 	}
 	batch.next.Store(nil)
@@ -211,7 +213,7 @@ func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxIn
 //   - txInpoints: Parent transaction references for each node
 func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
 	q.queueLength.Add(int64(len(nodes))) // gosec:nolint  reserve before publishing
-	q.publish(nodes, txInpoints, nil)
+	q.publish(nodes, txInpoints, nil, nil)
 }
 
 // enqueueBatchIfRoom adds a batch only if doing so would not push the number of
@@ -258,19 +260,19 @@ func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree
 //
 // Returns:
 //   - bool: true if the batch was enqueued, false if it was refused for room
-func (q *LockFreeQueue) enqueueBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, validatedHeights []uint32) bool {
+func (q *LockFreeQueue) enqueueBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, validatedHeights, lockTimes []uint32) bool {
 	n := int64(len(nodes)) // gosec:nolint
 
 	if q.maxItems <= 0 {
 		q.queueLength.Add(n) // reserve before publishing
-		q.publish(nodes, txInpoints, validatedHeights)
+		q.publish(nodes, txInpoints, validatedHeights, lockTimes)
 
 		return true
 	}
 
 	after := q.queueLength.Add(n) // reserve
 	if after <= q.maxItems {
-		q.publish(nodes, txInpoints, validatedHeights) // reservation already accounted
+		q.publish(nodes, txInpoints, validatedHeights, lockTimes) // reservation already accounted
 
 		return true
 	}
@@ -282,7 +284,7 @@ func (q *LockFreeQueue) enqueueBatchIfRoom(nodes []subtree.Node, txInpoints []*s
 			prometheusSubtreeProcessorOversizeBatchAdmitted.Inc()
 		}
 
-		q.publish(nodes, txInpoints, validatedHeights)
+		q.publish(nodes, txInpoints, validatedHeights, lockTimes)
 
 		return true
 	}

@@ -150,3 +150,67 @@ func TestOptionsFromValidateRequest_BlockAssemblyCandidateRoundTrip(t *testing.T
 	require.NoError(t, err)
 	require.Nil(t, got.BlockAssemblyCandidate)
 }
+
+// TestValidate_HandsTheBlockingLockTimeToBlockAssembly pins the lock time the validator sends
+// block assembly: the nLockTime of a transaction it can hold back, 0 for one every input
+// sequence of makes final. Block assembly keeps out a transaction its next block cannot mine,
+// and checks again after a reorg.
+func TestValidate_HandsTheBlockingLockTimeToBlockAssembly(t *testing.T) {
+	const (
+		blockHeight = 3
+		lockTime    = 1_700_000_000 // a time lock
+		blockTime   = lockTime + 100
+	)
+
+	for _, tt := range []struct {
+		name     string
+		sequence uint32
+		want     uint32
+	}{
+		{"a sequence that is not final", 0xfffffffe, lockTime},
+		{"every sequence final", 0xffffffff, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.BlockAssembly.Disabled = false
+
+			utxoStoreURL, err := url.Parse("sqlitememory:///test")
+			require.NoError(t, err)
+
+			utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, tSettings, utxoStoreURL)
+			require.NoError(t, err)
+			require.NoError(t, utxoStore.SetBlockHeight(blockHeight-1))
+			require.NoError(t, utxoStore.SetMedianBlockTime(blockTime))
+
+			parent := bt.NewTx()
+			parent.AddOutput(&bt.Output{Satoshis: 10_000, LockingScript: bscript.NewFromBytes([]byte{bscript.OpTRUE})})
+			_, err = utxoStore.Create(ctx, parent, 1, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 1, BlockHeight: 1, SubtreeIdx: 0}))
+			require.NoError(t, err)
+
+			tx := opTrueSpend(t, parent, 1, lockTime, tt.sequence)
+
+			blockAssembler := &MockBlockAssemblyStore{}
+
+			v := &Validator{
+				logger:         ulogger.TestLogger{},
+				utxoStore:      utxoStore,
+				blockAssembler: blockAssembler,
+				settings:       tSettings,
+				txValidator:    NewTxValidator(ulogger.TestLogger{}, tSettings),
+				stats:          gocore.NewStat("validator"),
+			}
+
+			_, err = v.ValidateWithOptions(ctx, tx, blockHeight, ProcessOptions(
+				WithSkipPolicyChecks(true),
+				WithInBlock(true),
+				WithCandidateBlockTime(blockTime),
+			))
+			require.NoError(t, err)
+
+			require.Len(t, blockAssembler.storedTxs, 1)
+			require.Equal(t, tt.want, blockAssembler.storedTxs[0].lockTime)
+		})
+	}
+}
