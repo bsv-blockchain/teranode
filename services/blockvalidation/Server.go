@@ -1745,9 +1745,12 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block.Height = height
 
-	// A caller-supplied block ID is applied so the block is stored under it. It does not
-	// mark the block mined: full validation still has the setMinedChan worker tag the
-	// transactions (buildAddBlockOpts). Legacy netsync sends 0 on every route.
+	// A caller-supplied block ID is applied so the block is stored under it. On full
+	// validation it does not mark the block mined: the setMinedChan worker still tags the
+	// transactions (buildAddBlockOpts). On the quick route the transactions are stamped
+	// with it and commitBlock stores the block with mined_set true, so setQuickBlockID
+	// first refuses an ID that is not the block's reservation. Legacy netsync sends 0 on
+	// every route.
 	if request.BlockId != 0 {
 		block.ID = request.BlockId
 	}
@@ -2215,8 +2218,8 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	// non-poisoning removal primitive (only InvalidateBlock, which poisons). With the default
 	// (opt-out) gate, block.Valid runs monolithically before AddBlock, so no corrupt body is
 	// ever added. When opted in, a corrupt body on the optimistic-background path takes the
-	// invalidate route (see the block.Valid background handler). This gate is removed once
-	// block.Valid is split so its integrity floor runs before the optimistic AddBlock.
+	// invalidate route (see the block.Valid background handler). The integrity floor that runs
+	// before the optimistic AddBlock narrows that to defects it does not check, so the gate stays.
 	opts := &ValidateBlockOptions{
 		DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings, baseURL),
 		IsRevalidation:          false, // processBlockFound is for new blocks, not revalidation
@@ -3030,9 +3033,10 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			//
 			//   blockchain.Server.ReportPeerFailure broadcasts NotificationType_PeerFailure
 			//   -> p2p.Server routes failure_type "catchup" to
-			//      syncCoordinator.HandleCatchupFailure (and its subscription listener
-			//      deliberately bypasses the "skip notifications while syncing" filter for
-			//      this type — "needed to switch peers on catchup failure")
+			//      syncCoordinator.HandleCatchupFailure (its subscription listener hands
+			//      catchup PeerFailures to a dedicated worker that never runs the FSM skip
+			//      check, so neither a parked block announcement nor the CATCHINGBLOCKS
+			//      filter holds them back)
 			//   -> SyncCoordinator clears currentSyncPeer and calls triggerSyncLocked, i.e.
 			//      immediate re-selection of a different sync peer.
 			//

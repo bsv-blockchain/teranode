@@ -199,11 +199,10 @@ func addScopeTestBlock(t *testing.T, ctx context.Context, client blockchain.Clie
 	block, err := model.NewBlock(header, coinbase, subtrees, uint64(1+2*len(subtrees)), 0, height, 0) //nolint:gosec
 	require.NoError(t, err)
 	require.NoError(t, client.AddBlock(ctx, block, "test", blockchainoptions.WithSubtreesSet(true)))
-	// Block validation has finished with it: a reorg waits for blocks whose mined_set is unset.
-	require.NoError(t, client.SetBlockMinedSet(ctx, block.Hash()))
-
 	_, meta, err := client.GetBlockHeader(ctx, block.Hash())
 	require.NoError(t, err)
+	// Block validation has finished with it: a reorg waits for blocks whose mined_set is unset.
+	require.NoError(t, client.SetBlockMinedSet(ctx, block.Hash(), meta.MinedSetGeneration))
 
 	block.ID = meta.ID
 
@@ -376,7 +375,9 @@ func TestReorgBlocks_InvalidMoveBackChecksOnlyItsOwnTxs(t *testing.T) {
 	require.NoError(t, err)
 	// Invalidating clears A's mined_set for block validation's unset-mined pass, and the
 	// reorg waits for that pass to finish.
-	require.NoError(t, chain.SetBlockMinedSet(ctx, blockA.Hash()))
+	_, blockAMeta, err := chain.GetBlockHeader(ctx, blockA.Hash())
+	require.NoError(t, err)
+	require.NoError(t, chain.SetBlockMinedSet(ctx, blockA.Hash(), blockAMeta.MinedSetGeneration))
 
 	newSubtreeChan := make(chan NewSubtreeRequest, 10)
 	go func() {
@@ -499,8 +500,8 @@ func TestReorgBlocks_RequeuedForwardTxIsNotMarkedFalse(t *testing.T) {
 	chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, sharedTx)}
 	chain.moveForward[1].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, otherTx)}
 
-	// A drain only takes batches stamped before it starts, so stamp the batch a millisecond earlier
-	// than any drain can start. Then the last forward block's drain always takes it.
+	// Stamp the batch a millisecond before any drain, so the last forward block's drain always
+	// takes it.
 	enqueueAt := time.Now()
 	stp.queue.clock = fixedClock{t: enqueueAt}
 	stp.clock = fixedClock{t: enqueueAt.Add(time.Millisecond)}

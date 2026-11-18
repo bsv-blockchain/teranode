@@ -1,6 +1,7 @@
 package utxoset
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -124,4 +125,23 @@ func TestSetLockedReachesTheUTXORowsToo(t *testing.T) {
 
 	require.Equal(t, 3, lockedUTXOs,
 		"every UTXO must carry it: the spend path reads the UTXO row, never the transaction row")
+}
+
+// TestSetLockedContainmentStatementNeverScansItsTable pins setLockedMinedSQL's plan with nested
+// loops off, the stand-in for the estimates that pick a hash join. As a plain UPDATE ... FROM
+// unnest join it planned a Hash Join over a Seq Scan of the containment partitions here.
+func TestSetLockedContainmentStatementNeverScansItsTable(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, _, _ := lockedStampedParentSpent(t, s, ctx)
+	h := parent.TxIDChainHash()
+
+	root := explainUnderNoNestloop(t, s, ctx, setLockedMinedSQL, [][]byte{h[:]}, false, FlagLocked, s.lookupFloor())
+
+	walkPlan(root, func(n planNode) {
+		if strings.HasPrefix(n.RelationName, "tx_mined") {
+			require.NotEqual(t, "Seq Scan", n.NodeType, "seq scan of %s", n.RelationName)
+			require.NotEqual(t, "Parallel Seq Scan", n.NodeType, "seq scan of %s", n.RelationName)
+		}
+	})
 }

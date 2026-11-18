@@ -180,9 +180,9 @@ func TestProgressHookBeatsThroughAFullReorg(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// WaitForPendingBlocks attempt, move back block2, move forward block3, mark
-	// block3 processed.
-	require.Equal(t, 4, calls)
+	// WaitForPendingBlocks attempt, read block2's conflicting nodes before the
+	// move back, move back block2, move forward block3, mark block3 processed.
+	require.Equal(t, 5, calls)
 }
 
 // TestProgressHookBeatsWhileWaitingForBlockValidation pins that each poll of
@@ -297,8 +297,9 @@ func resetBlockchainMock() *blockchain.Mock {
 // restart goes straight back into the same reset (issue 1447).
 //
 // The count is exact so removing any one beat fails it: two blocks each through
-// the moveBack loop, the concurrent processed_at clear, the moveForward loop
-// and the processed_at loop.
+// the read of their conflicting nodes before anything changes, the moveBack
+// loop, the concurrent processed_at clear, the moveForward loop and the
+// processed_at loop.
 func TestProgressHookBeatsThroughAReset(t *testing.T) {
 	stp, _ := newProgressTestProcessor(t, resetBlockchainMock())
 
@@ -321,14 +322,14 @@ func TestProgressHookBeatsThroughAReset(t *testing.T) {
 	require.True(t, postProcessed, "the reset must run to its post-process step")
 	require.Equal(t, moveForward[1].Header.Hash(), stp.GetCurrentBlockHeader().Hash(), "reset must land on the last moveForward block")
 
-	require.Equal(t, 4*len(moveBack), counter.count(),
-		"one beat per block in each of: moveBack, processed_at clear, moveForward, processed_at")
+	require.Equal(t, 5*len(moveBack), counter.count(),
+		"one beat per block in each of: conflicting-node read, moveBack, processed_at clear, moveForward, processed_at")
 }
 
 // TestProgressHookBeatsThroughAFastForwardReset covers the checkpoint-trusted
 // branch of Reset, which replaces the per-block moveForward loop with
-// concurrent coinbase processing. Two blocks each through the moveBack loop,
-// the processed_at clear, the coinbase goroutines and the processed_at loop.
+// concurrent coinbase processing. Two blocks each through the conflicting-node
+// read, the moveBack loop, the processed_at clear, the coinbase goroutines and the processed_at loop.
 func TestProgressHookBeatsThroughAFastForwardReset(t *testing.T) {
 	stp, _ := newProgressTestProcessor(t, resetBlockchainMock())
 
@@ -342,8 +343,8 @@ func TestProgressHookBeatsThroughAFastForwardReset(t *testing.T) {
 	require.NoError(t, response.Err)
 	require.Equal(t, moveForward[1].Header.Hash(), stp.GetCurrentBlockHeader().Hash(), "reset must land on the last moveForward block")
 
-	require.Equal(t, 4*len(moveBack), counter.count(),
-		"one beat per block in each of: moveBack, processed_at clear, coinbase processing, processed_at")
+	require.Equal(t, 5*len(moveBack), counter.count(),
+		"one beat per block in each of: conflicting-node read, moveBack, processed_at clear, coinbase processing, processed_at")
 }
 
 // TestProgressHookSkipsReorgBeatsOnceCancelled pins the shutdown guard on the

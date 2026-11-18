@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -64,6 +65,9 @@ type onMainChainRepairState struct {
 	watches map[*chainWriteWatch]struct{}
 	// startupLockWait is startupWatchLockWait; tests shorten it.
 	startupLockWait time.Duration
+	// boundedTimeout is the budget of a bounded attempt, rebuildOffChainSetTimeout; tests
+	// shorten it.
+	boundedTimeout time.Duration
 	// running is true while the loop has an attempt in flight. A rebuild outside the loop
 	// does not release the record then, because the attempt can commit after it from an
 	// older snapshot; the loop decides once the attempt has finished.
@@ -182,10 +186,16 @@ type chainWriteWatch struct {
 // watchOnMainChainWrites opens a watch for a walk about to run without slowPathMu.
 //
 // Such a walk reads its rows from a snapshot taken when it began. A chain write that
-// commits during the walk can touch only rows the walk does not, so REPEATABLE READ aborts
-// neither, and the walk can then commit its older view over the write. The owner opens a
-// watch before the walk and closes it under slowPathMu after the walk has committed, so
-// every write that committed in between has been noted on it.
+// commits during the walk can touch only rows the walk does not, so REPEATABLE READ on its
+// own aborts neither, and the walk can then commit its older view over the write. The owner
+// opens a watch before the walk and closes it under slowPathMu after the walk has
+// committed, so every write in this process that committed in between has been noted on it.
+//
+// On PostgreSQL the shared chain-write row (see chainWriteStateKey) already rolls such a
+// walk back and its retry lands from a fresh snapshot, for writes from every process. The
+// watch still reports the write, so the owner runs one more walk than it needs to: a
+// bounded one after a reorg, a full one after an operator write. On SQLite the watch is
+// the only guard.
 //
 // Each write notes the lowest height at which it can have moved the best chain. Every row
 // below every noted height has the same membership on the chain the walk saw as on the
@@ -384,19 +394,36 @@ const (
 // attemptOnMainChainRepair runs one repair attempt.
 //
 // A bounded attempt runs under slowPathMu, the lock the StoreBlock paths that owed it
-// held, so no slow-path writer interleaves with a walk over the rows at the tip. It is
-// short: the window is the tip's plus the recorded floor, under a 30 s budget.
+// held, so no slow-path writer interleaves with a walk over the rows at the tip. Its window
+// is the tip's plus the recorded floor, under a 30 s budget. That is short for the usual
+// floor, a few hundred or a few thousand blocks below the tip, but a floor can lie anywhere
+// down to genesis: a reorg whose reconcile walked to genesis because every flag was false
+// notes floor 0. A bounded walk that runs out of its budget is therefore turned into a
+// full one, which on PostgreSQL runs without the lock under a 30 min budget, instead of
+// holding slowPathMu for 30 s on every retry of a walk that cannot finish in time. The
+// switch does not ask why the walk ran out of time, so a database slow enough to stall a
+// bounded walk over only its normal window (10×CoinbaseMaturity blocks, 1,000 on mainnet)
+// also hands the repair to the full walk. The
+// repair then stays a full walk, retried after the backoff, until one lands or an
+// overlapping write narrows it. On PostgreSQL those walks run without slowPathMu (see
+// below); on SQLite each holds it for up to 30 min instead of 30 s.
 //
 // On PostgreSQL a full attempt never takes slowPathMu. It can run for up to 30 min, and
 // while the database stays slow it is retried every 30 s, so holding the lock would stop
-// block storage for as long as the fault lasts. Readers are on their flag-free walk
+// block storage for as long as the fault lasts. Without the lock, blocks keep being stored
+// while no chain write meets the walk. A fork block whose reconcile reaches a row the walk
+// has already updated waits on that row while it holds slowPathMu, so every StoreBlock
+// after it, extends included, waits too. The wait ends when one of the two gives way: the
+// walk rolls back at its chain-write check or on any earlier error, or PostgreSQL aborts
+// the fork's reconcile as a deadlock victim and RetryTx runs it again. It lasts at most
+// the rest of the walk's 30 min budget. Readers are on their flag-free walk
 // because of the guard, and rows a concurrent StoreBlock inserts are flagged by that
 // StoreBlock. A chain write that commits during the attempt can leave the attempt's older
 // view in place (see watchOnMainChainWrites), so the attempt watches for chain writes and
 // reports an overlap when one was noted. When every noted write named the lowest height it
 // can have moved, and no mark owing a full walk arrived meanwhile, the walk left every row
 // below that height right, and the record is narrowed to a bounded walk down to it, which
-// runs next under slowPathMu like any bounded attempt and which no write can overlap. When
+// runs next under slowPathMu like any bounded attempt. When
 // one of them could not name a height, which is InvalidateBlock and RevalidateBlock, the
 // full walk runs again, unlocked, after the backoff. A steady stream of such operator
 // writes can keep the repair owed; readers stay on the flag-free walk meanwhile, which
@@ -405,7 +432,11 @@ const (
 // On SQLite a full attempt does take slowPathMu. SQLite lets one writer in at a time, so a
 // long walk would make each StoreBlock that needs to write fail with SQLITE_BUSY after the
 // 5 s busy timeout; waiting on the lock delays block storage without failing it. Every
-// SQLite attempt is therefore locked, and none can be overlapped.
+// SQLite attempt is therefore locked.
+//
+// slowPathMu only orders writers in this process. On PostgreSQL every walk, locked or
+// not, also checks the shared chain-write row before it commits (see chainWriteStateKey),
+// which rolls it back when a write from any process committed during it.
 //
 // A locked attempt reads the record only once it holds the lock. A chain write it queued
 // behind has finished by then and cannot overlap it, and a rebuild outside the loop that
@@ -458,7 +489,7 @@ func (s *SQL) attemptOnMainChainRepair() (repairOutcome, error) {
 		watch = s.watchOnMainChainWrites()
 	}
 
-	err := s.runOnMainChainRepair(full, floor)
+	timedOut, err := s.runOnMainChainRepair(full, floor)
 
 	overlapped := false
 	writeFloor := noRepairFloor
@@ -478,6 +509,17 @@ func (s *SQL) attemptOnMainChainRepair() (repairOutcome, error) {
 
 	if err != nil {
 		r.attempts++
+
+		if timedOut && !full && !r.full {
+			// The bounded window did not fit its budget, so the next attempt walks to
+			// genesis. The full walk covers every height, so the floor goes with it, and a
+			// write that overlaps the full walk narrows the record to that write's own
+			// floor rather than back to this one.
+			r.full = true
+			r.floor = noRepairFloor
+
+			return repairFailed, errors.NewProcessingError("attempt %d (bounded walk from floor %d, holding slowPathMu %v) ran out of its %s budget, the next attempt walks the full chain", attempt, floor, locked, r.boundedTimeout, err)
+		}
 
 		return repairFailed, errors.NewProcessingError("attempt %d (full walk %v, floor %d, holding slowPathMu %v)", attempt, full, floor, locked, err)
 	}
@@ -518,24 +560,31 @@ func (s *SQL) onMainChainRepairNeedsLockLocked() bool {
 // runOnMainChainRepair runs the walk of one attempt; attemptOnMainChainRepair decides
 // whether it holds slowPathMu. rebuildOnMainChainFlag raises the guard itself for its
 // duration, on top of the count this record holds.
-func (s *SQL) runOnMainChainRepair(full bool, floor int64) error {
-	timeout := rebuildOffChainSetTimeout
-	if full {
-		timeout = migrationFullRebuildTimeout
+//
+// timedOut is true when the walk failed because it ran out of its budget. It is read from
+// the context rather than the error: the rebuild wraps a driver error in a StorageError,
+// which keeps only its message. A shutdown cancels the context instead, which is not a
+// timeout.
+func (s *SQL) runOnMainChainRepair(full bool, floor int64) (timedOut bool, err error) {
+	timeout := migrationFullRebuildTimeout
+	if !full {
+		s.onMainChainRepair.mu.Lock()
+		timeout = s.onMainChainRepair.boundedTimeout
+		s.onMainChainRepair.mu.Unlock()
 	}
 
 	ctx, cancel := s.shutdownAwareContext(timeout)
 	defer cancel()
 
-	if err := s.rebuildOnMainChainFlagFrom(ctx, full, floor); err != nil {
-		return err
+	if err = s.rebuildOnMainChainFlagFrom(ctx, full, floor); err != nil {
+		return errors.Is(ctx.Err(), context.DeadlineExceeded), err
 	}
 
 	// Drop any answer a reader cached from the column between the failed write and the
 	// mark. Everything cached since came from a flag-free walk and is still right.
 	s.ResetResponseCache()
 
-	return nil
+	return false, nil
 }
 
 // releaseOnMainChainRepairGauge drops this store's contribution to the pending gauge when
