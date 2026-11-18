@@ -1129,6 +1129,7 @@ func heavyForkBlock(parent *model.Block, nonce uint32) *model.Block {
 // takes the tip once the row is released.
 func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T) {
 	s := newPostgresChainWriteStore(t)
+	s.useInMemoryChainCheck = true
 	ctx := context.Background()
 
 	// block1 to block3 are the main chain and blockAlternative2 a fork off block1. alt4
@@ -1173,8 +1174,24 @@ func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T
 			return false
 		}
 
-		return waiting > 0
-	}, 10*time.Second, 20*time.Millisecond, "the fork block's reconcile never queued on the held row")
+		return waiting > 0 && s.mainChainRebuilding.Load() > 0
+	}, 10*time.Second, 20*time.Millisecond, "the fork block's reconcile never queued on the held row with the guard raised")
+
+	// Readers can use the forked set during the retry pause. Require a sustained
+	// unguarded window, so a brief gap between attempts cannot satisfy the check.
+	var unguardedSince time.Time
+	require.Eventually(t, func() bool {
+		if s.mainChainRebuilding.Load() != 0 {
+			unguardedSince = time.Time{}
+			return false
+		}
+
+		if unguardedSince.IsZero() {
+			unguardedSince = time.Now()
+		}
+
+		return time.Since(unguardedSince) >= forkLockRetryDelay/2 && len(forkDone) == 0
+	}, 3*(forkLockTimeout+forkLockRetryDelay), 10*time.Millisecond, "the fork block must release the guard during its retry pause")
 
 	// An extend of the current tip touches no row the holder has, so only slowPathMu could
 	// keep it waiting.
