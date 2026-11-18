@@ -1039,8 +1039,9 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				if graceErr != nil {
 					// Keep missing-parent outermost: the counters, the legacy orphan
 					// pool and the HTTP 422 mapping treat it as deferrable. The wrapped
-					// node fault still marks it as ours at the RPC boundary.
-					err = errors.NewTxMissingParentError("[Validate][%s] parent missing and DAH grace undecided", txID, graceErr)
+					// node fault still marks it as ours at the RPC boundary. The original
+					// error stays in the chain, so the 422 body and the log name the parent.
+					err = errors.NewTxMissingParentError("[Validate][%s] parent missing and DAH grace undecided", txID, errors.Join(err, graceErr))
 					span.RecordError(err)
 
 					return nil, err
@@ -1988,7 +1989,8 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 //
 // The grace needs all of these:
 //   - a blockchain client (without one it denies before any store read);
-//   - a stored record for this txid with BlockIDs;
+//   - a stored record for this txid with a BlockID other than 0 (see
+//     nonGenesisBlockIDs);
 //   - at least one of those blocks on the current chain (a block that lost a
 //     reorg keeps its stale ID; only invalidated blocks get BlockIDs cleared);
 //   - the record is not conflicting, not locked and not creating.
@@ -1996,10 +1998,22 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 // A bless returns the stored record and writes nothing. The txid commits to the
 // whole transaction, so the record is for these exact bytes. Scripts are not
 // re-run and spends are not recorded: every parent is absent, so there is no
-// record to spend against. This matches the store's own resolveSpendCompletions,
-// which accepts an existing child on a not-found parent. Finality runs earlier in
-// precheckTransaction. Coinbase maturity is not rechecked, because the tx is mined
-// at or below the tip and maturity only grows with height.
+// record to spend against.
+//
+// BlockIDs do not prove that the spends were recorded, and the stores do not
+// enforce that DAH eviction leaves only fully spent parents. A create-only record
+// (seedimport, quick-validate wave 1) can carry BlockIDs with no spends behind
+// it, and a conflicting record can be DAH-evicted with unspent outputs. The
+// grace accepts this: with every parent absent, this node holds no output the tx
+// could double-spend, and the record claims a block on the current chain.
+//
+// The stores' own not-found-parent check (resolveSpendCompletions and its SQL
+// and Pebble mirrors) needs only that the record exists. It is looser than this
+// grace, not a precedent for it; issue 2252 tracks it.
+//
+// Finality runs earlier in precheckTransaction. Coinbase maturity is not
+// rechecked, because the tx is mined at or below the tip and maturity only grows
+// with height.
 //
 // A nil record and nil error deny the grace, as does a clean not-found of the
 // child. A store or blockchain fault returns an error with a node-fault class
@@ -2023,11 +2037,13 @@ func (v *Validator) dahEvictedParentGrace(ctx context.Context, tx *bt.Tx, txID s
 		return nil, errors.NewStorageError("[Validate][%s] DAH-evicted-parent grace: meta read failed (degraded store?)", txID, metaErr)
 	}
 
-	if len(txMetaData.BlockIDs) == 0 || txMetaData.Conflicting || txMetaData.Locked || txMetaData.Creating {
+	minedBlockIDs := nonGenesisBlockIDs(txMetaData.BlockIDs)
+
+	if len(minedBlockIDs) == 0 || txMetaData.Conflicting || txMetaData.Locked || txMetaData.Creating {
 		return nil, nil
 	}
 
-	onCurrentChain, chainErr := v.blockchainClient.CheckBlockIsInCurrentChain(ctx, txMetaData.BlockIDs)
+	onCurrentChain, chainErr := v.blockchainClient.CheckBlockIsInCurrentChain(ctx, minedBlockIDs)
 	if chainErr != nil {
 		if ctx.Err() != nil {
 			return nil, nil
@@ -2046,6 +2062,21 @@ func (v *Validator) dahEvictedParentGrace(ctx context.Context, tx *bt.Tx, txID s
 	v.logger.Debugf("[Validate][%s] all parents absent, tx mined on current chain and not conflicting/locked/creating, assuming blessed (BlockIDs=%v)", txID, txMetaData.BlockIDs)
 
 	return txMetaData, nil
+}
+
+// nonGenesisBlockIDs drops block id 0. Genesis holds id 0 and is on every chain,
+// and its only transaction has no inputs, so id 0 on a record with inputs is the
+// seeder's placeholder (cmd/seeder), not evidence of a block.
+func nonGenesisBlockIDs(blockIDs []uint32) []uint32 {
+	ids := make([]uint32, 0, len(blockIDs))
+
+	for _, id := range blockIDs {
+		if id != 0 {
+			ids = append(ids, id)
+		}
+	}
+
+	return ids
 }
 
 // getUtxoBlockHeightsAndExtendTx returns the block height of each input's parent
@@ -2115,22 +2146,28 @@ func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID st
 		return nil, false, errors.NewProcessingError("[Validate][%s] store returned %d parent outputs for %d outpoints", txID, len(answers), len(outpoints))
 	}
 
+	// A read fault outranks every verdict below. Found in input order instead, it
+	// would surface as a missing parent whenever an earlier parent is absent.
+	for i, answer := range answers {
+		if answer.Err != nil {
+			return nil, false, errors.NewProcessingError("[Validate][%s] error getting parent transaction %s", txID, outpoints[i].TxID, answer.Err)
+		}
+	}
+
 	for i, answer := range answers {
 		inputIdx := storeIdxs[i]
 		parentTxHash := outpoints[i].TxID
 
-		switch {
-		case answer.Err != nil:
-			return nil, false, errors.NewProcessingError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, answer.Err)
-		case answer.Status == utxo.ParentOutputTxNotFound:
+		switch answer.Status {
+		case utxo.ParentOutputTxNotFound:
 			allParentsMissing := len(storeIdxs) == len(tx.Inputs) && everyParentNotFound(answers)
 
 			return nil, allParentsMissing, errors.NewTxMissingParentError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash)
-		case answer.Status == utxo.ParentOutputNoSuchIndex:
+		case utxo.ParentOutputNoSuchIndex:
 			return nil, false, errors.NewTxInvalidError("[Validate][%s] parent transaction %s has no output %d", txID, parentTxHash, outpoints[i].Vout)
-		case answer.Status == utxo.ParentOutputMined:
+		case utxo.ParentOutputMined:
 			utxoHeights[inputIdx] = answer.Height
-		case answer.Status == utxo.ParentOutputNotMined:
+		case utxo.ParentOutputNotMined:
 			utxoHeights[inputIdx] = unconfirmedParentHeight
 		default:
 			return nil, false, errors.NewProcessingError("[Validate][%s] store gave no answer for parent transaction %s", txID, parentTxHash)

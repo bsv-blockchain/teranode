@@ -10,6 +10,7 @@ package validator
 
 import (
 	"context"
+	"net/url"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	bcsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
@@ -148,11 +150,14 @@ func TestValidate_ExtendStepDAHEvictedParentGrace(t *testing.T) {
 		minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
 		v, mockStore, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, onCurrentChain: true})
 
+		blessedBefore := testutil.ToFloat64(prometheusValidatorDAHGraceBlessed)
+
 		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
 		require.NoError(t, err)
 		require.NotNil(t, txMetaData)
 		require.Equal(t, []uint32{1, 2}, txMetaData.BlockIDs)
+		require.Equal(t, blessedBefore+1, testutil.ToFloat64(prometheusValidatorDAHGraceBlessed), "a bless must count once")
 		// The verdict must come from the chain oracle, asked about the child's own BlockIDs.
 		chain.AssertCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, []uint32{1, 2})
 		// The grace must short-circuit BEFORE any spend is attempted: no Spend
@@ -249,6 +254,8 @@ func TestValidate_ExtendStepDAHEvictedParentGrace(t *testing.T) {
 		minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
 		v, mockStore, _ := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, chainErr: errors.NewServiceError("blockchain unavailable")})
 
+		faultsBefore := testutil.ToFloat64(prometheusValidatorDAHGraceFault.WithLabelValues("chain_check"))
+
 		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
 		require.Error(t, err)
@@ -258,6 +265,9 @@ func TestValidate_ExtendStepDAHEvictedParentGrace(t *testing.T) {
 		// SERVICE_UNAVAILABLE is on the RPC layer's node-fault list; SERVICE_ERROR is not,
 		// and would be reported to the submitter as a verdict on the transaction.
 		require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "the fault must surface as a node-fault class, got: %v", err)
+		require.Contains(t, err.Error(), tx.Inputs[0].PreviousTxIDChainHash().String(), "the error must still name the missing parent")
+		require.Contains(t, errors.PublicError(err).Error(), tx.Inputs[0].PreviousTxIDChainHash().String(), "the submitter-facing error must name the missing parent")
+		require.Equal(t, faultsBefore+1, testutil.ToFloat64(prometheusValidatorDAHGraceFault.WithLabelValues("chain_check")), "a chain-check fault must count once")
 		mockStore.AssertExpectations(t)
 	})
 
@@ -267,11 +277,15 @@ func TestValidate_ExtendStepDAHEvictedParentGrace(t *testing.T) {
 		// classification can satisfy the STORAGE_ERROR assertion.
 		v, mockStore, _ := setupExtendGraceValidator(t, tx, extendGraceSetup{childMetaErr: errors.NewProcessingError("aerospike timeout")})
 
+		faultsBefore := testutil.ToFloat64(prometheusValidatorDAHGraceFault.WithLabelValues("meta_read"))
+
 		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrTxMissingParent), "a fault must stay deferrable, got: %v", err)
 		require.True(t, errors.Is(err, errors.ErrStorageError), "the grace must classify the read fault as a node fault, got: %v", err)
+		require.Contains(t, err.Error(), tx.Inputs[0].PreviousTxIDChainHash().String(), "the error must still name the missing parent")
+		require.Equal(t, faultsBefore+1, testutil.ToFloat64(prometheusValidatorDAHGraceFault.WithLabelValues("meta_read")), "a meta-read fault must count once")
 		mockStore.AssertExpectations(t)
 	})
 
@@ -431,7 +445,6 @@ func TestExtendGraceRequiresEveryParentAbsent(t *testing.T) {
 	}{
 		{"first absent, second present", []utxo.ParentOutput{notFound, present}},
 		{"first present, second absent", []utxo.ParentOutput{present, notFound}},
-		{"first absent, second read fault", []utxo.ParentOutput{notFound, {Err: errors.NewStorageError("read failed")}}},
 	} {
 		t.Run(tc.name+" is denied", func(t *testing.T) {
 			tx, _ := makeTwoParentGraceTx(t)
@@ -442,6 +455,30 @@ func TestExtendGraceRequiresEveryParentAbsent(t *testing.T) {
 
 			require.Nil(t, txMetaData)
 			require.ErrorIs(t, err, errors.ErrTxMissingParent)
+			mockStore.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
+			chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
+		})
+	}
+
+	readFault := utxo.ParentOutput{Err: errors.NewStorageError("read failed")}
+
+	for _, tc := range []struct {
+		name    string
+		answers []utxo.ParentOutput
+	}{
+		{"first absent, second read fault", []utxo.ParentOutput{notFound, readFault}},
+		{"first read fault, second absent", []utxo.ParentOutput{readFault, notFound}},
+	} {
+		t.Run(tc.name+" surfaces the fault in either input order", func(t *testing.T) {
+			tx, _ := makeTwoParentGraceTx(t)
+			minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{3}}
+			v, mockStore, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, onCurrentChain: true, parentResult: tc.answers})
+
+			txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+
+			require.Nil(t, txMetaData)
+			require.False(t, errors.Is(err, errors.ErrTxMissingParent), "a store fault must not read as a missing parent, got: %v", err)
+			require.True(t, errors.Is(err, errors.ErrStorageError), "the store fault must surface, got: %v", err)
 			mockStore.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
 			chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
 		})
@@ -461,4 +498,38 @@ func TestExtendGraceRequiresEveryParentAbsent(t *testing.T) {
 		mockStore.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
 		chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
 	})
+}
+
+// The seeder stamps every UTXO-set record with block id 0. Genesis holds id 0 and
+// is on every chain, so a real blockchain store answers true for [0]. The grace
+// must not take that as evidence of a block.
+func TestExtendGraceIgnoresGenesisBlockID(t *testing.T) {
+	logger := ulogger.TestLogger{}
+	settings := test.CreateBaseTestSettings(t)
+
+	store, err := bcsql.New(logger, &url.URL{Scheme: "sqlitememory"}, settings)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { require.NoError(t, store.Close(context.Background())) })
+
+	chainClient, err := blockchain.NewLocalClient(logger, settings, store, nil, nil)
+	require.NoError(t, err)
+
+	onChain, err := chainClient.CheckBlockIsInCurrentChain(context.Background(), []uint32{0})
+	require.NoError(t, err)
+	require.True(t, onChain, "precondition: the real store places id 0 on the current chain")
+
+	tx := makeExtendGraceTx(t)
+	seededMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{0}}
+	v, mockStore, _ := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: seededMeta})
+	v.blockchainClient = chainClient
+
+	blessedBefore := testutil.ToFloat64(prometheusValidatorDAHGraceBlessed)
+
+	txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+
+	require.Nil(t, txMetaData)
+	require.ErrorIs(t, err, errors.ErrTxMissingParent)
+	require.Equal(t, blessedBefore, testutil.ToFloat64(prometheusValidatorDAHGraceBlessed), "a seeded record must not be blessed")
+	mockStore.AssertExpectations(t)
 }
