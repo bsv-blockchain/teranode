@@ -3117,11 +3117,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 // So the block goes to whichever side removes it from the cache. If this call
 // removes it, it releases it, as the old Delete-then-release did. If the entry is
 // already gone, the caller must not touch the block's subtrees again. The setMined
-// worker or the cache's eviction function may have removed it, or another
-// validation may have overwritten it. A taken block belongs to the worker, though
-// some worker early returns skip its release (a separate cleanup bug). A block
-// that was never cached (cached false) is still only ValidateBlock's, so it is
-// released directly.
+// worker, the cache's eviction function, or a reclaim call for another object
+// with the same hash may have removed it. Another validation may also have
+// overwritten it. Some worker early returns skip release (a separate cleanup
+// bug). A block that was never cached (cached false) is still only ValidateBlock's,
+// so it is released directly.
 //
 // The cache can also hold a different object for the same hash: a revalidation of
 // the block, or the optimistic-mining goroutine, which runs outside
