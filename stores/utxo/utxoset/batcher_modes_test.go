@@ -6,6 +6,7 @@ import (
 	"math"
 	"sync"
 	"testing"
+	"time"
 
 	batcher "github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -122,6 +123,37 @@ func batcherBatchSizeStats(t *testing.T, name string) (sum float64, count uint64
 	return sum, count
 }
 
+// settledBatchSizeStats is batcherBatchSizeStats taken only once every triggered batch has been
+// observed in the histogram.
+//
+// go-batcher bumps teranode_batcher_batches_total before it runs the batch fn, but observes
+// teranode_batcher_batch_size in a defer after the fn returns, and utxoset answers each caller
+// from inside the fn. So a caller can return before its batch reaches the histogram: a read
+// taken right after a load can miss its last batches, and a later window can pick them up.
+// Every dispatch records both, so the histogram has caught up once its count equals the
+// counter's total; polling for that makes the window boundaries exact.
+func settledBatchSizeStats(t *testing.T, name string) (sum float64, count uint64) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+
+	for {
+		sum, count = batcherBatchSizeStats(t, name)
+		triggered := batcherFlushCount(t, name)
+
+		if float64(count) == triggered {
+			return sum, count
+		}
+
+		if time.Now().After(deadline) {
+			require.Failf(t, "batch_size histogram never caught up with batches_total",
+				"batcher %q: %d batches observed, %v triggered", name, count, triggered)
+		}
+
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // driveSpendAndCreateLoad fires n concurrent CreateOnly SpendAndCreate calls through s, each its
 // own transaction, and waits for every one of them to land.
 //
@@ -197,16 +229,17 @@ func TestBatcherModeGreedyAccumulateBoundsFlushCount(t *testing.T) {
 // TestBatcherModeDrainProducesAdaptiveSmallBatches is the other half of the same proof: drain
 // mode still exists and still behaves as before when an operator asks for it.
 //
-// This does NOT assert a flush count against the greedy bound. Drain fires as soon as a worker
-// is free with whatever has queued, but nothing stops it from also draining a full 500-item
-// batch when 2,000 callers all land inside the same instant -- a slow or contended CI box
-// stretches exactly that window, so a count-based assertion can converge on the greedy shape by
-// utxocidence and either flake red on a fast box or pass green while hiding a real regression
-// on a slow one. The two properties that are true of drain mode REGARDLESS of timing are: every
-// flush it makes is stamped reason=drain (see the drain branch in go-batcher's worker loop,
-// which never falls through to the size- or timeout-triggered paths), and because it fires on
-// whatever is queued rather than waiting for the queue to fill, its batches average well under
-// the cap even when some individual ones happen to hit it.
+// Neither the flush count nor the batch size under the concurrent burst says anything about
+// drain mode: when 2,000 callers all land inside the same instant, drain legitimately takes
+// full 500-item batches, so a count- or average-based bound converges on the greedy shape on a
+// slow or contended CI box and flakes. Two properties hold regardless of timing, and the test
+// asserts only those:
+//
+//   - under the concurrent burst, every flush is stamped reason=drain (the drain branch in
+//     go-batcher's worker loop never falls through to the size- or timeout-triggered paths);
+//   - with one caller at a time, the queue never holds more than one item, so drain must fire
+//     each lone item immediately as a batch of exactly one rather than wait for the cap or the
+//     timer. That is the adaptive behaviour, measured without depending on scheduling.
 func TestBatcherModeDrainProducesAdaptiveSmallBatches(t *testing.T) {
 	for attempt := 1; attempt <= 5; attempt++ {
 		t.Run(fmt.Sprintf("run%d", attempt), func(t *testing.T) {
@@ -220,30 +253,45 @@ func TestBatcherModeDrainProducesAdaptiveSmallBatches(t *testing.T) {
 			})
 
 			reasonsBefore := batcherReasonCounts(t, "utxoset_spend_and_create")
-			sumBefore, countBefore := batcherBatchSizeStats(t, "utxoset_spend_and_create")
+			sumBefore, countBefore := settledBatchSizeStats(t, "utxoset_spend_and_create")
 
 			driveSpendAndCreateLoad(t, s, ctx, batcherModeCallers, 100, uint64(1000+attempt)*10_000_000)
 
 			reasonsAfter := batcherReasonCounts(t, "utxoset_spend_and_create")
-			sumAfter, countAfter := batcherBatchSizeStats(t, "utxoset_spend_and_create")
+			sumAfter, countAfter := settledBatchSizeStats(t, "utxoset_spend_and_create")
 
 			drainFlushes := reasonsAfter[batcher.ReasonDrain] - reasonsBefore[batcher.ReasonDrain]
 			sizeFlushes := reasonsAfter[batcher.ReasonSize] - reasonsBefore[batcher.ReasonSize]
 			timeoutFlushes := reasonsAfter[batcher.ReasonTimeout] - reasonsBefore[batcher.ReasonTimeout]
 
-			flushCount := countAfter - countBefore
-			require.Positive(t, flushCount, "the load must have produced at least one flush")
-			avgBatchSize := (sumAfter - sumBefore) / float64(flushCount)
-
-			t.Logf("drain mode: %d flushes reason=drain, %d reason=size, %d reason=timeout, avg batch size %.1f (cap %d)",
-				int64(drainFlushes), int64(sizeFlushes), int64(timeoutFlushes), avgBatchSize, batcherModeSize)
+			t.Logf("drain mode burst: %d flushes reason=drain, %d reason=size, %d reason=timeout, %d dispatched batches, %.0f items",
+				int64(drainFlushes), int64(sizeFlushes), int64(timeoutFlushes), countAfter-countBefore, sumAfter-sumBefore)
 
 			require.Positivef(t, drainFlushes, "drain mode must report at least one flush with reason=drain")
 			require.Zerof(t, sizeFlushes, "drain mode must never report a size-triggered flush, got %v", sizeFlushes)
 			require.Zerof(t, timeoutFlushes, "drain mode must never report a timeout-triggered flush, got %v", timeoutFlushes)
-			require.Lessf(t, avgBatchSize, float64(batcherModeSize)/2,
-				"drain mode should adapt the batch to the queue rather than converge on the cap: avg batch size %.1f, cap %d",
-				avgBatchSize, batcherModeSize)
+
+			// Sequential callers: each SpendAndCreate blocks until its batch lands, so only one
+			// item is ever queued and drain must dispatch it on its own.
+			const sequentialCallers = 20
+
+			seqSumBefore, seqCountBefore := settledBatchSizeStats(t, "utxoset_spend_and_create")
+			seqReasonsBefore := batcherReasonCounts(t, "utxoset_spend_and_create")
+
+			for i := 0; i < sequentialCallers; i++ {
+				driveSpendAndCreateLoad(t, s, ctx, 1, 100, uint64(2000+attempt)*10_000_000+uint64(i)) //nolint:gosec // test id spread, no overflow at this scale
+			}
+
+			seqSumAfter, seqCountAfter := settledBatchSizeStats(t, "utxoset_spend_and_create")
+			seqReasonsAfter := batcherReasonCounts(t, "utxoset_spend_and_create")
+
+			require.Equalf(t, uint64(sequentialCallers), seqCountAfter-seqCountBefore,
+				"drain mode must flush each lone queued item as its own batch")
+			require.InDeltaf(t, float64(sequentialCallers), seqSumAfter-seqSumBefore, 0,
+				"every sequential drain batch must hold exactly one item")
+			require.InDeltaf(t, float64(sequentialCallers),
+				seqReasonsAfter[batcher.ReasonDrain]-seqReasonsBefore[batcher.ReasonDrain], 0,
+				"every sequential flush must be stamped reason=drain")
 		})
 	}
 }

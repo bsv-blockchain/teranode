@@ -3033,9 +3033,10 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			//
 			//   blockchain.Server.ReportPeerFailure broadcasts NotificationType_PeerFailure
 			//   -> p2p.Server routes failure_type "catchup" to
-			//      syncCoordinator.HandleCatchupFailure (and its subscription listener
-			//      deliberately bypasses the "skip notifications while syncing" filter for
-			//      this type — "needed to switch peers on catchup failure")
+			//      syncCoordinator.HandleCatchupFailure (its subscription listener hands
+			//      catchup PeerFailures to a dedicated worker that never runs the FSM skip
+			//      check, so neither a parked block announcement nor the CATCHINGBLOCKS
+			//      filter holds them back)
 			//   -> SyncCoordinator clears currentSyncPeer and calls triggerSyncLocked, i.e.
 			//      immediate re-selection of a different sync peer.
 			//
