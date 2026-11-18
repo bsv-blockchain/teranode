@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	astore "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	apruner "github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
@@ -260,10 +261,12 @@ func TestPrunerUnresolvableRecordDoesNotBlockCycle(t *testing.T) {
 	healthyKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), healthy.TxIDChainHash().CloneBytes())
 	require.NoError(t, err)
 
-	// Mark one record external without writing any blob. Its input references are
-	// now unrecoverable, which is exactly the anomaly the old code swallowed by
-	// deleting the record and losing the parent's replay protection.
+	// Mark one record external with a blob that does not parse. Its input references are
+	// unrecoverable, which is the anomaly the old code swallowed by deleting the record and
+	// losing the parent's replay protection. A record whose blobs are both gone is not this
+	// case: it is deleted, as on main, see TestProcessRecordChunk_UnresolvableInputs.
 	require.NoError(t, client.Put(nil, brokenKey, aerospike.BinMap{fields.External.String(): true}))
+	require.NoError(t, store.GetExternalStore().Set(ctx, broken.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, []byte{0x01, 0x02, 0x03}))
 
 	astore.ResetPrunerServiceForTests()
 	t.Cleanup(astore.ResetPrunerServiceForTests)

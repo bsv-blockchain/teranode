@@ -407,17 +407,18 @@ func TestExternalFileAlreadyDeleted(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, exists)
 
-	// Missing inputs must retain the record so replay protection can be retried,
-	// and must do so without failing the cycle: a hard error here would unwind
-	// into PruneWithPartitions, which never retries a non-timeout error, so this
-	// one record would block all pruning permanently.
+	// Both blobs are gone, so the inputs are unrecoverable and no parent can be marked now. The
+	// record is deleted, as on main, and the cycle is not failed: a record left behind by
+	// pruner_skipDeletions or an unanswered delete had its parents marked before its blob went.
 	pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	processed, err := service.Prune(pruneCtx, 7, "<test-hash>")
 	require.NoError(t, err)
-	require.Equal(t, int64(0), processed)
+	require.Equal(t, int64(1), processed)
+
+	// Verify the Aerospike record was still deleted
 	_, err = client.Get(nil, key)
-	require.NoError(t, err, "record with unresolvable inputs must be retained")
+	require.Error(t, err, "a record whose blobs are both gone is deleted, not rescanned on every block")
 }
 
 // TestMixedExternalAndNormalTransactions tests pruning of both types in one batch
