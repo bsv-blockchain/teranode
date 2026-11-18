@@ -284,6 +284,38 @@ func TestHistoryEndpointProjectsStage(t *testing.T) {
 	}
 }
 
+func TestHistoryEndpointShowsActiveAlarmStatus(t *testing.T) {
+	clock := newFakeClock()
+	metrics := newFake("metrics", func(context.Context, int) (snapshot.Patch, error) {
+		clock.Advance(5 * time.Second)
+		return func(s *snapshot.Snapshot) {
+			s.Cache.HitRate = snapshot.Reading{Value: 0.1, Status: snapshot.StatusOK}
+			s.Cache.Fill = snapshot.Reading{Value: 0.9, Status: snapshot.StatusOK}
+		}, nil
+	})
+	srv := newProbe(t, probeOpts{fast: []Collector{metrics}, floors: []string{"cache.hitRate=0.9"}, clock: clock.Now})
+	runProbe(t, srv)
+
+	require.Eventually(t, func() bool {
+		return hasAlarm(servedSnapshot(t, srv), "cache-hit-rate")
+	}, 5*time.Second, 20*time.Millisecond)
+
+	require.Eventually(t, func() bool {
+		status, raw := doRequest(t, http.MethodGet, apiURL(srv, "/api/history?stage=cache&minutes=1"), testToken, nil)
+		require.Equal(t, http.StatusOK, status)
+
+		var body historyBody
+		require.NoError(t, json.Unmarshal(raw, &body))
+		for _, series := range body.Series {
+			if series.Key == "cache.hitRate" && len(series.Points) > 0 {
+				st := series.Points[len(series.Points)-1].St
+				return st == snapshot.StatusWarn || st == snapshot.StatusCrit
+			}
+		}
+		return false
+	}, 5*time.Second, 20*time.Millisecond, "active alarm never appeared in cache history")
+}
+
 func TestSnapshotEndpointServesEvaluatedSnapshot(t *testing.T) {
 	srv := newProbe(t, probeOpts{})
 	runProbe(t, srv)

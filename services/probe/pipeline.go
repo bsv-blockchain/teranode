@@ -414,6 +414,7 @@ func (p *pipeline) handle(snap snapshot.Snapshot) (clean bool) {
 	}
 
 	normalise(&snap)
+	p.sampler.recordEvaluated(snap)
 
 	p.mu.Lock()
 	p.latest = cloneSnapshot(snap)
