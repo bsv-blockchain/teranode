@@ -1196,8 +1196,9 @@ func (u *Server) validateForkBelowCheckpoint(catchupCtx *CatchupContext) error {
 
 // validateStoredTargetBelowCheckpoint applies the checkpoint fork rule to a catchup target that
 // is already stored, as ValidateBlock does for a stored hash: one below a checkpoint the tip has
-// passed that is not on the main chain is refused as BlockInvalid. A target that is not stored
-// passes; the fork checks after the header fetch cover it.
+// passed that is not on the main chain is refused, and the peer charged, as
+// validateForkBelowCheckpoint refuses an offered chain. A target that is not stored passes; the
+// fork checks after the header fetch cover it.
 func (u *Server) validateStoredTargetBelowCheckpoint(ctx context.Context, catchupCtx *CatchupContext) error {
 	if u.settings.ChainCfgParams == nil || len(u.settings.ChainCfgParams.Checkpoints) == 0 {
 		return nil
@@ -1219,15 +1220,19 @@ func (u *Server) validateStoredTargetBelowCheckpoint(ctx context.Context, catchu
 	}
 
 	if err = u.blockValidation.rejectStoredForkBelowCheckpoint(ctx, header, meta.Height); err != nil {
-		if errors.Is(err, errors.ErrBlockInvalid) {
-			u.logger.Errorf("[catchup][%s] %v", hash.String(), err)
-
-			if prometheusCatchupErrors != nil {
-				prometheusCatchupErrors.WithLabelValues(catchupCtx.peerID, "bad_fork_prior_to_checkpoint").Inc()
-			}
+		if !errors.Is(err, errors.ErrBlockInvalid) {
+			return err
 		}
 
-		return err
+		u.logger.Errorf("[catchup][%s] %v", hash.String(), err)
+
+		u.recordMaliciousAttempt(catchupCtx.peerID, "bad_fork_prior_to_checkpoint")
+
+		if prometheusCatchupErrors != nil {
+			prometheusCatchupErrors.WithLabelValues(catchupCtx.peerID, "bad_fork_prior_to_checkpoint").Inc()
+		}
+
+		return errors.NewServiceError("[catchup][%s] bad-fork-prior-to-checkpoint: the stored target at height %d is below a checkpoint the tip has passed and is not on the main chain", hash.String(), meta.Height)
 	}
 
 	return nil

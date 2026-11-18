@@ -7,6 +7,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/model"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/stretchr/testify/require"
 )
@@ -36,11 +37,31 @@ func inTemplate(stp *SubtreeProcessor, hash chainhash.Hash) bool {
 	return ok
 }
 
-// TestTxFinality_DequeueDropsNotFinalAndDescendants pins the queue path: a transaction whose
-// nLockTime holds it back at the candidate is dropped with its descendants, unless it was
-// validated for a later height than the candidate's (the validator is ahead of block assembly,
-// and the transaction becomes final once block assembly catches up).
-func TestTxFinality_DequeueDropsNotFinalAndDescendants(t *testing.T) {
+// nextFinalityHeader is a block on top of blockHeader, for moving the candidate on.
+func nextFinalityHeader() *model.BlockHeader {
+	return &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  blockHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      blockHeader.Timestamp + 1,
+		Bits:           blockHeader.Bits,
+		Nonce:          7,
+	}
+}
+
+// moveFinalityCandidate moves the processor to the next block and the candidate with it, as
+// block assembly does after a block.
+func moveFinalityCandidate(stp *SubtreeProcessor, height, medianTimePast uint32) {
+	next := nextFinalityHeader()
+	stp.currentBlockHeader.Store(next)
+	stp.SetTxCandidate(next.Hash(), height, medianTimePast)
+}
+
+// TestTxFinality_DequeueHoldsNotFinalAndDescendants pins the queue path: a transaction whose
+// nLockTime holds it back at the candidate is held with its descendants, whatever height it
+// was validated for (one validated ahead comes from a validator ahead of block assembly). Held
+// transactions are offered again when the candidate moves, and go in once they are final.
+func TestTxFinality_DequeueHoldsNotFinalAndDescendants(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -74,8 +95,37 @@ func TestTxFinality_DequeueDropsNotFinalAndDescendants(t *testing.T) {
 	require.False(t, inTemplate(stp, heightLocked), "height lock 600 is not final at height 600")
 	require.False(t, inTemplate(stp, timeLocked), "a time lock equal to the median time past is not final")
 	require.False(t, inTemplate(stp, child), "a descendant of a transaction that is not final must not enter the template")
+	require.False(t, inTemplate(stp, ahead), "a transaction validated ahead is held until block assembly catches up")
 	require.True(t, inTemplate(stp, final), "height lock 599 is final at height 600")
-	require.True(t, inTemplate(stp, ahead), "a transaction validated for a later height waits for block assembly to catch up")
+
+	moveFinalityCandidate(stp, finalityTestHeight+1, finalityTestMTP+1)
+
+	for _, hash := range []chainhash.Hash{heightLocked, timeLocked, child, ahead} {
+		require.Eventually(t, func() bool { return inTemplate(stp, hash) }, 2*time.Second, 5*time.Millisecond,
+			"a held transaction goes in once the candidate makes it final: %s", hash)
+	}
+}
+
+// TestTxFinality_HeldTxMinedElsewhereIsNotOfferedAgain pins that a held transaction a block
+// mines is forgotten: offering it again would put a mined transaction into the template.
+func TestTxFinality_HeldTxMinedElsewhereIsNotOfferedAgain(t *testing.T) {
+	stp := newFinalityTestProcessor(t, context.Background())
+
+	locked := chainhash.HashH([]byte("finality-held-then-mined"))
+	child := chainhash.HashH([]byte("finality-held-then-mined-child"))
+
+	require.Empty(t, stp.FilterUnminedTxEra([]*utxostore.UnminedTransaction{
+		{Node: &subtreepkg.Node{Hash: locked}, TxInpoints: &subtreepkg.TxInpoints{}, LockTime: finalityTestHeight},
+		{Node: &subtreepkg.Node{Hash: child}, TxInpoints: inpointsWithParent(locked)},
+	}, []uint32{0, 0}))
+	require.Equal(t, 2, stp.heldCount())
+
+	mined := NewSortedHashSet(1)
+	require.NoError(t, mined.Put(locked))
+	require.NoError(t, mined.Freeze(1))
+	stp.forgetMinedDroppedTxs(mined)
+
+	require.Equal(t, 1, stp.heldCount(), "the mined transaction is forgotten, its child stays held")
 }
 
 // TestTxFinality_StaleCandidateAdmits pins that the check is skipped while the candidate
@@ -94,9 +144,10 @@ func TestTxFinality_StaleCandidateAdmits(t *testing.T) {
 	require.Len(t, kept, 1)
 }
 
-// TestTxFinality_ReloadDropsNotFinal pins the reload path: the store's nLockTime is checked
-// against the candidate whatever height the transaction is tagged with, and descendants go too.
-func TestTxFinality_ReloadDropsNotFinal(t *testing.T) {
+// TestTxFinality_ReloadHoldsNotFinal pins the reload path: the store's nLockTime is checked
+// against the candidate whatever height the transaction is tagged with, and descendants are
+// held with it.
+func TestTxFinality_ReloadHoldsNotFinal(t *testing.T) {
 	stp := newFinalityTestProcessor(t, context.Background())
 
 	locked := chainhash.HashH([]byte("finality-reload-locked"))
@@ -111,6 +162,7 @@ func TestTxFinality_ReloadDropsNotFinal(t *testing.T) {
 
 	require.Len(t, kept, 1)
 	require.Equal(t, final, kept[0].Hash)
+	require.Equal(t, 2, stp.heldCount())
 
 	// Tagged above the candidate: after a reorg to a shorter chain, not a validator ahead.
 	afterShorterReorg := chainhash.HashH([]byte("finality-reload-after-shorter-reorg"))
@@ -173,4 +225,14 @@ func TestTxFinality_NotFinalTemplateTxs(t *testing.T) {
 	require.NoError(t, minedSet.Freeze(1))
 	stp.forgetMinedDroppedTxs(minedSet)
 	require.Equal(t, 1, stp.NotFinalTemplateTxs(), "a mined transaction is no longer tracked")
+
+	// One that left the template some other way (this node's own block, a conflict) is
+	// forgotten when the template is checked, so the tracked set stays the template's.
+	stp.droppedMu.Lock()
+	stp.trackLockTimeLocked(chainhash.HashH([]byte("finality-template-gone")), finalityTestMTP-50)
+	stp.droppedMu.Unlock()
+	require.Equal(t, int64(2), stp.lockedCount.Load())
+
+	require.Equal(t, 1, stp.NotFinalTemplateTxs())
+	require.Equal(t, int64(1), stp.lockedCount.Load(), "a tracked transaction no longer in the template is forgotten")
 }

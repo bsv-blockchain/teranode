@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model/time"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 const errFailedCloseIterator = "failed to close iterator: %v"
@@ -117,12 +118,13 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 		return nil, it.err
 	}
 
-	// Outpoint columns only. Everything this iterator produces from the inputs is
+	// Outpoint and sequence columns only. The inputs feed
 	// subtree.NewTxInpointsFromInputs below, which reads each input's parent hash
-	// and vout; the returned UnminedTransaction carries no transaction body. The
-	// extended and unlocking columns were being read and discarded once per
-	// unmined transaction, on the path block assembly walks at every restart.
-	q2 := inputsQuerySQL(inputsQueryOutpoints, "transaction_id = $1")
+	// and vout, and the lock time check, which reads the sequences; the returned
+	// UnminedTransaction carries no transaction body. The extended and unlocking
+	// columns were being read and discarded once per unmined transaction, on the
+	// path block assembly walks at every restart.
+	q2 := inputsQuerySQL(inputsQueryOutpointsSequence, "transaction_id = $1")
 
 	rows, err := it.store.db.QueryContext(ctx, q2, id)
 	if err != nil {
@@ -150,7 +152,7 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 	// every input of every unmined transaction at each block assembly restart.
 	var scanRow inputScanRow
 
-	scanTargets := scanRow.scanTargets(inputsQueryOutpoints)
+	scanTargets := scanRow.scanTargets(inputsQueryOutpointsSequence)
 
 	for rows.Next() {
 		if err = rows.Scan(scanTargets...); err != nil {
@@ -161,7 +163,7 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 			return nil, err
 		}
 
-		input, inputErr := scanRow.toInput(inputsQueryOutpoints)
+		input, inputErr := scanRow.toInput(inputsQueryOutpointsSequence)
 		if inputErr != nil {
 			if err = it.Close(); err != nil {
 				it.store.logger.Warnf(errFailedCloseIterator, err)
@@ -231,25 +233,8 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 
 	// Block assembly keeps out a transaction its next block cannot mine. The lock time holds
 	// a transaction back only while one of its input sequences is not final.
-	if lockTime != 0 {
-		var holding bool
-
-		q4 := `SELECT EXISTS (SELECT 1 FROM inputs WHERE transaction_id = $1 AND sequence_number <> $2)`
-
-		if err = it.store.db.QueryRowContext(ctx, q4, id, bt.DefaultSequenceNumber).Scan(&holding); err != nil {
-			if closeErr := it.Close(); closeErr != nil {
-				it.store.logger.Warnf(errFailedCloseIterator, closeErr)
-			}
-
-			it.err = err
-
-			return nil, it.err
-		}
-
-		if !holding {
-			lockTime = 0
-		}
-	}
+	tx.LockTime = lockTime
+	lockTime = util.BlockingLockTime(&tx)
 
 	return &utxo.UnminedTransaction{
 		Node: &subtree.Node{

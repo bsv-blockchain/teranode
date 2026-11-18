@@ -1069,7 +1069,7 @@ func TestReorg_KeepsOutTxsNoLongerFinal(t *testing.T) {
 // of them stay final at a next block not behind the highest moved-back block holding
 // transactions. Here three blocks move back for one heavier block, so the next height is below
 // the highest moved-back block's. Blocks without transactions, or only the lowest block moved
-// back, never rebuild.
+// back, never rebuild, and the floor an earlier reorg left stays until a reset.
 func TestCheckTemplateFinality_MovedBackBlocks(t *testing.T) {
 	_, ba, ctx, cancel, cleanup := setupTest(t)
 	defer cancel()
@@ -1133,14 +1133,76 @@ func TestCheckTemplateFinality_MovedBackBlocks(t *testing.T) {
 		{"only the lowest block moved back", movedBack(2, 1), false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			ba.blockAssembler.finalityCheck.Store(nil)
-			ba.blockAssembler.recordReorgFinalityCheck(tt.movedBack)
+			ba.blockAssembler.movedBackFloor.Store(nil)
+			ba.blockAssembler.recordMovedBackFloor(tt.movedBack)
 
 			rebuild, err := ba.blockAssembler.checkTemplateFinality(ctx, heavier, forkMeta.Height+1)
 			require.NoError(t, err)
 			require.Equal(t, tt.rebuild, rebuild)
 		})
 	}
+
+	// The transactions an earlier reorg moved back are still in the template when a later one
+	// moves back only empty blocks, so the floor stays until a reset.
+	t.Run("a later reorg moving back only empty blocks keeps the floor", func(t *testing.T) {
+		ba.blockAssembler.movedBackFloor.Store(nil)
+		ba.blockAssembler.recordMovedBackFloor(movedBack(2, 3))
+		ba.blockAssembler.recordMovedBackFloor(movedBack(1, 3))
+
+		rebuild, err := ba.blockAssembler.checkTemplateFinality(ctx, heavier, forkMeta.Height+1)
+		require.NoError(t, err)
+		require.True(t, rebuild)
+	})
+}
+
+// TestSettleTemplate_UnsettledTemplateIsRetriedOnTheSameTip pins what follows a failed settle:
+// the template may hold a transaction the next block cannot mine, so mining candidates are
+// empty, and the settle is retried on the same tip, which no new block announcement would do.
+func TestSettleTemplate_UnsettledTemplateIsRetriedOnTheSameTip(t *testing.T) {
+	_, ba, ctx, cancel, cleanup := setupTest(t)
+	defer cancel()
+	defer cleanup()
+
+	mineBlocks(t, ctx, ba, 1)
+
+	tx := newTx(0)
+	tx.Inputs[0].SequenceNumber = bt.DefaultSequenceNumber
+
+	_, _, err := ba.utxoStore.SpendAndCreate(ctx, tx, 2, utxostore.WithCreateOnly(), utxostore.WithLocked(false))
+	require.NoError(t, err)
+
+	inpoints, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *tx.TxIDChainHash(), Fee: 111}}, []*subtree.TxInpoints{&inpoints}, nil, nil))
+
+	candidateHolds := func() bool {
+		_, subtrees, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+		if err != nil {
+			return false
+		}
+
+		for _, st := range subtrees {
+			for _, node := range st.Nodes {
+				if node.Hash.Equal(*tx.TxIDChainHash()) {
+					return true
+				}
+			}
+		}
+
+		return false
+	}
+
+	require.Eventually(t, candidateHolds, 5*time.Second, 50*time.Millisecond)
+
+	// As a settle that failed after the last block move leaves it.
+	ba.blockAssembler.templateUnsettled.Store(true)
+
+	_, subtrees, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, subtrees, "an unsettled template must not be mined")
+
+	require.Eventually(t, func() bool { return !ba.blockAssembler.templateUnsettled.Load() && candidateHolds() }, 10*time.Second, 50*time.Millisecond,
+		"the settle is retried on the same tip and the template is mined again")
 }
 
 // TestShouldHandleReorgWithLongerChain verifies reorganization with extended chains.

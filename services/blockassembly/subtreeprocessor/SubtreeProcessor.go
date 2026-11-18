@@ -220,6 +220,13 @@ type SubtreeProcessor struct {
 	lockedTxs   map[chainhash.Hash]uint32
 	lockedCount atomic.Int64
 
+	// heldTxs holds, under droppedMu and in queue order, the transactions their lock time
+	// holds back at the candidate and their descendants, to offer again when the candidate
+	// moves; heldSet indexes them.
+	heldTxs         []heldTx
+	heldSet         map[chainhash.Hash]struct{}
+	heldCountAtomic atomic.Int64
+
 	// currentItemsPerFile specifies the maximum number of items per subtree file
 	currentItemsPerFile atomic.Int32
 
@@ -5616,7 +5623,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 			startIdx = 1 // skip coinbase in first subtree
 		}
 		for i := startIdx; i < len(subtreeNodes); i++ {
-			if !stp.admitTxLocked(subtreeNodes[i].Hash, &subtreeMetaTxInpoints[idx][i], block.Height, 0, false) {
+			if !stp.admitTxLocked(subtreeNodes[i], &subtreeMetaTxInpoints[idx][i], block.Height, 0) {
 				droppedFromBlock = true
 				continue
 			}

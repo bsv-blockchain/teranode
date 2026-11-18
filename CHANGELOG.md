@@ -186,14 +186,16 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
       its template from the UTXO store. Mining candidates stay empty while it does. On
       regtest this also happens once at block 1, because the script engine enables P2SH
       at height 2.
-    - Block assembly also keeps out a transaction whose nLockTime the next block has not
-      reached, and its descendants. The validator sends the lock time of each transaction
-      with an input sequence that is not final: the `locktime` field of `AddTxRequest`,
-      unused until now, and a new `lock_times` on `AddTxBatchColumnarRequest`. A reload
-      reads it from the UTXO store. A reorg can lower the next block's height or median
-      time past; when it leaves such a transaction in the template, or lands on a next
-      block behind the highest block it moved back that held transactions, block assembly
-      rebuilds the template from the UTXO store.
+    - Block assembly also holds back a transaction whose nLockTime the next block has not
+      reached, and its descendants, and offers them again after every block, so they go
+      in once final. The validator sends the lock time of each transaction with an input
+      sequence that is not final: the `locktime` field of `AddTxRequest`, unused until
+      now, and a new `lock_times` on `AddTxBatchColumnarRequest`. A reload reads it from
+      the UTXO store. A reorg can lower the next block's height or median time past; when
+      it leaves such a transaction in the template, or lands on a next block behind the
+      highest block a reorg moved back that held transactions, block assembly rebuilds the
+      template from the UTXO store. If it cannot confirm the template after a block,
+      mining candidates are empty and it retries every 5 seconds.
     - The validator gRPC request has two new fields, `block_assembly_candidate_height`
       and `block_assembly_candidate_median_time`. The HTTP `/tx` endpoint refuses both.
   In a mixed-version deploy, an older validator sends no height and its transactions
@@ -201,11 +203,9 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   `blockassembly_storeTxInpointsForSubtreeMeta` off, block assembly has no parent
   hashes, so it cannot find the descendants of a dropped transaction. A dropped
   transaction stays in the UTXO store and is not resubmitted. The Aerospike store's
-  reload does not read input sequences, so it also keeps out a transaction whose
-  sequences are all final but whose nLockTime is still ahead. A transaction validated
-  against a higher tip that a reorg replaced by a shorter chain, and still on its way to
-  block assembly when the reorg completes, is admitted without the lock time check.
-  Nothing to configure. (#2069)
+  reload does not read input sequences, so it also holds back a transaction whose
+  sequences are all final but whose nLockTime is still ahead, until the chain reaches
+  it. Nothing to configure. (#2069)
 
 - **A failed `on_main_chain` write in the SQL blockchain store is now repaired in the
   background, and block storage can wait for the repair.** `InvalidateBlock`,

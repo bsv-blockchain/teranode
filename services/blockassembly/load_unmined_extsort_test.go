@@ -158,6 +158,34 @@ func TestLoadUnminedSorted_ParentsFirstOnTies(t *testing.T) {
 	require.Equal(t, []chainhash.Hash{early.Hash, parent.Hash, child.Hash, grandchild.Hash}, loadedHashes(t, ba))
 }
 
+// TestLoadUnminedSorted_HeightsFollowTheParentsFirstReorder pins that each transaction keeps
+// its own validated height when an equal-CreatedAt run is put parents first: the parent here
+// was validated under other rules and goes, and its child goes with it, whatever order the
+// iterator gave them in.
+func TestLoadUnminedSorted_HeightsFollowTheParentsFirstReorder(t *testing.T) {
+	initPrometheusMetrics()
+
+	ba, _, cleanup := setupDiskSortTest(t)
+	defer cleanup()
+
+	ba.settings.BlockAssembly.UnminedTxDiskSortPaths = []string{t.TempDir()}
+	ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta = true
+	ba.subtreeProcessor.SetTxEra(150)
+
+	parent := unminedAt(1, 5000)
+	parent.UnminedSince = 99
+	child := unminedAt(2, 5000, parent.Hash)
+	child.UnminedSince = 150
+	unrelated := unminedAt(3, 4000)
+	unrelated.UnminedSince = 150
+
+	iter := &sliceUnminedIterator{batches: [][]*utxo.UnminedTransaction{{child, parent, unrelated}}}
+
+	require.NoError(t, ba.loadUnminedSorted(context.Background(), iter, map[uint32]bool{}, false))
+
+	require.Equal(t, []chainhash.Hash{unrelated.Hash}, loadedHashes(t, ba))
+}
+
 func TestLoadUnminedSorted_FiltersLikeTheInMemoryPath(t *testing.T) {
 	initPrometheusMetrics()
 

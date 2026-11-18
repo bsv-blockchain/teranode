@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 )
 
 // lockTimeThreshold separates a height nLockTime from a time one (bitcoin-sv's LOCKTIME_THRESHOLD).
@@ -22,8 +23,78 @@ type txCandidate struct {
 // a side block's transaction checked against one tip, a mempool transaction against the tip a
 // reorg replaced). Block assembly sets the candidate after every block move and, after a reorg,
 // rebuilds the template when NotFinalTemplateTxs finds one.
+//
+// Setting it offers the held transactions again, through the queue and in the order they were
+// held, so the ones now final go in and the rest are held again.
 func (stp *SubtreeProcessor) SetTxCandidate(tip *chainhash.Hash, height, medianTimePast uint32) {
 	stp.txCandidate.Store(&txCandidate{tip: *tip, height: height, medianTimePast: medianTimePast})
+
+	stp.offerHeldTxs()
+}
+
+// heldTx is a transaction kept back until the candidate makes it final, with what it was
+// queued with.
+type heldTx struct {
+	node     subtreepkg.Node
+	inpoints *subtreepkg.TxInpoints
+	height   uint32
+	lockTime uint32
+}
+
+// holdTxLocked keeps a transaction back to offer again when the candidate moves. The caller
+// holds droppedMu.
+func (stp *SubtreeProcessor) holdTxLocked(node subtreepkg.Node, inpoints *subtreepkg.TxInpoints, height, lockTime uint32) {
+	if _, ok := stp.heldSet[node.Hash]; ok {
+		return
+	}
+
+	if stp.heldSet == nil {
+		stp.heldSet = make(map[chainhash.Hash]struct{})
+	}
+
+	stp.heldSet[node.Hash] = struct{}{}
+	stp.heldTxs = append(stp.heldTxs, heldTx{node: node, inpoints: inpoints, height: height, lockTime: lockTime})
+	stp.heldCountAtomic.Store(int64(len(stp.heldTxs)))
+}
+
+// clearHeldLocked forgets every held transaction. The caller holds droppedMu.
+func (stp *SubtreeProcessor) clearHeldLocked() {
+	stp.heldTxs = nil
+	stp.heldSet = nil
+	stp.heldCountAtomic.Store(0)
+}
+
+// heldCount returns how many transactions are held.
+func (stp *SubtreeProcessor) heldCount() int {
+	return int(stp.heldCountAtomic.Load())
+}
+
+// offerHeldTxs queues every held transaction again, in the order they were held, so parents
+// come before their children.
+func (stp *SubtreeProcessor) offerHeldTxs() {
+	if stp.heldCountAtomic.Load() == 0 {
+		return
+	}
+
+	stp.droppedMu.Lock()
+	held := stp.heldTxs
+	stp.clearHeldLocked()
+	stp.droppedMu.Unlock()
+
+	if len(held) == 0 {
+		return
+	}
+
+	nodes := make([]subtreepkg.Node, len(held))
+	inpoints := make([]*subtreepkg.TxInpoints, len(held))
+	heights := make([]uint32, len(held))
+	lockTimes := make([]uint32, len(held))
+
+	for i, h := range held {
+		nodes[i], inpoints[i], heights[i], lockTimes[i] = h.node, h.inpoints, h.height, h.lockTime
+	}
+
+	stp.queue.enqueueTaggedBatch(nodes, inpoints, heights, lockTimes)
 }
 
 // freshTxCandidate returns the candidate when it describes the block after the processor's
@@ -83,8 +154,9 @@ func (stp *SubtreeProcessor) trackLockTimeLocked(hash chainhash.Hash, lockTime u
 }
 
 // NotFinalTemplateTxs returns how many tracked transactions still in the template are not
-// final at the candidate. Block assembly reads it after a reorg; it is 0 while the candidate
-// is not set for the current block.
+// final at the candidate, and forgets the tracked ones no longer in it (mined in this node's
+// own block, or removed). Block assembly reads it after every block move; it is 0 while the
+// candidate is not set for the current block.
 func (stp *SubtreeProcessor) NotFinalTemplateTxs() int {
 	if stp.lockedCount.Load() == 0 {
 		return 0
@@ -101,13 +173,16 @@ func (stp *SubtreeProcessor) NotFinalTemplateTxs() int {
 	notFinal := 0
 
 	for hash, lockTime := range stp.lockedTxs {
-		if stp.finalAtCandidate(lockTime, c) {
+		// Block assembly calls this between block moves, which it hands to the processor and
+		// waits for, so the map is not swapped while it is read.
+		if _, ok := stp.currentTxMap.Get(hash); !ok {
+			delete(stp.lockedTxs, hash)
+			stp.lockedCount.Add(-1)
+
 			continue
 		}
 
-		// Block assembly calls this between block moves, which it hands to the processor and
-		// waits for, so the map is not swapped while it is read.
-		if _, ok := stp.currentTxMap.Get(hash); ok {
+		if !stp.finalAtCandidate(lockTime, c) {
 			notFinal++
 		}
 	}

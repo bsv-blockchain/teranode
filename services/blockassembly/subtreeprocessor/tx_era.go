@@ -43,43 +43,49 @@ func (stp *SubtreeProcessor) TxEra() (lo, hi uint32, ok bool) {
 // admitTxLocked reports whether a transaction validated at height (0 when untagged) may
 // enter the template: its height is under the next block's rules, its nLockTime (lockTime,
 // 0 when it cannot hold the transaction back) does not hold it back at the candidate, and
-// none of its parents was kept out. A refused transaction is recorded so its descendants are
-// refused too, which is why callers offer transactions in queue order, parents before
-// children. An admitted transaction that was refused before is forgotten, so its own
-// descendants are admitted again. The caller holds droppedMu.
+// none of its parents was kept out. The caller holds droppedMu, and offers transactions in
+// queue order, parents before children, so a refusal reaches every descendant.
 //
-// From the queue (fromQueue) the lock is checked only when the transaction was validated for
-// the candidate's height or an earlier one, or the height is unknown. One validated for a
-// later height comes from a validator ahead of block assembly, and is final once block
-// assembly catches up. A reload runs at the chain tip, where a height above the candidate's is
-// a reorg to a shorter chain, so it checks every lock.
-func (stp *SubtreeProcessor) admitTxLocked(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, height, lockTime uint32, fromQueue bool) bool {
+// A transaction validated under other rules is dropped, recorded so its descendants are
+// dropped too. One its lock time holds back is held, with its descendants, and offered again
+// when the candidate moves (tx_finality.go): it was validated for another candidate, by a
+// validator ahead of block assembly or before a reorg, and becomes final as the chain grows.
+// An admitted transaction that was dropped before is forgotten, so its own descendants are
+// admitted again.
+func (stp *SubtreeProcessor) admitTxLocked(node subtreepkg.Node, inpoints *subtreepkg.TxInpoints, height, lockTime uint32) bool {
+	hash := node.Hash
+
 	if era := stp.txEra.Load(); era != nil && height != 0 && (height < era.lo || height > era.hi) {
 		stp.recordDroppedLocked(hash)
 		return false
 	}
 
+	if inpoints != nil && (len(stp.droppedTxs) != 0 || len(stp.heldSet) != 0) {
+		for _, parent := range inpoints.ParentTxHashes {
+			if _, dropped := stp.droppedTxs[parent]; dropped {
+				stp.recordDroppedLocked(hash)
+				return false
+			}
+		}
+
+		for _, parent := range inpoints.ParentTxHashes {
+			if _, held := stp.heldSet[parent]; held {
+				stp.holdTxLocked(node, inpoints, height, lockTime)
+				return false
+			}
+		}
+	}
+
 	if lockTime != 0 {
-		if c := stp.freshTxCandidate(); c != nil && (!fromQueue || height == 0 || height <= c.height) && !stp.finalAtCandidate(lockTime, c) {
-			stp.recordDroppedLocked(hash)
+		if c := stp.freshTxCandidate(); c != nil && !stp.finalAtCandidate(lockTime, c) {
+			stp.holdTxLocked(node, inpoints, height, lockTime)
 			return false
 		}
 	}
 
-	if len(stp.droppedTxs) != 0 {
-		if inpoints != nil {
-			for _, parent := range inpoints.ParentTxHashes {
-				if _, dropped := stp.droppedTxs[parent]; dropped {
-					stp.recordDroppedLocked(hash)
-					return false
-				}
-			}
-		}
-
-		if _, dropped := stp.droppedTxs[hash]; dropped {
-			delete(stp.droppedTxs, hash)
-			stp.droppedCount.Add(-1)
-		}
+	if _, dropped := stp.droppedTxs[hash]; dropped {
+		delete(stp.droppedTxs, hash)
+		stp.droppedCount.Add(-1)
 	}
 
 	stp.trackLockTimeLocked(hash, lockTime)
@@ -116,7 +122,7 @@ func (stp *SubtreeProcessor) filterTxEra(batches []*TxBatch) {
 			b.lockTimes = nil
 		}
 
-		if b.validatedHeights == nil && b.lockTimes == nil && len(stp.droppedTxs) == 0 {
+		if b.validatedHeights == nil && b.lockTimes == nil && len(stp.droppedTxs) == 0 && len(stp.heldSet) == 0 {
 			continue
 		}
 
@@ -132,7 +138,7 @@ func (stp *SubtreeProcessor) filterTxEra(batches []*TxBatch) {
 				lockTime = b.lockTimes[i]
 			}
 
-			if !stp.admitTxLocked(b.nodes[i].Hash, b.txInpoints[i], height, lockTime, true) {
+			if !stp.admitTxLocked(b.nodes[i], b.txInpoints[i], height, lockTime) {
 				continue
 			}
 
@@ -170,7 +176,7 @@ func (stp *SubtreeProcessor) filterTxEra(batches []*TxBatch) {
 // transaction whose sequences are all final but whose nLockTime is not yet reached is kept
 // out too.
 func (stp *SubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransaction, validatedHeights []uint32) []*utxostore.UnminedTransaction {
-	if stp.txEra.Load() == nil && stp.droppedCount.Load() == 0 && stp.txCandidate.Load() == nil {
+	if stp.txEra.Load() == nil && stp.droppedCount.Load() == 0 && stp.heldCountAtomic.Load() == 0 && stp.txCandidate.Load() == nil {
 		return txs
 	}
 
@@ -185,7 +191,7 @@ func (stp *SubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransact
 			height = validatedHeights[i]
 		}
 
-		admitted := stp.admitTxLocked(tx.Hash, tx.TxInpoints, height, tx.LockTime, false)
+		admitted := stp.admitTxLocked(*tx.Node, tx.TxInpoints, height, tx.LockTime)
 
 		switch {
 		case admitted && kept != nil:
@@ -216,10 +222,12 @@ func (stp *SubtreeProcessor) RestartDroppedTxs() (finish func(reloaded bool)) {
 	stp.droppedMu.Lock()
 	prev := stp.droppedTxs
 	prevLocked := stp.lockedTxs
+	prevHeld := stp.heldTxs
 	stp.droppedTxs = nil
 	stp.droppedCount.Store(0)
 	stp.lockedTxs = nil
 	stp.lockedCount.Store(0)
+	stp.clearHeldLocked()
 	stp.droppedMu.Unlock()
 
 	return func(reloaded bool) {
@@ -232,6 +240,10 @@ func (stp *SubtreeProcessor) RestartDroppedTxs() (finish func(reloaded bool)) {
 
 		for hash, lockTime := range prevLocked {
 			stp.trackLockTimeLocked(hash, lockTime)
+		}
+
+		for _, h := range prevHeld {
+			stp.holdTxLocked(h.node, h.inpoints, h.height, h.lockTime)
 		}
 
 		// Not through recordDroppedLocked: these drops were counted when they happened.
@@ -253,10 +265,10 @@ func (stp *SubtreeProcessor) RestartDroppedTxs() (finish func(reloaded bool)) {
 // not stay out for the drop. A block made only of this node's own subtrees has no map, and
 // mines nothing that was dropped: a dropped transaction never entered them.
 //
-// The tracked lock times of the transactions it mines are forgotten too: they left the
-// template.
+// The tracked lock times of the transactions it mines are forgotten too, since they left the
+// template, and so are the held ones it mines, which must not be offered again.
 func (stp *SubtreeProcessor) forgetMinedDroppedTxs(mined *SortedHashSet) {
-	if mined == nil || (stp.droppedCount.Load() == 0 && stp.lockedCount.Load() == 0) {
+	if mined == nil || (stp.droppedCount.Load() == 0 && stp.lockedCount.Load() == 0 && stp.heldCountAtomic.Load() == 0) {
 		return
 	}
 
@@ -275,6 +287,23 @@ func (stp *SubtreeProcessor) forgetMinedDroppedTxs(mined *SortedHashSet) {
 			delete(stp.lockedTxs, hash)
 			stp.lockedCount.Add(-1)
 		}
+	}
+
+	if len(stp.heldTxs) != 0 {
+		kept := stp.heldTxs[:0]
+
+		for _, h := range stp.heldTxs {
+			if mined.Exists(h.node.Hash) {
+				delete(stp.heldSet, h.node.Hash)
+				continue
+			}
+
+			kept = append(kept, h)
+		}
+
+		clear(stp.heldTxs[len(kept):])
+		stp.heldTxs = kept
+		stp.heldCountAtomic.Store(int64(len(kept)))
 	}
 }
 

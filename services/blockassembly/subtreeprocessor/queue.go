@@ -216,6 +216,14 @@ func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree
 	q.publish(nodes, txInpoints, nil, nil)
 }
 
+// enqueueTaggedBatch adds a batch with its validated heights and lock times, without a bound.
+// The subtree processor uses it to offer its held transactions again: they were admitted to
+// the queue once already.
+func (q *LockFreeQueue) enqueueTaggedBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, validatedHeights, lockTimes []uint32) {
+	q.queueLength.Add(int64(len(nodes))) // gosec:nolint  reserve before publishing
+	q.publish(nodes, txInpoints, validatedHeights, lockTimes)
+}
+
 // enqueueBatchIfRoom adds a batch only if doing so would not push the number of
 // published-or-reserved items past maxItems, and reports whether it did.
 //

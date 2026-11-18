@@ -821,7 +821,6 @@ func TestCatchup_NoMinedSetChurnOnRejectedFork(t *testing.T) {
 				}
 
 				require.Error(t, err)
-				require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a stored fork below a passed checkpoint is invalid, got: %v", err)
 				require.Contains(t, err.Error(), "bad-fork-prior-to-checkpoint")
 			})
 		}
