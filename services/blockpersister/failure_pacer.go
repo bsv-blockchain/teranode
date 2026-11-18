@@ -1,6 +1,10 @@
 package blockpersister
 
-import "time"
+import (
+	"time"
+
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+)
 
 // failurePacer paces retries for failures that will be retried against the same
 // block. The loop's flat persistSleep was attached uniformly to every failure,
@@ -19,6 +23,10 @@ type failurePacer struct {
 	base  time.Duration
 	max   time.Duration
 	fails int
+	// last is the block the current failure run belongs to. A failure on a
+	// different block starts a new run: the escalated wait earned by an earlier
+	// block (for example one that was then invalidated) must not carry over.
+	last *chainhash.Hash
 }
 
 // pacerMaxSleep bounds escalated waiting. Past this point the loop is polling
@@ -33,8 +41,15 @@ const pacerMaxSleep = 5 * time.Minute
 // with no new setting.
 const announceAtFailures = 3
 
-// next records one more consecutive failure and returns how long to wait.
-func (p *failurePacer) next() time.Duration {
+// next records one more consecutive failure of block and returns how long to
+// wait. A block other than the one that failed last starts a fresh run.
+func (p *failurePacer) next(block *chainhash.Hash) time.Duration {
+	if p.last == nil || !p.last.IsEqual(block) {
+		p.fails = 0
+		hash := *block
+		p.last = &hash
+	}
+
 	p.fails++
 
 	d := p.base
@@ -64,4 +79,5 @@ func (p *failurePacer) consecutive() int {
 // reset clears the counter after a block files successfully.
 func (p *failurePacer) reset() {
 	p.fails = 0
+	p.last = nil
 }
