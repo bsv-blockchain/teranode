@@ -5095,8 +5095,8 @@ func TestHandleGetchaintipsComprehensive(t *testing.T) {
 		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
 	})
 
-	// The cache is keyed by the best block hash so a new block or reorg
-	// invalidates it immediately; repeated polling within one tip must be
+	// The cached answer records the best block hash so a new block or reorg
+	// retires it immediately; repeated polling within one tip must be
 	// served from the cache, and a moved tip must not be.
 	t.Run("cache is keyed to the best tip and serves repeats", func(t *testing.T) {
 		hashA := chainhash.DoubleHashH([]byte("tips-cache-tip-a"))
@@ -5163,6 +5163,43 @@ func TestHandleGetchaintipsComprehensive(t *testing.T) {
 		_, err = handleGetchaintips(context.Background(), s, cmd, nil)
 		require.NoError(t, err)
 
+		mockClient.AssertNumberOfCalls(t, "GetChainTips", 2)
+	})
+
+	// A side-branch block never moves the best tip, so the operator's own
+	// invalidateblock must retire the cached answer even though the tip is unchanged.
+	t.Run("invalidateblock retires the cached answer at an unchanged tip", func(t *testing.T) {
+		hashD := chainhash.DoubleHashH([]byte("tips-cache-tip-d"))
+		header := &model.BlockHeader{HashPrevBlock: &hashD, HashMerkleRoot: &hashD}
+
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(header, &model.BlockHeaderMeta{}, nil)
+		mockClient.On("GetChainTips", mock.Anything).Return(
+			[]*model.ChainTip{{Height: 7, Hash: hashD.String(), Branchlen: 0, Status: "active"}}, nil,
+		)
+		mockClient.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil)
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+				RPC:            settings.RPCSettings{CacheEnabled: true},
+			},
+		}
+
+		cmd := &bsvjson.GetChainTipsCmd{}
+		_, err := handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		_, err = handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		mockClient.AssertNumberOfCalls(t, "GetChainTips", 1)
+
+		_, err = handleInvalidateBlock(context.Background(), s, bsvjson.NewInvalidateBlockCmd(hashD.String()), nil)
+		require.NoError(t, err)
+
+		_, err = handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
 		mockClient.AssertNumberOfCalls(t, "GetChainTips", 2)
 	})
 }

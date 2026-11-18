@@ -69,6 +69,21 @@ const txRejectedPrefix = "TX rejected: "
 // live items expire after 10s
 var rpcCallCache = newRPCCache()
 
+// chainTipsCacheKey holds the single getchaintips entry. The entry records the
+// best block hash it was computed at, so a lookup can tell whether it is stale.
+const chainTipsCacheKey = "getchaintips"
+
+type chainTipsCacheEntry struct {
+	bestHash string
+	result   []map[string]interface{}
+}
+
+// clearChainTipsCache drops the cached getchaintips answer. Commands that change
+// block validity call it so the next getchaintips reflects the change.
+func clearChainTipsCache() {
+	rpcCallCache.Delete(chainTipsCacheKey)
+}
+
 func newRPCCache() *ttlcache.Cache[string, any] {
 	c := ttlcache.New[string, any](
 		ttlcache.WithTTL[string, any](10*time.Second),
@@ -1928,6 +1943,8 @@ func handleInvalidateBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 	}
 
 	_, err = s.blockchainClient.InvalidateBlock(ctx, ch)
+	clearChainTipsCache()
+
 	if err != nil {
 		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
@@ -1975,6 +1992,8 @@ func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 	defer deferFn()
 
 	c := cmd.(*bsvjson.ReconsiderBlockCmd)
+
+	defer clearChainTipsCache()
 
 	ch, err := chainhash.NewHashFromStr(c.BlockHash)
 	if err != nil {
@@ -3002,17 +3021,13 @@ func isIPOrSubnet(ipOrSubnet string) bool {
 
 // handleGetchaintips implements the getchaintips command.
 //
-// The cached answer is keyed by the current best block hash, which is the
-// cache's invalidation on chain update. Chain tips describe where the chain
-// branches, so an entry older than the last new block - five minutes of them
-// under the flat TTL this used - is exactly the window in which an operator
-// checking a suspected reorganisation is told nothing happened. Keying on the
-// tip means a new block, reorg or invalidateblock retires the entry at once,
-// while polling within one block interval still hits the cache and stays
-// inside the rate limit the door enforces. The TTL remains as a memory bound
-// for abandoned tip keys, not as a staleness window. If the best header cannot
-// be read, the call fails open: it serves a fresh walk and skips the cache
-// rather than guess a key.
+// The cached answer carries the best block hash it was computed at and is
+// served only while that hash is still the best. A best-tip change (new block,
+// reorg) therefore retires it at once, and so does invalidateblock or
+// reconsiderblock through this server (clearChainTipsCache). It does NOT cover
+// a side-branch block that arrives while the best tip is unchanged: that tip
+// shows up when the entry expires, within the cache's 10 second TTL. If the
+// best header cannot be read, the call serves a fresh walk and skips the cache.
 func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetchaintips",
 		tracing.WithParentStat(RPCStat),
@@ -3026,25 +3041,24 @@ func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 		return nil, bsvjson.ErrRPCInternal
 	}
 
-	// The tip hash is an atomic read on the blockchain service, orders of
-	// magnitude cheaper than the tips walk this caches.
-	cacheKey := ""
-	if s.blockchainClient != nil {
-		if header, _, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil {
-			cacheKey = "getchaintips:" + header.Hash().String()
-		} else {
-			s.logger.Warnf("[handleGetchaintips] best header unavailable (%v); serving an uncached chain tips walk", err)
-		}
-	}
-
-	if cacheKey != "" {
-		if cached := rpcCallCache.Get(cacheKey); cached != nil {
-			return cached.Value(), nil
-		}
-	}
-
 	if s.blockchainClient == nil {
 		return nil, bsvjson.ErrRPCInternal
+	}
+
+	bestHash := ""
+
+	if header, _, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil {
+		bestHash = header.Hash().String()
+	} else {
+		s.logger.Warnf("[handleGetchaintips] best header unavailable (%v); serving an uncached chain tips walk", err)
+	}
+
+	if bestHash != "" {
+		if cached := rpcCallCache.Get(chainTipsCacheKey); cached != nil {
+			if entry, ok := cached.Value().(chainTipsCacheEntry); ok && entry.bestHash == bestHash {
+				return entry.result, nil
+			}
+		}
 	}
 
 	// Get chain tips from the blockchain client
@@ -3065,8 +3079,8 @@ func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 		})
 	}
 
-	if s.settings.RPC.CacheEnabled && cacheKey != "" {
-		rpcCallCache.Set(cacheKey, result, 300*time.Second)
+	if s.settings.RPC.CacheEnabled && bestHash != "" {
+		rpcCallCache.Set(chainTipsCacheKey, chainTipsCacheEntry{bestHash: bestHash, result: result}, ttlcache.DefaultTTL)
 	}
 
 	return result, nil
