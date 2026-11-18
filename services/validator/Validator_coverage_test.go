@@ -26,6 +26,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -967,20 +968,34 @@ func TestValidateInternalRecordsHistogramPastDecoupling(t *testing.T) {
 	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, errors.NewStorageError("spend failed"))
 
-	before := validateHistogramCount(t)
+	histogram := isolateValidateHistogram(t)
 
 	_, err = v.validateInternal(ctx, tx, 100, &Options{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "error spending utxos")
 
-	require.Equal(t, before+1, validateHistogramCount(t), "validateInternal must record exactly one histogram sample")
+	require.Equal(t, uint64(1), validateHistogramCount(t, histogram), "validateInternal must record exactly one histogram sample")
 }
 
-func validateHistogramCount(t *testing.T) uint64 {
+// isolateValidateHistogram swaps the validateInternal histogram for an
+// unregistered one for this test, so other tests cannot change its count.
+func isolateValidateHistogram(t *testing.T) prometheus.Histogram {
+	t.Helper()
+
+	original := prometheusTransactionValidateTotal
+	histogram := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "test_validator_validate_total"})
+	prometheusTransactionValidateTotal = histogram
+
+	t.Cleanup(func() { prometheusTransactionValidateTotal = original })
+
+	return histogram
+}
+
+func validateHistogramCount(t *testing.T, histogram prometheus.Histogram) uint64 {
 	t.Helper()
 
 	m := &dto.Metric{}
-	require.NoError(t, prometheusTransactionValidateTotal.Write(m))
+	require.NoError(t, histogram.Write(m))
 
 	return m.GetHistogram().GetSampleCount()
 }

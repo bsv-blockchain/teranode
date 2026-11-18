@@ -94,6 +94,8 @@ func setupExtendGraceValidator(t *testing.T, tx *bt.Tx, cfg extendGraceSetup) (*
 	blockchainMock := &blockchain.Mock{}
 
 	if cfg.chainStall {
+		require.NotNil(t, cfg.childMeta, "chainStall needs childMeta: the chain check is only reached for a stored child")
+
 		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, cfg.childMeta.BlockIDs).
 			Run(func(args mock.Arguments) { stallUntilDone(args.Get(0).(context.Context)) }).
 			Return(false, errors.NewServiceError("chain check interrupted", context.DeadlineExceeded))
