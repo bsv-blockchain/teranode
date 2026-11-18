@@ -532,6 +532,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	return v, nil
 }
 
+// txmetaTopicMetadataTimeout bounds the start-up topic metadata request so an
+// unreachable broker cannot stall validator construction.
+var txmetaTopicMetadataTimeout = 10 * time.Second
+
 // checkTxMetaPartitionAgreement reconciles validator_txmeta_numPartitions
 // against everything it must match for v2 txmeta routing to be sound:
 // the cache bucket count (the routing divides BucketsCount into partition
@@ -558,7 +562,10 @@ func (v *Validator) checkTxMetaPartitionAgreement(ctx context.Context) {
 
 	// Preferred source: ask the broker what the topic actually has.
 	if counter, ok := v.txmetaKafkaProducerClient.(kafka.TopicPartitionCounter); ok && counter != nil {
-		count, err := counter.TopicPartitionCount(ctx)
+		metaCtx, cancel := context.WithTimeout(ctx, txmetaTopicMetadataTimeout)
+		count, err := counter.TopicPartitionCount(metaCtx)
+		cancel()
+
 		if err != nil {
 			v.logger.Warnf("[Validator] cannot verify txmeta topic partition count against validator_txmeta_numPartitions=%d: %v", numPartitions, err)
 			return
@@ -2767,6 +2774,14 @@ type txmetaItemWithHash struct {
 	h    uint64
 }
 
+// The v2 header carries txmetacache.BucketsCount as a uint16 that receivers
+// accept only when it is zero or a power of two. Both assertions fail the build,
+// not a running node, if a cache build tag ever selects a count outside that.
+var (
+	_ = [1]struct{}{}[txmetacache.BucketsCount>>16]
+	_ = [1]struct{}{}[txmetacache.BucketsCount&(txmetacache.BucketsCount-1)]
+)
+
 // serializeTxMetaBatchV2 writes a v2-format txmeta Kafka payload for a set of
 // items that have already been grouped into a single Kafka partition.
 //
@@ -2801,9 +2816,10 @@ func serializeTxMetaBatchV2(items []txmetaItemWithHash, bucketsCount int) []byte
 	buf[1] = txmetacache.WireV2Version
 	// Build-tag-selected cache geometry, on the wire: receivers compare it
 	// against their own and can name the disagreement instead of silently
-	// sharing buckets across partitions. uint16 bounds it to <= 65535; the
-	// production count (8192) and every test count fit far inside.
-	binary.LittleEndian.PutUint16(buf[txmetacache.WireV2BucketsOffset:], uint16(min(bucketsCount, int(^uint16(0)))))
+	// sharing buckets across partitions. The header holds a uint16 and receivers
+	// accept only zero or a power of two, which the compile-time assertion on
+	// txmetacache.BucketsCount below guarantees for every build tag.
+	binary.LittleEndian.PutUint16(buf[txmetacache.WireV2BucketsOffset:], uint16(bucketsCount)) //nolint:gosec // bounded by the BucketsCount assertion
 	binary.LittleEndian.PutUint32(buf[4:], uint32(len(items)))
 	off := 8
 
