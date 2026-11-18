@@ -30,6 +30,12 @@ func (m LaneMigration) Stamps() bool {
 	}
 }
 
+// MaxLaneGrant is the most lane positions one grant can hold, 2^40 (about 1.1 trillion). A lane
+// holds 2^56 positions, so it takes 65,536 grants of this size to use one up, where without a cap a
+// single grant sized from a huge reported rate or blockchain_laneGrantMin could exhaust a lane for
+// good. It is far above any real need: two minutes at a million positions a second is 1.2 x 10^8.
+const MaxLaneGrant uint64 = 1 << 40
+
 // CheckLaneMigration refuses a step this build does not implement, and any unknown value, so a node
 // configured for a later step fails at start instead of running a step it only half has.
 func CheckLaneMigration(m LaneMigration) error {
@@ -63,6 +69,10 @@ func (s BlockChainSettings) CheckLaneLease() error {
 
 	if s.LaneGrantDuration <= 0 {
 		return errors.NewConfigurationError("blockchain_laneGrantDuration must be positive, got %s", s.LaneGrantDuration)
+	}
+
+	if s.LaneGrantMin > MaxLaneGrant {
+		return errors.NewConfigurationError("blockchain_laneGrantMin (%d) must be at most %d", s.LaneGrantMin, MaxLaneGrant)
 	}
 
 	if s.LaneLeaseRenewInterval >= s.LaneLeaseStopAfter {

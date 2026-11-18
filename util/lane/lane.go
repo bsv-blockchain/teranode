@@ -132,8 +132,10 @@ func (g Grant) Len() uint64 {
 // Settles finishes a grant the holder has left: the grant's first position and its final number,
 // which is the grant's last position if it was used up, or the highest position taken if it aged
 // out. The holder sends it on its next grant request and on its release, and the service writes it
-// on that hand-out row or close row. A zero LastTaken means the grant was never used. The zero
-// value settles nothing.
+// on that hand-out row or close row. A grant is settled only once it has been used, so LastTaken is
+// never zero in a pair the holder sends. A grant never used gets no settles pair: positions above
+// the release's LastTaken were never given out, and a lapsed close is taken to have used every grant
+// of its lease. The zero value settles nothing.
 type Settles struct {
 	First     uint64
 	LastTaken uint64

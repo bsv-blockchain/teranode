@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -656,11 +657,19 @@ func TestOpenLaneLeaseSkipsAnExhaustedLane(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint8(0), g.Lane)
 
+		// No one grant can use up a lane (settings.MaxLaneGrant), so an older hand-out takes lane 0
+		// to within ten positions of its end, and the next grant takes the rest.
+		_, err = s.db.ExecContext(t.Context(),
+			`INSERT INTO lane_handout (lane, first, last, holder, height, handed_at) VALUES (0, $1, $2, 'a', 1, $3)`,
+			lane.ToSigned(g.Last+1), lane.ToSigned(lane.MaxPosition-10), time.Now())
+		require.NoError(t, err)
+
 		r := leaseRenew(id, g)
 		r.WantGrant, r.Rate = true, lane.MaxPosition
 
 		last, _, _, err := s.RenewLaneLease(t.Context(), r)
 		require.NoError(t, err)
+		require.Equal(t, lane.MaxPosition-9, last.First)
 		require.Equal(t, lane.MaxPosition, last.Last, "a grant is capped at the last position")
 
 		_, err = s.ReleaseLaneLease(t.Context(), options.LaneLeaseRelease{Lease: id, Lane: g.Lane, LastTaken: g.First})
@@ -1216,9 +1225,9 @@ func runLeaseModel(t *testing.T, s *SQL, seed uint64, steps int) {
 			ls.age = 0
 
 			if req.WantGrant {
-				size := req.GrantMin // two minutes at the rate, and at least the minimum
-				if req.Rate > lane.MaxPosition/120 {
-					size = lane.MaxPosition
+				size := req.GrantMin // two minutes at the rate, at least the minimum, at most MaxLaneGrant
+				if req.Rate > settings.MaxLaneGrant/120 {
+					size = settings.MaxLaneGrant
 				} else if req.Rate > 0 {
 					size = max(size, req.Rate*120)
 				}
@@ -1272,4 +1281,45 @@ func runLeaseModel(t *testing.T, s *SQL, seed uint64, steps int) {
 		// SQLite keeps times to the millisecond, and two closes in one would tie on their close time.
 		time.Sleep(2 * time.Millisecond)
 	}
+}
+
+// grantSize sizes on whole seconds of the duration, so under one second every grant is the minimum
+// (and nothing divides by zero). No grant holds more than settings.MaxLaneGrant, whatever the rate
+// or the minimum.
+func TestGrantSize(t *testing.T) {
+	const capRate = settings.MaxLaneGrant / 120
+
+	for _, c := range []struct {
+		name    string
+		rate    uint64
+		d       time.Duration
+		minimum uint64
+		want    uint64
+	}{
+		{"under one second gives the minimum", 90_000, 500 * time.Millisecond, 10_000, 10_000},
+		{"zero rate gives the minimum", 0, 2 * time.Minute, 10_000, 10_000},
+		{"rate times whole seconds", 100, 2*time.Minute + 900*time.Millisecond, 10, 12_000},
+		{"never below the minimum", 3, 2 * time.Minute, 10_000, 10_000},
+		{"rate exactly at the cap", capRate, 2 * time.Minute, 1, capRate * 120},
+		{"rate one above the cap", capRate + 1, 2 * time.Minute, 1, settings.MaxLaneGrant},
+		{"huge rate is capped", lane.MaxPosition, 2 * time.Minute, 1, settings.MaxLaneGrant},
+		{"huge minimum is capped", 0, 2 * time.Minute, lane.MaxPosition, settings.MaxLaneGrant},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			require.Equal(t, c.want, grantSize(c.rate, c.d, c.minimum))
+		})
+	}
+}
+
+// An open asked for a first grant above settings.MaxLaneGrant gets MaxLaneGrant, so a misconfigured
+// blockchain_laneGrantMin cannot use up a lane on its first grant.
+func TestOpenLaneLeaseCapsTheFirstGrant(t *testing.T) {
+	runLaneHandoutTests(t, "first grant cap", func(t *testing.T, s *SQL) {
+		req := leaseOpen("a")
+		req.GrantMin = lane.MaxPosition
+
+		_, g, _, err := s.OpenLaneLease(t.Context(), req)
+		require.NoError(t, err)
+		require.Equal(t, settings.MaxLaneGrant, g.Last-g.First+1)
+	})
 }

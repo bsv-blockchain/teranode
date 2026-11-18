@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/lane"
@@ -54,6 +55,13 @@ const (
 // never hand out the same position, even when one outlives its close. The service holds nothing
 // between calls: a holder reports a grant's final number (its settles pair) on the request after it
 // leaves the grant, and that request's row records it.
+//
+// Not every hand-out is settled. A grant nobody used gets no settles pair: the spare held at a
+// release, a grant the holder refused, and a grant whose reply was lost. A lost reply happens when
+// the service commits the grant but the holder's call times out or the connection drops: the holder
+// retries with the same settles pair and gets the next grant, so two hand-out rows carry that pair
+// and the first is never installed and never settled. Positions stay unique, because the retry
+// starts above it. A reader of settles pairs must take a hand-out no pair names as possibly unused.
 //
 // Times are on the database clock, so a sweep run from any blockchain pod judges every lease by
 // the same clock. Closing is one conditional UPDATE from open to closed, and only the caller whose
@@ -107,7 +115,7 @@ func (s *SQL) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lan
 			return err
 		}
 
-		grant, err = s.recordGrant(ctx, tx, id, chosen, req.GrantMin, req.Holder, req.Height, lane.Settles{})
+		grant, err = s.recordGrant(ctx, tx, id, chosen, min(req.GrantMin, settings.MaxLaneGrant), req.Holder, req.Height, lane.Settles{})
 		if err != nil {
 			return err
 		}
@@ -436,15 +444,19 @@ func (s *SQL) recordGrant(ctx context.Context, tx *sql.Tx, id lane.LeaseID, l ui
 	return lane.Grant{Lane: l, First: first, Last: last}, nil
 }
 
-// grantSize is two minutes of the reported rate, by default, and never less than the minimum.
+// grantSize is two minutes of the reported rate, by default, and never less than the minimum. It
+// sizes on whole seconds of d, so a d under one second gives the minimum. No grant holds more than
+// settings.MaxLaneGrant, so neither a huge reported rate nor a huge minimum can use up a lane at once.
 func grantSize(rate uint64, d time.Duration, minimum uint64) uint64 {
+	minimum = min(minimum, settings.MaxLaneGrant)
+
 	secs := uint64(d / time.Second)
 	if secs == 0 || rate == 0 {
 		return minimum
 	}
 
-	if rate > lane.MaxPosition/secs {
-		return lane.MaxPosition
+	if rate > settings.MaxLaneGrant/secs {
+		return settings.MaxLaneGrant
 	}
 
 	return max(minimum, rate*secs)

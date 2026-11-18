@@ -42,6 +42,11 @@ func TestCheckLaneMigrationAcceptsOffAndShadowOnly(t *testing.T) {
 	require.True(t, LaneMigrationShadow.Stamps())
 	require.True(t, LaneMigrationRows.Stamps())
 	require.True(t, LaneMigrationLanes.Stamps())
+
+	// An unknown value never stamps, so code that checks Stamps before CheckLaneMigration still
+	// writes nothing for a typo.
+	require.False(t, LaneMigration("on").Stamps())
+	require.False(t, LaneMigration("").Stamps())
 }
 
 func TestLaneLeaseDefaults(t *testing.T) {
@@ -132,6 +137,8 @@ func TestCheckLaneLeaseBoundaries(t *testing.T) {
 		{"grant duration one nanosecond", func(s *BlockChainSettings) { s.LaneGrantDuration = time.Nanosecond }, false},
 		{"renew equals stop", func(s *BlockChainSettings) { s.LaneLeaseRenewInterval = s.LaneLeaseStopAfter }, true},
 		{"renew one nanosecond before stop", func(s *BlockChainSettings) { s.LaneLeaseRenewInterval = s.LaneLeaseStopAfter - time.Nanosecond }, false},
+		{"grant minimum at the cap", func(s *BlockChainSettings) { s.LaneGrantMin = MaxLaneGrant }, false},
+		{"grant minimum one above the cap", func(s *BlockChainSettings) { s.LaneGrantMin = MaxLaneGrant + 1 }, true},
 	}
 
 	for _, test := range tests {
