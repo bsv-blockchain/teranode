@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,8 +15,11 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/usql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -198,10 +202,10 @@ func requireOldRowReadsNoLanePosition(t *testing.T, inspect *sql.DB, store *Stor
 	// The other lane columns arrived with it, empty: the spend above wrote its spending data and
 	// no spender position, and no child got parent positions. Running the explicit schema
 	// preparation again changes nothing.
-	for _, c := range sqlLaneColumns[1:] {
+	for _, c := range sqlLaneColumnsWant[1:] {
 		var n int
-		require.NoError(t, inspect.QueryRow(`SELECT count(*) FROM `+c.table+` WHERE `+c.column+` IS NOT NULL`).Scan(&n), "%s.%s exists", c.table, c.column)
-		require.Zero(t, n, "%s.%s holds nothing", c.table, c.column)
+		require.NoError(t, inspect.QueryRow(`SELECT count(*) FROM `+c[0]+` WHERE `+c[1]+` IS NOT NULL`).Scan(&n), "%s.%s exists", c[0], c[1])
+		require.Zero(t, n, "%s.%s holds nothing", c[0], c[1])
 	}
 
 	var spent int
@@ -343,4 +347,129 @@ func TestLanePositionMigrationPostgresBoundsTheLockWait(t *testing.T) {
 	require.NoError(t, oldDB.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'lane_position'`).Scan(&columns))
 	require.Equal(t, 1, columns)
 	require.NotNil(t, store)
+}
+
+// sqlLaneColumnsWant is every lane column of the SQL store, written out here rather than read
+// from sqlLaneColumns so a column dropped from that list fails these tests.
+var sqlLaneColumnsWant = [][2]string{
+	{"transactions", "lane_position"},
+	{"transactions", "parent_lane_positions"},
+	{"outputs", "spending_lane_position"},
+}
+
+// laneColumnState reports whether table has column and, if so, whether it is nullable with no
+// default, on either engine.
+func laneColumnState(t *testing.T, store *Store, table, column string) (exists, nullableNoDefault bool) {
+	t.Helper()
+
+	db := store.RawDB()
+
+	if store.engine == string(util.Postgres) {
+		var nullable string
+
+		var dflt sql.NullString
+
+		err := db.QueryRow(`SELECT is_nullable, column_default FROM information_schema.columns
+		                     WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2`, table, column).Scan(&nullable, &dflt)
+		if err == sql.ErrNoRows {
+			return false, false
+		}
+
+		require.NoError(t, err)
+
+		return true, nullable == "YES" && !dflt.Valid
+	}
+
+	var notNull int
+
+	var dflt sql.NullString
+
+	err := db.QueryRow(`SELECT "notnull", dflt_value FROM pragma_table_info('`+table+`') WHERE name = $1`, column).Scan(&notNull, &dflt)
+	if err == sql.ErrNoRows {
+		return false, false
+	}
+
+	require.NoError(t, err)
+
+	return true, notNull == 0 && !dflt.Valid
+}
+
+// requirePrepareLaneSchemaRestoresColumns drops the two lane columns nothing in this build writes,
+// then has PrepareLaneSchema put them back, nullable, with no default and no value in any row.
+func requirePrepareLaneSchemaRestoresColumns(t *testing.T, store *Store) {
+	t.Helper()
+
+	ctx := context.Background()
+
+	for _, c := range sqlLaneColumnsWant[1:] {
+		_, err := store.RawDB().Exec(`ALTER TABLE ` + c[0] + ` DROP COLUMN ` + c[1])
+		require.NoError(t, err, "%s.%s", c[0], c[1])
+
+		exists, _ := laneColumnState(t, store, c[0], c[1])
+		require.False(t, exists, "%s.%s dropped", c[0], c[1])
+	}
+
+	require.NoError(t, store.PrepareLaneSchema(ctx))
+	require.NoError(t, store.PrepareLaneSchema(ctx), "a second run is a no-op")
+
+	for _, c := range sqlLaneColumnsWant {
+		exists, nullable := laneColumnState(t, store, c[0], c[1])
+		require.True(t, exists, "%s.%s", c[0], c[1])
+		require.True(t, nullable, "%s.%s is nullable with no default", c[0], c[1])
+
+		var n int
+		require.NoError(t, store.RawDB().QueryRow(`SELECT count(*) FROM `+c[0]+` WHERE `+c[1]+` IS NOT NULL`).Scan(&n))
+		require.Zero(t, n, "%s.%s holds nothing", c[0], c[1])
+	}
+}
+
+func TestPrepareLaneSchemaRestoresColumnsSQLite(t *testing.T) {
+	store, _ := setup(context.Background(), t)
+
+	requirePrepareLaneSchemaRestoresColumns(t, store)
+}
+
+func TestPrepareLaneSchemaRestoresColumnsPostgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, err := New(context.Background(), ulogger.TestLogger{}, lanePositionSettings(t), startLanePositionPostgres(t))
+	require.NoError(t, err)
+
+	requirePrepareLaneSchemaRestoresColumns(t, store)
+}
+
+// lockedLaneExecutor stands in for Postgres while another transaction holds a table: every lane
+// column statement fails with lock_not_available until its table is released at the time given.
+type lockedLaneExecutor struct {
+	freeAt map[string]time.Time
+}
+
+func (e lockedLaneExecutor) Exec(query string, _ ...interface{}) (sql.Result, error) {
+	for column, at := range e.freeAt {
+		if strings.Contains(query, "attname = '"+column+"'") && time.Now().Before(at) {
+			return nil, &pgconn.PgError{Code: usql.PgErrLockNotAvailable}
+		}
+	}
+
+	return nil, nil
+}
+
+func (e lockedLaneExecutor) Close() error { return nil }
+
+// The lane columns share one deadline. Here lane_position is free after 1.5s of a 2s limit and
+// parent_lane_positions never is: with one deadline the pass gives up a little after 2s; a fresh
+// limit per column would keep the schema lock for 3.5s or more.
+func TestAddLanePositionColumnSharesOneDeadline(t *testing.T) {
+	started := time.Now()
+
+	err := addLanePositionColumn(lockedLaneExecutor{freeAt: map[string]time.Time{
+		"lane_position":         started.Add(1500 * time.Millisecond),
+		"parent_lane_positions": started.Add(time.Hour),
+	}}, 2*time.Second)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "parent_lane_positions")
+	require.Less(t, time.Since(started), 3*time.Second)
 }

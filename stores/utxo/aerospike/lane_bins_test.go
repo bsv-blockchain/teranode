@@ -54,6 +54,14 @@ func TestDecodeParentLanePositionsRejects(t *testing.T) {
 		_, err := decodeParentLanePositions(v, 2)
 		require.Error(t, err, name)
 	}
+
+	// With no parents expected, only the list type rule refuses a bin of another type.
+	_, err := decodeParentLanePositions(int64(5), 0)
+	require.Error(t, err)
+
+	got, err := decodeParentLanePositions([]interface{}{}, 0)
+	require.NoError(t, err)
+	require.Empty(t, got)
 }
 
 func TestSpendingLanePositionsBin(t *testing.T) {
@@ -62,6 +70,7 @@ func TestSpendingLanePositionsBin(t *testing.T) {
 
 	list, ok := bin.Value.GetObject().([]interface{})
 	require.True(t, ok)
+	require.Equal(t, []interface{}{int64(0), int64(0), int64(0)}, list, "an unspent slot is written as 0, not nil")
 
 	got, err := decodeSpendingLanePositions(list, 3)
 	require.NoError(t, err)

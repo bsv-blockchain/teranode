@@ -6046,18 +6046,23 @@ func addLaneColumnSQL(c sqlLaneColumn) string {
 	`
 }
 
-// laneColumnMigrationLimit is how long addLanePositionColumn retries one column before the store
-// refuses to open. It only matters on the first start of a build against a database from before
-// the column, beside a process that keeps a transaction open on the table for all of this time.
-// Other processes opening the store wait on the schema lock for at most this long too.
+// laneColumnMigrationLimit is how long addLanePositionColumn retries, across all the lane
+// columns together, before the store refuses to open. It only matters on the first start of a
+// build against a database from before the columns, beside a process that keeps a transaction open
+// on transactions or outputs for all of this time. Other processes opening the store wait on the
+// schema lock for at most this long too, plus one last attempt.
 var laneColumnMigrationLimit = 5 * time.Minute
 
-// addLanePositionColumn adds every lane column. For each, when the table lock is not granted
-// within the lock_timeout it backs off and tries again, until limit has passed. Each attempt is its
-// own statement, so between attempts nothing holds or waits for a lock on the table.
+// addLanePositionColumn adds every lane column, under one deadline limit from now. For each, when
+// the table lock is not granted within the lock_timeout it backs off and tries again until the
+// deadline has passed. Each attempt is its own statement, so between attempts nothing holds or
+// waits for a lock on the table. The attempts take ACCESS EXCLUSIVE on transactions and, for
+// spending_lane_position, on outputs, each only for its 200ms lock_timeout when not granted.
 func addLanePositionColumn(db DBExecutor, limit time.Duration) error {
+	deadline := time.Now().Add(limit)
+
 	for _, c := range sqlLaneColumns {
-		if err := addLaneColumn(db, c, limit); err != nil {
+		if err := addLaneColumn(db, c, deadline); err != nil {
 			return errors.NewStorageError("could not add %s column to %s table", c.column, c.table, err)
 		}
 	}
@@ -6065,7 +6070,7 @@ func addLanePositionColumn(db DBExecutor, limit time.Duration) error {
 	return nil
 }
 
-func addLaneColumn(db DBExecutor, c sqlLaneColumn, limit time.Duration) error {
+func addLaneColumn(db DBExecutor, c sqlLaneColumn, deadline time.Time) error {
 	ctx := context.Background()
 
 	switch e := db.(type) {
@@ -6075,7 +6080,6 @@ func addLaneColumn(db DBExecutor, c sqlLaneColumn, limit time.Duration) error {
 		ctx = e.ctx
 	}
 
-	deadline := time.Now().Add(limit)
 	backoff := 50 * time.Millisecond
 	stmt := addLaneColumnSQL(c)
 

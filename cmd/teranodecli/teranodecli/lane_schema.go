@@ -16,8 +16,10 @@ const laneSchemaLongHelp = `Installs the lane columns of the configured UTXO sto
 lane positions that the lane migration later fills. Run it at utxostore_laneMigration=off, before
 the historical conversion, with every teranode process of the node stopped, as a database role that
 owns the tables. It writes no row and is safe to run again. Start the node's processes afterwards so
-each sees the same schema. The blockchain store's lane tables need no command: every start of the
-blockchain service creates them.`
+each sees the same schema. The blockchain store's lane tables are not this command's: every start of
+the blockchain service creates them when its database role may CREATE. A role without CREATE needs
+the database owner to create the lane tables and the lane_map_lane_last index first, then grant
+SELECT and INSERT on them.`
 
 // laneSchemaExecute opens the configured UTXO store and installs its lane columns.
 func laneSchemaExecute(logger ulogger.Logger, tSettings *settings.Settings, out io.Writer) func(args []string) error {

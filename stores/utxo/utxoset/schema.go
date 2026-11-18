@@ -722,11 +722,12 @@ func CreateSchema(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 // openLaneColumns reports whether this database has lane_position on its identity tables, adding
-// every lane column first when lane positions are on. The columns are not in the schema, because a
-// NULL in a row that has no other NULL adds a null bitmap, which is 8 bytes of heap and WAL per row
-// with nothing to show for them. A database that has never had lane positions on keeps the rows main
-// writes, until an operator installs the lane schema with PrepareLaneSchema at off before the
-// historical conversion.
+// those three columns first when lane positions are on. The columns are not in the schema, because
+// a NULL in a row that has no other NULL adds a null bitmap, which is 8 bytes of heap and WAL per
+// row with nothing to show for them. A database that has never had lane positions on keeps the
+// rows main writes, until an operator installs the lane schema with PrepareLaneSchema. The other
+// five lane columns, which nothing in this build writes, arrive only that way, so turning lane
+// positions on does not add columns that would stay empty.
 //
 // A process with the flag off still looks, because the columns outlive the flag: on a database
 // where they exist, the statements that copy a record's payload keep carrying the position. A process
@@ -755,6 +756,17 @@ func openLaneColumns(ctx context.Context, pool *pgxpool.Pool, on bool) (bool, er
 // lane_position, which the create path writes.
 var laneColumnTables = []string{"tx_ident", "tx_mined", "preserved_parent"}
 
+// laneOwnPositionColumns are the lane_position columns of laneColumnTables: the only lane columns
+// that opening the store with lane positions on adds.
+func laneOwnPositionColumns() []laneSchemaColumn {
+	cols := make([]laneSchemaColumn, 0, len(laneColumnTables))
+	for _, table := range laneColumnTables {
+		cols = append(cols, laneSchemaColumn{table, "lane_position", "BIGINT"})
+	}
+
+	return cols
+}
+
 // laneSchemaColumn is one nullable lane column of the utxoset schema.
 type laneSchemaColumn struct{ table, column, sqlType string }
 
@@ -782,7 +794,7 @@ var laneSchemaColumns = []laneSchemaColumn{
 	{"spend_journal", "lane_position", "BIGINT"},
 }
 
-// laneColumnMigrationLimit is how long addLanePositionColumns keeps retrying one column before the
+// laneColumnMigrationLimit is how long addLaneColumns keeps retrying one column before the
 // store refuses to open, or PrepareLaneSchema fails, with the error. It only matters beside another
 // process that keeps a transaction open on that table for all of this time.
 const laneColumnMigrationLimit = 5 * time.Minute
@@ -793,7 +805,7 @@ const laneColumnMigrationLimit = 5 * time.Minute
 // or runs the same ALTER TABLE ... ADD COLUMN IF NOT EXISTS statements by hand. Restart every
 // process of the node afterwards so each one sees the same schema.
 func PrepareLaneSchema(ctx context.Context, pool *pgxpool.Pool) error {
-	return addLanePositionColumns(ctx, pool, laneColumnMigrationLimit)
+	return addLaneColumns(ctx, pool, laneSchemaColumns, laneColumnMigrationLimit)
 }
 
 // PrepareLaneSchema installs this store's lane columns; see the package function.
@@ -813,8 +825,14 @@ func (s *Store) LaneSchemaInstalled(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// addLanePositionColumns gives the database every lane column, nullable, with no default, no
-// rewrite and no backfill. A row already stored reads NULL with no change to it. ADD COLUMN on a
+// addLanePositionColumns gives the database the lane_position column of each of laneColumnTables,
+// which is all that opening the store with lane positions on adds.
+func addLanePositionColumns(ctx context.Context, pool *pgxpool.Pool, limit time.Duration) error {
+	return addLaneColumns(ctx, pool, laneOwnPositionColumns(), limit)
+}
+
+// addLaneColumns gives the database the lane columns cols, nullable, with no default, no rewrite
+// and no backfill. A row already stored reads NULL with no change to it. ADD COLUMN on a
 // partitioned parent adds it to every attached partition, and a partition made later copies the
 // parent's columns. A spend-journal leaf the pruner has detached and not yet dropped keeps its old
 // columns; nothing reads it but the copy-forward, which names its columns.
@@ -830,8 +848,8 @@ func (s *Store) LaneSchemaInstalled(ctx context.Context) (bool, error) {
 // The catalog check comes first because ALTER TABLE takes its lock before it looks, and every
 // process that opens the store with lane positions on runs this. Once the columns exist this is
 // catalog reads and no lock.
-func addLanePositionColumns(ctx context.Context, pool *pgxpool.Pool, limit time.Duration) error {
-	for _, c := range laneSchemaColumns {
+func addLaneColumns(ctx context.Context, pool *pgxpool.Pool, cols []laneSchemaColumn, limit time.Duration) error {
+	for _, c := range cols {
 		if err := addLaneColumn(ctx, pool, c, limit); err != nil {
 			return errors.NewStorageError("[utxoset] add %s to %s", c.column, c.table, err)
 		}

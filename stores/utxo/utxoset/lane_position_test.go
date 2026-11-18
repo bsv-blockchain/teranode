@@ -1173,6 +1173,45 @@ func lanePositionsOf(l uint8, n int) []uint64 {
 	return out
 }
 
+// laneSchemaColumnsWant is every lane column PrepareLaneSchema installs, written out here rather
+// than read from laneSchemaColumns so a column dropped from that list fails these tests.
+var laneSchemaColumnsWant = [][2]string{
+	{"tx_ident", "lane_position"},
+	{"tx_mined", "lane_position"},
+	{"preserved_parent", "lane_position"},
+	{"tx_ident", "parent_lane_positions"},
+	{"tx_mined", "parent_lane_positions"},
+	{"preserved_parent", "parent_lane_positions"},
+	{"utxo", "lane_position"},
+	{"spend_journal", "lane_position"},
+}
+
+// Opening the store with lane positions on adds only the record's own lane_position, on the three
+// identity tables; the other five lane columns, which nothing in this build writes, wait for
+// PrepareLaneSchema, so rows do not carry a null bitmap for columns that stay empty.
+func TestLanePositionsOnAddsOnlyTheOwnPositionColumns(t *testing.T) {
+	s, ctx := newTestStore(t)
+	on := reopenWithFlag(t, s, true)
+
+	for _, table := range []string{"tx_ident", "tx_mined", "preserved_parent"} {
+		require.True(t, hasColumn(t, on, ctx, table, "lane_position"), table)
+	}
+
+	for _, c := range laneSchemaColumnsWant[3:] {
+		require.False(t, hasColumn(t, on, ctx, c[0], c[1]), "%s.%s arrives only with PrepareLaneSchema", c[0], c[1])
+	}
+
+	installed, err := on.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.False(t, installed)
+
+	require.NoError(t, on.PrepareLaneSchema(ctx))
+
+	for _, c := range laneSchemaColumnsWant {
+		require.True(t, hasColumn(t, on, ctx, c[0], c[1]), "%s.%s", c[0], c[1])
+	}
+}
+
 // hasColumn reports whether table has column, nullable with no default.
 func hasColumn(t *testing.T, s *Store, ctx context.Context, table, column string) bool {
 	t.Helper()
@@ -1216,8 +1255,8 @@ func TestLaneSchemaInstalledAtOffKeepsDisabledWritersWorking(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, installed)
 
-	for _, c := range laneSchemaColumns {
-		require.True(t, hasColumn(t, s, ctx, c.table, c.column), "%s.%s", c.table, c.column)
+	for _, c := range laneSchemaColumnsWant {
+		require.True(t, hasColumn(t, s, ctx, c[0], c[1]), "%s.%s", c[0], c[1])
 	}
 
 	for _, leaf := range []string{"utxo_p0", "utxo_p7", "tx_ident_l0"} {
@@ -1248,10 +1287,10 @@ func TestLaneSchemaInstalledAtOffKeepsDisabledWritersWorking(t *testing.T) {
 	require.NoError(t, s.pool.QueryRow(ctx, `SELECT string_agg(encode(ukey::text::bytea, 'hex') || satoshis::text, ',' ORDER BY ukey) FROM utxo`).Scan(&after))
 	require.Equal(t, before, after)
 
-	for _, c := range laneSchemaColumns {
+	for _, c := range laneSchemaColumnsWant {
 		var n int
-		require.NoError(t, s.pool.QueryRow(ctx, `SELECT count(*) FROM `+c.table+` WHERE `+c.column+` IS NOT NULL`).Scan(&n))
-		require.Zero(t, n, "%s.%s holds no value", c.table, c.column)
+		require.NoError(t, s.pool.QueryRow(ctx, `SELECT count(*) FROM `+c[0]+` WHERE `+c[1]+` IS NOT NULL`).Scan(&n))
+		require.Zero(t, n, "%s.%s holds no value", c[0], c[1])
 	}
 
 	// The process that installed the schema still runs main's statements, and a restart at off

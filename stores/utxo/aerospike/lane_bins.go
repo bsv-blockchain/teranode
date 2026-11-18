@@ -15,9 +15,14 @@ import (
 // writes either bin.
 
 // spendingLanePositionsBin builds the slot lane-position bin of a record holding n output slots,
-// every slot unspent.
+// every slot unspent, which the format writes as 0.
 func spendingLanePositionsBin(n int) *aerospike.Bin {
-	return aerospike.NewBin(fields.SpendingLanePositions.String(), make([]interface{}, n))
+	list := make([]interface{}, n)
+	for i := range list {
+		list[i] = int64(0)
+	}
+
+	return aerospike.NewBin(fields.SpendingLanePositions.String(), list)
 }
 
 // parentLanePositionsBin builds a child's parent lane-position bin, checking every position.

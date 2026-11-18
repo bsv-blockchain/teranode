@@ -204,6 +204,10 @@ func checkDisjoint(subtrees []SubtreeBitmaps) error {
 
 	for i, s := range subtrees {
 		for l, bm := range s.Lanes {
+			if bm == nil || bm.IsEmpty() {
+				return errors.NewProcessingError("subtree %d lane %d has an empty bitmap", i, l)
+			}
+
 			u, ok := seen[l]
 			if !ok {
 				seen[l] = bm.Clone()

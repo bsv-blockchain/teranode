@@ -339,17 +339,22 @@ func CheckMapRows(rows []MapRow) error {
 }
 
 // Taken reports whether this row's block took position p. The caller has parsed the hole data
-// once with Check and passes the bitmap; it is ignored for a range row.
-func (r MapRow) Taken(p uint64, holeData *roaring64.Bitmap) bool {
+// once with Check and passes the bitmap; it is ignored for a range row and below the first hole.
+// It is an error to pass no bitmap when a RowTagRoaring64 row needs one to answer.
+func (r MapRow) Taken(p uint64, holeData *roaring64.Bitmap) (bool, error) {
 	if p < r.First || p > r.Last {
-		return false
+		return false, nil
 	}
 
 	if r.Tag == RowTagRange || p < r.FirstHole {
-		return true
+		return true, nil
 	}
 
-	return holeData != nil && holeData.Contains(p)
+	if holeData == nil {
+		return false, errors.NewProcessingError("lane %d map row %d to %d: position %d needs the row's hole data", r.Lane, r.First, r.Last, p)
+	}
+
+	return holeData.Contains(p), nil
 }
 
 // SameRow reports whether two rows say the same thing: lane, range, first hole, tag and the same

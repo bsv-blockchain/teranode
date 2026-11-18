@@ -15,6 +15,14 @@ func bitmapOf(positions ...uint64) *roaring64.Bitmap {
 	return bm
 }
 
+func requireTaken(t *testing.T, r MapRow, p uint64, holeData *roaring64.Bitmap, want bool) {
+	t.Helper()
+
+	got, err := r.Taken(p, holeData)
+	require.NoError(t, err)
+	require.Equal(t, want, got, "position %d", p)
+}
+
 func TestBuildMapRowsRange(t *testing.T) {
 	bm := roaring64.New()
 	bm.AddRange(1, 90_001)
@@ -26,8 +34,8 @@ func TestBuildMapRowsRange(t *testing.T) {
 	hole, err := rows[0].Check()
 	require.NoError(t, err)
 	require.Nil(t, hole)
-	require.True(t, rows[0].Taken(41_000, nil))
-	require.False(t, rows[0].Taken(90_001, nil))
+	requireTaken(t, rows[0], 41_000, nil, true)
+	requireTaken(t, rows[0], 90_001, nil, false)
 }
 
 // The design's lane 11 example: block 1,000 takes 5,000 to 7,000 with holes from 5,004.
@@ -53,12 +61,18 @@ func TestBuildMapRowsWithHoles(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, parsed.Equals(bm))
 
-	require.True(t, r.Taken(5_003, parsed), "below the first hole needs no bitmap")
-	require.True(t, r.Taken(5_003, nil))
-	require.False(t, r.Taken(5_004, parsed))
-	require.False(t, r.Taken(6_000, parsed))
-	require.True(t, r.Taken(6_999, parsed))
-	require.False(t, r.Taken(4_999, parsed))
+	requireTaken(t, r, 5_003, parsed, true)
+	requireTaken(t, r, 5_003, nil, true) // below the first hole needs no bitmap
+	requireTaken(t, r, 5_004, parsed, false)
+	requireTaken(t, r, 6_000, parsed, false)
+	requireTaken(t, r, 6_999, parsed, true)
+	requireTaken(t, r, 4_999, parsed, false)
+
+	// At or above the first hole a holed row cannot answer without its bitmap.
+	_, err = r.Taken(6_999, nil)
+	require.Error(t, err)
+	_, err = r.Taken(5_004, nil)
+	require.Error(t, err)
 
 	// The input is not modified.
 	require.False(t, bm.Contains(6_000))

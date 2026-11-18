@@ -147,6 +147,51 @@ func TestLaneFilesRefuseBadBitmaps(t *testing.T) {
 
 	_, err = EncodeSubtreeBitmaps(SubtreeBitmaps{Lanes: LaneBitmaps{1: bitmapOf(MaxPosition + 1)}})
 	require.Error(t, err)
+
+	_, err = EncodeSubtreeBitmaps(SubtreeBitmaps{Lanes: LaneBitmaps{1: nil}})
+	require.Error(t, err, "nil bitmap")
+
+	// The overlap check runs first in a proof file, so it must refuse a nil or empty bitmap
+	// itself rather than panic on it, in any subtree.
+	for name, lanes := range map[string]LaneBitmaps{
+		"nil":   {7: nil},
+		"empty": {7: roaring64.New()},
+	} {
+		for _, at := range []int{0, 1} {
+			p := sampleProof()
+			p.Subtrees[at].Lanes = lanes
+
+			require.NotPanics(t, func() {
+				_, err = EncodeProofFile(p)
+			}, name)
+			require.Error(t, err, "%s bitmap in subtree %d", name, at)
+		}
+	}
+}
+
+// A lane written twice in one subtree is refused, in both files, rather than the second copy
+// silently replacing the first.
+func TestLaneFilesRefuseARepeatedLane(t *testing.T) {
+	two := SubtreeBitmaps{SubtreeHash: chainhash.Hash{0x61}, Lanes: LaneBitmaps{1: bitmapOf(1), 2: bitmapOf(5)}}
+
+	s, err := EncodeSubtreeBitmaps(two)
+	require.NoError(t, err)
+
+	off := 4 + 1 + 32 + 2
+	first := 5 + int(s[off+1])
+	s[off+first] = 1 // the second entry now claims lane 1 again
+
+	_, err = DecodeSubtreeBitmaps(s)
+	require.Error(t, err)
+
+	p, err := EncodeProofFile(ProofFile{BlockHash: chainhash.Hash{0x62}, Subtrees: []SubtreeBitmaps{two}})
+	require.NoError(t, err)
+
+	off = 4 + 1 + 32 + 4 + 32 + 2
+	p[off+first] = 1
+
+	_, err = DecodeProofFile(p)
+	require.Error(t, err)
 }
 
 func indexOf(b, sub []byte) int {
@@ -186,6 +231,35 @@ func FuzzDecodeProofFile(f *testing.F) {
 			for l, bm := range p.Subtrees[i].Lanes {
 				require.True(t, q.Subtrees[i].Lanes[l].Equals(bm))
 			}
+		}
+	})
+}
+
+func FuzzDecodeSubtreeBitmaps(f *testing.F) {
+	b, err := EncodeSubtreeBitmaps(sampleProof().Subtrees[0])
+	if err != nil {
+		f.Fatal(err)
+	}
+
+	f.Add(b)
+	f.Add([]byte("LNSB\x01"))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		s, err := DecodeSubtreeBitmaps(data)
+		if err != nil {
+			return
+		}
+
+		again, err := EncodeSubtreeBitmaps(s)
+		require.NoError(t, err)
+
+		q, err := DecodeSubtreeBitmaps(again)
+		require.NoError(t, err)
+		require.Equal(t, s.SubtreeHash, q.SubtreeHash)
+		require.Len(t, q.Lanes, len(s.Lanes))
+
+		for l, bm := range s.Lanes {
+			require.True(t, q.Lanes[l].Equals(bm))
 		}
 	})
 }
