@@ -432,8 +432,14 @@ func blockBacklog(s *snapshot.Snapshot) (float64, bool) {
 
 	blocks := c.Value
 
-	if p := s.Chain.PeerHeight; s.FSM == fsmCatchingBlocks && p.Status == snapshot.StatusOK && p.Value > float64(s.Tip) {
-		blocks = max(blocks, p.Value-float64(s.Tip))
+	if s.FSM == fsmCatchingBlocks {
+		p := s.Chain.PeerHeight
+		if p.Status != snapshot.StatusOK {
+			return 0, false
+		}
+		if p.Value > float64(s.Tip) {
+			blocks = max(blocks, p.Value-float64(s.Tip))
+		}
 	}
 
 	return blocks, true
