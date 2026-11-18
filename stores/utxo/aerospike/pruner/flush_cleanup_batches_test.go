@@ -2169,3 +2169,65 @@ func TestMarkParents_TransportFailureWithdrawsEveryMarker(t *testing.T) {
 	require.Error(t, err, "the transport failure is returned")
 	require.False(t, hasMarker(t, client, parentKey, &child), "a marker the lost batch may have written is withdrawn")
 }
+
+// TestFlushCleanupBatches_ConflictingLoserIsVerifiedBeforeTheMarkerWrite: a parent record that lists a
+// conflicting loser is read before its marker write. The loser's output names someone else, so the
+// loser is deleted unmarked, and the marker write's filter has no way to say that: a write that
+// listed it would be refused for the whole record, to be read and written again after. The winner
+// beside it must be marked by the first write, so no marker write is refused, and the loser is
+// deleted without a marker.
+func TestFlushCleanupBatches_ConflictingLoserIsVerifiedBeforeTheMarkerWrite(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	var other chainhash.Hash
+	other[0] = 0xEE
+
+	parent := chainhash.HashH([]byte{0xF7, 1})
+	winner := chainhash.HashH([]byte{0xF7, 2})
+	loser := chainhash.HashH([]byte{0xF7, 3})
+
+	// Output 0 names the winner, output 1 a spender that is neither.
+	parentKey := putRecord(t, client, &parent, aerospike.BinMap{
+		fields.Utxos.String(): []interface{}{spentUtxoElement(&winner), spentUtxoElement(&other)},
+	})
+	winnerKey := putRecord(t, client, &winner, aerospike.BinMap{fields.TxID.String(): winner.CloneBytes()})
+	loserKey := putRecord(t, client, &loser, aerospike.BinMap{fields.TxID.String(): loser.CloneBytes()})
+
+	updates := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &winner))
+	require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 1, &loser))
+
+	for _, info := range updates {
+		info.markReleased(&loser)
+	}
+
+	refused := 0
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		err := client.BatchOperate(policy, records)
+
+		for _, rec := range records {
+			if rec.BatchRec().ResultCode == types.FILTERED_OUT {
+				refused++
+			}
+		}
+
+		return err
+	}
+
+	heldBack, err := s.flushCleanupBatches(context.Background(), updates, []*pendingDeletion{
+		{txHash: &winner, keys: []*aerospike.Key{winnerKey}},
+		{txHash: &loser, keys: []*aerospike.Key{loserKey}},
+	}, nil)
+	require.NoError(t, err)
+	require.Zero(t, heldBack)
+
+	require.Zero(t, refused, "the record that lists a loser is verified first, so its marker write is not refused")
+	require.True(t, hasMarker(t, client, parentKey, &winner), "the winner is marked")
+	require.False(t, hasMarker(t, client, parentKey, &loser), "the loser is deleted unmarked")
+
+	for _, key := range []*aerospike.Key{winnerKey, loserKey} {
+		exists, existsErr := client.Exists(nil, key)
+		require.NoError(t, existsErr)
+		require.False(t, exists)
+	}
+}
