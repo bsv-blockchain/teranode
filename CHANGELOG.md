@@ -38,9 +38,6 @@ read every section between yours and the target.
   the three tables with the owner role before upgrading, and grant the node role `SELECT, INSERT, UPDATE`
   on `lane_lease` and `SELECT, INSERT` on the other two, or startup fails. A `lane_handout` left by a soak
   of this PR also needs its new columns added by the owner (DDL in #2136).
-- **`utxostore_laneMigration=shadow` requires a store that writes lane positions.** Daemon
-  startup now refuses null and experimental Pebble stores at shadow. Use a supported store or
-  keep `utxostore_laneMigration=off`. (#2136)
 - **The limited RPC credential can no longer call `freeze`, `unfreeze` or `reassign`.** A call with
   `rpc_limit_user`/`rpc_limit_pass` now answers "limited user not authorized for this method". Tools
   that call these methods, such as an alert-system client, must use `rpc_user`/`rpc_pass`. (#2095)
