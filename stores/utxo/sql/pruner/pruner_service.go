@@ -194,10 +194,11 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr st
 // with s.db.BeginTx, which resolves to the embedded stdlib method: every
 // txn.ExecContext on it is a raw *sql.Tx call that does NOT go through usql's
 // per-statement retry or its circuit breaker. On Postgres the transaction can be
-// chosen as the victim of a deadlock (40P01), and on SQLite a deferred transaction
-// that starts as a reader can fail to upgrade with SQLITE_BUSY_SNAPSHOT, which
-// busy_timeout cannot wait out. Both are safe to retry by re-running the whole
-// transaction, so the retry lives here.
+// chosen as the victim of a deadlock (40P01). On SQLite the transaction opens
+// with a write (takeSQLiteWriteLock), so it cannot hit SQLITE_BUSY_SNAPSHOT from a
+// reader upgrade; it can still get SQLITE_BUSY or SQLITE_LOCKED once busy_timeout
+// runs out. Both are safe to retry by re-running the whole transaction, so the
+// retry lives here.
 // Mirrors stores/blockchain/sql/sql.go rebuildOnMainChainFlag.
 const (
 	maxPruneAttempts   = 3
@@ -519,9 +520,10 @@ func (s *Service) deleteTombstonedTx(ctx context.Context, blockHeight uint32) (d
 // opts.Isolation, and util/sql.go builds the SQLite DSN with no _txlock, so what
 // SQLite gets is a plain deferred BEGIN. The cross-statement atomicity the pruner
 // needs still holds there: one writer at a time, and the transaction rolls back as
-// a unit. A deferred BEGIN that starts as a reader can fail to upgrade with
-// SQLITE_BUSY_SNAPSHOT, which is why deleteTombstoned retries the whole
-// transaction.
+// a unit. The transaction opens with takeSQLiteWriteLock, so it is a writer before
+// it reads anything and cannot fail to upgrade from a reader with
+// SQLITE_BUSY_SNAPSHOT. deleteTombstoned still retries the whole transaction on
+// SQLITE_BUSY or SQLITE_LOCKED, which busy_timeout can run out on.
 var pruneTxOptions = &sql.TxOptions{Isolation: sql.LevelReadCommitted}
 
 // finishPrune reads the delete's row count and commits. Nothing runs between
@@ -611,8 +613,16 @@ func (s *Service) pruneCandidates(ctx context.Context, blockHeight uint32, candi
 	// leaves. Such a child would get no marker, and a replay of it would then be
 	// recreated and spend that output cleanly, so it stays. A parent output
 	// naming a different, well-formed spender (a conflicting loser) does not hold
-	// the child back, and a parent that is gone needs no marker. The Aerospike
-	// pruner applies the same rule in keepSpendHolders.
+	// the child back, and a parent that is gone needs no marker.
+	//
+	// The rule is per input here and per parent record in the Aerospike
+	// pruner's keepSpendHolders, which holds a child back only when no claimed
+	// output on a record names it and at least one is unspent or malformed. Take
+	// a child with inputs P:0 and P:1 on one record, P:0 naming it and P:1 unspent
+	// after a truncated rollback. Aerospike marks P and deletes the child. This
+	// query holds the child back, and it stays and is counted on every prune.
+	// Both are replay-safe: P:0's marker refuses a replay, and the rollback
+	// reverses P:1.
 	//
 	// The one statement feeds both the marker INSERT and the DELETE, so a
 	// held-back child gets no marker anywhere: the spend path refuses an

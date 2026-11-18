@@ -2406,7 +2406,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		// that reasoning and what covers this flavour of #1214 instead.
 		//
 		// That exclusion does not hold once the batch ALSO contains ErrSpent,
-		// ErrTxConflicting, ErrFrozen, or ErrUtxoHashMismatch: a concurrent attempt
+		// ErrTxConflicting, ErrFrozen, ErrUtxoHashMismatch, or a pruned-replay
+		// marker (ErrUtxoSpendingTxPruned): a concurrent attempt
 		// at this same txid sees the same outpoints and hits the same unwinnable
 		// failure, so it can never reach Create either — nobody can be a
 		// legitimate owner of the partial spends, and the rollback is both safe

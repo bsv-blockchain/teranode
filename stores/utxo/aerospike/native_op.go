@@ -213,7 +213,8 @@ func (s *Store) detectNativeMarkLongestChainSupport(ctx context.Context) bool {
 // it the affected batch fails once and everything after falls back to UDF.
 //
 // Called from the per-record error branches of every native-capable call site
-// and from executeTeranodeOp. A no-op when native ops are already off (the
+// except the pruner's sub-op 15 marker write, which uses
+// observePrunerNativeOpError, and from executeTeranodeOp. A no-op when native ops are already off (the
 // UDF path can also surface PARAMETER_ERROR for unrelated reasons; we only
 // interpret it as "native unsupported" while native ops are active).
 func (s *Store) demoteNativeOnUnsupported(err error) {

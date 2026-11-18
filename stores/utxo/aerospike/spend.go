@@ -853,7 +853,8 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	//
 	// That exclusion only holds while nothing else in the batch proves the tx
 	// unwinnable. If the batch ALSO contains ErrSpent, ErrTxConflicting,
-	// ErrFrozen or ErrUtxoHashMismatch (sawUnwinnable), this txid can never
+	// ErrFrozen, ErrUtxoHashMismatch or a pruned-replay marker
+	// (ErrUtxoSpendingTxPruned) (sawUnwinnable), this txid can never
 	// reach Create no matter who is racing it: a concurrent attempt sees the
 	// same outpoints and hits the same unwinnable failure, so nobody can be a
 	// legitimate owner of the partial spends and the rollback is both safe and
