@@ -572,10 +572,10 @@ func NewBlobError(message string, params ...interface{}) *Error {
 // such as a missing, truncated or wrong-type header. Stores write blobs whole (temp file then
 // rename, or a single S3 put), so such a blob stays broken and a retry of the same read cannot
 // help. A store keeps its StorageError and adds this as the cause, so the StorageError and
-// IsRetryableError checks are unchanged. The rendered message now contains BLOB_CORRUPT, so the
-// substring match in IsMaliciousResponseError also catches a wrong-type header and an S3 Get
-// header failure. Block validation retries those a bounded number of times, as it already did for
-// "missing or invalid header".
+// IsRetryableError checks are unchanged. The rendered message contains BLOB_CORRUPT, which the
+// substring match in IsMaliciousResponseError catches, so a caller that must not retry checks
+// IsBlobCorrupt first. Block validation does: it neither requeues a block that failed on one nor
+// tries another source for it.
 func NewBlobCorruptError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOB_CORRUPT, message, params...)
 }
