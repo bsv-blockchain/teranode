@@ -143,8 +143,8 @@ full-replication ACK buys no correctness, only latency in the per-block removal 
 
 **Scope** - record removal only:
 
-- Pruner **parent updates** (the `deletedChildren` marker writes, each a map write filtered on the parent output)
-  mutate records that survive the prune and always use `COMMIT_ALL`.
+- Pruner **parent updates** (the `deletedChildren` marker writes and their withdrawals, each native sub-op 15 or a
+  map write filtered on the parent output) mutate records that survive the prune and always use `COMMIT_ALL`.
 - Every write **outside** the pruner always uses `COMMIT_ALL`. There is no cluster-wide commit-level
   setting: UTXO record creation, the transaction-creation lock, the conflict WAL, setMined, unspend
   and the preserve / delete-at-height writes are none of them self-healing, so relaxing them would

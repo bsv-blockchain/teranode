@@ -710,9 +710,10 @@ type spendCompletionResult struct {
 }
 
 // rollbackSet is the set a failed call reverses (see utxo.RollbackSet). An
-// idempotent match is held back when a resolved input hit a pruned-replay marker
-// or when any input is still unanswered, since that input may be the marker hit.
-// On the normal path every input is answered, so unresolved is zero there.
+// idempotent match is held back when a resolved input hit a pruned-replay marker,
+// when any input is still unanswered, since that input may be the marker hit, or
+// on a RequireParentOutputs call, whose record exists so its matches are its own
+// spends. On the normal path every input is answered, so unresolved is zero there.
 func (r *spendCompletionResult) rollbackSet() []*utxo.Spend {
 	return utxo.RollbackSet(r.spentSpends, r.idempotentSpends, r.prunedRejection || r.unresolved > 0 || r.requireParentOutput)
 }

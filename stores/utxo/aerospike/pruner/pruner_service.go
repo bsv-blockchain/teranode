@@ -2675,7 +2675,10 @@ func (s *Service) drainCarry(ctx context.Context, carry *deleteCarry) (deleted, 
 // masters' pages was never sent and the worker failed a cycle every chunk of
 // which had succeeded. So a drain takes up to about two batches' retry
 // budgets plus their blob deletions, minutes rather than seconds when the
-// server is overloaded.
+// server is overloaded. A refused carried delete adds more: its marker
+// withdrawals (settleCarriedDeletes) take no context and are sent up to
+// withdrawMarkerAttempts times, each a batch with a retry budget of its own, so
+// that case can take up to three more.
 //
 // A drain that stops on an error leaves the rest of the carry unsent. Those
 // children stay present behind their markers until a later cycle finds them
