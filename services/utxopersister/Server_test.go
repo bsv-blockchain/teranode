@@ -999,8 +999,8 @@ func TestProcessNextBlock_ExistsCheckFailureFailsThePass(t *testing.T) {
 	require.False(t, exists, "no set is written when the existence check fails")
 }
 
-// When lastProcessed.dat cannot be written the previous set is kept, because it
-// is still the base the next pass verifies and builds on.
+// When lastProcessed.dat cannot be written the previous set is kept, and the
+// same process retries recording the published set before deleting its base.
 func TestProcessNextBlock_FailedHeightWriteKeepsThePreviousSet(t *testing.T) {
 	ctx := context.Background()
 	store := &faultyStore{Store: memory.New()}
@@ -1014,6 +1014,29 @@ func TestProcessNextBlock_FailedHeightWriteKeepsThePreviousSet(t *testing.T) {
 	exists, err := store.Exists(ctx, byH[1][:], fileformat.FileTypeUtxoSet)
 	require.NoError(t, err)
 	require.True(t, exists, "the previous set must survive a failed height write")
+
+	height, err := server.readLastHeight(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), height)
+
+	require.Len(t, readSetUTXOs(t, ctx, server.settings, store, byH[3]), 3)
+
+	// The write recovers while the chain tip stays at block 3. Retry on the
+	// same Server, without Init or a restart resetting its in-memory height.
+	store.datWriteFails = false
+	delay, err := server.processNextBlock(ctx)
+	require.NoError(t, err)
+	require.Zero(t, delay, "the retry must record block 3 rather than wait for a new tip")
+
+	height, err = server.readLastHeight(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(3), height)
+	require.Equal(t, height, server.lastHeight)
+
+	exists, err = store.Exists(ctx, byH[1][:], fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.False(t, exists, "the retry must delete the previous set after recording the new height")
+	require.Len(t, readSetUTXOs(t, ctx, server.settings, store, byH[3]), 3)
 }
 
 // calledFrom reports whether the caller of the faultyStore method running now

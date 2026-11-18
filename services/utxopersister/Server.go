@@ -714,8 +714,6 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 		}
 	}
 
-	s.lastHeight = c.lastBlockHeight
-
 	// Write the headers file for the UTXO set
 	if s.blockchainStore != nil {
 		if err := WriteHeadersToStore(ctx, s.logger, s.settings, s.blockStore, s.blockchainStore, c.lastBlockHash, c.lastBlockHeight); err != nil {
@@ -730,9 +728,12 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	// deleting it first would let a stop between the two (a crash, a deploy, a
 	// liveness restart, or a failed delete below) restart onto a base that no
 	// longer exists, and every later pass would fail verifyLastSet.
-	if err := s.writeLastHeight(ctx, s.lastHeight); err != nil {
+	if err := s.writeLastHeight(ctx, c.lastBlockHeight); err != nil {
 		return 0, err
 	}
+	// Keep the in-memory height at the previous set until the write succeeds,
+	// so a later pass in this process retries recording the published set.
+	s.lastHeight = c.lastBlockHeight
 
 	// Remove the previous block's UTXOSet and its side files. lastProcessed.dat
 	// has already moved past it, so a stop or a failed delete here leaves some
