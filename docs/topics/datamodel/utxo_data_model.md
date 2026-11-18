@@ -486,6 +486,7 @@ Contains complete transaction metadata and first UTXO batch:
 | `spentUtxos` | Number of spent UTXOs in THIS record | Always |
 | `spentExtraRecs` | Number of child records fully spent | If outputs > `utxoBatchSize` |
 | `blockIDs`, `blockHeights`, `subtreeIdxs` | Block references | Always |
+| `dahVer` | Count of the master's `deleteAtHeight` writes and expression evaluations, not only changes: an expression setMined or longest-chain call with no stamp change still bumps it. Every writer bumps it, so page writes can be ordered. Absent means 0 | After the first evaluation of the master's `deleteAtHeight` |
 | `fee`, `sizeInBytes`, `isCoinbase`, etc. | Transaction metadata | Always |
 
 #### Child Records (Index 1+)
@@ -498,6 +499,7 @@ Contain UTXO batches with minimal metadata:
 | `recordUtxos` | Number of non-nil UTXOs in THIS child record | Always |
 | `spentUtxos` | Number of spent UTXOs in THIS child record | Always |
 | `deleteAtHeight` | Cleanup trigger for this record | When set |
+| `dahVer` | The master's `dahVer` at the write that last set or cleared this record's `deleteAtHeight`. A page write is refused when the page already holds that version or a later one. A page never counts its own | After a versioned page write |
 | Common metadata | Version, locktime, fee, isCoinbase, locked, conflicting | Always |
 
 **Child Record DAH Management:**
@@ -505,6 +507,7 @@ Contain UTXO batches with minimal metadata:
 - When master record's UTXOs all spent → `SetDAHForChildRecords()` sets DAH on all children
 - When master record unspentalready → `SetDAHForChildRecords()` with DAH=0 clears DAH on all children
 - Enables coordinated cleanup of entire transaction across all pagination records
+- A child record never stamps or versions itself; its `deleteAtHeight` only ever comes from its master
 
 #### Pagination Example
 

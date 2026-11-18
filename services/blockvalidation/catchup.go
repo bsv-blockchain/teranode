@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/blockassemblyutil"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
@@ -56,7 +57,11 @@ type CatchupContext struct {
 	commonAncestorMeta  *model.BlockHeaderMeta
 	commonAncestorIndex int // Index of common ancestor in peer headers
 	forkDepth           uint32
-	currentHeight       uint32
+	// walkExhausted is set by findCommonAncestor when every header the peer served is one we hold,
+	// at or below our tip: the walk ran off the end of the list without finding where the chains
+	// diverge. forkDepth is not measured then, because nothing has shown there is a fork.
+	walkExhausted bool
+	currentHeight uint32
 	// bestBlockMeta is the accepted chain tip read once by findCommonAncestor and reused by
 	// every later step, so they all reason about the same tip. Reading it a second time would
 	// let the tip move in between: the ancestor is chosen against this height, so a tip that
@@ -307,19 +312,41 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
+	// Step 3.1: A list whose every header we already hold, at or below our tip, offers nothing new,
+	// so nothing below may act on a fork depth measured from where it ended: not the
+	// coinbase-maturity check, the secret-mining check, the netted-route refusal or the mined_set
+	// clear.
+	if catchupCtx.walkExhausted {
+		return u.handleExhaustedAncestorWalk(ctx, catchupCtx)
+	}
+
 	// Step 4: Validate fork depth against coinbase maturity
 	if err = u.validateForkDepth(catchupCtx); err != nil {
-		return err
+		return u.preferNettedRouteForkRefusal(catchupCtx, err)
 	}
 
-	// Step 4.1: Refuse a chain that forks below a checkpoint the tip has passed, before any
-	// of its blocks is fetched or skipped as already stored.
-	if err = u.validateForkBelowCheckpoint(catchupCtx); err != nil {
-		return err
-	}
-
-	// Step 5: Check for secret mining attempts
+	// Step 5: Check for secret mining attempts. Its error is returned as it is, not through
+	// preferNettedRouteForkRefusal: only one of its returns is a rejection of the peer, and the
+	// others are local faults documented as not penalising the peer. A secretly mined netted fork
+	// therefore takes the same path as one off the netted route: reported malicious, not rotated.
 	if err = u.checkSecretMining(ctx, catchupCtx); err != nil {
+		return err
+	}
+
+	// Step 5.1: Refuse a fork below the checkpoint on the netted route, at any depth, before the
+	// mined_set clear below un-stamps this node's own blocks for a fork this route can never take.
+	// It runs after the fork-depth and secret-mining checks, which read headers only, so a fork
+	// deeper than coinbase maturity, or a secretly mined one, is still reported as malicious
+	// (recordMaliciousAttempt). When the fork-depth check rejects a netted fork, this refusal is
+	// returned in place of its error (preferNettedRouteForkRefusal), so the peer is rotated.
+	if err = u.refuseNettedRouteFork(catchupCtx); err != nil {
+		return err
+	}
+
+	// Step 5.2: Refuse a chain that forks below a checkpoint the tip has passed (bitcoin-sv's
+	// bad-fork-prior-to-checkpoint), on any route, before any of its blocks is fetched or
+	// skipped as already stored, and whatever its work.
+	if err = u.validateForkBelowCheckpoint(catchupCtx); err != nil {
 		return err
 	}
 
@@ -366,7 +393,11 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 	// ancestor from the store, and rejects a peer that supplied a header mined against a
 	// target of its own choosing. It must stay ahead of step 10, whose subtree prewarm
 	// fetches block data before any block is validated.
-	if err = u.validateCatchupHeaderDifficulty(ctx, catchupCtx); err != nil {
+	//
+	// Then, on the netted route, refuse a window with no verified checkpoint above its first
+	// block, before any block body is fetched. It runs after the difficulty check, so a
+	// self-consistent low-difficulty chain in such a window is still reported as malicious.
+	if err = u.validateHeaderWindow(ctx, catchupCtx); err != nil {
 		return err
 	}
 
@@ -433,6 +464,87 @@ func (u *Server) clearMinedSetOnForkedBlocks(ctx context.Context, catchupCtx *Ca
 		u.logger.Infof("[catchup][%s] Cleared mined_set on %d fork blocks and sent notifications",
 			catchupCtx.blockUpTo.Hash().String(), len(headers))
 	}
+}
+
+// handleExhaustedAncestorWalk ends a catchup whose served headers are all ones we already hold, at
+// or below our tip. A held header may be a stored side-chain block, so this is not proof the list
+// is our main chain, but the walk found no header we lack: it never reached the point where the
+// peer's chain leaves what we hold, and nothing the peer offered is new.
+//
+// Why the list ended decides who is at fault. If our own accumulated-header cap or iteration limit
+// cut it, we stopped asking: the peer would have gone on, and the list says nothing about its
+// chain. That holds only when the list starts where our locator does. An honest peer serves from
+// the newest locator entry on its chain, and includes that block, so a peer holding our first
+// entry starts its list there. The locator starts below our tip only while the UTXO store lags the
+// chain (catchupGetBlockHeaders), and then the cap can end that honest list below our tip. That is
+// returned as a ServiceError marked with localHeaderCapKey, a local fault, so the peer is not
+// charged and the per-block attempt cap bounds the retries. The same locator truncates the same
+// way, so the retry cannot get further until the lag shrinks below the cap.
+//
+// A capped list that starts anywhere else is charged to the peer as an invalid response. Either
+// the peer ignored the locator, for instance serving our own chain from genesis to trip our cap
+// and dodge any charge, or it lacks our first locator entry, and then the list shows its chain
+// leaving ours more than one cap deep, far past coinbase maturity.
+//
+// Otherwise the peer ended the list itself, short of the block it announced, which is the case
+// handleNoNewHeaders already judges.
+//
+// Treating the depth as zero instead would be wrong: a long genuine fork is exactly what the cap
+// truncates, so the depth checks must be skipped, not fed a zero.
+func (u *Server) handleExhaustedAncestorWalk(ctx context.Context, catchupCtx *CatchupContext) error {
+	result := catchupCtx.headersFetchResult
+	lastHeight := catchupCtx.commonAncestorMeta.Height
+
+	if result.StoppedOnCap {
+		if !listStartsAtLocator(result) {
+			firstHash := "none"
+			if len(result.Headers) > 0 {
+				firstHash = result.Headers[0].Hash().String()
+			}
+
+			return errors.NewNetworkInvalidResponseError("[catchup][%s] peer %s served a header list starting at %s, not at our block locator's first entry, that our header cap (%s) cut at height %d below our tip at %d with every header one we hold", catchupCtx.blockUpTo.Hash().String(), catchupCtx.peerID, firstHash, result.StopReason, lastHeight, catchupCtx.currentHeight)
+		}
+
+		return newLocalHeaderCapRefusal("[catchup][%s] header fetch stopped on our own header cap (%s) at height %d, below our tip at %d, with every header one we hold: no evidence of a fork, not charging peer %s", catchupCtx.blockUpTo.Hash().String(), result.StopReason, lastHeight, catchupCtx.currentHeight, catchupCtx.peerID)
+	}
+
+	u.logger.Infof("[catchup][%s] every header peer %s served is one we hold, up to height %d (our tip %d): nothing new", catchupCtx.blockUpTo.Hash().String(), catchupCtx.peerID, lastHeight, catchupCtx.currentHeight)
+
+	return u.handleNoNewHeaders(ctx, catchupCtx.blockUpTo)
+}
+
+// listStartsAtLocator reports whether the served header list starts at the first entry of the
+// block locator we sent, which GetBlockLocator sets to the block the locator was built from.
+func listStartsAtLocator(result *catchup.Result) bool {
+	if len(result.Headers) == 0 || len(result.LocatorHashes) == 0 || result.LocatorHashes[0] == nil {
+		return false
+	}
+
+	return result.Headers[0].Hash().IsEqual(result.LocatorHashes[0])
+}
+
+// localHeaderCapKey is the error-data key newLocalHeaderCapRefusal sets on the local fault
+// handleExhaustedAncestorWalk returns when our own header cap cut a list that starts at our
+// locator. releaseCatchupLock scores an error that carries it as local_header_cap, not as a peer
+// error (isLocalHeaderCapRefusal).
+const localHeaderCapKey = "local_header_cap"
+
+// newLocalHeaderCapRefusal builds that local fault: a ServiceError, so no peer is charged, marked
+// with localHeaderCapKey.
+func newLocalHeaderCapRefusal(message string, params ...interface{}) *errors.Error {
+	err := errors.NewServiceError(message, params...)
+	err.SetData(localHeaderCapKey, true)
+
+	return err
+}
+
+// isLocalHeaderCapRefusal reports whether err is a local fault that newLocalHeaderCapRefusal built.
+func isLocalHeaderCapRefusal(err error) bool {
+	if err == nil || !isLocalCatchupFault(err) {
+		return false
+	}
+
+	return hasErrorMarker(err, localHeaderCapKey)
 }
 
 // handleNoNewHeaders is invoked when filterHeaders leaves zero headers to process.
@@ -675,6 +787,21 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			isPeerError = false
 			reportCorruptBlock = true
 			corruptBlockHash = ctx.corruptBlockHash
+		case isNettedRouteRefusal(*err):
+			// A local netted-route refusal: the window has no verified checkpoint, or a quick
+			// validation there is retried. Server.go scores it local through isLocalCatchupFault.
+			// Matched by the data marker only these refusals carry (nettedRouteRefusalKey), not by
+			// the word "checkpoint", and below the corrupt-body and unbound-tx cases, so a chain that
+			// also carries one of those codes is scored by the code. It stays above every
+			// text-matched case, because the wrapped cause of a retried quick validation can
+			// contain "eof", "http" or "connection", and those cases charge the peer.
+			errorType = "local_no_verified_checkpoint"
+			isPeerError = false
+		case isLocalHeaderCapRefusal(*err):
+			// Our own header cap cut a list that starts at our locator, with every header one we
+			// hold (handleExhaustedAncestorWalk). Matched by its data marker, like the case above.
+			errorType = "local_header_cap"
+			isPeerError = false
 		case !isLocalCatchupFault(*err) && (errors.Is(*err, errors.ErrBlockInvalid) || errors.Is(*err, errors.ErrTxInvalid)):
 			// Gated on the same predicate validateBlocksOnChannel and
 			// processCatchupChItem use, rather than on the case ordering above it.
@@ -739,6 +866,11 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// store a processing error carrying a peer URL as the peer's.
 			errorType = "local_processing_fault"
 			isPeerError = false
+		case hasErrorMarker(*err, nettedDeepForkRefusalKey):
+			// A fork deeper than coinbase maturity on the netted route. preferNettedRouteForkRefusal
+			// returns it as a peer fault so the peer is rotated, and that code would otherwise make
+			// the IsNetworkError case below label it network_error. It stays a peer error.
+			errorType = "coinbase_maturity_violation"
 		case errors.IsNetworkError(*err):
 			errorType = "network_error"
 		case strings.Contains(errorMsg, "secret mining") || strings.Contains(errorMsg, "secretly mined"):
@@ -784,7 +916,7 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			PeerURL:           ctx.baseURL,
 			TargetBlockHash:   ctx.blockUpTo.Hash().String(),
 			TargetBlockHeight: ctx.blockUpTo.Height,
-			ErrorMessage:      errorMsg,
+			ErrorMessage:      blockchain.SanitizeCatchupError(errorMsg), // served by Asset /catchup/status (bitcoin-sv/teranode#4855)
 			ErrorType:         errorType,
 			AttemptTime:       time.Now().UnixMilli(),
 			DurationMs:        time.Since(ctx.startTime).Milliseconds(),
@@ -1059,10 +1191,19 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	catchupCtx.currentHeight = currentHeight
 	catchupCtx.bestBlockMeta = bestMeta
 
-	// Walk through peer's headers (oldest to newest) to find the highest common ancestor
+	// Walk through peer's headers (oldest to newest) to find the last one we store. That is only
+	// a candidate: a stored block can sit on a side branch we validated but never adopted, so
+	// the ancestor is narrowed to our current chain below.
 	commonAncestorIndex := -1
 	var commonAncestorMeta *model.BlockHeaderMeta
+	storedMetas := make([]*model.BlockHeaderMeta, 0, len(peerHeaders))
+	stoppedAboveTip := false
 	u.logger.Debugf("[catchup][%s] Checking %d peer headers for common ancestor (current height: %d)", catchupCtx.blockUpTo.Hash().String(), len(peerHeaders), currentHeight)
+
+	// The walk ends in one of two ways: it stops on a header we do not hold, or one above our tip,
+	// which is where the peer's list leaves what we hold, or it runs off the end of the list with every
+	// header one we hold. Only the first is evidence of a fork; walkExhausted records the second.
+	walkExhausted := true
 
 	for i, header := range peerHeaders {
 		// GetBlockHeader conveys both existence and height in a single RPC: a
@@ -1072,6 +1213,8 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		if err != nil {
 			if errors.Is(err, errors.ErrBlockNotFound) {
 				u.logger.Debugf("[catchup][%s] Block %s not in our chain - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String())
+				walkExhausted = false
+
 				break // Once we find a header we don't have, stop
 			}
 
@@ -1086,11 +1229,15 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		// what changed is only where the height comes from.
 		if meta.Height > currentHeight {
 			u.logger.Debugf("[catchup][%s] Block %s at height %d is ahead of our tip %d - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, currentHeight)
+			stoppedAboveTip = true
+			walkExhausted = false
+
 			break
 		}
 
 		commonAncestorIndex = i // Keep updating to find the LAST match
 		commonAncestorMeta = meta
+		storedMetas = append(storedMetas, meta)
 		u.logger.Debugf("[catchup][%s] Block %s exists in our chain at height %d (index %d)", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, i)
 	}
 
@@ -1098,11 +1245,40 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		return errors.NewNetworkInvalidResponseError("[catchup][%s] no common ancestor found in peer headers", catchupCtx.blockUpTo.Hash().String())
 	}
 
+	commonAncestorIndex, err = u.lastOnCurrentChain(ctx, catchupCtx, peerHeaders, storedMetas, bestMeta)
+	if err != nil {
+		return err
+	}
+
+	if commonAncestorIndex == -1 {
+		// Our locator is built from our current chain, so an honest peer's reply starts on it,
+		// unless our own chain reorged during the header fetch.
+		return u.noAncestorOnCurrentChainError(ctx, catchupCtx, bestMeta)
+	}
+
+	commonAncestorMeta = storedMetas[commonAncestorIndex]
+
 	// The common ancestor's metadata was already fetched during the walk above.
 	commonAncestorHash := peerHeaders[commonAncestorIndex].Hash()
 
-	if commonAncestorMeta.Invalid {
-		return errors.NewBlockInvalidError("[catchup][%s] common ancestor %s at height %d is marked invalid, not catching up", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height)
+	// The ancestor and the stored headers after it must all be valid. Before the ancestor was
+	// narrowed to our current chain, a stored invalid side block was itself the ancestor and
+	// failed here. Now it sits after the ancestor, and accepting the offer would un-stamp our
+	// blocks above the ancestor (step 9.6) before validation rejected the invalid block again.
+	// Block validation relies on catchup aborting here for the invalid block's descendants.
+	for i := commonAncestorIndex; i < len(storedMetas); i++ {
+		if storedMetas[i].Invalid {
+			return errors.NewBlockInvalidError("[catchup][%s] offered block %s at height %d (common ancestor %s) is marked invalid, not catching up", catchupCtx.blockUpTo.Hash().String(), peerHeaders[i].Hash().String(), storedMetas[i].Height, commonAncestorHash.String())
+		}
+	}
+
+	// The height ceiling ended the ancestor search, not the offer, so stored headers above our tip
+	// have not been checked yet. The same un-stamping applies: with s6..s10 valid and s11 invalid
+	// on b5, against a tip at b10, the ancestor is b5 and step 9.6 would un-stamp b6..b10.
+	if stoppedAboveTip {
+		if err := u.rejectInvalidStoredHeader(ctx, catchupCtx, peerHeaders[len(storedMetas):], commonAncestorHash); err != nil {
+			return err
+		}
 	}
 
 	// The headers after the ancestor must form one chain built on it. Every later step assigns
@@ -1112,14 +1288,16 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	// one fixed tip, so a break here is the peer's fault: NetworkInvalidResponse, charged to it.
 	if commonAncestorIndex+1 < len(peerHeaders) {
 		offered := peerHeaders[commonAncestorIndex+1:]
-		if !(&catchup.CommonAncestorFinder{}).ValidateChainConnection(offered, commonAncestorHash) {
+		if !catchup.ValidateChainConnection(offered, commonAncestorHash) {
 			return errors.NewNetworkInvalidResponseError("[catchup][%s] headers offered after common ancestor %s do not link to common ancestor as one chain (first header %s has parent %s)", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), offered[0].Hash().String(), offered[0].HashPrevBlock.String())
 		}
 	}
 
-	// Calculate fork depth
+	// Calculate fork depth, only where the walk found the divergence. A list that ran out with every
+	// header held ends where the peer, or our own header cap, stopped serving, not where the chains
+	// part, so the distance from there to our tip is no fork depth.
 	forkDepth := uint32(0)
-	if commonAncestorMeta.Height < currentHeight {
+	if !walkExhausted && commonAncestorMeta.Height < currentHeight {
 		forkDepth = currentHeight - commonAncestorMeta.Height
 	}
 
@@ -1127,10 +1305,144 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	catchupCtx.commonAncestorMeta = commonAncestorMeta
 	catchupCtx.commonAncestorIndex = commonAncestorIndex
 	catchupCtx.forkDepth = forkDepth
+	catchupCtx.walkExhausted = walkExhausted
 
-	u.logger.Infof("[catchup][%s] Found common ancestor: %s at height %d (index %d), fork depth: %d", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height, commonAncestorIndex, forkDepth)
+	u.logger.Infof("[catchup][%s] Found common ancestor: %s at height %d (index %d), fork depth: %d, ran out of headers: %t", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height, commonAncestorIndex, forkDepth, walkExhausted)
 
 	return nil
+}
+
+// rejectInvalidStoredHeader walks headers oldest to newest, up to the first one we do not store,
+// and returns a BlockInvalidError for the first one stored marked invalid. A failed lookup is our
+// own fault, so it is a ServiceError, which the caller retries without charging the peer.
+func (u *Server) rejectInvalidStoredHeader(ctx context.Context, catchupCtx *CatchupContext, headers []*model.BlockHeader, commonAncestorHash *chainhash.Hash) error {
+	for _, header := range headers {
+		_, meta, err := u.blockchainClient.GetBlockHeader(ctx, header.Hash())
+		if err != nil {
+			if errors.Is(err, errors.ErrBlockNotFound) {
+				return nil
+			}
+
+			return errors.NewServiceError("[catchup][%s] failed to get header for block %s", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+		}
+
+		if meta.Invalid {
+			return errors.NewBlockInvalidError("[catchup][%s] offered block %s at height %d (common ancestor %s) is marked invalid, not catching up", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, commonAncestorHash.String())
+		}
+	}
+
+	return nil
+}
+
+// lastOnCurrentChain returns the index of the last header in the stored prefix of peerHeaders
+// that is on our current chain, or -1 if none is. storedMetas[i] is the stored meta of
+// peerHeaders[i].
+//
+// The last stored header is not enough. Take a local chain A0..A10 and a stored side branch
+// S6..S9 on A5 that we validated but never adopted. A peer offering [A5, S6..S9, P10, P11] has
+// every header up to S9 stored, so the walk alone picks S9, measures a fork depth of 1 instead
+// of 5, and the mined_set clear un-stamps only A10 while A6..A9 are reorged out. The header-link
+// checks cannot see it, because the side branch is linked internally.
+//
+// The stored prefix is a run of current-chain blocks followed by side-chain ones. The header
+// fetch rejects a batch that does not link as one chain, and once a header leaves our current
+// chain none of its descendants can rejoin it. So the answer is a binary search over that
+// prefix, which costs about log2(n) chain checks and one in the common case where the last
+// stored header is on our chain. If the prefix were not ordered that way, the search would
+// still return a current-chain header whose successor is off it, and the link check after
+// this call rejects any offer that does not build on what it returns.
+func (u *Server) lastOnCurrentChain(ctx context.Context, catchupCtx *CatchupContext, peerHeaders []*model.BlockHeader, storedMetas []*model.BlockHeaderMeta, bestMeta *model.BlockHeaderMeta) (int, error) {
+	onChain := func(i int) (bool, error) {
+		if storedMetas[i].ID == bestMeta.ID {
+			return true, nil
+		}
+
+		ok, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{storedMetas[i].ID})
+		if err != nil {
+			// Our own RPC failed, so the caller retries without charging the peer.
+			return false, errors.NewServiceError("[catchup][%s] failed to check whether block %s is on our current chain", catchupCtx.blockUpTo.Hash().String(), peerHeaders[i].Hash().String(), err)
+		}
+
+		return ok, nil
+	}
+
+	last := len(storedMetas) - 1
+
+	ok, err := onChain(last)
+	if err != nil {
+		return -1, err
+	}
+
+	if ok {
+		return last, nil
+	}
+
+	ok, err = onChain(0)
+	if err != nil {
+		return -1, err
+	}
+
+	if !ok {
+		return -1, nil
+	}
+
+	// Invariant: lo is on our current chain, hi is not.
+	lo, hi := 0, last
+	for hi-lo > 1 {
+		mid := lo + (hi-lo)/2
+
+		ok, err := onChain(mid)
+		if err != nil {
+			return -1, err
+		}
+
+		if ok {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+
+	u.logger.Infof("[catchup][%s] Last stored offered header %s is on a side branch, common ancestor narrowed to %s on our current chain", catchupCtx.blockUpTo.Hash().String(), peerHeaders[last].Hash().String(), peerHeaders[lo].Hash().String())
+
+	return lo, nil
+}
+
+// noAncestorOnCurrentChainError returns the error for an offer whose stored prefix holds no
+// block on our current chain. The block locator is built from one block on our current chain,
+// headersFetchResult.StartHash, so an honest peer's reply starts on that chain. If StartHash is
+// still on our current chain, the reply is the peer's fault. If it is not, our own chain
+// reorged during the header fetch and the offer may be honest, so the error is a ServiceError:
+// the caller retries and the peer is not charged.
+func (u *Server) noAncestorOnCurrentChainError(ctx context.Context, catchupCtx *CatchupContext, bestMeta *model.BlockHeaderMeta) error {
+	target := catchupCtx.blockUpTo.Hash().String()
+	peerFault := errors.NewNetworkInvalidResponseError("[catchup][%s] no common ancestor on our current chain found in peer headers", target)
+
+	if catchupCtx.headersFetchResult == nil || catchupCtx.headersFetchResult.StartHash == nil {
+		return peerFault
+	}
+
+	startHash := catchupCtx.headersFetchResult.StartHash
+
+	_, startMeta, err := u.blockchainClient.GetBlockHeader(ctx, startHash)
+	if err != nil {
+		return errors.NewServiceError("[catchup][%s] failed to read locator start block %s", target, startHash.String(), err)
+	}
+
+	if startMeta.ID == bestMeta.ID {
+		return peerFault
+	}
+
+	onChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{startMeta.ID})
+	if err != nil {
+		return errors.NewServiceError("[catchup][%s] failed to check whether locator start block %s is on our current chain", target, startHash.String(), err)
+	}
+
+	if onChain {
+		return peerFault
+	}
+
+	return errors.NewServiceError("[catchup][%s] no common ancestor on our current chain found in peer headers, but our chain reorged away from locator start block %s during the header fetch, retrying", target, startHash.String())
 }
 
 // validateForkDepth ensures the fork doesn't exceed coinbase maturity limits.
@@ -1191,7 +1503,9 @@ func (u *Server) validateForkBelowCheckpoint(catchupCtx *CatchupContext) error {
 		prometheusCatchupErrors.WithLabelValues(catchupCtx.peerID, "bad_fork_prior_to_checkpoint").Inc()
 	}
 
-	return errors.NewServiceError("[catchup][%s] bad-fork-prior-to-checkpoint: chain forks at height %d, below a checkpoint the tip (height %d) has passed", catchupCtx.blockUpTo.Hash().String(), firstForkHeight, catchupCtx.bestBlockMeta.Height)
+	// The peer's fault, as for a header that contradicts a checkpoint: a ServiceError would read
+	// as a local fault, and the same peer would be asked for the same chain again.
+	return errors.NewNetworkInvalidResponseError("[catchup][%s] bad-fork-prior-to-checkpoint: chain forks at height %d, below a checkpoint the tip (height %d) has passed", catchupCtx.blockUpTo.Hash().String(), firstForkHeight, catchupCtx.bestBlockMeta.Height)
 }
 
 // validateStoredTargetBelowCheckpoint applies the checkpoint fork rule to a catchup target that
@@ -1232,7 +1546,7 @@ func (u *Server) validateStoredTargetBelowCheckpoint(ctx context.Context, catchu
 			prometheusCatchupErrors.WithLabelValues(catchupCtx.peerID, "bad_fork_prior_to_checkpoint").Inc()
 		}
 
-		return errors.NewServiceError("[catchup][%s] bad-fork-prior-to-checkpoint: the stored target at height %d is below a checkpoint the tip has passed and is not on the main chain", hash.String(), meta.Height)
+		return errors.NewNetworkInvalidResponseError("[catchup][%s] bad-fork-prior-to-checkpoint: the stored target at height %d is below a checkpoint the tip has passed and is not on the main chain", hash.String(), meta.Height)
 	}
 
 	return nil
@@ -1329,8 +1643,9 @@ func (u *Server) filterHeaders(ctx context.Context, catchupCtx *CatchupContext) 
 		return errors.NewProcessingError("[catchup][%s] no headers to filter", catchupCtx.blockUpTo.Hash().String())
 	}
 
-	// Since we found the true common ancestor, all headers after that index should be new to us
-	// No need for complex filtering - just take everything after the common ancestor
+	// Take everything after the common ancestor. The ancestor is the last offered header on our
+	// current chain, so the headers after it can still include stored side blocks. The block fetch
+	// trims the stored-valid ones before it requests anything (see storedHeaderPrefix).
 	if catchupCtx.commonAncestorIndex < 0 || catchupCtx.commonAncestorIndex >= len(peerHeaders) {
 		return errors.NewProcessingError("[catchup][%s] invalid common ancestor index: %d", catchupCtx.blockUpTo.Hash().String(), catchupCtx.commonAncestorIndex)
 	}
@@ -1394,8 +1709,10 @@ func (u *Server) buildHeaderCache(catchupCtx *CatchupContext) error {
 func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) error {
 	catchupCtx.useQuickValidation = false
 
-	// Quick validation disabled, no need to verify checkpoints
-	if !u.settings.BlockValidation.CatchupAllowQuickValidation {
+	// Quick validation disabled, no need to verify checkpoints. A store that nets below the
+	// checkpoint (utxoset) takes those blocks only through quick validation, so it ignores
+	// the setting.
+	if !u.settings.BlockValidation.CatchupAllowQuickValidation && !utxo.NetsBelowCheckpoint(u.utxoStore) {
 		return nil
 	}
 
@@ -1429,6 +1746,138 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 	}
 
 	return nil
+}
+
+// validateHeaderWindow runs the checks on the fetched header window that need no block body, in
+// sequence: the DAA (difficulty adjustment algorithm) check, which reports a peer that serves a
+// low-difficulty chain, and then the netted-route refusal of a window without a verified
+// checkpoint, which is a local fault and reports no peer.
+func (u *Server) validateHeaderWindow(ctx context.Context, catchupCtx *CatchupContext) error {
+	if err := u.validateCatchupHeaderDifficulty(ctx, catchupCtx); err != nil {
+		return err
+	}
+
+	return u.refuseNettedRouteWindowWithoutCheckpoint(catchupCtx)
+}
+
+// nettedRouteFirstBlock reports whether the first block after the common ancestor is on the
+// netted route (mustStayOnQuickValidationAt), and that block's height.
+func (u *Server) nettedRouteFirstBlock(catchupCtx *CatchupContext) (uint32, bool) {
+	if u.blockValidation == nil || catchupCtx.commonAncestorMeta == nil {
+		return 0, false
+	}
+
+	first := catchupCtx.commonAncestorMeta.Height + 1
+
+	return first, u.blockValidation.mustStayOnQuickValidationAt(first)
+}
+
+// refuseNettedRouteFork refuses a fork whose first block is on the netted route, as the peer's
+// fault (a NetworkInvalidResponseError, as for a header that contradicts a checkpoint: a bare
+// ProcessingError is a local fault and charges no peer). verifyCheckpointsInHeaderChain does not
+// check a fork, so none of its blocks can be quick validated, and on this route no block can take
+// another route. The fork is off the checkpointed chain: on this route each block this node holds below the checkpoint was
+// written through quick validation under a verified checkpoint at or above it, or through the
+// legacy route under a header proof that ends at a checkpoint, so a different block at the same
+// height is not an ancestor of that checkpoint. Refused before the mined_set clear and before any
+// block body is fetched.
+func (u *Server) refuseNettedRouteFork(catchupCtx *CatchupContext) error {
+	if catchupCtx.forkDepth == 0 {
+		return nil
+	}
+
+	first, netted := u.nettedRouteFirstBlock(catchupCtx)
+	if !netted {
+		return nil
+	}
+
+	return errors.NewNetworkInvalidResponseError("[catchup][%s] peer serves a fork of depth %d from height %d, below the hardcoded checkpoint, and a netting UTXO store takes those blocks only on the checkpointed chain", catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth, first)
+}
+
+// preferNettedRouteForkRefusal returns refuseNettedRouteFork's refusal in place of err when the
+// fork is on the netted route, and err otherwise. err is validateForkDepth's rejection, its only
+// error. That check has already reported the peer malicious, but it returns a ServiceError,
+// which processCatchupChItem reads as a local fault (isLocalCatchupFault): it reports no peer
+// failure, keeps the same sync peer and retries the same hash. On the netted
+// route the fork is the peer's fault at any depth, so the refusal, a NetworkInvalidResponseError,
+// is returned instead, and the peer is rotated as it is for a shallower netted fork. The
+// refusal carries nettedDeepForkRefusalKey, so releaseCatchupLock still labels it
+// coinbase_maturity_violation, and its message names the fork depth.
+//
+// The peer is therefore charged more here than for the same fork off the netted route. Both get
+// validateForkDepth's malicious report. This route adds the catch-up failure charge and the
+// rotation signal processCatchupChItem sends for every peer fault. That is intended: the
+// rotation is what this swap is for, and processCatchupChItem gives no rotation without the
+// charge. Off the netted route the ServiceError gets neither, which is upstream behaviour this
+// change leaves alone.
+func (u *Server) preferNettedRouteForkRefusal(catchupCtx *CatchupContext, err error) error {
+	refusal := u.refuseNettedRouteFork(catchupCtx)
+	if refusal == nil {
+		return err
+	}
+
+	u.logger.Warnf("[catchup][%s] fork deeper than coinbase maturity is on the netted route, refused as the peer's fault: %v", catchupCtx.blockUpTo.Hash().String(), err)
+
+	var marked *errors.Error
+	if errors.As(refusal, &marked) {
+		marked.SetData(nettedDeepForkRefusalKey, true)
+	}
+
+	return refusal
+}
+
+// nettedDeepForkRefusalKey is the error-data key preferNettedRouteForkRefusal sets on the
+// refusal it returns in place of validateForkDepth's rejection.
+const nettedDeepForkRefusalKey = "netted_deep_fork_refusal"
+
+// nettedRouteRefusalKey is the error-data key newNettedRouteRefusal sets on each local refusal of
+// the netted route: the window without a verified checkpoint (here and in tryQuickValidation),
+// the retried quick validation, and processBlockFound's block with no header proof yet.
+// releaseCatchupLock scores an error that carries it, and is a local fault, as
+// local_no_verified_checkpoint (isNettedRouteRefusal). It is a marker on the error rather than
+// text in the message, so no other error can match it by its wording.
+const nettedRouteRefusalKey = "netted_route_refusal"
+
+// newNettedRouteRefusal builds a local refusal of the netted route: a ServiceError, so no peer is
+// charged, marked with nettedRouteRefusalKey. Pass a cause as the last parameter, as for
+// errors.NewServiceError.
+func newNettedRouteRefusal(message string, params ...interface{}) *errors.Error {
+	err := errors.NewServiceError(message, params...)
+	err.SetData(nettedRouteRefusalKey, true)
+
+	return err
+}
+
+// isNettedRouteRefusal reports whether err is a local refusal of the netted route: a local fault
+// with a link in its chain, within hasErrorMarker's depth bound, that newNettedRouteRefusal built.
+func isNettedRouteRefusal(err error) bool {
+	if err == nil || !isLocalCatchupFault(err) {
+		return false
+	}
+
+	return hasErrorMarker(err, nettedRouteRefusalKey)
+}
+
+// refuseNettedRouteWindowWithoutCheckpoint refuses a window on the netted route whose first block
+// has no verified checkpoint at or above it, as a local fault (a ServiceError). An honest peer
+// that is still syncing, or a blockUpTo below the next checkpoint, gives such a window, so no
+// peer is charged, and the per-block attempt cap bounds the retries. tryQuickValidation makes the
+// same refusal for each block; this one stops the catch-up before a block body is fetched.
+func (u *Server) refuseNettedRouteWindowWithoutCheckpoint(catchupCtx *CatchupContext) error {
+	if catchupCtx.forkDepth > 0 || len(catchupCtx.blockHeaders) == 0 {
+		return nil
+	}
+
+	first, netted := u.nettedRouteFirstBlock(catchupCtx)
+	if !netted {
+		return nil
+	}
+
+	if catchupCtx.useQuickValidation && catchupCtx.highestCheckpointHeight >= first {
+		return nil
+	}
+
+	return newNettedRouteRefusal("[catchup][%s] block at height %d is below the hardcoded checkpoint on a netting UTXO store and can only be quick validated, but this catch-up window holds no verified checkpoint above it", catchupCtx.blockUpTo.Hash().String(), first)
 }
 
 // verifyCheckpointsAgainstHeaders verifies checkpoints against the fetched headers
@@ -2219,6 +2668,15 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 
 	// If block is not eligible for quick validation, use normal validation
 	if !canUseQuickValidation {
+		// A ServiceError, not a ProcessingError: the window holds no verified checkpoint above this
+		// block, which an honest peer that is still syncing, or a blockUpTo below the next
+		// checkpoint, also produces. The terminal handler scores a ServiceError as a local fault
+		// (isLocalCatchupFault), so no peer is charged and the per-block attempt cap still bounds
+		// the retries.
+		if u.blockValidation.mustStayOnQuickValidation(block) {
+			return false, newNettedRouteRefusal("[tryQuickValidation][%s] block at height %d is below the hardcoded checkpoint on a netting UTXO store and can only be quick validated, but this catch-up window holds no verified checkpoint above it", block.Hash().String(), block.Height)
+		}
+
 		return true, nil
 	}
 
@@ -2233,6 +2691,10 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 		block.Height,
 		u.settings.BlockValidation.MaxBlocksBehindBlockAssembly,
 	); err != nil {
+		if u.blockValidation.mustStayOnQuickValidation(block) {
+			return false, errors.NewServiceError("[tryQuickValidation][%s] block assembly not ready for a block that can only be quick validated; retry", block.Hash().String(), err)
+		}
+
 		u.logger.Warnf("[tryQuickValidation][%s] block assembly not ready, falling back to normal validation: %v",
 			block.Hash().String(), err)
 		return true, nil // Fall back to normal validation
@@ -2491,6 +2953,12 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s: catch-up context cancelled while waiting for subtree writes to settle, skipping cleanup",
 				catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
 		}
+		if u.blockValidation.mustStayOnQuickValidation(block) {
+			// Normal validation would read spend-journal rows the netting store did not
+			// write for the part of this block it applied. Retry quick validation instead.
+			return false, newNettedRouteRefusal("[tryQuickValidation][%s] quick validation of a block below the checkpoint on a netting UTXO store failed; it is retried, not validated another way", block.Hash().String(), err)
+		}
+
 		// Quick validation failed, try normal validation
 		return true, nil
 	}

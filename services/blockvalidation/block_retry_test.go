@@ -101,7 +101,7 @@ func TestRequeueForRetry_KeepsSourcePriorityAndHeight(t *testing.T) {
 	server := newRetryTestServer(t, 3)
 	hash := &chainhash.Hash{1}
 
-	server.blockPriorityQueue.Add(processBlockFound{hash: hash, baseURL: "http://peer", peerID: "p1"}, PriorityNearFork, 42)
+	server.blockPriorityQueue.Add(processBlockFound{hash: hash, baseURL: "http://peer", peerID: "p1", reply: newBlockFoundReply()}, PriorityNearFork, 42)
 
 	taken, status := server.blockPriorityQueue.Get(context.Background(), &mockBlockProcessor{})
 	require.Equal(t, GetOK, status)
@@ -112,7 +112,7 @@ func TestRequeueForRetry_KeepsSourcePriorityAndHeight(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "http://peer", item.blockFound.baseURL)
 	require.Equal(t, "p1", item.blockFound.peerID)
-	require.Nil(t, item.blockFound.errCh)
+	require.Nil(t, item.blockFound.reply, "the caller was answered with the failed attempt, so a retry must not carry its answered reply")
 	require.Equal(t, PriorityNearFork, item.priority)
 	require.Equal(t, uint32(42), item.height)
 }

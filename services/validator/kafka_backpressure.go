@@ -3,12 +3,14 @@ package validator
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // cooldownDutyDivisor sets how much of the pause that preceded a fail-open
@@ -62,7 +64,8 @@ type pausableConsumer interface {
 // kafkaBackpressureController pauses and resumes the validator's transaction
 // Kafka consumer based on the block-assembly ingest queue-head age, with
 // hysteresis (distinct pause/resume watermarks), a hard per-pause cap, and
-// fail-open resume when the signal is unavailable. It complements — and never
+// fail-open resume when the signal is unavailable. The per-pause cap does not apply to a pause
+// caused only by the held count, which clears when a block connects. It complements — and never
 // replaces — the block-assembly hard shed and queue cap: pausing lets bursts
 // ride on Kafka's durable log so fewer transactions hit the shed path.
 //
@@ -96,11 +99,23 @@ type kafkaBackpressureController struct {
 	queueCount    int64
 	queueMaxItems int64
 
+	// heldCount and maxHeld carry the transactions block assembly holds in memory and its
+	// enforced limit on them, from the same read. They are the terms of a second fill predicate:
+	// the ingest queue reads near empty while that limit is the bound that is full, so the queue
+	// terms alone leave the controller blind to it. Written only by tick and read only by
+	// evaluate.
+	heldCount int64
+	maxHeld   int64
+
 	// lastReportedWindow and windowMismatchLogged bound the mismatch warning to
 	// one line per distinct reported value, so a persistent misconfiguration
 	// cannot spam at the poll cadence.
 	lastReportedWindow   time.Duration
 	windowMismatchLogged bool
+
+	// onStats, when set, receives every successful queue-stats read. The validator's held-limit
+	// gate takes its readings from it, so the stats are read once and not twice.
+	onStats func(blockassembly.QueueStats)
 
 	// now supplies the current time; overridable in tests for deterministic
 	// max-pause behaviour.
@@ -112,6 +127,15 @@ type kafkaBackpressureController struct {
 
 	// pauseStart is when the current pause began; valid only while paused.
 	pauseStart time.Time
+
+	// pauseCause is the label of the predicate that started the current pause: age, fill or held.
+	pauseCause string
+
+	// heldMaxPause is the hard cap on a pause held up by the held count alone, which MaxPause does
+	// not bound. It is the retention of the Kafka topic the consumer reads: past it the broker
+	// has already dropped what the pause is holding back, so waiting longer saves nothing. Zero
+	// means no cap.
+	heldMaxPause time.Duration
 
 	// failOpenResumeAt is when the last fail-open resume happened, and
 	// failOpenCooldown is how long a new pause stays suppressed from that
@@ -254,6 +278,12 @@ func (c *kafkaBackpressureController) tick(ctx context.Context) {
 	c.reportedWindow = c.observeReportedWindow(stats.DoubleSpendWindow)
 	c.queueCount = stats.Count
 	c.queueMaxItems = stats.MaxItems
+	c.heldCount = stats.HeldCount
+	c.maxHeld = stats.MaxHeld
+
+	if c.onStats != nil {
+		c.onStats(stats)
+	}
 
 	c.evaluate(stats.HeadAge)
 }
@@ -392,6 +422,36 @@ func (c *kafkaBackpressureController) fillThresholds() (pause, resume int64) {
 	return pause, pause / 2
 }
 
+// heldThresholds returns the pause and resume counts for the transactions block assembly holds
+// in memory, or 0, 0 when there is no usable signal. It pauses at the same percentage as
+// fillThresholds and is inert in the same cases: no reported limit, or the percentage set to 0.
+// With the default blockassembly_maxTransactionsInMemory=0 the controller behaves exactly as it
+// did before.
+//
+// It resumes at ResumeHeldPercent of the limit, so a block that frees one transaction does not
+// toggle the consumer. The held count steps down only when a block connects and never reaches 0,
+// because the coinbase placeholder stays. The pause threshold is at least 2, and the resume
+// threshold is held between 1 and one below it, so a resume is always reachable and always below
+// the pause.
+func (c *kafkaBackpressureController) heldThresholds() (pause, resume int64) {
+	if c.maxHeld <= 0 || c.cfg.PauseQueueFillPercent <= 0 {
+		return 0, 0
+	}
+
+	pause = max(c.percentOfMaxHeld(c.cfg.PauseQueueFillPercent), 2)
+	resume = min(max(c.percentOfMaxHeld(c.cfg.ResumeHeldPercent), 1), pause-1)
+
+	return pause, resume
+}
+
+// percentOfMaxHeld returns pct percent of the reported held limit, without overflowing for a
+// limit near the top of the int64 range.
+func (c *kafkaBackpressureController) percentOfMaxHeld(pct int) int64 {
+	p := int64(pct)
+
+	return c.maxHeld/100*p + c.maxHeld%100*p/100
+}
+
 // evaluate applies the hysteresis decision to a freshly-read queue-head age and
 // queue fill.
 //
@@ -413,8 +473,13 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 	}
 
 	fillPause, fillResume := c.fillThresholds()
-	hotByFill := fillPause > 0 && c.queueCount >= fillPause
-	coolByFill := fillPause == 0 || c.queueCount <= fillResume
+	heldPause, heldResume := c.heldThresholds()
+	hotByHeld := heldPause > 0 && c.heldCount >= heldPause
+	hotByQueue := fillPause > 0 && c.queueCount >= fillPause
+	coolByHeld := heldPause == 0 || c.heldCount <= heldResume
+
+	hotByFill := hotByQueue || hotByHeld
+	coolByFill := (fillPause == 0 || c.queueCount <= fillResume) && coolByHeld
 
 	// A genuine drain means BOTH predicates are cool, and it means the same thing
 	// everywhere it is used: it is what resumes a pause, and it is what clears a
@@ -445,11 +510,13 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 			// Age takes the log line when both fired: the fill wording exists to name
 			// the regime age cannot see, and claiming it while age is also hot would
 			// be false.
-			c.pause(effectiveAge, hotByFill && !hotByAge, fillPause)
+			c.pause(effectiveAge, hotByFill && !hotByAge, hotByHeld && !hotByQueue && !hotByAge, fillPause, heldPause)
 		}
 
 		return
 	}
+
+	prometheusKafkaBackpressurePauseSeconds.WithLabelValues(c.pauseCause).Set(c.now().Sub(c.pauseStart).Seconds())
 
 	// Already paused: resume on a genuine drain (low watermark AND cool fill), or
 	// when the pause has run past its hard cap (fail-open) even if it is still hot.
@@ -459,6 +526,33 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 	}
 
 	if pausedFor := c.now().Sub(c.pauseStart); pausedFor >= c.cfg.MaxPause {
+		// The held pause is exempt from the cap while the queue and age predicates are cool. The
+		// held count clears only when a block connects, so resuming earlier does not relieve it:
+		// the consumer would pull at line rate and every transaction would be refused, unwound and
+		// dropped until then. Waiting in Kafka is the better outcome. A queue or age pause, or a
+		// stale signal, still fails open. The pause is bounded by heldMaxPause, the topic retention:
+		// past it the broker has dropped the backlog the pause holds back, so it fails open like the
+		// others. Before that, the operator's signal is the gauge
+		// teranode_validator_kafka_backpressure_pause_seconds with cause held.
+		heldOnly := hotByHeld && !hotByQueue && effectiveAge < c.cfg.PauseQueueAge
+		heldCapReached := c.heldMaxPause > 0 && pausedFor >= c.heldMaxPause
+
+		if heldOnly && heldCapReached {
+			c.logger.Errorf("[Validator] kafka backpressure: held pause reached the topic retention %s with %d/%d transactions still held, so the broker is dropping the backlog this pause holds back; resuming", c.heldMaxPause, c.heldCount, c.maxHeld)
+		}
+
+		if heldOnly && !heldCapReached {
+			if c.pauseCause != "held" {
+				prometheusKafkaBackpressurePauseSeconds.WithLabelValues(c.pauseCause).Set(0)
+
+				c.pauseCause = "held"
+			}
+
+			prometheusKafkaBackpressurePauseSeconds.WithLabelValues(c.pauseCause).Set(pausedFor.Seconds())
+
+			return
+		}
+
 		// The queue is still hot, so this resume is a fail-open: arm a bounded,
 		// proportional cooldown rather than suppressing backpressure for a whole
 		// MaxPause window.
@@ -467,19 +561,35 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 	}
 }
 
-// pause suspends the consumer and records the pause start. byFill says which
-// predicate fired, so the log names the reason an operator has to act on.
-func (c *kafkaBackpressureController) pause(age time.Duration, byFill bool, fillPause int64) {
+// pause suspends the consumer and records the pause start. byFill says a fill predicate fired
+// without the age predicate, and byHeld says that predicate was the held count alone, so the
+// log names the numbers an operator has to act on.
+func (c *kafkaBackpressureController) pause(age time.Duration, byFill, byHeld bool, fillPause, heldPause int64) {
 	c.consumer.PauseAll()
 	c.pauseStart = c.now()
+	c.pauseCause = "age"
+
+	if byHeld {
+		c.pauseCause = "held"
+	} else if byFill {
+		c.pauseCause = "fill"
+	}
+
 	c.paused.Store(true)
 
 	prometheusKafkaBackpressurePaused.Set(1)
 	prometheusKafkaBackpressurePauseTotal.Inc()
 
+	if byHeld {
+		c.logger.Warnf("[Validator] kafka backpressure: paused tx consumer (held %d/%d >= %d transactions, queue fill %d/%d, queue-head age %s still below pause watermark %s)",
+			c.heldCount, c.maxHeld, heldPause, c.queueCount, c.queueMaxItems, age, c.cfg.PauseQueueAge)
+
+		return
+	}
+
 	if byFill {
-		c.logger.Warnf("[Validator] kafka backpressure: paused tx consumer (queue fill %d/%d >= %d items, queue-head age %s still below pause watermark %s)",
-			c.queueCount, c.queueMaxItems, fillPause, age, c.cfg.PauseQueueAge)
+		c.logger.Warnf("[Validator] kafka backpressure: paused tx consumer (queue fill %d/%d >= %d items, held %d/%d, queue-head age %s still below pause watermark %s)",
+			c.queueCount, c.queueMaxItems, fillPause, c.heldCount, c.maxHeld, age, c.cfg.PauseQueueAge)
 
 		return
 	}
@@ -497,6 +607,7 @@ func (c *kafkaBackpressureController) resume(reason string) {
 	c.paused.Store(false)
 
 	prometheusKafkaBackpressurePaused.Set(0)
+	prometheusKafkaBackpressurePauseSeconds.WithLabelValues(c.pauseCause).Set(0)
 	prometheusKafkaBackpressureResumeTotal.Inc()
 	prometheusKafkaBackpressurePausedSecondsTotal.Add(pausedFor.Seconds())
 
@@ -554,5 +665,62 @@ func (v *Server) startKafkaBackpressure(ctx context.Context) {
 	}
 
 	controller := newKafkaBackpressureController(v.logger, cfg, v.settings.BlockAssembly.DoubleSpendWindow, v.blockAssemblyClient, v.consumerClient)
+	if observer, ok := v.validator.(interface {
+		observeQueueStats(blockassembly.QueueStats)
+	}); ok {
+		controller.onStats = observer.observeQueueStats
+	}
+
+	controller.heldMaxPause = v.kafkaTopicRetention()
+
 	go controller.run(controllerCtx)
+}
+
+// kafkaTopicRetention returns the retention of the validator transaction topic, read from the
+// retention query parameter of the topic URL in milliseconds, with the producer's default of ten
+// minutes when it is absent. It returns zero when the value does not parse as a positive number.
+func (v *Server) kafkaTopicRetention() time.Duration {
+	retentionMs := int64(600000)
+
+	if u := v.settings.Kafka.ValidatorTxsConfig; u != nil {
+		parsed, err := strconv.ParseInt(util.GetQueryParam(u, "retention", "600000"), 10, 64)
+		if err != nil || parsed <= 0 {
+			return 0
+		}
+
+		retentionMs = parsed
+	}
+
+	return time.Duration(retentionMs) * time.Millisecond
+}
+
+// warnBackpressureOffWithLimit logs once per process that Kafka backpressure is off while block
+// assembly enforces an in-memory transaction limit. It runs on the first Kafka transaction
+// refused by that limit, reads the reported limit once to confirm it, and is a no-op when
+// backpressure is enabled, the client is nil or no limit is reported. A failed read releases the
+// latch so a later refusal tries again.
+func (v *Server) warnBackpressureOffWithLimit(ctx context.Context) {
+	if v.settings.Validator.KafkaBackpressure.Enabled || v.blockAssemblyClient == nil {
+		return
+	}
+
+	if !v.backpressureOffWarned.CompareAndSwap(false, true) {
+		return
+	}
+
+	readCtx, cancel := context.WithTimeout(ctx, defaultKafkaBackpressureReadTimeout)
+	stats, err := v.blockAssemblyClient.GetBlockAssemblyQueueStats(readCtx)
+
+	cancel()
+
+	if err != nil {
+		v.backpressureOffWarned.Store(false)
+		return
+	}
+
+	if stats.MaxHeld <= 0 {
+		return
+	}
+
+	v.logger.Warnf("[Validator] kafka backpressure is off while block assembly limits transactions in memory (blockassembly_maxTransactionsInMemory=%d): every Kafka transaction refused by that limit, including all of them during an unmined load or reset, is validated, refused, unwound and dropped; set validator_kafkaBackpressureEnabled=true so the backlog waits in Kafka instead", stats.MaxHeld)
 }

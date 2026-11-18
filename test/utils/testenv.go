@@ -610,9 +610,11 @@ func (t *TeranodeTestEnv) GetMappedPort(nodeName string, port string) (network.P
 }
 
 // StopDockerNodes stops the Docker Compose services and removes volumes.
+// Each suite run uses a fresh project name (suite.testid), so volumes left
+// behind here are never reused and pile up on the Docker host.
 func (t *TeranodeTestEnv) StopDockerNodes() error {
 	if t != nil && t.Compose != nil {
-		if err := t.Compose.Down(t.Context); err != nil {
+		if err := t.Compose.Down(t.Context, tc.RemoveOrphans(true), tc.RemoveVolumes(true)); err != nil {
 			return err
 		}
 	}
@@ -620,7 +622,11 @@ func (t *TeranodeTestEnv) StopDockerNodes() error {
 	return nil
 }
 
-// RestartDockerNodes restarts the Docker Compose services.
+// RestartDockerNodes restarts the Docker Compose services. It keeps the
+// project's named volumes so the nodes come back with their chain state, and
+// StopDockerNodes removes them at the end of the test. The anonymous volumes
+// that this Down detaches from the old containers are not removed by that
+// final teardown, so each restart leaves one set of them behind.
 func (t *TeranodeTestEnv) RestartDockerNodes(envSettings map[string]string) error {
 	if t.Compose != nil {
 		if err := t.Compose.Down(t.Context); err != nil {

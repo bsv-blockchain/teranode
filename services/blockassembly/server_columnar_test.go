@@ -232,8 +232,6 @@ func TestAddTxBatchColumnar_ValidatesVoutIdxsTxOffsets(t *testing.T) {
 func TestAddTxBatchColumnar_RejectsOOBParentTxOffsets(t *testing.T) {
 	ba, _ := setupServer(t)
 
-	enableStoreTxInpoints(t, ba)
-
 	txid := chainhash.Hash{}
 	parentHash := chainhash.Hash{}
 	req := &blockassembly_api.AddTxBatchColumnarRequest{
@@ -257,8 +255,6 @@ func TestAddTxBatchColumnar_RejectsOOBParentTxOffsets(t *testing.T) {
 // offset arrays produce a clean error rather than a slice-bounds panic.
 func TestAddTxBatchColumnar_RejectsNonMonotonicOffsets(t *testing.T) {
 	ba, _ := setupServer(t)
-
-	enableStoreTxInpoints(t, ba)
 
 	// Two parents but offsets dip in the middle. Endpoints still satisfy the
 	// totalParents/voutIdxsLen checks, so the monotonicity loop is what
@@ -287,8 +283,6 @@ func TestAddTxBatchColumnar_RejectsNonMonotonicOffsets(t *testing.T) {
 func TestAddTxBatchColumnar_RejectsOOBVoutIdxsTxOffsets(t *testing.T) {
 	ba, _ := setupServer(t)
 
-	enableStoreTxInpoints(t, ba)
-
 	txid := chainhash.Hash{}
 	parentHash := chainhash.Hash{}
 	req := &blockassembly_api.AddTxBatchColumnarRequest{
@@ -306,14 +300,6 @@ func TestAddTxBatchColumnar_RejectsOOBVoutIdxsTxOffsets(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "vout_idxs_tx_offsets[txCount]")
 	})
-}
-
-// enableStoreTxInpoints flips the StoreTxInpointsForSubtreeMeta setting so
-// the per-tx loop actually exercises the unsafe.Slice + offset arithmetic
-// that the regression tests target.
-func enableStoreTxInpoints(t *testing.T, ba *BlockAssembly) {
-	t.Helper()
-	ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta = true
 }
 
 // TestConvertToColumnarFormat_Success verifies columnar conversion.
@@ -488,11 +474,11 @@ type heightRecordingSubtreeProcessor struct {
 	lockTimes [][]uint32
 }
 
-func (r *heightRecordingSubtreeProcessor) AddBatchIfRoom(_ []subtreepkg.Node, _ []*subtreepkg.TxInpoints, validatedHeights, lockTimes []uint32) bool {
+func (r *heightRecordingSubtreeProcessor) AddBatchBounded(_ []subtreepkg.Node, _ []*subtreepkg.TxInpoints, _ bool, validatedHeights, lockTimes []uint32) subtreeprocessor.Admission {
 	r.heights = append(r.heights, validatedHeights)
 	r.lockTimes = append(r.lockTimes, lockTimes)
 
-	return true
+	return subtreeprocessor.Admitted
 }
 
 // TestAddTx_HandsTheValidatedHeightToTheSubtreeProcessor pins the tags every ingest handler

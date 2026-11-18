@@ -77,10 +77,13 @@ const rebuildOffChainSetTimeout = 30 * time.Second
 
 // migrationFullRebuildTimeout bounds the one-shot full-chain rebuildOnMainChainFlag
 // that runs at startup the first time the on_main_chain column is populated.
-// Unlike the bounded-window rebuilds (which touch at most 10×CoinbaseMaturity
-// blocks and always fit in rebuildOffChainSetTimeout), the migration walks the
-// full chain via a recursive CTE and its runtime scales with chain length. On a
-// multi-million-block chain on an undersized VM this can take several minutes,
+// Unlike a bounded-window rebuild, which walks 10×CoinbaseMaturity blocks below
+// the tip, extended down to any recorded floor, under rebuildOffChainSetTimeout,
+// the migration walks the full chain via a recursive CTE and its runtime scales
+// with chain length. A floor can lie as low as genesis, so the background repair
+// hands a bounded walk that runs out of rebuildOffChainSetTimeout to the full
+// walk and this budget (see attemptOnMainChainRepair). On a
+// multi-million-block chain on an undersized VM the full walk can take several minutes,
 // so the 30 s window used elsewhere is too short: if the migration times out,
 // the column is left unpopulated and CheckBlockIsInCurrentChain's fast path
 // returns no rows, silently breaking validation for any block below the
@@ -342,6 +345,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 	// the startup rebuild below can fail before the loop is started at the end of New.
 	s.onMainChainRepair.backoff = onMainChainRepairInitialBackoff
 	s.onMainChainRepair.startupLockWait = startupWatchLockWait
+	s.onMainChainRepair.boundedTimeout = rebuildOffChainSetTimeout
 	s.onMainChainRepair.wake = make(chan struct{}, 1)
 	s.onMainChainRepair.stopped = make(chan struct{})
 
@@ -363,6 +367,11 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 	if err != nil {
 		s.blockIDReservations.Stop() // avoid leaking the janitor goroutine on the error path
 		return nil, errors.NewStorageError("failed to insert genesis transaction", err)
+	}
+
+	if err = s.ensureChainWriteRow(context.Background()); err != nil {
+		s.blockIDReservations.Stop()
+		return nil, err
 	}
 
 	if useInMemory {
@@ -563,6 +572,7 @@ var blockchainSchemaExpectedColumns = []string{
 	"median_time_past",
 	"coinbase_bump",
 	"on_main_chain",
+	"mined_set_gen",
 }
 
 // blockchainSchemaExpectedIndexes is the list of indexes on blocks that the
@@ -573,19 +583,97 @@ var (
 		"ux_blocks_hash",
 	}
 	blockchainSchemaExpectedFullIndexes = []string{
-		"idx_chain_work_peer_id",
-		"idx_chain_work_valid",
+		"idx_chain_work_id_v2",
+		"idx_chain_work_id_valid",
 		"idx_subtrees_mined_height",
 		"idx_subtrees_set_height",
 		"idx_not_persisted_height",
 		"idx_height",
 		"idx_parent_id",
-		"idx_inserted_at",
 		"idx_invalid_height",
 		"idx_on_main_chain_height",
 		"idx_off_main_chain",
 	}
+
+	// blockchainSchemaRetiredIndexes are indexes the schema setup drops, on
+	// Postgres (withIndexes) and SQLite alike. While one still exists the
+	// Postgres schema is not current, so the DDL sequence runs once on an
+	// existing database and dropRetiredIndexes removes it. Each entry carries
+	// its own constant DROP statement, so no SQL is built from a string.
+	blockchainSchemaRetiredIndexes = []retiredIndex{
+		// idx_inserted_at served only GetBlocksByTime, which has been removed
+		{name: "idx_inserted_at", dropSQL: `DROP INDEX IF EXISTS idx_inserted_at;`},
+		// idx_chain_work_peer_id and idx_chain_work_valid ordered equal-work blocks by peer_id,
+		// which the best-tip order no longer uses; idx_chain_work_id_v2 and
+		// idx_chain_work_id_valid, ordered by id, replace them
+		{name: "idx_chain_work_peer_id", dropSQL: `DROP INDEX IF EXISTS idx_chain_work_peer_id;`},
+		{name: "idx_chain_work_valid", dropSQL: `DROP INDEX IF EXISTS idx_chain_work_valid;`},
+		// idx_chain_work_id is the name an older binary drops on every start, so the full index
+		// takes a fresh name, idx_chain_work_id_v2, that a rollback leaves alone
+		{name: "idx_chain_work_id", dropSQL: `DROP INDEX IF EXISTS idx_chain_work_id;`},
+	}
 )
+
+// retiredIndex is an index an older schema created and the current one drops.
+type retiredIndex struct {
+	name    string
+	dropSQL string
+}
+
+// retiredIndexPresent reports whether any index in blockchainSchemaRetiredIndexes
+// still exists. It queries pg_class, so it is Postgres only.
+func retiredIndexPresent(db *usql.DB) (bool, error) {
+	for _, idx := range blockchainSchemaRetiredIndexes {
+		var exists bool
+		if err := db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = $1 AND relkind = 'i')`,
+			idx.name,
+		).Scan(&exists); err != nil {
+			return false, err
+		}
+		if exists {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// dropRetiredIndexes drops every index in blockchainSchemaRetiredIndexes. On
+// failure it closes db, as the rest of the schema setup does, and returns a
+// storage error naming the index.
+func dropRetiredIndexes(db *usql.DB) error {
+	for _, idx := range blockchainSchemaRetiredIndexes {
+		if _, err := db.Exec(idx.dropSQL); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not drop %s index", idx.name, err)
+		}
+	}
+
+	return nil
+}
+
+// createChainWorkIndexes builds the indexes the best-tip order reads, on Postgres and SQLite
+// alike, and then drops the retired indexes they replace. The drop comes after the creates, so a
+// node still running the old binary against this database is never left without a chain work
+// index. On failure it closes db, as the rest of the schema setup does.
+func createChainWorkIndexes(db *usql.DB) error {
+	// Primary index for best block queries without invalid filter.
+	// Used by: GetBlockStats, recursive CTEs that don't filter by invalid.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id_v2 ON blocks (chain_work DESC, id ASC);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_chain_work_id_v2 index", err)
+	}
+
+	// Partial index for valid blocks, the most common query pattern (GetBestBlockHeader, etc.):
+	// the primary index for finding the best valid block.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id_valid ON blocks (chain_work DESC, id ASC) WHERE invalid = false;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_chain_work_id_valid index", err)
+	}
+
+	return dropRetiredIndexes(db)
+}
 
 // isBlockchainSchemaCurrent returns true when the blocks table exists with all
 // expected columns and indexes in place. Uses only system-catalog reads
@@ -667,6 +755,13 @@ func isBlockchainSchemaCurrent(db *usql.DB, withIndexes bool) (bool, error) {
 		}
 	}
 
+	// Any retired index still present?
+	if withIndexes {
+		if present, err := retiredIndexPresent(db); err != nil || present {
+			return false, err
+		}
+	}
+
 	return true, nil
 }
 
@@ -711,6 +806,7 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 		,median_time_past BIGINT NOT NULL DEFAULT 0
 		,coinbase_bump  BYTEA NULL
 		,on_main_chain  BOOLEAN NOT NULL DEFAULT FALSE
+		,mined_set_gen  BIGINT NOT NULL DEFAULT 0
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -807,6 +903,13 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 		}
 	}
 
+	// add the mined_set_gen column to the blocks table if it does not exist. Every write that
+	// clears mined_set bumps it, so SetBlockMinedSet can refuse a tagging run that started
+	// before the clear (see SetBlockMinedSet.go).
+	if err := addMinedSetGenColumn(db, "SELECT column_name FROM information_schema.columns WHERE table_name='blocks' AND column_name='mined_set_gen'"); err != nil {
+		return err
+	}
+
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_blocks_hash ON blocks (hash);`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create ux_blocks_hash index", err)
@@ -817,11 +920,6 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 		if _, err := db.Exec(`DROP INDEX IF EXISTS pux_blocks_height;`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not drop pux_blocks_height index", err)
-		}
-		// idx_chain_work_id is superseded by idx_chain_work_peer_id (same prefix)
-		if _, err := db.Exec(`DROP INDEX IF EXISTS idx_chain_work_id;`); err != nil {
-			_ = db.Close()
-			return errors.NewStorageError("could not drop idx_chain_work_id index", err)
 		}
 		// idx_mined_set is superseded by idx_subtrees_mined_height
 		if _, err := db.Exec(`DROP INDEX IF EXISTS idx_mined_set;`); err != nil {
@@ -839,19 +937,8 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 			return errors.NewStorageError("could not drop idx_persisted_at index", err)
 		}
 
-		// === CHAIN WORK INDEXES ===
-		// Primary index for best block queries without invalid filter
-		// Used by: GetBlockStats, recursive CTEs that don't filter by invalid
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
-			_ = db.Close()
-			return errors.NewStorageError("could not create idx_chain_work_peer_id index", err)
-		}
-
-		// Partial index for valid blocks - most common query pattern (GetBestBlockHeader, etc.)
-		// This is the primary index for finding the best valid block
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_valid ON blocks (chain_work DESC, peer_id ASC, id ASC) WHERE invalid = false;`); err != nil {
-			_ = db.Close()
-			return errors.NewStorageError("could not create idx_chain_work_valid index", err)
+		if err := createChainWorkIndexes(db); err != nil {
+			return err
 		}
 
 		// === BLOCK STATUS INDEXES ===
@@ -887,13 +974,6 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_parent_id ON blocks (parent_id);`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not create idx_parent_id index", err)
-		}
-
-		// === TIME-BASED INDEXES ===
-		// Index for GetBlocksByTime query: WHERE inserted_at >= x AND inserted_at <= y
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_inserted_at ON blocks (inserted_at);`); err != nil {
-			_ = db.Close()
-			return errors.NewStorageError("could not create idx_inserted_at index", err)
 		}
 
 		// === INVALID BLOCKS INDEX ===
@@ -987,6 +1067,28 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 	return nil
 }
 
+// addMinedSetGenColumn adds the mined_set_gen column to blocks when probeQuery, which must
+// select one row naming the column if it exists, finds nothing. It closes db on failure, as
+// the schema builders that call it do on every other error.
+func addMinedSetGenColumn(db *usql.DB, probeQuery string) error {
+	err := db.QueryRow(probeQuery).Scan(new(string))
+	if err == nil {
+		return nil
+	}
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		_ = db.Close()
+		return errors.NewStorageError("could not check for mined_set_gen column in blocks table", err)
+	}
+
+	if _, err = db.Exec(`ALTER TABLE blocks ADD COLUMN mined_set_gen BIGINT NOT NULL DEFAULT 0;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not add mined_set_gen column to blocks table", err)
+	}
+
+	return nil
+}
+
 func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS state (
@@ -1028,6 +1130,7 @@ func createSqliteSchema(db *usql.DB) error {
 		,median_time_past BIGINT NOT NULL DEFAULT 0
 		,coinbase_bump  BLOB NULL
 		,on_main_chain  BOOLEAN NOT NULL DEFAULT FALSE
+		,mined_set_gen  BIGINT NOT NULL DEFAULT 0
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -1119,6 +1222,13 @@ func createSqliteSchema(db *usql.DB) error {
 		}
 	}
 
+	// add the mined_set_gen column to the blocks table if it does not exist. Every write that
+	// clears mined_set bumps it, so SetBlockMinedSet can refuse a tagging run that started
+	// before the clear (see SetBlockMinedSet.go).
+	if err := addMinedSetGenColumn(db, "SELECT name FROM pragma_table_info('blocks') WHERE name='mined_set_gen'"); err != nil {
+		return err
+	}
+
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_blocks_hash ON blocks (hash);`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create ux_blocks_hash index", err)
@@ -1128,11 +1238,6 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`DROP INDEX IF EXISTS pux_blocks_height;`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not drop pux_blocks_height index", err)
-	}
-	// idx_chain_work_id is superseded by idx_chain_work_peer_id (same prefix)
-	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_chain_work_id;`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not drop idx_chain_work_id index", err)
 	}
 	// idx_mined_set is superseded by idx_subtrees_mined_height
 	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_mined_set;`); err != nil {
@@ -1150,19 +1255,8 @@ func createSqliteSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not drop idx_persisted_at index", err)
 	}
 
-	// === CHAIN WORK INDEXES ===
-	// Primary index for best block queries without invalid filter
-	// Used by: GetBlockStats, recursive CTEs that don't filter by invalid
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create idx_chain_work_peer_id index", err)
-	}
-
-	// Partial index for valid blocks - most common query pattern (GetBestBlockHeader, etc.)
-	// This is the primary index for finding the best valid block
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_valid ON blocks (chain_work DESC, peer_id ASC, id ASC) WHERE invalid = false;`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create idx_chain_work_valid index", err)
+	if err := createChainWorkIndexes(db); err != nil {
+		return err
 	}
 
 	// === BLOCK STATUS INDEXES ===
@@ -1198,13 +1292,6 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_parent_id ON blocks (parent_id);`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_parent_id index", err)
-	}
-
-	// === TIME-BASED INDEXES ===
-	// Index for GetBlocksByTime query: WHERE inserted_at >= x AND inserted_at <= y
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_inserted_at ON blocks (inserted_at);`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create idx_inserted_at index", err)
 	}
 
 	// === INVALID BLOCKS INDEX ===
@@ -1529,16 +1616,35 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 	return onMainChainCount != bestHeight+1, nil
 }
 
-// reconcileOnMainChain restores the invariant that on_main_chain is true on
+// reconcileMaxDepth is the least number of blocks below the best block reconcileOnMainChainRows
+// walks. It walks further when the fork point is deeper.
+func (s *SQL) reconcileMaxDepth() int64 {
+	maxDepth := int64(s.chainParams.CoinbaseMaturity) * 2
+	if maxDepth < 100 {
+		maxDepth = 100
+	}
+
+	return maxDepth
+}
+
+// reconcileOnMainChain is reconcileOnMainChainRows without the counts, for tests that
+// only need the flags reconciled.
+func (s *SQL) reconcileOnMainChain(ctx context.Context, exec execQuerier) error {
+	_, _, err := s.reconcileOnMainChainRows(ctx, exec)
+
+	return err
+}
+
+// reconcileOnMainChainRows restores the invariant that on_main_chain is true on
 // exactly the chain from genesis to the chain_work-best valid block. It is
 // the hot-path replacement for rebuildOnMainChainFlag's window scan and is
-// called from StoreBlock's reorg branch — the only chain-mutating path
-// where consensus bounds the divergence between the new chain and the old.
+// called from StoreBlock's reorg branch, where the walk runs down from the new
+// best block to the old main chain.
 //
 // InvalidateBlock and RevalidateBlock are administrative operations whose
 // fork point can lie arbitrarily deep below the current tip; reconciling
-// them with this bounded helper would silently leave incorrect flags below
-// the walked window. Those paths therefore use rebuildOnMainChainFlag with
+// them with this walk would leave incorrect flags in place below the first
+// flagged block it meets. Those paths therefore use rebuildOnMainChainFlag with
 // full=true, which is slower but unbounded and correct.
 //
 // The function takes no parameters: caller-supplied tips are unsafe under
@@ -1579,8 +1685,11 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 // Algorithm (single statement):
 //
 //  1. best_block CTE: highest chain_work valid block.
-//  2. new_path CTE: walks best_block's lineage backward via parent_id up
-//     to maxDepth steps.
+//  2. new_path CTE: walks best_block's lineage backward via parent_id at
+//     least maxDepth steps, and on past that until it reaches a block that
+//     is already flagged true, which is where the new chain meets the old.
+//     Each step must go down in height. Past maxDepth nothing else bounds the
+//     walk, so a parent_id loop would otherwise recurse forever.
 //  3. UPDATE in one go:
 //     a. blocks in new_path with on_main_chain=false → true
 //     (covers reorgs and the fast-path-descendant gap).
@@ -1590,15 +1699,29 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 //     flagged sibling, regardless of whether the caller knew the right
 //     "old tip").
 //
-// Bounds: maxDepth = max(2*CoinbaseMaturity, 100). Reorgs deeper than
-// CoinbaseMaturity are consensus-invalid, so the bound is always safe
-// for StoreBlock-driven reorgs; the floor of 100 covers tests with very
-// small CoinbaseMaturity. The function does NOT include a deep-fork
-// fallback because the obvious cheap check (count of on_main_chain=true
-// vs bestHeight+1) is necessary but not sufficient: when a stale flag
+// Bounds: maxDepth = max(2*CoinbaseMaturity, 100) is the least the walk
+// covers, so stray flags that far below the tip are cleared even when the
+// fork point is higher; the floor of 100 covers tests with very small
+// CoinbaseMaturity. maxDepth is not a bound on the fork point. Catch-up
+// bounds a fork's depth from the old tip, and a branch with less work per
+// block can overtake the old tip only far above the fork point, so the walk
+// keeps going down while the block it is on is flagged false. Below the
+// first flagged block it reaches, the old and new chains are the same, and
+// the flags there are left as they were. A walk that never meets a flagged
+// block ends at genesis, which is a full repair of the lineage.
+//
+// The rows this reconcile visits are the new chain's blocks from the fork
+// point up, or the top maxDepth blocks when the fork point is higher. That is
+// cheap for an ordinary reorg, and a walk to genesis when no block is flagged;
+// such a walk reports floor 0, which the background repair handles (see
+// attemptOnMainChainRepair). It does not repair
+// a flag that is wrong below the first flagged block it meets, because
+// nothing tells it the chain is broken there: the count of
+// on_main_chain=true against bestHeight+1 still matches when a stale flag
 // at one height is replaced by a wrongly-flagged sibling at the same
-// height the count still matches. Callers that may produce deep
-// divergences must use rebuildOnMainChainFlag instead.
+// height. InvalidateBlock and RevalidateBlock are rare admin operations and
+// use rebuildOnMainChainFlag(full) instead, which trusts no existing flag and
+// so also repairs one that was already wrong below the fork point.
 //
 // The caller must hold s.mainChainRebuilding (Add(1)/Add(-1)) so concurrent
 // readers take the CTE fallback during the brief commit window, and
@@ -1608,43 +1731,15 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 // Idempotent: a no-op when on_main_chain already matches the chain_work
 // best's lineage within the walked window.
 //
+// It reports how many rows it changed and the lowest height among them, so
+// StoreBlock can tell a reorg from a fork block that left the main chain where
+// it was, and can note how far down the reorg moved membership. floor is
+// noRepairFloor when it changed none.
+//
 // exec is the pool or an open transaction; StoreBlock passes its transaction so the
 // reconciliation commits or rolls back together with the INSERT. The error is the
 // driver's own, unwrapped, and the caller types it.
-func (s *SQL) reconcileOnMainChain(ctx context.Context, exec execQuerier) error {
-	_, err := s.reconcileOnMainChainRows(ctx, exec)
-
-	return err
-}
-
-// reconcileMaxDepth is how many blocks below the best block reconcileOnMainChain walks.
-func (s *SQL) reconcileMaxDepth() int64 {
-	maxDepth := int64(s.chainParams.CoinbaseMaturity) * 2
-	if maxDepth < 100 {
-		maxDepth = 100
-	}
-
-	return maxDepth
-}
-
-// reconcileFloor is the lowest height at which a reconcile run by StoreBlock for a block
-// at height can have moved the best chain: reconcileMaxDepth below the block, clamped at
-// zero. When the block takes the tip, the reconcile walks that far down its lineage and
-// assumes the fork lies within the walk, as consensus bounds it to. When it does not, the
-// best chain does not move and any height bounds it.
-func (s *SQL) reconcileFloor(height uint32) int64 {
-	floor := int64(height) - s.reconcileMaxDepth()
-	if floor < 0 {
-		floor = 0
-	}
-
-	return floor
-}
-
-// reconcileOnMainChainRows is reconcileOnMainChain returning how many rows the
-// reconciliation changed, so StoreBlock can tell a reorg from a fork block that left the
-// main chain where it was.
-func (s *SQL) reconcileOnMainChainRows(ctx context.Context, exec execQuerier) (int64, error) {
+func (s *SQL) reconcileOnMainChainRows(ctx context.Context, exec execQuerier) (changed int64, floor int64, err error) {
 	maxDepth := s.reconcileMaxDepth()
 
 	// best_block, new_path, window_floor and the UPDATE all live in one
@@ -1655,17 +1750,18 @@ func (s *SQL) reconcileOnMainChainRows(ctx context.Context, exec execQuerier) (i
 		WITH RECURSIVE
 		best_block(id) AS (
 			SELECT id FROM blocks WHERE invalid = false
-			ORDER BY chain_work DESC, peer_id ASC, id ASC
+			ORDER BY chain_work DESC, id ASC
 			LIMIT 1
 		),
-		new_path(id, parent_id, height, depth) AS (
-			SELECT id, parent_id, height, 0 FROM blocks
+		new_path(id, parent_id, height, depth, on_main_chain) AS (
+			SELECT id, parent_id, height, 0, on_main_chain FROM blocks
 			WHERE id IN (SELECT id FROM best_block)
 			UNION ALL
-			SELECT b.id, b.parent_id, b.height, np.depth + 1
+			SELECT b.id, b.parent_id, b.height, np.depth + 1, b.on_main_chain
 			FROM blocks b
 			INNER JOIN new_path np ON b.id = np.parent_id
-			WHERE b.id != np.id AND np.depth < $1
+			WHERE b.id != np.id AND b.height < np.height
+				AND (np.depth < $1 OR np.on_main_chain = false)
 		),
 		window_floor(h) AS (
 			SELECT MIN(height) FROM new_path
@@ -1680,21 +1776,93 @@ func (s *SQL) reconcileOnMainChainRows(ctx context.Context, exec execQuerier) (i
 					AND height >= COALESCE((SELECT h FROM window_floor), 0)
 					AND id NOT IN (SELECT id FROM new_path))
 			  )
+		RETURNING height
 	`
-	// The error is returned raw: StoreBlock runs this inside RetryTx, which needs the
-	// driver's concrete type to classify it, and types it once RetryTx returns.
-	res, err := exec.ExecContext(ctx, q, maxDepth)
+	// The errors are returned raw: StoreBlock runs this inside RetryTx, which needs the
+	// driver's concrete type to classify them, and types them once RetryTx returns.
+	rows, err := exec.QueryContext(ctx, q, maxDepth)
 	if err != nil {
-		return 0, err
+		return 0, noRepairFloor, err
 	}
 
-	changed, err := res.RowsAffected()
-	if err != nil {
-		// Both drivers report it; if one ever does not, assume the chain moved.
-		return 1, nil
+	defer rows.Close()
+
+	floor = noRepairFloor
+
+	for rows.Next() {
+		var height int64
+		if err = rows.Scan(&height); err != nil {
+			return 0, noRepairFloor, err
+		}
+
+		if changed == 0 || height < floor {
+			floor = height
+		}
+
+		changed++
 	}
 
-	return changed, nil
+	if err = rows.Err(); err != nil {
+		return 0, noRepairFloor, err
+	}
+
+	return changed, floor, nil
+}
+
+// reorgForkFloor returns the lowest height at which storing newBlockID can have changed the
+// best chain: one above the fork point of the best block before the store and the best
+// block after it. It reads parent_id alone, never on_main_chain, so stale flags cannot
+// raise it. That matters to a walk of the column running without slowPathMu: it may have
+// read the rows while the old best block was best, and it rewrites every row below the
+// floor this note gives with that older view, so the floor must reach the fork point
+// however the flags stood. The lowest row the reconcile changed is not enough. With flags
+// that already describe the branch retaking the tip, the reconcile changes only the new
+// tip's row, while the best chain changed right down to the fork point.
+//
+// The best block before the store is the best block other than newBlockID. The caller
+// holds slowPathMu and calls it in the transaction that inserted newBlockID, so no other
+// slow-path write sits between the two. It returns noRepairFloor when either best block
+// cannot be found, which owes a full walk.
+//
+// The walk steps the higher of the two blocks, or both at equal heights, until they
+// meet, so it reads about twice the fork's depth in rows.
+func (s *SQL) reorgForkFloor(ctx context.Context, exec execQuerier, newBlockID uint64) (int64, error) {
+	q := `
+		WITH RECURSIVE
+		post_best(id) AS (
+			SELECT id FROM blocks WHERE invalid = false
+			ORDER BY chain_work DESC, peer_id ASC, id ASC
+			LIMIT 1
+		),
+		pre_best(id) AS (
+			SELECT id FROM blocks WHERE invalid = false AND id != $1
+			ORDER BY chain_work DESC, peer_id ASC, id ASC
+			LIMIT 1
+		),
+		walk(a, a_height, a_parent, b, b_height, b_parent) AS (
+			SELECT pa.id, pa.height, pa.parent_id, pb.id, pb.height, pb.parent_id
+			FROM blocks pa, blocks pb
+			WHERE pa.id IN (SELECT id FROM post_best) AND pb.id IN (SELECT id FROM pre_best)
+			UNION ALL
+			SELECT na.id, na.height, na.parent_id, nb.id, nb.height, nb.parent_id
+			FROM walk w
+			INNER JOIN blocks na ON na.id = CASE WHEN w.a_height >= w.b_height THEN w.a_parent ELSE w.a END
+			INNER JOIN blocks nb ON nb.id = CASE WHEN w.b_height >= w.a_height THEN w.b_parent ELSE w.b END
+			WHERE w.a != w.b
+		)
+		SELECT MIN(a_height) FROM walk WHERE a = b
+	`
+
+	var forkHeight sql.NullInt64
+	if err := exec.QueryRowContext(ctx, q, newBlockID).Scan(&forkHeight); err != nil {
+		return noRepairFloor, err
+	}
+
+	if !forkHeight.Valid {
+		return noRepairFloor, nil
+	}
+
+	return forkHeight.Int64 + 1, nil
 }
 
 // rebuildOnMainChainFlag updates the on_main_chain column to accurately reflect the
@@ -1806,7 +1974,7 @@ func (s *SQL) startupRebuildOnMainChain(ctx context.Context, full bool, floor in
 func (s *SQL) startupRepairFloor(ctx context.Context) int64 {
 	var bestHeight int64
 
-	err := s.db.QueryRowContext(ctx, `SELECT height FROM blocks WHERE invalid = false ORDER BY chain_work DESC, peer_id ASC, id ASC LIMIT 1`).Scan(&bestHeight)
+	err := s.db.QueryRowContext(ctx, `SELECT height FROM blocks WHERE invalid = false ORDER BY chain_work DESC, id ASC LIMIT 1`).Scan(&bestHeight)
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			s.logger.Warnf("startup: reading the best height for the on_main_chain repair floor failed, a failed startup rebuild will be owed a full walk: %v", err)
@@ -1839,14 +2007,16 @@ func (s *SQL) rebuildOnMainChainFlagFrom(ctx context.Context, full bool, floor i
 	// writes. Two callers run without slowPathMu held: the startup goroutine (see
 	// New) and, on PostgreSQL, the background repair's full walk (see
 	// attemptOnMainChainRepair); Invalidate/Revalidate hold slowPathMu and StoreBlock
-	// holds it for its whole duration, so they cannot conflict. Those two can,
-	// however, race a slow-path write to the same rows — so retry the whole
+	// holds it for its whole duration, so in this process they cannot conflict. Those
+	// two can, however, race a slow-path write to the same rows, and any walk can race a
+	// chain write from another process, which the check of the shared chain-write row
+	// turns into 40001 or 55P03 (see chainWriteStateKey) — so retry the whole
 	// transaction (begin → reads → UPDATEs → commit) as a unit on those codes.
 	// tx.ExecContext / tx.QueryRowContext are stdlib *sql.Tx methods and do NOT
 	// go through usql's per-statement retry, so the retry has to live here.
 	//
 	// On SQLite the modernc driver ignores the isolation option and never returns
-	// 40001/40P01, so isSerializationRetry is always false and the loop runs once.
+	// 40001/40P01/55P03, so isSerializationRetry is always false and the loop runs once.
 	const (
 		maxRebuildAttempts = 3
 		retryBaseDelay     = 100 * time.Millisecond
@@ -1890,19 +2060,22 @@ func (s *SQL) rebuildOnMainChainFlagFrom(ctx context.Context, full bool, floor i
 }
 
 // isSerializationRetry reports whether err is a Postgres serialization_failure
-// (40001) or deadlock_detected (40P01) — the two codes a REPEATABLE READ
-// transaction can raise on a write-write conflict and which are safe to retry by
-// re-running the whole transaction. SQLite never produces these codes.
+// (40001), deadlock_detected (40P01) or lock_not_available (55P03): the codes a
+// REPEATABLE READ walk can raise on a conflicting write, the last from its NOWAIT
+// check of the chain-write row (see chainWriteStateKey), and which are safe to retry
+// by re-running the whole transaction. SQLite never produces these codes.
 func (*SQL) isSerializationRetry(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		return pgErr.Code == usql.PgErrSerializationFail || pgErr.Code == usql.PgErrDeadlockDetected
+		return pgErr.Code == usql.PgErrSerializationFail || pgErr.Code == usql.PgErrDeadlockDetected ||
+			pgErr.Code == usql.PgErrLockNotAvailable
 	}
 
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) {
 		code := string(pqErr.Code)
-		return code == usql.PgErrSerializationFail || code == usql.PgErrDeadlockDetected
+		return code == usql.PgErrSerializationFail || code == usql.PgErrDeadlockDetected ||
+			code == usql.PgErrLockNotAvailable
 	}
 
 	return false
@@ -1926,7 +2099,7 @@ func (s *SQL) rebuildOnMainChainFlagTx(ctx context.Context, full bool, floor int
 	// Fetch best block ID and height inside the transaction for a consistent snapshot.
 	var bestBlockID uint32
 	var bestHeight int64
-	bestQ := `SELECT id, height FROM blocks WHERE invalid = false ORDER BY chain_work DESC, peer_id ASC, id ASC LIMIT 1`
+	bestQ := `SELECT id, height FROM blocks WHERE invalid = false ORDER BY chain_work DESC, id ASC LIMIT 1`
 	if err = tx.QueryRowContext(ctx, bestQ).Scan(&bestBlockID, &bestHeight); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // empty DB — nothing to rebuild
@@ -1999,6 +2172,16 @@ func (s *SQL) rebuildOnMainChainFlagTx(ctx context.Context, full bool, floor int
 			return err
 		}
 		return errors.NewStorageError("rebuildOnMainChainFlag: failed to set on_main_chain flags", err)
+	}
+
+	// Last, so a chain write from any process that committed after this snapshot, or is
+	// still open, rolls this walk back instead of being written over; see
+	// chainWriteStateKey.
+	if err = s.checkNoChainWriteSinceSnapshot(ctx, tx); err != nil {
+		if s.isSerializationRetry(err) {
+			return err
+		}
+		return errors.NewStorageError("rebuildOnMainChainFlag: failed to check for chain writes since the snapshot", err)
 	}
 
 	if err = tx.Commit(); err != nil {

@@ -71,6 +71,31 @@ var (
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
+
+	// prometheusUtxoLockWalkMissingDescendants counts the descendants GetAndLockChildrenSkippingMissing
+	// skipped because the spending data of a parent names a record that is not in the store. These
+	// free functions have no logger, so the counter is how an operator sees it here; the caller logs
+	// the hashes.
+	prometheusUtxoLockWalkMissingDescendants = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "utxo",
+			Name:      "lock_walk_missing_descendants_total",
+			Help:      "Descendants skipped by GetAndLockChildrenSkippingMissing because their record is not in the store",
+		},
+	)
+
+	// prometheusUtxoReverseSkippedNoCounterBody counts the demotions ReverseProcessConflicting
+	// did not make because a counter it would promote has no stored body. These free functions
+	// have no logger, so the counter is how an operator sees it.
+	prometheusUtxoReverseSkippedNoCounterBody = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "utxo",
+			Name:      "reverse_conflicting_skipped_no_counter_body",
+			Help:      "Demotions not made by ReverseProcessConflicting because a counter to promote has no stored body",
+		},
+	)
 )
 
 // conflictingWalkFanOut caps the per-level width of the conflicting-descendant
@@ -119,6 +144,12 @@ const compensationTimeout = 2 * time.Minute
 // When a reverse of the block has since made a winner Conflicting again, the retry rolls the checklist
 // back and plans again under the same record. A winner that is not Conflicting and owns every input
 // is already applied, and the plan skips it.
+//
+// Two chain checks keep confirmed transactions from being demoted. A loser mined on the block's own
+// ancestry means the block is invalid: nothing is changed and the WithRefusalHandler callback is called. A
+// loser mined elsewhere on the current chain (WithRecoveryChainGuard) is left out of the plan, the
+// rest is resolved, and the WithConfirmedLoserHandler callback is called; if it owns a winning input
+// the run fails instead.
 //
 // ProcessConflicting returns:
 //   - losers: the transactions displaced by the winners, with their descendants. It never contains
@@ -274,7 +305,7 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 		if e != nil {
 			return nil, nil, errors.NewProcessingError("[ProcessConflicting][%s] error getting counter conflicting txs", h.String(), e)
 		}
-		spends, e := GetSpends(m.Tx)
+		spends, e := winnerSpends(m.Tx)
 		if e != nil {
 			return nil, nil, e
 		}
@@ -306,6 +337,29 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 			// carried result still needs acknowledgement, and replay uses the WAL's input.
 			return finishConflictRecoveryWithCarried(ctx, s, intent, allWinners, carried, options.deferCompletion)
 		}
+	}
+	// A transaction confirmed on the current chain cannot lose to a block on that chain. Leave it out
+	// of the plan and resolve the rest. Refusing the whole operation, as the ancestry guard does, would
+	// leave the winners Conflicting without invalidating their block, and a Conflicting record gets a
+	// deleteAtHeight, so the pruner would delete a winner mined on the current chain. When a confirmed
+	// loser owns a winning input, the winners cannot be applied without unspending it: that is an error.
+	confirmed, e := options.currentChainGuard.confirmedLosers(ctx, s, affected.order, winnerSet)
+	if e != nil {
+		return nil, nil, e
+	}
+	if len(confirmed) > 0 {
+		for _, h := range confirmed {
+			prometheusUtxoConflictingCurrentChainDemotionRefused.Inc()
+			if options.onConfirmedLoser != nil {
+				options.onConfirmedLoser(h)
+			}
+		}
+		if e = refuseConfirmedWinningInputOwner(ctx, s, winningSpends, confirmed); e != nil {
+			return nil, nil, e
+		}
+		// A confirmed loser that turns out to be a child of a loser being demoted is not in the plan,
+		// so the descendant check below aborts and rolls back rather than erase its edge.
+		affected = affected.without(confirmed)
 	}
 	recovery, err = prepareConflictRecovery(ctx, s, affected.order, winningSpends)
 	if err != nil {
@@ -534,13 +588,24 @@ func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32,
 			continue
 		}
 
-		demotedMeta, getErr := s.Get(ctx, &demotedHash, fields.Tx, fields.Conflicting)
+		demotedMeta, getErr := s.Get(ctx, &demotedHash, fields.Tx, fields.TxInpoints, fields.Conflicting)
 		if getErr != nil {
 			return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] error getting demoted tx meta", demotedHash.String(), getErr)
 		}
 
-		if demotedMeta == nil || demotedMeta.Tx == nil {
+		if demotedMeta == nil {
 			continue
+		}
+
+		// What this transaction spends, taken from the stored record in preference to the
+		// serialized body. A store that bounds how long it keeps transactions returns no body
+		// for an old one, and a transaction that lost a double-spend is kept indefinitely
+		// because it may still need promoting, so the two conditions meet routinely. This used
+		// to skip such a transaction outright and silently, which meant the demotion did not
+		// happen and nobody was told.
+		demotedInpoints, inErr := counterConflictingInpoints(demotedMeta)
+		if inErr != nil {
+			return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] cannot read what the demoted tx spends", demotedHash.String(), inErr)
 		}
 
 		if demotedMeta.Conflicting {
@@ -555,7 +620,7 @@ func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32,
 			// non-D spender. If any input shows nil or still points at D,
 			// fall through and re-run the steps below; the Mark and
 			// Unspend are idempotent on the already-applied state.
-			fullyReversed, checkErr := isReverseFullyApplied(ctx, s, demotedMeta.Tx, demotedHash)
+			fullyReversed, checkErr := isReverseFullyApplied(ctx, s, demotedInpoints, demotedHash)
 			if checkErr != nil {
 				return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] error confirming reverse completion via parent state", demotedHash.String(), checkErr)
 			}
@@ -566,9 +631,42 @@ func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32,
 		}
 
 		// Step 1: identify counters per input.
-		countersToPromote, selErr := selectCountersForDemotedTx(ctx, s, demotedMeta.Tx, demotedSet)
+		countersToPromote, selErr := selectCountersForDemotedTx(ctx, s, demotedInpoints, demotedSet)
 		if selErr != nil {
 			return nil, nil, selErr
+		}
+
+		// Every counter's body is read before anything changes. Re-spending a counter's inputs
+		// needs its body, because SpendAndCreate takes a *bt.Tx and the interface has no
+		// body-free route. A body-less record is ordinary: on the utxoset store the tx_body
+		// partition ages out, and below the checkpoint with utxostore_skipTxBodyBelowCheckpoint
+		// on there is no body at all. When a counter has none, D is not demoted. Demoting it
+		// would mark D and its descendants conflicting and free D's inputs while the counter
+		// stays conflicting, and a valid transaction and its descendants would leave the
+		// mempool with no winner in their place. Left as it is, D keeps its inputs and stays
+		// the winner, which is the state before this block's promotion, and the skip is counted.
+		counterTxs := make([]*bt.Tx, 0, len(countersToPromote))
+		missingBody := false
+
+		for _, counterHash := range countersToPromote {
+			counterMeta, getCounterErr := s.Get(ctx, &counterHash, fields.Tx)
+			if getCounterErr != nil {
+				return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] error getting counter tx %s", demotedHash.String(), counterHash.String(), getCounterErr)
+			}
+
+			if counterMeta == nil || counterMeta.Tx == nil {
+				missingBody = true
+
+				break
+			}
+
+			counterTxs = append(counterTxs, counterMeta.Tx)
+		}
+
+		if missingBody {
+			prometheusUtxoReverseSkippedNoCounterBody.Inc()
+
+			continue
 		}
 
 		// Step 2: re-mark D + descendants Conflicting=true.
@@ -585,27 +683,32 @@ func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32,
 
 		// Step 3: unspend D's input spends so parent.SpendingDatas[vout]
 		// no longer points at D.
-		demotedSpends, buildErr := spendsForTx(demotedMeta.Tx)
+		//
+		// The STORE is asked which coins D took, rather than this working it out from D's
+		// inputs. A coin's identity is computed partly from the amount and locking script of
+		// the output being spent, and a transaction only carries those when it is kept in
+		// extended form. A store that keeps the plain form cannot answer that way, and one
+		// that bounds how long it keeps transactions at all cannot answer it for an old
+		// transaction by any route. Asking the store lets each answer from what it actually
+		// holds. For a store keeping the extended form the answer is SpendsForTx over the same
+		// inputs, so nothing about its behaviour changes.
+		demotedSpends, buildErr := s.SpendsMadeBy(ctx, demotedHash)
 		if buildErr != nil {
 			return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] error building unspend records", demotedHash.String(), buildErr)
 		}
 
-		if unspendErr := s.Unspend(ctx, demotedSpends, false); unspendErr != nil {
+		// No lock flag: this move takes no lock on D's parents, so it has none to release. A
+		// parent can be locked by another holder, such as block validation waiting for its
+		// block to be mined, and passing false would clear that holder's lock on the SQL and
+		// Pebble stores. ProcessConflicting releases its own parent locks through
+		// SetConflictLocks.
+		if unspendErr := s.Unspend(ctx, demotedSpends); unspendErr != nil {
 			return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] error unspending demoted tx inputs", demotedHash.String(), unspendErr)
 		}
 
 		// Step 4 & 5: per counter, re-spend its inputs and un-cascade.
-		for _, counterHash := range countersToPromote {
-			counterMeta, getCounterErr := s.Get(ctx, &counterHash, fields.Tx)
-			if getCounterErr != nil {
-				return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] error getting counter tx %s", demotedHash.String(), counterHash.String(), getCounterErr)
-			}
-
-			if counterMeta == nil || counterMeta.Tx == nil {
-				continue
-			}
-
-			if _, _, spendErr := s.SpendAndCreate(ctx, counterMeta.Tx, blockHeight, WithSpendOnly(),
+		for k, counterHash := range countersToPromote {
+			if _, _, spendErr := s.SpendAndCreate(ctx, counterTxs[k], blockHeight, WithSpendOnly(),
 				WithIgnoreConflicting(true), WithIgnoreLocked(true)); spendErr != nil {
 				return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] error spending counter %s", demotedHash.String(), counterHash.String(), spendErr)
 			}
@@ -661,10 +764,10 @@ func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32,
 // spender. An error is surfaced for any Get failure — that's a store-level
 // problem, not a state question, and the caller must abort the reverse rather
 // than make assumptions.
-func isReverseFullyApplied(ctx context.Context, s Store, demotedTx *bt.Tx, demotedHash chainhash.Hash) (bool, error) {
-	for _, input := range demotedTx.Inputs {
-		parentHash := input.PreviousTxIDChainHash()
-		vout := input.PreviousTxOutIndex
+func isReverseFullyApplied(ctx context.Context, s Store, inpoints []subtree.Inpoint, demotedHash chainhash.Hash) (bool, error) {
+	for _, in := range inpoints {
+		parentHash := &in.Hash
+		vout := in.Index
 
 		parentMeta, err := s.Get(ctx, parentHash, fields.Utxos)
 		if err != nil {
@@ -730,14 +833,14 @@ func isReverseFullyApplied(ctx context.Context, s Store, demotedTx *bt.Tx, demot
 // input — caller demotes D + descendants but leaves SpendingDatas[vout]
 // untouched for that input. ReverseProcessConflicting's caller can rely on
 // the returned list being the exact set to feed Spend/UnmarkConflicting.
-func selectCountersForDemotedTx(ctx context.Context, s Store, demotedTx *bt.Tx, demotedSet map[chainhash.Hash]struct{}) ([]chainhash.Hash, error) {
+func selectCountersForDemotedTx(ctx context.Context, s Store, inpoints []subtree.Inpoint, demotedSet map[chainhash.Hash]struct{}) ([]chainhash.Hash, error) {
 	seen := make(map[chainhash.Hash]struct{})
 
 	result := make([]chainhash.Hash, 0)
 
-	for _, input := range demotedTx.Inputs {
-		parentHash := input.PreviousTxIDChainHash()
-		vout := input.PreviousTxOutIndex
+	for _, in := range inpoints {
+		parentHash := &in.Hash
+		vout := in.Index
 
 		parentMeta, err := s.Get(ctx, parentHash, fields.ConflictingChildren)
 		if err != nil {
@@ -779,7 +882,12 @@ func selectCountersForDemotedTx(ctx context.Context, s Store, demotedTx *bt.Tx, 
 				continue
 			}
 
-			if !candidateSpendsOutput(&candidateMeta.TxInpoints, parentHash, vout) {
+			candidateInpoints, cErr := counterConflictingInpoints(candidateMeta)
+			if cErr != nil {
+				continue
+			}
+
+			if !candidateSpendsOutput(candidateInpoints, parentHash, vout) {
 				continue
 			}
 
@@ -831,9 +939,9 @@ func isOlderCounter(aCreatedAt int64, aHash chainhash.Hash, bCreatedAt int64, bH
 	return false
 }
 
-func candidateSpendsOutput(inpoints *subtree.TxInpoints, parentHash *chainhash.Hash, vout uint32) bool {
-	for _, inpoint := range inpoints.GetTxInpoints() {
-		if inpoint.Index == vout && inpoint.Hash.IsEqual(parentHash) {
+func candidateSpendsOutput(inpoints []subtree.Inpoint, parentHash *chainhash.Hash, vout uint32) bool {
+	for _, in := range inpoints {
+		if in.Index == vout && in.Hash.IsEqual(parentHash) {
 			return true
 		}
 	}
@@ -841,9 +949,15 @@ func candidateSpendsOutput(inpoints *subtree.TxInpoints, parentHash *chainhash.H
 	return false
 }
 
-// spendsForTx builds the []*Spend records for tx.Inputs in the same shape
+// SpendsForTx builds the []*Spend records for tx.Inputs in the same shape
 // Unspend / Spend expect.
-func spendsForTx(tx *bt.Tx) ([]*Spend, error) {
+//
+// Exported so a store whose transactions are kept in extended form can answer
+// SpendsMadeBy with it directly, rather than growing a second copy of the same
+// loop. A store that keeps transactions in the plain form cannot use this: the
+// amount and locking script it reads off each input are only present in the
+// extended form, and it has to answer from what it does keep instead.
+func SpendsForTx(tx *bt.Tx) ([]*Spend, error) {
 	spends := make([]*Spend, len(tx.Inputs))
 
 	for i, input := range tx.Inputs {
@@ -861,6 +975,21 @@ func spendsForTx(tx *bt.Tx) ([]*Spend, error) {
 	}
 
 	return spends, nil
+}
+
+// winnerSpends is the spend records that promote a winner: one per input, naming the winner as
+// the spender. They are built from the body the store returned. A store that keeps transactions
+// in extended form returns inputs that carry the amount and locking script of the output they
+// spend, so each record carries its UTXO hash, which that store's spend and unspend check. A
+// store that keeps the plain form (utxoset) returns inputs without them, so no hash can be
+// computed; that store finds a UTXO by its outpoint and authorises the spend by the spender, so
+// it gets records addressed by outpoint alone.
+func winnerSpends(tx *bt.Tx) ([]*Spend, error) {
+	if tx.IsExtended() {
+		return GetSpends(tx)
+	}
+
+	return GetSpendsOutpointOnly(tx)
 }
 
 // UnmarkConflictingRecursively flips Conflicting=false on the given txs and
@@ -1052,6 +1181,49 @@ func appendNewHashes(dst, src []chainhash.Hash) []chainhash.Hash {
 	}
 
 	return dst
+}
+
+// without returns the members of h that drop does not hold, in order.
+func (h *hashSet) without(drop []chainhash.Hash) hashSet {
+	var dropped, out hashSet
+
+	dropped.add(drop...)
+
+	for _, hash := range h.order {
+		if !dropped.has(hash) {
+			out.add(hash)
+		}
+	}
+
+	return out
+}
+
+// refuseConfirmedWinningInputOwner returns an error when a transaction in confirmed is the recorded
+// spender of a winning input. The winners cannot take that input without unspending a transaction
+// confirmed on the current chain. Planning would also reject the outside owner, but as a spend that
+// changed during preparation, which is not what happened.
+func refuseConfirmedWinningInputOwner(ctx context.Context, s Store, winningSpends []*Spend, confirmed []chainhash.Hash) error {
+	var refused hashSet
+
+	refused.add(confirmed...)
+
+	for _, sp := range winningSpends {
+		response, err := s.GetSpend(ctx, sp)
+		if err != nil {
+			return errors.NewProcessingError("[ProcessConflicting] cannot read the spender of winning input %s:%d", sp.TxID.String(), sp.Vout, err)
+		}
+
+		if response == nil || response.SpendingData == nil || response.SpendingData.TxID == nil {
+			continue
+		}
+
+		if refused.has(*response.SpendingData.TxID) {
+			return errors.NewProcessingError("[ProcessConflicting] refusing conflict resolution: winning input %s:%d is spent by %s, which is confirmed on the current chain",
+				sp.TxID.String(), sp.Vout, response.SpendingData.TxID.String())
+		}
+	}
+
+	return nil
 }
 
 func (h *hashSet) add(hashes ...chainhash.Hash) {
@@ -1406,36 +1578,99 @@ func MarkConflictingRecursively(ctx context.Context, s Store, hashes []chainhash
 	return allAffectedSpends, markedOrder, nil
 }
 
+// GetAndLockChildren locks the transaction and every spending descendant of it, and returns the
+// descendants (not the root). It is strict: any record it cannot find, the root or a descendant,
+// fails the walk with ErrTxNotFound. See GetAndLockChildrenSkippingMissing for the variant that
+// survives a descendant whose record is gone.
+//
+// It has no production caller: the reorg move-back uses GetAndLockChildrenSkippingMissing. It stays
+// because tests use it as a fail-closed oracle, where a walk that silently left out a descendant
+// would hide the very state they check.
 func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]chainhash.Hash, error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetAndLockChildren")
 
 	defer deferFn()
 
+	children, _, err := getAndLockChildren(ctx, s, hash, false)
+
+	return children, err
+}
+
+// GetAndLockChildrenSkippingMissing locks the transaction and every spending descendant of it, like
+// GetAndLockChildren, but a descendant whose record is absent from the store does not fail the walk.
+//
+// A parent's spending data can keep naming a child whose record was deleted since (pruned, or removed
+// by another path), so the record a spending data points at is not guaranteed to exist. There is
+// nothing to lock, save or delete for such a record, and the walk cannot continue through it, so it
+// is left out of the returned children and its hash is returned in missing instead, for the caller to
+// report.
+//
+// A spending data can also name a child whose create has not committed yet: a store that runs
+// SpendAndCreate as a spend followed by a create (Aerospike does) records the spender on the parent
+// first. So a descendant is not settled as missing on its first not-found. Once the walk has locked
+// every record it reached, it reads each missing hash once more; one that exists by then is locked
+// and walked like any other child. This narrows the window to a create that is still in flight after
+// the whole walk, it does not close it. The locks stop a spend made without IgnoreLocked from adding
+// a spender to a record the walk has read, but block and subtree validation spend with IgnoreLocked,
+// so they can still add a spender, and with it a descendant, that this walk does not see. Only hashes
+// still absent on that second read are returned in missing, and each one increments
+// teranode_utxo_lock_walk_missing_descendants_total.
+//
+// The walk reaches a missing record's descendants only through another parent that exists. A
+// descendant reachable only through a missing record cannot be found from the store, so it is not
+// locked or returned, and the caller cannot clean it up through this walk.
+//
+// The root is different: if the root itself is absent the walk fails with ErrTxNotFound, as there is
+// nothing to walk from. Any other error fails the walk.
+func GetAndLockChildrenSkippingMissing(ctx context.Context, s Store, hash chainhash.Hash) (children, missing []chainhash.Hash, err error) {
+	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetAndLockChildrenSkippingMissing")
+
+	defer deferFn()
+
+	return getAndLockChildren(ctx, s, hash, true)
+}
+
+func getAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash, skipMissing bool) ([]chainhash.Hash, []chainhash.Hash, error) {
 	if hash.Equal(subtree.CoinbasePlaceholderHashValue) {
 		// skip the coinbase placeholder hash
-		return nil, errors.NewProcessingError("[GetAndLockChildren][%s] tx is frozen", hash.String())
+		return nil, nil, errors.NewProcessingError("[GetAndLockChildren][%s] tx is frozen", hash.String())
 	}
 
 	visited := make(map[chainhash.Hash]struct{})
 	visited[hash] = struct{}{}
 	currentLevel := []chainhash.Hash{hash}
 
+	// missingSet holds the hashes not found on their latest read, missingOrder the order they were
+	// first found missing in, and rechecked the ones already given their second read
+	missingSet := make(map[chainhash.Hash]struct{})
+	rechecked := make(map[chainhash.Hash]struct{})
+
+	var missingOrder []chainhash.Hash
+
+	isRootLevel := true
+
 	for len(currentLevel) > 0 {
 		results := make([]*meta.Data, len(currentLevel))
+		notFound := make([]bool, len(currentLevel))
 		g, gCtx := errgroup.WithContext(ctx)
 		// Same per-level ceiling as GetConflictingChildren, same rationale — see
 		// conflictingWalkFanOut.
 		g.SetLimit(conflictingWalkFanOut)
 
+		// only descendants may be skipped, never the root
+		tolerateMissing := skipMissing && !isRootLevel
+
 		for i, current := range currentLevel {
 			i := i
 			current := current
 			g.Go(func() error {
-				if err := s.SetLocked(gCtx, []chainhash.Hash{current}, true); err != nil {
-					return err
-				}
-				txMeta, err := s.Get(gCtx, &current, fields.Utxos)
+				txMeta, err := lockAndGetUtxos(gCtx, s, current)
 				if err != nil {
+					if tolerateMissing && errors.Is(err, errors.ErrTxNotFound) {
+						notFound[i] = true
+						return nil
+					}
+
 					return err
 				}
 				results[i] = txMeta
@@ -1444,7 +1679,19 @@ func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]ch
 		}
 
 		if err := g.Wait(); err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+
+		isRootLevel = false
+
+		for i, gone := range notFound {
+			if gone {
+				if _, seen := rechecked[currentLevel[i]]; !seen {
+					missingOrder = append(missingOrder, currentLevel[i])
+				}
+
+				missingSet[currentLevel[i]] = struct{}{}
+			}
 		}
 
 		var nextLevel []chainhash.Hash
@@ -1463,7 +1710,7 @@ func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]ch
 						}
 
 						if child.Equal(subtree.CoinbasePlaceholderHashValue) {
-							return nil, errors.NewProcessingError("[GetAndLockChildren][%s] tx is frozen", child.String())
+							return nil, nil, errors.NewProcessingError("[GetAndLockChildren][%s] tx is frozen", child.String())
 						}
 
 						visited[child] = struct{}{}
@@ -1472,18 +1719,63 @@ func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]ch
 				}
 			}
 		}
+
+		if len(nextLevel) == 0 {
+			// every reachable record is locked, so a spend made without IgnoreLocked cannot land on
+			// one (block and subtree validation spend with IgnoreLocked and can still add a spender
+			// this walk will not see): give each missing hash its one second read, in case its create
+			// was still in flight on the first
+			for _, missingHash := range missingOrder {
+				if _, gone := missingSet[missingHash]; !gone {
+					continue
+				}
+
+				if _, done := rechecked[missingHash]; done {
+					continue
+				}
+
+				rechecked[missingHash] = struct{}{}
+
+				delete(missingSet, missingHash)
+
+				nextLevel = append(nextLevel, missingHash)
+			}
+		}
+
 		currentLevel = nextLevel
 	}
 
-	// exclude the root hash from the result
+	// exclude the root hash and every record that was not found from the result
 	delete(visited, hash)
 
 	children := make([]chainhash.Hash, 0, len(visited))
 	for child := range visited {
+		if _, gone := missingSet[child]; gone {
+			continue
+		}
+
 		children = append(children, child)
 	}
 
-	return children, nil
+	var missing []chainhash.Hash
+
+	for _, missingHash := range missingOrder {
+		if _, gone := missingSet[missingHash]; gone {
+			missing = append(missing, missingHash)
+			prometheusUtxoLockWalkMissingDescendants.Inc()
+		}
+	}
+
+	return children, missing, nil
+}
+
+// lockAndGetUtxos locks one record and reads its outputs and their spenders.
+func lockAndGetUtxos(ctx context.Context, s Store, hash chainhash.Hash) (*meta.Data, error) {
+	if err := s.SetLocked(ctx, []chainhash.Hash{hash}, true); err != nil {
+		return nil, err
+	}
+
+	return s.Get(ctx, &hash, fields.Utxos)
 }
 
 // GetConflictingChildren walks the descendant graph of the given transaction —
@@ -1598,6 +1890,46 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash, m
 	}
 
 	return conflictingChildren, nil
+}
+
+// counterConflictingInpoints reports what a transaction spends, as parent and vout pairs.
+//
+// It reads the stored inpoints in preference to the serialized body, because the body is not
+// permanent in every store. A store that bounds transaction bytes by a retention horizon
+// returns a record whose Tx is nil for anything older, and does so as its ordinary steady state
+// rather than as an error, so a body-only reading of this question walks off a nil pointer the
+// first time an incoming subtree names an old conflicting transaction. That is a panic in a
+// worker with nothing above it to recover, so it takes the process down, and it is reachable
+// from the network. The inpoints live on the identity record for as long as the transaction
+// does.
+//
+// The body stays as the fallback for a record carrying no inpoints, so nothing regresses for a
+// store or a caller that never had them. A record carrying NEITHER is an error rather than an
+// empty result, because an empty result would report a transaction with no counter-spender at
+// all, and that is the answer that lets a double spend through.
+func counterConflictingInpoints(txMeta *meta.Data) ([]subtree.Inpoint, error) {
+	if txMeta == nil {
+		return nil, errors.NewTxNotFoundError("no metadata for the transaction")
+	}
+
+	if len(txMeta.TxInpoints.ParentTxHashes) > 0 {
+		return txMeta.TxInpoints.GetTxInpoints(), nil
+	}
+
+	if txMeta.Tx == nil {
+		return nil, errors.NewProcessingError("record carries neither stored inpoints nor a transaction body")
+	}
+
+	inpoints := make([]subtree.Inpoint, 0, len(txMeta.Tx.Inputs))
+
+	for _, input := range txMeta.Tx.Inputs {
+		inpoints = append(inpoints, subtree.Inpoint{
+			Hash:  *input.PreviousTxIDChainHash(),
+			Index: input.PreviousTxOutIndex,
+		})
+	}
+
+	return inpoints, nil
 }
 
 // GetConflictingChildrenFromRoots is GetConflictingChildren for many roots at
@@ -1833,18 +2165,62 @@ func conflictingWalkChildren(txMeta *meta.Data) []chainhash.Hash {
 	return children
 }
 
+// CounterConflictingInpoints reports what txHash spends, from txMeta as read with
+// fields.TxInpoints. A record that stores no inpoints keeps what it spends only in
+// its body, so the body is read for that record alone; a record carrying neither
+// is a processing error (see counterConflictingInpoints). A failed body read is
+// returned as the store returned it.
+func CounterConflictingInpoints(ctx context.Context, s Store, txHash chainhash.Hash, txMeta *meta.Data) ([]subtree.Inpoint, error) {
+	if CounterConflictingNeedsBody(txMeta) {
+		bodyMeta, err := s.Get(ctx, &txHash, fields.Tx)
+		if err != nil {
+			return nil, err
+		}
+
+		if bodyMeta != nil {
+			txMeta.Tx = bodyMeta.Tx
+		}
+	}
+
+	return CounterConflictingInpointsOf(txHash, txMeta)
+}
+
+// CounterConflictingNeedsBody reports whether txMeta, read with fields.TxInpoints, stores no
+// inpoints and no body, so CounterConflictingInpoints would read the body before it can say what
+// the transaction spends. A caller that holds many records reads those bodies in one batch,
+// sets each Tx, and calls CounterConflictingInpointsOf.
+func CounterConflictingNeedsBody(txMeta *meta.Data) bool {
+	return txMeta != nil && len(txMeta.TxInpoints.ParentTxHashes) == 0 && txMeta.Tx == nil
+}
+
+// CounterConflictingInpointsOf is CounterConflictingInpoints without the body read: it reports
+// what txHash spends from txMeta as it stands, and a record carrying neither inpoints nor a body
+// is the same processing error.
+func CounterConflictingInpointsOf(txHash chainhash.Hash, txMeta *meta.Data) ([]subtree.Inpoint, error) {
+	inpoints, err := counterConflictingInpoints(txMeta)
+	if err != nil {
+		return nil, errors.NewProcessingError("[CounterConflictingInpoints][%s] cannot read what the transaction spends", txHash.String(), err)
+	}
+
+	return inpoints, nil
+}
+
 // GetCounterConflictingTxHashes returns the given transaction plus, for every
 // input, the transaction the store records as spending that same output (the
 // counter-conflicting transaction) and that spender's full descendant set.
 // maxNodes bounds each descendant walk (see GetConflictingChildren); <= 0
 // means unbounded.
+//
+// The inputs come from the stored inpoints where the store has them, so a transaction whose
+// serialized bytes have aged out of a retention window is still answerable.
 func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhash.Hash, maxNodes int) ([]chainhash.Hash, error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetCounterConflictingTxHashes")
 
 	defer deferFn()
 
-	// Only the parent hashes are read below, so ask for the inpoints rather than
-	// the whole transaction.
+	// Only what the transaction spends is read below, so ask for the inpoints
+	// rather than the whole transaction. The body is read only for a record that
+	// stores no inpoints, below.
 	txMeta, err := s.Get(ctx, &txHash, fields.TxInpoints)
 	if err != nil {
 		return nil, err
@@ -1856,15 +2232,20 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 		return nil, errors.NewTxNotFoundError("[GetCounterConflictingTxHashes][%s] tx not found", txHash.String())
 	}
 
+	inpoints, err := CounterConflictingInpoints(ctx, s, txHash, txMeta)
+	if err != nil {
+		return nil, err
+	}
+
 	counterConflictingMap := make(map[chainhash.Hash]struct{})
 	counterConflictingMap[txHash] = struct{}{}
 
 	// get the unique parent txs
 	parentTxs := make(map[chainhash.Hash][]*chainhash.Hash)
 
-	for _, parentHash := range txMeta.TxInpoints.GetParentTxHashes() {
+	for _, in := range inpoints {
 		// get the parent tx
-		parentTxs[parentHash] = nil
+		parentTxs[in.Hash] = nil
 	}
 
 	for parentTx := range parentTxs {
@@ -1896,39 +2277,29 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 		parentTxs[*parentTxHash] = spendingTxIDs
 	}
 
-	// Walk the inpoints, not txMeta.Tx.Inputs. The Get above asks for
-	// fields.TxInpoints only, so txMeta.Tx is nil on the SQL store on both read
-	// paths. getUnbatched and batchDecorateChunk attach meta.Data.Tx only for
-	// fields.Tx or fields.Outputs. settings.conf sets utxostore_getBatcherSize to
-	// 4096, so the batched path is the live one, and sendGetBatch decorates each
-	// field set separately, so a batch-mate asking for fields.Tx does not widen
-	// this read.
+	// validate every input and collect the unique counter-spenders; several inputs
+	// are typically spent by the same counter tx and its descendant walk must run
+	// only once, not once per input. Dedupe on a dedicated set:
+	// counterConflictingMap is seeded with txHash, and a spender equal to txHash
+	// itself must still be walked.
 	//
-	// GetTxInpoints returns the outpoints grouped parent-then-vout rather than in
-	// input order. Only the order of the descendant walks below changes with it,
-	// and the result is accumulated into counterConflictingMap, so the returned
-	// set is the same. It does decide which walk spends the maxNodes budget
-	// first, which was already unspecified for a transaction with several
-	// conflicting parents.
-	inpoints := txMeta.TxInpoints.GetTxInpoints()
-
-	// Collect the unique counter-spenders: several inputs are typically spent by
-	// the same counter tx and its descendant walk must run only once, not once
-	// per input. Dedupe on a dedicated set: counterConflictingMap is seeded with
-	// txHash, and a spender equal to txHash itself must still be walked.
+	// The order is the stored inpoints' order, which is parent-major with parents
+	// deduplicated rather than the transaction's original input order. Nothing
+	// downstream depends on it: the result is collected into counterConflictingMap
+	// and returned as a set, so the order decides only which walk runs first.
 	seenSpenders := make(map[chainhash.Hash]struct{}, len(inpoints))
 	uniqueSpendingTxIDs := make([]chainhash.Hash, 0, len(inpoints))
 
-	for _, inpoint := range inpoints {
-		parenTxIDS, ok := parentTxs[inpoint.Hash]
+	for _, in := range inpoints {
+		parenTxIDS, ok := parentTxs[in.Hash]
 		if ok {
 			// check the length of the spending txs, if it's less than the index, then the input is not spent
-			if len(parenTxIDS) <= int(inpoint.Index) {
+			if len(parenTxIDS) <= int(in.Index) {
 				// throw an error
-				return nil, errors.NewProcessingError("[GetCounterConflictingTxHashes][%s] cannot process counter conflicting, input %d of %s is out of range (len: %d, %v)", txHash.String(), inpoint.Index, inpoint.Hash.String(), len(parenTxIDS), parenTxIDS)
+				return nil, errors.NewProcessingError("[GetCounterConflictingTxHashes][%s] cannot process counter conflicting, input %d of %s is out of range (len: %d, %v)", txHash.String(), in.Index, in.Hash.String(), len(parenTxIDS), parenTxIDS)
 			}
 
-			spendingTxID := parenTxIDS[inpoint.Index]
+			spendingTxID := parenTxIDS[in.Index]
 			if spendingTxID != nil {
 				counterConflictingMap[*spendingTxID] = struct{}{}
 

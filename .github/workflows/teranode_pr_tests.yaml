@@ -140,6 +140,11 @@ jobs:
         # seconds without.
         run: make test-heavy
 
+      - name: Check consensus package coverage
+        # Fails when a consensus-critical package's statement coverage in the
+        # coverage.out written by make test falls below its minimum.
+        run: go run ./cmd/coveragegate -profile coverage.out -thresholds .github/consensus-coverage.txt
+
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

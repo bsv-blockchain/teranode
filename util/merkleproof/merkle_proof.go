@@ -170,30 +170,45 @@ func ConstructMerkleProof(txID *chainhash.Hash, repo MerkleProofConstructor) (*M
 	// Best-effort: a reorg between this main-chain check and the GetBlockByID
 	// call below could return a proof against a re-orphaned block. SPV clients
 	// should re-fetch on header divergence.
+	//
+	// An id with no stored block is skipped. Quick validation can leave one on a
+	// transaction: a retry after its block id reservation was swept stores the block
+	// under a new id, and the old id stays on the transaction. The in-memory chain
+	// check can report such an id as on the main chain.
 	mainChainIdx := -1
+
+	var block *model.Block
+
 	for i, id := range txMeta.BlockIDs {
 		onChain, err := repo.IsBlockOnMainChain(id, txMeta.BlockHeights[i])
 		if err != nil {
 			return nil, terr.NewProcessingError("failed to check main chain", err)
 		}
-		if onChain {
-			mainChainIdx = i
-			break
+
+		if !onChain {
+			continue
 		}
+
+		block, err = repo.GetBlockByID(uint64(id))
+		if terr.Is(err, terr.ErrBlockNotFound) {
+			continue
+		}
+
+		if err != nil {
+			return nil, terr.NewProcessingError("failed to get block data", err)
+		}
+
+		mainChainIdx = i
+
+		break
 	}
+
 	if mainChainIdx == -1 {
 		return nil, terr.NewTxNotFoundError("transaction not in main chain")
 	}
 
-	blockID := txMeta.BlockIDs[mainChainIdx]
 	blockHeight := txMeta.BlockHeights[mainChainIdx]
 	subtreeIdx := txMeta.SubtreeIdxs[mainChainIdx]
-
-	// Get block data using block ID instead of height for better performance
-	block, err := repo.GetBlockByID(uint64(blockID))
-	if err != nil {
-		return nil, terr.NewProcessingError("failed to get block data", err)
-	}
 
 	// Validate subtree index
 	if subtreeIdx < 0 || subtreeIdx >= len(block.Subtrees) {

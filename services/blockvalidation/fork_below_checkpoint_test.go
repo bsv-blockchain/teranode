@@ -24,7 +24,7 @@ import (
 // TestValidateBlock_RejectsForkBelowCheckpoint pins bitcoin-sv's bad-fork-prior-to-checkpoint
 // on the direct (non-catchup) path. A side block below a checkpoint the tip has passed is
 // validated at its own height, so below Genesis or Chronicle it gets the older script rules and
-// its txs can reach block assembly (issue 4940).
+// its txs can reach block assembly.
 func TestValidateBlock_RejectsForkBelowCheckpoint(t *testing.T) {
 	initPrometheusMetrics()
 

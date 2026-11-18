@@ -51,7 +51,6 @@ func invRepairPeer(t *testing.T, sm *SyncManager, idx uint8, lastBlock int32) (*
 	})
 
 	state := registerInvPeer(sm, local, lastBlock)
-	t.Cleanup(state.requestedTxns.Stop)
 
 	return local, data, headers, state
 }

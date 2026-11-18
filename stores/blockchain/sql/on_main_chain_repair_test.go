@@ -15,6 +15,8 @@ import (
 	"github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/usql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -374,10 +376,226 @@ func TestOnMainChainRepairWithoutAFloorWalksToGenesis(t *testing.T) {
 	}
 }
 
+// TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime: a reorg whose reconcile
+// walked to genesis, because every flag was false, notes floor 0. A bounded repair down to
+// that floor walks the whole chain under slowPathMu and the 30 s budget. If it does not fit,
+// retrying the same walk would hold the lock for the full budget on every attempt and never
+// land, so the attempt that runs out of time must hand the repair to the full walk, which
+// on PostgreSQL runs without the lock.
+//
+// The bounded walk here stands in for one too long for its budget: it waits until its
+// context ends. The full walk is the real transaction.
+func TestOnMainChainRepairEscalatesABoundedWalkThatRunsOutOfTime(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		unlocked bool
+	}{
+		{name: "sqlite holds the lock", unlocked: false},
+		{name: "postgres runs the full walk without the lock", unlocked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newOnMainChainTestStore(t)
+			s.unlockedFullRepair = tc.unlocked
+
+			setRepairBackoff(t, s, time.Millisecond)
+
+			s.onMainChainRepair.mu.Lock()
+			require.Equal(t, rebuildOffChainSetTimeout, s.onMainChainRepair.boundedTimeout, "New gives a bounded attempt the 30 s budget")
+			s.onMainChainRepair.boundedTimeout = 50 * time.Millisecond
+			s.onMainChainRepair.mu.Unlock()
+
+			storeBlocks(t, s, block1, block2, block3)
+
+			// The stale row sits at the bottom of the chain, at the noted floor 0. The hook
+			// makes the bounded walk outlast its budget, so only the full walk repairs it.
+			_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`, block1.Hash().CloneBytes())
+			require.NoError(t, err)
+
+			var (
+				mu         sync.Mutex
+				fulls      []bool
+				floors     []int64
+				locked     []bool
+				fullBudget time.Duration
+			)
+
+			s.rebuildTxHook = func(ctx context.Context, full bool, floor int64) error {
+				held := !s.slowPathMu.TryLock()
+				if !held {
+					s.slowPathMu.Unlock()
+				}
+
+				mu.Lock()
+				fulls = append(fulls, full)
+				floors = append(floors, floor)
+				locked = append(locked, held)
+
+				if deadline, ok := ctx.Deadline(); ok && full {
+					fullBudget = time.Until(deadline)
+				}
+
+				fullCalls := 0
+				for _, f := range fulls {
+					if f {
+						fullCalls++
+					}
+				}
+				mu.Unlock()
+
+				if !full {
+					<-ctx.Done()
+
+					// A driver reports a statement cancelled at the deadline as its own
+					// error, which does not wrap context.DeadlineExceeded.
+					return errors.NewStorageError("pq: canceling statement due to user request")
+				}
+
+				if fullCalls == 1 {
+					// The first full walk fails too. The retry must still be a full walk.
+					return errors.NewStorageError("full walk failed")
+				}
+
+				return s.rebuildOnMainChainFlagTx(ctx, full, floor)
+			}
+
+			s.markOnMainChainDirty(false, 0, "test", errors.NewStorageError("injected"))
+			waitForRepair(t, s)
+
+			require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "the full walk repairs the stale row")
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			require.Equal(t, []bool{false, true, true}, fulls, "one bounded attempt runs out of time, a failed full walk is retried as a full walk, which lands")
+			require.Equal(t, int64(0), floors[0], "the bounded attempt walks down to the noted floor")
+			require.Equal(t, []bool{true, !tc.unlocked, !tc.unlocked}, locked, "the bounded attempt holds slowPathMu; the full walks hold it only on SQLite")
+			require.InDelta(t, float64(30*time.Minute), float64(fullBudget), float64(5*time.Second), "the full walk runs under the 30 min full-walk budget, not the bounded one it escaped")
+
+			s.onMainChainRepair.mu.Lock()
+			defer s.onMainChainRepair.mu.Unlock()
+
+			require.False(t, s.onMainChainRepair.full, "the landed repair clears the record")
+			require.Equal(t, noRepairFloor, s.onMainChainRepair.floor)
+		})
+	}
+}
+
+// TestOnMainChainRepairShutdownDoesNotEscalateABoundedWalk: Close cancels a bounded
+// attempt's context, which is not the budget running out. The record must stay bounded with
+// its floor, so a store that is shutting down does not decide its repair needs the full walk.
+func TestOnMainChainRepairShutdownDoesNotEscalateABoundedWalk(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	setRepairBackoff(t, s, time.Hour)
+
+	started := make(chan struct{})
+
+	s.rebuildTxHook = func(ctx context.Context, full bool, floor int64) error {
+		close(started)
+		<-ctx.Done()
+
+		return errors.NewStorageError("bounded walk cancelled", ctx.Err())
+	}
+
+	s.markOnMainChainDirty(false, 2, "test", errors.NewStorageError("injected"))
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the bounded attempt did not start")
+	}
+
+	close(s.backgroundDone)
+	select {
+	case <-s.onMainChainRepair.stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the repair loop did not stop")
+	}
+
+	s.onMainChainRepair.mu.Lock()
+	defer s.onMainChainRepair.mu.Unlock()
+
+	require.False(t, s.onMainChainRepair.full, "a shutdown is not a timeout, so the record stays bounded")
+	require.Equal(t, int64(2), s.onMainChainRepair.floor)
+}
+
+// TestOnMainChainRepairEscalatedWalkThatIsOverlappedNarrowsToTheWritesFloor: escalating a
+// bounded repair from floor 0 to the full walk must also drop floor 0. On PostgreSQL the
+// full walk runs without slowPathMu, so a StoreBlock reorg can overlap it, and the record is
+// then narrowed to the lower of its floor and the reorg's. A floor 0 left on the record would
+// win that and send the repair back to the locked bounded walk to genesis that has just run
+// out of time. The next walk must reach only the reorg's floor.
+func TestOnMainChainRepairEscalatedWalkThatIsOverlappedNarrowsToTheWritesFloor(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	s.unlockedFullRepair = true
+	setRepairBackoff(t, s, time.Millisecond)
+
+	s.onMainChainRepair.mu.Lock()
+	s.onMainChainRepair.boundedTimeout = 50 * time.Millisecond
+	s.onMainChainRepair.mu.Unlock()
+
+	alt3, alt4 := reorgFixture(t, s)
+
+	var (
+		mu     sync.Mutex
+		fulls  []bool
+		floors []int64
+		locked []bool
+	)
+
+	s.rebuildTxHook = func(ctx context.Context, full bool, floor int64) error {
+		held := !s.slowPathMu.TryLock()
+		if !held {
+			s.slowPathMu.Unlock()
+		}
+
+		mu.Lock()
+		fulls = append(fulls, full)
+		floors = append(floors, floor)
+		locked = append(locked, held)
+		call := len(fulls)
+		mu.Unlock()
+
+		switch call {
+		case 1:
+			// The bounded walk from floor 0 outlasts its budget.
+			<-ctx.Done()
+
+			return errors.NewStorageError("bounded walk did not finish", ctx.Err())
+		case 2:
+			// The full walk is overlapped by a reorg and commits its older view.
+			for _, b := range []*model.Block{alt3, alt4} {
+				if _, _, err := s.StoreBlock(ctx, b, "peer"); err != nil {
+					return err
+				}
+			}
+
+			_, err := s.db.ExecContext(ctx, `UPDATE blocks SET on_main_chain = (hash IN ($1, $2)) WHERE height IN (2, 3, 4)`,
+				block2.Hash().CloneBytes(), block3.Hash().CloneBytes())
+
+			return err
+		default:
+			return s.rebuildOnMainChainFlagTx(ctx, full, floor)
+		}
+	}
+
+	s.markOnMainChainDirty(false, 0, "test", errors.NewStorageError("injected"))
+	waitForRepair(t, s)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Equal(t, []bool{false, true, false}, fulls, "the bounded walk runs out of time, the full walk is overlapped, then one bounded walk lands")
+	require.Equal(t, []int64{0, noRepairFloor, int64(block2.Height)}, floors, "the last walk reaches the reorg's floor, not floor 0")
+	require.Equal(t, []bool{true, false, true}, locked, "only the bounded walks hold slowPathMu")
+
+	requireForkIsTheMainChain(t, s, alt3, alt4)
+}
+
 // TestOnMainChainRepairRerunsWhenAChainWriteOverlapsIt: a full walk that runs without
 // slowPathMu reads its rows from a snapshot taken when it began. RevalidateBlock can commit
 // in the meantime, its own rebuild can land and acknowledge the repair, and then the walk
-// commits its older view. On PostgreSQL the two touch different rows, so neither aborts.
+// commits its older view. On PostgreSQL the two touch different rows, so neither aborts on
+// them; the shared chain-write row rolls the walk back, and the watch reruns it once more.
 // The repair must not release the guard on that walk. It must run again.
 //
 // SQLite cannot hold two writers open at once, so this test stands in for the stale
@@ -589,7 +807,8 @@ func TestALaterFullRebuildClearsThePendingRepair(t *testing.T) {
 // has taken its snapshot, with block3's chain as the best and block3's flag left false by
 // the failed write it is owed for. RevalidateBlock then makes alt4 the best and its own
 // rebuild commits. The held walk resumes and sets block3 true from its old snapshot. The
-// two rebuilds update different rows, so neither aborts, and without the rerun the table
+// two rebuilds update different rows, so neither aborts on them, and without the shared
+// chain-write row and the rerun the table
 // ends with both block3 and alt3 flagged at height 3.
 func TestOnMainChainRepairRacingRevalidate_PostgreSQL(t *testing.T) {
 	if testing.Short() {
@@ -670,7 +889,7 @@ func TestOnMainChainRepairRacingRevalidate_PostgreSQL(t *testing.T) {
 // TestStartupRebuildOverlappedByAChainWriteRunsAgain: the startup rebuild runs without
 // slowPathMu and reads its rows from a snapshot taken when it began. A chain write can
 // commit while it runs and the rebuild can then commit its older view over it; on
-// PostgreSQL the two touch different rows, so neither aborts. The startup goroutine then
+// PostgreSQL the two touch different rows, so neither aborts on them. The startup goroutine then
 // drops its guard and every reader trusts the stale column. The rebuild must record the
 // overlap so the background repair walks again.
 //
@@ -923,7 +1142,7 @@ func requireForkIsTheMainChain(t *testing.T, s *SQL, alt3, alt4 *model.Block) {
 // PostgreSQL runs without slowPathMu, and a StoreBlock reorg that commits during it can
 // leave the walk's older view in place. The reorg notes the lowest height it can have
 // moved, and the walk left every row below that right, so the repair runs next as a bounded
-// walk down to that height under slowPathMu, which no write can overlap. It must not run
+// walk down to that height under slowPathMu, which no write in this process can overlap. It must not run
 // the full walk again, and it must never run a full walk under slowPathMu, which would stop
 // block storage for up to 30 min.
 func TestOnMainChainRepairNarrowsAnOverlappedFullWalkToTheWritesFloor(t *testing.T) {
@@ -943,7 +1162,7 @@ func TestOnMainChainRepairNarrowsAnOverlappedFullWalkToTheWritesFloor(t *testing
 
 	require.Equal(t, []bool{true, false}, fault.walks(), "the overlapped full walk, then one bounded walk")
 	require.Equal(t, []bool{false, true}, fault.lockHeld(), "the full walk runs unlocked, the bounded one under slowPathMu")
-	require.Equal(t, s.reconcileFloor(alt4.Height), fault.floorsSeen()[1], "the bounded walk reaches the reorg's floor")
+	require.Equal(t, int64(block2.Height), fault.floorsSeen()[1], "the bounded walk reaches the reorg's floor")
 
 	requireForkIsTheMainChain(t, s, alt3, alt4)
 	requireRepairSettled(t, s, gaugeBefore)
@@ -992,7 +1211,7 @@ func TestOnMainChainRepairRerunsAnOperatorOverlapInFullWithoutTheLock(t *testing
 // chain write is noted during it, so a write that cannot have been overwritten must not be
 // noted. A fork block that leaves the tip where it is, and an invalid record, add a row no
 // older snapshot can see and change none it can. A reorg moves rows and is noted, with the
-// bottom of its reconcile's walk as the height.
+// lowest height its reconcile changed as the height.
 func TestStoreBlockNotesOnlyChainWritesThatMoveMembership(t *testing.T) {
 	s := newOnMainChainTestStore(t)
 	ctx := context.Background()
@@ -1020,7 +1239,7 @@ func TestStoreBlockNotesOnlyChainWritesThatMoveMembership(t *testing.T) {
 
 	moved, floor = s.closeOnMainChainWatch(watch)
 	require.True(t, moved, "the reorg to alt4 is noted")
-	require.Equal(t, s.reconcileFloor(alt4.Height), floor, "with the bottom of its reconcile's walk")
+	require.Equal(t, int64(block2.Height), floor, "with the lowest height its reconcile changed")
 }
 
 // TestChainWritesThatFailBeforeCommitAreNotNoted: a write that failed before it committed
@@ -1125,7 +1344,7 @@ func TestStartupFullRebuildOverlappedByAReorgOwesABoundedWalk(t *testing.T) {
 
 	require.Equal(t, []bool{true, false}, fault.walks(), "the overlapped startup walk, then one bounded repair")
 	require.Equal(t, []bool{false, true}, fault.lockHeld())
-	require.Equal(t, s.reconcileFloor(alt4.Height), fault.floorsSeen()[1])
+	require.Equal(t, int64(block2.Height), fault.floorsSeen()[1])
 
 	requireForkIsTheMainChain(t, s, alt3, alt4)
 	requireRepairSettled(t, s, gaugeBefore)
@@ -1211,4 +1430,315 @@ func TestLockedRepairAttemptIsNotOverlappedByAWriterItQueuedBehind(t *testing.T)
 	waitForRepair(t, s)
 
 	require.EqualValues(t, 1, fault.calls.Load(), "one walk: the writer finished before the attempt began")
+}
+
+// newPostgresStorePair opens two stores on one PostgreSQL database, the way a second
+// teranode instance or the rewindblockchain tool shares a node's database. Each store has
+// its own slowPathMu and its own in-process watch, so neither sees the other's chain writes
+// through them.
+func newPostgresStorePair(t *testing.T) (*SQL, *SQL) {
+	t.Helper()
+
+	if testing.Short() {
+		t.Skip("Skipping PostgreSQL tests in short mode")
+	}
+
+	connStr, teardown, err := postgres.SetupTestPostgresContainer()
+	if err != nil {
+		t.Skipf("PostgreSQL container not available: %v", err)
+	}
+
+	t.Cleanup(func() { _ = teardown() })
+
+	storeURL, err := url.Parse(connStr)
+	require.NoError(t, err)
+
+	first, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = first.Close(context.Background()) })
+	waitForStartupRebuild(t, first)
+
+	second, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = second.Close(context.Background()) })
+	waitForStartupRebuild(t, second)
+
+	require.True(t, first.unlockedFullRepair, "a PostgreSQL store runs the full repair without slowPathMu")
+	setRepairBackoff(t, first, time.Millisecond)
+
+	return first, second
+}
+
+// holdFirstRepairWalk makes the first walk s runs after this call stop once it has taken
+// its snapshot, until the returned release is called. started is closed when it stops.
+func holdFirstRepairWalk(s *SQL) (started <-chan struct{}, release func()) {
+	var snapshots atomic.Int32
+
+	startedCh := make(chan struct{})
+	releaseCh := make(chan struct{})
+
+	s.rebuildSnapshotHook = func(bool) {
+		if snapshots.Add(1) != 1 {
+			return
+		}
+
+		close(startedCh)
+		<-releaseCh
+	}
+
+	return startedCh, func() { close(releaseCh) }
+}
+
+func waitForHeldWalk(t *testing.T, started <-chan struct{}) {
+	t.Helper()
+
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the repair's walk did not reach its snapshot")
+	}
+}
+
+// recordWalkSQLStates wraps s's rebuild transaction and records the SQLSTATE of every
+// attempt that failed with a PostgreSQL error, so a test can see which code the
+// chain-write check raised rather than only that the repair landed in the end.
+func recordWalkSQLStates(s *SQL) func() []string {
+	var (
+		mu     sync.Mutex
+		states []string
+	)
+
+	s.rebuildTxHook = func(ctx context.Context, full bool, floor int64) error {
+		err := s.rebuildOnMainChainFlagTx(ctx, full, floor)
+
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			mu.Lock()
+			states = append(states, pgErr.Code)
+			mu.Unlock()
+		}
+
+		return err
+	}
+
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return append([]string(nil), states...)
+	}
+}
+
+// TestOnMainChainRepairRerunsWhenAnotherStoreRevalidates_PostgreSQL is
+// TestOnMainChainRepairRacingRevalidate_PostgreSQL with the RevalidateBlock made by a
+// second store on the same database, as a second instance would make it. The first
+// store's in-process watch never hears of that write, so only the database can tell the
+// held walk that its snapshot is stale.
+func TestOnMainChainRepairRerunsWhenAnotherStoreRevalidates_PostgreSQL(t *testing.T) {
+	s, other := newPostgresStorePair(t)
+	ctx := context.Background()
+
+	alt3 := createBlock3OnFork(blockAlternative2)
+	alt4 := createBlock3OnFork(alt3)
+	storeBlocks(t, s, block1, block2, block3, blockAlternative2, alt3, alt4)
+	_, err := s.InvalidateBlock(ctx, alt4.Hash())
+	require.NoError(t, err)
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+
+	// The stale flag the failed write left behind.
+	_, err = s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`, block3.Hash().CloneBytes())
+	require.NoError(t, err)
+
+	started, release := holdFirstRepairWalk(s)
+	sqlStates := recordWalkSQLStates(s)
+
+	s.markOnMainChainDirty(true, noRepairFloor, "test", errors.NewStorageError("injected"))
+	waitForHeldWalk(t, started)
+
+	require.NoError(t, other.RevalidateBlock(ctx, alt4.Hash()))
+
+	release()
+	waitForRepair(t, s)
+	require.Equal(t, []string{usql.PgErrSerializationFail}, sqlStates(),
+		"a write committed after the walk's snapshot fails the walk's check with 40001, and the retry lands")
+
+	var atHeight3 int
+	require.NoError(t, s.db.QueryRow(`SELECT count(*) FROM blocks WHERE height = 3 AND on_main_chain = true`).Scan(&atHeight3))
+	require.Equal(t, 1, atHeight3, "one block per height on the main chain")
+	require.False(t, getOnMainChain(t, s, block3.Hash().CloneBytes()), "the held walk is rolled back at its chain-write check, and its retry from a fresh snapshot leaves block3 off the main chain")
+	require.True(t, getOnMainChain(t, s, alt3.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, alt4.Hash().CloneBytes()))
+}
+
+// TestOnMainChainRepairRerunsWhenAnotherStoreDeletesTheTip_PostgreSQL: rewindblockchain
+// deletes blocks through its own store. Deleting block3 while the node's repair walk holds
+// a snapshot with block3 as the best leaves alt3 the best block, on the other branch. The
+// held walk would then commit the old branch's flags, and the repair would land and send
+// readers back to a column that describes a chain whose tip is gone.
+func TestOnMainChainRepairRerunsWhenAnotherStoreDeletesTheTip_PostgreSQL(t *testing.T) {
+	s, other := newPostgresStorePair(t)
+	ctx := context.Background()
+
+	alt3 := createBlock3OnFork(blockAlternative2)
+	storeBlocks(t, s, block1, block2, block3, blockAlternative2, alt3)
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, alt3.Hash().CloneBytes()))
+
+	// A stale flag for the held walk to write back.
+	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`, block2.Hash().CloneBytes())
+	require.NoError(t, err)
+
+	started, release := holdFirstRepairWalk(s)
+
+	s.markOnMainChainDirty(true, noRepairFloor, "test", errors.NewStorageError("injected"))
+	waitForHeldWalk(t, started)
+
+	require.NoError(t, other.DeleteBlock(ctx, block3.Hash()))
+
+	release()
+	waitForRepair(t, s)
+
+	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "block2 is on the branch that lost its tip")
+	require.True(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, alt3.Hash().CloneBytes()))
+}
+
+// TestOnMainChainRepairWaitsOutAnUncommittedChainWrite_PostgreSQL: a chain write from
+// another process takes the shared row first and is still open when the walk reaches its
+// end. The write's later statements may read the rows from before the walk's commit, so
+// the walk cannot commit around it: it must give way and land only after the write ends.
+func TestOnMainChainRepairWaitsOutAnUncommittedChainWrite_PostgreSQL(t *testing.T) {
+	s, other := newPostgresStorePair(t)
+	ctx := context.Background()
+
+	storeBlocks(t, s, block1, block2, block3)
+
+	started, release := holdFirstRepairWalk(s)
+	// Before the mark, so the held walk's own attempt is recorded.
+	sqlStates := recordWalkSQLStates(s)
+
+	s.markOnMainChainDirty(true, noRepairFloor, "test", errors.NewStorageError("injected"))
+	waitForHeldWalk(t, started)
+
+	tx, err := other.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = tx.Rollback() })
+
+	require.NoError(t, other.lockChainWrites(ctx, tx))
+
+	release()
+
+	require.Never(t, func() bool {
+		return s.mainChainRebuilding.Load() == 0
+	}, time.Second, 10*time.Millisecond, "the repair must not land while a chain write holds the shared row")
+
+	require.NotEmpty(t, sqlStates())
+	require.Equal(t, usql.PgErrLockNotAvailable, sqlStates()[0], "NOWAIT gives way to the open write at once")
+
+	require.NoError(t, tx.Commit())
+	waitForRepair(t, s)
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+}
+
+// TestOnMainChainRepairIgnoresAnInvalidBlockFromAnotherStore_PostgreSQL: a block stored
+// as invalid is written off the main chain and skips the reconcile, so it moves nothing a
+// walk can see. It must not take the shared chain-write row, or a peer sending blocks with
+// valid proof of work and a bad body could keep rolling the repair walk back.
+func TestOnMainChainRepairIgnoresAnInvalidBlockFromAnotherStore_PostgreSQL(t *testing.T) {
+	s, other := newPostgresStorePair(t)
+	ctx := context.Background()
+
+	alt3 := createBlock3OnFork(blockAlternative2)
+	storeBlocks(t, s, block1, block2, block3, blockAlternative2)
+
+	started, release := holdFirstRepairWalk(s)
+	sqlStates := recordWalkSQLStates(s)
+
+	s.markOnMainChainDirty(true, noRepairFloor, "test", errors.NewStorageError("injected"))
+	waitForHeldWalk(t, started)
+
+	_, _, err := other.StoreBlock(ctx, alt3, "peer", options.WithInvalid(true))
+	require.NoError(t, err)
+
+	release()
+	waitForRepair(t, s)
+	require.Empty(t, sqlStates(), "an invalid block takes no chain-write lock, so the held walk commits first time")
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, alt3.Hash().CloneBytes()))
+}
+
+// TestOnMainChainRepairRerunsWhenAnotherStoreReorgs_PostgreSQL: a second instance stores
+// alt4, whose branch then has more work, so its StoreBlock reorganises the chain while the
+// first store's repair walk holds a snapshot with block3 as the best. The reorg clears
+// block2 and sets the other branch; the held walk sets block3, a row the reorg did not
+// touch, so without the shared row neither aborts and height 3 ends with two flags.
+func TestOnMainChainRepairRerunsWhenAnotherStoreReorgs_PostgreSQL(t *testing.T) {
+	s, other := newPostgresStorePair(t)
+	ctx := context.Background()
+
+	alt3 := createBlock3OnFork(blockAlternative2)
+	alt4 := createBlock3OnFork(alt3)
+	storeBlocks(t, s, block1, block2, block3, blockAlternative2, alt3)
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+
+	// A stale flag for the held walk to write back.
+	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`, block3.Hash().CloneBytes())
+	require.NoError(t, err)
+
+	started, release := holdFirstRepairWalk(s)
+
+	s.markOnMainChainDirty(true, noRepairFloor, "test", errors.NewStorageError("injected"))
+	waitForHeldWalk(t, started)
+
+	_, _, err = other.StoreBlock(ctx, alt4, "")
+	require.NoError(t, err)
+	require.True(t, getOnMainChain(t, s, alt4.Hash().CloneBytes()))
+
+	release()
+	waitForRepair(t, s)
+
+	var atHeight3 int
+	require.NoError(t, s.db.QueryRow(`SELECT count(*) FROM blocks WHERE height = 3 AND on_main_chain = true`).Scan(&atHeight3))
+	require.Equal(t, 1, atHeight3, "one block per height on the main chain")
+	require.False(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, alt3.Hash().CloneBytes()))
+}
+
+// TestOnMainChainRepairRerunsWhenAnotherStoreInvalidates_PostgreSQL: a second instance
+// invalidates block3 while the first store's repair walk holds a snapshot with block3 as
+// the best. The invalidation and its own rebuild move the chain to the other branch; the
+// held walk sets block2, which neither touched, so without the shared row height 2 ends
+// with two flags.
+func TestOnMainChainRepairRerunsWhenAnotherStoreInvalidates_PostgreSQL(t *testing.T) {
+	s, other := newPostgresStorePair(t)
+	ctx := context.Background()
+
+	alt3 := createBlock3OnFork(blockAlternative2)
+	storeBlocks(t, s, block1, block2, block3, blockAlternative2, alt3)
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+
+	// A stale flag for the held walk to write back.
+	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`, block2.Hash().CloneBytes())
+	require.NoError(t, err)
+
+	started, release := holdFirstRepairWalk(s)
+
+	s.markOnMainChainDirty(true, noRepairFloor, "test", errors.NewStorageError("injected"))
+	waitForHeldWalk(t, started)
+
+	_, err = other.InvalidateBlock(ctx, block3.Hash())
+	require.NoError(t, err)
+	require.True(t, getOnMainChain(t, s, alt3.Hash().CloneBytes()))
+
+	release()
+	waitForRepair(t, s)
+
+	var atHeight2 int
+	require.NoError(t, s.db.QueryRow(`SELECT count(*) FROM blocks WHERE height = 2 AND on_main_chain = true`).Scan(&atHeight2))
+	require.Equal(t, 1, atHeight2, "one block per height on the main chain")
+	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()))
 }

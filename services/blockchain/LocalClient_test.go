@@ -370,7 +370,7 @@ func TestLocalClient_NilStorePanics(t *testing.T) {
 		{
 			name: "SetBlockMinedSet",
 			fn: func() {
-				_ = client.SetBlockMinedSet(ctx, &blockHash)
+				_ = client.SetBlockMinedSet(ctx, &blockHash, 0)
 			},
 		},
 		{
@@ -443,13 +443,6 @@ func TestLocalClient_NilStorePanics(t *testing.T) {
 			name: "GetHashOfAncestorBlock",
 			fn: func() {
 				_, _ = client.GetHashOfAncestorBlock(ctx, &blockHash, 10)
-			},
-		},
-		{
-			name: "GetBlockHeadersFromTill",
-			fn: func() {
-				blockHashTill := chainhash.HashH([]byte("till"))
-				_, _, _ = client.GetBlockHeadersFromTill(ctx, &blockHash, &blockHashTill)
 			},
 		},
 		{

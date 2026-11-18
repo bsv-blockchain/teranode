@@ -59,6 +59,7 @@ var (
 	prometheusBlockAssemblerStateDuration               *prometheus.HistogramVec
 	prometheusBlockAssemblerGenerateBlocks              prometheus.Histogram
 	prometheusBlockAssemblerUtxoIndexReady              *prometheus.GaugeVec
+	prometheusBlockAssemblerUnminedUndecidedExcluded    prometheus.Counter
 	prometheusBlockAssemblerUtxoIndexWaitDuration       *prometheus.HistogramVec
 	prometheusBlockAssemblerGetUnminedTxIteratorTime    *prometheus.HistogramVec
 	prometheusBlockAssemblerIteratorProcessingTime      *prometheus.HistogramVec
@@ -79,6 +80,9 @@ var (
 
 	// prometheusBlockAssemblyQueueShed counts transactions shed because the ingest queue was full past the bounded wait
 	prometheusBlockAssemblyQueueShed prometheus.Counter
+
+	// prometheusBlockAssemblyHeldShed counts the subset of those sheds caused by the in-memory transaction limit rather than the ingest queue bound
+	prometheusBlockAssemblyHeldShed prometheus.Counter
 
 	// prometheusBlockAssemblyQueueWait measures how long an ingest handler waited for queue room before succeeding or shedding
 	prometheusBlockAssemblyQueueWait prometheus.Histogram
@@ -415,6 +419,15 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusBlockAssemblerUnminedUndecidedExcluded = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "unmined_undecided_excluded",
+			Help:      "Unmined transactions left out of a reload because their inputs could not be checked, permanently or in two loads in a row",
+		},
+	)
+
 	prometheusBlockAssemblerUtxoIndexReady = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "teranode",
@@ -553,6 +566,15 @@ func _initPrometheusMetrics() {
 			Name:      "add_directly_batch_seconds",
 			Help:      "Time taken to add all unmined transactions to subtree processor",
 			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockAssemblyHeldShed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "held_limit_shed_total",
+			Help:      "Total batches shed because block assembly held its configured maximum of transactions in memory. A subset of queue_shed_total. Sustained growth means no block is being produced or the limit is too tight.",
 		},
 	)
 

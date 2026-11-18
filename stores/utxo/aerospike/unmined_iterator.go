@@ -268,14 +268,13 @@ func (it *unminedTxIterator) partitionWorker(ctx context.Context, policy *as.Que
 			fields.BlockIDs.String(),
 			fields.UnminedSince.String(),
 			fields.IsCoinbase.String(),
-			// Block assembly keeps out a transaction the next block cannot mine. The
-			// input sequences are not read, so it checks every stored lock time.
+			// read in every mode: block assembly keeps each tx's parent links whatever
+			// blockassembly_storeTxInpointsForSubtreeMeta says
+			fields.External.String(),
+			fields.Inputs.String(),
+			// Block assembly holds back a transaction the next block cannot mine. The
+			// input sequences are not decoded, so it checks every stored lock time.
 			fields.LockTime.String(),
-		}
-
-		if it.store.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
-			stmt.BinNames = append(stmt.BinNames, fields.External.String())
-			stmt.BinNames = append(stmt.BinNames, fields.Inputs.String())
 		}
 	}
 
@@ -601,12 +600,10 @@ func (it *unminedTxIterator) processRecord(ctx context.Context, bins map[string]
 	// pointer into a combined allocation would retain the whole record.
 	txInpoints := &subtree.TxInpoints{}
 
-	// Process external transaction if needed; otherwise the inpoints stay empty
-	if it.store.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
-		*txInpoints, err = it.processTransactionInpoints(ctx, &txData, bins)
-		if err != nil {
-			return nil, errors.NewProcessingError("failed to process transaction inpoints for %s", txData.hash.String(), err)
-		}
+	// read the inpoints in every mode, from the external transaction when the record has one
+	*txInpoints, err = it.processTransactionInpoints(ctx, &txData, bins)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to process transaction inpoints for %s", txData.hash.String(), err)
 	}
 
 	// Extract createdAt timestamp

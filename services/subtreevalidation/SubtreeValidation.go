@@ -1112,68 +1112,56 @@ func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtr
 
 	dah := u.utxoStore.GetBlockHeight() + u.settings.GetSubtreeValidationBlockHeightRetention()
 
-	g, gCtx := errgroup.WithContext(ctx)
+	// The meta is written before the subtree, not beside it. The .subtree file is what
+	// every later check reads as "this subtree is done": the quorum lock's file check on
+	// the peer path, subtreeAlreadyHandled on the block path. Written in parallel, a meta
+	// write that failed after the subtree write succeeded left a stored subtree with no
+	// meta, and nothing on this service ever wrote it again. Written in order, a stored
+	// subtree from this path always has its meta, and a failed meta write leaves no
+	// subtree, so the next announcement or block validates it again. The cost is the
+	// meta write's latency, which no longer overlaps the subtree write.
+	u.logger.Debugf("[ValidateSubtreeInternal][%s] serialize subtree meta", subtreeHash.String())
 
-	g.Go(func() error {
-		//
-		// store subtree meta in store
-		//
-		u.logger.Debugf("[ValidateSubtreeInternal][%s] serialize subtree meta", subtreeHash.String())
+	completeSubtreeMetaBytes, err := subtreeMeta.Serialize()
+	if err != nil {
+		return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree meta", subtreeHash.String(), err)
+	}
 
-		completeSubtreeMetaBytes, err := subtreeMeta.Serialize()
-		if err != nil {
-			return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree meta", subtreeHash.String(), err)
+	u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree meta", subtreeHash.String())
+
+	if err = u.subtreeStore.Set(ctx,
+		merkleRoot[:],
+		fileformat.FileTypeSubtreeMeta,
+		completeSubtreeMetaBytes,
+		options.WithDeleteAt(dah),
+	); err != nil {
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree meta already exists in store", subtreeHash.String())
+		} else {
+			return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree meta", subtreeHash.String(), err)
 		}
+	}
 
-		u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree meta", subtreeHash.String())
+	u.logger.Debugf("[ValidateSubtreeInternal][%s] serialize subtree", subtreeHash.String())
 
-		if err = u.subtreeStore.Set(gCtx,
-			merkleRoot[:],
-			fileformat.FileTypeSubtreeMeta,
-			completeSubtreeMetaBytes,
-			options.WithDeleteAt(dah),
-		); err != nil {
-			if errors.Is(err, errors.ErrBlobAlreadyExists) {
-				u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree meta already exists in store", subtreeHash.String())
-			} else {
-				return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree meta", subtreeHash.String(), err)
-			}
+	completeSubtreeBytes, err := subtree.Serialize()
+	if err != nil {
+		return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree", subtreeHash.String(), err)
+	}
+
+	u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree", subtreeHash.String())
+
+	if err = u.subtreeStore.Set(ctx,
+		merkleRoot[:],
+		fileformat.FileTypeSubtree,
+		completeSubtreeBytes,
+		options.WithDeleteAt(dah),
+	); err != nil {
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree already exists in store", subtreeHash.String())
+		} else {
+			return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree", subtreeHash.String(), err)
 		}
-
-		return nil
-	})
-
-	g.Go(func() error {
-		//
-		// store subtree in store
-		//
-		u.logger.Debugf("[ValidateSubtreeInternal][%s] serialize subtree", subtreeHash.String())
-
-		completeSubtreeBytes, err := subtree.Serialize()
-		if err != nil {
-			return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree", subtreeHash.String(), err)
-		}
-
-		u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree", subtreeHash.String())
-
-		if err = u.subtreeStore.Set(gCtx,
-			merkleRoot[:],
-			fileformat.FileTypeSubtree,
-			completeSubtreeBytes,
-			options.WithDeleteAt(dah),
-		); err != nil {
-			if errors.Is(err, errors.ErrBlobAlreadyExists) {
-				u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree already exists in store", subtreeHash.String())
-			} else {
-				return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree", subtreeHash.String(), err)
-			}
-		}
-
-		return nil
-	})
-
-	if err := g.Wait(); err != nil {
-		return err
 	}
 
 	_ = u.SetSubtreeExists(subtreeHash)
@@ -1416,10 +1404,32 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 	processedValidatorOptions := validator.ProcessOptions(validationOptions...)
 
 	var (
-		errorsFound    = atomic.Uint64{}
-		firstError     error
-		firstErrorOnce sync.Once
+		errorsFound         = atomic.Uint64{}
+		missingParentErrors = atomic.Uint64{}
+		failures            txFailureTally
+		firstError          error
+		firstErrorOnce      sync.Once
 	)
+
+	// One summary line per call, however the call ends. A store-side cause
+	// (circuit breaker open, context canceled) is this node's problem and still
+	// needs to be seen, so it stays at ERROR; a subtree whose only failures are
+	// missing parents is the expected ordering case that the block path resolves,
+	// so that reads at Info. On the peer path the handler logs the returned error
+	// too, so a failed peer subtree logs two lines, not one per transaction.
+	logFailureSummary := func() {
+		failed := failures.count()
+		if failed == 0 {
+			return
+		}
+
+		if failed == missingParentErrors.Load() {
+			u.logger.Infof("[validateSubtree][%s] %d of %d missing txs failed, all missing a parent: %s", subtreeHash.String(), failed, len(missingTxs), failures.String())
+			return
+		}
+
+		u.logger.Errorf("[validateSubtree][%s] %d of %d missing txs failed: %s", subtreeHash.String(), failed, len(missingTxs), failures.String())
+	}
 
 	// txs of a peer subtree kept aside because they conflict with txs this node accepted
 	kept := &keptAsideSet{u: u, txMetaSlice: txMetaSlice, blockHeight: blockHeight, hashes: make(map[chainhash.Hash]struct{})}
@@ -1492,9 +1502,13 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 				}
 
 				if err != nil {
-					// Log the error, but do not return it, since we want to process all transactions in the subtree
+					// Log the error at Debug only, and do not return it, since we want to process all
+					// transactions in the subtree. The causes are tallied and reported once per subtree
+					// below: a subtree of already-mined transactions fails every input the same way, and
+					// one ERROR line per transaction was a third of a node's log volume (issue 2108).
 					u.logger.Debugf("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)
 					errorsFound.Add(1)
+					failures.add(*tx.TxIDChainHash(), err)
 
 					firstErrorOnce.Do(func() {
 						firstError = errors.NewProcessingError("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), tx.TxIDChainHash().String(), err)
@@ -1506,15 +1520,13 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 						// still fails (errorsFound was incremented above); the block path is the
 						// backstop — when the block arrives, Phase-3 sequential revalidation in
 						// CheckBlockSubtrees resolves cross-subtree parents in block order.
+						missingParentErrors.Add(1)
 						u.logger.Debugf("[validateSubtree][%s] transaction %s is missing parent", subtreeHash.String(), tx.TxIDChainHash().String())
 					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
 						// Report invalid subtree - contains truly invalid transaction
 						u.publishInvalidSubtree(gCtx, subtreeHash.String(), baseURL, peerID, "contains_invalid_transaction")
 
 						return err
-					} else {
-						// If the error is not a policy error, we log it as a processing error
-						u.logger.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)
 					}
 
 					return nil
@@ -1531,8 +1543,11 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 						u.logger.Debugf("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), txIdx, tx.TxIDChainHash().String())
 						errorsFound.Add(1)
 
+						dupErr := errors.NewProcessingError("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), txIdx, tx.TxIDChainHash().String())
+						failures.add(*tx.TxIDChainHash(), dupErr)
+
 						firstErrorOnce.Do(func() {
-							firstError = errors.NewProcessingError("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), txIdx, tx.TxIDChainHash().String())
+							firstError = dupErr
 						})
 
 						return nil
@@ -1564,13 +1579,20 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 		u.unlockAcceptedTransactions(ctx, subtreeHash, lockedHashes)
 
 		if waitErr != nil {
+			// A truly invalid transaction ends the subtree here. The failures tallied
+			// before it (a store fault on a sibling, say) had their own ERROR lines
+			// before the tally and still need to be seen.
+			logFailureSummary()
+
 			return waitErr
 		}
 	}
 
 	if errorsFound.Load() > 0 {
+		logFailureSummary()
+
 		// If there are errors found, we return here, so that the caller can handle it
-		return errors.NewProcessingError("[validateSubtree][%s] found %d errors while processing subtree", subtreeHash.String(), errorsFound.Load(), firstError)
+		return errors.NewProcessingError("[validateSubtree][%s] found %d errors while processing subtree: %s", subtreeHash.String(), errorsFound.Load(), failures.String(), firstError)
 	}
 
 	if missingCount.Load() > 0 {

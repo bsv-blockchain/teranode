@@ -192,7 +192,7 @@ func TestCheckSubtreeFromBlockLegacyUnconfirmedParents(t *testing.T) {
 		InitPrometheusMetrics()
 
 		// A side block is validated at its own height, here one below the tip+1
-		// (Genesis) block assembly mines at, so under older script rules (issue 4940).
+		// (Genesis) block assembly mines at, so under older script rules.
 		childSubtree := singleNodeSubtree(t, childHash)
 		server, recordingClient := newServerWithFSMState(t, blockchain.FSMStateRUNNING, subtreeFixture{childSubtree, childTx.ExtendedBytes()})
 		require.Equal(t, blockHeight, server.settings.ChainCfgParams.GenesisActivationHeight)

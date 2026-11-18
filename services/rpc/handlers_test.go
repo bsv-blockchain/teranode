@@ -14,9 +14,17 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
+	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
+	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/test/utils/transactions"
+	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -155,4 +163,66 @@ func TestHandleGetRawTransaction(t *testing.T) {
 	cmd.Txid = "nonexistenttxid"
 	_, err = handleGetRawTransaction(context.Background(), s, cmd, nil)
 	require.Error(t, err)
+}
+
+// TestHandleSendRawTransaction_RefusedWhileSyncing pins issue 2003 on RPC: in
+// CATCHINGBLOCKS sendrawtransaction answers -10, the code bitcoind uses during
+// initial block download, and neither the blob store nor the validator, the
+// only writer of the UTXO store, sees the transaction. RUNNING and a cached
+// IDLE both accept.
+func TestHandleSendRawTransaction_RefusedWhileSyncing(t *testing.T) {
+	for _, tt := range []struct {
+		state   blockchain.FSMStateType
+		refuses bool
+	}{
+		{blockchain.FSMStateCATCHINGBLOCKS, true},
+		{blockchain.FSMStateRUNNING, false},
+		{blockchain.FSMStateIDLE, false},
+	} {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			state := tt.state
+			blockchainClient := &blockchain.Mock{}
+			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+			validated := 0
+			txStore := blobmemory.New()
+
+			s := &RPCServer{
+				logger:   mocklogger.NewTestLogger(),
+				settings: &settings.Settings{ChainCfgParams: &chaincfg.MainNetParams, Policy: &settings.PolicySettings{}},
+				txStore:  txStore,
+				validatorClient: &validator.MockValidator{
+					ValidateFunc: func(context.Context, *bt.Tx) (*meta.Data, error) {
+						validated++
+						return &meta.Data{}, nil
+					},
+				},
+				unminedTxGate: blockchain.NewUnminedTxGate(mocklogger.NewTestLogger(), blockchainClient, blockchain.UnminedTxRouteRPCSendRawTx),
+			}
+
+			tx := transactions.CreateTestTransactionChainWithCount(t, 3)[1]
+			refusedBefore := s.unminedTxGate.RefusedTotal()
+
+			_, err := handleSendRawTransaction(context.Background(), s, &bsvjson.SendRawTransactionCmd{HexTx: hex.EncodeToString(tx.ExtendedBytes())}, nil)
+
+			stored, existsErr := txStore.Exists(context.Background(), tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
+			require.NoError(t, existsErr)
+
+			if tt.refuses {
+				var rpcErr *bsvjson.RPCError
+				require.ErrorAs(t, err, &rpcErr)
+				require.Equal(t, bsvjson.ErrRPCClientInInitialDownload, rpcErr.Code)
+				require.Equal(t, 0, validated, "a refused tx must not reach the validator or the UTXO store")
+				require.False(t, stored, "a refused tx must not reach the blob store")
+				require.InDelta(t, refusedBefore+1, s.unminedTxGate.RefusedTotal(), 0)
+
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, 1, validated)
+			require.True(t, stored)
+			require.InDelta(t, refusedBefore, s.unminedTxGate.RefusedTotal(), 0)
+		})
+	}
 }

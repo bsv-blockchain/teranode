@@ -114,8 +114,10 @@ func TestCheckBlockSubtrees_MultiBatch_BalancesArenas(t *testing.T) {
 
 	wireMultiBatchMocks(server)
 
-	mockValidator := server.validatorClient.(*validator.MockValidator)
-	mockValidator.UtxoStore = server.utxoStore
+	// The mock validator derives each tx's meta from the tx itself, parents
+	// included. Pointed at the mocked utxo store it would get an empty meta back,
+	// whose subtree meta cannot be serialized; the subtree is written only after
+	// its meta, so validation would fail.
 
 	const numSubtrees = 5
 	block := buildMultiBatchBlock(t, server, numSubtrees)
@@ -242,7 +244,7 @@ func TestCheckBlockSubtrees_OnlyRunningFeedsBlockAssembly(t *testing.T) {
 // TestCheckBlockSubtrees_BlockAssemblyFeedFollowsScriptEra pins the block assembly
 // feed in RUNNING. A block's txs are validated at the block's own height, while
 // assembly mines them at tip+1 without re-checking scripts. A side block below
-// Genesis would put pre-Genesis-valid txs into the template (issue 4940); a
+// Genesis would put pre-Genesis-valid txs into the template; a
 // same-era competitor whose parent is not the tip must still feed, or its txs are
 // stranded when it loses: ErrTxExists keeps them out of assembly on resubmission.
 // A block above tip+1 does not feed: a height locktime final there may not be

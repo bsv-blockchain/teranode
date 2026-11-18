@@ -22,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
@@ -477,17 +478,17 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx1, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}, nil, nil))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}, false, nil, nil))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}, nil, nil))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}, false, nil, nil))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}, nil, nil))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}, false, nil, nil))
 
 	t.Log("Waiting for transactions to be processed...")
 
@@ -616,15 +617,15 @@ func TestShouldHandleReorg(t *testing.T) {
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx1, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}, nil, nil))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}, false, nil, nil))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}, nil, nil))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}, false, nil, nil))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}, nil, nil))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}, false, nil, nil))
 
 	// Add Chain A block (lower difficulty)
 	t.Log("Adding Chain A block...")
@@ -842,7 +843,7 @@ func mineBlocks(t *testing.T, ctx context.Context, ba *BlockAssembly, n int) {
 	}
 }
 
-// TestTxRulesChange_RebuildsTheTemplate pins issue 4940's activation-height case: a
+// TestTxRulesChange_RebuildsTheTemplate pins the activation-height case: a
 // transaction validated for one height stays in the template while the tip moves the next
 // block under other rules (regtest enables P2SH at height 2), unless block assembly
 // rebuilds the template. The rebuild reloads from the UTXO store under the new rules and
@@ -911,7 +912,7 @@ func TestTxRulesChange_RebuildsTheTemplate(t *testing.T) {
 				inpoints, err := subtree.NewTxInpointsFromTx(tx)
 				require.NoError(t, err)
 
-				require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *tx.TxIDChainHash(), Fee: 111}}, []*subtree.TxInpoints{&inpoints}, []uint32{height}, nil))
+				require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *tx.TxIDChainHash(), Fee: 111}}, []*subtree.TxInpoints{&inpoints}, false, []uint32{height}, nil))
 
 				return tx.TxIDChainHash()
 			}
@@ -947,15 +948,20 @@ func TestTxRulesChange_RebuildsTheTemplate(t *testing.T) {
 			require.False(t, inCandidate(oldRules), "a transaction validated before the rules changed must leave the template")
 
 			child := chainhash.HashH([]byte("child-of-dropped-then-mined"))
-			require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: child, Fee: 111}},
-				[]*subtree.TxInpoints{{ParentTxHashes: []chainhash.Hash{minedElsewhere}}}, []uint32{100}, nil))
+			require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded(
+				[]subtree.Node{{Hash: child, Fee: 111}},
+				[]*subtree.TxInpoints{{ParentTxHashes: []chainhash.Hash{minedElsewhere}}},
+				false,
+				[]uint32{100},
+				nil,
+			))
 			require.Eventually(t, func() bool { return inCandidate(&child) }, 5*time.Second, 50*time.Millisecond,
 				"the rebuild forgets a drop its reload no longer finds")
 		})
 	}
 }
 
-// TestReorg_KeepsOutTxsNoLongerFinal pins issue 4940's finality case: a transaction final at
+// TestReorg_KeepsOutTxsNoLongerFinal pins the finality case: a transaction final at
 // the next block when it was added stays in the template after a reorg moves the next block to
 // a height where its nLockTime holds it back, unless block assembly rebuilds the template.
 // Here a heavier one-block branch replaces two blocks, so the next height drops by one, and a
@@ -1007,8 +1013,13 @@ func TestReorg_KeepsOutTxsNoLongerFinal(t *testing.T) {
 		inpoints, err := subtree.NewTxInpointsFromTx(tx)
 		require.NoError(t, err)
 
-		require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *tx.TxIDChainHash(), Fee: 111}},
-			[]*subtree.TxInpoints{&inpoints}, []uint32{next}, []uint32{util.BlockingLockTime(tx)}))
+		require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded(
+			[]subtree.Node{{Hash: *tx.TxIDChainHash(), Fee: 111}},
+			[]*subtree.TxInpoints{&inpoints},
+			false,
+			[]uint32{next},
+			[]uint32{util.BlockingLockTime(tx)},
+		))
 
 		return tx.TxIDChainHash()
 	}
@@ -1173,7 +1184,7 @@ func TestSettleTemplate_UnsettledTemplateIsRetriedOnTheSameTip(t *testing.T) {
 
 	inpoints, err := subtree.NewTxInpointsFromTx(tx)
 	require.NoError(t, err)
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *tx.TxIDChainHash(), Fee: 111}}, []*subtree.TxInpoints{&inpoints}, nil, nil))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *tx.TxIDChainHash(), Fee: 111}}, []*subtree.TxInpoints{&inpoints}, false, nil, nil))
 
 	candidateHolds := func() bool {
 		_, subtrees, err := ba.blockAssembler.GetMiningCandidate(context.Background())
@@ -1302,15 +1313,15 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx1, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}, nil, nil))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1}, false, nil, nil))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}, nil, nil))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2}, false, nil, nil))
 
 	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}, nil, nil))
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3}, false, nil, nil))
 
 	// Add Chain A blocks (lower difficulty)
 	t.Log("Adding Chain A blocks...")
@@ -1627,7 +1638,9 @@ func TestHandleReorgWithInvalidBlock_Integration(t *testing.T) {
 	// so call SetBlockMinedSet directly — otherwise BA's reset() blocks in
 	// waitForBlockMinedSet until its retry budget exhausts.
 	for i := range invalidatedHashes {
-		require.NoError(t, ba.blockchainClient.SetBlockMinedSet(ctx, &invalidatedHashes[i]),
+		_, invalidatedMeta, err := ba.blockchainClient.GetBlockHeader(ctx, &invalidatedHashes[i])
+		require.NoError(t, err)
+		require.NoError(t, ba.blockchainClient.SetBlockMinedSet(ctx, &invalidatedHashes[i], invalidatedMeta.MinedSetGeneration),
 			"failed to re-set mined_set on invalidated block %s", invalidatedHashes[i].String())
 	}
 

@@ -19,66 +19,66 @@ type txCandidate struct {
 // SetTxCandidate sets the block the template is mined in. Block assembly mines a transaction
 // without re-checking it, so one whose nLockTime holds it back there must not be in the
 // template. A transaction is final at the candidate it was validated for, and a forward block
-// only raises the height and the median time past, but a reorg can lower either (issue 4940:
-// a side block's transaction checked against one tip, a mempool transaction against the tip a
-// reorg replaced). Block assembly sets the candidate after every block move and, after a reorg,
-// rebuilds the template when NotFinalTemplateTxs finds one.
+// only raises the height and the median time past, but a reorg can lower either (a side
+// block's transaction checked against one tip, a mempool transaction against the tip a reorg
+// replaced). Block assembly sets the candidate after every block move, and rebuilds the
+// template when NotFinalTemplateTxs then finds one.
 //
 // Setting it offers the held transactions again, through the queue and in the order they were
 // held, so the ones now final go in and the rest are held again.
 func (stp *SubtreeProcessor) SetTxCandidate(tip *chainhash.Hash, height, medianTimePast uint32) {
 	stp.txCandidate.Store(&txCandidate{tip: *tip, height: height, medianTimePast: medianTimePast})
 
-	stp.offerHeldTxs()
+	stp.offerLockHeldTxs()
 }
 
-// heldTx is a transaction kept back until the candidate makes it final, with what it was
+// lockHeldTx is a transaction kept back until the candidate makes it final, with what it was
 // queued with.
-type heldTx struct {
+type lockHeldTx struct {
 	node     subtreepkg.Node
 	inpoints *subtreepkg.TxInpoints
 	height   uint32
 	lockTime uint32
 }
 
-// holdTxLocked keeps a transaction back to offer again when the candidate moves. The caller
+// holdForLockTimeLocked keeps a transaction back to offer again when the candidate moves. The caller
 // holds droppedMu.
-func (stp *SubtreeProcessor) holdTxLocked(node subtreepkg.Node, inpoints *subtreepkg.TxInpoints, height, lockTime uint32) {
-	if _, ok := stp.heldSet[node.Hash]; ok {
+func (stp *SubtreeProcessor) holdForLockTimeLocked(node subtreepkg.Node, inpoints *subtreepkg.TxInpoints, height, lockTime uint32) {
+	if _, ok := stp.lockHeldSet[node.Hash]; ok {
 		return
 	}
 
-	if stp.heldSet == nil {
-		stp.heldSet = make(map[chainhash.Hash]struct{})
+	if stp.lockHeldSet == nil {
+		stp.lockHeldSet = make(map[chainhash.Hash]struct{})
 	}
 
-	stp.heldSet[node.Hash] = struct{}{}
-	stp.heldTxs = append(stp.heldTxs, heldTx{node: node, inpoints: inpoints, height: height, lockTime: lockTime})
-	stp.heldCountAtomic.Store(int64(len(stp.heldTxs)))
+	stp.lockHeldSet[node.Hash] = struct{}{}
+	stp.lockHeldTxs = append(stp.lockHeldTxs, lockHeldTx{node: node, inpoints: inpoints, height: height, lockTime: lockTime})
+	stp.lockHeldCount.Store(int64(len(stp.lockHeldTxs)))
 }
 
-// clearHeldLocked forgets every held transaction. The caller holds droppedMu.
-func (stp *SubtreeProcessor) clearHeldLocked() {
-	stp.heldTxs = nil
-	stp.heldSet = nil
-	stp.heldCountAtomic.Store(0)
+// clearLockHeldLocked forgets every held transaction. The caller holds droppedMu.
+func (stp *SubtreeProcessor) clearLockHeldLocked() {
+	stp.lockHeldTxs = nil
+	stp.lockHeldSet = nil
+	stp.lockHeldCount.Store(0)
 }
 
-// heldCount returns how many transactions are held.
-func (stp *SubtreeProcessor) heldCount() int {
-	return int(stp.heldCountAtomic.Load())
+// lockHeldTxCount returns how many transactions are held for their lock time.
+func (stp *SubtreeProcessor) lockHeldTxCount() int {
+	return int(stp.lockHeldCount.Load())
 }
 
-// offerHeldTxs queues every held transaction again, in the order they were held, so parents
+// offerLockHeldTxs queues every held transaction again, in the order they were held, so parents
 // come before their children.
-func (stp *SubtreeProcessor) offerHeldTxs() {
-	if stp.heldCountAtomic.Load() == 0 {
+func (stp *SubtreeProcessor) offerLockHeldTxs() {
+	if stp.lockHeldCount.Load() == 0 {
 		return
 	}
 
 	stp.droppedMu.Lock()
-	held := stp.heldTxs
-	stp.clearHeldLocked()
+	held := stp.lockHeldTxs
+	stp.clearLockHeldLocked()
 	stp.droppedMu.Unlock()
 
 	if len(held) == 0 {

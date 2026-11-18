@@ -225,12 +225,20 @@ func (c *LocalClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeade
 	return c.store.GetBestBlockHeader(ctx)
 }
 
+func (c *LocalClient) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return c.store.GetBestBlockHeaderUncached(ctx)
+}
+
 func (c *LocalClient) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	return c.store.GetBlockHeader(ctx, blockHash)
 }
 
 func (c *LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return c.store.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
+}
+
+func (c *LocalClient) GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return c.store.GetBlockHeadersByParentLinks(ctx, blockHash, numberOfHeaders)
 }
 
 func (c *LocalClient) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
@@ -243,20 +251,6 @@ func (c *LocalClient) GetBlockHeadersFromCommonAncestor(ctx context.Context, cha
 	return getBlockHeadersFromCommonAncestor(ctx, c.store, chainTipHash, blockLocatorHashes, maxHeaders)
 }
 
-// GetLatestBlockHeaderFromBlockLocator retrieves the latest block header from a block locator.
-func (c *LocalClient) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	return c.store.GetLatestBlockHeaderFromBlockLocator(ctx, bestBlockHash, blockLocator)
-}
-
-// GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
-func (c *LocalClient) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return c.store.GetBlockHeadersFromOldest(ctx, chainTipHash, targetHash, numberOfHeaders)
-}
-
-func (c *LocalClient) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return c.store.GetBlockHeadersFromTill(ctx, blockHashFrom, blockHashTill)
-}
-
 func (c *LocalClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	return c.store.CheckBlockIsInCurrentChain(ctx, blockIDs)
 }
@@ -267,6 +261,14 @@ func (c *LocalClient) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs 
 
 func (c *LocalClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return c.store.GetBlockHeadersFromHeight(ctx, height, limit)
+}
+
+func (c *LocalClient) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
+	return blocksBetterThanPage(ctx, c.store, after, from, minHeight, limit)
+}
+
+func (c *LocalClient) ClearBestTipLowWater(ctx context.Context, expected []byte) error {
+	return c.store.ClearBestTipLowWater(ctx, expected)
 }
 
 func (c *LocalClient) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
@@ -388,8 +390,8 @@ func (c *LocalClient) GetBlockIsMined(ctx context.Context, blockHash *chainhash.
 	return c.store.GetBlockIsMined(ctx, blockHash)
 }
 
-func (c *LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	return c.store.SetBlockMinedSet(ctx, blockHash)
+func (c *LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, minedSetGeneration uint64) error {
+	return c.store.SetBlockMinedSet(ctx, blockHash, &minedSetGeneration)
 }
 
 func (c *LocalClient) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {

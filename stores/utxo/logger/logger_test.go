@@ -67,6 +67,8 @@ func (m *MockStore) GetBlockState() utxo.BlockState {
 	}
 }
 
+func (m *MockStore) Stamper() pruner.Stamper { return pruner.NoStamp }
+
 func (m *MockStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	args := m.Called(ctx, checkLiveness)
 	return args.Int(0), args.String(1), args.Error(2)
@@ -82,6 +84,31 @@ func (m *MockStore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpoint
 // TestSupportsOutpointOnlySpend_Delegates verifies the logger decorator forwards the
 // wrapped store's fast-path capability in both directions (so a SQL store wrapped by the
 // logger still reports true, and the gates that query through the decorator engage).
+// TestConflictingTxHashes_Delegates pins that the logger decorator returns the
+// wrapped store's answer unchanged, including indexed=false.
+func TestConflictingTxHashes_Delegates(t *testing.T) {
+	ctx := context.Background()
+	want := []chainhash.Hash{{1}, {2}}
+
+	inner := &MockStore{}
+	inner.On("ConflictingTxHashes", ctx).Return(want, true, nil).Once()
+	inner.On("ConflictingTxHashes", ctx).Return(nil, false, nil).Once()
+
+	s := New(ctx, ulogger.TestLogger{}, inner)
+
+	hashes, indexed, err := s.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Equal(t, want, hashes)
+
+	hashes, indexed, err = s.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.False(t, indexed)
+	require.Nil(t, hashes)
+
+	inner.AssertExpectations(t)
+}
+
 func TestSupportsOutpointOnlySpend_Delegates(t *testing.T) {
 	for _, want := range []bool{true, false} {
 		inner := &MockStore{SupportsOutpointOnlySpendResult: want}
@@ -163,6 +190,14 @@ func (m *MockStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(utxo.UnminedTxIterator), args.Error(1)
+}
+
+func (m *MockStore) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Bool(1), args.Error(2)
+	}
+	return args.Get(0).([]chainhash.Hash), args.Bool(1), args.Error(2)
 }
 
 func (m *MockStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
@@ -1111,6 +1146,11 @@ func TestInterfaceCompliance(t *testing.T) {
 	require.NotNil(t, loggerStore)
 }
 
+// SpendsMadeBy returns nothing: no test here drives the conflict-undo path.
+func (m *MockStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
+}
+
 // newLoggedSQLiteStore wraps a sqlitememory UTXO store in the logger store.
 func newLoggedSQLiteStore(t *testing.T) (utxo.Store, utxo.Store) {
 	t.Helper()
@@ -1125,6 +1165,15 @@ func newLoggedSQLiteStore(t *testing.T) (utxo.Store, utxo.Store) {
 	require.NoError(t, err)
 
 	return New(ctx, ulogger.TestLogger{}, base), base
+}
+
+// The logger store forwards Stamper to the inner store. A sql store has nothing to stamp, so
+// what comes back is pruner.NoStamp, and the wrapper does not invent a stamp of its own.
+func TestStamper_Forwards(t *testing.T) {
+	s, base := newLoggedSQLiteStore(t)
+
+	require.Equal(t, base.Stamper(), s.Stamper())
+	require.Equal(t, pruner.NoStamp, s.Stamper())
 }
 
 // The logger store forwards a list to the inner store's SpendAndCreateMulti,

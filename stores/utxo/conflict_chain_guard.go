@@ -79,6 +79,101 @@ func (g CurrentChainGuard) protectForward(ctx context.Context, s Store, winners 
 	return p
 }
 
+// confirmedLosers returns the members of losers, winners excluded, that are mined in a block on
+// the current chain. It returns nil when the guard has no check.
+//
+// A forward operation demotes what loses to a block on the current chain, and a transaction
+// confirmed on that chain cannot lose to it. The ancestry guard already refuses a loser mined on
+// the block's own ancestry, so a loser this finds is mined in a later current-chain block, or the
+// block itself has left the current chain. Neither is a demotion to make: in #2071 the "losers"
+// were the winner's own mined descendants, and the pruner deleted them once they were demoted.
+//
+// As in filterAncestryConfirmedLosers, a store error aborts and a missing record is no evidence.
+// One chain query settles the common case, where no loser is confirmed; only a positive answer
+// pays for a query per distinct block ID, to name them.
+func (g CurrentChainGuard) confirmedLosers(ctx context.Context, s Store, losers []chainhash.Hash, winners map[chainhash.Hash]struct{}) ([]chainhash.Hash, error) {
+	if g.check == nil {
+		return nil, nil
+	}
+
+	unresolved := make([]*UnresolvedMetaData, 0, len(losers))
+	for _, h := range losers {
+		if _, isWinner := winners[h]; !isWinner {
+			unresolved = append(unresolved, &UnresolvedMetaData{Hash: h, Idx: len(unresolved)})
+		}
+	}
+
+	if len(unresolved) == 0 {
+		return nil, nil
+	}
+
+	if err := s.BatchDecorate(ctx, unresolved, fields.BlockIDs); err != nil {
+		return nil, errors.NewProcessingError("[confirmedLosers] failed to read losing tx block ids", err)
+	}
+
+	mined := make([]*UnresolvedMetaData, 0, len(unresolved))
+	seen := make(map[uint32]struct{}, len(unresolved))
+	union := make([]uint32, 0, len(unresolved))
+
+	for _, u := range unresolved {
+		if u.Err != nil && !errors.Is(u.Err, errors.ErrTxNotFound) {
+			return nil, errors.NewProcessingError("[confirmedLosers][%s] failed to read losing tx block ids", u.Hash.String(), u.Err)
+		}
+
+		if u.Err != nil || u.Data == nil || len(u.Data.BlockIDs) == 0 {
+			continue
+		}
+
+		mined = append(mined, u)
+
+		for _, id := range u.Data.BlockIDs {
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				union = append(union, id)
+			}
+		}
+	}
+
+	if len(union) == 0 {
+		return nil, nil
+	}
+
+	anyConfirmed, err := g.check(ctx, union)
+	if err != nil {
+		return nil, errors.NewProcessingError("[confirmedLosers] failed to check the current chain for losing txs", err)
+	}
+
+	if !anyConfirmed {
+		return nil, nil
+	}
+
+	// Attribute the answer per block, not per loser: a cascade often has many losers mined in the
+	// same block, and each block needs asking only once.
+	onChain := make(map[uint32]bool, len(union))
+
+	for _, id := range union {
+		answer, err := g.check(ctx, []uint32{id})
+		if err != nil {
+			return nil, errors.NewProcessingError("[confirmedLosers] failed to check the current chain for block %d", id, err)
+		}
+
+		onChain[id] = answer
+	}
+
+	var confirmed []chainhash.Hash
+
+	for _, u := range mined {
+		for _, id := range u.Data.BlockIDs {
+			if onChain[id] {
+				confirmed = append(confirmed, u.Hash)
+				break
+			}
+		}
+	}
+
+	return confirmed, nil
+}
+
 type chainProtectedConflictStore struct {
 	Store
 	guard      CurrentChainGuard

@@ -72,7 +72,7 @@ func (f txEraFixture) requireOnlyAdmitted(t *testing.T, stp *SubtreeProcessor) {
 	}
 }
 
-// TestTxEra_DequeueDropsOtherRulesAndDescendants pins issue 4940's queue path: a tx tagged
+// TestTxEra_DequeueDropsOtherRulesAndDescendants pins the queue path: a tx tagged
 // with a height under other consensus rules than the next block's is dropped at dequeue,
 // and so is every queued descendant of it, even when the descendant is in a later batch.
 func TestTxEra_DequeueDropsOtherRulesAndDescendants(t *testing.T) {
@@ -84,15 +84,17 @@ func TestTxEra_DequeueDropsOtherRulesAndDescendants(t *testing.T) {
 
 	f := newTxEraFixture()
 
-	require.True(t, stp.AddBatchIfRoom(
+	require.Equal(t, Admitted, stp.AddBatchBounded(
 		[]subtreepkg.Node{{Hash: f.parent, Fee: 1, SizeInBytes: 1}, {Hash: f.inEra, Fee: 1, SizeInBytes: 1}, {Hash: f.untagged, Fee: 1, SizeInBytes: 1}},
 		[]*subtreepkg.TxInpoints{{}, {}, {}},
+		false,
 		[]uint32{99, 150, 0},
 		nil,
 	))
-	require.True(t, stp.AddBatchIfRoom(
+	require.Equal(t, Admitted, stp.AddBatchBounded(
 		[]subtreepkg.Node{{Hash: f.child, Fee: 1, SizeInBytes: 1}, {Hash: f.grandchild, Fee: 1, SizeInBytes: 1}},
 		[]*subtreepkg.TxInpoints{inpointsWithParent(f.parent), inpointsWithParent(f.child)},
+		false,
 		[]uint32{150, 150},
 		nil,
 	))
@@ -184,15 +186,17 @@ func TestTxEra_BlockMovementDrainDropsOtherRulesAndDescendants(t *testing.T) {
 
 	f := newTxEraFixture()
 
-	require.True(t, stp.AddBatchIfRoom(
+	require.Equal(t, Admitted, stp.AddBatchBounded(
 		[]subtreepkg.Node{{Hash: f.parent, Fee: 1, SizeInBytes: 1}, {Hash: f.inEra, Fee: 1, SizeInBytes: 1}, {Hash: f.untagged, Fee: 1, SizeInBytes: 1}},
 		[]*subtreepkg.TxInpoints{{}, {}, {}},
+		false,
 		[]uint32{99, 150, 0},
 		nil,
 	))
-	require.True(t, stp.AddBatchIfRoom(
+	require.Equal(t, Admitted, stp.AddBatchBounded(
 		[]subtreepkg.Node{{Hash: f.child, Fee: 1, SizeInBytes: 1}, {Hash: f.grandchild, Fee: 1, SizeInBytes: 1}},
 		[]*subtreepkg.TxInpoints{inpointsWithParent(f.parent), inpointsWithParent(f.child)},
+		false,
 		[]uint32{150, 150},
 		nil,
 	))

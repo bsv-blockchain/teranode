@@ -103,7 +103,7 @@ func newWALTestChain(t *testing.T) (blockchain.ClientI, *walTestChain) {
 	return client, chain
 }
 
-func newResetWALTestProcessor(t *testing.T, start bool) (*SubtreeProcessor, *countPendingScans, *blob_memory.Memory, *walTestChain) {
+func newResetWALTestProcessor(t *testing.T, start bool, opts ...Options) (*SubtreeProcessor, *countPendingScans, *blob_memory.Memory, *walTestChain) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -127,7 +127,7 @@ func newResetWALTestProcessor(t *testing.T, start bool) (*SubtreeProcessor, *cou
 		}
 	}()
 
-	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), subtreeStore, blockchainClient, store, newSubtreeChan)
+	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), subtreeStore, blockchainClient, store, newSubtreeChan, opts...)
 	require.NoError(t, err)
 
 	if start {
@@ -288,9 +288,13 @@ func storeTestSubtree(t *testing.T, subtreeStore *blob_memory.Memory, conflictin
 	require.NoError(t, subtreeStore.Set(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	// A move back reads the subtree meta too.
+	// Node 0 is the coinbase placeholder, which has no parents; every tx after it
+	// takes its parents from its inputs, as the meta reader requires (issue 1638).
 	meta := subtreepkg.NewSubtreeMeta(st)
-	for i := range st.Nodes {
-		require.NoError(t, meta.SetTxInpoints(i, subtreepkg.NewTxInpoints()))
+	require.NoError(t, meta.SetTxInpoints(0, subtreepkg.NewTxInpoints()))
+
+	for _, tx := range txs {
+		require.NoError(t, meta.SetTxInpointsFromTx(tx))
 	}
 
 	metaBytes, err := meta.Serialize()
@@ -525,9 +529,9 @@ func TestReorgBlocks_PartialRemineAfterAcceptedHeal(t *testing.T) {
 	require.False(t, conflicting(loser2))
 }
 
-// A reset does not reverse the blocks it moves back, but it retires their forward checklists, as
-// reorgBlocks does. Otherwise a checklist left by a failed acknowledgement would make the next startup
-// roll back an operation that has stayed live since. The applied state stays as it is.
+// A reset reverses the conflict resolution of the blocks it moves back and retires their forward
+// checklists, as reorgBlocks does. Otherwise a checklist left by a failed acknowledgement would make
+// the next startup roll back an operation the reverse has already undone.
 func TestReset_RetiresMovedBackForwardChecklist(t *testing.T) {
 	ctx := t.Context()
 	stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false)
@@ -564,9 +568,13 @@ func TestReset_RetiresMovedBackForwardChecklist(t *testing.T) {
 	require.NoError(t, err)
 	owner, err := store.GetSpend(ctx, spends[0])
 	require.NoError(t, err)
-	require.Equal(t, winner.TxIDChainHash(), owner.SpendingData.TxID, "a reset leaves the applied state as it is")
+	require.Equal(t, loser.TxIDChainHash(), owner.SpendingData.TxID, "the reset's reverse gives the input back to the loser")
 
 	m, err := store.Get(ctx, loser.TxIDChainHash(), fields.Conflicting)
 	require.NoError(t, err)
-	require.True(t, m.Conflicting)
+	require.False(t, m.Conflicting)
+
+	m, err = store.Get(ctx, winner.TxIDChainHash(), fields.Conflicting)
+	require.NoError(t, err)
+	require.True(t, m.Conflicting, "the reverse demotes the moved-back winner")
 }

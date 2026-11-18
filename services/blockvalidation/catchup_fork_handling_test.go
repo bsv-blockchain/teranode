@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	"github.com/bsv-blockchain/teranode/services/p2p"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
@@ -813,7 +814,7 @@ func TestCatchup_NoMinedSetChurnOnRejectedFork(t *testing.T) {
 				added := append([]*mock.Call(nil), mockBlockchainClient.ExpectedCalls[n:]...)
 				mockBlockchainClient.ExpectedCalls = append(added, mockBlockchainClient.ExpectedCalls[:n]...)
 
-				err := server.catchup(context.Background(), targetBlock, "peer-4940", "http://peer")
+				err := server.catchup(context.Background(), targetBlock, "peer-stored-fork", "http://peer")
 
 				if onMainChain {
 					require.NoError(t, err)
@@ -981,13 +982,22 @@ func (c *registryTipP2PClient) GetPeer(_ context.Context, _ string) (*p2p.PeerIn
 	return &p2p.PeerInfo{BlockHash: c.tip}, nil
 }
 
+// nettingMockStore is the catch-up test's mock UTXO store as a store that nets below the
+// checkpoint and takes outpoint-only spends, the two properties model.NettedRouteAt reads.
+type nettingMockStore struct {
+	*utxo.MockUtxostore
+}
+
+func (nettingMockStore) NetsBelowCheckpoint() bool       { return true }
+func (nettingMockStore) SupportsOutpointOnlySpend() bool { return true }
+
 // TestCatchup_CompetingEqualWorkChains tests handling of chains with equal proof of work
 func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 	t.Run("FollowFirstSeenWithEqualWork", func(t *testing.T) {
 		// This test verifies that the catchup layer can process competing chains
-		// with equal work. The actual "first-seen" tiebreaker (peer_id ASC) is
+		// with equal work. The actual first-stored tiebreaker (chain_work DESC, id ASC) is
 		// implemented in the blockchain store layer - see the test:
-		// TestSqlGetChainTip/equal_chainwork_prefers_lower_peer_id_(first-seen_rule)
+		// TestSqlGetChainTip/equal_chainwork_keeps_the_block_stored_first
 		// in stores/blockchain/sql/GetBestBlockHeader_test.go
 		//
 		// This test tracks which chain's HTTP endpoint was called first during catchup.

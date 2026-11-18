@@ -108,25 +108,37 @@ The `optimisticMining` setting provides a validation strategy that prioritizes b
 **Optimistic Mining Mode (opt-in):**
 
 ```text
-1. Add block to blockchain immediately (before full validation)
-2. Mark block as existing in cache
-3. Validate in background goroutine:
+1. Check header context and, for a body with no subtrees, the coinbase-only binding
+   (on failure → reject)
+2. Check the integrity floor: body bound to header through its first and last subtrees,
+   then the coinbase rules (on failure → validate fully first, as in normal mode)
+3. Add block to blockchain (before full validation)
+4. Mark block as existing in cache
+5. Validate in background goroutine:
    a. Fetch block headers for validation context
-   b. Validate subtrees and transactions
+   b. Run the full block validation (`block.Valid`)
    c. Update stores (subtree DAH, tx metadata)
    d. Mark transactions as mined
-4. If validation fails → Queue for revalidation
+6. If validation proves the block invalid (or, once the node is running, a transaction spends a
+   parent that is in no block) → invalidate it; on a transient failure → queue for revalidation
 ```
 
 **Technical Implementation:**
 
-The optimistic path is implemented in `ValidateBlock()` (services/blockvalidation/BlockValidation.go:1187-1220):
+The optimistic path is implemented in `ValidateBlockWithOptions()` (services/blockvalidation/BlockValidation.go):
 
-1. **Immediate Block Addition**: Calls `blockchainClient.AddBlock()` before subtree validation completes
-2. **Block Exists Cache**: Sets block as existing to prevent reprocessing
-3. **Background Validation**: Spawns goroutine with `optimisticMiningWg.Add(1)`
-4. **Decoupled Context**: Uses `tracing.DecoupleTracingSpan()` to prevent context cancellation from blocking background work
-5. **Rollback on Failure**: Calls `ReValidateBlock()` if background validation fails
+1. **Checks Before the Add**: Subtree validation has already run synchronously. The header-context
+   checks, the coinbase-only binding for a body with no subtrees, and `model.Block.CheckIntegrityFloor`
+   (merkle binding through the first and last subtrees, then the coinbase rules) run next. A block
+   that fails the floor is not added early and is validated fully first
+2. **Block Addition**: Calls `blockchainClient.AddBlock()` before the full `block.Valid()` runs
+3. **Block Exists Cache**: Sets block as existing to prevent reprocessing
+4. **Background Validation**: Spawns goroutine with `optimisticMiningWg.Add(1)`
+5. **Decoupled Context**: Uses `tracing.DecoupleTracingSpan()` to prevent context cancellation from blocking background work
+6. **Rollback on Failure**: an invalid verdict invalidates the block (`markBlockAsInvalid`, or
+   `InvalidateBlock` directly for a corrupt body, or when `checkOldBlockIDs` finds a transaction
+   whose parent is mined only outside the block's own history); a transient failure re-queues it
+   for revalidation and leaves it on the chain
 
 **Configuration:**
 
@@ -139,15 +151,16 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
 - **Runtime Override**: Can be disabled per-block via `ValidateBlockOptions.DisableOptimisticMining`
 - **Revalidation**: Revalidation of an already-stored block is always non-optimistic regardless of
   the settings above
-- **Opt-in corrupt-body tradeoff**: with both flags set, a corrupt body on the optimistic-background
-  path is already added before background validation runs, so it takes the *invalidate route*
-  (invalidated/poisoned rather than re-downloaded) until the `block.Valid` integrity-floor split
-  lands and removes that path
-- **Known exposure under the opt-in**: a received body that carries subtrees is still added before
-  it is bound to its header, and when it is invalidated its coinbase is persisted with the invalid
-  record (bitcoin-sv/teranode#4844). A body carrying no subtrees is bound by the coinbase-only rule
-  and rejected before the add. Keep `blockvalidation_optimistic_mining_peer_blocks` off until the
-  `block.Valid` split lands
+- **Checks before the add**: the header-context checks and, for a body with no subtrees, the
+  coinbase-only binding run first and are verdicts: a block that fails them is rejected, not added.
+  Then `model.Block.CheckIntegrityFloor` binds a body with subtrees to its header through its first
+  and last subtrees and runs the coinbase rules on it: shape, the common transaction rules, coinbase
+  length, finality and BIP34. A block that fails the floor is not added early; it is validated fully
+  first, exactly as with the peer-blocks flag off
+- **Opt-in corrupt-body tradeoff**: the floor does not check duplicate transactions, the lengths of
+  the subtrees between the first and last, fees, or transaction order and spends. A body that breaks
+  one of those is found only after the add, so a corrupt one takes the *invalidate route*
+  (invalidated/poisoned rather than re-downloaded)
 
 **Performance Benefits:**
 
@@ -616,8 +629,10 @@ The Block Validation service detects re-presented (already-mined) transactions d
 To decide whether a transaction's parents already exist on the current chain (the `validOrderAndBlessed` side of the detection), Teranode uses an exact set of block-header IDs rather than a probabilistic filter:
 
 - **Current-chain ID set**: validation builds a map of the current chain's block-header IDs (`currentBlockHeaderIDsMap`). The IDs come from `GetBlockHeaderIDs` on the optimistic-mining path and from `GetBlockHeaders` metadata on the normal and revalidation paths; in every case the set is a bounded window of recent headers (100 by default), not the whole chain. Membership is exact, so a hit is a sound positive.
-- **Old-parent resolution**: parents that resolve to blocks outside the prefetched set are collected per transaction (`oldBlockIDsMap`) and confirmed by the Block Validation service in `checkOldBlockIDs`, which prefetches a window of up to 10,000 recent current-chain block-header IDs via `GetBlockHeaderIDs`. Because that window is truncated, any block ID not found in it falls back to the authoritative `CheckBlockIsInCurrentChain` RPC — the bounded window is the reason the fallback exists.
-- **Forked-set route**: when `blockchain_use_in_memory_chain_check` is enabled, Block Validation holds no local prefetched ID set and defers every distinct parent-block-ID set to `CheckBlockIsInCurrentChain`. The store answers from two in-memory structures and normally issues no SQL at all. An ID above `maxBlockID` is rejected outright: it has been assigned but not yet committed. An ID at or below `maxBlockID` that is absent from the off-chain (forked) set is accepted as on-chain. The toggle picks how the verdict is reached, not what it is, on every ID that belongs to a committed block AND is classified in the forked set at the time of the call. Those two qualifiers are the whole of the difference, and there are two inputs where they do not hold. A gap ID, an ID at or below `maxBlockID` with no committed `blocks` row, is rejected by SQL and accepted by the forked-set route. And a block that has just moved on or off the main chain is inside the ID range before the forked set has caught up, which the `mainChainRebuilding` guard is there to cover. See below for how much each one costs.
+- **Old-parent resolution**: parents that resolve to blocks outside the prefetched set are collected per transaction (`oldBlockIDsMap`) and confirmed by the Block Validation service in `checkOldBlockIDs`, which prefetches a window of up to 10,000 recent current-chain block-header IDs via `GetBlockHeaderIDs`. Because that window is truncated, any block ID not found in it falls back to the authoritative `CheckBlockIsAncestorOfBlock` RPC, anchored at the block's parent, so a parent counts only if it is mined in the block's own history. The bounded window is the reason the fallback exists.
+- **Forked-set route**: when `blockchain_use_in_memory_chain_check` is enabled, Block Validation holds no local prefetched ID set and sends every distinct parent-block-ID set to the same `CheckBlockIsAncestorOfBlock` RPC, anchored at the block's parent. Each distinct set then costs one RPC and one indexed query, or a recursive walk of parent links when the parent is on a fork or a main-chain rebuild holds the store's guard. On this route the toggle only removes the prefetch; the verdict is the same as on the default route.
+
+    The toggle also changes how the store answers `CheckBlockIsInCurrentChain` for its other callers, such as block assembly and the asset service, and the rest of this section describes that. The store answers from two in-memory structures and normally issues no SQL at all. An ID above `maxBlockID` is rejected outright: it has been assigned but not yet committed. An ID at or below `maxBlockID` that is absent from the off-chain (forked) set is accepted as on-chain. The toggle picks how the verdict is reached, not what it is, on every ID that belongs to a committed block AND is classified in the forked set at the time of the call. Those two qualifiers are the whole of the difference, and there are two inputs where they do not hold. A gap ID, an ID at or below `maxBlockID` with no committed `blocks` row, is rejected by SQL and accepted by the forked-set route. And a block that has just moved on or off the main chain is inside the ID range before the forked set has caught up, which the `mainChainRebuilding` guard is there to cover. See below for how much each one costs.
 
     Two cases still fall through to SQL. An ID that *is* in the forked set is confirmed against the authoritative `on_main_chain` query, with the recursive `parent_id` CTE behind it, before anything is rejected — the forked set is rebuilt from the `on_main_chain` flags, so a transiently-false flag would otherwise turn into a permanent block invalidation. And while the store's main-chain state is rebuilding, or before `maxBlockID` has been initialised, the whole route defers to SQL because neither structure is trustworthy yet.
 
@@ -640,7 +655,7 @@ The `validOrderAndBlessed` function performs several critical validations during
 
 2. **Parent Chain-Membership Validation**:
 
-    - Checks whether a transaction's parents have already been mined in the current chain via exact block-ID set membership, falling back to the authoritative `CheckBlockIsInCurrentChain` RPC on a set miss
+    - Checks whether a transaction's parents have already been mined in the current chain via exact block-ID set membership, falling back to the authoritative `CheckBlockIsAncestorOfBlock` RPC, anchored at the block's parent, on a set miss
     - Rejects blocks containing transactions whose parents are neither earlier in the block nor on the current chain
     - Note: transactions that have *themselves* already been mined are rejected separately, in `model.UpdateTxMinedStatus` during the set-mined phase (see above)
 
@@ -662,12 +677,9 @@ The Block Validation service implements a sophisticated fork manager to track an
 
 ##### Fork States and Lifecycle
 
-The fork manager tracks forks through four distinct states:
+Every fork starts in the **Active** state. The cleanup routine marks an Active fork **Stale** when it has had no activity for `MaxAge` (default: 1 hour) and no worker is processing one of its blocks, and removes it in the same pass, subject to the retention policy below.
 
-- **Active**: Fork is currently being processed and built upon
-- **Stale**: Fork has had no activity for an extended period (default: 1 hour)
-- **Resolved**: Fork has been resolved to the main chain or abandoned
-- **Orphaned**: Fork is too far behind the main chain (beyond coinbase maturity)
+The `ForkState` type also defines **Resolved** and **Orphaned**, and the cleanup routine still handles them, but no code path sets either state.
 
 ##### Fork Registration and Tracking
 
@@ -698,30 +710,13 @@ defer guard.Release()
 // Process block
 ```
 
-##### Fork Resolution
-
-Forks are resolved when:
-
-1. **Main Chain Updated**: A fork block becomes the new main chain tip
-2. **Checkpoint Verification**: Fork passes through a known checkpoint
-3. **Manual Resolution**: Operator triggers reconsideration
-
-When a fork is resolved, the fork manager:
-
-- Marks fork state as `Resolved`
-- Notifies registered callbacks with resolution details
-- Records resolution metrics (depth, lifetime, outcome)
-- Schedules cleanup after grace period (5 minutes)
-
 ##### Fork Cleanup
 
-The fork manager runs an automatic cleanup routine (configurable interval, default: 5 minutes) that:
+The fork manager runs a cleanup routine every `CheckInterval` (default: 5 minutes) that:
 
-- Removes resolved forks after grace period
-- Abandons stale forks with no activity
-- Orphans forks too far behind main chain
-- Applies retention policy to limit memory usage
-- Updates aggregate metrics (average depth, longest fork, etc.)
+- Marks Active forks with no activity for `MaxAge` and no active worker as Stale, and selects them for removal
+- Applies a retention policy: when more than `MaxInactiveForks` (default: 100) forks are tracked, a pass removes only enough of the selected forks, least recently active first, to bring the count down to that number
+- Records each removed fork's lifetime and depth, then updates the aggregate metrics (average depth, longest fork, and the rest)
 
 ##### Integration with Block Priority Queue
 

@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"encoding/binary"
 	"math"
 	"net"
 	"net/url"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	sqlstore "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -229,4 +231,66 @@ func TestClientGetBlockHeaderIDs_AboveHeaderCap(t *testing.T) {
 		})
 		require.Equal(t, codes.InvalidArgument, status.Code(err), "full headers remain capped")
 	}
+}
+
+func TestBlocksBetterThan_ClampsConfiguredPageSize(t *testing.T) {
+	fixture := setup(t)
+	genesis, genesisMeta, err := fixture.server.store.GetBestBlockHeader(t.Context())
+	require.NoError(t, err)
+	for height := uint32(1); height <= 3; height++ {
+		block := createTestBlockAtHeight(fixture, t, height, 1000000+height*600)
+		_, _, err = fixture.server.store.StoreBlock(t.Context(), block, "")
+		require.NoError(t, err)
+	}
+	fixture.server.settings.BlockChain.MaxBlockHeadersPerRequest = 1
+	after := model.NewBestTipKey(genesis, genesisMeta)
+	for height := uint32(1); height <= 3; height++ {
+		page, err := fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: after.Bytes(), Limit: 1000})
+		require.NoError(t, err)
+		require.Len(t, page.BlockHeaders, 1)
+		require.Len(t, page.Metas, 1)
+		header, err := model.NewBlockHeaderFromBytes(page.BlockHeaders[0])
+		require.NoError(t, err)
+		meta, err := model.NewBlockHeaderMetaFromBytes(page.Metas[0])
+		require.NoError(t, err)
+		require.Equal(t, height, meta.Height, "worst first")
+		require.Equal(t, height < 3, page.More, "a capped page says whether blocks follow it")
+		after = model.NewBestTipKey(header, meta)
+	}
+	end, err := fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: after.Bytes(), Limit: 1000})
+	require.NoError(t, err)
+	require.Empty(t, end.BlockHeaders)
+	require.False(t, end.More)
+	_, err = fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: after.Bytes()})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	_, err = fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: []byte{9}, Limit: 1})
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "a malformed key is rejected")
+}
+
+// A block assembly still on the order by peer id sends version 1 keys. The blockchain service
+// refuses them, in either field, so that block assembly follows the best header instead of
+// reading replies in an order it does not share.
+func TestBlocksBetterThan_RefusesLegacyKey(t *testing.T) {
+	fixture := setup(t)
+	genesis, genesisMeta, err := fixture.server.store.GetBestBlockHeader(t.Context())
+	require.NoError(t, err)
+
+	current := model.NewBestTipKey(genesis, genesisMeta)
+
+	legacy := []byte{1}
+	legacy = binary.LittleEndian.AppendUint32(legacy, uint32(len(current.ChainWork)))
+	legacy = append(legacy, current.ChainWork...)
+	legacy = binary.LittleEndian.AppendUint32(legacy, 4)
+	legacy = append(legacy, "peer"...)
+	legacy = binary.LittleEndian.AppendUint32(legacy, current.ID)
+	legacy = append(legacy, current.Hash[:]...)
+
+	_, err = fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: current.Bytes(), Limit: 1})
+	require.NoError(t, err)
+
+	_, err = fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: legacy, Limit: 1})
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "a version 1 after key is refused")
+
+	_, err = fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: current.Bytes(), From: legacy, Limit: 1})
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "a version 1 from key is refused")
 }

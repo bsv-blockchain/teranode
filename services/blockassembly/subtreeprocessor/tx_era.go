@@ -15,8 +15,8 @@ type txEra struct {
 
 // SetTxEra sets the rules the template is built under to those at nextHeight, the height
 // of the next block. Block assembly mines a transaction without re-checking it, so one
-// validated at a height under other rules (issue 4940: a side block below Genesis or
-// Chronicle, or a transaction in flight while the tip crosses an activation height) must
+// validated at a height under other rules (a side block below Genesis or Chronicle, or a
+// transaction in flight while the tip crosses an activation height) must
 // not reach the template. A network the script engine does not know clears the era, which
 // admits everything.
 func (stp *SubtreeProcessor) SetTxEra(nextHeight uint32) {
@@ -60,7 +60,7 @@ func (stp *SubtreeProcessor) admitTxLocked(node subtreepkg.Node, inpoints *subtr
 		return false
 	}
 
-	if inpoints != nil && (len(stp.droppedTxs) != 0 || len(stp.heldSet) != 0) {
+	if inpoints != nil && (len(stp.droppedTxs) != 0 || len(stp.lockHeldSet) != 0) {
 		for _, parent := range inpoints.ParentTxHashes {
 			if _, dropped := stp.droppedTxs[parent]; dropped {
 				stp.recordDroppedLocked(hash)
@@ -69,8 +69,8 @@ func (stp *SubtreeProcessor) admitTxLocked(node subtreepkg.Node, inpoints *subtr
 		}
 
 		for _, parent := range inpoints.ParentTxHashes {
-			if _, held := stp.heldSet[parent]; held {
-				stp.holdTxLocked(node, inpoints, height, lockTime)
+			if _, held := stp.lockHeldSet[parent]; held {
+				stp.holdForLockTimeLocked(node, inpoints, height, lockTime)
 				return false
 			}
 		}
@@ -78,7 +78,7 @@ func (stp *SubtreeProcessor) admitTxLocked(node subtreepkg.Node, inpoints *subtr
 
 	if lockTime != 0 {
 		if c := stp.freshTxCandidate(); c != nil && !stp.finalAtCandidate(lockTime, c) {
-			stp.holdTxLocked(node, inpoints, height, lockTime)
+			stp.holdForLockTimeLocked(node, inpoints, height, lockTime)
 			return false
 		}
 	}
@@ -122,7 +122,7 @@ func (stp *SubtreeProcessor) filterTxEra(batches []*TxBatch) {
 			b.lockTimes = nil
 		}
 
-		if b.validatedHeights == nil && b.lockTimes == nil && len(stp.droppedTxs) == 0 && len(stp.heldSet) == 0 {
+		if b.validatedHeights == nil && b.lockTimes == nil && len(stp.droppedTxs) == 0 && len(stp.lockHeldSet) == 0 {
 			continue
 		}
 
@@ -176,7 +176,7 @@ func (stp *SubtreeProcessor) filterTxEra(batches []*TxBatch) {
 // transaction whose sequences are all final but whose nLockTime is not yet reached is kept
 // out too.
 func (stp *SubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransaction, validatedHeights []uint32) []*utxostore.UnminedTransaction {
-	if stp.txEra.Load() == nil && stp.droppedCount.Load() == 0 && stp.heldCountAtomic.Load() == 0 && stp.txCandidate.Load() == nil {
+	if stp.txEra.Load() == nil && stp.droppedCount.Load() == 0 && stp.lockHeldCount.Load() == 0 && stp.txCandidate.Load() == nil {
 		return txs
 	}
 
@@ -222,12 +222,12 @@ func (stp *SubtreeProcessor) RestartDroppedTxs() (finish func(reloaded bool)) {
 	stp.droppedMu.Lock()
 	prev := stp.droppedTxs
 	prevLocked := stp.lockedTxs
-	prevHeld := stp.heldTxs
+	prevHeld := stp.lockHeldTxs
 	stp.droppedTxs = nil
 	stp.droppedCount.Store(0)
 	stp.lockedTxs = nil
 	stp.lockedCount.Store(0)
-	stp.clearHeldLocked()
+	stp.clearLockHeldLocked()
 	stp.droppedMu.Unlock()
 
 	return func(reloaded bool) {
@@ -243,7 +243,7 @@ func (stp *SubtreeProcessor) RestartDroppedTxs() (finish func(reloaded bool)) {
 		}
 
 		for _, h := range prevHeld {
-			stp.holdTxLocked(h.node, h.inpoints, h.height, h.lockTime)
+			stp.holdForLockTimeLocked(h.node, h.inpoints, h.height, h.lockTime)
 		}
 
 		// Not through recordDroppedLocked: these drops were counted when they happened.
@@ -268,7 +268,7 @@ func (stp *SubtreeProcessor) RestartDroppedTxs() (finish func(reloaded bool)) {
 // The tracked lock times of the transactions it mines are forgotten too, since they left the
 // template, and so are the held ones it mines, which must not be offered again.
 func (stp *SubtreeProcessor) forgetMinedDroppedTxs(mined *SortedHashSet) {
-	if mined == nil || (stp.droppedCount.Load() == 0 && stp.lockedCount.Load() == 0 && stp.heldCountAtomic.Load() == 0) {
+	if mined == nil || (stp.droppedCount.Load() == 0 && stp.lockedCount.Load() == 0 && stp.lockHeldCount.Load() == 0) {
 		return
 	}
 
@@ -289,21 +289,21 @@ func (stp *SubtreeProcessor) forgetMinedDroppedTxs(mined *SortedHashSet) {
 		}
 	}
 
-	if len(stp.heldTxs) != 0 {
-		kept := stp.heldTxs[:0]
+	if len(stp.lockHeldTxs) != 0 {
+		kept := stp.lockHeldTxs[:0]
 
-		for _, h := range stp.heldTxs {
+		for _, h := range stp.lockHeldTxs {
 			if mined.Exists(h.node.Hash) {
-				delete(stp.heldSet, h.node.Hash)
+				delete(stp.lockHeldSet, h.node.Hash)
 				continue
 			}
 
 			kept = append(kept, h)
 		}
 
-		clear(stp.heldTxs[len(kept):])
-		stp.heldTxs = kept
-		stp.heldCountAtomic.Store(int64(len(kept)))
+		clear(stp.lockHeldTxs[len(kept):])
+		stp.lockHeldTxs = kept
+		stp.lockHeldCount.Store(int64(len(kept)))
 	}
 }
 

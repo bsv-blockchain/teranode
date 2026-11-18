@@ -74,15 +74,17 @@ func TestTxFinality_DequeueHoldsNotFinalAndDescendants(t *testing.T) {
 	child := chainhash.HashH([]byte("finality-child"))
 	last := chainhash.HashH([]byte("finality-last"))
 
-	require.True(t, stp.AddBatchIfRoom(
+	require.Equal(t, Admitted, stp.AddBatchBounded(
 		[]subtreepkg.Node{{Hash: heightLocked, Fee: 1, SizeInBytes: 1}, {Hash: timeLocked, Fee: 1, SizeInBytes: 1}, {Hash: final, Fee: 1, SizeInBytes: 1}, {Hash: ahead, Fee: 1, SizeInBytes: 1}},
 		[]*subtreepkg.TxInpoints{{}, {}, {}, {}},
+		false,
 		[]uint32{finalityTestHeight, finalityTestHeight, finalityTestHeight, finalityTestHeight + 1},
 		[]uint32{finalityTestHeight, finalityTestMTP, finalityTestHeight - 1, finalityTestHeight},
 	))
-	require.True(t, stp.AddBatchIfRoom(
+	require.Equal(t, Admitted, stp.AddBatchBounded(
 		[]subtreepkg.Node{{Hash: child, Fee: 1, SizeInBytes: 1}, {Hash: last, Fee: 1, SizeInBytes: 1}},
 		[]*subtreepkg.TxInpoints{inpointsWithParent(heightLocked), {}},
+		false,
 		[]uint32{finalityTestHeight, finalityTestHeight},
 		[]uint32{0, 0},
 	))
@@ -118,14 +120,14 @@ func TestTxFinality_HeldTxMinedElsewhereIsNotOfferedAgain(t *testing.T) {
 		{Node: &subtreepkg.Node{Hash: locked}, TxInpoints: &subtreepkg.TxInpoints{}, LockTime: finalityTestHeight},
 		{Node: &subtreepkg.Node{Hash: child}, TxInpoints: inpointsWithParent(locked)},
 	}, []uint32{0, 0}))
-	require.Equal(t, 2, stp.heldCount())
+	require.Equal(t, 2, stp.lockHeldTxCount())
 
 	mined := NewSortedHashSet(1)
 	require.NoError(t, mined.Put(locked))
 	require.NoError(t, mined.Freeze(1))
 	stp.forgetMinedDroppedTxs(mined)
 
-	require.Equal(t, 1, stp.heldCount(), "the mined transaction is forgotten, its child stays held")
+	require.Equal(t, 1, stp.lockHeldTxCount(), "the mined transaction is forgotten, its child stays held")
 }
 
 // TestTxFinality_StaleCandidateAdmits pins that the check is skipped while the candidate
@@ -162,7 +164,7 @@ func TestTxFinality_ReloadHoldsNotFinal(t *testing.T) {
 
 	require.Len(t, kept, 1)
 	require.Equal(t, final, kept[0].Hash)
-	require.Equal(t, 2, stp.heldCount())
+	require.Equal(t, 2, stp.lockHeldTxCount())
 
 	// Tagged above the candidate: after a reorg to a shorter chain, not a validator ahead.
 	afterShorterReorg := chainhash.HashH([]byte("finality-reload-after-shorter-reorg"))
@@ -203,9 +205,10 @@ func TestTxFinality_NotFinalTemplateTxs(t *testing.T) {
 	timeLocked := chainhash.HashH([]byte("finality-template-time-locked"))
 	mined := chainhash.HashH([]byte("finality-template-mined"))
 
-	require.True(t, stp.AddBatchIfRoom(
+	require.Equal(t, Admitted, stp.AddBatchBounded(
 		[]subtreepkg.Node{{Hash: timeLocked, Fee: 1, SizeInBytes: 1}, {Hash: mined, Fee: 1, SizeInBytes: 1}},
 		[]*subtreepkg.TxInpoints{{}, {}},
+		false,
 		[]uint32{finalityTestHeight, finalityTestHeight},
 		[]uint32{finalityTestMTP - 100, finalityTestMTP - 50},
 	))
