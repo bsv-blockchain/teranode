@@ -83,3 +83,56 @@ func TestIsPruneRetryableSeesASQLiteWriterUpgradeConflict(t *testing.T) {
 
 	require.True(t, isPruneRetryable(&pruneStepError{step: "failed to mark pruned children", err: err}, "sqlite"))
 }
+
+// TestTakeSQLiteWriteLockMakesTheTransactionAWriter: the statement that opens a pruning
+// transaction on SQLite writes nothing, and still takes the write lock when it starts. Another
+// connection then cannot write until the transaction ends, so the first real write of the prune
+// cannot fail with SQLITE_BUSY_SNAPSHOT because someone committed after its reads. A deferred
+// transaction that only read (the control) lets the other connection write.
+func TestTakeSQLiteWriteLockMakesTheTransactionAWriter(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "lock.db")+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(50)")
+	require.NoError(t, err)
+
+	defer db.Close()
+
+	_, err = db.Exec("CREATE TABLE deleted_children (parent_id INTEGER, child_hash BLOB)")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	reader, err := db.Conn(ctx)
+	require.NoError(t, err)
+
+	defer reader.Close()
+
+	_, err = reader.ExecContext(ctx, "BEGIN")
+	require.NoError(t, err)
+
+	var n int
+
+	require.NoError(t, reader.QueryRowContext(ctx, "SELECT count(*) FROM deleted_children").Scan(&n))
+
+	_, err = db.Exec("INSERT INTO deleted_children VALUES (1, x'01')")
+	require.NoError(t, err, "control: a transaction that only read does not stop another connection from writing")
+
+	_, err = reader.ExecContext(ctx, "ROLLBACK")
+	require.NoError(t, err)
+
+	writer, err := db.Conn(ctx)
+	require.NoError(t, err)
+
+	defer writer.Close()
+
+	_, err = writer.ExecContext(ctx, "BEGIN")
+	require.NoError(t, err)
+
+	_, err = writer.ExecContext(ctx, takeSQLiteWriteLock)
+	require.NoError(t, err)
+
+	_, err = db.Exec("INSERT INTO deleted_children VALUES (2, x'02')")
+	require.Error(t, err, "another connection cannot write while the pruning transaction holds the write lock")
+	require.Contains(t, err.Error(), "database is locked")
+
+	_, err = writer.ExecContext(ctx, "ROLLBACK")
+	require.NoError(t, err)
+}

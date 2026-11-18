@@ -692,6 +692,8 @@ func newFaultService(t *testing.T) (*Service, sqlmock.Sqlmock, *atomic.Int32) {
 // DELETE, which the caller answers.
 func expectPruneStatements(mock sqlmock.Sqlmock) {
 	mock.ExpectBegin()
+	// The first statement of a pruning transaction on SQLite makes it a writer.
+	mock.ExpectExec("DELETE FROM deleted_children WHERE 1 = 0").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DROP TABLE IF EXISTS utxo_prune_candidates").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE TEMP TABLE utxo_prune_candidates").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO utxo_prune_candidates").WillReturnResult(sqlmock.NewResult(0, 2))

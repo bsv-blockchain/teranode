@@ -83,6 +83,12 @@ func TestPrunerRetriesDeadlockOnMarkerInsert_Postgres(t *testing.T) {
 	// Step 1: hold the pruner's own marker row uncommitted.
 	holder, err := store.db.BeginTx(ctx, nil)
 	require.NoError(t, err)
+
+	// The holder checks for a deadlock only after 30 s, the pruner after the default 1 s, so the
+	// pruner is the victim however long the holder takes to start waiting.
+	_, err = holder.ExecContext(ctx, "SET LOCAL deadlock_timeout = '30s'")
+	require.NoError(t, err)
+
 	released := false
 	t.Cleanup(func() {
 		if !released {

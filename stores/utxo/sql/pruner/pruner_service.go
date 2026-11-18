@@ -483,6 +483,10 @@ func (s *Service) deleteTombstonedTx(ctx context.Context, blockHeight uint32) (d
 	// by resubmitting an already mined transaction. A locked row is skipped here
 	// instead, and no outside write can abort the transaction.
 	//
+	// SQLite has one writer. The transaction opens with a statement that writes
+	// nothing and takes the write lock (takeSQLiteWriteLock), so no other writer
+	// can commit between its reads and its first real write.
+	//
 	// The hold-back verdict is a later statement, so it reads the parents'
 	// outputs after the locks are held. It still reads rows this transaction does
 	// not lock (a parent output can be released between the verdict and the
@@ -560,6 +564,14 @@ WHERE ` + DefensiveDeleteFilter
 
 	return q
 }
+
+// takeSQLiteWriteLock: SQLite starts a deferred transaction as a reader and fails the first write
+// after another writer committed with SQLITE_BUSY_SNAPSHOT, which busy_timeout
+// cannot wait out. A statement that writes takes the write lock when it starts,
+// whether or not it changes a row, so this one makes the transaction a writer
+// before it reads anything. Postgres needs no such statement: the candidate
+// locks do the work.
+const takeSQLiteWriteLock = `DELETE FROM deleted_children WHERE 1 = 0`
 
 // pruneCandidates runs the pruning transaction: select and lock the candidates,
 // decide which of them are held back, write a marker for each parent output that
@@ -651,6 +663,12 @@ WHERE EXISTS (SELECT 1
 	}
 
 	defer func() { _ = txn.Rollback() }()
+
+	if s.engine != "postgres" {
+		if _, err := txn.ExecContext(ctx, takeSQLiteWriteLock); err != nil {
+			return 0, 0, &pruneStepError{step: "failed to take the write lock", err: err}
+		}
+	}
 
 	// Postgres drops the table at COMMIT. SQLite has no such clause and keeps a
 	// committed temp table on the connection, so this clears any leftover. Neither
