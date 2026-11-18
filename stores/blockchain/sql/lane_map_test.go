@@ -8,6 +8,7 @@ import (
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
@@ -46,10 +47,16 @@ func TestLaneMapRowsInsertAndRead(t *testing.T) {
 		require.Equal(t, uint64(5_002), got[1].FirstHole)
 		require.Equal(t, rows[0].HoleData, got[1].HoleData)
 
-		// A retry with the same rows, in another order, writes nothing and succeeds.
+		// A retry with the same rows writes nothing and succeeds, in the order given (lane 200 before
+		// lane 7, not the stored order) and in the stored order.
+		require.Equal(t, uint8(200), rows[0].Lane, "the retry is out of the stored order")
+		require.NoError(t, s.InsertLaneMapRows(ctx, 1_000, rows))
 		require.NoError(t, s.InsertLaneMapRows(ctx, 1_000, []lane.MapRow{rows[1], rows[0]}))
 
-		// A retry that differs fails and changes nothing.
+		// A retry that differs fails and changes nothing: other holes in as many rows, a row
+		// fewer, or one row alone.
+		require.Error(t, s.InsertLaneMapRows(ctx, 1_000, append(holedRows(t, 200, 5_000, 5_002, 7_000), lane7...)), "same row count, different holes")
+		require.Error(t, s.InsertLaneMapRows(ctx, 1_000, append(append([]lane.MapRow(nil), lane7...), holedRows(t, 200, 5_000, 5_002, 7_000)...)), "same row count, different holes, out of order")
 		require.Error(t, s.InsertLaneMapRows(ctx, 1_000, holedRows(t, 200, 5_000, 5_002, 7_000)))
 		require.Error(t, s.InsertLaneMapRows(ctx, 1_000, lane7), "a missing row is a difference")
 
@@ -178,12 +185,100 @@ func TestLaneConversionSegmentLifecycle(t *testing.T) {
 	})
 }
 
+// The prefix ends at 4 and the suffix runs to 10, so a block reaching 5 stays inside the segment and
+// only the prefix-end check refuses it.
 func TestLaneConversionBlocksMustNotPassThePrefix(t *testing.T) {
 	runLaneHandoutTests(t, "prefix end", func(t *testing.T, s *SQL) {
 		ctx := t.Context()
-		require.NoError(t, s.InsertLaneConversionSegment(ctx, testSegment(1, 2, 4, 4)))
+		require.NoError(t, s.InsertLaneConversionSegment(ctx, testSegment(1, 2, 4, 10)))
 		require.Error(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{{Seq: 0, BlockID: 1, Height: 1, First: 2, Count: 4}}))
 		require.Error(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{{Seq: 0, BlockID: 1, Height: 1, First: 3, Count: 1}}), "must start at the segment's first")
+
+		// Across calls too: the second block may not run past the prefix end either.
+		require.NoError(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{{Seq: 0, BlockID: 1, Height: 1, First: 2, Count: 2}}))
+		require.Error(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{{Seq: 1, BlockID: 2, Height: 2, First: 4, Count: 2}}))
+		require.NoError(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{{Seq: 1, BlockID: 2, Height: 2, First: 4, Count: 1}}))
+		require.NoError(t, s.CompleteLaneConversionSegment(ctx, 1, chainhash.Hash{1}))
+	})
+}
+
+// A block added in a later call must continue the last stored block: the next position, a higher
+// height and another block. The stored list is read only from its last block, so each of these is
+// checked against that block.
+func TestLaneConversionBlocksContinueAcrossCalls(t *testing.T) {
+	runLaneHandoutTests(t, "continue", func(t *testing.T, s *SQL) {
+		ctx := t.Context()
+		require.NoError(t, s.InsertLaneConversionSegment(ctx, testSegment(1, 2, 20, 20)))
+
+		b0 := lane.ConversionBlock{Seq: 0, BlockID: 100, Height: 100, First: 2, Count: 3}
+		b1 := lane.ConversionBlock{Seq: 1, BlockID: 101, Height: 101, First: 5, Count: 0}
+		require.NoError(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{b0, b1}))
+
+		for name, b := range map[string]lane.ConversionBlock{
+			"height not rising": {Seq: 2, BlockID: 102, Height: 101, First: 5, Count: 1},
+			"same block again":  {Seq: 2, BlockID: 101, Height: 102, First: 5, Count: 1},
+			"position gap":      {Seq: 2, BlockID: 102, Height: 102, First: 6, Count: 1},
+			"position overlap":  {Seq: 2, BlockID: 102, Height: 102, First: 4, Count: 1},
+			"sequence gap":      {Seq: 3, BlockID: 102, Height: 102, First: 5, Count: 1},
+		} {
+			require.Error(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{b}), name)
+		}
+
+		// Repeating an earlier block, out of order with new ones, compares it and continues.
+		b2 := lane.ConversionBlock{Seq: 2, BlockID: 102, Height: 102, First: 5, Count: 2}
+		require.NoError(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{b0, b2}))
+
+		changed := b0
+		changed.BlockID = 99
+		require.Error(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{changed, b1}), "a repeated block that differs, with a matching one")
+
+		blocks, err := s.GetLaneConversionBlocks(ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, []lane.ConversionBlock{b0, b1, b2}, blocks)
+
+		// A block ID listed in two calls, not adjacent, is caught when the segment completes.
+		require.NoError(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{{Seq: 3, BlockID: 100, Height: 103, First: 7, Count: 14}}))
+		require.Error(t, s.CompleteLaneConversionSegment(ctx, 1, chainhash.Hash{1}))
+	})
+}
+
+// A new segment appends: an ID below a recorded one, or positions not above every recorded
+// segment's, is refused even when nothing overlaps. Recording a segment again is a no-op, and an
+// invalid segment is refused before anything is stored.
+func TestLaneConversionSegmentsAppend(t *testing.T) {
+	runLaneHandoutTests(t, "append", func(t *testing.T, s *SQL) {
+		ctx := t.Context()
+
+		require.NoError(t, s.InsertLaneConversionSegment(ctx, testSegment(5, 100, 110, 120)))
+		require.NoError(t, s.InsertLaneConversionSegment(ctx, testSegment(5, 100, 110, 120)), "the same segment again")
+
+		require.Error(t, s.InsertLaneConversionSegment(ctx, testSegment(4, 200, 210, 220)), "a lower ID above the positions")
+		require.Error(t, s.InsertLaneConversionSegment(ctx, testSegment(6, 10, 20, 30)), "a higher ID below the positions")
+		require.Error(t, s.InsertLaneConversionSegment(ctx, testSegment(6, 120, 125, 130)), "starting at the last position")
+
+		require.Error(t, s.InsertLaneConversionSegment(ctx, testSegment(0, 200, 210, 220)), "segment ID 0")
+		require.Error(t, s.InsertLaneConversionSegment(ctx, testSegment(7, 300, 310, 305)), "prefix past the last position")
+
+		require.NoError(t, s.InsertLaneConversionSegment(ctx, testSegment(6, 121, 125, 130)))
+
+		segs, err := s.GetLaneConversionSegments(ctx)
+		require.NoError(t, err)
+		require.Equal(t, []lane.ConversionSegment{testSegment(5, 100, 110, 120), testSegment(6, 121, 125, 130)}, segs)
+	})
+}
+
+// Every lane_map index the reader needs exists on both engines, by its own name.
+func TestLaneMapLaneLastIndexExists(t *testing.T) {
+	runLaneHandoutTests(t, "index", func(t *testing.T, s *SQL) {
+		var n int
+
+		if s.engine == util.Postgres {
+			require.NoError(t, s.db.QueryRow(`SELECT count(*) FROM pg_indexes WHERE tablename = 'lane_map' AND indexname = 'lane_map_lane_last' AND indexdef LIKE '%(lane, last)%'`).Scan(&n))
+		} else {
+			require.NoError(t, s.db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'index' AND tbl_name = 'lane_map' AND name = 'lane_map_lane_last'`).Scan(&n))
+		}
+
+		require.Equal(t, 1, n)
 	})
 }
 
@@ -247,10 +342,14 @@ func TestLaneMapRowsWaitForTheBlockLock(t *testing.T) {
 	_, err = holder.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, laneMapLockClass, int32(77))
 	require.NoError(t, err)
 
+	// The holder writes its own row for block 77 under the lock.
+	_, err = holder.ExecContext(ctx, `INSERT INTO lane_map (block_id, lane, first, last, first_hole, tag, hole_data) VALUES (77, 1, 1, 10, 0, 0, NULL)`)
+	require.NoError(t, err)
+
 	done := make(chan error, 1)
 
 	go func() {
-		done <- s.InsertLaneMapRows(ctx, 77, []lane.MapRow{{Lane: 1, First: 1, Last: 10, Tag: lane.RowTagRange}})
+		done <- s.InsertLaneMapRows(ctx, 77, []lane.MapRow{{Lane: 2, First: 1, Last: 10, Tag: lane.RowTagRange}})
 	}()
 
 	select {
@@ -262,6 +361,83 @@ func TestLaneMapRowsWaitForTheBlockLock(t *testing.T) {
 	// Another block's rows are not held back.
 	require.NoError(t, s.InsertLaneMapRows(ctx, 78, []lane.MapRow{{Lane: 1, First: 1, Last: 10, Tag: lane.RowTagRange}}))
 
-	require.NoError(t, holder.Rollback())
-	require.NoError(t, <-done)
+	// Once the holder commits, the waiting writer reads what it wrote and refuses its own,
+	// different row instead of adding it beside the holder's.
+	require.NoError(t, holder.Commit())
+	require.Error(t, <-done)
+
+	got, err := s.GetLaneMapRows(ctx, 77)
+	require.NoError(t, err)
+	require.Equal(t, []lane.MapRow{{Lane: 1, First: 1, Last: 10, Tag: lane.RowTagRange}}, got)
+}
+
+// The segment tables are written under one lock, taken before the writer reads them: on Postgres
+// the segment advisory lock, on SQLite laneWriteMu. Held here while the holder records segment 1,
+// the lock keeps a second writer from reading too early and recording segment 2 over the same
+// positions; once the holder is done the writer sees segment 1 and refuses.
+func TestLaneConversionSegmentWaitsForTheSegmentLock(t *testing.T) {
+	runLaneHandoutTests(t, "segment lock", func(t *testing.T, s *SQL) {
+		ctx := t.Context()
+
+		const insertSegment1 = `INSERT INTO lane_conversion_segment (segment, first, prefix_last, last, source_tip_block_id, source_tip_hash, manifest_digest, created_at)
+			VALUES (1, 100, 110, 120, 900000, $1, $2, CURRENT_TIMESTAMP)`
+
+		seg1 := testSegment(1, 100, 110, 120)
+
+		var (
+			release func() error
+			insert  func() error
+		)
+
+		if s.engine == util.Postgres {
+			holder, err := s.db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+
+			defer func() { _ = holder.Rollback() }()
+
+			_, err = holder.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, laneSegmentLockClass, int32(0))
+			require.NoError(t, err)
+
+			insert = func() error {
+				_, err := holder.ExecContext(ctx, insertSegment1, seg1.SourceTipHash[:], seg1.ManifestDigest[:])
+				return err
+			}
+			release = holder.Commit
+		} else {
+			laneWriteMu.Lock()
+
+			insert = func() error {
+				_, err := s.db.ExecContext(ctx, insertSegment1, seg1.SourceTipHash[:], seg1.ManifestDigest[:])
+				return err
+			}
+			release = func() error {
+				laneWriteMu.Unlock()
+				return nil
+			}
+		}
+
+		done := make(chan error, 1)
+
+		go func() {
+			done <- s.InsertLaneConversionSegment(ctx, testSegment(2, 115, 118, 125))
+		}()
+
+		select {
+		case err := <-done:
+			if s.engine != util.Postgres {
+				laneWriteMu.Unlock()
+			}
+
+			require.Failf(t, "the segment insert did not wait for the segment lock", "returned %v", err)
+		case <-time.After(500 * time.Millisecond):
+		}
+
+		require.NoError(t, insert())
+		require.NoError(t, release())
+		require.Error(t, <-done, "segment 2 overlaps segment 1, which the holder recorded")
+
+		segs, err := s.GetLaneConversionSegments(ctx)
+		require.NoError(t, err)
+		require.Equal(t, []lane.ConversionSegment{seg1}, segs)
+	})
 }

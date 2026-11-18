@@ -492,7 +492,8 @@ type Store interface {
 	// GetLaneMapRowsEndingAbove returns every map row of a lane whose range ends above a position.
 	GetLaneMapRowsEndingAbove(ctx context.Context, laneNum uint8, above uint64) ([]lane.BlockMapRow, error)
 
-	// InsertLaneConversionSegment records a historical conversion segment, insert-only.
+	// InsertLaneConversionSegment records a historical conversion segment, insert-only. A new
+	// segment appends: its ID and first position are above every recorded segment's.
 	InsertLaneConversionSegment(ctx context.Context, seg lane.ConversionSegment) error
 
 	// GetLaneConversionSegments returns every recorded conversion segment by ID.

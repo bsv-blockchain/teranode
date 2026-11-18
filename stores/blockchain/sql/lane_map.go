@@ -388,8 +388,9 @@ func positionArg(p uint64) int64 {
 }
 
 // InsertLaneConversionSegment records a conversion segment's bounds and source. It is
-// insert-only: recording the same segment again is a no-op, and a different segment under an ID
-// already used, or one whose positions overlap another segment's, fails.
+// insert-only: recording the same segment again is a no-op, a different segment under an ID
+// already used fails, and a new segment must append, with an ID above every recorded segment's and
+// a first position above every recorded segment's last.
 func (s *SQL) InsertLaneConversionSegment(ctx context.Context, seg lane.ConversionSegment) error {
 	if err := seg.Check(); err != nil {
 		return err
@@ -421,9 +422,16 @@ func (s *SQL) InsertLaneConversionSegment(ctx context.Context, seg lane.Conversi
 
 			return nil
 		}
+	}
 
-		if seg.First <= other.Last && other.First <= seg.Last {
-			return errors.NewProcessingError("conversion segment %d positions %d to %d overlap segment %d", seg.ID, seg.First, seg.Last, other.ID)
+	// A new segment appends: its ID and its positions are above every recorded segment's.
+	for _, other := range segments {
+		if seg.ID < other.ID {
+			return errors.NewProcessingError("conversion segment %d is below the recorded segment %d; a new segment appends above", seg.ID, other.ID)
+		}
+
+		if seg.First <= other.Last {
+			return errors.NewProcessingError("conversion segment %d starts at %d, not above segment %d's last position %d", seg.ID, seg.First, other.ID, other.Last)
 		}
 	}
 
@@ -501,8 +509,12 @@ func querySegments(ctx context.Context, q queryer) ([]lane.ConversionSegment, er
 
 // InsertLaneConversionBlocks records part of a segment's prefix block list, in order. A resumed
 // conversion calls it again from where it stopped: a block already recorded must match exactly,
-// and a new block must continue the stored list without a gap. It fails for an unknown or
-// completed segment.
+// and a new block must continue the stored list without a gap: the next sequence number, the next
+// position, a height above the block before it and not past the prefix end. It fails for an
+// unknown or completed segment. It reads only the last stored block and the stored blocks the call
+// repeats, so recording a long segment a few blocks at a time costs what each call holds; that a
+// block ID is not listed twice across calls is checked once, over the whole list, by
+// CompleteLaneConversionSegment.
 func (s *SQL) InsertLaneConversionBlocks(ctx context.Context, segment uint32, blocks []lane.ConversionBlock) error {
 	defer s.lockLaneProcess()()
 
@@ -526,31 +538,67 @@ func (s *SQL) InsertLaneConversionBlocks(ctx context.Context, segment uint32, bl
 		return errors.NewProcessingError("conversion segment %d is complete; its blocks are fixed", segment)
 	}
 
-	stored, err := queryConversionBlocks(ctx, tx, segment)
+	last, haveLast, err := lastConversionBlock(ctx, tx, segment)
 	if err != nil {
 		return err
 	}
 
-	all := append([]lane.ConversionBlock(nil), stored...)
+	// stored is how many blocks are recorded: sequence numbers are 0 to stored-1, with no gap.
+	stored := uint64(0)
+	if haveLast {
+		stored = uint64(last.Seq) + 1
+	}
+
+	repeatLo, repeatHi, repeats := uint32(0), uint32(0), false
+
+	var fresh []lane.ConversionBlock
 
 	for _, b := range blocks {
 		switch {
-		case int(b.Seq) < len(stored):
-			if stored[b.Seq] != b {
-				return errors.NewProcessingError("conversion segment %d block %d is already recorded differently", segment, b.Seq)
+		case uint64(b.Seq) < stored:
+			if !repeats || b.Seq < repeatLo {
+				repeatLo = b.Seq
 			}
-		case int(b.Seq) == len(all):
-			all = append(all, b)
+
+			if !repeats || b.Seq > repeatHi {
+				repeatHi = b.Seq
+			}
+
+			repeats = true
+		case uint64(b.Seq) == stored+uint64(len(fresh)):
+			fresh = append(fresh, b)
 		default:
-			return errors.NewProcessingError("conversion segment %d block %d does not follow block %d", segment, b.Seq, len(all)-1)
+			return errors.NewProcessingError("conversion segment %d block %d does not follow block %d", segment, b.Seq, int64(stored)+int64(len(fresh))-1) //nolint:gosec // a segment has far fewer than 2^63 blocks
 		}
 	}
 
-	if err = checkBlockPrefix(seg, all); err != nil {
+	if repeats {
+		recorded, err := queryConversionBlockRange(ctx, tx, segment, repeatLo, repeatHi)
+		if err != nil {
+			return err
+		}
+
+		for _, b := range blocks {
+			if uint64(b.Seq) >= stored {
+				continue
+			}
+
+			if r, ok := recorded[b.Seq]; !ok || r != b {
+				return errors.NewProcessingError("conversion segment %d block %d is already recorded differently", segment, b.Seq)
+			}
+		}
+	}
+
+	var prev *lane.ConversionBlock
+	if haveLast {
+		prev = &last
+	}
+
+	if err = checkBlocksFollow(seg, prev, fresh); err != nil {
 		return err
 	}
 
-	for _, b := range all[len(stored):] {
+	for _, b := range fresh {
 		if _, err = tx.ExecContext(ctx,
 			`INSERT INTO lane_conversion_block (segment, seq, block_id, height, first, count) VALUES ($1, $2, $3, $4, $5, $6)`,
 			int64(segment), int64(b.Seq), int64(b.BlockID), int64(b.Height), positionArg(b.First), positionArg(b.Count),
@@ -566,24 +614,82 @@ func (s *SQL) InsertLaneConversionBlocks(ctx context.Context, segment uint32, bl
 	return nil
 }
 
-// checkBlockPrefix checks a possibly incomplete block list: everything CheckConversionBlocks
-// checks except that it must reach the prefix end, which it must not pass.
-func checkBlockPrefix(seg lane.ConversionSegment, blocks []lane.ConversionBlock) error {
-	if len(blocks) == 0 {
-		return nil
+// checkBlocksFollow checks blocks that continue a segment's stored list after prev, the last stored
+// block, or from the start when prev is nil: each starts where the one before it ends, rises in
+// height, is not the block before it, and none runs past the prefix end. The sequence numbers are
+// checked by the caller.
+func checkBlocksFollow(seg lane.ConversionSegment, prev *lane.ConversionBlock, blocks []lane.ConversionBlock) error {
+	next := seg.First
+	if prev != nil {
+		next = prev.First + prev.Count
 	}
 
-	last := blocks[len(blocks)-1]
-	end := last.First + last.Count - 1
-
-	if last.First+last.Count > seg.PrefixLast+1 {
-		return errors.NewProcessingError("conversion segment %d blocks reach %d past the prefix end %d", seg.ID, end, seg.PrefixLast)
+	if next > seg.PrefixLast+1 {
+		return errors.NewProcessingError("conversion segment %d: stored blocks end at %d, past the prefix end %d", seg.ID, next-1, seg.PrefixLast)
 	}
 
-	partial := seg
-	partial.PrefixLast = last.First + last.Count - 1
+	for i := range blocks {
+		b := blocks[i]
 
-	return lane.CheckConversionBlocks(partial, blocks)
+		if prev != nil {
+			if b.Height <= prev.Height {
+				return errors.NewProcessingError("conversion segment %d: block %d at height %d does not rise above %d", seg.ID, b.Seq, b.Height, prev.Height)
+			}
+
+			if b.BlockID == prev.BlockID {
+				return errors.NewProcessingError("conversion segment %d: block %d repeats block ID %d", seg.ID, b.Seq, b.BlockID)
+			}
+		}
+
+		if b.First != next {
+			return errors.NewProcessingError("conversion segment %d: block %d starts at %d, want %d", seg.ID, b.Seq, b.First, next)
+		}
+
+		if b.Count > seg.PrefixLast+1-next {
+			return errors.NewProcessingError("conversion segment %d: block %d's %d positions from %d run past the prefix end %d", seg.ID, b.Seq, b.Count, next, seg.PrefixLast)
+		}
+
+		next += b.Count
+		prev = &blocks[i]
+	}
+
+	return nil
+}
+
+// lastConversionBlock returns a segment's last stored block, if it has any.
+func lastConversionBlock(ctx context.Context, q queryer, segment uint32) (lane.ConversionBlock, bool, error) {
+	res, err := q.QueryContext(ctx, `SELECT seq, block_id, height, first, count FROM lane_conversion_block WHERE segment = $1 ORDER BY seq DESC LIMIT 1`, int64(segment))
+	if err != nil {
+		return lane.ConversionBlock{}, false, errors.NewStorageError("query the last conversion block of segment %d", segment, err)
+	}
+
+	blocks, err := scanConversionBlocks(res, segment)
+	if err != nil || len(blocks) == 0 {
+		return lane.ConversionBlock{}, false, err
+	}
+
+	return blocks[0], true, nil
+}
+
+// queryConversionBlockRange returns a segment's stored blocks with sequence numbers lo to hi, by
+// sequence number.
+func queryConversionBlockRange(ctx context.Context, q queryer, segment, lo, hi uint32) (map[uint32]lane.ConversionBlock, error) {
+	res, err := q.QueryContext(ctx, `SELECT seq, block_id, height, first, count FROM lane_conversion_block WHERE segment = $1 AND seq >= $2 AND seq <= $3 ORDER BY seq`, int64(segment), int64(lo), int64(hi))
+	if err != nil {
+		return nil, errors.NewStorageError("query conversion blocks %d to %d of segment %d", lo, hi, segment, err)
+	}
+
+	blocks, err := scanConversionBlocks(res, segment)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(map[uint32]lane.ConversionBlock, len(blocks))
+	for _, b := range blocks {
+		out[b.Seq] = b
+	}
+
+	return out, nil
 }
 
 // GetLaneConversionBlocks returns a segment's recorded prefix blocks in order.
@@ -597,6 +703,11 @@ func queryConversionBlocks(ctx context.Context, q queryer, segment uint32) ([]la
 		return nil, errors.NewStorageError("query conversion blocks of segment %d", segment, err)
 	}
 
+	return scanConversionBlocks(res, segment)
+}
+
+// scanConversionBlocks reads conversion block rows and closes res.
+func scanConversionBlocks(res *sql.Rows, segment uint32) ([]lane.ConversionBlock, error) {
 	defer func() { _ = res.Close() }()
 
 	var out []lane.ConversionBlock
@@ -604,7 +715,7 @@ func queryConversionBlocks(ctx context.Context, q queryer, segment uint32) ([]la
 	for res.Next() {
 		var seq, blockID, height, first, count int64
 
-		if err = res.Scan(&seq, &blockID, &height, &first, &count); err != nil {
+		if err := res.Scan(&seq, &blockID, &height, &first, &count); err != nil {
 			return nil, errors.NewStorageError("scan conversion block", err)
 		}
 
@@ -615,7 +726,7 @@ func queryConversionBlocks(ctx context.Context, q queryer, segment uint32) ([]la
 		out = append(out, lane.ConversionBlock{Seq: uint32(seq), BlockID: uint32(blockID), Height: uint32(height), First: uint64(first), Count: uint64(count)})
 	}
 
-	if err = res.Err(); err != nil {
+	if err := res.Err(); err != nil {
 		return nil, errors.NewStorageError("read conversion blocks of segment %d", segment, err)
 	}
 
