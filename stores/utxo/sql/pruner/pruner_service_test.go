@@ -33,6 +33,7 @@ func TestNewService(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 			Ctx:    context.Background(),
@@ -48,6 +49,7 @@ func TestNewService(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: nil,
 			DB:     db.DB,
 		})
@@ -62,6 +64,7 @@ func TestNewService(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(nil, Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -75,6 +78,7 @@ func TestNewService(t *testing.T) {
 		logger := &MockLogger{}
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     nil,
 		})
@@ -84,11 +88,31 @@ func TestNewService(t *testing.T) {
 		assert.Contains(t, err.Error(), "db is required")
 	})
 
+	t.Run("EngineIsRequired", func(t *testing.T) {
+		db := NewMockDB()
+
+		for _, engine := range []string{"", "mysql", "Postgres", "postgresql"} {
+			service, err := NewService(createTestSettings(), Options{Logger: &MockLogger{}, DB: db.DB, Engine: engine})
+
+			require.Error(t, err, "engine %q", engine)
+			require.Nil(t, service)
+			require.Contains(t, err.Error(), "engine must be postgres, sqlite or sqlitememory")
+		}
+
+		for _, engine := range []string{"postgres", "sqlite", "sqlitememory"} {
+			service, err := NewService(createTestSettings(), Options{Logger: &MockLogger{}, DB: db.DB, Engine: engine})
+
+			require.NoError(t, err, "engine %q", engine)
+			require.Equal(t, engine, service.engine)
+		}
+	})
+
 	t.Run("DefaultValues", func(t *testing.T) {
 		logger := &MockLogger{}
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -109,6 +133,7 @@ func TestService_Start(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -137,6 +162,7 @@ func TestService_PruneValidation(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -155,6 +181,7 @@ func TestService_PruneValidation(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -174,6 +201,7 @@ func TestService_PruneValidation(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -194,6 +222,7 @@ func TestService_Prune(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -212,6 +241,7 @@ func TestService_Prune(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -238,6 +268,7 @@ func TestService_PruneExecution(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -273,6 +304,7 @@ func TestService_PruneExecution(t *testing.T) {
 		}
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -298,6 +330,7 @@ func TestService_PruneExecution(t *testing.T) {
 		}
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -318,6 +351,7 @@ func TestDeleteTombstoned(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -342,6 +376,7 @@ func TestDeleteTombstoned(t *testing.T) {
 		}
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -362,6 +397,7 @@ func TestDeleteTombstoned(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -386,6 +422,7 @@ func TestService_IntegrationTests(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -413,6 +450,7 @@ func TestService_IntegrationTests(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -436,6 +474,7 @@ func TestService_EdgeCases(t *testing.T) {
 		}
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -463,6 +502,7 @@ func TestService_EdgeCases(t *testing.T) {
 		}
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -490,6 +530,7 @@ func TestService_EdgeCases(t *testing.T) {
 		}
 
 		service, err := NewService(createTestSettings(), Options{
+			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -526,6 +567,7 @@ func newSqlmockService(t *testing.T, defensive bool, reap func(ctx context.Conte
 	tSettings.Pruner.UTXODefensiveEnabled = defensive
 
 	service, err := NewService(tSettings, Options{
+		Engine:          "sqlite",
 		Logger:          logger,
 		DB:              &usql.DB{DB: sqlDB},
 		ReapConflicting: reap,
@@ -679,7 +721,7 @@ func newFaultService(t *testing.T) (*Service, sqlmock.Sqlmock, *atomic.Int32) {
 	tSettings := createTestSettings()
 	tSettings.Pruner.UTXODefensiveEnabled = false
 
-	service, err := NewService(tSettings, Options{Logger: logger, DB: &usql.DB{DB: sqlDB}})
+	service, err := NewService(tSettings, Options{Engine: "sqlite", Logger: logger, DB: &usql.DB{DB: sqlDB}})
 	require.NoError(t, err)
 
 	// Every prune starts by clearing the stamps of unmined records.

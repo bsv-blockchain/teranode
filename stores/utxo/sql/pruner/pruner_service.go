@@ -74,9 +74,13 @@ type Options struct {
 	// If not specified, defaults to global_blockHeightRetention (288 blocks)
 	SafetyWindow uint32
 
-	// Engine is the store URL scheme ("postgres", "sqlite", "sqlitememory").
-	// Only ON COMMIT DROP support differs, so an empty value is treated as
-	// "not Postgres" and falls back to the portable form.
+	// Engine is the store URL scheme, "postgres", "sqlite" or "sqlitememory", and NewService
+	// rejects anything else, empty included. It selects the engine-specific SQL: on "postgres"
+	// the candidate row locks (FOR NO KEY UPDATE SKIP LOCKED, which make a concurrent setDAH or
+	// replay wait for the prune), ON COMMIT DROP for the candidates table and the retry
+	// predicate for serialization failures and deadlocks; on the SQLite engines the write-lock
+	// statement that opens the transaction as a writer and the message match of the retry
+	// predicate. A Postgres store given a SQLite engine would prune without the row locks.
 	Engine string
 
 	// ReapConflicting deletes one expired conflicting record and the references its parents hold
@@ -97,6 +101,12 @@ func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 
 	if opts.DB == nil {
 		return nil, errors.NewProcessingError("db is required")
+	}
+
+	switch opts.Engine {
+	case "postgres", "sqlite", "sqlitememory":
+	default:
+		return nil, errors.NewProcessingError("engine must be postgres, sqlite or sqlitememory, got %q", opts.Engine)
 	}
 
 	safetyWindow := opts.SafetyWindow
