@@ -1,6 +1,8 @@
 package aerospike_test
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -917,4 +919,160 @@ func TestRollbackKeepsAMatchMarkedAfterTheSpendRead(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, after.SpendingData, "a match whose parent carries the marker by the time of the probe is a confirmed spend and must stay")
 	require.Equal(t, *c.TxIDChainHash(), *after.SpendingData.TxID, "P:0 must still be spent by C")
+}
+
+// rollbackFixtureParent creates a parent with the given number of outputs; tag
+// keeps its txid apart from other parents in the same test.
+func rollbackFixtureParent(t *testing.T, ctx context.Context, store *astore.Store, tag byte, outputs int) *bt.Tx {
+	t.Helper()
+
+	p := bt.NewTx()
+	require.NoError(t, p.From(fmt.Sprintf("%064x", []byte{tag}), 0, "51", 30000))
+
+	for i := 0; i < outputs; i++ {
+		require.NoError(t, p.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+	}
+
+	_, err := store.Create(ctx, p, 1000)
+	require.NoError(t, err)
+
+	return p
+}
+
+// spendOf is the spend of parent's output vout by child's input vin.
+func spendOf(t *testing.T, parent *bt.Tx, vout uint32, child *bt.Tx, vin int) *utxo.Spend {
+	t.Helper()
+
+	hash, err := util.UTXOHashFromOutput(parent.TxIDChainHash(), parent.Outputs[vout], vout)
+	require.NoError(t, err)
+
+	return &utxo.Spend{TxID: parent.TxIDChainHash(), Vout: vout, UTXOHash: hash, SpendingData: spendpkg.NewSpendingData(child.TxIDChainHash(), vin)}
+}
+
+// TestWithoutMarkedMatchesDropsOnlyMarkedMatches: before a rollback reverses
+// the spends of a pruned-and-replayed C, it re-reads each idempotent match's
+// parent for C's replay marker. C spends P:0 and P:1, where P carries C's
+// marker, Q:0, where Q carries none, and R:0, where R is gone. Only the marked
+// match P:0 is a confirmed spend to keep. P:1 was written by this call, so the
+// marker says nothing about it. Q:0 may be an orphan of an earlier failed
+// attempt and must stay reversible so it heals. R has no output left to
+// release, so its match stays in the set.
+func TestWithoutMarkedMatchesDropsOnlyMarkedMatches(t *testing.T) {
+	s := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, cleanup := initAerospike(t, s, ulogger.New("without-marked-matches-test"))
+	t.Cleanup(cleanup)
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	p := rollbackFixtureParent(t, ctx, store, 0x51, 2)
+	q := rollbackFixtureParent(t, ctx, store, 0x52, 1)
+	r := rollbackFixtureParent(t, ctx, store, 0x53, 1)
+
+	c := bt.NewTx()
+	for _, input := range []struct {
+		parent *bt.Tx
+		vout   uint32
+	}{{p, 0}, {p, 1}, {q, 0}, {r, 0}} {
+		out := input.parent.Outputs[input.vout]
+		require.NoError(t, c.From(input.parent.TxID(), input.vout, out.LockingScript.String(), out.Satoshis))
+	}
+
+	require.NoError(t, c.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+	_, _, err := store.SpendAndCreate(ctx, c, 1000)
+	require.NoError(t, err)
+
+	pKey := parentKeyForOutput(t, store, p.TxIDChainHash(), 0, s.UtxoStore.UtxoBatchSize)
+	require.NoError(t, client.PutBins(nil, pKey, aerospike.NewBin(fields.DeletedChildren.String(),
+		map[interface{}]interface{}{c.TxID(): true})))
+
+	rKey := parentKeyForOutput(t, store, r.TxIDChainHash(), 0, s.UtxoStore.UtxoBatchSize)
+	existed, err := client.Delete(nil, rKey)
+	require.NoError(t, err)
+	require.True(t, existed, "fixture: R existed")
+
+	marked := spendOf(t, p, 0, c, 0)
+	fresh := spendOf(t, p, 1, c, 1)
+	unmarked := spendOf(t, q, 0, c, 2)
+	gone := spendOf(t, r, 0, c, 3)
+
+	kept := store.WithoutMarkedMatchesForTest(c, []*utxo.Spend{marked, fresh, unmarked, gone}, []*utxo.Spend{marked, unmarked, gone})
+	require.Equal(t, []*utxo.Spend{fresh, unmarked, gone}, kept,
+		"only the marked match leaves the rollback: a fresh write on the marked parent, an unmarked match and a match on a gone parent stay")
+}
+
+// TestRollbackOfARequireParentOutputsCall: the second wave of
+// DefaultSpendAndCreateMulti spends with RequireParentOutputs, so the
+// spender-existence probe would always find the first wave's record. That call
+// decides by error class instead: a validation failure reverses what it
+// wrote, and an infrastructure failure leaves it for the retry to match.
+func TestRollbackOfARequireParentOutputsCall(t *testing.T) {
+	s := test.CreateBaseTestSettings(t)
+
+	_, store, ctx, cleanup := initAerospike(t, s, ulogger.New("require-parent-outputs-rollback-test"))
+	t.Cleanup(cleanup)
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	for i, tc := range []struct {
+		name           string
+		rollbackNeeded bool
+		wantReversed   bool
+	}{
+		{name: "validation failure reverses the write", rollbackNeeded: true, wantReversed: true},
+		{name: "infrastructure failure keeps it for the retry"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := rollbackFixtureParent(t, ctx, store, byte(0x61+i), 1)
+
+			c := bt.NewTx()
+			require.NoError(t, c.From(p.TxID(), 0, p.Outputs[0].LockingScript.String(), p.Outputs[0].Satoshis))
+			require.NoError(t, c.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+			_, _, err := store.SpendAndCreate(ctx, c, 1000)
+			require.NoError(t, err)
+
+			written := spendOf(t, p, 0, c, 0)
+
+			store.RollbackRequiredParentSpendsForTest(c, []*utxo.Spend{written}, tc.rollbackNeeded)
+
+			after, err := store.GetSpend(ctx, written)
+			require.NoError(t, err)
+
+			if tc.wantReversed {
+				require.Nil(t, after.SpendingData, "the call's own write is reversed")
+				return
+			}
+
+			require.NotNil(t, after.SpendingData, "the write stays for the retry to match")
+			require.Equal(t, *c.TxIDChainHash(), *after.SpendingData.TxID)
+		})
+	}
+}
+
+// TestBlessedInputIsNotAWrittenSpend: an input whose parent is gone, of a
+// transaction the store already holds, is blessed: it counts as succeeded but
+// wrote nothing, so a later rollback must not try to reverse it.
+func TestBlessedInputIsNotAWrittenSpend(t *testing.T) {
+	s := test.CreateBaseTestSettings(t)
+
+	_, store, ctx, cleanup := initAerospike(t, s, ulogger.New("blessed-input-test"))
+	t.Cleanup(cleanup)
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	p := rollbackFixtureParent(t, ctx, store, 0x71, 1)
+	goneParent := chainhash.HashH([]byte("pruned parent"))
+
+	c := bt.NewTx()
+	require.NoError(t, c.From(goneParent.String(), 0, "51", 5000))
+	require.NoError(t, c.From(p.TxID(), 0, p.Outputs[0].LockingScript.String(), p.Outputs[0].Satoshis))
+	require.NoError(t, c.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+
+	_, err := store.Create(ctx, c, 1000)
+	require.NoError(t, err, "fixture: the store already holds C")
+
+	blessed := &utxo.Spend{TxID: &goneParent, Vout: 0, SpendingData: spendpkg.NewSpendingData(c.TxIDChainHash(), 0), Err: errors.NewTxNotFoundError("parent pruned")}
+	written := spendOf(t, p, 0, c, 1)
+
+	spent, succeeded := store.ResolveSpendCompletionsForTest(ctx, c, []*utxo.Spend{blessed, written})
+	require.Equal(t, 2, succeeded, "the blessed input counts as succeeded")
+	require.NoError(t, blessed.Err, "its error is cleared")
+	require.Equal(t, []*utxo.Spend{written}, spent, "but it wrote nothing, so it is not a spend to reverse")
 }

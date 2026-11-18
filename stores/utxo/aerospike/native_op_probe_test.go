@@ -67,6 +67,31 @@ func TestNativeTeranodeOpProbe_Container(t *testing.T) {
 			"probe decision must match the server image the suite runs against")
 	})
 
+	// The start-up probe records its replay-protection verdict, which routes
+	// spendMulti: native only on a dispatcher that proved the marker and the
+	// idempotent report.
+	t.Run("replay_protection_verdict_matches_server", func(t *testing.T) {
+		require.Equal(t, expectNative, store.nativeReplayProtection.Load())
+		require.Equal(t, expectNative, store.useNativeForSubOp(subOpSpendMulti))
+	})
+
+	// Every probe writes a short-lived record and must delete it again, on any
+	// server image.
+	t.Run("probe_record_cleanup_deletes_it", func(t *testing.T) {
+		key, _, cleanup, built := store.buildProbeRecord(probePolicy(), "cleanup test", 1000, 0)
+		require.True(t, built)
+
+		exists, err := store.client.Exists(nil, key)
+		require.NoError(t, err)
+		require.True(t, exists, "fixture: the probe record was written")
+
+		cleanup()
+
+		exists, err = store.client.Exists(nil, key)
+		require.NoError(t, err)
+		require.False(t, exists, "the probe's cleanup deletes its record")
+	})
+
 	t.Run("spend_semantics_probe_direct", func(t *testing.T) {
 		require.Equal(t, expectNative, store.probeNativeSpendSemantics(ctx, probePolicy()),
 			"spend probe must accept the fork dispatcher and reject a stock server")

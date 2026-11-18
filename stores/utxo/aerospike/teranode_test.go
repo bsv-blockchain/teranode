@@ -420,3 +420,18 @@ func TestParseLuaMapResponse_Conflicting(t *testing.T) {
 		require.False(t, r.Conflicting)
 	})
 }
+
+// TestLuaMapResponseResetClearsIdempotent: responses are pooled, so Reset must
+// drop the idempotent indexes. A stale list would mark the next response's
+// fresh writes as idempotent matches, and a failed call would then leave those
+// writes in place, spent by a transaction the store does not hold.
+func TestLuaMapResponseResetClearsIdempotent(t *testing.T) {
+	s := &Store{}
+
+	res, err := s.ParseLuaMapResponse(map[interface{}]interface{}{"status": "OK", "idempotent": []interface{}{0, 2}})
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 2}, res.Idempotent, "fixture: the list is parsed")
+
+	res.Reset()
+	require.Nil(t, res.Idempotent)
+}

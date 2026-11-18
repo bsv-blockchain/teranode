@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -131,4 +132,91 @@ func TestAbortPathNeverReversesAnIdempotentMatchWhileAnInputIsUnanswered(t *test
 	res = s.resolveSpendCompletions(context.Background(), bt.NewTx(), []*batchSpend{a, b, e}, true)
 	require.True(t, res.prunedRejection)
 	require.Empty(t, res.rollbackSet())
+}
+
+// TestRollbackSet_RequireParentOutputsKeepsIdempotentMatches: on the second
+// wave of DefaultSpendAndCreateMulti (RequireParentOutputs) an idempotent match
+// is the first wave's own write or a confirmed spend, never an orphan to heal,
+// so a failed call reverses only what it wrote.
+func TestRollbackSet_RequireParentOutputsKeepsIdempotentMatches(t *testing.T) {
+	written := mkSpendItem(1, nil).spend
+	match := mkSpendItem(2, nil).spend
+
+	res := &spendCompletionResult{spentSpends: []*utxo.Spend{written}, idempotentSpends: []*utxo.Spend{match}, requireParentOutput: true}
+	require.Equal(t, []*utxo.Spend{written}, res.rollbackSet())
+
+	res.requireParentOutput = false
+	require.Equal(t, []*utxo.Spend{written, match}, res.rollbackSet(), "control: without it the match is reversible")
+}
+
+// TestResolveSpendCompletions_CarriesRequireParentOutputs: the call-level flag
+// comes from the items, so the rollback set of a RequireParentOutputs call
+// keeps its idempotent matches.
+func TestResolveSpendCompletions_CarriesRequireParentOutputs(t *testing.T) {
+	s := newTestStoreForGet(t)
+
+	match := mkSpendItem(1, nil)
+	match.idempotent = true
+
+	fresh := mkSpendItem(2, nil)
+
+	spent := mkSpendItem(3, nil)
+	spent.spend.Err = errors.NewUtxoSpentError(*spent.spend.TxID, spent.spend.Vout, *spent.spend.UTXOHash, spendpkg.NewSpendingData(spent.spend.TxID, 0))
+
+	for _, item := range []*batchSpend{match, fresh, spent} {
+		item.requireParentOutput = true
+		item.completed.Store(true)
+		item.published.Store(true)
+	}
+
+	res := s.resolveSpendCompletions(context.Background(), bt.NewTx(), []*batchSpend{match, fresh, spent}, false)
+	require.True(t, res.requireParentOutput)
+	require.Equal(t, []*utxo.Spend{fresh.spend}, res.rollbackSet(), "the first wave's match stays")
+}
+
+// TestResolveSpendCompletions_PrunedReplayIsUnwinnable: a pruned-replay answer
+// means this txid can never win, so it lifts the suppression a transient lock
+// on a sibling input would otherwise put on the rollback.
+func TestResolveSpendCompletions_PrunedReplayIsUnwinnable(t *testing.T) {
+	s := newTestStoreForGet(t)
+
+	locked := mkSpendItem(1, nil)
+	locked.spend.Err = errors.NewTxLockedError("locked")
+
+	pruned := mkSpendItem(2, nil)
+	pruned.spend.Err = errors.NewUtxoSpendingTxPrunedError("pruned")
+
+	for _, item := range []*batchSpend{locked, pruned} {
+		item.completed.Store(true)
+		item.published.Store(true)
+	}
+
+	res := s.resolveSpendCompletions(context.Background(), bt.NewTx(), []*batchSpend{locked, pruned}, false)
+	require.True(t, res.sawTransientLock, "fixture: the sibling is locked")
+	require.True(t, res.sawUnwinnable, "a pruned replay can never win")
+}
+
+// TestProcessSingleBatchResult_FlagsIdempotentBeforePublishing: the rollback
+// decision reads an item's idempotent flag once the item is published, so the
+// flag must be set before the item is completed. Run under -race, as make test
+// does: a flag written after publishing races the reader below.
+func TestProcessSingleBatchResult_FlagsIdempotentBeforePublishing(t *testing.T) {
+	s := newTestStoreForGet(t)
+
+	group := completion.NewGroup(1)
+	item := mkSpendItem(1, group)
+
+	key, err := aerospike.NewKey("test-ns", "test-set", []byte("parent"))
+	require.NoError(t, err)
+
+	record := aerospike.NewBatchRead(nil, key, nil)
+	record.Record = &aerospike.Record{Key: key, Bins: aerospike.BinMap{
+		LuaSuccess.String(): map[interface{}]interface{}{"status": "OK", "idempotent": []interface{}{0}},
+	}}
+
+	go s.processSingleBatchResult(context.Background(), record, []aerospike.MapValue{{"idx": 0}}, []*batchSpend{item}, item.spend.TxID, 0, 1)
+
+	require.NoError(t, group.Wait(context.Background(), 5*time.Second))
+	require.True(t, item.published.Load())
+	require.True(t, item.idempotent, "the flag is set before the item is published")
 }

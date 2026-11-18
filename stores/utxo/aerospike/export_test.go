@@ -94,3 +94,34 @@ func ConflictWALFallbackScans() float64 {
 func (s *Store) RollbackIdempotentMatchesForTest(tx *bt.Tx, idempotent []*utxo.Spend) {
 	s.rollbackPartialSpends(tx, &spendCompletionResult{idempotentSpends: idempotent, rollbackNeeded: true, sawUnwinnable: true}, "test")
 }
+
+// WithoutMarkedMatchesForTest runs the rollback's replay-marker re-read on its
+// own and returns the spends it leaves in the rollback.
+func (s *Store) WithoutMarkedMatchesForTest(tx *bt.Tx, rollback, idempotent []*utxo.Spend) []*utxo.Spend {
+	return s.withoutMarkedMatches(context.Background(), tx, rollback, idempotent, "test")
+}
+
+// RollbackRequiredParentSpendsForTest runs the rollback of a failed
+// RequireParentOutputs call (the second wave of DefaultSpendAndCreateMulti)
+// that wrote the given spends. rollbackNeeded says whether its failure was a
+// validation error (utxo.IsSpendRollbackError) rather than an infrastructure one.
+func (s *Store) RollbackRequiredParentSpendsForTest(tx *bt.Tx, written []*utxo.Spend, rollbackNeeded bool) {
+	s.rollbackPartialSpends(tx, &spendCompletionResult{spentSpends: written, requireParentOutput: true, rollbackNeeded: rollbackNeeded}, "test")
+}
+
+// ResolveSpendCompletionsForTest resolves the answered spends of a call by tx,
+// each carrying its own Err, and returns the spends the call wrote and the
+// number of inputs that succeeded.
+func (s *Store) ResolveSpendCompletionsForTest(ctx context.Context, tx *bt.Tx, spends []*utxo.Spend) (written []*utxo.Spend, succeeded int) {
+	items := make([]*batchSpend, len(spends))
+
+	for i, spend := range spends {
+		items[i] = &batchSpend{spend: spend}
+		items[i].completed.Store(true)
+		items[i].published.Store(true)
+	}
+
+	res := s.resolveSpendCompletions(ctx, tx, items, false)
+
+	return res.spentSpends, res.succeeded
+}

@@ -38,8 +38,11 @@ func TestDemoteNativeOnUnsupported(t *testing.T) {
 	// batchRec.Err / opErr, never a teranode-wrapped one. fmt.Errorf is used
 	// deliberately: it is the only stdlib way to build a chain that keeps the
 	// aerospike type reachable, mirroring the client's own wrapping.
+	s.nativeReplayProtection.Store(true)
+
 	s.demoteNativeOnUnsupported(fmt.Errorf("op failed: %w", aeroErr(types.PARAMETER_ERROR))) //nolint:forbidigo // std %w chain needed; errors.New* erases the aerospike type
 	require.False(t, s.useNativeTeranodeOps.Load(), "wrapped PARAMETER_ERROR must demote")
+	require.False(t, s.nativeReplayProtection.Load(), "demotion clears the replay-protection verdict, so a stale true cannot re-arm the fenced sub-ops")
 
 	// Demoting again is a no-op (CAS already false).
 	s.demoteNativeOnUnsupported(aeroErr(types.PARAMETER_ERROR))
