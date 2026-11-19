@@ -942,6 +942,7 @@ var spendVerdicts = map[string]error{
 	"creating":          errors.ErrTxCreating,
 	"frozen":            errors.ErrFrozen,
 	"hash mismatch":     errors.ErrUtxoHashMismatch,
+	"invalid size":      errors.NewUtxoInvalidSize("output has a bad size"),
 	"coinbase immature": errors.ErrTxCoinbaseImmature,
 }
 
@@ -1165,6 +1166,14 @@ func TestRollForwardCreating(t *testing.T) {
 		require.False(t, completed, "another actor's finalize completed the record and owns its hand-off")
 		require.Equal(t, lost.spends, spends)
 		require.Equal(t, []string{"lease", "spend", "finalize"}, lost.callSeq, "the finalize removed the leases, so none is released")
+
+		inDoubt := &fakeRollForwarder{spends: []*Spend{{}, {}}, finalizeErr: MarkFinalInDoubt(errors.NewTxExistsError("final, sent more than once"))}
+
+		spends, completed, err = RollForwardCreating(ctx, ulogger.TestLogger{}, inDoubt, tx, []byte{1}, 100)
+		require.NoError(t, err)
+		require.True(t, completed, "an earlier send of this finalize may be the write that completed the record, so the hand-off is not dropped")
+		require.Equal(t, inDoubt.spends, spends)
+		require.Equal(t, []string{"lease", "spend", "finalize"}, inDoubt.callSeq)
 	})
 
 	t.Run("a finalize failure releases the lease, returns the spends and leaves them in place", func(t *testing.T) {
@@ -2030,7 +2039,7 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		require.Equal(t, []string{"create", "spend", "finalize"}, f.callSeq, "no retry, no lease release, no rollback")
 	})
 
-	t.Run("an already-final answer after a failed try is this call's own write and is success", func(t *testing.T) {
+	t.Run("an already-final answer after a failed try is in doubt: the call hands the tx on and owns no unwind", func(t *testing.T) {
 		shortenUnspendBackoff(t)
 
 		f := &fakeSequentialStore{
@@ -2040,11 +2049,26 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		}
 
 		md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
-		require.NoError(t, err, "the write of the first try may be the one that cleared the state")
-		require.NotNil(t, md)
-		require.False(t, md.Creating)
+		require.ErrorIs(t, err, errors.ErrTxExists)
+		require.True(t, IsRolledForward(err), "the write of the first try may be the one that cleared the state, so the hand-off must not be dropped")
+		require.Nil(t, md, "a roll-forward of this attempt may have delivered the tx, so this call must not return a record it may unwind")
 		require.Len(t, spends, 1)
 		require.Equal(t, []string{"create", "spend", "finalize", "finalize"}, f.callSeq)
+	})
+
+	t.Run("an already-final answer to a write the client sent more than once is in doubt on the first try", func(t *testing.T) {
+		f := &fakeSequentialStore{
+			spends:      []*Spend{{}},
+			createMeta:  &meta.Data{Creating: true, Attempt: []byte{9}},
+			finalizeErr: MarkFinalInDoubt(errors.NewTxExistsError("final, sent more than once")),
+		}
+
+		md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
+		require.ErrorIs(t, err, errors.ErrTxExists)
+		require.True(t, IsRolledForward(err), "this call may be the only one that finalized the record, so it hands the tx on")
+		require.Nil(t, md)
+		require.Len(t, spends, 1)
+		require.Equal(t, []string{"create", "spend", "finalize"}, f.callSeq, "no retry, no lease release, no rollback")
 	})
 
 	t.Run("finalize failure after every retry returns an error and leaves the record creating", func(t *testing.T) {
@@ -2488,6 +2512,17 @@ func TestIsSpendLeaseLive(t *testing.T) {
 	require.False(t, IsAlreadyFinal(marked))
 }
 
+func TestIsFinalInDoubt(t *testing.T) {
+	require.Nil(t, MarkFinalInDoubt(nil))
+	require.False(t, IsFinalInDoubt(nil))
+	require.False(t, IsFinalInDoubt(MarkAlreadyFinal(errors.NewTxExistsError("another actor"))))
+
+	marked := MarkFinalInDoubt(errors.NewTxExistsError("sent more than once"))
+	require.True(t, IsFinalInDoubt(marked))
+	require.True(t, IsAlreadyFinal(marked), "the record is final in both cases")
+	require.True(t, IsFinalInDoubt(errors.NewProcessingError("wrapped", marked)))
+}
+
 func TestSpendOutcomeUnknown(t *testing.T) {
 	failed := errors.NewUtxoError("spend failed")
 
@@ -2505,5 +2540,9 @@ func TestSpendOutcomeUnknown(t *testing.T) {
 
 	for name, fault := range spendFaults {
 		require.True(t, spendOutcomeUnknown([]*Spend{{Err: errors.ErrSpent}, {Err: fault}}, failed), "%s: one input in doubt is enough", name)
+		require.True(t, spendOutcomeUnknown([]*Spend{{Err: errors.NewUtxoError("wrapped", fault)}}, failed), "%s wrapped in a UTXO error", name)
 	}
+
+	// INVALID_SPEND reaches the caller as a UTXO error with no cause. On one input it is a verdict.
+	require.False(t, spendOutcomeUnknown([]*Spend{{Err: errors.NewUtxoError("invalid spend for vout 1")}}, failed))
 }

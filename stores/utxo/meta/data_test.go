@@ -353,6 +353,8 @@ func Benchmark_MetaBytes(b *testing.B) {
 }
 
 // Data is allocated once per record read, so a new field must not move it up a size class.
+// The create-first attempt token (Attempt, 24 bytes) took it from 240 to 264 bytes, which is the
+// 288-byte class. The create-first flags beside it fit in the padding of the other flags.
 func TestDataSize(t *testing.T) {
-	require.Equal(t, uintptr(240), unsafe.Sizeof(Data{}))
+	require.Equal(t, uintptr(264), unsafe.Sizeof(Data{}))
 }

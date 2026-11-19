@@ -4,9 +4,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
@@ -55,6 +58,51 @@ func TestFinalizeTransaction(t *testing.T) {
 
 	// A tx that was never created in the creating state is already final too.
 	require.True(t, utxo.IsAlreadyFinal(store.FinalizeTransaction(ctx, tests.ParentTx, nil)))
+}
+
+// TestFinalizeTransaction_FilteredOutAfterARepeatedSendIsInDoubt covers a finalize whose first
+// send applied with its answer lost. The client sends the write again, the record no longer
+// carries the creating bin, and the server filters the second send out. That answer must not read
+// as another actor's finalize: this call may be the only one, and then nobody else hands the
+// transaction to block assembly.
+func TestFinalizeTransaction_FilteredOutAfterARepeatedSendIsInDoubt(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	attempt := attemptOf(t, ctx, store, tx.TxIDChainHash())
+
+	// While the record is creating under this attempt, a filtered-out write is a fault, in doubt or not.
+	stillCreating := store.FinalizeFilteredOutResult(tx.TxIDChainHash(), attempt, true)
+	require.Error(t, stillCreating)
+	require.False(t, utxo.IsAlreadyFinal(stillCreating), "a record that is still creating is not final")
+
+	require.NoError(t, store.FinalizeTransaction(ctx, tx, attempt))
+
+	sentOnce := store.FinalizeFilteredOutResult(tx.TxIDChainHash(), attempt, false)
+	require.ErrorIs(t, sentOnce, errors.ErrTxExists)
+	require.True(t, utxo.IsAlreadyFinal(sentOnce))
+	require.False(t, utxo.IsFinalInDoubt(sentOnce), "a write the client sent once did not clear the state: another actor did")
+
+	sentAgain := store.FinalizeFilteredOutResult(tx.TxIDChainHash(), attempt, true)
+	require.ErrorIs(t, sentAgain, errors.ErrTxExists)
+	require.True(t, utxo.IsAlreadyFinal(sentAgain))
+	require.True(t, utxo.IsFinalInDoubt(sentAgain), "an earlier send of the same write may be the one that cleared the state")
+}
+
+func TestWriteInDoubt(t *testing.T) {
+	require.False(t, teranode_aerospike.WriteInDoubt(&aerospike.BatchRecord{}))
+	require.False(t, teranode_aerospike.WriteInDoubt(&aerospike.BatchRecord{ResultCode: types.FILTERED_OUT}), "a first send that was filtered out")
+	require.True(t, teranode_aerospike.WriteInDoubt(&aerospike.BatchRecord{ResultCode: types.FILTERED_OUT, InDoubt: true}), "the client sets the flag when it sent the write more than once")
 }
 
 // cancelledAfterStartContext reports itself cancelled through Err but never closes Done, so a

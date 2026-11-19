@@ -636,8 +636,13 @@ type Store interface {
 	// attempt is the token of the attempt the caller created or read: the clear touches only
 	// a record that carries that token, so a finalize left over from an earlier attempt of the
 	// same txid cannot clear a later attempt's state. A record that is absent, rolling back or
-	// owned by another attempt is refused with ErrTxNotFound. Idempotent for an already final
-	// record; stores without create-first support return nil.
+	// owned by another attempt is refused with ErrTxNotFound. It returns nil only to the call
+	// whose write cleared the state, and that call owns the hand-off of the transaction and any
+	// unwind of it. A call that finds the record already final changes nothing and returns an
+	// ErrTxExists for which IsAlreadyFinal is true. When the store cannot tell whether an
+	// earlier send of the same call cleared the state, IsFinalInDoubt is true as well: the
+	// caller hands the transaction on and unwinds nothing. Stores without create-first support
+	// return nil.
 	FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error
 
 	// QueryStaleCreatingTxs returns the hashes of transactions still in the "creating"
@@ -694,8 +699,11 @@ type Store interface {
 	// marking it as rolling back, so no concurrent roll-forward can finalize it. attempt is the
 	// token of the attempt the caller created or read, and the claim touches only a record that
 	// carries it. The claim is exclusive: it reports true only to the one caller whose write set
-	// the marker, and that caller alone reverses the spends and ends the rollback. It reverses
-	// them only once SpendLeasesLive reports false. It reports
+	// the marker, and that caller alone reverses the spends and ends the rollback. The store
+	// refuses the claim while a spend lease of the attempt is live: it writes nothing and returns
+	// an error for which IsSpendLeaseLive is true (MarkSpendLeaseLive), and the caller tries again
+	// until the lease is released or stale. A store that can grant a lease must refuse the claim
+	// this way, because the caller reverses the spends as soon as the claim succeeds. It reports
 	// false, and writes nothing, when the record is absent, already finalized, owned by another
 	// attempt, or already rolling back under another caller. A store with no tentative state
 	// reports false. Used by the create-first rollback, which then reverses its spends and calls
@@ -721,9 +729,12 @@ type Store interface {
 	// whose attempt, identified by the token, was marked as rolling back. A spend record is the
 	// txid and the input index, so a reversal cannot tell two attempts of one txid apart. This
 	// call is the proof that the attempt it names still owns the txid: it reports true only when
-	// the record is rolling back, carries the token, is not yet recorded as reversed and is not
-	// already held by another actor, and then marks the record busy and renews the hold. A caller that gets false, because the
-	// record is absent, belongs to another attempt or is busy, must not reverse any spend. The
+	// the record is rolling back, carries the token and is not already held by another actor, and
+	// then marks the record busy. Two states can be taken: a rollback whose spends are not yet
+	// recorded as reversed, and the hold that EndCreateFirstRollback left, whose time to live the
+	// take renews. A record that is recorded as reversed and is not yet a hold is refused, because
+	// its cleanup is running. A caller that gets false, because the record is absent, belongs to
+	// another attempt, is busy or is in that state, must not reverse any spend. The
 	// caller reverses under a context bounded by utxostore_spendRollbackTimeout and then calls
 	// ReleaseRollbackHold. A store with no tentative state reports false.
 	TakeRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error)
@@ -750,8 +761,9 @@ type Store interface {
 
 	// SpendLeasesLive reports whether a spender of the attempt that carries the token may still be
 	// spending: a lease is live until the time it names has passed by a further
-	// utxostore_spendRollbackTimeout. The owner of a rollback reverses no spend while it reports
-	// true. A store with no tentative state reports false.
+	// utxostore_spendRollbackTimeout. BeginCreateFirstRollback is refused while it reports true.
+	// The pruner sweep reads it before it claims or resumes a rollback. A store with no tentative
+	// state reports false.
 	SpendLeasesLive(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error)
 
 	// ClearCreateFirstHold removes the hold that EndCreateFirstRollback left for the txid, when

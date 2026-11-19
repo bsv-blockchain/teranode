@@ -107,6 +107,29 @@ func IsAlreadyFinal(err error) bool {
 	return hasErrorData(err, alreadyFinalKey)
 }
 
+// finalInDoubtKey is the error-data key MarkFinalInDoubt sets.
+const finalInDoubtKey = "finalInDoubt"
+
+// MarkFinalInDoubt marks err as returned by a FinalizeTransaction that found the record already
+// final and cannot tell whose write cleared the creating state: an earlier send of this same call
+// may have applied with its answer lost. IsAlreadyFinal is true for it as well. The caller does
+// not own an unwind, because another actor may have delivered the transaction, and it must not
+// drop the hand-off, because no other actor may exist. It hands the transaction on as a
+// roll-forward does. It returns err.
+func MarkFinalInDoubt(err *errors.Error) *errors.Error {
+	if err != nil {
+		err.SetData(alreadyFinalKey, true)
+		err.SetData(finalInDoubtKey, true)
+	}
+
+	return err
+}
+
+// IsFinalInDoubt reports whether an error carries the MarkFinalInDoubt marker anywhere in its chain.
+func IsFinalInDoubt(err error) bool {
+	return hasErrorData(err, finalInDoubtKey)
+}
+
 // spendLeaseLiveKey is the error-data key MarkSpendLeaseLive sets.
 const spendLeaseLiveKey = "spendLeaseLive"
 
@@ -1009,6 +1032,13 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 	}
 
 	if finErr := finalizeDetached(ctx, logger, s, tx, md.Attempt); finErr != nil {
+		if IsFinalInDoubt(finErr) {
+			// The record is final and this call cannot tell whether its own write or a roll-forward
+			// of this attempt cleared the state. It hands the transaction on and unwinds nothing,
+			// which is what a roll-forward does, so it returns the result of one.
+			return nil, spends, MarkRolledForward(errors.NewTxExistsError("SpendAndCreate create-first: tx %s is final and the finalize of this call is in doubt", hash.String(), finErr))
+		}
+
 		if IsAlreadyFinal(finErr) {
 			// A roll-forward of this attempt cleared the creating state first. That actor owns the
 			// hand-off of the transaction, so this call reports an ordinary duplicate.
@@ -1046,7 +1076,7 @@ func spendOutcomeUnknown(spends []*Spend, err error) bool {
 			continue
 		}
 
-		if !isSpendVerdict(sp.Err) {
+		if !isSpendVerdict(sp.Err) && !isInvalidSpend(sp.Err) {
 			return true
 		}
 
@@ -1069,7 +1099,18 @@ func isSpendVerdict(err error) bool {
 		errors.Is(err, errors.ErrTxCreating) ||
 		errors.Is(err, errors.ErrFrozen) ||
 		errors.Is(err, errors.ErrUtxoHashMismatch) ||
+		errors.Is(err, errors.ErrUtxoInvalidSize) ||
 		errors.Is(err, errors.ErrTxCoinbaseImmature)
+}
+
+// isInvalidSpend reports whether the error of one input is the store's refusal of an invalid
+// spend: a UTXO error that wraps no cause. It is a verdict on that input. It is not asked of the
+// error of the whole spend, which is a UTXO error whatever made the spend fail, and a UTXO error
+// that wraps a cause is judged by that cause.
+func isInvalidSpend(err error) bool {
+	var e *errors.Error
+
+	return errors.As(err, &e) && e.Code() == errors.ERR_UTXO_ERROR && e.WrappedErr() == nil
 }
 
 // spendLeaseReleaser is the store subset releaseSpendLease needs.
@@ -1216,9 +1257,13 @@ func rollForwardCreating(ctx context.Context, logger ulogger.Logger, s creatingF
 
 	if err = s.FinalizeTransaction(bCtx, tx, attempt); err != nil {
 		if IsAlreadyFinal(err) {
-			// Another actor's finalize of this attempt cleared the creating state first, and that
-			// actor owns the hand-off. The record is complete and this call did not complete it.
-			return spends, false, nil
+			// The record is complete. Another actor's finalize of this attempt cleared the creating
+			// state first, and that actor owns the hand-off, so this call did not complete it. The
+			// answer in doubt is the exception: an earlier send of this finalize may be the write
+			// that cleared the state. A roll-forward unwinds nothing, so it then reports the record
+			// as completed: block assembly drops a second hand-off, and a hand-off that nobody
+			// makes leaves the transaction out of every template.
+			return spends, IsFinalInDoubt(err), nil
 		}
 
 		releaseSpendLease(ctx, logger, s, hash, attempt, lease)
@@ -1298,9 +1343,9 @@ func finalizeWithRetry(ctx context.Context, logger ulogger.Logger, s SequentialS
 
 		if IsAlreadyFinal(tryErr) {
 			// After a try that failed, the write of that try may be the one that cleared the state:
-			// its answer was lost. Only an already-final answer to the first try is another actor's.
-			if retries > 0 {
-				return nil
+			// its answer was lost. It may also be another actor's, so the result is in doubt.
+			if retries > 0 && !IsFinalInDoubt(tryErr) {
+				return MarkFinalInDoubt(errors.NewTxExistsError("tx %s is final after a finalize try that failed", tx.TxIDChainHash().String(), tryErr))
 			}
 
 			return tryErr

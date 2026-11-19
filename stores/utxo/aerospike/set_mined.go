@@ -807,16 +807,18 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 			continue
 		}
 
-		items = append(items, &utxo.UnresolvedMetaData{Hash: *h, Idx: i, Fields: []fields.FieldName{fields.Creating, fields.RollingBack}})
+		items = append(items, &utxo.UnresolvedMetaData{Hash: *h, Idx: i, Fields: []fields.FieldName{fields.Creating, fields.RollingBack, fields.Attempt}})
 	}
 
 	if len(items) == 0 {
 		return nil
 	}
 
-	if err := s.BatchDecorate(ctx, items, fields.Creating, fields.RollingBack); err != nil {
+	if err := s.BatchDecorate(ctx, items, fields.Creating, fields.RollingBack, fields.Attempt); err != nil {
 		return errors.NewProcessingError("[setMined] create-first pre-flight: batch read of creating flag failed", err)
 	}
+
+	var legacy []*chainhash.Hash
 
 	for _, item := range items {
 		if item.Err != nil {
@@ -828,6 +830,15 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 		}
 
 		if item.Data == nil || !item.Data.Creating {
+			continue
+		}
+
+		// A creating record with no attempt token was not written by a create-first attempt. It
+		// is a record whose clearCreatingFlag failed, and the write that made it did not defer
+		// the spend of its inputs. There is nothing to roll forward: mining clears the bin.
+		if len(item.Data.Attempt) == 0 && !item.Data.RollingBack {
+			legacy = append(legacy, &item.Hash)
+
 			continue
 		}
 
@@ -862,6 +873,48 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 		if _, _, err := utxo.RollForwardCreating(ctx, s.logger, s, md.Tx, md.Attempt, blockHeight, utxo.WithIgnoreLocked(true)); err != nil {
 			return errors.NewProcessingError("[setMined] create-first pre-flight: roll-forward of %s failed", item.Hash.String(), err)
 		}
+	}
+
+	return s.clearCreatingWithoutAttempt(legacy)
+}
+
+// clearCreatingWithoutAttempt deletes the creating bin from the master records that carry no
+// attempt token and are not rolling back. The setMined writes cleared this bin on every master
+// before create-first existed, and they no longer do, because they cannot tell such a record from
+// a tentative one. The filter tells them apart on the server, so a record that a create-first
+// attempt owns is never cleared here. The extra records are cleared by clearLockedOnRecordsMulti.
+func (s *Store) clearCreatingWithoutAttempt(hashes []*chainhash.Hash) error {
+	if len(hashes) == 0 {
+		return nil
+	}
+
+	writePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	writePolicy.FilterExpression = finalizeFilter(nil)
+
+	clearOp := aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))
+	records := make([]aerospike.BatchRecordIfc, 0, len(hashes))
+
+	for _, h := range hashes {
+		key, err := aerospike.NewKey(s.namespace, s.setName, h[:])
+		if err != nil {
+			return errors.NewProcessingError("[setMined] failed to create key for %s", h.String(), err)
+		}
+
+		records = append(records, aerospike.NewBatchWrite(writePolicy, key, clearOp))
+	}
+
+	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), records); err != nil {
+		return errors.NewStorageError("[setMined] failed to clear the creating bin of %d records with no attempt token", len(hashes), err)
+	}
+
+	for i, record := range records {
+		recErr := record.BatchRec().Err
+		if recErr == nil || isKeyNotFound(recErr) || isFilteredOut(recErr) {
+			continue
+		}
+
+		return errors.NewStorageError("[setMined] failed to clear the creating bin of %s", hashes[i].String(), recErr)
 	}
 
 	return nil

@@ -120,7 +120,7 @@ If the clear phase fails or the process stops, the records stay in the `creating
    - The record batch has no top-level error, and every record returns OK or `KEY_EXISTS_ERROR`.
 
    A second store of a single-record transaction that went through the `RECORD_TOO_BIG` retry does not do this. It takes the plain `sendStoreBatch` put, gets `KEY_EXISTS_ERROR`, and returns `ErrTxExists` without a call to `clearCreatingFlag`. Only `setMined` recovers that case.
-3. **setMined**: when the transaction is mined, `setMined` deletes the `creating` bin from the master record and from every extra record that exists. The Lua `setMined` function or `set_mined_expressions.go` clears the master. `clearLockedOnRecordsMulti` in `set_mined.go` clears the extra records in the same write that clears `locked`. On the expressions path, a master write that comes back `FILTERED_OUT` keeps its `creating` bin, but its extra records are still cleared.
+3. **setMined**: when the transaction is mined, `setMined` deletes the `creating` bin from the master record and from every extra record that exists. A pre-flight in `SetMinedMulti` clears the master before the mined write (`clearCreatingWithoutAttempt` in `set_mined.go`). It clears only a master that carries no `attempt` token and is not rolling back, in one write that the server filters on those bins. A master with a token belongs to a create-first attempt, and the pre-flight rolls it forward instead (see "Create-First Two-Phase Commit"). The Lua `setMined` function and `set_mined_expressions.go` do not touch the bin. `clearLockedOnRecordsMulti` in `set_mined.go` clears the extra records in the same write that clears `locked`.
 
 One gap remains after `setMined`: an extra record that the write phase never created. `setMined` clears the master, and the clear of the missing record gets `KEY_NOT_FOUND`, which `setMined` treats as benign. The record stays missing. Subtree validation then sees a complete master and does not process the transaction again. A master record without the bin therefore does not prove that every extra record exists.
 
@@ -460,8 +460,10 @@ reorg/conflict helpers) are single-phase and bypass the create-first ordering.
   the record. The sweep reverses nothing while a spend lease of the attempt is live (see "Spend
   lease" below): it leaves the record for a later pass.
 - **setMined** — a pre-flight in `SetMinedMulti` rolls a still-creating record forward
-  (re-spend, then finalize) before the mined write. The write paths no longer clear the
-  `creating` bin. The pre-flight runs on every call, whatever `utxostore_useCreateFirstOrder`
+  (re-spend, then finalize) before the mined write. It does this only for a record that carries
+  an `attempt` token. A creating record with no token was not written by a create-first attempt:
+  its `clearCreatingFlag` failed, and the pre-flight deletes its `creating` bin and spends
+  nothing. The write paths no longer clear the `creating` bin. The pre-flight runs on every call, whatever `utxostore_useCreateFirstOrder`
   says, so turning the flag off cannot strand creating records. Correctness rests on the
   pre-flight, which fails closed, because the native sub-op write path's handling of the bin
   is not verifiable from this repository.
@@ -515,6 +517,16 @@ that cleared the state hands the transaction to block assembly, and only it may 
 hand-off. The other reports an ordinary duplicate and takes neither step, so a creator cannot
 delete a record that another instance has already delivered.
 
+One answer is in doubt. The client can send a finalize write again after a send whose answer was
+lost, and the second send is filtered out because the first one cleared the bin. The client marks
+such a record in doubt, and the store then returns an error for which `utxo.IsFinalInDoubt` is
+true as well. An already-final answer after a finalize try that failed is in doubt in the same
+way. The caller cannot tell its own write from another actor's, so it hands the transaction on and
+unwinds nothing: the creator returns the result of a roll-forward (`utxo.IsRolledForward`), and a
+roll-forward reports the record as completed. Block assembly drops a second hand-off of the same
+transaction. One case stays open: a roll-forward whose answer is in doubt hands the transaction
+on, and a creator that is still alive and did clear the state may then unwind a shed hand-off.
+
 ### Rollback of a failed create-first spend
 
 A spend that fails after the tentative create is rolled back by `utxo.RollBackCreating`. The
@@ -538,8 +550,9 @@ spends under the hold, make it fail, and the reversal is not recorded while anyo
 reversing. A cleanup that fails releases `busy`.
 While
 the marker is set, `FinalizeTransaction` (single and multi-record) refuses the record with
-`ErrTxNotFound`, so a concurrent roll-forward cannot complete it. A roll-forward whose finalize
-is refused releases its lease, and the owner, which was waiting for it, reverses its spends. The Lua spend
+`ErrTxNotFound`, so a concurrent roll-forward cannot complete it. A roll-forward holds its lease
+until its finalize returns, and the claim of a rollback is refused until that lease is released,
+so no finalize is in flight when the marker is set. The Lua spend
 gate still reads `creating`, so a rolling-back record's outputs stay unspendable. A spend whose
 batch may still be in flight (a context error, or the `utxostore_spendWaitTimeout`
 ServiceUnavailable) is not rolled back: the record stays creating for the sweep. The fresh
