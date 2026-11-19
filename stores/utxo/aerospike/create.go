@@ -133,16 +133,17 @@ type BatchStoreItem struct {
 	// Locked indicates if this transaction is locked for spending
 	locked bool
 
-	// lanePosition is the lane position (util/lane) written to the master record.
-	// lane.None writes no bin. It fits in padding, because isCoinbase shares the word
-	// beside blockHeight, so a create allocates no more than it did.
-	lanePosition uint64
-
 	// creating indicates this transaction is stored in the tentative create-first
 	// state: the creating bin is written and NOT cleared by the create phase-2 (the
 	// validator's FinalizeTransaction clears it), so its outputs stay unspendable
 	// until the inputs have been spent and the tx finalized.
+	// It shares the word of lockTime, conflicting and locked.
 	creating bool
+
+	// lanePosition is the lane position (util/lane) written to the master record.
+	// lane.None writes no bin. It fits in padding, because isCoinbase shares the word
+	// beside blockHeight, so a create allocates no more than it did.
+	lanePosition uint64
 
 	// attempt is the token of this create-first attempt. It is written next to the creating bin
 	// on every record the attempt creates, and every write that ends the attempt is filtered on
@@ -1168,7 +1169,54 @@ func (s *Store) alignChildrenWithMaster(txHash *chainhash.Hash, recordKeys []*ae
 		return nil
 	}
 
-	return s.stampChildren(txHash, recordKeys[1:], state.attempt)
+	keys, err := s.childrenUnderAnotherToken(txHash, recordKeys[1:], state.attempt)
+	if err != nil || len(keys) == 0 {
+		return err
+	}
+
+	return s.stampChildren(txHash, keys, state.attempt)
+}
+
+// childrenUnderAnotherToken returns the keys of the pagination children that are creating and do
+// not carry the given token. It reads them, so that a create which finds every child in line
+// sends no write: the clear of the creating bin stays the only update a create sends.
+func (s *Store) childrenUnderAnotherToken(txHash *chainhash.Hash, keys []*aerospike.Key, attempt []byte) ([]*aerospike.Key, error) {
+	readPolicy := aerospike.NewBatchReadPolicy()
+	bins := []string{fields.Creating.String(), fields.Attempt.String()}
+	records := make([]aerospike.BatchRecordIfc, 0, len(keys))
+
+	for _, key := range keys {
+		records = append(records, aerospike.NewBatchRead(readPolicy, key, bins))
+	}
+
+	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), records); err != nil {
+		return nil, errors.NewStorageError("failed to read the attempt token of the child records of %s", txHash, err)
+	}
+
+	var other []*aerospike.Key
+
+	for i, record := range records {
+		br := record.BatchRec()
+
+		if br.Err != nil && !isKeyNotFound(br.Err) {
+			return nil, errors.NewStorageError("failed to read the attempt token of a child record of %s", txHash, br.Err)
+		}
+
+		if br.Record == nil {
+			continue
+		}
+
+		if _, creating := br.Record.Bins[fields.Creating.String()]; !creating {
+			continue
+		}
+
+		token, _ := br.Record.Bins[fields.Attempt.String()].([]byte)
+		if !bytes.Equal(token, attempt) {
+			other = append(other, keys[i])
+		}
+	}
+
+	return other, nil
 }
 
 // stampChildren writes the attempt token on the given pagination children, and removes the bin
@@ -1483,12 +1531,7 @@ func (s *Store) storeExternallyWithLock(
 		}
 
 		if !s.settings.UtxoStore.UseCreateFirstOrder {
-			clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore), s.masterAttempt(bItem.txHash))
-			if utxo.IsAlreadyFinal(clearErr) {
-				// The flag is already clear: another caller finalized the record.
-				clearErr = nil
-			}
-
+			clearErr := unlessAlreadyFinal(s.clearCreatingFlag(bItem.txHash, len(binsToStore), s.masterAttempt(bItem.txHash)))
 			if clearErr != nil {
 				// A mined create's caller may read ErrTxExists as done: the seeder and
 				// block assembly's coinbase store do. See creatingNotClearedError.
@@ -1513,12 +1556,7 @@ func (s *Store) storeExternallyWithLock(
 		return
 	}
 
-	clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore), bItem.attempt)
-	if utxo.IsAlreadyFinal(clearErr) {
-		// The flag is already clear: another caller finalized the record.
-		clearErr = nil
-	}
-
+	clearErr := unlessAlreadyFinal(s.clearCreatingFlag(bItem.txHash, len(binsToStore), bItem.attempt))
 	if clearErr != nil && len(bItem.blockIDs) > 0 {
 		// A create that carries mined block info is not reliably reached by the
 		// recovery paths listed below. See creatingNotClearedError.
@@ -1846,7 +1884,7 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int, attemp
 			// FILTERED_OUT is success when the bin didn't exist, nothing to clear; a rolling
 			// back master is refused
 			if ok && aErr.ResultCode == types.FILTERED_OUT {
-				return s.finalizeFilteredOutResult(txHash, attempt)
+				return s.finalizeFilteredOutResult(txHash, attempt, writeInDoubt(masterWrite.BatchRec()))
 			}
 			s.logger.Errorf("[clearCreatingFlag] Failed to clear creating flag for master record for tx %s: %v", txHash, masterWrite.BatchRec().Err)
 			return errors.NewProcessingError("failed to unlock master record for tx %s", txHash)
@@ -1854,6 +1892,16 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int, attemp
 	}
 
 	return nil
+}
+
+// unlessAlreadyFinal turns the already-final answer of clearCreatingFlag into nil. The creating bin
+// is clear, because another caller finalized the record, and a create has no hand-off to own.
+func unlessAlreadyFinal(err error) error {
+	if utxo.IsAlreadyFinal(err) {
+		return nil
+	}
+
+	return err
 }
 
 // creatingNotClearedError is the error a create carrying mined block info

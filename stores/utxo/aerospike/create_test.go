@@ -486,8 +486,10 @@ func BenchmarkStore_Create(b *testing.B) {
 }
 
 // BatchStoreItem is allocated once per create, so a new field must not make it bigger.
+// The create-first attempt token (attempt, 24 bytes) took it from 144 to 168 bytes. The creating
+// flag beside it fits in the padding of the other flags.
 func TestBatchStoreItemSize(t *testing.T) {
-	require.Equal(t, uintptr(144), unsafe.Sizeof(teranodeaerospike.BatchStoreItem{}))
+	require.Equal(t, uintptr(168), unsafe.Sizeof(teranodeaerospike.BatchStoreItem{}))
 }
 
 // BenchmarkStore_CreateLanePosition is BenchmarkStore_Create with the store taking a position from
@@ -552,7 +554,7 @@ func BenchmarkStore_GetBinsToStoreLanePosition(b *testing.B) {
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
-				if _, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, c.pos, nil); err != nil {
+				if _, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, false, c.pos, nil); err != nil {
 					b.Fatal(err)
 				}
 			}

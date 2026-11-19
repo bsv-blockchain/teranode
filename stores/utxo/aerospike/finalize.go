@@ -50,7 +50,8 @@ func (b *batchFinalize) complete(err error) {
 // It returns nil only to the call whose write cleared the state. A call that finds the tx
 // already final (creating bin already absent) changes nothing and returns an ErrTxExists for
 // which utxo.IsAlreadyFinal is true: the transaction is stored, and the call that cleared the
-// state owns its hand-off. attempt is the token of the attempt the caller created or read: the clear is
+// state owns its hand-off. When the client sent the finalize write more than once, an earlier
+// send may be the write that cleared the state, and utxo.IsFinalInDoubt is true as well. attempt is the token of the attempt the caller created or read: the clear is
 // filtered on it, on the master and on every pagination child, so a finalize left over from an
 // earlier attempt of the same txid cannot clear a later attempt's creating state. Returns
 // ErrTxNotFound if the record has vanished, is rolling back (BeginCreateFirstRollback) or
@@ -222,7 +223,7 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 		case ok && aErr.ResultCode == types.FILTERED_OUT:
 			// Creating bin already absent → already finalized, idempotent success. A rolling
 			// back record, or one owned by another attempt, is refused.
-			batch[idx].complete(s.finalizeFilteredOutResult(batch[idx].tx.TxIDChainHash(), batch[idx].attempt))
+			batch[idx].complete(s.finalizeFilteredOutResult(batch[idx].tx.TxIDChainHash(), batch[idx].attempt, writeInDoubt(rec.BatchRec())))
 		case ok && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR:
 			// The record vanished between create and finalize — surface it so the
 			// caller (validator roll-forward / sweeper) knows the state is broken.
@@ -256,12 +257,21 @@ func attemptFilter(attempt []byte) *aerospike.Expression {
 	)
 }
 
+// writeInDoubt reports whether the client sent the write of a batch record more than once. The
+// client marks a record in doubt only then, so an answer to the last send says nothing about
+// what an earlier send did on the server.
+func writeInDoubt(rec *aerospike.BatchRecord) bool {
+	return rec.InDoubt || isInDoubt(rec.Err)
+}
+
 // finalizeFilteredOutResult reads the master record after a finalize write was filtered out
 // and returns the finalize result: an error marked with utxo.MarkAlreadyFinal when the creating
 // bin is gone, because another write cleared it, and
 // ErrTxNotFound when the record is rolling back, has vanished or is creating under another
-// attempt.
-func (s *Store) finalizeFilteredOutResult(txHash *chainhash.Hash, attempt []byte) error {
+// attempt. inDoubt says that the filtered-out answer belongs to a send the client repeated. An
+// earlier send of the same finalize may then be the write that cleared the bin, so the error is
+// marked with utxo.MarkFinalInDoubt.
+func (s *Store) finalizeFilteredOutResult(txHash *chainhash.Hash, attempt []byte, inDoubt bool) error {
 	key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
 	if err != nil {
 		return errors.NewProcessingError("[finalizeFilteredOutResult] failed to create key for %s", txHash.String(), err)
@@ -277,6 +287,8 @@ func (s *Store) finalizeFilteredOutResult(txHash *chainhash.Hash, attempt []byte
 		return errors.NewTxNotFoundError("[sendFinalizeBatch] record not found for tx %s", txHash.String())
 	case state.rollingBack:
 		return errors.NewTxNotFoundError("[sendFinalizeBatch] tx %s is rolling back", txHash.String())
+	case !state.creating && inDoubt:
+		return utxo.MarkFinalInDoubt(errors.NewTxExistsError("[sendFinalizeBatch] tx %s is final and the finalize write was sent more than once", txHash.String()))
 	case !state.creating:
 		return utxo.MarkAlreadyFinal(errors.NewTxExistsError("[sendFinalizeBatch] tx %s is already final", txHash.String()))
 	case !bytes.Equal(state.attempt, attempt):

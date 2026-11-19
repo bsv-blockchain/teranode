@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -111,4 +112,15 @@ func (s *Store) FailChildAdoption(batchLevel bool) {
 // RestoreBatchOperate removes the override that FailChildAdoption installed.
 func (s *Store) RestoreBatchOperate() {
 	s.batchOperateFn = nil
+}
+
+// FinalizeFilteredOutResult reads the result of a finalize write that the server filtered out.
+// inDoubt says that the client sent the write more than once.
+func (s *Store) FinalizeFilteredOutResult(txHash *chainhash.Hash, attempt []byte, inDoubt bool) error {
+	return s.finalizeFilteredOutResult(txHash, attempt, inDoubt)
+}
+
+// WriteInDoubt reports whether the client sent the write of a batch record more than once.
+func WriteInDoubt(rec *aerospike.BatchRecord) bool {
+	return writeInDoubt(rec)
 }
