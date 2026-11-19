@@ -3005,21 +3005,6 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 			}
 		}
 	}()
-	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
-		func(item *batchSpend) *utxo.Spend {
-			if item == nil {
-				return nil
-			}
-			return item.spend
-		},
-		func(item *batchSpend, err error) {
-			item.errCh <- err
-		},
-	)
-	if len(batch) == 0 {
-		return
-	}
-
 	s.retrySpendBatchContext(ctx, batch, func(batch []*batchSpend) bool {
 		return s.trySendSpendBatch(ctx, batch)
 	})
