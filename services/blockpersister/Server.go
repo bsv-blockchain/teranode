@@ -242,7 +242,7 @@ func (u *Server) sleepFor(ctx context.Context, d time.Duration) {
 func (u *Server) pacedSleep(ctx context.Context, pacer *failurePacer, block *chainhash.Hash) {
 	d := pacer.next(block)
 	if pacer.announce() {
-		u.logger.Errorf("[BlockPersister] Same block failing repeatedly (%d consecutive failures, next wait %v): this block will not file without operator action - if it trails the retention window its source transactions may already be pruned", pacer.consecutive(), d)
+		u.logger.Errorf("[BlockPersister] Block %s failing repeatedly (%d consecutive failures, next wait %v): this block will not file without operator action - if it trails the retention window its source transactions may already be pruned", block, pacer.consecutive(), d)
 	}
 	u.sleepFor(ctx, d)
 }
