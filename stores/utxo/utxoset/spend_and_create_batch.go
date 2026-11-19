@@ -45,12 +45,12 @@ import (
 // A variable rather than a constant so a test can force the split.
 var spendAndCreateBatchByteBudget = 16 << 20
 
-// spendAndCreateResult is what one queued SpendAndCreate gets back.
 // spendAndCreateBatchAfterCommit is a test hook called after a batch commits. An error from it is
 // returned as the commit's, which is the shape of a commit the server made and the client did not
 // hear about. nil in production.
 var spendAndCreateBatchAfterCommit func() error
 
+// spendAndCreateResult is what one queued SpendAndCreate gets back.
 type spendAndCreateResult struct {
 	data   *meta.Data
 	spends []*utxo.Spend
