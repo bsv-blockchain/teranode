@@ -2615,6 +2615,13 @@ func TestCreateCaller(t *testing.T) {
 	require.Equal(t, utxostore.CallerValidator, createCaller(&Options{}))
 	require.Equal(t, utxostore.CallerSubtreeValidation, createCaller(&Options{InBlock: true}))
 
+	// WithCaller sets the caller and nothing else: it changes nothing about validation.
+	named := ProcessOptions(WithCaller(utxostore.CallerBlockValidation))
+	require.Equal(t, utxostore.CallerBlockValidation, named.Caller)
+
+	named.Caller = utxostore.CallerUnknown
+	require.Equal(t, ProcessOptions(), named, "WithCaller must leave every other option as it was")
+
 	// A caller the options name wins, with or without InBlock.
 	require.Equal(t, utxostore.CallerSubtreeValidation, createCaller(&Options{Caller: utxostore.CallerSubtreeValidation}))
 	require.Equal(t, utxostore.CallerBlockValidation, createCaller(&Options{Caller: utxostore.CallerBlockValidation, InBlock: true}))
