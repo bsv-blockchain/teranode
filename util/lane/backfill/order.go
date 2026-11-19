@@ -27,11 +27,14 @@ type SourceSubtree struct {
 	TxIDs []chainhash.Hash
 }
 
-// Source is everything the numbering of one segment depends on, frozen: the main-chain blocks to
-// number, in rising height, and the readable transactions no main-chain block holds.
+// Source is everything the numbering of one segment depends on, frozen: the source tip, the
+// main-chain blocks to number in rising height, and the readable transactions no main-chain block
+// holds. The tip may be later than the blocks this segment numbers.
 type Source struct {
-	Blocks []SourceBlock
-	Suffix []chainhash.Hash
+	SourceTipBlockID uint32
+	SourceTipHash    chainhash.Hash
+	Blocks           []SourceBlock
+	Suffix           []chainhash.Hash
 }
 
 // Facts answers what the frozen stores hold about a transaction. Both calls must give the same
@@ -146,9 +149,9 @@ func takesPosition(txid chainhash.Hash, facts Facts) (bool, error) {
 
 // Number writes the segment's assignment into m from the frozen source, block by block and then
 // the suffix, and finishes it. Against a manifest a crash left part-written it resumes: each block
-// already recorded must match the source exactly, or it fails, since a changed source would
-// renumber transactions already given positions. A transaction placed twice, in two blocks or a
-// block and the suffix, fails. It allocates nothing: positions follow from the manifest's first
+// already recorded and the source tip must match the manifest, or it fails, since a changed source
+// would renumber transactions already given positions. A transaction placed twice, in two blocks or
+// a block and the suffix, fails. It allocates nothing: positions follow from the manifest's first
 // position and the order.
 func Number(ctx context.Context, m *Manifest, src Source, facts Facts, seen Seen) (lane.ConversionSegment, error) {
 	if m.Finished() {
@@ -159,6 +162,11 @@ func Number(ctx context.Context, m *Manifest, src Source, facts Facts, seen Seen
 
 	if len(written) > len(src.Blocks) {
 		return lane.ConversionSegment{}, errors.NewProcessingError("manifest holds %d blocks, the source %d", len(written), len(src.Blocks))
+	}
+
+	header := m.Header()
+	if src.SourceTipBlockID != header.SourceTipBlockID || src.SourceTipHash != header.SourceTipHash {
+		return lane.ConversionSegment{}, errors.NewProcessingError("source tip block %d (%s) differs from manifest tip block %d (%s); the source changed", src.SourceTipBlockID, src.SourceTipHash.String(), header.SourceTipBlockID, header.SourceTipHash.String())
 	}
 
 	for i, b := range src.Blocks {

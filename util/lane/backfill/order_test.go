@@ -34,6 +34,8 @@ func h(s string) chainhash.Hash { return chainhash.HashH([]byte(s)) }
 // 700,001 one that already had a leased position.
 func exampleSource() (Source, fakeFacts) {
 	src := Source{
+		SourceTipBlockID: testHeader().SourceTipBlockID,
+		SourceTipHash:    testHeader().SourceTipHash,
 		Blocks: []SourceBlock{
 			{
 				BlockID: 7, Height: 700_000, Hash: h("block 700000"), Coinbase: h("cb 700000"),
@@ -139,6 +141,51 @@ func TestNumberResumesAfterACrash(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(dir, "part"))
 	require.NoError(t, err)
 	require.Equal(t, a, b)
+}
+
+// A reorganization after the first block must not append a replacement tip under the old
+// manifest header, even when every recorded block still matches the source.
+func TestNumberResumeRefusesAChangedSourceTip(t *testing.T) {
+	src, facts := exampleSource()
+	src.SourceTipBlockID = src.Blocks[1].BlockID
+	src.SourceTipHash = src.Blocks[1].Hash
+	header := testHeader()
+	header.SourceTipBlockID = src.SourceTipBlockID
+	header.SourceTipHash = src.SourceTipHash
+
+	for name, changeTip := range map[string]func(*Source){
+		"block ID": func(s *Source) {
+			s.Blocks[1].BlockID++
+			s.SourceTipBlockID++
+		},
+		"block hash": func(s *Source) {
+			s.Blocks[1].Hash = h("replacement tip")
+			s.SourceTipHash = s.Blocks[1].Hash
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "m")
+			part, err := CreateManifest(path, header)
+			require.NoError(t, err)
+			order, err := BlockOrder(src.Blocks[0], facts)
+			require.NoError(t, err)
+			_, err = part.AppendBlock(src.Blocks[0].BlockID, src.Blocks[0].Height, order)
+			require.NoError(t, err)
+			require.NoError(t, part.Close())
+
+			resumed, err := ResumeManifest(path)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, resumed.Close()) }()
+
+			changed := src
+			changed.Blocks = append([]SourceBlock(nil), src.Blocks...)
+			changeTip(&changed)
+			_, err = Number(context.Background(), resumed, changed, facts, MemorySeen{})
+			require.Error(t, err)
+			require.Len(t, resumed.Blocks(), 1, "the replacement tip must not be appended")
+			require.False(t, resumed.Finished())
+		})
+	}
 }
 
 // A source that changed under a part-written manifest is refused rather than renumbered.
