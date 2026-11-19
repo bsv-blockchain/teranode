@@ -978,6 +978,100 @@ func TestAbortedSpendKeepsAnIdempotentMatchWhileAnInputIsUnanswered(t *testing.T
 	}
 }
 
+func TestAbandonedQueuedSpendNeverWrites(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+		parent := replayParent(t, ctx, store, strings.Repeat("11", 32))
+		child := replaySpender(t, parent)
+		store.settings.UtxoStore.SpendWaitTimeout = 100 * time.Millisecond
+		entered, release, settled := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		defer func() {
+			select {
+			case <-release:
+			default:
+				close(release)
+			}
+		}()
+		store.spendBatcher.Close()
+		store.spendBatcher = batcher.NewWithPool(1, time.Millisecond, func(batch []*batchSpend) {
+			close(entered)
+			<-release // The serial callback has not handed these items to the store yet.
+			store.sendSpendBatch(batch)
+			close(settled)
+		}, false)
+		callDone := make(chan error, 1)
+		go func() {
+			_, _, err := store.SpendAndCreate(ctx, child, 1000)
+			callDone <- err
+		}()
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("spend was not queued")
+		}
+		select {
+		case err := <-callDone:
+			require.Error(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("queued caller must be able to abandon an item before execution")
+		}
+		close(release)
+		select {
+		case <-settled:
+		case <-time.After(5 * time.Second):
+			t.Fatal("released callback did not settle")
+		}
+		require.Empty(t, outputSpendingData(t, ctx, store, parent, 0), "a queued spend canceled before execution must never reach the database")
+	})
+}
+
+func TestAbandonedQueuedSpendDoesNotCancelItsBatchPeer(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
+		a := replaySpender(t, replayParent(t, ctx, store, strings.Repeat("11", 32)))
+		parentB := replayParent(t, ctx, store, strings.Repeat("22", 32))
+		b := replaySpender(t, parentB)
+		store.settings.UtxoStore.SpendWaitTimeout = time.Minute
+		entered, release := make(chan struct{}), make(chan struct{})
+		defer func() {
+			select {
+			case <-release:
+			default:
+				close(release)
+			}
+		}()
+		store.spendBatcher.Close()
+		store.spendBatcher = batcher.NewWithPool(2, time.Minute, func(batch []*batchSpend) {
+			close(entered)
+			<-release
+			store.sendSpendBatch(batch)
+		}, false)
+		callCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		aDone, bDone := make(chan error, 1), make(chan error, 1)
+		go func() { _, err := store.Spend(callCtx, a, 1000); aDone <- err }()
+		go func() { _, err := store.Spend(ctx, b, 1000); bDone <- err }()
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("both spends must be queued together")
+		}
+		cancel()
+		select {
+		case err := <-aDone:
+			require.Error(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("queued canceled caller did not return")
+		}
+		close(release)
+		select {
+		case err := <-bDone:
+			require.NoError(t, err, "discarding an abandoned queued item must not cancel a live peer")
+		case <-time.After(5 * time.Second):
+			t.Fatal("live batch peer did not return")
+		}
+		require.NotEmpty(t, outputSpendingData(t, ctx, store, parentB, 0))
+	})
+}
+
 func testAbortedSpendKeepsIdempotentMatch(t *testing.T, byCancel bool) {
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		newParent := func(seed string) *bt.Tx {

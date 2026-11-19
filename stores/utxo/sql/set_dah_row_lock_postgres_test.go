@@ -19,11 +19,84 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 )
 
 const pgLockNotAvailable = "55P03"
+
+// Delete and mining must lock the transaction before its block references.
+// The short deadlock timeout on Delete makes its failure deterministic when
+// the old opposite order forms a cycle; mining cannot hide it with a retry.
+func TestDeleteAndMiningUseTheSameRowLockOrder_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+	for _, unset := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unset_%t", unset), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			t.Cleanup(cancel)
+			dbURL := startPostgresContainer(t, ctx)
+			store, miner := newPostgresTestStore(t, ctx, dbURL), newPostgresTestStore(t, ctx, dbURL)
+			t.Cleanup(func() { _ = store.Close(context.Background()); _ = miner.Close(context.Background()) })
+			tx := replayParent(t, ctx, store, "1111111111111111111111111111111111111111111111111111111111111111")
+			block := utxo.MinedBlockInfo{BlockID: 1000, BlockHeight: 1000, OnLongestChain: true}
+			_, err := store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, block)
+			require.NoError(t, err)
+			// Each store now has one connection, so these session settings apply
+			// to its actual Delete or SetMinedMulti transaction.
+			store.db.SetMaxOpenConns(1)
+			store.db.SetMaxIdleConns(1)
+			miner.db.SetMaxOpenConns(1)
+			miner.db.SetMaxIdleConns(1)
+			_, err = store.db.ExecContext(ctx, "SET deadlock_timeout = '100ms'; SET application_name = 'delete-order-delete'")
+			require.NoError(t, err)
+			_, err = miner.db.ExecContext(ctx, "SET deadlock_timeout = '10s'; SET application_name = 'delete-order-miner'")
+			require.NoError(t, err)
+			control, err := pgx.Connect(ctx, dbURL.String())
+			require.NoError(t, err)
+			defer func() { _ = control.Close(context.Background()) }()
+			holder, err := control.Begin(ctx)
+			require.NoError(t, err)
+			defer func() { _ = holder.Rollback(context.Background()) }()
+			_, err = holder.Exec(ctx, "DELETE FROM block_ids WHERE transaction_id IN (SELECT id FROM transactions WHERE hash = $1)", tx.TxIDChainHash()[:])
+			require.NoError(t, err)
+			observer, err := pgx.Connect(ctx, dbURL.String())
+			require.NoError(t, err)
+			defer func() { _ = observer.Close(context.Background()) }()
+			waitForLock := func(name string) {
+				t.Helper()
+				deadline := time.Now().Add(5 * time.Second)
+				for time.Now().Before(deadline) {
+					var waiting bool
+					err := observer.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name = $1 AND wait_event_type = 'Lock')", name).Scan(&waiting)
+					require.NoError(t, err)
+					if waiting {
+						return
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				t.Fatalf("%s must be waiting on the held row", name)
+			}
+			deleted, mined := make(chan error, 1), make(chan error, 1)
+			go func() { deleted <- store.Delete(ctx, tx.TxIDChainHash()) }()
+			waitForLock("delete-order-delete")
+			block.UnsetMined = unset
+			go func() { _, err := miner.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, block); mined <- err }()
+			waitForLock("delete-order-miner")
+			require.NoError(t, holder.Rollback(ctx))
+			require.NoError(t, <-deleted, "Delete must not become the deadlock victim of mining")
+			err = <-mined
+			if unset {
+				require.NoError(t, err, "unsetting a deleted transaction is a no-op")
+			} else {
+				require.ErrorIs(t, err, errors.ErrTxNotFound, "mining must see the row Delete removed")
+			}
+			require.False(t, rowExists(ctx, t, store, *tx.TxIDChainHash()))
+		})
+	}
+}
 
 func pruneRowsAtHeight(ctx context.Context, t *testing.T, store *Store, height uint32) {
 	t.Helper()

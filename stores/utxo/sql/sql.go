@@ -95,6 +95,13 @@ const (
 // batchSpend represents a single UTXO spend request in a batch.
 // Mirrors aerospike/spend.go batchSpend struct.
 type batchSpend struct {
+	call *spendCall
+	// execution transfers ownership from the waiting caller to the callback.
+	// A queued caller can abandon its item; an executing caller instead waits
+	// for settled, so it cannot return before a commit or rollback finishes.
+	execution         atomic.Uint32
+	settled           <-chan struct{}
+	interrupted       bool        // A canceled batch may not have reached this input's marker check.
 	spend             *utxo.Spend // UTXO to spend
 	blockHeight       uint32      // Current block height
 	errCh             chan error  // Channel for completion notification
@@ -109,6 +116,17 @@ type batchSpend struct {
 	// confirmed output to any new spender.
 	idempotent bool
 }
+
+// spendCall shares caller cancellation across the inputs of one Spend call.
+type spendCall struct {
+	ctx context.Context
+}
+
+const (
+	spendQueued uint32 = iota
+	spendExecuting
+	spendAbandoned
+)
 
 // Store implements the UTXO store interface using a SQL database backend.
 type Store struct {
@@ -2290,9 +2308,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		succeeded        int
 		spentSpends      = make([]*utxo.Spend, 0, len(spends)) // written by this call
 		idempotentSpends = make([]*utxo.Spend, 0, len(spends)) // already recorded; this call wrote nothing
-		// unresolved counts inputs that stopped waiting before their batch
-		// answered (context cancelled, or the wait timed out). Their real answer
-		// is unknown and may be the pruned-replay marker; see spendRollbackSet.
+		// unresolved counts abandoned or interrupted inputs whose marker
+		// verdict is unknown. An earlier idempotent match may be a historical
+		// spend, so it must survive rollback; see spendRollbackSet.
 		unresolved int
 		g          errgroup.Group
 	)
@@ -2317,6 +2335,13 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			return nil, errors.NewProcessingError("spend of %s:%d carries no spending data", spend.TxID, spend.Vout)
 		}
 	}
+	callCtx, cancelCall := context.WithCancel(s.ctx)
+	defer cancelCall()
+	call := &spendCall{ctx: callCtx}
+	if ctx.Done() != nil {
+		stop := context.AfterFunc(ctx, cancelCall)
+		defer stop()
+	}
 
 	for idx, spend := range spends {
 		if spend == nil {
@@ -2334,8 +2359,13 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				handleSpendPanic(recover(), &spends[idx].Err, s.logger)
 			}()
 
+			spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
+			if spendTimeout <= 0 {
+				spendTimeout = 30 * time.Second
+			}
 			errCh := make(chan error, 1)
 			item := &batchSpend{
+				call:              call,
 				spend:             spend,
 				blockHeight:       blockHeight,
 				errCh:             errCh,
@@ -2343,53 +2373,48 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				ignoreLocked:      useIgnoreLocked,
 				skipUTXOHashCheck: useSkipUTXOHashCheck,
 			}
-			s.spendBatcher.PutCtx(ctx, item)
-
-			// Wait for batch response with timeout to prevent indefinite blocking
-			spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
-			if spendTimeout <= 0 {
-				spendTimeout = 30 * time.Second
-			}
-
-			timer := time.NewTimer(spendTimeout)
+			// Reuse the input's wait timer to cancel this call's database
+			// work too. The callback may include inputs from other calls;
+			// those share its transaction's abort, as on any SQL failure.
+			timer := time.AfterFunc(spendTimeout, cancelCall)
 			defer timer.Stop()
+			s.spendBatcher.PutCtx(callCtx, item)
 
 			var batchErr error
 			select {
 			case batchErr = <-errCh:
 				// Batch completed successfully or with error
-			case <-ctx.Done():
-				// Known residual window (#1291, store-level atomic Spend /
-				// reverse-on-abort): this item is still enqueued in the batcher and
-				// will be committed by the callback under the store's own context,
-				// not this caller ctx. A straggler UPDATE can land after we give up
-				// here and after the rollback below has already run, leaving exactly
-				// the #1214 dangling ref. Not fixed here — counted below so it is
-				// at least observable.
+			case <-callCtx.Done():
 				prometheusUtxoSpendAbortInFlight.Inc()
-				spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spend.TxID.String(), spend.Vout)
-
+				if item.execution.CompareAndSwap(spendQueued, spendAbandoned) {
+					// Execution cannot start after this handoff is abandoned.
+					if ctx.Err() != nil || s.ctx.Err() != nil {
+						spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spend.TxID.String(), spend.Vout)
+					} else {
+						prometheusUtxoErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
+						spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spend.TxID.String(), spend.Vout, spendTimeout)
+					}
+					mu.Lock()
+					unresolved++
+					mu.Unlock()
+					return nil
+				}
+				// The callback owns this item. Cancellation aborts its SQL;
+				// wait for cleanup and its actual answer before rollback.
+				<-item.settled
+				batchErr = <-errCh
+			}
+			if item.settled != nil {
+				<-item.settled
+			}
+			if item.interrupted {
+				// Cancellation may precede this input's marker check, while an
+				// earlier batch has already reported a historical idempotent match.
+				// The canceled input's marker verdict is still unknown, so keep
+				// those matches while reversing only acknowledged fresh writes.
 				mu.Lock()
 				unresolved++
 				mu.Unlock()
-
-				return nil
-			case <-timer.C:
-				// Known residual window (#1291, store-level atomic Spend /
-				// reverse-on-abort): same straggler risk as the ctx.Done() arm
-				// above — the item remains enqueued and can still commit under the
-				// store's own context after this per-item wait gives up and after
-				// the rollback below has run. Not fixed here — counted below so it
-				// is at least observable.
-				prometheusUtxoErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
-				prometheusUtxoSpendAbortInFlight.Inc()
-				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spend.TxID.String(), spend.Vout, spendTimeout)
-
-				mu.Lock()
-				unresolved++
-				mu.Unlock()
-
-				return nil
 			}
 
 			// Handle "already blessed" — parent tx not found but spending tx exists.
@@ -2917,6 +2942,66 @@ func readBlockIDs(rows sqlRows) (map[chainhash.Hash][]uint32, error) {
 // Aerospike doesn't need this because it uses optimistic single-key operations
 // without DB-level row locking.
 func (s *Store) sendSpendBatch(batch []*batchSpend) {
+	settled := make(chan struct{})
+	defer close(settled)
+	active := make([]*batchSpend, 0, len(batch))
+	for _, item := range batch {
+		if item == nil {
+			continue
+		}
+		// Publish settled before the handoff. A failed caller CAS then sees
+		// the initialized channel and waits for transaction cleanup.
+		item.settled = settled
+		if !item.execution.CompareAndSwap(spendQueued, spendExecuting) {
+			continue
+		}
+		active = append(active, item)
+	}
+	batch = active
+	if len(batch) == 0 {
+		return
+	}
+	// A batch containing one call uses that call's cancellation directly.
+	// A mixed batch merges only the distinct calls that can abort its SQL.
+	ctx := s.ctx
+	primary := batch[0].call
+	singleCall := primary != nil
+	for _, item := range batch {
+		if item.call != primary {
+			singleCall = false
+			break
+		}
+	}
+	if singleCall {
+		ctx = primary.ctx
+	} else {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(s.ctx)
+		stops := make([]func() bool, 0, len(batch))
+		seen := make(map[*spendCall]struct{})
+		for _, item := range batch {
+			if item.call == nil {
+				continue
+			}
+			if _, ok := seen[item.call]; !ok {
+				seen[item.call] = struct{}{}
+				stops = append(stops, context.AfterFunc(item.call.ctx, cancel))
+			}
+		}
+		defer func() {
+			for _, stop := range stops {
+				stop()
+			}
+			cancel()
+		}()
+	}
+	defer func() {
+		if ctx.Err() != nil {
+			for _, item := range active {
+				item.interrupted = true
+			}
+		}
+	}()
 	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
 		func(item *batchSpend) *utxo.Spend {
 			if item == nil {
@@ -2932,8 +3017,8 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 		return
 	}
 
-	s.retrySpendBatch(batch, func(batch []*batchSpend) bool {
-		return s.trySendSpendBatch(s.ctx, batch)
+	s.retrySpendBatchContext(ctx, batch, func(batch []*batchSpend) bool {
+		return s.trySendSpendBatch(ctx, batch)
 	})
 }
 
@@ -4600,6 +4685,14 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 			SELECT id FROM transactions WHERE hash = $1
 		)
 	`
+	if s.engine == "postgres" {
+		// Lock the transaction before its block references, as mining does.
+		// Keep this in the existing first statement so Delete adds no trip.
+		q = `DELETE FROM block_ids
+		WHERE transaction_id IN (
+			SELECT id FROM transactions WHERE hash = $1 FOR UPDATE
+		)`
+	}
 
 	_, err = txn.ExecContext(ctx, q, hash[:])
 	if err != nil {

@@ -1636,9 +1636,8 @@ func answerEveryRecord(s *Service, code types.ResultCode) *int {
 
 // TestWithdrawMarkers_LastingRefusal: a withdrawal refused with a code that
 // answers the same way every time is sent once, not resent. It is counted when
-// the parent's marker write landed, since that marker then stays and refuses
-// the kept child's re-spend. It is not counted when the marker write itself
-// failed: a record that cannot take this write did not take the marker either.
+// the parent's marker write landed, including when its answer was unreadable:
+// that marker stays and refuses the kept child's re-spend.
 func TestWithdrawMarkers_LastingRefusal(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -1646,7 +1645,7 @@ func TestWithdrawMarkers_LastingRefusal(t *testing.T) {
 		counted      float64
 	}{
 		{name: "marker landed", counted: 1},
-		{name: "marker write failed", markerFailed: true, counted: 0},
+		{name: "marker outcome unread", markerFailed: true, counted: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, client := newFlushTestService(t)
@@ -1654,20 +1653,24 @@ func TestWithdrawMarkers_LastingRefusal(t *testing.T) {
 
 			parent := chainhash.HashH([]byte{0xF4, 1})
 			child := chainhash.HashH([]byte{0xF4, 2})
-			putRecord(t, client, &parent, spentBy(&child))
+			parentKey := putRecord(t, client, &parent, spentBy(&child))
 
 			updates := make(map[string]*parentUpdateInfo)
 			require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
+			_, err := s.markParents(context.Background(), updates)
+			require.NoError(t, err)
+			require.True(t, hasMarker(t, client, parentKey, &child), "fixture: the marker landed before its outcome became unknown")
 
 			for _, info := range updates {
 				info.markerFailed = tc.markerFailed
 			}
 
-			calls := answerEveryRecord(s, types.BIN_TYPE_ERROR)
+			calls := answerEveryRecord(s, types.ROLE_VIOLATION)
 
 			s.withdrawMarkers(updates, map[chainhash.Hash]struct{}{child: {}})
 			require.Equal(t, 1, *calls, "a lasting refusal is not resent")
 			require.Equal(t, tc.counted, failures())
+			require.True(t, hasMarker(t, client, parentKey, &child), "the refused withdrawal leaves a real marker behind")
 		})
 	}
 }

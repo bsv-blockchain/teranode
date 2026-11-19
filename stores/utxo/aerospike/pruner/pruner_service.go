@@ -3752,11 +3752,6 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 	type withdrawal struct {
 		key  *aerospike.Key
 		keys []interface{}
-		// markerFailed: the marker write to this parent failed, or its outcome
-		// could not be read. A lasting refusal of the withdrawal then says the
-		// record cannot take this write at all, so the marker did not land
-		// either, and it is not counted.
-		markerFailed bool
 	}
 
 	pending := make([]withdrawal, 0, len(updates))
@@ -3777,7 +3772,7 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 		// A parent whose marker write failed is resent like any other: the
 		// failure may be an outcome that could not be read, and then the marker
 		// may have landed.
-		pending = append(pending, withdrawal{key: info.key, keys: keys, markerFailed: info.markerFailed})
+		pending = append(pending, withdrawal{key: info.key, keys: keys})
 	}
 
 	var (
@@ -3795,11 +3790,9 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 
 		retry, refused, err := s.sendWithdrawals(policy, keys, childKeys)
 
-		for _, i := range refused {
-			if !pending[i].markerFailed {
-				lasting++
-			}
-		}
+		// A marker with an unreadable outcome may have landed. A lasting
+		// refusal of its removal does not prove absence, so count it too.
+		lasting += len(refused)
 
 		// A fresh slice: retry need not be ascending (an unsent batch lists its
 		// unroutable keys first), so filtering pending in place would let one
