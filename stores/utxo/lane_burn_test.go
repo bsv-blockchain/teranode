@@ -183,4 +183,21 @@ func TestSequentialSpendAndCreateRecordsItsBurns(t *testing.T) {
 
 		require.Equal(t, before+1, burnCount("seqstore", LaneBurnExists, CallerBlockAssembly))
 	})
+
+	t.Run("a create whose outcome the store could not confirm", func(t *testing.T) {
+		s := &lanedSequentialStore{fakeSequentialStore: fakeSequentialStore{
+			createErr: MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("batch did not complete")),
+		}}
+		s.NameLaneBurns("seqstore")
+		s.SetLanePositionSource(onePosition{lane.Pack(9, 6)})
+
+		before := burnCount("seqstore", LaneBurnOutcomeUnknown, CallerValidator)
+
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100,
+			WithCreateOnly(), WithCaller(CallerValidator))
+		require.True(t, IsCreateOutcomeUnknown(err))
+
+		require.Equal(t, before+1, burnCount("seqstore", LaneBurnOutcomeUnknown, CallerValidator),
+			"a create that may still land counts as outcome_unknown")
+	})
 }
