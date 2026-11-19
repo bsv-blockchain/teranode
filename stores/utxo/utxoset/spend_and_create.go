@@ -7,7 +7,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/jackc/pgx/v5"
 )
@@ -295,7 +294,9 @@ func (s *Store) burnUnlessStored(ctx context.Context, tx *bt.Tx, options *utxo.C
 	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), laneBurnProbeTimeout)
 	defer cancel()
 
-	md, getErr := s.Get(probeCtx, &txid, fields.LanePosition)
+	// Read directly, not through the get batcher: queueing on it takes the store's close lock,
+	// which a closing store with a writer stuck on a full queue can hold past any deadline.
+	md, getErr := s.getDirect(probeCtx, &txid, false, false, true)
 
 	switch {
 	case getErr == nil && md != nil && md.LanePosition == position:
