@@ -83,43 +83,71 @@ func TestValidateBlock_RejectsForkBelowCheckpoint(t *testing.T) {
 }
 
 // TestReValidateBlock_RejectsForkBelowCheckpoint pins the checkpoint fork rule on the queued
-// revalidation worker, before its subtree work, as ValidateBlockWithOptions applies it.
+// revalidation worker, before its subtree work, as ValidateBlockWithOptions applies it. The
+// optimistic paths queue blocks they already stored, and a stored block below the checkpoint
+// is refused only when it is not on the main chain: one that is, is an ancestor of the
+// checkpoint.
 func TestReValidateBlock_RejectsForkBelowCheckpoint(t *testing.T) {
-	initPrometheusMetrics()
+	for _, tc := range []struct {
+		name        string
+		stored      bool
+		onMainChain bool
+		rejected    bool
+	}{
+		{name: "not stored", rejected: true},
+		{name: "stored fork", stored: true, rejected: true},
+		{name: "stored on the main chain", stored: true, onMainChain: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			initPrometheusMetrics()
 
-	ctx := context.Background()
+			ctx := context.Background()
 
-	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup(t)
-	defer cleanup()
+			utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup(t)
+			defer cleanup()
 
-	countingClient := &countingSubtreeValidationClient{Interface: subtreeValidationClient}
+			countingClient := &countingSubtreeValidationClient{Interface: subtreeValidationClient}
 
-	tSettings := test.CreateBaseTestSettings(t)
+			tSettings := test.CreateBaseTestSettings(t)
 
-	// Checkpoint at 1000, block at height 1, tip past the checkpoint.
-	block, mockBlockchain, _ := belowCheckpointPoWFixture(t, tSettings)
+			// Checkpoint at 1000, block at height 1, tip past the checkpoint.
+			block, mockBlockchain, _ := belowCheckpointPoWFixture(t, tSettings)
 
-	nBits, err := model.NewNBitFromString("207fffff")
-	require.NoError(t, err)
-	block.Header.Bits = *nBits
-	for ok, _, _ := block.Header.HasMetTargetDifficulty(); !ok; ok, _, _ = block.Header.HasMetTargetDifficulty() {
-		block.Header.Nonce++
+			nBits, err := model.NewNBitFromString("207fffff")
+			require.NoError(t, err)
+			block.Header.Bits = *nBits
+			for ok, _, _ := block.Header.HasMetTargetDifficulty(); !ok; ok, _, _ = block.Header.HasMetTargetDifficulty() {
+				block.Header.Nonce++
+			}
+
+			for _, call := range mockBlockchain.ExpectedCalls {
+				if call.Method == "GetBestBlockHeader" {
+					call.ReturnArguments[1] = &model.BlockHeaderMeta{Height: 1500}
+				}
+			}
+			mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil).Maybe()
+			mockBlockchain.On("GetBlockExists", mock.Anything, block.Hash()).Return(tc.stored, nil).Maybe()
+			mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, block.Hash(), uint64(1)).Return([]uint32{7}, nil).Maybe()
+			mockBlockchain.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{7}).Return(tc.onMainChain, nil).Maybe()
+
+			bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, countingClient)
+
+			err = bv.reValidateBlock(ctx, revalidateBlockData{block: block, baseURL: "http://peer"})
+
+			if !tc.rejected {
+				if err != nil {
+					require.NotContains(t, err.Error(), "bad-fork-prior-to-checkpoint")
+				}
+
+				return
+			}
+
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrBlockInvalid), "got: %v", err)
+			require.Contains(t, err.Error(), "bad-fork-prior-to-checkpoint")
+			require.Equal(t, int32(0), countingClient.checkBlockSubtreesCalls.Load(), "rejected before its transactions are validated")
+		})
 	}
-
-	for _, call := range mockBlockchain.ExpectedCalls {
-		if call.Method == "GetBestBlockHeader" {
-			call.ReturnArguments[1] = &model.BlockHeaderMeta{Height: 1500}
-		}
-	}
-	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil).Maybe()
-
-	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, countingClient)
-
-	err = bv.reValidateBlock(ctx, revalidateBlockData{block: block, baseURL: "http://peer"})
-	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "got: %v", err)
-	require.Contains(t, err.Error(), "bad-fork-prior-to-checkpoint")
-	require.Equal(t, int32(0), countingClient.checkBlockSubtreesCalls.Load(), "rejected before its transactions are validated")
 }
 
 // TestValidateBlock_RejectsForkBelowCheckpointPassedDuringValidation pins the re-check

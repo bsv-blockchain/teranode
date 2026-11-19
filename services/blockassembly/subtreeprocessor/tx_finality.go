@@ -132,7 +132,8 @@ func (stp *SubtreeProcessor) OfferLockHeldTxs(ctx context.Context) error {
 		case item.Err != nil:
 			return errors.NewProcessingError("[OfferLockHeldTxs] error reading held transaction %s", item.Hash.String(), item.Err)
 		case item.Data == nil:
-			return errors.NewProcessingError("[OfferLockHeldTxs] no data read for held transaction %s", item.Hash.String())
+			// Some stores answer a missing transaction with no data and no error.
+			verdicts[i] = drop
 		case item.Data.Conflicting:
 			verdicts[i] = drop
 		case item.Data.UnminedSince == 0:

@@ -355,6 +355,43 @@ func TestTxFinality_ConflictingHeldTxIsNotOfferedAgain(t *testing.T) {
 	require.True(t, childDropped, "the child is dropped for its dropped parent")
 }
 
+// TestTxFinality_HeldTxMissingWithoutAnErrorIsDropped pins a store that answers a missing
+// transaction with no data and no error, as the null store does: the transaction is dropped
+// like one the store reports not found, and the rest are offered. Failing the offer instead
+// would leave every later template unsettled.
+func TestTxFinality_HeldTxMissingWithoutAnErrorIsDropped(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stp := newFinalityTestProcessor(t, ctx)
+
+	missing := chainhash.HashH([]byte("finality-held-missing"))
+	other := chainhash.HashH([]byte("finality-held-other"))
+
+	require.Empty(t, stp.FilterUnminedTxEra([]*utxostore.UnminedTransaction{
+		{Node: &subtreepkg.Node{Hash: missing}, TxInpoints: &subtreepkg.TxInpoints{}, LockTime: finalityTestHeight},
+		{Node: &subtreepkg.Node{Hash: other}, TxInpoints: &subtreepkg.TxInpoints{}, LockTime: finalityTestHeight},
+	}, []uint32{0, 0}))
+
+	storeAnswers(stp, func(hash chainhash.Hash) *meta.Data {
+		if hash == missing {
+			return nil
+		}
+
+		return unminedInStore
+	})
+
+	moveFinalityCandidate(t, stp, finalityTestHeight+1, finalityTestMTP)
+
+	require.Equal(t, int64(1), stp.queue.length(), "only the other one is offered again")
+
+	stp.droppedMu.Lock()
+	_, missingDropped := stp.droppedTxs[missing]
+	stp.droppedMu.Unlock()
+
+	require.True(t, missingDropped)
+}
+
 // TestNothingToReload_AnswersWhateverTheProcessorState pins that NothingToReload never waits on a
 // processor that is not serving requests: block assembly asks it after every block move, and a
 // processor not started, or stopped, would otherwise hold it for good. It answers false there,

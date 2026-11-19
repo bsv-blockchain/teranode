@@ -4082,9 +4082,24 @@ func (u *BlockValidation) reValidateBlock(ctx context.Context, blockData revalid
 	}
 
 	// The checkpoint fork rule, before the subtree work below, as ValidateBlockWithOptions
-	// applies it. A revalidation: no verdict is sent for it.
-	if err := u.rejectForkBelowCheckpoint(ctx, blockData.block, &ValidateBlockOptions{IsRevalidation: true}, blockData.baseURL); err != nil {
-		return err
+	// applies it. A revalidation: no verdict is sent for it. The optimistic paths queue blocks
+	// they already stored, and height alone does not tell a stored main-chain block, an
+	// ancestor of the checkpoint, from a fork.
+	if model.BelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, blockData.block.Height) {
+		stored, err := u.blockchainClient.GetBlockExists(ctx, blockData.block.Hash())
+		if err != nil {
+			return errors.NewServiceError("[reValidateBlock][%s] failed to check whether the block is stored for the checkpoint fork rule", blockData.block.Hash().String(), err)
+		}
+
+		if stored {
+			err = u.rejectStoredForkBelowCheckpoint(ctx, blockData.block.Header, blockData.block.Height)
+		} else {
+			err = u.rejectForkBelowCheckpoint(ctx, blockData.block, &ValidateBlockOptions{IsRevalidation: true}, blockData.baseURL)
+		}
+
+		if err != nil {
+			return err
+		}
 	}
 
 	// The header hash must meet the target its own nBits declares, below checkpoint or not
