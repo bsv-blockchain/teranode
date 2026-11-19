@@ -1287,7 +1287,14 @@ func TestLanePositionBurnsOfANettedList(t *testing.T) {
 	t.Run("a below-checkpoint chunk that fails burns rolled_back", func(t *testing.T) {
 		const height = 900
 
-		s, ctx := newLaneStore(t)
+		// One worker runs the chunks in list order, so the first commits before the second fails:
+		// with chunks side by side, the failure could cancel the first one's commit, which counts
+		// outcome_unknown.
+		s, ctx := newTestStoreWith(t, func(ts *settings.Settings) {
+			ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+			ts.UtxoStore.NettedBelowWorkers = 1
+		})
+		require.Equal(t, 1, s.nettedBelowWorkers())
 		withNettedBelowChunkTxs(t, 1)
 
 		w := tests.BuildMultiWorkload(t, 0xc8, 1, 2)
@@ -1314,19 +1321,14 @@ func TestLanePositionBurnsOfANettedList(t *testing.T) {
 		nettedBelowFault = nil
 		require.ErrorIs(t, err, failure)
 
-		// The failure cancels the chunks running beside it, so the first chunk either committed
-		// or rolled back too. Every position is on a record or counted, never both.
-		stored := 0
-
-		for _, tx := range list {
-			if _, gerr := s.Get(ctx, tx.TxIDChainHash()); gerr == nil {
-				stored++
-			}
-		}
-
-		t.Logf("stored %d of %d", stored, len(list))
-		require.Equal(t, tests.LaneBurns{utxo.LaneBurnRolledBack + "/block_validation": float64(len(list) - stored)},
+		require.Equal(t, tests.LaneBurns{utxo.LaneBurnRolledBack + "/block_validation": 1},
 			tests.ReadLaneBurns(t, "utxoset").Since(before))
+
+		_, err = s.Get(ctx, list[0].TxIDChainHash())
+		require.NoError(t, err, "the first chunk committed its position")
+
+		_, err = s.Get(ctx, list[1].TxIDChainHash())
+		require.ErrorIs(t, err, errors.ErrTxNotFound, "the failed chunk rolled back")
 	})
 }
 
@@ -1627,6 +1629,33 @@ func TestLanePositionBurnOfACommitThatReportedFailure(t *testing.T) {
 		require.Equal(t, tests.LaneBurns{
 			utxo.LaneBurnSpendRejected + "/subtree_validation":  1,
 			utxo.LaneBurnParentFailed + "/subtree_validation":   1,
+			utxo.LaneBurnOutcomeUnknown + "/subtree_validation": 1,
+		}, tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
+	t.Run("a list chunk that found a stored transaction", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+
+		root := storedParent(t, s, ctx)
+		stored := spendOutput(t, root, 0, 2)
+		fresh := spendOutput(t, root, 1, 3)
+
+		_, _, err := s.SpendAndCreate(ctx, stored, 1_100)
+		require.NoError(t, err)
+
+		useBurnSource(t, s, burnPositions(2)...)
+		failure := failNextCommit(t)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		// The chunk finds stored already held and settles it as existing; its write of fresh
+		// commits and reports failure.
+		_, err = s.SpendAndCreateMulti(ctx, []*bt.Tx{stored, fresh}, 1_100, utxo.WithIgnoreLocked(true),
+			utxo.WithCaller(utxo.CallerSubtreeValidation))
+		require.ErrorIs(t, err, failure)
+
+		require.Equal(t, tests.LaneBurns{
+			utxo.LaneBurnExists + "/subtree_validation":         1,
 			utxo.LaneBurnOutcomeUnknown + "/subtree_validation": 1,
 		}, tests.ReadLaneBurns(t, "utxoset").Since(before))
 	})
