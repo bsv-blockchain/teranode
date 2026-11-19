@@ -1289,7 +1289,7 @@ func TestLanePositionBurnsOfANettedList(t *testing.T) {
 			tests.ReadLaneBurns(t, "utxoset").Since(before))
 	})
 
-	t.Run("a below-checkpoint chunk that fails burns rolled_back", func(t *testing.T) {
+	t.Run("a below-checkpoint chunk that fails burns rolled_back, and the chunk after it list_failed", func(t *testing.T) {
 		const height = 900
 
 		// One worker runs the chunks in list order, so the first commits before the second fails:
@@ -1302,12 +1302,12 @@ func TestLanePositionBurnsOfANettedList(t *testing.T) {
 		require.Equal(t, 1, s.nettedBelowWorkers())
 		withNettedBelowChunkTxs(t, 1)
 
-		w := tests.BuildMultiWorkload(t, 0xc8, 1, 2)
+		w := tests.BuildMultiWorkload(t, 0xc8, 1, 3)
 		w.StoreRoots(t, s, height-1)
 
 		list := outpointOnly(w.Txs)
 
-		// The second transaction's chunk fails; the first commits.
+		// The second transaction's chunk fails; the first commits; the third never starts.
 		nettedBelowFault = func(chunk []int) error {
 			if len(chunk) == 1 && chunk[0] == 1 {
 				return failure
@@ -1318,7 +1318,7 @@ func TestLanePositionBurnsOfANettedList(t *testing.T) {
 
 		t.Cleanup(func() { nettedBelowFault = nil })
 
-		useBurnSource(t, s, burnPositions(2)...)
+		useBurnSource(t, s, burnPositions(3)...)
 		before := tests.ReadLaneBurns(t, "utxoset")
 
 		_, err := s.SpendAndCreateMulti(ctx, list, height,
@@ -1326,14 +1326,18 @@ func TestLanePositionBurnsOfANettedList(t *testing.T) {
 		nettedBelowFault = nil
 		require.ErrorIs(t, err, failure)
 
-		require.Equal(t, tests.LaneBurns{utxo.LaneBurnRolledBack + "/block_validation": 1},
-			tests.ReadLaneBurns(t, "utxoset").Since(before))
+		require.Equal(t, tests.LaneBurns{
+			utxo.LaneBurnRolledBack + "/block_validation": 1,
+			utxo.LaneBurnListFailed + "/block_validation": 1,
+		}, tests.ReadLaneBurns(t, "utxoset").Since(before))
 
 		_, err = s.Get(ctx, list[0].TxIDChainHash())
 		require.NoError(t, err, "the first chunk committed its position")
 
-		_, err = s.Get(ctx, list[1].TxIDChainHash())
-		require.ErrorIs(t, err, errors.ErrTxNotFound, "the failed chunk rolled back")
+		for _, tx := range list[1:] {
+			_, err = s.Get(ctx, tx.TxIDChainHash())
+			require.ErrorIs(t, err, errors.ErrTxNotFound, "the failed chunk rolled back, and the one after it never ran")
+		}
 	})
 }
 

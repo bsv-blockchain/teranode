@@ -321,6 +321,12 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 
 	for _, chunk := range netBelowChunks(items, size, nettedBelowMaxChunkOutputs) {
 		g.Go(func() error {
+			// A chunk admitted after a sibling failed never starts: it would fail at its begin
+			// anyway, and left untouched its positions count as list_failed, not rolled_back.
+			if err := gCtx.Err(); err != nil {
+				return err
+			}
+
 			err := s.netBelowChunk(gCtx, chunk, list, blockHeight, spender, positions)
 			if err != nil {
 				for _, it := range chunk {
