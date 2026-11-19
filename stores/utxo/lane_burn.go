@@ -124,9 +124,9 @@ var prometheusLanePositionsBurned = promauto.NewCounterVec(
 // LaneBurnReason returns why a create that took a position and failed with err burned it. spends are
 // the spends the call returned, if any: a refused input is reported on its Spend.
 func LaneBurnReason(err error, spends []*Spend) string {
-	// A spend cut short by the context ending is reported on the Spend records and as a utxo
-	// error, like a refused one, so the context is ruled out before the utxo error is read as a
-	// refusal.
+	// A spend cut short by the context ending, or failed by a timeout or an unavailable service or
+	// storage, is reported on the Spend records and as a utxo error, like a refused one. So both
+	// are ruled out before the utxo error is read as a refusal.
 	switch {
 	case errors.Is(err, errors.ErrTxExists):
 		return LaneBurnExists
