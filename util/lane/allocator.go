@@ -3,6 +3,7 @@ package lane
 import (
 	"context"
 	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -25,6 +26,11 @@ const (
 
 	// releaseTimeout bounds the release Close sends.
 	releaseTimeout = 5 * time.Second
+
+	// maxReturned bounds the positions of one grant held for reuse. Next hands a returned position
+	// out before a new one, so in steady running the stack holds one or two; the bound keeps a flood
+	// of returns from growing it, and a return past it stays burned.
+	maxReturned = 256
 
 	// firstUnleasedLane is the first lane a lease never holds: 254 is the coinbase lane and 255 the
 	// backfill lane.
@@ -66,6 +72,14 @@ type Timings struct {
 // and then fails with service unavailable, and the create fails with it: no record goes out without
 // a position. A lease the service reports closed is dropped, and a new one opened, usually on
 // another lane.
+//
+// A store hands back, with Return, a position it took and can prove no record carries. Next gives
+// a returned position out again before the grant's next new one, but only from the grant it came
+// from: leaving a grant drops its returned positions, and they stay burned. A returned position is
+// always below the grant's next new position, so at or below the highest position taken. Returned
+// positions still waiting at the top of a grant's taken range when it is settled lower its final
+// number, and the release's, so both name only positions that may carry a record
+// (settledFinalLocked).
 type Allocator struct {
 	src    LeaseSource
 	holder string
@@ -90,16 +104,24 @@ type Allocator struct {
 	curFirstTake time.Time
 	// halfAsked is true once Next has signalled the loop that cur is half used.
 	halfAsked bool
-	spare     Grant
-	hasSpare  bool
+	// returned holds the numbers of positions of cur that were given out and handed back by Return,
+	// each below next and each once. Next takes from it before next. Its capacity is maxReturned,
+	// fixed when the allocator is built, so neither a take nor a return allocates.
+	returned []uint64
+	spare    Grant
+	hasSpare bool
 	// pending settles the grants left and not yet reported, oldest first, until grant requests or
 	// the release carry them. It holds at most two: after a successful request at most the current
 	// grant and the spare can be left before the next one succeeds, and once two are left no grant
 	// is current, so none can be left again until a request succeeds and carries the oldest.
 	pending  [2]Settles
 	npending int
-	// leaseTaken is the highest position this lease has given out; 0 for none.
+	// leaseTaken is the highest position this lease has given out that may carry a record; 0 for
+	// none. A grant left with returned positions at its top lowers it past them (settledFinalLocked).
 	leaseTaken uint64
+	// leaseTakenBefore is leaseTaken as it stood when cur was installed, the number the lease falls
+	// back to when every position cur gave out came back.
+	leaseTakenBefore uint64
 	// highest is the highest position this process has given out in each lane, across leases. A
 	// grant that does not start above it is refused.
 	highest [MaxLane + 1]uint64
@@ -152,6 +174,7 @@ func NewAllocator(src LeaseSource, holder string, t Timings, logger ulogger.Logg
 		attemptTimeout: attemptTimeout,
 		takeWait:       defaultTakeWait,
 		changed:        make(chan struct{}),
+		returned:       make([]uint64, 0, maxReturned),
 		wake:           make(chan struct{}, 1),
 		ctx:            ctx,
 		cancel:         cancel,
@@ -219,6 +242,12 @@ func (a *Allocator) Close() error {
 	}
 
 	a.mu.Lock()
+	// The grant still current settles here, by the release's LastTaken, so returned positions at its
+	// top lower that number as they would its settles pair.
+	if a.next != 0 && !a.curFirstTake.IsZero() {
+		a.leaseTaken = a.leaseTakenAfterLocked(a.settledFinalLocked(a.next - 1))
+	}
+
 	// With two pairs held the release carries the older. The newer is the grant last left, and its
 	// final number is the LastTaken the release carries anyway.
 	leased, release := a.leased, Release{Lease: a.lease, Lane: a.lane, LastTaken: a.leaseTaken, Settles: a.pending[0]}
@@ -318,7 +347,9 @@ func (a *Allocator) takeLocked() (v uint64, ok bool, changed chan struct{}, err 
 		aged := !a.curFirstTake.IsZero() && now.Sub(a.curFirstTake) >= a.t.GrantDuration
 		unusedExpired := a.curFirstTake.IsZero() && now.Sub(a.curRequested) >= a.t.GrantDuration
 
-		if !usedUp && !aged && !unusedExpired {
+		// A used-up grant with returned positions stays current until they are given out, inside
+		// the same age limit as any other take from it.
+		if (!usedUp || len(a.returned) > 0) && !aged && !unusedExpired {
 			break
 		}
 
@@ -327,6 +358,18 @@ func (a *Allocator) takeLocked() (v uint64, ok bool, changed chan struct{}, err 
 
 	if a.next == 0 {
 		return None, false, a.changed, nil
+	}
+
+	// A returned position goes out first. It is below next, so the highest taken and the lease's last
+	// taken stay as they are, and it is not counted in the rate: the service sizes grants by the new
+	// positions a holder uses.
+	if n := len(a.returned); n > 0 {
+		reused := a.returned[n-1]
+		a.returned = a.returned[:n-1]
+
+		prometheusLaneReused.Inc()
+
+		return Pack(a.cur.Lane, reused), true, nil, nil
 	}
 
 	v = Pack(a.cur.Lane, a.next)
@@ -350,7 +393,9 @@ func (a *Allocator) takeLocked() (v uint64, ok bool, changed chan struct{}, err 
 }
 
 // leaveCurrentLocked settles the current grant and moves to the spare, or to no grant when there is
-// no spare, in which case the loop asks for one at once.
+// no spare, in which case the loop asks for one at once. The grant's returned positions are dropped
+// and stay burned, each at or below the final number it settles at: installLocked clears them, and with no
+// grant installed next is 0, which Return and takeLocked both refuse.
 func (a *Allocator) leaveCurrentLocked(usedUp bool) {
 	final := a.next - 1
 	if usedUp {
@@ -358,8 +403,10 @@ func (a *Allocator) leaveCurrentLocked(usedUp bool) {
 	}
 
 	if !a.curFirstTake.IsZero() {
+		final = a.settledFinalLocked(final)
 		a.pending[a.npending] = Settles{First: a.cur.First, LastTaken: final}
 		a.npending++
+		a.leaseTaken = a.leaseTakenAfterLocked(final)
 	}
 
 	if a.hasSpare {
@@ -372,10 +419,68 @@ func (a *Allocator) leaveCurrentLocked(usedUp bool) {
 	a.signal()
 }
 
-// installLocked makes g the current grant.
+// installLocked makes g the current grant, dropping the returned positions of the grant before it.
+// It is the one place they are dropped: every other way off a grant sets next to 0 until it runs.
 func (a *Allocator) installLocked(g Grant, requested time.Time) {
 	a.cur, a.next, a.curFirstTake, a.halfAsked = g, g.First, time.Time{}, false
 	a.curRequested = requested
+	a.returned = a.returned[:0]
+	a.leaseTakenBefore = a.leaseTaken
+}
+
+// settledFinalLocked lowers final, the highest position cur gave out, past every returned position
+// still waiting at the top of the taken range, removing each from the set, so the number a grant
+// settles at, and the release, names only positions that may carry a record. Take grant 1 to 100
+// taken up to 7 with 7 and 6 returned: it settles at 5. A returned position below a used one, 3
+// under a used 5, changes nothing and is dropped with the grant. When every position cur gave out
+// came back it returns 0: the grant gave out nothing that may carry a record.
+func (a *Allocator) settledFinalLocked(final uint64) uint64 {
+	for final >= a.cur.First {
+		i := slices.Index(a.returned, final)
+		if i < 0 {
+			return final
+		}
+
+		a.returned = slices.Delete(a.returned, i, i+1)
+		final--
+	}
+
+	return 0
+}
+
+// leaseTakenAfterLocked is the lease's last-taken number once cur settles at final: final itself, or
+// the number before cur when cur settles at 0.
+func (a *Allocator) leaseTakenAfterLocked(final uint64) uint64 {
+	if final == 0 {
+		return a.leaseTakenBefore
+	}
+
+	return final
+}
+
+// Return hands back v, a position Next gave out that no record carries, so a later Next gives it
+// out again. The caller must know that no record carries it, not just that its own write failed:
+// a position returned while a record carries it goes to a second record. Return takes v back only
+// while the allocator is on the grant v came from, only below the grant's next new position, and
+// only once while it waits; it reports whether it did. A position it does not take back stays
+// burned, which is safe.
+func (a *Allocator) Return(v uint64) bool {
+	l, n := Unpack(v)
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.released || !a.leased || a.next == 0 || l != a.cur.Lane || n < a.cur.First || n >= a.next {
+		return false
+	}
+
+	if len(a.returned) == cap(a.returned) || slices.Contains(a.returned, n) {
+		return false
+	}
+
+	a.returned = append(a.returned, n)
+
+	return true
 }
 
 func (a *Allocator) withinStopLocked() bool {
@@ -527,7 +632,7 @@ func (a *Allocator) open() error {
 
 	a.leased, a.lease, a.lane = true, id, g.Lane
 	a.installLocked(g, sent)
-	a.hasSpare, a.pending, a.npending, a.leaseTaken = false, [2]Settles{}, 0, 0
+	a.hasSpare, a.pending, a.npending, a.leaseTaken, a.leaseTakenBefore = false, [2]Settles{}, 0, 0, 0
 	a.lastGood = sent
 	a.samples = [2]rateSample{{sent, a.taken}, {sent, a.taken}}
 	a.broadcastLocked()
