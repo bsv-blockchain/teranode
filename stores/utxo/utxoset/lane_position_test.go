@@ -1444,6 +1444,15 @@ func TestLanePositionBurnUnlessStored(t *testing.T) {
 		burns(func() { s.burnUnlessStored(ctx, stored, options, lane.Pack(31, 2), exists, nil) }),
 		"the record carries another position")
 
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnError + "/validator": 1},
+		burns(func() { s.burnUnlessStored(ctx, stored, options, lane.Pack(31, 6), storage, nil) }),
+		"another position, and the rerun failed for a storage error")
+
+	refused := []*utxo.Spend{{Err: errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil)}}
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnSpendRejected + "/validator": 1},
+		burns(func() { s.burnUnlessStored(ctx, stored, options, lane.Pack(31, 7), storage, refused) }),
+		"another position, and the rerun's spend was refused")
+
 	missing := tests.BuildMultiWorkload(t, 0xcb, 1, 1).Roots[0]
 	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/validator": 1},
 		burns(func() { s.burnUnlessStored(ctx, missing, options, lane.Pack(31, 3), storage, nil) }),
