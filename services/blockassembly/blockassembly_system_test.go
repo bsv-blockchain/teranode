@@ -1097,6 +1097,55 @@ func TestTxRulesChange_EmptyTemplateIsNotRebuilt(t *testing.T) {
 	require.False(t, ba.blockAssembler.templateUnsettled.Load(), "no reload was attempted")
 }
 
+// TestTxRulesChange_EmptyTemplateStillRecoversADrop pins the limit of that shortcut: a
+// transaction validated for the new rules ahead of block assembly is dropped while the template
+// is empty, and the rules change must still reload, so it comes back.
+func TestTxRulesChange_EmptyTemplateStillRecoversADrop(t *testing.T) {
+	_, ba, ctx, cancel, cleanup := setupTest(t)
+	defer cancel()
+	defer cleanup()
+
+	// Made-up parents; the reload's parent-chain check would drop the transaction first.
+	ba.settings.BlockAssembly.OnRestartValidateParentChain = false
+
+	// Up to Genesis-2: the next block, 99, is the last before Genesis.
+	mineBlocks(t, ctx, ba, 98)
+
+	// A made-up parent: an all-zero one with a final sequence would read as a coinbase.
+	tx := newTx(14)
+	require.NoError(t, tx.Inputs[0].PreviousTxIDAdd(&chainhash.Hash{0x14}))
+
+	_, _, err := ba.utxoStore.SpendAndCreate(ctx, tx, 100, utxostore.WithCreateOnly(), utxostore.WithLocked(false))
+	require.NoError(t, err)
+
+	inpoints, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+
+	// Validated for 100, ahead of block assembly's 99: dropped, and the template stays empty.
+	require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded([]subtree.Node{{Hash: *tx.TxIDChainHash(), Fee: 111}},
+		[]*subtree.TxInpoints{&inpoints}, false, []uint32{100}, nil))
+	require.Eventually(t, func() bool { return ba.blockAssembler.subtreeProcessor.QueueLength() == 0 }, 5*time.Second, 20*time.Millisecond)
+
+	mineBlocks(t, ctx, ba, 1)
+
+	require.Eventually(t, func() bool {
+		_, subtrees, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+		if err != nil {
+			return false
+		}
+
+		for _, st := range subtrees {
+			for _, node := range st.Nodes {
+				if node.Hash.Equal(*tx.TxIDChainHash()) {
+					return true
+				}
+			}
+		}
+
+		return false
+	}, 10*time.Second, 50*time.Millisecond, "the reload brings back a transaction dropped under the old rules")
+}
+
 // TestCheckTemplateFinality_MovedBackBlocks pins the rule for the transactions of the blocks a
 // reorg moves back, which block assembly does not track: each was final in its block, so all
 // of them stay final at a next block not behind the highest moved-back block holding

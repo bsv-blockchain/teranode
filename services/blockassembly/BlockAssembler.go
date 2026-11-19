@@ -2189,9 +2189,11 @@ func (b *BlockAssembler) settleTemplate(ctx context.Context, header *model.Block
 	// The template holds transactions validated for an earlier next height. When the next
 	// height falls under other transaction rules (an activation height), rebuild it from the
 	// UTXO store, whose reload keeps out the ones validated under the old rules.
-	// An empty template has nothing to rebuild: the queue is decided under the new rules.
-	// That is the first block on a fresh regtest chain, whose next height enables P2SH.
-	if b.templateTxEraIsStale() && b.subtreeProcessor != nil && b.subtreeProcessor.TemplateEmpty() {
+	// An empty template with no transaction kept out has nothing to rebuild: the queue is
+	// decided under the new rules. That is the first block on a fresh regtest chain, whose next
+	// height enables P2SH. A transaction kept out under the old rules is recovered by the
+	// reload, so a template that recorded one still reloads.
+	if b.templateTxEraIsStale() && b.subtreeProcessor != nil && b.subtreeProcessor.NothingToReload() {
 		era := b.currentTxEra()
 		b.templateTxEra.Store(&era)
 	}

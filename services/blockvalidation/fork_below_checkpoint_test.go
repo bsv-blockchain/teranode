@@ -59,9 +59,12 @@ func TestValidateBlock_RejectsForkBelowCheckpoint(t *testing.T) {
 	mockBlockchain.On("GetBlockExists", mock.Anything, block.Header.Hash()).Return(false, nil).Maybe()
 	mockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, countingClient)
+	producer := &capturingInvalidBlockProducer{}
 
-	err = bv.ValidateBlock(ctx, block, "test")
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, countingClient)
+	bv.invalidBlockKafkaProducer = producer
+
+	err = bv.ValidateBlockWithOptions(ctx, block, "http://peer", &ValidateBlockOptions{PeerID: "peer-1"})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a fork below the checkpoint must surface as BlockInvalid, got: %v", err)
 	require.Contains(t, err.Error(), "bad-fork-prior-to-checkpoint")
@@ -69,6 +72,54 @@ func TestValidateBlock_RejectsForkBelowCheckpoint(t *testing.T) {
 	require.Equal(t, int32(0), countingClient.checkBlockSubtreesCalls.Load(),
 		"a fork below the checkpoint must be rejected before its transactions are validated")
 	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+	// The verdict reaches p2p with the serving peer, so the peer is struck.
+	require.Eventually(t, func() bool { return len(producer.messages()) == 1 }, 5*time.Second, 10*time.Millisecond)
+
+	var msg kafkamessage.KafkaInvalidBlockTopicMessage
+	require.NoError(t, proto.Unmarshal(producer.messages()[0], &msg))
+	require.Equal(t, "peer-1", msg.PeerId)
+	require.Contains(t, msg.Reason, "bad-fork-prior-to-checkpoint")
+}
+
+// TestReValidateBlock_RejectsForkBelowCheckpoint pins the checkpoint fork rule on the queued
+// revalidation worker, before its subtree work, as ValidateBlockWithOptions applies it.
+func TestReValidateBlock_RejectsForkBelowCheckpoint(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+
+	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup(t)
+	defer cleanup()
+
+	countingClient := &countingSubtreeValidationClient{Interface: subtreeValidationClient}
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// Checkpoint at 1000, block at height 1, tip past the checkpoint.
+	block, mockBlockchain, _ := belowCheckpointPoWFixture(t, tSettings)
+
+	nBits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+	block.Header.Bits = *nBits
+	for ok, _, _ := block.Header.HasMetTargetDifficulty(); !ok; ok, _, _ = block.Header.HasMetTargetDifficulty() {
+		block.Header.Nonce++
+	}
+
+	for _, call := range mockBlockchain.ExpectedCalls {
+		if call.Method == "GetBestBlockHeader" {
+			call.ReturnArguments[1] = &model.BlockHeaderMeta{Height: 1500}
+		}
+	}
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil).Maybe()
+
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, countingClient)
+
+	err = bv.reValidateBlock(ctx, revalidateBlockData{block: block, baseURL: "http://peer"})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "got: %v", err)
+	require.Contains(t, err.Error(), "bad-fork-prior-to-checkpoint")
+	require.Equal(t, int32(0), countingClient.checkBlockSubtreesCalls.Load(), "rejected before its transactions are validated")
 }
 
 // TestValidateBlock_RejectsForkBelowCheckpointPassedDuringValidation pins the re-check

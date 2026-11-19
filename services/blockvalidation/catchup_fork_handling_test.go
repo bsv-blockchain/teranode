@@ -18,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -814,15 +815,25 @@ func TestCatchup_NoMinedSetChurnOnRejectedFork(t *testing.T) {
 				added := append([]*mock.Call(nil), mockBlockchainClient.ExpectedCalls[n:]...)
 				mockBlockchainClient.ExpectedCalls = append(added, mockBlockchainClient.ExpectedCalls[:n]...)
 
+				// One earlier failure on the peer's breaker: a forbidden target must add to it,
+				// not reset it with a success, or a peer that keeps offering one never trips it.
+				server.peerCircuitBreakers = catchup.NewPeerCircuitBreakers(catchup.DefaultCircuitBreakerConfig())
+				server.peerCircuitBreakers.GetBreaker("peer-stored-fork").RecordFailure()
+
 				err := server.catchup(context.Background(), targetBlock, "peer-stored-fork", "http://peer")
+
+				_, failures, _, _ := server.peerCircuitBreakers.GetBreaker("peer-stored-fork").GetStats()
 
 				if onMainChain {
 					require.NoError(t, err)
+					require.Zero(t, failures, "a main-chain target credits the peer")
+
 					return
 				}
 
 				require.Error(t, err)
 				require.Contains(t, err.Error(), "bad-fork-prior-to-checkpoint")
+				require.Equal(t, 2, failures, "a forbidden target counts against the peer")
 			})
 		}
 	})

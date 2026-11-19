@@ -250,8 +250,8 @@ func (m *MockSubtreeProcessor) SetTxCandidate(*chainhash.Hash, uint32, uint32) {
 // NotFinalTemplateTxs implements Interface.NotFinalTemplateTxs: none.
 func (m *MockSubtreeProcessor) NotFinalTemplateTxs() int { return 0 }
 
-// TemplateEmpty implements Interface.TemplateEmpty: never, so a rules change rebuilds.
-func (m *MockSubtreeProcessor) TemplateEmpty() bool { return false }
+// NothingToReload implements Interface.NothingToReload: never, so a rules change reloads.
+func (m *MockSubtreeProcessor) NothingToReload() bool { return false }
 
 // OfferLockHeldTxs implements Interface.OfferLockHeldTxs. A no-op.
 func (m *MockSubtreeProcessor) OfferLockHeldTxs(context.Context) error { return nil }

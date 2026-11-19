@@ -299,8 +299,18 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 	if len(catchupCtx.headersFetchResult.Headers) == 0 {
 		// The target is already stored, so the fork checks below never see it. It can be a
 		// fork stored before the tip passed a checkpoint above it, and is no longer valid.
+		breaker := u.catchupCircuitBreaker(catchupCtx.peerID, catchupCtx.baseURL)
+
 		if err = u.validateStoredTargetBelowCheckpoint(ctx, catchupCtx); err != nil {
+			if breaker != nil && errors.Is(err, errors.ErrNetworkInvalidResponse) {
+				breaker.RecordFailure()
+			}
+
 			return err
+		}
+
+		if breaker != nil {
+			breaker.RecordSuccess()
 		}
 
 		u.logger.Infof("[catchup][%s] block already exists or no headers needed", blockUpTo.Hash().String())
@@ -1507,6 +1517,21 @@ func (u *Server) validateForkBelowCheckpoint(catchupCtx *CatchupContext) error {
 	// The peer's fault, as for a header that contradicts a checkpoint: a ServiceError would read
 	// as a local fault, and the same peer would be asked for the same chain again.
 	return errors.NewNetworkInvalidResponseError("[catchup][%s] bad-fork-prior-to-checkpoint: chain forks at height %d, below a checkpoint the tip (height %d) has passed", catchupCtx.blockUpTo.Hash().String(), firstForkHeight, catchupCtx.bestBlockMeta.Height)
+}
+
+// catchupCircuitBreaker returns the circuit breaker catchupGetBlockHeaders uses for the peer, nil
+// when there are none.
+func (u *Server) catchupCircuitBreaker(peerID, baseURL string) *catchup.CircuitBreaker {
+	if u.peerCircuitBreakers == nil {
+		return nil
+	}
+
+	identifier := peerID
+	if identifier == "" {
+		identifier = baseURL
+	}
+
+	return u.peerCircuitBreakers.GetBreaker(identifier)
 }
 
 // validateStoredTargetBelowCheckpoint applies the checkpoint fork rule to a catchup target that

@@ -6,6 +6,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
+	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 )
 
@@ -114,19 +115,27 @@ func (stp *SubtreeProcessor) OfferLockHeldTxs(ctx context.Context) error {
 
 	verdicts := make([]int, len(held))
 
+	// One batched read for the whole held set.
+	unresolved := make([]*utxostore.UnresolvedMetaData, len(held))
 	for i, h := range held {
-		hash := h.node.Hash
+		unresolved[i] = &utxostore.UnresolvedMetaData{Hash: h.node.Hash, Idx: i}
+	}
 
-		data, err := stp.utxoStore.Get(ctx, &hash, fields.Conflicting, fields.UnminedSince)
+	if err := stp.utxoStore.BatchDecorate(ctx, unresolved, fields.Conflicting, fields.UnminedSince); err != nil {
+		return errors.NewProcessingError("[OfferLockHeldTxs] error reading the held transactions", err)
+	}
 
+	for i, item := range unresolved {
 		switch {
-		case errors.Is(err, errors.ErrTxNotFound):
+		case errors.Is(item.Err, errors.ErrTxNotFound):
 			verdicts[i] = drop
-		case err != nil:
-			return errors.NewProcessingError("[OfferLockHeldTxs] error reading held transaction %s", hash.String(), err)
-		case data.Conflicting:
+		case item.Err != nil:
+			return errors.NewProcessingError("[OfferLockHeldTxs] error reading held transaction %s", item.Hash.String(), item.Err)
+		case item.Data == nil:
+			return errors.NewProcessingError("[OfferLockHeldTxs] no data read for held transaction %s", item.Hash.String())
+		case item.Data.Conflicting:
 			verdicts[i] = drop
-		case data.UnminedSince == 0:
+		case item.Data.UnminedSince == 0:
 			verdicts[i] = forget
 		}
 	}

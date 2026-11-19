@@ -212,6 +212,29 @@ func TestCheckSubtreeFromBlockLegacyUnconfirmedParents(t *testing.T) {
 		}
 	})
 
+	t.Run("RUNNING state, peer branch, side block below Genesis: assembly disabled", func(t *testing.T) {
+		InitPrometheusMetrics()
+
+		// The peer-served branch feeds block assembly under the same gate as the legacy one.
+		childSubtree := singleNodeSubtree(t, childHash)
+		server, recordingClient := newServerWithFSMState(t, blockchain.FSMStateRUNNING, subtreeFixture{childSubtree, childTx.ExtendedBytes()})
+
+		request := legacyRequest(childSubtree)
+		request.BaseUrl = "http://peer.invalid"
+		request.BlockHeight = blockHeight - 1
+
+		response, err := server.CheckSubtreeFromBlock(context.Background(), request)
+		require.NoError(t, err)
+		require.True(t, response.Blessed)
+
+		recorded := recordingClient.recordedOptions(*childHash)
+		require.NotEmpty(t, recorded, "child transaction was not validated")
+
+		for _, opts := range recorded {
+			require.False(t, opts.AddTXToBlockAssembly, "a block in an older script era than tip+1 must not feed block assembly")
+		}
+	})
+
 	t.Run("IDLE state: assembly disabled", func(t *testing.T) {
 		InitPrometheusMetrics()
 

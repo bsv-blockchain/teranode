@@ -318,7 +318,7 @@ type SubtreeProcessor struct {
 	// lengthCh receives requests for the current length of the processor
 	lengthCh chan chan int
 
-	// templateEmptyCh receives requests for whether the template holds no transaction
+	// templateEmptyCh receives NothingToReload's requests
 	templateEmptyCh chan chan bool
 
 	// checkSubtreeProcessorCh is used to check the subtree processor state
@@ -1119,7 +1119,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 				case emptyCh := <-stp.templateEmptyCh:
 					// Answered between dequeue iterations, so no dequeued batch is half placed.
 					current := stp.currentSubtree.Load()
-					emptyCh <- len(stp.chainedSubtrees) == 0 && (current == nil || current.Length() <= 1)
+					emptyCh <- len(stp.chainedSubtrees) == 0 && (current == nil || current.Length() <= 1) && stp.droppedCount.Load() == 0
 
 				case errCh := <-stp.checkSubtreeProcessorCh:
 					errCh <- stp.runHandlerWithRecover("checkSubtreeProcessor", func() error {
@@ -2721,12 +2721,13 @@ func (stp *SubtreeProcessor) ProcessRemainderTransactionsAndDequeue(ctx context.
 	return stp.processRemainderTransactionsAndDequeue(ctx, params)
 }
 
-// TemplateEmpty reports whether the template holds no transaction besides the coinbase. It is
-// answered on the processor's goroutine between dequeue iterations, so a batch admitted under
-// the previous transaction rules is either in the template already or still queued, where the
-// current rules decide it. A processor that is not running answers false, so the caller
-// rebuilds as it would for a template with transactions.
-func (stp *SubtreeProcessor) TemplateEmpty() bool {
+// NothingToReload reports whether a reload of the template would change nothing: it holds no
+// transaction besides the coinbase, and none is recorded as kept out (a transaction dropped
+// under the previous rules can be admitted under the new ones). It is answered on the
+// processor's goroutine between dequeue iterations, so a batch admitted under the previous
+// transaction rules is either in the template already or still queued, where the current
+// rules decide it. A processor that is not running answers false, so the caller reloads.
+func (stp *SubtreeProcessor) NothingToReload() bool {
 	p := stp.processorCtx.Load()
 	if p == nil {
 		return false

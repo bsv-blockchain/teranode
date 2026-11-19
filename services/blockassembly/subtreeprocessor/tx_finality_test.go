@@ -62,11 +62,19 @@ func moveFinalityCandidate(t *testing.T, stp *SubtreeProcessor, height, medianTi
 	require.NoError(t, stp.OfferLockHeldTxs(context.Background()))
 }
 
-// storeAnswers makes the processor's mock UTXO store answer every read with data, as the store
-// holding the held transactions would.
-func storeAnswers(stp *SubtreeProcessor, data *meta.Data, err error) {
-	stp.utxoStore.(*utxostore.MockUtxostore).On("Get", mock.Anything, mock.Anything, mock.Anything).Return(data, err)
+// storeAnswers makes the processor's mock UTXO store answer every batched read with what
+// dataFor returns for each hash, as the store holding the held transactions would.
+func storeAnswers(stp *SubtreeProcessor, dataFor func(hash chainhash.Hash) *meta.Data) {
+	stp.utxoStore.(*utxostore.MockUtxostore).On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			for _, item := range args.Get(1).([]*utxostore.UnresolvedMetaData) {
+				item.Data = dataFor(item.Hash)
+			}
+		}).Return(nil)
 }
+
+// allUnmined answers every held transaction as an unmined mempool transaction.
+func allUnmined(chainhash.Hash) *meta.Data { return unminedInStore }
 
 // unminedInStore is how the store holds a mempool transaction.
 var unminedInStore = &meta.Data{UnminedSince: finalityTestHeight}
@@ -114,7 +122,7 @@ func TestTxFinality_DequeueHoldsNotFinalAndDescendants(t *testing.T) {
 	require.False(t, inTemplate(stp, ahead), "a transaction validated ahead is held until block assembly catches up")
 	require.True(t, inTemplate(stp, final), "height lock 599 is final at height 600")
 
-	storeAnswers(stp, unminedInStore, nil)
+	storeAnswers(stp, allUnmined)
 	moveFinalityCandidate(t, stp, finalityTestHeight+1, finalityTestMTP+1)
 
 	for _, hash := range []chainhash.Hash{heightLocked, timeLocked, child, ahead} {
@@ -268,7 +276,7 @@ func TestTxFinality_QueuedChildWaitsForItsOfferedParent(t *testing.T) {
 	defer cancel()
 
 	stp := newFinalityTestProcessor(t, ctx)
-	storeAnswers(stp, unminedInStore, nil)
+	storeAnswers(stp, allUnmined)
 
 	parent := chainhash.HashH([]byte("finality-offered-parent"))
 	child := chainhash.HashH([]byte("finality-queued-child"))
@@ -317,9 +325,13 @@ func TestTxFinality_ConflictingHeldTxIsNotOfferedAgain(t *testing.T) {
 		{Node: &subtreepkg.Node{Hash: child}, TxInpoints: inpointsWithParent(loser)},
 	}, []uint32{0, 0}))
 
-	mockStore := stp.utxoStore.(*utxostore.MockUtxostore)
-	mockStore.On("Get", mock.Anything, &loser, mock.Anything).Return(&meta.Data{Conflicting: true, UnminedSince: finalityTestHeight}, nil)
-	mockStore.On("Get", mock.Anything, &child, mock.Anything).Return(unminedInStore, nil)
+	storeAnswers(stp, func(hash chainhash.Hash) *meta.Data {
+		if hash == loser {
+			return &meta.Data{Conflicting: true, UnminedSince: finalityTestHeight}
+		}
+
+		return unminedInStore
+	})
 
 	moveFinalityCandidate(t, stp, finalityTestHeight+1, finalityTestMTP)
 
@@ -343,11 +355,11 @@ func TestTxFinality_ConflictingHeldTxIsNotOfferedAgain(t *testing.T) {
 	require.True(t, childDropped, "the child is dropped for its dropped parent")
 }
 
-// TestTemplateEmpty_AnswersWhateverTheProcessorState pins that TemplateEmpty never waits on a
+// TestNothingToReload_AnswersWhateverTheProcessorState pins that NothingToReload never waits on a
 // processor that is not serving requests: block assembly asks it after every block move, and a
 // processor not started, or stopped, would otherwise hold it for good. It answers false there,
 // so the caller rebuilds as before.
-func TestTemplateEmpty_AnswersWhateverTheProcessorState(t *testing.T) {
+func TestNothingToReload_AnswersWhateverTheProcessorState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -356,13 +368,13 @@ func TestTemplateEmpty_AnswersWhateverTheProcessorState(t *testing.T) {
 
 	answer := func() bool {
 		done := make(chan bool, 1)
-		go func() { done <- stp.TemplateEmpty() }()
+		go func() { done <- stp.NothingToReload() }()
 
 		select {
 		case empty := <-done:
 			return empty
 		case <-time.After(5 * time.Second):
-			require.FailNow(t, "TemplateEmpty did not answer")
+			require.FailNow(t, "NothingToReload did not answer")
 			return false
 		}
 	}

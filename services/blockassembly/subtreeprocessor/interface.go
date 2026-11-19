@@ -107,8 +107,9 @@ type Interface interface {
 	// the candidate, among those whose nLockTime can hold them back.
 	NotFinalTemplateTxs() int
 
-	// TemplateEmpty reports whether the template holds no transaction besides the coinbase.
-	TemplateEmpty() bool
+	// NothingToReload reports whether the template holds no transaction besides the coinbase
+	// and none is recorded as kept out, so a reload would change nothing.
+	NothingToReload() bool
 
 	// OfferLockHeldTxs queues again the transactions held back for their lock time that are
 	// still unmined and not conflicting, after the candidate moved. See tx_finality.go.

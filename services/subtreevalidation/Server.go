@@ -1039,6 +1039,33 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		FromBlock:     true,
 	}
 
+	peerValidatorOptions := []validator.Option{
+		validator.WithSkipPolicyChecks(true),
+		validator.WithInBlock(true),
+		validator.WithCreateConflicting(true),
+		validator.WithIgnoreLocked(true),
+		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+	}
+
+	// The same gate as the legacy branch: the block's txs feed block assembly only when the
+	// node is RUNNING, the block is not above tip+1 and both heights share the transaction
+	// rules (feedsBlockAssembly).
+	peerState, err := u.blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil {
+		return false, errors.NewProcessingError("[CheckSubtree] Failed to get FSM current state", err)
+	}
+
+	peerFeeds, peerCandidate, err := u.feedsBlockAssembly(ctx, *peerState == blockchain.FSMStateRUNNING, request.BlockHeight, previousBlockHash)
+	if err != nil {
+		return false, errors.NewProcessingError("[CheckSubtree] Failed to decide block assembly feed", err)
+	}
+
+	if !peerFeeds {
+		peerValidatorOptions = append(peerValidatorOptions, validator.WithAddTXToBlockAssembly(false))
+	} else if peerCandidate != nil {
+		peerValidatorOptions = append(peerValidatorOptions, validator.WithBlockAssemblyCandidate(peerCandidate))
+	}
+
 	// Call the ValidateSubtreeInternal method
 	// Options.CandidateBlockTime intentionally not populated (no candidate
 	// block header in the peer-facing request); Options.CandidateParentMedianTime
@@ -1049,11 +1076,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		v,
 		request.BlockHeight,
 		blockIds,
-		validator.WithSkipPolicyChecks(true),
-		validator.WithInBlock(true),
-		validator.WithCreateConflicting(true),
-		validator.WithIgnoreLocked(true),
-		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+		peerValidatorOptions...,
 	); err != nil {
 		return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
 	}

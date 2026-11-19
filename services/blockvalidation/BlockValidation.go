@@ -4003,6 +4003,12 @@ func (u *BlockValidation) reValidateBlock(ctx context.Context, blockData revalid
 		return errors.NewBlockInvalidError("[reValidateBlock][%s] block conflicts with hardcoded checkpoint", blockData.block.Hash().String(), err)
 	}
 
+	// The checkpoint fork rule, before the subtree work below, as ValidateBlockWithOptions
+	// applies it. A revalidation: no verdict is sent for it.
+	if err := u.rejectForkBelowCheckpoint(ctx, blockData.block, &ValidateBlockOptions{IsRevalidation: true}, blockData.baseURL); err != nil {
+		return err
+	}
+
 	// The header hash must meet the target its own nBits declares, below checkpoint or not
 	// — see the matching block in ValidateBlockWithOptions for why this half of the old
 	// skip is never safe to take. Enforced before the subtree work below.
