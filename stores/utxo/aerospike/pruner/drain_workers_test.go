@@ -58,6 +58,37 @@ func TestDrainReadyCarryKeepsBlobsWithTheirMasters(t *testing.T) {
 	}
 }
 
+func TestDrainReadyCarryReportsOrphanBlobAndDrainsAcknowledgedDeletes(t *testing.T) {
+	s, client := newFlushTestService(t)
+	ctx := context.Background()
+	child := chainhash.HashH([]byte("ready-master-with-orphan"))
+	orphan := chainhash.HashH([]byte("ready-orphan-blob"))
+	key := putRecord(t, client, &child, aerospike.BinMap{fields.TxID.String(): child.CloneBytes()})
+	for _, hash := range []chainhash.Hash{child, orphan} {
+		require.NoError(t, s.external.Set(ctx, hash.CloneBytes(), fileformat.FileTypeTx, []byte("blob")))
+	}
+	carry := &deleteCarry{
+		blockHeight: testPruneHeight,
+		deletions:   []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{key}}},
+		files: []*externalFileInfo{
+			{txHash: &orphan, fileType: fileformat.FileTypeTx},
+			{txHash: &child, fileType: fileformat.FileTypeTx},
+		},
+	}
+	deleted, held, err := s.drainReadyCarry(ctx, carry)
+	require.ErrorContains(t, err, "blob has no carried master")
+	require.Equal(t, 1, deleted, "an orphan blob must not discard acknowledged record deletes")
+	require.Zero(t, held)
+	exists, getErr := client.Exists(nil, key)
+	require.NoError(t, getErr)
+	require.False(t, exists)
+	for _, hash := range []chainhash.Hash{child, orphan} {
+		blobExists, blobErr := s.external.Exists(ctx, hash.CloneBytes(), fileformat.FileTypeTx)
+		require.NoError(t, blobErr)
+		require.Equal(t, hash == orphan, blobExists, "only the confirmed master's blob may be deleted")
+	}
+}
+
 func TestPruneCombinesReadyWorkerDeletes(t *testing.T) {
 	s, client := newFlushTestService(t)
 	const workers, children, batchSize = 16, 64, 8

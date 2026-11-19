@@ -56,11 +56,16 @@ func (s *Service) drainReadyCarry(ctx context.Context, carry *deleteCarry) (dele
 		batch.pages = append(batch.pages, page)
 		batchRecords++
 	}
+	var orphanErr error
 	for _, file := range pending.files {
 		owner := masters[*file.txHash]
 		if owner == nil {
-			carry.add(pending)
-			return 0, 0, errors.NewProcessingError("pruner blob has no carried master: %s", file.txHash)
+			// Keep the orphan blob, but still drain the acknowledged deletes:
+			// the caller does not read this carry again after we return.
+			if orphanErr == nil {
+				orphanErr = errors.NewProcessingError("pruner blob has no carried master; blob retained: %s", file.txHash)
+			}
+			continue
 		}
 		owner.files = append(owner.files, file)
 	}
@@ -81,6 +86,9 @@ func (s *Service) drainReadyCarry(ctx context.Context, carry *deleteCarry) (dele
 		})
 	}
 	err = group.Wait()
+	if err == nil {
+		err = orphanErr
+	}
 	return deleted, heldBack, err
 }
 

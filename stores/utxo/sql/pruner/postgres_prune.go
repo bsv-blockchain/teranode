@@ -36,11 +36,17 @@ func (s *Service) prunePostgresBatch(ctx context.Context, statements [6]postgres
 		batched = true
 
 		batch := &pgx.Batch{}
+		// Select the same isolation as the explicit transaction path without
+		// changing the connection's default or adding a network round trip.
+		batch.Queue("SET LOCAL transaction_isolation = 'read committed'")
 		for _, statement := range statements {
 			batch.Queue(statement.query, statement.args...)
 		}
 		results := driver.Conn().SendBatch(ctx, batch)
 		defer results.Close()
+		if _, isolationErr := results.Exec(); isolationErr != nil {
+			return &pruneStepError{step: "failed to set pruning transaction isolation", err: isolationErr}
+		}
 
 		for i, statement := range statements {
 			tag, execErr := results.Exec()

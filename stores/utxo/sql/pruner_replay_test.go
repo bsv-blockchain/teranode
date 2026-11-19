@@ -1497,18 +1497,39 @@ func (c *countedPruneConn) Write(b []byte) (int, error) {
 // TestPostgresPruneUsesOneWireBatch keeps pruning's network cost independent of
 // its six ordered statements. One other write clears stale unmined heights.
 func TestPostgresPruneUsesOneWireBatch(t *testing.T) {
-	testPostgresPruneWireBatch(t, pgx.QueryExecModeExec, 2)
+	testPostgresPruneWireBatch(t, pgx.QueryExecModeExec, 2, "")
 }
 
 func TestPostgresPruneWithCachedStatements(t *testing.T) {
-	testPostgresPruneWireBatch(t, pgx.QueryExecModeCacheStatement, 0)
+	testPostgresPruneWireBatch(t, pgx.QueryExecModeCacheStatement, 0, "")
 }
 
-func testPostgresPruneWireBatch(t *testing.T, mode pgx.QueryExecMode, wantWrites int64) {
+func TestPostgresPruneBatchSelectsReadCommitted(t *testing.T) {
+	for _, isolation := range []string{"repeatable read", "serializable"} {
+		t.Run(isolation, func(t *testing.T) {
+			testPostgresPruneWireBatch(t, pgx.QueryExecModeExec, 2, isolation)
+		})
+	}
+}
+
+func testPostgresPruneWireBatch(t *testing.T, mode pgx.QueryExecMode, wantWrites int64, defaultIsolation string) {
 	t.Helper()
 	store, ctx := setupPostgresStore(t)
 	store.settings.Pruner.UTXODefensiveEnabled = false
 	want := seedPruneTimingStore(ctx, t, store, 0, 4, 2)
+	if defaultIsolation != "" {
+		_, err := store.db.ExecContext(ctx, `CREATE FUNCTION require_prune_read_committed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+	IF current_setting('transaction_isolation') <> 'read committed' THEN
+		RAISE EXCEPTION 'pruning requires READ COMMITTED';
+	END IF;
+	RETURN OLD;
+END $$`)
+		require.NoError(t, err)
+		_, err = store.db.ExecContext(ctx, `CREATE TRIGGER require_prune_read_committed BEFORE DELETE ON transactions
+FOR EACH ROW EXECUTE FUNCTION require_prune_read_committed()`)
+		require.NoError(t, err)
+	}
 
 	connection, err := store.db.Conn(ctx)
 	require.NoError(t, err)
@@ -1521,6 +1542,9 @@ func testPostgresPruneWireBatch(t *testing.T, mode pgx.QueryExecMode, wantWrites
 	}))
 	require.NoError(t, connection.Close())
 	config.DefaultQueryExecMode = mode
+	if defaultIsolation != "" {
+		config.RuntimeParams["default_transaction_isolation"] = defaultIsolation
+	}
 
 	var writes atomic.Int64
 	dial := config.DialFunc
@@ -1553,4 +1577,9 @@ func testPostgresPruneWireBatch(t *testing.T, mode pgx.QueryExecMode, wantWrites
 	var markers int
 	require.NoError(t, pool.QueryRowContext(ctx, "SELECT count(*) FROM deleted_children").Scan(&markers))
 	require.Equal(t, 8, markers, "each of four children leaves markers on its two surviving parents")
+	if defaultIsolation != "" {
+		var isolation string
+		require.NoError(t, pool.QueryRowContext(ctx, "SHOW transaction_isolation").Scan(&isolation))
+		require.Equal(t, defaultIsolation, isolation, "pruning must not change the session's isolation")
+	}
 }
