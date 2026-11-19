@@ -2,6 +2,7 @@ package lane
 
 import (
 	"encoding/hex"
+	"runtime"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
@@ -272,4 +273,31 @@ func FuzzDecodeSubtreeBitmaps(f *testing.F) {
 			require.True(t, q.Lanes[l].Equals(bm))
 		}
 	})
+}
+
+// allocatedBy returns the bytes fn allocates.
+func allocatedBy(fn func()) uint64 {
+	var before, after runtime.MemStats
+
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	fn()
+	runtime.ReadMemStats(&after)
+
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// A proof file claiming 2^31 subtrees in a few bytes is refused before anything is sized from
+// the claim.
+func TestDecodeProofFileBoundsItsAllocationByTheBuffer(t *testing.T) {
+	b := append([]byte(proofFileMagic), BitmapFormatVersion)
+	b = append(b, make([]byte, 32)...)
+	b = append(b, 0xff, 0xff, 0xff, 0x7f)
+	b = append(b, make([]byte, 64)...)
+
+	var err error
+
+	n := allocatedBy(func() { _, err = DecodeProofFile(b) })
+	require.Error(t, err)
+	require.Less(t, n, uint64(1<<20), "allocated %d bytes for a %d-byte file", n, len(b))
 }

@@ -791,3 +791,60 @@ func TestManifestRefusesRunsPastTheLane(t *testing.T) {
 		require.True(t, os.IsNotExist(err), "%s: nothing created", name)
 	}
 }
+
+// A filesystem that grows a file before its data is durable can leave the last record as zero
+// bytes after a crash. Resuming cuts it like any other partial last record; reading refuses it.
+// A tail of non-zero bytes that fails its head CRC is damage, and nothing is cut.
+func TestManifestCutsOnlyAZeroFilledLastRecord(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m")
+
+	m, err := CreateManifest(path, testHeader())
+	require.NoError(t, err)
+	_, err = m.AppendBlock(10, 10, txids(1, 4))
+	require.NoError(t, err)
+	require.NoError(t, m.Close())
+
+	one, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	m, err = ResumeManifest(path)
+	require.NoError(t, err)
+	_, err = m.AppendBlock(11, 11, txids(2, 4))
+	require.NoError(t, err)
+	require.NoError(t, m.Close())
+
+	two, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Greater(t, len(two), len(one))
+
+	zeroed := append(append([]byte{}, one...), make([]byte, len(two)-len(one))...)
+	require.NoError(t, os.WriteFile(path, zeroed, 0o600))
+
+	_, err = OpenManifest(path)
+	require.Error(t, err, "reading refuses the zero-filled tail and cuts nothing")
+
+	m, err = ResumeManifest(path)
+	require.NoError(t, err)
+	require.Len(t, m.Blocks(), 1, "the zero-filled record is dropped")
+	require.NoError(t, m.Close())
+
+	cut, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, one, cut)
+
+	for name, tail := range map[string][]byte{
+		"stale bytes":           append([]byte{recordBlock, 1, 2, 3}, make([]byte, len(two)-len(one)-4)...),
+		"zero head, stale body": append(make([]byte, frameHead), append([]byte{9}, make([]byte, len(two)-len(one)-frameHead-1)...)...),
+	} {
+		bad := append(append([]byte{}, one...), tail...)
+		require.NoError(t, os.WriteFile(path, bad, 0o600))
+
+		_, err = ResumeManifest(path)
+		require.Error(t, err, name)
+
+		after, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.Equal(t, bad, after, "%s: nothing is cut", name)
+	}
+}

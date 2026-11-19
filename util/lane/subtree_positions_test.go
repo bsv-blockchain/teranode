@@ -162,3 +162,18 @@ func FuzzDecodeSubtreePositions(f *testing.F) {
 		require.Equal(t, data, again)
 	})
 }
+
+// A positions file claiming 2^31 nodes in a few bytes is refused before anything is sized from
+// the claim.
+func TestDecodeSubtreePositionsBoundsItsAllocationByTheBuffer(t *testing.T) {
+	b := append([]byte(subtreePositionsMagic), SubtreePositionsVersion)
+	b = append(b, make([]byte, 32)...)
+	b = append(b, 0xff, 0xff, 0xff, 0x7f)
+	b = append(b, make([]byte, 64)...)
+
+	var err error
+
+	n := allocatedBy(func() { _, err = DecodeSubtreePositions(b) })
+	require.Error(t, err)
+	require.Less(t, n, uint64(1<<20), "allocated %d bytes for a %d-byte file", n, len(b))
+}

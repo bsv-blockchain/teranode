@@ -40,10 +40,14 @@ import (
 // The transaction at index i of a block or suffix record holds position first+i of the backfill
 // lane, and a block or suffix payload is exactly its fixed part plus count txids. Every record is
 // written and synced before the next, so a crash can only leave a partial last record: a frame
-// head shorter than its 13 bytes, or a head whose own CRC is good with a payload that runs past
-// the end of the file or, ending exactly there, fails its CRC. ResumeManifest cuts such a record;
-// OpenManifest refuses it; both refuse any other damage, a corrupt length field included, since
-// its own CRC then fails. The manifest digest is SHA-256 over the whole file once the end record
+// head shorter than its 13 bytes, a head whose own CRC is good with a payload that runs past the
+// end of the file or, ending exactly there, fails its CRC, or zero bytes from the record's start to
+// the end of the file, which a filesystem that grows a file before its data is durable can leave.
+// ResumeManifest cuts such a record; OpenManifest refuses it; both refuse any other damage, a
+// corrupt length field included, since its own CRC then fails. A tail of stale non-zero bytes is
+// refused as damage too, so a manifest needs a filesystem that makes data durable before the size
+// that covers it, as ext4 with data=ordered does; on another, a crash can leave a manifest the
+// operator must cut by hand. The manifest digest is SHA-256 over the whole file once the end record
 // is written.
 
 const (
@@ -318,6 +322,15 @@ func readFrame(r *bufio.Reader, remaining int64, path string, pos int64) (byte, 
 	}
 
 	if crc32.Checksum(head[:9], crcTable) != binary.LittleEndian.Uint32(head[9:]) {
+		zero, err := zeroToEnd(head[:], r)
+		if err != nil {
+			return 0, 0, false, errors.NewStorageError("read manifest record", err)
+		}
+
+		if zero {
+			return 0, 0, false, nil // a zero-filled tail: the last record was never written
+		}
+
 		return 0, 0, false, errors.NewProcessingError("manifest %s: damaged record head at offset %d", path, pos)
 	}
 
@@ -327,6 +340,35 @@ func readFrame(r *bufio.Reader, remaining int64, path string, pos int64) (byte, 
 	}
 
 	return head[0], payloadLen, true, nil
+}
+
+// zeroToEnd reports whether head and every byte left in r are zero. No committed record is all
+// zero: its type byte never is.
+func zeroToEnd(head []byte, r io.Reader) (bool, error) {
+	for _, b := range head {
+		if b != 0 {
+			return false, nil
+		}
+	}
+
+	buf := make([]byte, 64<<10)
+
+	for {
+		n, err := r.Read(buf)
+		for _, b := range buf[:n] {
+			if b != 0 {
+				return false, nil
+			}
+		}
+
+		if err == io.EOF { //nolint:errorlint // bufio returns io.EOF itself, unwrapped
+			return true, nil
+		}
+
+		if err != nil {
+			return false, err
+		}
+	}
 }
 
 // readBody reads a record's payload, keeping only the fixed part of a block or suffix record in
