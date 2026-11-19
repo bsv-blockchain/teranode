@@ -1164,6 +1164,30 @@ func createPostgresLaneTables(db *usql.DB) error {
 		}
 	}
 
+	return setLaneMapHoleDataStorage(db)
+}
+
+// setLaneMapHoleDataStorage stores lane_map.hole_data out of line without trying to compress it.
+// Hole data is a Roaring bitmap, already compact, and any row with real hole data passes the
+// TOAST threshold, so the default attempt to compress it costs CPU at commit for little or no
+// saving. The catalog check comes first, so a current schema runs no DDL and a role without
+// ownership still starts; the ALTER runs once, on a table this build created or an earlier one did.
+func setLaneMapHoleDataStorage(db *usql.DB) error {
+	var storage string
+	if err := db.QueryRow(
+		`SELECT a.attstorage::text FROM pg_attribute a WHERE a.attrelid = 'lane_map'::regclass AND a.attname = 'hole_data' AND NOT a.attisdropped`,
+	).Scan(&storage); err != nil {
+		return errors.NewStorageError("could not read lane_map.hole_data storage", err)
+	}
+
+	if storage == "e" {
+		return nil
+	}
+
+	if _, err := db.Exec(`ALTER TABLE lane_map ALTER COLUMN hole_data SET STORAGE EXTERNAL`); err != nil {
+		return errors.NewStorageError("could not set lane_map.hole_data storage to EXTERNAL", err)
+	}
+
 	return nil
 }
 

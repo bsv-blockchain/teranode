@@ -541,3 +541,33 @@ func TestLaneConversionSegmentWaitsForTheSegmentLock(t *testing.T) {
 		require.Equal(t, []lane.ConversionSegment{seg1}, segs)
 	})
 }
+
+// On Postgres hole_data is stored out of line with no compression attempt, on a new database and
+// on one whose lane_map an earlier build created with the default storage.
+func TestLaneMapHoleDataIsStoredExternal(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	s, err := New(ulogger.TestLogger{}, dbURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	storage := func() string {
+		var st string
+		require.NoError(t, db.QueryRow(`SELECT attstorage::text FROM pg_attribute WHERE attrelid = 'lane_map'::regclass AND attname = 'hole_data'`).Scan(&st))
+
+		return st
+	}
+
+	require.Equal(t, "e", storage(), "a new lane_map")
+
+	_, err = db.Exec(`ALTER TABLE lane_map ALTER COLUMN hole_data SET STORAGE EXTENDED`)
+	require.NoError(t, err)
+	require.Equal(t, "x", storage())
+
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true))
+	require.Equal(t, "e", storage(), "an earlier build's lane_map")
+}
