@@ -577,6 +577,11 @@ func (w *nettedWrite) runChunks(ctx context.Context, plan *chunkPlan, stats *fam
 // transaction rolled back whole, so the rerun starts from nothing.
 func (w *nettedWrite) runFamilyChunk(ctx context.Context, ch *familyChunk, plan *chunkPlan, stats *familyStats) error {
 	if err := ctx.Err(); err != nil {
+		// The chunk never starts, so nothing rolled back: its positions count as list_failed.
+		for _, i := range ch.pos {
+			w.items[i].burnReason = utxo.LaneBurnListFailed
+		}
+
 		return err
 	}
 

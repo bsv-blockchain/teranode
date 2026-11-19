@@ -1834,3 +1834,29 @@ func TestLanePositionBurnOfADirectCreateWithAnEndedContext(t *testing.T) {
 	require.Equal(t, 0, identityCount(t, s, ctx, tx))
 	require.Equal(t, 0, utxoCount(t, s, ctx, tx))
 }
+
+// A list whose context has already ended when its chunk would start writes nothing, so its positions
+// count as list_failed, not rolled_back. The partitions are ensured by an earlier list first, so the
+// write reaches the chunk rather than failing at a partition.
+func TestLanePositionBurnOfAListThatNeverStarted(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+
+	root := storedParent(t, s, ctx)
+
+	_, err := s.SpendAndCreateMulti(ctx, []*bt.Tx{spendOutput(t, root, 0, 1)}, 1_100, utxo.WithIgnoreLocked(true))
+	require.NoError(t, err, "warms the partitions")
+
+	useBurnSource(t, s, burnPositions(1)...)
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, err = s.SpendAndCreateMulti(cancelled, []*bt.Tx{spendOutput(t, root, 1, 2)}, 1_100, utxo.WithIgnoreLocked(true),
+		utxo.WithCaller(utxo.CallerSubtreeValidation))
+	require.Error(t, err)
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnListFailed + "/subtree_validation": 1},
+		tests.ReadLaneBurns(t, "utxoset").Since(before))
+}
