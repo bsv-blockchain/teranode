@@ -13,22 +13,22 @@ import (
 const lockTimeThreshold = 500_000_000
 
 // txCandidate is the block the template is mined in: the tip it extends, its height and the
-// tip's median time past.
+// time used for nLockTime (its own timestamp before CSV, parent median time past after).
 type txCandidate struct {
 	tip            chainhash.Hash
 	height         uint32
-	medianTimePast uint32
+	lockTimeCutoff uint32
 }
 
 // SetTxCandidate sets the block the template is mined in. Block assembly mines a transaction
 // without re-checking it, so one whose nLockTime holds it back there must not be in the
-// template. A transaction is final at the candidate it was validated for, and a forward block
-// only raises the height and the median time past, but a reorg can lower either (a side
-// block's transaction checked against one tip, a mempool transaction against the tip a reorg
-// replaced). Block assembly sets the candidate after every block move, and rebuilds the
+// template. A transaction is final at the candidate it was validated for, but a reorg can
+// lower its height or time cutoff (a side block's transaction checked against one tip, a
+// mempool transaction against the tip a reorg replaced). Block assembly sets the candidate
+// after every block move, and rebuilds the
 // template when NotFinalTemplateTxs then finds one.
-func (stp *SubtreeProcessor) SetTxCandidate(tip *chainhash.Hash, height, medianTimePast uint32) {
-	stp.txCandidate.Store(&txCandidate{tip: *tip, height: height, medianTimePast: medianTimePast})
+func (stp *SubtreeProcessor) SetTxCandidate(tip *chainhash.Hash, height, lockTimeCutoff uint32) {
+	stp.txCandidate.Store(&txCandidate{tip: *tip, height: height, lockTimeCutoff: lockTimeCutoff})
 }
 
 // lockHeldTx is a transaction kept back until the candidate makes it final, with what it was
@@ -204,9 +204,8 @@ func (stp *SubtreeProcessor) freshTxCandidate() *txCandidate {
 }
 
 // finalAtCandidate reports whether a transaction with lockTime, the nLockTime of a transaction
-// with a non-final input sequence, is final in block c (util.ValidLockTime). Below CSV a time
-// lock is measured against the block's own timestamp, which is about now and which a reorg does
-// not lower, so only a height lock is checked there.
+// with a non-final input sequence, is final in block c (util.ValidLockTime). The cutoff is
+// the block's own timestamp before CSV and its parent's median time past afterward.
 func (stp *SubtreeProcessor) finalAtCandidate(lockTime uint32, c *txCandidate) bool {
 	if lockTime == 0 {
 		return true
@@ -216,11 +215,7 @@ func (stp *SubtreeProcessor) finalAtCandidate(lockTime uint32, c *txCandidate) b
 		return c.height > lockTime
 	}
 
-	if c.height < stp.settings.ChainCfgParams.CSVHeight {
-		return true
-	}
-
-	return c.medianTimePast > lockTime
+	return c.lockTimeCutoff > lockTime
 }
 
 // trackLockTimeLocked records an admitted transaction whose nLockTime can hold it back, so a

@@ -188,9 +188,9 @@ func TestTxFinality_ReloadHoldsNotFinal(t *testing.T) {
 	}, []uint32{finalityTestHeight + 2}))
 }
 
-// TestTxFinality_PreCSVTimeLockIsNotChecked pins that below CSV a time lock is measured against
-// the candidate's own timestamp, which a reorg does not lower, so only height locks are checked.
-func TestTxFinality_PreCSVTimeLockIsNotChecked(t *testing.T) {
+// TestTxFinality_PreCSVTimeLockUsesCandidateTimestamp pins that below CSV a time lock is
+// measured against the candidate's own timestamp, including during a reload after a reorg.
+func TestTxFinality_PreCSVTimeLockUsesCandidateTimestamp(t *testing.T) {
 	stp := newTestSubtreeProcessorForDequeueStaleness(t, context.Background())
 	stp.InitCurrentBlockHeader(blockHeader)
 	stp.SetTxEra(300)
@@ -204,8 +204,8 @@ func TestTxFinality_PreCSVTimeLockIsNotChecked(t *testing.T) {
 		{Node: &subtreepkg.Node{Hash: heightLocked}, TxInpoints: &subtreepkg.TxInpoints{}, LockTime: 300},
 	}, []uint32{0, 0})
 
-	require.Len(t, kept, 1)
-	require.Equal(t, timeLocked, kept[0].Hash)
+	require.Empty(t, kept)
+	require.Equal(t, 2, stp.lockHeldTxCount())
 }
 
 // TestTxFinality_NotFinalTemplateTxs pins what block assembly reads after a reorg: the tracked

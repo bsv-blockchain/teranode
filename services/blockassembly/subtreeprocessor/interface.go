@@ -100,8 +100,8 @@ type Interface interface {
 	FilterUnminedTxEra(txs []*utxostore.UnminedTransaction, validatedHeights []uint32) []*utxostore.UnminedTransaction
 
 	// SetTxCandidate sets the block the template is mined in: the tip it extends, its
-	// height and the tip's median time past. See tx_finality.go.
-	SetTxCandidate(tip *chainhash.Hash, height, medianTimePast uint32)
+	// height and the time used for nLockTime at that height. See tx_finality.go.
+	SetTxCandidate(tip *chainhash.Hash, height, lockTimeCutoff uint32)
 
 	// NotFinalTemplateTxs returns how many transactions in the template are not final at
 	// the candidate, among those whose nLockTime can hold them back.

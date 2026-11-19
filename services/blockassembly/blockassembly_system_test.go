@@ -1175,6 +1175,22 @@ func TestCheckTemplateFinality_MovedBackBlocks(t *testing.T) {
 		})
 	}
 
+	// A valid pre-CSV block may be stamped ahead of the current clock. An equal-height
+	// sibling has the same parent MTP, but its next candidate can be too early for a
+	// timestamp-locked transaction that was final in the moved-back block.
+	t.Run("pre-CSV sibling below moved-back timestamp", func(t *testing.T) {
+		future := *headers[2]
+		future.Timestamp = uint32(time.Now().Add(time.Hour).Unix())
+		ba.blockAssembler.movedBackFloor.Store(nil)
+		ba.blockAssembler.recordMovedBackFloor([]blockWithMeta{{
+			block: &model.Block{Header: &future, TransactionCount: 2}, meta: metas[2],
+		}})
+
+		rebuild, err := ba.blockAssembler.checkTemplateFinality(ctx, heavier, forkMeta.Height+1)
+		require.NoError(t, err)
+		require.True(t, rebuild)
+	})
+
 	// The transactions an earlier reorg moved back are still in the template when a later one
 	// moves back only empty blocks, so the floor stays until a reset.
 	t.Run("a later reorg moving back only empty blocks keeps the floor", func(t *testing.T) {

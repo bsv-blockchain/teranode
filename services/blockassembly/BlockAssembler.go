@@ -113,7 +113,7 @@ type BlockAssembler struct {
 	// templateTxEraIsStale.
 	templateTxEra atomic.Pointer[txEraRange]
 
-	// movedBackFloor is the highest block a reorg moved back that held transactions, kept until
+	// movedBackFloor tracks the height and timestamp of blocks moved back with transactions, until
 	// a reset rebuilds the template (checkTemplateFinality). templateUnsettled is set while a
 	// settleTemplate after a block move has not succeeded: the template may then hold
 	// transactions the next block cannot mine, so mining candidates are empty.
@@ -1356,7 +1356,7 @@ func (b *BlockAssembler) resetToBlockWithResponse(ctx context.Context, bestBlock
 		b.subtreeProcessor.SetTxEra(currentHeight + 1)
 
 		// The reload keeps out the transactions the target's next block cannot mine.
-		if _, err := b.updateTxCandidate(ctx, bestBlockchainBlockHeader, currentHeight); err != nil {
+		if _, _, err := b.updateTxCandidate(ctx, bestBlockchainBlockHeader, currentHeight); err != nil {
 			return errors.NewProcessingError("[Reset] error setting the block the template is mined in", err)
 		}
 
@@ -2018,14 +2018,16 @@ func (b *BlockAssembler) templateTxEraIsStale() bool {
 }
 
 // reorgFinalityCheck is the moved-back floor a reorg leaves for checkTemplateFinality: the
-// highest block it moved back that held transactions besides the coinbase.
+// highest block it moved back that held transactions besides the coinbase, and the latest
+// timestamp of any such block for pre-CSV time locks.
 type reorgFinalityCheck struct {
 	movedBack       *model.BlockHeader
 	movedBackHeight uint32
+	movedBackTime   uint32
 }
 
-// recordMovedBackFloor raises the moved-back floor to the highest block of moveBack that held
-// transactions. The floor only rises until a reset rebuilds the template: the moved-back
+// recordMovedBackFloor raises the moved-back height and timestamp floors for blocks that held
+// transactions. The floors only rise until a reset rebuilds the template: the moved-back
 // transactions stay in the template untracked, and a later reorg can lower the next block
 // below them.
 func (b *BlockAssembler) recordMovedBackFloor(moveBack []blockWithMeta) {
@@ -2037,7 +2039,15 @@ func (b *BlockAssembler) recordMovedBackFloor(moveBack []blockWithMeta) {
 		}
 
 		if next == nil || m.meta.Height > next.movedBackHeight {
-			next = &reorgFinalityCheck{movedBack: m.block.Header, movedBackHeight: m.meta.Height}
+			movedBackTime := m.block.Header.Timestamp
+			if next != nil && next.movedBackTime > movedBackTime {
+				movedBackTime = next.movedBackTime
+			}
+			next = &reorgFinalityCheck{movedBack: m.block.Header, movedBackHeight: m.meta.Height, movedBackTime: movedBackTime}
+		} else if m.block.Header.Timestamp > next.movedBackTime {
+			copy := *next
+			copy.movedBackTime = m.block.Header.Timestamp
+			next = &copy
 		}
 	}
 
@@ -2047,19 +2057,31 @@ func (b *BlockAssembler) recordMovedBackFloor(moveBack []blockWithMeta) {
 }
 
 // updateTxCandidate tells the subtree processor which block the template is mined in: the one
-// after header, at height+1, whose time locks are measured against header's median time past,
-// which it returns.
-func (b *BlockAssembler) updateTxCandidate(ctx context.Context, header *model.BlockHeader, height uint32) (uint32, error) {
+// after header, at height+1. Time locks use that block's timestamp before CSV, and header's
+// median time past afterward. It returns both times for the moved-back floor check.
+func (b *BlockAssembler) updateTxCandidate(ctx context.Context, header *model.BlockHeader, height uint32) (uint32, uint32, error) {
 	medianTimePast, err := b.ParentMedianTimePast(ctx, header.Hash())
 	if err != nil {
-		return 0, err
+		return 0, 0, err
+	}
+
+	lockTimeCutoff := medianTimePast
+	if height+1 < b.settings.ChainCfgParams.CSVHeight {
+		candidateTime, err := b.candidateTime(ctx, header)
+		if err != nil {
+			return 0, 0, err
+		}
+		lockTimeCutoff, err = safeconversion.Int64ToUint32(candidateTime)
+		if err != nil {
+			return 0, 0, err
+		}
 	}
 
 	if b.subtreeProcessor != nil {
-		b.subtreeProcessor.SetTxCandidate(header.Hash(), height+1, medianTimePast)
+		b.subtreeProcessor.SetTxCandidate(header.Hash(), height+1, lockTimeCutoff)
 	}
 
-	return medianTimePast, nil
+	return medianTimePast, lockTimeCutoff, nil
 }
 
 // checkTemplateFinality sets the block the template is mined in after a block move and reports
@@ -2069,13 +2091,12 @@ func (b *BlockAssembler) updateTxCandidate(ctx context.Context, header *model.Bl
 // candidate as it was then. It tracks the ones whose nLockTime can hold them back, and a reorg
 // can lower the candidate under them, as can a transaction admitted while the candidate still
 // described the previous block (NotFinalTemplateTxs). The transactions of the blocks a reorg
-// moved back are not tracked: each was final in its block, at that block's height and its
-// parent's median time past, so all of them are still final at a candidate not behind the
-// highest moved-back block holding transactions (recordMovedBackFloor). One block moved back
-// never is: the new tip is above its parent, so neither the height nor the median time past
-// can be behind it.
+// moved back are not tracked: each was final in its block, so they remain final when the next
+// height and time are at least those of every moved-back block holding transactions
+// (recordMovedBackFloor). Before CSV, time means the candidate's own timestamp; afterward it
+// means its parent's median time past.
 func (b *BlockAssembler) checkTemplateFinality(ctx context.Context, header *model.BlockHeader, height uint32) (bool, error) {
-	medianTimePast, err := b.updateTxCandidate(ctx, header, height)
+	medianTimePast, lockTimeCutoff, err := b.updateTxCandidate(ctx, header, height)
 	if err != nil {
 		return false, err
 	}
@@ -2085,6 +2106,10 @@ func (b *BlockAssembler) checkTemplateFinality(ctx context.Context, header *mode
 	}
 
 	if floor := b.movedBackFloor.Load(); floor != nil {
+		if height+1 < b.settings.ChainCfgParams.CSVHeight && lockTimeCutoff < floor.movedBackTime {
+			return true, nil
+		}
+
 		movedBackParentMedianTimePast, err := b.ParentMedianTimePast(ctx, floor.movedBack.HashPrevBlock)
 		if err != nil {
 			return false, err
@@ -2927,7 +2952,7 @@ func (b *BlockAssembler) initState(ctx context.Context) error {
 
 	// The unmined reload that follows keeps out the transactions the next block cannot mine.
 	if header, height := b.CurrentBlock(); header != nil {
-		if _, err = b.updateTxCandidate(ctx, header, height); err != nil {
+		if _, _, err = b.updateTxCandidate(ctx, header, height); err != nil {
 			return errors.NewProcessingError("[BlockAssembler] error setting the block the template is mined in", err)
 		}
 	}
