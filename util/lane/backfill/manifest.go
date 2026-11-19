@@ -122,6 +122,17 @@ type Manifest struct {
 	failed bool
 }
 
+// check refuses a header no manifest can be finished from: segment 0, or a first position outside
+// BackfillFirstPosition to MaxPosition. The writer and the loader both run it, so a hand-made
+// header cannot wrap the prefix and overflow arithmetic.
+func (h Header) check() error {
+	if h.Segment == 0 || h.First < lane.BackfillFirstPosition || h.First > lane.MaxPosition {
+		return errors.NewProcessingError("manifest header: segment %d first %d is not a valid start", h.Segment, h.First)
+	}
+
+	return nil
+}
+
 // CreateManifest starts a new manifest for a segment. The file must not exist. The magic and the
 // header record are written to a temporary file this call creates exclusively, under a name of its
 // own beside path, synced, and linked to path, so a crash during creation leaves either no
@@ -129,8 +140,8 @@ type Manifest struct {
 // It never opens, truncates or removes a file it did not create: a temporary file an earlier crash
 // left stays as it is, and may be a second name of a manifest in use.
 func CreateManifest(path string, h Header) (*Manifest, error) {
-	if h.Segment == 0 || h.First < lane.BackfillFirstPosition || h.First > lane.MaxPosition {
-		return nil, errors.NewProcessingError("manifest header: segment %d first %d is not a valid start", h.Segment, h.First)
+	if err := h.check(); err != nil {
+		return nil, err
 	}
 
 	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
@@ -431,6 +442,11 @@ func (m *Manifest) apply(typ byte, payloadLen uint64, body []byte, pos int64, fi
 			SourceTipBlockID: binary.LittleEndian.Uint32(body[12:]),
 		}
 		copy(m.header.SourceTipHash[:], body[16:])
+
+		if err := m.header.check(); err != nil {
+			return errors.NewProcessingError("manifest %s", m.path, err)
+		}
+
 		m.next = m.header.First
 
 		return nil

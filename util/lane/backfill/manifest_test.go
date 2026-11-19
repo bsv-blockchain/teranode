@@ -766,9 +766,16 @@ func TestManifestRefusesRunsPastTheLane(t *testing.T) {
 	block = binary.LittleEndian.AppendUint64(block, 3)
 	block = append(block, make([]byte, 3*chainhash.HashSize)...)
 
+	segmentZero := headerRecordAt(1_000_001)
+	binary.LittleEndian.PutUint32(segmentZero[1:], 0)
+
 	for name, b := range map[string][]byte{
-		"block past the lane":  craft(headerRecordAt(near), block),
-		"suffix past the lane": craft(headerRecordAt(near), suffixRecord(near, 3, 3)),
+		"block past the lane":     craft(headerRecordAt(near), block),
+		"suffix past the lane":    craft(headerRecordAt(near), suffixRecord(near, 3, 3)),
+		"loaded header first 0":   craft(headerRecordAt(0)),
+		"loaded header sentinel":  craft(headerRecordAt(lane.BackfillSlotSentinel)),
+		"loaded header past lane": craft(headerRecordAt(lane.MaxPosition + 1)),
+		"loaded header segment 0": craft(segmentZero),
 	} {
 		path := filepath.Join(dir, "bad")
 		require.NoError(t, os.WriteFile(path, b, 0o600))

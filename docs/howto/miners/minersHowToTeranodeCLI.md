@@ -31,6 +31,7 @@ Usage: teranode-cli <command> [options]
     loadunminedbench     Benchmark loadUnminedTransactions with CPU and memory profiling
     logs                 Interactive log viewer with filtering and search
     monitor              Live TUI dashboard for monitoring node status
+    prepare-lane-schema  Install the UTXO store's lane columns, empty, at lane migration step off (node must be stopped)
     reconsiderblock      Reconsider a block that was previously marked as invalid
     remainderbench       Benchmark processRemainderTransactionsAndDequeue with CPU and memory profiling
     resetblockassembly   Reset block assembly state
@@ -110,6 +111,9 @@ Usage: teranode-cli <command> [options]
 | `audit-mined-set`    | List blocks stored with mined_set true whose   | `--start-height` - First height to audit (default: 0)           |
 |                      | sampled transactions lack the block ID or are  | `--end-height` - Last height to audit (required)                |
 |                      | still locked (read-only; remedy is a resync)   | `--max-blocks` - Refuse a wider range (default: 10000)          |
+| `prepare-lane-schema`| Install the UTXO store's lane columns, empty,  | none                                                             |
+|                      | at lane migration step off (node must be       |                                                                  |
+|                      | stopped; run as the tables' owner)             |                                                                  |
 | `rewindblockchain`   | Rewind blockchain DB, UTXO store and subtree   | `--target-height` - Height to rewind to (default: Block Assembly's saved height) |
 |                      | blobs to Block Assembly's persisted height     | `--dry-run` - Report the plan without modifying any store        |
 |                      | (DESTRUCTIVE - node must be stopped)           | `--assume-yes` - Skip the interactive confirmation               |

@@ -284,6 +284,16 @@ Remedy: there is no in-place repair. If the audit reports an affected block, res
 
 Exit codes: 0 when no block is affected and at least one block was checked, or there was nothing to audit; 1 when it finds an affected block or the run fails; 2 when no block is affected but every audited block is `UNCHECKED`, as with a missing subtree store or a fully pruned range. Exit 2 is not a pass.
 
+#### Prepare Lane Schema
+
+Install the configured UTXO store's lane columns before the historical lane conversion:
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli prepare-lane-schema
+```
+
+Run it at `utxostore_laneMigration=off`, with every teranode process of the node stopped, as a database role that owns the tables. It adds nullable, empty lane columns, writes no row, and is safe to run again. Start the node's processes afterwards so each sees the same schema. On utxoset it adds the eight lane columns that opening the store at `off` never adds. The SQL store already adds its columns at every open, and Aerospike has no schema to install. The blockchain store's lane tables are not this command's: every start of the blockchain service creates them when its role may `CREATE`.
+
 Options:
 
 - `--start-height` - First main-chain height to audit (default: 0)
