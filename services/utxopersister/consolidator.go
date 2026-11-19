@@ -301,8 +301,8 @@ func (c *consolidator) consumeDeletions(ctx context.Context, us *UTXOSet) error 
 }
 
 // consumeAdditions fetches the per-block additions reader, processes it, and
-// releases the read permit. Unlike deletions, a missing additions file is a
-// real error - every block written via NewUTXOSet creates one.
+// releases the read permit. A missing additions file is an error, as a missing
+// deletions file is: every block written via NewUTXOSet creates both.
 func (c *consolidator) consumeAdditions(ctx context.Context, us *UTXOSet) error {
 	r, err := us.GetUTXOAdditionsReader(ctx)
 	if err != nil {
