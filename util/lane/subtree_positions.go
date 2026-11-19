@@ -2,6 +2,7 @@ package lane
 
 import (
 	"encoding/binary"
+	"math"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
@@ -9,18 +10,25 @@ import (
 )
 
 // The subtree lane positions file sits beside a subtree's meta file (go-subtree Meta, which has
-// no version and is not changed). It carries, for each node of the subtree in node order, the
+// no version and is not changed). For each node of the subtree, in node order, it carries the
 // transaction's own lane position and one lane position per distinct parent, in the parent order
-// of that node's TxInpoints in the meta file:
+// of that node's TxInpoints in the meta file. The file is laid out in columns, so it decodes in one
+// pass into three flat arrays, the same shape SubtreePositions holds in memory:
 //
-//	[4]  magic "LNSP"
-//	[1]  format version, 1
-//	[32] subtree root hash
-//	[4]  node count, uint32 LE
-//	per node: [8] own position, [4] parent count uint32 LE, [8] per parent
+//	[4]    magic "LNSP"
+//	[1]    format version, 1
+//	[32]   subtree root hash
+//	[4]    node count n, uint32 LE
+//	[8*n]  own position of each node, uint64 LE
+//	[4*n]  parent count of each node, uint32 LE
+//	[8*p]  every node's parent positions, node by node, where p is the sum of the counts
 //
 // The coinbase placeholder, node 0 of a block's first subtree, has no position yet: it is written
 // as own position 0 with no parents. No other node may carry a zero or invalid position.
+//
+// A reader that needs both the meta and the positions should fetch the two files concurrently;
+// decoding the positions costs one pass over the bytes and three allocations however many nodes
+// the subtree holds.
 
 const (
 	// SubtreePositionsVersion is the only version of the subtree lane positions file.
@@ -28,171 +36,211 @@ const (
 
 	subtreePositionsMagic = "LNSP"
 
-	// minNodeEntry is the smallest encoded node: own position and a parent count.
-	minNodeEntry = PositionSize + 4
+	subtreePositionsHead = len(subtreePositionsMagic) + 1 + chainhash.HashSize + 4
+
+	// perNodeFixed is each node's own position and parent count.
+	perNodeFixed = PositionSize + 4
 )
 
-// SubtreePositions is the decoded subtree lane positions file.
+// SubtreePositions holds a subtree's lane positions in three flat arrays indexed by node, so a
+// million-node subtree costs three allocations, not one per node. Node i's own position is Own[i]
+// and its parent positions are Parents[ParentStart[i]:ParentStart[i+1]]. ParentStart has one more
+// entry than Own. Build one with NewSubtreePositions and AppendNode, or by decoding a file.
 type SubtreePositions struct {
-	RootHash chainhash.Hash
-	Nodes    []TxPositions
+	RootHash    chainhash.Hash
+	Own         []uint64
+	ParentStart []uint32
+	Parents     []uint64
 }
 
-// EncodeSubtreePositions serializes s. It checks every position first, so it never writes a file
-// its own decoder would refuse.
-func EncodeSubtreePositions(s SubtreePositions) ([]byte, error) {
-	size := len(subtreePositionsMagic) + 1 + chainhash.HashSize + 4
+// NewSubtreePositions starts an empty positions set for a subtree, with room for nodes nodes and
+// parents parent positions in total.
+func NewSubtreePositions(root chainhash.Hash, nodes, parents int) *SubtreePositions {
+	start := make([]uint32, 1, nodes+1)
 
-	for i, n := range s.Nodes {
-		if err := checkNode(i, n); err != nil {
-			return nil, err
-		}
-
-		size += minNodeEntry + len(n.Parents)*PositionSize
+	return &SubtreePositions{
+		RootHash:    root,
+		Own:         make([]uint64, 0, nodes),
+		ParentStart: start,
+		Parents:     make([]uint64, 0, parents),
 	}
-
-	buf := make([]byte, 0, size)
-	buf = append(buf, subtreePositionsMagic...)
-	buf = append(buf, SubtreePositionsVersion)
-	buf = append(buf, s.RootHash[:]...)
-	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(s.Nodes))) //nolint:gosec // a subtree holds far fewer than 2^32 nodes
-
-	for _, n := range s.Nodes {
-		buf = AppendPosition(buf, n.Own)
-		buf = binary.LittleEndian.AppendUint32(buf, uint32(len(n.Parents))) //nolint:gosec // bounded by the inputs of one transaction
-		buf = AppendPositions(buf, n.Parents)
-	}
-
-	return buf, nil
 }
 
-// DecodeSubtreePositions parses a subtree lane positions file and checks every position. It does
-// not compare it with the subtree; CheckSubtreePositions does.
-func DecodeSubtreePositions(b []byte) (SubtreePositions, error) {
-	head := len(subtreePositionsMagic) + 1 + chainhash.HashSize + 4
-	if len(b) < head {
-		return SubtreePositions{}, errors.NewProcessingError("subtree lane positions file is %d bytes, too short", len(b))
+// AppendNode adds the next node's own position and parent positions, copying the parents.
+func (s *SubtreePositions) AppendNode(own uint64, parents []uint64) error {
+	if uint64(len(s.Parents))+uint64(len(parents)) > math.MaxUint32 {
+		return errors.NewProcessingError("subtree lane positions: more than 2^32 parent positions")
 	}
 
-	if string(b[:len(subtreePositionsMagic)]) != subtreePositionsMagic {
-		return SubtreePositions{}, errors.NewProcessingError("subtree lane positions file does not start with %q", subtreePositionsMagic)
+	s.Own = append(s.Own, own)
+	s.Parents = append(s.Parents, parents...)
+	s.ParentStart = append(s.ParentStart, uint32(len(s.Parents))) //nolint:gosec // bounded above
+
+	return nil
+}
+
+// Len is the number of nodes.
+func (s *SubtreePositions) Len() int {
+	return len(s.Own)
+}
+
+// NodeParents returns node i's parent positions, a view into Parents capped so an append cannot
+// run into the next node's.
+func (s *SubtreePositions) NodeParents(i int) []uint64 {
+	lo, hi := s.ParentStart[i], s.ParentStart[i+1]
+
+	return s.Parents[lo:hi:hi]
+}
+
+// checkShape validates the arrays' shape and every position: all valid, except the coinbase
+// placeholder form (own 0, no parents) which only node 0 may have.
+func (s *SubtreePositions) checkShape() error {
+	if len(s.ParentStart) != len(s.Own)+1 || s.ParentStart[0] != 0 || int(s.ParentStart[len(s.Own)]) != len(s.Parents) {
+		return errors.NewProcessingError("subtree lane positions: offsets do not match %d nodes and %d parents", len(s.Own), len(s.Parents))
 	}
 
-	if v := b[len(subtreePositionsMagic)]; v != SubtreePositionsVersion {
-		return SubtreePositions{}, errors.NewProcessingError("subtree lane positions file has unsupported version %d", v)
-	}
-
-	var s SubtreePositions
-
-	copy(s.RootHash[:], b[len(subtreePositionsMagic)+1:])
-	n := binary.LittleEndian.Uint32(b[head-4:])
-	rest := b[head:]
-
-	if uint64(n)*minNodeEntry > uint64(len(rest)) {
-		return SubtreePositions{}, errors.NewProcessingError("subtree lane positions file claims %d nodes in %d bytes", n, len(rest))
-	}
-
-	s.Nodes = make([]TxPositions, n)
-
-	for i := range s.Nodes {
-		if len(rest) < minNodeEntry {
-			return SubtreePositions{}, errors.NewProcessingError("subtree lane positions file truncated at node %d", i)
+	for i, own := range s.Own {
+		lo, hi := s.ParentStart[i], s.ParentStart[i+1]
+		if hi < lo {
+			return errors.NewProcessingError("subtree node %d: parent offsets run backwards", i)
 		}
 
-		s.Nodes[i].Own = binary.LittleEndian.Uint64(rest)
-		k := binary.LittleEndian.Uint32(rest[PositionSize:])
-		rest = rest[minNodeEntry:]
-
-		parents, more, err := readNodeParents(rest, k, i)
-		if err != nil {
-			return SubtreePositions{}, err
+		if own == None && lo == hi && i == 0 {
+			continue
 		}
 
-		s.Nodes[i].Parents = parents
-		rest = more
-
-		if err := checkNode(i, s.Nodes[i]); err != nil {
-			return SubtreePositions{}, err
+		if err := CheckPosition(own); err != nil {
+			return errors.NewProcessingError("subtree node %d own lane position", i, err)
 		}
 	}
 
-	if len(rest) != 0 {
-		return SubtreePositions{}, errors.NewProcessingError("subtree lane positions file has %d trailing bytes", len(rest))
-	}
-
-	return s, nil
-}
-
-func readNodeParents(rest []byte, k uint32, node int) ([]uint64, []byte, error) {
-	if uint64(k)*PositionSize > uint64(len(rest)) {
-		return nil, nil, errors.NewProcessingError("subtree lane positions file truncated in node %d's %d parents", node, k)
-	}
-
-	if k == 0 {
-		return nil, rest, nil
-	}
-
-	parents := make([]uint64, k)
-	for j := range parents {
-		parents[j] = binary.LittleEndian.Uint64(rest[j*PositionSize:])
-	}
-
-	return parents, rest[int(k)*PositionSize:], nil
-}
-
-// checkNode checks one node's positions: all valid, except the coinbase placeholder form (own 0,
-// no parents) which only node 0 may have.
-func checkNode(i int, n TxPositions) error {
-	if n.Own == None && len(n.Parents) == 0 && i == 0 {
-		return nil
-	}
-
-	if err := CheckPosition(n.Own); err != nil {
-		return errors.NewProcessingError("subtree node %d own lane position", i, err)
-	}
-
-	for j, p := range n.Parents {
+	for j, p := range s.Parents {
 		if err := CheckPosition(p); err != nil {
-			return errors.NewProcessingError("subtree node %d parent %d lane position", i, j, err)
+			return errors.NewProcessingError("subtree parent lane position %d", j, err)
 		}
 	}
 
 	return nil
 }
 
+// EncodeSubtreePositions serializes s in one exactly sized allocation. It checks every position
+// first, so it never writes a file its own decoder would refuse.
+func EncodeSubtreePositions(s *SubtreePositions) ([]byte, error) {
+	if err := s.checkShape(); err != nil {
+		return nil, err
+	}
+
+	n := len(s.Own)
+
+	buf := make([]byte, 0, subtreePositionsHead+n*perNodeFixed+len(s.Parents)*PositionSize)
+	buf = append(buf, subtreePositionsMagic...)
+	buf = append(buf, SubtreePositionsVersion)
+	buf = append(buf, s.RootHash[:]...)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(n)) //nolint:gosec // a subtree holds far fewer than 2^32 nodes
+	buf = AppendPositions(buf, s.Own)
+
+	for i := 0; i < n; i++ {
+		buf = binary.LittleEndian.AppendUint32(buf, s.ParentStart[i+1]-s.ParentStart[i])
+	}
+
+	return AppendPositions(buf, s.Parents), nil
+}
+
+// DecodeSubtreePositions parses a subtree lane positions file and checks every position. It reads
+// the bytes once and allocates three arrays, each sized only after the buffer is known to hold
+// what the counts claim. It does not compare the result with the subtree; CheckSubtreePositions
+// does.
+func DecodeSubtreePositions(b []byte) (*SubtreePositions, error) {
+	if len(b) < subtreePositionsHead {
+		return nil, errors.NewProcessingError("subtree lane positions file is %d bytes, too short", len(b))
+	}
+
+	if string(b[:len(subtreePositionsMagic)]) != subtreePositionsMagic {
+		return nil, errors.NewProcessingError("subtree lane positions file does not start with %q", subtreePositionsMagic)
+	}
+
+	if v := b[len(subtreePositionsMagic)]; v != SubtreePositionsVersion {
+		return nil, errors.NewProcessingError("subtree lane positions file has unsupported version %d", v)
+	}
+
+	n := uint64(binary.LittleEndian.Uint32(b[subtreePositionsHead-4:]))
+	rest := b[subtreePositionsHead:]
+
+	if n*perNodeFixed > uint64(len(rest)) {
+		return nil, errors.NewProcessingError("subtree lane positions file claims %d nodes in %d bytes", n, len(rest))
+	}
+
+	ownBytes := rest[:n*PositionSize]
+	countBytes := rest[n*PositionSize : n*perNodeFixed]
+	parentBytes := rest[n*perNodeFixed:]
+
+	// Sum the counts before allocating: the parent block must hold exactly that many positions.
+	var total uint64
+	for i := uint64(0); i < n; i++ {
+		total += uint64(binary.LittleEndian.Uint32(countBytes[i*4:]))
+	}
+
+	if total > math.MaxUint32 || total*PositionSize != uint64(len(parentBytes)) {
+		return nil, errors.NewProcessingError("subtree lane positions file: counts sum to %d parents, %d bytes remain", total, len(parentBytes))
+	}
+
+	s := &SubtreePositions{
+		Own:         make([]uint64, n),
+		ParentStart: make([]uint32, n+1),
+		Parents:     make([]uint64, total),
+	}
+	copy(s.RootHash[:], b[len(subtreePositionsMagic)+1:])
+
+	for i := range s.Own {
+		s.Own[i] = binary.LittleEndian.Uint64(ownBytes[i*PositionSize:])
+		s.ParentStart[i+1] = s.ParentStart[i] + binary.LittleEndian.Uint32(countBytes[i*4:])
+	}
+
+	for j := range s.Parents {
+		s.Parents[j] = binary.LittleEndian.Uint64(parentBytes[j*PositionSize:])
+	}
+
+	if err := s.checkShape(); err != nil {
+		return nil, err
+	}
+
+	return s, nil
+}
+
 // CheckSubtreePositions checks a decoded positions file against the subtree and its meta: the
 // same root hash and node count, one parent position per distinct parent of each node, and the
 // position-less form only on a coinbase placeholder at node 0.
-func CheckSubtreePositions(s SubtreePositions, st *subtreepkg.Subtree, meta *subtreepkg.Meta) error {
-	if st == nil || meta == nil {
-		return errors.NewProcessingError("subtree lane positions: subtree and meta are required")
+func CheckSubtreePositions(s *SubtreePositions, st *subtreepkg.Subtree, meta *subtreepkg.Meta) error {
+	if s == nil || st == nil || meta == nil {
+		return errors.NewProcessingError("subtree lane positions: positions, subtree and meta are required")
 	}
 
 	if root := st.RootHash(); root == nil || *root != s.RootHash {
 		return errors.NewProcessingError("subtree lane positions are for subtree %s, not this one", s.RootHash.String())
 	}
 
-	if len(s.Nodes) != st.Length() || len(meta.TxInpoints) < st.Length() {
-		return errors.NewProcessingError("subtree lane positions hold %d nodes, the subtree %d and its meta %d", len(s.Nodes), st.Length(), len(meta.TxInpoints))
+	if s.Len() != st.Length() || len(meta.TxInpoints) < st.Length() {
+		return errors.NewProcessingError("subtree lane positions hold %d nodes, the subtree %d and its meta %d", s.Len(), st.Length(), len(meta.TxInpoints))
 	}
 
-	for i, n := range s.Nodes {
+	for i := 0; i < s.Len(); i++ {
 		placeholder := i == 0 && st.Nodes[0].Hash == subtreepkg.CoinbasePlaceholderHashValue
+		parents := s.NodeParents(i)
 
-		if placeholder != (n.Own == None) {
+		if placeholder != (s.Own[i] == None) {
 			return errors.NewProcessingError("subtree node %d: only the coinbase placeholder has no lane position, and it has none", i)
 		}
 
 		if placeholder {
-			if len(n.Parents) != 0 {
+			if len(parents) != 0 {
 				return errors.NewProcessingError("subtree node 0, the coinbase placeholder, has parent positions")
 			}
 
 			continue
 		}
 
-		parents := meta.TxInpoints[i].ParentTxHashes
-		if err := n.Check(parents); err != nil {
+		p := TxPositions{Own: s.Own[i], Parents: parents}
+		if err := p.Check(meta.TxInpoints[i].ParentTxHashes); err != nil {
 			return errors.NewProcessingError("subtree node %d (%s)", i, st.Nodes[i].Hash.String(), err)
 		}
 	}
