@@ -174,6 +174,11 @@ func TestLanePositionContractUtxoset(t *testing.T) {
 		t.Run("burns", func(t *testing.T) { tests.LanePositionBurns(t, s, "utxoset") })
 	})
 
+	t.Run("no batchers", func(t *testing.T) {
+		s, _ := newUnbatchedLaneStore(t)
+		tests.LanePositionBurns(t, s, "utxoset")
+	})
+
 	t.Run("checkpointed", func(t *testing.T) {
 		s, _ := newLaneStore(t)
 		tests.LanePositionMinedCreate(t, s)
@@ -1737,4 +1742,42 @@ func TestLanePositionBurnOfAWaiterThatGaveUp(t *testing.T) {
 
 	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/block_assembly": 1},
 		tests.ReadLaneBurns(t, "utxoset").Since(before), "the batch's answer counts nothing more")
+}
+
+// The read-back reads the database directly, so it keeps its deadline even when the store's close
+// lock is unavailable: a closing store, waiting on a writer stuck behind a full queue, holds it.
+// Reading through the get batcher would wait on that lock past any deadline.
+func TestLanePositionBurnUnlessStoredDoesNotWaitOnTheCloseLock(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+	require.NotNil(t, s.getBatcher, "the test needs the batched get it must avoid")
+
+	missing := tests.BuildMultiWorkload(t, 0xce, 1, 1).Roots[0]
+	options := &utxo.CreateOptions{Caller: utxo.CallerValidator}
+
+	old := laneBurnProbeTimeout
+	laneBurnProbeTimeout = 200 * time.Millisecond
+
+	t.Cleanup(func() { laneBurnProbeTimeout = old })
+
+	s.closeMu.Lock()
+
+	unlock := sync.OnceFunc(s.closeMu.Unlock)
+	t.Cleanup(unlock)
+
+	done := make(chan struct{})
+
+	go func() {
+		s.burnUnlessStored(ctx, missing, options, lane.Pack(31, 5), errors.NewStorageError("rerun failed"), nil)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		unlock()
+		<-done
+		t.Fatal("the read-back waited on the store's close lock")
+	}
+
+	unlock()
 }

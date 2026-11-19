@@ -44,9 +44,9 @@ import (
 // submission, which is what retires the applied_block ledger.
 func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	opts ...utxo.CreateOption) (_ *meta.Data, spends []*utxo.Spend, err error) {
-	// Set from the batch's answer; see spendAndCreateResult. notQueued is set when the caller had
-	// already given up before its item was queued, so nothing was written.
-	var rerunAfterBatchError, notQueued bool
+	// Set from the batch's answer; see spendAndCreateResult. notSubmitted is set when the caller had
+	// already given up before anything was queued or sent, so nothing was written.
+	var rerunAfterBatchError, notSubmitted bool
 
 	options := &utxo.CreateOptions{}
 	for _, opt := range opts {
@@ -79,7 +79,7 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		// is the final one.
 		if utxo.TookLanePosition(options.LanePosition, position) {
 			defer func() {
-				if notQueued {
+				if notSubmitted {
 					s.BurnLanePosition(utxo.CreatedTxID(tx, options), options.Caller, position, utxo.LaneBurnError)
 					return
 				}
@@ -111,7 +111,7 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		// Once queued the item is applied whether or not anyone is waiting.
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			// Nothing was queued, so the position certainly burned.
-			notQueued = true
+			notSubmitted = true
 
 			return nil, nil, ctxErr
 		}
@@ -132,6 +132,11 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		rerunAfterBatchError = res.rerunAfterBatchError
 
 		return res.data, res.spends, res.err
+	}
+
+	// A call whose context has already ended fails before it opens a database transaction.
+	if ctx.Err() != nil {
+		notSubmitted = true
 	}
 
 	return s.spendAndCreateOne(ctx, tx, blockHeight, options, opts...)

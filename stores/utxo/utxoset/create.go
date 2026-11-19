@@ -134,13 +134,14 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	// A position this call took from the source is its own to record if the create fails. A
 	// caller that stops waiting for the batch gets its context error while the batch may still
 	// write the record, and LaneBurnReason says so. A batch that failed with its database
-	// transaction open says why on its result.
-	var batchBurnReason string
+	// transaction open says why on its result, and so does a direct call whose context had
+	// already ended.
+	var knownBurnReason string
 
 	if utxo.TookLanePosition(options.LanePosition, position) {
 		defer func() {
-			if batchBurnReason != "" && err != nil {
-				s.BurnLanePosition(utxo.CreatedTxID(tx, options), options.Caller, position, batchBurnReason)
+			if knownBurnReason != "" && err != nil {
+				s.BurnLanePosition(utxo.CreatedTxID(tx, options), options.Caller, position, knownBurnReason)
 				return
 			}
 
@@ -174,7 +175,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 			}) {
 				select {
 				case res := <-done:
-					batchBurnReason = res.burnReason
+					knownBurnReason = res.burnReason
 
 					return res.data, res.err
 				case <-ctx.Done():
@@ -182,6 +183,12 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 				}
 			}
 		}
+	}
+
+	// A call whose context has already ended fails before it opens a database transaction, so its
+	// position was certainly not written.
+	if ctx.Err() != nil {
+		knownBurnReason = utxo.LaneBurnError
 	}
 
 	// Both partitions BEFORE the transaction is opened, never inside it: the DDL needs its own
