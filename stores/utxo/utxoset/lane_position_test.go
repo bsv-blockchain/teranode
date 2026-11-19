@@ -1860,3 +1860,35 @@ func TestLanePositionBurnOfAListThatNeverStarted(t *testing.T) {
 	require.Equal(t, tests.LaneBurns{utxo.LaneBurnListFailed + "/subtree_validation": 1},
 		tests.ReadLaneBurns(t, "utxoset").Since(before))
 }
+
+// A below-checkpoint list that fails before it has built its transactions, here at the identity probe
+// on an ended context, counts every position it took as list_failed, and stores nothing.
+func TestLanePositionBurnOfABelowCheckpointListThatFailedEarly(t *testing.T) {
+	const height = 900
+
+	s, ctx := newLaneStore(t)
+
+	w := tests.BuildMultiWorkload(t, 0xcf, 1, 3)
+	w.StoreRoots(t, s, height-1)
+
+	list := outpointOnly(w.Txs)
+
+	useBurnSource(t, s, burnPositions(len(list))...)
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, err := s.SpendAndCreateMulti(cancelled, list, height,
+		append(belowCheckpointOptions(height), utxo.WithCaller(utxo.CallerBlockValidation))...)
+	require.Error(t, err)
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnListFailed + "/block_validation": float64(len(list))},
+		tests.ReadLaneBurns(t, "utxoset").Since(before))
+
+	for i, tx := range list {
+		_, err = s.Get(ctx, tx.TxIDChainHash())
+		require.ErrorIs(t, err, errors.ErrTxNotFound, "tx %d", i)
+	}
+}
