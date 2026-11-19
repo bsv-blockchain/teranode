@@ -220,16 +220,17 @@ type netBelowTx struct {
 	tx    *bt.Tx
 	txid  chainhash.Hash
 	ident bool
+	// burn says why the transaction's lane position burned once its chunk failed: rolled_back, or
+	// outcome_unknown when the chunk's COMMIT failed and may have landed. A byte in ident's padding,
+	// so the struct does not grow. Each chunk writes only its own transactions', and they are read
+	// after every chunk ends.
+	burn listBurn
 	// netted[vin] is true when input vin spends an output of an earlier transaction of the
 	// list. nil when none does.
 	netted []bool
 	// listSpent are the transaction's own outputs a later transaction of the list spends.
 	listSpent []uint32
 	result    utxo.SpendAndCreateMultiResult
-	// burnReason says why the transaction's lane position burned once its chunk failed:
-	// rolled_back, or outcome_unknown when the chunk's COMMIT failed and may have landed. Each
-	// chunk writes only its own transactions', and they are read after every chunk ends.
-	burnReason string
 }
 
 func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndCreateMultiList,
@@ -250,7 +251,7 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 					return utxo.SpendAndCreateMultiResult{}, ""
 				}
 
-				return items[i].result, items[i].burnReason
+				return items[i].result, items[i].burn.String()
 			}
 		}
 
@@ -330,8 +331,8 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 			err := s.netBelowChunk(gCtx, chunk, list, blockHeight, spender, positions)
 			if err != nil {
 				for _, it := range chunk {
-					if it.burnReason == "" {
-						it.burnReason = utxo.LaneBurnRolledBack
+					if it.burn == listBurnNone {
+						it.burn = listBurnRolledBack
 					}
 				}
 			}
@@ -554,7 +555,7 @@ func (s *Store) netBelowChunk(ctx context.Context, chunk []*netBelowTx, list *ut
 	if err = commitCreates(ctx, dbTx); err != nil {
 		// The commit may have landed, so the positions may be on records.
 		for _, it := range chunk {
-			it.burnReason = utxo.LaneBurnOutcomeUnknown
+			it.burn = listBurnOutcomeUnknown
 		}
 
 		return errors.NewStorageError("[utxoset][SpendAndCreateMulti] commit netted chunk", err)

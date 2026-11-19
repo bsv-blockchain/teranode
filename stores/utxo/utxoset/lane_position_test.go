@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -1812,8 +1813,9 @@ func TestLanePositionBurnUnlessStoredDoesNotWaitOnTheCloseLock(t *testing.T) {
 // A chunk round that fails before it re-marks what an earlier round found stored still counts that
 // transaction as exists: the transaction is live in this round's status, but known stored.
 func TestLanePositionFailedChunkKeepsAnEarlierRoundsExists(t *testing.T) {
-	stored, fresh := &multiTx{}, &multiTx{}
+	stored, fresh := &multiTx{pos: 0}, &multiTx{pos: 1}
 
+	w := &nettedWrite{burns: make([]listBurn, 2)}
 	run := &chunkRun{
 		its:           []*multiTx{stored, fresh},
 		st:            []chunkStatus{chunkLive, chunkLive},
@@ -1821,10 +1823,47 @@ func TestLanePositionFailedChunkKeepsAnEarlierRoundsExists(t *testing.T) {
 		forcedExisted: []bool{true, false},
 	}
 
-	run.recordFailedBurns()
+	w.recordFailedBurns(run)
 
-	require.Equal(t, utxo.LaneBurnExists, stored.burnReason)
-	require.Equal(t, utxo.LaneBurnRolledBack, fresh.burnReason)
+	require.Equal(t, utxo.LaneBurnExists, w.burnAt(0))
+	require.Equal(t, utxo.LaneBurnRolledBack, w.burnAt(1))
+}
+
+// A list without lane positions records no burn reasons and allocates nothing for them.
+func TestLanePositionListBurnsOnlyWithPositions(t *testing.T) {
+	w := &nettedWrite{}
+	run := &chunkRun{its: []*multiTx{{pos: 0}}, st: []chunkStatus{chunkLive}, res: make([]utxo.SpendAndCreateMultiResult, 1),
+		forcedExisted: []bool{false}}
+
+	w.recordFailedBurns(run)
+	w.setBurn(0, listBurnListFailed)
+
+	require.Nil(t, w.burns)
+	require.Empty(t, w.burnAt(0))
+}
+
+// Every reason label round-trips through its one-byte code.
+func TestListBurnCodes(t *testing.T) {
+	for _, reason := range []string{utxo.LaneBurnExists, utxo.LaneBurnSpendRejected, utxo.LaneBurnOutcomeUnknown,
+		utxo.LaneBurnRolledBack, utxo.LaneBurnParentFailed, utxo.LaneBurnListFailed, utxo.LaneBurnError} {
+		require.Equal(t, reason, listBurnFor(reason).String())
+	}
+
+	require.Equal(t, utxo.LaneBurnError, listBurnFor("no such reason").String())
+	require.Empty(t, listBurnNone.String())
+}
+
+// The burn code sits in padding the netted-below transaction already had, so it costs no memory.
+func TestNetBelowTxDidNotGrow(t *testing.T) {
+	require.Equal(t, unsafe.Sizeof(struct {
+		pos       int
+		tx        *bt.Tx
+		txid      chainhash.Hash
+		ident     bool
+		netted    []bool
+		listSpent []uint32
+		result    utxo.SpendAndCreateMultiResult
+	}{}), unsafe.Sizeof(netBelowTx{}))
 }
 
 // A direct Create whose context has already ended fails before it opens a database transaction, so
