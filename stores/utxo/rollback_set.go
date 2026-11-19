@@ -89,11 +89,10 @@ func AnyPrunedReplay(spends []*Spend) bool {
 // spend. Every other caller rolls back by the stores' own record-existence probe
 // and transient-window gate, which differ between the stores.
 //
-// A missing parent counts only when requireParentOutputs is set, because only
-// there is it a failure of the spend. Any other caller keeps the behaviour from
-// before replay protection: a missing parent is not a validation failure, the
-// fresh sibling spends stay, and a retry once the parent arrives matches them
-// idempotently.
+// A missing parent selects this error-class rollback only for
+// RequireParentOutputs calls. Ordinary calls use the stores' record-existence
+// probe and transient-error gate, which can reverse fresh sibling spends and
+// unmarked idempotent matches.
 func IsSpendRollbackError(err error, requireParentOutputs bool) bool {
 	return errors.Is(err, errors.ErrSpent) ||
 		errors.Is(err, errors.ErrTxConflicting) ||

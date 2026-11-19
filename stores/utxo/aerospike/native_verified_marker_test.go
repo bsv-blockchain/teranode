@@ -360,6 +360,22 @@ func TestJudgeVerifiedMarkerProbe(t *testing.T) {
 			want: replayProbeMismatch, wantErrs: 1,
 		},
 		{
+			name: "a finite TTL extension",
+			change: func(s []answer, r []*aerospike.Record) ([]answer, []*aerospike.Record, error) {
+				r[0] = record(verifiedMarkerProbeTTL+1, childA)
+				return s, r, nil
+			},
+			want: replayProbeMismatch, wantErrs: 1,
+		},
+		{
+			name: "the finite TTL boundary is retained",
+			change: func(s []answer, r []*aerospike.Record) ([]answer, []*aerospike.Record, error) {
+				r[0], r[1] = record(verifiedMarkerProbeTTL, childA), record(verifiedMarkerProbeTTL, childA)
+				return s, r, nil
+			},
+			want: replayProbeProven,
+		},
+		{
 			name: "a child the output does not name is accepted",
 			change: func(s []answer, r []*aerospike.Record) ([]answer, []*aerospike.Record, error) {
 				s[1] = answer{}

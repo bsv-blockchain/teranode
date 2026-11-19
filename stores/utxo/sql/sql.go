@@ -3036,7 +3036,9 @@ type spendSelectResult struct {
 
 // trySendSpendBatchBulk uses bulk SELECT + bulk UPDATE for PostgreSQL.
 func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) (retryable bool) {
-	txn, err := s.db.BeginTx(ctx, nil)
+	// Marker rechecks must see pruning commits after the initial SELECT,
+	// regardless of the PostgreSQL role or database's default isolation.
+	txn, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		for _, item := range batch {
 			item.errCh <- errors.NewStorageError("[Spend] failed to begin transaction", err)
@@ -3834,7 +3836,12 @@ func failSpendBatch(batch []*batchSpend, validationErrors map[int]error, msg str
 // trySendSpendBatchPerRow processes a spend batch with per-row SELECT+UPDATE (original behavior).
 // Used for SQLite or when BatchSQLOperations is disabled.
 func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend) (retryable bool) {
-	txn, err := s.db.BeginTx(ctx, nil)
+	var txOptions *sql.TxOptions
+	if s.engine == "postgres" {
+		// Match the bulk path's marker visibility; keep SQLite's defaults.
+		txOptions = &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+	}
+	txn, err := s.db.BeginTx(ctx, txOptions)
 	if err != nil {
 		for _, item := range batch {
 			item.errCh <- errors.NewStorageError("[Spend] failed to begin transaction", err)

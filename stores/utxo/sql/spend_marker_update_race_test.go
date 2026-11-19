@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,6 +31,19 @@ import (
 // an open spend transaction there, and the hook's insert would block on it.
 // Both Postgres spend paths are covered: the bulk path and the per-row one.
 func TestSpendRefusesMarkerCommittedAfterSelect(t *testing.T) {
+	testSpendRefusesMarkerCommittedAfterSelect(t, "")
+}
+
+func TestSpendRefusesMarkerCommittedAfterSelectWithNonDefaultIsolation(t *testing.T) {
+	for _, isolation := range []string{"repeatable read", "serializable"} {
+		t.Run(isolation, func(t *testing.T) {
+			testSpendRefusesMarkerCommittedAfterSelect(t, isolation)
+		})
+	}
+}
+
+func testSpendRefusesMarkerCommittedAfterSelect(t *testing.T, defaultIsolation string) {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -58,7 +72,24 @@ func TestSpendRefusesMarkerCommittedAfterSelect(t *testing.T) {
 		bulk := tc.bulk
 
 		t.Run(tc.name, func(t *testing.T) {
-			store, ctx := setupPostgresStore(t)
+			ctx := context.Background()
+			dbURL := startPostgresContainer(t, ctx)
+			if defaultIsolation != "" {
+				admin, err := pgx.Connect(ctx, dbURL.String())
+				require.NoError(t, err)
+				// Only these two fixed test values reach this statement. New
+				// store connections must inherit the database default.
+				_, err = admin.Exec(ctx, "ALTER DATABASE testdb SET default_transaction_isolation = '"+defaultIsolation+"'")
+				require.NoError(t, err)
+				require.NoError(t, admin.Close(ctx))
+			}
+			store := newPostgresTestStore(t, ctx, dbURL)
+			t.Cleanup(func() { require.NoError(t, store.Close(ctx)) })
+			if defaultIsolation != "" {
+				var isolation string
+				require.NoError(t, store.db.QueryRowContext(ctx, "SHOW transaction_isolation").Scan(&isolation))
+				require.Equal(t, defaultIsolation, isolation)
+			}
 			store.settings.UtxoStore.BatchSQLOperations = bulk
 
 			if tc.noRetention {

@@ -352,13 +352,15 @@ For large transactions stored externally in Blob Store (S3 or filesystem), the P
 
     - Has inputs → FileTypeTx (`.tx` file)
     - No inputs → FileTypeOutputs (`.outputs` file)
-3. Delete file from Blob Store before deleting Aerospike record
-4. If file already deleted (by previous cleanup), proceed with Aerospike deletion
+3. Write the required replay markers on its parents and confirm the Aerospike master removal operation (a delete, or a one-second TTL touch when TTL pruning is enabled)
+4. Delete the external file only after that operation is confirmed
 
 **Error Handling:**
 
-- If file deletion fails: Log error and skip Aerospike record deletion
-- If file not found (ErrNotFound): Proceed with Aerospike deletion (file already cleaned up)
+- If the master removal operation fails or its outcome is unknown: Keep its external files
+- If file deletion fails: Log and return the error; the master is already removed or scheduled to expire, so the failure can leave an orphan blob
+- If file not found (ErrNotFound): Treat cleanup as successful (file already cleaned up)
+- External files have no delete-at-height, and a deleted master is not scanned again, so a failed blob deletion is not automatically retried by a later pruning pass
 
 ### 2.7 Channel-Based Deduplication
 

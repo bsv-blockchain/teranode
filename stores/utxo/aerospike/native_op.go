@@ -667,9 +667,9 @@ func (s *Store) probeNativeSpendSemantics(ctx context.Context, policy *aerospike
 	return true
 }
 
-// nativeSupportProbes are the start-up probes initNativeTeranodeOps runs: the native opcode and the
-// spend semantics behind it (which also records the replay-protection verdict), then the
-// longest-chain mark and sub-op 15, each run only when the one before it passed.
+// nativeSupportProbes are the start-up probes initNativeTeranodeOps runs: the
+// native opcode and spend semantics (which record the replay-protection verdict),
+// then independent longest-chain and sub-op 15 probes gated on that first result.
 type nativeSupportProbes struct {
 	ops, markLongestChain, verifiedMarker func(ctx context.Context) bool
 }
