@@ -421,6 +421,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	s.NameLaneBurns("aerospike")
+	s.NameLaneReturns("aerospike")
 
 	// Initialize spendLuaPackages array with configurable count
 	if s.settings.Aerospike.SeparateSpendUDFModuleCount > 0 {

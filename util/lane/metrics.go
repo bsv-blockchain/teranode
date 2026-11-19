@@ -14,6 +14,7 @@ var (
 	prometheusLaneWaits         prometheus.Counter
 	prometheusLaneTakeFailures  prometheus.Counter
 	prometheusLaneRefusedGrants prometheus.Counter
+	prometheusLaneReused        prometheus.Counter
 
 	prometheusMetricsInitOnce sync.Once
 )
@@ -55,6 +56,12 @@ func initPrometheusMetrics() {
 			Subsystem: "lane",
 			Name:      "refused_grants_total",
 			Help:      "Grants refused because they did not start above a position this process already gave out in that lane",
+		})
+		prometheusLaneReused = promauto.NewCounter(prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "lane",
+			Name:      "positions_reused_total",
+			Help:      "Lane positions handed to a new record a second time, after a store returned them because no record carried them. Each is also counted in positions_total",
 		})
 	})
 }

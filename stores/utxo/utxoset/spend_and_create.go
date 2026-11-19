@@ -78,19 +78,34 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		// batched path waits for its batch's answer whatever the caller's context does, and a batch
 		// that rolls back runs the item again with the same position, so the answer returned here
 		// is the final one.
+		//
+		// It also goes back for reuse when the final answer proves nothing carries it:
+		// refusedUnwritten for exists, utxo.RefusedSpend for a refused spend. A rerun after a failed
+		// batch never returns it: that batch's COMMIT may have landed with it.
 		if utxo.TookLanePosition(options.LanePosition, position) {
 			defer func() {
-				if notSubmitted {
+				if err == nil {
+					return
+				}
+
+				switch {
+				case notSubmitted:
 					s.BurnLanePosition(options.Caller, utxo.LaneBurnError)
-					return
-				}
-
-				if rerunAfterBatchError && err != nil {
+				case rerunAfterBatchError:
 					s.burnUnlessStored(ctx, tx, options, position, err, spends)
+				default:
+					s.BurnCreateLanePosition(options, position, err, spends)
+				}
+
+				if rerunAfterBatchError {
 					return
 				}
 
-				s.BurnCreateLanePosition(options, position, err, spends)
+				if refusedUnwritten(err, options) {
+					s.ReturnLanePosition(position, utxo.LaneReturnExists, true)
+				} else if !options.CreateOnly && utxo.RefusedSpend(err, spends) {
+					s.ReturnLanePosition(position, utxo.LaneReturnSpendRejected, true)
+				}
 			}()
 		}
 

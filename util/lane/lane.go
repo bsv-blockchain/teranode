@@ -4,12 +4,15 @@
 //
 // The high byte is the lane: one per process that creates records, held under a
 // lease from the blockchain service. The low seven bytes are the position: the
-// record's place in that lane, counting up by one per record within a grant. A
-// lease lapses unless renewed; its holder stops giving out positions before the
-// service can close it and give the lane to another process, and every grant in a
-// lane starts above the lane's last one, so positions in a lane are never given out
-// twice and rise in the order their grants were recorded. A lane position is unique
-// across the grants recorded in one blockchain database and is written once, so
+// record's place in that lane. Within a grant, new positions count up by one per
+// take. A position a store proved no record carries can be returned and given out
+// again, only inside the grant it came from (Allocator.Return), so takes within a
+// grant need not rise. A lease lapses unless renewed; its holder stops giving out
+// positions before the service can close it and give the lane to another process,
+// and every grant in a lane starts above the lane's last one, so no two records
+// carry the same position in a lane, and the grants rise in the order they were
+// recorded. A lane position is unique among the records created under the grants
+// recorded in one blockchain database and is written once, so
 // later work can say which block took a record by keeping a range of positions per
 // lane per block, instead of writing to the record. Restoring an older blockchain
 // database could reuse positions, which is a listed limit of this phase.
@@ -131,11 +134,14 @@ func (g Grant) Len() uint64 {
 
 // Settles finishes a grant the holder has left: the grant's first position and its final number,
 // which is the grant's last position if it was used up, or the highest position taken if it aged
-// out. The holder sends it on its next grant request and on its release, and the service writes it
-// on that hand-out row or close row. A grant is settled only once it has been used, so LastTaken is
-// never zero in a pair the holder sends. A grant never used gets no settles pair: positions above
-// the release's LastTaken were never given out, and a lapsed close is taken to have used every grant
-// of its lease. The zero value settles nothing.
+// out, lowered past any positions at the top of that range that came back unwritten (Allocator.Return)
+// and were not given out again. No position above the final number carries a record. The holder
+// sends it on its next grant request and on its release, and the service writes it on that hand-out
+// row or close row. A grant is settled only once it has been used; LastTaken is zero in a pair the
+// holder sends only when every position the grant gave out came back, so none carries a record. A
+// grant never used gets no settles pair: positions above the release's LastTaken were never given
+// out, or came back, and a lapsed close is taken to have used every grant of its lease. The zero
+// value settles nothing.
 type Settles struct {
 	First     uint64
 	LastTaken uint64
@@ -167,7 +173,9 @@ type RenewResult struct {
 type Release struct {
 	Lease LeaseID
 	Lane  uint8
-	// LastTaken is the last position taken in the lane; zero for none.
+	// LastTaken is the highest position the lease gave out in the lane that may carry a record:
+	// positions at the top that came back unwritten (Allocator.Return) are left out, so it can fall
+	// below the current grant, and is zero when none was given out or every one came back.
 	LastTaken uint64
 	// Settles finishes the oldest grant left and not yet reported; a newer one left after it is
 	// settled by LastTaken.

@@ -146,8 +146,9 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	// The position is taken before the first spend, so a create that cannot get one fails having
 	// spent nothing, rather than spending, failing and rolling the spends back.
 	//
-	// A position taken here from the source is this call's to record if it burns. The store's
-	// Create is handed it as a named position, so it records nothing for it.
+	// A position taken here from the source is this call's to record if it burns, and to return if
+	// the create provably wrote nothing. The store's Create is handed it as a named position, so it
+	// records and returns nothing for it.
 	var (
 		taker LanePositionTaker
 		taken uint64
@@ -185,6 +186,11 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 				}
 
 				taker.BurnLanePosition(options.Caller, reason)
+
+				// No record carries the position; a refused spend returns it.
+				if RefusedSpend(err, spends) {
+					taker.ReturnLanePosition(taken, LaneReturnSpendRejected, true)
+				}
 			}
 
 			return nil, spends, err
@@ -199,6 +205,10 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	if err != nil {
 		if taken != lane.None {
 			taker.BurnLanePosition(options.Caller, LaneBurnReason(err, nil))
+
+			// Only the store knows whether its failed Create wrote the position; it says so by
+			// marking the error.
+			taker.ReturnLanePosition(taken, LaneReturnExists, errors.Is(err, errors.ErrTxExists) && LanePositionUnwritten(err))
 		}
 
 		if errors.Is(err, errors.ErrTxExists) {

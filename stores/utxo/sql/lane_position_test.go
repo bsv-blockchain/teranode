@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -16,6 +17,8 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/usql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -65,11 +68,37 @@ func lanePositionSettings(t *testing.T) *settings.Settings {
 	return tSettings
 }
 
+// sqlLaneRules: a create the SQL store refuses as ErrTxExists, with a block or without, wrote nothing
+// unless an earlier attempt of it may have committed (see markRefusedCreate and
+// TestLanePositionNotReturnedAfterAConflictLinkDeadlock), and a list goes through SpendAndCreate.
+var sqlLaneRules = tests.LaneReturnRules{Exists: true, MinedExists: true, ListExists: true}
+
+// sqlLaneRows counts the transaction rows carrying any of positions, the one column the store
+// writes a position to.
+func sqlLaneRows(s *Store) tests.LanePositionCounter {
+	return func(t testing.TB, positions []uint64) int {
+		t.Helper()
+
+		total := 0
+
+		for _, p := range positions {
+			var n int
+			require.NoError(t, s.db.QueryRowContext(context.Background(),
+				`SELECT count(*) FROM transactions WHERE lane_position = $1`, lane.ToSigned(p)).Scan(&n))
+
+			total += n
+		}
+
+		return total
+	}
+}
+
 func TestLanePositionContractSQLite(t *testing.T) {
 	db, _ := setup(context.Background(), t)
 
 	tests.LanePositionContract(t, db)
 	t.Run("burns", func(t *testing.T) { tests.LanePositionBurns(t, db, "sql") })
+	t.Run("returns", func(t *testing.T) { tests.LanePositionReturns(t, db, sqlLaneRules, sqlLaneRows(db)) })
 }
 
 // Every Postgres create path writes the lane position: the create batcher's
@@ -103,6 +132,7 @@ func TestLanePositionContractPostgres(t *testing.T) {
 
 			tests.LanePositionContract(t, db)
 			t.Run("burns", func(t *testing.T) { tests.LanePositionBurns(t, db, "sql") })
+			t.Run("returns", func(t *testing.T) { tests.LanePositionReturns(t, db, sqlLaneRules, sqlLaneRows(db)) })
 		})
 	}
 }
@@ -328,4 +358,71 @@ func TestLanePositionMigrationPostgresBoundsTheLockWait(t *testing.T) {
 	require.NoError(t, oldDB.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'lane_position'`).Scan(&columns))
 	require.Equal(t, 1, columns)
 	require.NotNil(t, store)
+}
+
+// A conflicting create on the single-CTE path commits its record, then writes the parent links in a
+// transaction of its own. When that second transaction dies on a lock error, Create retries, and the
+// retry meets the record the first attempt committed. That ErrTxExists is this create's own record,
+// which carries the position, so the position must not go back for reuse. A serialization failure
+// is recognised only through the wrapped PgError, since its message names no lock.
+func TestLanePositionNotReturnedAfterAConflictLinkLockError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	dbURL := startLanePositionPostgres(t)
+
+	tSettings := lanePositionSettings(t)
+	tSettings.UtxoStore.StoreBatcherSize = 1
+
+	db, err := New(context.Background(), ulogger.TestLogger{}, tSettings, dbURL)
+	require.NoError(t, err)
+	require.Nil(t, db.createBatcher, "the test needs the single-CTE path")
+	require.True(t, db.settings.UtxoStore.BatchSQLOperations, "the test needs the single-CTE path")
+
+	for i, c := range []struct {
+		name string
+		err  *pgconn.PgError
+	}{
+		{"a deadlock", &pgconn.PgError{Code: usql.PgErrDeadlockDetected, Message: "deadlock detected"}},
+		{"a serialization failure", &pgconn.PgError{Code: usql.PgErrSerializationFail, Message: "could not serialize access due to concurrent update"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			faults := 0
+			conflictingChildrenFault = func() error {
+				faults++
+				return c.err
+			}
+
+			t.Cleanup(func() { conflictingChildrenFault = nil })
+
+			first := lane.Pack(46, uint64(2*i+1)) //nolint:gosec // i is 0 or 1
+			source := tests.NewReturningLanePositions(first, first+1)
+			db.SetLanePositionSource(source)
+			t.Cleanup(func() { db.SetLanePositionSource(nil) })
+
+			tx := tests.BuildMultiWorkload(t, byte(0xab+i), 1, 1).Roots[0] //nolint:gosec // i is 0 or 1
+
+			_, err := db.Create(context.Background(), tx, 960, utxostore.WithConflicting(true))
+			require.ErrorIs(t, err, errors.ErrTxExists, "the retry meets the record the first attempt committed")
+			require.Equal(t, 1, faults, "only the first attempt reached the conflict links")
+
+			require.Empty(t, source.Returned(), "the record carries the position")
+
+			md, err := db.Get(context.Background(), tx.TxIDChainHash(), fields.LanePosition)
+			require.NoError(t, err)
+			require.Equal(t, first, md.LanePosition)
+		})
+	}
+}
+
+// markRefusedCreate marks only ErrTxExists, and only when no earlier attempt may have committed.
+func TestMarkRefusedCreate(t *testing.T) {
+	require.True(t, utxostore.LanePositionUnwritten(markRefusedCreate(errors.NewTxExistsError("exists"), false)))
+	require.False(t, utxostore.LanePositionUnwritten(markRefusedCreate(errors.NewTxExistsError("exists"), true)),
+		"an earlier attempt may have written the record")
+	require.False(t, utxostore.LanePositionUnwritten(markRefusedCreate(errors.NewStorageError("disk"), false)),
+		"only a refusal proves the position unwritten")
+	require.False(t, utxostore.LanePositionUnwritten(markRefusedCreate(errors.NewUtxoError("refused"), false)))
+	require.NoError(t, markRefusedCreate(nil, false))
 }
