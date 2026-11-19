@@ -1121,7 +1121,12 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 					} else if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
 						// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules (already stored as invalid by ValidateBlockWithOptions)", blockUpTo.Hash().String(), block.Hash().String())
-						u.reportCatchupMaliciousAndBan(gCtx, peerID, "invalid_block_validation", p2p.ReasonInvalidBlock)
+
+						if isInheritedInvalidError(err) {
+							u.reportCatchupMalicious(gCtx, peerID, "invalid_block_validation")
+						} else {
+							u.reportCatchupMaliciousAndBan(gCtx, peerID, "invalid_block_validation", p2p.ReasonInvalidBlock)
+						}
 					}
 
 					// Record metric for validation failure

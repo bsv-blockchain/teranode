@@ -1471,7 +1471,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 				if blockMeta != nil && blockMeta.Invalid {
 					ctxLogger.Warnf("[ValidateBlock][%s] block already exists and is marked as invalid", block.Header.Hash().String())
-					return errors.NewBlockInvalidError("[ValidateBlock][%s] block already exists as invalid", block.Header.Hash().String())
+					return markInheritedInvalid(errors.NewBlockInvalidError("[ValidateBlock][%s] block already exists as invalid", block.Header.Hash().String()))
 				}
 
 				ctxLogger.Warnf("[ValidateBlock][%s] tried to validate existing valid block", block.Header.Hash().String())
@@ -1549,7 +1549,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				if !opts.IsRevalidation {
 					u.storeInvalidBlock(ctx, block, opts.PeerID, fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String()))
 				}
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
+				return markInheritedInvalid(errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String()))
 			}
 		} else {
 			// Fetch headers from blockchain service
@@ -1580,7 +1580,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				if !opts.IsRevalidation {
 					u.storeInvalidBlock(ctx, block, opts.PeerID, fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String()))
 				}
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
+				return markInheritedInvalid(errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String()))
 			}
 		}
 
@@ -2060,6 +2060,29 @@ func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Bl
 // Returns true if the parent block is marked as invalid, false otherwise.
 func (*BlockValidation) checkParentInvalid(parentMeta *model.BlockHeaderMeta) bool {
 	return parentMeta != nil && parentMeta.Invalid
+}
+
+const errDataInheritedInvalid = "inherited_invalid"
+
+func markInheritedInvalid(err *errors.Error) *errors.Error {
+	err.SetData(errDataInheritedInvalid, true)
+
+	return err
+}
+
+func isInheritedInvalidError(err error) bool {
+	var e *errors.Error
+
+	for err != nil && errors.As(err, &e) {
+		if inherited, ok := e.GetData(errDataInheritedInvalid).(bool); ok && inherited {
+			return true
+		}
+
+		err = e.WrappedErr()
+		e = nil
+	}
+
+	return false
 }
 
 func (u *BlockValidation) kafkaNotifyBlockInvalid(block *model.Block, reason string) {
