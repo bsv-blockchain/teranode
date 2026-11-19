@@ -27,6 +27,8 @@ func TestLaneBurnReason(t *testing.T) {
 		{"a spend refused on its record", errors.NewProcessingError("failed"), refused, LaneBurnSpendRejected},
 		{"a utxo error", errors.NewUtxoError("2 of 2 inputs could not be spent"), nil, LaneBurnSpendRejected},
 		{"the caller's context ended", context.Canceled, nil, LaneBurnOutcomeUnknown},
+		{"a spend cut short by the context ending", errors.NewContextCanceledError("cancelled"),
+			[]*Spend{{Err: errors.NewContextCanceledError("cancelled")}}, LaneBurnOutcomeUnknown},
 		{"a write marked unknown", MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("timed out")), nil, LaneBurnOutcomeUnknown},
 		{"anything else", errors.NewStorageError("disk"), nil, LaneBurnError},
 	}

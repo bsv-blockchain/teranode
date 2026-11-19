@@ -45,8 +45,9 @@ import (
 // submission, which is what retires the applied_block ledger.
 func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	opts ...utxo.CreateOption) (_ *meta.Data, spends []*utxo.Spend, err error) {
-	// Set from the batch's answer; see spendAndCreateResult.
-	var rerunAfterBatchError bool
+	// Set from the batch's answer; see spendAndCreateResult. notQueued is set when the caller had
+	// already given up before its item was queued, so nothing was written.
+	var rerunAfterBatchError, notQueued bool
 
 	options := &utxo.CreateOptions{}
 	for _, opt := range opts {
@@ -79,6 +80,11 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		// is the final one.
 		if utxo.TookLanePosition(options.LanePosition, position) {
 			defer func() {
+				if notQueued {
+					s.BurnLanePosition(utxo.CreatedTxID(tx, options), options.Caller, position, utxo.LaneBurnError)
+					return
+				}
+
 				if rerunAfterBatchError && err != nil {
 					s.burnUnlessStored(ctx, tx, options, position, err, spends)
 					return
@@ -104,8 +110,11 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 	if s.spendAndCreateBatcher != nil && !options.Conflicting && !s.closed.Load() {
 		// A caller that has already given up gets its answer before anything is queued.
 		// Once queued the item is applied whether or not anyone is waiting.
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// Nothing was queued, so the position certainly burned.
+			notQueued = true
+
+			return nil, nil, ctxErr
 		}
 
 		item := newSpendAndCreateItem(tx, blockHeight, options, opts)
@@ -274,9 +283,9 @@ var laneBurnProbeTimeout = 5 * time.Second
 
 // burnUnlessStored records the burn of position for a create whose rerun after a failed batch
 // failed with err. The failed batch's COMMIT may have landed with this very position, whatever the
-// rerun then met, so the stored record is read. Carrying the position, nothing burned. Missing, or
-// carrying another position, the position burned for the rerun's own reason: exists for
-// ErrTxExists. Unreadable within laneBurnProbeTimeout, the outcome is unknown.
+// rerun then met, so the stored record is read. Carrying the position, nothing burned. Carrying
+// another position, the position burned for the rerun's own reason: exists for ErrTxExists.
+// Missing, or unreadable within laneBurnProbeTimeout, the outcome is unknown.
 func (s *Store) burnUnlessStored(ctx context.Context, tx *bt.Tx, options *utxo.CreateOptions, position uint64,
 	err error, spends []*utxo.Spend) {
 	txid := utxo.CreatedTxID(tx, options)
@@ -289,9 +298,11 @@ func (s *Store) burnUnlessStored(ctx context.Context, tx *bt.Tx, options *utxo.C
 	switch {
 	case getErr == nil && md != nil && md.LanePosition == position:
 		return
-	case getErr == nil && md != nil, errors.Is(getErr, errors.ErrTxNotFound):
+	case getErr == nil && md != nil:
 		s.BurnLanePosition(txid, options.Caller, position, utxo.LaneBurnReason(err, spends))
 	default:
+		// No record proves nothing: the failed batch's COMMIT may still be completing on its own
+		// connection, and this read does not wait for it.
 		s.BurnLanePosition(txid, options.Caller, position, utxo.LaneBurnOutcomeUnknown)
 	}
 }

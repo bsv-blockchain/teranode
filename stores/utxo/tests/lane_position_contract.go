@@ -629,6 +629,25 @@ func LanePositionBurns(t *testing.T, db utxostore.Store, store string) {
 		require.Equal(t, 2, source.Calls(), "the named create took nothing from the source")
 	})
 
+	t.Run("a call whose caller had already given up burns error", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xc7, 1, 1)
+		w.StoreRoots(t, db, 940)
+
+		useLanePositionSource(t, db, NewScriptedLanePositions(lanePositionsFrom(28, 1)...))
+
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+
+		// The position is taken, and nothing is written with it: no store may report that as an
+		// outcome it does not know.
+		requireBurns(t, store, LaneBurns{utxostore.LaneBurnError + "/validator": 1}, func() {
+			_, _, err := db.SpendAndCreate(cancelled, w.Txs[0], 941, utxostore.WithCaller(utxostore.CallerValidator))
+			require.Error(t, err)
+		})
+
+		requireNotStored(t, db, w.Txs[0])
+	})
+
 	t.Run("a create with no caller counts under unknown", func(t *testing.T) {
 		root := BuildMultiWorkload(t, 0xc5, 1, 1).Roots[0]
 		useLanePositionSource(t, db, NewScriptedLanePositions(lanePositionsFrom(26, 2)...))

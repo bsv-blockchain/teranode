@@ -1396,8 +1396,8 @@ func TestLanePositionBurnOfABatchRerunAfterALandedCommit(t *testing.T) {
 }
 
 // After a rerun fails, the stored record decides: the same position burned nothing, whatever the
-// rerun met; another position, or no record, burned for the rerun's own reason; a record that
-// cannot be read within the bound is an unknown outcome. The caller's context ending does not cut
+// rerun met; another position burned for the rerun's own reason; no record, or a record that
+// cannot be read within the bound, is an unknown outcome. The caller's context ending does not cut
 // the read short.
 func TestLanePositionBurnUnlessStored(t *testing.T) {
 	s, ctx := newUncheckpointedLaneStore(t)
@@ -1437,11 +1437,14 @@ func TestLanePositionBurnUnlessStored(t *testing.T) {
 		"the record carries another position")
 
 	missing := tests.BuildMultiWorkload(t, 0xcb, 1, 1).Roots[0]
-	require.Equal(t, tests.LaneBurns{utxo.LaneBurnError + "/validator": 1},
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/validator": 1},
 		burns(func() { s.burnUnlessStored(ctx, missing, options, lane.Pack(31, 3), storage, nil) }),
-		"no record, so the position burned for the rerun's reason")
+		"no record proves nothing: the failed batch's commit may still be completing")
 
-	// A read that cannot finish within the bound gives up, so it never holds the caller.
+	// A read that cannot finish within the bound gives up, so it never holds the caller. The
+	// production bound is 5 seconds.
+	require.Equal(t, 5*time.Second, laneBurnProbeTimeout)
+
 	old := laneBurnProbeTimeout
 	laneBurnProbeTimeout = time.Nanosecond
 
