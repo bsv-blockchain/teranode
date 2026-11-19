@@ -72,7 +72,8 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		}
 
 		// A position this call took from the source goes back for reuse when the final answer proves
-		// nothing carries it (spendAndCreateUnwritten). A rerun after a failed batch never returns
+		// nothing carries it: refusedUnwritten for exists, utxo.RefusedSpend for a refused spend. A
+		// rerun after a failed batch never returns
 		// it: that batch's COMMIT may have landed with it.
 		if options.LanePosition == lane.None && position != lane.None {
 			defer func() {

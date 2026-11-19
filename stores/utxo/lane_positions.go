@@ -18,7 +18,8 @@ type LanePositionSource interface {
 // takes the position before it spends or opens a database transaction, so a wait for one holds
 // nothing, and a create that cannot get one fails having written nothing. A store that plans a write
 // again after a rollback keeps the positions it took. A position taken for a write that is then
-// refused, such as a transaction that exists already, is burned, which is safe: no record carries it.
+// refused, such as a transaction that exists already, is burned, which is safe because no record
+// carries it, unless the store proves that and hands it back for reuse (ReturnLanePosition).
 // There is no wrapper around the store, because a wrapper has to scan and extend the options on
 // every create, and it hides what the wrapped store can do.
 //

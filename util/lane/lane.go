@@ -173,7 +173,9 @@ type RenewResult struct {
 type Release struct {
 	Lease LeaseID
 	Lane  uint8
-	// LastTaken is the last position taken in the lane; zero for none.
+	// LastTaken is the highest position the lease gave out in the lane that may carry a record:
+	// positions at the top that came back unwritten (Allocator.Return) are left out, so it can fall
+	// below the current grant, and is zero when none was given out or every one came back.
 	LastTaken uint64
 	// Settles finishes the oldest grant left and not yet reported; a newer one left after it is
 	// settled by LastTaken.

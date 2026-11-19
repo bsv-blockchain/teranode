@@ -220,7 +220,8 @@ func (a *Allocator) Ready() error {
 	}
 }
 
-// Close stops the allocator, tries to release its lease with the last position it took, and then
+// Close stops the allocator, tries to release its lease with the highest position it gave out that
+// may carry a record (settledFinalLocked lowers it past returned positions at the top), and then
 // closes src if src is an io.Closer. A release that fails, such as one sent to a blockchain service
 // that has already stopped, is logged and the lease lapses at the service's close time. Positions not handed out are lost, which is safe: the service never
 // hands them out again.
@@ -419,8 +420,10 @@ func (a *Allocator) leaveCurrentLocked(usedUp bool) {
 	a.signal()
 }
 
-// installLocked makes g the current grant, dropping the returned positions of the grant before it.
-// It is the one place they are dropped: every other way off a grant sets next to 0 until it runs.
+// installLocked makes g the current grant, dropping the returned positions still held from the grant
+// before it. settledFinalLocked has already removed any at the top of that grant's taken range, and
+// until installLocked runs every other way off a grant sets next to 0, which Return and takeLocked
+// both refuse.
 func (a *Allocator) installLocked(g Grant, requested time.Time) {
 	a.cur, a.next, a.curFirstTake, a.halfAsked = g, g.First, time.Time{}, false
 	a.curRequested = requested
