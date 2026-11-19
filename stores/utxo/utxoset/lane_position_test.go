@@ -1781,3 +1781,43 @@ func TestLanePositionBurnUnlessStoredDoesNotWaitOnTheCloseLock(t *testing.T) {
 
 	unlock()
 }
+
+// A chunk round that fails before it re-marks what an earlier round found stored still counts that
+// transaction as exists: the transaction is live in this round's status, but known stored.
+func TestLanePositionFailedChunkKeepsAnEarlierRoundsExists(t *testing.T) {
+	stored, fresh := &multiTx{}, &multiTx{}
+
+	run := &chunkRun{
+		its:           []*multiTx{stored, fresh},
+		st:            []chunkStatus{chunkLive, chunkLive},
+		res:           make([]utxo.SpendAndCreateMultiResult, 2),
+		forcedExisted: []bool{true, false},
+	}
+
+	run.recordFailedBurns()
+
+	require.Equal(t, utxo.LaneBurnExists, stored.burnReason)
+	require.Equal(t, utxo.LaneBurnRolledBack, fresh.burnReason)
+}
+
+// A direct Create whose context has already ended fails before it opens a database transaction, so
+// its position counts as error, and nothing is written.
+func TestLanePositionBurnOfADirectCreateWithAnEndedContext(t *testing.T) {
+	s, ctx := newUnbatchedLaneStore(t)
+	useBurnSource(t, s, burnPositions(1)...)
+
+	tx := mkTx(t, 1, 5_000)
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, err := s.Create(cancelled, tx, 1_000, utxo.WithCaller(utxo.CallerBlockAssembly))
+	require.Error(t, err)
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnError + "/block_assembly": 1},
+		tests.ReadLaneBurns(t, "utxoset").Since(before))
+	require.Equal(t, 0, identityCount(t, s, ctx, tx))
+	require.Equal(t, 0, utxoCount(t, s, ctx, tx))
+}

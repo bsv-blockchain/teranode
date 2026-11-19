@@ -1188,6 +1188,13 @@ func (w *nettedWrite) createInChunk(ctx context.Context, dbTx pgx.Tx, run *chunk
 // itself failed and may have landed.
 func (run *chunkRun) recordFailedBurns() {
 	for k, it := range run.its {
+		// A round marks what an earlier round found stored only after its begin and locks, so a
+		// round that fails before that still knows it from forcedExisted.
+		if run.forcedExisted[k] {
+			it.burnReason = utxo.LaneBurnExists
+			continue
+		}
+
 		switch run.st[k] {
 		case chunkExisted:
 			it.burnReason = utxo.LaneBurnExists
