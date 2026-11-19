@@ -1441,29 +1441,129 @@ func TestLanePositionBurnUnlessStored(t *testing.T) {
 	require.Less(t, time.Since(start), time.Second)
 }
 
-// A list chunk whose COMMIT reports failure may have landed, so its positions count as
-// outcome_unknown, not rolled_back.
-func TestLanePositionBurnOfAListChunkWhoseCommitFailed(t *testing.T) {
-	s, ctx := newUncheckpointedLaneStore(t)
-	forceChunkOfOne(t)
-
-	root := storedParent(t, s, ctx)
-	a := spendOutput(t, root, 0, 1)
+// failNextCommit makes the next commit of a transaction that writes creates report failure after it
+// landed, as a lost acknowledgement does.
+func failNextCommit(t *testing.T) error {
+	t.Helper()
 
 	failure := errors.NewStorageError("injected lost commit acknowledgement")
-	multiCreateAfterCommit = func() error { return failure }
 
-	t.Cleanup(func() { multiCreateAfterCommit = nil })
+	var once atomic.Bool
 
-	useBurnSource(t, s, burnPositions(1)...)
-	before := tests.ReadLaneBurns(t, "utxoset")
+	createCommitFault = func() error {
+		if once.CompareAndSwap(false, true) {
+			return failure
+		}
 
-	_, err := s.SpendAndCreateMulti(ctx, []*bt.Tx{a}, 1_100, utxo.WithIgnoreLocked(true),
-		utxo.WithCaller(utxo.CallerSubtreeValidation))
-	multiCreateAfterCommit = nil
-	require.ErrorIs(t, err, failure)
+		return nil
+	}
 
-	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/subtree_validation": 1},
-		tests.ReadLaneBurns(t, "utxoset").Since(before))
-	require.Equal(t, 1, identityCount(t, s, ctx, a), "the commit landed")
+	t.Cleanup(func() { createCommitFault = nil })
+
+	return failure
+}
+
+// newUnbatchedLaneStore is a lane store with no create or spend-and-create batcher, so every create
+// takes the single-write path.
+func newUnbatchedLaneStore(t *testing.T) (*Store, context.Context) {
+	t.Helper()
+
+	s, ctx := newTestStoreWith(t, func(ts *settings.Settings) {
+		withCheckpoints(ts, nil)
+		ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+		ts.UtxoStore.StoreBatcherSize = 1
+	})
+	require.Nil(t, s.createBatcher)
+	require.Nil(t, s.spendAndCreateBatcher)
+
+	return s, ctx
+}
+
+// A COMMIT that reports failure may have landed, so the position it carried counts as
+// outcome_unknown, on every utxoset path that commits creates.
+func TestLanePositionBurnOfACommitThatReportedFailure(t *testing.T) {
+	unknown := func(caller string) tests.LaneBurns {
+		return tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/" + caller: 1}
+	}
+
+	t.Run("a single-write Create", func(t *testing.T) {
+		s, ctx := newUnbatchedLaneStore(t)
+		useBurnSource(t, s, burnPositions(1)...)
+		_ = failNextCommit(t)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err := s.Create(ctx, mkTx(t, 1, 5_000), 1_000, utxo.WithCaller(utxo.CallerBlockAssembly))
+		require.Error(t, err)
+
+		require.Equal(t, unknown("block_assembly"), tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
+	t.Run("a single-write SpendAndCreate", func(t *testing.T) {
+		s, ctx := newUnbatchedLaneStore(t)
+		useBurnSource(t, s, burnPositions(1)...)
+		_ = failNextCommit(t)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, _, err := s.SpendAndCreate(ctx, mkTx(t, 1, 5_000), 1_000, utxo.WithCreateOnly(), utxo.WithCaller(utxo.CallerValidator))
+		require.Error(t, err)
+
+		require.Equal(t, unknown("validator"), tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
+	t.Run("a create batch", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+		require.NotNil(t, s.createBatcher)
+		useBurnSource(t, s, burnPositions(1)...)
+		_ = failNextCommit(t)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err := s.Create(ctx, mkTx(t, 1, 5_000), 1_000, utxo.WithCaller(utxo.CallerBlockAssembly))
+		require.Error(t, err)
+
+		require.Equal(t, unknown("block_assembly"), tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
+	t.Run("a list chunk above the checkpoint", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+		forceChunkOfOne(t)
+
+		root := storedParent(t, s, ctx)
+		a := spendOutput(t, root, 0, 1)
+
+		useBurnSource(t, s, burnPositions(1)...)
+		failure := failNextCommit(t)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err := s.SpendAndCreateMulti(ctx, []*bt.Tx{a}, 1_100, utxo.WithIgnoreLocked(true),
+			utxo.WithCaller(utxo.CallerSubtreeValidation))
+		require.ErrorIs(t, err, failure)
+
+		require.Equal(t, unknown("subtree_validation"), tests.ReadLaneBurns(t, "utxoset").Since(before))
+		require.Equal(t, 1, identityCount(t, s, ctx, a), "the commit landed")
+	})
+
+	t.Run("a list chunk below the checkpoint", func(t *testing.T) {
+		const height = 900
+
+		s, ctx := newLaneStore(t)
+		withNettedBelowChunkTxs(t, 1)
+
+		w := tests.BuildMultiWorkload(t, 0xcc, 1, 1)
+		w.StoreRoots(t, s, height-1)
+
+		useBurnSource(t, s, burnPositions(1)...)
+		failure := failNextCommit(t)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err := s.SpendAndCreateMulti(ctx, outpointOnly(w.Txs), height,
+			append(belowCheckpointOptions(height), utxo.WithCaller(utxo.CallerBlockValidation))...)
+		require.ErrorIs(t, err, failure)
+
+		require.Equal(t, unknown("block_validation"), tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
 }

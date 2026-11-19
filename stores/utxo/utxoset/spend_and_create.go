@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/jackc/pgx/v5"
 )
 
 // SpendAndCreate spends the transaction's inputs and creates its outputs in ONE
@@ -253,8 +254,9 @@ func (s *Store) spendAndCreateOne(ctx context.Context, tx *bt.Tx, blockHeight ui
 		return nil, spends, err
 	}
 
-	if cerr := dbTx.Commit(ctx); cerr != nil {
-		return nil, spends, errors.NewStorageError("[utxoset][SpendAndCreate] commit", cerr)
+	if cerr := commitCreates(ctx, dbTx); cerr != nil {
+		// The commit may have landed, as the SQL store marks the same failure.
+		return nil, spends, utxo.MarkCreateOutcomeUnknown(errors.NewStorageError("[utxoset][SpendAndCreate] commit", cerr))
 	}
 
 	committed = true
@@ -288,4 +290,24 @@ func (s *Store) burnUnlessStored(ctx context.Context, tx *bt.Tx, options *utxo.C
 	case md.LanePosition != position:
 		s.BurnLanePosition(txid, options.Caller, position, utxo.LaneBurnExists)
 	}
+}
+
+// createCommitFault is a test hook called after a transaction that writes creates commits. An error
+// from it is returned as the commit's, which is the shape of a commit the server made and the client
+// did not hear about. nil in production.
+var createCommitFault func() error
+
+// commitCreates commits a transaction that writes creates. A failure may have landed: the server
+// can commit and the client not hear, so a caller counts a lane position it carried as
+// outcome_unknown.
+func commitCreates(ctx context.Context, dbTx pgx.Tx) error {
+	if err := dbTx.Commit(ctx); err != nil {
+		return err
+	}
+
+	if createCommitFault != nil {
+		return createCommitFault()
+	}
+
+	return nil
 }

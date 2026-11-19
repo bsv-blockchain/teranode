@@ -13,7 +13,8 @@ import (
 // A burned lane position is one a store took from its source for a create and then wrote no record
 // carrying. Burning is safe, since no record has the position, but every burned position inside a
 // block's range is a hole in that block's lane map, so the stores count and log each one with why it
-// burned and which service asked for the create.
+// burned and which service asked for the create. A position whose write cannot be confirmed either
+// way is counted too, under outcome_unknown, so the counter can include positions that were written.
 //
 // The code that took the position from the source records its burn, from the result it saw. A store
 // whose Create is handed a position the caller already took records nothing for it, so one burned
@@ -109,7 +110,7 @@ var prometheusLanePositionsBurned = promauto.NewCounterVec(
 		Namespace: "teranode",
 		Subsystem: "lane",
 		Name:      "positions_burned_total",
-		Help:      "Lane positions a store took for a create and wrote no record with, by store, reason and the service that asked for the create",
+		Help:      "Lane positions a store took for a create and wrote no record with, plus positions whose write outcome is unknown (reason outcome_unknown, which may have been written), by store, reason and the service that asked for the create",
 	},
 	[]string{"store", "reason", "caller"},
 )

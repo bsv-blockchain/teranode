@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
@@ -100,4 +101,24 @@ func TestBurnLanePositionLogsOneLine(t *testing.T) {
 		"reason=exists", "caller=block_validation"} {
 		require.Contains(t, line, want)
 	}
+}
+
+// A create that names its transaction's ID logs that ID, not the hash of the bytes it was given, as
+// a rebuilt transaction's create does.
+func TestBurnLanePositionLogsTheNamedTxID(t *testing.T) {
+	log := &burnLog{}
+
+	var positions LanePositions
+
+	positions.NameLaneBurns("teststore", log)
+
+	tx := bt.NewTx()
+	named := chainhash.HashH([]byte("the id the create names"))
+	require.NotEqual(t, named, *tx.TxIDChainHash())
+
+	positions.BurnCreateLanePosition(tx, &CreateOptions{TxID: &named}, lane.Pack(9, 1), errors.NewTxExistsError("exists"), nil)
+
+	require.Len(t, log.lines, 1)
+	require.Contains(t, log.lines[0], named.String())
+	require.NotContains(t, log.lines[0], tx.TxIDChainHash().String())
 }

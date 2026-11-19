@@ -545,7 +545,7 @@ func (s *Store) netBelowChunk(ctx context.Context, chunk []*netBelowTx, list *ut
 		return err
 	}
 
-	if err = dbTx.Commit(ctx); err != nil {
+	if err = commitCreates(ctx, dbTx); err != nil {
 		// The commit may have landed, so the positions may be on records.
 		for _, it := range chunk {
 			it.burnReason = utxo.LaneBurnOutcomeUnknown

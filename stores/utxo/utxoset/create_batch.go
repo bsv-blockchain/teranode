@@ -1092,7 +1092,7 @@ func (s *Store) sendCreateBatch(batch []*createItem) {
 		}
 	}
 
-	if err := dbTx.Commit(ctx); err != nil {
+	if err := commitCreates(ctx, dbTx); err != nil {
 		s.failBatchWith(batch, errors.NewStorageError("[utxoset][Create] commit", err), utxo.LaneBurnOutcomeUnknown)
 		return
 	}

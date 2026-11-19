@@ -240,8 +240,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		return nil, cerr
 	}
 
-	if err := dbTx.Commit(ctx); err != nil {
-		return nil, errors.NewStorageError("[utxoset][Create] commit", err)
+	if err := commitCreates(ctx, dbTx); err != nil {
+		// The commit may have landed, as the SQL store marks the same failure.
+		return nil, utxo.MarkCreateOutcomeUnknown(errors.NewStorageError("[utxoset][Create] commit", err))
 	}
 
 	committed = true

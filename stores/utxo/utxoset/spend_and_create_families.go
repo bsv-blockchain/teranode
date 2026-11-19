@@ -779,7 +779,7 @@ func (w *nettedWrite) familyRound(ctx context.Context, run *chunkRun, stats *fam
 
 		// The commit runs on a context the caller cannot cancel; see multiCommitTimeout.
 		commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), multiCommitTimeout)
-		err = dbTx.Commit(commitCtx)
+		err = commitCreates(commitCtx, dbTx)
 
 		cancel()
 
