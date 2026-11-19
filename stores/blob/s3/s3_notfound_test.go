@@ -330,6 +330,11 @@ func TestS3_ErrorMessagesRenderTheObjectKey(t *testing.T) {
 // mapped to ErrNotFound, because the aerospike caller treats a miss as licence to
 // fall back to a different representation, and a corrupt blob is evidence that this
 // node's stored copy is wrong rather than absent.
+//
+// It also pins which of them carry the BlobCorrupt cause. Unknown magic, a wrong file
+// type, and any bad header on Get (which holds the whole object) are corrupt: an S3 put
+// is all or nothing, so a retry reads the same bytes. A short header on the GetIoReader
+// stream is not marked, because there it can also be a connection dropped mid-body.
 func TestS3_MalformedStoredObjectIsAStorageFault(t *testing.T) {
 	key := []byte("malformed")
 
@@ -354,6 +359,28 @@ func TestS3_MalformedStoredObjectIsAStorageFault(t *testing.T) {
 		require.False(t, errors.Is(err, errors.ErrNotFound),
 			"a present but unreadable blob is not a miss — calling it one invites the caller's fallback")
 		require.NotContains(t, err.Error(), "%!s(")
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.True(t, errors.IsBlobCorrupt(err), "unknown magic is a corrupt object")
+	})
+
+	t.Run("GetIoReader on a blob shorter than a header is not marked corrupt", func(t *testing.T) {
+		s3Store, mock := setupTestS3(t)
+		storeRaw(t, mock, s3Store, []byte("abc"))
+
+		_, err := s3Store.GetIoReader(context.Background(), key, fileformat.FileTypeTx)
+
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.False(t, errors.IsBlobCorrupt(err), "a short stream can be a dropped connection, so it stays retryable")
+	})
+
+	t.Run("Get on a blob shorter than a header is corrupt", func(t *testing.T) {
+		s3Store, mock := setupTestS3(t)
+		storeRaw(t, mock, s3Store, []byte("abc"))
+
+		_, err := s3Store.Get(context.Background(), key, fileformat.FileTypeTx)
+
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.True(t, errors.IsBlobCorrupt(err), "Get holds the whole object, so a short header is the object itself")
 	})
 
 	t.Run("Get on a blob with no valid header", func(t *testing.T) {
@@ -365,6 +392,8 @@ func TestS3_MalformedStoredObjectIsAStorageFault(t *testing.T) {
 		require.Error(t, err)
 		require.False(t, errors.Is(err, errors.ErrNotFound))
 		require.NotContains(t, err.Error(), "%!s(")
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.True(t, errors.IsBlobCorrupt(err))
 	})
 
 	t.Run("GetIoReader on a blob whose header is a different file type", func(t *testing.T) {
@@ -379,5 +408,24 @@ func TestS3_MalformedStoredObjectIsAStorageFault(t *testing.T) {
 		require.Error(t, err)
 		require.False(t, errors.Is(err, errors.ErrNotFound))
 		require.NotContains(t, err.Error(), "%!s(")
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.True(t, errors.IsBlobCorrupt(err), "a wrong file type is a corrupt object")
+	})
+
+	t.Run("Get on a blob whose header is a different file type", func(t *testing.T) {
+		s3Store, mock := setupTestS3(t)
+
+		header := fileformat.NewHeader(fileformat.FileTypeSubtree)
+		storeRaw(t, mock, s3Store, append(header.Bytes(), []byte("body")...))
+
+		_, err := s3Store.Get(context.Background(), key, fileformat.FileTypeTx)
+
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.True(t, errors.IsBlobCorrupt(err), "Get must apply the same file-type check as GetIoReader")
+
+		// The rejected body must not reach Get's cache, or the next Get would serve it with no error.
+		content, err := s3Store.Get(context.Background(), key, fileformat.FileTypeTx)
+		require.True(t, errors.IsBlobCorrupt(err), "a second Get must be rejected too, not served from the cache")
+		require.Nil(t, content)
 	})
 }

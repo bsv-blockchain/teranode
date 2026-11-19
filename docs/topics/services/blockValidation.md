@@ -636,13 +636,13 @@ To decide whether a transaction's parents already exist on the current chain (th
 
     Two cases still fall through to SQL. An ID that *is* in the forked set is confirmed against the authoritative `on_main_chain` query, with the recursive `parent_id` CTE behind it, before anything is rejected — the forked set is rebuilt from the `on_main_chain` flags, so a transiently-false flag would otherwise turn into a permanent block invalidation. And while the store's main-chain state is rebuilding, or before `maxBlockID` has been initialised, the whole route defers to SQL because neither structure is trustworthy yet.
 
-    Accepting on absence from the forked set relies on every ID at or below `maxBlockID` belonging to a committed block. That does not hold, and it is worth knowing exactly how it fails before enabling the toggle. Measured on the Hetzner boxes on 2026-09-01, mainnet held 184 IDs below `MAX(id)` with no `blocks` row, testnet and teratestnet none. They arrive in runs, one run per node restart, each as long as the number of blocks in flight at the time. Block heights are unbroken across every run, so no block is missing; only IDs were burned.
+    Accepting on absence from the forked set relies on every ID at or below `maxBlockID` belonging to a committed block. That does not hold, and it is worth knowing exactly how it fails before enabling the toggle. Measured on the Hetzner boxes on 2026-09-01, mainnet held 184 IDs below `MAX(id)` with no `blocks` row, testnet and teratestnet none. In that measurement, the gaps arrived in runs, one run per node restart, each as long as the number of blocks in flight at the time. Block heights are unbroken across every run, so no block is missing; only IDs were burned. A fork attempt that inserts an automatically assigned ID and then rolls back on a PostgreSQL lock wait also burns that sequence value. At the nominal 500 ms lock wait and 1 s retry pause, one such caller can consume about 1,200 sequence values during a 30-minute walk. Those attempts insert no committed block row, so gap growth is not limited to restarts.
 
     What makes the accept safe is that nothing references those IDs. Decoding the packed block membership stored against each transaction, across all 12 runs and all 8 partitions, gave 381,599 stamps and zero pointing at an ID with no block. The failure that burns an ID lands before any transaction is stamped with it, so the wrong answer exists and nothing can ask for it.
 
     Two paths could change that, and neither has fired: `storeInvalidBlock` re-commits a pre-assigned block under a fresh ID and abandons the one already stamped on its transactions, and the gRPC `AddBlock` handler accepts a caller-supplied ID with no bound. Re-check with `SELECT (SELECT MAX(id) FROM blocks) + 1 - (SELECT COUNT(*) FROM blocks);` rather than by re-arguing block-ID assignment, which is not where the risk is. While `blockchain_chain_check_shadow_compare` is enabled, every forked-set accept and 1 in 1024 `maxBlockID` rejects are also computed the authoritative way and any disagreement is logged and counted, which is how that assumption is measured rather than assumed. The comparison never changes the answer and never turns a failed query into an error; turning it off is what makes this route fast.
 
-    Two things to know before enabling the toggle. First, with the shadow comparison on, which is its default, every accept still runs the authoritative query, so a node that enables the route and leaves the comparison on saves no round trip on accepts. Second, on a forked-set node `StoreBlock` holds `mainChainRebuilding` for its whole length, so while a block is being stored this route and the other `on_main_chain` readers take their SQL or flag-free walks instead. With no concurrent ingest the route is far faster than SQL; under sustained high `StoreBlock` rates it is slower, and the crossover shrinks as the chain gets deeper. The `StoreBlock` duty cycle of a real catch-up, the number that decides which side a node sits on, has not been measured, so do not enable the toggle during initial sync or catch-up until it has.
+    Two things to know before enabling the toggle. First, with the shadow comparison on, which is its default, every accept still runs the authoritative query, so a node that enables the route and leaves the comparison on saves no round trip on accepts. Second, on a forked-set node `StoreBlock` holds `mainChainRebuilding` for each store attempt, so during an attempt this route and the other `on_main_chain` readers take their SQL or flag-free walks instead. A fork block that retries a lock wait releases the guard between attempts. With no concurrent ingest the route is far faster than SQL; under sustained high `StoreBlock` rates it is slower, and the crossover shrinks as the chain gets deeper. The `StoreBlock` duty cycle of a real catch-up, the number that decides which side a node sits on, has not been measured, so do not enable the toggle during initial sync or catch-up until it has.
 
 ##### The validOrderAndBlessed Mechanism
 
@@ -776,6 +776,8 @@ Only failures that are not a verdict on the block are retried. The worker puts t
 4. **Same Source**: The requeued block keeps the peer that announced it, with its original class and height
 
 Invalid blocks are never retried.
+
+The priority-queue worker does not retry a block that failed on a corrupt blob in this node's own store (`ERR_BLOB_CORRUPT`) or fetch it from another source, even though its error text matches the malicious-response check. The file already exists, so every attempt would read the same bytes. Repair or remove the file. Repair alone does not requeue the block: validation needs a later peer announcement or catchup from a later block. Catchup and the legacy park still treat the error as a local storage fault and may retry it.
 
 ##### Alternative Source Handling
 
@@ -1082,7 +1084,7 @@ After **10 consecutive failures** (total worst-case budget: 111s) the worker emi
 - `teranode_blockvalidation_setmined_drops_total` (counter, aggregate across all blocks) — incremented when the worker drops a block after exceeding retries. Any non-zero value (or an increase over a window) is page-worthy.
 - Log marker: grep `manual_intervention_required` in the blockvalidation service logs for the dropped block hashes; this is the authoritative source for the specific block, since the metrics are no longer labeled by `blockhash`.
 
-**Operator runbook for `manual_intervention_required`.**
+**Operator runbook for `manual_intervention_required` (setMined drops).** This covers the line the worker logs when it drops a block. The invalid-block revert also logs this marker when a subtree has no usable copy; that case has its own repair steps under "Unusable Subtree Files When Reverting an Invalid Block" below.
 
 1. Identify the block hash from the log line.
 2. Pull the block's tx hashes via the asset service and spot-check a sample against the UTXO store: each non-coinbase tx MUST have the block's `blockID` in its `blockIDs` slice. Drift here is the signal.
@@ -1091,6 +1093,16 @@ After **10 consecutive failures** (total worst-case budget: 111s) the worker emi
 5. If `teranode_blockvalidation_setmined_drops_total` keeps incrementing across a cluster after deploy, **stop the rollout** and audit `block_ids` data drift before continuing; the new postcondition is surfacing pre-existing corruption that needs a one-shot repair pass before the stricter check is safe to flip on.
 
 These counters are deliberately unlabeled (no `{blockhash}`) to avoid unbounded Prometheus cardinality — a per-block label series would grow without limit and never be reclaimed. Operators alert on the aggregate rate / non-zero total instead, and resolve the specific unrecoverable block from the `manual_intervention_required` log line. Do not attempt to build a per-block alert on these metrics: there is no `blockhash` label, so such an alert would silently never fire.
+
+#### Unusable Subtree Files When Reverting an Invalid Block
+
+When a block is marked invalid, `setTxMinedStatus` removes its tag from its transactions. To find them it reloads each of the block's subtrees, first as `.subtree` and then as `.subtreeToCheck`, and uses the first copy that reads, parses and whose nodes hash to the subtree's own hash. A subtree with no usable copy is skipped, because no retry can bring one back:
+
+- **Absent** (no copy in the store): skipped with a warning. An invalid block need not have all its subtrees.
+- **Corrupt** (a copy with a missing, truncated or wrong-type header, a body that does not parse, or a body whose nodes hash to another root): skipped. The stores write blobs whole, so a retry would read the same bytes, and returning it would leave the block at `mined_set=false` and hold block assembly's `WaitForPendingBlocks` indefinitely. The skip logs an `ERROR` containing `manual_intervention_required` with the block and subtree hashes, and increments `teranode_blockvalidation_revert_subtree_corrupt_total` (once per revert attempt that reaches the subtree, so a revert retried for another subtree's read failure counts it again). That subtree's transactions keep the invalid block's tag and stay out of block assembly. The revert still finishes and sets the block's `mined_set`, so restoring the file alone does nothing. To repair, put back a good `.subtree` or `.subtreeToCheck` file for that subtree hash, then clear the block's `mined_set` (the blockchain service's `ClearBlockMinedSet`), and the mined-not-set sweep runs the revert again.
+- **Any other read failure** (an I/O error, an unreachable store): returned, and the revert is retried.
+
+The corrupt classification comes from the file and S3 stores. A subtree store reached through the blob HTTP server answers every non-miss failure with a 500, so a corrupt header behind it is still retried.
 
 > **For a comprehensive explanation of the two-phase commit process across the entire system, including how Block Validation plays a role in the second phase, see the [Two-Phase Transaction Commit Process](../features/two_phase_commit.md) documentation.**
 >

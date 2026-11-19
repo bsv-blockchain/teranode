@@ -204,6 +204,48 @@ jobs:
         run: |
           go test -race -tags "testtxmetacache" -count=1 -timeout=15m ./stores/utxo/aerospike/...
 
+  js-unit-tests:
+    name: js unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      # Runs every *.test.js under services/ with node's built-in runner and
+      # writes lcov for Sonar. Sonar scans another checkout, so the absolute
+      # SF: paths are rewritten relative to the repository root.
+      - name: Run JS unit tests with coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files 'services/*.test.js')
+          : > lcov.info
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No JS unit tests under services/."
+            exit 0
+          fi
+          node --test --experimental-test-coverage \
+            --test-coverage-exclude='**/*.test.js' \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=lcov --test-reporter-destination=lcov.info \
+            "${files[@]}"
+          sed -i "s#^SF:${GITHUB_WORKSPACE}/#SF:#" lcov.info
+
+      - name: Upload JS coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: js-coverage-report
+          path: lcov.info
+          if-no-files-found: error
+          retention-days: 1
+
   filename-check-report:
     name: filename check report
     runs-on: ubuntu-latest
@@ -231,6 +273,7 @@ jobs:
       - golangci-lint
       - test
       - filename-check-report
+      - js-unit-tests
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -257,12 +300,19 @@ jobs:
           run-id: ${{ github.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download JS coverage report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: js-coverage-report
+          run-id: ${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       # Presence-only validation: never execute or parse artifact contents.
       - name: Validate required Sonar inputs
         shell: bash
         run: |
           set -euo pipefail
-          for file in coverage.out golangci-lint-report.xml sonar_filename_report.json; do
+          for file in coverage.out golangci-lint-report.xml sonar_filename_report.json lcov.info; do
             [ -f "$file" ] || {
               echo "::error::Missing required Sonar input file: $file"
               exit 1
@@ -277,5 +327,6 @@ jobs:
             coverage.out
             golangci-lint-report.xml
             sonar_filename_report.json
+            lcov.info
           if-no-files-found: error
           retention-days: 1
