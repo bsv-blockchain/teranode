@@ -166,6 +166,29 @@ func TestUnconfirmedParentsOptionDoesNotLeakToPeerPaths(t *testing.T) {
 		}
 	})
 
+	t.Run("a caller the handler is given wins over its default", func(t *testing.T) {
+		InitPrometheusMetrics()
+
+		server, recordingClient, childSubtree := newServer(t)
+
+		server.bestBlockHeaderMeta.Store(&model.BlockHeaderMeta{Height: blockHeight - 1})
+		blockIDsMap := map[uint32]bool{}
+		server.currentBlockIDsMap.Store(&blockIDsMap)
+
+		baseURL, err := url.Parse("http://peer.invalid:8090")
+		require.NoError(t, err)
+
+		require.NoError(t, server.subtreesHandler(context.Background(), time.Now(), childSubtree.RootHash(), baseURL, "peer-1",
+			validator.WithCaller(utxo.CallerBlockValidation)))
+
+		recorded := recordingClient.recordedOptions(*childHash)
+		require.NotEmpty(t, recorded)
+
+		for i, opts := range recorded {
+			require.Equal(t, utxo.CallerBlockValidation, opts.Caller, "call #%d", i)
+		}
+	})
+
 	// Guard against hash drift in the fixture: the child must really spend
 	// the unconfirmed parent, otherwise the sentinel shape this test claims
 	// to exercise is vacuous.
