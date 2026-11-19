@@ -139,6 +139,33 @@ func TestUnconfirmedParentsOptionDoesNotLeakToPeerPaths(t *testing.T) {
 		}
 	})
 
+	t.Run("a replayed peer subtree names subtree validation too", func(t *testing.T) {
+		InitPrometheusMetrics()
+
+		server, recordingClient, childSubtree := newServer(t)
+
+		server.bestBlockHeaderMeta.Store(&model.BlockHeaderMeta{Height: blockHeight - 1})
+		blockIDsMap := map[uint32]bool{}
+		server.currentBlockIDsMap.Store(&blockIDsMap)
+
+		baseURL, err := url.Parse("http://peer.invalid:8090")
+		require.NoError(t, err)
+
+		// A peer subtree kept while catching up is validated later by replaySubtree, which does not
+		// go through subtreesHandler.
+		outcome, err := server.replaySubtree(context.Background(),
+			skippedSubtree{hash: *childSubtree.RootHash(), baseURL: baseURL, peerID: "peer-1", recordedAt: time.Now()})
+		require.NoError(t, err)
+		require.Equal(t, "replayed", outcome)
+
+		recorded := recordingClient.recordedOptions(*childHash)
+		require.NotEmpty(t, recorded, "the replay validated the child")
+
+		for i, opts := range recorded {
+			require.Equal(t, utxo.CallerSubtreeValidation, opts.Caller, "replay call #%d", i)
+		}
+	})
+
 	// Guard against hash drift in the fixture: the child must really spend
 	// the unconfirmed parent, otherwise the sentinel shape this test claims
 	// to exercise is vacuous.

@@ -132,11 +132,6 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 // subtreesHandler validates a peer subtree received at receivedAt. A subtree kept for replay
 // because the node is catching up is aged from receivedAt.
 func (u *Server) subtreesHandler(ctx context.Context, receivedAt time.Time, hash *chainhash.Hash, baseURL *url.URL, peerID string, validationOptions ...validator.Option) error {
-	// A peer's subtree is validated without InBlock, so the validator would label its creates as its
-	// own on the burned lane position counter. It names subtree validation instead. First, so an
-	// option the caller passes still wins.
-	validationOptions = append([]validator.Option{validator.WithCaller(utxo.CallerSubtreeValidation)}, validationOptions...)
-
 	// Wait for a validation slot before taking the subtree's quorum lock:
 	// block validation (CheckBlockSubtrees) waits on that lock, so a subtree
 	// queued here while holding it would make a block wait for the queue. A
@@ -217,6 +212,11 @@ const (
 // validateAdmittedPeerSubtree validates a peer subtree that holds an admission slot, on a node
 // that is RUNNING.
 func (u *Server) validateAdmittedPeerSubtree(ctx context.Context, hash *chainhash.Hash, baseURL *url.URL, peerID string, validationOptions ...validator.Option) (peerSubtreeResult, error) {
+	// A peer's subtree, live or replayed after a catch-up, is validated without InBlock, so the
+	// validator would label its creates as its own on the burned lane position counter. It names
+	// subtree validation instead. First, so an option the caller passes still wins.
+	validationOptions = append([]validator.Option{validator.WithCaller(utxo.CallerSubtreeValidation)}, validationOptions...)
+
 	// The span starts after the wait, so the handler histogram measures
 	// validation only; the wait has its own metric.
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "subtreesHandler",
