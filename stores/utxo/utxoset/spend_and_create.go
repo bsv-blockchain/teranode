@@ -284,8 +284,10 @@ var laneBurnProbeTimeout = 5 * time.Second
 // burnUnlessStored records the burn of position for a create whose rerun after a failed batch
 // failed with err. The failed batch's COMMIT may have landed with this very position, whatever the
 // rerun then met, so the stored record is read. Carrying the position, nothing burned. Carrying
-// another position, the position burned for the rerun's own reason: exists for ErrTxExists.
-// Missing, or unreadable within laneBurnProbeTimeout, the outcome is unknown.
+// another position is taken as a burn for the rerun's own reason, exists for ErrTxExists, though
+// it does not prove one: block assembly can delete the record and re-create it with a new
+// position between the rerun and this read, and this read holds no lock against that. Missing, or
+// unreadable within laneBurnProbeTimeout, the outcome is unknown.
 func (s *Store) burnUnlessStored(ctx context.Context, tx *bt.Tx, options *utxo.CreateOptions, position uint64,
 	err error, spends []*utxo.Spend) {
 	txid := utxo.CreatedTxID(tx, options)

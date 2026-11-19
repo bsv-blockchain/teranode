@@ -1599,6 +1599,37 @@ func TestLanePositionBurnOfACommitThatReportedFailure(t *testing.T) {
 		require.Equal(t, 1, identityCount(t, s, ctx, a), "the commit landed")
 	})
 
+	t.Run("a list chunk whose earlier round settled some transactions", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+
+		root := storedParent(t, s, ctx)
+
+		// Spends root output 0 first, so the list's own spend of it is refused.
+		_, _, err := s.SpendAndCreate(ctx, spendOutput(t, root, 0, 4), 1_100)
+		require.NoError(t, err)
+
+		refused := spendOutput(t, root, 0, 2)
+		child := spendOutput(t, refused, 0, 1)
+		valid := spendOutput(t, root, 1, 3)
+
+		useBurnSource(t, s, burnPositions(3)...)
+		failure := failNextCommit(t)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		// The first round finds the refused spend and rolls back; the second writes only valid,
+		// and its commit reports failure.
+		_, err = s.SpendAndCreateMulti(ctx, []*bt.Tx{refused, child, valid}, 1_100, utxo.WithIgnoreLocked(true),
+			utxo.WithCaller(utxo.CallerSubtreeValidation))
+		require.ErrorIs(t, err, failure)
+
+		require.Equal(t, tests.LaneBurns{
+			utxo.LaneBurnSpendRejected + "/subtree_validation":  1,
+			utxo.LaneBurnParentFailed + "/subtree_validation":   1,
+			utxo.LaneBurnOutcomeUnknown + "/subtree_validation": 1,
+		}, tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
 	t.Run("a list chunk below the checkpoint", func(t *testing.T) {
 		const height = 900
 

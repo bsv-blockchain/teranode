@@ -622,6 +622,8 @@ type chunkRun struct {
 	// refused spend turned out to be its own earlier spend.
 	forcedExisted []bool
 	parentDead    []bool
+	// commitFailed is true once the chunk's COMMIT reported failure; it may have landed.
+	commitFailed bool
 	// netted[k][vin] is true when input vin's parent is a live transaction of this same chunk.
 	netted [][]bool
 }
@@ -649,6 +651,8 @@ func (w *nettedWrite) familyAttempt(ctx context.Context, ch *familyChunk, its []
 
 		again, err := w.familyRound(ctx, run, stats)
 		if err != nil {
+			run.recordFailedBurns()
+
 			return err
 		}
 
@@ -785,7 +789,7 @@ func (w *nettedWrite) familyRound(ctx context.Context, run *chunkRun, stats *fam
 
 		if err != nil {
 			// The commit may have landed, so the positions may be on records.
-			run.markCommitUnknown()
+			run.commitFailed = true
 
 			return false, errors.NewStorageError("[utxoset][SpendAndCreateMulti] commit chunk", err)
 		}
@@ -797,7 +801,7 @@ func (w *nettedWrite) familyRound(ctx context.Context, run *chunkRun, stats *fam
 
 		if multiCreateAfterCommit != nil {
 			if err = multiCreateAfterCommit(); err != nil {
-				run.markCommitUnknown()
+				run.commitFailed = true
 
 				return false, err
 			}
@@ -1178,11 +1182,26 @@ func (w *nettedWrite) createInChunk(ctx context.Context, dbTx pgx.Tx, run *chunk
 	return plan, planned, false, w.writeNettedJournal(ctx, dbTx, journal)
 }
 
-// markCommitUnknown records that the chunk's COMMIT failed and may have landed, so a lane position
-// of the chunk is counted as outcome_unknown rather than rolled_back.
-func (run *chunkRun) markCommitUnknown() {
-	for _, it := range run.its {
-		it.burnReason = utxo.LaneBurnOutcomeUnknown
+// recordFailedBurns records why each transaction's lane position burned when the chunk failed. A
+// transaction an earlier round settled keeps its known reason, since it was not in the write that
+// failed. One in the final write burned as rolled_back, or as outcome_unknown when the COMMIT
+// itself failed and may have landed.
+func (run *chunkRun) recordFailedBurns() {
+	for k, it := range run.its {
+		switch run.st[k] {
+		case chunkExisted:
+			it.burnReason = utxo.LaneBurnExists
+		case chunkParentFailed:
+			it.burnReason = utxo.LaneBurnParentFailed
+		case chunkFailed:
+			it.burnReason = utxo.LaneBurnReason(run.res[k].Err, run.res[k].Spends)
+		default:
+			if run.commitFailed {
+				it.burnReason = utxo.LaneBurnOutcomeUnknown
+			} else {
+				it.burnReason = utxo.LaneBurnRolledBack
+			}
+		}
 	}
 }
 
