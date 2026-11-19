@@ -270,8 +270,8 @@ func TestCreatePostgresSchema_ErrorAtDeletedChildrenTable(t *testing.T) {
 	mockDB := CreateMockDBForSchema()
 	defer mockDB.AssertExpectations(t)
 
-	// Setup error at step 16 (deleted_children table, the replay-marker table)
-	SetupCreatePostgresSchemaErrorMocks(mockDB, 16)
+	// Setup error at step 17 (deleted_children table, the replay-marker table)
+	SetupCreatePostgresSchemaErrorMocks(mockDB, 17)
 
 	udb := &usql.DB{DB: nil}
 	err := createPostgresSchemaWithMockDB(udb, mockDB)

@@ -701,6 +701,20 @@ WHERE EXISTS (SELECT 1
 		args = append(args, safetyWindow)
 	}
 
+	if s.engine == "postgres" {
+		statements := [6]postgresPruneStatement{
+			{query: dropStale, step: "failed to clear stale pruning candidates"},
+			{query: createCandidatesPostgres, step: "failed to create the pruning candidates table"},
+			{query: candidatesQuery, args: args, step: "failed to select pruning candidates"},
+			{query: holdBackQuery, step: "failed to hold back unverified children"},
+			{query: markerQuery, step: "failed to mark pruned children"},
+			{query: deleteQuery, step: "failed to delete transactions"},
+		}
+		if deleted, heldBack, batched, batchErr := s.prunePostgresBatch(ctx, statements); batched || batchErr != nil {
+			return deleted, heldBack, batchErr
+		}
+	}
+
 	txn, err := s.db.BeginTx(ctx, pruneTxOptions)
 	if err != nil {
 		return 0, 0, &pruneStepError{step: "failed to begin pruning transaction", err: err}

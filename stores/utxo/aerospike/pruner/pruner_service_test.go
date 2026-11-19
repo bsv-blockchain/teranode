@@ -718,7 +718,7 @@ func TestPartitionWorker_CancelledWorkerStillDrainsTheCarry(t *testing.T) {
 		return err
 	}
 
-	_, _, _ = s.partitionWorker(ctx, 10, 0, 4096)
+	_, _ = s.PruneWithPartitions(ctx, 10, "canceled-worker", 1)
 
 	require.NotZero(t, calls, "precondition: the first chunk's marker batch was sent")
 

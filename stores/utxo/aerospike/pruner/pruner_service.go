@@ -188,7 +188,7 @@ type Service struct {
 	// every write outside the pruner stay on COMMIT_ALL — see prune_policies.go.
 	removalCommitLevel aerospike.CommitLevel
 
-	partitionWorkerFn func(ctx context.Context, blockHeight uint32, partitionStart int, partitionCount int) (int64, int64, error)
+	partitionWorkerFn func(ctx context.Context, blockHeight uint32, partitionStart int, partitionCount int, drainTo *deleteCarry) (int64, int64, error)
 
 	// Cached field names (avoid repeated String() allocations in hot paths)
 	fieldTxID, fieldUtxos, fieldInputs, fieldDeletedChildren, fieldExternal        string
@@ -621,6 +621,7 @@ func (s *Service) partitionWorker(
 	blockHeight uint32,
 	partitionStart int,
 	partitionCount int,
+	drainTo *deleteCarry,
 ) (processed int64, skipped int64, err error) {
 
 	// Each worker creates its own policy for complete independence (no shared state)
@@ -721,15 +722,22 @@ func (s *Service) partitionWorker(
 	util.SafeSetLimit(s.logger, chunkGroup, s.chunkGroupLimit)
 
 	// Each chunk's deletes ride the next chunk's batch; whatever is left is
-	// sent when the worker stops, on every path. A worker stopping on an error
-	// or a cancellation still tries to drain: the carried children are cleared
+	// handed to the pruning attempt when the worker stops. A worker stopping on an error
+	// or a cancellation still hands over its tail: the carried children are cleared
 	// and their markers have landed, so leaving them present behind those
 	// markers would refuse their own re-spend. A drain that cannot send what is
 	// left logs it; see drainCarryDetached.
 	carry := &deleteCarry{blockHeight: blockHeight}
 
 	defer func() {
-		s.finishPartitionWorker(ctx, chunkGroup, carry, &processed, &skipped, &err)
+		if drainTo == nil {
+			s.finishPartitionWorker(ctx, chunkGroup, carry, &processed, &skipped, &err)
+			return
+		}
+		// No chunk may still be adding acknowledged deletes when the worker
+		// publishes its tail to the pruning attempt.
+		_ = chunkGroup.Wait()
+		drainTo.addWorkerTail(carry)
 	}()
 
 	submitChunk := func(chunkToProcess []*aerospike.Result) {
@@ -872,6 +880,8 @@ func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, b
 		s.logger.Infof("[pruner][%s:%d] phase 2: pruning attempt %d with %d partition workers (total partitions: %d)",
 			blockHashStr, blockHeight, attempt, len(pendingRanges), totalPartitions)
 
+		readyDeletes := &deleteCarry{blockHeight: blockHeight}
+
 		// Launch partition workers for pending ranges only
 		results := make(chan workerResult, len(pendingRanges))
 		var wg sync.WaitGroup
@@ -880,7 +890,7 @@ func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, b
 			wg.Add(1)
 			go func(r partitionRange) {
 				defer wg.Done()
-				processed, skipped, err := s.partitionWorkerFn(ctx, blockHeight, r.start, r.count)
+				processed, skipped, err := s.partitionWorkerFn(ctx, blockHeight, r.start, r.count, readyDeletes)
 				results <- workerResult{
 					processed:      processed,
 					skipped:        skipped,
@@ -902,7 +912,14 @@ func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, b
 		var hasTimeout bool
 		var nonTimeoutErr error
 
-		for result := range results {
+		// A completed worker hands over only its final pending deletes. Keep
+		// each worker's chunk pipeline local, and combine tails that become ready
+		// together without waiting for the slowest partition range.
+		var drains errgroup.Group
+		drains.SetLimit(numPartitionQueries)
+		var drainMu sync.Mutex
+		var drained, drainSkipped int64
+		consume := func(result workerResult) {
 			attemptProcessed += result.processed
 			attemptSkipped += result.skipped
 
@@ -918,6 +935,62 @@ func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, b
 					nonTimeoutErr = result.err
 				}
 			}
+		}
+		closed := false
+		for !closed {
+			result, ok := <-results
+			if !ok {
+				break
+			}
+			consume(result)
+			if !readyDeletes.empty() {
+				timer := time.NewTimer(drainCoalesceWindow)
+				gathering := true
+				for gathering {
+					select {
+					case next, ok := <-results:
+						if !ok {
+							closed = true
+							gathering = false
+						} else {
+							consume(next)
+						}
+					case <-timer.C:
+						gathering = false
+					case <-ctx.Done():
+						gathering = false
+					}
+				}
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			}
+			ready := readyDeletes.take()
+			if !ready.empty() {
+				drains.Go(func() error {
+					d, k, drainErr := s.drainReadyCarry(ctx, ready)
+					drainMu.Lock()
+					drained += int64(d)
+					drainSkipped += int64(k)
+					drainMu.Unlock()
+					return drainErr
+				})
+			}
+		}
+		drainErr := drains.Wait()
+		attemptProcessed += drained
+		attemptSkipped += drainSkipped
+		if drained > 0 {
+			prometheusUtxoRecordsDeleted.Add(float64(drained))
+		}
+		if drainSkipped > 0 {
+			prometheusUtxoRecordsDeletedSkipped.Add(float64(drainSkipped))
+		}
+		if drainErr != nil && nonTimeoutErr == nil {
+			nonTimeoutErr = drainErr
 		}
 
 		// Accumulate partial progress from this attempt (including from timed-out workers)
@@ -2615,6 +2688,9 @@ func spendHolder(utxos []interface{}, offsets []uint32, childHash *chainhash.Has
 //     anything added meanwhile, so nothing is overwritten.
 type deleteCarry struct {
 	mu sync.Mutex
+	// Completed-worker tails retain their former batch allowance and concurrency.
+	workers   int
+	batchSize int
 	// blockHeight is the height the carried children were selected at. Their
 	// deletes re-check it on the server; see carriedMasterGuard.
 	blockHeight uint32
@@ -2648,7 +2724,8 @@ func (c *deleteCarry) take() *deleteCarry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	taken := &deleteCarry{blockHeight: c.blockHeight, deletions: c.deletions, files: c.files, updates: c.updates, pages: c.pages}
+	taken := &deleteCarry{blockHeight: c.blockHeight, deletions: c.deletions, files: c.files, updates: c.updates, pages: c.pages, workers: c.workers, batchSize: c.batchSize}
+	c.workers, c.batchSize = 0, 0
 	c.deletions, c.files, c.updates, c.pages = nil, nil, nil, nil
 
 	return taken
@@ -2660,6 +2737,8 @@ func (c *deleteCarry) add(more *deleteCarry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.workers += more.workers
+	c.batchSize = max(c.batchSize, more.batchSize)
 	c.deletions = append(c.deletions, more.deletions...)
 	c.files = append(c.files, more.files...)
 	c.updates = append(c.updates, more.updates...)

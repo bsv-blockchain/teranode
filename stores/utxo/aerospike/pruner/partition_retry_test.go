@@ -99,7 +99,7 @@ func (m *mockPartitionWorker) addResult(partitionStart int, r mockPartitionWorke
 	m.results[partitionStart] = append(m.results[partitionStart], r)
 }
 
-func (m *mockPartitionWorker) worker(_ context.Context, _ uint32, start, count int) (int64, int64, error) {
+func (m *mockPartitionWorker) worker(_ context.Context, _ uint32, start, count int, _ *deleteCarry) (int64, int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

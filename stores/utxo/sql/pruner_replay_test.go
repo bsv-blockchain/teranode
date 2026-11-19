@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,9 +17,13 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	sqlpruner "github.com/bsv-blockchain/teranode/stores/utxo/sql/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/usql"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -25,6 +31,13 @@ import (
 type replayPruneCase struct {
 	name                                                     string
 	defensive, markerFailure, deleteFailure, perRow, upgrade bool
+	commitFailure                                            bool
+}
+
+func TestPrunedChildReplayCommitFailurePostgres(t *testing.T) {
+	store, ctx := setupPostgresStore(t)
+	store.settings.Pruner.UTXODefensiveEnabled = false
+	testPrunedChildReplay(t, ctx, store, replayPruneCase{commitFailure: true})
 }
 
 func TestPrunedChildReplay(t *testing.T) {
@@ -103,15 +116,20 @@ func testPrunedChildReplay(t *testing.T, ctx context.Context, store *Store, tc r
 	}
 	svc, err := store.GetPrunerService()
 	require.NoError(t, err)
-	if tc.markerFailure || tc.deleteFailure {
+	if tc.markerFailure || tc.deleteFailure || tc.commitFailure {
 		table, operation := "deleted_children", "INSERT"
-		if tc.deleteFailure {
+		if tc.deleteFailure || tc.commitFailure {
 			table, operation = "transactions", "DELETE"
 		}
 		if store.engine == "postgres" {
 			_, err = store.db.ExecContext(ctx, `CREATE FUNCTION reject_prune() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected prune failure'; END $$`)
 			require.NoError(t, err)
-			_, err = store.db.ExecContext(ctx, "CREATE TRIGGER reject_prune BEFORE "+operation+" ON "+table+" FOR EACH ROW EXECUTE FUNCTION reject_prune()")
+			if tc.commitFailure {
+				_, err = store.db.ExecContext(ctx, `CREATE CONSTRAINT TRIGGER reject_prune AFTER DELETE ON transactions
+					DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_prune()`)
+			} else {
+				_, err = store.db.ExecContext(ctx, "CREATE TRIGGER reject_prune BEFORE "+operation+" ON "+table+" FOR EACH ROW EXECUTE FUNCTION reject_prune()")
+			}
 		} else {
 			_, err = store.db.ExecContext(ctx, "CREATE TRIGGER reject_prune BEFORE "+operation+" ON "+table+" BEGIN SELECT RAISE(ABORT, 'injected prune failure'); END")
 		}
@@ -1463,4 +1481,76 @@ func TestWithoutMarkedMatchesCountsAMatchItCannotRead(t *testing.T) {
 		require.Equal(t, []*utxo.Spend{fresh}, kept, "a failed read drops the match and keeps the spend this call wrote")
 		require.Equal(t, before+1, testutil.ToFloat64(prometheusUtxoSpendRollbackMarkerUnread), "the dropped match is counted")
 	})
+}
+
+// countedPruneConn measures client writes without changing the PostgreSQL protocol.
+type countedPruneConn struct {
+	net.Conn
+	writes *atomic.Int64
+}
+
+func (c *countedPruneConn) Write(b []byte) (int, error) {
+	c.writes.Add(1)
+	return c.Conn.Write(b)
+}
+
+// TestPostgresPruneUsesOneWireBatch keeps pruning's network cost independent of
+// its six ordered statements. One other write clears stale unmined heights.
+func TestPostgresPruneUsesOneWireBatch(t *testing.T) {
+	testPostgresPruneWireBatch(t, pgx.QueryExecModeExec, 2)
+}
+
+func TestPostgresPruneWithCachedStatements(t *testing.T) {
+	testPostgresPruneWireBatch(t, pgx.QueryExecModeCacheStatement, 0)
+}
+
+func testPostgresPruneWireBatch(t *testing.T, mode pgx.QueryExecMode, wantWrites int64) {
+	t.Helper()
+	store, ctx := setupPostgresStore(t)
+	store.settings.Pruner.UTXODefensiveEnabled = false
+	want := seedPruneTimingStore(ctx, t, store, 0, 4, 2)
+
+	connection, err := store.db.Conn(ctx)
+	require.NoError(t, err)
+	var config *pgx.ConnConfig
+	require.NoError(t, connection.Raw(func(raw any) error {
+		driver, ok := raw.(*stdlib.Conn)
+		require.True(t, ok)
+		config = driver.Conn().Config()
+		return nil
+	}))
+	require.NoError(t, connection.Close())
+	config.DefaultQueryExecMode = mode
+
+	var writes atomic.Int64
+	dial := config.DialFunc
+	config.DialFunc = func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := dial(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return &countedPruneConn{Conn: conn, writes: &writes}, nil
+	}
+	pool := stdlib.OpenDB(*config, stdlib.OptionShouldPing(func(context.Context, stdlib.ShouldPingParams) bool { return false }))
+	t.Cleanup(func() { require.NoError(t, pool.Close()) })
+	pool.SetMaxOpenConns(1)
+	require.NoError(t, pool.PingContext(ctx))
+	service, err := sqlpruner.NewService(store.settings, sqlpruner.Options{
+		Logger: store.logger, DB: usql.WrapDB(pool), Ctx: ctx, Engine: "postgres",
+	})
+	require.NoError(t, err)
+
+	writes.Store(0)
+	deleted, err := service.Prune(ctx, 1300, "wire-batch")
+	sent := writes.Load()
+	require.NoError(t, err)
+	require.EqualValues(t, want, deleted)
+	if wantWrites > 0 {
+		require.Equal(t, wantWrites, sent, "one cleanup query and one atomic pruning batch")
+	} else {
+		require.Greater(t, sent, int64(2), "cached statements retain the separate transaction path")
+	}
+	var markers int
+	require.NoError(t, pool.QueryRowContext(ctx, "SELECT count(*) FROM deleted_children").Scan(&markers))
+	require.Equal(t, 8, markers, "each of four children leaves markers on its two surviving parents")
 }
