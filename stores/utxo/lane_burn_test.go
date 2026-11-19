@@ -201,3 +201,18 @@ func TestSequentialSpendAndCreateRecordsItsBurns(t *testing.T) {
 			"a create that may still land counts as outcome_unknown")
 	})
 }
+
+// A create that names its transaction's ID, as a rebuilt transaction's does, is looked up by that ID,
+// not by the hash of the bytes it was given.
+func TestCreatedTxID(t *testing.T) {
+	tx := bt.NewTx()
+	tx.LockTime = 13
+
+	named := chainhash.HashH([]byte("the id the create names"))
+	require.NotEqual(t, named, *tx.TxIDChainHash())
+
+	require.Equal(t, named, CreatedTxID(tx, &CreateOptions{TxID: &named}))
+	require.Equal(t, *tx.TxIDChainHash(), CreatedTxID(tx, &CreateOptions{}))
+	require.Equal(t, *tx.TxIDChainHash(), CreatedTxID(tx, nil))
+	require.Equal(t, chainhash.Hash{}, CreatedTxID(nil, nil))
+}
