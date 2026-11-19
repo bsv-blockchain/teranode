@@ -1914,3 +1914,25 @@ func requireNoLanePosition(t *testing.T, s *Store, ctx context.Context, tx *bt.T
 	require.NoError(t, err)
 	require.Equal(t, lane.None, md.LanePosition)
 }
+
+// A below-checkpoint list takes its positions one at a time too, and a take that fails part way burns
+// the positions already taken as take_failed, as the list above the checkpoint does.
+func TestLanePositionBurnOfABelowCheckpointTakeThatFailed(t *testing.T) {
+	const height = 900
+
+	s, ctx := newLaneStore(t)
+
+	w := tests.BuildMultiWorkload(t, 0xdb, 1, 2)
+	w.StoreRoots(t, s, height-1)
+
+	source := useBurnSource(t, s, burnPositions(1)...)
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, err := s.SpendAndCreateMulti(ctx, outpointOnly(w.Txs), height,
+		append(belowCheckpointOptions(height), utxo.WithCaller(utxo.CallerBlockValidation))...)
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.Equal(t, 2, source.Calls())
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnTakeFailed + "/block_validation": 1},
+		tests.ReadLaneBurns(t, "utxoset").Since(before))
+}
