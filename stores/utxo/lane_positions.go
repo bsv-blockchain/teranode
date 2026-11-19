@@ -29,17 +29,26 @@ type LanePositionTaker interface {
 
 	// TakeLanePosition returns the position for the record that o describes; see LanePositions.Take.
 	TakeLanePosition(ctx context.Context, o *CreateOptions) (uint64, error)
+
+	// ReturnLanePosition hands back a position taken from the source that the caller proved no
+	// record carries; see LanePositions.ReturnLanePosition.
+	ReturnLanePosition(position uint64, reason string, unwritten bool)
 }
 
 // LanePositions is the part of a store that implements LanePositionTaker. With no source set, which
 // is every store with lane positions off, a create pays one nil check.
 type LanePositions struct {
 	source LanePositionSource
+	// returner is source when it takes positions back, and nil otherwise.
+	returner LanePositionReturner
+	// returnStore labels the positions this store returns; see NameLaneReturns.
+	returnStore string
 }
 
 // SetLanePositionSource implements LanePositionTaker.
 func (l *LanePositions) SetLanePositionSource(source LanePositionSource) {
 	l.source = source
+	l.returner, _ = source.(LanePositionReturner)
 }
 
 // Take returns the position for the record that o describes: the caller's own if it named one,

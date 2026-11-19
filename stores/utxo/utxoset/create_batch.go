@@ -314,6 +314,9 @@ func (s *Store) claimFloor() int32 {
 type createResult struct {
 	data *meta.Data
 	err  error
+	// rolledBack is true when the batch failed with its database transaction open, before its
+	// COMMIT was sent, so nothing of it was written.
+	rolledBack bool
 }
 
 // createItem is a single Create waiting for its batch to flush.
@@ -1067,13 +1070,20 @@ func (s *Store) sendCreateBatch(batch []*createItem) {
 	}()
 
 	if err := s.lockTxids(ctx, dbTx, plan.txids); err != nil {
-		s.failBatch(batch, err)
+		s.failBatchRolledBack(batch, err)
 		return
 	}
 
 	if err := s.runCreatePlan(ctx, dbTx, plan); err != nil {
-		s.failBatch(batch, err)
+		s.failBatchRolledBack(batch, err)
 		return
+	}
+
+	if createBatchBeforeCommit != nil {
+		if err := createBatchBeforeCommit(); err != nil {
+			s.failBatchRolledBack(batch, err)
+			return
+		}
 	}
 
 	if err := dbTx.Commit(ctx); err != nil {
@@ -1095,3 +1105,16 @@ func (s *Store) failBatch(items []*createItem, err error) {
 		item.done <- createResult{err: err}
 	}
 }
+
+// failBatchRolledBack is failBatch for a batch that failed with its database transaction open,
+// before its COMMIT was sent: the deferred rollback undoes it whole, so no item's lane position was
+// written.
+func (s *Store) failBatchRolledBack(items []*createItem, err error) {
+	for _, item := range items {
+		item.done <- createResult{err: err, rolledBack: true}
+	}
+}
+
+// createBatchBeforeCommit is a test hook called after a create batch's statements and before its
+// COMMIT. An error from it fails the batch with its transaction open. nil in production.
+var createBatchBeforeCommit func() error

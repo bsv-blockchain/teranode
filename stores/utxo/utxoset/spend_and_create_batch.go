@@ -46,10 +46,20 @@ import (
 var spendAndCreateBatchByteBudget = 16 << 20
 
 // spendAndCreateResult is what one queued SpendAndCreate gets back.
+// spendAndCreateBatchAfterCommit is a test hook called after a batch commits. An error from it is
+// returned as the commit's, which is the shape of a commit the server made and the client did not
+// hear about. nil in production.
+var spendAndCreateBatchAfterCommit func() error
+
 type spendAndCreateResult struct {
 	data   *meta.Data
 	spends []*utxo.Spend
 	err    error
+
+	// rerunAfterBatchError is true when the item was rerun alone after its batch failed. A batch
+	// whose COMMIT failed may still have landed, so the rerun's ErrTxExists can be the item's own
+	// record, carrying the position the item took.
+	rerunAfterBatchError bool
 }
 
 // inputClaim is what an input said about the UTXO it spends when the call arrived.
@@ -276,7 +286,7 @@ func (s *Store) applyChunk(chunk []*spendAndCreateItem, delivered []bool) {
 		item.restoreClaims()
 
 		data, spends, ierr := s.spendAndCreateOne(ctx, item.tx, item.blockHeight, item.options, item.opts...)
-		deliver(i, spendAndCreateResult{data: data, spends: spends, err: ierr})
+		deliver(i, spendAndCreateResult{data: data, spends: spends, err: ierr, rerunAfterBatchError: err != nil})
 	}
 }
 
@@ -564,6 +574,12 @@ func (s *Store) runSpendAndCreateBatch(ctx context.Context, batch []*spendAndCre
 		}
 
 		dbTx = nil
+
+		if spendAndCreateBatchAfterCommit != nil {
+			if err = spendAndCreateBatchAfterCommit(); err != nil {
+				return results, rejected, errors.NewStorageError("[utxoset][SpendAndCreate] commit batch", err)
+			}
+		}
 	}
 
 	// Durable. Everything is final now except the items still waiting on a sibling's fate.

@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 // unspendRetryBackoffBase is the base delay for the exponential backoff between
@@ -144,8 +145,17 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 
 	// The position is taken before the first spend, so a create that cannot get one fails having
 	// spent nothing, rather than spending, failing and rolling the spends back.
+	//
+	// A position taken here from the source is this call's to return if the create provably wrote
+	// nothing. The store's Create is handed it as a named position, so it returns nothing for it.
+	var (
+		taker LanePositionTaker
+		taken uint64
+	)
+
 	if !options.SpendOnly {
-		if taker, ok := s.(LanePositionTaker); ok {
+		var ok bool
+		if taker, ok = s.(LanePositionTaker); ok {
 			position, takeErr := taker.TakeLanePosition(ctx, options)
 			if takeErr != nil {
 				return nil, nil, takeErr
@@ -153,6 +163,10 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 
 			if position != options.LanePosition {
 				opts = WithTakenLanePosition(opts, position)
+			}
+
+			if options.LanePosition == lane.None {
+				taken = position
 			}
 		}
 	}
@@ -162,6 +176,11 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	if !options.CreateOnly {
 		spends, err = s.Spend(ctx, tx, blockHeight, options.IgnoreFlags)
 		if err != nil {
+			// The create never ran, so no record carries the position; a refused spend returns it.
+			if taken != lane.None && RefusedSpend(err, spends) {
+				taker.ReturnLanePosition(taken, LaneReturnSpendRejected, true)
+			}
+
 			return nil, spends, err
 		}
 
@@ -172,6 +191,12 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 
 	md, err := s.Create(ctx, tx, blockHeight, opts...)
 	if err != nil {
+		// Only the store knows whether its failed Create wrote the position; it says so by marking
+		// the error.
+		if taken != lane.None {
+			taker.ReturnLanePosition(taken, LaneReturnExists, errors.Is(err, errors.ErrTxExists) && LanePositionUnwritten(err))
+		}
+
 		if errors.Is(err, errors.ErrTxExists) {
 			// the tx already exists; leave the spends in place for the caller to decide
 			return nil, spends, err
