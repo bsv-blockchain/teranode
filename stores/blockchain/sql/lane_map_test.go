@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"net/url"
 	"testing"
 	"time"
 
@@ -236,10 +237,109 @@ func TestLaneConversionBlocksContinueAcrossCalls(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []lane.ConversionBlock{b0, b1, b2}, blocks)
 
+		// A resume that repeats three stored blocks out of order, the lowest neither first nor
+		// last, and adds one: every repeat is compared and the new block goes in.
+		b3 := lane.ConversionBlock{Seq: 3, BlockID: 103, Height: 103, First: 7, Count: 1}
+		require.NoError(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{b1, b0, b2, b3}))
+
+		blocks, err = s.GetLaneConversionBlocks(ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, []lane.ConversionBlock{b0, b1, b2, b3}, blocks)
+
 		// A block ID listed in two calls, not adjacent, is caught when the segment completes.
-		require.NoError(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{{Seq: 3, BlockID: 100, Height: 103, First: 7, Count: 14}}))
+		require.NoError(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{{Seq: 4, BlockID: 100, Height: 104, First: 8, Count: 13}}))
 		require.Error(t, s.CompleteLaneConversionSegment(ctx, 1, chainhash.Hash{1}))
 	})
+}
+
+// Within one call each new block chains onto the block before it in that call, on a first call
+// and after stored blocks, and a call with one bad block stores none of its blocks.
+func TestLaneConversionBlocksChainWithinOneCall(t *testing.T) {
+	runLaneHandoutTests(t, "one call", func(t *testing.T, s *SQL) {
+		ctx := t.Context()
+		require.NoError(t, s.InsertLaneConversionSegment(ctx, testSegment(1, 2, 20, 20)))
+
+		b0 := lane.ConversionBlock{Seq: 0, BlockID: 100, Height: 100, First: 2, Count: 3}
+		b1 := lane.ConversionBlock{Seq: 1, BlockID: 101, Height: 101, First: 5, Count: 2}
+
+		bad := func(seq uint32, after lane.ConversionBlock) map[string]lane.ConversionBlock {
+			next := after.First + after.Count
+
+			return map[string]lane.ConversionBlock{
+				"height not rising": {Seq: seq, BlockID: after.BlockID + 50, Height: after.Height, First: next, Count: 1},
+				"same block":        {Seq: seq, BlockID: after.BlockID, Height: after.Height + 1, First: next, Count: 1},
+				"position gap":      {Seq: seq, BlockID: after.BlockID + 50, Height: after.Height + 1, First: next + 1, Count: 1},
+			}
+		}
+
+		for name, b := range bad(1, b0) {
+			require.Error(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{b0, b}), "first call: %s", name)
+
+			blocks, err := s.GetLaneConversionBlocks(ctx, 1)
+			require.NoError(t, err)
+			require.Empty(t, blocks, name)
+		}
+
+		require.NoError(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{b0}))
+
+		for name, b := range bad(2, b1) {
+			require.Error(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{b1, b}), "after stored blocks: %s", name)
+
+			blocks, err := s.GetLaneConversionBlocks(ctx, 1)
+			require.NoError(t, err)
+			require.Equal(t, []lane.ConversionBlock{b0}, blocks, name)
+		}
+	})
+}
+
+// A stored block list that already runs past the prefix end, which only a fault could leave, is
+// refused rather than continued.
+func TestLaneConversionBlocksRefuseAStoredListPastThePrefix(t *testing.T) {
+	runLaneHandoutTests(t, "stored past prefix", func(t *testing.T, s *SQL) {
+		ctx := t.Context()
+		require.NoError(t, s.InsertLaneConversionSegment(ctx, testSegment(1, 2, 4, 10)))
+
+		_, err := s.db.ExecContext(ctx, `INSERT INTO lane_conversion_block (segment, seq, block_id, height, first, count) VALUES (1, 0, 100, 100, 2, 5)`)
+		require.NoError(t, err)
+
+		require.Error(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{{Seq: 1, BlockID: 101, Height: 101, First: 7, Count: 0}}))
+	})
+}
+
+// A segment or completion insert that the database refuses is reported, and nothing is recorded.
+// A SQLite trigger stands in for the refusal, such as a role without INSERT.
+func TestLaneConversionInsertsReportARefusedInsert(t *testing.T) {
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+
+	ctx := t.Context()
+
+	_, err = s.db.ExecContext(ctx, `CREATE TRIGGER refuse_segment BEFORE INSERT ON lane_conversion_segment BEGIN SELECT RAISE(ABORT, 'refused'); END`)
+	require.NoError(t, err)
+
+	require.Error(t, s.InsertLaneConversionSegment(ctx, testSegment(1, 2, 4, 4)))
+
+	segs, err := s.GetLaneConversionSegments(ctx)
+	require.NoError(t, err)
+	require.Empty(t, segs)
+
+	_, err = s.db.ExecContext(ctx, `DROP TRIGGER refuse_segment`)
+	require.NoError(t, err)
+
+	require.NoError(t, s.InsertLaneConversionSegment(ctx, testSegment(1, 2, 4, 4)))
+	require.NoError(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{{Seq: 0, BlockID: 100, Height: 100, First: 2, Count: 3}}))
+
+	_, err = s.db.ExecContext(ctx, `CREATE TRIGGER refuse_complete BEFORE INSERT ON lane_conversion_complete BEGIN SELECT RAISE(ABORT, 'refused'); END`)
+	require.NoError(t, err)
+
+	require.Error(t, s.CompleteLaneConversionSegment(ctx, 1, chainhash.Hash{1}))
+
+	complete, err := s.LaneConversionComplete(ctx, 1)
+	require.NoError(t, err)
+	require.False(t, complete)
 }
 
 // A new segment appends: an ID below a recorded one, or positions not above every recorded

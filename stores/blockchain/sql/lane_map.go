@@ -511,10 +511,11 @@ func querySegments(ctx context.Context, q queryer) ([]lane.ConversionSegment, er
 // conversion calls it again from where it stopped: a block already recorded must match exactly,
 // and a new block must continue the stored list without a gap: the next sequence number, the next
 // position, a height above the block before it and not past the prefix end. It fails for an
-// unknown or completed segment. It reads only the last stored block and the stored blocks the call
-// repeats, so recording a long segment a few blocks at a time costs what each call holds; that a
-// block ID is not listed twice across calls is checked once, over the whole list, by
-// CompleteLaneConversionSegment.
+// unknown or completed segment. It reads only the last stored block and the stored blocks from the
+// lowest to the highest sequence number the call repeats, so recording a long segment a few blocks
+// at a time costs what each call holds. Each new block is checked against the block before it;
+// that a block ID is not listed twice anywhere else, within a call or across calls, is checked
+// once, over the whole list, by CompleteLaneConversionSegment.
 func (s *SQL) InsertLaneConversionBlocks(ctx context.Context, segment uint32, blocks []lane.ConversionBlock) error {
 	defer s.lockLaneProcess()()
 
