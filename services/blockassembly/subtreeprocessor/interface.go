@@ -108,7 +108,7 @@ type Interface interface {
 	NotFinalTemplateTxs() int
 
 	// NothingToReload reports whether the template holds no transaction besides the coinbase
-	// and none is recorded as kept out, so a reload would change nothing.
+	// and none is recorded as kept out or held, so a reload would change nothing.
 	NothingToReload() bool
 
 	// OfferLockHeldTxs queues again the transactions held back for their lock time that are

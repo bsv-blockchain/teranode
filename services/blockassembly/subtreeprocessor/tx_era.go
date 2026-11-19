@@ -47,11 +47,12 @@ func (stp *SubtreeProcessor) TxEra() (lo, hi uint32, ok bool) {
 // queue order, parents before children, so a refusal reaches every descendant.
 //
 // A transaction validated under other rules is dropped, recorded so its descendants are
-// dropped too. One its lock time holds back is held, with its descendants, and offered again
+// dropped too. A descendant dropped for its parent alone waits on that parent, and comes back
+// if a block mines it (forgetMinedDroppedTxs). One its lock time holds back is held, with its descendants, and offered again
 // when the candidate moves (tx_finality.go): it was validated for another candidate, by a
 // validator ahead of block assembly or before a reorg, and becomes final as the chain grows.
 // An admitted transaction that was dropped before is forgotten, so its own descendants are
-// admitted again.
+// admitted again, and those dropped for it are held to be offered again.
 func (stp *SubtreeProcessor) admitTxLocked(node subtreepkg.Node, inpoints *subtreepkg.TxInpoints, height, lockTime uint32) bool {
 	hash := node.Hash
 
@@ -67,6 +68,7 @@ func (stp *SubtreeProcessor) admitTxLocked(node subtreepkg.Node, inpoints *subtr
 			if _, dropped := stp.droppedTxs[parent]; dropped {
 				stp.releaseLockHeldLocked(hash)
 				stp.recordDroppedLocked(hash)
+				stp.waitOnDroppedParentLocked(parent, lockHeldTx{node: node, inpoints: inpoints, height: height, lockTime: lockTime})
 
 				return false
 			}
@@ -90,6 +92,11 @@ func (stp *SubtreeProcessor) admitTxLocked(node subtreepkg.Node, inpoints *subtr
 	if _, dropped := stp.droppedTxs[hash]; dropped {
 		delete(stp.droppedTxs, hash)
 		stp.droppedCount.Add(-1)
+
+		if waiting, ok := stp.droppedWaiters[hash]; ok {
+			delete(stp.droppedWaiters, hash)
+			stp.releaseDroppedWaitersLocked(waiting)
+		}
 	}
 
 	stp.releaseLockHeldLocked(hash)
@@ -109,6 +116,16 @@ func (stp *SubtreeProcessor) recordDroppedLocked(hash chainhash.Hash) {
 	}
 
 	prometheusSubtreeProcessorTxEraDropped.Inc()
+}
+
+// waitOnDroppedParentLocked keeps tx, dropped because parent was, to bring back if a block
+// mines parent. The caller holds droppedMu.
+func (stp *SubtreeProcessor) waitOnDroppedParentLocked(parent chainhash.Hash, tx lockHeldTx) {
+	if stp.droppedWaiters == nil {
+		stp.droppedWaiters = make(map[chainhash.Hash][]lockHeldTx)
+	}
+
+	stp.droppedWaiters[parent] = append(stp.droppedWaiters[parent], tx)
 }
 
 // filterTxEra removes from the dequeued batches, in queue order, every transaction
@@ -221,16 +238,18 @@ func (stp *SubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransact
 // failed reload cannot let a queued child of a dropped parent in. The processor does not
 // dequeue while a reset reloads.
 //
-// The tracked lock times are restarted the same way: the reload tracks every transaction it
-// brings in again.
+// The tracked lock times and the descendants waiting on a dropped parent are restarted the
+// same way: the reload brings in, or drops, every one of them again.
 func (stp *SubtreeProcessor) RestartDroppedTxs() (finish func(reloaded bool)) {
 	stp.droppedMu.Lock()
 	prev := stp.droppedTxs
+	prevWaiters := stp.droppedWaiters
 	prevLocked := stp.lockedTxs
 	prevHeld := stp.lockHeldTxs
 	prevHeldSet := stp.lockHeldSet
 	stp.droppedTxs = nil
 	stp.droppedCount.Store(0)
+	stp.droppedWaiters = nil
 	stp.lockedTxs = nil
 	stp.lockedCount.Store(0)
 	stp.clearLockHeldLocked()
@@ -276,6 +295,12 @@ func (stp *SubtreeProcessor) RestartDroppedTxs() (finish func(reloaded bool)) {
 				stp.droppedCount.Add(1)
 			}
 		}
+
+		for parent, waiters := range prevWaiters {
+			for _, w := range waiters {
+				stp.waitOnDroppedParentLocked(parent, w)
+			}
+		}
 	}
 }
 
@@ -283,6 +308,9 @@ func (stp *SubtreeProcessor) RestartDroppedTxs() (finish func(reloaded bool)) {
 // so their descendants are validated against them under the next block's rules and must
 // not stay out for the drop. A block made only of this node's own subtrees has no map, and
 // mines nothing that was dropped: a dropped transaction never entered them.
+//
+// The descendants dropped for a parent it mines come back: they are held, with their own
+// waiting descendants, for OfferLockHeldTxs to check against the store and queue again.
 //
 // The tracked lock times of the transactions it mines are forgotten too, since they left the
 // template, and so are the held ones it mines, which must not be offered again.
@@ -294,11 +322,28 @@ func (stp *SubtreeProcessor) forgetMinedDroppedTxs(mined *SortedHashSet) {
 	stp.droppedMu.Lock()
 	defer stp.droppedMu.Unlock()
 
+	var (
+		waiting  []lockHeldTx
+		minedAny bool
+	)
+
 	for hash := range stp.droppedTxs {
 		if mined.Exists(hash) {
 			delete(stp.droppedTxs, hash)
 			stp.droppedCount.Add(-1)
+
+			minedAny = true
+			waiting = append(waiting, stp.droppedWaiters[hash]...)
+			delete(stp.droppedWaiters, hash)
 		}
+	}
+
+	if waiting != nil {
+		stp.releaseDroppedWaitersLocked(waiting)
+	}
+
+	if minedAny {
+		stp.pruneDroppedWaitersLocked()
 	}
 
 	for hash := range stp.lockedTxs {
@@ -330,17 +375,66 @@ func (stp *SubtreeProcessor) forgetMinedDroppedTxs(mined *SortedHashSet) {
 	}
 }
 
+// releaseDroppedWaitersLocked holds the transactions that waited on a dropped parent that has
+// left the dropped set (a block mined it, or it was admitted), and those that waited on them,
+// breadth first. One no longer dropped (a block mined it too, or it was admitted since) is
+// skipped. Each one leaves the dropped set as it is held, so a transaction that spends it is
+// held behind it rather than dropped, and so is a released one that comes before a released
+// parent: it waits for the next offer. Offered, one that is in a conflict, or has another
+// parent still kept out, is dropped again. The caller holds droppedMu.
+func (stp *SubtreeProcessor) releaseDroppedWaitersLocked(waiting []lockHeldTx) {
+	for i := 0; i < len(waiting); i++ {
+		w := waiting[i]
+
+		if _, dropped := stp.droppedTxs[w.node.Hash]; !dropped {
+			continue
+		}
+
+		delete(stp.droppedTxs, w.node.Hash)
+		stp.droppedCount.Add(-1)
+
+		waiting = append(waiting, stp.droppedWaiters[w.node.Hash]...)
+		delete(stp.droppedWaiters, w.node.Hash)
+
+		stp.holdForLockTimeLocked(w.node, w.inpoints, w.height, w.lockTime)
+	}
+}
+
+// pruneDroppedWaitersLocked forgets the waiting records of transactions that left the dropped
+// set while they waited: a block mined them. The caller holds droppedMu.
+func (stp *SubtreeProcessor) pruneDroppedWaitersLocked() {
+	for parent, waiters := range stp.droppedWaiters {
+		kept := waiters[:0]
+
+		for _, w := range waiters {
+			if _, dropped := stp.droppedTxs[w.node.Hash]; dropped {
+				kept = append(kept, w)
+			}
+		}
+
+		clear(waiters[len(kept):])
+
+		if len(kept) == 0 {
+			delete(stp.droppedWaiters, parent)
+		} else {
+			stp.droppedWaiters[parent] = kept
+		}
+	}
+}
+
 // keepPreviousNodeFunc returns the check a moveBack applies to the template it rebuilds around
 // the moved-back block: a node one of whose parents was kept out is kept out too, recorded so
 // its own descendants follow, and taken out of the tx map. Only a drop from the moved-back
 // block can orphan a template node, since every earlier drop already kept its descendants out
 // on admission, so the check runs only when droppedFromBlock is set.
-func (stp *SubtreeProcessor) keepPreviousNodeFunc(droppedFromBlock bool) func(hash chainhash.Hash) bool {
+func (stp *SubtreeProcessor) keepPreviousNodeFunc(droppedFromBlock bool) func(node subtreepkg.Node) bool {
 	if !droppedFromBlock {
-		return func(chainhash.Hash) bool { return true }
+		return func(subtreepkg.Node) bool { return true }
 	}
 
-	return func(hash chainhash.Hash) bool {
+	return func(node subtreepkg.Node) bool {
+		hash := node.Hash
+
 		inpoints, ok := stp.currentTxMap.Get(hash)
 		if !ok || inpoints == nil {
 			return true
@@ -353,6 +447,12 @@ func (stp *SubtreeProcessor) keepPreviousNodeFunc(droppedFromBlock bool) func(ha
 			if _, dropped := stp.droppedTxs[parent]; dropped {
 				stp.recordDroppedLocked(hash)
 				stp.currentTxMap.Delete(hash)
+
+				// Untagged: it was admitted under the template's rules, and a rules change
+				// reloads while anything is kept out or held (NothingToReload). A copy, so the
+				// record does not keep the moved-back block's inpoints alive.
+				kept := *inpoints
+				stp.waitOnDroppedParentLocked(parent, lockHeldTx{node: node, inpoints: &kept, lockTime: stp.lockedTxs[hash]})
 
 				return false
 			}

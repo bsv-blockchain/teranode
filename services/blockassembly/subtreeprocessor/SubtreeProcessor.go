@@ -214,6 +214,11 @@ type SubtreeProcessor struct {
 	droppedTxs   map[chainhash.Hash]struct{}
 	droppedCount atomic.Int64
 
+	// droppedWaiters holds, under droppedMu and by the kept-out parent that kept each one out,
+	// the transactions dropped for a parent alone, so a block that mines that parent can bring
+	// them back (forgetMinedDroppedTxs).
+	droppedWaiters map[chainhash.Hash][]lockHeldTx
+
 	// txCandidate is the block the template is mined in. lockedTxs holds, under droppedMu,
 	// the nLockTime of every admitted transaction it can hold back, so a reorg that lowers
 	// the candidate can find the ones it no longer lets in (tx_finality.go).
@@ -1119,7 +1124,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 				case emptyCh := <-stp.templateEmptyCh:
 					// Answered between dequeue iterations, so no dequeued batch is half placed.
 					current := stp.currentSubtree.Load()
-					emptyCh <- len(stp.chainedSubtrees) == 0 && (current == nil || current.Length() <= 1) && stp.droppedCount.Load() == 0
+					emptyCh <- len(stp.chainedSubtrees) == 0 && (current == nil || current.Length() <= 1) && stp.droppedCount.Load() == 0 && stp.lockHeldCount.Load() == 0
 
 				case errCh := <-stp.checkSubtreeProcessorCh:
 					errCh <- stp.runHandlerWithRecover("checkSubtreeProcessor", func() error {
@@ -2723,7 +2728,8 @@ func (stp *SubtreeProcessor) ProcessRemainderTransactionsAndDequeue(ctx context.
 
 // NothingToReload reports whether a reload of the template would change nothing: it holds no
 // transaction besides the coinbase, and none is recorded as kept out (a transaction dropped
-// under the previous rules can be admitted under the new ones). It is answered on the
+// under the previous rules can be admitted under the new ones) or held (a held one can be
+// untagged, and only a reload checks it against the new rules). It is answered on the
 // processor's goroutine between dequeue iterations, so a batch admitted under the previous
 // transaction rules is either in the template already or still queued, where the current
 // rules decide it. A processor that is not running answers false, so the caller reloads.
@@ -6521,7 +6527,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 
 	for _, st := range previousChainedSubtrees {
 		for _, node := range st.Nodes {
-			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node.Hash) {
+			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node) {
 				continue
 			}
 			allNodes = append(allNodes, node)
@@ -6529,7 +6535,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	}
 	if previousCurrentSubtree != nil {
 		for _, node := range previousCurrentSubtree.Nodes {
-			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node.Hash) {
+			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node) {
 				continue
 			}
 			allNodes = append(allNodes, node)

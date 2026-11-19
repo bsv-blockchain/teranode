@@ -421,6 +421,13 @@ func TestNothingToReload_AnswersWhateverTheProcessorState(t *testing.T) {
 	stp.Start(ctx)
 	require.True(t, answer(), "a running processor with nothing in the template answers true")
 
+	// A held transaction may be untagged (one a moveBack kept out for its parent), so only a
+	// reload checks it against new rules.
+	stp.droppedMu.Lock()
+	stp.holdForLockTimeLocked(subtreepkg.Node{Hash: chainhash.HashH([]byte("nothing-to-reload-held"))}, &subtreepkg.TxInpoints{}, 0, 0)
+	stp.droppedMu.Unlock()
+	require.False(t, answer(), "a held transaction is reloaded")
+
 	stp.Stop(ctx)
 	require.False(t, answer(), "a stopped processor answers false")
 }
