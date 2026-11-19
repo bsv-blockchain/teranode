@@ -27,6 +27,7 @@ func TestLaneBurnReason(t *testing.T) {
 		{"exists wins over a refused spend", errors.NewTxExistsError("exists"), refused, LaneBurnExists},
 		{"a spend refused on its record", errors.NewProcessingError("failed"), refused, LaneBurnSpendRejected},
 		{"a utxo error", errors.NewUtxoError("2 of 2 inputs could not be spent"), nil, LaneBurnSpendRejected},
+		{"a spent utxo", errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil), nil, LaneBurnSpendRejected},
 		{"the caller's context ended", context.Canceled, nil, LaneBurnOutcomeUnknown},
 		{"a spend cut short by the context ending", errors.NewContextCanceledError("cancelled"),
 			[]*Spend{{Err: errors.NewContextCanceledError("cancelled")}}, LaneBurnOutcomeUnknown},
@@ -143,4 +144,78 @@ func TestBurnCreateLanePositionCountsAGivenUpWaiterAsUnknown(t *testing.T) {
 	require.Equal(t, before+1, testutil.ToFloat64(counter))
 	require.Len(t, log.lines, 1)
 	require.Contains(t, log.lines[0], "reason=outcome_unknown")
+}
+
+// A refused input reported on its Spend record counts as spend_rejected even when the call's error
+// has another code: the classification reads the records the call returned.
+func TestBurnCreateLanePositionReadsTheSpendRecords(t *testing.T) {
+	log := &burnLog{}
+
+	var positions LanePositions
+
+	positions.NameLaneBurns("spendstore", log)
+
+	refused := []*Spend{{Err: errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil)}}
+
+	positions.BurnCreateLanePosition(bt.NewTx(), &CreateOptions{}, lane.Pack(9, 3),
+		errors.NewProcessingError("the spend failed"), refused)
+
+	require.Len(t, log.lines, 1)
+	require.Contains(t, log.lines[0], "reason=spend_rejected")
+}
+
+// lanedSequentialStore is the sequential fake with lane positions, so SequentialSpendAndCreate takes
+// one and records its burn.
+type lanedSequentialStore struct {
+	fakeSequentialStore
+	LanePositions
+}
+
+type onePosition struct{ position uint64 }
+
+func (o onePosition) Next(context.Context) (uint64, error) { return o.position, nil }
+
+// SequentialSpendAndCreate records the burn of a position it took. A failed spend is classified from
+// the Spend records it returned, and a failed create logs the transaction's ID.
+func TestSequentialSpendAndCreateRecordsItsBurns(t *testing.T) {
+	tx := bt.NewTx()
+	tx.LockTime = 11
+	txid := *tx.TxIDChainHash()
+
+	t.Run("a spend refused on its record", func(t *testing.T) {
+		log := &burnLog{}
+		s := &lanedSequentialStore{fakeSequentialStore: fakeSequentialStore{
+			spends:   []*Spend{{Err: errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil)}},
+			spendErr: errors.NewProcessingError("the spend failed"),
+		}}
+		s.NameLaneBurns("seqstore", log)
+		s.SetLanePositionSource(onePosition{lane.Pack(9, 4)})
+
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100,
+			WithCaller(CallerValidator))
+		require.Error(t, err)
+
+		require.Len(t, log.lines, 1)
+		require.Contains(t, log.lines[0], "reason=spend_rejected")
+		require.Contains(t, log.lines[0], "caller=validator")
+		require.Contains(t, log.lines[0], txid.String())
+		require.Zero(t, s.createCalls, "the create never ran")
+	})
+
+	t.Run("a create that fails", func(t *testing.T) {
+		log := &burnLog{}
+		s := &lanedSequentialStore{fakeSequentialStore: fakeSequentialStore{
+			createErr: errors.NewTxExistsError("exists"),
+		}}
+		s.NameLaneBurns("seqstore", log)
+		s.SetLanePositionSource(onePosition{lane.Pack(9, 5)})
+
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100,
+			WithCreateOnly(), WithCaller(CallerBlockAssembly))
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		require.Len(t, log.lines, 1)
+		require.Contains(t, log.lines[0], "reason=exists")
+		require.Contains(t, log.lines[0], txid.String())
+	})
 }

@@ -238,6 +238,19 @@ func TestValidate_OutpointOnlySpend_ConflictingFallbackMinimalCreate(t *testing.
 	creates := recorder.createOnly(*competingTx.TxIDChainHash())
 	require.Len(t, creates, 1, "the conflicting fallback made one create-only call")
 	require.Equal(t, utxostore.CallerValidator, creates[0])
+
+	// The same request marked InBlock, as subtree validation sends it, names subtree validation.
+	inBlockTx := competingTx.Clone()
+	inBlockTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x02})
+
+	opts.InBlock = true
+
+	_, err = v.ValidateWithOptions(ctx, inBlockTx, 500, opts)
+	require.Error(t, err)
+
+	creates = recorder.createOnly(*inBlockTx.TxIDChainHash())
+	require.Len(t, creates, 1, "the conflicting fallback made one create-only call")
+	require.Equal(t, utxostore.CallerSubtreeValidation, creates[0])
 }
 
 // TestValidate_OutpointOnlySpend_RequiresSkipScriptValidation verifies that
