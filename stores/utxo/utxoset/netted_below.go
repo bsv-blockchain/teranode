@@ -226,11 +226,35 @@ type netBelowTx struct {
 	// listSpent are the transaction's own outputs a later transaction of the list spends.
 	listSpent []uint32
 	result    utxo.SpendAndCreateMultiResult
+	// rolledBack is true once the chunk holding the transaction failed, so its lane position
+	// burned. Each chunk writes only its own transactions', and they are read after every chunk ends.
+	rolledBack bool
 }
 
 func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndCreateMultiList,
 	blockHeight uint32, positions []uint64) ([]utxo.SpendAndCreateMultiResult, error) {
 	mi, _ := minedBlock(list.Options.MinedBlockInfos)
+
+	// Every position taken for the list that no record carries burns, whichever way the list
+	// ends. A failure before the items exist burns them all; after, the chunks that committed
+	// gave their transactions results even when the list as a whole failed.
+	var items []*netBelowTx
+
+	defer func() {
+		var outcome func(int) (utxo.SpendAndCreateMultiResult, bool)
+
+		if items != nil {
+			outcome = func(i int) (utxo.SpendAndCreateMultiResult, bool) {
+				if items[i] == nil {
+					return utxo.SpendAndCreateMultiResult{}, false
+				}
+
+				return items[i].result, items[i].rolledBack
+			}
+		}
+
+		s.burnList(list, positions, utxo.LaneBurnListFailed, outcome)
+	}()
 
 	for i, tx := range txs {
 		if tx.IsCoinbase() {
@@ -248,7 +272,7 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 		position[list.TxIDs[i]] = i
 	}
 
-	items := make([]*netBelowTx, len(txs))
+	items = make([]*netBelowTx, len(txs))
 	spender := make(map[nettedKey]nettedSpender)
 
 	for i, tx := range txs {
@@ -295,7 +319,16 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 	g.SetLimit(workers)
 
 	for _, chunk := range netBelowChunks(items, size, nettedBelowMaxChunkOutputs) {
-		g.Go(func() error { return s.netBelowChunk(gCtx, chunk, list, blockHeight, spender, positions) })
+		g.Go(func() error {
+			err := s.netBelowChunk(gCtx, chunk, list, blockHeight, spender, positions)
+			if err != nil {
+				for _, it := range chunk {
+					it.rolledBack = true
+				}
+			}
+
+			return err
+		})
 	}
 
 	if err := g.Wait(); err != nil {

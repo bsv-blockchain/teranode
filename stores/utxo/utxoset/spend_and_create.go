@@ -41,7 +41,7 @@ import (
 // mechanism covers both arrival paths, the re-applied block and the duplicate mempool
 // submission, which is what retires the applied_block ledger.
 func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
-	opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	opts ...utxo.CreateOption) (_ *meta.Data, spends []*utxo.Spend, err error) {
 	options := &utxo.CreateOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -62,9 +62,19 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 	// call that cannot get one fails having spent and written nothing. A call that creates nothing
 	// takes no position. createIn parses opts again, so the position goes there too.
 	if !options.SpendOnly {
-		position, err := s.Take(ctx, options)
-		if err != nil {
-			return nil, nil, err
+		position, takeErr := s.Take(ctx, options)
+		if takeErr != nil {
+			return nil, nil, takeErr
+		}
+
+		// A position this call took from the source is its own to record if the call fails. The
+		// batched path waits for its batch's answer whatever the caller's context does, and a batch
+		// that rolls back runs the item again with the same position, so the answer returned here
+		// is the final one.
+		if utxo.TookLanePosition(options.LanePosition, position) {
+			defer func() {
+				s.BurnCreateLanePosition(tx, options, position, err, spends)
+			}()
 		}
 
 		options.LanePosition = position

@@ -32,6 +32,7 @@ func TestLanePositionContract(t *testing.T) {
 	t.Cleanup(deferFn)
 
 	tests.LanePositionContract(t, store)
+	t.Run("burns", func(t *testing.T) { tests.LanePositionBurns(t, store, "aerospike") })
 }
 
 // TestLanePositionBin checks what the contract cannot see: the raw bin, on the

@@ -114,7 +114,7 @@ func minedBlock(infos []utxo.MinedBlockInfo) (utxo.MinedBlockInfo, bool) {
 // table forever and the UTXO table's size is the entire budget. This mirrors the
 // PR 684 queue store's spendable_count and the aerospike store's ShouldStoreOutputAsUTXO
 // gate, so all three agree on what "spendable" means.
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (_ *meta.Data, err error) {
 	// Parsed up front rather than only on the batched path, because the single path now needs
 	// to know whether this create carries block information before it opens its transaction:
 	// that is what decides which tx_mined partition has to exist.
@@ -129,6 +129,22 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	position, err := s.Take(ctx, options)
 	if err != nil {
 		return nil, err
+	}
+
+	// A position this call took from the source is its own to record if the create fails. A
+	// caller that stops waiting for the batch gets its context error while the batch may still
+	// write the record, and LaneBurnReason says so. A batch that rolled back says so on its result.
+	var rolledBack bool
+
+	if utxo.TookLanePosition(options.LanePosition, position) {
+		defer func() {
+			if rolledBack && err != nil {
+				s.BurnLanePosition(utxo.CreatedTxID(tx, options), options.Caller, position, utxo.LaneBurnRolledBack)
+				return
+			}
+
+			s.BurnCreateLanePosition(tx, options, position, err, nil)
+		}()
 	}
 
 	options.LanePosition = position
@@ -157,6 +173,8 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 			}) {
 				select {
 				case res := <-done:
+					rolledBack = res.rolledBack
+
 					return res.data, res.err
 				case <-ctx.Done():
 					return nil, ctx.Err()

@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 // unspendRetryBackoffBase is the base delay for the exponential backoff between
@@ -144,8 +145,17 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 
 	// The position is taken before the first spend, so a create that cannot get one fails having
 	// spent nothing, rather than spending, failing and rolling the spends back.
+	//
+	// A position taken here from the source is this call's to record if it burns. The store's
+	// Create is handed it as a named position, so it records nothing for it.
+	var (
+		taker LanePositionTaker
+		taken uint64
+	)
+
 	if !options.SpendOnly {
-		if taker, ok := s.(LanePositionTaker); ok {
+		var ok bool
+		if taker, ok = s.(LanePositionTaker); ok {
 			position, takeErr := taker.TakeLanePosition(ctx, options)
 			if takeErr != nil {
 				return nil, nil, takeErr
@@ -153,6 +163,10 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 
 			if position != options.LanePosition {
 				opts = WithTakenLanePosition(opts, position)
+			}
+
+			if TookLanePosition(options.LanePosition, position) {
+				taken = position
 			}
 		}
 	}
@@ -162,6 +176,17 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	if !options.CreateOnly {
 		spends, err = s.Spend(ctx, tx, blockHeight, options.IgnoreFlags)
 		if err != nil {
+			if taken != lane.None {
+				// The spend half failed, so the create never ran and its outcome is known even
+				// when the spend's was not.
+				reason := LaneBurnReason(err, spends)
+				if reason == LaneBurnOutcomeUnknown {
+					reason = LaneBurnError
+				}
+
+				taker.BurnLanePosition(CreatedTxID(tx, options), options.Caller, taken, reason)
+			}
+
 			return nil, spends, err
 		}
 
@@ -172,6 +197,10 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 
 	md, err := s.Create(ctx, tx, blockHeight, opts...)
 	if err != nil {
+		if taken != lane.None {
+			taker.BurnLanePosition(CreatedTxID(tx, options), options.Caller, taken, LaneBurnReason(err, nil))
+		}
+
 		if errors.Is(err, errors.ErrTxExists) {
 			// the tx already exists; leave the spends in place for the caller to decide
 			return nil, spends, err

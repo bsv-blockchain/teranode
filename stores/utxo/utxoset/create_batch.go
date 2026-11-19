@@ -314,6 +314,10 @@ func (s *Store) claimFloor() int32 {
 type createResult struct {
 	data *meta.Data
 	err  error
+
+	// rolledBack is true when the batch's database transaction failed after it was opened and
+	// rolled back, so the item's lane position burned with it.
+	rolledBack bool
 }
 
 // createItem is a single Create waiting for its batch to flush.
@@ -971,6 +975,10 @@ func newCreateBatcher(s *Store, size int, duration time.Duration, drainMode, gre
 	return b
 }
 
+// createBatchBeforeCommit is a test hook called just before a create batch commits. An error from it
+// fails the batch, which rolls back. nil in production.
+var createBatchBeforeCommit func() error
+
 // sendCreateBatch flushes a batch of Creates as one statement.
 func (s *Store) sendCreateBatch(batch []*createItem) {
 	// Marks this batch as in flight so Close waits for the database work, not merely for the
@@ -1067,17 +1075,24 @@ func (s *Store) sendCreateBatch(batch []*createItem) {
 	}()
 
 	if err := s.lockTxids(ctx, dbTx, plan.txids); err != nil {
-		s.failBatch(batch, err)
+		s.failBatchRolledBack(batch, err)
 		return
 	}
 
 	if err := s.runCreatePlan(ctx, dbTx, plan); err != nil {
-		s.failBatch(batch, err)
+		s.failBatchRolledBack(batch, err)
 		return
 	}
 
+	if createBatchBeforeCommit != nil {
+		if err := createBatchBeforeCommit(); err != nil {
+			s.failBatchRolledBack(batch, err)
+			return
+		}
+	}
+
 	if err := dbTx.Commit(ctx); err != nil {
-		s.failBatch(batch, errors.NewStorageError("[utxoset][Create] commit", err))
+		s.failBatchRolledBack(batch, errors.NewStorageError("[utxoset][Create] commit", err))
 		return
 	}
 
@@ -1093,5 +1108,12 @@ func (s *Store) sendCreateBatch(batch []*createItem) {
 func (s *Store) failBatch(items []*createItem, err error) {
 	for _, item := range items {
 		item.done <- createResult{err: err}
+	}
+}
+
+// failBatchRolledBack is failBatch for a batch whose database transaction was open and rolled back.
+func (s *Store) failBatchRolledBack(items []*createItem, err error) {
+	for _, item := range items {
+		item.done <- createResult{err: err, rolledBack: true}
 	}
 }

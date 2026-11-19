@@ -10,6 +10,7 @@ import (
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -428,4 +429,182 @@ func LanePositionContract(t *testing.T, db utxostore.Store) {
 	t.Run("from a source", func(t *testing.T) { LanePositionFromSource(t, db) })
 	t.Run("multi", func(t *testing.T) { LanePositionMulti(t, db) })
 	t.Run("absent without the option", func(t *testing.T) { LanePositionAbsentWithoutOption(t, db) })
+}
+
+// LaneBurns is the burned lane position counter of one store at a moment, keyed "reason/caller".
+type LaneBurns map[string]float64
+
+// ReadLaneBurns reads teranode_lane_positions_burned_total for one store from the default registry.
+func ReadLaneBurns(t testing.TB, store string) LaneBurns {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	burns := LaneBurns{}
+
+	for _, family := range families {
+		if family.GetName() != "teranode_lane_positions_burned_total" {
+			continue
+		}
+
+		for _, m := range family.GetMetric() {
+			labels := make(map[string]string, 3)
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+
+			if labels["store"] == store {
+				burns[labels["reason"]+"/"+labels["caller"]] = m.GetCounter().GetValue()
+			}
+		}
+	}
+
+	return burns
+}
+
+// Since returns what the counter gained after before, leaving out every label set that did not move.
+func (b LaneBurns) Since(before LaneBurns) LaneBurns {
+	diff := LaneBurns{}
+
+	for k, v := range b {
+		if d := v - before[k]; d != 0 {
+			diff[k] = d
+		}
+	}
+
+	return diff
+}
+
+// requireBurns runs f and requires the store's burned lane position counter to gain exactly want.
+func requireBurns(t *testing.T, store string, want LaneBurns, f func()) {
+	t.Helper()
+
+	before := ReadLaneBurns(t, store)
+
+	f()
+
+	require.Equal(t, want, ReadLaneBurns(t, store).Since(before), "burned lane positions")
+}
+
+// LanePositionBurns: a position a store takes from its source and writes no record with is counted
+// once, labelled with the store, why it burned and which service asked for the create. A create
+// that writes its record counts nothing, and neither does a position the caller named, which the
+// caller took and is the caller's to count. store is the label the store counts under.
+func LanePositionBurns(t *testing.T, db utxostore.Store, store string) {
+	ctx := context.Background()
+
+	t.Run("a written record burns nothing", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xc0, 2, 2)
+		source := NewScriptedLanePositions(lanePositionsFrom(21, 8)...)
+		useLanePositionSource(t, db, source)
+
+		requireBurns(t, store, LaneBurns{}, func() {
+			for _, root := range w.Roots {
+				_, _, err := db.SpendAndCreate(ctx, root, 940, utxostore.WithCreateOnly(),
+					utxostore.WithCaller(utxostore.CallerBlockAssembly))
+				require.NoError(t, err)
+			}
+
+			_, _, err := db.SpendAndCreate(ctx, w.Txs[0], 941, utxostore.WithCaller(utxostore.CallerValidator))
+			require.NoError(t, err)
+
+			results, err := db.SpendAndCreateMulti(ctx, w.Txs[1:], 941, utxostore.WithIgnoreLocked(true),
+				utxostore.WithCaller(utxostore.CallerSubtreeValidation))
+			require.NoError(t, err)
+			requireAllStatus(t, results, utxostore.MultiTxCreated)
+		})
+
+		// Every position taken is on a record: nothing was taken and lost.
+		for i, tx := range append(w.Roots, w.Txs...) {
+			md, err := db.Get(ctx, tx.TxIDChainHash(), fields.LanePosition)
+			require.NoError(t, err, "record %d", i)
+			require.True(t, lane.Valid(md.LanePosition), "record %d has a position", i)
+		}
+
+		require.Equal(t, len(w.Roots)+len(w.Txs), source.Calls(), "one position per record")
+	})
+
+	t.Run("a create of a stored transaction burns exists", func(t *testing.T) {
+		root := BuildMultiWorkload(t, 0xc1, 1, 1).Roots[0]
+		useLanePositionSource(t, db, NewScriptedLanePositions(lanePositionsFrom(22, 2)...))
+
+		_, _, err := db.SpendAndCreate(ctx, root, 940, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		requireBurns(t, store, LaneBurns{utxostore.LaneBurnExists + "/validator": 1}, func() {
+			_, _, err = db.SpendAndCreate(ctx, root, 940, utxostore.WithCreateOnly(),
+				utxostore.WithCaller(utxostore.CallerValidator))
+			require.ErrorIs(t, err, errors.ErrTxExists)
+		})
+
+		requireLanePosition(t, db, root, lane.Pack(22, 1), "the first position stays")
+	})
+
+	t.Run("a named position is the caller's to count", func(t *testing.T) {
+		root := BuildMultiWorkload(t, 0xc2, 1, 1).Roots[0]
+		source := NewScriptedLanePositions(lanePositionsFrom(23, 1)...)
+		useLanePositionSource(t, db, source)
+
+		_, _, err := db.SpendAndCreate(ctx, root, 940, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		requireBurns(t, store, LaneBurns{}, func() {
+			_, _, err = db.SpendAndCreate(ctx, root, 940, utxostore.WithCreateOnly(),
+				utxostore.WithLanePosition(lane.Pack(23, 9)))
+			require.ErrorIs(t, err, errors.ErrTxExists)
+		})
+	})
+
+	t.Run("a refused spend burns spend_rejected", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xc3, 1, 1)
+		w.StoreRoots(t, db, 940)
+
+		useLanePositionSource(t, db, NewScriptedLanePositions(lanePositionsFrom(24, 2)...))
+
+		_, _, err := db.SpendAndCreate(ctx, w.Txs[0], 941)
+		require.NoError(t, err)
+
+		// Spends root output 0, which w.Txs[0] has spent.
+		double := spendOneOutput(t, w.Roots[0], 0)
+
+		requireBurns(t, store, LaneBurns{utxostore.LaneBurnSpendRejected + "/block_assembly": 1}, func() {
+			_, _, err = db.SpendAndCreate(ctx, double, 941, utxostore.WithCaller(utxostore.CallerBlockAssembly))
+			require.Error(t, err)
+		})
+
+		requireNotStored(t, db, double)
+	})
+
+	t.Run("a list with a stored transaction burns exists for it", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xc4, 1, 3)
+		w.StoreRoots(t, db, 940)
+
+		useLanePositionSource(t, db, NewScriptedLanePositions(lanePositionsFrom(25, 8)...))
+
+		_, _, err := db.SpendAndCreate(ctx, w.Txs[1], 941)
+		require.NoError(t, err)
+
+		requireBurns(t, store, LaneBurns{utxostore.LaneBurnExists + "/subtree_validation": 1}, func() {
+			results, err := db.SpendAndCreateMulti(ctx, w.Txs, 941, utxostore.WithIgnoreLocked(true),
+				utxostore.WithCaller(utxostore.CallerSubtreeValidation))
+			require.NoError(t, err)
+			require.Equal(t, utxostore.MultiTxCreated, results[0].Status)
+			require.Equal(t, utxostore.MultiTxExisted, results[1].Status)
+			require.Equal(t, utxostore.MultiTxCreated, results[2].Status)
+		})
+	})
+
+	t.Run("a create with no caller counts under unknown", func(t *testing.T) {
+		root := BuildMultiWorkload(t, 0xc5, 1, 1).Roots[0]
+		useLanePositionSource(t, db, NewScriptedLanePositions(lanePositionsFrom(26, 2)...))
+
+		_, _, err := db.SpendAndCreate(ctx, root, 940, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		requireBurns(t, store, LaneBurns{utxostore.LaneBurnExists + "/unknown": 1}, func() {
+			_, _, err = db.SpendAndCreate(ctx, root, 940, utxostore.WithCreateOnly())
+			require.ErrorIs(t, err, errors.ErrTxExists)
+		})
+	})
 }

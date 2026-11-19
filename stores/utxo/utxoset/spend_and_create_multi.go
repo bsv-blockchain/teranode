@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -61,7 +62,7 @@ func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeig
 			return nil, err
 		}
 
-		positions, err := s.TakeLanePositions(ctx, len(txs))
+		positions, err := s.TakeListLanePositions(ctx, list)
 		if err != nil {
 			return nil, err
 		}
@@ -73,7 +74,7 @@ func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeig
 		return utxo.DefaultSpendAndCreateMulti(ctx, s, utxo.SpendAndCreateMultiWidthsFor(s.settings), txs, blockHeight, opts...)
 	}
 
-	positions, err := s.TakeLanePositions(ctx, len(txs))
+	positions, err := s.TakeListLanePositions(ctx, list)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +82,55 @@ func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeig
 	w := s.newNettedWrite(txs, list, blockHeight)
 	w.positions = positions
 
-	return w.writeFamilies(ctx)
+	results, err := w.writeFamilies(ctx)
+
+	// On a failed list the results are nil, but chunks that committed before the failure gave
+	// their transactions results, and those positions were written.
+	s.burnList(list, positions, utxo.LaneBurnListFailed, func(i int) (utxo.SpendAndCreateMultiResult, bool) {
+		return w.items[i].result, w.items[i].rolledBack
+	})
+
+	return results, err
+}
+
+// burnList records every position a netted list took and wrote no record with. outcome gives
+// transaction i's result and whether its chunk rolled back; with no outcome, or for a transaction
+// with no result and no rolled-back chunk, the position burned for unsettled.
+func (s *Store) burnList(list *utxo.SpendAndCreateMultiList, positions []uint64, unsettled string,
+	outcome func(i int) (utxo.SpendAndCreateMultiResult, bool)) {
+	for i, position := range positions {
+		if position == lane.None {
+			continue
+		}
+
+		var (
+			res        utxo.SpendAndCreateMultiResult
+			rolledBack bool
+		)
+
+		if outcome != nil {
+			res, rolledBack = outcome(i)
+		}
+
+		var reason string
+
+		switch {
+		case res.Status == utxo.MultiTxCreated:
+			continue
+		case res.Status == utxo.MultiTxExisted:
+			reason = utxo.LaneBurnExists
+		case res.Status == utxo.MultiTxFailed:
+			reason = utxo.LaneBurnReason(res.Err, res.Spends)
+		case res.Status == utxo.MultiTxParentFailed:
+			reason = utxo.LaneBurnParentFailed
+		case rolledBack:
+			reason = utxo.LaneBurnRolledBack
+		default:
+			reason = unsettled
+		}
+
+		s.BurnLanePosition(list.TxIDs[i], list.Options.Caller, position, reason)
+	}
 }
 
 // listItemOptions are the options transaction pos of a list is written with, carrying the position
@@ -154,6 +203,9 @@ type multiTx struct {
 	claims  []inputClaim
 	spends  []*utxo.Spend
 	result  utxo.SpendAndCreateMultiResult
+	// rolledBack is true once the chunk holding the transaction failed, so its lane position
+	// burned. Written by runChunks under its lock and read only after the write ends.
+	rolledBack bool
 }
 
 func (it *multiTx) dead() bool {

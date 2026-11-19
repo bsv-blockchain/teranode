@@ -554,6 +554,12 @@ func (w *nettedWrite) runChunks(ctx context.Context, plan *chunkPlan, stats *fam
 					firstErr = err
 				}
 
+				if err != nil {
+					for _, i := range plan.chunks[idx].pos {
+						w.items[i].rolledBack = true
+					}
+				}
+
 				finish(idx, err != nil)
 			}
 		}()

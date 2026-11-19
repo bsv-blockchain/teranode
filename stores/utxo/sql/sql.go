@@ -217,6 +217,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		ctx:      ctx,
 	}
 
+	s.NameLaneBurns("sql", logger)
+
 	otelTracer := tracing.Tracer("utxo").OTelTracer()
 	batcherOpts := func(name string) []batcher.Option {
 		return []batcher.Option{
@@ -408,7 +410,7 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 
 // Create stores a new transaction's outputs as UTXOs.
 // For coinbase transactions, it sets the maturity period to 100 blocks.
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (txMeta *meta.Data, err error) {
 	options := &utxo.CreateOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -417,6 +419,15 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	position, takeErr := s.Take(ctx, options)
 	if takeErr != nil {
 		return nil, takeErr
+	}
+
+	// A position this call took from the source is its own to record if the create fails. A
+	// caller that stopped waiting for the batcher gets a context error while the batch may still
+	// write the record, and LaneBurnReason says so.
+	if utxo.TookLanePosition(options.LanePosition, position) {
+		defer func() {
+			s.BurnCreateLanePosition(tx, options, position, err, nil)
+		}()
 	}
 
 	options.LanePosition = position
@@ -430,9 +441,6 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	}
 
 	// Try the operation with retry logic for lock errors
-	var txMeta *meta.Data
-	var err error
-
 	for attempt := 0; attempt <= 3; attempt++ {
 		txMeta, err = s.createWithRetry(ctx, tx, blockHeight, options)
 

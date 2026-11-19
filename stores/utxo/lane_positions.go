@@ -3,7 +3,9 @@ package utxo
 import (
 	"context"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
@@ -29,12 +31,20 @@ type LanePositionTaker interface {
 
 	// TakeLanePosition returns the position for the record that o describes; see LanePositions.Take.
 	TakeLanePosition(ctx context.Context, o *CreateOptions) (uint64, error)
+
+	// BurnLanePosition counts and logs a position taken from the source that no record carries;
+	// see LanePositions.BurnLanePosition.
+	BurnLanePosition(txid chainhash.Hash, caller Caller, position uint64, reason string)
 }
 
 // LanePositions is the part of a store that implements LanePositionTaker. With no source set, which
 // is every store with lane positions off, a create pays one nil check.
 type LanePositions struct {
 	source LanePositionSource
+
+	// burnStore and burnLogger label and log the positions this store burns; see NameLaneBurns.
+	burnStore  string
+	burnLogger ulogger.Logger
 }
 
 // SetLanePositionSource implements LanePositionTaker.
@@ -73,6 +83,32 @@ func (l *LanePositions) TakeLanePosition(ctx context.Context, o *CreateOptions) 
 
 // TakeLanePositions takes n positions, one per transaction of a list, or returns nil with no source.
 func (l *LanePositions) TakeLanePositions(ctx context.Context, n int) ([]uint64, error) {
+	positions, err := l.takeLanePositions(ctx, n)
+	if err != nil {
+		return nil, err
+	}
+
+	return positions, nil
+}
+
+// TakeListLanePositions is TakeLanePositions for the transactions of list. A take that fails leaves
+// the positions taken before it unused, so it records them as burned before it returns nil.
+func (l *LanePositions) TakeListLanePositions(ctx context.Context, list *SpendAndCreateMultiList) ([]uint64, error) {
+	positions, err := l.takeLanePositions(ctx, len(list.TxIDs))
+	if err != nil {
+		for i, position := range positions {
+			l.BurnLanePosition(list.TxIDs[i], list.Options.Caller, position, LaneBurnTakeFailed)
+		}
+
+		return nil, err
+	}
+
+	return positions, nil
+}
+
+// takeLanePositions takes n positions. On a failure it returns the positions it took before the
+// failure with the error.
+func (l *LanePositions) takeLanePositions(ctx context.Context, n int) ([]uint64, error) {
 	if l.source == nil {
 		return nil, nil
 	}
@@ -82,7 +118,7 @@ func (l *LanePositions) TakeLanePositions(ctx context.Context, n int) ([]uint64,
 	for i := range positions {
 		p, err := l.Take(ctx, &CreateOptions{})
 		if err != nil {
-			return nil, err
+			return positions[:i], err
 		}
 
 		positions[i] = p

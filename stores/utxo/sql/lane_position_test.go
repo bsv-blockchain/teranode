@@ -69,6 +69,7 @@ func TestLanePositionContractSQLite(t *testing.T) {
 	db, _ := setup(context.Background(), t)
 
 	tests.LanePositionContract(t, db)
+	t.Run("burns", func(t *testing.T) { tests.LanePositionBurns(t, db, "sql") })
 }
 
 // Every Postgres create path writes the lane position: the create batcher's
@@ -101,6 +102,7 @@ func TestLanePositionContractPostgres(t *testing.T) {
 			require.NoError(t, err)
 
 			tests.LanePositionContract(t, db)
+			t.Run("burns", func(t *testing.T) { tests.LanePositionBurns(t, db, "sql") })
 		})
 	}
 }
