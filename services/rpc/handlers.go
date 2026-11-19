@@ -78,10 +78,39 @@ type chainTipsCacheEntry struct {
 	result   []map[string]interface{}
 }
 
-// clearChainTipsCache drops the cached getchaintips answer. Commands that change
-// block validity call it so the next getchaintips reflects the change.
+var (
+	chainTipsMu  sync.Mutex
+	chainTipsGen uint64
+)
+
+// clearChainTipsCache drops the cached getchaintips answer and bumps the
+// generation, so a walk that started before the clear cannot store its result
+// afterwards. Commands that change block validity call it so the next
+// getchaintips reflects the change.
 func clearChainTipsCache() {
+	chainTipsMu.Lock()
+	defer chainTipsMu.Unlock()
+
+	chainTipsGen++
 	rpcCallCache.Delete(chainTipsCacheKey)
+}
+
+func chainTipsGeneration() uint64 {
+	chainTipsMu.Lock()
+	defer chainTipsMu.Unlock()
+
+	return chainTipsGen
+}
+
+// storeChainTips caches the answer unless the cache was cleared since generation
+// was read, in which case the answer may predate the change and is not stored.
+func storeChainTips(generation uint64, entry chainTipsCacheEntry) {
+	chainTipsMu.Lock()
+	defer chainTipsMu.Unlock()
+
+	if chainTipsGen == generation {
+		rpcCallCache.Set(chainTipsCacheKey, entry, ttlcache.DefaultTTL)
+	}
 }
 
 func newRPCCache() *ttlcache.Cache[string, any] {
@@ -3024,7 +3053,9 @@ func isIPOrSubnet(ipOrSubnet string) bool {
 // The cached answer carries the best block hash it was computed at and is
 // served only while that hash is still the best. A best-tip change (new block,
 // reorg) therefore retires it at once, and so does invalidateblock or
-// reconsiderblock through this server (clearChainTipsCache). It does NOT cover
+// reconsiderblock through this server (clearChainTipsCache). A walk that was
+// already running when one of them cleared the cache does not store its result
+// (generation check). It does NOT cover
 // a side-branch block that arrives while the best tip is unchanged: that tip
 // shows up when the entry expires, within the cache's 10 second TTL. If the
 // best header cannot be read, the call serves a fresh walk and skips the cache.
@@ -3045,6 +3076,7 @@ func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 		return nil, bsvjson.ErrRPCInternal
 	}
 
+	generation := chainTipsGeneration()
 	bestHash := ""
 
 	if header, _, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil {
@@ -3080,7 +3112,7 @@ func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 	}
 
 	if s.settings.RPC.CacheEnabled && bestHash != "" {
-		rpcCallCache.Set(chainTipsCacheKey, chainTipsCacheEntry{bestHash: bestHash, result: result}, ttlcache.DefaultTTL)
+		storeChainTips(generation, chainTipsCacheEntry{bestHash: bestHash, result: result})
 	}
 
 	return result, nil

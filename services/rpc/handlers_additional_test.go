@@ -5202,6 +5202,46 @@ func TestHandleGetchaintipsComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		mockClient.AssertNumberOfCalls(t, "GetChainTips", 2)
 	})
+
+	// invalidateblock can finish while a getchaintips walk is still reading the old
+	// tips. That walk must not store its result after the clear, or the stale answer
+	// is served until the TTL expires.
+	t.Run("a walk that overlaps an invalidation does not repopulate the cache", func(t *testing.T) {
+		hashE := chainhash.DoubleHashH([]byte("tips-cache-tip-e"))
+		header := &model.BlockHeader{HashPrevBlock: &hashE, HashMerkleRoot: &hashE}
+
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(header, &model.BlockHeaderMeta{}, nil)
+		mockClient.On("GetChainTips", mock.Anything).Return(
+			[]*model.ChainTip{{Height: 8, Hash: hashE.String(), Branchlen: 0, Status: "active"}}, nil,
+		).Run(func(mock.Arguments) {
+			clearChainTipsCache()
+		}).Once()
+		mockClient.On("GetChainTips", mock.Anything).Return(
+			[]*model.ChainTip{{Height: 8, Hash: hashE.String(), Branchlen: 0, Status: "active"}}, nil,
+		).Once()
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+				RPC:            settings.RPCSettings{CacheEnabled: true},
+			},
+		}
+
+		cmd := &bsvjson.GetChainTipsCmd{}
+		_, err := handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+
+		_, err = handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		mockClient.AssertNumberOfCalls(t, "GetChainTips", 2)
+
+		_, err = handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		mockClient.AssertNumberOfCalls(t, "GetChainTips", 2)
+	})
 }
 
 // mockBlockValidationClient is a mock implementation of blockvalidation.Interface for testing
