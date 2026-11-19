@@ -33,6 +33,15 @@ const blockchainAuthTestKey = "blockchain-auth-transport-test-key"
 
 func startAuthenticatedBlockchain(t *testing.T, reflection bool) (*Blockchain, *settings.Settings, *grpc.ClientConn) {
 	t.Helper()
+
+	return startTunedBlockchain(t, reflection, nil)
+}
+
+// startTunedBlockchain starts the service as startAuthenticatedBlockchain does, after tune has
+// changed the settings. The service reads settings such as the sweep interval at start, so a test
+// cannot change them afterwards.
+func startTunedBlockchain(t *testing.T, reflection bool, tune func(*settings.Settings)) (*Blockchain, *settings.Settings, *grpc.ClientConn) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	s := test.CreateBaseTestSettings(t)
 	s.Context = t.Name()
@@ -42,6 +51,9 @@ func startAuthenticatedBlockchain(t *testing.T, reflection bool) (*Blockchain, *
 	s.BlockChain.HTTPListenAddress = "127.0.0.1:0"
 	s.BlockChain.PeerRegistryStore = nil
 	s.BlockChain.GRPCAddress = ""
+	if tune != nil {
+		tune(s)
+	}
 	logger := ulogger.NewErrorTestLogger(t)
 	store, err := sqlstore.New(logger, &url.URL{Scheme: "sqlitememory"}, s)
 	require.NoError(t, err)
