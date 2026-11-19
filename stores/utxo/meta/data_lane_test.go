@@ -120,6 +120,90 @@ func TestNewDataFromLaneMetaBytesRejects(t *testing.T) {
 	require.Error(t, err)
 }
 
+// laneMetaByHand writes the lane metadata encoding without the encoder's checks, so a decoder test
+// can hand it what the encoder refuses to write.
+func laneMetaByHand(t *testing.T, own uint64, flags byte, inpoints subtree.TxInpoints, parents []uint64) []byte {
+	t.Helper()
+
+	b := []byte{LaneMetaMagic, LaneMetaVersion}
+	b = lane.AppendPosition(b, own)
+	b = append(b, make([]byte, 16)...) // fee and size
+	b = append(b, flags)
+
+	b, err := inpoints.AppendSerialized(b)
+	require.NoError(t, err)
+
+	return lane.AppendPositions(b, parents)
+}
+
+// The decoder refuses on its own what the encoder would never write: a parent listed twice, an
+// inpoints region cut short, and any buffer shorter than the fixed header.
+func TestNewDataFromLaneMetaBytesRefusesWhatTheEncoderWouldNotWrite(t *testing.T) {
+	dupInpoints := subtree.NewTxInpointsFromPacked([]chainhash.Hash{*hash3, *hash3}, []uint32{1, 0, 1, 1})
+	dup := laneMetaByHand(t, lane.Pack(1, 1), 0, dupInpoints, []uint64{lane.Pack(1, 2), lane.Pack(1, 3)})
+
+	var got Data
+
+	_, err := NewDataFromLaneMetaBytes(dup, &got)
+	require.Error(t, err, "a parent listed twice")
+
+	// The parent count promises one parent and the buffer ends there.
+	cut := laneMetaByHand(t, lane.Pack(1, 1), 0, subtree.NewTxInpoints(), nil)
+	cut = append(cut[:laneMetaHeader], 1, 0, 0, 0)
+	_, err = NewDataFromLaneMetaBytes(cut, &got)
+	require.Error(t, err, "inpoints cut short")
+
+	// The same cut, with the bytes of a whole parent hash but no vouts.
+	cut = append(append([]byte{}, cut...), hash3[:]...)
+	_, err = NewDataFromLaneMetaBytes(cut, &got)
+	require.Error(t, err, "inpoints cut inside a parent")
+
+	d, parents := laneSample()
+	good, err := d.LaneMetaBytesInto(nil, parents)
+	require.NoError(t, err)
+
+	for n := 0; n < laneMetaHeader+4; n++ {
+		require.NotPanics(t, func() { _, err = NewDataFromLaneMetaBytes(good[:n], &got) }, "%d bytes", n)
+		require.Error(t, err, "%d bytes", n)
+	}
+}
+
+// Every flag round-trips on its own and together, and each lands on the bit MetaBytes uses.
+func TestLaneMetaBytesKeepsEveryFlag(t *testing.T) {
+	set := map[string]func(*Data){
+		"coinbase":    func(d *Data) { d.IsCoinbase = true },
+		"frozen":      func(d *Data) { d.Frozen = true },
+		"conflicting": func(d *Data) { d.Conflicting = true },
+		"locked":      func(d *Data) { d.Locked = true },
+		"in block":    func(d *Data) { d.InBlock = true },
+		"none":        func(*Data) {},
+		"all": func(d *Data) {
+			d.IsCoinbase, d.Frozen, d.Conflicting, d.Locked, d.InBlock = true, true, true, true, true
+		},
+	}
+
+	for name, apply := range set {
+		d, parents := laneSample()
+		d.Locked, d.InBlock = false, false
+		apply(d)
+
+		b, err := d.LaneMetaBytesInto(nil, parents)
+		require.NoError(t, err, name)
+
+		legacy, err := d.MetaBytes()
+		require.NoError(t, err, name)
+		require.Equal(t, legacy[16], b[26], "%s: the flags byte is MetaBytes' own", name)
+
+		var got Data
+
+		_, err = NewDataFromLaneMetaBytes(b, &got)
+		require.NoError(t, err, name)
+		require.Equal(t,
+			[5]bool{d.IsCoinbase, d.Frozen, d.Conflicting, d.Locked, d.InBlock},
+			[5]bool{got.IsCoinbase, got.Frozen, got.Conflicting, got.Locked, got.InBlock}, name)
+	}
+}
+
 // The legacy encodings are unchanged by the lane encoding: these are their exact bytes.
 func TestLegacyMetaEncodingsAreUnchanged(t *testing.T) {
 	d, _ := laneSample()

@@ -95,6 +95,16 @@ func TestProofFileRefusesOverlap(t *testing.T) {
 
 	_, err = DecodeProofFile(bad)
 	require.Error(t, err)
+
+	// A third subtree overlapping the second, not the first, is refused too: the check compares
+	// with every earlier subtree, not only the first.
+	three3 := ProofFile{Subtrees: []SubtreeBitmaps{
+		{SubtreeHash: chainhash.Hash{1}, Lanes: LaneBitmaps{7: bitmapOf(1)}},
+		{SubtreeHash: chainhash.Hash{2}, Lanes: LaneBitmaps{7: bitmapOf(2)}},
+		{SubtreeHash: chainhash.Hash{3}, Lanes: LaneBitmaps{7: bitmapOf(2)}},
+	}}
+	_, err = EncodeProofFile(three3)
+	require.Error(t, err)
 }
 
 func TestLaneFilesRejectMalformedInput(t *testing.T) {

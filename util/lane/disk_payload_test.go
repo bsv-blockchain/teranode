@@ -72,6 +72,18 @@ func TestDiskPayloadRejects(t *testing.T) {
 		_, _, err := DecodeDiskPayload(b)
 		require.Error(t, err, name)
 	}
+
+	// Written by hand, past the encoder's checks: a parent listed twice, which go-subtree's reader
+	// accepts, so only the decoder's own position check refuses it.
+	dup := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{{0xA}, {0xA}}, []uint32{1, 0, 1, 1})
+
+	b := AppendPosition([]byte{DiskPayloadVersion}, Pack(1, 1))
+	b, err = dup.AppendSerialized(b)
+	require.NoError(t, err)
+	b = AppendPositions(b, []uint64{Pack(1, 2), Pack(1, 3)})
+
+	_, _, err = DecodeDiskPayload(b)
+	require.Error(t, err, "a parent listed twice")
 }
 
 func FuzzDecodeDiskPayload(f *testing.F) {

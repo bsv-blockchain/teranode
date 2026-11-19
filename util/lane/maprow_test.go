@@ -3,6 +3,7 @@ package lane
 import (
 	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/stretchr/testify/require"
@@ -147,6 +148,7 @@ func TestBuildMapRowsSplitsOnWholeChunks(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(rows), 1)
 	require.NoError(t, CheckMapRows(rows))
+	requireLongestRuns(t, bm, rows, limit)
 
 	union := roaring64.New()
 
@@ -160,6 +162,31 @@ func TestBuildMapRowsSplitsOnWholeChunks(t *testing.T) {
 	}
 
 	require.True(t, union.Equals(bm))
+}
+
+// requireLongestRuns checks that each row except the last is the longest run of chunks that fits
+// the limit: adding the next occupied chunk's positions to it would pass the limit.
+func requireLongestRuns(t *testing.T, bm *roaring64.Bitmap, rows []MapRow, limit uint64) {
+	t.Helper()
+
+	for i := 0; i+1 < len(rows); i++ {
+		part, err := rows[i].Check()
+		require.NoError(t, err)
+
+		if part == nil {
+			part = roaring64.New()
+			part.AddRange(rows[i].First, rows[i].Last+1)
+		}
+
+		next := rows[i+1].First >> chunkBits
+		chunk := roaring64.New()
+		chunk.AddRange(next<<chunkBits, (next+1)<<chunkBits)
+		chunk.And(bm)
+
+		part.Or(chunk)
+		part.RunOptimize()
+		require.Greater(t, part.GetSerializedSizeInBytes(), limit, "row %d could have taken the next chunk", i)
+	}
 }
 
 // A sparse bitmap over a very wide span splits at a cost that follows the chunks it holds. Each
@@ -176,10 +203,16 @@ func TestBuildMapRowsSplitsASparseWideBitmap(t *testing.T) {
 
 	require.Greater(t, bm.GetSerializedSizeInBytes(), uint64(limit))
 
+	// The split this replaced took more than 45 s and 12 GB here; this one takes well under a
+	// second.
+	started := time.Now()
 	rows, err := buildMapRows(9, bm, limit)
+	require.Less(t, time.Since(started), 10*time.Second, "the split's cost follows the span, not the occupied chunks")
+
 	require.NoError(t, err)
 	require.Greater(t, len(rows), 1)
 	require.NoError(t, CheckMapRows(rows))
+	requireLongestRuns(t, bm, rows, limit)
 
 	union := roaring64.New()
 
@@ -283,6 +316,76 @@ func TestSameRow(t *testing.T) {
 	same, err = SameRow(MapRow{Lane: 1, First: 1, Last: 3}, MapRow{Lane: 1, First: 1, Last: 3})
 	require.NoError(t, err)
 	require.True(t, same)
+
+	// The same lane, range, first hole and tag over different sets are different rows.
+	a, err := BuildMapRows(1, bitmapOf(1, 2, 4, 6))
+	require.NoError(t, err)
+	b, err := BuildMapRows(1, bitmapOf(1, 2, 4, 5, 6))
+	require.NoError(t, err)
+	require.Equal(t, a[0].FirstHole, b[0].FirstHole)
+
+	same, err = SameRow(a[0], b[0])
+	require.NoError(t, err)
+	require.False(t, same)
+}
+
+// A bitmap filled one position at a time is a plain bitmap container, not the canonical run form,
+// and BuildMapRows still writes canonical rows from it, whole or split.
+func TestBuildMapRowsWritesCanonicalRowsFromAnyBitmap(t *testing.T) {
+	bm := roaring64.New()
+
+	for c := uint64(0); c < 8; c++ {
+		for p := uint64(1); p < 5_000; p++ {
+			if p != 3 {
+				bm.Add(c<<16 + p)
+			}
+		}
+	}
+
+	for _, limit := range []uint64{MaxRowHoleDataBytes, 2 << 10} {
+		rows, err := buildMapRows(9, bm, limit)
+		require.NoError(t, err)
+		require.NoError(t, CheckMapRows(rows), "limit %d", limit)
+	}
+}
+
+// A lane split into many rows costs what its rows hold: each row's search starts small and grows
+// with that row, not with every chunk still to place. 100,000 occupied chunks under a 4 KB limit
+// make a few hundred rows. The split builds about a dozen chunk ranges per chunk placed; a search
+// that probed the whole remainder for every row builds more than ten times as many, and that gap
+// widens with the lane.
+func TestBuildMapRowsSplitCostFollowsTheRows(t *testing.T) {
+	const chunks = 100_000
+
+	bm := roaring64.New()
+	for i := uint64(0); i < chunks; i++ {
+		bm.Add(i<<chunkBits + 1)
+	}
+
+	const limit = 4 << 10
+
+	before := splitChunkRanges.Load()
+	rows, err := buildMapRows(9, bm, limit)
+	work := splitChunkRanges.Load() - before
+
+	t.Logf("%d rows, %d chunk ranges built for %d chunks", len(rows), work, chunks)
+
+	require.NoError(t, err)
+	require.Greater(t, len(rows), 100)
+	require.NoError(t, CheckMapRows(rows))
+	// About 12 per chunk here; searching the whole remainder for each row costs over 130.
+	require.Less(t, work, int64(30*chunks), "the split's work follows the rows, not the chunks left")
+}
+
+// occupiedChunks lists each occupied chunk once, however many positions it holds, so the split's
+// work follows the chunks and not the positions.
+func TestOccupiedChunksListsEachChunkOnce(t *testing.T) {
+	bm := roaring64.New()
+	bm.AddRange(1, 50_000)
+	bm.AddRange(3<<16, 3<<16+40_000)
+	bm.Add(1 << 40)
+
+	require.Equal(t, []uint64{0, 3, 1 << 24}, occupiedChunks(bm))
 }
 
 func mustBytes(t *testing.T, bm *roaring64.Bitmap) []byte {

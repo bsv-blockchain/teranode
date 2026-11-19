@@ -2,10 +2,15 @@ package lane
 
 import (
 	"bytes"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/teranode/errors"
 )
+
+// splitChunkRanges counts the chunk ranges takeChunks builds, so a test can hold the split's work
+// to the chunks it places. Nothing else reads it.
+var splitChunkRanges atomic.Int64
 
 // RowTag says how a map row stores which positions of its range its block took. It is one byte so
 // a later codec can be added per row without migrating the rows already stored.
@@ -129,6 +134,8 @@ func occupiedChunks(bm *roaring64.Bitmap) []uint64 {
 // is always below any limit a caller uses outside tests.
 func takeChunks(bm *roaring64.Bitmap, chunks []uint64, limit uint64) (*roaring64.Bitmap, int, error) {
 	part := func(n int) *roaring64.Bitmap {
+		splitChunkRanges.Add(int64(n))
+
 		p := roaring64.New()
 		for _, c := range chunks[:n] {
 			p.AddRange(c<<chunkBits, (c+1)<<chunkBits)
