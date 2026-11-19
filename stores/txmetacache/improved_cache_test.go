@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"sync"
@@ -976,6 +977,97 @@ func TestImprovedCache_CleanLockedMapUnallocated(t *testing.T) {
 
 	t.Logf("Unallocated cache stats - ValidEntriesCount: %d, TotalElementsAdded: %d",
 		stats.ValidEntriesCount, stats.TotalElementsAdded)
+}
+
+// TestImprovedCache_New_TrimRatio verifies that New threads an explicit
+// trimRatio through to the Preallocated bucket's Init call (the bug fixed
+// here: the value used to come from an untagged gocore.Config() read that
+// bypassed the typed settings system).
+func TestImprovedCache_New_TrimRatio(t *testing.T) {
+	t.Run("explicit trimRatio is honoured", func(t *testing.T) {
+		cache, err := New(16*1024, Preallocated, 7)
+		require.NoError(t, err)
+		defer cache.Reset()
+
+		require.Equal(t, 7, cache.trimRatio)
+
+		for i := range cache.buckets {
+			bp, ok := cache.buckets[i].(*bucketPreallocated)
+			require.True(t, ok, "bucket %d should be a bucketPreallocated", i)
+			require.Equal(t, 7, bp.trimRatio)
+		}
+	})
+
+	t.Run("omitted trimRatio falls back to defaultTrimRatio", func(t *testing.T) {
+		cache, err := New(16*1024, Preallocated)
+		require.NoError(t, err)
+		defer cache.Reset()
+
+		require.Equal(t, defaultTrimRatio, cache.trimRatio)
+	})
+
+	t.Run("trimRatio is ignored by non-preallocated bucket types", func(t *testing.T) {
+		cache, err := New(16*1024, Unallocated, 99)
+		require.NoError(t, err)
+		defer cache.Reset()
+
+		// Unallocated buckets never read c.trimRatio; the field on the
+		// top-level cache stays at its zero value.
+		require.Equal(t, 0, cache.trimRatio)
+	})
+}
+
+// TestBucketPreallocated_CleanLockedMap_TrimRatioAffectsRetainedEntries proves
+// trimRatio actually changes eviction behaviour for the Preallocated bucket
+// type. On every chunk-arena rotation, bucketPreallocated.Set computes
+// numOfChunksToRemove = ceil(len(chunks) * trimRatio / 100) and discards that
+// many chunks from the front of the arena via cleanLockedMap. A higher
+// trimRatio therefore discards a larger fraction of the arena per rotation:
+// given the same populated map, cleanLockedMap must retain fewer entries for
+// the higher trimRatio's (larger) starting offset.
+func TestBucketPreallocated_CleanLockedMap_TrimRatioAffectsRetainedEntries(t *testing.T) {
+	const chunksPerBucket = 8
+	const numEntries = 1000
+
+	numOfChunksToRemove := func(trimRatio int) int {
+		return int(math.Ceil(float64(chunksPerBucket*trimRatio) / 100))
+	}
+
+	newPopulatedBucket := func(t *testing.T, trimRatio int) *bucketPreallocated {
+		t.Helper()
+
+		b := &bucketPreallocated{}
+		require.NoError(t, b.Init(uint64(chunksPerBucket*ChunkSize), trimRatio))
+
+		// Populate the index map with entries spread evenly across the
+		// full chunk-arena byte range, independent of Set/hashing, so
+		// both buckets start from an identical, deterministic map.
+		arenaBytes := uint64(chunksPerBucket * ChunkSize)
+		span := arenaBytes / numEntries
+
+		b.m = make(map[uint64]uint64, numEntries)
+		for i := uint64(0); i < numEntries; i++ {
+			b.m[i] = i * span
+		}
+
+		return b
+	}
+
+	lowRatioBucket := newPopulatedBucket(t, 2)
+	highRatioBucket := newPopulatedBucket(t, 80)
+
+	lowRatioRemoved := numOfChunksToRemove(2)
+	highRatioRemoved := numOfChunksToRemove(80)
+	require.Less(t, lowRatioRemoved, highRatioRemoved, "test setup: trimRatio=80 must remove more chunks than trimRatio=2")
+
+	lowRatioBucket.cleanLockedMap(lowRatioRemoved * ChunkSize)
+	highRatioBucket.cleanLockedMap(highRatioRemoved * ChunkSize)
+
+	t.Logf("trimRatio=2: removed %d chunks, retained %d entries", lowRatioRemoved, len(lowRatioBucket.m))
+	t.Logf("trimRatio=80: removed %d chunks, retained %d entries", highRatioRemoved, len(highRatioBucket.m))
+
+	require.Less(t, len(highRatioBucket.m), len(lowRatioBucket.m),
+		"a higher trimRatio should retain fewer live entries after cleanLockedMap")
 }
 
 // TestImprovedCache_CleanLockedMapPreallocated tests cleanLockedMap for preallocated buckets

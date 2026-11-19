@@ -53,12 +53,12 @@ func PrintResults(results []Result) {
 func checkGo() Result {
 	out, err := exec.Command("go", "version").Output()
 	if err != nil {
-		return Result{Name: "Go", OK: false, Message: "not found - install Go 1.26+ from https://go.dev"}
+		return Result{Name: "Go", OK: false, Message: "not found - install Go 1.27+ from https://go.dev"}
 	}
 
 	version := string(out)
 
-	// Parse version like "go version go1.26.0 linux/amd64"
+	// Parse version like "go version go1.27.0 linux/amd64"
 	re := regexp.MustCompile(`go(\d+)\.(\d+)`)
 	matches := re.FindStringSubmatch(version)
 
@@ -69,11 +69,11 @@ func checkGo() Result {
 	major, _ := strconv.Atoi(matches[1])
 	minor, _ := strconv.Atoi(matches[2])
 
-	if major < 1 || (major == 1 && minor < 26) {
+	if major < 1 || (major == 1 && minor < 27) {
 		return Result{
 			Name:    "Go",
 			OK:      false,
-			Message: fmt.Sprintf("version %d.%d found, need 1.26+", major, minor),
+			Message: fmt.Sprintf("version %d.%d found, need 1.27+", major, minor),
 		}
 	}
 

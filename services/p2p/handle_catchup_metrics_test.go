@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -83,6 +84,27 @@ func TestRecordCatchupAttempt_RegistersSyncAttempt(t *testing.T) {
 	require.Equal(t, int64(1), got.CatchupAttempts)
 }
 
+// TestRecordCatchupAttempt_IncrementsCounter confirms the success path
+// increments prometheusP2PCatchupAttempts, and that the early-return on an
+// invalid peer ID (before the registry call) does not.
+func TestRecordCatchupAttempt_IncrementsCounter(t *testing.T) {
+	initPrometheusMetrics()
+
+	before := testutil.ToFloat64(prometheusP2PCatchupAttempts)
+
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	resp, err := s.RecordCatchupAttempt(context.Background(), &p2p_api.RecordCatchupAttemptRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusP2PCatchupAttempts))
+
+	_, err = s.RecordCatchupAttempt(context.Background(), &p2p_api.RecordCatchupAttemptRequest{PeerId: "not-a-peer-id"})
+	require.Error(t, err)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusP2PCatchupAttempts), "an invalid peer ID must not increment the counter")
+}
+
 func TestRecordCatchupAttempt_InvalidPeerID(t *testing.T) {
 	s, _, _ := freshTestServer(t)
 
@@ -103,8 +125,37 @@ func TestRecordCatchupSuccess_UpdatesInteractionMetrics(t *testing.T) {
 
 	got, _ := reg.Get(pid.String())
 	require.Equal(t, int64(1), got.InteractionSuccesses)
-	require.Equal(t, int64(250), got.AvgResponseTimeMs)
+	require.Equal(t, int64(0), got.AvgResponseTimeMs, "the catchup duration is not a response time")
 	require.Equal(t, int64(1), got.CatchupSuccesses)
+}
+
+// TestRecordCatchupSuccess_DurationDoesNotCutReputation pins issue 2092: a peer
+// with every interaction successful that serves one catchup of a minute keeps
+// the score a peer that never served a catchup has. Before, the whole catchup
+// duration was blended into AvgResponseTimeMs, the >=30s band applied the 0.6
+// speed factor, and the peer fell from ~90 to 54 (below the tierMiner threshold
+// of 50 once the recency bonus lapsed).
+func TestRecordCatchupSuccess_DurationDoesNotCutReputation(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	reg.Register(&blockchain.PeerInfo{ID: "idle-peer"})
+	reg.UpdateMetrics("idle-peer", 0, 0, 0, true, false, false, 0)
+
+	resp, err := s.RecordCatchupSuccess(context.Background(), &p2p_api.RecordCatchupSuccessRequest{
+		PeerId:     pid.String(),
+		DurationMs: (60 * time.Second).Milliseconds(),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+
+	served, _ := reg.Get(pid.String())
+	idlePeer, _ := reg.Get("idle-peer")
+
+	require.Equal(t, int64(0), served.AvgResponseTimeMs)
+	require.Equal(t, int64(1), served.CatchupSuccesses)
+	require.InDelta(t, idlePeer.ReputationScore, served.ReputationScore, 0.01, "serving a catchup must not lower a peer's score")
+	require.GreaterOrEqual(t, served.ReputationScore, 80.0)
 }
 
 func TestRecordCatchupFailure_UpdatesInteractionMetrics(t *testing.T) {
@@ -118,6 +169,27 @@ func TestRecordCatchupFailure_UpdatesInteractionMetrics(t *testing.T) {
 	got, _ := reg.Get(pid.String())
 	require.Equal(t, int64(1), got.InteractionFailures)
 	require.Equal(t, int64(1), got.CatchupFailures)
+}
+
+// TestRecordCatchupSuccess_IncrementsCounter confirms the success path
+// increments prometheusP2PCatchupSuccesses, and that the early-return on an
+// invalid peer ID (before the registry call) does not.
+func TestRecordCatchupSuccess_IncrementsCounter(t *testing.T) {
+	initPrometheusMetrics()
+
+	before := testutil.ToFloat64(prometheusP2PCatchupSuccesses)
+
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	resp, err := s.RecordCatchupSuccess(context.Background(), &p2p_api.RecordCatchupSuccessRequest{PeerId: pid.String(), DurationMs: 100})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusP2PCatchupSuccesses))
+
+	_, err = s.RecordCatchupSuccess(context.Background(), &p2p_api.RecordCatchupSuccessRequest{PeerId: "not-a-peer"})
+	require.Error(t, err)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusP2PCatchupSuccesses), "an invalid peer ID must not increment the counter")
 }
 
 func TestRecordCatchupFailure_BlockIncomplete_DowngradesFullPeer(t *testing.T) {
@@ -237,6 +309,35 @@ func TestRecordCatchupFailure_BlockIncomplete_DoesNotBanPeer(t *testing.T) {
 	banned, err := s.peerRegistry.IsPeerBanned(context.Background(), pid.String())
 	require.NoError(t, err)
 	require.False(t, banned)
+}
+
+// TestRecordCatchupFailure_IncrementsFailureCounter confirms both the generic
+// and block-incomplete failure paths increment the prometheusP2PCatchupFailures
+// counter, labelled by the normalized failure kind, so an operator can alert on
+// catchup failures the same way they already can for attempts/successes.
+func TestRecordCatchupFailure_IncrementsFailureCounter(t *testing.T) {
+	initPrometheusMetrics()
+
+	genericBefore := testutil.ToFloat64(prometheusP2PCatchupFailures.WithLabelValues(catchupFailureKindGeneric))
+	blockIncompleteBefore := testutil.ToFloat64(prometheusP2PCatchupFailures.WithLabelValues(catchupFailureKindBlockIncomplete))
+
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	resp, err := s.RecordCatchupFailure(context.Background(), &p2p_api.RecordCatchupFailureRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, genericBefore+1, testutil.ToFloat64(prometheusP2PCatchupFailures.WithLabelValues(catchupFailureKindGeneric)))
+
+	blockHash := chainhash.HashH([]byte("counter-block-incomplete"))
+	resp, err = s.RecordCatchupFailure(context.Background(), &p2p_api.RecordCatchupFailureRequest{
+		PeerId:      pid.String(),
+		FailureKind: catchupFailureKindBlockIncomplete,
+		BlockHash:   blockHash.String(),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, blockIncompleteBefore+1, testutil.ToFloat64(prometheusP2PCatchupFailures.WithLabelValues(catchupFailureKindBlockIncomplete)))
 }
 
 func TestRecordCatchupFailure_UnknownFailureKind_Generic(t *testing.T) {
@@ -593,6 +694,7 @@ func TestIsPeerUnhealthy_LowReputation(t *testing.T) {
 	resp, err := s.IsPeerUnhealthy(context.Background(), &p2p_api.IsPeerUnhealthyRequest{PeerId: pid.String()})
 	require.NoError(t, err)
 	require.True(t, resp.IsUnhealthy)
+	require.False(t, resp.Unknown, "a registered peer with low reputation is a real verdict, not an absence of information")
 }
 
 func TestIsPeerUnhealthy_UnknownPeer(t *testing.T) {
@@ -601,6 +703,19 @@ func TestIsPeerUnhealthy_UnknownPeer(t *testing.T) {
 	resp, err := s.IsPeerUnhealthy(context.Background(), &p2p_api.IsPeerUnhealthyRequest{PeerId: pid.String()})
 	require.NoError(t, err)
 	require.True(t, resp.IsUnhealthy)
+}
+
+// TestIsPeerUnhealthy_UnknownPeerSetsUnknownField pins the distinction the callers need: a peer
+// absent from the registry sets Unknown alongside the conservative IsUnhealthy=true, so callers can
+// tell "no information about this peer" apart from an actual unhealthy verdict (e.g. low reputation
+// or low success rate, neither of which set Unknown).
+func TestIsPeerUnhealthy_UnknownPeerSetsUnknownField(t *testing.T) {
+	s, _, pid := freshTestServer(t)
+
+	resp, err := s.IsPeerUnhealthy(context.Background(), &p2p_api.IsPeerUnhealthyRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.True(t, resp.IsUnhealthy)
+	require.True(t, resp.Unknown)
 }
 
 func TestRecordCatchupSuccess_InvalidPeerID(t *testing.T) {

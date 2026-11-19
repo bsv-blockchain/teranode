@@ -821,14 +821,21 @@ func TestFeelerPromotesAnAddressEndToEnd(t *testing.T) {
 		t.Fatal("the probe never reached the listener")
 	}
 
+	// Waits on the counter, not on the book, because the counter is the last
+	// thing the probe writes: feelerProbe calls addrManager.Good and only then
+	// adds to feelerVerified. Waiting on the book returns inside the window
+	// between those two writes, so the counter read that followed could still
+	// see zero -- which is how this test failed in CI, not a theoretical race.
+	// The book is then read without waiting, since Good has already returned.
 	require.Eventually(t, func() bool {
-		return srv.addrManager.UnverifiedAddress() == nil
+		return srv.feelerVerified.Load() == 1
 	}, 20*time.Second, 10*time.Millisecond,
-		"a verified address must leave the new table")
+		"the probe has to verify the address it was given")
 
+	require.Nil(t, srv.addrManager.UnverifiedAddress(),
+		"a verified address must leave the new table")
 	require.Equal(t, 1, srv.addrManager.NumAddresses(),
 		"promotion moves the address between tables, it does not add or drop one")
-	require.Equal(t, uint64(1), srv.feelerVerified.Load())
 }
 
 // TestFeelerDoesNotPromoteNonBSVPeer is the counterpart, and it guards against

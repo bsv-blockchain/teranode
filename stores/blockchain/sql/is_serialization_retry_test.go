@@ -22,9 +22,10 @@ func (w *wrappedErr) Error() string { return w.msg + ": " + w.err.Error() }
 func (w *wrappedErr) Unwrap() error { return w.err }
 
 // TestIsSerializationRetry locks in the classification the rebuildOnMainChainFlag
-// retry loop depends on: only Postgres serialization_failure (40001) and
-// deadlock_detected (40P01) — raised via either the pgx (*pgconn.PgError) or the
-// lib/pq (*pq.Error) driver — are retryable. Everything else (including SQLite,
+// retry loop depends on: only Postgres serialization_failure (40001),
+// deadlock_detected (40P01) and lock_not_available (55P03, from the NOWAIT check of
+// the chain-write row) — raised via either the pgx (*pgconn.PgError) or the lib/pq
+// (*pq.Error) driver — are retryable. Everything else (including SQLite,
 // which never produces these codes) is not.
 func TestIsSerializationRetry(t *testing.T) {
 	s := &SQL{}
@@ -38,6 +39,8 @@ func TestIsSerializationRetry(t *testing.T) {
 		{"pgx deadlock_detected", &pgconn.PgError{Code: usql.PgErrDeadlockDetected}, true},
 		{"pq serialization_failure", &pq.Error{Code: pq.ErrorCode(usql.PgErrSerializationFail)}, true},
 		{"pq deadlock_detected", &pq.Error{Code: pq.ErrorCode(usql.PgErrDeadlockDetected)}, true},
+		{"pgx lock_not_available", &pgconn.PgError{Code: usql.PgErrLockNotAvailable}, true},
+		{"pq lock_not_available", &pq.Error{Code: pq.ErrorCode(usql.PgErrLockNotAvailable)}, true},
 		{"wrapped pgx serialization_failure", &wrappedErr{msg: "rebuild", err: &pgconn.PgError{Code: usql.PgErrSerializationFail}}, true},
 		{"pgx unique_violation (non-retryable)", &pgconn.PgError{Code: "23505"}, false},
 		{"pq unique_violation (non-retryable)", &pq.Error{Code: "23505"}, false},

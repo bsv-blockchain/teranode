@@ -228,13 +228,29 @@ func (m *MockPeerServiceClient) GetPeer(ctx context.Context, in *p2p_api.GetPeer
 	}, nil
 }
 
+func TestPeerInfo_DisplayHeight(t *testing.T) {
+	t.Run("reports the advertised claim, not the sync cap", func(t *testing.T) {
+		p := &PeerInfo{Height: 104_791, AdvertisedHeight: 962_710}
+		require.Equal(t, uint32(962_710), p.DisplayHeight())
+	})
+
+	t.Run("falls back to Height for peers that predate AdvertisedHeight", func(t *testing.T) {
+		p := &PeerInfo{Height: 99}
+		require.Equal(t, uint32(99), p.DisplayHeight())
+	})
+
+	t.Run("unknown height stays zero", func(t *testing.T) {
+		require.Zero(t, (&PeerInfo{}).DisplayHeight())
+	})
+}
+
 func TestSimpleClientGetPeers(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
 		mockClient := &MockPeerServiceClient{
 			GetPeersFunc: func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error) {
 				return &p2p_api.GetPeersResponse{
 					Peers: []*p2p_api.Peer{
-						{Id: "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz", Addr: "/ip4/127.0.0.1/tcp/9905", CurrentHeight: 101, Banscore: 7, BytesReceived: 2048},
+						{Id: "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz", Addr: "/ip4/127.0.0.1/tcp/9905", CurrentHeight: 101, AdvertisedHeight: 962710, Banscore: 7, BytesReceived: 2048},
 						{Id: "12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw", Addr: "/ip4/127.0.0.2/tcp/9905", CurrentHeight: 99},
 					},
 				}, nil
@@ -251,10 +267,12 @@ func TestSimpleClientGetPeers(t *testing.T) {
 		require.Len(t, peers, 2)
 		require.Equal(t, "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz", peers[0].ID.String())
 		require.Equal(t, uint32(101), peers[0].Height)
+		require.Equal(t, uint32(962710), peers[0].AdvertisedHeight)
 		require.Equal(t, 7, peers[0].BanScore)
 		require.Equal(t, uint64(2048), peers[0].BytesReceived)
 		require.True(t, peers[0].IsConnected)
 		require.Equal(t, uint32(99), peers[1].Height)
+		require.Equal(t, uint32(0), peers[1].AdvertisedHeight, "older peer with no advertised height reported")
 	})
 
 	t.Run("grpc_error", func(t *testing.T) {
@@ -934,11 +952,12 @@ func TestSimpleClientIsPeerUnhealthy(t *testing.T) {
 				return &p2p_api.IsPeerUnhealthyResponse{IsUnhealthy: true, Reason: "low rep", ReputationScore: 12.5}, nil
 			},
 		})
-		unhealthy, reason, score, err := client.IsPeerUnhealthy(context.Background(), "peer1")
+		unhealthy, reason, score, unknown, err := client.IsPeerUnhealthy(context.Background(), "peer1")
 		require.NoError(t, err)
 		require.True(t, unhealthy)
 		require.Equal(t, "low rep", reason)
 		require.InDelta(t, 12.5, score, 0.001)
+		require.False(t, unknown)
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -946,7 +965,7 @@ func TestSimpleClientIsPeerUnhealthy(t *testing.T) {
 				return nil, assert.AnError
 			},
 		})
-		_, _, _, err := client.IsPeerUnhealthy(context.Background(), "peer1")
+		_, _, _, _, err := client.IsPeerUnhealthy(context.Background(), "peer1")
 		require.Error(t, err)
 	})
 }
@@ -960,6 +979,7 @@ func TestSimpleClientGetPeerRegistry(t *testing.T) {
 						{
 							Id:                   "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz",
 							Height:               99,
+							AdvertisedHeight:     962710,
 							IsConnected:          true,
 							BlocksReceived:       3,
 							SubtreesReceived:     4,
@@ -976,6 +996,8 @@ func TestSimpleClientGetPeerRegistry(t *testing.T) {
 		require.Equal(t, int64(3), peers[0].BlocksReceived)
 		require.Equal(t, int64(4), peers[0].SubtreesReceived)
 		require.Equal(t, int64(5), peers[0].TransactionsReceived)
+		require.Equal(t, uint32(962710), peers[0].AdvertisedHeight,
+			"the asset peers endpoint reads AdvertisedHeight off this conversion")
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -1014,6 +1036,25 @@ func TestSimpleClientRecordBytesDownloaded(t *testing.T) {
 		})
 		err := client.RecordBytesDownloaded(context.Background(), "peer1", 0)
 		require.Contains(t, err.Error(), "failed to record bytes downloaded")
+	})
+	// Callers detach this call from their own cancellation (it runs as a fetch
+	// is closed), so a stuck p2p service must not hold them past a short bound.
+	t.Run("stuck_server_is_bounded", func(t *testing.T) {
+		defer func(d time.Duration) { recordBytesDownloadedTimeout = d }(recordBytesDownloadedTimeout)
+		recordBytesDownloadedTimeout = 50 * time.Millisecond
+
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordBytesDownloadedFunc: func(ctx context.Context, in *p2p_api.RecordBytesDownloadedRequest, opts ...grpc.CallOption) (*p2p_api.RecordBytesDownloadedResponse, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		})
+
+		start := time.Now()
+		err := client.RecordBytesDownloaded(context.WithoutCancel(context.Background()), "peer1", 0)
+
+		require.Error(t, err)
+		require.Less(t, time.Since(start), 5*time.Second)
 	})
 }
 

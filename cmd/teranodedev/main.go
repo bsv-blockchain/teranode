@@ -285,6 +285,10 @@ func doctorCmd() *cli.Command {
 			// Check settings_local.conf
 			if devsettings.HasEntries(projectRoot, cfg.DevName) {
 				fmt.Println("\nsettings_local.conf: OK (has entries for dev." + cfg.DevName + ")")
+
+				if !devsettings.HasRPCCredentials(projectRoot, cfg.DevName) {
+					fmt.Println("  MISSING rpc_user/rpc_pass for dev." + cfg.DevName + ": rpc and generate will get 401 - re-run 'teranode-dev init'")
+				}
 			} else {
 				fmt.Println("\nsettings_local.conf: MISSING entries for dev." + cfg.DevName)
 			}
@@ -720,7 +724,7 @@ func handleChainMismatch(projectRoot string, cfg *config.Config, storeURL *url.U
 	}
 
 	fmt.Printf("  [FAIL] Configured network is %q but stored blockchain data is from %q\n", result.ConfiguredNet, storedDesc)
-	fmt.Printf("         Store:            %s\n", result.StoreURL)
+	fmt.Printf("         Store:            %s\n", result.StoreURL) // urlsafe: prereq.CheckChain redacts before storing it
 	fmt.Printf("         Stored genesis:   %s\n", result.StoredHash)
 	fmt.Printf("         Expected genesis: %s\n", result.ExpectedHash)
 	fmt.Println()

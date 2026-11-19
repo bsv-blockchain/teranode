@@ -70,6 +70,9 @@ const (
 	Reassignments FieldName = "reassignments"
 	// DeleteAtHeight specifies the block height at which the record should be deleted
 	DeleteAtHeight FieldName = "deleteAtHeight"
+	// DAHVersion counts the writes of DeleteAtHeight on a master record. Every writer bumps it with the write,
+	// so a child page write that carries an older version can be refused.
+	DAHVersion FieldName = "dahVer"
 	// CreatedAt is the timestamp when the unmined transaction was first added to the store
 	CreatedAt FieldName = "createdAt"
 	// UnminedSince is the block height when an unmined transaction was first stored.
@@ -83,6 +86,13 @@ const (
 	PreserveUntil FieldName = "preserveUntil"
 	// DeletedChildren map of child records that have been deleted
 	DeletedChildren FieldName = "deletedChildren"
+	// LanePosition is the record's lane position (util/lane): written once at
+	// create, never updated. Absent on a record created with none (the lane
+	// migration off, before it existed, or a tool that opens its own store), and
+	// on utxoset unreadable once the row carrying it has aged out; see
+	// meta.Data.LanePosition. At shadow the daemon refuses unsupported stores.
+	// Not part of utxo.MetaFields: a caller names it.
+	LanePosition FieldName = "lanePos"
 )
 
 // String returns the string representation of the FieldName.

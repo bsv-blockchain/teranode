@@ -10,6 +10,11 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// maxBlockLocatorHashes bounds the number of hashes accepted in a block_locator_hashes
+// query parameter. A real client sends ~32 (computeLocatorHeights); 256 leaves generous
+// headroom while preventing an attacker from forcing an unbounded locator walk.
+const maxBlockLocatorHashes = 256
+
 // Pagination represents pagination metadata for API responses that return lists of items.
 // It provides information about the current page and total available records.
 //

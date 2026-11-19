@@ -23,6 +23,13 @@ type benchCache struct {
 	deletes atomic.Uint64
 }
 
+// DeleteDemoted shadows the embedded zero TxMetaCache's, which has no backend.
+func (c *benchCache) DeleteDemoted(hashes []chainhash.Hash) {
+	for i := range hashes {
+		_ = c.Delete(context.Background(), &hashes[i])
+	}
+}
+
 func (c *benchCache) Delete(_ context.Context, _ *chainhash.Hash) error {
 	c.deletes.Add(1)
 	return nil
@@ -195,6 +202,13 @@ func BenchmarkTxmetaHandler_V2_Batch10000_Payload64(b *testing.B) {
 type realCache struct {
 	txmetacache.TxMetaCache
 	c *txmetacache.ImprovedCache
+}
+
+// DeleteDemoted shadows the embedded zero TxMetaCache's, which has no backend.
+func (r *realCache) DeleteDemoted(hashes []chainhash.Hash) {
+	for i := range hashes {
+		_ = r.Delete(context.Background(), &hashes[i])
+	}
 }
 
 func (r *realCache) Delete(_ context.Context, _ *chainhash.Hash) error {

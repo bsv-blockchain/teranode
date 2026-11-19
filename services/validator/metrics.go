@@ -43,6 +43,18 @@ var (
 	// or fails structural validation checks. High values may indicate network attacks or client issues.
 	prometheusInvalidTransactions prometheus.Counter
 
+	// prometheusMissingParentTransactions counts Kafka-sourced transactions rejected only because
+	// their parent UTXO has not been seen yet (ErrTxMissingParent). Kept separate from
+	// prometheusInvalidTransactions because this is an ordering artifact of the validatortxs
+	// topic's concurrent per-partition consumption, not a genuinely invalid or attack transaction.
+	prometheusMissingParentTransactions prometheus.Counter
+
+	// prometheusHeldLimitShedTransactions counts Kafka-sourced transactions that block assembly
+	// refused at its in-memory transaction limit. Kept separate from
+	// prometheusInvalidTransactions because the transaction was valid; the node had no room for
+	// it, and the validator unwound and dropped it.
+	prometheusHeldLimitShedTransactions prometheus.Counter
+
 	// prometheusValidatorParentCommitRetries counts retries spent waiting for a parent
 	// transaction to finish its own commit, labelled by condition (TX_LOCKED or
 	// TX_CREATING). Paired with prometheusValidatorParentCommitExhausted, this gives the
@@ -58,6 +70,11 @@ var (
 	// except legacy p2p relay (which parks it in netsync's orphan pool) nothing is
 	// holding it, so the increment marks a transaction the node lost.
 	prometheusValidatorParentCommitExhausted *prometheus.CounterVec
+
+	// prometheusValidatorUnlockFailed counts accepted transactions whose two-phase-commit
+	// unlock failed or timed out. The transaction was spent and created; it stays locked
+	// until it is mined, so its descendants are answered TX_LOCKED until then.
+	prometheusValidatorUnlockFailed prometheus.Counter
 
 	// prometheusTransactionValidateTotal measures the complete end-to-end validation time for transactions.
 	// This histogram tracks the total time spent validating a transaction from initial receipt through
@@ -140,6 +157,10 @@ var (
 	// consumer has spent paused by the controller.
 	prometheusKafkaBackpressurePausedSecondsTotal prometheus.Counter
 
+	// prometheusKafkaBackpressurePauseSeconds holds how long the current pause has run, in
+	// seconds, under the cause label age, fill or held, and 0 once the consumer resumes.
+	prometheusKafkaBackpressurePauseSeconds *prometheus.GaugeVec
+
 	// prometheusKafkaBackpressureReadErrors tracks the current consecutive
 	// queue-stats read-error streak (resets to 0 on a good read).
 	prometheusKafkaBackpressureReadErrors prometheus.Gauge
@@ -195,12 +216,17 @@ var (
 	prometheusValidatorShedDroppedTotal prometheus.Counter
 
 	// prometheusValidatorShedInBlockDroppedTotal counts block-context transactions
-	// accepted without a block-assembly template entry because the ingest queue was
-	// full. The transaction is valid, unlocked and spendable; it is simply not
-	// mineable by this node until the next unmined reload, which nothing schedules,
-	// so a rising value is the signal that a block-assembly reset would recover
-	// template entries this node is otherwise missing.
+	// kept Locked outside the block-assembly template because the ingest queue was
+	// full. The transaction is valid and stays Locked; it is simply not
+	// mineable by this node until the next unmined reload. The validator schedules a
+	// check for each burst of them and resets block assembly if no block has unlocked
+	// them (prometheusValidatorShedInBlockRecoveryResets). The reload reads Locked
+	// unmined records, adds them to the template and unlocks them.
 	prometheusValidatorShedInBlockDroppedTotal prometheus.Counter
+
+	// prometheusValidatorShedInBlockRecoveryResets counts the block assembly resets the
+	// validator requested to recover transactions an in-block shed kept Locked.
+	prometheusValidatorShedInBlockRecoveryResets prometheus.Counter
 
 	// prometheusValidatorShedUnwindReappeared counts shed unwinds aborted because the
 	// record was CONCLUSIVELY readable again immediately before the unspend: another
@@ -228,10 +254,12 @@ var (
 	prometheusValidatorHandoffDeadlineTotal prometheus.Counter
 
 	// prometheusValidatorExistingTxLockedUnmined counts resubmits that found an
-	// existing record locked, unmined and not conflicting — the residual stranded
-	// state. Field data from this counter is what should decide whether that state
-	// ever needs a behavioural answer, since the store cannot distinguish its
-	// causes.
+	// existing record locked, unmined and not conflicting. The causes are a conflict
+	// resolution in flight, a submission interrupted before its hand-off, and a
+	// block-context transaction shed from the ingest queue, which is left Locked
+	// outside the template on purpose. The store cannot distinguish them, so a
+	// rising value is not by itself a fault; compare it with
+	// shed_inblock_dropped_total.
 	prometheusValidatorExistingTxLockedUnmined prometheus.Counter
 )
 
@@ -267,6 +295,26 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "invalid_transactions",
 			Help:      "Number of transactions found invalid by the validator service",
+		},
+	)
+
+	// Missing-parent transactions counter (Kafka intake only)
+	prometheusMissingParentTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "missing_parent_transactions",
+			Help:      "Number of Kafka-sourced transactions rejected because their parent UTXO had not been seen yet (ordering artifact, not necessarily invalid)",
+		},
+	)
+
+	// Held-limit shed counter (Kafka intake only)
+	prometheusHeldLimitShedTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "held_limit_shed_transactions",
+			Help:      "Number of Kafka-sourced transactions dropped because block assembly refused them at its in-memory transaction limit (valid transactions, not invalid ones)",
 		},
 	)
 
@@ -400,6 +448,15 @@ func _initPrometheusMetrics() {
 		[]string{"condition"},
 	)
 
+	prometheusValidatorUnlockFailed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "unlock_failed",
+			Help:      "Accepted transactions whose two-phase-commit unlock failed and stay locked until mined",
+		},
+	)
+
 	// Block assembly operations histogram
 	prometheusValidatorSendToBlockAssembly = promauto.NewHistogram(
 		prometheus.HistogramOpts{
@@ -480,6 +537,16 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusKafkaBackpressurePauseSeconds = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "kafka_backpressure_pause_seconds",
+			Help:      "Seconds the current backpressure pause has run, by cause (age, fill or held), 0 once the consumer resumes",
+		},
+		[]string{"cause"},
+	)
+
 	prometheusKafkaBackpressureReadErrors = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "teranode",
@@ -548,7 +615,16 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "validator",
 			Name:      "shed_inblock_dropped_total",
-			Help:      "Number of block-context transactions accepted without a block-assembly template entry because the ingest queue was full",
+			Help:      "Number of block-context transactions kept Locked outside the block-assembly template because the ingest queue was full; a block assembly reset or restart restores them",
+		},
+	)
+
+	prometheusValidatorShedInBlockRecoveryResets = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_inblock_recovery_resets_total",
+			Help:      "Number of block assembly resets the validator requested because transactions an in-block shed kept Locked were still outside the template",
 		},
 	)
 
@@ -584,7 +660,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "validator",
 			Name:      "existing_tx_locked_unmined_total",
-			Help:      "Number of resubmits that found an existing transaction record locked, unmined and not conflicting",
+			Help:      "Number of resubmits that found an existing transaction record locked, unmined and not conflicting. Causes include a conflict resolution in flight, an interrupted submission and a block-context transaction left outside the template by a queue shed",
 		},
 	)
 }

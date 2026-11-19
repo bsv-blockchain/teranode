@@ -78,6 +78,16 @@ func (e *env) preflight(ctx context.Context) (*preflightResult, error) {
 		return nil, errors.NewProcessingError("rewind depth %d exceeds coinbase maturity (%d); pass --force-deep to override", tip-target, coinbaseMaturity)
 	}
 
+	// 4b. The stamp boundary, with NO override. A store whose UTXOs carry their block permanently
+	// once a partition is stamped can never take that write back, and its undo copies and preserved
+	// parents carry the same pairs. Deleting blocks down to a target that leaves a stamped height
+	// less than the stamp depth below the new tip would let the chain change beneath those pairs
+	// with nothing to correct them; the only recovery from that state is a resync, so the tool
+	// refuses before it starts.
+	if err := e.refuseBelowStampBoundary(ctx, target); err != nil {
+		return nil, err
+	}
+
 	// 5. Capture the pre-run block persister height. Reading it here means a
 	// genuine storage failure aborts before Phase 0 mutates anything.
 	persisterHeight, persisterHeightKnown, err := e.readBlockPersisterHeight(ctx)
@@ -128,6 +138,35 @@ func (e *env) preflight(ctx context.Context) (*preflightResult, error) {
 	}
 
 	return res, nil
+}
+
+// refuseBelowStampBoundary refuses a target that would leave the highest stamped height less
+// than the stamp depth below the new tip. The highest stamped height is one below the stamp
+// fence, so the rule is target >= fence - 1 + depth.
+//
+// Every store is asked the same way. A stamp fence of zero means nothing has been stamped, so
+// there is no boundary and nothing is refused. That is the answer pruner.NoStamp gives for the
+// sql and aerospike stores, which have no stamp at all, and the answer a utxoset store gives
+// before its first partition is stamped. It is tested before the arithmetic, which would wrap.
+func (e *env) refuseBelowStampBoundary(ctx context.Context, target uint32) error {
+	st := e.utxoStore.Stamper()
+
+	floors, err := st.Floors(ctx)
+	if err != nil {
+		return errors.NewStorageError("failed to read the UTXO store's stamp floors", err)
+	}
+
+	if floors.StampFence == 0 {
+		return nil
+	}
+
+	lowest := floors.StampFence - 1 + st.StampDepth()
+	if target >= lowest {
+		return nil
+	}
+
+	return errors.NewProcessingError("target %d would leave the UTXO store's highest stamped height %d less than %d blocks below the tip; the stamped pairs can never be taken back and there is no override, the lowest safe target is %d and anything deeper needs a resync",
+		target, floors.StampFence-1, st.StampDepth(), lowest)
 }
 
 // warnOnPersisterAnomalies cross-checks the state key against the persister's

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/util"
 )
@@ -81,7 +82,6 @@ func checkPortConflicts(s *settings.Settings) []ConfigResult {
 		{"Propagation gRPC", s.Propagation.GRPCListenAddress},
 		{"Propagation HTTP", s.Propagation.HTTPListenAddress},
 		{"Asset HTTP", s.Asset.HTTPListenAddress},
-		{"Asset Centrifuge", s.Asset.CentrifugeListenAddress},
 		{"Block Persister HTTP", s.BlockPersister.HTTPListenAddress},
 		{"Faucet HTTP", s.Faucet.HTTPListenAddress},
 		{"Health Check HTTP", s.HealthCheckHTTPListenAddress},
@@ -246,21 +246,21 @@ func checkSecurity(s *settings.Settings) []ConfigResult {
 
 	if s.GRPCAdminAPIKey == "" {
 		results = append(results, ConfigResult{
-			Severity:    severity,
+			Severity:    SeverityERROR,
 			Check:       labelGRPCAdminAPIKey,
 			Value:       valueEmpty,
-			Recommended: "Set grpc_admin_api_key (32+ chars)",
+			Recommended: "Set grpc_admin_api_key on Blockchain and all clients (32+ random chars)",
 		})
 	} else if util.IsPlaceholderAdminAPIKey(s.GRPCAdminAPIKey) {
 		results = append(results, ConfigResult{
 			Severity:    SeverityERROR,
 			Check:       labelGRPCAdminAPIKey,
 			Value:       "well-known placeholder",
-			Recommended: "Replace the placeholder; P2P/Legacy servers ignore it and admin RPCs stay disabled until a real secret is set",
+			Recommended: "Replace the placeholder; Blockchain refuses startup without a valid shared service key",
 		})
 	} else if len(s.GRPCAdminAPIKey) < 16 {
 		results = append(results, ConfigResult{
-			Severity:    SeverityWARN,
+			Severity:    SeverityERROR,
 			Check:       labelGRPCAdminAPIKey,
 			Value:       fmt.Sprintf("%d chars (weak)", len(s.GRPCAdminAPIKey)),
 			Recommended: "Use at least 16 characters, ideally 32+",
@@ -764,13 +764,13 @@ func checkObservability(s *settings.Settings) []ConfigResult {
 	if s.TracingEnabled {
 		collectorURL := ""
 		if s.TracingCollectorURL != nil {
-			collectorURL = s.TracingCollectorURL.String()
+			collectorURL = urlutil.Redact(s.TracingCollectorURL)
 		}
 
 		results = append(results, ConfigResult{
 			Severity: SeverityINFO,
 			Check:    "Tracing",
-			Value:    fmt.Sprintf("enabled, sample_rate=%.2f, collector=%s", s.TracingSampleRate, collectorURL),
+			Value:    fmt.Sprintf("enabled, sample_rate=%.2f, collector=%s", s.TracingSampleRate, collectorURL), // urlsafe: collectorURL is urlutil.Redact output, six lines up
 		})
 	} else {
 		results = append(results, ConfigResult{

@@ -2,8 +2,10 @@ package p2p
 
 import (
 	"context"
+	"math"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"sort"
 	"sync"
 	"time"
@@ -32,6 +34,32 @@ const (
 	// It spans the full-node and pruned-node passes of one selection as well as
 	// closely spaced selection ticks.
 	peerHealthCacheTTL = 10 * time.Second
+
+	// The margins below define "materially better". Two candidates whose soft
+	// merit metrics differ by no more than these margins are treated as members
+	// of the same top band: the incumbent is kept (hysteresis, so near-equal
+	// peers cannot ping-pong the sync slot) and, when there is no incumbent, the
+	// winner is drawn uniformly from the band (diversity, so independent nodes do
+	// not all herd onto the same marginally-best peer). Validated chain work and
+	// proven-delivery tier are never softened this way.
+
+	// peerReputationEquivalenceMargin is the reputation-score difference below
+	// which two candidates count as equally reputable.
+	peerReputationEquivalenceMargin = 5.0
+
+	// peerResponseTimeEquivalenceMargin is the absolute average-response-time
+	// difference (ms) below which two candidates count as equally fast; it keeps
+	// jitter on fast peers from looking like a material difference.
+	peerResponseTimeEquivalenceMargin = 25
+
+	// peerResponseTimeEquivalenceRatio is the relative average-response-time
+	// ratio below which two candidates count as equally fast, so the margin also
+	// scales for slower links.
+	peerResponseTimeEquivalenceRatio = 1.25
+
+	// peerBanScoreEquivalenceMargin is the ban-score difference below which two
+	// candidates count as equally well-behaved.
+	peerBanScoreEquivalenceMargin = 5
 )
 
 // peerHealthCacheEntry is a cached availability probe result.
@@ -50,10 +78,19 @@ type SelectionCriteria struct {
 	ForcedPeerID                 string        // If set, only this peer (canonical libp2p ID string) will be selected
 	PreviousPeer                 string        // The previously selected peer (canonical libp2p ID string), if any
 	SyncAttemptCooldown          time.Duration // Cooldown period before retrying a peer
+
+	// PreviousPeerFailed reports that PreviousPeer failed (a no-progress
+	// stall) and the caller wants it rotated off. When false the
+	// previous peer is sticky: it is re-selected as long as no challenger is
+	// materially better than it (see peersNearEqual), which stops two
+	// near-equal peers from alternating the sync slot every cycle and
+	// re-triggering catchup on each switch. When true it is excluded from
+	// selection whenever an alternative exists.
+	PreviousPeerFailed bool
 }
 
 // PeerSelector handles peer selection logic.
-// Selection among candidates that are equal on every merit criterion is
+// Selection among candidates that are near-equal on every merit criterion is
 // randomized so a Sybil attacker cannot capture selection by grinding peer
 // IDs. When settings.P2P.HealthCheckEnabled is set it probes candidate DataHub
 // URLs over HTTP (bounded concurrency, overall deadline) and keeps a short-TTL
@@ -117,7 +154,10 @@ func (ps *PeerSelector) randomIndex(n int) int {
 // SelectSyncPeer selects the best peer for syncing using two-phase selection:
 // Phase 1: Try to select from full nodes (nodes with complete block data)
 // Phase 2: If no full nodes and fallback enabled, select from non-full nodes
-// Ties among equally ranked candidates are broken randomly, never by peer ID.
+// Near-equally ranked candidates form a top band (see selectFromCandidates):
+// the previous peer is kept if it is in that band and has not failed
+// (hysteresis), otherwise the winner is drawn randomly from the band, never by
+// peer ID.
 // When settings.P2P.HealthCheckEnabled is set, candidate DataHub URLs are
 // probed over HTTP before either phase: concurrently (bounded by
 // peerHealthCheckConcurrency), full-node tier first so slow pruned peers
@@ -193,7 +233,7 @@ func (ps *PeerSelector) getFullNodeCandidates(peers []*blockchain.PeerInfo, basi
 	for _, p := range peers {
 		if ps.isEligibleFullNode(p, now, basicEligible, healthByURL) {
 			candidates = append(candidates, p)
-			ps.logger.Debugf("[PeerSelector] Full node candidate: %s (validated_height=%d, advertised_height=%d, mode=%s)",
+			ps.logger.Debugf("[PeerSelector] Full node candidate: %s (validated_height=%d, sync_height=%d, mode=%s)",
 				p.ID, p.ValidatedHeight, p.Height, p.Storage)
 		}
 	}
@@ -209,7 +249,7 @@ func (ps *PeerSelector) getPrunedNodeCandidates(peers []*blockchain.PeerInfo, ba
 		// Only include if eligible but NOT a full node
 		if ps.isEligible(p, basicEligible, healthByURL) && !ps.isEffectiveFullNode(p, now) {
 			candidates = append(candidates, p)
-			ps.logger.Debugf("[PeerSelector] Pruned node candidate: %s (validated_height=%d, advertised_height=%d, mode=%s)",
+			ps.logger.Debugf("[PeerSelector] Pruned node candidate: %s (validated_height=%d, sync_height=%d, mode=%s)",
 				p.ID, p.ValidatedHeight, p.Height, p.Storage)
 		}
 	}
@@ -269,11 +309,86 @@ func (ps *PeerSelector) comparePeerCandidates(a, b *blockchain.PeerInfo, now tim
 	return 0
 }
 
+// peersNearEqual reports whether two candidates are close enough on every merit
+// criterion that switching from one to the other is not a material improvement.
+// It is reflexive and symmetric, and it is a strict relaxation of
+// comparePeerCandidates == 0: exact ties are always near-equal.
+//
+// Hard criteria are never softened, because picking the weaker peer would
+// directly slow or stall catchup: proven recent full-block delivery and
+// validated chain work must match exactly. The soft criteria (reputation,
+// average response time, ban score) are compared with the equivalence margins
+// above. Validated height is also hard: peers at the same tip report the same
+// validated height, so requiring equality costs no band width in practice while
+// keeping validated progress — the only progress signal for advertised-probe
+// peers, which carry no validated chain work at all — from being softened away.
+//
+// Near-equality is deliberately not transitive, so callers must always evaluate
+// it against the band leader (see selectFromCandidates).
+func (ps *PeerSelector) peersNearEqual(a, b *blockchain.PeerInfo, now time.Time, freshnessWindow time.Duration) bool {
+	if peerHasRecentFullBlockDelivery(a, now, freshnessWindow) != peerHasRecentFullBlockDelivery(b, now, freshnessWindow) {
+		return false
+	}
+	if compareChainWork(a.ValidatedChainWork, b.ValidatedChainWork) != 0 {
+		return false
+	}
+	if a.ValidatedHeight != b.ValidatedHeight {
+		return false
+	}
+	if math.Abs(a.ReputationScore-b.ReputationScore) > peerReputationEquivalenceMargin {
+		return false
+	}
+	// A measured response time is information the other peer lacks, so a
+	// measured peer and an unmeasured one are never near-equal (mirroring
+	// comparePeerCandidates, which prefers the measured one).
+	if (a.AvgResponseTimeMs > 0) != (b.AvgResponseTimeMs > 0) {
+		return false
+	}
+	if a.AvgResponseTimeMs > 0 && b.AvgResponseTimeMs > 0 &&
+		!responseTimesNearEqual(a.AvgResponseTimeMs, b.AvgResponseTimeMs) {
+		return false
+	}
+
+	banDelta := a.BanScore - b.BanScore
+	if banDelta < 0 {
+		banDelta = -banDelta
+	}
+
+	return banDelta <= peerBanScoreEquivalenceMargin
+}
+
+// responseTimesNearEqual reports whether two measured average response times are
+// within either the absolute or the relative equivalence margin.
+func responseTimesNearEqual(a, b int64) bool {
+	fast, slow := a, b
+	if fast > slow {
+		fast, slow = slow, fast
+	}
+	if slow-fast <= peerResponseTimeEquivalenceMargin {
+		return true
+	}
+	return float64(slow) <= float64(fast)*peerResponseTimeEquivalenceRatio
+}
+
 // selectFromCandidates selects the best peer from a list of candidates
 // using validation-gated delivery evidence and locally validated work.
-// Candidates that tie on every merit criterion form the top band, and the
-// winner is drawn uniformly at random from that band so an attacker cannot
-// deterministically capture selection by grinding peer IDs.
+// Candidates that are near-equal to the highest-ranked one (peersNearEqual)
+// form the top band, and:
+//   - if the previous peer is in that band and the caller did not report it
+//     failed, it is kept (hysteresis): the slot only moves when a challenger is
+//     materially better, so near-equal peers cannot ping-pong the slot and
+//     re-trigger catchup every cycle;
+//   - otherwise the winner is drawn uniformly at random from the band, so an
+//     attacker cannot deterministically capture selection by grinding peer IDs
+//     and independent nodes spread their load over near-equal peers instead of
+//     herding onto one.
+//
+// The band is the prefix of the merit order that is near-equal to the leader.
+// Because near-equality is not transitive, the scan stops at the first
+// non-near-equal candidate, which can make the band smaller than the set of all
+// peers near-equal to the leader; it can never make it contain a materially
+// worse peer.
+//
 // The candidates slice is consumed: it is reordered and may be filtered in
 // place, so callers must not reuse it afterwards.
 func (ps *PeerSelector) selectFromCandidates(candidates []*blockchain.PeerInfo, criteria SelectionCriteria, isFullNode bool) string {
@@ -281,9 +396,10 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*blockchain.PeerInfo, 
 		return ""
 	}
 
-	// Rotate off the previously selected peer whenever an alternative exists,
-	// so a tied previous peer cannot be re-drawn from the top band.
-	if len(candidates) > 1 && criteria.PreviousPeer != "" {
+	// Rotate off the previous peer only when the caller reports it failed, and
+	// only while an alternative exists. Rotating unconditionally is what makes
+	// two near-equal peers alternate every cycle.
+	if len(candidates) > 1 && criteria.PreviousPeer != "" && criteria.PreviousPeerFailed {
 		filtered := candidates[:0]
 		for _, c := range candidates {
 			if c.ID != criteria.PreviousPeer {
@@ -291,7 +407,7 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*blockchain.PeerInfo, 
 			}
 		}
 		if len(filtered) > 0 && len(filtered) < len(candidates) {
-			ps.logger.Debugf("[PeerSelector] Excluding previous peer %s from selection", criteria.PreviousPeer)
+			ps.logger.Debugf("[PeerSelector] Excluding failed previous peer %s from selection", criteria.PreviousPeer)
 			candidates = filtered
 		}
 	}
@@ -303,13 +419,26 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*blockchain.PeerInfo, 
 
 	topBandSize := 1
 	for topBandSize < len(candidates) &&
-		ps.comparePeerCandidates(candidates[0], candidates[topBandSize], now, criteria.FullDeliveryFreshnessWindow) == 0 {
+		ps.peersNearEqual(candidates[0], candidates[topBandSize], now, criteria.FullDeliveryFreshnessWindow) {
 		topBandSize++
 	}
 
-	selectedIndex := 0
-	if topBandSize > 1 {
-		selectedIndex = ps.randomIndex(topBandSize)
+	selectedIndex := -1
+	if criteria.PreviousPeer != "" && !criteria.PreviousPeerFailed {
+		for i := range topBandSize {
+			if candidates[i].ID == criteria.PreviousPeer {
+				selectedIndex = i
+				ps.logger.Debugf("[PeerSelector] Keeping previous peer %s: no challenger is materially better", criteria.PreviousPeer)
+				break
+			}
+		}
+	}
+
+	if selectedIndex < 0 {
+		selectedIndex = 0
+		if topBandSize > 1 {
+			selectedIndex = ps.randomIndex(topBandSize)
+		}
 	}
 
 	selected := candidates[selectedIndex]
@@ -317,11 +446,11 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*blockchain.PeerInfo, 
 	if !isFullNode {
 		nodeType = "PRUNED"
 	}
-	ps.logger.Infof("[PeerSelector] Selected %s node peer %s (validated_height=%d, advertised_height=%d, banScore=%d, avgResponseTimeMs=%d) from %d candidates (topBandSize=%d, index=%d)",
+	ps.logger.Infof("[PeerSelector] Selected %s node peer %s (validated_height=%d, sync_height=%d, banScore=%d, avgResponseTimeMs=%d) from %d candidates (topBandSize=%d, index=%d)",
 		nodeType, selected.ID, selected.ValidatedHeight, selected.Height, selected.BanScore, selected.AvgResponseTimeMs, len(candidates), topBandSize, selectedIndex)
 
 	for i := 0; i < len(candidates) && i < 3; i++ {
-		ps.logger.Debugf("[PeerSelector] Candidate %d: %s (validated_height=%d, advertised_height=%d, banScore=%d, avgResponseTimeMs=%d, mode=%s, url=%s)",
+		ps.logger.Debugf("[PeerSelector] Candidate %d: %s (validated_height=%d, sync_height=%d, banScore=%d, avgResponseTimeMs=%d, mode=%s, url=%s)",
 			i+1, candidates[i].ID, candidates[i].ValidatedHeight, candidates[i].Height, candidates[i].BanScore, candidates[i].AvgResponseTimeMs, candidates[i].Storage, candidates[i].DataHubURL)
 	}
 
@@ -379,8 +508,15 @@ func (ps *PeerSelector) isEligibleBasic(p *blockchain.PeerInfo, criteria Selecti
 		return false
 	}
 
-	// Check sync attempt cooldown BEFORE health check (avoids re-checking failed peers)
-	if criteria.SyncAttemptCooldown > 0 && !p.LastSyncAttempt.IsZero() {
+	// Check sync attempt cooldown BEFORE health check (avoids re-checking failed peers).
+	// The incumbent sync peer is exempt while it has not failed: the cooldown exists to
+	// stop us hammering peers we just tried and bounced off, whereas keeping the current
+	// peer (hysteresis) is not a retry. Without the exemption the incumbent would drop
+	// out of its own selection for the whole cooldown window, so every evaluation in that
+	// window would rotate the slot onto another peer — exactly the oscillation hysteresis
+	// is meant to stop.
+	incumbentExempt := criteria.PreviousPeer != "" && p.ID == criteria.PreviousPeer && !criteria.PreviousPeerFailed
+	if !incumbentExempt && criteria.SyncAttemptCooldown > 0 && !p.LastSyncAttempt.IsZero() {
 		timeSinceLastAttempt := time.Since(p.LastSyncAttempt)
 		if timeSinceLastAttempt < criteria.SyncAttemptCooldown {
 			ps.logger.Debugf("[PeerSelector] Peer %s attempted recently (%v ago, cooldown: %v)",
@@ -520,10 +656,18 @@ func (ps *PeerSelector) checkCandidatesHealth(ctx context.Context, peers []*bloc
 
 				healthy, err := ps.checkHealth(probeCtx, url)
 				if err != nil {
-					if probeCtx.Err() != nil {
-						ps.logger.Debugf("[PeerSelector] Availability probe for %s aborted: %v", url, err)
-					} else {
-						ps.logger.Debugf("[PeerSelector] Availability probe for %s failed: %v", url, err)
+					switch {
+					case probeCtx.Err() != nil:
+						ps.logger.Debugf("[PeerSelector] Availability probe for %s aborted: %v", peerURLForLog(url), err)
+					case errors.Is(err, errors.ErrInvalidArgument):
+						// The peer was refused before any packet left: an unusable base URL,
+						// or an address our own policy bars (a private-network address with
+						// p2p_allow_private_ips unset). That is a local configuration cause
+						// and it silently removes the peer from selection, so it is not a
+						// debug-level event. An unreachable peer stays at debug.
+						ps.logger.Warnf("[PeerSelector] Availability probe for %s refused before dialling: %v", peerURLForLog(url), err)
+					default:
+						ps.logger.Debugf("[PeerSelector] Availability probe for %s failed: %v", peerURLForLog(url), err)
 					}
 				}
 
@@ -608,19 +752,31 @@ func compareChainWork(a, b []byte) int {
 }
 
 // checkPeerAvailability tests if a peer's DataHub URL is reachable via HTTP.
-// DataHubURL already includes /api/v1 prefix, so we just append the endpoint path.
+// DataHubURL already includes /api/v1 prefix, so the endpoint is appended as a path segment.
 // Any 2xx response counts as available; the probe is bounded by peerHealthCheckTimeout.
 //
 // The probe target is peer-supplied, so it goes through ps.httpClient, whose dialer
 // re-validates every resolved IP against util.DefaultSSRFDialPolicy.
+//
+// The URL is built with util.JoinPeerURL and the health path left empty, so the probe
+// cannot be steered by the base URL's shape. Announced DataHub URLs are shape-checked in
+// validateDataHubURL, but the registry this reads from is also written by the blockchain
+// RegisterPeer API and reloaded from persisted JSON, neither of which re-checks. Building
+// the URL here keeps the guarantee local to the call rather than three layers away.
 func (ps *PeerSelector) checkPeerAvailability(ctx context.Context, dataHubURL string) (bool, error) {
 	if dataHubURL == "" {
 		return false, nil
 	}
 
 	// DataHubURL format: "https://host/api/v1"
-	// Append /bestblockheader to get full endpoint path
-	checker := health.CheckPeerHTTPServer(ps.httpClient, dataHubURL, "/bestblockheader")
+	// The base URL is not echoed here: userinfo is one of the shapes JoinPeerURL refuses,
+	// and the wrapped error names the shape without carrying the credentials.
+	probeURL, err := util.JoinPeerURL(dataHubURL, "bestblockheader")
+	if err != nil {
+		return false, errors.NewInvalidArgumentError("peer health check has an unusable base URL", err)
+	}
+
+	checker := health.CheckPeerHTTPServer(ps.httpClient, probeURL, "")
 
 	statusCode, msg, err := checker(ctx, false)
 	if statusCode == http.StatusOK {
@@ -634,4 +790,18 @@ func (ps *PeerSelector) checkPeerAvailability(ctx context.Context, dataHubURL st
 	}
 
 	return false, err
+}
+
+// peerURLForLog renders a peer-supplied URL for an operator log line with any userinfo
+// removed. The peer chooses this string, and credentials in it are one of the shapes
+// JoinPeerURL refuses, so logging it verbatim would copy them into the log.
+func peerURLForLog(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "<unparseable peer URL>"
+	}
+
+	parsed.User = nil
+
+	return parsed.String()
 }

@@ -17,7 +17,7 @@ import (
 // TestQuickValidateBlock_CoinbaseLengthBinding pins the bitcoin-sv/teranode#4692 fix: the
 // quick-validation path never calls block.Valid, so it never ran the bad-coinbase-length check
 // (model's step 4b) at all — a merkle-bound block with a one-byte or oversized coinbase scriptSig
-// could be silently committed. checkQuickValidationCoinbaseLength closes that gap by running
+// could be silently committed. checkQuickValidationCoinbase closes that gap by running
 // model.CoinbaseScriptSigLengthInBounds once subtree processing has returned successfully. Both
 // shapes are merkle-bound by the time it runs — subtrees present, by validateSubtrees'
 // CheckMerkleRoot; no subtrees, by model.Block.CheckCoinbaseOnlyBodyBound at this route's entry —
