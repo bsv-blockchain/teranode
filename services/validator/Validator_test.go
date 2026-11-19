@@ -2640,11 +2640,14 @@ func TestSpendAndCreateInUtxoStoreNamesItsCaller(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		inBlock bool
+		named   utxostore.Caller
 		caller  string
 		seed    byte
 	}{
-		{"mempool submission", false, "validator", 0xce},
-		{"in a block or subtree", true, "subtree_validation", 0xcf},
+		{"mempool submission", false, utxostore.CallerUnknown, "validator", 0xce},
+		{"in a block or subtree", true, utxostore.CallerUnknown, "subtree_validation", 0xcf},
+		{"a peer subtree, named without InBlock", false, utxostore.CallerSubtreeValidation, "subtree_validation", 0xd9},
+		{"a named caller wins over InBlock", true, utxostore.CallerBlockValidation, "block_validation", 0xda},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			// A transaction whose parent the store does not hold: the spend fails, and the
@@ -2656,7 +2659,7 @@ func TestSpendAndCreateInUtxoStoreNamesItsCaller(t *testing.T) {
 
 			before := tests.ReadLaneBurns(t, "sql")
 
-			_, _, err := v.spendAndCreateInUtxoStore(ctx, tx, 940, false, &Options{InBlock: c.inBlock})
+			_, _, err := v.spendAndCreateInUtxoStore(ctx, tx, 940, false, &Options{InBlock: c.inBlock, Caller: c.named})
 			require.Error(t, err)
 
 			burns := tests.ReadLaneBurns(t, "sql").Since(before)

@@ -37,9 +37,10 @@ const (
 	// reason can include positions that were in fact written.
 	LaneBurnOutcomeUnknown = "outcome_unknown"
 
-	// LaneBurnRolledBack: a utxoset create batch, or a chunk of a list, failed before its COMMIT,
-	// whether it rolled back an open database transaction or failed in planning or at BEGIN, and its
-	// positions were not written again.
+	// LaneBurnRolledBack: a utxoset create batch failed with its database transaction open, or a
+	// chunk of a list failed before its COMMIT (in planning, at BEGIN or with its transaction open),
+	// and the positions were not written again. A create batch that fails before its transaction
+	// opens, in partition setup or at BEGIN, counts as an ordinary error.
 	LaneBurnRolledBack = "rolled_back"
 
 	// LaneBurnParentFailed: a parent of the transaction earlier in its list failed, so the

@@ -251,6 +251,19 @@ func TestValidate_OutpointOnlySpend_ConflictingFallbackMinimalCreate(t *testing.
 	creates = recorder.createOnly(*inBlockTx.TxIDChainHash())
 	require.Len(t, creates, 1, "the conflicting fallback made one create-only call")
 	require.Equal(t, utxostore.CallerSubtreeValidation, creates[0])
+
+	// A caller the request names wins, here over InBlock.
+	namedTx := competingTx.Clone()
+	namedTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03})
+
+	opts.Caller = utxostore.CallerBlockValidation
+
+	_, err = v.ValidateWithOptions(ctx, namedTx, 500, opts)
+	require.Error(t, err)
+
+	creates = recorder.createOnly(*namedTx.TxIDChainHash())
+	require.Len(t, creates, 1, "the conflicting fallback made one create-only call")
+	require.Equal(t, utxostore.CallerBlockValidation, creates[0])
 }
 
 // TestValidate_OutpointOnlySpend_RequiresSkipScriptValidation verifies that
