@@ -21,11 +21,12 @@ import (
 
 // The reasons a position burns.
 const (
-	// LaneBurnExists: the create answered ErrTxExists, because the store already held the
-	// transaction. The record keeps the position it has. One exception: a utxoset create that
-	// carries a block, for a transaction held only as UTXO rows with no identity or containment
-	// row, writes the new position on the containment row it adds and still answers ErrTxExists,
-	// so it is counted here though the position was written.
+	// LaneBurnExists: the create answered ErrTxExists. Either the store already held the
+	// transaction, and the record keeps the position it has, or, on Aerospike, another create of
+	// the same transaction held its multi-record creation lock, and that create may still fail.
+	// One exception: a utxoset create that carries a block, for a transaction held only as UTXO
+	// rows with no identity or containment row, writes the new position on the containment row it
+	// adds and still answers ErrTxExists, so it is counted here though the position was written.
 	LaneBurnExists = "exists"
 
 	// LaneBurnSpendRejected: an input could not be spent, so the transaction was not created.
