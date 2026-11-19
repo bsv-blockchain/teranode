@@ -82,10 +82,25 @@ type recordRef struct {
 	count  uint64
 }
 
+// manifestFile is what a Manifest uses of its file. *os.File is the only one outside tests; a test
+// substitutes one whose writes or syncs fail.
+type manifestFile interface {
+	io.ReaderAt
+	io.WriterAt
+	Sync() error
+	Close() error
+	Stat() (os.FileInfo, error)
+	Truncate(size int64) error
+}
+
+// wrapManifestFile is the file a new manifest writes through: the temporary file itself, unless a
+// test substitutes a faulty one.
+var wrapManifestFile = func(f *os.File) manifestFile { return f }
+
 // Manifest is an open assignment manifest: what it holds so far, and the writer that extends it.
 type Manifest struct {
 	path   string
-	f      *os.File
+	f      manifestFile
 	digest hash.Hash
 
 	header   Header
@@ -121,7 +136,7 @@ func CreateManifest(path string, h Header) (*Manifest, error) {
 
 	tmp := f.Name()
 
-	m := &Manifest{path: path, f: f, digest: sha256.New(), header: h, next: h.First}
+	m := &Manifest{path: path, f: wrapManifestFile(f), digest: sha256.New(), header: h, next: h.First}
 
 	fail := func(err error) (*Manifest, error) {
 		_ = f.Close()

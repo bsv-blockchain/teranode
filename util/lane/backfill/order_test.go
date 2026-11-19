@@ -240,6 +240,42 @@ func TestNumberResumesAfterTheSuffix(t *testing.T) {
 	require.NoError(t, resumed.Close())
 }
 
+// A resumed numbering places the blocks already written again as it checks them, so a transaction
+// in a written block that the source also lists in the suffix is refused, not given a second
+// position.
+func TestNumberResumeRefusesATransactionAlreadyWritten(t *testing.T) {
+	src, facts := exampleSource()
+	path := filepath.Join(t.TempDir(), "m")
+
+	numberedPart(t, path, src, facts, 1, nil)
+
+	src.Suffix = []chainhash.Hash{h("F"), h("A")}
+
+	m, err := ResumeManifest(path)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, m.Close()) }()
+
+	_, err = Number(context.Background(), m, src, facts, MemorySeen{})
+	require.Error(t, err)
+	require.False(t, m.Finished())
+}
+
+// The orders refuse or skip what Number relies on them for: a suffix listing a transaction twice,
+// and a coinbase the subtree lists by its own txid rather than the placeholder.
+func TestOrdersRefuseADuplicateAndSkipTheCoinbaseByTxID(t *testing.T) {
+	_, err := SuffixOrder([]chainhash.Hash{h("F"), h("G"), h("F")}, fakeFacts{})
+	require.Error(t, err)
+
+	src, facts := exampleSource()
+	b := src.Blocks[0]
+	b.Subtrees[0].TxIDs = []chainhash.Hash{b.Coinbase, h("A"), h("gone1")}
+
+	order, err := BlockOrder(b, facts)
+	require.NoError(t, err)
+	require.Equal(t, []chainhash.Hash{h("A"), h("B"), h("C")}, order)
+}
+
 // A manifest holding more blocks than the source is refused: the source lost a block.
 func TestNumberRefusesAManifestLongerThanTheSource(t *testing.T) {
 	src, facts := exampleSource()

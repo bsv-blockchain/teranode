@@ -175,12 +175,13 @@ func TestImportBlockRefusesSharedPositions(t *testing.T) {
 func TestImportBlockLeavesADuplicateCoinbaseToItsOwnBlock(t *testing.T) {
 	shared := h("shared coinbase")
 
+	// Block IDs differ from heights: the coinbase lane holds the block ID.
 	earlier := SourceBlock{
-		BlockID: 91_812, Height: 91_812, Hash: h("block 91812"), Coinbase: shared,
+		BlockID: 5, Height: 91_812, Hash: h("block 91812"), Coinbase: shared,
 		Subtrees: []SourceSubtree{{Hash: h("st a"), TxIDs: []chainhash.Hash{subtreepkg.CoinbasePlaceholderHashValue, h("a1")}}},
 	}
 	later := SourceBlock{
-		BlockID: 91_842, Height: 91_842, Hash: h("block 91842"), Coinbase: shared,
+		BlockID: 9, Height: 91_842, Hash: h("block 91842"), Coinbase: shared,
 		Subtrees: []SourceSubtree{{Hash: h("st b"), TxIDs: []chainhash.Hash{subtreepkg.CoinbasePlaceholderHashValue, h("b1")}}},
 	}
 
@@ -192,16 +193,27 @@ func TestImportBlockLeavesADuplicateCoinbaseToItsOwnBlock(t *testing.T) {
 	require.NoError(t, assign.Add(h("a1"), lane.Pack(lane.BackfillLane, 10)))
 	require.NoError(t, assign.Add(h("b1"), lane.Pack(lane.BackfillLane, 11)))
 
+	onlyA1 := []lane.MapRow{{Lane: lane.BackfillLane, First: 10, Last: 10, Tag: lane.RowTagRange}}
+
 	first, err := ImportBlock(earlier, assign)
 	require.NoError(t, err)
 	require.Equal(t, 1, first.Members)
-	require.Equal(t, []lane.MapRow{{Lane: lane.BackfillLane, First: 10, Last: 10, Tag: lane.RowTagRange}}, first.Rows)
+	require.Equal(t, onlyA1, first.Rows)
+
+	// The same when the subtree lists the coinbase by its txid rather than the placeholder.
+	byTxID := earlier
+	byTxID.Subtrees = []SourceSubtree{{Hash: h("st a"), TxIDs: []chainhash.Hash{shared, h("a1")}}}
+
+	first, err = ImportBlock(byTxID, assign)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.Members)
+	require.Equal(t, onlyA1, first.Rows)
 
 	second, err := ImportBlock(later, assign)
 	require.NoError(t, err)
 	require.Equal(t, 2, second.Members)
 	require.Equal(t, []lane.MapRow{
-		{Lane: lane.CoinbaseLane, First: 91_842, Last: 91_842, Tag: lane.RowTagRange},
+		{Lane: lane.CoinbaseLane, First: 9, Last: 9, Tag: lane.RowTagRange},
 		{Lane: lane.BackfillLane, First: 11, Last: 11, Tag: lane.RowTagRange},
 	}, second.Rows)
 
@@ -212,6 +224,49 @@ func TestImportBlockLeavesADuplicateCoinbaseToItsOwnBlock(t *testing.T) {
 	imported, err := ImportBlock(earlier, assign)
 	require.NoError(t, err)
 	require.Equal(t, 2, imported.Members)
+}
+
+// An invalid assigned position is refused before anything else looks at it, a coinbase's
+// included: a zero position in the coinbase lane names no block, and must not pass as another
+// block's coinbase.
+func TestImportBlockRefusesAnInvalidAssignedPosition(t *testing.T) {
+	b := SourceBlock{
+		BlockID: 5, Height: 100, Hash: h("block"), Coinbase: h("cb"),
+		Subtrees: []SourceSubtree{{Hash: h("st"), TxIDs: []chainhash.Hash{subtreepkg.CoinbasePlaceholderHashValue, h("a1")}}},
+	}
+
+	for name, assign := range map[string]badAssignment{
+		"zero coinbase position": {h("cb"): lane.Pack(lane.CoinbaseLane, 0)},
+		"zero position":          {h("a1"): lane.Pack(3, 0)},
+	} {
+		_, err := ImportBlock(b, assign)
+		require.Error(t, err, name)
+	}
+}
+
+// badAssignment hands out whatever it holds, unchecked, as a corrupt assignment source would.
+type badAssignment map[chainhash.Hash]uint64
+
+func (a badAssignment) Position(txid chainhash.Hash) (uint64, bool) {
+	p, ok := a[txid]
+
+	return p, ok
+}
+
+// A proof file with fewer subtrees than the source block is refused, not indexed past its end.
+func TestCheckBackfillStretchRefusesAProofMissingASubtree(t *testing.T) {
+	src, m, assign := numberedExample(t)
+
+	imported, err := ImportBlock(src.Blocks[0], assign)
+	require.NoError(t, err)
+
+	imported.Proof.Subtrees = imported.Proof.Subtrees[:1]
+
+	ids, err := m.BlockTxIDs(0)
+	require.NoError(t, err)
+
+	require.NotPanics(t, func() { err = CheckBackfillStretch(imported, m.Blocks()[0], ids, src.Blocks[0]) })
+	require.Error(t, err)
 }
 
 // CheckBackfillStretch refuses a record for another block, whichever side names the wrong one.
@@ -248,6 +303,13 @@ func TestMapAssignmentRefusesARunPastTheLane(t *testing.T) {
 	require.Error(t, a.AddSuffix(0, txids(1, 1)), "position 0")
 	require.Error(t, a.AddSuffix(lane.MaxPosition, txids(1, 2)), "the second txid would pass the lane")
 	require.Error(t, a.AddBlock(lane.ConversionBlock{First: lane.MaxPosition + 1, Count: 1}, txids(1, 1)))
+
+	// Further past the lane, where MaxPosition-first+1 would wrap and the length rule alone would
+	// let the run through to Pack.
+	var err error
+
+	require.NotPanics(t, func() { err = a.AddSuffix(lane.MaxPosition+5, txids(1, 1)) })
+	require.Error(t, err)
 
 	require.NotPanics(t, func() { _ = a.AddSuffix(lane.MaxPosition-1, txids(2, 3)) })
 	require.Empty(t, a, "a refused run adds nothing")

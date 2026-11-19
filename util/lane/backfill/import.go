@@ -41,7 +41,8 @@ func (a MapAssignment) AddSuffix(first uint64, txids []chainhash.Hash) error {
 }
 
 func (a MapAssignment) addRun(first uint64, txids []chainhash.Hash) error {
-	if first < 1 || first > lane.MaxPosition || uint64(len(txids)) > lane.MaxPosition-first+1 {
+	// Position 0 needs no rule here: Add refuses it for the first txid before anything is added.
+	if first > lane.MaxPosition || uint64(len(txids)) > lane.MaxPosition-first+1 {
 		return errors.NewProcessingError("a run of %d txids from position %d does not fit 1 to %d", len(txids), first, lane.MaxPosition)
 	}
 
@@ -86,7 +87,8 @@ type ImportedBlock struct {
 	BlockID uint32
 	Rows    []lane.MapRow
 	Proof   lane.ProofFile
-	// Members is the number of the block's transactions the assignment holds. A historical block
+	// Members is the number of the block's transactions placed: those the assignment holds, less
+	// a duplicate coinbase whose coinbase-lane position names another block. A historical block
 	// may have fewer than it contains, since a fully removed transaction needs no position, so this
 	// is not a block count and must never stand in for one at a normal block gate.
 	Members int
@@ -117,8 +119,7 @@ func ImportBlock(b SourceBlock, assign Assignment) (ImportedBlock, error) {
 		lanes := lane.LaneBitmaps{}
 
 		for ni, txid := range st.TxIDs {
-			isCoinbase := txid == subtreepkg.CoinbasePlaceholderHashValue
-			if isCoinbase {
+			if txid == subtreepkg.CoinbasePlaceholderHashValue {
 				txid = b.Coinbase
 			}
 
@@ -137,7 +138,8 @@ func ImportBlock(b SourceBlock, assign Assignment) (ImportedBlock, error) {
 				return ImportedBlock{}, errors.NewProcessingError("block %d subtree %d node %d", b.BlockID, si, ni, err)
 			}
 
-			if isCoinbase || txid == b.Coinbase {
+			// The placeholder was replaced by the coinbase above, so this is the coinbase in either form.
+			if txid == b.Coinbase {
 				if l, p := lane.Unpack(pos); l == lane.CoinbaseLane && p != uint64(b.BlockID) {
 					continue
 				}
@@ -184,11 +186,11 @@ func ImportBlock(b SourceBlock, assign Assignment) (ImportedBlock, error) {
 }
 
 // CheckBackfillStretch verifies an imported block against its manifest record: the block is the
-// record's block, its backfill-lane positions within the record's stretch are exactly First to
-// First+Count-1, and each manifest transaction sits in a subtree whose bitmap holds the position
-// the manifest assigned it. It checks subtrees, not nodes: two transactions of one subtree whose
-// positions were swapped pass. Positions outside the stretch, which an earlier segment gave, are
-// not this record's to check.
+// record's block, the record holds Count txids, and each of them sits in a subtree whose bitmap
+// holds the position the manifest assigned it, First+i for the txid at index i. So every position
+// of the stretch, First to First+Count-1, is in the import. It checks subtrees, not nodes: two
+// transactions of one subtree whose positions were swapped pass. Positions outside the stretch,
+// which an earlier segment gave, are not this record's to check.
 func CheckBackfillStretch(imported ImportedBlock, rec lane.ConversionBlock, txids []chainhash.Hash, b SourceBlock) error {
 	if imported.BlockID != rec.BlockID || b.BlockID != rec.BlockID {
 		return errors.NewProcessingError("manifest block %d is block %d, not %d", rec.Seq, rec.BlockID, imported.BlockID)
@@ -196,22 +198,6 @@ func CheckBackfillStretch(imported ImportedBlock, rec lane.ConversionBlock, txid
 
 	if uint64(len(txids)) != rec.Count {
 		return errors.NewProcessingError("manifest block %d holds %d txids, its record says %d", rec.Seq, len(txids), rec.Count)
-	}
-
-	// Only the record's own stretch is compared: the block may also hold transactions an earlier
-	// segment numbered, which keep their positions in the same lane.
-	want := roaring64.New()
-	if rec.Count > 0 {
-		want.AddRange(rec.First, rec.First+rec.Count)
-	}
-
-	got := roaring64.New()
-	if all := imported.Proof.LaneUnion()[lane.BackfillLane]; all != nil && rec.Count > 0 {
-		got = roaring64.And(all, want)
-	}
-
-	if !got.Equals(want) {
-		return errors.NewProcessingError("block %d: imported backfill positions are not the manifest's stretch %d to %d", rec.BlockID, rec.First, rec.First+rec.Count-1)
 	}
 
 	// Each assigned transaction sits in the subtree whose bitmap holds its position.

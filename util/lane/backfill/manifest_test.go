@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
@@ -171,6 +172,7 @@ func TestManifestRefusesDamage(t *testing.T) {
 	require.NoError(t, os.WriteFile(existing, nil, 0o600))
 	_, err = CreateManifest(existing, testHeader())
 	require.Error(t, err, "never overwrites a manifest")
+	require.Empty(t, tempFiles(t, existing), "a refused create removes its own temporary file")
 }
 
 func TestManifestRefusesFallingHeight(t *testing.T) {
@@ -551,4 +553,223 @@ func FuzzOpenManifest(f *testing.F) {
 		require.Equal(t, blocks, resumed.Blocks())
 		require.NoError(t, resumed.Close())
 	})
+}
+
+var errInjected = errors.NewStorageError("injected fault")
+
+// faultyFile is a manifest file whose writes or syncs fail on demand, and which counts its syncs.
+type faultyFile struct {
+	*os.File
+	failWrite bool
+	failSync  bool
+	syncs     int
+}
+
+func (f *faultyFile) WriteAt(b []byte, off int64) (int, error) {
+	if f.failWrite {
+		return 0, errInjected
+	}
+
+	return f.File.WriteAt(b, off)
+}
+
+func (f *faultyFile) Sync() error {
+	f.syncs++
+
+	if f.failSync {
+		return errInjected
+	}
+
+	return f.File.Sync()
+}
+
+// withFaultyFiles makes every manifest CreateManifest opens write through a faultyFile, which
+// faults configures, and returns the files made.
+func withFaultyFiles(t *testing.T, faults faultyFile) *[]*faultyFile {
+	t.Helper()
+
+	made := &[]*faultyFile{}
+	saved := wrapManifestFile
+
+	wrapManifestFile = func(f *os.File) manifestFile {
+		ff := &faultyFile{File: f, failWrite: faults.failWrite, failSync: faults.failSync}
+		*made = append(*made, ff)
+
+		return ff
+	}
+
+	t.Cleanup(func() { wrapManifestFile = saved })
+
+	return made
+}
+
+// Every record is synced before the call that wrote it returns.
+func TestManifestSyncsEveryRecord(t *testing.T) {
+	made := withFaultyFiles(t, faultyFile{})
+
+	m, err := CreateManifest(filepath.Join(t.TempDir(), "m"), testHeader())
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, m.Close()) }()
+
+	f := (*made)[0]
+	require.Equal(t, 1, f.syncs, "the header")
+
+	_, err = m.AppendBlock(10, 10, txids(1, 2))
+	require.NoError(t, err)
+	require.Equal(t, 2, f.syncs)
+
+	_, err = m.AppendSuffix(txids(2, 1))
+	require.NoError(t, err)
+	require.Equal(t, 3, f.syncs)
+
+	_, err = m.Finish()
+	require.NoError(t, err)
+	require.Equal(t, 4, f.syncs)
+}
+
+// A sync that fails after its write succeeded leaves a whole record on disk that the caller was
+// told failed. The manifest then refuses every later write, even once syncs work again, so a retry
+// cannot write the record a second time; resuming finds the one copy and carries on.
+func TestManifestRefusesAppendsAfterAFailedSync(t *testing.T) {
+	made := withFaultyFiles(t, faultyFile{})
+	path := filepath.Join(t.TempDir(), "m")
+
+	m, err := CreateManifest(path, testHeader())
+	require.NoError(t, err)
+	_, err = m.AppendBlock(10, 10, txids(1, 2))
+	require.NoError(t, err)
+
+	f := (*made)[0]
+	f.failSync = true
+
+	_, err = m.AppendBlock(11, 11, txids(2, 2))
+	require.Error(t, err)
+
+	f.failSync = false
+
+	_, err = m.AppendBlock(11, 11, txids(2, 2))
+	require.Error(t, err, "the retry is refused")
+	_, err = m.AppendSuffix(nil)
+	require.Error(t, err)
+	_, err = m.Finish()
+	require.Error(t, err)
+	require.NoError(t, m.Close())
+
+	m, err = ResumeManifest(path)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, m.Close()) }()
+
+	blocks := m.Blocks()
+	require.Len(t, blocks, 2, "the block whose sync failed is on disk once")
+	require.Equal(t, uint32(11), blocks[1].BlockID)
+
+	_, err = m.AppendSuffix(nil)
+	require.NoError(t, err)
+}
+
+// A create whose header write fails leaves no manifest and no temporary file: the link comes after
+// the header is written and synced.
+func TestManifestCreateThatFailsLeavesNothing(t *testing.T) {
+	for name, faults := range map[string]faultyFile{
+		"write fails": {failWrite: true},
+		"sync fails":  {failSync: true},
+	} {
+		withFaultyFiles(t, faults)
+
+		path := filepath.Join(t.TempDir(), "m")
+
+		_, err := CreateManifest(path, testHeader())
+		require.Error(t, err, name)
+
+		_, err = os.Lstat(path)
+		require.True(t, os.IsNotExist(err), "%s: no manifest", name)
+		require.Empty(t, tempFiles(t, path), "%s: no temporary file", name)
+	}
+}
+
+// A crash that leaves a record head and fewer bytes than its tail is a torn last record, which
+// ResumeManifest cuts.
+func TestManifestCutsAHeadWithoutItsTail(t *testing.T) {
+	whole := craft(headerRecord(), blockRecord(2, 2))
+	end := craft(endRecord(1_000_002, 1_000_002))[5:] // the end record's frame alone
+
+	for extra := 0; extra < frameTail; extra++ {
+		path := filepath.Join(t.TempDir(), "m")
+		require.NoError(t, os.WriteFile(path, append(append([]byte{}, whole...), end[:frameHead+extra]...), 0o600))
+
+		m, err := ResumeManifest(path)
+		require.NoError(t, err, "%d bytes after the head", extra)
+		require.Len(t, m.Blocks(), 1)
+		require.False(t, m.Finished())
+		require.NoError(t, m.Close())
+
+		cut, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.Equal(t, whole, cut)
+	}
+}
+
+// headerRecordAt is headerRecord starting at first.
+func headerRecordAt(first uint64) []byte {
+	r := []byte{recordHeader}
+	r = binary.LittleEndian.AppendUint32(r, 1)
+	r = binary.LittleEndian.AppendUint64(r, first)
+	r = binary.LittleEndian.AppendUint32(r, 900_000)
+
+	return append(r, make([]byte, 32)...)
+}
+
+// No record may run past the last position of the backfill lane, whether written or loaded, and
+// no manifest starts with a segment or first position that could never be finished.
+func TestManifestRefusesRunsPastTheLane(t *testing.T) {
+	near := lane.MaxPosition - 1
+
+	m, err := CreateManifest(filepath.Join(t.TempDir(), "m"), Header{Segment: 1, First: near})
+	require.NoError(t, err)
+
+	_, err = m.AppendBlock(10, 10, txids(1, 3))
+	require.Error(t, err, "a block of three from the second-last position")
+	_, err = m.AppendSuffix(txids(2, 3))
+	require.Error(t, err, "a suffix of three from the second-last position")
+
+	_, err = m.AppendSuffix(txids(2, 2))
+	require.NoError(t, err, "two fit exactly")
+	require.NoError(t, m.Close())
+
+	dir := t.TempDir()
+
+	block := []byte{recordBlock}
+	block = binary.LittleEndian.AppendUint32(block, 0)
+	block = binary.LittleEndian.AppendUint32(block, 7)
+	block = binary.LittleEndian.AppendUint32(block, 700_000)
+	block = binary.LittleEndian.AppendUint64(block, near)
+	block = binary.LittleEndian.AppendUint64(block, 3)
+	block = append(block, make([]byte, 3*chainhash.HashSize)...)
+
+	for name, b := range map[string][]byte{
+		"block past the lane":  craft(headerRecordAt(near), block),
+		"suffix past the lane": craft(headerRecordAt(near), suffixRecord(near, 3, 3)),
+	} {
+		path := filepath.Join(dir, "bad")
+		require.NoError(t, os.WriteFile(path, b, 0o600))
+
+		_, err := OpenManifest(path)
+		require.Error(t, err, name)
+	}
+
+	for name, h := range map[string]Header{
+		"segment 0":         {Segment: 0, First: 1_000_001},
+		"first past lane":   {Segment: 1, First: lane.MaxPosition + 1},
+		"first is sentinel": {Segment: 1, First: lane.BackfillSlotSentinel},
+	} {
+		path := filepath.Join(dir, "h")
+
+		_, err := CreateManifest(path, h)
+		require.Error(t, err, name)
+
+		_, err = os.Lstat(path)
+		require.True(t, os.IsNotExist(err), "%s: nothing created", name)
+	}
 }
