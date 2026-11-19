@@ -1965,17 +1965,71 @@ func TestLanePositionBurnOfABelowCheckpointTakeThatFailed(t *testing.T) {
 
 	s, ctx := newLaneStore(t)
 
-	w := tests.BuildMultiWorkload(t, 0xdb, 1, 2)
+	w := tests.BuildMultiWorkload(t, 0xdb, 1, 3)
 	w.StoreRoots(t, s, height-1)
 
-	source := useBurnSource(t, s, burnPositions(1)...)
+	// Two positions are taken before the third take fails, so the count is one per position taken,
+	// not one per list.
+	source := useBurnSource(t, s, burnPositions(2)...)
 	before := tests.ReadLaneBurns(t, "utxoset")
 
 	_, err := s.SpendAndCreateMulti(ctx, outpointOnly(w.Txs), height,
 		append(belowCheckpointOptions(height), utxo.WithCaller(utxo.CallerBlockValidation))...)
 	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
-	require.Equal(t, 2, source.Calls())
+	require.Equal(t, 3, source.Calls())
 
-	require.Equal(t, tests.LaneBurns{utxo.LaneBurnTakeFailed + "/block_validation": 1},
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnTakeFailed + "/block_validation": 2},
 		tests.ReadLaneBurns(t, "utxoset").Since(before))
+}
+
+// A failed chunk records each transaction's reason at its place in the whole list, not its place in
+// the chunk: here the failing chunk is the list's second, so the two differ.
+func TestLanePositionFailedChunkRecordsReasonsAtListPositions(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+
+	old := multiCreateChunkTxs
+	multiCreateChunkTxs = 2
+
+	t.Cleanup(func() { multiCreateChunkTxs = old })
+
+	root := mkTx(t, 4, 7_000)
+	_, err := s.Create(ctx, root, 1_000, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1_000, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	a := spendOutput(t, root, 0, 1)
+	b := spendOutput(t, root, 1, 1)
+	stored := spendOutput(t, root, 2, 1)
+	fresh := spendOutput(t, root, 3, 1)
+
+	_, _, err = s.SpendAndCreate(ctx, stored, 1_100)
+	require.NoError(t, err)
+
+	// The second chunk, holding stored and fresh, fails after it has found stored existing.
+	failure := errors.NewProcessingError("injected failure")
+	multiChunkFault = func(chunk int, stage string) error {
+		if chunk == 1 && stage == "created" {
+			return failure
+		}
+
+		return nil
+	}
+
+	t.Cleanup(func() { multiChunkFault = nil })
+
+	useBurnSource(t, s, burnPositions(4)...)
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, err = s.SpendAndCreateMulti(ctx, []*bt.Tx{a, b, stored, fresh}, 1_100, utxo.WithIgnoreLocked(true),
+		utxo.WithCaller(utxo.CallerSubtreeValidation))
+	multiChunkFault = nil
+	require.ErrorIs(t, err, failure)
+
+	require.Equal(t, 1, identityCount(t, s, ctx, a), "the first chunk committed")
+	require.Equal(t, 1, identityCount(t, s, ctx, b), "the first chunk committed")
+	require.Equal(t, 0, identityCount(t, s, ctx, fresh), "the second chunk rolled back")
+
+	require.Equal(t, tests.LaneBurns{
+		utxo.LaneBurnExists + "/subtree_validation":     1,
+		utxo.LaneBurnRolledBack + "/subtree_validation": 1,
+	}, tests.ReadLaneBurns(t, "utxoset").Since(before))
 }
