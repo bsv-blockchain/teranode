@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -24,6 +26,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -640,4 +643,293 @@ func TestSpendAndCreateKeepsSpendsWhenCreateInDoubt(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp.SpendingData, "the parent coin must stay spent by the stored transaction")
 	require.Equal(t, child.TxIDChainHash().String(), resp.SpendingData.TxID.String())
+}
+
+// TestCreateMinedReportsCreatingNotCleared covers a paginated transaction
+// created already mined, as quick validation creates every transaction of a
+// block below the checkpoint, whose clear of the creating bin fails. Nothing
+// repeats a create that returned success, and setMined does not run for a
+// transaction created mined unless it is found existing, so a success there
+// could leave the records with the creating bin and every output on them
+// refused with CREATING. The create must return a retryable error and keep the
+// spends; a repeat must finish the clear.
+func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	const (
+		blockHeight = 604315
+		blockID     = 11
+		// The parent spends the zero hash, so the store takes it for a
+		// coinbase; spend it well past maturity.
+		spendHeight = blockHeight + 1_000
+	)
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// Batch size 4 and 10 outputs: the master holds vouts 0-3, extra record 1
+	// holds 4-7, extra record 2 holds 8-9.
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	// failClears fails the next n clears of the creating bin. A clear is the
+	// only UPDATE_ONLY batch write a create sends; it fails before anything
+	// is sent, so the records keep the bin. The external write runs in its own
+	// goroutine beside the store's other batches, so the count is atomic.
+	failClears := func(n int32) {
+		var left atomic.Int32
+
+		left.Store(n)
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if len(records) > 0 {
+				if write, ok := records[0].(*aerospike.BatchWrite); ok && write.Policy != nil &&
+					write.Policy.RecordExistsAction == aerospike.UPDATE_ONLY && left.Add(-1) >= 0 {
+					return &aerospike.AerospikeError{ResultCode: types.SERVER_NOT_AVAILABLE}
+				}
+			}
+
+			return client.BatchOperate(policy, records)
+		})
+		t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+	}
+
+	hasCreatingBin := func(t *testing.T, tx *bt.Tx, recordIdx uint32) bool {
+		t.Helper()
+
+		key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(tx.TxIDChainHash(), recordIdx))
+		require.NoError(t, err)
+
+		rec, err := client.Get(nil, key)
+		require.NoError(t, err)
+		require.NotNil(t, rec, "record %d of %s must exist", recordIdx, tx.TxIDChainHash())
+
+		_, ok := rec.Bins[fields.Creating.String()]
+
+		return ok
+	}
+
+	spendVout := func(parent *bt.Tx, vout uint32) error {
+		out := parent.Outputs[vout]
+
+		child := bt.NewTx()
+		require.NoError(t, child.From(parent.TxIDChainHash().String(), vout, out.LockingScript.String(), out.Satoshis))
+		child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00, 0x48, 0x30, 0x45})
+		require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", out.Satoshis-100))
+
+		_, err := store.Spend(ctx, child, spendHeight)
+
+		return err
+	}
+
+	mined := utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: blockID, BlockHeight: blockHeight})
+
+	requireCreatingNotCleared := func(t *testing.T, err error) {
+		t.Helper()
+
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errors.ErrTxExists, "a failed clear must not read as a finished create")
+		require.True(t, errors.IsRetryableError(err), "the caller must repeat the create: %v", err)
+		require.True(t, utxo.IsCreateOutcomeUnknown(err), "the records are stored, so the spends must stay: %v", err)
+	}
+
+	requireAllCleared := func(t *testing.T, parent *bt.Tx) {
+		t.Helper()
+
+		for idx := uint32(0); idx <= 2; idx++ {
+			require.Falsef(t, hasCreatingBin(t, parent, idx), "record %d must lose the creating bin", idx)
+		}
+
+		// One output on each record: master, extra 1, extra 2.
+		for _, vout := range []uint32{0, 5, 9} {
+			require.NoErrorf(t, spendVout(parent, vout), "vout %d must be spendable", vout)
+		}
+	}
+
+	t.Run("repeat finishes the clear", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		failClears(1)
+
+		_, err := store.Create(ctx, parent, blockHeight, mined)
+		requireCreatingNotCleared(t, err)
+		require.ErrorContains(t, err, "failed to unlock child records", "the error carries the clear's own failure")
+
+		require.True(t, hasCreatingBin(t, parent, 2), "the failed clear leaves the bin on the extra record")
+		require.ErrorIs(t, spendVout(parent, 9), errors.ErrTxCreating, "an output on the extra record is refused until the clear is done")
+
+		_, err = store.Create(ctx, parent, blockHeight, mined)
+		require.ErrorIs(t, err, errors.ErrTxExists, "the repeat finds the records and finishes the clear")
+
+		requireAllCleared(t, parent)
+	})
+
+	t.Run("repeat whose clear fails reports it again", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		failClears(2)
+
+		_, err := store.Create(ctx, parent, blockHeight, mined)
+		requireCreatingNotCleared(t, err)
+
+		// The repeat finds the master record; its failed clear must not come
+		// back as ErrTxExists, which the caller reads as done.
+		_, err = store.Create(ctx, parent, blockHeight, mined)
+		requireCreatingNotCleared(t, err)
+
+		_, err = store.Create(ctx, parent, blockHeight, mined)
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		requireAllCleared(t, parent)
+	})
+
+	t.Run("create with no mined info still succeeds", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		// A validator create keeps its recovery paths: the transaction is seen
+		// again in a subtree, or setMined runs when its block is mined.
+		failClears(1)
+
+		_, err := store.Create(ctx, parent, blockHeight)
+		require.NoError(t, err)
+		require.True(t, hasCreatingBin(t, parent, 2))
+	})
+
+	t.Run("repeat with no mined info whose clear fails still reports exists", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		failClears(2)
+
+		_, err := store.Create(ctx, parent, blockHeight)
+		require.NoError(t, err)
+
+		// The repeat path keeps the same gate as the first write: only a
+		// mined create turns a failed clear into an error.
+		_, err = store.Create(ctx, parent, blockHeight)
+		require.ErrorIs(t, err, errors.ErrTxExists)
+		require.True(t, hasCreatingBin(t, parent, 2))
+	})
+
+	t.Run("held lock is not reported as exists to a mined create", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		// A lock record left in place, as when an earlier attempt's release
+		// failed: it lives out its TTL, and a repeat inside that window never
+		// reaches the clear.
+		lockKey, keyErr := aerospike.NewKey(store.GetNamespace(), store.GetName(),
+			uaerospike.CalculateKeySourceInternal(parent.TxIDChainHash(), teranodeaerospike.LockRecordIndex))
+		require.NoError(t, keyErr)
+		require.NoError(t, client.PutBins(nil, lockKey, aerospike.NewBin("lock_token", "left-behind")))
+
+		_, err := store.Create(ctx, parent, blockHeight, mined)
+		requireCreatingNotCleared(t, err)
+		require.ErrorContains(t, err, "transaction creation in progress or already exists", "the error carries the lock's own answer")
+
+		// Control: a validator create keeps today's answer.
+		_, err = store.Create(ctx, parent, blockHeight)
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		deleted, delErr := client.Delete(nil, lockKey)
+		require.Nil(t, delErr)
+		require.True(t, deleted)
+
+		_, err = store.Create(ctx, parent, blockHeight, mined)
+		require.NoError(t, err, "once the lock is gone the repeat writes and clears the records")
+
+		requireAllCleared(t, parent)
+	})
+
+	t.Run("held lock over a cleared transaction answers exists", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		_, err := store.Create(ctx, parent, blockHeight, mined)
+		require.NoError(t, err)
+		requireAllCleared(t, parent)
+
+		// The create finished but its lock release failed, so the lock waits out
+		// its TTL over records that are already cleared.
+		lockKey, keyErr := aerospike.NewKey(store.GetNamespace(), store.GetName(),
+			uaerospike.CalculateKeySourceInternal(parent.TxIDChainHash(), teranodeaerospike.LockRecordIndex))
+		require.NoError(t, keyErr)
+		require.NoError(t, client.PutBins(nil, lockKey, aerospike.NewBin("lock_token", "left-behind")))
+
+		_, err = store.Create(ctx, parent, blockHeight, mined)
+		require.ErrorIs(t, err, errors.ErrTxExists, "a master with no creating bin means the clear finished")
+		require.False(t, utxo.IsCreateOutcomeUnknown(err))
+	})
+
+	t.Run("held lock over a master still creating is reported", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		failClears(1)
+
+		_, err := store.Create(ctx, parent, blockHeight, mined)
+		requireCreatingNotCleared(t, err)
+		require.True(t, hasCreatingBin(t, parent, 0), "the failed clear leaves the bin on the master")
+
+		lockKey, keyErr := aerospike.NewKey(store.GetNamespace(), store.GetName(),
+			uaerospike.CalculateKeySourceInternal(parent.TxIDChainHash(), teranodeaerospike.LockRecordIndex))
+		require.NoError(t, keyErr)
+		require.NoError(t, client.PutBins(nil, lockKey, aerospike.NewBin("lock_token", "left-behind")))
+
+		_, err = store.Create(ctx, parent, blockHeight, mined)
+		requireCreatingNotCleared(t, err)
+		require.ErrorContains(t, err, "transaction creation in progress or already exists", "the error carries the lock's own answer")
+	})
+
+	t.Run("lock write that fails for another reason is not outcome-unknown", func(t *testing.T) {
+		cleanDB(t, client)
+
+		parent := createTransactionWithOutputs(10)
+
+		// The lock write fails before this call writes any record, so its error
+		// is not marked outcome-unknown. Only a held lock turns into the
+		// outcome-unknown error.
+		var lockKey *aerospike.Key
+
+		store.SetLockPutFn(func(policy *aerospike.WritePolicy, key *aerospike.Key, bins ...*aerospike.Bin) aerospike.Error {
+			if policy == nil || key == nil || len(bins) == 0 {
+				return &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+			}
+
+			lockKey = key
+
+			return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+		})
+		t.Cleanup(func() { store.SetLockPutFn(nil) })
+
+		_, err := store.Create(ctx, parent, blockHeight, mined)
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errors.ErrTxExists)
+		require.False(t, utxo.IsCreateOutcomeUnknown(err), "nothing was written, so the outcome is known: %v", err)
+		require.ErrorContains(t, err, "failed to acquire lock")
+		require.NotNil(t, lockKey, "the lock write went through the hook")
+
+		lockRec, getErr := client.Get(nil, lockKey)
+		require.Nil(t, lockRec, "acquireLock writes no lock of its own beside the hook")
+		require.NotNil(t, getErr)
+
+		store.SetLockPutFn(nil)
+
+		_, err = store.Get(ctx, parent.TxIDChainHash())
+		require.ErrorIs(t, err, errors.ErrTxNotFound, "the failed lock write stores nothing")
+	})
 }

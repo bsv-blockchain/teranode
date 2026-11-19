@@ -311,6 +311,9 @@ type Store struct {
 	// spender-existence probe; nil outside tests. A test uses it to prune the spender in that gap.
 	rollbackBeforeProbe func()
 
+	// lockPutFn is a test-only override for the creation lock's s.client.PutBins; nil means use the real client.
+	lockPutFn func(*aerospike.WritePolicy, *aerospike.Key, ...*aerospike.Bin) aerospike.Error
+
 	// batcherWait bounds how long a submitter waits for a batcher to deliver a
 	// result before giving up, so a wedged dispatch fn can never park a caller
 	// for the life of the process. Computed once from the batch policy.
