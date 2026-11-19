@@ -139,7 +139,10 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 }
 
 func getTestSettings() *settings.Settings {
-	return &settings.Settings{
+	s := &settings.Settings{
 		ChainCfgParams: &chaincfg.RegressionNetParams,
 	}
+	setLaneLeaseTimings(s)
+
+	return s
 }

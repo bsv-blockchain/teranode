@@ -9,6 +9,7 @@ import stderrors "errors"
 //	processing error -> error when manipulating data, i.e., when processing a block, a transaction, etc., inside the method/function.
 var (
 	ErrBlobAlreadyExists          = New(ERR_BLOB_EXISTS, "blob already exists")
+	ErrBlobCorrupt                = New(ERR_BLOB_CORRUPT, "blob corrupt")
 	ErrBlobError                  = New(ERR_BLOB_ERROR, "blob error")
 	ErrBlobNotFound               = New(ERR_BLOB_NOT_FOUND, "blob not found")
 	ErrBlockAssemblyReset         = New(ERR_BLOCK_ASSEMBLY_RESET, "block assembly reset")
@@ -565,6 +566,28 @@ func NewBlobNotFoundError(message string, params ...interface{}) *Error {
 // NewBlobError creates a new error with the blob error code.
 func NewBlobError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOB_ERROR, message, params...)
+}
+
+// NewBlobCorruptError creates an error for a stored blob whose bytes are present but unusable,
+// such as a missing, truncated or wrong-type header. Stores write blobs whole (temp file then
+// rename, or a single S3 put), so such a blob stays broken and a retry of the same read cannot
+// help. A store keeps its StorageError and adds this as the cause, so the StorageError and
+// IsRetryableError checks are unchanged. The rendered message contains BLOB_CORRUPT, which the
+// substring match in IsMaliciousResponseError catches, so a caller that must not retry checks
+// IsBlobCorrupt first. Block validation's priority-queue worker does: it neither requeues a block
+// that failed on one nor tries another source for it. Catchup and the legacy park do not check it
+// yet; they treat it as a local storage fault and retry the block later.
+func NewBlobCorruptError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOB_CORRUPT, message, params...)
+}
+
+// IsBlobCorrupt reports whether err, or anything it wraps, is a blob-corrupt error.
+func IsBlobCorrupt(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return Is(err, ErrBlobCorrupt)
 }
 
 // NewBlobFooterSizeMismatchError creates a new error with the blob footer size mismatch error code.
