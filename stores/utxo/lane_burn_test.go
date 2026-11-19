@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -123,4 +124,23 @@ func TestBurnLanePositionLogsTheNamedTxID(t *testing.T) {
 	require.Len(t, log.lines, 1)
 	require.Contains(t, log.lines[0], named.String())
 	require.NotContains(t, log.lines[0], tx.TxIDChainHash().String())
+}
+
+// A caller that stopped waiting for its queued create gets its context error, and the record may
+// still be written: the position counts as outcome_unknown, and is logged.
+func TestBurnCreateLanePositionCountsAGivenUpWaiterAsUnknown(t *testing.T) {
+	log := &burnLog{}
+
+	var positions LanePositions
+
+	positions.NameLaneBurns("waiterstore", log)
+
+	counter := prometheusLanePositionsBurned.WithLabelValues("waiterstore", LaneBurnOutcomeUnknown, CallerValidator.String())
+	before := testutil.ToFloat64(counter)
+
+	positions.BurnCreateLanePosition(bt.NewTx(), &CreateOptions{Caller: CallerValidator}, lane.Pack(9, 2), context.Canceled, nil)
+
+	require.Equal(t, before+1, testutil.ToFloat64(counter))
+	require.Len(t, log.lines, 1)
+	require.Contains(t, log.lines[0], "reason=outcome_unknown")
 }

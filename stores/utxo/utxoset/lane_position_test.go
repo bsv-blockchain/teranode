@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1650,4 +1651,61 @@ func TestLanePositionBurnOfACommitThatReportedFailure(t *testing.T) {
 
 		require.Equal(t, unknown("block_validation"), tests.ReadLaneBurns(t, "utxoset").Since(before))
 	})
+}
+
+// A caller that stops waiting for its queued create counts its position as outcome_unknown. The batch
+// still writes the record with the position, and its answer counts nothing more.
+func TestLanePositionBurnOfAWaiterThatGaveUp(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+	require.NotNil(t, s.createBatcher)
+
+	position := burnPositions(1)[0]
+	useBurnSource(t, s, position)
+
+	held := make(chan struct{})
+	release := make(chan struct{})
+	markHeld := sync.OnceFunc(func() { close(held) })
+	releaseBatch := sync.OnceFunc(func() { close(release) })
+
+	createBatchBeforeCommit = func() error {
+		markHeld()
+		<-release
+
+		return nil
+	}
+
+	// Released before the store closes, even when an assertion below fails, so a failure cannot
+	// leave the batch, and the store's Close, waiting forever.
+	t.Cleanup(func() {
+		releaseBatch()
+		createBatchBeforeCommit = nil
+	})
+
+	tx := mkTx(t, 1, 5_000)
+	callCtx, cancel := context.WithCancel(ctx)
+
+	before := tests.ReadLaneBurns(t, "utxoset")
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := s.Create(callCtx, tx, 1_000, utxo.WithCaller(utxo.CallerBlockAssembly))
+		done <- err
+	}()
+
+	<-held
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/block_assembly": 1},
+		tests.ReadLaneBurns(t, "utxoset").Since(before))
+
+	releaseBatch()
+
+	require.Eventually(t, func() bool {
+		md, err := s.Get(ctx, tx.TxIDChainHash(), fields.LanePosition)
+		return err == nil && md.LanePosition == position
+	}, 10*time.Second, 20*time.Millisecond, "the batch wrote the record with the position")
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/block_assembly": 1},
+		tests.ReadLaneBurns(t, "utxoset").Since(before), "the batch's answer counts nothing more")
 }
