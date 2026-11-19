@@ -37,8 +37,9 @@ const (
 	// reason can include positions that were in fact written.
 	LaneBurnOutcomeUnknown = "outcome_unknown"
 
-	// LaneBurnRolledBack: a batch, or a chunk of a list, rolled back, and its positions were not
-	// written again.
+	// LaneBurnRolledBack: a utxoset create batch, or a chunk of a list, failed before its COMMIT,
+	// whether it rolled back an open database transaction or failed in planning or at BEGIN, and its
+	// positions were not written again.
 	LaneBurnRolledBack = "rolled_back"
 
 	// LaneBurnParentFailed: a parent of the transaction earlier in its list failed, so the

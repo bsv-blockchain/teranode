@@ -1457,6 +1457,20 @@ func TestLanePositionBurnUnlessStored(t *testing.T) {
 		burns(func() { s.burnUnlessStored(ctx, stored, options, lane.Pack(31, 7), storage, refused) }),
 		"another position, and the rerun's spend was refused")
 
+	// A record read without a position proves nothing: the read can answer from a row that does not
+	// carry one.
+	unpositioned := tests.BuildMultiWorkload(t, 0xc9, 1, 2).Roots[1]
+
+	s.SetLanePositionSource(nil)
+
+	_, _, err = s.SpendAndCreate(ctx, unpositioned, 1_000, utxo.WithCreateOnly())
+	require.NoError(t, err)
+	requireNoLanePosition(t, s, ctx, unpositioned)
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/validator": 1},
+		burns(func() { s.burnUnlessStored(ctx, unpositioned, options, lane.Pack(31, 8), storage, nil) }),
+		"a record without a position is an unknown outcome")
+
 	missing := tests.BuildMultiWorkload(t, 0xcb, 1, 1).Roots[0]
 	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/validator": 1},
 		burns(func() { s.burnUnlessStored(ctx, missing, options, lane.Pack(31, 3), storage, nil) }),
@@ -1891,4 +1905,12 @@ func TestLanePositionBurnOfABelowCheckpointListThatFailedEarly(t *testing.T) {
 		_, err = s.Get(ctx, tx.TxIDChainHash())
 		require.ErrorIs(t, err, errors.ErrTxNotFound, "tx %d", i)
 	}
+}
+
+func requireNoLanePosition(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx) {
+	t.Helper()
+
+	md, err := s.Get(ctx, tx.TxIDChainHash(), fields.LanePosition)
+	require.NoError(t, err)
+	require.Equal(t, lane.None, md.LanePosition)
 }
