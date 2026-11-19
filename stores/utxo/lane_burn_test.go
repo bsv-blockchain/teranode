@@ -2,9 +2,13 @@ package utxo
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,4 +62,42 @@ func TestTookLanePosition(t *testing.T) {
 	require.True(t, TookLanePosition(0, 5), "no position named, one taken from the source")
 	require.False(t, TookLanePosition(5, 5), "the caller named it")
 	require.False(t, TookLanePosition(0, 0), "no source")
+}
+
+// burnLog captures the info lines a burn writes.
+type burnLog struct {
+	ulogger.TestLogger
+	lines []string
+}
+
+func (l *burnLog) Infof(format string, args ...interface{}) {
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+// Every burn writes one info line naming the transaction, the position and its lane, the store, the
+// reason and the caller. A create that wrote its record writes none.
+func TestBurnLanePositionLogsOneLine(t *testing.T) {
+	log := &burnLog{}
+
+	var positions LanePositions
+
+	positions.NameLaneBurns("teststore", log)
+
+	tx := bt.NewTx()
+	tx.LockTime = 7
+	txid := *tx.TxIDChainHash()
+	position := lane.Pack(9, 1234)
+
+	positions.BurnCreateLanePosition(tx, &CreateOptions{Caller: CallerBlockValidation}, position, nil, nil)
+	require.Empty(t, log.lines, "a create that wrote its record burns nothing")
+
+	positions.BurnCreateLanePosition(tx, &CreateOptions{Caller: CallerBlockValidation}, position,
+		errors.NewTxExistsError("exists"), nil)
+	require.Len(t, log.lines, 1)
+
+	line := log.lines[0]
+	for _, want := range []string{txid.String(), fmt.Sprint(position), "lane 9", "store=teststore",
+		"reason=exists", "caller=block_validation"} {
+		require.Contains(t, line, want)
+	}
 }

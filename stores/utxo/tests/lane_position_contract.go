@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -487,6 +488,11 @@ func requireBurns(t *testing.T, store string, want LaneBurns, f func()) {
 	require.Equal(t, want, ReadLaneBurns(t, store).Since(before), "burned lane positions")
 }
 
+// directCreator is a store's own Create, which SpendAndCreate wraps on the Aerospike and SQL stores.
+type directCreator interface {
+	Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, error)
+}
+
 // LanePositionBurns: a position a store takes from its source and writes no record with is counted
 // once, labelled with the store, why it burned and which service asked for the create. A create
 // that writes its record counts nothing, and neither does a position the caller named, which the
@@ -593,6 +599,34 @@ func LanePositionBurns(t *testing.T, db utxostore.Store, store string) {
 			require.Equal(t, utxostore.MultiTxExisted, results[1].Status)
 			require.Equal(t, utxostore.MultiTxCreated, results[2].Status)
 		})
+	})
+
+	t.Run("a direct Create counts its own position, and only its own", func(t *testing.T) {
+		creator, ok := utxostore.As[directCreator](db)
+		require.True(t, ok, "every store with lane positions has its own Create")
+
+		w := BuildMultiWorkload(t, 0xc6, 1, 2)
+		source := NewScriptedLanePositions(lanePositionsFrom(27, 3)...)
+		useLanePositionSource(t, db, source)
+
+		requireBurns(t, store, LaneBurns{}, func() {
+			_, err := creator.Create(ctx, w.Roots[0], 940, utxostore.WithCaller(utxostore.CallerBlockAssembly))
+			require.NoError(t, err)
+		})
+
+		requireLanePosition(t, db, w.Roots[0], lane.Pack(27, 1))
+
+		requireBurns(t, store, LaneBurns{utxostore.LaneBurnExists + "/block_assembly": 1}, func() {
+			_, err := creator.Create(ctx, w.Roots[0], 940, utxostore.WithCaller(utxostore.CallerBlockAssembly))
+			require.ErrorIs(t, err, errors.ErrTxExists)
+		})
+
+		requireBurns(t, store, LaneBurns{}, func() {
+			_, err := creator.Create(ctx, w.Roots[0], 940, utxostore.WithLanePosition(lane.Pack(27, 9)))
+			require.ErrorIs(t, err, errors.ErrTxExists, "a named position is the caller's to count")
+		})
+
+		require.Equal(t, 2, source.Calls(), "the named create took nothing from the source")
 	})
 
 	t.Run("a create with no caller counts under unknown", func(t *testing.T) {

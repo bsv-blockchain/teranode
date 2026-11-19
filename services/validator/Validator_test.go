@@ -29,6 +29,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -58,6 +59,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
@@ -2606,4 +2608,60 @@ func TestReadMTPsLocked_GuardFiresOnUnpopulatedStore(t *testing.T) {
 	require.Contains(t, err.Error(), "MTP store not loaded up to height 5")
 	require.Nil(t, utxoMTPs)
 	require.Equal(t, uint32(0), blockMTP)
+}
+
+func TestCreateCaller(t *testing.T) {
+	require.Equal(t, utxostore.CallerValidator, createCaller(nil))
+	require.Equal(t, utxostore.CallerValidator, createCaller(&Options{}))
+	require.Equal(t, utxostore.CallerSubtreeValidation, createCaller(&Options{InBlock: true}))
+}
+
+// A validator create names its caller on the store's burned lane position counter: its own for a
+// mempool submission, subtree validation's for a request marked InBlock.
+func TestSpendAndCreateInUtxoStoreNamesItsCaller(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///validator_burn_caller")
+	require.NoError(t, err)
+
+	store, err := sql.New(ctx, logger, tSettings, storeURL)
+	require.NoError(t, err)
+
+	v := &Validator{logger: logger, utxoStore: store, settings: tSettings}
+
+	for _, c := range []struct {
+		name    string
+		inBlock bool
+		caller  string
+		seed    byte
+	}{
+		{"mempool submission", false, "validator", 0xce},
+		{"in a block or subtree", true, "subtree_validation", 0xcf},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			// A transaction whose parent the store does not hold: the spend fails, and the
+			// position the call took burns.
+			tx := tests.BuildMultiWorkload(t, c.seed, 1, 1).Roots[0]
+
+			store.SetLanePositionSource(tests.NewScriptedLanePositions(lane.Pack(40, 1)))
+			t.Cleanup(func() { store.SetLanePositionSource(nil) })
+
+			before := tests.ReadLaneBurns(t, "sql")
+
+			_, _, err := v.spendAndCreateInUtxoStore(ctx, tx, 940, false, &Options{InBlock: c.inBlock})
+			require.Error(t, err)
+
+			burns := tests.ReadLaneBurns(t, "sql").Since(before)
+			require.Len(t, burns, 1, "one position burned: %v", burns)
+
+			for key, n := range burns {
+				require.Equal(t, float64(1), n)
+				require.Truef(t, strings.HasSuffix(key, "/"+c.caller), "burn %q is labelled %s", key, c.caller)
+			}
+		})
+	}
 }

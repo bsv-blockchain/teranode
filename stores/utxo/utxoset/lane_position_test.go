@@ -1341,9 +1341,56 @@ func TestLanePositionBurnOfARolledBackCreateBatch(t *testing.T) {
 	createBatchBeforeCommit = func() error { return errors.NewStorageError("injected failure before commit") }
 	t.Cleanup(func() { createBatchBeforeCommit = nil })
 
-	_, err := s.Create(ctx, mkTx(t, 1, 5_000), 1_000, utxo.WithCaller(utxo.CallerBlockAssembly))
+	tx := mkTx(t, 1, 5_000)
+
+	_, err := s.Create(ctx, tx, 1_000, utxo.WithCaller(utxo.CallerBlockAssembly))
 	require.Error(t, err)
 
 	require.Equal(t, tests.LaneBurns{utxo.LaneBurnRolledBack + "/block_assembly": 1},
 		tests.ReadLaneBurns(t, "utxoset").Since(before))
+
+	// The batch really rolled back: nothing of the transaction is stored.
+	require.Equal(t, 0, identityCount(t, s, ctx, tx))
+	require.Equal(t, 0, utxoCount(t, s, ctx, tx))
+
+	_, err = s.Get(ctx, tx.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound)
+}
+
+// A batch whose COMMIT landed but reported failure reruns its items alone with the positions they
+// took. The rerun finds each item's own record and answers ErrTxExists, which is the item's own
+// write, not a burn.
+func TestLanePositionBurnOfABatchRerunAfterALandedCommit(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+	require.NotNil(t, s.spendAndCreateBatcher, "the test needs the batched spend-and-create")
+
+	root := tests.BuildMultiWorkload(t, 0xc9, 1, 1).Roots[0]
+	position := burnPositions(1)[0]
+
+	useBurnSource(t, s, position)
+
+	failed := false
+	spendAndCreateBatchAfterCommit = func() error {
+		if failed {
+			return nil
+		}
+
+		failed = true
+
+		return errors.NewStorageError("injected lost commit acknowledgement")
+	}
+
+	t.Cleanup(func() { spendAndCreateBatchAfterCommit = nil })
+
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, _, err := s.SpendAndCreate(ctx, root, 1_000, utxo.WithCreateOnly(), utxo.WithCaller(utxo.CallerValidator))
+	require.ErrorIs(t, err, errors.ErrTxExists, "the rerun finds the record the batch wrote")
+	require.True(t, failed)
+
+	require.Equal(t, tests.LaneBurns{}, tests.ReadLaneBurns(t, "utxoset").Since(before), "the record carries the position")
+
+	md, err := s.Get(ctx, root.TxIDChainHash(), fields.LanePosition)
+	require.NoError(t, err)
+	require.Equal(t, position, md.LanePosition)
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 )
 
@@ -42,6 +43,9 @@ import (
 // submission, which is what retires the applied_block ledger.
 func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	opts ...utxo.CreateOption) (_ *meta.Data, spends []*utxo.Spend, err error) {
+	// Set from the batch's answer; see spendAndCreateResult.
+	var rerunAfterBatchError bool
+
 	options := &utxo.CreateOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -73,6 +77,11 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		// is the final one.
 		if utxo.TookLanePosition(options.LanePosition, position) {
 			defer func() {
+				if rerunAfterBatchError && errors.Is(err, errors.ErrTxExists) {
+					s.burnUnlessStored(ctx, tx, options, position)
+					return
+				}
+
 				s.BurnCreateLanePosition(tx, options, position, err, spends)
 			}()
 		}
@@ -110,6 +119,7 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		// acts on that: it would neither hand the transaction to block assembly nor accept a
 		// resubmission, which meets ErrTxExists. The only truthful answer is the batch's.
 		res := <-item.done
+		rerunAfterBatchError = res.rerunAfterBatchError
 
 		return res.data, res.spends, res.err
 	}
@@ -253,4 +263,21 @@ func (s *Store) spendAndCreateOne(ctx context.Context, tx *bt.Tx, blockHeight ui
 	}
 
 	return data, spends, nil
+}
+
+// burnUnlessStored records the burn of position for a create that a rerun after a failed batch
+// answered with ErrTxExists. The failed batch's COMMIT may have landed with this very position, so
+// the stored record is read: carrying the position, nothing burned; carrying another, the position
+// burned as exists; unreadable, the outcome is unknown.
+func (s *Store) burnUnlessStored(ctx context.Context, tx *bt.Tx, options *utxo.CreateOptions, position uint64) {
+	txid := utxo.CreatedTxID(tx, options)
+
+	md, err := s.Get(context.WithoutCancel(ctx), &txid, fields.LanePosition)
+
+	switch {
+	case err != nil || md == nil:
+		s.BurnLanePosition(txid, options.Caller, position, utxo.LaneBurnOutcomeUnknown)
+	case md.LanePosition != position:
+		s.BurnLanePosition(txid, options.Caller, position, utxo.LaneBurnExists)
+	}
 }
