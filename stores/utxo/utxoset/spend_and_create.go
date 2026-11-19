@@ -79,8 +79,8 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		// is the final one.
 		if utxo.TookLanePosition(options.LanePosition, position) {
 			defer func() {
-				if rerunAfterBatchError && errors.Is(err, errors.ErrTxExists) {
-					s.burnUnlessStored(ctx, tx, options, position)
+				if rerunAfterBatchError && err != nil {
+					s.burnUnlessStored(ctx, tx, options, position, err, spends)
 					return
 				}
 
@@ -272,23 +272,27 @@ func (s *Store) spendAndCreateOne(ctx context.Context, tx *bt.Tx, blockHeight ui
 // caller waits for it, so it must never hold the caller, or the validator's lock on the txid, long.
 var laneBurnProbeTimeout = 5 * time.Second
 
-// burnUnlessStored records the burn of position for a create that a rerun after a failed batch
-// answered with ErrTxExists. The failed batch's COMMIT may have landed with this very position, so
-// the stored record is read: carrying the position, nothing burned; carrying another, the position
-// burned as exists; unreadable within laneBurnProbeTimeout, the outcome is unknown.
-func (s *Store) burnUnlessStored(ctx context.Context, tx *bt.Tx, options *utxo.CreateOptions, position uint64) {
+// burnUnlessStored records the burn of position for a create whose rerun after a failed batch
+// failed with err. The failed batch's COMMIT may have landed with this very position, whatever the
+// rerun then met, so the stored record is read. Carrying the position, nothing burned. Missing, or
+// carrying another position, the position burned for the rerun's own reason: exists for
+// ErrTxExists. Unreadable within laneBurnProbeTimeout, the outcome is unknown.
+func (s *Store) burnUnlessStored(ctx context.Context, tx *bt.Tx, options *utxo.CreateOptions, position uint64,
+	err error, spends []*utxo.Spend) {
 	txid := utxo.CreatedTxID(tx, options)
 
 	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), laneBurnProbeTimeout)
 	defer cancel()
 
-	md, err := s.Get(probeCtx, &txid, fields.LanePosition)
+	md, getErr := s.Get(probeCtx, &txid, fields.LanePosition)
 
 	switch {
-	case err != nil || md == nil:
+	case getErr == nil && md != nil && md.LanePosition == position:
+		return
+	case getErr == nil && md != nil, errors.Is(getErr, errors.ErrTxNotFound):
+		s.BurnLanePosition(txid, options.Caller, position, utxo.LaneBurnReason(err, spends))
+	default:
 		s.BurnLanePosition(txid, options.Caller, position, utxo.LaneBurnOutcomeUnknown)
-	case md.LanePosition != position:
-		s.BurnLanePosition(txid, options.Caller, position, utxo.LaneBurnExists)
 	}
 }
 

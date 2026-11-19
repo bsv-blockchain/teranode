@@ -1395,9 +1395,10 @@ func TestLanePositionBurnOfABatchRerunAfterALandedCommit(t *testing.T) {
 	require.Equal(t, position, md.LanePosition)
 }
 
-// After a rerun answers ErrTxExists, the stored record decides: the same position burned nothing,
-// another position burned as exists, and a record that cannot be read within the bound is an
-// unknown outcome.
+// After a rerun fails, the stored record decides: the same position burned nothing, whatever the
+// rerun met; another position, or no record, burned for the rerun's own reason; a record that
+// cannot be read within the bound is an unknown outcome. The caller's context ending does not cut
+// the read short.
 func TestLanePositionBurnUnlessStored(t *testing.T) {
 	s, ctx := newUncheckpointedLaneStore(t)
 
@@ -1408,6 +1409,8 @@ func TestLanePositionBurnUnlessStored(t *testing.T) {
 	require.NoError(t, err)
 
 	options := &utxo.CreateOptions{Caller: utxo.CallerValidator}
+	exists := errors.NewTxExistsError("exists")
+	storage := errors.NewStorageError("begin failed")
 
 	burns := func(f func()) tests.LaneBurns {
 		before := tests.ReadLaneBurns(t, "utxoset")
@@ -1417,17 +1420,26 @@ func TestLanePositionBurnUnlessStored(t *testing.T) {
 		return tests.ReadLaneBurns(t, "utxoset").Since(before)
 	}
 
-	require.Equal(t, tests.LaneBurns{}, burns(func() { s.burnUnlessStored(ctx, stored, options, mine) }),
+	require.Equal(t, tests.LaneBurns{}, burns(func() { s.burnUnlessStored(ctx, stored, options, mine, exists, nil) }),
 		"the record carries the position")
 
+	require.Equal(t, tests.LaneBurns{}, burns(func() { s.burnUnlessStored(ctx, stored, options, mine, storage, nil) }),
+		"the record carries the position, though the rerun failed for another reason")
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	require.Equal(t, tests.LaneBurns{}, burns(func() { s.burnUnlessStored(cancelled, stored, options, mine, storage, nil) }),
+		"the caller's context ended, and the read still finds the position")
+
 	require.Equal(t, tests.LaneBurns{utxo.LaneBurnExists + "/validator": 1},
-		burns(func() { s.burnUnlessStored(ctx, stored, options, lane.Pack(31, 2)) }),
+		burns(func() { s.burnUnlessStored(ctx, stored, options, lane.Pack(31, 2), exists, nil) }),
 		"the record carries another position")
 
 	missing := tests.BuildMultiWorkload(t, 0xcb, 1, 1).Roots[0]
-	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/validator": 1},
-		burns(func() { s.burnUnlessStored(ctx, missing, options, lane.Pack(31, 3)) }),
-		"no record could be read")
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnError + "/validator": 1},
+		burns(func() { s.burnUnlessStored(ctx, missing, options, lane.Pack(31, 3), storage, nil) }),
+		"no record, so the position burned for the rerun's reason")
 
 	// A read that cannot finish within the bound gives up, so it never holds the caller.
 	old := laneBurnProbeTimeout
@@ -1437,8 +1449,46 @@ func TestLanePositionBurnUnlessStored(t *testing.T) {
 
 	start := time.Now()
 	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/validator": 1},
-		burns(func() { s.burnUnlessStored(ctx, stored, options, lane.Pack(31, 4)) }))
+		burns(func() { s.burnUnlessStored(ctx, stored, options, lane.Pack(31, 4), exists, nil) }))
 	require.Less(t, time.Since(start), time.Second)
+}
+
+// A batch whose COMMIT landed but reported failure reruns its item, and the rerun can fail too,
+// here at its own commit. The record the batch wrote carries the position, so nothing burned.
+func TestLanePositionBurnOfAFailedRerunAfterALandedCommit(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+	require.NotNil(t, s.spendAndCreateBatcher)
+
+	root := tests.BuildMultiWorkload(t, 0xcd, 1, 1).Roots[0]
+	position := burnPositions(1)[0]
+
+	useBurnSource(t, s, position)
+
+	var batchFailed atomic.Bool
+
+	spendAndCreateBatchAfterCommit = func() error {
+		if batchFailed.CompareAndSwap(false, true) {
+			return errors.NewStorageError("injected lost batch commit acknowledgement")
+		}
+
+		return nil
+	}
+
+	t.Cleanup(func() { spendAndCreateBatchAfterCommit = nil })
+
+	_ = failNextCommit(t)
+
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, _, err := s.SpendAndCreate(ctx, root, 1_000, utxo.WithCreateOnly(), utxo.WithCaller(utxo.CallerValidator))
+	require.Error(t, err)
+	require.False(t, errors.Is(err, errors.ErrTxExists), "the rerun failed at its commit: %v", err)
+
+	require.Equal(t, tests.LaneBurns{}, tests.ReadLaneBurns(t, "utxoset").Since(before), "the record carries the position")
+
+	md, err := s.Get(ctx, root.TxIDChainHash(), fields.LanePosition)
+	require.NoError(t, err)
+	require.Equal(t, position, md.LanePosition)
 }
 
 // failNextCommit makes the next commit of a transaction that writes creates report failure after it

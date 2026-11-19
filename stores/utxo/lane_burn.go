@@ -22,7 +22,11 @@ import (
 
 // The reasons a position burns.
 const (
-	// LaneBurnExists: the store already held the transaction, so the create wrote nothing.
+	// LaneBurnExists: the create answered ErrTxExists, because the store already held the
+	// transaction. The record keeps the position it has. One exception: a utxoset create that
+	// carries a block, for a transaction held only as UTXO rows with no identity or containment
+	// row, writes the new position on the containment row it adds and still answers ErrTxExists,
+	// so it is counted here though the position was written.
 	LaneBurnExists = "exists"
 
 	// LaneBurnSpendRejected: an input could not be spent, so the transaction was not created.
@@ -110,7 +114,7 @@ var prometheusLanePositionsBurned = promauto.NewCounterVec(
 		Namespace: "teranode",
 		Subsystem: "lane",
 		Name:      "positions_burned_total",
-		Help:      "Lane positions a store took for a create and wrote no record with, plus positions whose write outcome is unknown (reason outcome_unknown, which may have been written), by store, reason and the service that asked for the create",
+		Help:      "Lane positions a store took for a create and wrote no record with, by store, reason and the service that asked for the create. Reason outcome_unknown counts positions whose write could not be confirmed and may have been written; reason exists can include a utxoset block create that wrote the position on a containment row",
 	},
 	[]string{"store", "reason", "caller"},
 )
