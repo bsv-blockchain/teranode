@@ -25,6 +25,8 @@ func TestLaneBurnReason(t *testing.T) {
 		{"the transaction exists", errors.NewTxExistsError("exists"), nil, LaneBurnExists},
 		{"exists wins over a refused spend", errors.NewTxExistsError("exists"), refused, LaneBurnExists},
 		{"a spend refused on its record", errors.NewProcessingError("failed"), refused, LaneBurnSpendRejected},
+		{"a spend timeout on its record", errors.NewUtxoError("spend failed", errors.NewServiceUnavailableError("batch timed out")),
+			[]*Spend{{Err: errors.NewServiceUnavailableError("batch timed out")}}, LaneBurnError},
 		{"a utxo error", errors.NewUtxoError("2 of 2 inputs could not be spent"), nil, LaneBurnSpendRejected},
 		{"a spent utxo", errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil), nil, LaneBurnSpendRejected},
 		{"the caller's context ended", context.Canceled, nil, LaneBurnOutcomeUnknown},
@@ -165,6 +167,25 @@ func TestSequentialSpendAndCreateRecordsItsBurns(t *testing.T) {
 		require.Error(t, err)
 
 		require.Equal(t, before+1, burnCount("seqstore", LaneBurnSpendRejected, CallerValidator))
+		require.Zero(t, s.createCalls, "the create never ran")
+	})
+
+	t.Run("a spend batch timeout", func(t *testing.T) {
+		timeoutErr := errors.NewServiceUnavailableError("batch timed out")
+		s := &lanedSequentialStore{fakeSequentialStore: fakeSequentialStore{
+			spends:   []*Spend{{Err: timeoutErr}},
+			spendErr: errors.NewUtxoError("spend failed", timeoutErr),
+		}}
+		s.NameLaneBurns("seqstore")
+		s.SetLanePositionSource(onePosition{lane.Pack(9, 7)})
+
+		before := burnCount("seqstore", LaneBurnError, CallerValidator)
+
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100,
+			WithCaller(CallerValidator))
+		require.ErrorIs(t, err, errors.ErrUtxoError)
+
+		require.Equal(t, before+1, burnCount("seqstore", LaneBurnError, CallerValidator))
 		require.Zero(t, s.createCalls, "the create never ran")
 	})
 

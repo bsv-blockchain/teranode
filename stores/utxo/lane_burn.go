@@ -134,6 +134,8 @@ func LaneBurnReason(err error, spends []*Spend) string {
 		return LaneBurnSpendRejected
 	case IsCreateOutcomeUnknown(err):
 		return LaneBurnOutcomeUnknown
+	case errors.IsTransientLocalError(err):
+		return LaneBurnError
 	case errors.Is(err, errors.ErrUtxoError), errors.Is(err, errors.ErrSpent):
 		return LaneBurnSpendRejected
 	default:
@@ -141,11 +143,11 @@ func LaneBurnReason(err error, spends []*Spend) string {
 	}
 }
 
-// spendRefused reports whether a Spend record says its input was refused. A record whose error is
-// the context ending was not refused.
+// spendRefused reports whether a Spend record says its input was refused. A context or local
+// service failure did not refuse the input.
 func spendRefused(spends []*Spend) bool {
 	for _, s := range spends {
-		if s != nil && s.Err != nil && !errors.IsContextError(s.Err) {
+		if s != nil && s.Err != nil && !errors.IsContextError(s.Err) && !errors.IsTransientLocalError(s.Err) {
 			return true
 		}
 	}
