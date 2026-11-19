@@ -1175,15 +1175,32 @@ func lanePositionsOf(l uint8, n int) []uint64 {
 
 // laneSchemaColumnsWant is every lane column PrepareLaneSchema installs, written out here rather
 // than read from laneSchemaColumns so a column dropped from that list fails these tests.
-var laneSchemaColumnsWant = [][2]string{
-	{"tx_ident", "lane_position"},
-	{"tx_mined", "lane_position"},
-	{"preserved_parent", "lane_position"},
-	{"tx_ident", "parent_lane_positions"},
-	{"tx_mined", "parent_lane_positions"},
-	{"preserved_parent", "parent_lane_positions"},
-	{"utxo", "lane_position"},
-	{"spend_journal", "lane_position"},
+// Each entry is table, column and the Postgres data_type: a lane position is a signed 64-bit
+// integer (lane 128 and up is negative) and a parent list is eight bytes per parent.
+var laneSchemaColumnsWant = [][3]string{
+	{"tx_ident", "lane_position", "bigint"},
+	{"tx_mined", "lane_position", "bigint"},
+	{"preserved_parent", "lane_position", "bigint"},
+	{"tx_ident", "parent_lane_positions", "bytea"},
+	{"tx_mined", "parent_lane_positions", "bytea"},
+	{"preserved_parent", "parent_lane_positions", "bytea"},
+	{"utxo", "lane_position", "bigint"},
+	{"spend_journal", "lane_position", "bigint"},
+}
+
+// columnType is a column's Postgres data_type, or "" when it has none.
+func columnType(t *testing.T, s *Store, ctx context.Context, table, column string) string {
+	t.Helper()
+
+	var typ string
+
+	err := s.pool.QueryRow(ctx, `SELECT data_type FROM information_schema.columns
+	                              WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2`, table, column).Scan(&typ)
+	if err != nil {
+		return ""
+	}
+
+	return typ
 }
 
 // Opening the store with lane positions on adds only the record's own lane_position, on the three
@@ -1209,7 +1226,80 @@ func TestLanePositionsOnAddsOnlyTheOwnPositionColumns(t *testing.T) {
 
 	for _, c := range laneSchemaColumnsWant {
 		require.True(t, hasColumn(t, on, ctx, c[0], c[1]), "%s.%s", c[0], c[1])
+		require.Equal(t, c[2], columnType(t, on, ctx, c[0], c[1]), "%s.%s type", c[0], c[1])
 	}
+
+	installed, err = on.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.True(t, installed)
+
+	// Any one column missing, the last in the list included, is not installed.
+	_, err = on.pool.Exec(ctx, `ALTER TABLE spend_journal DROP COLUMN lane_position`)
+	require.NoError(t, err)
+
+	installed, err = on.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.False(t, installed)
+
+	// A catalog query that fails is reported, not read as "not installed".
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	_, err = on.LaneSchemaInstalled(cancelled)
+	require.Error(t, err)
+}
+
+// PrepareLaneSchema keeps retrying a lock timeout for its limit: a transaction that holds the
+// table for a second delays it and does not fail it.
+func TestPrepareLaneSchemaWaitsOutAShortLock(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	blocker, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	var n int64
+	require.NoError(t, blocker.QueryRow(ctx, `SELECT count(*) FROM spend_journal`).Scan(&n))
+
+	// Only this goroutine touches the blocking transaction from here on, and the test waits for it.
+	released := make(chan struct{})
+
+	go func() {
+		defer close(released)
+
+		time.Sleep(time.Second)
+
+		_ = blocker.Rollback(ctx)
+	}()
+
+	err = s.PrepareLaneSchema(ctx)
+	<-released
+
+	require.NoError(t, err)
+	require.True(t, hasColumn(t, s, ctx, "spend_journal", "lane_position"))
+}
+
+// The limit is one deadline for a column, not one per attempt: with the table held well past the
+// limit, the add gives up soon after the limit instead of retrying until the holder lets go.
+func TestLaneColumnAddGivesUpAtItsLimitAcrossRetries(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	blocker, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = blocker.Rollback(ctx) }()
+
+	var n int64
+	require.NoError(t, blocker.QueryRow(ctx, `SELECT count(*) FROM tx_ident`).Scan(&n))
+
+	// The context ends long after the limit, so an add that kept renewing its deadline stops only
+	// there, and too late.
+	addCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	err = addLanePositionColumns(addCtx, s.pool, 1500*time.Millisecond)
+	require.Error(t, err, "the table is still held at the limit")
+	require.Less(t, time.Since(started), 8*time.Second)
 }
 
 // hasColumn reports whether table has column, nullable with no default.

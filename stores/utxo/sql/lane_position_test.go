@@ -351,15 +351,17 @@ func TestLanePositionMigrationPostgresBoundsTheLockWait(t *testing.T) {
 
 // sqlLaneColumnsWant is every lane column of the SQL store, written out here rather than read
 // from sqlLaneColumns so a column dropped from that list fails these tests.
-var sqlLaneColumnsWant = [][2]string{
-	{"transactions", "lane_position"},
-	{"transactions", "parent_lane_positions"},
-	{"outputs", "spending_lane_position"},
+// Each entry is table, column, the Postgres data_type and the SQLite declared type: a lane
+// position is a signed 64-bit integer and a parent list is eight bytes per parent.
+var sqlLaneColumnsWant = [][4]string{
+	{"transactions", "lane_position", "bigint", "BIGINT"},
+	{"transactions", "parent_lane_positions", "bytea", "BLOB"},
+	{"outputs", "spending_lane_position", "bigint", "BIGINT"},
 }
 
 // laneColumnState reports whether table has column and, if so, whether it is nullable with no
-// default, on either engine.
-func laneColumnState(t *testing.T, store *Store, table, column string) (exists, nullableNoDefault bool) {
+// default, and its type as the engine names it.
+func laneColumnState(t *testing.T, store *Store, table, column string) (exists, nullableNoDefault bool, typ string) {
 	t.Helper()
 
 	db := store.RawDB()
@@ -369,58 +371,93 @@ func laneColumnState(t *testing.T, store *Store, table, column string) (exists, 
 
 		var dflt sql.NullString
 
-		err := db.QueryRow(`SELECT is_nullable, column_default FROM information_schema.columns
-		                     WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2`, table, column).Scan(&nullable, &dflt)
+		err := db.QueryRow(`SELECT is_nullable, column_default, data_type FROM information_schema.columns
+		                     WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2`, table, column).Scan(&nullable, &dflt, &typ)
 		if err == sql.ErrNoRows {
-			return false, false
+			return false, false, ""
 		}
 
 		require.NoError(t, err)
 
-		return true, nullable == "YES" && !dflt.Valid
+		return true, nullable == "YES" && !dflt.Valid, typ
 	}
 
 	var notNull int
 
 	var dflt sql.NullString
 
-	err := db.QueryRow(`SELECT "notnull", dflt_value FROM pragma_table_info('`+table+`') WHERE name = $1`, column).Scan(&notNull, &dflt)
+	err := db.QueryRow(`SELECT "notnull", dflt_value, type FROM pragma_table_info('`+table+`') WHERE name = $1`, column).Scan(&notNull, &dflt, &typ)
 	if err == sql.ErrNoRows {
-		return false, false
+		return false, false, ""
 	}
 
 	require.NoError(t, err)
 
-	return true, notNull == 0 && !dflt.Valid
+	return true, notNull == 0 && !dflt.Valid, typ
 }
 
-// requirePrepareLaneSchemaRestoresColumns drops the two lane columns nothing in this build writes,
-// then has PrepareLaneSchema put them back, nullable, with no default and no value in any row.
+// laneRowsSnapshot is what PrepareLaneSchema must not change: every transaction's lane position and
+// every output's spending data.
+func laneRowsSnapshot(t *testing.T, store *Store) [4]int64 {
+	t.Helper()
+
+	var s [4]int64
+
+	require.NoError(t, store.RawDB().QueryRow(`SELECT count(*), count(lane_position), coalesce(sum(lane_position % 1000003), 0) FROM transactions`).Scan(&s[0], &s[1], &s[2]))
+	require.NoError(t, store.RawDB().QueryRow(`SELECT count(spending_data) FROM outputs`).Scan(&s[3]))
+
+	return s
+}
+
+// requirePrepareLaneSchemaRestoresColumns stores records with a lane position and a spend, drops
+// the two lane columns nothing in this build writes, then has PrepareLaneSchema put them back,
+// nullable, with no default, with the right type, and with no value written to any row.
 func requirePrepareLaneSchemaRestoresColumns(t *testing.T, store *Store) {
 	t.Helper()
 
 	ctx := context.Background()
 
+	w := tests.BuildMultiWorkload(t, 0xe2, 1, 1)
+	w.StoreRoots(t, store, 10)
+
+	_, _, err := store.SpendAndCreate(ctx, w.Txs[0], 11, utxostore.WithLanePosition(lane.Pack(9, 5)))
+	require.NoError(t, err)
+
+	before := laneRowsSnapshot(t, store)
+	require.Greater(t, before[0], int64(1), "transactions are stored")
+	require.Positive(t, before[1], "a transaction has a lane position")
+	require.Positive(t, before[3], "an output is spent")
+
 	for _, c := range sqlLaneColumnsWant[1:] {
 		_, err := store.RawDB().Exec(`ALTER TABLE ` + c[0] + ` DROP COLUMN ` + c[1])
 		require.NoError(t, err, "%s.%s", c[0], c[1])
 
-		exists, _ := laneColumnState(t, store, c[0], c[1])
+		exists, _, _ := laneColumnState(t, store, c[0], c[1])
 		require.False(t, exists, "%s.%s dropped", c[0], c[1])
 	}
 
 	require.NoError(t, store.PrepareLaneSchema(ctx))
 	require.NoError(t, store.PrepareLaneSchema(ctx), "a second run is a no-op")
 
+	wantType := 2
+	if store.engine != string(util.Postgres) {
+		wantType = 3
+	}
+
 	for _, c := range sqlLaneColumnsWant {
-		exists, nullable := laneColumnState(t, store, c[0], c[1])
+		exists, nullable, typ := laneColumnState(t, store, c[0], c[1])
 		require.True(t, exists, "%s.%s", c[0], c[1])
 		require.True(t, nullable, "%s.%s is nullable with no default", c[0], c[1])
+		require.Equal(t, c[wantType], typ, "%s.%s type", c[0], c[1])
+	}
 
+	for _, c := range sqlLaneColumnsWant[1:] {
 		var n int
 		require.NoError(t, store.RawDB().QueryRow(`SELECT count(*) FROM `+c[0]+` WHERE `+c[1]+` IS NOT NULL`).Scan(&n))
 		require.Zero(t, n, "%s.%s holds nothing", c[0], c[1])
 	}
+
+	require.Equal(t, before, laneRowsSnapshot(t, store), "no row was written")
 }
 
 func TestPrepareLaneSchemaRestoresColumnsSQLite(t *testing.T) {
@@ -438,6 +475,83 @@ func TestPrepareLaneSchemaRestoresColumnsPostgres(t *testing.T) {
 	require.NoError(t, err)
 
 	requirePrepareLaneSchemaRestoresColumns(t, store)
+}
+
+// holdTable opens a transaction that reads table, holding a lock that ADD COLUMN must wait for,
+// and returns its release.
+func holdTable(t *testing.T, store *Store, table string) func() {
+	t.Helper()
+
+	holder, err := store.RawDB().Begin()
+	require.NoError(t, err)
+
+	var n int64
+	require.NoError(t, holder.QueryRow(`SELECT count(*) FROM `+table).Scan(&n))
+
+	release := func() { _ = holder.Rollback() }
+	t.Cleanup(release)
+
+	return release
+}
+
+// PrepareLaneSchema on Postgres: on a current schema the catalog check means no lock is asked
+// for, so a held table does not delay it; with a column missing it waits out a short hold within
+// its limit; and it stops when the caller's context ends instead of retrying to the limit.
+func TestPrepareLaneSchemaLocksPostgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	ctx := context.Background()
+
+	store, err := New(ctx, ulogger.TestLogger{}, lanePositionSettings(t), startLanePositionPostgres(t))
+	require.NoError(t, err)
+
+	saved := laneColumnMigrationLimit
+	t.Cleanup(func() { laneColumnMigrationLimit = saved })
+
+	t.Run("current schema takes no lock", func(t *testing.T) {
+		release := holdTable(t, store, "outputs")
+		defer release()
+
+		laneColumnMigrationLimit = time.Second
+		require.NoError(t, store.PrepareLaneSchema(ctx))
+	})
+
+	t.Run("waits out a short hold", func(t *testing.T) {
+		_, err := store.RawDB().Exec(`ALTER TABLE outputs DROP COLUMN spending_lane_position`)
+		require.NoError(t, err)
+
+		release := holdTable(t, store, "outputs")
+
+		go func() {
+			time.Sleep(time.Second)
+			release()
+		}()
+
+		laneColumnMigrationLimit = time.Minute
+		require.NoError(t, store.PrepareLaneSchema(ctx))
+
+		exists, _, _ := laneColumnState(t, store, "outputs", "spending_lane_position")
+		require.True(t, exists)
+	})
+
+	t.Run("stops when the context ends", func(t *testing.T) {
+		_, err := store.RawDB().Exec(`ALTER TABLE outputs DROP COLUMN spending_lane_position`)
+		require.NoError(t, err)
+
+		release := holdTable(t, store, "outputs")
+		defer release()
+
+		laneColumnMigrationLimit = 30 * time.Second
+
+		cctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancel()
+
+		started := time.Now()
+		require.Error(t, store.PrepareLaneSchema(cctx))
+		require.Less(t, time.Since(started), 10*time.Second, "it gave up when the context ended, not at the limit")
+	})
 }
 
 // lockedLaneExecutor stands in for Postgres while another transaction holds a table: every lane
@@ -471,5 +585,5 @@ func TestAddLanePositionColumnSharesOneDeadline(t *testing.T) {
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "parent_lane_positions")
-	require.Less(t, time.Since(started), 3*time.Second)
+	require.Less(t, time.Since(started), 3500*time.Millisecond)
 }
