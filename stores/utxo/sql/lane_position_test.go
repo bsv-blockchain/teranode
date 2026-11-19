@@ -3,6 +3,8 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
+	"fmt"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -396,17 +398,49 @@ func laneColumnState(t *testing.T, store *Store, table, column string) (exists, 
 	return true, notNull == 0 && !dflt.Valid, typ
 }
 
-// laneRowsSnapshot is what PrepareLaneSchema must not change: every transaction's lane position and
-// every output's spending data.
-func laneRowsSnapshot(t *testing.T, store *Store) [4]int64 {
+// laneRowsSnapshot is what PrepareLaneSchema must not change: every transaction's lane position by
+// hash, and every output's spending data by transaction hash and index.
+func laneRowsSnapshot(t *testing.T, store *Store) (positions, spends map[string]string) {
 	t.Helper()
 
-	var s [4]int64
+	positions = map[string]string{}
+	spends = map[string]string{}
 
-	require.NoError(t, store.RawDB().QueryRow(`SELECT count(*), count(lane_position), coalesce(sum(lane_position % 1000003), 0) FROM transactions`).Scan(&s[0], &s[1], &s[2]))
-	require.NoError(t, store.RawDB().QueryRow(`SELECT count(spending_data) FROM outputs`).Scan(&s[3]))
+	rows, err := store.RawDB().Query(`SELECT hash, lane_position FROM transactions`)
+	require.NoError(t, err)
 
-	return s
+	for rows.Next() {
+		var (
+			hash []byte
+			pos  sql.NullInt64
+		)
+
+		require.NoError(t, rows.Scan(&hash, &pos))
+
+		positions[hex.EncodeToString(hash)] = fmt.Sprint(pos)
+	}
+
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+
+	rows, err = store.RawDB().Query(`SELECT t.hash, o.idx, o.spending_data FROM outputs o JOIN transactions t ON t.id = o.transaction_id`)
+	require.NoError(t, err)
+
+	for rows.Next() {
+		var (
+			hash, data []byte
+			idx        int64
+		)
+
+		require.NoError(t, rows.Scan(&hash, &idx, &data))
+
+		spends[fmt.Sprintf("%x:%d", hash, idx)] = fmt.Sprintf("%x/%t", data, data != nil)
+	}
+
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+
+	return positions, spends
 }
 
 // requirePrepareLaneSchemaRestoresColumns stores records with a lane position and a spend, drops
@@ -423,10 +457,20 @@ func requirePrepareLaneSchemaRestoresColumns(t *testing.T, store *Store) {
 	_, _, err := store.SpendAndCreate(ctx, w.Txs[0], 11, utxostore.WithLanePosition(lane.Pack(9, 5)))
 	require.NoError(t, err)
 
-	before := laneRowsSnapshot(t, store)
-	require.Greater(t, before[0], int64(1), "transactions are stored")
-	require.Positive(t, before[1], "a transaction has a lane position")
-	require.Positive(t, before[3], "an output is spent")
+	positionsBefore, spendsBefore := laneRowsSnapshot(t, store)
+	require.Greater(t, len(positionsBefore), 1, "transactions are stored")
+	require.Contains(t, positionsBefore, hex.EncodeToString(w.Txs[0].TxIDChainHash()[:]))
+	require.Equal(t, fmt.Sprint(sql.NullInt64{Int64: int64(lane.Pack(9, 5)), Valid: true}), positionsBefore[hex.EncodeToString(w.Txs[0].TxIDChainHash()[:])], "a transaction has a lane position")
+
+	spent := 0
+
+	for _, v := range spendsBefore {
+		if strings.HasSuffix(v, "/true") {
+			spent++
+		}
+	}
+
+	require.Positive(t, spent, "an output is spent")
 
 	for _, c := range sqlLaneColumnsWant[1:] {
 		_, err := store.RawDB().Exec(`ALTER TABLE ` + c[0] + ` DROP COLUMN ` + c[1])
@@ -457,7 +501,9 @@ func requirePrepareLaneSchemaRestoresColumns(t *testing.T, store *Store) {
 		require.Zero(t, n, "%s.%s holds nothing", c[0], c[1])
 	}
 
-	require.Equal(t, before, laneRowsSnapshot(t, store), "no row was written")
+	positionsAfter, spendsAfter := laneRowsSnapshot(t, store)
+	require.Equal(t, positionsBefore, positionsAfter, "every transaction keeps its lane position")
+	require.Equal(t, spendsBefore, spendsAfter, "every output keeps its spending data")
 }
 
 func TestPrepareLaneSchemaRestoresColumnsSQLite(t *testing.T) {

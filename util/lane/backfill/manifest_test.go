@@ -563,6 +563,8 @@ type faultyFile struct {
 	failWrite bool
 	failSync  bool
 	syncs     int
+	// ops is each successful write and sync, in order: "w" for a write, "s" for a sync.
+	ops string
 }
 
 func (f *faultyFile) WriteAt(b []byte, off int64) (int, error) {
@@ -570,7 +572,12 @@ func (f *faultyFile) WriteAt(b []byte, off int64) (int, error) {
 		return 0, errInjected
 	}
 
-	return f.File.WriteAt(b, off)
+	n, err := f.File.WriteAt(b, off)
+	if err == nil {
+		f.ops += "w"
+	}
+
+	return n, err
 }
 
 func (f *faultyFile) Sync() error {
@@ -580,7 +587,12 @@ func (f *faultyFile) Sync() error {
 		return errInjected
 	}
 
-	return f.File.Sync()
+	err := f.File.Sync()
+	if err == nil {
+		f.ops += "s"
+	}
+
+	return err
 }
 
 // withFaultyFiles makes every manifest CreateManifest opens write through a faultyFile, which
@@ -612,20 +624,26 @@ func TestManifestSyncsEveryRecord(t *testing.T) {
 
 	defer func() { require.NoError(t, m.Close()) }()
 
+	// Each record's write is followed by its sync before the call returns: magic and header, then
+	// one write and one sync per record, never a sync ahead of the write it should cover.
 	f := (*made)[0]
 	require.Equal(t, 1, f.syncs, "the header")
+	require.Equal(t, "wws", f.ops)
 
 	_, err = m.AppendBlock(10, 10, txids(1, 2))
 	require.NoError(t, err)
 	require.Equal(t, 2, f.syncs)
+	require.Equal(t, "wwsws", f.ops)
 
 	_, err = m.AppendSuffix(txids(2, 1))
 	require.NoError(t, err)
 	require.Equal(t, 3, f.syncs)
+	require.Equal(t, "wwswsws", f.ops)
 
 	_, err = m.Finish()
 	require.NoError(t, err)
 	require.Equal(t, 4, f.syncs)
+	require.Equal(t, "wwswswsws", f.ops)
 }
 
 // A sync that fails after its write succeeded leaves a whole record on disk that the caller was
