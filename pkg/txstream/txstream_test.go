@@ -3,11 +3,13 @@ package txstream
 import (
 	"bytes"
 	"io"
+	"runtime"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -157,4 +159,212 @@ func TestStandardOnlyRefusesTheExtendedForm(t *testing.T) {
 	}})
 	require.ErrorAs(t, err, new(ExtendedFormError))
 	require.False(t, called, "refused before any output is read")
+}
+
+// A declared script length is the peer's word, not proof the bytes exist. A 61-byte transaction
+// declaring a 512 MiB locking script, and then ending, must fail without allocating the 512 MiB:
+// the script is read in growing chunks, and is allocated whole only once a quarter of it has
+// arrived. The 64 MiB cases pin that quarter: just under it the whole script is never allocated,
+// just over it it is.
+func TestADeclaredScriptLengthIsNotAllocatedBeforeItsBytesArrive(t *testing.T) {
+	var header bytes.Buffer
+
+	header.Write([]byte{1, 0, 0, 0})             // version
+	header.WriteByte(1)                          // one input
+	header.Write(make([]byte, 32+4))             // previous outpoint
+	header.Write([]byte{1, 0x51})                // unlocking script OP_TRUE
+	header.Write([]byte{0xff, 0xff, 0xff, 0xff}) // sequence
+	header.WriteByte(1)                          // one output
+	header.Write(make([]byte, 8))                // satoshis
+
+	declare512MiB := []byte{0xfe, 0x00, 0x00, 0x00, 0x20}
+	declare64MiB := []byte{0xfe, 0x00, 0x00, 0x00, 0x04}
+
+	for _, tc := range []struct {
+		name     string
+		declared []byte
+		sent     int
+		below    uint64 // TotalAlloc must stay under this, when set
+		atLeast  uint64 // TotalAlloc must reach this, when set
+	}{
+		{name: "512 MiB declared, none of it sent", declared: declare512MiB, sent: 0, below: 1 << 20},
+		{name: "512 MiB declared, 1 MiB of it sent", declared: declare512MiB, sent: 1 << 20, below: 4 << 20},
+		{name: "64 MiB declared, just under a quarter sent", declared: declare64MiB, sent: 16<<20 - 1<<10, below: 32 << 20},
+		{name: "64 MiB declared, just over a quarter sent", declared: declare64MiB, sent: 16<<20 + 1<<10, atLeast: 64 << 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := append(bytes.Clone(header.Bytes()), tc.declared...)
+			stream = append(stream, make([]byte, tc.sent)...)
+
+			var before, after runtime.MemStats
+
+			runtime.ReadMemStats(&before)
+			_, _, _, err := NewReader(bytes.NewReader(stream)).Next(Options{})
+			runtime.ReadMemStats(&after)
+
+			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+
+			allocated := after.TotalAlloc - before.TotalAlloc
+			if tc.below > 0 {
+				require.Less(t, allocated, tc.below, "allocated for bytes that never arrived")
+			}
+
+			if tc.atLeast > 0 {
+				require.GreaterOrEqual(t, allocated, tc.atLeast, "the whole script was not allocated once a quarter arrived")
+			}
+		})
+	}
+}
+
+// A script larger than several growth steps, read partly as a proof prefix and partly straight into
+// its final buffer, comes back byte for byte.
+func TestAScriptSpanningManyChunksReadsWhole(t *testing.T) {
+	// 3 MiB: its 768 KiB proof is read as chunks of 64, 128, 256 and 320 KiB, so the doubling and
+	// the copy offsets are both under a byte-for-byte check.
+	tx := sampleTx(t, 7, 3<<20)
+
+	got, id, _, err := NewReader(bytes.NewReader(tx.Bytes())).Next(Options{})
+	require.NoError(t, err)
+	require.Equal(t, *tx.TxIDChainHash(), *id)
+	require.Equal(t, tx.Outputs[1].LockingScript, got.Outputs[1].LockingScript)
+}
+
+// pieceReader hands out at most piece bytes per Read and counts its calls.
+type pieceReader struct {
+	r     io.Reader
+	piece int
+	calls int
+}
+
+func (p *pieceReader) Read(b []byte) (int, error) {
+	p.calls++
+
+	return p.r.Read(b[:min(len(b), p.piece)])
+}
+
+// failingWriter fails every write larger than the reader's 4 KiB buffer, so only a read straight
+// from the source into a prefix chunk fails, and remembers how many source reads had happened at
+// its first failure.
+type failingWriter struct {
+	src      *pieceReader
+	failedAt int
+}
+
+var errSinkFull = errors.NewStorageError("sink full")
+
+func (w *failingWriter) Write(p []byte) (int, error) {
+	if len(p) <= 4096 {
+		return len(p), nil
+	}
+
+	if w.failedAt == 0 {
+		w.failedAt = w.src.calls
+	}
+
+	return 0, errSinkFull
+}
+
+// A failing output writer stops the read at once, even when the read that failed filled its
+// buffer, which io.ReadFull would otherwise take as success. The script is large enough to be read
+// in prefix chunks, and the source hands out exactly one chunk per read, so every chunk read
+// completes.
+func TestAFailingWriterStopsTheReadBeforeAnotherSourceRead(t *testing.T) {
+	tx := bt.NewTx()
+	tx.Version = 1
+
+	prev := chainhash.Hash{9}
+	in := &bt.Input{SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{0x51})}
+	require.NoError(t, in.PreviousTxIDAdd(&prev))
+	tx.Inputs = append(tx.Inputs, in)
+
+	script := make([]byte, 5*scriptChunk)
+	script[0] = 0x76 // not a data script, so it is read and kept
+	tx.Outputs = append(tx.Outputs, &bt.Output{Satoshis: 1, LockingScript: bscript.NewFromBytes(script)})
+
+	src := &pieceReader{r: bytes.NewReader(tx.Bytes()), piece: scriptChunk}
+	sink := &failingWriter{src: src}
+
+	_, _, _, err := NewReader(src).Next(Options{BeforeOutputs: func(*bt.Tx) (io.Writer, error) { return sink, nil }})
+
+	require.ErrorIs(t, err, errSinkFull)
+	require.NotZero(t, sink.failedAt)
+	require.Equal(t, sink.failedAt, src.calls, "the source was read again after the writer failed")
+}
+
+// A trusted source reads a large script with one allocation of its length and no proof prefix.
+// The same script from an untrusted source costs a quarter more.
+func TestATrustedSourceAllocatesALargeScriptOnce(t *testing.T) {
+	const size = 4 << 20
+
+	raw := sampleTx(t, 8, size).Bytes()
+
+	allocated := func(opts Options) uint64 {
+		var before, after runtime.MemStats
+
+		runtime.ReadMemStats(&before)
+		got, _, _, err := NewReader(bytes.NewReader(raw)).Next(opts)
+		runtime.ReadMemStats(&after)
+
+		require.NoError(t, err)
+		require.Equal(t, raw, got.Bytes())
+
+		return after.TotalAlloc - before.TotalAlloc
+	}
+
+	require.Less(t, allocated(Options{LengthsTrusted: true}), uint64(size)*9/8, "a trusted script is allocated once")
+	require.GreaterOrEqual(t, allocated(Options{}), uint64(size)*5/4, "an untrusted script proves a quarter first")
+}
+
+// nthWriteFails fails its nth write and every one after it, and remembers how many source reads
+// had happened at its first failure.
+type nthWriteFails struct {
+	src      *pieceReader
+	n        int
+	writes   int
+	failedAt int
+}
+
+func (w *nthWriteFails) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes < w.n {
+		return len(p), nil
+	}
+
+	if w.failedAt == 0 {
+		w.failedAt = w.src.calls
+	}
+
+	return 0, errSinkFull
+}
+
+// The peek that spots an OP_FALSE OP_RETURN script reads the source directly, so it must not run
+// once the writer has failed. The writer fails on the one-byte script length, a read io.ReadFull
+// completes and so swallows the failure, and the source holds nothing more until it is read again.
+func TestAFailingWriterStopsTheReadBeforeTheDataScriptPeek(t *testing.T) {
+	tx := bt.NewTx()
+	tx.Version = 1
+
+	prev := chainhash.Hash{10}
+	in := &bt.Input{SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{0x51})}
+	require.NoError(t, in.PreviousTxIDAdd(&prev))
+	tx.Inputs = append(tx.Inputs, in)
+
+	data := []byte{bscript.OpFALSE, bscript.OpRETURN, 0x01}
+	tx.Outputs = append(tx.Outputs, &bt.Output{LockingScript: bscript.NewFromBytes(data)})
+
+	raw := tx.Bytes()
+	throughLength := len(raw) - 4 - len(data) // everything up to and including the script length
+
+	src := &pieceReader{r: bytes.NewReader(raw), piece: throughLength}
+	// The writes are the output count, the satoshis and then the script length.
+	sink := &nthWriteFails{src: src, n: 3}
+
+	_, _, _, err := NewReader(src).Next(Options{
+		BeforeOutputs:   func(*bt.Tx) (io.Writer, error) { return sink, nil },
+		SkipDataScripts: true,
+	})
+
+	require.ErrorIs(t, err, errSinkFull)
+	require.NotZero(t, sink.failedAt)
+	require.Equal(t, sink.failedAt, src.calls, "the source was read again after the writer failed")
 }

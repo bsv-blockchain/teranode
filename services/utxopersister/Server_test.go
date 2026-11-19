@@ -2,21 +2,28 @@ package utxopersister
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	terrors "github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -486,4 +493,597 @@ func TestStart_FSMContextCancellation(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, terrors.IsContextError(err), "expected context error, got %v", err)
 	mockBlockchainClient.AssertExpectations(t)
+}
+
+// A loop that stopped beating longer ago than the timeout is reported as wedged,
+// and only then: no timeout, or a heartbeat no loop has claimed, stays healthy
+// (issue 1447).
+func TestHealth_LivenessReportsStalledLoop(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name         string
+		stallTimeout time.Duration
+		lastBeatAgo  time.Duration // 0 = never beaten
+		wantStatus   int
+	}{
+		{name: "stale beat past the timeout", stallTimeout: time.Minute, lastBeatAgo: 2 * time.Minute, wantStatus: http.StatusServiceUnavailable},
+		{name: "fresh beat", stallTimeout: time.Minute, lastBeatAgo: time.Second, wantStatus: http.StatusOK},
+		{name: "timeout off", stallTimeout: 0, lastBeatAgo: time.Hour, wantStatus: http.StatusOK},
+		{name: "loop not started yet", stallTimeout: time.Minute, lastBeatAgo: 0, wantStatus: http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.Block.UTXOPersisterLivenessStallTimeout = tt.stallTimeout
+
+			server := New(ctx, ulogger.TestLogger{}, tSettings, memory.New(), nil)
+			if tt.lastBeatAgo > 0 {
+				server.heartbeat.SetLastBeatForTest(time.Now().Add(-tt.lastBeatAgo))
+			}
+
+			status, msg, err := server.Health(ctx, true)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantStatus, status, msg)
+		})
+	}
+}
+
+// newLivenessTestServer starts a Server's main loop with a short idle tick and a
+// liveness timeout, its best-block lookup answered by bestBlockHeader. It
+// returns the server and a stop function that ends the loop and waits for Start
+// to return.
+func newLivenessTestServer(t *testing.T, stallTimeout time.Duration, bestBlockHeader func(mock.Arguments)) (*Server, func()) {
+	t.Helper()
+
+	return startLivenessTestServer(t, stallTimeout, 0, bestBlockHeader, nil)
+}
+
+// startLivenessTestServer is newLivenessTestServer with a poll interval (0 =
+// the production default) and a best-block lookup that fails with
+// bestBlockErr when it is not nil, so a pass returns at once and the loop
+// goes back to idling in its select.
+func startLivenessTestServer(t *testing.T, stallTimeout, pollInterval time.Duration, bestBlockHeader func(mock.Arguments), bestBlockErr error) (*Server, func()) {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Block.UTXOPersisterLivenessStallTimeout = stallTimeout
+
+	mockClient := &blockchain.Mock{}
+	mockClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(nil)
+	mockClient.On("Subscribe", mock.Anything, mock.Anything).Return(make(chan *blockchain.Notification), nil)
+	mockClient.On("GetBestBlockHeader", mock.Anything).Run(bestBlockHeader).Return(createTestBlockHeader(), createTestBlockHeaderMeta(150), bestBlockErr)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	server := New(ctx, ulogger.TestLogger{}, tSettings, memory.New(), mockClient)
+	server.lastHeight = 100
+	server.heartbeatInterval = 10 * time.Millisecond
+	server.pollInterval = pollInterval
+
+	done := make(chan error, 1)
+
+	go func() { done <- server.Start(ctx, make(chan struct{})) }()
+
+	stop := func() {
+		cancel()
+
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(5 * time.Second):
+			t.Fatal("Start did not return after its context was cancelled")
+		}
+	}
+
+	return server, stop
+}
+
+// An idle, synced persister is healthy: the startup pass finds the next block
+// still waiting for 100 confirmations and waits a minute inside the loop's select
+// case. That wait beats, so the probe never fires on a node with nothing to do.
+// The stop then disables the heartbeat, so a graceful drain is not read as a stall.
+func TestStart_IdleLoopStaysLiveAndStopDisablesHeartbeat(t *testing.T) {
+	waiting := make(chan struct{}, 1)
+
+	server, stop := newLivenessTestServer(t, 100*time.Millisecond, func(mock.Arguments) {
+		select {
+		case waiting <- struct{}{}:
+		default:
+		}
+	})
+
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the startup pass never asked for the best block")
+	}
+
+	require.Never(t, func() bool {
+		status, _, _ := server.Health(context.Background(), true)
+		return status != http.StatusOK
+	}, 500*time.Millisecond, 10*time.Millisecond, "a persister waiting for confirmations must stay live")
+
+	require.NotZero(t, server.heartbeat.Age(), "the loop must have claimed the heartbeat")
+
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(prometheusUTXOPersisterLivenessHeartbeatAge) > 0
+	}, 5*time.Second, 10*time.Millisecond, "a running loop publishes its heartbeat age")
+
+	stop()
+
+	require.Zero(t, server.heartbeat.Age(), "a stopped loop must disable its heartbeat")
+
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(prometheusUTXOPersisterLivenessHeartbeatAge) == 0
+	}, 5*time.Second, 10*time.Millisecond, "a stopped loop's gauge reads 0, not its last age")
+}
+
+// A pass that returns at once leaves the loop idling in its select, where only
+// the idle tick beats. With nothing else to do for longer than the timeout, the
+// probe must still answer OK.
+func TestStart_IdleTickKeepsAnIdleLoopLive(t *testing.T) {
+	asked := make(chan struct{}, 1)
+
+	server, stop := startLivenessTestServer(t, 100*time.Millisecond, 0, func(mock.Arguments) {
+		select {
+		case asked <- struct{}{}:
+		default:
+		}
+	}, terrors.NewServiceError("best block unavailable"))
+
+	defer stop()
+
+	select {
+	case <-asked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the startup pass never asked for the best block")
+	}
+
+	require.Never(t, func() bool {
+		status, _, _ := server.Health(context.Background(), true)
+		return status != http.StatusOK
+	}, 500*time.Millisecond, 10*time.Millisecond, "an idle loop must stay live on the idle tick alone")
+}
+
+// The poll timer fires even though the idle tick keeps waking the select. A
+// time.After created on every pass would be restarted by each tick and never
+// fire, so a persister without notifications would never poll again.
+func TestStart_PollTimerFiresBetweenIdleTicks(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		calls int
+	)
+
+	_, stop := startLivenessTestServer(t, 0, 50*time.Millisecond, func(mock.Arguments) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+	}, terrors.NewServiceError("best block unavailable"))
+
+	defer stop()
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return calls >= 3
+	}, 5*time.Second, 10*time.Millisecond, "the poll timer must run passes with no notification or trigger")
+
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(prometheusUTXOPersisterLivenessHeartbeatAge) > 0
+	}, 5*time.Second, 10*time.Millisecond, "the heartbeat age is published while the liveness timeout is off")
+}
+
+// The reproduction from issue 1447: a loop stuck inside a pass (here a
+// best-block lookup that never returns) stops beating, and the probe reports
+// 503 instead of answering OK forever.
+func TestStart_WedgedLoopFailsLiveness(t *testing.T) {
+	release := make(chan struct{})
+
+	server, stop := newLivenessTestServer(t, 100*time.Millisecond, func(mock.Arguments) {
+		<-release
+	})
+
+	defer stop()
+	defer close(release)
+
+	require.Eventually(t, func() bool {
+		status, _, _ := server.Health(context.Background(), true)
+		return status == http.StatusServiceUnavailable
+	}, 5*time.Second, 10*time.Millisecond, "a wedged loop must fail liveness")
+}
+
+// restartTestChain stages three blocks of deltas and the set for block 1, the
+// state a persister is in once it has recorded height 1. It returns a Server
+// at lastHeight 1 whose best block is 3, so its next pass rolls blocks 2 and 3
+// up into the set for block 3.
+//
+// block3Txs replaces block 3's single new output when given.
+func restartTestChain(t *testing.T, store blob.Store, block3Txs ...*bt.Tx) (*Server, map[uint32]*chainhash.Hash) {
+	t.Helper()
+
+	ctx := context.Background()
+	tSettings := test.CreateBaseTestSettings(t)
+
+	headers, metas, byH := buildChainHeaders(t, tSettings.ChainCfgParams.GenesisHash, 3)
+
+	stageBlockDeltas(t, ctx, tSettings, store, byH[1], 1, p2pkhTx(t, 0x11, 1000))
+	stageBlockDeltas(t, ctx, tSettings, store, byH[2], 2, p2pkhTx(t, 0x22, 2000))
+	if len(block3Txs) == 0 {
+		block3Txs = []*bt.Tx{p2pkhTx(t, 0x33, 3000)}
+	}
+
+	stageBlockDeltas(t, ctx, tSettings, store, byH[3], 3, block3Txs...)
+
+	mockClient := &blockchain.Mock{}
+	mockClient.On("GetBestBlockHeader", mock.Anything).Return(headers[2], metas[2], nil)
+
+	for _, r := range [][2]uint32{{1, 1}, {1, 3}, {2, 3}} {
+		mockClient.On("GetBlockHeadersByHeight", mock.Anything, r[0], r[1]).Return(headers[r[0]-1:r[1]], metas[r[0]-1:r[1]], nil)
+	}
+
+	server := New(ctx, ulogger.TestLogger{}, tSettings, store, mockClient)
+
+	require.NoError(t, server.BuildUTXOSetToHeight(ctx, 0, 1, true))
+	require.NoError(t, server.Init(ctx))
+	require.Equal(t, uint32(1), server.lastHeight)
+
+	return server, byH
+}
+
+// A run that published the set for block 3 and then stopped before recording
+// it (a crash, a deploy, a liveness restart) must not wedge the next run on
+// "already exists": the next pass records the finished set and moves on.
+func TestProcessNextBlock_RecordsASetAnEarlierRunPublished(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+
+	server, byH := restartTestChain(t, store)
+
+	// The earlier run: the set for block 3 is published, lastProcessed still says 1.
+	require.NoError(t, server.BuildUTXOSetToHeight(ctx, 1, 3, false))
+
+	// Give the previous set its sidecars, so the test sees they go with it.
+	require.NoError(t, store.Set(ctx, byH[1][:], fileformat.FileTypeUtxoSetHash, []byte("set-hash")))
+	require.NoError(t, store.Set(ctx, byH[1][:], fileformat.FileTypeUtxoHeaders, []byte("headers")))
+
+	_, err := server.processNextBlock(ctx)
+	require.NoError(t, err)
+
+	for _, ft := range []fileformat.FileType{fileformat.FileTypeUtxoSetHash, fileformat.FileTypeUtxoHeaders} {
+		exists, err := store.Exists(ctx, byH[1][:], ft)
+		require.NoError(t, err)
+		require.False(t, exists, "the previous %s is deleted with the set", ft)
+	}
+
+	height, err := server.readLastHeight(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(3), height)
+
+	exists, err := store.Exists(ctx, byH[1][:], fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.False(t, exists, "the previous set is deleted once the new one is recorded")
+
+	require.Len(t, readSetUTXOs(t, ctx, server.settings, store, byH[3]), 3)
+}
+
+// delFailingStore fails every delete of a UTXO set, standing in for a run that
+// stops after writing the new set and before the previous one is gone.
+type delFailingStore struct {
+	blob.Store
+}
+
+func (s *delFailingStore) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
+	if fileType == fileformat.FileTypeUtxoSet {
+		return terrors.NewStorageError("injected delete failure")
+	}
+
+	return s.Store.Del(ctx, key, fileType, opts...)
+}
+
+// The new height is recorded before the previous set is deleted. Otherwise a
+// stop between the two leaves lastProcessed pointing at a base set that is gone,
+// and every later pass fails to verify it. A failed delete is logged, not
+// returned: nothing would retry it, and the pass has done its work.
+func TestProcessNextBlock_RecordsHeightBeforeDeletingPreviousSet(t *testing.T) {
+	ctx := context.Background()
+	store := &delFailingStore{Store: memory.New()}
+
+	server, byH := restartTestChain(t, store)
+
+	// Give the previous set its side files, so the test can see they are kept.
+	require.NoError(t, store.Set(ctx, byH[1][:], fileformat.FileTypeUtxoSetHash, []byte("set-hash")))
+	require.NoError(t, store.Set(ctx, byH[1][:], fileformat.FileTypeUtxoHeaders, []byte("headers")))
+
+	logs := &recordingT{}
+	server.logger = ulogger.NewErrorTestLogger(logs)
+
+	_, err := server.processNextBlock(ctx)
+	require.NoError(t, err, "a failed delete of the previous set does not fail a pass that recorded the new one")
+	require.True(t, logs.contains("ERR_LEVEL", "not retried"), "a failed delete is logged at Error")
+
+	for _, ft := range []fileformat.FileType{fileformat.FileTypeUtxoSet, fileformat.FileTypeUtxoSetHash, fileformat.FileTypeUtxoHeaders} {
+		exists, err := store.Exists(ctx, byH[1][:], ft)
+		require.NoError(t, err)
+		require.True(t, exists, "the previous %s stays on disk after a failed delete", ft)
+	}
+
+	height, err := server.readLastHeight(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(3), height, "the new set must be recorded even though the old one was not deleted")
+
+	exists, err := store.Exists(ctx, byH[3][:], fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.True(t, exists)
+}
+
+// processNextBlock and BuildUTXOSetToHeight both hand the heartbeat to the
+// consolidator, so a long roll-up renews a heartbeat the main loop owns. The
+// heartbeat is armed an hour stale; the per-block beats must bring it back.
+func TestRollUp_RenewsAnArmedHeartbeat(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name   string
+		rollUp func(*Server) error
+	}{
+		{name: "processNextBlock", rollUp: func(s *Server) error {
+			_, err := s.processNextBlock(ctx)
+			return err
+		}},
+		{name: "BuildUTXOSetToHeight", rollUp: func(s *Server) error {
+			return s.BuildUTXOSetToHeight(ctx, 1, 3, false)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, _ := restartTestChain(t, memory.New())
+			server.heartbeat.SetLastBeatForTest(time.Now().Add(-time.Hour))
+
+			require.NoError(t, tt.rollUp(server))
+			require.Less(t, server.heartbeat.Age(), time.Minute, "the roll-up must renew the heartbeat")
+		})
+	}
+}
+
+// Every record a roll-up and a set write handle counts toward a beat. With a
+// beat on every record, the count is the sum of each counting step, so removing
+// any one of them changes it.
+func TestRollUpAndSetWrite_BeatPerRecord(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+
+	// Block 3 spends block 1's output, so the roll-up reads a deletion and the
+	// set write filters a record copied from the previous set.
+	spend := p2pkhTx(t, 0x33, 3000)
+
+	in := &bt.Input{
+		PreviousTxOutIndex: 0,
+		UnlockingScript:    bscript.NewFromBytes([]byte{0x51}),
+		SequenceNumber:     bt.DefaultSequenceNumber,
+	}
+	require.NoError(t, in.PreviousTxIDAdd(p2pkhTx(t, 0x11, 1000).TxIDChainHash()))
+	spend.Inputs = append(spend.Inputs, in)
+
+	server, byH := restartTestChain(t, store, spend)
+
+	c := NewConsolidator(server.logger, server.settings, nil, server.blockchainClient, store, byH[1])
+	c.beatEvery = 1
+
+	beats := 0
+	c.progress = func() { beats++ }
+
+	require.NoError(t, c.ConsolidateBlockRange(ctx, 2, 3))
+
+	// Two blocks, one deletion read, and one additions record per block.
+	require.Equal(t, 2+1+2, beats, "roll-up beats")
+
+	us, err := GetUTXOSet(ctx, server.logger, server.settings, store, byH[1], 1)
+	require.NoError(t, err)
+
+	beats = 0
+
+	require.NoError(t, us.CreateUTXOSet(ctx, c))
+
+	// One record copied from block 1's set, and the two additions.
+	require.Equal(t, 1+2, beats, "set write beats")
+}
+
+// The idle tick falls back to its default when unset, which is every production
+// server: a zero interval would panic in time.NewTicker on every start.
+func TestEffectiveHeartbeatInterval(t *testing.T) {
+	require.Equal(t, defaultHeartbeatInterval, effectiveHeartbeatInterval(0))
+	require.Equal(t, defaultHeartbeatInterval, effectiveHeartbeatInterval(-time.Second))
+	require.Equal(t, 10*time.Millisecond, effectiveHeartbeatInterval(10*time.Millisecond))
+}
+
+// A timeout at or within twice the idle tick cannot tell an idle loop from a
+// wedged one; zero or less means the check is off.
+func TestLivenessTimeoutTooTight(t *testing.T) {
+	tick := 5 * time.Second
+
+	tests := []struct {
+		stall time.Duration
+		tight bool
+	}{
+		{stall: 0, tight: false},
+		{stall: -time.Second, tight: false},
+		{stall: tick, tight: true},
+		{stall: 2 * tick, tight: true},
+		{stall: 2*tick + time.Nanosecond, tight: false},
+	}
+
+	for _, tt := range tests {
+		require.Equal(t, tt.tight, livenessTimeoutTooTight(tt.stall, tick), "stall timeout %s", tt.stall)
+	}
+}
+
+// A shutdown during the wait for confirmations ends the pass at once and queues
+// no further pass, so the stop is not held up and no work starts after it.
+func TestTrigger_ShutdownDuringConfirmationWaitQueuesNoPass(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	mockClient := &blockchain.Mock{}
+	mockClient.On("GetBestBlockHeader", mock.Anything).Return(createTestBlockHeader(), createTestBlockHeaderMeta(150), nil)
+
+	server := New(context.Background(), ulogger.TestLogger{}, tSettings, memory.New(), mockClient)
+	server.lastHeight = 100
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+
+	require.NoError(t, server.trigger(ctx, "test"))
+	require.Less(t, time.Since(start), 10*time.Second, "the wait must end at shutdown, not after a minute")
+	require.Empty(t, server.triggerCh, "a pass stopped by shutdown must not queue another")
+}
+
+// The one-shot build renews a heartbeat the main loop owns but never arms one,
+// so a CLI build in a process with no main loop can never fail liveness.
+func TestBuildUTXOSetToHeight_DoesNotArmTheHeartbeat(t *testing.T) {
+	server, _ := restartTestChain(t, memory.New())
+
+	require.NoError(t, server.BuildUTXOSetToHeight(context.Background(), 1, 3, false))
+	require.Zero(t, server.heartbeat.Age(), "a one-shot build must leave an unarmed heartbeat unarmed")
+}
+
+// faultyStore fails the operations its flags name, standing in for a block
+// store that errors partway through a pass.
+type faultyStore struct {
+	blob.Store
+	existsFailsFor *chainhash.Hash // fail processNextBlock's own Exists check of this block's UTXO set
+	datWriteFails  bool            // fail writing lastProcessed.dat
+}
+
+func (s *faultyStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
+	if s.existsFailsFor != nil && fileType == fileformat.FileTypeUtxoSet && string(key) == string(s.existsFailsFor[:]) && calledFrom("processNextBlock") {
+		return false, terrors.NewStorageError("injected exists failure")
+	}
+
+	return s.Store.Exists(ctx, key, fileType, opts...)
+}
+
+func (s *faultyStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
+	if s.datWriteFails && fileType == fileformat.FileTypeDat {
+		return terrors.NewStorageError("injected lastProcessed write failure")
+	}
+
+	return s.Store.Set(ctx, key, fileType, value, opts...)
+}
+
+// A failed check for an existing target set fails the pass. Treating the error
+// as "no set" would go on to write a set that may already be there.
+func TestProcessNextBlock_ExistsCheckFailureFailsThePass(t *testing.T) {
+	ctx := context.Background()
+	store := &faultyStore{Store: memory.New()}
+
+	server, byH := restartTestChain(t, store)
+
+	// The roll-up also asks whether block 3's set exists; only the check made
+	// directly by processNextBlock, for an existing target set, fails.
+	store.existsFailsFor = byH[3]
+
+	_, err := server.processNextBlock(ctx)
+	require.ErrorContains(t, err, "injected exists failure")
+
+	height, err := server.readLastHeight(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), height)
+
+	exists, err := store.Store.Exists(ctx, byH[3][:], fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.False(t, exists, "no set is written when the existence check fails")
+}
+
+// When lastProcessed.dat cannot be written the previous set is kept, and the
+// same process retries recording the published set before deleting its base.
+func TestProcessNextBlock_FailedHeightWriteKeepsThePreviousSet(t *testing.T) {
+	ctx := context.Background()
+	store := &faultyStore{Store: memory.New()}
+
+	server, byH := restartTestChain(t, store)
+	store.datWriteFails = true
+
+	_, err := server.processNextBlock(ctx)
+	require.ErrorContains(t, err, "injected lastProcessed write failure")
+
+	exists, err := store.Exists(ctx, byH[1][:], fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.True(t, exists, "the previous set must survive a failed height write")
+
+	height, err := server.readLastHeight(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), height)
+
+	require.Len(t, readSetUTXOs(t, ctx, server.settings, store, byH[3]), 3)
+
+	// The write recovers while the chain tip stays at block 3. Retry on the
+	// same Server, without Init or a restart resetting its in-memory height.
+	store.datWriteFails = false
+	delay, err := server.processNextBlock(ctx)
+	require.NoError(t, err)
+	require.Zero(t, delay, "the retry must record block 3 rather than wait for a new tip")
+
+	height, err = server.readLastHeight(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(3), height)
+	require.Equal(t, height, server.lastHeight)
+
+	exists, err = store.Exists(ctx, byH[1][:], fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.False(t, exists, "the retry must delete the previous set after recording the new height")
+	require.Len(t, readSetUTXOs(t, ctx, server.settings, store, byH[3]), 3)
+}
+
+// calledFrom reports whether the caller of the faultyStore method running now
+// is the named Server method.
+func calledFrom(method string) bool {
+	pc, _, _, ok := runtime.Caller(2)
+	if !ok {
+		return false
+	}
+
+	return strings.HasSuffix(runtime.FuncForPC(pc).Name(), "(*Server)."+method)
+}
+
+// recordingT is a ulogger.TestingT that keeps every line logged through it.
+type recordingT struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (r *recordingT) Errorf(format string, args ...interface{}) { r.Logf(format, args...) }
+func (r *recordingT) FailNow()                                  {}
+func (r *recordingT) Logf(format string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.lines = append(r.lines, fmt.Sprintf(format, args...))
+}
+
+// contains reports whether one logged line holds every one of parts.
+func (r *recordingT) contains(parts ...string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, line := range r.lines {
+		all := true
+
+		for _, p := range parts {
+			if !strings.Contains(line, p) {
+				all = false
+				break
+			}
+		}
+
+		if all {
+			return true
+		}
+	}
+
+	return false
 }

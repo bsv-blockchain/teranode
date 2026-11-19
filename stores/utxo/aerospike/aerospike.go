@@ -203,6 +203,8 @@ func safeBatcherPutBatchCtx[T any](b batcherIfc[T], ctx context.Context, items [
 // Store implements the UTXO store interface using Aerospike.
 // It is thread-safe for concurrent access.
 type Store struct {
+	utxo.LanePositions
+
 	ctx                 context.Context // store the global context for things that run in the background
 	url                 *url.URL
 	client              *uaerospike.Client
@@ -253,6 +255,12 @@ type Store struct {
 	// read it concurrently (see demoteNativeOnUnsupported in native_op.go).
 	useNativeTeranodeOps atomic.Bool
 
+	// useNativeMarkLongestChain is whether the server also serves native sub-op 14, markLongestChain,
+	// which MarkTransactionsOnLongestChain uses in place of its expression write. Set by its own
+	// start-up probe (detectNativeMarkLongestChainSupport) and cleared on a runtime PARAMETER_ERROR
+	// from that sub-op only, so an older server keeps every other native op.
+	useNativeMarkLongestChain atomic.Bool
+
 	// conflictingIndexState is whether this process trusts the conflicting index
 	// (conflictingIndexUnchecked/Usable/Unusable); see conflicting_index.go.
 	// conflictingIndexCancel and conflictingIndexDone stop and await the
@@ -286,6 +294,9 @@ type Store struct {
 
 	// batchOperateFn is a test-only override for s.client.BatchOperate; nil means use the real client.
 	batchOperateFn func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
+
+	// lockPutFn is a test-only override for the creation lock's s.client.PutBins; nil means use the real client.
+	lockPutFn func(*aerospike.WritePolicy, *aerospike.Key, ...*aerospike.Bin) aerospike.Error
 
 	// batcherWait bounds how long a submitter waits for a batcher to deliver a
 	// result before giving up, so a wedged dispatch fn can never park a caller
@@ -680,6 +691,17 @@ func (s *Store) SetLogger(logger ulogger.Logger) {
 // and advanced operations that require direct access to the Aerospike client.
 func (s *Store) GetClient() *uaerospike.Client {
 	return s.client
+}
+
+// CloseClient closes the Aerospike client and evicts it from the per-host
+// connection cache, without draining the store's batchers or closing its
+// external blob store. The test daemon uses it to emulate a crash. Evicting
+// matters: a later store for the same host, such as a restarted daemon, would
+// otherwise reuse the closed client and fail with INVALID_NODE_ERROR.
+func (s *Store) CloseClient() {
+	if s.client != nil {
+		util.CloseAerospikeClient(s.url.Host)
+	}
 }
 
 // GetNamespace returns the Aerospike namespace used by this store.

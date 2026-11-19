@@ -103,7 +103,7 @@ func newWALTestChain(t *testing.T) (blockchain.ClientI, *walTestChain) {
 	return client, chain
 }
 
-func newResetWALTestProcessor(t *testing.T, start bool) (*SubtreeProcessor, *countPendingScans, *blob_memory.Memory, *walTestChain) {
+func newResetWALTestProcessor(t *testing.T, start bool, opts ...Options) (*SubtreeProcessor, *countPendingScans, *blob_memory.Memory, *walTestChain) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -127,7 +127,7 @@ func newResetWALTestProcessor(t *testing.T, start bool) (*SubtreeProcessor, *cou
 		}
 	}()
 
-	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), subtreeStore, blockchainClient, store, newSubtreeChan)
+	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), subtreeStore, blockchainClient, store, newSubtreeChan, opts...)
 	require.NoError(t, err)
 
 	if start {

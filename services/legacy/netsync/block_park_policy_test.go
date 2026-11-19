@@ -290,7 +290,7 @@ func TestSyncManager_AParkedBlockSurvivesAParentThatIsSlowToBeMarkedMined(t *tes
 
 	// setTxMined finishes for the parent, and the next sweep pass resubmits the
 	// kept block.
-	require.NoError(t, h.chain.SetBlockMinedSet(h.sm.ctx, &parent))
+	require.NoError(t, h.chain.SetBlockMinedSet(h.sm.ctx, &parent, 0))
 
 	h.sm.sweepParkedBlocks(time.Now().Add(2*parkStuckThreshold + time.Second))
 
@@ -585,6 +585,33 @@ func TestSyncManager_ARejectedParkedBlockDropsItsPeerInEveryState(t *testing.T) 
 		require.True(t, unclassified.blamePeer, "the default arm still sends the reject, as it always did")
 		require.False(t, unclassified.dropPeer, "an error nobody has classified must not rotate the sync peer")
 	})
+}
+
+// TestParkCommitFailure_ABlockIDOrderRefusalKeepsTheBlock pins how the park reads
+// the blockchain store refusing an id that is not above the parent's. The cause
+// is a stale id reservation in this node's own database, so the block is kept,
+// not written off, and the peer is not blamed.
+func TestParkCommitFailure_ABlockIDOrderRefusalKeepsTheBlock(t *testing.T) {
+	refusal := errors.NewBlockIDOrderError("block id 5 is not above its parent's id 6")
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "plain", err: refusal},
+		{name: "wrapped by netsync", err: errors.NewProcessingError("failed to process block", errors.NewProcessingError("commit failed", refusal))},
+		{name: "through block validation and gRPC", err: parkCommitChain(refusal)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := parkCommitFailure(tc.err)
+
+			require.Equal(t, parkDispositionRetryLater, d)
+			require.Equal(t, parkBlobKeep, d.blob, "the downloaded block must stay parked")
+			require.False(t, d.markFailed, "a stale reservation says nothing about the block")
+			require.False(t, d.blamePeer, "the stale reservation is this node's fault, not the peer's")
+			require.False(t, d.dropPeer, "the peer sent a good block")
+		})
+	}
 }
 
 // TestParkCommitFailure_AMissingParentRefusalKeepsTheBlock pins how the park reads block

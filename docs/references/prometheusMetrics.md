@@ -138,8 +138,6 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockchain_get_fsm_current_state`             | Histogram | Histogram of GetFSMCurrentState calls to the blockchain service         |
 | `teranode_blockchain_get_block_locator`                              | Histogram | Histogram of GetBlockLocator calls to the blockchain service                           |
 | `teranode_blockchain_locate_block_headers`                           | Histogram | Histogram of LocateBlockHeaders calls to the blockchain service                        |
-| `teranode_blockchain_get_latest_block_header_from_block_locator`     | Histogram | Histogram of GetLatestBlockHeaderFromBlockLocator calls to the blockchain service      |
-| `teranode_blockchain_get_block_headers_from_oldest`                  | Histogram | Histogram of GetBlockHeadersFromOldest calls to the blockchain service                 |
 | `teranode_blockchain_check_block_is_ancestor_of_block`               | Histogram | Histogram of CheckBlockIsAncestorOfBlock calls to the blockchain service               |
 | `teranode_blockchain_get_blocks_by_height`                           | Histogram | Histogram of GetBlocksByHeight calls to the blockchain service                         |
 | `teranode_blockchain_set_block_persisted_at`                         | Histogram | Histogram of SetBlockPersistedAt calls to the blockchain service                       |
@@ -202,15 +200,13 @@ CounterVec and HistogramVec metrics use labels: `peer_id`, `success`, `error_typ
 | `teranode_blockvalidation_fork_created_total`                | CounterVec   | Total number of forks created                                    |
 | `teranode_blockvalidation_fork_lifetime_seconds`             | Histogram    | Lifetime of forks in seconds                                     |
 | `teranode_blockvalidation_fork_depth_blocks`                 | Histogram    | Depth of forks in blocks                                         |
-| `teranode_blockvalidation_fork_resolved_total`               | CounterVec   | Total number of forks resolved                                   |
-| `teranode_blockvalidation_fork_resolution_depth_blocks`      | Histogram    | Depth at which forks were resolved in blocks                     |
-| `teranode_blockvalidation_fork_orphaned_total`               | Counter      | Total number of forks marked as orphaned                         |
 | `teranode_blockvalidation_processing_blocks_stuck`           | Gauge        | Number of blocks stuck in processing state                       |
 | `teranode_blockvalidation_fork_average_depth`                | Gauge        | Average depth of active forks in blocks                          |
 | `teranode_blockvalidation_fork_longest_depth`                | Gauge        | Longest active fork depth in blocks                              |
 | `teranode_blockvalidation_fork_average_lifetime_seconds`     | Gauge        | Average lifetime of active forks in seconds                      |
 | `teranode_blockvalidation_queue_skip_count`                  | Histogram    | Number of times blocks were skipped before processing            |
 | `teranode_blockvalidation_queue_wait_seconds`                | Histogram    | Time blocks spend in queue before processing                     |
+| `teranode_blockvalidation_revert_subtree_corrupt_total` | Counter | Times the invalid-block revert skipped a subtree with no usable copy, at least one corrupt; counted again on each revert attempt; non-zero needs manual repair (see the block validation service docs) |
 | `teranode_blockvalidation_outpoint_only_blocks_total` | Counter | Blocks that entered the below-checkpoint outpoint-only fast path, counted once on entry; a block that later falls back to normal validation is still counted |
 | `teranode_blockvalidation_quick_commit_add_block_seconds` | Histogram | AddBlock duration in the quick-validation commit tail |
 | `teranode_blockvalidation_quick_commit_unlock_seconds` | Histogram | Unlock pass duration in the quick-validation commit tail |
@@ -222,6 +218,7 @@ CounterVec and HistogramVec metrics use labels: `peer_id`, `success`, `error_typ
 |-----------------------------------------|---------|-------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
 | `teranode_p2p_publish_blocked_total`     | Counter | `topic`, `fsm_state`, `stage` | Outbound P2P messages suppressed by the per-FSM-state allow-list; `stage="precheck"` is an expected skip, `stage="chokepoint"` is a publish that leaked past the pre-checks |
 | `teranode_p2p_websocket_notifications_dropped_total` | Counter | `type` | WebSocket notifications dropped because the shared notification channel was full, by notification type (`block`, `subtree`, `node_status`) |
+| `teranode_p2p_blockchain_notifications_dropped_total` | Counter | `queue`, `type`, `reason` | Blockchain notifications the p2p subscription listener lost; `queue` is `peer-failure` or `announcement`, `type` is the notification type, `reason` is `queue_full` (the worker queue was full) or `timeout` (an announcement failed after its 30 s bound passed) |
 | `teranode_p2p_websocket_clients_evicted_total` | Counter | | WebSocket clients evicted from the broadcast fan-out because their send buffer was full when a broadcast reached them |
 | `teranode_p2p_connected_peers`           | Gauge   | -                             | Number of peers currently connected to this node over the p2p network (directly connected only, matching `node_status.connected_peers_count`) |
 | `teranode_p2p_ban_events_total`          | Counter | `reason`                      | Total number of peer ban events; `reason` is one of `protocol_violation`, `invalid_subtree`, `invalid_block`, `spam`, `operator_ban` (BanPeer RPC), or `unknown` |
@@ -362,6 +359,12 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_subtreevalidation_cached_subtree_conflict_probes_total` | Counter | Transactions of already-cached subtrees whose conflicting flag was read from the UTXO store during block blessing. Scales with transactions per block |
 | `teranode_subtreevalidation_peer_subtree_admission_wait` | Histogram | Seconds a peer subtree waited for a `subtreevalidation_peerSubtreeConcurrency` slot |
 | `teranode_subtreevalidation_peer_subtree_admission_waiting` | Gauge | Peer subtrees waiting for a `subtreevalidation_peerSubtreeConcurrency` slot |
+
+## UTXO Persister Service Metrics
+
+| Metric                                                  | Type  | Description |
+|---------------------------------------------------------|-------|-------------|
+| `teranode_utxopersister_liveness_heartbeat_age_seconds` | Gauge | Seconds since the main loop last beat its liveness heartbeat (0 before the loop's first beat and once the service is stopping); until the service starts stopping, the value `utxoPersister_livenessStallTimeout` is compared against |
 
 ## Validator Service Metrics
 

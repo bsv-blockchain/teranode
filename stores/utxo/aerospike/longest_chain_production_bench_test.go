@@ -298,7 +298,11 @@ var (
 	markAllocsCtx     context.Context
 	markAllocsHashes  []chainhash.Hash
 	markAllocsBallast []*ballastNode
+	markAllocsWorkers int
 )
+
+// markAllocsBatchSize is the scale environment's utxostore_maxMinedBatchSize.
+const markAllocsBatchSize = 64
 
 // ballastNode is one object of the pointer-rich heap BenchmarkMarkTransactionsOnLongestChainAllocs can
 // hold, so the garbage collector has a large live graph to mark while the mark allocates.
@@ -327,8 +331,9 @@ func BenchmarkMarkTransactionsOnLongestChainAllocs(b *testing.B) {
 		count := envInt(b, "LONGEST_CHAIN_BENCH_TXS", 1_000_000)
 
 		tSettings := test.CreateBaseTestSettings(b)
-		tSettings.UtxoStore.MaxMinedBatchSize = 64
+		tSettings.UtxoStore.MaxMinedBatchSize = markAllocsBatchSize
 		tSettings.UtxoStore.MaxMinedRoutines = envInt(b, "LONGEST_CHAIN_BENCH_ROUTINES", 4096)
+		markAllocsWorkers = tSettings.UtxoStore.MaxMinedRoutines
 
 		store, ctx, _ := initAerospikeBench(b, tSettings, ulogger.NewErrorTestLogger(b))
 		markAllocsStore, markAllocsCtx = store, ctx
@@ -350,8 +355,55 @@ func BenchmarkMarkTransactionsOnLongestChainAllocs(b *testing.B) {
 		}
 	})
 
-	for _, onLongestChain := range []bool{false, true} {
-		b.Run(fmt.Sprintf("onLongestChain=%t", onLongestChain), func(b *testing.B) {
+	// SetMinedMulti, block validation's write, runs over the same records with the same split (the
+	// routine count, each sending 64-record batches one after another), so its numbers compare with the
+	// mark's on the same server.
+	hashPtrs := make([]*chainhash.Hash, len(markAllocsHashes))
+	for i := range markAllocsHashes {
+		hashPtrs[i] = &markAllocsHashes[i]
+	}
+
+	setMined := func() error {
+		chunks := (len(hashPtrs) + markAllocsBatchSize - 1) / markAllocsBatchSize
+		workers := min(markAllocsWorkers, chunks)
+		rangeSize := (len(hashPtrs) + workers - 1) / workers
+
+		g, gCtx := errgroup.WithContext(markAllocsCtx)
+
+		for w := 0; w < workers && w*rangeSize < len(hashPtrs); w++ {
+			part := hashPtrs[w*rangeSize : min((w+1)*rangeSize, len(hashPtrs))]
+
+			g.Go(func() error {
+				for i := 0; i < len(part); i += markAllocsBatchSize {
+					if _, err := markAllocsStore.SetMinedMulti(gCtx, part[i:min(i+markAllocsBatchSize, len(part))], utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true}); err != nil {
+						return err
+					}
+				}
+
+				return nil
+			})
+		}
+
+		return g.Wait()
+	}
+
+	type benchCase struct {
+		name string
+		run  func() error
+	}
+
+	cases := []benchCase{
+		{"onLongestChain=false", func() error {
+			return markAllocsStore.MarkTransactionsOnLongestChain(markAllocsCtx, markAllocsHashes, false)
+		}},
+		{"onLongestChain=true", func() error {
+			return markAllocsStore.MarkTransactionsOnLongestChain(markAllocsCtx, markAllocsHashes, true)
+		}},
+		{"SetMinedMulti", setMined},
+	}
+
+	for _, bc := range cases {
+		b.Run(bc.name, func(b *testing.B) {
 			count := len(markAllocsHashes)
 
 			runtime.GC()
@@ -363,7 +415,7 @@ func BenchmarkMarkTransactionsOnLongestChainAllocs(b *testing.B) {
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				require.NoError(b, markAllocsStore.MarkTransactionsOnLongestChain(markAllocsCtx, markAllocsHashes, onLongestChain))
+				require.NoError(b, bc.run())
 			}
 
 			b.StopTimer()

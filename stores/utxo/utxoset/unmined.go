@@ -82,6 +82,17 @@ SELECT k.txid, s.mined_height, s.block_id, s.subtree_idx, s.created_height,
     ON CONFLICT (txid) DO UPDATE
    SET preserve_until = GREATEST(preserved_parent.preserve_until, EXCLUDED.preserve_until)`
 
+// preserveParentLaneSQL is preserveParentSQL carrying lane_position, for a database that has the
+// column. Only the full copy has a position to carry; the thin copies have none.
+var preserveParentLaneSQL = laneStatement(preserveParentSQL,
+	"preserve_until)\nSELECT k.txid", "preserve_until, lane_position)\nSELECT k.txid",
+	"s.flags & ~$8::smallint, $5::int\n", "s.flags & ~$8::smallint, $5::int, s.lane_position\n",
+	"m.fee, m.size_in_bytes, m.tx_inpoints, m.locktime, m.created_at, m.flags\n", "m.fee, m.size_in_bytes, m.tx_inpoints, m.locktime, m.created_at, m.flags,\n           m.lane_position\n",
+	"NULL, NULL, NULL, NULL, NULL, m.flags\n", "NULL, NULL, NULL, NULL, NULL, m.flags, NULL\n",
+	"NULL, NULL, NULL, NULL, NULL, u.flags\n", "NULL, NULL, NULL, NULL, NULL, u.flags, NULL\n",
+	"NULL, NULL, NULL, NULL, NULL, j.flags\n", "NULL, NULL, NULL, NULL, NULL, j.flags, NULL\n",
+)
+
 // renewPreservedSQL extends the preservation of every named parent that already has one. The
 // insert above copies a parent only from its block's tx_mined partition, a live UTXO or a spend-journal row,
 // and a parent fully spent in its block loses all three once its partition and journal partitions
@@ -159,7 +170,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 
 	leaves, ids, los, his := liveUTXOArgs(txids)
 
-	if _, err := s.pool.Exec(ctx, preserveParentSQL, leaves, ids, los, his, until,
+	if _, err := s.pool.Exec(ctx, s.laneForm(preserveParentSQL, preserveParentLaneSQL), leaves, ids, los, his, until,
 		int32(floors.DroppedFloor), int32(floors.StampCompleteFloor), FlagLocked); err != nil { //nolint:gosec // heights fit int32
 		return errors.NewStorageError("[utxoset][PreserveTransactions] preserve %d parents until %d",
 			len(txids), preserveUntilHeight, err)

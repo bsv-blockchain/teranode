@@ -24,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/usql"
 )
 
@@ -621,15 +622,6 @@ func (m *MockStore) GetBlockHeadersByParentLinks(ctx context.Context, blockHash 
 	return m.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
 }
 
-// GetBlockHeadersFromTill retrieves block headers between two specified blocks.
-func (m *MockStore) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
-}
-
-func (m *MockStore) GetForkedBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic(implementMe)
-}
-
 func (m *MockStore) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
 }
@@ -701,6 +693,22 @@ func (m *MockStore) RevalidateBlock(ctx context.Context, blockHash *chainhash.Ha
 	panic(implementMe)
 }
 
+func (m *MockStore) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lane.LeaseID, lane.Grant, int, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (lane.Grant, bool, bool, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) ReleaseLaneLease(ctx context.Context, req options.LaneLeaseRelease) (bool, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) CloseStaleLaneLeases(ctx context.Context, closeAfter time.Duration) (int, error) {
+	panic(implementMe)
+}
+
 func (m *MockStore) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	panic(implementMe)
 }
@@ -743,7 +751,7 @@ func (m *MockStore) GetBlockIsMined(_ context.Context, blockHash *chainhash.Hash
 	return isMined, nil
 }
 
-func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, expectedGeneration *uint64) error {
 	panic(implementMe)
 }
 
@@ -778,10 +786,6 @@ func (m *MockStore) SetBlockPersistedAt(ctx context.Context, blockHash *chainhas
 // GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
 func (m *MockStore) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
 	return []*model.Block{}, nil
-}
-
-func (m *MockStore) GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error) {
-	panic(implementMe)
 }
 
 func (m *MockStore) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {

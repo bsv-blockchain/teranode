@@ -76,6 +76,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/ordishs/gocore"
@@ -105,14 +106,13 @@ type BatchStoreItem struct {
 	// TxHash is the transaction ID
 	txHash *chainhash.Hash
 
-	// IsCoinbase indicates if this is a coinbase transaction
-	isCoinbase bool
-
 	// Tx contains the full transaction data
 	tx *bt.Tx
 
 	// BlockHeight is the height where this transaction appears
 	blockHeight uint32
+	// IsCoinbase indicates if this is a coinbase transaction
+	isCoinbase bool
 
 	// BlockIDs contains all blocks where this transaction appears
 	blockIDs []uint32
@@ -131,6 +131,11 @@ type BatchStoreItem struct {
 
 	// Locked indicates if this transaction is locked for spending
 	locked bool
+
+	// lanePosition is the lane position (util/lane) written to the master record.
+	// lane.None writes no bin. It fits in padding, because isCoinbase shares the word
+	// beside blockHeight, so a create allocates no more than it did.
+	lanePosition uint64
 
 	// group signals completion of the whole batch; the producer waits on it
 	// once instead of one channel receive per item.
@@ -192,6 +197,12 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	_, _, deferFn := tracing.Tracer("aerospike").Start(ctx, "aerospike:Create")
 	defer deferFn()
 
+	// First, so a create that cannot get a position writes nothing, not even a parent's conflict note.
+	lanePosition, err := s.Take(ctx, createOptions)
+	if err != nil {
+		return nil, err
+	}
+
 	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
 		return nil, errors.NewProcessingError("failed to get tx meta data", err)
@@ -252,6 +263,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		subtreeIdxs:  subtreeIdxs,
 		conflicting:  createOptions.Conflicting,
 		locked:       createOptions.Locked,
+		lanePosition: lanePosition,
 		group:        group,
 	}
 
@@ -420,7 +432,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			external = true
 		}
 
-		binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, arena) // false is to say this is a normal record, not external.
+		binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, bItem.lanePosition, arena) // false is to say this is a normal record, not external.
 		if err != nil {
 			bItem.complete(errors.NewProcessingError("could not get bins to store", err))
 			resultHandledElsewhere[idx] = true
@@ -438,7 +450,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			// that outlives sendStoreBatch (and the per-batch arena). Rebuild its
 			// bins with heap-owned backing (nil arena) so the deferred arena reset
 			// cannot corrupt the bytes the goroutine still references.
-			binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, nil)
+			binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, bItem.lanePosition, nil)
 			if err != nil {
 				bItem.complete(errors.NewProcessingError("could not rebuild bins for external store", err))
 				resultHandledElsewhere[idx] = true
@@ -571,10 +583,21 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %v", batchID, err)
 
+		batchInDoubt := isInDoubt(err)
+
 		for idx, bItem := range batch {
 			if resultHandledElsewhere[idx] {
 				continue
 			}
+
+			// A batch spans nodes, and the error names one of them: a record
+			// another node wrote is OK, or KEY_EXISTS from an earlier attempt,
+			// while the call failed.
+			if batchInDoubt || recordMayExist(batchRecords[idx].BatchRec()) {
+				bItem.complete(createMayHaveCommittedError(err))
+				continue
+			}
+
 			bItem.complete(err)
 		}
 
@@ -607,7 +630,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 				}
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
-					binsToStore, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, batch[idx].blockHeights, batch[idx].subtreeIdxs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting, batch[idx].locked, nil) // true is to say this is a big record
+					binsToStore, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, batch[idx].blockHeights, batch[idx].subtreeIdxs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting, batch[idx].locked, batch[idx].lanePosition, nil) // true is to say this is a big record
 					if err != nil {
 						batch[idx].complete(errors.NewProcessingError("could not get bins to store", err))
 						continue
@@ -630,6 +653,11 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			// and KEY_NOT_FOUND_ERROR on a real BatchWrite (which is NOT a NOOP) — must
 			// be surfaced. Previously the SafeSend was nested inside the type-asserted
 			// branch and a non-matching error left the caller hung on <-errCh.
+			if writeMayHaveApplied(batchRecord.BatchRec()) {
+				batch[idx].complete(createMayHaveCommittedError(err))
+				continue
+			}
+
 			batch[idx].complete(errors.NewStorageError("[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d", batch[idx].txHash.String(), idx, batchID, err))
 			continue
 		}
@@ -817,7 +845,7 @@ func extendedTxSize(tx *bt.Tx) int {
 //   - Whether the transaction has UTXOs
 //   - Any error that occurred
 func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHeights []uint32, subtreeIdxs []int, external bool,
-	txHash *chainhash.Hash, isCoinbase bool, isConflicting bool, isLocked bool, arena *bt.Arena) ([][]*aerospike.Bin, error) {
+	txHash *chainhash.Hash, isCoinbase bool, isConflicting bool, isLocked bool, lanePosition uint64, arena *bt.Arena) ([][]*aerospike.Bin, error) {
 	var (
 		fee          uint64
 		utxoHashes   []*chainhash.Hash
@@ -948,6 +976,13 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 
 	// add the created at bin in milliseconds to the first record
 	batches[0] = append(batches[0], aerospike.NewBin(fields.CreatedAt.String(), aerospike.NewIntegerValue(int(time.Now().UnixMilli()))))
+
+	// The lane position goes on the master record only, in the same write that
+	// creates it. lane.None writes no bin, so a record created without one is
+	// identical to what it was before lane positions existed.
+	if lanePosition != lane.None {
+		batches[0] = append(batches[0], aerospike.NewBin(fields.LanePosition.String(), aerospike.NewIntegerValue(int(lane.ToSigned(lanePosition)))))
+	}
 
 	if len(batches) > 1 {
 		// if we have more than one batch, we opt to store the transaction externally
@@ -1102,8 +1137,11 @@ func classifyCreateBatchResults(batchRecords []aerospike.BatchRecordIfc) (master
 //
 // ERROR HANDLING PHILOSOPHY:
 //
-// The function returns success (nil error) as long as Phase 1 completes, even if Phase 2
-// fails. This is intentional and correct because:
+// For a create with no mined block info, the function returns success (nil error) as long
+// as Phase 1 completes, even if Phase 2 fails. A create carrying mined block info instead
+// returns creatingNotClearedError when Phase 2 fails, and a retryable error when the lock
+// is held, because these recovery scenarios do not reliably reach it. For the first case
+// returning success is intentional because:
 //
 // 1. TRANSACTION IS PERSISTED: Phase 1 success means all records exist with complete data
 // 2. SPEND PROTECTION: creating=true flags prevent premature UTXO spending (per-record Lua checks)
@@ -1132,6 +1170,40 @@ func (s *Store) storeExternallyWithLock(
 	// Acquire lock FIRST to prevent duplicate work
 	lockKey, lockToken, err := s.acquireLock(bItem.txHash, len(binsToStore))
 	if err != nil {
+		// A held lock means another attempt is writing the records, or an earlier
+		// attempt's release failed and the lock waits out its TTL. Either way this
+		// call has not cleared the creating flag, so a mined create must not answer
+		// ErrTxExists, which the seeder and the coinbase store read as done. See
+		// creatingNotClearedError. Every mined caller now fails while the lock is
+		// held, which lasts until the lock's TTL runs out when a release failed or
+		// a create crashed (30 s plus 2 s per record, at most 300 s). For the seeder,
+		// the coinbase store and the reorg restore that replaces carrying on with
+		// the creating bin set. Quick validation used to stamp an existing
+		// transaction mined instead, which clears the bin; now, if the lock is
+		// still held when its repeats run out, its validation of the block fails
+		// with this storage error. Its repeats stop after the first pass with no
+		// progress, which is well inside the lock's 30 s minimum TTL.
+		// A master record with no creating bin means the clear finished (the master
+		// is cleared last), so a lock left by a failed release still answers
+		// ErrTxExists, as it did before.
+		// The lock's ErrTxExists is carried as text, not wrapped: errors.Is walks the
+		// chain, so a wrapped one would still read as done.
+		if len(bItem.blockIDs) > 0 && errors.Is(err, errors.ErrTxExists) {
+			cleared, readErr := s.masterCreatingCleared(bItem.txHash)
+			if cleared {
+				bItem.complete(err)
+				return
+			}
+
+			lockedErr := errors.NewStorageError("[%s] tx %s is locked by another create attempt, so its creating flag may not be cleared: %s", funcName, bItem.txHash, err.Error())
+			if readErr != nil {
+				lockedErr = errors.NewStorageError("[%s] tx %s is locked by another create attempt, and reading its master record failed: %s", funcName, bItem.txHash, err.Error(), readErr)
+			}
+
+			bItem.complete(createMayHaveCommittedError(lockedErr))
+			return
+		}
+
 		bItem.complete(err)
 		return
 	}
@@ -1189,7 +1261,13 @@ func (s *Store) storeExternallyWithLock(
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
 	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
-		bItem.complete(errors.NewProcessingError("[%s] BatchOperate failed for tx %s", funcName, bItem.txHash, err))
+		failErr := errors.NewProcessingError("[%s] BatchOperate failed for tx %s", funcName, bItem.txHash, err)
+		if isInDoubt(err) || recordMayExist(batchRecords[0].BatchRec()) {
+			bItem.complete(createMayHaveCommittedError(failErr))
+			return
+		}
+
+		bItem.complete(failErr)
 		return
 	}
 
@@ -1208,7 +1286,15 @@ func (s *Store) storeExternallyWithLock(
 		// Do NOT clean up partial records - leave them for the next attempt to complete
 		// The creating bin in each record prevents UTXO spending until all records exist
 		// The defer will release the lock, allowing another process to finish the creation
-		bItem.complete(errors.NewProcessingError("failed to create all records for tx %s - partial records remain for next attempt to complete", bItem.txHash))
+		failErr := errors.NewProcessingError("failed to create all records for tx %s - partial records remain for next attempt to complete", bItem.txHash)
+		if recordMayExist(batchRecords[0].BatchRec()) {
+			// The master record makes the transaction exist, creating, so its
+			// spends must stay for the next attempt to complete it.
+			bItem.complete(createMayHaveCommittedError(failErr))
+			return
+		}
+
+		bItem.complete(failErr)
 		return
 	}
 
@@ -1229,6 +1315,13 @@ func (s *Store) storeExternallyWithLock(
 		// manual intervention. This ensures eventual consistency through automatic recovery.
 		clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore))
 		if clearErr != nil {
+			// A mined create's caller may read ErrTxExists as done: the seeder and
+			// block assembly's coinbase store do. See creatingNotClearedError.
+			if len(bItem.blockIDs) > 0 {
+				bItem.complete(creatingNotClearedError(funcName, bItem.txHash, clearErr))
+				return
+			}
+
 			s.logger.Warnf("[%s] Transaction %s exists but creating flag cleanup failed: %v", funcName, bItem.txHash, clearErr)
 		}
 		bItem.complete(errors.NewTxExistsError("transaction already exists: %s", bItem.txHash))
@@ -1236,8 +1329,18 @@ func (s *Store) storeExternallyWithLock(
 	}
 
 	clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore))
+	if clearErr != nil && len(bItem.blockIDs) > 0 {
+		// A create that carries mined block info is not reliably reached by the
+		// recovery paths listed below. See creatingNotClearedError.
+		bItem.complete(creatingNotClearedError(funcName, bItem.txHash, clearErr))
+		return
+	}
+
 	if clearErr != nil {
 		// PARTIAL SUCCESS: Transaction records created successfully, but creating flag cleanup failed
+		//
+		// This applies only to a create with no mined block info; a mined create returned
+		// creatingNotClearedError above, because the recovery paths below do not reliably reach it.
 		//
 		// WHY WE RETURN SUCCESS DESPITE INCOMPLETE PHASE 2:
 		//
@@ -1320,7 +1423,12 @@ func (s *Store) acquireLock(txHash *chainhash.Hash, numRecords int) (*aerospike.
 		aerospike.NewBin("lock_token", token),
 	}
 
-	err = s.client.PutBins(lockPolicy, lockKey, lockBins...)
+	if s.lockPutFn != nil {
+		err = s.lockPutFn(lockPolicy, lockKey, lockBins...)
+	} else {
+		err = s.client.PutBins(lockPolicy, lockKey, lockBins...)
+	}
+
 	if err != nil {
 		if isKeyExists(err) {
 			return nil, "", errors.NewTxExistsError("transaction creation in progress or already exists: %s", txHash)
@@ -1394,6 +1502,31 @@ func (s *Store) prepareRecordKeys(txHash *chainhash.Hash, numRecords int) ([]*ae
 	}
 
 	return recordKeys, nil
+}
+
+// masterCreatingCleared reports whether the master record of a paginated transaction
+// exists without the creating bin. clearCreatingFlag clears the master last, so a
+// master with no creating bin means every record was cleared. A missing master, a
+// master that still has the bin, and a failed read all return false; only a failed
+// read returns an error.
+func (s *Store) masterCreatingCleared(txHash *chainhash.Hash) (bool, error) {
+	key, err := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySourceInternal(txHash, 0))
+	if err != nil {
+		return false, err
+	}
+
+	record, getErr := s.client.Get(util.GetAerospikeReadPolicy(s.settings), key, fields.Creating.String())
+	if getErr != nil {
+		if getErr.Matches(types.KEY_NOT_FOUND_ERROR) {
+			return false, nil
+		}
+
+		return false, getErr
+	}
+
+	_, creating := record.Bins[fields.Creating.String()]
+
+	return !creating, nil
 }
 
 // ensureCreatingBin ensures the creating bin is set to the specified value
@@ -1498,4 +1631,100 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 	}
 
 	return nil
+}
+
+// creatingNotClearedError is the error a create carrying mined block info
+// returns when its records are written but clearCreatingFlag failed. Such a
+// create comes from quick validation, the seeder, seedimport, or block
+// assembly's coinbase store and reorg restore, and the recovery paths a
+// validator create relies on do not reliably reach it: the transaction is not
+// seen again in a subtree, and only quick validation runs setMined for a
+// transaction it created already mined. Returning success would leave the
+// records with the creating bin, and the seeder and the coinbase store would
+// carry on with every output on them refused with CREATING.
+//
+// The error is a storage error, which IsRetryableError accepts. Quick
+// validation repeats the create, and the repeat finds the master record and
+// retries the clear; the other callers fail their operation instead of carrying
+// on. It is also marked outcome-unknown, because the records are stored:
+// utxo.SequentialSpendAndCreate must keep the spends rather than unspend the
+// inputs of a stored transaction.
+func creatingNotClearedError(funcName string, txHash *chainhash.Hash, clearErr error) error {
+	return createMayHaveCommittedError(errors.NewStorageError("[%s] tx %s is stored but its creating flag was not cleared", funcName, txHash, clearErr))
+}
+
+// createMayHaveCommittedError marks err, from a create write that may have
+// committed on the server, as leaving the create's outcome unknown.
+// utxo.SequentialSpendAndCreate unspends the inputs of a create that failed for
+// certain, and doing that for a write that did commit leaves a stored
+// transaction with live inputs, which a repeat never heals because a repeat
+// drops a transaction whose record exists. Marked outcome-unknown, the spends
+// stay, as for a context error, until a repeat finds the record or writes it.
+func createMayHaveCommittedError(err error) error {
+	var tErr *errors.Error
+	if !errors.As(err, &tErr) {
+		tErr = errors.NewStorageError("aerospike create write may have committed", err)
+	}
+
+	return utxo.MarkCreateOutcomeUnknown(tErr)
+}
+
+// isInDoubt reports whether err, from a write, says the write may have been
+// applied. BatchOperate runs one command per node and chains their errors, so
+// the head names only the last node to fail, and a node's in-doubt flag can be
+// lost: the client judges a node's batch a read when its last record is one.
+// isInDoubt therefore walks the whole chain and answers true for any error
+// marked in doubt, any TIMEOUT, and any client-side code (zero or below:
+// network and connection failures), the codes the client's own in-doubt rule
+// uses. One timeout is told apart: uaerospike.PermitTimeoutError, the wrapper's
+// wait for a connection permit running out, comes back before anything is sent,
+// so it is not in doubt. The rule still over-marks other writes that never went
+// out: client codes such as MAX_ERROR_RATE and
+// NO_AVAILABLE_CONNECTIONS_TO_NODE, where the client sent nothing on its last
+// attempt. Such a create keeps its spends with no record until a repeat of the
+// create, the safe direction. Those codes stay marked because the client can
+// return one after an earlier attempt of the same command did send.
+func isInDoubt(err error) bool {
+	for err != nil {
+		// Nothing was sent: the permit wait ran out before the client was
+		// called, and the permit is taken once for the whole call.
+		if _, ok := err.(*uaerospike.PermitTimeoutError); ok {
+			return false
+		}
+
+		// As reads this one link of the chain, the client's constant errors
+		// included; errors.As would stop at the first link.
+		if link, ok := err.(interface{ As(any) bool }); ok {
+			aeErr := &aerospike.AerospikeError{}
+			if link.As(aeErr) && (aeErr.InDoubt || aeErr.ResultCode == types.TIMEOUT || aeErr.ResultCode <= 0) {
+				return true
+			}
+		}
+
+		unwrapper, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+
+		err = unwrapper.Unwrap()
+	}
+
+	return false
+}
+
+// writeMayHaveApplied reports whether a batch write's record may have been
+// written: the server applied it (OK), or the client sent it and lost the
+// answer (in doubt). A record the call never sent keeps NO_RESPONSE. The
+// record's error is read with isInDoubt as well, because the client flags a
+// batch record in doubt only after a retry: a write the server answered with
+// TIMEOUT on the first send, which may have applied on the master, comes back
+// unflagged.
+func writeMayHaveApplied(rec *aerospike.BatchRecord) bool {
+	return rec.InDoubt || isInDoubt(rec.Err) || (rec.Err == nil && rec.ResultCode == types.OK)
+}
+
+// recordMayExist reports whether a create's record may exist after its batch
+// write: written now, in doubt, or left by an earlier attempt (KEY_EXISTS).
+func recordMayExist(rec *aerospike.BatchRecord) bool {
+	return writeMayHaveApplied(rec) || isKeyExists(rec.Err)
 }

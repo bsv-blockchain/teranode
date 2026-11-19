@@ -1275,7 +1275,7 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	// one fixed tip, so a break here is the peer's fault: NetworkInvalidResponse, charged to it.
 	if commonAncestorIndex+1 < len(peerHeaders) {
 		offered := peerHeaders[commonAncestorIndex+1:]
-		if !(&catchup.CommonAncestorFinder{}).ValidateChainConnection(offered, commonAncestorHash) {
+		if !catchup.ValidateChainConnection(offered, commonAncestorHash) {
 			return errors.NewNetworkInvalidResponseError("[catchup][%s] headers offered after common ancestor %s do not link to common ancestor as one chain (first header %s has parent %s)", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), offered[0].Hash().String(), offered[0].HashPrevBlock.String())
 		}
 	}

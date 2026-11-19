@@ -138,7 +138,17 @@ type Daemon struct {
 	// must fail fast, without reaching into logger internals.
 	startErr   error
 	startErrMu sync.Mutex
+	// crashed is set by crash; the shutdown path then skips closeClients and
+	// closeStores, as a killed process would.
+	crashed atomic.Bool
 }
+
+const (
+	// serviceStopTimeout is how long Stop allows the services to stop.
+	serviceStopTimeout = 30 * time.Second
+	// closeStoresTimeout bounds closeStores, which drains the store batchers.
+	closeStoresTimeout = 30 * time.Second
+)
 
 // New creates a new Daemon instance with the provided options.
 func New(opts ...Option) *Daemon {
@@ -219,8 +229,13 @@ func (d *Daemon) Stop(skipTracerShutdown ...bool) error {
 		return nil
 	}
 
-	// // Default timeout of 30 seconds if it wasn't provided
-	shutdownTimeout := 30 * time.Second
+	// stopCh closes only after closeStores, so the wait allows for the
+	// services' Stop() calls plus closeStores' own budget. It is not a
+	// guarantee: the service manager stops the services one after another,
+	// each with its own StopTimeout, so several slow services can still use
+	// it up. Stop then returns a timeout error, which TestDaemon.Stop reports
+	// as a test failure.
+	shutdownTimeout := serviceStopTimeout + closeStoresTimeout
 
 	// Set up a timeout channel
 	timeoutCh := time.After(shutdownTimeout)
@@ -450,6 +465,13 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 		waitErr <- sm.Wait()
 	}()
 
+	// stopCh is closed last, after closeClients and closeStores below (defers
+	// run LIFO), so Stop() returns only once the stores are closed and their
+	// batchers drained. Closing it before them let Stop() return, and the test
+	// daemon reset the store singletons, before closeStores read them, so no
+	// store was closed at all.
+	defer d.closeStopOnce.Do(func() { close(d.stopCh) })
+
 	// closeStores must run on BOTH shutdown paths (OS-signal via waitErr,
 	// daemon.Stop() via doneCh) and MUST run after every service has
 	// finished using the stores. The defer is registered here, before the
@@ -497,8 +519,6 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 		logger.Infof("daemon shutdown completed")
 	}
 
-	d.closeStopOnce.Do(func() { close(d.stopCh) })
-
 	// A startServices failure closes doneCh itself, so the select above takes
 	// the requested-shutdown branch, and sm.Wait() can return nil because the
 	// failing service never reached the errgroup (an Init or constructor
@@ -541,6 +561,10 @@ type clientCloser interface {
 // closeStores, because clients sit in front of the stores in the dependency
 // graph. Each client is closed via the Stage-E clientCloser contract.
 func (d *Daemon) closeClients(logger ulogger.Logger) {
+	if d.crashed.Load() {
+		return
+	}
+
 	d.daemonStores.constructedClientsMu.Lock()
 	clients := d.daemonStores.constructedClients
 	d.daemonStores.constructedClients = nil
@@ -562,7 +586,11 @@ func (d *Daemon) closeClients(logger ulogger.Logger) {
 // batcher drain — to run with real time available, not return
 // immediately with context.Canceled.
 func (d *Daemon) closeStores(logger ulogger.Logger) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if d.crashed.Load() {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), closeStoresTimeout)
 	defer cancel()
 
 	globalStoreMutex.RLock()

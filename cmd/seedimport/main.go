@@ -96,6 +96,10 @@ func run(ctx context.Context, logger ulogger.Logger, s *settings.Settings, block
 		return errors.NewConfigurationError("invalid --seed-url", urlutil.ParseErrorReason(err))
 	}
 
+	if s.UtxoStore.LaneMigration != settings.LaneMigrationOff {
+		return errors.NewConfigurationError("seedimport requires utxostore_laneMigration=off; lane-enabled imports are not supported")
+	}
+
 	hashPrefix := -2
 	if seedURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(seedURL.Query().Get("hashPrefix"))

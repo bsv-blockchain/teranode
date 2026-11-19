@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/health"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 const errNotImplemented = "not implemented"
@@ -176,6 +177,18 @@ func (c *LocalClient) AssignBlockID(ctx context.Context, blockHash *chainhash.Ha
 	return c.store.AssignBlockID(ctx, blockHash)
 }
 
+func (c *LocalClient) OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
+	return openLaneLease(ctx, c.store, c.settings, holder)
+}
+
+func (c *LocalClient) RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error) {
+	return renewLaneLease(ctx, c.store, c.settings, r)
+}
+
+func (c *LocalClient) ReleaseLaneLease(ctx context.Context, r lane.Release) (bool, error) {
+	return releaseLaneLease(ctx, c.store, r)
+}
+
 func (c *LocalClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	return c.store.GetBlockStats(ctx)
 }
@@ -249,20 +262,6 @@ func (c *LocalClient) GetBlockHeadersFromCommonAncestor(ctx context.Context, cha
 	// This function is similar to GetBlockHeadersToCommonAncestor but retrieves headers
 	// starting from the common ancestor towards the target hash.
 	return getBlockHeadersFromCommonAncestor(ctx, c.store, chainTipHash, blockLocatorHashes, maxHeaders)
-}
-
-// GetLatestBlockHeaderFromBlockLocator retrieves the latest block header from a block locator.
-func (c *LocalClient) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	return c.store.GetLatestBlockHeaderFromBlockLocator(ctx, bestBlockHash, blockLocator)
-}
-
-// GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
-func (c *LocalClient) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return c.store.GetBlockHeadersFromOldest(ctx, chainTipHash, targetHash, numberOfHeaders)
-}
-
-func (c *LocalClient) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return c.store.GetBlockHeadersFromTill(ctx, blockHashFrom, blockHashTill)
 }
 
 func (c *LocalClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
@@ -404,8 +403,8 @@ func (c *LocalClient) GetBlockIsMined(ctx context.Context, blockHash *chainhash.
 	return c.store.GetBlockIsMined(ctx, blockHash)
 }
 
-func (c *LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	return c.store.SetBlockMinedSet(ctx, blockHash)
+func (c *LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, minedSetGeneration uint64) error {
+	return c.store.SetBlockMinedSet(ctx, blockHash, &minedSetGeneration)
 }
 
 func (c *LocalClient) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {

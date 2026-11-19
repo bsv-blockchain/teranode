@@ -36,7 +36,11 @@ type Interface interface {
 	BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseURL string, waitToComplete bool) error
 
 	// ProcessBlock validates and processes a complete block at the specified height.
-	// blockID is the pre-assigned block ID from the caller (0 = not pre-assigned, blockchain will auto-assign).
+	// blockID is the ID to store the block under; 0 means none, and the blockchain service
+	// assigns one. A non-zero ID should be the one AssignBlockID returns for the block's hash:
+	// quick validation refuses any other before it touches the UTXO store, and on full
+	// validation the blockchain store refuses one another block holds or has reserved, or
+	// one its ID sequence has not issued yet. Legacy netsync always sends 0.
 	// headerProven is the caller's ancestry proof for a below-checkpoint block: true only when
 	// the caller can show the block's hash sits at or below a pinned checkpoint hash matched in
 	// an internally linked header run. False denies the below-checkpoint quick route and

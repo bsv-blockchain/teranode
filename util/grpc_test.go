@@ -328,6 +328,28 @@ func TestCleanupListeners(t *testing.T) {
 		_ = otherListener.Close()
 	})
 
+	t.Run("does not clean up a context that only contains it", func(t *testing.T) {
+		// Test daemons number their contexts, so daemon 1's context is a
+		// substring of daemon 10's.
+		daemon1, _, _, err := GetListener("ctx-testdaemon-1", "service1", "", "localhost:0")
+		require.NoError(t, err)
+
+		daemon10, _, _, err := GetListener("ctx-testdaemon-10", "service1", "", "localhost:0")
+		require.NoError(t, err)
+
+		defer CleanupListeners("ctx-testdaemon-10")
+
+		keys := CleanupListeners("ctx-testdaemon-1")
+		require.Equal(t, []string{listenerKey("ctx-testdaemon-1", "service1", "")}, keys)
+
+		cached, _, _, err := GetListener("ctx-testdaemon-10", "service1", "", "localhost:0")
+		require.NoError(t, err)
+		require.Same(t, daemon10, cached, "daemon 10's listener must still be cached")
+
+		_, err = daemon1.Accept()
+		require.Error(t, err, "daemon 1's listener must be closed")
+	})
+
 	t.Run("cleanup non-existing context", func(t *testing.T) {
 		keys := CleanupListeners("non-existing-context")
 		assert.Empty(t, keys)
