@@ -220,6 +220,12 @@ type netBelowTx struct {
 	tx    *bt.Tx
 	txid  chainhash.Hash
 	ident bool
+	// commitSent is set on every transaction of a chunk just before its COMMIT is sent, and
+	// rolledBack on every one of a chunk that failed before then, so nothing of it was written. Both
+	// sit in ident's padding. Each chunk writes only its own transactions', read after every chunk
+	// ends.
+	commitSent bool
+	rolledBack bool
 	// netted[vin] is true when input vin spends an output of an earlier transaction of the
 	// list. nil when none does.
 	netted []bool
@@ -295,10 +301,31 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 	g.SetLimit(workers)
 
 	for _, chunk := range netBelowChunks(items, size, nettedBelowMaxChunkOutputs) {
-		g.Go(func() error { return s.netBelowChunk(gCtx, chunk, list, blockHeight, spender, positions) })
+		g.Go(func() error {
+			// A chunk admitted after a sibling failed never starts: it writes nothing, and its
+			// positions stay burned like the rest of a failed list's.
+			if err := gCtx.Err(); err != nil {
+				return err
+			}
+
+			err := s.netBelowChunk(gCtx, chunk, list, blockHeight, spender, positions)
+			if err != nil {
+				for _, it := range chunk {
+					it.rolledBack = !it.commitSent
+				}
+			}
+
+			return err
+		})
 	}
 
-	if err := g.Wait(); err != nil {
+	err = g.Wait()
+
+	s.returnRolledBackList(positions, func(i int) bool {
+		return items[i].rolledBack && items[i].result.Status == utxo.MultiTxNotAttempted
+	})
+
+	if err != nil {
 		return nil, err
 	}
 
@@ -507,6 +534,10 @@ func (s *Store) netBelowChunk(ctx context.Context, chunk []*netBelowTx, list *ut
 
 	if err = s.netBelowFault(chunk); err != nil {
 		return err
+	}
+
+	for _, it := range chunk {
+		it.commitSent = true
 	}
 
 	if err = dbTx.Commit(ctx); err != nil {

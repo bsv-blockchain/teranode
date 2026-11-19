@@ -600,6 +600,21 @@ func (w *nettedWrite) runFamilyChunk(ctx context.Context, ch *familyChunk, plan 
 	})
 }
 
+// recordRolledBack records, for a chunk whose attempt failed, which of its transactions were still
+// being written when it failed before sending its COMMIT: their round rolled back whole, so their
+// lane positions are on no record. A transaction found stored, one whose spend was refused and one
+// whose parent failed were not in that write, and a failure at or after the COMMIT may have landed,
+// so none of those counts. A later attempt of the chunk overwrites what an earlier one recorded.
+func (w *nettedWrite) recordRolledBack(run *chunkRun) {
+	if w.rolledBack == nil {
+		return
+	}
+
+	for k, it := range run.its {
+		w.rolledBack[it.pos] = !run.commitSent && run.st[k] == chunkLive && !run.forcedExisted[k]
+	}
+}
+
 // chunkRun is the state of one chunk across its rounds.
 type chunkRun struct {
 	ch  *familyChunk
@@ -614,6 +629,9 @@ type chunkRun struct {
 	// refused spend turned out to be its own earlier spend.
 	forcedExisted []bool
 	parentDead    []bool
+	// commitSent is true once a round has sent its COMMIT. A round that fails before then rolls
+	// back whole, so nothing of it was written.
+	commitSent bool
 	// netted[k][vin] is true when input vin's parent is a live transaction of this same chunk.
 	netted [][]bool
 }
@@ -641,6 +659,8 @@ func (w *nettedWrite) familyAttempt(ctx context.Context, ch *familyChunk, its []
 
 		again, err := w.familyRound(ctx, run, stats)
 		if err != nil {
+			w.recordRolledBack(run)
+
 			return err
 		}
 
@@ -771,6 +791,7 @@ func (w *nettedWrite) familyRound(ctx context.Context, run *chunkRun, stats *fam
 
 		// The commit runs on a context the caller cannot cancel; see multiCommitTimeout.
 		commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), multiCommitTimeout)
+		run.commitSent = true
 		err = dbTx.Commit(commitCtx)
 
 		cancel()
