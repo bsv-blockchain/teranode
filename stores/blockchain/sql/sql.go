@@ -1174,6 +1174,10 @@ func createPostgresLaneTables(db *usql.DB) error {
 // holds the blockchain schema lock.
 const laneMapStorageLockTimeout = 2 * time.Second
 
+// laneMapStorageLockTimeoutSQL sets laneMapStorageLockTimeout for the ALTER's transaction. It is a
+// literal so the statement is never built at run time; a test keeps the two in step.
+const laneMapStorageLockTimeoutSQL = `SET LOCAL lock_timeout = '2000ms'`
+
 // setLaneMapHoleDataStorage asks Postgres to store lane_map.hole_data out of line without trying
 // to compress it, once a row is large enough to be moved out of line at all. Hole data is a Roaring
 // bitmap, already compact, so the default compression attempt costs CPU at commit for little or no
@@ -1205,7 +1209,7 @@ func setLaneMapHoleDataStorage(logger ulogger.Logger, db *usql.DB) {
 
 		defer func() { _ = tx.Rollback() }()
 
-		if _, err = tx.Exec(fmt.Sprintf(`SET LOCAL lock_timeout = '%dms'`, laneMapStorageLockTimeout.Milliseconds())); err != nil {
+		if _, err = tx.Exec(laneMapStorageLockTimeoutSQL); err != nil {
 			return err
 		}
 

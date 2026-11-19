@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"testing"
 	"time"
@@ -633,4 +634,9 @@ func TestLaneMapHoleDataStorageNeverBlocksStartup(t *testing.T) {
 	// The owner's next start applies it.
 	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true))
 	require.Equal(t, "e", storage())
+}
+
+// The literal lock_timeout statement names the same wait as laneMapStorageLockTimeout.
+func TestLaneMapStorageLockTimeoutSQLMatchesTheConstant(t *testing.T) {
+	require.Equal(t, fmt.Sprintf("SET LOCAL lock_timeout = '%dms'", laneMapStorageLockTimeout.Milliseconds()), laneMapStorageLockTimeoutSQL)
 }
