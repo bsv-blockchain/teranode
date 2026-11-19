@@ -1829,8 +1829,12 @@ func TestLanePositionFailedChunkKeepsAnEarlierRoundsExists(t *testing.T) {
 	require.Equal(t, utxo.LaneBurnRolledBack, w.burnAt(1))
 }
 
-// A list without lane positions records no burn reasons and allocates nothing for them.
+// A list without lane positions records no burn reasons and allocates nothing for them; a list with
+// them gets one byte per transaction.
 func TestLanePositionListBurnsOnlyWithPositions(t *testing.T) {
+	require.Nil(t, newListBurns(nil), "no positions, nothing allocated")
+	require.Len(t, newListBurns(burnPositions(3)), 3)
+
 	w := &nettedWrite{}
 	run := &chunkRun{its: []*multiTx{{pos: 0}}, st: []chunkStatus{chunkLive}, res: make([]utxo.SpendAndCreateMultiResult, 1),
 		forcedExisted: []bool{false}}

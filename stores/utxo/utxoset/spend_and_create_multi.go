@@ -82,9 +82,7 @@ func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeig
 	w := s.newNettedWrite(txs, list, blockHeight)
 	w.positions = positions
 
-	if positions != nil {
-		w.burns = make([]listBurn, len(txs))
-	}
+	w.burns = newListBurns(positions)
 
 	results, err := w.writeFamilies(ctx)
 
@@ -235,6 +233,16 @@ type nettedWrite struct {
 	// index. Allocated only with positions, so a list without them carries no byte for it. Each
 	// chunk writes only its own transactions', and they are read after every chunk ends.
 	burns []listBurn
+}
+
+// newListBurns is the burn-reason slice for a list that took positions, one byte per transaction,
+// or nil for a list that took none, which then carries nothing for it.
+func newListBurns(positions []uint64) []listBurn {
+	if positions == nil {
+		return nil
+	}
+
+	return make([]listBurn, len(positions))
 }
 
 // setBurn records why transaction i's position burned, when the list took positions.
