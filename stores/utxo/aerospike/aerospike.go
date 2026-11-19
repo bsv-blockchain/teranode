@@ -203,6 +203,8 @@ func safeBatcherPutBatchCtx[T any](b batcherIfc[T], ctx context.Context, items [
 // Store implements the UTXO store interface using Aerospike.
 // It is thread-safe for concurrent access.
 type Store struct {
+	utxo.LanePositions
+
 	ctx                 context.Context // store the global context for things that run in the background
 	url                 *url.URL
 	client              *uaerospike.Client

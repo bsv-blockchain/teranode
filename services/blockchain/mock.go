@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -662,6 +663,30 @@ func (s *errorStoreGetBlockHeader) GetBlockHeader(ctx context.Context, h *chainh
 		return nil, nil, args.Error(2)
 	}
 	return args.Get(0).(*model.BlockHeader), args.Get(1).(*model.BlockHeaderMeta), args.Error(2)
+}
+
+// OpenLaneLease mocks the OpenLaneLease method
+func (m *Mock) OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
+	args := m.Called(ctx, holder)
+	if args.Error(2) != nil {
+		return lane.LeaseID{}, lane.Grant{}, args.Error(2)
+	}
+	return args.Get(0).(lane.LeaseID), args.Get(1).(lane.Grant), nil
+}
+
+// RenewLaneLease mocks the RenewLaneLease method
+func (m *Mock) RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error) {
+	args := m.Called(ctx, r)
+	if args.Error(1) != nil {
+		return lane.RenewResult{}, args.Error(1)
+	}
+	return args.Get(0).(lane.RenewResult), nil
+}
+
+// ReleaseLaneLease mocks the ReleaseLaneLease method
+func (m *Mock) ReleaseLaneLease(ctx context.Context, r lane.Release) (bool, error) {
+	args := m.Called(ctx, r)
+	return args.Bool(0), args.Error(1)
 }
 
 type emptyStoreGetBlockHeader struct {

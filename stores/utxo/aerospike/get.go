@@ -81,6 +81,7 @@ import (
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/stores/utxo/txparse"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/ordishs/gocore"
@@ -1169,6 +1170,22 @@ NEXT_BATCH_RECORD:
 						items[idx].Data.CreatedAt = int64(t)
 					case int64:
 						items[idx].Data.CreatedAt = t
+					}
+				}
+
+			case fields.LanePosition:
+				// Only written when a lane position was supplied, so an absent bin is
+				// normal and leaves 0 (lane.None). The bin is a signed integer holding
+				// the position bit for bit. An unexpected type is ignored rather than
+				// failing the read.
+				if v := bins[key.String()]; v != nil {
+					switch t := v.(type) {
+					case int:
+						items[idx].Data.LanePosition = lane.FromSigned(int64(t))
+					case int64:
+						items[idx].Data.LanePosition = lane.FromSigned(t)
+					default:
+						s.logger.Warnf("[BatchDecorate][%s] ignoring lane position bin of unexpected type %T", items[idx].Hash, v)
 					}
 				}
 			}

@@ -229,7 +229,7 @@ type netBelowTx struct {
 }
 
 func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndCreateMultiList,
-	blockHeight uint32) ([]utxo.SpendAndCreateMultiResult, error) {
+	blockHeight uint32, positions []uint64) ([]utxo.SpendAndCreateMultiResult, error) {
 	mi, _ := minedBlock(list.Options.MinedBlockInfos)
 
 	for i, tx := range txs {
@@ -295,7 +295,7 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 	g.SetLimit(workers)
 
 	for _, chunk := range netBelowChunks(items, size, nettedBelowMaxChunkOutputs) {
-		g.Go(func() error { return s.netBelowChunk(gCtx, chunk, list, blockHeight, spender) })
+		g.Go(func() error { return s.netBelowChunk(gCtx, chunk, list, blockHeight, spender, positions) })
 	}
 
 	if err := g.Wait(); err != nil {
@@ -376,6 +376,16 @@ SELECT t.txid, t.mined_height, t.block_id, t.subtree_idx, t.created_height,
 ON CONFLICT (txid, mined_height, block_id) DO NOTHING
 RETURNING txid`
 
+// nettedMinedLaneSQL is nettedMinedSQL with lane_position added, for a database with the column. It
+// looks at no existing row, unlike the create statements, because a coinbase is never in a netted
+// list and any other transaction below the checkpoint is contained in one block under one id.
+var nettedMinedLaneSQL = laneStatement(nettedMinedSQL,
+	"size_in_bytes, fee, tx_inpoints, locktime, created_at, flags)", "size_in_bytes, fee, tx_inpoints, locktime, created_at, flags, lane_position)",
+	"t.size_in_bytes, t.fee, NULL, NULL, t.created_at, t.flags\n", "t.size_in_bytes, t.fee, NULL, NULL, t.created_at, t.flags,\n       NULLIF(t.lane_position, 0)\n",
+	"$7::bigint[], $8::bigint[], $9::smallint[])", "$7::bigint[], $8::bigint[], $9::smallint[], $10::bigint[])",
+	"fee, created_at, flags)\nON CONFLICT", "fee, created_at, flags, lane_position)\nON CONFLICT",
+)
+
 // nettedDeleteSQL deletes the coins the chunk's new transactions spend from outside the list. It
 // is spendJournalSQL's delete with the same predicates (the full txid recheck, the per-key flag
 // mask written as an inequality the planner can estimate, the maturity test) and without the
@@ -407,10 +417,10 @@ INSERT INTO tx_body (created_height, txid, raw_tx)
 SELECT * FROM unnest($1::int[], $2::bytea[], $3::bytea[])`
 
 func (s *Store) netBelowChunk(ctx context.Context, chunk []*netBelowTx, list *utxo.SpendAndCreateMultiList,
-	blockHeight uint32, spender map[nettedKey]nettedSpender) error {
+	blockHeight uint32, spender map[nettedKey]nettedSpender, positions []uint64) error {
 	createItems := make([]*createItem, len(chunk))
 	for k, it := range chunk {
-		createItems[k] = &createItem{tx: it.tx, blockHeight: blockHeight, options: list.Options.ItemOptions(it.pos)}
+		createItems[k] = &createItem{tx: it.tx, blockHeight: blockHeight, options: listItemOptions(list, positions, it.pos)}
 	}
 
 	plan := s.planCreates(createItems)
@@ -587,8 +597,18 @@ func (s *Store) netBelowClaim(ctx context.Context, dbTx pgx.Tx, p *createPlan) (
 
 	s.countCreatesAheadOfTip(p)
 
-	rows, err := dbTx.Query(ctx, nettedMinedSQL, p.txids, p.minedHeight, p.blockID, p.subtreeIdx,
-		p.heights, p.sizes, p.fees, p.createdAt, p.txFlags)
+	stmt, argCount := nettedMinedSQL, 9
+	if s.laneColumn {
+		stmt, argCount = nettedMinedLaneSQL, 10
+	}
+
+	args := append(make([]any, 0, argCount),
+		p.txids, p.minedHeight, p.blockID, p.subtreeIdx, p.heights, p.sizes, p.fees, p.createdAt, p.txFlags)
+	if s.laneColumn {
+		args = append(args, p.lanes)
+	}
+
+	rows, err := dbTx.Query(ctx, stmt, args...)
 	if err != nil {
 		return nil, errors.NewStorageError("[utxoset][SpendAndCreateMulti] claim netted chunk", err)
 	}

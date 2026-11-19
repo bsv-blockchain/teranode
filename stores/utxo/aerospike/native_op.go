@@ -37,6 +37,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -757,7 +758,7 @@ func (s *Store) buildProbeRecord(policy *aerospike.WritePolicy, label string, bl
 		return nil, nil, noop, false
 	}
 
-	bins, binsErr := s.GetBinsToStore(tx, blockHeight, nil, nil, nil, false, txHash, false, false, false, nil)
+	bins, binsErr := s.GetBinsToStore(tx, blockHeight, nil, nil, nil, false, txHash, false, false, false, lane.None, nil)
 	if binsErr != nil || len(bins) != 1 {
 		s.logger.Warnf("[teranode-native-op] %s record build failed (%v, %d batches); falling back to UDF path", label, binsErr, len(bins))
 		return nil, nil, noop, false
