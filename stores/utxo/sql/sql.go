@@ -2716,21 +2716,6 @@ func readBlockIDs(rows sqlRows) (map[chainhash.Hash][]uint32, error) {
 // Aerospike doesn't need this because it uses optimistic single-key operations
 // without DB-level row locking.
 func (s *Store) sendSpendBatch(batch []*batchSpend) {
-	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
-		func(item *batchSpend) *utxo.Spend {
-			if item == nil {
-				return nil
-			}
-			return item.spend
-		},
-		func(item *batchSpend, err error) {
-			item.errCh <- err
-		},
-	)
-	if len(batch) == 0 {
-		return
-	}
-
 	s.retrySpendBatch(batch, func(batch []*batchSpend) bool {
 		return s.trySendSpendBatch(s.ctx, batch)
 	})
