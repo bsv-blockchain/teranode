@@ -298,7 +298,7 @@ Install the configured UTXO store's lane columns before the historical lane conv
 SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli prepare-lane-schema
 ```
 
-Run it at `utxostore_laneMigration=off`, with every teranode process of the node stopped, as a database role that owns the tables. It adds nullable, empty lane columns, writes no row, and is safe to run again. Start the node's processes afterwards so each sees the same schema. On utxoset it adds the eight lane columns that opening the store at `off` never adds. The SQL store already adds its columns at every open, and Aerospike has no schema to install. The blockchain store's lane tables are not this command's: every start of the blockchain service creates them when its role may `CREATE`.
+Run it at `utxostore_laneMigration=off`, with every teranode process of the node stopped, as a database role that owns the tables. It takes no arguments and is safe to run again. It adds nullable, empty lane columns and fills no existing row. It opens the store the way the node does first, and on a new database that normal startup can create the store's base schema and its metadata rows. Start the node's processes afterwards so each sees the same schema. On utxoset it adds the eight lane columns that opening the store at `off` never adds. The SQL store already adds its columns at every open, and Aerospike has no schema to install. The blockchain store's lane tables are not this command's: every start of the blockchain service creates them when its role may `CREATE`.
 
 ### Benchmarking Tools
 

@@ -15,7 +15,9 @@ import (
 const laneSchemaLongHelp = `Installs the lane columns of the configured UTXO store: nullable, empty columns for the
 lane positions that the lane migration later fills. Run it at utxostore_laneMigration=off, before
 the historical conversion, with every teranode process of the node stopped, as a database role that
-owns the tables. It writes no row and is safe to run again. Start the node's processes afterwards so
+owns the tables. It takes no arguments and is safe to run again. The lane columns it adds are empty:
+it fills no existing row. It opens the store as the node does first, and that startup can create the
+store's base schema and its metadata rows on a new database. Start the node's processes afterwards so
 each sees the same schema. The blockchain store's lane tables are not this command's: every start of
 the blockchain service creates them when its database role may CREATE. A role without CREATE needs
 the database owner to create the lane tables and the lane_map_lane_last index first, then grant
