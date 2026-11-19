@@ -552,6 +552,8 @@ func createPostgresSchema(logger ulogger.Logger, db *usql.DB, withIndexes bool) 
 			return err
 		}
 
+		setLaneMapHoleDataStorage(logger, db)
+
 		current, err := isBlockchainSchemaCurrent(db, withIndexes)
 		if err != nil {
 			logger.Warnf("[blockchain schema] current-schema probe failed, will run full DDL: %v", err)
@@ -1164,31 +1166,58 @@ func createPostgresLaneTables(db *usql.DB) error {
 		}
 	}
 
-	return setLaneMapHoleDataStorage(db)
+	return nil
 }
 
-// setLaneMapHoleDataStorage stores lane_map.hole_data out of line without trying to compress it.
-// Hole data is a Roaring bitmap, already compact, and any row with real hole data passes the
-// TOAST threshold, so the default attempt to compress it costs CPU at commit for little or no
-// saving. The catalog check comes first, so a current schema runs no DDL and a role without
-// ownership still starts; the ALTER runs once, on a table this build created or an earlier one did.
-func setLaneMapHoleDataStorage(db *usql.DB) error {
+// laneMapStorageLockTimeout bounds how long startup waits for the lock that setting
+// lane_map.hole_data's storage needs, so a session holding lane_map cannot stall startup while it
+// holds the blockchain schema lock.
+const laneMapStorageLockTimeout = 2 * time.Second
+
+// setLaneMapHoleDataStorage asks Postgres to store lane_map.hole_data out of line without trying
+// to compress it, once a row is large enough to be moved out of line at all. Hole data is a Roaring
+// bitmap, already compact, so the default compression attempt costs CPU at commit for little or no
+// saving. Small hole data stays inline whatever the setting, and changing it rewrites no stored
+// value: it applies to later writes.
+//
+// It is a performance setting only, so it never stops startup. A current schema runs no DDL: the
+// catalog check comes first. Otherwise the ALTER waits at most laneMapStorageLockTimeout for its
+// lock, and a timeout, or a role that does not own lane_map, is logged as a warning and the store
+// starts with the default storage; the table's owner can run the ALTER by hand.
+func setLaneMapHoleDataStorage(logger ulogger.Logger, db *usql.DB) {
 	var storage string
 	if err := db.QueryRow(
 		`SELECT a.attstorage::text FROM pg_attribute a WHERE a.attrelid = 'lane_map'::regclass AND a.attname = 'hole_data' AND NOT a.attisdropped`,
 	).Scan(&storage); err != nil {
-		return errors.NewStorageError("could not read lane_map.hole_data storage", err)
+		logger.Warnf("[blockchain schema] could not read lane_map.hole_data storage, leaving it as it is: %v", err)
+		return
 	}
 
 	if storage == "e" {
-		return nil
+		return
 	}
 
-	if _, err := db.Exec(`ALTER TABLE lane_map ALTER COLUMN hole_data SET STORAGE EXTERNAL`); err != nil {
-		return errors.NewStorageError("could not set lane_map.hole_data storage to EXTERNAL", err)
-	}
+	err := func() error {
+		tx, err := db.BeginTx(context.Background(), nil)
+		if err != nil {
+			return err
+		}
 
-	return nil
+		defer func() { _ = tx.Rollback() }()
+
+		if _, err = tx.Exec(fmt.Sprintf(`SET LOCAL lock_timeout = '%dms'`, laneMapStorageLockTimeout.Milliseconds())); err != nil {
+			return err
+		}
+
+		if _, err = tx.Exec(`ALTER TABLE lane_map ALTER COLUMN hole_data SET STORAGE EXTERNAL`); err != nil {
+			return err
+		}
+
+		return tx.Commit()
+	}()
+	if err != nil {
+		logger.Warnf("[blockchain schema] lane_map.hole_data keeps its default storage; the table owner can run ALTER TABLE lane_map ALTER COLUMN hole_data SET STORAGE EXTERNAL: %v", err)
+	}
 }
 
 // addMinedSetGenColumn adds the mined_set_gen column to blocks when probeQuery, which must

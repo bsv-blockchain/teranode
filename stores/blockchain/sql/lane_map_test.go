@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -570,4 +571,66 @@ func TestLaneMapHoleDataIsStoredExternal(t *testing.T) {
 
 	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true))
 	require.Equal(t, "e", storage(), "an earlier build's lane_map")
+}
+
+// The storage setting is a performance setting and never stops startup. A session holding
+// lane_map makes startup wait at most laneMapStorageLockTimeout, then start with the default
+// storage; a role that does not own lane_map starts too.
+func TestLaneMapHoleDataStorageNeverBlocksStartup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	s, err := New(ulogger.TestLogger{}, dbURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	storage := func() string {
+		var st string
+		require.NoError(t, db.QueryRow(`SELECT attstorage::text FROM pg_attribute WHERE attrelid = 'lane_map'::regclass AND attname = 'hole_data'`).Scan(&st))
+
+		return st
+	}
+
+	_, err = db.Exec(`ALTER TABLE lane_map ALTER COLUMN hole_data SET STORAGE EXTENDED`)
+	require.NoError(t, err)
+
+	holder, err := db.Begin()
+	require.NoError(t, err)
+
+	_, err = holder.Exec(`LOCK TABLE lane_map IN ACCESS EXCLUSIVE MODE`)
+	require.NoError(t, err)
+
+	started := time.Now()
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true), "a held lane_map lock does not fail startup")
+	require.Less(t, time.Since(started), laneMapStorageLockTimeout+10*time.Second, "startup waits about the lock timeout, not for the holder")
+	require.NoError(t, holder.Rollback())
+	require.Equal(t, "x", storage(), "the default storage stays while the lock was held")
+
+	// A role that does not own lane_map, on a schema its owner created with the default storage.
+	for _, stmt := range []string{
+		`CREATE ROLE lane_storage_node LOGIN PASSWORD 'lane_storage_node'`,
+		`REVOKE CREATE ON SCHEMA public FROM PUBLIC`,
+		`GRANT USAGE ON SCHEMA public TO lane_storage_node`,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO lane_storage_node`,
+	} {
+		_, err = db.Exec(stmt)
+		require.NoError(t, err, stmt)
+	}
+
+	nodeURL := *dbURL
+	nodeURL.User = url.UserPassword("lane_storage_node", "lane_storage_node")
+
+	nodeDB, err := usql.Open("postgres", nodeURL.String())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = nodeDB.Close() })
+
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, nodeDB, true), "a non-owner starts with the default storage")
+	require.Equal(t, "x", storage())
+
+	// The owner's next start applies it.
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true))
+	require.Equal(t, "e", storage())
 }

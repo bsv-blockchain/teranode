@@ -15,8 +15,9 @@ import (
 // The map and its neighbours, in the blockchain database.
 //
 // lane_map holds the map rows: per block, one row per lane the block took positions from, split
-// over whole chunks when a row's hole data would pass 64 MB. On Postgres hole_data has STORAGE
-// EXTERNAL: stored out of line, never compressed, since a Roaring bitmap is compact already. Positions are the seven-byte position
+// over whole chunks when a row's hole data would pass 64 MB. On Postgres startup asks for
+// hole_data STORAGE EXTERNAL, so hole data large enough to leave the row is stored out of line
+// without a compression attempt; small hole data stays inline. See setLaneMapHoleDataStorage. Positions are the seven-byte position
 // within the lane. Rows are insert-only and kept for ever, including after the block is
 // invalidated; nothing references blocks by foreign key, so creating these tables takes no lock on
 // blocks. The index on (lane, last) serves the reader query for rows ending above a lane floor. It
