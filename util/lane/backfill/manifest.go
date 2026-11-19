@@ -309,8 +309,9 @@ func (m *Manifest) load(resume bool) error {
 }
 
 // readFrame reads a record's type and length and checks the head's own CRC. ok is false for a
-// partial last record: fewer bytes left than a head, or a good head whose payload and tail run
-// past the end of the file. A head that fails its CRC is damage.
+// partial last record: fewer bytes left than a head, a good head whose payload and tail run past
+// the end of the file, or a head that fails its CRC with it and every byte after it to the end of
+// the file zero. Any other head that fails its CRC is damage.
 func readFrame(r *bufio.Reader, remaining int64, path string, pos int64) (byte, uint64, bool, error) {
 	if remaining < frameHead {
 		return 0, 0, false, nil

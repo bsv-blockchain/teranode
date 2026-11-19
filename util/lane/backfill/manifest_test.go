@@ -848,3 +848,43 @@ func TestManifestCutsOnlyAZeroFilledLastRecord(t *testing.T) {
 		require.Equal(t, bad, after, "%s: nothing is cut", name)
 	}
 }
+
+// The zero check reads the tail in 64 KiB pieces. A zero tail longer than one piece is cut, and
+// one whose only non-zero byte lies past the first piece is refused with nothing cut.
+func TestManifestScansAZeroTailToTheEnd(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m")
+
+	m, err := CreateManifest(path, testHeader())
+	require.NoError(t, err)
+	_, err = m.AppendBlock(10, 10, txids(1, 4))
+	require.NoError(t, err)
+	require.NoError(t, m.Close())
+
+	one, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	long := make([]byte, 200<<10)
+
+	require.NoError(t, os.WriteFile(path, append(append([]byte{}, one...), long...), 0o600))
+
+	m, err = ResumeManifest(path)
+	require.NoError(t, err)
+	require.Len(t, m.Blocks(), 1)
+	require.NoError(t, m.Close())
+
+	cut, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, one, cut, "a zero tail of several pieces is cut")
+
+	late := append([]byte{}, long...)
+	late[len(late)-1] = 1
+	bad := append(append([]byte{}, one...), late...)
+	require.NoError(t, os.WriteFile(path, bad, 0o600))
+
+	_, err = ResumeManifest(path)
+	require.Error(t, err, "a non-zero byte past the first piece is damage")
+
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, bad, after, "nothing is cut")
+}
