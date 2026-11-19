@@ -2253,8 +2253,10 @@ func (s *Service) stageParentUpdate(updates, queued map[string]*parentUpdateInfo
 // higher output is never named there. What the copy did do was accumulate ~70
 // bytes per pruned child on a record that never shrinks; a 16k-output parent
 // crossed write-block-size at roughly 15k children and every later marker write
-// to it failed with RECORD_TOO_BIG. Page-only marking bounds each record to one
-// entry per output it actually holds.
+// to it failed with RECORD_TOO_BIG. Page-only marking avoids copying markers
+// for other pages onto the master. Without output reuse, new markers are bounded
+// by the outputs on each page. Unspend leaves historical markers intact, so reused
+// outputs and old master copies can exceed that bound.
 //
 // Queueing is not marking. The offset within the page is kept with the child so
 // keepSpendHolders can drop the marker when that output does not record this

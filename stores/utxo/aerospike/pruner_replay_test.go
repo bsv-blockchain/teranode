@@ -500,9 +500,9 @@ func TestSpendDoesNotBlessWithRequireParentOutputs(t *testing.T) {
 // test of the same name. A conflicting loser names the winner's outpoint in its
 // inputs and never held it, and it is a pruning candidate like any tombstoned
 // record. Only the child the output records as its spender may be marked: the
-// SQL spend path checks the transaction asking to spend, so a marker for the
-// loser there would refuse its genuinely fresh spend of the output once the
-// winner's spend is released, and nothing clears a marker.
+// marker check uses the output's recorded spender. After Unspend, a stale
+// loser marker allows the loser's first fresh spend, but refuses a later
+// idempotent spend once the output records the loser.
 func TestPrunerMarksOnlyTheChildThatHeldTheSpend(t *testing.T) {
 	logger := ulogger.New("pruner-marker-holder-test")
 	s := test.CreateBaseTestSettings(t)
@@ -573,7 +573,7 @@ func TestPrunerMarksOnlyTheChildThatHeldTheSpend(t *testing.T) {
 
 	markers := parentRecord.Bins[fields.DeletedChildren.String()]
 	require.Contains(t, markers, winner.TxID(), "the child that actually held the spend must still be marked")
-	require.NotContains(t, markers, loser.TxID(), "the loser never held P:0, so marking it would reject its own later spend of that output forever")
+	require.NotContains(t, markers, loser.TxID(), "the loser never held P:0; a stale marker would reject a later idempotent spend after it wins the output")
 
 	// End state that matters: with the winner's spend released, the loser's fresh
 	// spend of the now-free output must be accepted.

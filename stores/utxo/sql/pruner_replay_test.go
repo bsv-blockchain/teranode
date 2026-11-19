@@ -645,7 +645,8 @@ func TestSpendDoesNotBlessWithRequireParentOutputs(t *testing.T) {
 // TestPrunerMarksOnlyTheChildThatHeldTheSpend: a conflicting loser names the
 // same outpoint in its inputs as the winner but never held it. Only the child
 // the output records as its spender may be marked, as on Aerospike: a marker
-// for the loser would refuse the loser's own spend if it ever won the output.
+// for the loser allows its first fresh spend after Unspend, but refuses a later
+// idempotent spend once the output records the loser.
 func TestPrunerMarksOnlyTheChildThatHeldTheSpend(t *testing.T) {
 	for _, defensive := range []bool{false, true} {
 		t.Run(fmt.Sprintf("defensive=%v", defensive), func(t *testing.T) {
@@ -716,7 +717,7 @@ func testPrunerMarksOnlyTheChildThatHeldTheSpend(t *testing.T, defensive bool) {
 		require.NoError(t, store.db.QueryRowContext(ctx,
 			"SELECT COUNT(*) FROM deleted_children WHERE child_hash = $1", loser.TxIDChainHash()[:]).Scan(&loserMarkers))
 		require.Equal(t, 0, loserMarkers,
-			"the loser never held P:0, so marking it would reject its own later spend of that output forever")
+			"the loser never held P:0; a stale marker would reject a later idempotent spend after it wins the output")
 
 		var winnerMarkers int
 		require.NoError(t, store.db.QueryRowContext(ctx,
