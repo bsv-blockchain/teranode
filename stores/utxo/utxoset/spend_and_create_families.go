@@ -556,7 +556,9 @@ func (w *nettedWrite) runChunks(ctx context.Context, plan *chunkPlan, stats *fam
 
 				if err != nil {
 					for _, i := range plan.chunks[idx].pos {
-						w.items[i].rolledBack = true
+						if w.items[i].burnReason == "" {
+							w.items[i].burnReason = utxo.LaneBurnRolledBack
+						}
 					}
 				}
 
@@ -782,6 +784,9 @@ func (w *nettedWrite) familyRound(ctx context.Context, run *chunkRun, stats *fam
 		cancel()
 
 		if err != nil {
+			// The commit may have landed, so the positions may be on records.
+			run.markCommitUnknown()
+
 			return false, errors.NewStorageError("[utxoset][SpendAndCreateMulti] commit chunk", err)
 		}
 
@@ -792,6 +797,8 @@ func (w *nettedWrite) familyRound(ctx context.Context, run *chunkRun, stats *fam
 
 		if multiCreateAfterCommit != nil {
 			if err = multiCreateAfterCommit(); err != nil {
+				run.markCommitUnknown()
+
 				return false, err
 			}
 		}
@@ -1169,6 +1176,14 @@ func (w *nettedWrite) createInChunk(ctx context.Context, dbTx pgx.Tx, run *chunk
 	}
 
 	return plan, planned, false, w.writeNettedJournal(ctx, dbTx, journal)
+}
+
+// markCommitUnknown records that the chunk's COMMIT failed and may have landed, so a lane position
+// of the chunk is counted as outcome_unknown rather than rolled_back.
+func (run *chunkRun) markCommitUnknown() {
+	for _, it := range run.its {
+		it.burnReason = utxo.LaneBurnOutcomeUnknown
+	}
 }
 
 // settleChunk gives every transaction of a settled chunk its result. It runs after the commit,

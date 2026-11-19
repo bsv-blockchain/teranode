@@ -209,9 +209,11 @@ func TestValidate_OutpointOnlySpend_ConflictingFallbackMinimalCreate(t *testing.
 	competingTx.Inputs = append(competingTx.Inputs, compIn)
 	competingTx.Outputs = append(competingTx.Outputs, &bt.Output{Satoshis: 300, LockingScript: coinbaseScript})
 
+	recorder := &createCallerRecorder{Store: store}
+
 	v := &Validator{
 		logger:      logger,
-		utxoStore:   store,
+		utxoStore:   recorder,
 		settings:    tSettings,
 		txValidator: NewTxValidator(logger, tSettings),
 		stats:       gocore.NewStat("validator"),
@@ -231,6 +233,11 @@ func TestValidate_OutpointOnlySpend_ConflictingFallbackMinimalCreate(t *testing.
 	require.Error(t, err, "competing spender must be rejected")
 	require.True(t, errors.Is(err, errors.ErrTxConflicting),
 		"conflicting fallback on the outpoint-only path must return ErrTxConflicting (via minimal create), not a GetFees processing error; got: %v", err)
+
+	// The fallback create names the validator, as its primary create does.
+	creates := recorder.createOnly(*competingTx.TxIDChainHash())
+	require.Len(t, creates, 1, "the conflicting fallback made one create-only call")
+	require.Equal(t, utxostore.CallerValidator, creates[0])
 }
 
 // TestValidate_OutpointOnlySpend_RequiresSkipScriptValidation verifies that

@@ -133,13 +133,14 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	// A position this call took from the source is its own to record if the create fails. A
 	// caller that stops waiting for the batch gets its context error while the batch may still
-	// write the record, and LaneBurnReason says so. A batch that rolled back says so on its result.
-	var rolledBack bool
+	// write the record, and LaneBurnReason says so. A batch that failed with its database
+	// transaction open says why on its result.
+	var batchBurnReason string
 
 	if utxo.TookLanePosition(options.LanePosition, position) {
 		defer func() {
-			if rolledBack && err != nil {
-				s.BurnLanePosition(utxo.CreatedTxID(tx, options), options.Caller, position, utxo.LaneBurnRolledBack)
+			if batchBurnReason != "" && err != nil {
+				s.BurnLanePosition(utxo.CreatedTxID(tx, options), options.Caller, position, batchBurnReason)
 				return
 			}
 
@@ -173,7 +174,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 			}) {
 				select {
 				case res := <-done:
-					rolledBack = res.rolledBack
+					batchBurnReason = res.burnReason
 
 					return res.data, res.err
 				case <-ctx.Done():

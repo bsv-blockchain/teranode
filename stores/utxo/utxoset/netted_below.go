@@ -226,9 +226,10 @@ type netBelowTx struct {
 	// listSpent are the transaction's own outputs a later transaction of the list spends.
 	listSpent []uint32
 	result    utxo.SpendAndCreateMultiResult
-	// rolledBack is true once the chunk holding the transaction failed, so its lane position
-	// burned. Each chunk writes only its own transactions', and they are read after every chunk ends.
-	rolledBack bool
+	// burnReason says why the transaction's lane position burned once its chunk failed:
+	// rolled_back, or outcome_unknown when the chunk's COMMIT failed and may have landed. Each
+	// chunk writes only its own transactions', and they are read after every chunk ends.
+	burnReason string
 }
 
 func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndCreateMultiList,
@@ -241,15 +242,15 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 	var items []*netBelowTx
 
 	defer func() {
-		var outcome func(int) (utxo.SpendAndCreateMultiResult, bool)
+		var outcome func(int) (utxo.SpendAndCreateMultiResult, string)
 
 		if items != nil {
-			outcome = func(i int) (utxo.SpendAndCreateMultiResult, bool) {
+			outcome = func(i int) (utxo.SpendAndCreateMultiResult, string) {
 				if items[i] == nil {
-					return utxo.SpendAndCreateMultiResult{}, false
+					return utxo.SpendAndCreateMultiResult{}, ""
 				}
 
-				return items[i].result, items[i].rolledBack
+				return items[i].result, items[i].burnReason
 			}
 		}
 
@@ -323,7 +324,9 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 			err := s.netBelowChunk(gCtx, chunk, list, blockHeight, spender, positions)
 			if err != nil {
 				for _, it := range chunk {
-					it.rolledBack = true
+					if it.burnReason == "" {
+						it.burnReason = utxo.LaneBurnRolledBack
+					}
 				}
 			}
 
@@ -543,6 +546,11 @@ func (s *Store) netBelowChunk(ctx context.Context, chunk []*netBelowTx, list *ut
 	}
 
 	if err = dbTx.Commit(ctx); err != nil {
+		// The commit may have landed, so the positions may be on records.
+		for _, it := range chunk {
+			it.burnReason = utxo.LaneBurnOutcomeUnknown
+		}
+
 		return errors.NewStorageError("[utxoset][SpendAndCreateMulti] commit netted chunk", err)
 	}
 

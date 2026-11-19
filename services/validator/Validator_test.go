@@ -2665,3 +2665,35 @@ func TestSpendAndCreateInUtxoStoreNamesItsCaller(t *testing.T) {
 		})
 	}
 }
+
+// createCallerRecorder remembers the caller each create-only SpendAndCreate names, by transaction,
+// then forwards the call to the real store.
+type createCallerRecorder struct {
+	utxostore.Store
+
+	mu      sync.Mutex
+	callers map[chainhash.Hash][]utxostore.Caller
+}
+
+func (r *createCallerRecorder) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
+	opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
+	if options, err := utxostore.ParseCreateOptions(opts...); err == nil && options.CreateOnly {
+		r.mu.Lock()
+		if r.callers == nil {
+			r.callers = map[chainhash.Hash][]utxostore.Caller{}
+		}
+
+		r.callers[*tx.TxIDChainHash()] = append(r.callers[*tx.TxIDChainHash()], options.Caller)
+		r.mu.Unlock()
+	}
+
+	return r.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+}
+
+// createOnly returns the callers the create-only calls for txid named.
+func (r *createCallerRecorder) createOnly(txid chainhash.Hash) []utxostore.Caller {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]utxostore.Caller(nil), r.callers[txid]...)
+}

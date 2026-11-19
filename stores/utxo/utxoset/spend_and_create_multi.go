@@ -86,30 +86,30 @@ func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeig
 
 	// On a failed list the results are nil, but chunks that committed before the failure gave
 	// their transactions results, and those positions were written.
-	s.burnList(list, positions, utxo.LaneBurnListFailed, func(i int) (utxo.SpendAndCreateMultiResult, bool) {
-		return w.items[i].result, w.items[i].rolledBack
+	s.burnList(list, positions, utxo.LaneBurnListFailed, func(i int) (utxo.SpendAndCreateMultiResult, string) {
+		return w.items[i].result, w.items[i].burnReason
 	})
 
 	return results, err
 }
 
 // burnList records every position a netted list took and wrote no record with. outcome gives
-// transaction i's result and whether its chunk rolled back; with no outcome, or for a transaction
-// with no result and no rolled-back chunk, the position burned for unsettled.
+// transaction i's result and, when its chunk failed, why its position burned; with no outcome, or
+// for a transaction with no result and no failed chunk, the position burned for unsettled.
 func (s *Store) burnList(list *utxo.SpendAndCreateMultiList, positions []uint64, unsettled string,
-	outcome func(i int) (utxo.SpendAndCreateMultiResult, bool)) {
+	outcome func(i int) (utxo.SpendAndCreateMultiResult, string)) {
 	for i, position := range positions {
 		if position == lane.None {
 			continue
 		}
 
 		var (
-			res        utxo.SpendAndCreateMultiResult
-			rolledBack bool
+			res       utxo.SpendAndCreateMultiResult
+			chunkBurn string
 		)
 
 		if outcome != nil {
-			res, rolledBack = outcome(i)
+			res, chunkBurn = outcome(i)
 		}
 
 		var reason string
@@ -123,8 +123,8 @@ func (s *Store) burnList(list *utxo.SpendAndCreateMultiList, positions []uint64,
 			reason = utxo.LaneBurnReason(res.Err, res.Spends)
 		case res.Status == utxo.MultiTxParentFailed:
 			reason = utxo.LaneBurnParentFailed
-		case rolledBack:
-			reason = utxo.LaneBurnRolledBack
+		case chunkBurn != "":
+			reason = chunkBurn
 		default:
 			reason = unsettled
 		}
@@ -203,9 +203,10 @@ type multiTx struct {
 	claims  []inputClaim
 	spends  []*utxo.Spend
 	result  utxo.SpendAndCreateMultiResult
-	// rolledBack is true once the chunk holding the transaction failed, so its lane position
-	// burned. Written by runChunks under its lock and read only after the write ends.
-	rolledBack bool
+	// burnReason says why the transaction's lane position burned once its chunk failed:
+	// rolled_back, or outcome_unknown when the chunk's COMMIT failed and may have landed. Written
+	// by the goroutine running the chunk and read only after the write ends.
+	burnReason string
 }
 
 func (it *multiTx) dead() bool {

@@ -2,6 +2,7 @@ package utxoset
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -265,14 +266,21 @@ func (s *Store) spendAndCreateOne(ctx context.Context, tx *bt.Tx, blockHeight ui
 	return data, spends, nil
 }
 
+// laneBurnProbeTimeout bounds burnUnlessStored's read. The read only labels a metric, and the
+// caller waits for it, so it must never hold the caller, or the validator's lock on the txid, long.
+var laneBurnProbeTimeout = 5 * time.Second
+
 // burnUnlessStored records the burn of position for a create that a rerun after a failed batch
 // answered with ErrTxExists. The failed batch's COMMIT may have landed with this very position, so
 // the stored record is read: carrying the position, nothing burned; carrying another, the position
-// burned as exists; unreadable, the outcome is unknown.
+// burned as exists; unreadable within laneBurnProbeTimeout, the outcome is unknown.
 func (s *Store) burnUnlessStored(ctx context.Context, tx *bt.Tx, options *utxo.CreateOptions, position uint64) {
 	txid := utxo.CreatedTxID(tx, options)
 
-	md, err := s.Get(context.WithoutCancel(ctx), &txid, fields.LanePosition)
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), laneBurnProbeTimeout)
+	defer cancel()
+
+	md, err := s.Get(probeCtx, &txid, fields.LanePosition)
 
 	switch {
 	case err != nil || md == nil:

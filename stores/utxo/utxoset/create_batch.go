@@ -315,9 +315,10 @@ type createResult struct {
 	data *meta.Data
 	err  error
 
-	// rolledBack is true when the batch's database transaction failed after it was opened and
-	// rolled back, so the item's lane position burned with it.
-	rolledBack bool
+	// burnReason says why the item's lane position burned when the batch failed with its database
+	// transaction open: rolled_back, or outcome_unknown when the COMMIT itself failed and may have
+	// landed. Empty for any other answer.
+	burnReason string
 }
 
 // createItem is a single Create waiting for its batch to flush.
@@ -1075,24 +1076,24 @@ func (s *Store) sendCreateBatch(batch []*createItem) {
 	}()
 
 	if err := s.lockTxids(ctx, dbTx, plan.txids); err != nil {
-		s.failBatchRolledBack(batch, err)
+		s.failBatchWith(batch, err, utxo.LaneBurnRolledBack)
 		return
 	}
 
 	if err := s.runCreatePlan(ctx, dbTx, plan); err != nil {
-		s.failBatchRolledBack(batch, err)
+		s.failBatchWith(batch, err, utxo.LaneBurnRolledBack)
 		return
 	}
 
 	if createBatchBeforeCommit != nil {
 		if err := createBatchBeforeCommit(); err != nil {
-			s.failBatchRolledBack(batch, err)
+			s.failBatchWith(batch, err, utxo.LaneBurnRolledBack)
 			return
 		}
 	}
 
 	if err := dbTx.Commit(ctx); err != nil {
-		s.failBatchRolledBack(batch, errors.NewStorageError("[utxoset][Create] commit", err))
+		s.failBatchWith(batch, errors.NewStorageError("[utxoset][Create] commit", err), utxo.LaneBurnOutcomeUnknown)
 		return
 	}
 
@@ -1111,9 +1112,10 @@ func (s *Store) failBatch(items []*createItem, err error) {
 	}
 }
 
-// failBatchRolledBack is failBatch for a batch whose database transaction was open and rolled back.
-func (s *Store) failBatchRolledBack(items []*createItem, err error) {
+// failBatchWith is failBatch for a batch whose database transaction was open, with the reason its
+// items' lane positions burned.
+func (s *Store) failBatchWith(items []*createItem, err error, burnReason string) {
 	for _, item := range items {
-		item.done <- createResult{err: err, rolledBack: true}
+		item.done <- createResult{err: err, burnReason: burnReason}
 	}
 }

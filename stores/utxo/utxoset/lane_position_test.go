@@ -1394,3 +1394,76 @@ func TestLanePositionBurnOfABatchRerunAfterALandedCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, position, md.LanePosition)
 }
+
+// After a rerun answers ErrTxExists, the stored record decides: the same position burned nothing,
+// another position burned as exists, and a record that cannot be read within the bound is an
+// unknown outcome.
+func TestLanePositionBurnUnlessStored(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+
+	stored := tests.BuildMultiWorkload(t, 0xca, 1, 1).Roots[0]
+	mine := lane.Pack(31, 1)
+
+	_, _, err := s.SpendAndCreate(ctx, stored, 1_000, utxo.WithCreateOnly(), utxo.WithLanePosition(mine))
+	require.NoError(t, err)
+
+	options := &utxo.CreateOptions{Caller: utxo.CallerValidator}
+
+	burns := func(f func()) tests.LaneBurns {
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		f()
+
+		return tests.ReadLaneBurns(t, "utxoset").Since(before)
+	}
+
+	require.Equal(t, tests.LaneBurns{}, burns(func() { s.burnUnlessStored(ctx, stored, options, mine) }),
+		"the record carries the position")
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnExists + "/validator": 1},
+		burns(func() { s.burnUnlessStored(ctx, stored, options, lane.Pack(31, 2)) }),
+		"the record carries another position")
+
+	missing := tests.BuildMultiWorkload(t, 0xcb, 1, 1).Roots[0]
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/validator": 1},
+		burns(func() { s.burnUnlessStored(ctx, missing, options, lane.Pack(31, 3)) }),
+		"no record could be read")
+
+	// A read that cannot finish within the bound gives up, so it never holds the caller.
+	old := laneBurnProbeTimeout
+	laneBurnProbeTimeout = time.Nanosecond
+
+	t.Cleanup(func() { laneBurnProbeTimeout = old })
+
+	start := time.Now()
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/validator": 1},
+		burns(func() { s.burnUnlessStored(ctx, stored, options, lane.Pack(31, 4)) }))
+	require.Less(t, time.Since(start), time.Second)
+}
+
+// A list chunk whose COMMIT reports failure may have landed, so its positions count as
+// outcome_unknown, not rolled_back.
+func TestLanePositionBurnOfAListChunkWhoseCommitFailed(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+	forceChunkOfOne(t)
+
+	root := storedParent(t, s, ctx)
+	a := spendOutput(t, root, 0, 1)
+
+	failure := errors.NewStorageError("injected lost commit acknowledgement")
+	multiCreateAfterCommit = func() error { return failure }
+
+	t.Cleanup(func() { multiCreateAfterCommit = nil })
+
+	useBurnSource(t, s, burnPositions(1)...)
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, err := s.SpendAndCreateMulti(ctx, []*bt.Tx{a}, 1_100, utxo.WithIgnoreLocked(true),
+		utxo.WithCaller(utxo.CallerSubtreeValidation))
+	multiCreateAfterCommit = nil
+	require.ErrorIs(t, err, failure)
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/subtree_validation": 1},
+		tests.ReadLaneBurns(t, "utxoset").Since(before))
+	require.Equal(t, 1, identityCount(t, s, ctx, a), "the commit landed")
+}
