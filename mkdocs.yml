@@ -70,6 +70,7 @@ nav:
       - Chain Integrity Testing: howto/chain-integrity-testing.md
       - Makefile Guide: howto/makefile.md
       - Bug Reporting: howto/bugReporting.md
+      - Release Process: howto/releaseProcess.md
       - Developer's Guide to Teranode-CLI: howto/developersHowToTeranodeCLI.md
       - Miners:
           - Installation:

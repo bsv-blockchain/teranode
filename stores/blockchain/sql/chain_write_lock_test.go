@@ -308,7 +308,9 @@ func TestNewDoesNotWaitOnAnOpenChainWrite_PostgreSQL(t *testing.T) {
 // blocks stop inside that statement, holding every lock it has taken so far, until the
 // returned release is called. It is a trigger rather than a hook in the store, so it holds
 // any writer at the same point without a seam in production code. Rows the on_main_chain
-// walk leaves unchanged fire no row trigger, so a walk is never held by it.
+// walk leaves unchanged fire no row trigger, so a walk is never held by it. The trigger
+// disables lock_timeout in its transaction so StoreBlock's bounded fork wait cannot
+// release the writer before the ordering check.
 func holdBlocksWrites(t *testing.T, s *SQL) (release func()) {
 	t.Helper()
 
@@ -317,6 +319,7 @@ func holdBlocksWrites(t *testing.T, s *SQL) (release func()) {
 	_, err := s.db.Exec(`
 		CREATE FUNCTION hold_blocks_write() RETURNS trigger LANGUAGE plpgsql AS $$
 		BEGIN
+			PERFORM set_config('lock_timeout', '0', true);
 			PERFORM pg_advisory_xact_lock(2218);
 			RETURN NULL;
 		END $$`)
@@ -369,9 +372,10 @@ func waitForHeldBlocksWrite(t *testing.T, s *SQL) {
 // walk run in that window must fail its check with 55P03 rather than commit.
 func TestChainWriteLockIsTakenBeforeTheWritersFlags_PostgreSQL(t *testing.T) {
 	writers := []struct {
-		name  string
-		setup func(t *testing.T, s *SQL)
-		write func(ctx context.Context, s *SQL) error
+		name                string
+		setup               func(t *testing.T, s *SQL)
+		write               func(ctx context.Context, s *SQL) error
+		holdPastLockTimeout bool
 	}{
 		{
 			name: "DeleteBlock",
@@ -397,7 +401,8 @@ func TestChainWriteLockIsTakenBeforeTheWritersFlags_PostgreSQL(t *testing.T) {
 			},
 		},
 		{
-			name: "StoreBlock on a fork",
+			name:                "StoreBlock on a fork",
+			holdPastLockTimeout: true,
 			write: func(ctx context.Context, s *SQL) error {
 				_, _, err := s.StoreBlock(ctx, createBlock3OnFork(blockAlternative2), "")
 				return err
@@ -423,6 +428,16 @@ func TestChainWriteLockIsTakenBeforeTheWritersFlags_PostgreSQL(t *testing.T) {
 			go func() { written <- writer.write(ctx, other) }()
 
 			waitForHeldBlocksWrite(t, walker)
+
+			if writer.holdPastLockTimeout {
+				// Keep this ordering check independent of the fork path's bounded wait.
+				// The trigger must still hold the same attempt when the walk checks it.
+				require.Never(t, func() bool {
+					var waiting int
+					err := walker.db.QueryRow(`SELECT COUNT(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting)
+					return err != nil || waiting == 0
+				}, 2*forkLockTimeout, 10*time.Millisecond, "the test trigger must hold the fork attempt beyond its normal lock timeout")
+			}
 
 			walkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
