@@ -2614,6 +2614,10 @@ func TestCreateCaller(t *testing.T) {
 	require.Equal(t, utxostore.CallerValidator, createCaller(nil))
 	require.Equal(t, utxostore.CallerValidator, createCaller(&Options{}))
 	require.Equal(t, utxostore.CallerSubtreeValidation, createCaller(&Options{InBlock: true}))
+
+	// A caller the options name wins, with or without InBlock.
+	require.Equal(t, utxostore.CallerSubtreeValidation, createCaller(&Options{Caller: utxostore.CallerSubtreeValidation}))
+	require.Equal(t, utxostore.CallerBlockValidation, createCaller(&Options{Caller: utxostore.CallerBlockValidation, InBlock: true}))
 }
 
 // A validator create names its caller on the store's burned lane position counter: its own for a

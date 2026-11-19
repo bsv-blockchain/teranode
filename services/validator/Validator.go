@@ -2131,10 +2131,15 @@ func (v *Validator) TriggerBatcher() {
 }
 
 // createCaller names the service a validator create is made for, for the burned lane position
-// counter. A create for a transaction that arrived in a block or an announced subtree (InBlock) is
-// subtree validation's: today only subtree validation sets InBlock. Every other create is the
-// validator's own, a mempool submission.
+// counter. A caller the options name wins: subtree validation names itself on a peer's subtree,
+// which it validates without InBlock. Otherwise a create for a transaction that arrived in a block
+// (InBlock) is subtree validation's, since today only subtree validation sets InBlock, and every
+// other create is the validator's own, a mempool submission.
 func createCaller(validationOptions *Options) utxo.Caller {
+	if validationOptions != nil && validationOptions.Caller != utxo.CallerUnknown {
+		return validationOptions.Caller
+	}
+
 	if validationOptions != nil && validationOptions.InBlock {
 		return utxo.CallerSubtreeValidation
 	}

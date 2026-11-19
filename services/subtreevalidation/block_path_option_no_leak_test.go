@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -130,6 +131,12 @@ func TestUnconfirmedParentsOptionDoesNotLeakToPeerPaths(t *testing.T) {
 		require.NoError(t, server.subtreesHandler(context.Background(), time.Now(), childSubtree.RootHash(), baseURL, "peer-1"))
 
 		requireFlagNeverSet(t, recordingClient, "Kafka subtreesHandler")
+
+		// Validated without InBlock, a peer subtree's creates name subtree validation themselves on
+		// the burned lane position counter, rather than counting as the validator's own.
+		for i, opts := range recordingClient.recordedOptions(*childHash) {
+			require.Equal(t, utxo.CallerSubtreeValidation, opts.Caller, "Kafka subtreesHandler call #%d", i)
+		}
 	})
 
 	// Guard against hash drift in the fixture: the child must really spend
