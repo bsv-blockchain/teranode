@@ -259,8 +259,10 @@ func TestHistoryEndpointProjectsStage(t *testing.T) {
 	hit := body.Series[keys["cache.hitRate"]]
 	require.Equal(t, "cache.hitRate", hit.Key)
 
+	require.Equal(t, snapshot.StatusIdle, hit.Points[0].St, "history keeps the evaluated status, and the hit rate warms up for its first 30 samples")
+
 	last := hit.Points[len(hit.Points)-1]
-	require.Equal(t, snapshot.StatusOK, last.St)
+	require.Contains(t, []snapshot.Status{snapshot.StatusIdle, snapshot.StatusOK}, last.St)
 	require.NotNil(t, last.V)
 	require.InDelta(t, 0.95, *last.V, 1e-9)
 
