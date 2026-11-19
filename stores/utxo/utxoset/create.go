@@ -141,11 +141,11 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	if utxo.TookLanePosition(options.LanePosition, position) {
 		defer func() {
 			if knownBurnReason != "" && err != nil {
-				s.BurnLanePosition(utxo.CreatedTxID(tx, options), options.Caller, position, knownBurnReason)
+				s.BurnLanePosition(options.Caller, knownBurnReason)
 				return
 			}
 
-			s.BurnCreateLanePosition(tx, options, position, err, nil)
+			s.BurnCreateLanePosition(options, position, err, nil)
 		}()
 	}
 

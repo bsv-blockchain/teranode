@@ -420,7 +420,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		batcherWait:            batcherWaitTimeout(tSettings),
 	}
 
-	s.NameLaneBurns("aerospike", logger)
+	s.NameLaneBurns("aerospike")
 
 	// Initialize spendLuaPackages array with configurable count
 	if s.settings.Aerospike.SeparateSpendUDFModuleCount > 0 {

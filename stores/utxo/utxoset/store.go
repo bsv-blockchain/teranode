@@ -335,7 +335,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		utxoIndexDecider: utxoIndexNeedsRebuild,
 		seeding:          seeding}
 
-	s.NameLaneBurns("utxoset", logger)
+	s.NameLaneBurns("utxoset")
 
 	if seeding {
 		logger.Warnf("[utxoset] seeding mode is on (seeding=true on the store URL): seeded creates write coins only, with their block height and no containment or identity row. Use it only for a seed from a UTXO snapshot, never for a running node")

@@ -81,7 +81,7 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		if utxo.TookLanePosition(options.LanePosition, position) {
 			defer func() {
 				if notSubmitted {
-					s.BurnLanePosition(utxo.CreatedTxID(tx, options), options.Caller, position, utxo.LaneBurnError)
+					s.BurnLanePosition(options.Caller, utxo.LaneBurnError)
 					return
 				}
 
@@ -90,7 +90,7 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 					return
 				}
 
-				s.BurnCreateLanePosition(tx, options, position, err, spends)
+				s.BurnCreateLanePosition(options, position, err, spends)
 			}()
 		}
 
@@ -309,11 +309,11 @@ func (s *Store) burnUnlessStored(ctx context.Context, tx *bt.Tx, options *utxo.C
 	case getErr == nil && md != nil && md.LanePosition == position:
 		return
 	case getErr == nil && md != nil && md.LanePosition != lane.None:
-		s.BurnLanePosition(txid, options.Caller, position, utxo.LaneBurnReason(err, spends))
+		s.BurnLanePosition(options.Caller, utxo.LaneBurnReason(err, spends))
 	default:
 		// No record proves nothing: the failed batch's COMMIT may still be completing on its own
 		// connection, and this read does not wait for it.
-		s.BurnLanePosition(txid, options.Caller, position, utxo.LaneBurnOutcomeUnknown)
+		s.BurnLanePosition(options.Caller, utxo.LaneBurnOutcomeUnknown)
 	}
 }
 

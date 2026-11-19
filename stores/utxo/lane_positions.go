@@ -3,9 +3,7 @@ package utxo
 import (
 	"context"
 
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
@@ -32,9 +30,9 @@ type LanePositionTaker interface {
 	// TakeLanePosition returns the position for the record that o describes; see LanePositions.Take.
 	TakeLanePosition(ctx context.Context, o *CreateOptions) (uint64, error)
 
-	// BurnLanePosition counts and logs a position taken from the source that no record carries;
-	// see LanePositions.BurnLanePosition.
-	BurnLanePosition(txid chainhash.Hash, caller Caller, position uint64, reason string)
+	// BurnLanePosition counts a position taken from the source that no record carries; see
+	// LanePositions.BurnLanePosition.
+	BurnLanePosition(caller Caller, reason string)
 }
 
 // LanePositions is the part of a store that implements LanePositionTaker. With no source set, which
@@ -42,9 +40,8 @@ type LanePositionTaker interface {
 type LanePositions struct {
 	source LanePositionSource
 
-	// burnStore and burnLogger label and log the positions this store burns; see NameLaneBurns.
-	burnStore  string
-	burnLogger ulogger.Logger
+	// burnStore labels the positions this store burns; see NameLaneBurns.
+	burnStore string
 }
 
 // SetLanePositionSource implements LanePositionTaker.
@@ -96,8 +93,8 @@ func (l *LanePositions) TakeLanePositions(ctx context.Context, n int) ([]uint64,
 func (l *LanePositions) TakeListLanePositions(ctx context.Context, list *SpendAndCreateMultiList) ([]uint64, error) {
 	positions, err := l.takeLanePositions(ctx, len(list.TxIDs))
 	if err != nil {
-		for i, position := range positions {
-			l.BurnLanePosition(list.TxIDs[i], list.Options.Caller, position, LaneBurnTakeFailed)
+		for range positions {
+			l.BurnLanePosition(list.Options.Caller, LaneBurnTakeFailed)
 		}
 
 		return nil, err

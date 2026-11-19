@@ -208,7 +208,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	// still write the record, and LaneBurnReason says so.
 	if utxo.TookLanePosition(createOptions.LanePosition, lanePosition) {
 		defer func() {
-			s.BurnCreateLanePosition(tx, createOptions, lanePosition, err, nil)
+			s.BurnCreateLanePosition(createOptions, lanePosition, err, nil)
 		}()
 	}
 

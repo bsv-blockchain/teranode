@@ -129,7 +129,7 @@ func (s *Store) burnList(list *utxo.SpendAndCreateMultiList, positions []uint64,
 			reason = unsettled
 		}
 
-		s.BurnLanePosition(list.TxIDs[i], list.Options.Caller, position, reason)
+		s.BurnLanePosition(list.Options.Caller, reason)
 	}
 }
 

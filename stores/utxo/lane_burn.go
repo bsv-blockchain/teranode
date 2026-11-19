@@ -4,7 +4,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -12,8 +11,8 @@ import (
 
 // A burned lane position is one a store took from its source for a create and then wrote no record
 // carrying. Burning is safe, since no record has the position, but every burned position inside a
-// block's range is a hole in that block's lane map, so the stores count and log each one with why it
-// burned and which service asked for the create. A position whose write cannot be confirmed either
+// block's range is a hole in that block's lane map, so the stores count each one with why it burned
+// and which service asked for the create. A position whose write cannot be confirmed either
 // way is counted too, under outcome_unknown, so the counter can include positions that were written.
 //
 // The code that took the position from the source records its burn, from the result it saw. A store
@@ -102,7 +101,7 @@ var withCaller = func() (opts [callerCount]CreateOption) {
 }()
 
 // WithCaller names the service the create is made for. It changes nothing about the write: it labels
-// the burned lane position counter and log line when the create's position burns.
+// the burned lane position counter when the create's position burns.
 func WithCaller(c Caller) CreateOption {
 	if c >= callerCount {
 		c = CallerUnknown
@@ -174,35 +173,28 @@ func CreatedTxID(tx *bt.Tx, o *CreateOptions) chainhash.Hash {
 	return *tx.TxIDChainHash()
 }
 
-// NameLaneBurns gives the store's name and logger to the burned lane position counter and log line.
-// A store calls it when it is built. One that does not records its burns under store "unknown",
-// with no log line.
-func (l *LanePositions) NameLaneBurns(store string, logger ulogger.Logger) {
+// NameLaneBurns gives the store's name to the burned lane position counter. A store calls it when it
+// is built. One that does not records its burns under store "unknown".
+func (l *LanePositions) NameLaneBurns(store string) {
 	l.burnStore = store
-	l.burnLogger = logger
 }
 
-// BurnLanePosition counts one burned position and logs it at info level.
-func (l *LanePositions) BurnLanePosition(txid chainhash.Hash, caller Caller, position uint64, reason string) {
+// BurnLanePosition counts one burned position.
+func (l *LanePositions) BurnLanePosition(caller Caller, reason string) {
 	store := l.burnStore
 	if store == "" {
 		store = "unknown"
 	}
 
 	prometheusLanePositionsBurned.WithLabelValues(store, reason, caller.String()).Inc()
-
-	if l.burnLogger != nil {
-		l.burnLogger.Infof("[lane] burned lane position %d (lane %d) of tx %s: store=%s reason=%s caller=%s",
-			position, lane.Lane(position), txid.String(), store, reason, caller.String())
-	}
 }
 
 // BurnCreateLanePosition records the burn of a create that took position from the source and
 // returned err, if it failed. A create that succeeded wrote the position, so it records nothing.
-func (l *LanePositions) BurnCreateLanePosition(tx *bt.Tx, o *CreateOptions, position uint64, err error, spends []*Spend) {
+func (l *LanePositions) BurnCreateLanePosition(o *CreateOptions, position uint64, err error, spends []*Spend) {
 	if err == nil || position == lane.None {
 		return
 	}
 
-	l.BurnLanePosition(CreatedTxID(tx, o), o.Caller, position, LaneBurnReason(err, spends))
+	l.BurnLanePosition(o.Caller, LaneBurnReason(err, spends))
 }
