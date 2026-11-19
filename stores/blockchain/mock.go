@@ -16,6 +16,7 @@ import (
 	"context"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -23,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/usql"
 )
 
@@ -688,6 +690,22 @@ func (m *MockStore) InvalidateBlock(ctx context.Context, blockHash *chainhash.Ha
 }
 
 func (m *MockStore) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lane.LeaseID, lane.Grant, int, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (lane.Grant, bool, bool, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) ReleaseLaneLease(ctx context.Context, req options.LaneLeaseRelease) (bool, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) CloseStaleLaneLeases(ctx context.Context, closeAfter time.Duration) (int, error) {
 	panic(implementMe)
 }
 

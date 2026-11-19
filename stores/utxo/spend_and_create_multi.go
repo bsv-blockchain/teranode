@@ -602,6 +602,10 @@ func PrepareSpendAndCreateMulti(txs []*bt.Tx, opts ...CreateOption) (*SpendAndCr
 		return nil, newSpendAndCreateMultiRefusedError("WithTXIDs has %d txids for %d transactions", len(options.TxIDs), len(txs))
 	}
 
+	if options.LanePosition != 0 {
+		return nil, newSpendAndCreateMultiRefusedError("WithLanePosition describes one record; a list takes its positions from the store's source")
+	}
+
 	if options.SubtreeIdxs != nil {
 		if len(options.MinedBlockInfos) == 0 {
 			return nil, newSpendAndCreateMultiRefusedError("WithSubtreeIdxs needs WithMinedBlockInfo: the indexes are positions in that block")

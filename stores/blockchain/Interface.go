@@ -30,12 +30,14 @@ package blockchain
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/usql"
 )
 
@@ -463,6 +465,22 @@ type Store interface {
 	//   - state: State to set
 	// Returns: Any error encountered
 	SetFSMState(ctx context.Context, state string) error
+
+	// OpenLaneLease closes stale leases, then opens a lease on a free lane with its first grant.
+	// lapsed is how many stale leases it closed first. See SQL.OpenLaneLease for the lane choice
+	// rule an implementation must follow.
+	OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (id lane.LeaseID, grant lane.Grant, lapsed int, err error)
+
+	// RenewLaneLease renews a lease and, if asked, records its next grant. closed reports a lease
+	// that is closed or no longer the lane's current one; nothing is written for it.
+	RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (grant lane.Grant, granted, closed bool, err error)
+
+	// ReleaseLaneLease closes a lease cleanly. alreadyClosed reports a lease closed before.
+	ReleaseLaneLease(ctx context.Context, req options.LaneLeaseRelease) (alreadyClosed bool, err error)
+
+	// CloseStaleLaneLeases closes, as lapsed, every open lease not renewed for closeAfter on the
+	// database clock, and returns how many it closed.
+	CloseStaleLaneLeases(ctx context.Context, closeAfter time.Duration) (int, error)
 
 	// LocateBlockHeaders retrieves block headers using a locator and stop hash.
 	// Legacy endpoint.
