@@ -224,20 +224,11 @@ func utxosetLaneRows(s *Store) tests.LanePositionCounter {
 	}
 }
 
-// newUnbatchedReturnStore is a lane store with no create or spend-and-create batcher, so every
-// create takes the single-write path.
+// newUnbatchedReturnStore is newUnbatchedLaneStore, for the position return tests.
 func newUnbatchedReturnStore(t *testing.T) (*Store, context.Context) {
 	t.Helper()
 
-	s, ctx := newTestStoreWith(t, func(ts *settings.Settings) {
-		withCheckpoints(ts, nil)
-		ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
-		ts.UtxoStore.StoreBatcherSize = 1
-	})
-	require.Nil(t, s.createBatcher)
-	require.Nil(t, s.spendAndCreateBatcher)
-
-	return s, ctx
+	return newUnbatchedLaneStore(t)
 }
 
 // storedLane reads the raw lane_position column of the named table for one transaction. ok is
@@ -2163,14 +2154,9 @@ func useReturningSource(t *testing.T, s *Store, positions ...uint64) *tests.Retu
 	return source
 }
 
-// returnPositions makes n positions in lane 30.
+// returnPositions makes n positions in lane 30, the same ones burnPositions makes.
 func returnPositions(n int) []uint64 {
-	positions := make([]uint64, n)
-	for i := range positions {
-		positions[i] = lane.Pack(30, uint64(i)+1) //nolint:gosec // i counts up from 0
-	}
-
-	return positions
+	return burnPositions(n)
 }
 
 // requireReturnedNowhere requires source to have taken back exactly want, and no row of any table
