@@ -229,3 +229,16 @@ func TestSequentialSpendAndCreateReturnsOnlyProvenPositions(t *testing.T) {
 		})
 	}
 }
+
+// A store that never named itself counts its returns under store "unknown".
+func TestReturnLanePositionCountsAnUnnamedStoreAsUnknown(t *testing.T) {
+	returned := prometheusLanePositionsReturned.WithLabelValues("unknown", LaneReturnExists)
+	before := testutil.ToFloat64(returned)
+
+	var positions LanePositions
+
+	positions.SetLanePositionSource(&returningSource{})
+	positions.ReturnLanePosition(lane.Pack(2, 5), LaneReturnExists, true)
+
+	require.InDelta(t, 1, testutil.ToFloat64(returned)-before, 0)
+}

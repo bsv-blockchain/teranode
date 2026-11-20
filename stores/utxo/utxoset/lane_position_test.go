@@ -172,12 +172,12 @@ func TestLanePositionContractUtxoset(t *testing.T) {
 	t.Run("no checkpoints", func(t *testing.T) {
 		s, _ := newUncheckpointedLaneStore(t)
 		tests.LanePositionContract(t, s)
-		t.Run("returns", func(t *testing.T) { tests.LanePositionReturns(t, s, utxosetLaneRules, utxosetLaneRows(s)) })
+		t.Run("returns", func(t *testing.T) { tests.LanePositionReturns(t, s, "utxoset", utxosetLaneRules, utxosetLaneRows(s)) })
 	})
 
 	t.Run("no batchers", func(t *testing.T) {
 		s, _ := newUnbatchedReturnStore(t)
-		tests.LanePositionReturns(t, s, utxosetLaneRules, utxosetLaneRows(s))
+		tests.LanePositionReturns(t, s, "utxoset", utxosetLaneRules, utxosetLaneRows(s))
 	})
 
 	t.Run("checkpointed", func(t *testing.T) {

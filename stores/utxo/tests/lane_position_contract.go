@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -481,6 +482,52 @@ type LaneReturnRules struct {
 	ListExists bool
 }
 
+// LaneReturns is the returned lane position counter of one store at a moment, keyed by reason.
+type LaneReturns map[string]float64
+
+// ReadLaneReturns reads teranode_lane_positions_returned_total for one store from the default
+// registry.
+func ReadLaneReturns(t testing.TB, store string) LaneReturns {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	returns := LaneReturns{}
+
+	for _, family := range families {
+		if family.GetName() != "teranode_lane_positions_returned_total" {
+			continue
+		}
+
+		for _, m := range family.GetMetric() {
+			labels := make(map[string]string, 2)
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+
+			if labels["store"] == store {
+				returns[labels["reason"]] = m.GetCounter().GetValue()
+			}
+		}
+	}
+
+	return returns
+}
+
+// Since returns what the counter gained after before, leaving out every reason that did not move.
+func (r LaneReturns) Since(before LaneReturns) LaneReturns {
+	diff := LaneReturns{}
+
+	for k, v := range r {
+		if d := v - before[k]; d != 0 {
+			diff[k] = d
+		}
+	}
+
+	return diff
+}
+
 // LanePositionCounter counts the rows of a store's own tables that carry any of positions. A store
 // passes one to LanePositionReturns so the check covers rows a Get does not read; nil leaves the Get
 // check alone.
@@ -489,10 +536,17 @@ type LanePositionCounter func(t testing.TB, positions []uint64) int
 // requireReturned requires source to have taken back exactly want, and no record of txs, nor any
 // row count reports, to carry a position it holds.
 func requireReturned(t *testing.T, db utxostore.Store, count LanePositionCounter, source *ReturningLanePositions,
-	want []uint64, txs ...*bt.Tx) {
+	store string, before LaneReturns, reason string, want []uint64, txs ...*bt.Tx) {
 	t.Helper()
 
 	returned := source.Returned()
+
+	wantCounted := LaneReturns{}
+	if len(returned) > 0 {
+		wantCounted[reason] = float64(len(returned))
+	}
+
+	require.Equal(t, wantCounted, ReadLaneReturns(t, store).Since(before), "returned lane positions counted for store %q", store)
 
 	if len(want) == 0 {
 		require.Empty(t, returned, "nothing goes back")
@@ -524,7 +578,7 @@ func requireReturned(t *testing.T, db utxostore.Store, count LanePositionCounter
 // once the create has its outcome, and every other burned position stays burned. Whatever goes back
 // is on no record the test wrote. rules says what the store proves; count, if not nil, checks its
 // raw rows as well.
-func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules, count LanePositionCounter) {
+func LanePositionReturns(t *testing.T, db utxostore.Store, store string, rules LaneReturnRules, count LanePositionCounter) {
 	ctx := context.Background()
 
 	ifReturned := func(ok bool, position uint64) []uint64 {
@@ -540,13 +594,15 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules
 		source := NewReturningLanePositions(lanePositionsFrom(40, 2)...)
 		useLanePositionSource(t, db, source)
 
+		before := ReadLaneReturns(t, store)
+
 		_, _, err := db.SpendAndCreate(ctx, root, 950, utxostore.WithCreateOnly())
 		require.NoError(t, err)
 
 		_, _, err = db.SpendAndCreate(ctx, root, 950, utxostore.WithCreateOnly())
 		require.ErrorIs(t, err, errors.ErrTxExists)
 
-		requireReturned(t, db, count, source, ifReturned(rules.Exists, lane.Pack(40, 2)), root)
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnExists, ifReturned(rules.Exists, lane.Pack(40, 2)), root)
 		requireLanePosition(t, db, root, lane.Pack(40, 1), "the stored record keeps its position")
 	})
 
@@ -558,13 +614,15 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules
 		source := NewReturningLanePositions(lanePositionsFrom(41, 2)...)
 		useLanePositionSource(t, db, source)
 
+		before := ReadLaneReturns(t, store)
+
 		_, err := creator.Create(ctx, root, 950)
 		require.NoError(t, err)
 
 		_, err = creator.Create(ctx, root, 950)
 		require.ErrorIs(t, err, errors.ErrTxExists)
 
-		requireReturned(t, db, count, source, ifReturned(rules.Exists, lane.Pack(41, 2)), root)
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnExists, ifReturned(rules.Exists, lane.Pack(41, 2)), root)
 	})
 
 	t.Run("a direct Create with a block refused because the transaction is stored", func(t *testing.T) {
@@ -575,6 +633,8 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules
 		source := NewReturningLanePositions(lanePositionsFrom(48, 2)...)
 		useLanePositionSource(t, db, source)
 
+		before := ReadLaneReturns(t, store)
+
 		mined := utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 52, BlockHeight: 952, SubtreeIdx: 0})
 
 		_, err := creator.Create(ctx, root, 952, mined)
@@ -583,7 +643,7 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules
 		_, err = creator.Create(ctx, root, 952, mined)
 		require.ErrorIs(t, err, errors.ErrTxExists)
 
-		requireReturned(t, db, count, source, ifReturned(rules.MinedExists, lane.Pack(48, 2)), root)
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnExists, ifReturned(rules.MinedExists, lane.Pack(48, 2)), root)
 	})
 
 	t.Run("a create with a block refused because the transaction is stored", func(t *testing.T) {
@@ -593,6 +653,8 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules
 		source := NewReturningLanePositions(lanePositionsFrom(42, 2)...)
 		useLanePositionSource(t, db, source)
 
+		before := ReadLaneReturns(t, store)
+
 		mined := utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 51, BlockHeight: 951, SubtreeIdx: 0})
 
 		_, _, err := db.SpendAndCreate(ctx, w.Txs[0], 951, utxostore.WithIgnoreLocked(true), mined)
@@ -601,7 +663,7 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules
 		_, _, err = db.SpendAndCreate(ctx, w.Txs[0], 951, utxostore.WithCreateOnly(), utxostore.WithIgnoreLocked(true), mined)
 		require.ErrorIs(t, err, errors.ErrTxExists)
 
-		requireReturned(t, db, count, source, ifReturned(rules.MinedExists, lane.Pack(42, 2)), w.Txs[0])
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnExists, ifReturned(rules.MinedExists, lane.Pack(42, 2)), w.Txs[0])
 	})
 
 	// The block-application order: the record is stored before its inputs are spent. The spends go
@@ -612,6 +674,8 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules
 
 		source := NewReturningLanePositions(lanePositionsFrom(47, 2)...)
 		useLanePositionSource(t, db, source)
+
+		before := ReadLaneReturns(t, store)
 
 		child := w.Txs[0]
 
@@ -631,7 +695,7 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules
 			require.NotEqual(t, int(utxostore.Status_OK), resp.Status, "input %d is spent", i)
 		}
 
-		requireReturned(t, db, count, source, ifReturned(rules.Exists, lane.Pack(47, 2)), child)
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnExists, ifReturned(rules.Exists, lane.Pack(47, 2)), child)
 		requireLanePosition(t, db, child, lane.Pack(47, 1), "the stored record keeps its position")
 	})
 
@@ -642,6 +706,8 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules
 		source := NewReturningLanePositions(lanePositionsFrom(43, 2)...)
 		useLanePositionSource(t, db, source)
 
+		before := ReadLaneReturns(t, store)
+
 		_, _, err := db.SpendAndCreate(ctx, w.Txs[0], 951)
 		require.NoError(t, err)
 
@@ -650,7 +716,7 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules
 		_, _, err = db.SpendAndCreate(ctx, double, 951)
 		require.Error(t, err)
 
-		requireReturned(t, db, count, source, []uint64{lane.Pack(43, 2)}, w.Txs[0], double)
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnSpendRejected, []uint64{lane.Pack(43, 2)}, w.Txs[0], double)
 		requireNotStored(t, db, double)
 	})
 
@@ -660,6 +726,8 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules
 
 		source := NewReturningLanePositions(lanePositionsFrom(44, 8)...)
 		useLanePositionSource(t, db, source)
+
+		before := ReadLaneReturns(t, store)
 
 		_, _, err := db.SpendAndCreate(ctx, w.Txs[1], 951)
 		require.NoError(t, err)
@@ -677,7 +745,7 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules
 			require.Empty(t, returned)
 		}
 
-		requireReturned(t, db, count, source, returned, w.Txs...)
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnExists, returned, w.Txs...)
 	})
 
 	t.Run("a call whose caller had already given up", func(t *testing.T) {
@@ -686,6 +754,8 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules
 
 		source := NewReturningLanePositions(lanePositionsFrom(45, 1)...)
 		useLanePositionSource(t, db, source)
+
+		before := ReadLaneReturns(t, store)
 
 		cancelled, cancel := context.WithCancel(ctx)
 		cancel()
@@ -696,6 +766,6 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, rules LaneReturnRules
 		require.False(t, errors.Is(err, errors.ErrServiceUnavailable), "the call took its position before it gave up: %v", err)
 		require.Zero(t, source.Remaining())
 
-		requireReturned(t, db, count, source, nil, w.Txs[0])
+		requireReturned(t, db, count, source, store, before, "", nil, w.Txs[0])
 	})
 }
