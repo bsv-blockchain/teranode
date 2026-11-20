@@ -246,10 +246,11 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 		if options.SpendOnly {
 			return nil, spends, nil
 		}
-	}
 
-	// crash-consistency seam: parents spent, child record not yet created
-	failpoint.Inject(failpoint.UTXOSpendBeforeCreate)
+		// crash-consistency seam: parents spent, child record not yet created.
+		// Inside the spend branch so create-only calls never fire it.
+		failpoint.Inject(failpoint.UTXOSpendBeforeCreate)
+	}
 
 	md, err := s.Create(ctx, tx, blockHeight, opts...)
 	if err != nil {

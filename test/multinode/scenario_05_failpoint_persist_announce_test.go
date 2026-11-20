@@ -14,14 +14,17 @@ import (
 )
 
 // TestFailpointPersistBeforeAddBlock crashes teranode3 in block assembly's
-// submitMiningSolution after the block's subtrees and coinbase have been
-// persisted and before the block is added to the blockchain store and
-// announced, then restarts it and checks:
+// submitMiningSolution after the coinbase write attempt and before the block
+// is added to the blockchain store and announced (subtree storage may still be
+// in flight), then restarts it and checks:
 //
-//  1. no peer saw the half-built block: every tip is unchanged;
+//  1. nothing was announced: the survivors' tips are unchanged;
 //  2. the restarted node is still on its pre-crash tip;
-//  3. the pending tx is mined in a later block that every peer accepts, and
-//     each subtree of that block is retrievable from the subtree stores.
+//  3. the pending tx survives and is mined in a later block that every peer
+//     accepts, and each subtree of that later block is retrievable.
+//
+// It does not inspect the crashed solution's own coinbase or subtree blobs, so
+// it does not prove where the seam sits relative to those writes.
 //
 // Requires a teranode:latest image built with the "failpoints" tag; run via
 // make network-chaos-failpoint-test.

@@ -21,10 +21,13 @@ const HitMarker = "FAILPOINT HIT: "
 const (
 	// UTXOSpendBeforeCreate fires in utxo.SequentialSpendAndCreate after the
 	// parent outputs have been spent and before the child tx record is created.
+	// It does not fire on create-only or spend-only calls.
 	UTXOSpendBeforeCreate = "utxo/spend-before-create"
 
 	// BlockAssemblyPersistBeforeAddBlock fires in block assembly's
-	// submitMiningSolution after the block's subtrees and coinbase have been
-	// persisted and before the block is added to the blockchain (and announced).
+	// submitMiningSolution after the coinbase tx store write has been attempted
+	// and before the block is added to the blockchain (and announced). The
+	// coinbase write only logs its error, and subtrees are stored by async
+	// workers that are not joined first, so neither is guaranteed persisted.
 	BlockAssemblyPersistBeforeAddBlock = "blockassembly/persist-before-addblock"
 )
