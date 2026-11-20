@@ -47,6 +47,9 @@ type Facts interface {
 
 	// Existing returns a valid lane position the transaction already holds, from a store copy or
 	// an earlier segment's manifest. A transaction with one keeps it and is not numbered again.
+	// It answers as the stores stood before this segment's import began, so it never returns a
+	// position this segment gave: a resumed Number would then drop that transaction from its
+	// block's order, find the block differs from the manifest and fail with "the source changed".
 	Existing(txid chainhash.Hash) (uint64, bool, error)
 }
 

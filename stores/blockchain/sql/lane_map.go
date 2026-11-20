@@ -234,8 +234,11 @@ func (s *SQL) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane
 }
 
 // insertLaneMapRowsTx is InsertLaneMapRows inside a caller's transaction, so the block gate can
-// commit a block's rows with the block itself. It takes the block's lane write lock first, so two
-// writers of one block never both see no rows and insert different ones.
+// commit a block's rows with the block itself. On Postgres it takes the block's lane write lock
+// first, held to the end of tx, so two writers of one block never both see no rows and insert
+// different ones. On SQLite the lock is laneWriteMu, which only the caller can hold for the whole
+// transaction: the caller takes s.lockLaneProcess() before beginning tx and releases it after the
+// commit, as InsertLaneMapRows does. InsertLaneMapRows is its only caller today.
 func (s *SQL) insertLaneMapRowsTx(ctx context.Context, tx *sql.Tx, blockID uint32, rows []lane.MapRow) error {
 	if err := s.lockLaneWrite(ctx, tx, laneMapLockClass, blockID); err != nil {
 		return err
