@@ -117,6 +117,11 @@ Usage: teranode-cli <command> [options]
 |                      |                                                | `--force-deep` - Allow a rewind deeper than 100 blocks           |
 |                      |                                                | `--verify` - Run post-rewind consistency checks                  |
 |                      |                                                | `--concurrency` - Subtree-load concurrency (default: 0 = auto)   |
+| `repair-missing-parents` | Rebuild UTXO-store parent records that were | `--peer` - Healthy peer asset base URL (required)                |
+|                      | pruned while a child still referenced them     | `--txids` - Comma-separated parent txids known to be missing     |
+|                      | (issue 1768), from a healthy peer              | `--scan` - Walk unmined txs and queue absent parents             |
+|                      | (FSM IDLE, other services stopped)             | `--dry-run` - Print the plan, write nothing (default: true)      |
+|                      |                                                | `--force-live` - Proceed when FSM is not IDLE (DANGEROUS)        |
 
 ### Interactive Tools
 
@@ -321,6 +326,48 @@ Options:
 - `--end-height`: Ending block height (0 for current tip) (default: 0)
 
 ⚠️ **Warning**: This command modifies blockchain database records. Always run with `--dry-run=true` first to preview changes before applying them to production databases.
+
+### Repair Missing Parents
+
+```bash
+teranode-cli repair-missing-parents --peer=<peer-asset-url> [--txids=<txid>,<txid>] [--scan] [--dry-run=false]
+```
+
+Rebuilds UTXO-store parent records that the pruner deleted while an unmined child still referenced them (issue 1768). A node in that state cannot validate the block that mines a spender of the lost record and retries the same block forever.
+
+For each missing parent the tool reads the transaction, its block heights and its per-output spent state from a healthy peer's asset service. It maps the peer's blocks to local blocks on the current chain, recreates the record as mined, and replays each recorded spend with the real spending transaction. The record is then read back and compared with the peer.
+
+Preconditions:
+
+1. The blockchain service must be running. The tool reads the FSM state and resolves block hashes through it.
+2. Put the FSM in IDLE with `teranode-cli setfsmstate --fsmstate idle`. The tool refuses to run in any other state.
+3. Stop the other services that write to the UTXO store (propagation, validator, block validation, subtree validation, block assembly). The validator does not pause in IDLE.
+
+Options:
+
+- `--peer`: Base URL of a healthy peer's asset service, for example `http://peer:8090` (required)
+- `--txids`: Comma-separated parent txids (64 hex characters each) you already know are missing
+- `--scan`: Walk every unmined transaction in the store and queue any parent it references that is absent. Finds latent holes whose spender has not been mined yet.
+- `--dry-run`: Print the plan and write nothing (default: `true`). Pass `--dry-run=false` to write.
+- `--force-live`: Proceed when the FSM is not IDLE (DANGEROUS: races block validation on the same records)
+
+Pass `--txids`, `--scan`, or both. The tool plans every parent first and prints the plan. It then writes only the parents whose plan succeeded. The report lists one line per parent with one of these outcomes:
+
+- `repaired`: rebuilt, and the read-back matches the peer
+- `planned`: dry run; the parent would be rebuilt
+- `already present`: the record exists and matches the peer
+- `present but differs from peer`: the record exists but its blocks or spent state differ from the peer. The tool does not change it.
+- `peer has pruned it`: the peer no longer holds the transaction
+- `peer output state unusable`: the peer reports an output as `FROZEN`, `CONFLICTING`, `LOCKED`, `NOT_FOUND`, or `SPENT` without a spender. The asset service also reports `NOT_FOUND` when its own lookup fails.
+- `peer block not on our chain`: the peer's main-chain block for the transaction is unknown, invalid, or not on our current chain
+- `spender touches outputs outside the repair`: replaying a spender would also change another record, because one of its other inputs is not already recorded locally as spent by it
+- `store records a different spender` or `failed`: the write failed. The rebuilt record is deleted again.
+
+The command exits non-zero when any parent is not `repaired`, `planned` or `already present`.
+
+The scan cannot see a hole whose only child is already mined; that hole surfaces as a catch-up wedge naming the parent, which you pass with `--txids`. A parent the peer has itself pruned cannot be rebuilt by this tool.
+
+⚠️ **Warning**: This command writes to the UTXO store. Run it with the default `--dry-run` first and read the plan before you pass `--dry-run=false`.
 
 ### Rewind Blockchain
 
