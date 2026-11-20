@@ -58,6 +58,7 @@ package aerospike
 import (
 	"context"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -1222,6 +1223,17 @@ func (s *Store) refuseHistoricalReplays(ctx context.Context, tx *bt.Tx, items []
 			item.spend.Err = errors.NewStorageError("[SPEND][%s] cannot tell whether the spending transaction exists, so cannot tell whether vout %d of %s is a replay of a pruned transaction: %v",
 				tx.TxID(), item.spend.Vout, item.spend.TxID.String(), err)
 		case !exists:
+			// A pruned replay, or an earlier attempt that left the spend behind and never
+			// created its transaction. Name both heights, so an operator can find and free the
+			// output if it is the second.
+			recorded := "no height (spent before heights were recorded)"
+			if item.hasRecordedHeight {
+				recorded = strconv.FormatUint(uint64(item.recordedHeight), 10)
+			}
+
+			s.logger.Warnf("[SPEND][%s] refusing vout %d of %s as a replay of a pruned transaction: spend recorded at %s, incoming at %d, spender has no record",
+				tx.TxID(), item.spend.Vout, item.spend.TxID.String(), recorded, item.blockHeight)
+
 			item.spend.Err = errors.NewUtxoSpendingTxPrunedError("[SPEND][%s] invalid spend for vout %d of %s: spending transaction was pruned",
 				tx.TxID(), item.spend.Vout, item.spend.TxID.String())
 		}

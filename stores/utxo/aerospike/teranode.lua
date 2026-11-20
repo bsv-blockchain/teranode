@@ -218,8 +218,9 @@ end
 -- output 3's spend is bytes 13 to 16 (1-based). It grows on demand to cover the output being
 -- spent and is never shrunk. Zero means no height was recorded: an output spent by an older
 -- package, or not spent. No real spend is made at height 0, because the genesis coinbase is
--- unspendable and the mempool spends at the tip plus one. Unspend leaves the 4 bytes in place:
--- they are only read on an idempotent match, which needs a spend, and a spend overwrites them.
+-- unspendable and the mempool spends at the tip plus one. Unspend zeroes the output's 4 bytes:
+-- an older package's spend writes no height, so a height left behind would be read as that
+-- later spend's and could make a young match look like history.
 
 -- Returns the height recorded for the output at offset (0-based), or nil if none is.
 local function getSpendHeight(heights, offset)
@@ -243,6 +244,26 @@ local function getSpendHeight(heights, offset)
     end
 
     return height
+end
+
+-- Zeroes the height recorded for the output at offset (0-based). Returns the bin to write back,
+-- or nil when it does not cover the output, so there is nothing to clear.
+local function clearSpendHeight(heights, offset)
+    if heights == nil then
+        return nil
+    end
+
+    local base = offset * SPEND_HEIGHT_SIZE
+
+    if bytes_size(heights) < base + SPEND_HEIGHT_SIZE then
+        return nil
+    end
+
+    for i = 1, SPEND_HEIGHT_SIZE do
+        heights[base + i] = 0
+    end
+
+    return heights
 end
 
 -- Records height for the output at offset (0-based) and returns the bin to write back, which is
@@ -689,6 +710,11 @@ function unspend(rec, offset, utxoHash, expectedSpendingData, currentBlockHeight
 
         local spentUtxos = rec[BIN_SPENT_UTXOS]
         rec[BIN_SPENT_UTXOS] = spentUtxos - 1
+
+        local clearedHeights = clearSpendHeight(rec[BIN_SPEND_HEIGHTS], offset)
+        if clearedHeights ~= nil then
+            rec[BIN_SPEND_HEIGHTS] = clearedHeights
+        end
     end
 
     local signal, childCount, conflicting = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)

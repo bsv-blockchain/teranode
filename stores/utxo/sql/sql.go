@@ -52,6 +52,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3117,10 +3118,26 @@ func (s *Store) classifyIdempotentMatch(item *batchSpend, recorded sql.NullInt64
 	}
 
 	if !spenderExists {
+		// The output names a spender with no record, recorded long ago. That is
+		// a pruned replay, or an earlier attempt that left the spend behind and
+		// never created its transaction. Name both heights, so an operator can
+		// find and free the output if it is the second.
+		s.logger.Warnf("[Spend] refusing %s:%d as a replay of pruned transaction %s: spend recorded at %s, incoming at %d, spender has no record",
+			item.spend.TxID, item.spend.Vout, item.spend.SpendingData.TxID, recordedHeightString(recorded), item.blockHeight)
+
 		return false, errors.NewUtxoSpendingTxPrunedError(errSpendTxPruned, item.spend.TxID, item.spend.Vout)
 	}
 
 	return true, nil
+}
+
+// recordedHeightString renders a recorded spend height for a log line.
+func recordedHeightString(recorded sql.NullInt64) string {
+	if !recorded.Valid {
+		return "no height (spent before heights were recorded)"
+	}
+
+	return strconv.FormatInt(recorded.Int64, 10)
 }
 
 // trySendSpendBatchBulk uses bulk SELECT + bulk UPDATE for PostgreSQL.

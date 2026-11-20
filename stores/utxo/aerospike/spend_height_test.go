@@ -108,8 +108,9 @@ func spendHeightSpendsOf(t *testing.T, child *bt.Tx) []*utxo.Spend {
 }
 
 // TestSpendRecordsItsHeight_Aerospike pins the layout: a fresh spend writes the 68-byte entry older
-// code reads and records its block height in the spendHeights bin, a match reports that height, a
-// re-spend after an unspend overwrites it, and a frozen output is never read as a historical spend.
+// code reads and records its block height in the spendHeights bin, a match reports that height, an
+// unspend clears it, a re-spend records its own, and a frozen output is never read as a historical
+// spend.
 func TestSpendRecordsItsHeight_Aerospike(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -148,11 +149,16 @@ func TestSpendRecordsItsHeight_Aerospike(t *testing.T) {
 		require.Equal(t, uint32(1200), height)
 	})
 
-	t.Run("a spend after an unspend records the new height", func(t *testing.T) {
+	t.Run("an unspend clears the height and a later spend records its own", func(t *testing.T) {
 		spends := spendHeightSpendsOf(t, child)
 
 		require.NoError(t, store.Unspend(ctx, spends))
 		require.Len(t, spendHeightEntry(t, store, parent.TxIDChainHash(), 0), 32)
+
+		// the unspend clears the height, so an older package's later spend, which writes
+		// none, is not read as one made at 1200
+		_, ok := spendHeightAt(t, store.GetClient(), parentKey, 0)
+		require.False(t, ok, "unspend zeroes the output's height")
 
 		other := conflictingIndexTx(t, parent, []uint32{0}, 2)
 		_, err := store.Spend(ctx, other, 1300)
