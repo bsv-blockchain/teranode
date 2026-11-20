@@ -3,10 +3,15 @@ package blockvalidation
 import (
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -94,4 +99,52 @@ func TestMarkCacheBypassRetryableForeignError(t *testing.T) {
 	require.True(t, isCacheBypassRetryable(marked), "the marker must survive a foreign error type")
 	require.True(t, errors.Is(marked, foreign), "the original error must still be reachable")
 	require.Contains(t, marked.Error(), "EOF", "the original error's message must still be reachable")
+}
+
+// TestNew_CacheBustTokenNotReusedAcrossRestart covers #1373: a counter that
+// starts at zero sends "?cachebust=1" again after every restart, which a peer's
+// proxy_cache may already hold. New seeds it randomly, so a restarted server
+// does not repeat the tokens the previous one handed out.
+func TestNew_CacheBustTokenNotReusedAcrossRestart(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	hash := chainhash.HashH([]byte("subtree-1373"))
+	base := "http://peer:8000/api/v1"
+
+	const n = 8
+
+	tokens := func(s *Server) []uint64 {
+		out := make([]uint64, 0, n)
+
+		for range n {
+			url, err := s.peerResourceURL(base, "subtree_data", &hash, true)
+			require.NoError(t, err)
+
+			_, token, found := strings.Cut(url, "?cachebust=")
+			require.True(t, found, url)
+
+			v, err := strconv.ParseUint(token, 10, 64)
+			require.NoError(t, err)
+
+			out = append(out, v)
+		}
+
+		return out
+	}
+
+	before := tokens(New(ulogger.TestLogger{}, tSettings, nil, nil, nil, nil, nil, nil, nil, nil))
+	restarted := tokens(New(ulogger.TestLogger{}, tSettings, nil, nil, nil, nil, nil, nil, nil, nil))
+
+	for _, run := range [][]uint64{before, restarted} {
+		require.NotEqual(t, uint64(1), run[0], "a fresh server must not start at the restart-prone token 1")
+
+		for i := 1; i < len(run); i++ {
+			require.Equal(t, run[i-1]+1, run[i], "tokens within one process must be successive")
+		}
+	}
+
+	for _, b := range before {
+		require.NotContains(t, restarted, b, "a restarted server must not reuse a token the previous one sent")
+	}
 }
