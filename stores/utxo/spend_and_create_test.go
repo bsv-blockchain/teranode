@@ -353,6 +353,18 @@ func TestSequentialSpendAndCreateRecordsTheSpenderPositionOnlyWithOne(t *testing
 		require.Equal(t, lane.Pack(3, 9), f.laneSpendPos)
 	})
 
+	t.Run("a named position is the one the spend records", func(t *testing.T) {
+		f := &laneSpenderStore{}
+		f.createMeta = &meta.Data{}
+		f.SetLanePositionSource(fixedLanePosition(lane.Pack(3, 9)))
+
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, f, tx, 100, WithLanePosition(lane.Pack(5, 7)))
+		require.NoError(t, err)
+		require.Zero(t, f.spendCalls)
+		require.Equal(t, 1, f.laneSpendCalls)
+		require.Equal(t, lane.Pack(5, 7), f.laneSpendPos, "the caller's position, not one from the source")
+	})
+
 	t.Run("spend only takes no position", func(t *testing.T) {
 		f := &laneSpenderStore{}
 		f.SetLanePositionSource(fixedLanePosition(lane.Pack(3, 9)))

@@ -47,8 +47,12 @@ func TestLaneMetaContentIsTheMetaBytes(t *testing.T) {
 	content, err := d.LaneMetaBytesInto(nil, parents)
 	require.NoError(t, err)
 
+	misses := testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode))
+
 	legacy, err := LaneMetaContent(content)
 	require.NoError(t, err)
+	require.Equal(t, misses, testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode)),
+		"an entry that decodes is not a miss")
 
 	var full meta.Data
 	gotParents, err := meta.NewDataFromLaneMetaBytes(content, &full)
@@ -106,6 +110,21 @@ func TestCountLaneTxMetaSent(t *testing.T) {
 	require.Equal(t, beforeLane+1, testutil.ToFloat64(lanes))
 	require.Equal(t, beforeLegacy+1, testutil.ToFloat64(legacy))
 	require.Equal(t, beforeMiss+1, testutil.ToFloat64(parentMissing))
+}
+
+// A consumer counts each entry under its own name, by the format the entry came in.
+func TestLaneTxMetaReceivedCountsByFormat(t *testing.T) {
+	lanes := prometheusLaneTxMetaMessages.WithLabelValues("test-consumer", "lane")
+	legacy := prometheusLaneTxMetaMessages.WithLabelValues("test-consumer", "legacy")
+	beforeLane, beforeLegacy := testutil.ToFloat64(lanes), testutil.ToFloat64(legacy)
+
+	received := NewLaneTxMetaReceived("test-consumer")
+	received.Count(true)
+	received.Count(true)
+	received.Count(false)
+
+	require.Equal(t, beforeLane+2, testutil.ToFloat64(lanes))
+	require.Equal(t, beforeLegacy+1, testutil.ToFloat64(legacy))
 }
 
 // The view allocates nothing, so a receiver pays no more for a lane entry than for a plain one.

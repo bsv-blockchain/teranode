@@ -20,6 +20,8 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -697,4 +699,134 @@ func TestServer_txmetaHandler_LaneEntries(t *testing.T) {
 		require.NoError(t, server.txmetaHandler(context.Background(), v1LaneMessage(chainhash.Hash{1}, legacy)))
 		mCache.AssertNotCalled(t, "SetCacheMultiSequential", mock.Anything, mock.Anything)
 	})
+}
+
+// txmetaEntry is one entry of a txmeta message built by txmetaMessage.
+type txmetaEntry struct {
+	hash      chainhash.Hash
+	entryHash uint64
+	action    byte
+	content   []byte
+}
+
+// txmetaMessage builds a v1 or v2 txmeta message holding entries, in order.
+func txmetaMessage(v2 bool, entries ...txmetaEntry) *kafka.KafkaMessage {
+	var data []byte
+
+	if v2 {
+		data = append(data, txmetacache.WireV2Magic, txmetacache.WireV2Version, 0, 0)
+	}
+
+	data = binary.LittleEndian.AppendUint32(data, uint32(len(entries))) //nolint:gosec // a few test entries
+
+	for _, e := range entries {
+		if v2 {
+			data = binary.LittleEndian.AppendUint64(data, e.entryHash)
+		}
+
+		data = append(data, e.hash[:]...)
+		data = append(data, e.action)
+		data = binary.LittleEndian.AppendUint32(data, uint32(len(e.content))) //nolint:gosec // small test content
+		data = append(data, e.content...)
+	}
+
+	return &kafka.KafkaMessage{Value: data}
+}
+
+// laneTxMetaReceivedCount reads teranode_lane_txmeta_messages_total{side="subtreevalidation", format}.
+func laneTxMetaReceivedCount(t *testing.T, format string) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range families {
+		if family.GetName() != "teranode_lane_txmeta_messages_total" {
+			continue
+		}
+
+		for _, m := range family.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+
+			if labels["side"] == "subtreevalidation" && labels["format"] == format {
+				return m.GetCounter().GetValue()
+			}
+		}
+	}
+
+	return 0
+}
+
+// A lane entry in a v2 message reaches the cache with its own key, the MetaBytes it holds and its
+// entry hash. A malformed lane entry is dropped without the entries after it, and counted: the
+// lane format whatever this consumer's setting, the error counter, and a plain entry only at shadow.
+func TestServer_txmetaHandler_LaneEntriesKeepTheirPlace(t *testing.T) {
+	tx := bt.NewTx()
+	in := &bt.Input{}
+	require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{5}))
+	tx.Inputs = append(tx.Inputs, in)
+
+	inpoints, err := subtreepkg.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+
+	d := &meta.Data{TxInpoints: inpoints, Fee: 423, SizeInBytes: 250, LanePosition: lane.Pack(9, 1)}
+
+	content, err := d.LaneMetaBytesInto(nil, []uint64{lane.Pack(9, 2)})
+	require.NoError(t, err)
+
+	legacy, err := d.MetaBytes()
+	require.NoError(t, err)
+
+	shadow := &settings.Settings{UtxoStore: settings.UtxoStoreSettings{LaneMigration: settings.LaneMigrationShadow}}
+
+	t.Run("v2: the key, the MetaBytes and the entry hash", func(t *testing.T) {
+		key := chainhash.Hash{7}
+
+		mCache := &mockCache{}
+		mCache.On("SetCacheMultiSequentialWithHashes", [][]byte{key[:]}, [][]byte{legacy}, []uint64{0xBEEF}).Return(nil)
+
+		server := &Server{logger: &mockLogger{}, utxoStore: mCache, settings: shadow}
+
+		msg := txmetaMessage(true, txmetaEntry{hash: key, entryHash: 0xBEEF, action: txmetacache.WireActionADDLane, content: content})
+		require.NoError(t, server.txmetaHandler(context.Background(), msg))
+		mCache.AssertExpectations(t)
+	})
+
+	for _, tc := range []struct {
+		name     string
+		settings *settings.Settings
+		legacy   float64
+	}{
+		{name: "off", settings: &settings.Settings{}, legacy: 0},
+		{name: "shadow", settings: shadow, legacy: 1},
+	} {
+		t.Run("v1 at "+tc.name+": a malformed lane entry drops only itself", func(t *testing.T) {
+			bad, good := chainhash.Hash{1}, chainhash.Hash{2}
+
+			mCache := &mockCache{}
+			mCache.On("SetCacheMultiSequential", [][]byte{good[:]}, [][]byte{legacy}).Return(nil)
+
+			mLogger := &mockLogger{}
+			mLogger.On("Debugf", mock.Anything, mock.Anything).Return()
+
+			server := &Server{logger: mLogger, utxoStore: mCache, settings: tc.settings}
+
+			lanes, plain := laneTxMetaReceivedCount(t, "lane"), laneTxMetaReceivedCount(t, "legacy")
+			errs := testutil.ToFloat64(prometheusSubtreeValidationSetTXMetaCacheKafkaErrors)
+
+			msg := txmetaMessage(false,
+				txmetaEntry{hash: bad, action: txmetacache.WireActionADDLane, content: legacy},
+				txmetaEntry{hash: good, action: txmetacache.WireActionADD, content: legacy},
+			)
+			require.NoError(t, server.txmetaHandler(context.Background(), msg))
+			mCache.AssertExpectations(t)
+
+			require.InDelta(t, lanes+1, laneTxMetaReceivedCount(t, "lane"), 0, "the malformed lane entry still counts as lane")
+			require.InDelta(t, plain+tc.legacy, laneTxMetaReceivedCount(t, "legacy"), 0, "a plain entry counts only at shadow")
+			require.InDelta(t, errs+1, testutil.ToFloat64(prometheusSubtreeValidationSetTXMetaCacheKafkaErrors), 0)
+		})
+	}
 }

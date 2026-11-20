@@ -34,6 +34,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-batcher/v2"
 	bt "github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -68,6 +69,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -2968,4 +2970,250 @@ func (r *createCallerRecorder) createOnly(txid chainhash.Hash) []utxostore.Calle
 	defer r.mu.Unlock()
 
 	return append([]utxostore.Caller(nil), r.callers[txid]...)
+}
+
+// laneTxMetaCounter reads one series of a teranode_lane counter from the default registry.
+func laneTxMetaCounter(t *testing.T, name string, labels map[string]string) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+
+	metrics:
+		for _, m := range family.GetMetric() {
+			got := map[string]string{}
+			for _, l := range m.GetLabel() {
+				got[l.GetName()] = l.GetValue()
+			}
+
+			for k, v := range labels {
+				if got[k] != v {
+					continue metrics
+				}
+			}
+
+			return m.GetCounter().GetValue()
+		}
+	}
+
+	return 0
+}
+
+func laneSentCount(t *testing.T, format string) float64 {
+	return laneTxMetaCounter(t, "teranode_lane_txmeta_messages_total", map[string]string{"side": "sent", "format": format})
+}
+
+func laneMissCount(t *testing.T, reason string) float64 {
+	return laneTxMetaCounter(t, "teranode_lane_txmeta_position_misses_total", map[string]string{"reason": reason})
+}
+
+// The validator counts every entry it sends at shadow, lane or legacy, with the reason for a legacy
+// one. An entry that passes the position checks but does not encode, here because its inpoints name
+// a parent twice, goes out legacy and is counted as encode_failed.
+func TestTxMetaPayloadCountsWhatItSends(t *testing.T) {
+	parents := []chainhash.Hash{{1}, {2}}
+	tx := parentOutputsChild(t, parents, []uint32{0, 0})
+
+	inpoints, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+
+	shadow := laneShadowValidator(t, nil)
+	good := []uint64{lane.Pack(2, 1), lane.Pack(3, 1)}
+
+	t.Run("lane", func(t *testing.T) {
+		lanes := laneSentCount(t, "lane")
+
+		_, laneFormat, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints, LanePosition: lane.Pack(1, 1)}, good)
+		require.NoError(t, err)
+		require.True(t, laneFormat)
+		require.InDelta(t, lanes+1, laneSentCount(t, "lane"), 0)
+	})
+
+	t.Run("a miss", func(t *testing.T) {
+		legacy, misses := laneSentCount(t, "legacy"), laneMissCount(t, txmetacache.LaneMissParent)
+
+		_, laneFormat, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints, LanePosition: lane.Pack(1, 1)}, []uint64{lane.Pack(2, 1), lane.None})
+		require.NoError(t, err)
+		require.False(t, laneFormat)
+		require.InDelta(t, legacy+1, laneSentCount(t, "legacy"), 0)
+		require.InDelta(t, misses+1, laneMissCount(t, txmetacache.LaneMissParent), 0)
+	})
+
+	t.Run("an encode failure", func(t *testing.T) {
+		twice := subtree.NewTxInpointsFromPacked([]chainhash.Hash{{1}, {1}}, []uint32{1, 0, 1, 1})
+		data := &meta.Data{TxInpoints: twice, Fee: 500, SizeInBytes: 250, LanePosition: lane.Pack(1, 1)}
+		require.Empty(t, laneTxMetaMiss(data, good), "the position checks pass")
+
+		legacy, misses := laneSentCount(t, "legacy"), laneMissCount(t, txmetacache.LaneMissEncode)
+
+		b, laneFormat, err := shadow.txMetaPayload(data, good)
+		require.NoError(t, err, "a miss is counted, never an error")
+		require.False(t, laneFormat)
+
+		want, err := data.MetaBytes()
+		require.NoError(t, err)
+		require.Equal(t, want, b)
+		require.InDelta(t, legacy+1, laneSentCount(t, "legacy"), 0)
+		require.InDelta(t, misses+1, laneMissCount(t, txmetacache.LaneMissEncode), 0)
+	})
+}
+
+// laneCaptureStore gives each parent read a lane position per parent, keeps the options of the
+// create, and gives the created record its own position, so a test can follow the positions through
+// Validate without a lane position source.
+type laneCaptureStore struct {
+	utxostore.Store
+
+	parentPositions map[chainhash.Hash]uint64
+	own             uint64
+	created         *utxostore.CreateOptions
+}
+
+func (s *laneCaptureStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxostore.Outpoint, opts ...utxostore.ParentOutputOption) ([]utxostore.ParentOutput, error) {
+	answers, err := s.Store.ParentOutputsForValidation(ctx, outpoints, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range answers {
+		answers[i].LanePosition = s.parentPositions[outpoints[i].TxID]
+	}
+
+	return answers, nil
+}
+
+func (s *laneCaptureStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
+	created, err := utxostore.ParseCreateOptions(opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	s.created = created
+
+	md, spends, err := s.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+	if md != nil {
+		md.LanePosition = s.own
+	}
+
+	return md, spends, err
+}
+
+// laneEntry reads the one entry of a v1 txmeta message: its action and its content.
+func laneEntry(t *testing.T, value []byte) (byte, []byte) {
+	t.Helper()
+
+	require.Equal(t, uint32(1), binary.LittleEndian.Uint32(value))
+
+	off := 4 + 32
+	action := value[off]
+	off++
+
+	n := int(binary.LittleEndian.Uint32(value[off:]))
+	off += 4
+	require.Len(t, value, off+n)
+
+	return action, value[off:]
+}
+
+// Through Validate at shadow, the parents' positions the parent read returned go to the create and
+// into the published txmeta entry, which carries the ADDLane action and the child's and parent's
+// positions, on the direct publish and through the batcher.
+func TestValidateCarriesLanePositionsToTheCreateAndTheTxMeta(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	base := parentOutputsStore(t)
+
+	s0 := bscript.NewFromBytes([]byte{0x76, 0xa9, 0x00})
+	parent := storedParent(t, base, 0x71, 150, s0, s0)
+	parentPosition := lane.Pack(14, 1)
+
+	store := &laneCaptureStore{Store: base, parentPositions: map[chainhash.Hash]uint64{*parent.TxIDChainHash(): parentPosition}}
+
+	validate := func(t *testing.T, v *Validator, vout uint32, own uint64) {
+		t.Helper()
+
+		store.own = own
+
+		child := parentOutputsChild(t, []chainhash.Hash{*parent.TxIDChainHash()}, []uint32{vout})
+		_, err := v.Validate(ctx, child, 201, WithSkipPolicyChecks(true), WithSkipScriptValidation(true), WithAddTXToBlockAssembly(false))
+		require.NoError(t, err)
+
+		require.NotNil(t, store.created)
+		require.Equal(t, []uint64{parentPosition}, store.created.ParentLanePositions, "the create gets the parent's position")
+	}
+
+	newValidator := func(t *testing.T) *Validator {
+		v := laneShadowValidator(t, store)
+		v.logger = ulogger.TestLogger{}
+		v.txValidator = NewTxValidator(ulogger.TestLogger{}, v.settings)
+		v.stats = gocore.NewStat("validator")
+
+		return v
+	}
+
+	checkEntry := func(t *testing.T, action byte, content []byte, own uint64) {
+		t.Helper()
+
+		require.Equal(t, txmetacache.WireActionADDLane, action)
+
+		var back meta.Data
+		gotParents, err := meta.NewDataFromLaneMetaBytes(content, &back)
+		require.NoError(t, err)
+		require.Equal(t, own, back.LanePosition)
+		require.Equal(t, []uint64{parentPosition}, gotParents)
+	}
+
+	t.Run("direct publish", func(t *testing.T) {
+		producer := kafka.NewKafkaAsyncProducerMock()
+
+		v := newValidator(t)
+		v.txmetaKafkaProducerClient = producer
+
+		own := lane.Pack(14, 2)
+		validate(t, v, 0, own)
+
+		require.Len(t, producer.PublishChannel(), 1)
+		msg := <-producer.PublishChannel()
+
+		action, content := laneEntry(t, msg.Value)
+		checkEntry(t, action, content, own)
+	})
+
+	t.Run("batcher", func(t *testing.T) {
+		var (
+			mu    sync.Mutex
+			items []*txmetaBatchItem
+		)
+
+		v := newValidator(t)
+		v.txmetaKafkaProducerClient = kafka.NewKafkaAsyncProducerMock()
+		v.txmetaKafkaBatcher = batcher.New[txmetaBatchItem](1, 10*time.Millisecond, func(batch []*txmetaBatchItem) {
+			mu.Lock()
+			items = append(items, batch...)
+			mu.Unlock()
+		}, true)
+
+		own := lane.Pack(14, 3)
+		validate(t, v, 1, own)
+
+		require.Eventually(t, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+
+			return len(items) == 1
+		}, 2*time.Second, 10*time.Millisecond)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		require.True(t, items[0].lane, "the batched item is marked as the lane encoding")
+		checkEntry(t, txmetacache.WireActionADDLane, items[0].metaBytes, own)
+	})
 }

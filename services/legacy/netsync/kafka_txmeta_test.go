@@ -8,10 +8,12 @@ import (
 
 	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,12 +56,18 @@ type txmetaTestEntry struct {
 	hash   chainhash.Hash
 	action byte
 	meta   meta.Data
+	// raw, when set, is the entry's content as is, in place of one built from meta.
+	raw []byte
 }
 
 // entryContent is an ADD entry's MetaBytes, or an ADDLane entry's lane encoding with one position
 // per parent.
 func entryContent(t *testing.T, entry txmetaTestEntry) []byte {
 	t.Helper()
+
+	if entry.raw != nil {
+		return entry.raw
+	}
 
 	if entry.action == txmetacache.WireActionADDLane {
 		parents := make([]uint64, len(entry.meta.TxInpoints.ParentTxHashes))
@@ -587,4 +595,99 @@ func TestProcessTXmetaBatchMessage_CoinbaseFiltering(t *testing.T) {
 
 		require.Empty(t, announced)
 	})
+}
+
+// relayLaneCount reads teranode_lane_txmeta_messages_total{side="legacy", format}.
+func relayLaneCount(t *testing.T, format string) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range families {
+		if family.GetName() != "teranode_lane_txmeta_messages_total" {
+			continue
+		}
+
+		for _, m := range family.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+
+			if labels["side"] == "legacy" && labels["format"] == format {
+				return m.GetCounter().GetValue()
+			}
+		}
+	}
+
+	return 0
+}
+
+// A lane entry that does not decode is not announced, and the entries after it still are. Relay
+// counts every lane entry, the malformed one included, whatever its own setting, and a plain entry
+// only at utxostore_laneMigration shadow.
+func TestProcessTXmetaBatchMessage_MalformedLaneEntryDropsOnlyItself(t *testing.T) {
+	bad, err := chainhash.NewHashFromStr("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+	require.NoError(t, err)
+
+	good, err := chainhash.NewHashFromStr("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+	require.NoError(t, err)
+
+	plain := meta.Data{Fee: 500, SizeInBytes: 250}
+	plainBytes, err := plain.MetaBytes()
+	require.NoError(t, err)
+
+	entries := []txmetaTestEntry{
+		// Plain MetaBytes under the ADDLane action: the lane decode refuses it.
+		{hash: *bad, action: txmetacache.WireActionADDLane, raw: plainBytes},
+		{hash: *good, action: txmetacache.WireActionADD, meta: meta.Data{Fee: 600, SizeInBytes: 250}},
+	}
+
+	for _, tc := range []struct {
+		name     string
+		settings *settings.Settings
+		legacy   float64
+	}{
+		{name: "off", settings: &settings.Settings{}, legacy: 0},
+		{name: "shadow", settings: &settings.Settings{UtxoStore: settings.UtxoStoreSettings{LaneMigration: settings.LaneMigrationShadow}}, legacy: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var announced []*TxHashAndFee
+
+			sm := &SyncManager{
+				logger:   ulogger.TestLogger{},
+				settings: tc.settings,
+				txAnnounceBatcher: batcher.NewWithDeduplication[TxHashAndFee](100, 50*time.Millisecond, func(batch []*TxHashAndFee) {
+					mu.Lock()
+					announced = append(announced, batch...)
+					mu.Unlock()
+				}, false),
+			}
+
+			lanes, legacy := relayLaneCount(t, "lane"), relayLaneCount(t, "legacy")
+
+			require.NoError(t, sm.processTXmetaBatchMessage(buildTXmetaBatchMessage(t, entries)))
+
+			require.Eventually(t, func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+
+				return len(announced) == 1
+			}, 2*time.Second, 10*time.Millisecond)
+
+			time.Sleep(100 * time.Millisecond)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			require.Len(t, announced, 1, "the malformed lane entry is not announced")
+			require.Equal(t, *good, announced[0].TxHash, "the entry after it still is")
+			require.Equal(t, uint64(600), announced[0].Fee)
+
+			require.InDelta(t, lanes+1, relayLaneCount(t, "lane"), 0, "the malformed lane entry still counts as lane")
+			require.InDelta(t, legacy+tc.legacy, relayLaneCount(t, "legacy"), 0, "a plain entry counts only at shadow")
+		})
+	}
 }
