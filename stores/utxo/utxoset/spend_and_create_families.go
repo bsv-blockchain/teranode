@@ -604,7 +604,9 @@ func (w *nettedWrite) runFamilyChunk(ctx context.Context, ch *familyChunk, plan 
 // being written when it failed before sending its COMMIT: their round rolled back whole, so their
 // lane positions are on no record. A transaction found stored, one whose spend was refused and one
 // whose parent failed were not in that write, and a failure at or after the COMMIT may have landed,
-// so none of those counts. A later attempt of the chunk overwrites what an earlier one recorded.
+// so none of those counts. A later attempt that fails overwrites what an earlier one recorded; one
+// that commits leaves it set, so the return also requires the transaction to still have no result,
+// which settleChunk gives it.
 func (w *nettedWrite) recordRolledBack(run *chunkRun) {
 	if w.rolledBack == nil {
 		return
