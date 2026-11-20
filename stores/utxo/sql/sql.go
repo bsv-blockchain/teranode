@@ -2777,21 +2777,6 @@ func readBlockIDs(rows sqlRows) (map[chainhash.Hash][]uint32, error) {
 // Aerospike doesn't need this because it uses optimistic single-key operations
 // without DB-level row locking.
 func (s *Store) sendSpendBatch(batch []*batchSpend) {
-	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
-		func(item *batchSpend) *utxo.Spend {
-			if item == nil {
-				return nil
-			}
-			return item.spend
-		},
-		func(item *batchSpend, err error) {
-			item.errCh <- err
-		},
-	)
-	if len(batch) == 0 {
-		return
-	}
-
 	s.retrySpendBatch(batch, func(batch []*batchSpend) bool {
 		return s.trySendSpendBatch(s.ctx, batch)
 	})
@@ -3056,6 +3041,9 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		spendingData []byte
 	}
 	seenKeys := make(map[utxoKey]seenEntry, len(toUpdate)) // key -> first entry
+	// These conflicts name a winner from this transaction, so they cannot
+	// survive an UPDATE, DAH, or commit failure that rolls its writes back.
+	uncommittedConflicts := make(map[int]struct{})
 	var dedupedUpdate []spendUpdateRow
 	for _, u := range toUpdate {
 		key := utxoKey{u.transactionID, u.vout}
@@ -3069,6 +3057,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 					validationErrors[u.batchIdx] = errors.NewProcessingError(errFailedCreateSpendingData, parseErr)
 				} else {
 					validationErrors[u.batchIdx] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existingSpendData)
+					uncommittedConflicts[u.batchIdx] = struct{}{}
 				}
 			}
 			// else: same spending data — idempotent re-spend, will be marked successful after UPDATE
@@ -3209,6 +3198,9 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		if err != nil {
 			if isDeadlock(err) {
 				return true
+			}
+			for i := range uncommittedConflicts {
+				delete(validationErrors, i)
 			}
 			for i, item := range batch {
 				if valErr, ok := validationErrors[i]; ok {
@@ -3437,6 +3429,9 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				if isDeadlock(err) {
 					return true
 				}
+				for i := range uncommittedConflicts {
+					delete(validationErrors, i)
+				}
 				for i, item := range batch {
 					if valErr, ok := validationErrors[i]; ok {
 						item.errCh <- valErr
@@ -3453,6 +3448,9 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 	if err := txn.Commit(); err != nil {
 		if isDeadlock(err) {
 			return true
+		}
+		for i := range uncommittedConflicts {
+			delete(validationErrors, i)
 		}
 		for i, item := range batch {
 			if valErr, ok := validationErrors[i]; ok {
@@ -3533,6 +3531,20 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 	validationErrors := make(map[int]error)              // index -> validation error (non-retryable)
 	aborted := false
 
+	// q1 reads this transaction's own uncommitted writes, so a later claim on an
+	// output written earlier in the batch gets a conflict naming that winner. Such
+	// a conflict cannot survive a rollback of the winner's write.
+	type writtenOutput struct{ transactionID, vout int }
+	writtenOutputs := make(map[writtenOutput]struct{}, len(batch))
+	uncommittedConflicts := make(map[int]struct{})
+	// A rollback replaces each such conflict with a storage error, answered once.
+	dropUncommittedConflicts := func(batchItems []*batchSpend, message string, cause error) {
+		for i := range uncommittedConflicts {
+			delete(validationErrors, i)
+			batchItems[i].errCh <- errors.NewStorageError(message, cause)
+		}
+	}
+
 	// Phase 1: SELECT + validate + UPDATE outputs
 	for i, item := range batch {
 		if aborted {
@@ -3604,6 +3616,9 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 					continue
 				}
 				validationErrors[i] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existingSpendData)
+				if _, written := writtenOutputs[writtenOutput{transactionID, int(spend.Vout)}]; written {
+					uncommittedConflicts[i] = struct{}{}
+				}
 				continue
 			}
 		}
@@ -3694,12 +3709,14 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 			continue
 		}
 
+		writtenOutputs[writtenOutput{transactionID, int(spend.Vout)}] = struct{}{}
 		successItems = append(successItems, item)
 		spentParentIDs[transactionID] = struct{}{}
 	}
 
 	// If aborted, roll back — send errors for items not yet notified
 	if aborted {
+		dropUncommittedConflicts(batch, "[Spend] batch rolled back due to DB error", nil)
 		for i, item := range batch {
 			if valErr, ok := validationErrors[i]; ok {
 				item.errCh <- valErr
@@ -3731,6 +3748,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 			if isDeadlock(err) {
 				return true
 			}
+			dropUncommittedConflicts(batch, "[Spend] failed to recompute DAH", err)
 			for i, item := range batch {
 				if valErr, ok := validationErrors[i]; ok {
 					item.errCh <- valErr
@@ -3748,6 +3766,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 		if isDeadlock(err) {
 			return true // retryable
 		}
+		dropUncommittedConflicts(batch, "[Spend] failed to commit transaction", err)
 		for i, item := range batch {
 			if valErr, ok := validationErrors[i]; ok {
 				item.errCh <- valErr

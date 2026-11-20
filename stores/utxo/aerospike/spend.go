@@ -1056,21 +1056,6 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		})
 	}()
 
-	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
-		func(item *batchSpend) *utxo.Spend {
-			if item == nil {
-				return nil
-			}
-			return item.spend
-		},
-		func(item *batchSpend, err error) {
-			item.complete(err)
-		},
-	)
-	if len(batch) == 0 {
-		return
-	}
-
 	// Use expression-based implementation only when each Aerospike record holds a single
 	// UTXO (utxoBatchSize == 1). With multiple UTXOs per record, the expression cannot
 	// byte-compare the specific UTXO hash at a list offset, so we fall back to Lua which
@@ -1085,9 +1070,8 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 // executeLuaSpendBatch runs the Lua UDF spend pipeline for the provided batch. It is the
 // shared backend used by sendSpendBatchLua's Lua route and by the expression path's
-// retry-through-Lua handler. Callers MUST have already run any duplicate-claim
-// filtering, since this method does not re-run it and assumes every item still expects
-// exactly one response on its errCh.
+// retry-through-Lua handler. It assumes every item still expects exactly one response
+// on its errCh. Competing claims on one output are decided by the store, not here.
 func (s *Store) executeLuaSpendBatch(batch []*batchSpend) {
 	s.executeLuaSpendBatchContext(s.ctx, batch)
 }
