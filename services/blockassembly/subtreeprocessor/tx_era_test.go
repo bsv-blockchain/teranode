@@ -419,3 +419,43 @@ func TestNothingToReload_AnswersWhateverTheProcessorState(t *testing.T) {
 	stp.Stop(ctx)
 	require.False(t, answer(), "a stopped processor answers false")
 }
+
+// BenchmarkFilterTxEra measures the era filter on a dequeued 1024-transaction batch with
+// nothing kept out: untagged, as an older sender sends, and tagged under the next block's rules,
+// as the validator sends.
+func BenchmarkFilterTxEra(b *testing.B) {
+	stp := newTestSubtreeProcessorForDequeueStaleness(b, context.Background())
+	stp.SetTxEra(150)
+
+	nodes := make([]subtreepkg.Node, 1024)
+	inpoints := make([]*subtreepkg.TxInpoints, 1024)
+	heights := make([]uint32, 1024)
+
+	for i := range nodes {
+		nodes[i] = subtreepkg.Node{Hash: chainhash.HashH([]byte{byte(i), byte(i >> 8)}), Fee: 1, SizeInBytes: 1}
+		inpoints[i] = &subtreepkg.TxInpoints{}
+		heights[i] = 150
+	}
+
+	for _, tagged := range []bool{false, true} {
+		name := "untagged"
+		if tagged {
+			name = "tagged"
+		}
+
+		b.Run(name, func(b *testing.B) {
+			batch := &TxBatch{}
+
+			b.ReportAllocs()
+
+			for b.Loop() {
+				batch.nodes, batch.txInpoints, batch.validatedHeights = nodes, inpoints, nil
+				if tagged {
+					batch.validatedHeights = heights
+				}
+
+				stp.filterTxEra([]*TxBatch{batch})
+			}
+		})
+	}
+}

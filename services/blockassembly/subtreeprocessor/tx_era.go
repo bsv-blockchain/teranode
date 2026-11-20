@@ -98,7 +98,7 @@ func (stp *SubtreeProcessor) filterTxEra(batches []*TxBatch) {
 			b.validatedHeights = nil
 		}
 
-		if b.validatedHeights == nil && len(stp.droppedTxs) == 0 {
+		if len(stp.droppedTxs) == 0 && stp.allInTxEra(b.validatedHeights) {
 			continue
 		}
 
@@ -131,6 +131,24 @@ func (stp *SubtreeProcessor) filterTxEra(batches []*TxBatch) {
 			b.validatedHeights = b.validatedHeights[:kept]
 		}
 	}
+}
+
+// allInTxEra reports whether every height is untagged (0) or under the next block's rules, so
+// admitTxLocked would admit each one while nothing is kept out. It lets the common batch skip
+// the per-transaction pass.
+func (stp *SubtreeProcessor) allInTxEra(heights []uint32) bool {
+	era := stp.txEra.Load()
+	if era == nil {
+		return true
+	}
+
+	for _, h := range heights {
+		if h != 0 && (h < era.lo || h > era.hi) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // FilterUnminedTxEra returns the reloaded transactions admitTxLocked accepts, in the order
