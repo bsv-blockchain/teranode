@@ -67,10 +67,12 @@ func (e *errOnCreateUtxoStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, bl
 //     - the drained batch's tx hash is in neither the queue nor any
 //     subtree -> the batch is lost.
 //
-// This test PINS the current buggy behaviour. When the underlying fix
-// in #852 lands (e.g. reorder side effects, queue snapshot/restore, or
-// two-phase dequeue), the post-rollback queue length assertion below
-// will need to flip to require.Equal(t, preLen, postLen).
+// This test PINS the current buggy behaviour of the inline drain, which
+// reorgBlocks and the catch-up loop still use. The dispatcher path (a single
+// new block) drains after the commit instead and no longer loses batches:
+// see TestHandleMoveForwardRequest_FailedBlockLeavesQueueUntouched. When the
+// inline drain gets the same fix, the post-rollback queue length assertion
+// below will need to flip to require.Equal(t, preLen, postLen).
 func TestMoveForwardBlockDrainLoss_BatchesLostOnPostDrainError(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)

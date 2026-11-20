@@ -25,11 +25,17 @@ type InMemoryBroker struct {
 	mu     sync.RWMutex
 }
 
-// Topic holds messages and consumer channels for a specific topic.
+// Topic holds the consumer channels for a specific topic and the next offset to assign.
+//
+// It holds no messages. It used to keep every message ever produced, in a history nothing read,
+// so on a node running Kafka in memory each message stayed on the heap for good: on mainnet on
+// 2026-09-30 that was 6.9 GB of transaction metadata, 88% of the live heap, with the garbage
+// collector taking 68% of the CPU. A message is delivered to the consumers there are when it is
+// produced, exactly as before, and is then free to be collected.
 type Topic struct {
-	messages  []*Message
-	consumers []chan *Message
-	mu        sync.RWMutex
+	nextOffset int64
+	consumers  []chan *Message
+	mu         sync.RWMutex
 }
 
 // NewInMemoryBroker creates a new instance of the in-memory broker.
@@ -49,7 +55,6 @@ func (b *InMemoryBroker) Produce(ctx context.Context, topic string, key []byte, 
 		b.mu.Lock()
 		if _, exists := b.topics[topic]; !exists {
 			b.topics[topic] = &Topic{
-				messages:  make([]*Message, 0),
 				consumers: make([]chan *Message, 0),
 			}
 		}
@@ -64,11 +69,11 @@ func (b *InMemoryBroker) Produce(ctx context.Context, topic string, key []byte, 
 		Topic:     topic,
 		Key:       key,
 		Value:     value,
-		Offset:    int64(len(t.messages)),
+		Offset:    t.nextOffset,
 		Partition: 0,
 		Timestamp: time.Now(),
 	}
-	t.messages = append(t.messages, msg)
+	t.nextOffset++
 
 	// Broadcast to all consumers
 	for _, ch := range t.consumers {
@@ -81,9 +86,7 @@ func (b *InMemoryBroker) Produce(ctx context.Context, topic string, key []byte, 
 	return nil
 }
 
-// DropTopic removes the topic entirely from the broker. Use at end-of-test
-// teardown to release the historical-messages buffer the broker pins
-// indefinitely.
+// DropTopic removes the topic entirely from the broker.
 func (b *InMemoryBroker) DropTopic(topic string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -104,28 +107,6 @@ func (b *InMemoryBroker) HasConsumer(topic string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return len(t.consumers) > 0
-}
-
-// TruncateTopic drops the broker's retained-messages buffer for a topic. The
-// in-memory broker otherwise keeps every produced message forever, which is
-// fine for short tests but pins gigabytes in long benchmark runs. Callers
-// that have confirmed all consumers have already drained past a given point
-// (e.g. via their own processed-counter watermark) can use this to release
-// the broker-side retention without affecting in-flight delivery — only the
-// historical buffer is cleared, not the per-consumer channels.
-func (b *InMemoryBroker) TruncateTopic(topic string) {
-	b.mu.RLock()
-	t, ok := b.topics[topic]
-	b.mu.RUnlock()
-	if !ok {
-		return
-	}
-	t.mu.Lock()
-	// Drop the backing array entirely (t.messages = t.messages[:0] would
-	// keep cap()-many message pointers alive and defeat the purpose for
-	// long bench runs).
-	t.messages = nil
-	t.mu.Unlock()
 }
 
 // Topics returns a list of topic names managed by the broker.
@@ -317,7 +298,6 @@ type InMemoryConsumerGroup struct {
 	errors        chan error
 	closeOnce     sync.Once
 	cancelConsume context.CancelFunc
-	wg            sync.WaitGroup
 	closed        chan struct{}
 	isRunning     bool
 	isPaused      bool
@@ -340,7 +320,9 @@ func (mcg *InMemoryConsumerGroup) Errors() <-chan error {
 	return mcg.errors
 }
 
-// Close stops the consumer group.
+// Close cancels the consume context and marks the group closed. It does not wait for
+// the consume goroutine: that goroutine stops on the cancelled context and unregisters
+// from the topic by itself.
 func (mcg *InMemoryConsumerGroup) Close() error {
 	mcg.mu.Lock()
 	if !mcg.isRunning {
@@ -351,25 +333,13 @@ func (mcg *InMemoryConsumerGroup) Close() error {
 
 	mcg.closeOnce.Do(func() {
 		mcg.mu.Lock()
-		cancelFn := mcg.cancelConsume
-		mcg.mu.Unlock()
-
-		if cancelFn != nil {
-			cancelFn()
+		if mcg.cancelConsume != nil {
+			mcg.cancelConsume()
 		}
-
-		// wg.Wait() must NOT run with mcg.mu held: the goroutine it is
-		// waiting on (Consume, via Messages' isPausedFunc closure) takes
-		// mcg.mu itself on every message it forwards, paused or not. Before
-		// wg was wired up (see Consume's own wg.Add/Done, added alongside
-		// this fix) Wait() returned instantly regardless, so this was a
-		// latent deadlock that never had time to fire; now that Wait()
-		// genuinely blocks until Consume returns, holding mu across it
-		// would deadlock the moment Consume's goroutine tried to take mu
-		// for its own pause check while Close held it here.
-		mcg.wg.Wait()
-
-		mcg.mu.Lock()
+		// Close does NOT join the consume goroutine. A handler can still be inside
+		// one message when Close runs, and a join would wait on that handler. The
+		// claim stops forwarding on the cancelled context instead, so the goroutine
+		// unwinds without a further message.
 		close(mcg.errors)
 		close(mcg.closed)
 		mcg.isRunning = false
@@ -390,16 +360,6 @@ func (mcg *InMemoryConsumerGroup) Consume(ctx context.Context, topics []string, 
 	mcg.isRunning = true
 	internalCtx, cancel := context.WithCancel(ctx)
 	mcg.cancelConsume = cancel
-	// Tracks this call's lifetime so Close's wg.Wait() genuinely blocks
-	// until this method returns, instead of racing ahead on an empty
-	// WaitGroup nothing ever added to. Done is a SEPARATE defer below (not
-	// folded into the mu-guarded cleanup defer) so it can fire without
-	// depending on mu at all: Close() deliberately does NOT hold mu across
-	// its own wg.Wait() (see Close's own comment) — this goroutine's
-	// isPausedFunc closure takes mu on every message it forwards, paused or
-	// not, and Close holding mu across a genuinely-blocking Wait() would
-	// deadlock against that the moment isPausedFunc ran concurrently.
-	mcg.wg.Add(1)
 	mcg.mu.Unlock()
 
 	defer func() {
@@ -411,7 +371,6 @@ func (mcg *InMemoryConsumerGroup) Consume(ctx context.Context, topics []string, 
 		mcg.cancelConsume = nil
 		mcg.mu.Unlock()
 	}()
-	defer mcg.wg.Done()
 
 	if len(topics) != 1 {
 		return errors.NewConfigurationError("in-memory consumer group mock only supports exactly one topic")
@@ -428,7 +387,6 @@ func (mcg *InMemoryConsumerGroup) Consume(ctx context.Context, topics []string, 
 		mcg.broker.mu.Lock()
 		if _, exists := mcg.broker.topics[topicToConsume]; !exists {
 			mcg.broker.topics[topicToConsume] = &Topic{
-				messages:  make([]*Message, 0),
 				consumers: make([]chan *Message, 0),
 			}
 		}
@@ -549,16 +507,9 @@ type InMemoryConsumerGroupClaim struct {
 	messages     <-chan *Message
 	isPausedFunc func() bool
 
-	// ctx is Consume's internalCtx, threaded through so Messages can stop
-	// forwarding as soon as it is cancelled instead of only when the
-	// broker-side messages channel closes. Without this, an idle claim
-	// (nothing ever produced to the topic) blocks forever in `for msg :=
-	// range c.messages` and no cancellation of ctx can ever unblock it —
-	// Consume never returns, and Close's wg.Wait() (see the wg field on
-	// InMemoryConsumerGroup) would wait forever too. nil in the one direct
-	// test construction that predates this field (in_memory_kafka_test.go
-	// TestConsumerGroupClaimMethods): doneCh treats nil the same as "never
-	// done", matching the old unconditional-range behaviour for that case.
+	// ctx is Consume's internal context. Messages stops forwarding when it is done, so
+	// ConsumeClaim returns and Consume unregisters its channel from the topic. A nil ctx
+	// never stops, which is the behaviour of a claim built directly in a test.
 	ctx context.Context
 }
 
@@ -577,15 +528,8 @@ func (c *InMemoryConsumerGroupClaim) Messages() <-chan *Message {
 		defer close(filtered)
 
 		for {
-			// Receive BEFORE checking pause, same order the original
-			// unconditional `for msg := range c.messages` used: a message
-			// already dequeued while unpaused is held (not dropped) across
-			// a pause that starts before it is delivered. Checking pause
-			// first instead (tried during this fix, reverted) delivers any
-			// message that arrives after PauseAll while this goroutine is
-			// parked in the receive select, since nothing re-checks pause
-			// between the receive and the send — TestConsumerGroupPauseResumeBehavior
-			// catches exactly that regression.
+			// Receive before the pause check, so a message taken while unpaused is held
+			// across a pause that starts before it is delivered, not dropped.
 			var msg *Message
 
 			select {
@@ -593,15 +537,12 @@ func (c *InMemoryConsumerGroupClaim) Messages() <-chan *Message {
 				return
 			case m, ok := <-c.messages:
 				if !ok {
-					// Broker-side channel closed (Consume's own teardown).
 					return
 				}
 
 				msg = m
 			}
 
-			// Wait while paused, but stop waiting the moment ctx is done —
-			// otherwise a claim paused at shutdown blocks here forever too.
 			for c.isPausedFunc != nil && c.isPausedFunc() {
 				select {
 				case <-done:
@@ -621,10 +562,8 @@ func (c *InMemoryConsumerGroupClaim) Messages() <-chan *Message {
 	return filtered
 }
 
-// doneCh returns c.ctx.Done(), or nil when ctx was never set. A nil channel
-// is never selectable, so a select against it blocks exactly like the old
-// unconditional `for range c.messages` did — the pre-ctx behaviour is
-// preserved for the one direct construction that has no ctx to give.
+// doneCh returns c.ctx.Done(), or nil when no ctx was set. A nil channel is never ready,
+// so a claim without a ctx forwards until its source channel closes.
 func (c *InMemoryConsumerGroupClaim) doneCh() <-chan struct{} {
 	if c.ctx == nil {
 		return nil

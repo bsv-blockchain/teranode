@@ -411,6 +411,16 @@ type PeerSnapshot struct {
 	// yet surfaced over the peer_api gRPC surface (GetPeers); that is a
 	// natural follow-up, not done here, disclosed rather than silent.
 	TxDropped uint64
+
+	// Services is the peer's advertised nServices from its version message,
+	// zero until the handshake has delivered one.
+	Services wire.ServiceFlag
+
+	// SyncStarted reports whether this peer currently drives header sync
+	// (peerSyncState.fSyncStarted). Stamped by PeerManager.Snapshots, which
+	// owns the sync-state mutex that guards the flag; a snapshot taken from
+	// Peer.Info directly always carries false.
+	SyncStarted bool
 }
 
 // Peer owns one connection's runtime: it feeds inbound messages through the
@@ -1584,6 +1594,8 @@ func (p *Peer) Info() PeerSnapshot {
 		ProtoconfReceived:   info.ProtoconfReceived,
 
 		TxDropped: p.txDropped.Load(),
+
+		Services: info.Services,
 	}
 }
 

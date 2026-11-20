@@ -382,7 +382,7 @@ func setup(t *testing.T) *testContext {
 	subtreeStore := memory_blob.New()
 	blockStore := memory_blob.New()
 
-	repo, err := NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
+	repo, err := NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil, nil)
 	require.NoError(t, err)
 
 	return &testContext{
@@ -453,14 +453,7 @@ func TestWriteTransactionsViaSubtreeStoreStreaming(t *testing.T) {
 		txs[0] = coinbase
 
 		for i := 1; i <= numTxs; i++ {
-			// Create unique transactions with incrementing version numbers for easy verification
-			tx := &bt.Tx{
-				Version:  uint32(i), //nolint:gosec
-				LockTime: uint32(i), //nolint:gosec
-				Inputs:   []*bt.Input{},
-				Outputs:  []*bt.Output{},
-			}
-			txs[i] = tx
+			txs[i] = uniqueStreamTestTx(t, i)
 		}
 
 		// Create block and subtree with all transactions
@@ -555,13 +548,7 @@ func TestWriteTransactionsViaSubtreeStoreStreaming(t *testing.T) {
 		txs[0] = coinbase
 
 		for i := 1; i <= numTxs; i++ {
-			tx := &bt.Tx{
-				Version:  uint32(i), //nolint:gosec
-				LockTime: uint32(i), //nolint:gosec
-				Inputs:   []*bt.Input{},
-				Outputs:  []*bt.Output{},
-			}
-			txs[i] = tx
+			txs[i] = uniqueStreamTestTx(t, i)
 		}
 
 		testParams := blockInfo{
@@ -633,13 +620,7 @@ func TestWriteTransactionsViaSubtreeStoreStreaming(t *testing.T) {
 		txs[0] = coinbase
 
 		for i := 1; i <= numTxs; i++ {
-			tx := &bt.Tx{
-				Version:  uint32(i), //nolint:gosec
-				LockTime: uint32(i), //nolint:gosec
-				Inputs:   []*bt.Input{},
-				Outputs:  []*bt.Output{},
-			}
-			txs[i] = tx
+			txs[i] = uniqueStreamTestTx(t, i)
 		}
 
 		testParams := blockInfo{

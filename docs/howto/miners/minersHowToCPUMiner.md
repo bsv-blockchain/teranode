@@ -35,6 +35,9 @@ The recommended CPU miner for Teranode is the BSV CPU miner available as a Docke
 
 ### Basic Configuration
 
+`--userpass` must match the `rpc_user`/`rpc_pass` you configured on the node. Teranode
+ships with both unset; `bitcoin:bitcoin` below is a placeholder, not a default.
+
 ```bash
 docker run -it \
   --network my-teranode-network \
@@ -160,7 +163,7 @@ docker run -it \
 **Solution**:
 
 - Verify RPC credentials in Teranode configuration
-- Default credentials are `bitcoin:bitcoin`
+- Credentials come from `rpc_user`/`rpc_pass`; nothing ships by default, so both must be set in `settings_local.conf`
 - Check userpass format: `username:password`
 
 **Issue**: Invalid address errors

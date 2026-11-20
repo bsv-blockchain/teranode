@@ -61,6 +61,7 @@ type Server struct {
 	blockvalidationClient blockvalidation.Interface
 	blockAssemblyClient   blockassembly.ClientI
 	p2pClient             p2p.ClientI
+	peerRegistryClient    blockchain.PeerRegistryClientI
 	banList               banlist.Interface
 }
 
@@ -86,6 +87,7 @@ type Server struct {
 func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
 	subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI,
 	blockvalidationClient blockvalidation.Interface, p2pClient p2p.ClientI, banList banlist.Interface,
+	peerRegistryClient blockchain.PeerRegistryClientI,
 	blockAssemblyClient ...blockassembly.ClientI) *Server {
 	s := &Server{
 		logger:                logger,
@@ -97,6 +99,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 		blockchainClient:      blockchainClient,
 		blockvalidationClient: blockvalidationClient,
 		p2pClient:             p2pClient,
+		peerRegistryClient:    peerRegistryClient,
 		banList:               banList,
 	}
 
@@ -147,9 +150,14 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		if strings.HasPrefix(addr, ":") {
 			addr = "localhost" + addr
 		}
+		// Probe the static liveness route, not /health. /health runs this very
+		// dependency inventory, so pointing the check at it makes a degraded
+		// store mark the HTTP server itself unhealthy once /health propagates
+		// the computed 503, and makes every readiness poll re-run the
+		// dependency checks through an extra HTTP hop.
 		checks = append(checks, health.Check{
 			Name:  "HTTP Server",
-			Check: health.CheckHTTPServer(fmt.Sprintf("http://%s", addr), "/health"),
+			Check: health.CheckHTTPServer(fmt.Sprintf("http://%s", addr), "/alive"),
 		})
 	}
 
@@ -200,7 +208,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 	}
 
 	repo, err := repository.NewRepository(v.logger, v.settings, v.utxoStore, v.txStore, v.blockchainClient,
-		v.blockvalidationClient, v.subtreeStore, v.blockPersisterStore, v.p2pClient)
+		v.blockvalidationClient, v.subtreeStore, v.blockPersisterStore, v.p2pClient, v.peerRegistryClient)
 	if err != nil {
 		return errors.NewServiceError("error creating repository", err)
 	}

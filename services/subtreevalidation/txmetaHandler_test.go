@@ -75,7 +75,19 @@ type mockCache struct {
 	txmetacache.TxMetaCache
 }
 
+// DeleteDemoted shadows the embedded zero TxMetaCache's, which has no backend.
+func (m *mockCache) DeleteDemoted(hashes []chainhash.Hash) {
+	for i := range hashes {
+		_ = m.Delete(context.Background(), &hashes[i])
+	}
+}
+
 func (m *mockCache) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	args := m.Called(ctx, hash)
+	return args.Error(0)
+}
+
+func (m *mockCache) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	args := m.Called(ctx, hash)
 	return args.Error(0)
 }

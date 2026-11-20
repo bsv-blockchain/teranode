@@ -9,7 +9,7 @@
     - [2.3. Validating the Transaction](#23-validating-the-transaction)
         - [2.3.1. Consensus Rules vs Policy Checks](#231-consensus-rules-vs-policy-checks)
         - [2.3.2. Transaction Format Extension](#232-transaction-format-extension)
-    - [2.4. Script Verification](#24-script-verification)
+    - [2.4. BDK Transaction Validation](#24-bdk-transaction-validation)
     - [2.5. Error Handling and Transaction Rejection](#25-error-handling-and-transaction-rejection)
     - [2.6. Concurrent Processing](#26-concurrent-processing)
     - [2.7. Post-validation: Updating stores and propagating the transaction](#27-post-validation-updating-stores-and-propagating-the-transaction)
@@ -375,6 +375,8 @@ If parent transactions cannot be found during the extension process:
 - Provides clear error message indicating which parent transaction is missing
 - Client can retry after ensuring parent transactions are validated/confirmed
 
+One exception applies to mempool submission only (`InBlock` false). When every parent is absent and the transaction's own record is mined on the current chain, the validator returns that record and reports success. DAH eviction or a lost UTXO partition causes this case. The record must not be conflicting, locked or creating. It must list exactly the transaction's inputs, so a UTXO-set snapshot record from the seeder or seedimport never qualifies. Block id 0 is ignored, because the seeder uses it as a placeholder. A store or blockchain fault during that check returns `ErrTxMissingParent` with a wrapped `STORAGE_ERROR` or `SERVICE_UNAVAILABLE`.
+
 **Common scenarios requiring parent transactions:**
 
 - **Child-pays-for-parent (CPFP)**: Transaction chains where child hasn't been validated yet
@@ -483,7 +485,6 @@ The Validator notifies the Block Assembly service of new transactions through gR
 
 The Validator service behavior is controlled by several key configuration parameters:
 
-- **`validator_kafkaWorkers`** (default: 0): Controls the number of concurrent Kafka message processing workers. When set to 0, Kafka consumer processing is disabled.
 - **`validator_httpRateLimit`** (default: 1024): Sets the rate limit for HTTP API requests to prevent service overload.
 - **`validator_verbose_debug`** (default: false): Enables detailed validation logging for troubleshooting.
 - **`useLocalValidator`** (code default: false; `settings.conf` ships with `true`): Determines whether to use a local validator instance or connect to a remote validator service via gRPC. Standard deployments using the provided `settings.conf` will use local validator mode.

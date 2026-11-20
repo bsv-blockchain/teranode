@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/settings"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -122,9 +123,10 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic_UOM(t *test
 	setMinedChan := make(chan *chainhash.Hash, 1)
 
 	mockHandler := new(MockInvalidBlockHandler)
-	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything).Return(nil).Once()
+	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything, mock.Anything).Return(nil).Once()
 
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 	bv := &testBlockValidation{
 		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient, mockHandler),
 		waitFunc: func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error {
@@ -302,7 +304,31 @@ func setupMockBlockchain(parentBlock *model.Block) *blockchain.Mock {
 	return mockBlockchain
 }
 
-func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
+// TestBlockValidation_CorruptBody_NotInvalidated_NonOptimistic drives the DEFAULT production
+// (non-optimistic) path with a corrupt-body fixture (zeroed merkle root). This is the true
+// "corrupt is re-downloaded, not poisoned" thesis on the path production runs by default
+// (bitcoin-sv/teranode#4692): the body is never AddBlock'd, so it is neither persisted invalid nor
+// invalidated, and ValidateBlock returns a corrupt error for the caller to re-download.
+//
+// Subtree validation is stubbed to pass, so the corrupt verdict comes from block.Valid. The real
+// service would bind the cached body to its header first and reject it there instead; that path is
+// TestBlockValidation_CorruptCachedBody_RejectedBySubtreeValidation_NonOptimistic.
+func TestBlockValidation_CorruptBody_NotInvalidated_NonOptimistic(t *testing.T) {
+	testCorruptBodyNotInvalidatedNonOptimistic(t, false)
+}
+
+// TestBlockValidation_CorruptCachedBody_RejectedBySubtreeValidation_NonOptimistic is the same
+// corrupt body through the real subtree validation service. Its subtree is cached, so the service
+// binds the body to the header before probing the store and returns corrupt from there, before
+// block.Valid and before any AddBlock. The outcome must be the same: corrupt, never invalidated,
+// never published.
+func TestBlockValidation_CorruptCachedBody_RejectedBySubtreeValidation_NonOptimistic(t *testing.T) {
+	testCorruptBodyNotInvalidatedNonOptimistic(t, true)
+}
+
+func testCorruptBodyNotInvalidatedNonOptimistic(t *testing.T, realSubtreeValidation bool) {
+	t.Helper()
+
 	initPrometheusMetrics()
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -360,16 +386,10 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 		block.Header.Nonce++
 	}
 
-	// Create a channel to signal when InvalidateBlock is called
-	invalidateBlockCalled := make(chan struct{})
-
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
-	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return([]chainhash.Hash{}, nil).Run(func(args mock.Arguments) {
-		// Signal that InvalidateBlock was called
-		close(invalidateBlockCalled)
-	})
+	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return([]chainhash.Hash{}, nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	subChan := make(chan *blockchain_api.Notification, 1)
@@ -383,11 +403,19 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	// Mock GetBlockIsMined for parent block mining status check
 	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
-	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
+	utxoStore, realSubtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
+	var subtreeValidationClient subtreevalidation.Interface = realSubtreeValidationClient
+
+	if !realSubtreeValidation {
+		stub := &subtreevalidation.MockSubtreeValidation{}
+		stub.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		subtreeValidationClient = stub
+	}
+
 	mockHandler := new(MockInvalidBlockHandler)
-	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything).Return(nil).Once()
+	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything, mock.Anything).Return(nil).Once()
 
 	// Use our thread-safe mock Kafka producer
 	mockKafka := &SafeMockKafkaProducer{}
@@ -398,7 +426,9 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tSettings.BlockValidation.OptimisticMining = true
+	// Default production path is non-optimistic (bitcoin-sv/teranode#4692): the corrupt body must be
+	// caught by block.Valid BEFORE any AddBlock, so it is never added and never invalidated.
+	tSettings.BlockValidation.OptimisticMining = false
 	tSettings.Kafka.InvalidBlocks = "test-invalid-blocks" // Enable Kafka publishing
 
 	bv := &testBlockValidation{
@@ -421,19 +451,22 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
-	err = bv.ValidateBlock(ctx, block, "test", false)
-	require.NoError(t, err)
+	// bitcoin-sv/teranode#4692: this block fails CheckMerkleRoot (its merkle root was zeroed), which
+	// is a tier-2 CORRUPT body — not consensus-invalid. On the non-optimistic default path the body
+	// is never AddBlock'd, so block.Valid returns corrupt and ValidateBlock surfaces it to the
+	// caller for re-download. The body must NEVER be persisted invalid=true (the honest body for
+	// this hash may still arrive from another peer) and must NOT be invalidated or published.
+	err = bv.ValidateBlock(ctx, block, "test", true)
+	require.Error(t, err)
+	require.True(t, errors.IsBlockCorrupt(err), "a zeroed-merkle body is corrupt, not invalid")
 
-	// Wait for the goroutine to call InvalidateBlock
-	select {
-	case <-invalidateBlockCalled:
-		// Successfully received signal that InvalidateBlock was called
-	case <-time.After(2 * time.Second):
-		t.Fatal("InvalidateBlock should be called in background goroutine")
-	}
+	// A corrupt body on the non-optimistic path is never invalidated (no AddBlock happened, so
+	// there is nothing to roll back). ValidateBlock is synchronous here — it has already returned —
+	// so assert deterministically that InvalidateBlock was never called, with no timer/sleep race.
+	mockBlockchain.AssertNotCalled(t, "InvalidateBlock", mock.Anything, block.Header.Hash())
+	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
-	// Verify that Publish was called on the Kafka producer
-	require.True(t, mockKafka.IsPublishCalled(), "Kafka Publish should be called for invalid block")
+	require.False(t, mockKafka.IsPublishCalled(), "corrupt block body must not be published as invalid")
 }
 
 func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
@@ -517,7 +550,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	// bv := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
 
 	mockHandler := new(MockInvalidBlockHandler)
-	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything).Return(nil).Once()
+	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything, mock.Anything).Return(nil).Once()
 
 	// Use our thread-safe mock Kafka producer
 	mockKafka := &SafeMockKafkaProducer{}

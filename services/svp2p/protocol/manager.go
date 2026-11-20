@@ -2628,9 +2628,11 @@ func (m *PeerManager) SyncRateFloor() uint64 {
 func (m *PeerManager) Snapshots() []PeerSnapshot {
 	m.mu.Lock()
 	peers := make([]*Peer, 0, len(m.peers))
+	syncPeers := make([]*SyncPeer, 0, len(m.peers))
 
-	for p := range m.peers {
+	for p, sp := range m.peers {
 		peers = append(peers, p)
+		syncPeers = append(syncPeers, sp)
 	}
 	m.mu.Unlock()
 
@@ -2638,6 +2640,17 @@ func (m *PeerManager) Snapshots() []PeerSnapshot {
 	for _, p := range peers {
 		snaps = append(snaps, p.Info())
 	}
+
+	// The sync flag lives on peerSyncState under syncMu, which is never held
+	// together with mu or a peer lock (see syncMu's own doc comment), so it
+	// is stamped in a separate pass after every Info call has completed.
+	m.syncMu.Lock()
+	for i, sp := range syncPeers {
+		if sp != nil && sp.State != nil {
+			snaps[i].SyncStarted = sp.State.fSyncStarted
+		}
+	}
+	m.syncMu.Unlock()
 
 	return snaps
 }

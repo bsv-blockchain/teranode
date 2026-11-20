@@ -184,7 +184,7 @@ func TestServerNew(t *testing.T) {
 		subtreeConsumer := &mockKafkaConsumer{}
 		txmetaConsumer := &mockKafkaConsumer{}
 
-		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
+		server, err := New(newCancelCtx(t), common.Logger, tSettings, subtreeStore, txStore, utxoStore,
 			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.Error(t, err)
@@ -211,7 +211,7 @@ func TestServerNew(t *testing.T) {
 		subtreeConsumer := setupMemoryKafkaConsumer(t, "subtrees-topic")
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic")
 
-		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
+		server, err := New(newCancelCtx(t), common.Logger, tSettings, subtreeStore, txStore, utxoStore,
 			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.NoError(t, err)
@@ -245,7 +245,7 @@ func TestServerNew(t *testing.T) {
 		subtreeConsumer := setupMemoryKafkaConsumer(t, "subtrees-topic-cache")
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic-cache")
 
-		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
+		server, err := New(newCancelCtx(t), common.Logger, tSettings, subtreeStore, txStore, utxoStore,
 			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.NoError(t, err)
@@ -273,7 +273,7 @@ func TestServerNew(t *testing.T) {
 		subtreeConsumer := setupMemoryKafkaConsumer(t, "subtrees-topic-invalid")
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic-invalid")
 
-		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
+		server, err := New(newCancelCtx(t), common.Logger, tSettings, subtreeStore, txStore, utxoStore,
 			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.NoError(t, err)
@@ -570,7 +570,7 @@ func TestPublishInvalidSubtree(t *testing.T) {
 		}
 
 		// Should return early without error
-		server.publishInvalidSubtree(context.Background(), "hash", "peer", "reason")
+		server.publishInvalidSubtree(context.Background(), "hash", "peer", "", "reason")
 	})
 
 	t.Run("FSM state catching blocks", func(t *testing.T) {
@@ -587,8 +587,40 @@ func TestPublishInvalidSubtree(t *testing.T) {
 		}
 		defer server.invalidSubtreeDeDuplicateMap.Stop()
 
-		server.publishInvalidSubtree(context.Background(), "hash", "peer", "reason")
+		server.publishInvalidSubtree(context.Background(), "hash", "peer", "", "reason")
 		require.True(t, publishCalled) // With nil blockchain client, message should be published
+	})
+
+	t.Run("publishes only in RUNNING", func(t *testing.T) {
+		// IDLE is suppressed: an operator STOP can land while catchup is running.
+		for _, tt := range []struct {
+			state     blockchain.FSMStateType
+			published bool
+		}{
+			{blockchain.FSMStateRUNNING, true},
+			{blockchain.FSMStateCATCHINGBLOCKS, false},
+			{blockchain.FSMStateIDLE, false},
+		} {
+			t.Run(tt.state.String(), func(t *testing.T) {
+				state := tt.state
+				blockchainClient := &blockchain.Mock{}
+				blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+				publishCalled := false
+				server := &Server{
+					logger:           ulogger.TestLogger{},
+					blockchainClient: blockchainClient,
+					invalidSubtreeKafkaProducer: &mockKafkaAsyncProducer{
+						publishFunc: func(msg *kafka.Message) { publishCalled = true },
+					},
+					invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute),
+				}
+				defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+				server.publishInvalidSubtree(context.Background(), "hash", "peer", "", "reason")
+				require.Equal(t, tt.published, publishCalled)
+			})
+		}
 	})
 
 	t.Run("successful publish", func(t *testing.T) {
@@ -605,7 +637,7 @@ func TestPublishInvalidSubtree(t *testing.T) {
 		}
 		defer server.invalidSubtreeDeDuplicateMap.Stop()
 
-		server.publishInvalidSubtree(context.Background(), "hash123", "peer456", "test reason")
+		server.publishInvalidSubtree(context.Background(), "hash123", "peer456", "peerid789", "test reason")
 		require.NotNil(t, publishedMsg)
 		require.Equal(t, []byte("hash123"), publishedMsg.Key)
 
@@ -615,6 +647,7 @@ func TestPublishInvalidSubtree(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "hash123", msg.SubtreeHash)
 		require.Equal(t, "peer456", msg.PeerUrl)
+		require.Equal(t, "peerid789", msg.PeerId)
 		require.Equal(t, "test reason", msg.Reason)
 	})
 
@@ -634,11 +667,11 @@ func TestPublishInvalidSubtree(t *testing.T) {
 		defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 		// First publish
-		server.publishInvalidSubtree(context.Background(), "hash123", "peer", "reason")
+		server.publishInvalidSubtree(context.Background(), "hash123", "peer", "", "reason")
 		require.Equal(t, 1, publishCount)
 
 		// Second publish with same hash should be deduplicated
-		server.publishInvalidSubtree(context.Background(), "hash123", "peer", "reason")
+		server.publishInvalidSubtree(context.Background(), "hash123", "peer", "", "reason")
 		require.Equal(t, 1, publishCount)
 	})
 }
@@ -737,6 +770,8 @@ func TestResolveTxMetaCacheBucketType(t *testing.T) {
 		{"Native", txmetacache.Native},
 		{"pointer", txmetacache.Pointer},
 		{"Pointer", txmetacache.Pointer},
+		{"lockfree", txmetacache.Lockfree},
+		{"LockFree", txmetacache.Lockfree},
 		{"gibberish", txmetacache.Unallocated}, // unknown → fallback
 	}
 

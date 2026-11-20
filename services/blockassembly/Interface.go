@@ -10,12 +10,62 @@ package blockassembly
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 )
+
+// QueueStats is a native-types snapshot of the block-assembly ingest queue,
+// returned by GetBlockAssemblyQueueStats.
+//
+// It is a struct rather than a tuple of return values deliberately: HeadAge and
+// DoubleSpendWindow are both durations with entirely different meanings, and as
+// adjacent positional returns they would be silently swappable at every call
+// site. Naming them costs a type declaration and removes that class of bug.
+type QueueStats struct {
+	// Count is the current ingest-queue depth in items.
+	//
+	// Depth alone is not a usable control input: it cannot tell a queue that is
+	// draining from one that is stalled, since a large but falling depth needs no
+	// intervention while a small but static one does. Depth as a FRACTION of MaxItems
+	// is, and that is how the backpressure controller uses it — alongside HeadAge,
+	// which stays blind to the regime where a queue is pinned at its ceiling while
+	// each batch still waits only until the next drain pass.
+	Count int64
+
+	// MaxItems is the enforced (normalized) item ceiling the reporting process
+	// applies, or <= 0 when its queue is unbounded. It is the denominator for Count
+	// and, like DoubleSpendWindow, is reported rather than read from the reader's own
+	// settings: the two live in independent settings contexts and cannot be assumed
+	// equal. A reported value <= 0 makes any fill-based decision meaningless, so
+	// readers must treat it as "no fill signal available" rather than as zero
+	// capacity.
+	MaxItems int64
+
+	// HeldCount is the transactions the reporting process holds in memory, queued plus already
+	// in subtrees. The ingest queue alone reads near empty while the in-memory limit is the
+	// bound that is full, so the fill predicate reads this next to Count.
+	HeldCount int64
+
+	// MaxHeld is the enforced in-memory transaction limit the reporting process applies, or
+	// <= 0 when there is none. It is the denominator for HeldCount, reported for the same
+	// reason as MaxItems.
+	MaxHeld int64
+
+	// HeadAge is how long the oldest queued batch has waited (0 when empty).
+	// It is the raw age, hold-back included.
+	HeadAge time.Duration
+
+	// DoubleSpendWindow is the drain floor the reporting process applies before
+	// a queued batch becomes eligible to dequeue. Under load HeadAge
+	// structurally includes it, so a reader deciding on the age must subtract
+	// this reported value rather than its own setting: the two live in
+	// independent settings contexts and cannot be assumed equal.
+	DoubleSpendWindow time.Duration
+}
 
 // ClientI defines the interface for block assembly client operations.
 // This interface provides methods for external components to interact with the block assembly service,
@@ -135,6 +185,20 @@ type ClientI interface {
 	//   - error: Any error encountered during retrieval
 	GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error)
 
+	// GetBlockAssemblyQueueStats retrieves a slim, atomic-only view of the ingest
+	// queue (depth, head-batch age, and the drain floor the age is measured
+	// against) for high-frequency control reads. It never blocks on the
+	// subtree-processor main loop the way GetBlockAssemblyState can. Native Go
+	// return types keep the protobuf inside the client.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation
+	//
+	// Returns:
+	//   - QueueStats: Queue depth, head-batch age and the reported double-spend window
+	//   - error: Any error encountered during retrieval
+	GetBlockAssemblyQueueStats(ctx context.Context) (QueueStats, error)
+
 	// GetBlockAssemblyBlockCandidate retrieves the block candidate for block assembly.
 	//
 	// Parameters:
@@ -167,6 +231,11 @@ type ClientI interface {
 	//   - []*chainhash.Hash: List of transaction hashes
 	//   - error: Any error encountered during retrieval
 	GetTransactionHashes(ctx context.Context) ([]string, error)
+
+	// PrepareBlock tells block assembly about a block on its tip that is being validated, so it
+	// can build the block's transaction map before the block is added. It is only a hint: block
+	// assembly binds the block's subtree list to its header itself.
+	PrepareBlock(ctx context.Context, block *model.Block) error
 }
 
 // Store defines the interface for block assembly storage operations.

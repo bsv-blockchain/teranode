@@ -112,7 +112,7 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 	return &TxValidator{
 		logger:   logger,
 		settings: tSettings,
-		bdk:      newScriptVerifierGoBDK(logger, tSettings.Policy, tSettings.ChainCfgParams),
+		bdk:      newScriptVerifierGoBDK(logger, tSettings.Policy, tSettings.ChainCfgParams, tSettings.Validator.ConsensusRerunSlots),
 		options:  options,
 	}
 }

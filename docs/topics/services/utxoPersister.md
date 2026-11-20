@@ -135,13 +135,17 @@ The UTXO Persister processes blocks and creates UTXO sets as follows:
         - Incorporates new UTXOs from the block's transactions.
         - Writes the new UTXO set to the Block Store.
 
-7. **Cleanup**:
+    - If the UTXO set for the target block is already in the Block Store, written by an earlier run that stopped before recording it or by a one-shot build, the service records it instead of writing it again.
 
-    - If not skipped (based on configuration), the service deletes the previous block's UTXO set to save space.
-
-8. **Update Last Processed Height**:
+7. **Update Last Processed Height**:
 
     - The service calls `writeLastHeight()` to update its record of the last processed block height.
+    - This happens before the cleanup below, so a stop between the two never leaves `lastProcessed.dat` pointing at a set that has been deleted.
+
+8. **Cleanup**:
+
+    - If not skipped (based on configuration), the service deletes the previous block's UTXO set to save space.
+    - A stop or a failed delete here can leave the previous set, or some of its side files, on disk, and nothing deletes them later.
 
 9. **Trigger Next Block Processing**:
 
@@ -312,13 +316,13 @@ These settings control the I/O performance and memory usage patterns of the UTXO
 
 | Setting | Type | Default | Description | Impact |
 | --------- | ------ | --------- | ------------- | -------- |
-| `utxoPersister_buffer_size` | string | `"4KB"` | Controls the buffer size for reading from and writing to UTXO files | Affects I/O performance and memory usage when processing UTXO data |
+| `utxoPersister_buffer_size` | string | `"256KB"` | Controls the buffer size for reading from and writing to UTXO files | Affects I/O performance and memory usage when processing UTXO data |
 
 #### Performance Tuning Interactions and Dependencies
 
 The buffer size setting directly affects how efficiently the service reads and writes UTXO data:
 
-- Larger buffer sizes (e.g., 64KB to 1MB) can significantly improve I/O throughput by reducing the number of system calls needed for file operations
+- Larger buffer sizes (e.g., 512KB to 1MB) can significantly improve I/O throughput by reducing the number of system calls needed for file operations
 - Smaller buffer sizes reduce memory usage but may increase CPU overhead due to more frequent I/O operations
 - The optimal buffer size depends on the hardware characteristics, particularly disk I/O capabilities, available memory, and the size of typical UTXO files
 
@@ -339,7 +343,7 @@ These settings control how UTXO data is stored and retained.
 
 These settings determine the storage footprint and data persistence behavior of the service:
 
-- When `blockpersister_skipUTXODelete` is `false` (default), the service maintains minimal storage by only keeping the UTXO set for the most recent processed block
+- When `blockpersister_skipUTXODelete` is `false` (default), the service maintains minimal storage by deleting each previous UTXO set once the next one is recorded. A stop or a failed delete at that point can leave the previous set, or some of its side files, on disk until removed by hand, and a delete that keeps failing leaves more of them on every pass
 - When set to `true`, the service preserves all historical UTXO sets, which increases storage requirements but enables historical analysis and validation
 - The `blockstore` setting defines where all block-related data is stored, affecting both read and write performance based on the underlying storage system
 - The `txstore` and `txmeta_store` settings determine where transaction data and UTXO metadata are stored, respectively, which impacts performance and data availability

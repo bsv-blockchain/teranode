@@ -230,7 +230,7 @@ func TestSyncManager_legacyFailClosed(t *testing.T) {
 		{name: "failClosed on, outpoint off => no-op", failClosed: true, outpoint: false, unified: false, height: below, want: false},
 		{name: "failClosed on, outpoint on, below => engages", failClosed: true, outpoint: true, unified: false, height: below, want: true},
 		{name: "failClosed on, outpoint on, above checkpoint => off", failClosed: true, outpoint: true, unified: false, height: above, want: false},
-		{name: "failClosed on, outpoint on, unified on => off (unified wins)", failClosed: true, outpoint: true, unified: true, height: below, want: false},
+		{name: "failClosed on, outpoint on, unified on => engages (svp2p never takes the unified route)", failClosed: true, outpoint: true, unified: true, height: below, want: true},
 	}
 
 	for _, tt := range tests {

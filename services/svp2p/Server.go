@@ -62,6 +62,12 @@ type Deps struct {
 	SubtreeValidation subtreevalidation.Interface
 	BlockValidation   blockvalidation.Interface
 	BlockAssembly     *blockassembly.Client
+
+	// PeerRegistry mirrors connected wire peers into the centralized peer
+	// registry for dashboard visibility (peer_registry_sync.go). Optional and
+	// excluded from complete(): it feeds no ingestion path, and a node
+	// without it just shows no wire peers in the dashboard.
+	PeerRegistry blockchain.PeerRegistryClientI
 }
 
 // complete reports whether every dependency the bridge needs is present. A
@@ -410,6 +416,17 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	s.logger.Infof("[svp2p] peer manager started, listening on %v", s.manager.ListenAddrs())
+
+	// Mirror connected wire peers into the centralized peer registry for the
+	// dashboard, exactly as the legacy service does (its Start wires
+	// newPeerRegistrySync the same way). Started after the manager so the
+	// first reconcile reads a live peer list; the loop stops with ctx.
+	if s.settings.Legacy.PeerRegistryEnabled && s.deps.PeerRegistry != nil {
+		registrySync := newPeerRegistrySync(s.logger, s.settings, s.deps.PeerRegistry, s.registryPeerSnapshots)
+		go registrySync.run(ctx)
+	} else {
+		s.logger.Infof("[svp2p] peer registry mirror disabled")
+	}
 
 	// The block announcement relay's Kafka leg. Started after the manager so
 	// RelayBlock always has a live peer registry to read; a message that

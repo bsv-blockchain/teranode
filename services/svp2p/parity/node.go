@@ -181,8 +181,16 @@ func newNode(t *testing.T, impl Impl, connectPeers []string, tweaks ...func(*set
 
 		tSettings.BlockChain.StoreURL = banStoreURL
 
-		svc = legacy.New(logger, tSettings, blockchainClient, validatorClient, subtreeStore, tempStore, utxoStore,
-			subtreeValidationClient, blockValidationClient, blockAssemblyClient)
+		svc = legacy.New(logger, tSettings, legacy.Dependencies{
+			BlockchainClient:    blockchainClient,
+			ValidationClient:    validatorClient,
+			SubtreeStore:        subtreeStore,
+			TempStore:           tempStore,
+			UtxoStore:           utxoStore,
+			SubtreeValidation:   subtreeValidationClient,
+			BlockValidation:     blockValidationClient,
+			BlockAssemblyClient: blockAssemblyClient,
+		})
 	case Svp2p:
 		srv := svp2p.NewWithDeps(logger, tSettings, blockchainClient, svp2p.Deps{
 			ValidationClient:  validatorClient,

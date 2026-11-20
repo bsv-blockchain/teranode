@@ -316,7 +316,7 @@ func newFetchLegacyBlockRepository(t *testing.T, tSettings *settings.Settings, b
 	t.Helper()
 
 	repo, err := repository.NewRepository(ulogger.TestLogger{}, tSettings, nil, nil,
-		blockchainClient, nil, subtreeStore, nil, nil)
+		blockchainClient, nil, subtreeStore, nil, nil, nil)
 	require.NoError(t, err)
 
 	return repo

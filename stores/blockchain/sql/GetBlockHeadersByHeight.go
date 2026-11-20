@@ -76,11 +76,9 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Calculate capacity safely, avoiding uint32 underflow when startHeight > endHeight
-	var capacity uint32 = 1
-	if endHeight >= startHeight {
-		capacity = max(1, endHeight-startHeight+1)
-	}
+	// Bounded preallocation: guards both the uint32 underflow when
+	// startHeight > endHeight and a legitimately-ordered but enormous range.
+	capacity := preallocForRange(startHeight, endHeight)
 
 	blockHeaders := make([]*model.BlockHeader, 0, capacity)
 	blockMetas := make([]*model.BlockHeaderMeta, 0, capacity)
@@ -96,7 +94,7 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 				SELECT b.hash
 				FROM blocks b
 				WHERE b.invalid = false
-				ORDER BY chain_work DESC, peer_id ASC, id ASC
+				ORDER BY chain_work DESC, id ASC
 				LIMIT 1
 			)
 			UNION ALL

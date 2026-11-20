@@ -163,7 +163,8 @@ func CreateTestBlock(height uint32, hash string) *model.Block {
 			Bits:           model.NBit{},
 			Nonce:          0,
 		},
-		Height: height,
+		Height:           height,
+		TransactionCount: 1,
 	}
 }
 
