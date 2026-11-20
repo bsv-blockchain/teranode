@@ -267,6 +267,7 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 	assert.Equal(t, tx.TxID(), blockAssembler.storedTxs[0].txHash.String())
 	assert.Equal(t, txMeta.Fee, blockAssembler.storedTxs[0].fee)
 	assert.Equal(t, txMeta.SizeInBytes, blockAssembler.storedTxs[0].size)
+	assert.Equal(t, uint32(257727), blockAssembler.storedTxs[0].validatedHeight, "block assembly is told the height the tx was validated at")
 }
 
 func TestValidate_RejectedTransactionChannel(t *testing.T) {
@@ -974,10 +975,11 @@ func TestIsFinalb633531280f980108329e3e0b9335b2290892d120916f9e17a9e3033bde1260b
 
 // txFeeSize represents transaction metadata for block assembly testing.
 type txFeeSize struct {
-	txHash     *chainhash.Hash
-	fee        uint64
-	size       uint64
-	txInpoints subtree.TxInpoints
+	txHash          *chainhash.Hash
+	fee             uint64
+	size            uint64
+	txInpoints      subtree.TxInpoints
+	validatedHeight uint32
 }
 
 // MockBlockAssemblyStore provides a test double for block assembly storage operations.
@@ -988,7 +990,7 @@ type MockBlockAssemblyStore struct {
 	removedTxs   []chainhash.Hash
 }
 
-func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error) {
+func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32) (bool, error) {
 	if s.panicOnStore {
 		// Simulates a nil/misconfigured block-assembly client panicking mid-delivery,
 		// e.g. inside the real gRPC client's Store() call.
@@ -1004,10 +1006,11 @@ func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, 
 	}
 
 	s.storedTxs = append(s.storedTxs, txFeeSize{
-		txHash:     hash,
-		fee:        fee,
-		size:       size,
-		txInpoints: txInpoints,
+		txHash:          hash,
+		fee:             fee,
+		size:            size,
+		txInpoints:      txInpoints,
+		validatedHeight: validatedHeight,
 	})
 
 	return true, nil

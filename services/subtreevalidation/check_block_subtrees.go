@@ -393,6 +393,31 @@ func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidati
 	return subtreeToCheck, nil
 }
 
+// feedsBlockAssembly reports whether a block's transactions may be added to
+// block assembly. Only when the FSM state allows it (stateFeeds: RUNNING, or a
+// short catchup from RUNNING that keeps the hand-off), and only when the block is
+// not above tip+1: a height locktime final there may not be final at tip+1.
+//
+// A block under other transaction rules than tip+1 (a side block below Genesis or
+// Chronicle) still feeds. Its txs carry the block's height, and block assembly's era
+// filter drops them and records the drop, so a descendant in a later block of the
+// same fork, under tip+1's rules, is dropped with them. Withholding them here would
+// leave block assembly unaware of them, and let such a descendant in without its
+// parent. A block that feeds even when it does not extend the tip keeps the txs of a
+// competitor that loses in the template.
+func (u *Server) feedsBlockAssembly(ctx context.Context, stateFeeds bool, blockHeight uint32) (bool, error) {
+	if !stateFeeds {
+		return false, nil
+	}
+
+	_, tipMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return false, errors.NewServiceError("failed to get best block header", err)
+	}
+
+	return blockHeight <= tipMeta.Height+1, nil
+}
+
 // CheckBlockSubtrees validates every subtree a block references, fetching any it
 // does not hold, and reports whether the block's transactions are valid.
 //
@@ -592,8 +617,14 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// short catchup that started from RUNNING: block validation asks to keep the
 	// hand-off on, offering unseen fork transactions to the pool through the
 	// existing RUNNING path (including its block-context queue-shed policy).
-	addTXToBlockAssembly := *currentState == blockchain.FSMStateRUNNING ||
+	// Either way the block must also pass feedsBlockAssembly's height gate.
+	stateFeeds := *currentState == blockchain.FSMStateRUNNING ||
 		(*currentState == blockchain.FSMStateCATCHINGBLOCKS && request.GetKeepBlockAssemblyHandoff())
+
+	addTXToBlockAssembly, err := u.feedsBlockAssembly(ctx, stateFeeds, block.Height)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] Failed to decide block assembly feed", err))
+	}
 
 	// BATCHED SUBTREE LOADING: Get blockIds once before batching
 	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
