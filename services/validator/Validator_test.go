@@ -2637,6 +2637,29 @@ func TestParentLanePositionsFollowTxInpointsOrder(t *testing.T) {
 
 	require.Equal(t, []uint64{lane.Pack(3, 1), lane.Pack(1, 1), lane.Pack(2, 1)}, parentLanePositions(tx, inputLanes))
 	require.Nil(t, parentLanePositions(tx, nil), "lane positions off")
+
+	// A wide transaction takes the set, and must give the same order.
+	wide := make([]chainhash.Hash, 0, 3*parentLaneLinearMax)
+	vouts := make([]uint32, 0, cap(wide))
+	wideLanes := make([]uint64, 0, cap(wide))
+
+	for i := 0; i < cap(wide); i++ {
+		p := chainhash.Hash{byte(i % (parentLaneLinearMax + 3))}
+		wide = append(wide, p)
+		vouts = append(vouts, uint32(i)) //nolint:gosec // i is small
+		wideLanes = append(wideLanes, lane.Pack(1, uint64(p[0])+1))
+	}
+
+	wideTx := parentOutputsChild(t, wide, vouts)
+	wideInpoints, err := subtree.NewTxInpointsFromTx(wideTx)
+	require.NoError(t, err)
+
+	want := make([]uint64, len(wideInpoints.ParentTxHashes))
+	for i, p := range wideInpoints.ParentTxHashes {
+		want[i] = lane.Pack(1, uint64(p[0])+1)
+	}
+
+	require.Equal(t, want, parentLanePositions(wideTx, wideLanes))
 }
 
 // At shadow the parents' lane positions come from the one parent read the validator already makes,

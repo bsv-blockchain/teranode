@@ -524,3 +524,59 @@ func TestNettedBelowCoinsTakeTheirTransactionsLanePosition(t *testing.T) {
 
 	require.Positive(t, checked, "the list leaves coins")
 }
+
+// A parent whose only records are its coin rows, or once spent its journal rows, still answers the
+// validator's parent read with its position: the identity row is gone and its containment row is
+// below the lookup floor, as for every parent mined more than about 576 blocks before.
+func TestParentOutputsCarryThePositionFromCoinAndJournalRows(t *testing.T) {
+	s, ctx := newLaneCopyStore(t)
+
+	want := lane.Pack(15, 3)
+
+	// Below mainnet's checkpoints, so the create takes the block path: coins and a containment
+	// row at height 100, and no identity row.
+	parent := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, parent, 100, utxo.WithLanePosition(want), utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 3, BlockHeight: 100, OnLongestChain: true}))
+	require.NoError(t, err)
+	require.False(t, identExists(t, s, ctx, parent))
+
+	require.NoError(t, s.SetBlockHeight(5_000))
+
+	op := []utxo.Outpoint{{TxID: *parent.TxIDChainHash(), Vout: 0}}
+
+	answers, err := s.ParentOutputsForValidation(ctx, op)
+	require.NoError(t, err)
+	require.Equal(t, utxo.ParentOutputMined, answers[0].Status)
+	require.Equal(t, want, answers[0].LanePosition, "answered from the coin row")
+
+	_ = spendOneOutput(t, s, ctx, parent, 0, 5_001)
+
+	answers, err = s.ParentOutputsForValidation(ctx, op)
+	require.NoError(t, err)
+	require.Equal(t, utxo.ParentOutputMined, answers[0].Status)
+	require.Equal(t, want, answers[0].LanePosition, "answered from the journal row")
+}
+
+// A preserved copy taken from a coin row, for a parent with no containment row left, carries the
+// coin's position.
+func TestPreservedCopyFromACoinRowCarriesItsPosition(t *testing.T) {
+	s, ctx := newLaneCopyStore(t)
+
+	want := lane.Pack(16, 4)
+
+	parent := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, parent, 100, utxo.WithLanePosition(want), utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 3, BlockHeight: 100, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	_, err = s.pool.Exec(ctx, `DELETE FROM tx_mined WHERE txid = $1`, hashBytes(parent))
+	require.NoError(t, err)
+
+	require.NoError(t, s.PreserveTransactions(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, 5_000))
+
+	v, null, ok := storedLane(t, s, ctx, "preserved_parent", parent)
+	require.True(t, ok, "the coin row gives a preserved copy")
+	require.False(t, null)
+	require.Equal(t, lane.ToSigned(want), v)
+}

@@ -2022,19 +2022,39 @@ func parentLanePositions(tx *bt.Tx, inputLanes []uint64) []uint64 {
 		return nil
 	}
 
-	parents := make([]chainhash.Hash, 0, len(tx.Inputs))
 	positions := make([]uint64, 0, len(tx.Inputs))
+
+	// A few inputs are compared directly; a wide transaction, a consolidation of thousands of
+	// parents, uses a set so the cost stays linear in its inputs.
+	if len(tx.Inputs) <= parentLaneLinearMax {
+		parents := make([]chainhash.Hash, 0, len(tx.Inputs))
+
+		for i, input := range tx.Inputs {
+			parent := *input.PreviousTxIDChainHash()
+			if !slices.Contains(parents, parent) {
+				parents = append(parents, parent)
+				positions = append(positions, inputLanes[i])
+			}
+		}
+
+		return positions
+	}
+
+	seen := make(map[chainhash.Hash]struct{}, len(tx.Inputs))
 
 	for i, input := range tx.Inputs {
 		parent := *input.PreviousTxIDChainHash()
-		if !slices.Contains(parents, parent) {
-			parents = append(parents, parent)
+		if _, ok := seen[parent]; !ok {
+			seen[parent] = struct{}{}
 			positions = append(positions, inputLanes[i])
 		}
 	}
 
 	return positions
 }
+
+// parentLaneLinearMax is the most inputs parentLanePositions compares directly.
+const parentLaneLinearMax = 16
 
 // twoPhaseCommitTransaction marks the transaction as spendable.
 //

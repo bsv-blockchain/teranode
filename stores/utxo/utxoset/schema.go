@@ -817,8 +817,9 @@ type laneSchemaColumn struct{ table, column, sqlType string }
 //     from the journal, and an output Unspend restores from it, keep their position.
 //
 // Opening the store never adds the last five; PrepareLaneSchema does. Where they exist the store
-// writes them and every copy carries them (openLaneCopyColumns), with lane positions on or off, as
-// it does lane_position; a create with lane positions off has none to write, so it writes NULL.
+// writes them, and each copy carries them where its source row has them (openLaneCopyColumns), with
+// lane positions on or off, as it does lane_position; a create with lane positions off has none to
+// write, so it writes NULL, and so does a create on the list path, which names no parents' positions.
 var laneSchemaColumns = []laneSchemaColumn{
 	{"tx_ident", "lane_position", "BIGINT"},
 	{"tx_mined", "lane_position", "BIGINT"},

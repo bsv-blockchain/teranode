@@ -104,13 +104,35 @@ var preserveParentLaneParentSQL = laneStatement(preserveParentLaneSQL,
 	"NULL, NULL, NULL, NULL, NULL, j.flags, NULL\n", "NULL, NULL, NULL, NULL, NULL, j.flags, NULL, NULL\n",
 )
 
+// The preserve statements whose thin copies, taken from a coin row or a journal row, carry that
+// row's lane_position, for a database with the column on utxo and spend_journal
+// (Store.laneCoinColumn). The containment row's thin copy has no position to carry.
+var (
+	preserveParentLaneCoinSQL = laneStatement(preserveParentLaneSQL,
+		"NULL, NULL, NULL, NULL, NULL, u.flags, NULL\n", "NULL, NULL, NULL, NULL, NULL, u.flags, u.lane_position\n",
+		"NULL, NULL, NULL, NULL, NULL, j.flags, NULL\n", "NULL, NULL, NULL, NULL, NULL, j.flags, j.lane_position\n",
+	)
+
+	preserveParentLaneParentCoinSQL = laneStatement(preserveParentLaneParentSQL,
+		"NULL, NULL, NULL, NULL, NULL, u.flags, NULL, NULL\n", "NULL, NULL, NULL, NULL, NULL, u.flags, u.lane_position, NULL\n",
+		"NULL, NULL, NULL, NULL, NULL, j.flags, NULL, NULL\n", "NULL, NULL, NULL, NULL, NULL, j.flags, j.lane_position, NULL\n",
+	)
+)
+
 // preserveParentForm is the preserve statement for this database's lane columns.
 func (s *Store) preserveParentForm() string {
-	if s.laneParentColumn {
+	switch {
+	case !s.laneColumn:
+		return preserveParentSQL
+	case s.laneParentColumn && s.laneCoinColumn:
+		return preserveParentLaneParentCoinSQL
+	case s.laneParentColumn:
 		return preserveParentLaneParentSQL
+	case s.laneCoinColumn:
+		return preserveParentLaneCoinSQL
+	default:
+		return preserveParentLaneSQL
 	}
-
-	return s.laneForm(preserveParentSQL, preserveParentLaneSQL)
 }
 
 // renewPreservedSQL extends the preservation of every named parent that already has one. The
