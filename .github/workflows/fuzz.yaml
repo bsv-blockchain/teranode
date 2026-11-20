@@ -88,6 +88,20 @@ jobs:
             target: FuzzParseRPCRequest
           - pkg: services/rpc/bsvjson
             target: FuzzUnmarshalCmd
+          - pkg: util/lane
+            target: FuzzDecodeDiskPayload
+          - pkg: util/lane
+            target: FuzzDecodeHoleData
+          - pkg: util/lane
+            target: FuzzDecodeSubtreePositions
+          - pkg: util/lane
+            target: FuzzDecodeProofFile
+          - pkg: util/lane
+            target: FuzzDecodeSubtreeBitmaps
+          - pkg: util/lane/backfill
+            target: FuzzOpenManifest
+          - pkg: stores/utxo/meta
+            target: FuzzNewDataFromLaneMetaBytes
     steps:
       # Nothing otherwise relates timeout_minutes to fuzztime, and a job killed
       # by timeout-minutes is cancelled mid-fuzz - so a deep run with a too-small
