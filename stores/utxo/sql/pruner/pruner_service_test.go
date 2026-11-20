@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,7 +14,6 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/util/usql"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +31,6 @@ func TestNewService(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 			Ctx:    context.Background(),
@@ -49,7 +46,6 @@ func TestNewService(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: nil,
 			DB:     db.DB,
 		})
@@ -64,7 +60,6 @@ func TestNewService(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(nil, Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -78,7 +73,6 @@ func TestNewService(t *testing.T) {
 		logger := &MockLogger{}
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     nil,
 		})
@@ -88,31 +82,11 @@ func TestNewService(t *testing.T) {
 		assert.Contains(t, err.Error(), "db is required")
 	})
 
-	t.Run("EngineIsRequired", func(t *testing.T) {
-		db := NewMockDB()
-
-		for _, engine := range []string{"", "mysql", "Postgres", "postgresql"} {
-			service, err := NewService(createTestSettings(), Options{Logger: &MockLogger{}, DB: db.DB, Engine: engine})
-
-			require.Error(t, err, "engine %q", engine)
-			require.Nil(t, service)
-			require.Contains(t, err.Error(), "engine must be postgres, sqlite or sqlitememory")
-		}
-
-		for _, engine := range []string{"postgres", "sqlite", "sqlitememory"} {
-			service, err := NewService(createTestSettings(), Options{Logger: &MockLogger{}, DB: db.DB, Engine: engine})
-
-			require.NoError(t, err, "engine %q", engine)
-			require.Equal(t, engine, service.engine)
-		}
-	})
-
 	t.Run("DefaultValues", func(t *testing.T) {
 		logger := &MockLogger{}
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -133,7 +107,6 @@ func TestService_Start(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -162,7 +135,6 @@ func TestService_PruneValidation(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -181,7 +153,6 @@ func TestService_PruneValidation(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -201,7 +172,6 @@ func TestService_PruneValidation(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -222,7 +192,6 @@ func TestService_Prune(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -241,7 +210,6 @@ func TestService_Prune(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -268,7 +236,6 @@ func TestService_PruneExecution(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -304,7 +271,6 @@ func TestService_PruneExecution(t *testing.T) {
 		}
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -330,7 +296,6 @@ func TestService_PruneExecution(t *testing.T) {
 		}
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -351,7 +316,6 @@ func TestDeleteTombstoned(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -376,7 +340,6 @@ func TestDeleteTombstoned(t *testing.T) {
 		}
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -397,7 +360,6 @@ func TestDeleteTombstoned(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -422,7 +384,6 @@ func TestService_IntegrationTests(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -450,7 +411,6 @@ func TestService_IntegrationTests(t *testing.T) {
 		db := NewMockDB()
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -474,7 +434,6 @@ func TestService_EdgeCases(t *testing.T) {
 		}
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -502,7 +461,6 @@ func TestService_EdgeCases(t *testing.T) {
 		}
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -530,7 +488,6 @@ func TestService_EdgeCases(t *testing.T) {
 		}
 
 		service, err := NewService(createTestSettings(), Options{
-			Engine: "sqlite",
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -567,7 +524,6 @@ func newSqlmockService(t *testing.T, defensive bool, reap func(ctx context.Conte
 	tSettings.Pruner.UTXODefensiveEnabled = defensive
 
 	service, err := NewService(tSettings, Options{
-		Engine:          "sqlite",
 		Logger:          logger,
 		DB:              &usql.DB{DB: sqlDB},
 		ReapConflicting: reap,
@@ -695,100 +651,86 @@ func TestReapExpiredConflicting(t *testing.T) {
 	})
 }
 
-// The tests below inject faults at the driver boundary, which a real store cannot do on
-// demand: a COMMIT that fails, a row count the driver cannot read, a BEGIN that fails with
-// a chosen code. Each pins the decision deleteTombstoned makes on that failure. The
-// statements themselves run against real SQLite and Postgres in stores/utxo/sql.
-
-func newFaultService(t *testing.T) (*Service, sqlmock.Sqlmock, *atomic.Int32) {
-	t.Helper()
-
-	sqlDB, mock, err := sqlmock.New()
-	require.NoError(t, err)
-
-	t.Cleanup(func() { _ = sqlDB.Close() })
-
-	var retries atomic.Int32
-
-	logger := &MockLogger{
-		WarnfFunc: func(format string, _ ...interface{}) {
-			if strings.Contains(format, "retrying") {
-				retries.Add(1)
-			}
-		},
+func TestDeleteTombstonedStatementErrors(t *testing.T) {
+	reapNothing := func(context.Context, chainhash.Hash, uint32, uint32) (bool, error) {
+		return false, nil
 	}
 
-	tSettings := createTestSettings()
-	tSettings.Pruner.UTXODefensiveEnabled = false
+	t.Run("DefensiveDeleteErrorIsReturned", func(t *testing.T) {
+		service, mock, _ := newSqlmockService(t, true, reapNothing)
 
-	service, err := NewService(tSettings, Options{Engine: "sqlite", Logger: logger, DB: &usql.DB{DB: sqlDB}})
-	require.NoError(t, err)
+		mock.ExpectExec("UPDATE transactions").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("DELETE FROM transactions").WillReturnError(sql.ErrConnDone)
 
-	// Every prune starts by clearing the stamps of unmined records.
-	mock.ExpectExec("UPDATE transactions").WillReturnResult(sqlmock.NewResult(0, 0))
+		deleted, err := service.deleteTombstoned(context.Background(), 100)
+		require.ErrorIs(t, err, sql.ErrConnDone)
+		require.Equal(t, int64(0), deleted)
+	})
 
-	return service, mock, &retries
-}
+	t.Run("DefensiveRowsAffectedErrorIsReturned", func(t *testing.T) {
+		service, mock, _ := newSqlmockService(t, true, reapNothing)
 
-// expectPruneStatements expects the statements of one pruning transaction up to the
-// DELETE, which the caller answers.
-func expectPruneStatements(mock sqlmock.Sqlmock) {
-	mock.ExpectBegin()
-	// The first statement of a pruning transaction on SQLite makes it a writer.
-	mock.ExpectExec("DELETE FROM deleted_children WHERE 1 = 0").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("DROP TABLE IF EXISTS utxo_prune_candidates").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("CREATE TEMP TABLE utxo_prune_candidates").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("INSERT INTO utxo_prune_candidates").WillReturnResult(sqlmock.NewResult(0, 2))
-	mock.ExpectExec("UPDATE utxo_prune_candidates").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("INSERT INTO deleted_children").WillReturnResult(sqlmock.NewResult(0, 1))
-}
+		mock.ExpectExec("UPDATE transactions").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("DELETE FROM transactions").WillReturnResult(sqlmock.NewErrorResult(sql.ErrConnDone))
 
-func TestDeleteTombstonedDoesNotRetryAnOrdinaryError(t *testing.T) {
-	service, mock, retries := newFaultService(t)
+		deleted, err := service.deleteTombstoned(context.Background(), 100)
+		require.ErrorIs(t, err, sql.ErrConnDone)
+		require.Equal(t, int64(0), deleted)
+	})
 
-	mock.ExpectBegin().WillReturnError(errors.NewProcessingError("connection refused"))
+	t.Run("ReapListErrorKeepsTheDeleteCount", func(t *testing.T) {
+		service, mock, _ := newSqlmockService(t, true, reapNothing)
 
-	_, _, err := service.deleteTombstoned(context.Background(), 1300)
-	require.Error(t, err)
-	require.Equal(t, int32(0), retries.Load(), "an error that is not a lock or serialization conflict must not be retried")
-	require.NoError(t, mock.ExpectationsWereMet())
-}
+		mock.ExpectExec("UPDATE transactions").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("DELETE FROM transactions").WillReturnResult(sqlmock.NewResult(0, 3))
+		mock.ExpectQuery("SELECT t.hash").WillReturnError(sql.ErrConnDone)
 
-func TestDeleteTombstonedRetriesAConflictThenGivesUp(t *testing.T) {
-	service, mock, retries := newFaultService(t)
+		deleted, err := service.deleteTombstoned(context.Background(), 100)
+		require.ErrorIs(t, err, sql.ErrConnDone)
+		require.Equal(t, int64(3), deleted)
+	})
 
-	for i := 0; i < maxPruneAttempts; i++ {
-		mock.ExpectBegin().WillReturnError(&pgconn.PgError{Code: "40P01"})
-	}
+	t.Run("DefensiveCountIncludesReapedRecords", func(t *testing.T) {
+		hash := chainhash.Hash{7}
 
-	_, _, err := service.deleteTombstoned(context.Background(), 1300)
-	require.Error(t, err)
-	require.Equal(t, int32(maxPruneAttempts-1), retries.Load(), "every attempt but the last logs a retry")
-	require.NoError(t, mock.ExpectationsWereMet(), "all attempts must have run")
-}
+		service, mock, _ := newSqlmockService(t, true, func(context.Context, chainhash.Hash, uint32, uint32) (bool, error) {
+			return true, nil
+		})
 
-func TestDeleteTombstonedReportsACommitFailure(t *testing.T) {
-	service, mock, _ := newFaultService(t)
+		mock.ExpectExec("UPDATE transactions").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("DELETE FROM transactions").WillReturnResult(sqlmock.NewResult(0, 3))
+		mock.ExpectQuery("SELECT t.hash").WillReturnRows(sqlmock.NewRows([]string{"hash"}).AddRow(hash[:]))
 
-	expectPruneStatements(mock)
-	mock.ExpectExec("DELETE FROM transactions").WillReturnResult(sqlmock.NewResult(0, 2))
-	mock.ExpectCommit().WillReturnError(errors.NewProcessingError("commit failed"))
-	mock.ExpectRollback()
+		deleted, err := service.deleteTombstoned(context.Background(), 100)
+		require.NoError(t, err)
+		require.Equal(t, int64(4), deleted)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
 
-	deleted, _, err := service.deleteTombstoned(context.Background(), 1300)
-	require.Error(t, err, "a prune whose commit failed must not report success")
-	require.Contains(t, err.Error(), "commit")
-	require.Zero(t, deleted)
-}
+	t.Run("NonDefensiveDeleteDoesNotReap", func(t *testing.T) {
+		service, mock, _ := newSqlmockService(t, false, func(context.Context, chainhash.Hash, uint32, uint32) (bool, error) {
+			require.FailNow(t, "default mode must not reap")
 
-func TestDeleteTombstonedReportsAnUnreadableRowCount(t *testing.T) {
-	service, mock, _ := newFaultService(t)
+			return false, nil
+		})
 
-	expectPruneStatements(mock)
-	mock.ExpectExec("DELETE FROM transactions").WillReturnResult(sqlmock.NewErrorResult(errors.NewProcessingError("no row count")))
-	mock.ExpectRollback()
+		mock.ExpectExec("UPDATE transactions").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("DELETE FROM transactions").WillReturnResult(sqlmock.NewResult(0, 2))
 
-	_, _, err := service.deleteTombstoned(context.Background(), 1300)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "rows affected", "the failure must be reported as the row count, before any commit is tried")
+		deleted, err := service.deleteTombstoned(context.Background(), 100)
+		require.NoError(t, err)
+		require.Equal(t, int64(2), deleted)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("NonDefensiveRowsAffectedErrorIsReturned", func(t *testing.T) {
+		service, mock, _ := newSqlmockService(t, false, reapNothing)
+
+		mock.ExpectExec("UPDATE transactions").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("DELETE FROM transactions").WillReturnResult(sqlmock.NewErrorResult(sql.ErrConnDone))
+
+		deleted, err := service.deleteTombstoned(context.Background(), 100)
+		require.ErrorIs(t, err, sql.ErrConnDone)
+		require.Equal(t, int64(0), deleted)
+	})
 }

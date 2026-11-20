@@ -289,7 +289,6 @@ func TestPrunerKeepsAConflictingLoserPromotedAfterItWasListedForReaping(t *testi
 	}
 
 	prunerSvc, err := sqlpruner.NewService(store.settings, sqlpruner.Options{
-		Engine:          store.engine,
 		Logger:          store.logger,
 		DB:              store.db,
 		Ctx:             ctx,

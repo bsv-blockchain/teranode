@@ -2648,10 +2648,6 @@ func (s *Store) probeAndRollbackPartialSpends(tx *bt.Tx, rollback []*utxo.Spend)
 		return
 	}
 
-	if spendAfterRollbackProbe != nil {
-		spendAfterRollbackProbe()
-	}
-
 	prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeFired).Inc()
 
 	s.unspendRollback(rbCtx, tx, rollback)
@@ -4164,11 +4160,6 @@ var spendBeforeRecheck func()
 // probeAndRollbackPartialSpends, before the existence probe. It is nil outside
 // tests, which use it to commit a concurrent change after the spend's reads.
 var spendBeforeRollbackProbe func()
-
-// spendAfterRollbackProbe runs when the rollback's existence probe has found no spender, before the
-// rollback runs. It is nil outside tests, which use it to commit a concurrent change
-// between the probe and the rollback.
-var spendAfterRollbackProbe func()
 
 // setDAHAfterLock runs in setDAH right after the Postgres row lock is taken and before
 // the eligibility read. It is nil outside tests, which use it to observe lock order and
@@ -6803,12 +6794,6 @@ func createPostgresSchemaImpl(db DBExecutor, logger ulogger.Logger) error {
 		return errors.NewStorageError("could not create conflict_intents table - [%+v]", err)
 	}
 
-	// Markers outlive a pruned child, but disappear with the surviving parent.
-	if err := createDeletedChildrenTable(db, logger); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create deleted_children table - [%+v]", err)
-	}
-
 	if _, err := db.Exec(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS conflict_owner BYTEA`); err != nil {
 		return err
 	}
@@ -6821,68 +6806,6 @@ func createPostgresSchemaImpl(db DBExecutor, logger ulogger.Logger) error {
 	// conflicting_index.go).
 
 	return nil
-}
-
-// deletedChildrenLockTimeout bounds each wait for the lock that creating the
-// deleted_children table takes on transactions, and deletedChildrenRetryDelay
-// is the pause before the next attempt. Variables so tests can shorten them.
-var (
-	deletedChildrenLockTimeout = 2 * time.Second
-	deletedChildrenRetryDelay  = time.Second
-)
-
-// createDeletedChildrenDDL creates the replay-marker table under a local
-// lock_timeout. Its foreign key takes SHARE ROW EXCLUSIVE on transactions,
-// which conflicts with the ROW EXCLUSIVE every write there holds, and Postgres
-// queues every later writer behind a waiting DDL. Unbounded, the first start of
-// this version would stall every spend and create for as long as a running
-// write, an older pruner's mass DELETE for one, takes to commit. set_config
-// with is_local applies only to the DO statement's own transaction.
-const createDeletedChildrenDDL = `DO $$
-BEGIN
-  PERFORM set_config('lock_timeout', '%dms', true);
-  CREATE TABLE IF NOT EXISTS deleted_children (
-    parent_id BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
-    child_hash BYTEA NOT NULL,
-    PRIMARY KEY (parent_id, child_hash)
-  );
-END $$;`
-
-// createDeletedChildrenTable runs createDeletedChildrenDDL until it succeeds,
-// retrying only when the lock wait timed out (SQLSTATE 55P03). Each wait is
-// bounded, so writers queued behind it run between attempts, and the retries
-// are not, so a busy database delays startup as before but never fails it on
-// this step. Once the table exists, CREATE TABLE IF NOT EXISTS takes no lock
-// on transactions, so this costs nothing after the first start. The caller's
-// context bounds the loop: a cancelled Exec fails with a different error.
-func createDeletedChildrenTable(db DBExecutor, logger ulogger.Logger) error {
-	ddl := fmt.Sprintf(createDeletedChildrenDDL, deletedChildrenLockTimeout.Milliseconds())
-
-	for attempt := 1; ; attempt++ {
-		_, err := db.Exec(ddl)
-		if err == nil || !isPgLockNotAvailable(err) {
-			return err
-		}
-
-		if logger != nil {
-			logger.Warnf("[createPostgresSchema] creating deleted_children waited %s for a lock on transactions held by a running write (attempt %d), retrying in %s", deletedChildrenLockTimeout, attempt, deletedChildrenRetryDelay)
-		}
-
-		time.Sleep(deletedChildrenRetryDelay)
-	}
-}
-
-// isPgLockNotAvailable reports whether err is Postgres's lock_not_available
-// (55P03), what a statement that hit its lock_timeout fails with.
-func isPgLockNotAvailable(err error) bool {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "55P03" {
-		return true
-	}
-
-	var pqErr *pq.Error
-
-	return errors.As(err, &pqErr) && pqErr.Code == "55P03"
 }
 
 func createSqliteSchema(db *usql.DB) error {
@@ -7226,16 +7149,6 @@ func createSqliteSchema(db *usql.DB) error {
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create conflict_intents table - [%+v]", err)
-	}
-
-	// Markers outlive a pruned child, but disappear with the surviving parent.
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS deleted_children (
-  parent_id BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
-  child_hash BLOB NOT NULL,
-  PRIMARY KEY (parent_id, child_hash)
- );`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create deleted_children table - [%+v]", err)
 	}
 
 	var ownerColumns int

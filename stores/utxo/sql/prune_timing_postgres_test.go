@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -20,10 +21,8 @@ import (
 // of transactions the prune is expected to delete.
 //
 //   - children: each spends one output of two different surviving parents (a parent
-//     keeps an unspent output), so every child has two inputs whose parent record and
-//     output the hold-back check has to read and each needs a replay marker.
-//   - pairs: a parent whose only output is spent by a child, both of them candidates, so
-//     the marker the child would leave on the parent dies with the parent.
+//     keeps an unspent output).
+//   - pairs: a parent whose only output is spent by a child, both of them candidates.
 //
 // Every candidate is mined and stamped below the prune height.
 func seedPruneTimingStore(ctx context.Context, t *testing.T, store *Store, run, children, pairs int) int {
@@ -168,10 +167,10 @@ func seedPruneTimingStore(ctx context.Context, t *testing.T, store *Store, run, 
 }
 
 // TestPruneTiming_Postgres times one prune of a block's worth of candidates: children
-// that leave replay markers on surviving parents, and parent and child pairs that are
-// both deleted. It only measures. It runs when TERANODE_SQL_TIMING is set, with
-// TERANODE_PRUNE_TIMING_CHILDREN and TERANODE_PRUNE_TIMING_PAIRS to size it, and logs
-// each run and the best of three, every run over fresh rows.
+// of surviving parents, and parent and child pairs that are both deleted. It only
+// measures. It runs when TERANODE_SQL_TIMING is set, with TERANODE_PRUNE_TIMING_CHILDREN,
+// TERANODE_PRUNE_TIMING_PAIRS and TERANODE_PRUNE_TIMING_RUNS (default 3) to size it, and
+// logs each run, the median and the best, every run over fresh rows.
 func TestPruneTiming_Postgres(t *testing.T) {
 	if os.Getenv("TERANODE_SQL_TIMING") == "" {
 		t.Skip("set TERANODE_SQL_TIMING=1 to run the prune timing")
@@ -189,12 +188,20 @@ func TestPruneTiming_Postgres(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	runs := 3
+
+	if v := os.Getenv("TERANODE_PRUNE_TIMING_RUNS"); v != "" {
+		_, err := fmt.Sscan(v, &runs)
+		require.NoError(t, err)
+	}
+
 	store, ctx := setupPostgresStore(t)
 	store.settings.Pruner.UTXODefensiveEnabled = false
 
 	best := time.Duration(1<<63 - 1)
+	timings := make([]time.Duration, 0, runs)
 
-	for run := 0; run < 3; run++ {
+	for run := 0; run < runs; run++ {
 		want := seedPruneTimingStore(ctx, t, store, run, children, pairs)
 
 		ResetPrunerServiceForTests()
@@ -218,10 +225,14 @@ func TestPruneTiming_Postgres(t *testing.T) {
 
 		t.Logf("run %d: pruned %d candidates (%d children, %d pairs) in %s", run, deleted, children, pairs, elapsed)
 
+		timings = append(timings, elapsed)
+
 		if elapsed < best {
 			best = elapsed
 		}
 	}
 
-	t.Logf("prune of %d children and %d pairs, best of 3: %s", children, pairs, best)
+	sort.Slice(timings, func(i, j int) bool { return timings[i] < timings[j] })
+
+	t.Logf("prune of %d children and %d pairs over %d runs: median %s, best %s", children, pairs, runs, timings[len(timings)/2], best)
 }

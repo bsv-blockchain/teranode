@@ -5,12 +5,11 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/stretchr/testify/require"
-
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/stretchr/testify/require"
 )
 
 // forEachSpendPath runs body on each spend implementation (SQLite per-row,

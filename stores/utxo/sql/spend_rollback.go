@@ -150,7 +150,7 @@ func hasTransientCreatingFailure(spends []*utxo.Spend) bool {
 
 // hasUnwinnableFailure reports whether any spend failed with an error class
 // meaning this txid can never win: ErrSpent, ErrTxConflicting, ErrFrozen,
-// ErrUtxoHashMismatch, or a pruned-replay marker.
+// ErrUtxoHashMismatch, or a pruned-replay refusal.
 //
 // Mirrors the aerospike store's sawUnwinnable flag. It exists to override
 // hasTransientLockFailure's suppression of the partial-spend rollback: a

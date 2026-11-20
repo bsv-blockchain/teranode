@@ -8,9 +8,8 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
-	"github.com/stretchr/testify/require"
-
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/stretchr/testify/require"
 )
 
 // heightBackend is one store configuration a spend-height test runs on.
