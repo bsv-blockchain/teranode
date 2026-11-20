@@ -85,6 +85,9 @@ func TestTryQuickValidation(t *testing.T) {
 			blockUpTo:               block,
 		}
 
+		// The local-fault branch asks whether another route stored the block before cleaning up.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
+
 		// Create a buffered channel for async writes
 		writeJobsChan := make(chan *SubtreeWriteJob, 10)
 
@@ -151,6 +154,8 @@ func TestTryQuickValidation(t *testing.T) {
 			highestCheckpointHeight: 200,
 			blockUpTo:               block,
 		}
+
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 
 		// Create a buffered channel for async writes
 		writeJobsChan := make(chan *SubtreeWriteJob, 10)
