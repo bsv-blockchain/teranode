@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -123,6 +124,7 @@ func TestUnminedIterator_RawScanMatchesStore(t *testing.T) {
 // A record whose external file has gone is left out of the block assembly scan,
 // against a real Aerospike and file blob store: the scan must not fail, and
 // every other unmined transaction, external ones included, still comes back.
+// The plain scan, which the rewind tool uses, still fails on the same record.
 func TestUnminedIterator_SkipsExternalRecordWithMissingFile(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -148,7 +150,21 @@ func TestUnminedIterator_SkipsExternalRecordWithMissingFile(t *testing.T) {
 
 	require.NoError(t, store.GetExternalStore().Del(ctx, broken.TxIDChainHash()[:], fileformat.FileTypeTx))
 
-	it, err := store.GetUnminedTxIterator()
+	plain, err := store.GetUnminedTxIterator()
+	require.NoError(t, err)
+
+	var plainErr error
+	for plainErr == nil {
+		var batch []*utxo.UnminedTransaction
+		if batch, plainErr = plain.Next(ctx); plainErr == nil && len(batch) == 0 {
+			break
+		}
+	}
+
+	require.ErrorIs(t, plainErr, errors.ErrNotFound)
+	require.NoError(t, plain.Close())
+
+	it, err := store.GetUnminedTxIteratorSkippingMissingExternal()
 	require.NoError(t, err)
 
 	got := map[chainhash.Hash]*utxo.UnminedTransaction{}

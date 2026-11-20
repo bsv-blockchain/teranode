@@ -4266,6 +4266,21 @@ func (b *BlockAssembler) drainUnminedDropHashes(where string, isReload bool) err
 	return b.subtreeProcessor.FlushDiskTxMapForLoad(where, isReload)
 }
 
+// unminedTxIteratorForLoad opens the unmined scan block assembly loads from.
+// A store that can leave out an external record whose file is missing (the
+// Aerospike store) is asked to: the file never comes back, so failing the scan
+// would stop block assembly on every restart. Other callers keep the scan that
+// fails.
+func (b *BlockAssembler) unminedTxIteratorForLoad() (utxo.UnminedTxIterator, error) {
+	if skipper, ok := utxo.As[interface {
+		GetUnminedTxIteratorSkippingMissingExternal() (utxo.UnminedTxIterator, error)
+	}](b.utxoStore); ok {
+		return skipper.GetUnminedTxIteratorSkippingMissingExternal()
+	}
+
+	return b.utxoStore.GetUnminedTxIterator()
+}
+
 func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload bool, validateInputs ...bool) (err error) {
 	shouldValidateInputs := len(validateInputs) > 0 && validateInputs[0]
 
@@ -4346,7 +4361,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 	b.logger.Infof("[loadUnminedTransactions] requesting unmined tx iterator from UTXO store")
 	start := time.Now()
-	it, err := b.utxoStore.GetUnminedTxIterator()
+	it, err := b.unminedTxIteratorForLoad()
 	duration := time.Since(start).Seconds()
 	if err != nil {
 		prometheusBlockAssemblerGetUnminedTxIteratorTime.WithLabelValues("false", "error").Observe(duration)
@@ -5313,7 +5328,7 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 
 	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] requesting unmined tx iterator from UTXO store")
 	start := time.Now()
-	it, err := b.utxoStore.GetUnminedTxIterator()
+	it, err := b.unminedTxIteratorForLoad()
 	duration := time.Since(start).Seconds()
 	if err != nil {
 		prometheusBlockAssemblerGetUnminedTxIteratorTime.WithLabelValues("false", "error").Observe(duration)

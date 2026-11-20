@@ -282,11 +282,14 @@ func (h *rawUnminedHandler) buildTx() (*utxo.UnminedTransaction, error) {
 		h.busy.Store(false)
 
 		// The record says the transaction is in the external store, but its file
-		// is not there. No retry or restart brings it back, so failing the scan
-		// would stop block assembly loading every other unmined transaction, on
-		// every start. Leave this one out instead. Its children are left out too
-		// by the parent chain check on reload (blockassembly_onRestartValidateParentChain).
-		if errors.Is(err, errors.ErrNotFound) {
+		// is not there. For block assembly's load, leave it out rather than fail
+		// the scan (see GetUnminedTxIteratorSkippingMissingExternal). On reload its
+		// children are left out by the parent chain check, when
+		// blockassembly_onRestartValidateParentChain and
+		// blockassembly_onRestartRemoveInvalidParentChainTxs are both on (the defaults).
+		if h.it.skipMissingExternal && errors.Is(err, errors.ErrNotFound) {
+			h.it.missingExternalSkipped.Add(1)
+			prometheusUnminedMissingExternalSkipped.Inc()
 			h.it.store.logger.Errorf("[unminedTxIterator][%s] skipping unmined transaction: its record is external but the external store has no file for it: %v", r.txid.String(), err)
 
 			return nil, nil

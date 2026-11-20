@@ -31,6 +31,7 @@ import (
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	utxoStore "github.com/bsv-blockchain/teranode/stores/utxo"
 	utxofields "github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	utxologger "github.com/bsv-blockchain/teranode/stores/utxo/logger"
 	utxostoresql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -3333,4 +3334,42 @@ func TestLoadUnminedTransactionsKeepsParentLinksWithSubtreeMetaOff(t *testing.T)
 			require.Equal(t, []chainhash.Hash{parentHash}, inpoints.ParentTxHashes, "the reload must keep the tx's parent links")
 		})
 	}
+}
+
+// skippingUtxoStore is a store that offers the load scan that leaves out an
+// external record whose file is missing, as the Aerospike store does.
+type skippingUtxoStore struct {
+	*utxoStore.MockUtxostore
+	skippingCalls int
+}
+
+func (s *skippingUtxoStore) GetUnminedTxIteratorSkippingMissingExternal() (utxoStore.UnminedTxIterator, error) {
+	s.skippingCalls++
+
+	return nil, nil
+}
+
+// Block assembly's load asks a store for the scan that skips a missing external
+// file, found through a wrapper too, and falls back to the plain scan on a store
+// without one.
+func TestUnminedTxIteratorForLoad(t *testing.T) {
+	t.Run("store with the skipping scan, behind a wrapper", func(t *testing.T) {
+		store := &skippingUtxoStore{MockUtxostore: new(utxoStore.MockUtxostore)}
+		b := &BlockAssembler{utxoStore: utxologger.New(context.Background(), ulogger.TestLogger{}, store)}
+
+		_, err := b.unminedTxIteratorForLoad()
+		require.NoError(t, err)
+		require.Equal(t, 1, store.skippingCalls)
+		store.AssertNotCalled(t, "GetUnminedTxIterator")
+	})
+
+	t.Run("store without it", func(t *testing.T) {
+		store := new(utxoStore.MockUtxostore)
+		store.On("GetUnminedTxIterator").Return(&sliceUnminedIterator{}, nil).Once()
+		b := &BlockAssembler{utxoStore: store}
+
+		_, err := b.unminedTxIteratorForLoad()
+		require.NoError(t, err)
+		store.AssertExpectations(t)
+	})
 }
