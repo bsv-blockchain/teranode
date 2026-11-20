@@ -72,6 +72,8 @@ func TestKnownDefect_FutureDatedBlock_IsNotClassifiedInvalid(t *testing.T) {
 			requireNothingPersisted(ctx, t, client, block.Hash())
 			require.False(t, errors.Is(err, errors.ErrBlockInvalid),
 				"BV-HEADER-006: a block ahead of the local clock is CLOCK-DEFERRED, not a verdict on the block, got: %v", err)
+			require.False(t, errors.IsBlockCorrupt(err),
+				"BV-HEADER-006: a block ahead of the local clock is CLOCK-DEFERRED, not corrupt: corrupt re-downloads and strikes the peer, got: %v", err)
 		})
 	}
 }
