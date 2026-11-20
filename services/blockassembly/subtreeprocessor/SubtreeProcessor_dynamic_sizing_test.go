@@ -68,15 +68,17 @@ func TestSubtreeProcessor_LowVolumeNeverIncreases(t *testing.T) {
 	require.NoError(t, err)
 	stp.Start(ctx)
 
-	// Test: High utilization but low volume (< 50 nodes per subtree)
+	// Test: High utilization but low volume (average fill below the minimum, the
+	// anti-creep threshold)
 	t.Run("high utilization low volume keeps size", func(t *testing.T) {
-		stp.currentItemsPerFile.Store(8)
+		stp.currentItemsPerFile.Store(4)
 
-		// Simulate 87.5% utilization (7 nodes in size-8 subtree)
+		// Simulate 85% utilization at the minimum size (average 3.4 nodes in size-4
+		// subtrees): above 80%, but below the minimum of 4
 		// Populate the ring buffer
 		r := stp.subtreeNodeCounts
-		for i := 0; i < 5; i++ {
-			r.Value = 7
+		for _, nodes := range []int{4, 4, 3, 3, 3} {
+			r.Value = nodes
 			r = r.Next()
 		}
 
@@ -91,7 +93,7 @@ func TestSubtreeProcessor_LowVolumeNeverIncreases(t *testing.T) {
 		stp.adjustSubtreeSize()
 
 		// Size should NOT increase despite high utilization and fast creation
-		// because volume is low (7 nodes < 50 threshold)
+		// because volume is low (average 3.4 nodes < minimum of 4)
 		require.Equal(t, initialSize, stp.currentItemsPerFile.Load(),
 			"Size should not increase with low transaction volume")
 	})
