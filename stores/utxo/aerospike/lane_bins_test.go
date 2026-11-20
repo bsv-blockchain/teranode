@@ -5,6 +5,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,5 +87,33 @@ func TestSpendingLanePositionsBytes(t *testing.T) {
 	} {
 		_, err := decodeSpendingLanePositions(v, 3)
 		require.Error(t, err, name)
+	}
+}
+
+// A spend counts as carrying its position only on a route that records it, on a server the probe
+// passed: the expression route, one output per record, records none.
+func TestCountLaneSpendsOnlyOnARouteThatRecords(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Aerospike.EnableSpendFilterExpressions = true
+
+	for _, tc := range []struct {
+		name          string
+		utxoBatchSize int
+		probe         bool
+		carried       float64
+	}{
+		{name: "lua route, probe passed", utxoBatchSize: 128, probe: true, carried: 2},
+		{name: "lua route, probe failed", utxoBatchSize: 128, probe: false, carried: 0},
+		{name: "expression route, probe passed", utxoBatchSize: 1, probe: true, carried: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Store{settings: tSettings, utxoBatchSize: tc.utxoBatchSize}
+			s.laneSlotWrites.Store(tc.probe)
+
+			yes, no := laneSpendCount(t, "yes"), laneSpendCount(t, "no")
+			s.countLaneSpends(2, true)
+			require.InDelta(t, yes+tc.carried, laneSpendCount(t, "yes"), 0)
+			require.InDelta(t, no+2-tc.carried, laneSpendCount(t, "no"), 0)
+		})
 	}
 }

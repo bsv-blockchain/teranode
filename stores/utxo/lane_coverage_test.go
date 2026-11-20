@@ -30,4 +30,13 @@ func TestCountLaneRecord(t *testing.T) {
 	CountLaneRecord(store, true, true, true)
 	require.Equal(t, ownYes+2, count(LaneCoverageOwn, "yes"))
 	require.Equal(t, parentsYes+1, count(LaneCoverageParents, "yes"))
+
+	// Each kind takes its own carried label.
+	CountLaneRecord(store, true, true, false)
+	require.Equal(t, ownYes+3, count(LaneCoverageOwn, "yes"), "own carried, parents not")
+	require.Equal(t, parentsNo+2, count(LaneCoverageParents, "no"))
+
+	CountLaneRecord(store, false, true, true)
+	require.Equal(t, ownNo+2, count(LaneCoverageOwn, "no"), "parents carried, own not")
+	require.Equal(t, parentsYes+2, count(LaneCoverageParents, "yes"))
 }

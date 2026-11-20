@@ -726,8 +726,8 @@ func CreateSchema(ctx context.Context, pool *pgxpool.Pool) error {
 // a NULL in a row that has no other NULL adds a null bitmap, which is 8 bytes of heap and WAL per
 // row with nothing to show for them. A database that has never had lane positions on keeps the
 // rows main writes, until an operator installs the lane schema with PrepareLaneSchema. The other
-// five lane columns, which nothing in this build writes, arrive only that way, so turning lane
-// positions on does not add columns that would stay empty.
+// five lane columns arrive only that way, and this build writes them only once PrepareLaneSchema
+// has installed them, so turning lane positions on adds no columns.
 //
 // A process with the flag off still looks, because the columns outlive the flag: on a database
 // where they exist, the statements that copy a record's payload keep carrying the position. A process

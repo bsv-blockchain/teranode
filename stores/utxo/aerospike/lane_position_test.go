@@ -481,3 +481,44 @@ func TestSpendAndCreateRecordsTheCreatesPositionInTheParentsSlot(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, int(lane.ToSigned(childPosition)), v)
 }
+
+// A below-checkpoint list creates a child of a parent in the list first and spends its inputs in a
+// second wave; that spend records the position the child was created with in the parent's slot.
+func TestBelowCheckpointListRecordsTheChildsPositionInTheParentsSlot(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, _, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	grandparent := laneParent(t, 7, 1)
+	_, _, err := store.SpendAndCreate(ctx, grandparent, 100, utxo.WithCreateOnly())
+	require.NoError(t, err)
+
+	store.SetLanePositionSource(tests.NewScriptedLanePositions(lane.Pack(202, 1), lane.Pack(202, 2)))
+	t.Cleanup(func() { store.SetLanePositionSource(nil) })
+
+	parent := laneChild(t, grandparent, 0)
+	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
+
+	child := laneChild(t, parent, 1)
+
+	results, err := store.SpendAndCreateMulti(ctx, []*bt.Tx{parent, child}, 101, utxo.WithBelowCheckpoint())
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+
+	for _, r := range results {
+		require.NoError(t, r.Err)
+	}
+
+	own, ok := recordBin(t, client, store, child, 0, fields.LanePosition)
+	require.True(t, ok)
+
+	ownPosition, ok := own.(int)
+	require.True(t, ok)
+
+	v, ok := recordBin(t, client, store, parent, 0, fields.SpendingLanePositions)
+	require.True(t, ok, "the second wave's spend wrote the slot")
+	require.Equal(t, []uint64{0, lane.FromSigned(int64(ownPosition))}, slotLanes(t, v))
+}

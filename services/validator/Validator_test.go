@@ -3122,7 +3122,8 @@ func laneEntry(t *testing.T, value []byte) (byte, []byte) {
 
 // Through Validate at shadow, the parents' positions the parent read returned go to the create and
 // into the published txmeta entry, which carries the ADDLane action and the child's and parent's
-// positions, on the direct publish and through the batcher.
+// positions, on the direct publish and through the batcher. A record without its own position goes
+// out as a plain ADD entry holding MetaBytes, on both paths.
 func TestValidateCarriesLanePositionsToTheCreateAndTheTxMeta(t *testing.T) {
 	tracing.SetupMockTracer()
 	initPrometheusMetrics()
@@ -3131,7 +3132,7 @@ func TestValidateCarriesLanePositionsToTheCreateAndTheTxMeta(t *testing.T) {
 	base := parentOutputsStore(t)
 
 	s0 := bscript.NewFromBytes([]byte{0x76, 0xa9, 0x00})
-	parent := storedParent(t, base, 0x71, 150, s0, s0)
+	parent := storedParent(t, base, 0x71, 150, s0, s0, s0, s0)
 	parentPosition := lane.Pack(14, 1)
 
 	store := &laneCaptureStore{Store: base, parentPositions: map[chainhash.Hash]uint64{*parent.TxIDChainHash(): parentPosition}}
@@ -3158,8 +3159,19 @@ func TestValidateCarriesLanePositionsToTheCreateAndTheTxMeta(t *testing.T) {
 		return v
 	}
 
+	// checkEntry checks one published entry: ADDLane with the child's and parent's positions when
+	// the child has its own position, a plain ADD holding MetaBytes when it has none.
 	checkEntry := func(t *testing.T, action byte, content []byte, own uint64) {
 		t.Helper()
+
+		if own == lane.None {
+			require.Equal(t, txmetacache.WireActionADD, action, "an entry without positions is a plain ADD")
+
+			var back meta.Data
+			require.NoError(t, meta.NewMetaDataFromBytes(content, &back), "and holds MetaBytes")
+
+			return
+		}
 
 		require.Equal(t, txmetacache.WireActionADDLane, action)
 
@@ -3170,50 +3182,61 @@ func TestValidateCarriesLanePositionsToTheCreateAndTheTxMeta(t *testing.T) {
 		require.Equal(t, []uint64{parentPosition}, gotParents)
 	}
 
-	t.Run("direct publish", func(t *testing.T) {
-		producer := kafka.NewKafkaAsyncProducerMock()
+	for _, tc := range []struct {
+		name string
+		vout uint32
+		own  uint64
+	}{
+		{name: "lane entry", vout: 0, own: lane.Pack(14, 2)},
+		{name: "plain entry", vout: 1, own: lane.None},
+	} {
+		t.Run("direct publish: "+tc.name, func(t *testing.T) {
+			producer := kafka.NewKafkaAsyncProducerMock()
 
-		v := newValidator(t)
-		v.txmetaKafkaProducerClient = producer
+			v := newValidator(t)
+			v.txmetaKafkaProducerClient = producer
 
-		own := lane.Pack(14, 2)
-		validate(t, v, 0, own)
+			validate(t, v, tc.vout, tc.own)
 
-		require.Len(t, producer.PublishChannel(), 1)
-		msg := <-producer.PublishChannel()
+			require.Len(t, producer.PublishChannel(), 1)
+			msg := <-producer.PublishChannel()
 
-		action, content := laneEntry(t, msg.Value)
-		checkEntry(t, action, content, own)
-	})
+			action, content := laneEntry(t, msg.Value)
+			checkEntry(t, action, content, tc.own)
+		})
 
-	t.Run("batcher", func(t *testing.T) {
-		var (
-			mu    sync.Mutex
-			items []*txmetaBatchItem
-		)
+		t.Run("batcher: "+tc.name, func(t *testing.T) {
+			var (
+				mu    sync.Mutex
+				items []*txmetaBatchItem
+			)
 
-		v := newValidator(t)
-		v.txmetaKafkaProducerClient = kafka.NewKafkaAsyncProducerMock()
-		v.txmetaKafkaBatcher = batcher.New[txmetaBatchItem](1, 10*time.Millisecond, func(batch []*txmetaBatchItem) {
-			mu.Lock()
-			items = append(items, batch...)
-			mu.Unlock()
-		}, true)
+			v := newValidator(t)
+			v.txmetaKafkaProducerClient = kafka.NewKafkaAsyncProducerMock()
+			v.txmetaKafkaBatcher = batcher.New[txmetaBatchItem](1, 10*time.Millisecond, func(batch []*txmetaBatchItem) {
+				mu.Lock()
+				items = append(items, batch...)
+				mu.Unlock()
+			}, true)
 
-		own := lane.Pack(14, 3)
-		validate(t, v, 1, own)
+			validate(t, v, tc.vout+2, tc.own)
 
-		require.Eventually(t, func() bool {
+			require.Eventually(t, func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+
+				return len(items) == 1
+			}, 2*time.Second, 10*time.Millisecond)
+
 			mu.Lock()
 			defer mu.Unlock()
 
-			return len(items) == 1
-		}, 2*time.Second, 10*time.Millisecond)
+			action := txmetacache.WireActionADD
+			if items[0].lane {
+				action = txmetacache.WireActionADDLane
+			}
 
-		mu.Lock()
-		defer mu.Unlock()
-
-		require.True(t, items[0].lane, "the batched item is marked as the lane encoding")
-		checkEntry(t, txmetacache.WireActionADDLane, items[0].metaBytes, own)
-	})
+			checkEntry(t, action, items[0].metaBytes, tc.own)
+		})
+	}
 }

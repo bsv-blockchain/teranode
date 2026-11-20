@@ -2515,8 +2515,8 @@ func columnType(t *testing.T, s *Store, ctx context.Context, table, column strin
 }
 
 // Opening the store with lane positions on adds only the record's own lane_position, on the three
-// identity tables; the other five lane columns, which nothing in this build writes, wait for
-// PrepareLaneSchema, so rows do not carry a null bitmap for columns that stay empty.
+// identity tables; the other five lane columns wait for PrepareLaneSchema, and this build writes
+// them only once it has installed them, so turning lane positions on adds no columns.
 func TestLanePositionsOnAddsOnlyTheOwnPositionColumns(t *testing.T) {
 	s, ctx := newTestStore(t)
 	on := reopenWithFlag(t, s, true)

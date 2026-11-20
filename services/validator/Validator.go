@@ -2512,12 +2512,8 @@ func laneTxMetaMiss(data *meta.Data, parentLanes []uint64) string {
 		return txmetacache.LaneMissOwn
 	}
 
-	parents := len(data.TxInpoints.ParentTxHashes)
-	if parents == 0 {
-		return ""
-	}
-
-	if len(parentLanes) != parents {
+	// A record with no parents, such as a coinbase, needs none, and parentLanePositions gives none.
+	if len(parentLanes) != len(data.TxInpoints.ParentTxHashes) {
 		return txmetacache.LaneMissParentsNotRead
 	}
 

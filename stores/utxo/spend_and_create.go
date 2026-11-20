@@ -186,6 +186,15 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 
 			spender = position
 		}
+	} else if options.LanePosition != lane.None {
+		// A spend-only call creates nothing, so it takes, burns and returns no position. A caller
+		// that has already written the record, as a below-checkpoint list's second wave has, names
+		// that record's position so its spends record it in each parent's slot.
+		if err := lane.CheckPosition(options.LanePosition); err != nil {
+			return nil, nil, errors.NewInvalidArgumentError("[SequentialSpendAndCreate] spender lane position", err)
+		}
+
+		spender = options.LanePosition
 	}
 
 	var spends []*Spend

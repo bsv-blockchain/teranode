@@ -83,6 +83,23 @@ func TestLaneSlotProbeAnswersFalseWithoutProof(t *testing.T) {
 
 		require.False(t, s.probeLaneSlotWrites(ctx), "a failed probe spend proves nothing")
 	})
+
+	t.Run("a probe spend whose response is an error", func(t *testing.T) {
+		// The spend reaches the server and records the position, but the script's answer is an
+		// error, so the probe must not trust what it would read back.
+		s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if err := s.client.BatchOperate(policy, records); err != nil {
+				return err
+			}
+
+			records[0].BatchRec().Record.Bins[LuaSuccess.String()] = map[interface{}]interface{}{"status": string(LuaStatusError)}
+
+			return nil
+		}
+		t.Cleanup(func() { s.batchOperateFn = nil })
+
+		require.False(t, s.probeLaneSlotWrites(ctx), "a refused probe spend proves nothing")
+	})
 }
 
 // laneSpendCount reads teranode_lane_spend_positions_total{store="aerospike", carried=carried}.
