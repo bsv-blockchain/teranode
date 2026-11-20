@@ -23,8 +23,9 @@ import (
 // median time past) is accepted by the quick route.
 
 // quickValidateUnderCheckpointOverride sets the operator's catch-up checkpoint override to the
-// candidate itself, so the candidate is a block the override puts on the quick route, and runs it
-// through the quick route.
+// candidate itself and runs the candidate through the quick route. The override settings only
+// record the scenario: quickValidateBlock never reads them (catch-up does, in catchup.go), so this
+// test does not prove that the override routes such a block to the quick route.
 func (chain *coinbaseFinalityChain) quickValidateUnderCheckpointOverride(block *model.Block) error {
 	chain.t.Helper()
 
@@ -71,8 +72,9 @@ func (chain *coinbaseFinalityChain) requireQuickRouteAcceptedAsNewTip(block *mod
 }
 
 // TestKnownDefect_QuickValidationAboveCheckpointOverride_RejectsNonFinalCoinbaseTimeLock shows the
-// quick route accepting a coinbase whose time lock has not passed, on a block that only the
-// operator's checkpoint override put on that route.
+// quick route accepting a coinbase whose time lock has not passed, on a block above every hardcoded
+// checkpoint, which only the operator's checkpoint override would send there. The test calls the
+// quick route directly; it does not exercise catch-up's routing.
 //
 // Spec: BV-QUICK-031, BV-BODY-019 and BV-BODY-015. Tracked as GAP-BV-062.
 //
