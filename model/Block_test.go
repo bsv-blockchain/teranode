@@ -609,7 +609,7 @@ func TestBlock_CheckHeaderContextual(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "two hours in the future")
 		// The class is GAP-BV-050: BV-HEADER-006 makes this a clock-dependent outcome, not an
-		// invalid verdict. TestKnownDefect_FutureDatedBlock_IsNotClassifiedInvalid (bvgaps)
+		// invalid verdict. TestKnownDefect_FutureDatedHeader_IsNotClassifiedInvalid (bvgaps)
 		// asserts it.
 	})
 
