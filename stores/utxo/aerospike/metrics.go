@@ -99,6 +99,9 @@ var (
 	// longest-chain DAH updates whose master could not be restored after a failed page write
 	prometheusTxMetaAerospikeLongestChainRestoreFailed prometheus.Counter
 
+	// unmined transactions the block assembly scan left out because their external file is missing
+	prometheusUnminedMissingExternalSkipped prometheus.Counter
+
 	// metrics for external transactions
 	prometheusTxMetaAerospikeMapGetExternal prometheus.Histogram
 	prometheusTxMetaAerospikeMapSetExternal prometheus.Histogram
@@ -117,6 +120,14 @@ func InitPrometheusMetrics() {
 // _initPrometheusMetrics performs the actual initialization of all Prometheus metrics.
 // This is called only once via sync.Once from InitPrometheusMetrics.
 func _initPrometheusMetrics() {
+	prometheusUnminedMissingExternalSkipped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "unmined_missing_external_skipped",
+			Help:      "Unmined transactions the block assembly scan left out because the external store has no file for them",
+		},
+	)
 	prometheusConflictWALFallbackScans = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",

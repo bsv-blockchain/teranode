@@ -32,6 +32,16 @@ type InconsistentTxRecord struct {
 	UnminedSince int
 }
 
+// MissingExternalSkipper is a store that offers block assembly's load scan: an
+// unmined record marked external whose file the external store does not have is
+// left out and counted, instead of failing the scan. Block assembly finds it with
+// As, and uses it only while its parent chain check drops a skipped record's
+// children. It falls back to GetUnminedTxIterator otherwise, and on a store
+// without it.
+type MissingExternalSkipper interface {
+	GetUnminedTxIteratorSkippingMissingExternal() (UnminedTxIterator, error)
+}
+
 // UnminedTxIterator provides an interface to iterate over unmined transactions efficiently.
 // It enables streaming access to large sets of unmined transactions without loading them all into memory.
 // Implementations should be safe for concurrent use and handle context cancellation appropriately.

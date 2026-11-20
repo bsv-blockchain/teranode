@@ -31,6 +31,7 @@ import (
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	utxoStore "github.com/bsv-blockchain/teranode/stores/utxo"
 	utxofields "github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	utxologger "github.com/bsv-blockchain/teranode/stores/utxo/logger"
 	utxostoresql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -3331,6 +3332,174 @@ func TestLoadUnminedTransactionsKeepsParentLinksWithSubtreeMetaOff(t *testing.T)
 			inpoints, ok := items.blockAssembler.subtreeProcessor.GetCurrentTxMap().Get(*tx.TxIDChainHash())
 			require.True(t, ok, "the reload must put the tx in block assembly")
 			require.Equal(t, []chainhash.Hash{parentHash}, inpoints.ParentTxHashes, "the reload must keep the tx's parent links")
+		})
+	}
+}
+
+// skippingUtxoStore is a store that offers the load scan that leaves out an
+// external record whose file is missing, as the Aerospike store does.
+type skippingUtxoStore struct {
+	*utxoStore.MockUtxostore
+	skippingCalls int
+	err           error
+}
+
+func (s *skippingUtxoStore) GetUnminedTxIteratorSkippingMissingExternal() (utxoStore.UnminedTxIterator, error) {
+	s.skippingCalls++
+
+	return nil, s.err
+}
+
+// Block assembly's load asks a store for the scan that skips a missing external
+// file, found through a wrapper too, but only while the load drops the children
+// of a transaction it left out. It falls back to the plain scan otherwise, and
+// on a store without the skipping scan.
+func TestUnminedTxIteratorForLoad(t *testing.T) {
+	withParentCheck := func(validate, remove bool) *settings.Settings {
+		s := test.CreateBaseTestSettings(t)
+		s.BlockAssembly.OnRestartValidateParentChain = validate
+		s.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = remove
+
+		return s
+	}
+
+	t.Run("store with the skipping scan, behind a wrapper", func(t *testing.T) {
+		store := &skippingUtxoStore{MockUtxostore: new(utxoStore.MockUtxostore)}
+		b := &BlockAssembler{settings: withParentCheck(true, true), utxoStore: utxologger.New(context.Background(), ulogger.TestLogger{}, store)}
+
+		_, err := b.unminedTxIteratorForLoad()
+		require.NoError(t, err)
+		require.Equal(t, 1, store.skippingCalls)
+		store.AssertNotCalled(t, "GetUnminedTxIterator")
+	})
+
+	t.Run("an error from the skipping scan reaches the caller", func(t *testing.T) {
+		store := &skippingUtxoStore{MockUtxostore: new(utxoStore.MockUtxostore), err: errors.NewProcessingError("scan unavailable")}
+		b := &BlockAssembler{settings: withParentCheck(true, true), utxoStore: store}
+
+		_, err := b.unminedTxIteratorForLoad()
+		require.ErrorIs(t, err, store.err)
+	})
+
+	for _, tc := range []struct {
+		name             string
+		validate, remove bool
+	}{
+		{"parent check off", false, true},
+		{"parent check keeps invalid children", true, false},
+	} {
+		t.Run(tc.name+": plain scan", func(t *testing.T) {
+			store := &skippingUtxoStore{MockUtxostore: new(utxoStore.MockUtxostore)}
+			store.On("GetUnminedTxIterator").Return(&sliceUnminedIterator{}, nil).Once()
+			b := &BlockAssembler{settings: withParentCheck(tc.validate, tc.remove), utxoStore: store}
+
+			_, err := b.unminedTxIteratorForLoad()
+			require.NoError(t, err)
+			require.Zero(t, store.skippingCalls)
+			store.AssertExpectations(t)
+		})
+	}
+
+	t.Run("store without it", func(t *testing.T) {
+		store := new(utxoStore.MockUtxostore)
+		store.On("GetUnminedTxIterator").Return(&sliceUnminedIterator{}, nil).Once()
+		b := &BlockAssembler{settings: withParentCheck(true, true), utxoStore: store}
+
+		_, err := b.unminedTxIteratorForLoad()
+		require.NoError(t, err)
+		store.AssertExpectations(t)
+	})
+}
+
+// loadSkippingStore offers the skipping scan over a real store, counts which
+// scan the load opened and how many transactions the load read from it.
+type loadSkippingStore struct {
+	utxoStore.Store
+	skippingCalls, plainCalls, yielded int
+}
+
+func (s *loadSkippingStore) GetUnminedTxIteratorSkippingMissingExternal() (utxoStore.UnminedTxIterator, error) {
+	s.skippingCalls++
+
+	return s.counting()
+}
+
+func (s *loadSkippingStore) GetUnminedTxIterator() (utxoStore.UnminedTxIterator, error) {
+	s.plainCalls++
+
+	return s.counting()
+}
+
+func (s *loadSkippingStore) counting() (utxoStore.UnminedTxIterator, error) {
+	it, err := s.Store.GetUnminedTxIterator()
+	if err != nil {
+		return nil, err
+	}
+
+	return &countingUnminedIterator{UnminedTxIterator: it, yielded: &s.yielded}, nil
+}
+
+type countingUnminedIterator struct {
+	utxoStore.UnminedTxIterator
+	yielded *int
+}
+
+func (c *countingUnminedIterator) Next(ctx context.Context) ([]*utxoStore.UnminedTransaction, error) {
+	batch, err := c.UnminedTxIterator.Next(ctx)
+	*c.yielded += len(batch)
+
+	return batch, err
+}
+
+// The in-memory load with the parent check on opens the scan that skips a
+// missing external file. The disk-sorted load, which runs only with the parent
+// check off, and the in-memory load with it off keep the plain scan, because
+// nothing there would drop a skipped transaction's children.
+func TestLoadUnminedTransactionsUsesTheSkippingScan(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		validate, diskSort bool
+		wantSkipping       bool
+	}{
+		{"in memory, parent check on", true, false, true},
+		{"in memory, parent check off", false, false, false},
+		{"disk sort", false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			initPrometheusMetrics()
+
+			ctx := t.Context()
+			items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+				s.BlockAssembly.OnRestartValidateParentChain = tc.validate
+				s.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = true
+				s.BlockAssembly.UnminedTxDiskSortEnabled = tc.diskSort
+				s.BlockAssembly.UnminedTxDiskSortPaths = []string{t.TempDir()}
+			})
+
+			tx := newTx(43)
+			_, _, err := items.utxoStore.SpendAndCreate(ctx, tx, 0, utxoStore.WithCreateOnly())
+			require.NoError(t, err)
+
+			store := &loadSkippingStore{Store: items.blockAssembler.utxoStore}
+			items.blockAssembler.utxoStore = store
+
+			require.NoError(t, items.blockAssembler.loadUnminedTransactions(ctx, false))
+
+			if tc.wantSkipping {
+				require.Equal(t, 1, store.skippingCalls)
+				require.Zero(t, store.plainCalls)
+			} else {
+				require.Zero(t, store.skippingCalls)
+				require.Equal(t, 1, store.plainCalls)
+			}
+
+			require.Equal(t, 1, store.yielded, "the load must read the tx from the scan it opened")
+
+			// with the parent check on, the tx is dropped: its parent is in no block
+			if !tc.validate {
+				_, ok := items.blockAssembler.subtreeProcessor.GetCurrentTxMap().Get(*tx.TxIDChainHash())
+				require.True(t, ok, "the load must put the tx in block assembly")
+			}
 		})
 	}
 }

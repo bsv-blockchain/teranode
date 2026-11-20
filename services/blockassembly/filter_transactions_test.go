@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -357,6 +358,55 @@ func TestValidateParentChain_RejectsChildOfConflictingParent(t *testing.T) {
 		"child of a conflicting parent must be filtered with OnRestartRemoveInvalidParentChainTxs=true")
 
 	mockStore.AssertExpectations(t)
+}
+
+// TestValidateParentChain_RejectsChildOfUnloadedUnminedParent covers a parent the
+// unmined scan left out, such as an external record whose file is missing: the
+// parent is in the store and still unmined, but not in the loaded list. The
+// child, and the grandchild through it, must not reach a block template.
+func TestValidateParentChain_RejectsChildOfUnloadedUnminedParent(t *testing.T) {
+	ctx := t.Context()
+	items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+		s.BlockAssembly.OnRestartValidateParentChain = true
+		s.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = true
+	})
+
+	parent := newTx(60)
+	child := newTx(61)
+	require.NoError(t, child.Inputs[0].PreviousTxIDAdd(parent.TxIDChainHash()))
+	grandchild := newTx(62)
+	require.NoError(t, grandchild.Inputs[0].PreviousTxIDAdd(child.TxIDChainHash()))
+
+	loaded := make([]*utxo.UnminedTransaction, 0, 2)
+
+	for i, tx := range []*bt.Tx{parent, child, grandchild} {
+		// at a non-zero height, so the store records each one as unmined since then
+		_, _, err := items.utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
+		require.NoError(t, err)
+
+		if tx == parent {
+			stored, err := items.utxoStore.Get(ctx, tx.TxIDChainHash(), fields.UnminedSince, fields.BlockIDs)
+			require.NoError(t, err)
+			require.Positive(t, stored.UnminedSince, "the parent must read back as unmined, not as an inconsistent record")
+			require.Empty(t, stored.BlockIDs)
+
+			continue // the scan left the parent out
+		}
+
+		inpoints, err := subtree.NewTxInpointsFromTx(tx)
+		require.NoError(t, err)
+
+		loaded = append(loaded, &utxo.UnminedTransaction{
+			Node:         &subtree.Node{Hash: *tx.TxIDChainHash(), Fee: 1000, SizeInBytes: 250},
+			TxInpoints:   &inpoints,
+			CreatedAt:    i,
+			UnminedSince: 1,
+		})
+	}
+
+	validTxs, err := items.blockAssembler.validateParentChain(ctx, loaded, map[uint32]bool{})
+	require.NoError(t, err)
+	require.Empty(t, validTxs)
 }
 
 // TestValidateParentChain_BatchDecorateRequestsConflicting verifies that validateParentChain

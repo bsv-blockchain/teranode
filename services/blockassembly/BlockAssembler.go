@@ -4266,6 +4266,29 @@ func (b *BlockAssembler) drainUnminedDropHashes(where string, isReload bool) err
 	return b.subtreeProcessor.FlushDiskTxMapForLoad(where, isReload)
 }
 
+// unminedTxIteratorForLoad opens the unmined scan block assembly loads from.
+// A store that can leave out an external record whose file is missing (the
+// Aerospike store) is asked to: the file never comes back, so failing the scan
+// would stop block assembly on every restart. Other callers keep the scan that
+// fails.
+//
+// The skip is taken only when the load drops the children of a transaction it
+// did not load, which is when blockassembly_onRestartValidateParentChain and
+// blockassembly_onRestartRemoveInvalidParentChainTxs are both on. Otherwise a
+// skipped transaction's children would reach a block template without their
+// parent, so the load keeps the scan that fails. The disk-sorted load runs only
+// with the parent check off, so it always keeps the failing scan.
+func (b *BlockAssembler) unminedTxIteratorForLoad() (utxo.UnminedTxIterator, error) {
+	dropsOrphanedChildren := b.settings.BlockAssembly.OnRestartValidateParentChain &&
+		b.settings.BlockAssembly.OnRestartRemoveInvalidParentChainTxs
+
+	if skipper, ok := utxo.As[utxo.MissingExternalSkipper](b.utxoStore); ok && dropsOrphanedChildren {
+		return skipper.GetUnminedTxIteratorSkippingMissingExternal()
+	}
+
+	return b.utxoStore.GetUnminedTxIterator()
+}
+
 func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload bool, validateInputs ...bool) (err error) {
 	shouldValidateInputs := len(validateInputs) > 0 && validateInputs[0]
 
@@ -4346,7 +4369,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 	b.logger.Infof("[loadUnminedTransactions] requesting unmined tx iterator from UTXO store")
 	start := time.Now()
-	it, err := b.utxoStore.GetUnminedTxIterator()
+	it, err := b.unminedTxIteratorForLoad()
 	duration := time.Since(start).Seconds()
 	if err != nil {
 		prometheusBlockAssemblerGetUnminedTxIteratorTime.WithLabelValues("false", "error").Observe(duration)
@@ -5313,7 +5336,7 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 
 	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] requesting unmined tx iterator from UTXO store")
 	start := time.Now()
-	it, err := b.utxoStore.GetUnminedTxIterator()
+	it, err := b.unminedTxIteratorForLoad()
 	duration := time.Since(start).Seconds()
 	if err != nil {
 		prometheusBlockAssemblerGetUnminedTxIteratorTime.WithLabelValues("false", "error").Observe(duration)
