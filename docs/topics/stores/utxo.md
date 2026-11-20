@@ -345,6 +345,49 @@ The two models also answer differently when a transaction that is already stored
 
 In both models, the parents stay spent by that transaction.
 
+#### When a spend is refused with error 78 (`ERR_UTXO_SPENDING_TX_PRUNED`)
+
+The Aerospike and Sql stores refuse a spend as a replay of a pruned transaction when three things hold. The parent output already records exactly this spender and input. That spend was recorded 144 or more blocks before the incoming block (half of `global_blockHeightRetention`, 288). The spender has no record. Usually this is right: the spender was mined, fully spent and pruned, and a block that mines it again is not valid.
+
+One case is not a replay. An earlier attempt spent the parent output, then failed before it created the spender's record, and nothing undid the spend. If the same transaction is then mined 144 or more blocks later, the store refuses it. Legacy sync keeps the block parked as a local UTXO fault and retries it, and every retry gets the same answer until the output is freed.
+
+The store logs one line per refused input. Sql:
+
+```text
+[Spend] refusing <parent>:<vout> as a replay of pruned transaction <spender>: spend recorded at <recorded height>, incoming at <incoming height>, spender has no record
+```
+
+Aerospike:
+
+```text
+[SPEND][<spender>] refusing vout <vout> of <parent> as a replay of a pruned transaction: spend recorded at <recorded height>, incoming at <incoming height>, spender has no record
+```
+
+`<parent>` and `<vout>` name the output. `<spender>` is the transaction being refused. The recorded height is the block height at which the left-behind spend was written; the incoming height is the block being validated now.
+
+**Tell the two cases apart before freeing anything.** Freeing the output of a genuine replay lets the node accept a block that mines a pruned transaction again. Check the block at the incoming height against the network: another node or a block explorer.
+
+- If the network's chain has that block at that height and it contains `<spender>`, this is the first time the spender is mined. The refusal is the left-behind spend, so free the output.
+- If the network does not have that block, keep the refusal. The peer's block is not on the chain the rest of the network follows.
+
+**Free the output on Sql (PostgreSQL or SQLite).** Stop the services that write to the UTXO store, then run one transaction. Hashes are stored in internal byte order, the reverse of the hex in the log line. Reverse a txid with `echo <txid> | fold -w2 | tac | tr -d '\n'`. On PostgreSQL write each as `decode('<reversed hex>', 'hex')`; on SQLite write it as `X'<reversed hex>'` and use `substr` in place of `substring`.
+
+```sql
+BEGIN;
+UPDATE outputs
+SET spending_data = NULL, spending_height = NULL
+WHERE transaction_id = (SELECT id FROM transactions WHERE hash = <parent>)
+  AND idx = <vout>
+  AND substring(spending_data from 1 for 32) = <spender>;
+-- Expect exactly one row. If it is not one, roll back and stop.
+UPDATE transactions SET delete_at_height = NULL WHERE hash = <parent>;
+COMMIT;
+```
+
+The first statement clears the spend only if it still names `<spender>`, as `Unspend` does. The second clears the parent's delete-at-height, so the pruner cannot delete the parent before the spender spends it again; the next spend of the parent sets it again. Start the services. Legacy sync retries the parked block by itself, and the spend is now written fresh. `cmd/reconsiderblock` is not needed, because the block was never marked invalid.
+
+**Aerospike has no supported way to free one output today.** The spend lives inside the record's `utxos` bin, and `spentUtxos`, `spendHeights` and the delete-at-height must change with it. The store's `Unspend` keeps them in step, but no operator command calls it for a spender that has no record. Do not edit the record with `aql`. Report the log line with both heights.
+
 ### 4.7. UTXO Batch Processing and External Storage mode
 
 Aerospike is the primary datastore for the UTXO store. However, to overcome Aerospike's record size limitation, the system implements an external storage mechanism for large transactions.
