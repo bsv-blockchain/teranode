@@ -98,7 +98,7 @@ func TestLanePositionContractSQLite(t *testing.T) {
 
 	tests.LanePositionContract(t, db)
 	t.Run("burns", func(t *testing.T) { tests.LanePositionBurns(t, db, "sql") })
-	t.Run("returns", func(t *testing.T) { tests.LanePositionReturns(t, db, sqlLaneRules, sqlLaneRows(db)) })
+	t.Run("returns", func(t *testing.T) { tests.LanePositionReturns(t, db, "sql", sqlLaneRules, sqlLaneRows(db)) })
 }
 
 // Every Postgres create path writes the lane position: the create batcher's
@@ -132,7 +132,7 @@ func TestLanePositionContractPostgres(t *testing.T) {
 
 			tests.LanePositionContract(t, db)
 			t.Run("burns", func(t *testing.T) { tests.LanePositionBurns(t, db, "sql") })
-			t.Run("returns", func(t *testing.T) { tests.LanePositionReturns(t, db, sqlLaneRules, sqlLaneRows(db)) })
+			t.Run("returns", func(t *testing.T) { tests.LanePositionReturns(t, db, "sql", sqlLaneRules, sqlLaneRows(db)) })
 		})
 	}
 }
@@ -425,4 +425,39 @@ func TestMarkRefusedCreate(t *testing.T) {
 		"only a refusal proves the position unwritten")
 	require.False(t, utxostore.LanePositionUnwritten(markRefusedCreate(errors.NewUtxoError("refused"), false)))
 	require.NoError(t, markRefusedCreate(nil, false))
+}
+
+// The conflicting create on the single-CTE path writes its parents' conflict links after the record
+// commits, the write TestLanePositionNotReturnedAfterAConflictLinkLockError replaces with a fault.
+// Without it the parent has no link to the child.
+func TestConflictingCreateOnTheSingleCTEPathLinksItsParent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	dbURL := startLanePositionPostgres(t)
+
+	tSettings := lanePositionSettings(t)
+	tSettings.UtxoStore.StoreBatcherSize = 1
+
+	db, err := New(context.Background(), ulogger.TestLogger{}, tSettings, dbURL)
+	require.NoError(t, err)
+	require.Nil(t, db.createBatcher, "the test needs the single-CTE path")
+	require.True(t, db.settings.UtxoStore.BatchSQLOperations, "the test needs the single-CTE path")
+
+	w := tests.BuildMultiWorkload(t, 0xad, 1, 1)
+	w.StoreRoots(t, db, 960)
+
+	child := w.Txs[0]
+
+	_, err = db.Create(context.Background(), child, 961, utxostore.WithConflicting(true))
+	require.NoError(t, err)
+
+	var links int
+	require.NoError(t, db.db.QueryRowContext(context.Background(), `
+		SELECT count(*) FROM conflicting_children c
+		  JOIN transactions p ON p.id = c.transaction_id
+		  JOIN transactions k ON k.id = c.child_transaction_id
+		 WHERE p.hash = $1 AND k.hash = $2`, w.Roots[0].TxIDChainHash()[:], child.TxIDChainHash()[:]).Scan(&links))
+	require.Equal(t, 1, links, "the parent links to its conflicting child")
 }

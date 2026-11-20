@@ -92,6 +92,12 @@ func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeig
 		return w.items[i].result, w.burnAt(i)
 	})
 
+	// A transaction its chunk rolled back whole before sending the COMMIT, and that no later attempt
+	// settled, wrote nothing, so its position also goes back. It was counted as burned above.
+	s.returnRolledBackList(positions, func(i int) bool {
+		return w.burnAt(i) == utxo.LaneBurnRolledBack && w.items[i].result.Status == utxo.MultiTxNotAttempted
+	})
+
 	return results, err
 }
 
@@ -132,6 +138,19 @@ func (s *Store) burnList(list *utxo.SpendAndCreateMultiList, positions []uint64,
 		}
 
 		s.BurnLanePosition(list.Options.Caller, reason)
+	}
+}
+
+// returnRolledBackList hands back, once a netted list has ended and no chunk can still commit, the
+// lane position of every transaction rolledBack says was rolled back whole before its chunk's COMMIT
+// was sent and that has no result from a later attempt. Nothing else of a list goes back: a
+// transaction found stored or with a refused spend may share its round's containment and journal
+// writes, which this does not prove unwritten.
+func (s *Store) returnRolledBackList(positions []uint64, rolledBack func(i int) bool) {
+	for i, position := range positions {
+		if position != lane.None && rolledBack(i) {
+			s.ReturnLanePosition(position, utxo.LaneReturnRolledBack, true)
+		}
 	}
 }
 

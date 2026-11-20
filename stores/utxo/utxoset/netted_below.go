@@ -341,7 +341,15 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 		})
 	}
 
-	if err := g.Wait(); err != nil {
+	err = g.Wait()
+
+	// A transaction its chunk rolled back whole before sending the COMMIT wrote nothing, so its
+	// position also goes back once every chunk has ended. The deferred burnList counts it as burned.
+	s.returnRolledBackList(positions, func(i int) bool {
+		return items[i].burn == listBurnRolledBack && items[i].result.Status == utxo.MultiTxNotAttempted
+	})
+
+	if err != nil {
 		return nil, err
 	}
 

@@ -60,8 +60,8 @@ type Timings struct {
 //
 // It holds the grant it is handing out and one spare. At half the current grant used it asks for
 // the next grant and keeps it as the spare. It takes from the current grant until the grant is used
-// up or GrantDuration has passed since its first position was taken, and only then moves to the
-// spare. An unused grant expires GrantDuration after its request was sent, including a spare.
+// up, with no returned position (Return) still waiting in it, or GrantDuration has passed since its
+// first position was taken, and only then moves to the spare. An unused grant expires GrantDuration after its request was sent, including a spare.
 // The grant it leaves is settled by the next request: the grant's first position and its
 // final number, which is the grant's last position if used up or the highest position taken if it
 // aged out, travel on the next grant request or on the release.
@@ -130,7 +130,8 @@ type Allocator struct {
 	released bool
 	// changed is closed and replaced whenever a waiting Next could now succeed or should give up.
 	changed chan struct{}
-	// taken counts positions given out, and samples hold it at the last two renewals, for the rate.
+	// taken counts new positions given out, not returned ones given out again, and samples hold it
+	// at the last two renewals, for the rate.
 	taken   uint64
 	samples [2]rateSample
 
@@ -249,8 +250,10 @@ func (a *Allocator) Close() error {
 		a.leaseTaken = a.leaseTakenAfterLocked(a.settledFinalLocked(a.next - 1))
 	}
 
-	// With two pairs held the release carries the older. The newer is the grant last left, and its
-	// final number is the LastTaken the release carries anyway.
+	// With two pairs held the release carries the older. The newer is the grant last left: its final
+	// number is the LastTaken the release carries, or, when that grant gave back every position it
+	// gave out and settled at 0, LastTaken stays the number before it and the newer pair is not sent.
+	// Either way no position above LastTaken carries a record.
 	leased, release := a.leased, Release{Lease: a.lease, Lane: a.lane, LastTaken: a.leaseTaken, Settles: a.pending[0]}
 	a.mu.Unlock()
 
@@ -395,7 +398,8 @@ func (a *Allocator) takeLocked() (v uint64, ok bool, changed chan struct{}, err 
 
 // leaveCurrentLocked settles the current grant and moves to the spare, or to no grant when there is
 // no spare, in which case the loop asks for one at once. The grant's returned positions are dropped
-// and stay burned, each at or below the final number it settles at: installLocked clears them, and with no
+// and stay burned. Those at the top of the taken range settledFinalLocked removes, and the grant
+// settles below them; those left sit below that final number and installLocked clears them. With no
 // grant installed next is 0, which Return and takeLocked both refuse.
 func (a *Allocator) leaveCurrentLocked(usedUp bool) {
 	final := a.next - 1
@@ -731,9 +735,10 @@ func (a *Allocator) renew(want bool) error {
 	return nil
 }
 
-// rateLocked is positions given out per second since the request before last that succeeded,
-// renewal or grant request alike: between 30 and 60 seconds at a 30-second renewal with no grant
-// request in between, and shorter when grant requests come close together.
+// rateLocked is new positions given out per second, returned ones given out again left out, since
+// the request before last that succeeded, renewal or grant request alike: between 30 and 60 seconds
+// at a 30-second renewal with no grant request in between, and shorter when grant requests come
+// close together.
 func (a *Allocator) rateLocked(at time.Time) uint64 {
 	base := a.samples[0]
 
