@@ -1377,9 +1377,8 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 // executeLuaSpendBatch runs the Lua UDF spend pipeline for the provided batch. It is the
 // shared backend used by sendSpendBatchLua's Lua route and by the expression path's
-// retry-through-Lua handler. Callers MUST have already run any duplicate-claim
-// filtering, since this method does not re-run it and assumes every item still expects
-// exactly one response on its errCh.
+// retry-through-Lua handler. It assumes every item still expects exactly one response
+// on its errCh. Competing claims on one output are decided by the store, not here.
 func (s *Store) executeLuaSpendBatch(batch []*batchSpend) {
 	s.executeLuaSpendBatchContext(s.ctx, batch)
 }
