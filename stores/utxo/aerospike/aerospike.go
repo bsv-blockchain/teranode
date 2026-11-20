@@ -203,6 +203,8 @@ func safeBatcherPutBatchCtx[T any](b batcherIfc[T], ctx context.Context, items [
 // Store implements the UTXO store interface using Aerospike.
 // It is thread-safe for concurrent access.
 type Store struct {
+	utxo.LanePositions
+
 	ctx                 context.Context // store the global context for things that run in the background
 	url                 *url.URL
 	client              *uaerospike.Client
@@ -292,6 +294,9 @@ type Store struct {
 
 	// batchOperateFn is a test-only override for s.client.BatchOperate; nil means use the real client.
 	batchOperateFn func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
+
+	// lockPutFn is a test-only override for the creation lock's s.client.PutBins; nil means use the real client.
+	lockPutFn func(*aerospike.WritePolicy, *aerospike.Key, ...*aerospike.Bin) aerospike.Error
 
 	// batcherWait bounds how long a submitter waits for a batcher to deliver a
 	// result before giving up, so a wedged dispatch fn can never park a caller

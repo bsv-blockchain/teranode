@@ -3,11 +3,13 @@ package utxoset
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,6 +60,30 @@ func TestDeleteOfATransactionTheStoreDoesNotHoldSucceeds(t *testing.T) {
 	absent := mkTx(t, 1, 9_999)
 	require.NoError(t, s.Delete(ctx, absent.TxIDChainHash()),
 		"a transaction the store never held deletes nothing, and that is not an error")
+}
+
+// TestDeleteThatCannotStartLeavesTheTransaction. A Delete whose context is already done cannot
+// open its database transaction. It must say so as a storage error, not as success or not-found,
+// and remove nothing.
+func TestDeleteThatCannotStartLeavesTheTransaction(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	tx := mkTx(t, 2, 5_001)
+	_, err := s.Create(ctx, tx, 100)
+	require.NoError(t, err)
+
+	h := tx.TxIDChainHash()
+
+	done, cancel := context.WithCancel(ctx)
+	cancel()
+
+	derr := s.Delete(done, h)
+	require.True(t, errors.Is(derr, errors.ErrStorageError), "a Delete that never started is a storage error, got %v", derr)
+
+	require.Equal(t, 2, countWhere(t, s, ctx, `SELECT count(*) FROM utxo WHERE txid = $1`, h[:]),
+		"and every UTXO is still there")
+	require.Equal(t, 1, countWhere(t, s, ctx, `SELECT count(*) FROM tx_ident WHERE txid = $1`, h[:]),
+		"and so is the identity row")
 }
 
 // TestDeleteIsIdempotent, for the same reason: a reorg retried after a crash must not fail on
@@ -229,4 +255,216 @@ func TestDeleteRemovesMembershipRows(t *testing.T) {
 	h := tx.TxIDChainHash()
 	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM tx_body WHERE txid = $1`, h[:]),
 		"a mined-only transaction's body must not survive Delete")
+}
+
+// TestDeleteRetriesADeadlockOnItsJournalRow: Delete takes the transaction's identity and
+// membership rows first and removes the undo records for its spent outputs after, so a writer that
+// holds one of those undo records and then asks for the identity row crosses it. Unspend of the same transaction is that writer: it consumes the undo
+// record first and share-locks the identity row after. The holder plays it, with its own
+// deadlock check pushed out where a superuser can do that, so Delete, which started waiting
+// first, is normally the one PostgreSQL stops. Delete must run again and succeed rather than hand
+// a reorg a storage error it does not tolerate.
+func TestDeleteRetriesADeadlockOnItsJournalRow(t *testing.T) {
+	before := testutil.ToFloat64(deadlockRetried.WithLabelValues("delete"))
+
+	for attempt := 1; ; attempt++ {
+		if deleteCrossesAHolder(t) {
+			break
+		}
+
+		require.Less(t, attempt, 3, "the holder, not Delete, was the deadlock victim on every attempt")
+	}
+
+	require.Greater(t, testutil.ToFloat64(deadlockRetried.WithLabelValues("delete")), before,
+		"Delete was stopped as a deadlock and ran again")
+}
+
+// deleteCrossesAHolder is one attempt of TestDeleteRetriesADeadlockOnItsJournalRow on a fresh
+// store. It reports false when the holder was the victim instead: PostgreSQL checks a lock wait for
+// a deadlock once, deadlock_timeout after it starts, so when more than that passes between Delete
+// blocking and the holder blocking, Delete's check finds no cycle and the holder's finds it.
+func deleteCrossesAHolder(t *testing.T) bool {
+	t.Helper()
+
+	s, ctx := newTestStore(t)
+
+	parent, spends := mempoolParentSpent(t, s, ctx, false)
+	h := parent.TxIDChainHash()
+	ukey := Pack(h[:], spends[0].Vout)
+
+	holder, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = holder.Rollback(context.Background()) }()
+
+	var superuser string
+	require.NoError(t, holder.QueryRow(ctx, `SELECT current_setting('is_superuser')`).Scan(&superuser))
+
+	if superuser == "on" {
+		_, err = holder.Exec(ctx, `SET LOCAL deadlock_timeout = '30s'`)
+		require.NoError(t, err)
+	} else {
+		t.Log("not a superuser, so the holder keeps the default deadlock_timeout")
+	}
+
+	_, err = holder.Exec(ctx, `SELECT 1 FROM spend_journal WHERE ukey = $1 AND txid = $2 FOR UPDATE`, ukey, h[:])
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+
+	go func() { done <- s.Delete(ctx, h) }()
+
+	waitForLockWait(t, s, ctx, "WITH k AS")
+
+	_, err = holder.Exec(ctx, `SELECT 1 FROM tx_ident WHERE txid = $1 FOR SHARE`, h[:])
+	if isDeadlock(err) {
+		require.NoError(t, holder.Rollback(ctx))
+		require.NoError(t, <-done)
+
+		return false
+	}
+
+	require.NoError(t, err, "the holder waits out Delete's deadlock check and gets the row")
+	require.NoError(t, holder.Rollback(ctx))
+
+	require.NoError(t, <-done, "a deadlock is retried, not returned")
+	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM tx_ident WHERE txid = $1`, h[:]))
+	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM spend_journal WHERE txid = $1`, h[:]))
+
+	return true
+}
+
+// TestDeleteWaitsForARestoreOfItsCoin: a restore of the transaction's coin that has run and not
+// committed holds a share lock on the transaction's identity row. Delete must wait for it and then
+// remove the coin it restored. When Delete was one statement, its snapshot was taken before the
+// coin committed: it waited on the identity row, deleted that row once the restore committed, and
+// left the coin behind, a live output whose transaction no longer exists and that nothing can
+// reclaim.
+func TestDeleteWaitsForARestoreOfItsCoin(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends := mempoolParentSpent(t, s, ctx, false)
+	h := parent.TxIDChainHash()
+
+	req, err := newUnspendRequest(spends, false)
+	require.NoError(t, err)
+
+	restore, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = restore.Rollback(context.Background()) }()
+
+	res, err := s.restoreIn(ctx, restore, req)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.restored)
+
+	done := make(chan error, 1)
+
+	go func() { done <- s.Delete(ctx, h) }()
+
+	waitForLockWait(t, s, ctx, "tx_ident")
+	require.NoError(t, restore.Commit(ctx))
+	require.NoError(t, <-done)
+
+	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM utxo WHERE txid = $1`, h[:]),
+		"the coin the restore put back must not outlive its transaction")
+	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM tx_ident WHERE txid = $1`, h[:]))
+}
+
+// TestDeleteWaitsForARestoreOfAMinedCoin is TestDeleteWaitsForARestoreOfItsCoin for a block-path
+// transaction, which has containment rows in tx_mined and no identity row. The restore
+// share-locks the containment rows, so the delete has to take those to wait for it.
+func TestDeleteWaitsForARestoreOfAMinedCoin(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	require.NoError(t, s.SetBlockHeight(100))
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	h := parent.TxIDChainHash()
+	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM tx_ident WHERE txid = $1`, h[:]), "fixture: no identity row")
+	require.Equal(t, 1, countWhere(t, s, ctx, `SELECT count(*) FROM tx_mined WHERE txid = $1`, h[:]), "fixture: one containment row")
+
+	spends, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 1_000, 0), 101)
+	require.NoError(t, err)
+	require.Len(t, spends, 1)
+
+	req, err := newUnspendRequest(spends, false)
+	require.NoError(t, err)
+
+	restore, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = restore.Rollback(context.Background()) }()
+
+	res, err := s.restoreIn(ctx, restore, req)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.restored)
+
+	done := make(chan error, 1)
+
+	go func() { done <- s.Delete(ctx, h) }()
+
+	// Delete is the only backend that can wait here. "FROM" matches either of its statements:
+	// PostgreSQL reports only the first 1024 bytes of a query, and deleteTxSQL names tx_mined
+	// past that.
+	waitForLockWait(t, s, ctx, "FROM")
+	require.NoError(t, restore.Commit(ctx))
+	require.NoError(t, <-done)
+
+	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM utxo WHERE txid = $1`, h[:]),
+		"the coin the restore put back must not outlive its transaction")
+	require.Equal(t, 0, countWhere(t, s, ctx, `SELECT count(*) FROM tx_mined WHERE txid = $1`, h[:]))
+}
+
+// TestDeleteCutWhileWaitingOnARowDeletesNothing: a Delete cut while its lock statement waits on a
+// row another transaction holds returns a storage error before it has deleted anything, so the
+// transaction's identity row, coins and undo records are all still there. The cut is aimed at the
+// lock statement, so this test needs that statement; the restore races above are what show the
+// order matters.
+func TestDeleteCutWhileWaitingOnARowDeletesNothing(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, _ := mempoolParentSpent(t, s, ctx, false)
+	h := parent.TxIDChainHash()
+
+	holder, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = holder.Rollback(context.Background()) }()
+
+	_, err = holder.Exec(ctx, `SELECT 1 FROM tx_ident WHERE txid = $1 FOR UPDATE`, h[:])
+	require.NoError(t, err)
+
+	cut, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	done := make(chan error, 1)
+
+	go func() { done <- s.Delete(cut, h) }()
+
+	waitForLockWait(t, s, ctx, "FOR UPDATE OF i")
+	cancel()
+
+	var derr error
+
+	select {
+	case derr = <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Delete did not return after its context was cancelled")
+	}
+
+	require.True(t, errors.Is(derr, errors.ErrStorageError), "a Delete cut while it waits is a storage error, got %v", derr)
+	require.ErrorContains(t, derr, "[utxoset][Delete] lock", "the cut landed while Delete waited for the rows")
+
+	require.NoError(t, holder.Rollback(ctx))
+
+	require.Equal(t, 1, countWhere(t, s, ctx, `SELECT count(*) FROM tx_ident WHERE txid = $1`, h[:]))
+	require.Equal(t, 1, countWhere(t, s, ctx, `SELECT count(*) FROM utxo WHERE txid = $1`, h[:]),
+		"the unspent output is still there")
+	require.Equal(t, 1, countWhere(t, s, ctx, `SELECT count(*) FROM spend_journal WHERE txid = $1`, h[:]),
+		"the undo record of the spent output is still there")
 }

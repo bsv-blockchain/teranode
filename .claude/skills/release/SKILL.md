@@ -18,7 +18,7 @@ Tag scheme:
 - Beta: `vX.Y.Z-beta-N` (e.g. `v0.15.0-beta-1`). Tagged on `release/vX.Y`. Immutable. The `release/vX.Y` branch is cut from `main` at the start of the minor's beta phase so all betas of that minor live on the same branch.
 - Stable: `vX.Y.Z`. Targets the SHA of the validated beta (never the branch tip — a hotfix landing after soak would otherwise get silently promoted).
 
-Canonical state source: **GitHub Releases page**. Don't maintain a separate doc — the `status` mode below renders it live.
+Canonical state source: **GitHub Releases page**. Don't maintain a separate doc — the `status` mode below renders it live. The human-readable release process, including the checklist and the go/no-go record, is `docs/howto/releaseProcess.md`.
 
 ## Modes
 
@@ -108,11 +108,25 @@ Steps:
 If all pass:
 1. **Resolve the beta SHA**: `git rev-parse vX.Y.Z-beta-N`. This is what gets tagged — never the branch tip.
 2. **Verify nothing has landed on top of the beta**: `git rev-parse release/vX.Y` must equal the beta SHA. If they differ, **refuse to tag**: a hotfix landed after the beta soak and that commit hasn't been validated. Tell the user; require a fresh beta cut.
-3. **Build release notes** from `<prev-stable-tag>..<beta-tag>` (never `..HEAD`); see "Release notes format". For "Before you upgrade", select the `## [Unreleased]` entries in `CHANGELOG.md` on `main` whose PRs are all in that range. Match their `(#NNN)` against `git log --format=%s <prev-stable-tag>..<beta-tag>` and only that range: older history reuses PR numbers from the previous repo. If only some of an entry's PRs are in range, split it and select the in-range part.
-4. `gh release create vX.Y.Z --target <beta-sha> --title vX.Y.Z --notes-file <path>`. Explicit SHA target — bypasses branch-tip resolution entirely.
-5. **Cut the changelog section** (stable only, after the release is published). On a branch from `main`, move the step 3 selection under `## [X.Y.Z] - <YYYY-MM-DD>` / `### Breaking` above the previous version, dated with the published release date (UTC); split entries leave their other part under `[Unreleased]`. Nothing selected: the heading plus `No breaking changes.`. Open it as a docs PR against `main`. Never edit `CHANGELOG.md` on the release branch.
-6. Return tag URL.
-7. Offer to draft an Announcements discussion post (see "Discussion announcement" section below). Don't post automatically — show the draft, let user edit, confirm before publishing.
+3. **Write the release records** (see `docs/howto/releaseProcess.md`). There are two:
+   - **The private release record**, readable only by the maintainers. Ask the user where it is. It holds the evidence that must not be published:
+     - the seven gate answers above, with the beta tag, the nodes and soak windows, and the sync-from-zero and mid-sync-upgrade nodes
+     - the security review or scan result
+     - every open Critical or High finding, each closed or with a waiver (owner, date, reason, close-by date). Security findings are draft repository security advisories; record their IDs only
+   - **The published checklist.** Copy `docs/releases/checklist-template.md` to `docs/releases/vX.Y.Z-checklist.md` on a branch from `main`, and mark each gate Yes, No or N/A with its public reference:
+     - the `teranode_main_build.yaml` run URL at the beta SHA and the results of its `test_and_lint` jobs (Go test, smoketest, prunertest), from `gh run list --workflow teranode_main_build.yaml --commit <beta-sha>`
+     - the node-validation verdict, tool version and mode for a full-mode run against the beta SHA (or the immutable image digest built from it), for a release with consensus-affecting scope, or N/A and the reason. The stable tag does not exist yet, so never require a run against `vX.Y.Z`
+     - the open bug-labelled issues, from `gh issue list --label bug --state open`
+     - the number of open, closed and waived Critical or High findings, and the miner feedback register counts
+   - **Never write** node names, peer identifiers, or the details of an unpublished security finding into the published checklist.
+4. **Record the decision.** Ask the user which maintainer approves, and the date. Set `**Decision:** Go` only when every item has evidence and every open Critical or High finding is closed or waived. Otherwise leave `**Decision:** No-Go`, name the failed criterion, and **refuse to tag**.
+5. **Merge the checklist to `main`** through a pull request, before the tag. Fill in `**Beta SHA:**` with the full 40-character beta SHA, the approver and the date as `YYYY-MM-DD`. The `release-checklist` job in `teranode_main_build.yaml` checks these fields and the single `**Decision:** Go` line; `docs/howto/releaseProcess.md` lists its failure conditions.
+6. **Push the tag, then wait for the gate.** `git tag vX.Y.Z <beta-sha> && git push $REMOTE vX.Y.Z`, with `$REMOTE` the canonical remote (see the `minor` mode). Explicit SHA — bypasses branch-tip resolution entirely. Find the build with `gh run list --workflow teranode_main_build.yaml --branch vX.Y.Z`, and wait with `gh run watch <run-id> --exit-status`. If `release-checklist` or `build-and-deploy` fails, **do not create the release**: fix the cause, then `gh run rerun <run-id> --failed`. The gate runs the workflow from the tagged commit, so a release branch cut before the `release-checklist` job existed (`release/v0.16` and earlier) has no gate. On those lines, check the merged checklist by hand before the tag push.
+7. **Build release notes** from `<prev-stable-tag>..<beta-tag>` (never `..HEAD`); see "Release notes format". For "Before you upgrade", collect breaking changes (see "Collect breaking changes") for that range only. Link the checklist in the notes.
+8. Only after the build passes: `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file <path>`. `--verify-tag` refuses to create a new tag, so the release uses the tag from step 6.
+9. **Do not edit any file in the repo for the release notes.** The repo has no `CHANGELOG.md`. The GitHub release is the only record.
+10. Return the release URL.
+11. Offer to draft an Announcements discussion post (see "Discussion announcement" section below). Don't post automatically — show the draft, let user edit, confirm before publishing.
 
 ### `minor` — propose a minor version bump
 
@@ -139,9 +153,9 @@ GitHub's "Generate release notes" emits an empty body for release branches built
 ```markdown
 ## Before you upgrade
 
-<The `[Unreleased]` entries selected in `stable` step 3, quoted verbatim, or "No breaking changes.">
+<The breaking changes collected in `stable` step 7, or "No breaking changes.">
 
-Upgrading from an earlier version than <prev-stable-tag>? Read every section between yours and this one: https://github.com/bsv-blockchain/teranode/blob/main/CHANGELOG.md
+Upgrading from an earlier version than <prev-stable-tag>? Read "Before you upgrade" in every release between yours and this one: https://github.com/bsv-blockchain/teranode/releases
 
 ## What's Changed
 
@@ -151,10 +165,39 @@ Upgrading from an earlier version than <prev-stable-tag>? Read every section bet
 **Full Changelog**: https://github.com/bsv-blockchain/teranode/compare/<prev-tag>...<new-tag>
 ```
 
-- "Before you upgrade" is required on stable releases and quotes the entries selected in `stable` step 3, the same ones step 5 moves to `[X.Y.Z]`; never paraphrase or drop one. Betas omit it.
+- "Before you upgrade" is required on stable releases and lists the breaking changes collected in `stable` step 7, one bullet per PR, each ending with `(#NNN)`; never drop one. Betas omit it.
 - Pull commit headlines from `git log --pretty='%s' <prev-tag>..<new-tag>`.
 - PR numbers come from the `(#NNN)` suffix already present in cherry-pick titles.
 - Author: `gh pr view <NNN> --json author -q .author.login`.
+
+## Collect breaking changes
+
+The repo has no changelog file. Each PR that breaks something carries a `## Breaking` section in its description (rule in `AGENTS.md`: Engineering Rules). Collect them from the release range only:
+
+```bash
+git log --format=%s <prev-stable-tag>..<beta-tag> | grep -o '(#[0-9]*)' | tr -d '(#)' | sort -un
+gh pr view <NNN> --json number,title,body,labels
+```
+
+1. Take the text under `## Breaking` in each PR body, and every PR with the `breaking` label.
+2. Match PR numbers against that range only. Older history reuses PR numbers from the previous repo.
+3. Read the PR diff for any PR touching `settings.conf`, `.proto` files, metric names, or consensus rules that has **no** `## Breaking` section. The author may have missed one. Ask the user; never add one silently.
+4. Legacy entries: PRs merged before `CHANGELOG.md` was deleted recorded their entries in that file. Fetch canonical main explicitly and search that fetched history, even when checked out on a release branch or using a fork. Stop release preparation if the fetch fails or no deletion is found:
+
+   ```bash
+   git fetch https://github.com/bsv-blockchain/teranode.git main || exit 1
+   sha=$(git log FETCH_HEAD --diff-filter=D --format=%H -1 -- CHANGELOG.md) || exit 1
+   if [ -z "$sha" ]; then
+     echo "No CHANGELOG.md deletion found on canonical main; stop release preparation." >&2
+     exit 1
+   fi
+   git show "$sha^:CHANGELOG.md"
+   ```
+
+   Use its `## [Unreleased]` entries whose PRs are in range. If only some of an entry's PRs are in range, split it.
+5. History before the deletion: the `[0.16.0]` section and earlier live only in git. Read them with `git show "$sha^:CHANGELOG.md"`, using the deletion SHA resolved in step 4. Use them when a user upgrades from a version older than the deletion and the release body for an intermediate version lacks "Before you upgrade". Quote them; do not edit published release bodies unasked.
+6. Keep only sections that meet the `AGENTS.md` definition of breaking: an operator or integrator must act, or something that worked stops working. Drop ordinary bug fixes, performance changes, log changes and error-message wording, even if the author listed them. List the dropped PRs for the user.
+7. Show the collected list to the user before publishing. Never paraphrase an author's text into a weaker claim.
 
 ## Discussion announcement
 
@@ -171,6 +214,8 @@ Use `gh api graphql` to create the discussion if the user approves. The category
 **GitHub:** https://github.com/bsv-blockchain/teranode/releases/tag/vX.Y.Z
 **Container:** ghcr.io/bsv-blockchain/teranode:vX.Y.Z
 
+**Release checklist:** https://github.com/bsv-blockchain/teranode/blob/main/docs/releases/vX.Y.Z-checklist.md
+
 ## Upgrade priority
 <Critical | Recommended | Optional> — <one-sentence reason>.
 <"Read the breaking changes before upgrading: <release URL>#before-you-upgrade", or "No breaking changes.">
@@ -180,8 +225,14 @@ Use `gh api graphql` to create the discussion if the user approves. The category
 - <Top change> (#PR)
 - <Top change> (#PR)
 
+## For miners
+<Required for a consensus-level or behaviour-affecting change: what a miner must verify before and after upgrading.>
+
+## For node operators
+<Required for a consensus-level or behaviour-affecting change: what a non-mining node operator must verify before and after upgrading.>
+
 ## Known issues
-<None | bulleted list with workarounds>
+<Every open bug-labelled issue that affects this build, with its number and any workaround; every waiver from the checklist; every open non-code item (such as an open governance item from miner feedback) with its timeline or deferral reason. "None" only when all of these are empty.>
 
 [Full changelog](https://github.com/bsv-blockchain/teranode/releases/tag/vX.Y.Z)
 ```
@@ -194,6 +245,9 @@ Use `gh api graphql` to create the discussion if the user approves. The category
   - *Critical* — fixes a known prod incident class or consensus correctness issue
   - *Recommended* — meaningful operational fixes, no known prod impact
   - *Optional* — perf or features only
+  - A release with a consensus correctness change that is not rated *Critical* must say why in the reason.
+- **Audiences**: a release with a consensus-level or behaviour-affecting change must have both "For miners" and "For node operators". Omit both only when there is no such change.
+- **Known issues**: check `gh issue list --label bug --state open` at tag time. "None" is correct only when nothing open affects the build.
 - **No node naming.** "mainnet/testnet/teratestnet" is fine; specific hostnames leak fleet topology.
 - **Theme line in title** is a tight summary — "operational fixes", "UTXO conflict-state hardening", "new minor: performance + consensus", etc. Avoid generic "bug fixes".
 
@@ -266,6 +320,7 @@ git diff --stat <prev-tag>..<new-tag>
 
 After tagging a stable patch:
 1. Verify release URL (`gh release view <tag>`).
+   Then verify the Announcements discussion exists for the stable tag: `gh api graphql -f query='{ repository(owner: "bsv-blockchain", name: "teranode") { discussions(first: 5, categoryId: "<announcements-id>", orderBy: {field: CREATED_AT, direction: DESC}) { nodes { title url } } } }'`. Look for `vX.Y.Z` in the titles. If it is missing, offer the draft again.
 2. Ask user if any deployment / monitoring follow-up is needed (e.g. update fleet, watch Coralogix for the next 30 min).
 3. Offer to run `triage` for the next round on the same release branch.
 

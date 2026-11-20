@@ -32,6 +32,9 @@ type getItem struct {
 	// and on Hetzner mainnet on 2026-10-19 fee-only existence checks from the legacy
 	// inventory handler, sharing batches with body reads, held tens of gigabytes of them.
 	wantBody bool
+	// wantLane works like wantChildren: the batch reads the column if ANY item asked, and an item
+	// that did not ask is handed a field it ignores.
+	wantLane bool
 	done     chan getResult
 }
 
@@ -119,6 +122,7 @@ func (s *Store) resolveGetItems(batch []*getItem, wantBody bool) {
 
 	hashes := make([]chainhash.Hash, len(batch))
 	wantChildren := false
+	wantLane := false
 
 	for i, it := range batch {
 		hashes[i] = it.hash
@@ -126,9 +130,13 @@ func (s *Store) resolveGetItems(batch []*getItem, wantBody bool) {
 		if it.wantChildren {
 			wantChildren = true
 		}
+
+		if it.wantLane {
+			wantLane = true
+		}
 	}
 
-	res, err := s.lookupMany(ctx, hashes, wantChildren, !wantBody)
+	res, err := s.lookupManyLane(ctx, hashes, wantChildren, !wantBody, wantLane)
 	if err != nil {
 		for _, it := range batch {
 			it.done <- getResult{err: err}
@@ -250,15 +258,16 @@ func (s *Store) sendLockBatch(batch []*lockItem) {
 
 // getBatched routes one read through the batcher.
 func (s *Store) getBatched(ctx context.Context, hash *chainhash.Hash,
-	wantChildren, wantBody bool) (*meta.Data, error) {
+	wantChildren, wantBody, wantLane bool) (*meta.Data, error) {
 	done := make(chan getResult, 1)
 
 	// A store that is closing reads directly, so the answer is the pool's closed error and not
 	// a panic on the batcher's closed channel.
 	if !s.enqueue(func() {
-		s.getBatcher.PutCtx(ctx, &getItem{hash: *hash, wantChildren: wantChildren, wantBody: wantBody, done: done})
+		s.getBatcher.PutCtx(ctx, &getItem{hash: *hash, wantChildren: wantChildren, wantBody: wantBody, wantLane: wantLane,
+			done: done})
 	}) {
-		return s.getDirect(ctx, hash, wantChildren, wantBody)
+		return s.getDirect(ctx, hash, wantChildren, wantBody, wantLane)
 	}
 
 	select {

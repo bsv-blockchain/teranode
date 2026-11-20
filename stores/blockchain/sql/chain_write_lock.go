@@ -8,8 +8,13 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 )
 
-// chainWriteStateKey is the state row every chain-membership write on PostgreSQL locks,
-// and every on_main_chain walk checks before it commits.
+// chainWriteStateKey is the state row the chain-membership writes on PostgreSQL lock,
+// and every on_main_chain walk checks before it commits. The writes that lock it are
+// DeleteBlock, InvalidateBlock, RevalidateBlock, the fork path of StoreBlock, and the
+// extend path's later clear of the new block's own flag when its best-block read after
+// the insert names another block. The extend path's insert takes no lock: it decides
+// on_main_chain from this process's best-block cache, which a lock taken inside its
+// transaction could not correct.
 //
 // The walks read their rows from a REPEATABLE READ snapshot and most run without
 // slowPathMu, which in any case only orders writers in this process. A chain write that
@@ -42,9 +47,28 @@ func (s *SQL) chainWriteLocking() bool {
 
 // ensureChainWriteRow creates the shared row if no process has yet. A walk that finds no
 // row cannot see a write that is creating it, so New creates it before any walk runs.
+//
+// It reads before it inserts. An INSERT ... ON CONFLICT waits for any open transaction
+// that has locked the row, and a chain write queued behind a full walk can hold it for as
+// long as the walk runs, so a starting process would sit in New with no deadline. A plain
+// read never waits on a row lock. On a new database the genesis StoreBlock's lock has
+// already created the row, so only a database that holds its chain but has no row reaches
+// the insert, such as one written before the row existed. There the usual holder is
+// another process's own insert in New, which lasts milliseconds.
 func (s *SQL) ensureChainWriteRow(ctx context.Context) error {
 	if !s.chainWriteLocking() {
 		return nil
+	}
+
+	var one int
+
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM state WHERE key = $1`, chainWriteStateKey).Scan(&one)
+	if err == nil {
+		return nil
+	}
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		return errors.NewStorageError("could not read the %s state row", chainWriteStateKey, err)
 	}
 
 	if _, err := s.db.ExecContext(ctx,
@@ -59,12 +83,12 @@ func (s *SQL) ensureChainWriteRow(ctx context.Context) error {
 // lockChainWrites locks the shared row for a chain-membership write. Call it as the first
 // statement of the transaction that moves chain membership, before anything it reads.
 // The error is the driver's own, unwrapped, so RetryTx can classify it.
-func (s *SQL) lockChainWrites(ctx context.Context, exec execQuerier) error {
+func (s *SQL) lockChainWrites(ctx context.Context, tx *sql.Tx) error {
 	if !s.chainWriteLocking() {
 		return nil
 	}
 
-	_, err := exec.ExecContext(ctx,
+	_, err := tx.ExecContext(ctx,
 		`INSERT INTO state (key, data, updated_at) VALUES ($1, $2, CURRENT_TIMESTAMP)
 		 ON CONFLICT (key) DO UPDATE SET updated_at = CURRENT_TIMESTAMP`,
 		chainWriteStateKey, []byte{})
@@ -85,6 +109,10 @@ func (s *SQL) checkNoChainWriteSinceSnapshot(ctx context.Context, tx *sql.Tx) er
 
 	err := tx.QueryRowContext(ctx, `SELECT 1 FROM state WHERE key = $1 FOR UPDATE NOWAIT`, chainWriteStateKey).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
+		// New creates the row, so it is missing only if removed by hand. Writes re-create
+		// it, but a walk already in flight cannot see that, so it commits unchecked.
+		s.logger.Warnf("[checkNoChainWriteSinceSnapshot] the %s state row is missing; committing the on_main_chain walk without the cross-process check", chainWriteStateKey)
+
 		return nil
 	}
 

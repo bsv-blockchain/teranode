@@ -5800,7 +5800,22 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		lastMoveForwardBlock := blockIdx == len(moveForwardBlocks)-1
 		// we skip the notifications for now and do them all at the end
 		// transactionMap is returned so we can check which transactions need to be marked as on the longest chain
-		if transactionMap, losingTxHashesMap, err = stp.moveForwardBlock(ctx, block, true, processedConflictingHashesMap, !lastMoveForwardBlock, lastMoveForwardBlock); err != nil {
+		//
+		// Every step asks to drain the queue, not only the last. A step whose
+		// block has no subtrees, or only ones block assembly already holds,
+		// skips the drain, and has no mined tx to filter against. The drain above took
+		// the backlog from before the reorg; what arrived since is filtered
+		// against the block whose step drains it, and once in the subtrees,
+		// by each later block's remainder pass. Draining on the last step
+		// alone filtered those arrivals against the last block, and a tx an
+		// earlier forward block mined went back into block assembly. A step
+		// that fails after its drain puts back its input, which lacks what it
+		// drained. The reset that follows a failed fork reorg reloads every tx
+		// the store marks unmined, and a queued tx is one, as with the last
+		// step's drain before. A tx that arrives after its own block's step
+		// still reaches only later blocks' filters, as it does outside a reorg,
+		// and so does one a positive double-spend window holds back past it.
+		if transactionMap, losingTxHashesMap, err = stp.moveForwardBlock(ctx, block, true, processedConflictingHashesMap, false, lastMoveForwardBlock); err != nil {
 			return err
 		}
 
@@ -8116,23 +8131,25 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHa
 func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*TxBatch) (int, error)) error {
 	// Bound the drain by two complementary cutoffs:
 	//
-	//  1. Time: validFromMillis = clock.Now() at function entry (or
-	//     clock.Now() - DoubleSpendWindow when that filter is enabled).
-	//     The queue filter in LockFreeQueue.dequeueBatch holds back any batch whose
-	//     enqueue timestamp is >= this value, so we only drain batches
-	//     that existed before this moment. Batches arriving during the
-	//     drain stay queued and roll forward to the next state-transition
-	//     cycle. The gRPC ingest handlers admit through AddBatchBounded,
-	//     which only refuses when blockassembly_maxQueueItems is positive;
-	//     with the default of 0 ingest is not backpressured, and even when
-	//     it is, the queue keeps filling up to its cap during the drain.
-	//     Either way this time cap is what stops the loop from chasing
-	//     ingest.
+	//  1. Time: the millisecond of clock.Now() at function entry,
+	//     inclusive, or clock.Now() - DoubleSpendWindow, exclusive, when
+	//     that filter is enabled. The drain stops at the first queued batch
+	//     the cutoff excludes (stamped after it with no window, at or after
+	//     it with one), and that batch and everything behind it roll
+	//     forward to the next state-transition cycle. With no window, a
+	//     batch stamped in the drain's own millisecond can arrive during the
+	//     drain and is taken too, which the item bound below caps. The
+	//     gRPC ingest handlers admit through AddBatchBounded, which only
+	//     refuses when blockassembly_maxQueueItems is positive; with the
+	//     default of 0 ingest is not backpressured, and even when it is,
+	//     the queue keeps filling up to its cap during the drain. So
+	//     something other than backpressure must stop the loop from chasing
+	//     ingest: this time cap with a window, and the item bound within
+	//     the drain's own millisecond.
 	//
 	//  2. Items: queueLength snapshotted at entry, compared against items
-	//     drained. Belt-and-braces — if clock granularity ever caused the
-	//     time filter to admit slightly more than expected, this caps
-	//     total work at the snapshot.
+	//     drained. It caps total work at the snapshot, plus at most one
+	//     batch, whatever the time filter admits.
 	//
 	// Previous form left validFromMillis=0 when DoubleSpendWindow=0,
 	// which disables the queue filter entirely (LockFreeQueue.dequeueBatch
@@ -8152,10 +8169,32 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	// "function entry" semantic the docstring describes. Calling
 	// stp.clock.Now() twice would let the second call admit batches
 	// enqueued in the gap between the two samples.
+	//
+	// With no double-spend window the cutoff includes the drain's own
+	// millisecond, so a batch stamped then and queued ahead of any later
+	// one is filtered against the block this drain moves. An exclusive
+	// cutoff held it back, and a later block's filter, or none, then let a
+	// tx this block mined back into block assembly. A producer stamps a
+	// batch before it links it, so a batch stamped in this millisecond can
+	// still miss the drain: when a later-stamped batch links ahead of it,
+	// or when it links after the drain ends. The steady-state dequeue loop
+	// then places it with no block filter, or the next block movement takes
+	// it and filters it only against the blocks that movement moves, never
+	// against this one, as for any tx that arrives after its block's drain.
 	now := stp.clock.Now()
+	window := stp.settings.BlockAssembly.DoubleSpendWindow
+
 	validFromMillis := now.UnixMilli()
-	if stp.settings.BlockAssembly.DoubleSpendWindow > 0 {
-		validFromMillis = now.Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
+	if window > 0 {
+		validFromMillis = now.Add(-window).UnixMilli()
+	}
+
+	dequeue := func() (*TxBatch, bool) {
+		if window > 0 {
+			return stp.queue.dequeueBatch(validFromMillis)
+		}
+
+		return stp.queue.dequeueBatchUntil(validFromMillis)
 	}
 
 	itemsProcessed := int64(0)
@@ -8163,7 +8202,7 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	chunkItems := 0
 
 	for itemsProcessed < queueLength {
-		batch, found := stp.queue.dequeueBatch(validFromMillis)
+		batch, found := dequeue()
 		if !found {
 			break
 		}

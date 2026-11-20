@@ -1094,7 +1094,7 @@ func (w *nettedWrite) createInChunk(ctx context.Context, dbTx pgx.Tx, run *chunk
 	items := make([]*createItem, len(planned))
 	for i, k := range planned {
 		it := run.its[k]
-		items[i] = &createItem{tx: it.tx, blockHeight: w.blockHeight, options: w.list.Options.ItemOptions(it.pos)}
+		items[i] = &createItem{tx: it.tx, blockHeight: w.blockHeight, options: listItemOptions(w.list, w.positions, it.pos)}
 	}
 
 	plan := w.s.planCreates(items)
