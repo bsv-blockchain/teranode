@@ -444,3 +444,83 @@ func readLaneCounter(t *testing.T, name string, key func(map[string]string) stri
 
 	return out
 }
+
+// The journal's copy-forward, which keeps a waiting transaction's spends past their partition's
+// drop, carries the output's position too, so Unspend still restores it.
+func TestJournalCopyForwardCarriesTheLanePosition(t *testing.T) {
+	s, ctx := newLaneCopyStore(t)
+
+	want := lane.Pack(13, 5)
+
+	parent := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, parent, 1_000, utxo.WithLanePosition(want), utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1_000, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	waiting := spendOneOutput(t, s, ctx, parent, 0, 1_010)
+
+	require.NoError(t, s.SetBlockHeight(1_728))
+
+	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
+	require.NoError(t, err)
+	require.Positive(t, dropped)
+
+	v, ok := journalLane(t, s, ctx, parent, 0)
+	requireLaneValue(t, want, v, ok, "the carried journal row")
+
+	spends, err := utxo.GetSpends(waiting)
+	require.NoError(t, err)
+	require.NoError(t, s.Unspend(ctx, spends))
+
+	v, ok = coinLane(t, s, ctx, parent, 0)
+	requireLaneValue(t, want, v, ok, "the coin rebuilt from the carried row")
+}
+
+// Below the checkpoint the netted write writes each surviving coin with its creating transaction's
+// position.
+func TestNettedBelowCoinsTakeTheirTransactionsLanePosition(t *testing.T) {
+	s, ctx := newLaneCopyStore(t)
+
+	const height = 800
+
+	w := tests.BuildMultiWorkload(t, 0xe2, 3, 3)
+	w.StoreRoots(t, s, height-1)
+
+	positions := make([]uint64, 2*len(w.Txs))
+	for i := range positions {
+		positions[i] = lane.Pack(14, uint64(i)+1) //nolint:gosec // i counts up from 0
+	}
+
+	s.SetLanePositionSource(tests.NewScriptedLanePositions(positions...))
+	t.Cleanup(func() { s.SetLanePositionSource(nil) })
+
+	list := outpointOnly(w.Txs)
+
+	results, err := s.SpendAndCreateMulti(ctx, list, height, belowCheckpointOptions(height)...)
+	require.NoError(t, err)
+
+	for i, r := range results {
+		require.Equal(t, utxo.MultiTxCreated, r.Status, "tx %d: %v", i, r.Err)
+	}
+
+	checked := 0
+
+	for _, tx := range list {
+		md, err := s.Get(ctx, tx.TxIDChainHash(), fields.LanePosition)
+		require.NoError(t, err)
+		require.True(t, lane.Valid(md.LanePosition))
+
+		for vout := range tx.Outputs {
+			v, ok := coinLane(t, s, ctx, tx, uint32(vout)) //nolint:gosec // a handful of outputs
+			if !ok {
+				continue // spent inside the list, so never written
+			}
+
+			requireLaneValue(t, md.LanePosition, v, ok, "a surviving coin")
+
+			checked++
+		}
+	}
+
+	require.Positive(t, checked, "the list leaves coins")
+}
