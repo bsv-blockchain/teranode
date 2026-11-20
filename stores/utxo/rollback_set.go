@@ -13,6 +13,42 @@ func IsPrunedReplayRejection(err error) bool {
 	return errors.Is(err, errors.ErrUtxoSpendingTxPruned)
 }
 
+// HistoricalSpendAge is how many blocks older than the incoming spend a
+// recorded spend must be to count as history: half the pruning retention, 144
+// at the default of 288.
+//
+// The pruner deletes a mined transaction no sooner than the retention after its
+// block, and a spend is recorded no later than that block, so a replay of a
+// pruned transaction always meets a spend at least the retention old. Half the
+// retention leaves a margin for a spend recorded above the block that mined it:
+// a mempool spend is recorded at the tip plus one, and a reorg to a heavier but
+// shorter chain can mine it lower. An honest retry after a failed attempt
+// comes back within minutes, far below the threshold.
+func HistoricalSpendAge(retention uint32) uint32 {
+	if age := retention / 2; age > 0 {
+		return age
+	}
+
+	return 1
+}
+
+// IsHistoricalSpend reports whether an idempotent match is a spend from
+// history rather than an earlier attempt at the current call. recorded is false
+// for a spend written before spend heights were stored; such a spend counts as
+// history. A recorded height above the incoming one (a re-applied block below
+// the tip) is not history.
+func IsHistoricalSpend(recordedHeight uint32, recorded bool, incomingHeight, retention uint32) bool {
+	if !recorded {
+		return true
+	}
+
+	if incomingHeight < recordedHeight {
+		return false
+	}
+
+	return incomingHeight-recordedHeight >= HistoricalSpendAge(retention)
+}
+
 // RollbackSet decides which of a failed Spend's successful inputs must be
 // reversed: everything this call actually wrote, plus, in most cases, the
 // inputs whose output already recorded exactly this spend.

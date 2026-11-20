@@ -103,3 +103,28 @@ func TestAnyPrunedReplayAndNeedsSpendRollbackSkipNilSpends(t *testing.T) {
 	require.False(t, NeedsSpendRollback([]*Spend{nil, missing}, false), "a missing parent is a failure only for a RequireParentOutputs caller")
 	require.True(t, NeedsSpendRollback([]*Spend{nil, missing}, true))
 }
+
+func TestIsHistoricalSpend(t *testing.T) {
+	for _, c := range []struct {
+		name           string
+		recordedHeight uint32
+		recorded       bool
+		incoming       uint32
+		retention      uint32
+		historical     bool
+	}{
+		{"a pruned child's spend 801 blocks back", 1200, true, 2001, 288, true},
+		{"an honest retry 2 blocks later", 2001, true, 2003, 288, false},
+		{"one block under half the retention", 1000, true, 1143, 288, false},
+		{"exactly half the retention", 1000, true, 1144, 288, true},
+		{"a spend written before heights were stored", 0, false, 5, 288, true},
+		{"a re-applied block below the recorded height", 2005, true, 2001, 288, false},
+		{"a zero retention still has an age of one", 10, true, 11, 0, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			require.Equal(t, c.historical, IsHistoricalSpend(c.recordedHeight, c.recorded, c.incoming, c.retention))
+		})
+	}
+
+	require.Equal(t, uint32(144), HistoricalSpendAge(288))
+}
