@@ -7729,7 +7729,15 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 		return nil, nil, nil, err
 	}
 
-	stp.forgetMinedDroppedTxs(transactionMap)
+	// The block's mined drops are forgotten before the drain below, so their queued children are
+	// admitted, and put back if the move fails after this: the block is then not applied.
+	if forgotten := stp.forgetMinedDroppedTxs(transactionMap); len(forgotten) != 0 {
+		defer func() {
+			if err != nil {
+				stp.restoreForgottenDroppedTxs(forgotten)
+			}
+		}()
+	}
 
 	if stp.reorgForwardTxMapSubtrees != nil {
 		for subtreeHash := range blockSubtreesMap {

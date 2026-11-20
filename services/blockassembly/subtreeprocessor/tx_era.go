@@ -227,18 +227,49 @@ func (stp *SubtreeProcessor) RestartDroppedTxs() (finish func(reloaded bool)) {
 // so their descendants are validated against them under the next block's rules and must
 // not stay out for the drop. A block made only of this node's own subtrees has no map, and
 // mines nothing that was dropped: a dropped transaction never entered them.
-func (stp *SubtreeProcessor) forgetMinedDroppedTxs(mined *SortedHashSet) {
+//
+// It returns the drops it forgot, for a move that fails afterwards to put back
+// (restoreForgottenDroppedTxs): the block is then not applied.
+func (stp *SubtreeProcessor) forgetMinedDroppedTxs(mined *SortedHashSet) []chainhash.Hash {
 	if mined == nil || stp.droppedCount.Load() == 0 {
+		return nil
+	}
+
+	stp.droppedMu.Lock()
+	defer stp.droppedMu.Unlock()
+
+	var forgotten []chainhash.Hash
+
+	for hash := range stp.droppedTxs {
+		if mined.Exists(hash) {
+			delete(stp.droppedTxs, hash)
+			stp.droppedCount.Add(-1)
+
+			forgotten = append(forgotten, hash)
+		}
+	}
+
+	return forgotten
+}
+
+// restoreForgottenDroppedTxs puts back the drops a failed move forgot. Not through
+// recordDroppedLocked: these drops were counted when they happened.
+func (stp *SubtreeProcessor) restoreForgottenDroppedTxs(forgotten []chainhash.Hash) {
+	if len(forgotten) == 0 {
 		return
 	}
 
 	stp.droppedMu.Lock()
 	defer stp.droppedMu.Unlock()
 
-	for hash := range stp.droppedTxs {
-		if mined.Exists(hash) {
-			delete(stp.droppedTxs, hash)
-			stp.droppedCount.Add(-1)
+	if stp.droppedTxs == nil {
+		stp.droppedTxs = make(map[chainhash.Hash]struct{}, len(forgotten))
+	}
+
+	for _, hash := range forgotten {
+		if _, ok := stp.droppedTxs[hash]; !ok {
+			stp.droppedTxs[hash] = struct{}{}
+			stp.droppedCount.Add(1)
 		}
 	}
 }

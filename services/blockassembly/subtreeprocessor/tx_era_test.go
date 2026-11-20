@@ -459,3 +459,29 @@ func BenchmarkFilterTxEra(b *testing.B) {
 		})
 	}
 }
+
+// TestTxEra_FailedMoveKeepsTheDropsItWouldForget pins that a block move forgets the drops of the
+// transactions its block mines only if the move completes. A move that fails after the forget
+// leaves the block unapplied, so a child of such a transaction must still be kept out.
+func TestTxEra_FailedMoveKeepsTheDropsItWouldForget(t *testing.T) {
+	f := newStepRestoreFixture(t, stepRestoreOptions{})
+
+	// f1, mined in the fork block F, was kept out of the template.
+	f.stp.droppedMu.Lock()
+	f.stp.recordDroppedLocked(f.f1)
+	f.stp.droppedMu.Unlock()
+
+	f.store.failCoinbaseOf.Store(f.blockF.CoinbaseTx.TxIDChainHash())
+	defer f.store.failCoinbaseOf.Store(nil)
+
+	err := f.stp.Reorg([]*model.Block{f.blockA}, []*model.Block{f.blockF, f.blockF2})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "error processing coinbase utxos")
+
+	f.stp.droppedMu.Lock()
+	_, stillDropped := f.stp.droppedTxs[f.f1]
+	f.stp.droppedMu.Unlock()
+
+	require.True(t, stillDropped, "the move that would have mined f1 failed")
+	require.Equal(t, int64(1), f.stp.droppedCount.Load())
+}
