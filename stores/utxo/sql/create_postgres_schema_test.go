@@ -210,12 +210,26 @@ func TestCreatePostgresSchema_ErrorAtLanePositionColumnAdd(t *testing.T) {
 	assert.Contains(t, err.Error(), "could not add lane_position column to transactions table")
 }
 
+func TestCreatePostgresSchema_ErrorAtSpendingHeightColumnAdd(t *testing.T) {
+	mockDB := CreateMockDBForSchema()
+	defer mockDB.AssertExpectations(t)
+
+	// Setup error at step 13 (spending_height column add)
+	SetupCreatePostgresSchemaErrorMocks(mockDB, 13)
+
+	udb := &usql.DB{DB: nil}
+	err := createPostgresSchemaWithMockDB(udb, mockDB)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "could not add spending_height column to outputs table")
+}
+
 func TestCreatePostgresSchema_ErrorAtBlockIDsConstraintEnsure(t *testing.T) {
 	mockDB := CreateMockDBForSchema()
 	defer mockDB.AssertExpectations(t)
 
-	// Setup error at step 13 (block_ids FK ensure CASCADE)
-	SetupCreatePostgresSchemaErrorMocks(mockDB, 13)
+	// Setup error at step 14 (block_ids FK ensure CASCADE)
+	SetupCreatePostgresSchemaErrorMocks(mockDB, 14)
 
 	udb := &usql.DB{DB: nil}
 	err := createPostgresSchemaWithMockDB(udb, mockDB)
@@ -228,8 +242,8 @@ func TestCreatePostgresSchema_ErrorAtConflictingChildrenTable(t *testing.T) {
 	mockDB := CreateMockDBForSchema()
 	defer mockDB.AssertExpectations(t)
 
-	// Setup error at step 14 (conflicting_children table creation)
-	SetupCreatePostgresSchemaErrorMocks(mockDB, 14)
+	// Setup error at step 15 (conflicting_children table creation)
+	SetupCreatePostgresSchemaErrorMocks(mockDB, 15)
 
 	udb := &usql.DB{DB: nil}
 	err := createPostgresSchemaWithMockDB(udb, mockDB)
@@ -242,8 +256,8 @@ func TestCreatePostgresSchema_ErrorAtUnspentByParentIndex(t *testing.T) {
 	mockDB := CreateMockDBForSchema()
 	defer mockDB.AssertExpectations(t)
 
-	// Setup error at step 15 (px_outputs_unspent_by_parent partial index)
-	SetupCreatePostgresSchemaErrorMocks(mockDB, 15)
+	// Setup error at step 16 (px_outputs_unspent_by_parent partial index)
+	SetupCreatePostgresSchemaErrorMocks(mockDB, 16)
 
 	udb := &usql.DB{DB: nil}
 	err := createPostgresSchemaWithMockDB(udb, mockDB)
@@ -256,8 +270,8 @@ func TestCreatePostgresSchema_ErrorAtConflictIntentsTable(t *testing.T) {
 	mockDB := CreateMockDBForSchema()
 	defer mockDB.AssertExpectations(t)
 
-	// Setup error at step 16 (conflict_intents table)
-	SetupCreatePostgresSchemaErrorMocks(mockDB, 16)
+	// Setup error at step 17 (conflict_intents table)
+	SetupCreatePostgresSchemaErrorMocks(mockDB, 17)
 
 	udb := &usql.DB{DB: nil}
 	err := createPostgresSchemaWithMockDB(udb, mockDB)
@@ -270,8 +284,8 @@ func TestCreatePostgresSchema_ErrorAtDeletedChildrenTable(t *testing.T) {
 	mockDB := CreateMockDBForSchema()
 	defer mockDB.AssertExpectations(t)
 
-	// Setup error at step 17 (deleted_children table, the replay-marker table)
-	SetupCreatePostgresSchemaErrorMocks(mockDB, 17)
+	// Setup error at step 18 (deleted_children table, the replay-marker table)
+	SetupCreatePostgresSchemaErrorMocks(mockDB, 18)
 
 	udb := &usql.DB{DB: nil}
 	err := createPostgresSchemaWithMockDB(udb, mockDB)
