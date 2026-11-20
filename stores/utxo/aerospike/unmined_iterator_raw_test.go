@@ -722,6 +722,11 @@ func TestRawUnminedHandler_SkipsExternalRecordWithMissingFile(t *testing.T) {
 	it.skipMissingExternal = true
 
 	require.NoError(t, feed(t, h, rawExternalRecordBins(1)))
+
+	// The skip must not leave the handler marked busy, or the idle watchdog
+	// would take a later stall on Aerospike for time spent on the external store.
+	require.False(t, h.busy.Load())
+
 	require.NoError(t, feed(t, h, rawMainRecordBins(2)))
 	require.NoError(t, h.flush())
 
