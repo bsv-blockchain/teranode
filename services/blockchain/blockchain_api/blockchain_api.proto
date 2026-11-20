@@ -1240,7 +1240,7 @@ message RenewLaneLeaseResponse {
 message ReleaseLaneLeaseRequest {
   bytes lease_id = 1;
   uint32 lane = 2;
-  uint64 last_taken = 3;          // Highest position given out in the lane that may carry a record: positions at the top that came back unwritten are left out; 0 for none
+  uint64 last_taken = 3;          // Highest position this lease gave out that may carry a record: positions at the top that came back unwritten are left out; 0 when this lease gave none out or every one of them came back
   uint64 settles_first = 4;
   uint64 settles_last_taken = 5;
 }

@@ -253,7 +253,7 @@ func (a *Allocator) Close() error {
 	// With two pairs held the release carries the older. The newer is the grant last left: its final
 	// number is the LastTaken the release carries, or, when that grant gave back every position it
 	// gave out and settled at 0, LastTaken stays the number before it and the newer pair is not sent.
-	// Either way no position above LastTaken carries a record.
+	// Either way no position this lease gave out above LastTaken carries a record.
 	leased, release := a.leased, Release{Lease: a.lease, Lane: a.lane, LastTaken: a.leaseTaken, Settles: a.pending[0]}
 	a.mu.Unlock()
 

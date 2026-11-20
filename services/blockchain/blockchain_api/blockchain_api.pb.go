@@ -7694,7 +7694,7 @@ type ReleaseLaneLeaseRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	LeaseId          []byte                 `protobuf:"bytes,1,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
 	Lane             uint32                 `protobuf:"varint,2,opt,name=lane,proto3" json:"lane,omitempty"`
-	LastTaken        uint64                 `protobuf:"varint,3,opt,name=last_taken,json=lastTaken,proto3" json:"last_taken,omitempty"` // Highest position given out in the lane that may carry a record: positions at the top that came back unwritten are left out; 0 for none
+	LastTaken        uint64                 `protobuf:"varint,3,opt,name=last_taken,json=lastTaken,proto3" json:"last_taken,omitempty"` // Highest position this lease gave out that may carry a record: positions at the top that came back unwritten are left out; 0 when this lease gave none out or every one of them came back
 	SettlesFirst     uint64                 `protobuf:"varint,4,opt,name=settles_first,json=settlesFirst,proto3" json:"settles_first,omitempty"`
 	SettlesLastTaken uint64                 `protobuf:"varint,5,opt,name=settles_last_taken,json=settlesLastTaken,proto3" json:"settles_last_taken,omitempty"`
 	unknownFields    protoimpl.UnknownFields

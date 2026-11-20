@@ -137,7 +137,7 @@ func (g Grant) Len() uint64 {
 // Settles finishes a grant the holder has left: the grant's first position and its final number,
 // which is the grant's last position if it was used up, or the highest position taken if it aged
 // out, lowered past any positions at the top of that range that came back unwritten (Allocator.Return)
-// and were not given out again. No position above the final number carries a record. The holder
+// and were not given out again. No position of that grant above the final number carries a record. The holder
 // sends it on its next grant request and on its release, and the service writes it on that hand-out
 // row or close row. A grant is settled only once it has been used; LastTaken is zero in a pair the
 // holder sends only when every position the grant gave out came back, so none carries a record. A
