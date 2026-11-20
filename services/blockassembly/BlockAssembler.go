@@ -204,6 +204,10 @@ type BlockAssembler struct {
 	stateChangeMu sync.RWMutex
 	stateChangeCh chan BestBlockInfo
 
+	// pendingStateChanges holds, under stateChangeMu, the tips set since block assembly last
+	// ran, to announce on stateChangeCh once it runs again (flushStateChanges).
+	pendingStateChanges []BestBlockInfo
+
 	// heartbeat records that the main select loop is still being serviced, so
 	// the liveness probe can distinguish a wedged assembler from an idle one
 	// (issue 1447)
@@ -1893,12 +1897,36 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 		b.subtreeProcessor.SetTxEra(height + 1)
 	}
 
-	// Send state change notification if a listener is registered
-	b.stateChangeMu.RLock()
-	stateChangeCh := b.stateChangeCh
-	b.stateChangeMu.RUnlock()
+	// A listener hears of the tip once block assembly runs on it again: a move sets it before
+	// it settles the template, and a mining candidate asked for meanwhile is an empty one.
+	b.stateChangeMu.Lock()
+	if b.stateChangeCh != nil {
+		b.pendingStateChanges = append(b.pendingStateChanges, BestBlockInfo{
+			Header: bestBlockchainBlockHeader,
+			Height: height,
+		})
+	}
+	b.stateChangeMu.Unlock()
 
-	if stateChangeCh != nil {
+	if state, ok := b.currentRunningState.Load().(State); ok && state == StateRunning {
+		b.flushStateChanges()
+	}
+}
+
+// flushStateChanges announces the pending tips to the state change listener, in the order they
+// were set.
+func (b *BlockAssembler) flushStateChanges() {
+	b.stateChangeMu.Lock()
+	pending := b.pendingStateChanges
+	b.pendingStateChanges = nil
+	stateChangeCh := b.stateChangeCh
+	b.stateChangeMu.Unlock()
+
+	if stateChangeCh == nil {
+		return
+	}
+
+	for _, info := range pending {
 		// Protect against send on closed channel
 		func() {
 			defer func() {
@@ -1906,10 +1934,7 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 					b.logger.Debugf("[BlockAssembler] stateChangeCh closed; skipping state change notification")
 				}
 			}()
-			stateChangeCh <- BestBlockInfo{
-				Header: bestBlockchainBlockHeader,
-				Height: height,
-			}
+			stateChangeCh <- info
 		}()
 	}
 }
@@ -2248,6 +2273,10 @@ func (b *BlockAssembler) setCurrentRunningState(state State) {
 	b.currentRunningState.Store(state)
 	b.stateStartTime.Store(now)
 	prometheusBlockAssemblerCurrentState.Set(float64(state))
+
+	if state == StateRunning {
+		b.flushStateChanges()
+	}
 }
 
 // GetCurrentRunningState returns the current operational state.
@@ -3006,6 +3035,7 @@ func (b *BlockAssembler) SetStateChangeCh(ch chan BestBlockInfo) {
 	b.stateChangeMu.Lock()
 	defer b.stateChangeMu.Unlock()
 	b.stateChangeCh = ch
+	b.pendingStateChanges = nil
 }
 
 // CurrentBlock returns the current best block header and height atomically.

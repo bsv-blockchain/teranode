@@ -3345,3 +3345,32 @@ func TestLoadUnminedTransactionsKeepsParentLinksWithSubtreeMetaOff(t *testing.T)
 		})
 	}
 }
+
+// TestBlockAssembler_StateChangeWaitsForTheMoveToFinish pins that a state-change listener hears
+// of a new tip only once block assembly is running on it again. A block move sets the tip
+// before it settles the template, and a mining candidate asked for meanwhile is an empty one.
+func TestBlockAssembler_StateChangeWaitsForTheMoveToFinish(t *testing.T) {
+	initPrometheusMetrics()
+
+	items := setupBlockAssemblyTest(t)
+	require.NotNil(t, items)
+
+	ba := items.blockAssembler
+
+	ch := make(chan BestBlockInfo, 4)
+	ba.SetStateChangeCh(ch)
+
+	ba.setCurrentRunningState(StateMovingUp)
+	ba.setBestBlockHeader(blockHeader1, 1)
+	ba.setBestBlockHeader(blockHeader2, 2)
+	require.Empty(t, ch, "no notification while the move runs")
+
+	ba.setCurrentRunningState(StateRunning)
+	require.Len(t, ch, 2, "both tips, in order, once running")
+	require.Equal(t, uint32(1), (<-ch).Height)
+	require.Equal(t, uint32(2), (<-ch).Height)
+
+	ba.setBestBlockHeader(blockHeader3, 3)
+	require.Len(t, ch, 1, "a tip set while running is announced at once")
+	require.Equal(t, uint32(3), (<-ch).Height)
+}
