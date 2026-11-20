@@ -3073,13 +3073,9 @@ type spendSelectResult struct {
 // for a transaction that outlived the retention (one that waited unmined, say),
 // and reports historical so that no rollback reverses it. A young match is an
 // earlier attempt at this call and reports not historical.
-//
-// With retention 0 nothing is ever pruned, so there is no replay to refuse and
-// every match is young; HistoricalSpendAge would otherwise clamp to one block
-// and refuse an honest retry that follows its failed attempt by a block.
 func (s *Store) classifyIdempotentMatch(item *batchSpend, recorded sql.NullInt64, spenderExists bool) (historical bool, refused error) {
 	retention := s.settings.GetUtxoStoreBlockHeightRetention()
-	if retention == 0 || !utxo.IsHistoricalSpend(uint32(recorded.Int64), recorded.Valid, item.blockHeight, retention) {
+	if !utxo.IsHistoricalSpend(uint32(recorded.Int64), recorded.Valid, item.blockHeight, retention) {
 		return false, nil
 	}
 

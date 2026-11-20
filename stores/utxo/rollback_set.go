@@ -36,8 +36,14 @@ func HistoricalSpendAge(retention uint32) uint32 {
 // history rather than an earlier attempt at the current call. recorded is false
 // for a spend written before spend heights were stored; such a spend counts as
 // history. A recorded height above the incoming one (a re-applied block below
-// the tip) is not history.
+// the tip) is not history. With retention 0 nothing is ever pruned, so no match
+// is history: HistoricalSpendAge would otherwise clamp to one block and refuse
+// an honest retry that follows its failed attempt by a block.
 func IsHistoricalSpend(recordedHeight uint32, recorded bool, incomingHeight, retention uint32) bool {
+	if retention == 0 {
+		return false
+	}
+
 	if !recorded {
 		return true
 	}

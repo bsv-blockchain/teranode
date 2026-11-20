@@ -119,7 +119,8 @@ func TestIsHistoricalSpend(t *testing.T) {
 		{"exactly half the retention", 1000, true, 1144, 288, true},
 		{"a spend written before heights were stored", 0, false, 5, 288, true},
 		{"a re-applied block below the recorded height", 2005, true, 2001, 288, false},
-		{"a zero retention still has an age of one", 10, true, 11, 0, true},
+		{"retention 0 prunes nothing, so nothing is history", 10, true, 5000, 0, false},
+		{"retention 0 with no recorded height", 0, false, 5000, 0, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			require.Equal(t, c.historical, IsHistoricalSpend(c.recordedHeight, c.recorded, c.incoming, c.retention))
