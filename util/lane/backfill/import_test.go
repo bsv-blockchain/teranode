@@ -295,8 +295,6 @@ func TestCheckBackfillStretchRefusesAnotherBlock(t *testing.T) {
 	require.Error(t, CheckBackfillStretch(imported, rec, ids, moved), "the source block is another block")
 }
 
-// A manifest run that would pass the last position of the lane is refused, never wrapped into a
-// position Pack cannot hold.
 // The txids handed in must be the record's Count. A short list passes every per-txid check, so
 // only the count check refuses it.
 func TestCheckBackfillStretchRefusesTxIDsShortOfTheRecord(t *testing.T) {
@@ -313,6 +311,8 @@ func TestCheckBackfillStretchRefusesTxIDsShortOfTheRecord(t *testing.T) {
 	require.ErrorContains(t, CheckBackfillStretch(imported, rec, ids[:len(ids)-1], src.Blocks[0]), "its record says")
 }
 
+// A manifest run that would pass the last position of the lane is refused, never wrapped into a
+// position Pack cannot hold.
 func TestMapAssignmentRefusesARunPastTheLane(t *testing.T) {
 	a := MapAssignment{}
 

@@ -244,8 +244,6 @@ func TestNumberRefusesAChangedSource(t *testing.T) {
 	}
 }
 
-// numberedPart writes the source's blocks, all of them or the first n, into a new manifest, and
-// optionally a suffix, as a run that crashed before finishing would leave it.
 // Facts.Existing answers as the stores stood before the segment's import. Facts that also return
 // the positions this segment's import wrote for block 0 make the resume see A, B and C as already
 // numbered, so block 0 no longer matches the manifest and Number refuses to go on.
@@ -276,6 +274,8 @@ func TestNumberResumeRefusesFactsThatSeeThisSegmentsImport(t *testing.T) {
 	require.Len(t, m.Blocks(), 1, "nothing appended")
 }
 
+// numberedPart writes the source's blocks, all of them or the first n, into a new manifest, and
+// optionally a suffix, as a run that crashed before finishing would leave it.
 func numberedPart(t *testing.T, path string, src Source, facts Facts, n int, suffix []chainhash.Hash) {
 	t.Helper()
 
