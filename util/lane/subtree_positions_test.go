@@ -117,6 +117,11 @@ func TestCheckSubtreePositionsRejectsMismatch(t *testing.T) {
 	require.Error(t, CheckSubtreePositions(samplePositions(t, st), nil, meta))
 	require.Error(t, CheckSubtreePositions(nil, st, meta))
 
+	// The coinbase placeholder may carry no parents. Its own position is None, so only the parent
+	// check refuses this.
+	withParents := positionsOf(t, *st.RootHash(), TxPositions{Parents: []uint64{Pack(1, 1)}}, TxPositions{Own: Pack(7, 100), Parents: []uint64{Pack(255, 2), Pack(0, 1)}}, TxPositions{Own: Pack(7, 101)})
+	require.ErrorContains(t, CheckSubtreePositions(withParents, st, meta), "coinbase placeholder, has parent positions")
+
 	positioned := samplePositions(t, st)
 	positioned.Own[0] = Pack(254, 9)
 	require.Error(t, CheckSubtreePositions(positioned, st, meta), "the coinbase placeholder has no position yet")

@@ -276,6 +276,68 @@ func TestManifestRefusesRecordsThatDisagreeWithThemselves(t *testing.T) {
 	require.NoError(t, m.Close())
 }
 
+// Each of these files fails one load check and would load without it, so each case names the
+// error that check gives.
+func TestManifestLoadChecksEachRecordAgainstTheOnesBefore(t *testing.T) {
+	dir := t.TempDir()
+
+	secondBlock := blockRecord(1, 1)
+	binary.LittleEndian.PutUint32(secondBlock[1:], 1) // Seq 1 where block 0 belongs; First is right
+
+	for name, c := range map[string]struct {
+		file []byte
+		want string
+	}{
+		"block before the header":  {craft(blockRecord(2, 2)), "out of order"},
+		"a second header":          {craft(headerRecord(), headerRecord()), "out of order"},
+		"block with the wrong seq": {craft(headerRecord(), secondBlock), "does not follow"},
+		"end with a wrong prefix":  {craft(headerRecord(), blockRecord(2, 2), endRecord(1_000_001, 1_000_002)), "end says"},
+		"end with a wrong last":    {craft(headerRecord(), blockRecord(2, 2), endRecord(1_000_002, 1_000_003)), "end says"},
+	} {
+		path := filepath.Join(dir, "bad")
+		require.NoError(t, os.WriteFile(path, c.file, 0o600))
+
+		_, err := ResumeManifest(path)
+		require.ErrorContains(t, err, c.want, name)
+	}
+}
+
+// A manifest finished without a suffix refuses a later block or suffix, whether finished in this
+// process or loaded finished. No other check stops either: the block would follow the last one and
+// the suffix would fit the lane. A manifest with no suffix has no suffix txids to read.
+func TestManifestRefusesAppendsOnceFinished(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m")
+
+	m, err := CreateManifest(path, testHeader())
+	require.NoError(t, err)
+
+	_, err = m.AppendBlock(10, 10, txids(1, 2))
+	require.NoError(t, err)
+
+	_, _, err = m.SuffixTxIDs()
+	require.ErrorContains(t, err, "has no suffix")
+
+	_, err = m.Finish()
+	require.NoError(t, err)
+
+	check := func(m *Manifest) {
+		_, err := m.AppendBlock(11, 11, txids(2, 1))
+		require.ErrorContains(t, err, "is complete")
+
+		_, err = m.AppendSuffix(txids(3, 1))
+		require.ErrorContains(t, err, "already has its suffix")
+	}
+
+	check(m)
+	require.NoError(t, m.Close())
+
+	m, err = ResumeManifest(path)
+	require.NoError(t, err)
+	require.True(t, m.Finished())
+	check(m)
+	require.NoError(t, m.Close())
+}
+
 func endRecord(prefixLast, last uint64) []byte {
 	r := []byte{recordEnd}
 	r = binary.LittleEndian.AppendUint64(r, prefixLast)

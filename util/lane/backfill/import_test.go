@@ -297,6 +297,22 @@ func TestCheckBackfillStretchRefusesAnotherBlock(t *testing.T) {
 
 // A manifest run that would pass the last position of the lane is refused, never wrapped into a
 // position Pack cannot hold.
+// The txids handed in must be the record's Count. A short list passes every per-txid check, so
+// only the count check refuses it.
+func TestCheckBackfillStretchRefusesTxIDsShortOfTheRecord(t *testing.T) {
+	src, m, assign := numberedExample(t)
+
+	imported, err := ImportBlock(src.Blocks[0], assign)
+	require.NoError(t, err)
+
+	ids, err := m.BlockTxIDs(0)
+	require.NoError(t, err)
+	require.NoError(t, CheckBackfillStretch(imported, m.Blocks()[0], ids, src.Blocks[0]))
+
+	rec := m.Blocks()[0]
+	require.ErrorContains(t, CheckBackfillStretch(imported, rec, ids[:len(ids)-1], src.Blocks[0]), "its record says")
+}
+
 func TestMapAssignmentRefusesARunPastTheLane(t *testing.T) {
 	a := MapAssignment{}
 
@@ -324,7 +340,10 @@ func TestMapAssignmentRefusesConflicts(t *testing.T) {
 	require.NoError(t, a.Add(h("x"), lane.Pack(1, 5)))
 	require.Error(t, a.Add(h("x"), lane.Pack(1, 6)))
 	require.Error(t, a.Add(h("y"), lane.Pack(1, 0)))
-	require.Error(t, a.AddBlock(lane.ConversionBlock{Count: 2}, txids(1, 1)))
+	// A record whose count differs from its txids is refused by that check, not by the run: First
+	// is a valid position, so without the count check the one txid would be added.
+	require.ErrorContains(t, a.AddBlock(lane.ConversionBlock{First: 1, Count: 2}, txids(1, 1)), "its record says 2")
+	require.ErrorContains(t, a.AddBlock(lane.ConversionBlock{First: 1, Count: 1}, txids(1, 2)), "its record says 1")
 
 	_, err := CoinbasePosition(0)
 	require.Error(t, err)

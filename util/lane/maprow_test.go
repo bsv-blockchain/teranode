@@ -270,6 +270,14 @@ func TestMapRowCheckRejects(t *testing.T) {
 	}
 }
 
+// Hole data over MaxRowHoleDataBytes is refused by size, before it is decoded.
+func TestMapRowCheckRefusesHoleDataOverTheRowLimit(t *testing.T) {
+	row := MapRow{Lane: 3, First: 10, Last: 13, FirstHole: 12, Tag: RowTagRoaring64, HoleData: make([]byte, MaxRowHoleDataBytes+1)}
+
+	_, err := row.Check()
+	require.ErrorContains(t, err, "over the row limit")
+}
+
 func TestCheckMapRowsRejectsSharedChunks(t *testing.T) {
 	a := MapRow{Lane: 1, First: 1, Last: 10, Tag: RowTagRange}
 	b := MapRow{Lane: 1, First: 20, Last: 30, Tag: RowTagRange}
