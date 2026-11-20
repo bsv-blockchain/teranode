@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1320,11 +1321,17 @@ func TestLaneColumnPassSharesOneDeadline(t *testing.T) {
 	holdIdent, err := s.pool.Begin(ctx)
 	require.NoError(t, err)
 
-	defer func() { _ = holdIdent.Rollback(ctx) }()
-
 	require.NoError(t, holdIdent.QueryRow(ctx, `SELECT count(*) FROM tx_ident`).Scan(&n))
 
-	time.AfterFunc(2*time.Second, func() { _ = holdIdent.Rollback(context.Background()) })
+	// One release, from whichever goroutine gets there first: the timer, or the test ending.
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { _ = holdIdent.Rollback(context.Background()) }) }
+
+	timer := time.AfterFunc(2*time.Second, release)
+	defer func() {
+		timer.Stop()
+		release()
+	}()
 
 	addCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
