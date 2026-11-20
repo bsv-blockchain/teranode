@@ -561,6 +561,9 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 		appSettings.Kafka.InvalidBlocksConfig.Scheme = newConst
 	}
 
+	// The daemon below runs with -alert=0, so the blockchain service must not wait for one.
+	appSettings.BlockChain.RequireAlertSystem = false
+
 	WaitForPortsFree(t, ctx, appSettings)
 
 	logger := ulogger.NewErrorTestLogger(t, cancel)

@@ -108,7 +108,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 
 	// Create a slice of service starters
 	starters := []serviceStarter{
-		{startBlockchain, func() error { return d.startBlockchainService(ctx, appSettings, args, createLogger) }},
+		{startBlockchain, func() error { return d.startBlockchainService(ctx, appSettings, args, startAlert, createLogger) }},
 		{startP2P, func() error { return d.startP2PService(ctx, appSettings, createLogger) }},
 		{startAsset, func() error { return d.startAssetService(ctx, appSettings, createLogger) }},
 		{startRPC, func() error { return d.startRPCService(ctx, appSettings, createLogger) }},
@@ -267,8 +267,13 @@ func newProfilerMux(logger ulogger.Logger, appSettings *settings.Settings, prome
 }
 
 // startBlockchainService initializes and starts the Blockchain service.
+// alertInProcess reports whether this process also runs the alert service; without it the
+// blockchain service starts only once the alert system answers on alert_healthAddress.
 func (d *Daemon) startBlockchainService(ctx context.Context, appSettings *settings.Settings,
-	args []string, createLogger func(string) ulogger.Logger) error {
+	args []string, alertInProcess bool, createLogger func(string) ulogger.Logger) error {
+	if err := checkAlertSystem(ctx, createLogger(loggerBlockchain), appSettings, alertInProcess); err != nil {
+		return err
+	}
 
 	blockchainStore, err := d.daemonStores.GetBlockchainStore(ctx, createLogger(loggerBlockchainSQL), appSettings)
 	if err != nil {

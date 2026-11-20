@@ -211,6 +211,10 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		appSettings.RPC.RPCPass = "testdaemon"
 	}
 
+	// The test daemon never runs the alert service, so the blockchain service must not wait
+	// for one.
+	appSettings.BlockChain.RequireAlertSystem = false
+
 	// Generate a unique context for this TestDaemon to ensure util.GetListener
 	// creates unique listeners instead of returning cached ones from another TestDaemon.
 	// The counter ensures uniqueness even when tests run in quick succession.
