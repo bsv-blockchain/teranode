@@ -193,7 +193,7 @@ func ImportBlock(b SourceBlock, assign Assignment) (ImportedBlock, error) {
 // which an earlier segment gave, are not this record's to check.
 func CheckBackfillStretch(imported ImportedBlock, rec lane.ConversionBlock, txids []chainhash.Hash, b SourceBlock) error {
 	if imported.BlockID != rec.BlockID || b.BlockID != rec.BlockID {
-		return errors.NewProcessingError("manifest block %d is block %d, not %d", rec.Seq, rec.BlockID, imported.BlockID)
+		return errors.NewProcessingError("manifest block %d is block %d; the import is of block %d and the source of block %d", rec.Seq, rec.BlockID, imported.BlockID, b.BlockID)
 	}
 
 	if uint64(len(txids)) != rec.Count {

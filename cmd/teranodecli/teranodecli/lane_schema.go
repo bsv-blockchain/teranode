@@ -39,6 +39,8 @@ func laneSchemaExecute(logger ulogger.Logger, tSettings *settings.Settings, out 
 			return errors.NewStorageError("failed to open the UTXO store", err)
 		}
 
+		defer func() { _ = store.Close(ctx) }()
+
 		return prepareLaneSchema(ctx, store, out)
 	}
 }

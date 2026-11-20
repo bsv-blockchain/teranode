@@ -298,8 +298,8 @@ func sortRows(rows []lane.MapRow) {
 	}
 }
 
-// GetLaneMapRows returns one block's map rows by lane and first position, each checked.
-func (s *SQL) GetLaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error) {
+// LaneMapRows returns one block's map rows by lane and first position, each checked.
+func (s *SQL) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error) {
 	got, err := queryLaneMapRows(ctx, s.db, `SELECT block_id, lane, first, last, first_hole, tag, hole_data FROM lane_map WHERE block_id = $1 ORDER BY lane, first`, int64(blockID))
 	if err != nil {
 		return nil, err
@@ -313,10 +313,10 @@ func (s *SQL) GetLaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow
 	return rows, nil
 }
 
-// GetLaneMapRowsEndingAbove returns every map row of a lane whose range ends above a position,
+// LaneMapRowsEndingAbove returns every map row of a lane whose range ends above a position,
 // from every block, by block and first position, each checked. A reader loads these with a floor:
 // rows below the floor's position that a late-mined transaction left are still needed.
-func (s *SQL) GetLaneMapRowsEndingAbove(ctx context.Context, laneNum uint8, above uint64) ([]lane.BlockMapRow, error) {
+func (s *SQL) LaneMapRowsEndingAbove(ctx context.Context, laneNum uint8, above uint64) ([]lane.BlockMapRow, error) {
 	if above > lane.MaxPosition {
 		return nil, errors.NewProcessingError("position %d is wider than seven bytes", above)
 	}
@@ -456,8 +456,8 @@ func (s *SQL) InsertLaneConversionSegment(ctx context.Context, seg lane.Conversi
 	return nil
 }
 
-// GetLaneConversionSegments returns every recorded segment by ID.
-func (s *SQL) GetLaneConversionSegments(ctx context.Context) ([]lane.ConversionSegment, error) {
+// LaneConversionSegments returns every recorded segment by ID.
+func (s *SQL) LaneConversionSegments(ctx context.Context) ([]lane.ConversionSegment, error) {
 	return querySegments(ctx, s.db)
 }
 
@@ -695,8 +695,8 @@ func queryConversionBlockRange(ctx context.Context, q queryer, segment, lo, hi u
 	return out, nil
 }
 
-// GetLaneConversionBlocks returns a segment's recorded prefix blocks in order.
-func (s *SQL) GetLaneConversionBlocks(ctx context.Context, segment uint32) ([]lane.ConversionBlock, error) {
+// LaneConversionBlocks returns a segment's recorded prefix blocks in order.
+func (s *SQL) LaneConversionBlocks(ctx context.Context, segment uint32) ([]lane.ConversionBlock, error) {
 	return queryConversionBlocks(ctx, s.db, segment)
 }
 

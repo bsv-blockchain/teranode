@@ -5,6 +5,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -894,4 +895,77 @@ func TestManifestScansAZeroTailToTheEnd(t *testing.T) {
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Equal(t, bad, after, "nothing is cut")
+}
+
+// Only one process writes a manifest: a second ResumeManifest, or a resume of a manifest still being
+// created, fails at once, and closing the writer releases it.
+func TestManifestHasOneWriter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m")
+
+	m, err := CreateManifest(path, testHeader())
+	require.NoError(t, err)
+
+	_, err = ResumeManifest(path)
+	require.ErrorContains(t, err, "another process", "the creator still holds it")
+
+	require.NoError(t, m.Close())
+
+	first, err := ResumeManifest(path)
+	require.NoError(t, err)
+
+	_, err = ResumeManifest(path)
+	require.ErrorContains(t, err, "another process")
+
+	ro, err := OpenManifest(path)
+	require.NoError(t, err, "reading needs no lock")
+	require.NoError(t, ro.Close())
+
+	require.NoError(t, first.Close())
+
+	again, err := ResumeManifest(path)
+	require.NoError(t, err)
+	require.NoError(t, again.Close())
+}
+
+// A header, end or unknown record claiming a huge length is refused before anything is sized from
+// the claim. A sparse file makes the claim fit the file without writing a gigabyte.
+func TestManifestChecksRecordLengthsBeforeAllocating(t *testing.T) {
+	const claimed = 1 << 30
+
+	for name, prefix := range map[string]struct {
+		lead []byte
+		typ  byte
+	}{
+		"huge header":    {nil, recordHeader},
+		"huge end":       {craft(headerRecord())[5:], recordEnd},
+		"unknown record": {craft(headerRecord())[5:], 'Z'},
+	} {
+		head := append([]byte{prefix.typ}, binary.LittleEndian.AppendUint64(nil, claimed)...)
+		head = binary.LittleEndian.AppendUint32(head, crc32.Checksum(head, crcTable))
+
+		b := append(append([]byte(manifestMagic), manifestVersion), prefix.lead...)
+		b = append(b, head...)
+
+		path := filepath.Join(t.TempDir(), "m")
+		require.NoError(t, os.WriteFile(path, b, 0o600))
+		require.NoError(t, os.Truncate(path, int64(len(b))+claimed+frameTail), "a sparse file the claim fits")
+
+		var err error
+
+		n := allocatedBy(func() { _, err = OpenManifest(path) })
+		require.Error(t, err, name)
+		require.Less(t, n, uint64(8<<20), "%s: allocated %d bytes", name, n)
+	}
+}
+
+// allocatedBy returns the bytes fn allocates.
+func allocatedBy(fn func()) uint64 {
+	var before, after runtime.MemStats
+
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	fn()
+	runtime.ReadMemStats(&after)
+
+	return after.TotalAlloc - before.TotalAlloc
 }

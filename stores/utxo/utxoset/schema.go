@@ -849,8 +849,12 @@ func addLanePositionColumns(ctx context.Context, pool *pgxpool.Pool, limit time.
 // process that opens the store with lane positions on runs this. Once the columns exist this is
 // catalog reads and no lock.
 func addLaneColumns(ctx context.Context, pool *pgxpool.Pool, cols []laneSchemaColumn, limit time.Duration) error {
+	// One deadline for the whole pass, as the SQL store does, so a pass of eight columns waits at
+	// most limit, not eight times it.
+	deadline := time.Now().Add(limit)
+
 	for _, c := range cols {
-		if err := addLaneColumn(ctx, pool, c, limit); err != nil {
+		if err := addLaneColumn(ctx, pool, c, deadline); err != nil {
 			return errors.NewStorageError("[utxoset] add %s to %s", c.column, c.table, err)
 		}
 	}
@@ -858,8 +862,7 @@ func addLaneColumns(ctx context.Context, pool *pgxpool.Pool, cols []laneSchemaCo
 	return nil
 }
 
-func addLaneColumn(ctx context.Context, pool *pgxpool.Pool, c laneSchemaColumn, limit time.Duration) error {
-	deadline := time.Now().Add(limit)
+func addLaneColumn(ctx context.Context, pool *pgxpool.Pool, c laneSchemaColumn, deadline time.Time) error {
 	backoff := fenceRetryBackoffMin
 
 	for {

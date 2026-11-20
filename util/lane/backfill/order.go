@@ -148,19 +148,17 @@ func takesPosition(txid chainhash.Hash, facts Facts) (bool, error) {
 }
 
 // Number writes the segment's assignment into m from the frozen source, block by block and then
-// the suffix, and finishes it. Against a manifest a crash left part-written it resumes: each block
+// the suffix, and finishes it. Against a manifest already finished, as a crash between Finish and
+// recording the segment leaves, it checks the source against everything recorded and returns the
+// segment, writing nothing. Against a manifest a crash left part-written it resumes: each block
 // already recorded and the source tip must match the manifest, or it fails, since a changed source
 // would renumber transactions already given positions. A transaction placed twice, in two blocks or
 // a block and the suffix, fails. It allocates nothing: positions follow from the manifest's first
 // position and the order.
 func Number(ctx context.Context, m *Manifest, src Source, facts Facts, seen Seen) (lane.ConversionSegment, error) {
-	if m.Finished() {
-		return lane.ConversionSegment{}, errors.NewProcessingError("manifest is already finished; a finished segment is never renumbered")
-	}
-
 	written := m.Blocks()
 
-	if len(written) > len(src.Blocks) {
+	if len(written) > len(src.Blocks) || (m.Finished() && len(written) != len(src.Blocks)) {
 		return lane.ConversionSegment{}, errors.NewProcessingError("manifest holds %d blocks, the source %d", len(written), len(src.Blocks))
 	}
 

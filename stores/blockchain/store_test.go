@@ -241,12 +241,12 @@ func TestDBEngine(t *testing.T) {
 func TestStoreCarriesTheLaneMapAndConversionMethods(t *testing.T) {
 	methods := []any{
 		Store.InsertLaneMapRows,
-		Store.GetLaneMapRows,
-		Store.GetLaneMapRowsEndingAbove,
+		Store.LaneMapRows,
+		Store.LaneMapRowsEndingAbove,
 		Store.InsertLaneConversionSegment,
-		Store.GetLaneConversionSegments,
+		Store.LaneConversionSegments,
 		Store.InsertLaneConversionBlocks,
-		Store.GetLaneConversionBlocks,
+		Store.LaneConversionBlocks,
 		Store.CompleteLaneConversionSegment,
 		Store.LaneConversionComplete,
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func TestLaneMapRowsInsertAndRead(t *testing.T) {
 		rows := append(holedRows(t, 200, 5_000, 5_001, 5_003, 7_000), lane7...)
 		require.NoError(t, s.InsertLaneMapRows(ctx, 1_000, rows))
 
-		got, err := s.GetLaneMapRows(ctx, 1_000)
+		got, err := s.LaneMapRows(ctx, 1_000)
 		require.NoError(t, err)
 		require.Len(t, got, 2)
 		require.Equal(t, lane7[0], got[0], "sorted by lane")
@@ -63,12 +64,12 @@ func TestLaneMapRowsInsertAndRead(t *testing.T) {
 		require.Error(t, s.InsertLaneMapRows(ctx, 1_000, holedRows(t, 200, 5_000, 5_002, 7_000)))
 		require.Error(t, s.InsertLaneMapRows(ctx, 1_000, lane7), "a missing row is a difference")
 
-		again, err := s.GetLaneMapRows(ctx, 1_000)
+		again, err := s.LaneMapRows(ctx, 1_000)
 		require.NoError(t, err)
 		require.Equal(t, got, again)
 
 		// Unknown block: no rows.
-		none, err := s.GetLaneMapRows(ctx, 999)
+		none, err := s.LaneMapRows(ctx, 999)
 		require.NoError(t, err)
 		require.Empty(t, none)
 	})
@@ -84,7 +85,7 @@ func TestLaneMapRowsRefuseInvalidRows(t *testing.T) {
 		overlap := []lane.MapRow{{Lane: 1, First: 1, Last: 10, Tag: lane.RowTagRange}, {Lane: 1, First: 11, Last: 20, Tag: lane.RowTagRange}}
 		require.Error(t, s.InsertLaneMapRows(ctx, 1, overlap), "two rows of one lane in one chunk")
 
-		rows, err := s.GetLaneMapRows(ctx, 1)
+		rows, err := s.LaneMapRows(ctx, 1)
 		require.NoError(t, err)
 		require.Empty(t, rows)
 
@@ -92,13 +93,13 @@ func TestLaneMapRowsRefuseInvalidRows(t *testing.T) {
 		_, err = s.db.ExecContext(ctx, `INSERT INTO lane_map (block_id, lane, first, last, first_hole, tag, hole_data) VALUES (2, 1, 1, 10, 3, 0, NULL)`)
 		require.NoError(t, err)
 
-		_, err = s.GetLaneMapRows(ctx, 2)
+		_, err = s.LaneMapRows(ctx, 2)
 		require.Error(t, err)
 	})
 }
 
 // The reader query for a floor: rows of a lane ending above a position, from every block.
-func TestGetLaneMapRowsEndingAbove(t *testing.T) {
+func TestLaneMapRowsEndingAbove(t *testing.T) {
 	runLaneHandoutTests(t, "ending above", func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 
@@ -107,17 +108,17 @@ func TestGetLaneMapRowsEndingAbove(t *testing.T) {
 		// A late-mined transaction below the floor: its row covers only position 600.
 		require.NoError(t, s.InsertLaneMapRows(ctx, 12, []lane.MapRow{{Lane: 7, First: 600, Last: 600, Tag: lane.RowTagRange}}))
 
-		got, err := s.GetLaneMapRowsEndingAbove(ctx, 7, 999)
+		got, err := s.LaneMapRowsEndingAbove(ctx, 7, 999)
 		require.NoError(t, err)
 		require.Len(t, got, 2)
 		require.Equal(t, uint32(10), got[0].BlockID)
 		require.Equal(t, uint32(11), got[1].BlockID)
 
-		got, err = s.GetLaneMapRowsEndingAbove(ctx, 7, 500)
+		got, err = s.LaneMapRowsEndingAbove(ctx, 7, 500)
 		require.NoError(t, err)
 		require.Len(t, got, 3)
 
-		_, err = s.GetLaneMapRowsEndingAbove(ctx, 7, lane.MaxPosition+1)
+		_, err = s.LaneMapRowsEndingAbove(ctx, 7, lane.MaxPosition+1)
 		require.Error(t, err)
 	})
 }
@@ -160,7 +161,7 @@ func TestLaneConversionSegmentLifecycle(t *testing.T) {
 		require.Error(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{{Seq: 3, BlockID: 1, Height: 700_003, First: 1_000_006}}), "a gap in the sequence")
 		require.Error(t, s.InsertLaneConversionBlocks(ctx, 9, []lane.ConversionBlock{b0}), "unknown segment")
 
-		blocks, err := s.GetLaneConversionBlocks(ctx, 1)
+		blocks, err := s.LaneConversionBlocks(ctx, 1)
 		require.NoError(t, err)
 		require.Equal(t, []lane.ConversionBlock{b0, b1}, blocks)
 
@@ -177,7 +178,7 @@ func TestLaneConversionSegmentLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, complete)
 
-		segs, err := s.GetLaneConversionSegments(ctx)
+		segs, err := s.LaneConversionSegments(ctx)
 		require.NoError(t, err)
 		require.Equal(t, []lane.ConversionSegment{seg}, segs)
 
@@ -235,7 +236,7 @@ func TestLaneConversionBlocksContinueAcrossCalls(t *testing.T) {
 		changed.BlockID = 99
 		require.Error(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{changed, b1}), "a repeated block that differs, with a matching one")
 
-		blocks, err := s.GetLaneConversionBlocks(ctx, 1)
+		blocks, err := s.LaneConversionBlocks(ctx, 1)
 		require.NoError(t, err)
 		require.Equal(t, []lane.ConversionBlock{b0, b1, b2}, blocks)
 
@@ -244,7 +245,7 @@ func TestLaneConversionBlocksContinueAcrossCalls(t *testing.T) {
 		b3 := lane.ConversionBlock{Seq: 3, BlockID: 103, Height: 103, First: 7, Count: 1}
 		require.NoError(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{b1, b0, b2, b3}))
 
-		blocks, err = s.GetLaneConversionBlocks(ctx, 1)
+		blocks, err = s.LaneConversionBlocks(ctx, 1)
 		require.NoError(t, err)
 		require.Equal(t, []lane.ConversionBlock{b0, b1, b2, b3}, blocks)
 
@@ -277,7 +278,7 @@ func TestLaneConversionBlocksChainWithinOneCall(t *testing.T) {
 		for name, b := range bad(1, b0) {
 			require.Error(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{b0, b}), "first call: %s", name)
 
-			blocks, err := s.GetLaneConversionBlocks(ctx, 1)
+			blocks, err := s.LaneConversionBlocks(ctx, 1)
 			require.NoError(t, err)
 			require.Empty(t, blocks, name)
 		}
@@ -287,7 +288,7 @@ func TestLaneConversionBlocksChainWithinOneCall(t *testing.T) {
 		for name, b := range bad(2, b1) {
 			require.Error(t, s.InsertLaneConversionBlocks(ctx, 1, []lane.ConversionBlock{b1, b}), "after stored blocks: %s", name)
 
-			blocks, err := s.GetLaneConversionBlocks(ctx, 1)
+			blocks, err := s.LaneConversionBlocks(ctx, 1)
 			require.NoError(t, err)
 			require.Equal(t, []lane.ConversionBlock{b0}, blocks, name)
 		}
@@ -324,7 +325,7 @@ func TestLaneConversionInsertsReportARefusedInsert(t *testing.T) {
 
 	require.Error(t, s.InsertLaneConversionSegment(ctx, testSegment(1, 2, 4, 4)))
 
-	segs, err := s.GetLaneConversionSegments(ctx)
+	segs, err := s.LaneConversionSegments(ctx)
 	require.NoError(t, err)
 	require.Empty(t, segs)
 
@@ -363,7 +364,7 @@ func TestLaneConversionSegmentsAppend(t *testing.T) {
 
 		require.NoError(t, s.InsertLaneConversionSegment(ctx, testSegment(6, 121, 125, 130)))
 
-		segs, err := s.GetLaneConversionSegments(ctx)
+		segs, err := s.LaneConversionSegments(ctx)
 		require.NoError(t, err)
 		require.Equal(t, []lane.ConversionSegment{testSegment(5, 100, 110, 120), testSegment(6, 121, 125, 130)}, segs)
 	})
@@ -468,7 +469,7 @@ func TestLaneMapRowsWaitForTheBlockLock(t *testing.T) {
 	require.NoError(t, holder.Commit())
 	require.Error(t, <-done)
 
-	got, err := s.GetLaneMapRows(ctx, 77)
+	got, err := s.LaneMapRows(ctx, 77)
 	require.NoError(t, err)
 	require.Equal(t, []lane.MapRow{{Lane: 1, First: 1, Last: 10, Tag: lane.RowTagRange}}, got)
 }
@@ -508,12 +509,16 @@ func TestLaneConversionSegmentWaitsForTheSegmentLock(t *testing.T) {
 		} else {
 			laneWriteMu.Lock()
 
+			var unlockOnce sync.Once
+			unlock := func() { unlockOnce.Do(laneWriteMu.Unlock) }
+			t.Cleanup(unlock) // a failed step below must not leave the package-wide mutex held
+
 			insert = func() error {
 				_, err := s.db.ExecContext(ctx, insertSegment1, seg1.SourceTipHash[:], seg1.ManifestDigest[:])
 				return err
 			}
 			release = func() error {
-				laneWriteMu.Unlock()
+				unlock()
 				return nil
 			}
 		}
@@ -526,10 +531,6 @@ func TestLaneConversionSegmentWaitsForTheSegmentLock(t *testing.T) {
 
 		select {
 		case err := <-done:
-			if s.engine != util.Postgres {
-				laneWriteMu.Unlock()
-			}
-
 			require.Failf(t, "the segment insert did not wait for the segment lock", "returned %v", err)
 		case <-time.After(500 * time.Millisecond):
 		}
@@ -538,7 +539,7 @@ func TestLaneConversionSegmentWaitsForTheSegmentLock(t *testing.T) {
 		require.NoError(t, release())
 		require.Error(t, <-done, "segment 2 overlaps segment 1, which the holder recorded")
 
-		segs, err := s.GetLaneConversionSegments(ctx)
+		segs, err := s.LaneConversionSegments(ctx)
 		require.NoError(t, err)
 		require.Equal(t, []lane.ConversionSegment{seg1}, segs)
 	})

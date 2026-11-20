@@ -6100,10 +6100,10 @@ func addLaneColumn(db DBExecutor, c sqlLaneColumn, deadline time.Time) error {
 }
 
 // addSqliteLaneColumns is addLanePositionColumn for SQLite, which has no lock to wait for.
-func addSqliteLaneColumns(db *usql.DB) error {
+func addSqliteLaneColumns(ctx context.Context, db *usql.DB) error {
 	for _, c := range sqlLaneColumns {
 		var n int
-		if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('`+c.table+`') WHERE name = $1`, c.column).Scan(&n); err != nil {
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('`+c.table+`') WHERE name = $1`, c.column).Scan(&n); err != nil {
 			return errors.NewStorageError("could not check %s table for %s column", c.table, c.column, err)
 		}
 
@@ -6111,7 +6111,7 @@ func addSqliteLaneColumns(db *usql.DB) error {
 			continue
 		}
 
-		if _, err := db.Exec(`ALTER TABLE ` + c.table + ` ADD COLUMN ` + c.column + ` ` + c.sqliteType); err != nil {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE `+c.table+` ADD COLUMN `+c.column+` `+c.sqliteType); err != nil {
 			return errors.NewStorageError("could not add %s column to %s table", c.column, c.table, err)
 		}
 	}
@@ -6124,7 +6124,7 @@ func addSqliteLaneColumns(db *usql.DB) error {
 // of the node afterwards.
 func (s *Store) PrepareLaneSchema(ctx context.Context) error {
 	if s.engine != string(util.Postgres) {
-		return addSqliteLaneColumns(s.db)
+		return addSqliteLaneColumns(ctx, s.db)
 	}
 
 	return addLanePositionColumn(dbExecutor{ctx: ctx, db: s.db}, laneColumnMigrationLimit)
@@ -6704,7 +6704,7 @@ func createSqliteSchema(db *usql.DB) error {
 
 	// Add the nullable lane columns to a database created before them. No
 	// default and no backfill: NULL reads as no lane position.
-	if err := addSqliteLaneColumns(db); err != nil {
+	if err := addSqliteLaneColumns(context.Background(), db); err != nil {
 		_ = db.Close()
 		return err
 	}

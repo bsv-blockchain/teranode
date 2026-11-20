@@ -713,11 +713,11 @@ func (m *MockStore) InsertLaneMapRows(ctx context.Context, blockID uint32, rows 
 	panic(implementMe)
 }
 
-func (m *MockStore) GetLaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error) {
+func (m *MockStore) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error) {
 	panic(implementMe)
 }
 
-func (m *MockStore) GetLaneMapRowsEndingAbove(ctx context.Context, laneNum uint8, above uint64) ([]lane.BlockMapRow, error) {
+func (m *MockStore) LaneMapRowsEndingAbove(ctx context.Context, laneNum uint8, above uint64) ([]lane.BlockMapRow, error) {
 	panic(implementMe)
 }
 
@@ -725,7 +725,7 @@ func (m *MockStore) InsertLaneConversionSegment(ctx context.Context, seg lane.Co
 	panic(implementMe)
 }
 
-func (m *MockStore) GetLaneConversionSegments(ctx context.Context) ([]lane.ConversionSegment, error) {
+func (m *MockStore) LaneConversionSegments(ctx context.Context) ([]lane.ConversionSegment, error) {
 	panic(implementMe)
 }
 
@@ -733,7 +733,7 @@ func (m *MockStore) InsertLaneConversionBlocks(ctx context.Context, segment uint
 	panic(implementMe)
 }
 
-func (m *MockStore) GetLaneConversionBlocks(ctx context.Context, segment uint32) ([]lane.ConversionBlock, error) {
+func (m *MockStore) LaneConversionBlocks(ctx context.Context, segment uint32) ([]lane.ConversionBlock, error) {
 	panic(implementMe)
 }
 

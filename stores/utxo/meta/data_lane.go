@@ -28,7 +28,10 @@ import (
 // miss.
 
 const (
-	// LaneMetaMagic is the first byte of the lane metadata encoding.
+	// LaneMetaMagic is the first byte of the lane metadata encoding. It is not a discriminator: a
+	// legacy MetaBytes begins with a fee, and a fee whose low 16 bits are 0x01A7 (423 satoshis,
+	// say) starts with the same two bytes as LaneMetaMagic and LaneMetaVersion. The lane encoding
+	// travels on its own topic and in its own cache, so a reader always knows which it holds.
 	LaneMetaMagic = byte(0xA7)
 
 	// LaneMetaVersion is the only version of the lane metadata encoding.

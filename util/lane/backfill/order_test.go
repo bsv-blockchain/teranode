@@ -104,8 +104,28 @@ func TestNumberAssignsTheDesignExample(t *testing.T) {
 	require.Equal(t, []chainhash.Hash{h("F")}, suffix)
 	require.Equal(t, uint64(1_000_006), first)
 
-	_, err = Number(context.Background(), m, src, facts, MemorySeen{})
-	require.Error(t, err, "a finished segment is never renumbered")
+	// A crash between Finish and recording the segment: numbering the same source again returns
+	// the same segment and writes nothing; a changed source is refused.
+	size, err := m.f.(interface{ Stat() (os.FileInfo, error) }).Stat()
+	require.NoError(t, err)
+
+	again, err := Number(context.Background(), m, src, facts, MemorySeen{})
+	require.NoError(t, err)
+	require.Equal(t, seg, again)
+
+	after, err := m.f.(interface{ Stat() (os.FileInfo, error) }).Stat()
+	require.NoError(t, err)
+	require.Equal(t, size.Size(), after.Size(), "nothing is written")
+
+	changed, _ := exampleSource()
+	changed.Suffix = []chainhash.Hash{h("G")}
+	_, err = Number(context.Background(), m, changed, facts, MemorySeen{})
+	require.Error(t, err, "a finished segment is never renumbered from another source")
+
+	fewer, _ := exampleSource()
+	fewer.Blocks = fewer.Blocks[:1]
+	_, err = Number(context.Background(), m, fewer, facts, MemorySeen{})
+	require.Error(t, err, "a finished segment checks every recorded block")
 }
 
 // A crash after the first block resumes into the same manifest, byte for byte.

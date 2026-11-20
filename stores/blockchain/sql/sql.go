@@ -1140,7 +1140,7 @@ func createPostgresLaneTables(db *usql.DB) error {
 		}
 
 		if _, err := db.Exec(table.ddl); err != nil {
-			return errors.NewStorageError("could not create %s table", table.name, err)
+			return errors.NewStorageError("could not create %s", table.name, err)
 		}
 	}
 

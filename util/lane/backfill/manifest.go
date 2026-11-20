@@ -21,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"golang.org/x/sys/unix"
 )
 
 // The assignment manifest of one conversion segment is one append-only file:
@@ -151,6 +152,14 @@ func CreateManifest(path string, h Header) (*Manifest, error) {
 
 	tmp := f.Name()
 
+	// Lock before the file is linked into place, so a resumer that opens path at once finds it held.
+	if err = lockManifest(f); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+
+		return nil, errors.NewProcessingError("manifest %s", path, err)
+	}
+
 	m := &Manifest{path: path, f: wrapManifestFile(f), digest: sha256.New(), header: h, next: h.First}
 
 	fail := func(err error) (*Manifest, error) {
@@ -229,6 +238,13 @@ func openManifest(path string, resume bool) (*Manifest, error) {
 	f, err := os.OpenFile(path, flag, 0) //nolint:gosec // an operator-supplied maintenance path
 	if err != nil {
 		return nil, errors.NewStorageError("open manifest %s", path, err)
+	}
+
+	if resume {
+		if err = lockManifest(f); err != nil {
+			_ = f.Close()
+			return nil, errors.NewProcessingError("manifest %s", path, err)
+		}
 	}
 
 	m := &Manifest{path: path, f: f, digest: sha256.New(), readOnly: !resume}
@@ -393,13 +409,26 @@ func (m *Manifest) readBody(r *bufio.Reader, typ byte, payloadLen uint64, pos in
 	binary.LittleEndian.PutUint64(head[1:], payloadLen)
 	crc.Write(head[:])
 
+	// Check a record's type and fixed length before allocating anything from the length it claims:
+	// a header or end record is a fixed size, and only the fixed part of a block or suffix record
+	// is kept in memory.
 	keep := payloadLen
 
 	switch typ {
+	case recordHeader:
+		if payloadLen != headerPayload {
+			return nil, false, errors.NewProcessingError("manifest %s: header of %d bytes at %d", m.path, payloadLen, pos)
+		}
+	case recordEnd:
+		if payloadLen != endPayload {
+			return nil, false, errors.NewProcessingError("manifest %s: end record of %d bytes at %d", m.path, payloadLen, pos)
+		}
 	case recordBlock:
 		keep = min(payloadLen, blockFixed)
 	case recordSuffix:
 		keep = min(payloadLen, suffixFixed)
+	default:
+		return nil, false, errors.NewProcessingError("manifest %s: unknown record %q at %d", m.path, typ, pos)
 	}
 
 	body := make([]byte, keep)
@@ -782,4 +811,15 @@ func (m *Manifest) readTxIDs(ref recordRef) ([]chainhash.Hash, error) {
 // Close closes the file.
 func (m *Manifest) Close() error {
 	return m.f.Close()
+}
+
+// lockManifest takes an exclusive, non-blocking lock on a manifest's file for as long as it stays
+// open, so two processes can never write one manifest: the second to create or resume it fails at
+// once instead of writing a record over the first's. Closing the file releases the lock.
+func lockManifest(f *os.File) error {
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil { //nolint:gosec // a file descriptor fits an int
+		return errors.NewProcessingError("another process holds this manifest open for writing", err)
+	}
+
+	return nil
 }
