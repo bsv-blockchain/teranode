@@ -402,14 +402,28 @@ func TestParentLanePositionsOnAerospike(t *testing.T) {
 	require.False(t, ok, "a parent without a position leaves the bin out")
 
 	// A spend at shadow on a server that passed the probe counts as carrying its position.
-	before := laneSpendsCarried(t)
-	_, err = store.SpendWithLanePosition(ctx, laneChild(t, child, 0), 102, lane.Pack(7, 103), utxo.IgnoreFlags{})
+	before := laneSpendsCounted(t, "yes")
+	grandchild := laneChild(t, child, 0)
+	spends, err := store.SpendWithLanePosition(ctx, grandchild, 102, lane.Pack(7, 103), utxo.IgnoreFlags{})
 	require.NoError(t, err)
-	require.Equal(t, before+1, laneSpendsCarried(t))
+	require.Equal(t, before+1, laneSpendsCounted(t, "yes"))
+
+	// Conflict resolution unspends and then spends again through RestoreConflictSpends, which sends
+	// no position: the slot stays zero and the restored spend counts as not carrying one.
+	require.NoError(t, store.Unspend(ctx, spends))
+
+	carriedBefore, missingBefore := laneSpendsCounted(t, "yes"), laneSpendsCounted(t, "no")
+	require.NoError(t, store.RestoreConflictSpends(ctx, spends, 102))
+	require.Equal(t, carriedBefore, laneSpendsCounted(t, "yes"), "a restored spend carries no position")
+	require.Equal(t, missingBefore+1, laneSpendsCounted(t, "no"), "a restored spend counts as missing")
+
+	v, ok = recordBin(t, client, store, child, 0, fields.SpendingLanePositions)
+	require.True(t, ok)
+	require.Equal(t, []uint64{0}, slotLanes(t, v), "the restore leaves the zeroed slot as it is")
 }
 
-// laneSpendsCarried reads teranode_lane_spend_positions_total{store="aerospike", carried="yes"}.
-func laneSpendsCarried(t *testing.T) float64 {
+// laneSpendsCounted reads teranode_lane_spend_positions_total{store="aerospike", carried=carried}.
+func laneSpendsCounted(t *testing.T, carried string) float64 {
 	t.Helper()
 
 	families, err := prometheus.DefaultGatherer.Gather()
@@ -426,7 +440,7 @@ func laneSpendsCarried(t *testing.T) float64 {
 				labels[l.GetName()] = l.GetValue()
 			}
 
-			if labels["store"] == "aerospike" && labels["carried"] == "yes" {
+			if labels["store"] == "aerospike" && labels["carried"] == carried {
 				return m.GetCounter().GetValue()
 			}
 		}

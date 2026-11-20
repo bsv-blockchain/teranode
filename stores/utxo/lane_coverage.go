@@ -33,7 +33,7 @@ var (
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "spend_positions_total",
-			Help:      "Spent outputs a UTXO store recorded at utxostore_laneMigration shadow, by store and carried: yes when the spend's record of the output (on utxoset its spend-journal row) carries the lane position the spend needs",
+			Help:      "Spent outputs a UTXO store recorded at utxostore_laneMigration shadow, by store and carried: yes on utxoset when the spend's journal row has a lane_position; yes on Aerospike when the spend sent the spender's lane position on the Lua or native route of a server the start-up probe found recording it (a same-spender repeat writes nothing and still counts yes)",
 		},
 		[]string{"store", "carried"},
 	)
@@ -57,8 +57,8 @@ func CountLaneRecord(store string, own bool, hasParents, parents bool) {
 	}
 }
 
-// CountLaneSpends counts spent outputs whose record carries the position (carried) and those
-// whose record does not (missing).
+// CountLaneSpends counts spent outputs that carried the position (carried) and those that did not
+// (missing), with each store's meaning of carried as the spend_positions_total help states it.
 func CountLaneSpends(store string, carried, missing int) {
 	if carried > 0 {
 		prometheusLaneSpendPositions.WithLabelValues(store, "yes").Add(float64(carried))

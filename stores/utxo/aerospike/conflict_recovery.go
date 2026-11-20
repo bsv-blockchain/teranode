@@ -246,6 +246,12 @@ func (s *Store) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend,
 				return sp.Err
 			}
 		}
+		// A restored spend sends no lane position, so the output's slot, which the unspend before
+		// it zeroed, stays zero; count it as not carrying one. Restoring the winner's position needs
+		// a read of the spender's record and comes with Phase 2.
+		if s.laneShadow() {
+			s.countLaneSpends(len(batch), false)
+		}
 	}
 	return nil
 }
