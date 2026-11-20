@@ -103,9 +103,7 @@ func (l *LanePositions) TakeLanePositions(ctx context.Context, n int) ([]uint64,
 func (l *LanePositions) TakeListLanePositions(ctx context.Context, list *SpendAndCreateMultiList) ([]uint64, error) {
 	positions, err := l.takeLanePositions(ctx, len(list.TxIDs))
 	if err != nil {
-		for range positions {
-			l.BurnLanePosition(list.Options.Caller, LaneBurnTakeFailed)
-		}
+		l.BurnLanePositions(list.Options.Caller, LaneBurnTakeFailed, len(positions))
 
 		return nil, err
 	}
