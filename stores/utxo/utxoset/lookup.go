@@ -271,8 +271,8 @@ type lookupResult struct {
 	// what they found. A batch with no such read runs the statements it always did, scans what it
 	// always did and pays nothing. Get, the get batcher and BatchDecorate set it when a caller names
 	// fields.LanePosition, and one such read turns it on for its whole get batch. burnUnlessStored
-	// also sets it, through getDirect, for its one-transaction read-back after a failed
-	// spend-and-create batch, outside any get batch.
+	// also sets it, through getDirect, for its one-transaction read-back after a spend-and-create
+	// batch's COMMIT reported failure, outside any get batch.
 	wantLane bool
 	lanes    map[chainhash.Hash]uint64
 }

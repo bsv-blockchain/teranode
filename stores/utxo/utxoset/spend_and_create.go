@@ -47,7 +47,7 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 	opts ...utxo.CreateOption) (_ *meta.Data, spends []*utxo.Spend, err error) {
 	// Set from the batch's answer; see spendAndCreateResult. notSubmitted is set when the caller had
 	// already given up before anything was queued or sent, so nothing was written.
-	var rerunAfterBatchError, notSubmitted bool
+	var rerunAfterCommitError, notSubmitted bool
 
 	options := &utxo.CreateOptions{}
 	for _, opt := range opts {
@@ -91,13 +91,13 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 				switch {
 				case notSubmitted:
 					s.BurnLanePosition(options.Caller, utxo.LaneBurnError)
-				case rerunAfterBatchError:
+				case rerunAfterCommitError:
 					s.burnUnlessStored(ctx, tx, options, position, err, spends)
 				default:
 					s.BurnCreateLanePosition(options, position, err, spends)
 				}
 
-				if rerunAfterBatchError {
+				if rerunAfterCommitError {
 					return
 				}
 
@@ -145,7 +145,7 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		// acts on that: it would neither hand the transaction to block assembly nor accept a
 		// resubmission, which meets ErrTxExists. The only truthful answer is the batch's.
 		res := <-item.done
-		rerunAfterBatchError = res.rerunAfterBatchError
+		rerunAfterCommitError = res.rerunAfterCommitError
 
 		return res.data, res.spends, res.err
 	}
@@ -301,9 +301,10 @@ func (s *Store) spendAndCreateOne(ctx context.Context, tx *bt.Tx, blockHeight ui
 // caller waits for it, so it must never hold the caller, or the validator's lock on the txid, long.
 var laneBurnProbeTimeout = 5 * time.Second
 
-// burnUnlessStored records the burn of position for a create whose rerun after a failed batch
-// failed with err. The failed batch's COMMIT may have landed with this very position, whatever the
-// rerun then met, so the stored record is read. Carrying the position, nothing burned. Carrying
+// burnUnlessStored records the burn of position for a create whose rerun, after its batch's COMMIT
+// reported failure, failed with err. That COMMIT may have landed with this very position, whatever
+// the rerun then met, so the stored record is read. A batch that failed before sending its COMMIT
+// rolled back whole, and its reruns burn like any single call. Carrying the position, nothing burned. Carrying
 // another position is taken as a burn for the rerun's own reason, exists for ErrTxExists, though
 // it does not prove one: block assembly can delete the record and re-create it with a new
 // position between the rerun and this read, and this read holds no lock against that. Missing, or
@@ -326,7 +327,7 @@ func (s *Store) burnUnlessStored(ctx context.Context, tx *bt.Tx, options *utxo.C
 	case getErr == nil && md != nil && md.LanePosition != lane.None:
 		s.BurnLanePosition(options.Caller, utxo.LaneBurnReason(err, spends))
 	default:
-		// No record proves nothing: the failed batch's COMMIT may still be completing on its own
+		// No record proves nothing: the batch's failed COMMIT may still be completing on its own
 		// connection, and this read does not wait for it.
 		s.BurnLanePosition(options.Caller, utxo.LaneBurnOutcomeUnknown)
 	}

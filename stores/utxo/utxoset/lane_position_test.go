@@ -1582,6 +1582,47 @@ func TestLanePositionBurnOfAFailedRerunAfterALandedCommit(t *testing.T) {
 	require.Equal(t, position, md.LanePosition)
 }
 
+// A batch that fails before sending its COMMIT rolls back whole, so its rerun is an ordinary single
+// call: a refused spend counts spend_rejected and its position goes back, rather than the read-back
+// after a failed COMMIT filing it under outcome_unknown.
+func TestLanePositionBurnOfARerunAfterABatchThatFailedBeforeItsCommit(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+	require.NotNil(t, s.spendAndCreateBatcher)
+
+	root := storedParent(t, s, ctx)
+
+	// Spends root output 0 first, so the call below has its spend refused.
+	_, _, err := s.SpendAndCreate(ctx, spendOutput(t, root, 0, 4), 1_100)
+	require.NoError(t, err)
+
+	refused := spendOutput(t, root, 0, 2)
+
+	source := useReturningSource(t, s, returnPositions(1)...)
+
+	var batchFailed atomic.Bool
+
+	spendAndCreateBatchFault = func() error {
+		if batchFailed.CompareAndSwap(false, true) {
+			return errors.NewStorageError("injected statement failure")
+		}
+
+		return nil
+	}
+
+	t.Cleanup(func() { spendAndCreateBatchFault = nil })
+
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, _, err = s.SpendAndCreate(ctx, refused, 1_100, utxo.WithCaller(utxo.CallerValidator))
+	spendAndCreateBatchFault = nil
+	require.Error(t, err)
+	require.True(t, batchFailed.Load(), "the batch failed before its commit")
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnSpendRejected + "/validator": 1},
+		tests.ReadLaneBurns(t, "utxoset").Since(before))
+	requireReturnedNowhere(t, s, source, returnPositions(1)[0])
+}
+
 // failNextCommit makes the next commit of a transaction that writes creates report failure after it
 // landed, as a lost acknowledgement does.
 func failNextCommit(t *testing.T) error {
