@@ -28,268 +28,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type replayPruneCase struct {
-	name                                                     string
-	defensive, markerFailure, deleteFailure, perRow, upgrade bool
-	commitFailure                                            bool
-}
-
-func TestPrunedChildReplayCommitFailurePostgres(t *testing.T) {
-	store, ctx := setupPostgresStore(t)
-	store.settings.Pruner.UTXODefensiveEnabled = false
-	testPrunedChildReplay(t, ctx, store, replayPruneCase{commitFailure: true})
-}
-
-func TestPrunedChildReplay(t *testing.T) {
-	for _, backend := range []string{"sqlite", "postgres"} {
-		for _, tc := range []replayPruneCase{
-			{name: "normal"}, {name: "defensive", defensive: true},
-			{name: "marker_failure", markerFailure: true},
-			{name: "delete_failure", deleteFailure: true},
-			{name: "per_row", perRow: true},
-			{name: "schema_upgrade", upgrade: true},
-		} {
-			t.Run(backend+"/"+tc.name, func(t *testing.T) {
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
-				var store *Store
-				if backend == "postgres" {
-					store, ctx = setupPostgresStore(t)
-				} else {
-					store, _ = setup(ctx, t)
-				}
-				store.settings.Pruner.UTXODefensiveEnabled = tc.defensive
-				if tc.perRow {
-					store.settings.UtxoStore.BatchSQLOperations = false
-				}
-				testPrunedChildReplay(t, ctx, store, tc)
-			})
-		}
-	}
-}
-
-func testPrunedChildReplay(t *testing.T, ctx context.Context, store *Store, tc replayPruneCase) {
-	t.Helper()
-	ResetPrunerServiceForTests()
-	t.Cleanup(ResetPrunerServiceForTests)
-	require.NoError(t, store.SetBlockHeight(1000))
-	parent := bt.NewTx()
-	require.NoError(t, parent.From("1111111111111111111111111111111111111111111111111111111111111111", 0, "51", 30000))
-	parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
-	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
-	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
-
-	_, err := store.Create(ctx, parent, 1000)
-	require.NoError(t, err)
-	child := bt.NewTx()
-	require.NoError(t, child.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
-	child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
-	require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
-	// A successful spend whose create has not happened yet must remain retryable.
-	_, err = store.Spend(ctx, child, 1000)
-	require.NoError(t, err)
-	_, _, err = store.SpendAndCreate(ctx, child, 1000)
-	require.NoError(t, err)
-	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parent.TxIDChainHash(), child.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 1000, BlockHeight: 1000, OnLongestChain: true})
-	require.NoError(t, err)
-	grandchild := bt.NewTx()
-	require.NoError(t, grandchild.From(child.TxID(), 0, child.Outputs[0].LockingScript.String(), child.Outputs[0].Satoshis))
-	grandchild.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
-	require.NoError(t, grandchild.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 2000))
-	_, _, err = store.SpendAndCreate(ctx, grandchild, 1001)
-	require.NoError(t, err)
-	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{grandchild.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 1001, BlockHeight: 1001, OnLongestChain: true})
-	require.NoError(t, err)
-
-	_, _, err = store.SpendAndCreate(ctx, child, 1200)
-	require.ErrorIs(t, err, errors.ErrTxExists)
-	if tc.upgrade {
-		// Model an existing database created by the previous schema.
-		_, err = store.db.ExecContext(ctx, "DROP TABLE deleted_children")
-		require.NoError(t, err)
-		if store.engine == "postgres" {
-			err = createPostgresSchema(ctx, store.logger, store.db)
-		} else {
-			err = createSqliteSchema(store.db)
-		}
-		require.NoError(t, err)
-	}
-	svc, err := store.GetPrunerService()
-	require.NoError(t, err)
-	if tc.markerFailure || tc.deleteFailure || tc.commitFailure {
-		table, operation := "deleted_children", "INSERT"
-		if tc.deleteFailure || tc.commitFailure {
-			table, operation = "transactions", "DELETE"
-		}
-		if store.engine == "postgres" {
-			_, err = store.db.ExecContext(ctx, `CREATE FUNCTION reject_prune() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected prune failure'; END $$`)
-			require.NoError(t, err)
-			if tc.commitFailure {
-				_, err = store.db.ExecContext(ctx, `CREATE CONSTRAINT TRIGGER reject_prune AFTER DELETE ON transactions
-					DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_prune()`)
-			} else {
-				_, err = store.db.ExecContext(ctx, "CREATE TRIGGER reject_prune BEFORE "+operation+" ON "+table+" FOR EACH ROW EXECUTE FUNCTION reject_prune()")
-			}
-		} else {
-			_, err = store.db.ExecContext(ctx, "CREATE TRIGGER reject_prune BEFORE "+operation+" ON "+table+" BEGIN SELECT RAISE(ABORT, 'injected prune failure'); END")
-		}
-		require.NoError(t, err)
-		_, err = svc.Prune(ctx, 1300, "injected-failure")
-		require.Error(t, err)
-		var count int
-		require.NoError(t, store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM transactions WHERE hash = $1 AND unmined_since IS NULL", child.TxIDChainHash()[:]).Scan(&count))
-		require.Equal(t, 1, count, "failed pruning retains the mined child")
-		require.NoError(t, store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM deleted_children").Scan(&count))
-		require.Zero(t, count, "deletion failure must roll back marker writes too")
-		if store.engine == "postgres" {
-			_, err = store.db.ExecContext(ctx, "DROP TRIGGER reject_prune ON "+table)
-		} else {
-			_, err = store.db.ExecContext(ctx, "DROP TRIGGER reject_prune")
-		}
-		require.NoError(t, err)
-	}
-	n, err := svc.Prune(ctx, 1300, "replay-regression")
-	require.NoError(t, err)
-	require.Equal(t, int64(1), n)
-	var exists bool
-	require.NoError(t, store.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM transactions WHERE hash = $1)", child.TxIDChainHash()[:]).Scan(&exists))
-	require.False(t, exists)
-	_, _, err = store.SpendAndCreate(ctx, child, 1200)
-	// Assert the dedicated code and the message, not the ErrUtxoError aggregate
-	// that wraps every batched spend failure — that wrapper is satisfied by any
-	// spend error and would pass with the childPruned branch removed.
-	require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "normal pruning must prevent recreation of a confirmed child")
-	require.Contains(t, err.Error(), "spending transaction was pruned")
-	require.NotErrorIs(t, err, errors.ErrSpent, "a pruned replay must not enter conflicting-transaction processing")
-	require.NoError(t, store.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM transactions WHERE hash = $1)", child.TxIDChainHash()[:]).Scan(&exists))
-	require.False(t, exists)
-	// Spend the remaining parent output, then prune the parent. Its marker must
-	// not block defensive pruning and must disappear with the parent row.
-	sibling := bt.NewTx()
-	require.NoError(t, sibling.From(parent.TxID(), 1, parent.Outputs[1].LockingScript.String(), parent.Outputs[1].Satoshis))
-	sibling.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
-	require.NoError(t, sibling.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 2000))
-	_, _, err = store.SpendAndCreate(ctx, sibling, 1300)
-	require.NoError(t, err)
-	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{sibling.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 1300, BlockHeight: 1300, OnLongestChain: true})
-	require.NoError(t, err)
-	n, err = svc.Prune(ctx, 1700, "prune-parent")
-	require.NoError(t, err)
-	require.Equal(t, int64(1), n)
-	var markers int
-	require.NoError(t, store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM deleted_children").Scan(&markers))
-	require.Zero(t, markers, "markers must be bounded by surviving parents")
-}
-
-// TestPrunedReplayRollsBackSiblingSpends pins the consumer side of the pruned-replay
-// rejection. A replayed child spends two parents: one still carries the pruner's
-// marker and is rejected, the other does not and commits a fresh spend. The
-// transaction can never exist, so that fresh spend has to be rolled back —
-// otherwise the sibling output is permanently recorded as spent by an absent
-// transaction and a genuine later spender gets ErrUtxoSpent naming a txid that
-// is nowhere in the store.
-//
-// The end state asserted is the sibling output's spending_data read back from the
-// store, not the fact that Unspend was called.
-func TestPrunedReplayRollsBackSiblingSpends(t *testing.T) {
-	for _, backend := range []string{"sqlite", "postgres"} {
-		t.Run(backend, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-
-			var store *Store
-
-			if backend == "postgres" {
-				store, ctx = setupPostgresStore(t)
-			} else {
-				store, _ = setup(ctx, t)
-			}
-
-			ResetPrunerServiceForTests()
-			t.Cleanup(ResetPrunerServiceForTests)
-			require.NoError(t, store.SetBlockHeight(1000))
-
-			parents := make([]*bt.Tx, 2)
-
-			for i := range parents {
-				parent := bt.NewTx()
-				// Distinct funding outpoints so the two parents get distinct txids.
-				require.NoError(t, parent.From("111111111111111111111111111111111111111111111111111111111111111"+string(rune('1'+i)), 0, "51", 30000))
-				parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
-				require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
-				require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
-				_, err := store.Create(ctx, parent, 1000)
-				require.NoError(t, err)
-
-				parents[i] = parent
-			}
-
-			child := bt.NewTx()
-			for _, parent := range parents {
-				require.NoError(t, child.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
-			}
-
-			for i := range child.Inputs {
-				child.Inputs[i].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
-			}
-
-			require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
-
-			_, _, err := store.SpendAndCreate(ctx, child, 1000)
-			require.NoError(t, err)
-			_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parents[0].TxIDChainHash(), parents[1].TxIDChainHash(), child.TxIDChainHash()},
-				utxo.MinedBlockInfo{BlockID: 1000, BlockHeight: 1000, OnLongestChain: true})
-			require.NoError(t, err)
-
-			grandchild := bt.NewTx()
-			require.NoError(t, grandchild.From(child.TxID(), 0, child.Outputs[0].LockingScript.String(), child.Outputs[0].Satoshis))
-			grandchild.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
-			require.NoError(t, grandchild.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 2000))
-			_, _, err = store.SpendAndCreate(ctx, grandchild, 1001)
-			require.NoError(t, err)
-			_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{grandchild.TxIDChainHash()},
-				utxo.MinedBlockInfo{BlockID: 1001, BlockHeight: 1001, OnLongestChain: true})
-			require.NoError(t, err)
-
-			svc, err := store.GetPrunerService()
-			require.NoError(t, err)
-			n, err := svc.Prune(ctx, 1300, "sibling-rollback")
-			require.NoError(t, err)
-			require.Equal(t, int64(1), n)
-
-			// Asymmetry fixture: parents[1] loses its marker, exactly the state a
-			// node that was already pruning before this change inherits for every
-			// child the old code removed. Its output is freed too, so the replay
-			// commits a fresh spend there rather than an idempotent re-spend.
-			_, err = store.db.ExecContext(ctx,
-				"DELETE FROM deleted_children WHERE parent_id IN (SELECT id FROM transactions WHERE hash = $1)",
-				parents[1].TxIDChainHash()[:])
-			require.NoError(t, err)
-			_, err = store.db.ExecContext(ctx,
-				"UPDATE outputs SET spending_data = NULL WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
-				parents[1].TxIDChainHash()[:])
-			require.NoError(t, err)
-
-			_, _, err = store.SpendAndCreate(ctx, child, 1200)
-			require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
-
-			var siblingSpent bool
-			require.NoError(t, store.db.QueryRowContext(ctx,
-				"SELECT spending_data IS NOT NULL FROM outputs WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
-				parents[1].TxIDChainHash()[:]).Scan(&siblingSpent))
-			require.False(t, siblingSpent, "the rejected replay must not leave the sibling output spent by a transaction that does not exist")
-
-			var childExists bool
-			require.NoError(t, store.db.QueryRowContext(ctx,
-				"SELECT EXISTS(SELECT 1 FROM transactions WHERE hash = $1)", child.TxIDChainHash()[:]).Scan(&childExists))
-			require.False(t, childExists, "the pruned child must not be recreated")
-		})
-	}
-}
-
 // TestPrunedReplayAcceptedAfterUnspend pins the rule both stores share: a
-// marker refuses a spender only while the parent output still records it.
-// Unspend clears spending_data and leaves deleted_children alone, so after an
+// replay is refused only while the parent output still records the spender.
+// Unspend clears spending_data and the spend height, so after an
 // Unspend the replay is an ordinary spend of a free output and the pruned child
 // is written again. Reaching this on a node needs a reorg deeper than the
 // pruning retention; the PR lists it as a limit.
@@ -364,12 +105,8 @@ func TestPrunedReplayAcceptedAfterUnspend(t *testing.T) {
 				parent.TxIDChainHash()[:]).Scan(&stillSpent))
 			require.False(t, stillSpent, "fixture: the unspend must actually have cleared spending_data")
 
-			var markers int
-			require.NoError(t, store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM deleted_children").Scan(&markers))
-			require.Equal(t, 1, markers, "Unspend must leave the replay marker in place")
-
 			_, _, err = store.SpendAndCreate(ctx, child, 1200)
-			require.NoError(t, err, "with the output no longer recording the child, its marker refuses nothing")
+			require.NoError(t, err, "with the output no longer recording the child, there is no replay to refuse")
 
 			var exists bool
 			require.NoError(t, store.db.QueryRowContext(ctx,
@@ -556,42 +293,6 @@ func outputSpendingData(t *testing.T, ctx context.Context, store *Store, parent 
 		parent.TxIDChainHash()[:], vout).Scan(&sd))
 
 	return sd
-}
-
-// TestPrunedReplayRollbackPreservesHistoricalSpend: C is replayed and rejected
-// on Q's marker while P carries no marker for it (a pre-marker prune, or one
-// parent's marker write having failed) and P:0 still records C's confirmed
-// spend. The replay's spend of P:0 is an idempotent match that writes nothing,
-// so the rollback must leave it alone: reversing it would hand a confirmed
-// output to any new spender. Reproduced by review on all three stores.
-func TestPrunedReplayRollbackPreservesHistoricalSpend(t *testing.T) {
-	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
-		p, _, child := twoParentPrunedChild(t, ctx, store)
-
-		_, err := store.db.ExecContext(ctx,
-			"DELETE FROM deleted_children WHERE parent_id IN (SELECT id FROM transactions WHERE hash = $1)", p.TxIDChainHash()[:])
-		require.NoError(t, err)
-
-		var markers int
-		require.NoError(t, store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM deleted_children").Scan(&markers))
-		require.Equal(t, 1, markers, "fixture: exactly one marker survives, on Q")
-
-		historical := spendpkg.NewSpendingData(child.TxIDChainHash(), 0).Bytes()
-		require.Equal(t, historical, outputSpendingData(t, ctx, store, p, 0), "fixture: P:0 is confirmed spent by the child")
-
-		_, err = store.Spend(ctx, child, 1200)
-		require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is rejected on Q's marker")
-
-		require.Equal(t, historical, outputSpendingData(t, ctx, store, p, 0),
-			"rejecting the replay must not release P:0's confirmed spend by the pruned child")
-
-		replacement := bt.NewTx()
-		require.NoError(t, replacement.From(p.TxID(), 0, p.Outputs[0].LockingScript.String(), p.Outputs[0].Satoshis))
-		replacement.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
-		require.NoError(t, replacement.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 2999))
-		_, _, err = store.SpendAndCreate(ctx, replacement, 1200)
-		require.ErrorIs(t, err, errors.ErrSpent, "P:0 was confirmed spent by the child and must not be spendable again")
-	})
 }
 
 // TestPrunedReplayFrozenAfterUnspend: the rolled-back output has been frozen.
@@ -798,7 +499,7 @@ func TestOrphanedSpendIsReversedOnTheNextAttempt(t *testing.T) {
 		// that does not roll back (a transient one). A missing parent used to be
 		// such an error; it now rolls back, so the orphan is written directly.
 		_, err = store.db.ExecContext(ctx,
-			"UPDATE outputs SET spending_data = $2 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
+			"UPDATE outputs SET spending_data = $2, spending_height = 1000 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
 			p.TxIDChainHash()[:], spendpkg.NewSpendingData(child.TxIDChainHash(), 0).Bytes())
 		require.NoError(t, err)
 
@@ -837,61 +538,6 @@ func TestOrphanedSpendIsReversedOnTheNextAttempt(t *testing.T) {
 	})
 }
 
-// TestRejectedReplayRollsBackFreshSpendsAtZeroRetention: with the effective
-// retention driven to 0 the bulk spend takes its non-DAH shape, which used to
-// be a single UPDATE ... RETURNING. RETURNING evaluates against the post-update
-// row on both engines, so the idempotent flag it reported was unconditionally
-// true and a genuinely fresh write came back looking like a match the store
-// already held. utxo.RollbackSet then held it back from a rejected replay's
-// rollback, orphaning exactly the spend that split was added to reverse.
-// A node that pruned under a positive retention and later has it adjusted to 0
-// still has markers, so the two conditions coexist. Found by review.
-//
-// The bulk path is Postgres-only (BatchSQLOperations && engine == "postgres"),
-// so only that subtest exercises the defect; SQLite takes the per-row path and
-// rides along as a control that the fixture itself is sound.
-func TestRejectedReplayRollsBackFreshSpendsAtZeroRetention(t *testing.T) {
-	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
-		p, q, child := twoParentPrunedChild(t, ctx, store)
-
-		// The marker on P is what rejects the replay; drop Q's so its output is
-		// free for a genuinely fresh spend by the same replay.
-		_, err := store.db.ExecContext(ctx,
-			"DELETE FROM deleted_children WHERE parent_id IN (SELECT id FROM transactions WHERE hash = $1)", q.TxIDChainHash()[:])
-		require.NoError(t, err)
-
-		// Release Q:0 so the replay's spend of it is new work, not a match.
-		q0Hash, err := util.UTXOHashFromOutput(q.TxIDChainHash(), q.Outputs[0], 0)
-		require.NoError(t, err)
-		require.NoError(t, store.Unspend(ctx, []*utxo.Spend{{
-			TxID: q.TxIDChainHash(), Vout: 0, UTXOHash: q0Hash,
-			SpendingData: spendpkg.NewSpendingData(child.TxIDChainHash(), 1),
-		}}))
-		require.Nil(t, outputSpendingData(t, ctx, store, q, 0), "fixture: Q:0 is free")
-
-		// Drive the effective retention to 0, which selects the non-DAH shape.
-		store.settings.UtxoStore.BlockHeightRetention = 0
-		store.settings.GlobalBlockHeightRetention = 0
-		require.Zero(t, store.settings.GetUtxoStoreBlockHeightRetention(), "fixture: the non-DAH branch is selected")
-
-		_, err = store.Spend(ctx, child, 1200)
-		require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is still rejected on P's marker")
-
-		require.Nil(t, outputSpendingData(t, ctx, store, q, 0),
-			"the replay's fresh spend of Q:0 was written by this call and must be rolled back with it")
-
-		// End state: Q:0 is spendable by a real transaction.
-		replacement := bt.NewTx()
-		require.NoError(t, replacement.From(q.TxID(), 0, q.Outputs[0].LockingScript.String(), q.Outputs[0].Satoshis))
-		replacement.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
-		require.NoError(t, replacement.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 2999))
-		_, _, err = store.SpendAndCreate(ctx, replacement, 1200)
-		require.NoError(t, err, "Q:0 was never legitimately consumed and must be spendable")
-
-		_ = p
-	})
-}
-
 // TestSpendRollbackSetForRequireParentOutputs: a RequireParentOutputs call
 // reverses only what it wrote, and only when an input failed with a validation
 // error. An idempotent match is that record's own spend and is never reversed,
@@ -910,50 +556,6 @@ func TestSpendRollbackSetForRequireParentOutputs(t *testing.T) {
 	require.Nil(t,
 		spendRollbackSet([]*utxo.Spend{written, timedOut}, []*utxo.Spend{written}),
 		"a call that failed only on a transient error reverses nothing")
-}
-
-// TestRollbackKeepsAMatchMarkedAfterTheSpendRead: a prune that commits between
-// a replay's marker read and its existence probe. The replay's input on P read
-// P:0 before the prune's marker landed, so it answered as an idempotent match
-// with no error, and a sibling input whose parent was gone failed. The probe
-// then finds no spender, because the same prune deleted it. The rollback must
-// read the marker again: P:0 is a confirmed spend by the pruned child, and
-// reversing it would release a confirmed output. The test calls the rollback
-// directly with the state that interleaving leaves behind.
-func TestRollbackKeepsAMatchMarkedAfterTheSpendRead(t *testing.T) {
-	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
-		p, _, child := twoParentPrunedChild(t, ctx, store)
-
-		historical := spendpkg.NewSpendingData(child.TxIDChainHash(), 0).Bytes()
-		require.Equal(t, historical, outputSpendingData(t, ctx, store, p, 0), "fixture: P:0 is confirmed spent by the child")
-
-		utxoHash, err := util.UTXOHashFromOutput(p.TxIDChainHash(), p.Outputs[0], 0)
-		require.NoError(t, err)
-
-		match := &utxo.Spend{TxID: p.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash, SpendingData: spendpkg.NewSpendingData(child.TxIDChainHash(), 0)}
-
-		// A spend this same call wrote on the marked parent: P:1 was free
-		// before the call. The marker names this spender, but says nothing
-		// about an output the call itself just took, so it must be reversed.
-		p1Hash, err := util.UTXOHashFromOutput(p.TxIDChainHash(), p.Outputs[1], 1)
-		require.NoError(t, err)
-
-		written := &utxo.Spend{TxID: p.TxIDChainHash(), Vout: 1, UTXOHash: p1Hash, SpendingData: spendpkg.NewSpendingData(child.TxIDChainHash(), 2)}
-
-		require.Nil(t, outputSpendingData(t, ctx, store, p, 1), "fixture: P:1 is free before the call")
-
-		_, err = store.db.ExecContext(ctx,
-			"UPDATE outputs SET spending_data = $2 WHERE idx = 1 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
-			p.TxIDChainHash()[:], written.SpendingData.Bytes())
-		require.NoError(t, err)
-
-		store.probeAndRollbackPartialSpends(child, []*utxo.Spend{match, written}, []*utxo.Spend{match})
-
-		require.Equal(t, historical, outputSpendingData(t, ctx, store, p, 0),
-			"a match whose parent carries the marker by the time of the probe is a confirmed spend and must stay")
-		require.Nil(t, outputSpendingData(t, ctx, store, p, 1),
-			"a spend this call wrote is reversed even though its parent carries a marker for this spender")
-	})
 }
 
 // TestAbortedSpendKeepsAnIdempotentMatchWhileAnInputIsUnanswered: tx C spends
@@ -1112,7 +714,7 @@ func testAbortedSpendKeepsIdempotentMatch(t *testing.T, byCancel bool) {
 
 		recorded := spendpkg.NewSpendingData(c.TxIDChainHash(), 1).Bytes()
 		_, err = store.db.ExecContext(ctx,
-			"UPDATE outputs SET spending_data = $2 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
+			"UPDATE outputs SET spending_data = $2, spending_height = 1000 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
 			b.TxIDChainHash()[:], recorded)
 		require.NoError(t, err)
 
@@ -1300,19 +902,15 @@ func replaySpender(t *testing.T, parents ...*bt.Tx) *bt.Tx {
 	return tx
 }
 
-// plantReplayMarker makes output 0 of parent record spender at vin, as it did before the pruner
-// removed spender, and writes the pruner's marker for it.
-func plantReplayMarker(t *testing.T, ctx context.Context, store *Store, parent, spender *bt.Tx, vin int) {
+// plantHistoricalSpend makes output 0 of parent record spender at vin with no spend height, as a
+// build that did not store heights left it. The spender has no record, so a spend of the same
+// call is a replay of a pruned transaction.
+func plantHistoricalSpend(t *testing.T, ctx context.Context, store *Store, parent, spender *bt.Tx, vin int) {
 	t.Helper()
 
 	_, err := store.db.ExecContext(ctx,
 		"UPDATE outputs SET spending_data = $2 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
 		parent.TxIDChainHash()[:], spendpkg.NewSpendingData(spender.TxIDChainHash(), vin).Bytes())
-	require.NoError(t, err)
-
-	_, err = store.db.ExecContext(ctx,
-		"INSERT INTO deleted_children (parent_id, child_hash) SELECT id, $2 FROM transactions WHERE hash = $1",
-		parent.TxIDChainHash()[:], spender.TxIDChainHash()[:])
 	require.NoError(t, err)
 }
 
@@ -1424,7 +1022,7 @@ func TestTransientLockDoesNotHideAPrunedReplay(t *testing.T) {
 
 		c := replaySpender(t, l, m, f)
 
-		plantReplayMarker(t, ctx, store, m, c, 1)
+		plantHistoricalSpend(t, ctx, store, m, c, 1)
 
 		require.NoError(t, store.SetLocked(ctx, []chainhash.Hash{*l.TxIDChainHash()}, true))
 
@@ -1469,7 +1067,7 @@ func TestRefusedReplayLeavesTheParentsStampAlone(t *testing.T) {
 					utxo.MinedBlockInfo{BlockID: 1000, BlockHeight: 1000, OnLongestChain: true})
 				require.NoError(t, err)
 
-				plantReplayMarker(t, ctx, store, p, c, 0)
+				plantHistoricalSpend(t, ctx, store, p, c, 0)
 
 				stamp := readDAH(ctx, t, store, *p.TxIDChainHash())
 				require.NotNil(t, stamp, "fixture: P is fully spent and mined, so it carries a stamp")
@@ -1537,43 +1135,6 @@ func TestSetDAHOfARowThePruneDeletedHasNothingToStamp(t *testing.T) {
 		inTxn(func(txn *sql.Tx) {
 			require.NoError(t, store.setDAH(ctx, txn, id), "setDAH has nothing to stamp on a deleted row")
 		})
-	})
-}
-
-// TestWithoutMarkedMatchesCountsAMatchItCannotRead: when the re-read of a parent's replay marker
-// fails, the idempotent match is dropped from the rollback, so the output stays spent by a
-// transaction the store may not hold. Each such match counts on
-// utxo_spend_rollback_marker_unread, and a spend this call wrote is never dropped. A match whose
-// marker is read, with none there, stays in the rollback and counts nothing.
-func TestWithoutMarkedMatchesCountsAMatchItCannotRead(t *testing.T) {
-	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
-		_, err := store.Create(ctx, tests.ParentTx, 1000)
-		require.NoError(t, err)
-
-		spendOutput := func(vout uint32) *utxo.Spend {
-			hash, hashErr := util.UTXOHashFromOutput(tests.ParentTx.TxIDChainHash(), tests.ParentTx.Outputs[vout], vout)
-			require.NoError(t, hashErr)
-
-			return &utxo.Spend{
-				TxID: tests.ParentTx.TxIDChainHash(), Vout: vout, UTXOHash: hash,
-				SpendingData: spendpkg.NewSpendingData(tests.Tx.TxIDChainHash(), int(vout)),
-			}
-		}
-
-		match, fresh := spendOutput(0), spendOutput(1)
-
-		before := testutil.ToFloat64(prometheusUtxoSpendRollbackMarkerUnread)
-
-		kept := store.withoutMarkedMatches(ctx, tests.Tx, []*utxo.Spend{match, fresh}, []*utxo.Spend{match})
-		require.Equal(t, []*utxo.Spend{match, fresh}, kept, "a readable, unmarked match stays in the rollback")
-		require.Equal(t, before, testutil.ToFloat64(prometheusUtxoSpendRollbackMarkerUnread), "a match whose marker was read counts nothing")
-
-		spent, cancel := context.WithCancel(ctx)
-		cancel()
-
-		kept = store.withoutMarkedMatches(spent, tests.Tx, []*utxo.Spend{match, fresh}, []*utxo.Spend{match})
-		require.Equal(t, []*utxo.Spend{fresh}, kept, "a failed read drops the match and keeps the spend this call wrote")
-		require.Equal(t, before+1, testutil.ToFloat64(prometheusUtxoSpendRollbackMarkerUnread), "the dropped match is counted")
 	})
 }
 

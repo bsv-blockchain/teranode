@@ -139,7 +139,7 @@ func TestSpendRetryRollsBackSpendWrittenOnRetry(t *testing.T) {
 				p.TxIDChainHash()[:]).Scan(&p0AfterUnspend)
 		}}
 
-		replay, err := store.Spend(ctx, child, 1200)
+		replay, err := store.Spend(ctx, child, 1001)
 		require.ErrorIs(t, err, errors.ErrFrozen, "the replay fails on frozen Q:0")
 		require.Len(t, replay, 2)
 		require.NoError(t, replay[0].Err, "P:0 was accepted on the retry")
@@ -164,9 +164,9 @@ func TestSpendRetryRollsBackSpendWrittenOnRetry(t *testing.T) {
 // match, M:0 is missing and Q:0 is spent by another transaction, a
 // rollback-class error. A missing parent is not a replay answer, so the
 // rollback must reverse P:0: leaving it spent would refuse P:0's next
-// legitimate spender with a txid this node never stored. The marker case, where
+// legitimate spender with a txid this node never stored. The historical case, where
 // the match is a confirmed spend and must stay, is pinned by
-// TestPrunedReplayRollbackPreservesHistoricalSpend.
+// TestFailedReplayReversesItsFreshSpendAndKeepsTheHistoricalMatch.
 func TestSpendRollbackReversesOrphanWhenASiblingParentIsMissing(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		newParent := func(seed string, create bool) *bt.Tx {
@@ -209,7 +209,7 @@ func TestSpendRollbackReversesOrphanWhenASiblingParentIsMissing(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = store.db.ExecContext(ctx,
-			"UPDATE outputs SET spending_data = $1 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $2)",
+			"UPDATE outputs SET spending_data = $1, spending_height = 1000 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $2)",
 			cSpends[0].SpendingData.Bytes(), p.TxIDChainHash()[:])
 		require.NoError(t, err)
 		require.Equal(t, cSpends[0].SpendingData.Bytes(), outputSpendingData(t, ctx, store, p, 0), "fixture: P:0 is an orphan spend by C")
@@ -225,32 +225,6 @@ func TestSpendRollbackReversesOrphanWhenASiblingParentIsMissing(t *testing.T) {
 		require.Empty(t, outputSpendingData(t, ctx, store, p, 0),
 			"the orphan spend of P:0 is reversed: a missing sibling parent is not a pruned-replay answer")
 	})
-}
-
-// TestSpendRollbackKeepsAMatchMarkedBeforeTheProbe: the same retry as
-// TestSpendRollbackReversesOrphanWhenASiblingParentIsMissing, but a prune
-// commits P's marker for C after the spend read P:0 and before the rollback's
-// existence probe. P:0 then records a confirmed spend by a pruned transaction,
-// and Spend must hand its idempotent matches to the rollback so the marker is
-// read again there and the match stays. The direct test of the rollback,
-// TestRollbackKeepsAMatchMarkedAfterTheSpendRead, does not go through Spend.
-//
-// The same prune is also committed after the probe and before the marker read, the window the
-// order of those two reads exists for: a probe that found no spender has already seen the marker,
-// because the prune commits the marker and the spender's delete together, so reading the marker
-// after the probe closes it, and reading it before would not.
-func TestSpendRollbackKeepsAMatchMarkedBeforeTheProbe(t *testing.T) {
-	for _, window := range []struct {
-		name string
-		hook *func()
-	}{
-		{name: "before the probe", hook: &spendBeforeRollbackProbe},
-		{name: "after the probe", hook: &spendAfterRollbackProbe},
-	} {
-		t.Run(window.name, func(t *testing.T) {
-			testSpendRollbackKeepsAMatchMarkedInWindow(t, window.hook)
-		})
-	}
 }
 
 func testSpendRollbackKeepsAMatchMarkedInWindow(t *testing.T, hook *func()) {
@@ -292,7 +266,7 @@ func testSpendRollbackKeepsAMatchMarkedInWindow(t *testing.T, hook *func()) {
 		require.NoError(t, err)
 
 		_, err = store.db.ExecContext(ctx,
-			"UPDATE outputs SET spending_data = $1 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $2)",
+			"UPDATE outputs SET spending_data = $1, spending_height = 1000 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $2)",
 			cSpends[0].SpendingData.Bytes(), p.TxIDChainHash()[:])
 		require.NoError(t, err)
 
@@ -327,7 +301,7 @@ func testSpendRollbackKeepsAMatchMarkedInWindow(t *testing.T, hook *func()) {
 
 // TestSpendRetryReversesAFreshWriteWhenAReplayAnswerFollows is the variant of the test above
 // that tells the rollback sets apart. A replay answer in the batch (here Q:0, which records C
-// and carries C's marker) makes the rollback leave idempotent matches alone and reverse only what
+// with no height and no record of C) makes the rollback leave idempotent matches alone and reverse only what
 // the call wrote. P:0 is an idempotent match on attempt 1, is released inside the retry window,
 // and is written fresh on attempt 2. A stale idempotent flag would keep it out of the
 // rollback, leaving P:0 spent by a transaction that is never created.
@@ -347,10 +321,12 @@ func TestSpendRetryReversesAFreshWriteWhenAReplayAnswerFollows(t *testing.T) {
 			utxo.MinedBlockInfo{BlockID: 1000, BlockHeight: 1000, OnLongestChain: true})
 		require.NoError(t, err)
 
-		// Q:0 records C and carries C's marker: a replay of C is refused on it.
+		// Q:0 records C with no height, as a build that stored none left it, and C
+		// has no record: a replay of C is refused on it as history. P:0 keeps its
+		// height of 1000, so on the replay at 1001 it is young.
 		_, err = store.db.ExecContext(ctx,
-			"INSERT INTO deleted_children (parent_id, child_hash) SELECT id, $2 FROM transactions WHERE hash = $1",
-			q.TxIDChainHash()[:], child.TxIDChainHash()[:])
+			"UPDATE outputs SET spending_height = NULL WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
+			q.TxIDChainHash()[:])
 		require.NoError(t, err)
 
 		require.NoError(t, store.SetBlockHeight(1100))
@@ -389,7 +365,7 @@ func TestSpendRetryReversesAFreshWriteWhenAReplayAnswerFollows(t *testing.T) {
 			hookErr = store.Unspend(ctx, []*utxo.Spend{p0})
 		}}
 
-		replay, err := store.Spend(ctx, child, 1200)
+		replay, err := store.Spend(ctx, child, 1001)
 		require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is refused on Q:0")
 		require.Len(t, replay, 2)
 

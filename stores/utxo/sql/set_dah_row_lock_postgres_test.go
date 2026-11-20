@@ -500,63 +500,6 @@ func TestSetDAHSeesConcurrentUnspend_Postgres(t *testing.T) {
 	require.True(t, rowExists(ctx, t, store, hash), "the pruner must not delete a row with a live output")
 }
 
-// TestSpendOfAMarkedParentDoesNotWaitForThePrune_Postgres: the pruner writes a
-// deleted_children row for a parent P that survives, and its foreign key takes
-// FOR KEY SHARE on P until the prune commits, through the whole DELETE. A spend
-// of P's other output runs setDAH on P. Its row lock must be FOR NO KEY UPDATE,
-// which that KEY SHARE does not block: with FOR UPDATE every spend of a marked
-// parent waited for the entire prune, and the batcher queued every other spend
-// behind it.
-func TestSpendOfAMarkedParentDoesNotWaitForThePrune_Postgres(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping Postgres integration test in short mode")
-	}
-
-	store, ctx := setupPostgresStore(t)
-	floorRetention(t, store)
-
-	parent := bt.NewTx()
-	require.NoError(t, parent.From("5555555555555555555555555555555555555555555555555555555555555555", 0, "51", 30000))
-	parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
-	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
-	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
-	_, err := store.Create(ctx, parent, 1000)
-	require.NoError(t, err)
-
-	// The prune in flight: a marker on P, written in a transaction that stays
-	// open, as the pruner's does until its DELETE commits.
-	prune, err := store.db.BeginTx(ctx, nil)
-	require.NoError(t, err)
-
-	t.Cleanup(func() { _ = prune.Rollback() })
-
-	_, err = prune.ExecContext(ctx,
-		"INSERT INTO deleted_children (parent_id, child_hash) SELECT id, $2 FROM transactions WHERE hash = $1",
-		parent.TxIDChainHash()[:], bytes.Repeat([]byte{0xAB}, 32))
-	require.NoError(t, err)
-
-	spender := bt.NewTx()
-	require.NoError(t, spender.From(parent.TxID(), 1, parent.Outputs[1].LockingScript.String(), parent.Outputs[1].Satoshis))
-	spender.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
-	require.NoError(t, spender.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
-
-	done := make(chan error, 1)
-
-	go func() {
-		_, spendErr := store.Spend(ctx, spender, 1000)
-		done <- spendErr
-	}()
-
-	select {
-	case err = <-done:
-		require.NoError(t, err)
-	case <-time.After(10 * time.Second):
-		t.Fatal("the spend of P:1 waited on the open prune's foreign-key lock on P")
-	}
-
-	require.NoError(t, prune.Rollback())
-}
-
 // TestCreateDeletedChildrenDoesNotQueueWritersBehindIt_Postgres: on the first
 // start of this version, creating deleted_children takes SHARE ROW EXCLUSIVE on
 // transactions for its foreign key. A running write holds ROW EXCLUSIVE there,

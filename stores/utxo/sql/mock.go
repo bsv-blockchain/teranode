@@ -318,7 +318,9 @@ func SetupCreatePostgresSchemaErrorMocks(mockDB *MockDB, errorAtStep int) {
 		func(q string) bool { return strings.Contains(q, "unmined_since") && strings.Contains(q, "ADD COLUMN") },
 		func(q string) bool { return strings.Contains(q, "preserve_until") && strings.Contains(q, "ADD COLUMN") },
 		func(q string) bool { return strings.Contains(q, "lane_position") && strings.Contains(q, "ADD COLUMN") },
-		func(q string) bool { return strings.Contains(q, "spending_height") && strings.Contains(q, "ADD COLUMN") },
+		func(q string) bool {
+			return strings.Contains(q, "spending_height") && strings.Contains(q, "ADD COLUMN")
+		},
 		func(q string) bool {
 			return strings.Contains(q, "block_ids_transaction_id_fkey") && strings.Contains(q, "confdeltype")
 		},
