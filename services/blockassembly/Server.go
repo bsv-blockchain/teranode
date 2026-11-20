@@ -1038,17 +1038,28 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		go func() {
 			defer close(metaDoneCh)
 
+			buildStart := time.Now()
+
 			subtreeMetaBytes, ok := ba.buildSubtreeMeta(subtreeRequest)
+
+			prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("meta_build").Observe(time.Since(buildStart).Seconds())
+
 			if !ok {
 				return
 			}
 
-			if err := ba.subtreeStore.Set(ctx,
+			writeStart := time.Now()
+
+			err := ba.subtreeStore.Set(ctx,
 				subtree.RootHash()[:],
 				fileformat.FileTypeSubtreeMeta,
 				subtreeMetaBytes,
 				options.WithDeleteAt(dah),
-			); err != nil {
+			)
+
+			prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("meta_write").Observe(time.Since(writeStart).Seconds())
+
+			if err != nil {
 				if errors.Is(err, errors.ErrBlobAlreadyExists) {
 					ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree meta already exists", subtree.RootHash().String())
 				} else {
@@ -1070,12 +1081,18 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	go func() {
 		defer close(subtreeStorageDone) // Signal coordinator when done
 		storedOK := true
-		if err := ba.subtreeStore.Set(ctx,
+		writeStart := time.Now()
+
+		err := ba.subtreeStore.Set(ctx,
 			subtree.RootHash()[:],
 			fileformat.FileTypeSubtree,
 			subtreeBytes,
 			options.WithDeleteAt(dah),
-		); err != nil {
+		)
+
+		prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("subtree_write").Observe(time.Since(writeStart).Seconds())
+
+		if err != nil {
 			if errors.Is(err, errors.ErrBlobAlreadyExists) {
 				ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree already exists", subtree.RootHash().String())
 			} else {
