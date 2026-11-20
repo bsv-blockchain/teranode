@@ -457,6 +457,7 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 | `teranode_aerospike_utxo_spend_batch_size`        | Histogram  | Size of utxo spend batch                                        |
 | `teranode_aerospike_get_external`                 | Histogram  | Duration of getting an external transaction from the blob store |
 | `teranode_aerospike_set_external`                 | Histogram  | Duration of setting an external transaction to the blob store   |
+| `teranode_aerospike_unmined_missing_external_skipped` | Counter | Unmined transactions left out of block assembly's startup load because their record is external and the blob store has no file for it |
 | `teranode_aerospike_txmeta_get_counter_conflicting` | Histogram  | Duration of getting counter conflicting transactions from the blob store |
 | `teranode_aerospike_txmeta_get_conflicting`        | Histogram  | Duration of getting conflicting transactions from the blob store |
 
