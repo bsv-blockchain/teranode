@@ -959,12 +959,15 @@ func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 }
 
 // GetUnminedTxIteratorSkippingMissingExternal is GetUnminedTxIterator for block
-// assembly's load. An unmined record marked external whose file the external
-// store does not have is logged, counted and left out, instead of failing the
-// scan: the file does not come back, so failing would stop block assembly from
-// starting on every restart. Every other caller keeps GetUnminedTxIterator,
-// which still fails, so a repair tool never reports success over a record it
-// could not read.
+// assembly's load, which runs at start, on reload and on reset. An unmined
+// record marked external whose file the external store does not have is logged,
+// counted and left out, instead of failing the scan: the file does not come
+// back, so failing would stop block assembly from starting on every restart.
+// The input-validating reset loads this way too, so it leaves such a record
+// unexamined and reports it only through the log and
+// teranode_aerospike_unmined_missing_external_skipped. Callers outside block
+// assembly's load, such as the rewind tool and the input-validation dry run,
+// keep GetUnminedTxIterator, which still fails on the record.
 func (s *Store) GetUnminedTxIteratorSkippingMissingExternal() (utxo.UnminedTxIterator, error) {
 	if s.client == nil {
 		return nil, errors.NewProcessingError(errAerospikeClientNotInit)

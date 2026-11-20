@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -361,50 +362,43 @@ func TestValidateParentChain_RejectsChildOfConflictingParent(t *testing.T) {
 
 // TestValidateParentChain_RejectsChildOfUnloadedUnminedParent covers a parent the
 // unmined scan left out, such as an external record whose file is missing: the
-// store still says the parent is unmined, but it is not in the loaded list. The
+// parent is in the store and still unmined, but not in the loaded list. The
 // child, and the grandchild through it, must not reach a block template.
 func TestValidateParentChain_RejectsChildOfUnloadedUnminedParent(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
+	items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+		s.BlockAssembly.OnRestartValidateParentChain = true
+		s.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = true
+	})
 
-	mockStore := new(utxo.MockUtxostore)
+	parent := newTx(60)
+	child := newTx(61)
+	require.NoError(t, child.Inputs[0].PreviousTxIDAdd(parent.TxIDChainHash()))
+	grandchild := newTx(62)
+	require.NoError(t, grandchild.Inputs[0].PreviousTxIDAdd(child.TxIDChainHash()))
 
-	testSettings := &settings.Settings{}
-	testSettings.BlockAssembly.ParentValidationBatchSize = 50
-	testSettings.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = true
+	loaded := make([]*utxo.UnminedTransaction, 0, 2)
 
-	blockAssembler := &BlockAssembler{
-		utxoStore: mockStore,
-		settings:  testSettings,
-		logger:    ulogger.TestLogger{},
+	for i, tx := range []*bt.Tx{parent, child, grandchild} {
+		_, _, err := items.utxoStore.SpendAndCreate(ctx, tx, 0, utxo.WithCreateOnly())
+		require.NoError(t, err)
+
+		if tx == parent {
+			continue // the scan left the parent out
+		}
+
+		inpoints, err := subtree.NewTxInpointsFromTx(tx)
+		require.NoError(t, err)
+
+		loaded = append(loaded, &utxo.UnminedTransaction{
+			Node:         &subtree.Node{Hash: *tx.TxIDChainHash(), Fee: 1000, SizeInBytes: 250},
+			TxInpoints:   &inpoints,
+			CreatedAt:    i,
+			UnminedSince: 1,
+		})
 	}
 
-	var parentHash, childHash, grandchildHash chainhash.Hash
-	for j := range parentHash {
-		parentHash[j] = 0xAA
-		childHash[j] = 0xBB
-		grandchildHash[j] = 0xCC
-	}
-
-	childTx := &utxo.UnminedTransaction{
-		Node:       &subtree.Node{Hash: childHash, Fee: 1000, SizeInBytes: 250},
-		TxInpoints: singleParentInpointsPtr(parentHash, 0),
-		CreatedAt:  1,
-	}
-	grandchildTx := &utxo.UnminedTransaction{
-		Node:       &subtree.Node{Hash: grandchildHash, Fee: 1000, SizeInBytes: 250},
-		TxInpoints: singleParentInpointsPtr(childHash, 0),
-		CreatedAt:  2,
-	}
-
-	mockStore.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Run(func(args mock.Arguments) {
-			for _, unresolved := range args.Get(1).([]*utxo.UnresolvedMetaData) {
-				unresolved.Data = &meta.Data{BlockIDs: []uint32{}, UnminedSince: 1}
-			}
-		}).
-		Return(nil)
-
-	validTxs, err := blockAssembler.validateParentChain(ctx, []*utxo.UnminedTransaction{childTx, grandchildTx}, map[uint32]bool{1: true})
+	validTxs, err := items.blockAssembler.validateParentChain(ctx, loaded, map[uint32]bool{})
 	require.NoError(t, err)
 	require.Empty(t, validTxs)
 }
