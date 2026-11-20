@@ -6007,42 +6007,84 @@ func (c connExecutor) Exec(query string, args ...interface{}) (sql.Result, error
 
 func (c connExecutor) Close() error { return nil }
 
-// addLanePositionColumnSQL adds the nullable lane_position column to transactions when it is
-// missing. With no default, Postgres only changes its catalog and does not rewrite the table, and
-// every row already stored reads NULL, meaning no lane position. lock_timeout bounds the wait for
-// the table lock: ADD COLUMN needs ACCESS EXCLUSIVE, and while it waits behind an open transaction
-// on transactions (a pruner batch on a pod still running the old build, say) every later read and
-// write on the table queues behind it.
-const addLanePositionColumnSQL = `
+// sqlLaneColumn is one nullable lane column of the SQL UTXO store.
+type sqlLaneColumn struct{ table, column, postgresType, sqliteType string }
+
+// sqlLaneColumns are the store's lane columns, added to a database created before them at every
+// open, at every lane migration step, as lane_position on transactions always has been. Each is
+// nullable with no default, so Postgres only changes its catalog and does not rewrite the table,
+// and every row already stored reads NULL, meaning no position.
+//
+//   - transactions.lane_position is the record's own lane position.
+//   - transactions.parent_lane_positions is the child's copy of its parents' positions, eight
+//     bytes per distinct parent in TxInpoints parent order (util/lane).
+//   - outputs.spending_lane_position is the spender's lane position, written beside
+//     spending_data by the spend that writes it.
+//
+// Nothing in this build writes the last two; the step that makes them mandatory does.
+var sqlLaneColumns = []sqlLaneColumn{
+	{"transactions", "lane_position", "BIGINT", "BIGINT"},
+	{"transactions", "parent_lane_positions", "BYTEA", "BLOB"},
+	{"outputs", "spending_lane_position", "BIGINT", "BIGINT"},
+}
+
+// addLaneColumnSQL adds one lane column when it is missing. The catalog check skips the lock on a
+// current schema; IF NOT EXISTS makes a second process that passed the check at the same moment a
+// no-op instead of a duplicate-column error. lock_timeout bounds the wait for the
+// table lock: ADD COLUMN needs ACCESS EXCLUSIVE, and while it waits behind an open transaction on
+// the table (a pruner batch on a pod still running the old build, say) every later read and write
+// on the table queues behind it.
+func addLaneColumnSQL(c sqlLaneColumn) string {
+	return `
 		DO $$
 		BEGIN
-			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'transactions'::regclass AND attname = 'lane_position' AND NOT attisdropped) THEN
+			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '` + c.table + `'::regclass AND attname = '` + c.column + `' AND NOT attisdropped) THEN
 				PERFORM set_config('lock_timeout', '200ms', true);
-				ALTER TABLE transactions ADD COLUMN lane_position BIGINT;
+				ALTER TABLE ` + c.table + ` ADD COLUMN IF NOT EXISTS ` + c.column + ` ` + c.postgresType + `;
 			END IF;
 		END $$;
 	`
+}
 
-// laneColumnMigrationLimit is how long addLanePositionColumn retries before the store refuses to
-// open. It only matters on the first start of this build against a database from before it,
-// beside a process that keeps a transaction open on transactions for all of this time. Other
-// processes opening the store wait on the schema lock for at most this long too.
+// laneColumnMigrationLimit is how long addLanePositionColumn retries, across all the lane
+// columns together, before the store refuses to open. It only matters on the first start of a
+// build against a database from before the columns, beside a process that keeps a transaction open
+// on transactions or outputs for all of this time. Other processes opening the store wait on the
+// schema lock for at most this long too, plus one last attempt.
 var laneColumnMigrationLimit = 5 * time.Minute
 
-// addLanePositionColumn runs addLanePositionColumnSQL, and when the table lock is not granted
-// within the lock_timeout it backs off and tries again, until limit has passed. Each attempt is its
-// own statement, so between attempts nothing holds or waits for a lock on transactions.
+// addLanePositionColumn adds every lane column, under one deadline limit from now. For each, when
+// the table lock is not granted within the lock_timeout it backs off and tries again until the
+// deadline has passed. Each attempt is its own statement, so between attempts nothing holds or
+// waits for a lock on the table. The attempts take ACCESS EXCLUSIVE on transactions and, for
+// spending_lane_position, on outputs, each only for its 200ms lock_timeout when not granted.
 func addLanePositionColumn(db DBExecutor, limit time.Duration) error {
-	ctx := context.Background()
-	if c, ok := db.(connExecutor); ok {
-		ctx = c.ctx
+	deadline := time.Now().Add(limit)
+
+	for _, c := range sqlLaneColumns {
+		if err := addLaneColumn(db, c, deadline); err != nil {
+			return errors.NewStorageError("could not add %s column to %s table", c.column, c.table, err)
+		}
 	}
 
-	deadline := time.Now().Add(limit)
+	return nil
+}
+
+func addLaneColumn(db DBExecutor, c sqlLaneColumn, deadline time.Time) error {
+	ctx := context.Background()
+
+	switch e := db.(type) {
+	case connExecutor:
+		ctx = e.ctx
+	case dbExecutor:
+		ctx = e.ctx
+	}
+
 	backoff := 50 * time.Millisecond
+	stmt := addLaneColumnSQL(c)
 
 	for {
-		_, err := db.Exec(addLanePositionColumnSQL)
+		_, err := db.Exec(stmt)
 		if err == nil || !isLockNotAvailable(err) || time.Now().After(deadline) {
 			return err
 		}
@@ -6056,6 +6098,49 @@ func addLanePositionColumn(db DBExecutor, limit time.Duration) error {
 		backoff = min(2*backoff, 2*time.Second)
 	}
 }
+
+// addSqliteLaneColumns is addLanePositionColumn for SQLite, which has no lock to wait for.
+func addSqliteLaneColumns(ctx context.Context, db *usql.DB) error {
+	for _, c := range sqlLaneColumns {
+		var n int
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('`+c.table+`') WHERE name = $1`, c.column).Scan(&n); err != nil {
+			return errors.NewStorageError("could not check %s table for %s column", c.table, c.column, err)
+		}
+
+		if n > 0 {
+			continue
+		}
+
+		if _, err := db.ExecContext(ctx, `ALTER TABLE `+c.table+` ADD COLUMN `+c.column+` `+c.sqliteType); err != nil {
+			return errors.NewStorageError("could not add %s column to %s table", c.column, c.table, err)
+		}
+	}
+
+	return nil
+}
+
+// PrepareLaneSchema installs the store's lane columns. Every open already does; this is the
+// explicit form an operator runs at off before the historical conversion. Restart every process
+// of the node afterwards.
+func (s *Store) PrepareLaneSchema(ctx context.Context) error {
+	if s.engine != string(util.Postgres) {
+		return addSqliteLaneColumns(ctx, s.db)
+	}
+
+	return addLanePositionColumn(dbExecutor{ctx: ctx, db: s.db}, laneColumnMigrationLimit)
+}
+
+// dbExecutor runs statements on the pool with a context.
+type dbExecutor struct {
+	ctx context.Context
+	db  *usql.DB
+}
+
+func (d dbExecutor) Exec(query string, args ...interface{}) (sql.Result, error) {
+	return d.db.ExecContext(d.ctx, query, args...)
+}
+
+func (d dbExecutor) Close() error { return nil }
 
 // isLockNotAvailable reports a Postgres lock_timeout (55P03) from either driver.
 func isLockNotAvailable(err error) bool {
@@ -6241,7 +6326,7 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 
 	if err := addLanePositionColumn(db, laneColumnMigrationLimit); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not add lane_position column to transactions table - [%+v]", err)
+		return err
 	}
 
 	// Ensure block_ids FK has ON DELETE CASCADE — only drop+recreate if it exists without CASCADE
@@ -6617,19 +6702,11 @@ func createSqliteSchema(db *usql.DB) error {
 		}
 	}
 
-	// Add the nullable lane_position column to a database created before it
-	// existed. No default and no backfill: NULL reads as no lane position.
-	var lanePositionColumns int
-	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('transactions') WHERE name = 'lane_position'`).Scan(&lanePositionColumns); err != nil {
+	// Add the nullable lane columns to a database created before them. No
+	// default and no backfill: NULL reads as no lane position.
+	if err := addSqliteLaneColumns(context.Background(), db); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not check transactions table for lane_position column - [%+v]", err)
-	}
-
-	if lanePositionColumns == 0 {
-		if _, err := db.Exec(`ALTER TABLE transactions ADD COLUMN lane_position BIGINT`); err != nil {
-			_ = db.Close()
-			return errors.NewStorageError("could not add lane_position column to transactions table - [%+v]", err)
-		}
+		return err
 	}
 
 	// conflict_intents — conflict-resolution write-ahead log (#861). See the
