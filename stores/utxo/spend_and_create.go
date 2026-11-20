@@ -142,6 +142,21 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 		return nil, nil, err
 	}
 
+	// The position is taken before the first spend, so a create that cannot get one fails having
+	// spent nothing, rather than spending, failing and rolling the spends back.
+	if !options.SpendOnly {
+		if taker, ok := s.(LanePositionTaker); ok {
+			position, takeErr := taker.TakeLanePosition(ctx, options)
+			if takeErr != nil {
+				return nil, nil, takeErr
+			}
+
+			if position != options.LanePosition {
+				opts = WithTakenLanePosition(opts, position)
+			}
+		}
+	}
+
 	var spends []*Spend
 
 	if !options.CreateOnly {

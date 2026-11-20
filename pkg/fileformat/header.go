@@ -214,6 +214,10 @@ func normalizeMagic(magic *[8]byte) {
 	}
 }
 
+// ErrUnknownMagic is wrapped by Read and ReadHeaderFromBytes when the first eight bytes are no
+// known file type's magic, so a caller can tell a malformed header from a failed read.
+var ErrUnknownMagic = fmt.Errorf("unknown magic")
+
 func (h *Header) Read(r io.Reader) error {
 	// Use io.ReadFull, not a single r.Read: io.Reader.Read may return fewer
 	// than 8 bytes with a nil error (sockets, TLS, io.Pipe, bufio over a slow
@@ -227,8 +231,7 @@ func (h *Header) Read(r io.Reader) error {
 	normalizeMagic(&h.magic)
 
 	if _, ok := magicToFileType[h.magic]; !ok {
-		// nolint: forbidigo
-		return fmt.Errorf("unknown magic: %v", h.magic)
+		return fmt.Errorf("%w: %v", ErrUnknownMagic, h.magic)
 	}
 
 	return nil
@@ -259,8 +262,7 @@ func ReadHeaderFromBytes(b []byte) (Header, error) {
 	normalizeMagic(&header.magic)
 
 	if _, ok := magicToFileType[header.magic]; !ok {
-		// nolint: forbidigo
-		return Header{}, fmt.Errorf("unknown magic: %v", header.magic)
+		return Header{}, fmt.Errorf("%w: %v", ErrUnknownMagic, header.magic)
 	}
 
 	return header, nil

@@ -300,6 +300,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			QuorumTimeout:                         getDuration("block_quorum_timeout", 10*time.Second, alternativeContext...),
 			ProcessTxMetaUsingStoreBatchSize:      getInt("blockvalidation_processTxMetaUsingStore_BatchSize", 1024, alternativeContext...),
 			UTXOPersisterBufferSize:               getString("utxoPersister_buffer_size", "256KB", alternativeContext...),
+			UTXOPersisterLivenessStallTimeout:     getDuration("utxoPersister_livenessStallTimeout", 0, alternativeContext...),
 			UTXOPersisterDirect:                   getBool("direct", true, alternativeContext...),
 			TxStore:                               getURL("txstore", "", alternativeContext...),
 			UtxoStore:                             getURL("txmeta_store", "", alternativeContext...),
@@ -397,6 +398,11 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaxBlocksByHeightRange:     getInt("blockchain_maxBlocksByHeightRange", 2000, alternativeContext...),
 			GenerationalCacheCapacity:  getInt("blockchain_generationalCacheCapacity", 100000, alternativeContext...),
 			MaxInvalidBlocksPerRequest: getInt("blockchain_maxInvalidBlocksPerRequest", 10000, alternativeContext...),
+			LaneLeaseRenewInterval:     getDuration("blockchain_laneLeaseRenewInterval", 30*time.Second, alternativeContext...),
+			LaneLeaseStopAfter:         getDuration("blockchain_laneLeaseStopAfter", 2*time.Minute, alternativeContext...),
+			LaneLeaseCloseAfter:        getDuration("blockchain_laneLeaseCloseAfter", 3*time.Minute, alternativeContext...),
+			LaneGrantMin:               getUint64AtLeast("blockchain_laneGrantMin", 10_000, 1, alternativeContext...),
+			LaneGrantDuration:          getDuration("blockchain_laneGrantDuration", 2*time.Minute, alternativeContext...),
 		},
 		BlockValidation: BlockValidationSettings{
 			MaxRetries:                                getInt("blockValidationMaxRetries", 3, alternativeContext...),
@@ -591,6 +597,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			IncrementBatcherTickerIntervalMillis:    getInt("utxostore_incrementBatcherTickerIntervalMillis", 0, alternativeContext...),
 			SetDAHBatcherTickerIntervalMillis:       getInt("utxostore_setDAHBatcherTickerIntervalMillis", 0, alternativeContext...),
 			LockedBatcherTickerIntervalMillis:       getInt("utxostore_lockedBatcherTickerIntervalMillis", 0, alternativeContext...),
+			LaneMigration:                           LaneMigration(getString("utxostore_laneMigration", string(LaneMigrationOff), alternativeContext...)),
 		},
 		P2P: P2PSettings{
 			BlockTopic:          getString("p2p_block_topic", "", alternativeContext...),

@@ -12,13 +12,72 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
+	utxotests "github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// A factory caller such as seeder has no daemon to install its allocator. Enabling
+// lanes must reject its creates, rather than treating a missing source as off.
+func TestNewStoreRequiresLaneSourceForEnabledCreates(t *testing.T) {
+	for _, mode := range []settings.LaneMigration{settings.LaneMigrationOff, settings.LaneMigrationShadow} {
+		for _, logging := range []string{"false", "true"} {
+			t.Run(string(mode)+"/logging="+logging, func(t *testing.T) {
+				ctx := context.Background()
+				s := test.CreateBaseTestSettings(t)
+				s.UtxoStore.LaneMigration = mode
+				var err error
+				s.UtxoStore.UtxoStore, err = url.Parse("sqlitememory://?logging=" + logging)
+				require.NoError(t, err)
+				store, err := NewStore(ctx, ulogger.TestLogger{}, s, "seeder", false)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, store.Close(ctx)) })
+				tx := utxotests.BuildMultiWorkload(t, 0xaa, 1, 1).Roots[0]
+				_, _, err = store.SpendAndCreate(ctx, tx, 930, utxo.WithCreateOnly())
+				if mode == settings.LaneMigrationOff {
+					require.NoError(t, err)
+					data, getErr := store.Get(ctx, tx.TxIDChainHash(), fields.LanePosition)
+					require.NoError(t, getErr)
+					require.Zero(t, data.LanePosition)
+					return
+				}
+				require.ErrorIs(t, err, errors.ErrConfiguration)
+				_, err = store.Get(ctx, tx.TxIDChainHash())
+				require.ErrorIs(t, err, errors.ErrTxNotFound)
+				taker, ok := utxo.As[utxo.LanePositionTaker](store)
+				require.True(t, ok)
+				holder, ok := utxo.As[utxo.LanePositionHolder](store)
+				require.True(t, ok)
+				require.ErrorIs(t, holder.StartLanePositions(ctx), errors.ErrConfiguration)
+				require.ErrorIs(t, holder.LanePositionsReady(), errors.ErrConfiguration)
+				taker.SetLanePositionSource(utxotests.NewScriptedLanePositions(1))
+				_, _, err = store.SpendAndCreate(ctx, tx, 930, utxo.WithCreateOnly())
+				require.NoError(t, err, "the daemon can install the real source before use")
+				data, err := store.Get(ctx, tx.TxIDChainHash(), fields.LanePosition)
+				require.NoError(t, err)
+				require.Equal(t, uint64(1), data.LanePosition)
+			})
+		}
+	}
+}
+
+func TestNewStoreRefusesUnsupportedLaneStore(t *testing.T) {
+	availableDatabases["null-lane-test"] = func(context.Context, ulogger.Logger, *settings.Settings, *url.URL) (utxo.Store, error) {
+		return nullstore.NewNullStore()
+	}
+	t.Cleanup(func() { delete(availableDatabases, "null-lane-test") })
+	s := test.CreateBaseTestSettings(t)
+	s.UtxoStore.UtxoStore = &url.URL{Scheme: "null-lane-test"}
+	s.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+	store, err := NewStore(context.Background(), ulogger.TestLogger{}, s, "direct-tool", false)
+	require.ErrorIs(t, err, errors.ErrConfiguration)
+	require.Nil(t, store)
+}
 
 // MockUTXOStore implements the utxo.Store interface for testing
 type MockUTXOStore struct {

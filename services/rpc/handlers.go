@@ -2786,7 +2786,12 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		return nil, rpcDecodeHexError(c.TxID)
 	}
 
-	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+	vout, err := safeconversion.IntToUint32(c.Vout)
+	if err != nil {
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
+	}
+
+	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: vout, UTXOHash: h}}, s.settings); err != nil {
 		return nil, err
 	}
 
@@ -2835,7 +2840,12 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, rpcDecodeHexError(c.TxID)
 	}
 
-	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+	vout, err := safeconversion.IntToUint32(c.Vout)
+	if err != nil {
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
+	}
+
+	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: vout, UTXOHash: h}}, s.settings); err != nil {
 		return nil, err
 	}
 
@@ -2895,8 +2905,13 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, rpcDecodeHexError(c.NewUTXOHash)
 	}
 
+	oldVout, err := safeconversion.IntToUint32(c.OldVout)
+	if err != nil {
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
+	}
+
 	if err = s.utxoStore.ReAssignUTXO(ctx,
-		&utxo.Spend{TxID: oldTXIDHash, Vout: uint32(c.OldVout), UTXOHash: oldUTXOHash}, // nolint:gosec
+		&utxo.Spend{TxID: oldTXIDHash, Vout: oldVout, UTXOHash: oldUTXOHash},
 		&utxo.Spend{UTXOHash: newUTXOHash}, s.settings); err != nil {
 		return nil, err
 	}

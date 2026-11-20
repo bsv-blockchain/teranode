@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 // Subscriber source identifiers passed to Subscribe(). Services use these
@@ -98,6 +99,17 @@ type ClientI interface {
 
 	// AssignBlockID returns a stable block ID for a given block hash (idempotent per hash).
 	AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error)
+
+	// OpenLaneLease opens a lease on a free lane, never 254 or 255, with its first grant. It returns
+	// an error when no lane is free, and the caller retries.
+	OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error)
+
+	// RenewLaneLease renews a lease and, with WantGrant, records the next grant. A closed lease is
+	// answered with Closed set, not an error, and the holder opens a new lease.
+	RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error)
+
+	// ReleaseLaneLease closes a lease cleanly. alreadyClosed reports a lease that was closed before.
+	ReleaseLaneLease(ctx context.Context, r lane.Release) (alreadyClosed bool, err error)
 
 	// SendNotification broadcasts a notification to subscribers.
 	//
@@ -737,7 +749,8 @@ type ClientI interface {
 	// - blockIDs: Array of block IDs to check
 	//
 	// Returns:
-	// - Boolean indicating whether all the blocks are in the main chain (true) or not (false)
+	// - Boolean indicating whether ANY of the blocks is in the main chain (true) or none is (false).
+	//   Callers rely on this any-of semantics; an empty blockIDs slice returns false.
 	// - Error if the check operation fails
 	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
 
