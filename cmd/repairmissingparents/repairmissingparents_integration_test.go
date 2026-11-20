@@ -128,9 +128,7 @@ func peerItemsFromStore(t *testing.T, store utxo.Store, tx *bt.Tx) []peerUTXO {
 	return items
 }
 
-func servePeer(t *testing.T, txs []*bt.Tx, parent *bt.Tx, blockHash chainhash.Hash, height uint32, items []peerUTXO) *httptest.Server {
-	t.Helper()
-
+func peerFor(txs []*bt.Tx, parent *bt.Tx, blockHash chainhash.Hash, height uint32, items []peerUTXO) *peer {
 	p := &peer{
 		txs: map[string][]byte{},
 		metas: map[string]any{parent.TxID(): map[string]any{
@@ -143,7 +141,13 @@ func servePeer(t *testing.T, txs []*bt.Tx, parent *bt.Tx, blockHash chainhash.Ha
 		p.txs[tx.TxID()] = tx.ExtendedBytes()
 	}
 
-	return p.serve(t)
+	return p
+}
+
+func servePeer(t *testing.T, txs []*bt.Tx, parent *bt.Tx, blockHash chainhash.Hash, height uint32, items []peerUTXO) *httptest.Server {
+	t.Helper()
+
+	return peerFor(txs, parent, blockHash, height, items).serve(t)
 }
 
 func childRecordExists(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, parent *chainhash.Hash, n uint32) bool {
@@ -462,10 +466,10 @@ func TestIntegration_DryRunLeavesStaleChildren(t *testing.T) {
 }
 
 // The review's scenario on a real store: the peer says P:0 is spent by X, which this
-// node never received, and X also spends Q:0, a healthy unspent output here. Replaying X
-// would mark Q:0 spent by a transaction we do not hold. The tool must refuse and leave
-// Q:0 unspent and P unwritten.
-func TestIntegration_SpenderTouchingHealthyOutputIsRefused(t *testing.T) {
+// node never received and which is not mined anywhere, and X also spends Q:0, a healthy
+// unspent output here. Our node never accepted X, so P:0 is rebuilt unspent and X is
+// not replayed: Q:0 stays unspent.
+func TestIntegration_UnheldOffChainSpenderLeavesOutputUnspent(t *testing.T) {
 	_, store := startAerospike(t)
 	ctx := context.Background()
 
@@ -493,20 +497,154 @@ func TestIntegration_SpenderTouchingHealthyOutputIsRefused(t *testing.T) {
 	require.NoError(t, x.PayToAddress(payAddress, 17000))
 
 	items := []peerUTXO{{Vout: 0, Status: statusSpent, SpendingData: spend.NewSpendingData(x.TxIDChainHash(), 0)}}
-	peer := servePeer(t, []*bt.Tx{p, x}, p, blockHash, height, items)
+	pr := peerFor([]*bt.Tx{p, x}, p, blockHash, height, items)
+	pr.metas[x.TxID()] = map[string]any{"blockHeights": []uint32{}, "blockHashes": []string{}, "subtreeIdxs": []int{}, "mainChainIndex": -1}
 
-	r, out := newIntegrationRepairer(t, store, idleChainFor(blockHash, blockID, height), peer.URL, Options{TxIDs: []chainhash.Hash{*p.TxIDChainHash()}})
+	r, out := newIntegrationRepairer(t, store, idleChainFor(blockHash, blockID, height), pr.serve(t).URL, Options{TxIDs: []chainhash.Hash{*p.TxIDChainHash()}})
 
 	report, err := r.Run(ctx)
 	require.NoError(t, err, out.String())
-	require.Equal(t, OutcomeUnsafeSpender, report.Results[0].Outcome, report.Results[0].Detail)
+	require.Equal(t, OutcomeRepaired, report.Results[0].Outcome, report.Results[0].Detail)
+	require.Contains(t, report.Results[0].Detail, "output 0 left unspent")
 
 	qState := peerItemsFromStore(t, store, q)
 	require.Equal(t, statusOK, qState[0].Status, "Q:0 must stay unspent")
 	require.Nil(t, qState[0].SpendingData)
 
+	pState := peerItemsFromStore(t, store, p)
+	require.Equal(t, statusOK, pState[0].Status, "P:0 is rebuilt unspent")
+}
+
+// pruneSpender does what the pruner does when it deletes a mined spender: it records the
+// spender in the deletedChildren bin of each record holding an output the spender spent,
+// then deletes the spender.
+func pruneSpender(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, spender *bt.Tx) {
+	t.Helper()
+
+	for _, in := range spender.Inputs {
+		key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySource(in.PreviousTxIDChainHash(), in.PreviousTxOutIndex, store.GetUtxoBatchSize()))
+		require.NoError(t, err)
+
+		_, aErr := client.Execute(nil, key, teranode_aerospike.LuaPackage, "addDeletedChildren", aerospike.NewValue([]interface{}{spender.TxID()}))
+		require.NoError(t, aErr)
+	}
+
+	require.NoError(t, store.Delete(context.Background(), spender.TxIDChainHash()))
+}
+
+// A spender that is mined on our chain and that the pruner deleted is replayed and
+// recorded as a deleted child, so a re-broadcast of it is refused instead of bringing it
+// back as an unmined transaction.
+func TestIntegration_PrunedSpenderIsRecordedAsDeletedChild(t *testing.T) {
+	client, store := startAerospike(t)
+	ctx := context.Background()
+
+	const height = uint32(670000)
+	const blockID = uint32(95)
+	blockHash := chainhash.HashH([]byte("block-670000"))
+
+	require.NoError(t, store.SetBlockHeight(height))
+
+	p := bt.NewTx()
+	require.NoError(t, p.From(chainhash.HashH([]byte("gp-pruned-spender")).String(), 0, "51", 10000))
+	require.NoError(t, p.PayToAddress(payAddress, 9000))
+	require.NoError(t, p.PayToAddress(payAddress, 500))
+	_, _, err := store.SpendAndCreate(ctx, p, height, utxo.WithCreateOnly(), utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: blockID, BlockHeight: height, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	s := bt.NewTx()
+	require.NoError(t, s.From(p.TxID(), 0, p.Outputs[0].LockingScript.String(), p.Outputs[0].Satoshis))
+	require.NoError(t, s.PayToAddress(payAddress, 8000))
+	_, _, err = store.SpendAndCreate(ctx, s, height+1)
+	require.NoError(t, err)
+
+	items := peerItemsFromStore(t, store, p)
+
+	pruneSpender(t, client, store, s)
+	require.NoError(t, store.Delete(ctx, p.TxIDChainHash()))
+
+	pr := peerFor([]*bt.Tx{p, s}, p, blockHash, height, items)
+	pr.metas[s.TxID()] = map[string]any{"blockHeights": []uint32{height}, "blockHashes": []string{blockHash.String()}, "subtreeIdxs": []int{0}, "mainChainIndex": 0}
+
+	r, out := newIntegrationRepairer(t, store, idleChainFor(blockHash, blockID, height), pr.serve(t).URL, Options{TxIDs: []chainhash.Hash{*p.TxIDChainHash()}})
+
+	report, err := r.Run(ctx)
+	require.NoError(t, err, out.String())
+	require.Equal(t, OutcomeRepaired, report.Results[0].Outcome, report.Results[0].Detail)
+	require.Contains(t, report.Results[0].Detail, "recorded as a deleted child")
+
+	pState := peerItemsFromStore(t, store, p)
+	require.Equal(t, statusSpent, pState[0].Status)
+	require.True(t, pState[0].SpendingData.TxID.IsEqual(s.TxIDChainHash()), "P:0 must be spent by S")
+
+	bins := readBins(t, client, store, p.TxIDChainHash())
+	dc, _ := bins[fields.DeletedChildren.String()].(map[interface{}]interface{})
+	require.Equal(t, true, dc[s.TxID()], "S must be a deleted child of P")
+
+	// A re-broadcast of S is refused and does not bring S back.
+	_, _, err = store.SpendAndCreate(ctx, s, height+2)
+	require.Error(t, err, "a re-broadcast of the pruned spender must be refused")
+
+	_, err = store.Get(ctx, s.TxIDChainHash(), fields.BlockIDs)
+	require.Error(t, err, "the pruned spender must not come back")
+}
+
+// A pruned spender that also spent another parent Q cannot be replayed: on the
+// surviving Q the store refuses the re-spend of a deleted child. The parent is refused
+// during planning, nothing is written, and Q is unchanged.
+func TestIntegration_PrunedSpenderWithOtherParentIsRefused(t *testing.T) {
+	client, store := startAerospike(t)
+	ctx := context.Background()
+
+	const height = uint32(680000)
+	const blockID = uint32(96)
+	blockHash := chainhash.HashH([]byte("block-680000"))
+
+	require.NoError(t, store.SetBlockHeight(height))
+
+	mined := utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: blockID, BlockHeight: height, OnLongestChain: true})
+
+	mk := func(seed string) *bt.Tx {
+		tx := bt.NewTx()
+		require.NoError(t, tx.From(chainhash.HashH([]byte(seed)).String(), 0, "51", 10000))
+		require.NoError(t, tx.PayToAddress(payAddress, 9000))
+		require.NoError(t, tx.PayToAddress(payAddress, 500))
+		_, _, err := store.SpendAndCreate(ctx, tx, height, utxo.WithCreateOnly(), mined)
+		require.NoError(t, err)
+
+		return tx
+	}
+
+	p := mk("gp-p-pruned-two")
+	q := mk("gp-q-pruned-two")
+
+	s := bt.NewTx()
+	require.NoError(t, s.From(p.TxID(), 0, p.Outputs[0].LockingScript.String(), p.Outputs[0].Satoshis))
+	require.NoError(t, s.From(q.TxID(), 0, q.Outputs[0].LockingScript.String(), q.Outputs[0].Satoshis))
+	require.NoError(t, s.PayToAddress(payAddress, 17000))
+	_, _, err := store.SpendAndCreate(ctx, s, height+1)
+	require.NoError(t, err)
+
+	items := peerItemsFromStore(t, store, p)
+
+	pruneSpender(t, client, store, s)
+	require.NoError(t, store.Delete(ctx, p.TxIDChainHash()))
+
+	pr := peerFor([]*bt.Tx{p, s}, p, blockHash, height, items)
+	pr.metas[s.TxID()] = map[string]any{"blockHeights": []uint32{height}, "blockHashes": []string{blockHash.String()}, "subtreeIdxs": []int{0}, "mainChainIndex": 0}
+
+	r, out := newIntegrationRepairer(t, store, idleChainFor(blockHash, blockID, height), pr.serve(t).URL, Options{TxIDs: []chainhash.Hash{*p.TxIDChainHash()}})
+
+	report, err := r.Run(ctx)
+	require.NoError(t, err, out.String())
+	require.Equal(t, OutcomePrunedSpender, report.Results[0].Outcome, report.Results[0].Detail)
+
 	_, err = store.Get(ctx, p.TxIDChainHash(), fields.BlockIDs)
 	require.Error(t, err, "P must not be written")
+
+	qState := peerItemsFromStore(t, store, q)
+	require.Equal(t, statusSpent, qState[0].Status, "Q:0 must stay spent")
+	require.True(t, qState[0].SpendingData.TxID.IsEqual(s.TxIDChainHash()), "Q:0 must stay spent by S")
 }
 
 // The txid does not cover a spender's extended input data. A peer that serves X with a
@@ -619,4 +757,58 @@ func TestIntegration_RepairRestoresCoinbaseParent(t *testing.T) {
 	for _, bin := range []fields.FieldName{fields.IsCoinbase, fields.SpendingHeight, fields.Utxos, fields.BlockIDs, fields.BlockHeights, fields.Tx} {
 		require.Equal(t, before[bin.String()], after[bin.String()], "bin %s must be restored exactly", bin)
 	}
+}
+
+// orphaningCreateStore makes the create fail after it has written the pagination
+// records but not the master, the partial state a paginated create can leave.
+type orphaningCreateStore struct {
+	*teranode_aerospike.Store
+}
+
+func (s orphaningCreateStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	o, err := utxo.ParseCreateOptions(opts...)
+	if err != nil || !o.CreateOnly {
+		return s.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+	}
+
+	if _, _, err := s.Store.SpendAndCreate(ctx, tx, blockHeight, opts...); err != nil {
+		return nil, nil, err
+	}
+
+	if err := s.Delete(ctx, tx.TxIDChainHash()); err != nil {
+		return nil, nil, err
+	}
+
+	return nil, nil, errors.NewStorageError("injected create failure after a partial write")
+}
+
+// A create that fails after a partial write is rolled back too, including pagination
+// records whose master never landed, which DeleteComplete cannot find on its own.
+func TestIntegration_CreateFailureSweepsOrphanedChildren(t *testing.T) {
+	client, store := startAerospike(t, func(s *settings.Settings) { s.UtxoStore.UtxoBatchSize = 2 })
+	ctx := context.Background()
+
+	const height = uint32(650000)
+	const blockID = uint32(93)
+	blockHash := chainhash.HashH([]byte("block-650000"))
+
+	require.NoError(t, store.SetBlockHeight(height))
+
+	parent, spenders, items := paginatedParent(t, store, "gp-orphans", height, blockID)
+	parentHash := parent.TxIDChainHash()
+
+	peer := servePeer(t, append([]*bt.Tx{parent}, spenders...), parent, blockHash, height, items)
+
+	r, out := newIntegrationRepairer(t, orphaningCreateStore{store}, idleChainFor(blockHash, blockID, height), peer.URL, Options{TxIDs: []chainhash.Hash{*parentHash}})
+
+	report, err := r.Run(ctx)
+	require.NoError(t, err, out.String())
+	require.Equal(t, OutcomeFailed, report.Results[0].Outcome)
+	require.Contains(t, report.Results[0].Detail, "injected create failure")
+	require.Contains(t, report.Results[0].Detail, "record rolled back")
+
+	_, err = store.Get(ctx, parentHash, fields.BlockIDs)
+	require.Error(t, err, "no master may remain")
+	require.False(t, childRecordExists(t, client, store, parentHash, 1), "orphaned pagination record 1 must be swept")
+	require.False(t, childRecordExists(t, client, store, parentHash, 2), "orphaned pagination record 2 must be swept")
 }

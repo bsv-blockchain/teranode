@@ -198,13 +198,52 @@ func idleChain(t *testing.T, f *fixture) *blockchain.Mock {
 	return idleChainFor(f.blockHash, f.blockID, f.blockHeight)
 }
 
+// unminedIterator yields the given unmined transactions once, then ends.
+func unminedIterator(txs ...*bt.Tx) *utxo.MockUnminedTxIterator {
+	batch := make([]*utxo.UnminedTransaction, 0, len(txs))
+
+	for _, tx := range txs {
+		inpoints, err := subtree.NewTxInpointsFromTx(tx)
+		if err != nil {
+			panic(err)
+		}
+
+		batch = append(batch, &utxo.UnminedTransaction{Node: &subtree.Node{Hash: *tx.TxIDChainHash()}, TxInpoints: &inpoints})
+	}
+
+	iter := new(utxo.MockUnminedTxIterator)
+
+	if len(batch) > 0 {
+		iter.On("Next", mock.Anything).Return(batch, nil).Once()
+	}
+
+	iter.On("Next", mock.Anything).Return(nil, nil)
+	iter.On("Close").Return(nil)
+
+	return iter
+}
+
+// baseStore is a store with no unmined transactions, unless unmined is given.
+func baseStore(unmined ...*bt.Tx) *utxo.MockUtxostore {
+	store := new(utxo.MockUtxostore)
+	store.On("SetBlockHeight", mock.Anything).Return(nil)
+	store.On("GetUnminedTxIterator").Return(unminedIterator(unmined...), nil)
+
+	return store
+}
+
 // missingParentStore is a store where the fixture parent is absent and both spenders
 // are held locally (minedChild mined, unminedChild unmined).
 func missingParentStore(f *fixture) *utxo.MockUtxostore {
-	store := new(utxo.MockUtxostore)
-	store.On("SetBlockHeight", mock.Anything).Return(nil)
+	store := baseStore()
 	store.On("Get", mock.Anything, hashPtr(*f.parent.TxIDChainHash()), mock.Anything).
 		Return(nil, errors.NewTxNotFoundError("not found")).Once()
+
+	return holdSpenders(store, f)
+}
+
+// holdSpenders makes the store hold both fixture spenders: minedChild mined, unminedChild unmined.
+func holdSpenders(store *utxo.MockUtxostore, f *fixture) *utxo.MockUtxostore {
 	store.On("Get", mock.Anything, hashPtr(*f.minedChild.TxIDChainHash()), mock.Anything).
 		Return(&meta.Data{BlockIDs: []uint32{f.blockID + 1}}, nil)
 	store.On("Get", mock.Anything, hashPtr(*f.unminedChild.TxIDChainHash()), mock.Anything).
@@ -285,8 +324,7 @@ func TestForceLiveOverridesGate(t *testing.T) {
 
 	chain := chainFor(blockchain.FSMStateRUNNING, f.blockHash, f.blockID, f.blockHeight)
 
-	store := new(utxo.MockUtxostore)
-	store.On("SetBlockHeight", mock.Anything).Return(nil)
+	store := holdSpenders(baseStore(), f)
 	store.On("Get", mock.Anything, hashPtr(*f.parent.TxIDChainHash()), mock.Anything).Return(f.matching(), nil)
 
 	r, _ := newRepairer(t, store, chain, f.peerServer(t, f.spentItems()).URL, Options{TxIDs: []chainhash.Hash{*f.parent.TxIDChainHash()}, ForceLive: true})
@@ -297,8 +335,7 @@ func TestForceLiveOverridesGate(t *testing.T) {
 func TestAlreadyPresentMatchingPeerIsSkipped(t *testing.T) {
 	f := newFixture(t)
 
-	store := new(utxo.MockUtxostore)
-	store.On("SetBlockHeight", mock.Anything).Return(nil)
+	store := holdSpenders(baseStore(), f)
 	store.On("Get", mock.Anything, hashPtr(*f.parent.TxIDChainHash()), mock.Anything).Return(f.matching(), nil)
 
 	r, _ := newRepairer(t, store, idleChain(t, f), f.peerServer(t, f.spentItems()).URL, Options{TxIDs: []chainhash.Hash{*f.parent.TxIDChainHash()}})
@@ -316,8 +353,7 @@ func TestAlreadyPresentDifferingFromPeerIsReported(t *testing.T) {
 	partial := f.matching()
 	partial.SpendingDatas[1] = nil
 
-	store := new(utxo.MockUtxostore)
-	store.On("SetBlockHeight", mock.Anything).Return(nil)
+	store := holdSpenders(baseStore(), f)
 	store.On("Get", mock.Anything, hashPtr(*f.parent.TxIDChainHash()), mock.Anything).Return(partial, nil)
 
 	r, _ := newRepairer(t, store, idleChain(t, f), f.peerServer(t, f.spentItems()).URL, Options{TxIDs: []chainhash.Hash{*f.parent.TxIDChainHash()}})
@@ -526,8 +562,7 @@ func TestPeerPrunedIsReported(t *testing.T) {
 	f := newFixture(t)
 	other := chainhash.HashH([]byte("unknown-to-peer"))
 
-	store := new(utxo.MockUtxostore)
-	store.On("SetBlockHeight", mock.Anything).Return(nil)
+	store := baseStore()
 	store.On("Get", mock.Anything, hashPtr(other), mock.Anything).Return(nil, errors.NewTxNotFoundError("not found"))
 
 	r, _ := newRepairer(t, store, idleChain(t, f), f.peerServer(t, f.spentItems()).URL, Options{TxIDs: []chainhash.Hash{other}})
@@ -775,20 +810,7 @@ func TestScanDiscoversParentsOfUnminedChildren(t *testing.T) {
 	f := newFixture(t)
 	parentHash := *f.parent.TxIDChainHash()
 
-	inpoints, err := subtree.NewTxInpointsFromTx(f.unminedChild)
-	require.NoError(t, err)
-
-	iter := new(utxo.MockUnminedTxIterator)
-	iter.On("Next", mock.Anything).Return([]*utxo.UnminedTransaction{{
-		Node:       &subtree.Node{Hash: *f.unminedChild.TxIDChainHash()},
-		TxInpoints: &inpoints,
-	}}, nil).Once()
-	iter.On("Next", mock.Anything).Return(nil, nil)
-	iter.On("Close").Return(nil)
-
-	store := new(utxo.MockUtxostore)
-	store.On("SetBlockHeight", mock.Anything).Return(nil)
-	store.On("GetUnminedTxIterator").Return(iter, nil)
+	store := baseStore(f.unminedChild)
 	store.On("Get", mock.Anything, hashPtr(parentHash), mock.Anything).Return(nil, errors.NewTxNotFoundError("not found"))
 	store.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
 
@@ -860,8 +882,8 @@ func TestMinedSpenderAbsentOtherParentIsNotQueued(t *testing.T) {
 	require.Equal(t, OutcomePlanned, res.Outcome, res.Detail)
 }
 
-// The reviewer's scenario: the spender is not held here and also spends Q:0, which is
-// unspent here. Replaying it would mark Q:0 spent by a transaction we do not hold.
+// The spender also spends Q:0, which is unspent here. Replaying it would mark Q:0 spent
+// as a side effect, so the parent is refused.
 func TestSpenderTouchingAnUnspentOutputElsewhereIsRefused(t *testing.T) {
 	f := newFixture(t)
 	parentHash := *f.parent.TxIDChainHash()
@@ -869,11 +891,7 @@ func TestSpenderTouchingAnUnspentOutputElsewhereIsRefused(t *testing.T) {
 	q := secondParent(t, f.unminedChild)
 	qHash := *q.TxIDChainHash()
 
-	store := new(utxo.MockUtxostore)
-	store.On("SetBlockHeight", mock.Anything).Return(nil)
-	store.On("Get", mock.Anything, hashPtr(parentHash), mock.Anything).Return(nil, errors.NewTxNotFoundError("not found"))
-	store.On("Get", mock.Anything, hashPtr(*f.minedChild.TxIDChainHash()), mock.Anything).Return(&meta.Data{BlockIDs: []uint32{1}}, nil)
-	store.On("Get", mock.Anything, hashPtr(*f.unminedChild.TxIDChainHash()), mock.Anything).Return(nil, errors.NewTxNotFoundError("not found"))
+	store := missingParentStore(f)
 	store.On("Get", mock.Anything, hashPtr(qHash), mock.Anything).Return(&meta.Data{}, nil)
 	store.On("GetSpend", mock.Anything, spendOf(qHash, 0)).Return(&utxo.SpendResponse{Status: int(utxo.Status_OK)}, nil)
 
@@ -905,29 +923,29 @@ func TestSpenderWithOtherInputSpentByAnotherTxIsRefused(t *testing.T) {
 	assertNoWrites(t, store)
 }
 
-// An absent other parent can only be skipped by the store's already-blessed fallback,
-// which needs the spender itself to be held here.
-func TestUnheldSpenderWithAbsentOtherParentIsRefused(t *testing.T) {
+// A spender that is mined on our chain but was pruned here cannot be replayed when it
+// also spends another parent: the store refuses the re-spend of a deleted child on a
+// surviving parent and cannot find a pruned one. The parent is refused before any write.
+func TestPrunedSpenderWithOtherInputIsRefused(t *testing.T) {
 	f := newFixture(t)
 	parentHash := *f.parent.TxIDChainHash()
 
 	q := secondParent(t, f.unminedChild)
 	qHash := *q.TxIDChainHash()
 
-	store := new(utxo.MockUtxostore)
-	store.On("SetBlockHeight", mock.Anything).Return(nil)
-	store.On("Get", mock.Anything, hashPtr(parentHash), mock.Anything).Return(nil, errors.NewTxNotFoundError("not found"))
-	store.On("Get", mock.Anything, hashPtr(*f.minedChild.TxIDChainHash()), mock.Anything).Return(&meta.Data{BlockIDs: []uint32{1}}, nil)
-	store.On("Get", mock.Anything, hashPtr(*f.unminedChild.TxIDChainHash()), mock.Anything).Return(nil, errors.NewTxNotFoundError("not found"))
+	store := unheldUnminedChildStore(f)
 	store.On("Get", mock.Anything, hashPtr(qHash), mock.Anything).Return(nil, errors.NewTxNotFoundError("not found"))
 
-	r, _ := newRepairer(t, store, idleChain(t, f), f.peerServer(t, f.spentItems()).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+	p := f.peer(f.spentItems())
+	p.metas[f.unminedChild.TxID()] = f.meta()
+
+	r, _ := newRepairer(t, store, idleChain(t, f), p.serve(t).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
 
 	report, err := r.Run(context.Background())
 	require.NoError(t, err)
-	require.Len(t, report.Results, 1, "an absent parent of an unheld spender is not queued")
-	require.Equal(t, OutcomeUnsafeSpender, report.Results[0].Outcome)
-	require.Contains(t, report.Results[0].Detail, "is not held here")
+	require.Len(t, report.Results, 1, "an absent parent of a pruned spender is not queued")
+	require.Equal(t, OutcomePrunedSpender, report.Results[0].Outcome)
+	require.Contains(t, report.Results[0].Detail, "outside this parent")
 	assertNoWrites(t, store)
 }
 
@@ -1130,4 +1148,245 @@ func TestImmatureOutputIsUnspent(t *testing.T) {
 	res := runOne(t, r)
 	require.Equal(t, OutcomePlanned, res.Outcome, res.Detail)
 	require.Len(t, res.Spends, 1)
+}
+
+// localChildStore holds the fixture's unmined child in the unmined set, with the
+// parent absent and both spenders held.
+func localChildStore(f *fixture) *utxo.MockUtxostore {
+	store := baseStore(f.unminedChild)
+	store.On("Get", mock.Anything, hashPtr(*f.parent.TxIDChainHash()), mock.Anything).Return(nil, errors.NewTxNotFoundError("not found"))
+
+	return holdSpenders(store, f)
+}
+
+// The peer never saw the local child, so it reports the output unspent. Rebuilding it
+// unspent would drop the child's spend and let any other spend of it through. This
+// must hold for a --txids run too, not only for --scan.
+func TestLocalChildSpendUnspentAtPeerIsRefused(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+
+	items := f.spentItems()
+	items[1] = peerUTXO{Vout: 1, Status: statusOK}
+
+	store := localChildStore(f)
+
+	r, _ := newRepairer(t, store, idleChain(t, f), f.peerServer(t, items).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+
+	res := runOne(t, r)
+	require.Equal(t, OutcomeLocalSpendConflict, res.Outcome)
+	require.Contains(t, res.Detail, "output 1 is spent here by unmined "+f.unminedChild.TxID()+" but unspent at the peer")
+	assertNoWrites(t, store)
+}
+
+// The peer records a competing spender. Replaying it would write that spend directly,
+// so the local child would never be marked conflicting and would stay minable.
+func TestLocalChildCompetingSpenderIsRefused(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+	competitor := chainhash.HashH([]byte("competing-spender"))
+
+	items := f.spentItems()
+	items[1].SpendingData = spend.NewSpendingData(&competitor, 0)
+
+	store := localChildStore(f)
+
+	r, _ := newRepairer(t, store, idleChain(t, f), f.peerServer(t, items).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+
+	res := runOne(t, r)
+	require.Equal(t, OutcomeLocalSpendConflict, res.Outcome)
+	require.Contains(t, res.Detail, "but by "+competitor.String()+" at the peer")
+	assertNoWrites(t, store)
+}
+
+// A create error other than ErrTxExists may still have landed the write, so the record
+// is rolled back, on a context that the caller's cancellation does not reach.
+func TestCreateErrorRollsBack(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	store := missingParentStore(f)
+	store.On("SpendAndCreate", mock.Anything, txWithID(f.parent.TxID()), f.blockHeight, mock.Anything).
+		Run(func(mock.Arguments) { cancel() }).
+		Return(nil, nil, context.Canceled).Once()
+	store.On("DeleteComplete", mock.MatchedBy(func(c context.Context) bool { return c.Err() == nil }), hashPtr(parentHash)).Return(nil).Once()
+
+	r, _ := newRepairer(t, store, idleChain(t, f), f.peerServer(t, f.spentItems()).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+
+	report, err := r.Run(ctx)
+	require.NoError(t, err)
+	require.Equal(t, OutcomeFailed, report.Results[0].Outcome)
+	require.Contains(t, report.Results[0].Detail, "create: ")
+	require.Contains(t, report.Results[0].Detail, "record rolled back")
+	store.AssertExpectations(t)
+}
+
+// ErrTxExists means something else wrote the record after it was planned; it is not
+// the tool's to delete.
+func TestCreateTxExistsIsNotRolledBack(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+
+	store := missingParentStore(f)
+	store.On("SpendAndCreate", mock.Anything, txWithID(f.parent.TxID()), f.blockHeight, mock.Anything).
+		Return(nil, nil, errors.NewTxExistsError("exists")).Once()
+
+	r, _ := newRepairer(t, store, idleChain(t, f), f.peerServer(t, f.spentItems()).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+
+	res := runOne(t, r)
+	require.Equal(t, OutcomeFailed, res.Outcome)
+	store.AssertNotCalled(t, "DeleteComplete", mock.Anything, mock.Anything)
+}
+
+// unheldUnminedChildStore holds minedChild but not unminedChild, with the parent absent.
+func unheldUnminedChildStore(f *fixture) *utxo.MockUtxostore {
+	store := baseStore()
+	store.On("Get", mock.Anything, hashPtr(*f.parent.TxIDChainHash()), mock.Anything).Return(nil, errors.NewTxNotFoundError("not found")).Once()
+	store.On("Get", mock.Anything, hashPtr(*f.minedChild.TxIDChainHash()), mock.Anything).Return(&meta.Data{BlockIDs: []uint32{f.blockID + 1}}, nil)
+	store.On("Get", mock.Anything, hashPtr(*f.unminedChild.TxIDChainHash()), mock.Anything).Return(nil, errors.NewTxNotFoundError("not found"))
+
+	return store
+}
+
+// The peer has a spender we never received and that is not mined anywhere: our node
+// never accepted it, so the output is rebuilt unspent and the spender is not replayed.
+func TestUnheldOffChainSpenderLeavesOutputUnspent(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+	currentHeight := f.blockHeight + 1500
+
+	p := f.peer(f.spentItems())
+	p.metas[f.unminedChild.TxID()] = map[string]any{"blockHeights": []uint32{}, "blockHashes": []string{}, "subtreeIdxs": []int{}, "mainChainIndex": -1}
+
+	store := unheldUnminedChildStore(f)
+	store.On("SpendAndCreate", mock.Anything, txWithID(f.parent.TxID()), f.blockHeight, mock.Anything).Return(&meta.Data{}, nil, nil).Once()
+	store.On("SpendAndCreate", mock.Anything, txWithID(f.minedChild.TxID()), currentHeight, mock.Anything).Return(nil, []*utxo.Spend{}, nil).Once()
+
+	rebuilt := f.matching()
+	rebuilt.SpendingDatas[1] = nil
+	store.On("Get", mock.Anything, hashPtr(parentHash), mock.Anything).Return(rebuilt, nil)
+
+	r, _ := newRepairer(t, store, idleChain(t, f), p.serve(t).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+
+	res := runOne(t, r)
+	require.Equal(t, OutcomeRepaired, res.Outcome, res.Detail)
+	require.Len(t, res.Spends, 1)
+	require.Contains(t, res.Detail, "output 1 left unspent: spender "+f.unminedChild.TxID()+" is not held here and not on our chain")
+	store.AssertNotCalled(t, "SpendAndCreate", mock.Anything, txWithID(f.unminedChild.TxID()), mock.Anything, mock.Anything)
+	store.AssertExpectations(t)
+}
+
+// The spender is mined in a block above our tip that we never received, which is the
+// wedged block itself. Validating that block writes the spend later.
+func TestUnheldSpenderInBlockUnknownHereLeavesOutputUnspent(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+	ahead := chainhash.HashH([]byte("block-above-our-tip"))
+
+	chain := idleChain(t, f)
+	chain.On("GetBlockHeader", mock.Anything, hashPtr(ahead)).Return(nil, nil, errors.NewBlockNotFoundError("block not found"))
+
+	p := f.peer(f.spentItems())
+	p.metas[f.unminedChild.TxID()] = map[string]any{"blockHeights": []uint32{f.blockHeight + 1}, "blockHashes": []string{ahead.String()}, "subtreeIdxs": []int{0}, "mainChainIndex": 0}
+
+	r, _ := newRepairer(t, unheldUnminedChildStore(f), chain, p.serve(t).URL, Options{TxIDs: []chainhash.Hash{parentHash}, DryRun: true})
+
+	res := runOne(t, r)
+	require.Equal(t, OutcomePlanned, res.Outcome, res.Detail)
+	require.Len(t, res.Spends, 1)
+	require.Contains(t, res.Detail, "output 1 left unspent")
+}
+
+// A transient failure while placing the spender must never read as "not on our chain",
+// or a spent output would be rebuilt unspent.
+func TestUnheldSpenderUndeterminedChainFailsTheParent(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+	spenderBlock := chainhash.HashH([]byte("spender-block"))
+
+	tests := []struct {
+		name  string
+		meta  map[string]any
+		chain func(c *blockchain.Mock)
+	}{
+		{
+			name: "block lookup fails",
+			meta: map[string]any{"blockHeights": []uint32{f.blockHeight}, "blockHashes": []string{spenderBlock.String()}, "subtreeIdxs": []int{0}, "mainChainIndex": 0},
+			chain: func(c *blockchain.Mock) {
+				c.On("GetBlockHeader", mock.Anything, hashPtr(spenderBlock)).Return(nil, nil, errors.NewServiceError("connection refused"))
+			},
+		},
+		{
+			name: "peer cannot place it on its main chain",
+			meta: map[string]any{"blockHeights": []uint32{f.blockHeight}, "blockHashes": []string{spenderBlock.String()}, "subtreeIdxs": []int{0}, "mainChainIndex": -1},
+		},
+		{
+			name: "peer cannot resolve its main-chain block hash",
+			meta: map[string]any{"blockHeights": []uint32{f.blockHeight}, "blockHashes": []string{""}, "subtreeIdxs": []int{0}, "mainChainIndex": 0},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chain := idleChain(t, f)
+			if tt.chain != nil {
+				tt.chain(chain)
+			}
+
+			p := f.peer(f.spentItems())
+			p.metas[f.unminedChild.TxID()] = tt.meta
+
+			store := unheldUnminedChildStore(f)
+
+			r, _ := newRepairer(t, store, chain, p.serve(t).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+
+			res := runOne(t, r)
+			require.Equal(t, OutcomeFailed, res.Outcome)
+			require.Contains(t, res.Detail, f.unminedChild.TxID())
+			assertNoWrites(t, store)
+		})
+	}
+}
+
+// A pruned spender is recorded as a deleted child, which only the Aerospike store can
+// hold. On any other store the parent is refused.
+func TestPrunedSpenderOnStoreWithoutDeletedChildrenIsRefused(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+
+	p := f.peer(f.spentItems())
+	p.metas[f.unminedChild.TxID()] = f.meta()
+
+	store := unheldUnminedChildStore(f)
+
+	r, _ := newRepairer(t, store, idleChain(t, f), p.serve(t).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+
+	res := runOne(t, r)
+	require.Equal(t, OutcomePrunedSpender, res.Outcome)
+	require.Contains(t, res.Detail, "cannot record deleted children")
+	assertNoWrites(t, store)
+}
+
+// A record rebuilt with an off-chain spend left unspent matches the peer on a rerun.
+func TestAlreadyPresentWithOffChainSpendLeftUnspentMatches(t *testing.T) {
+	f := newFixture(t)
+
+	p := f.peer(f.spentItems())
+	p.metas[f.unminedChild.TxID()] = map[string]any{"blockHeights": []uint32{}, "blockHashes": []string{}, "subtreeIdxs": []int{}, "mainChainIndex": -1}
+
+	rebuilt := f.matching()
+	rebuilt.SpendingDatas[1] = nil
+
+	store := baseStore()
+	store.On("Get", mock.Anything, hashPtr(*f.parent.TxIDChainHash()), mock.Anything).Return(rebuilt, nil)
+	store.On("Get", mock.Anything, hashPtr(*f.minedChild.TxIDChainHash()), mock.Anything).Return(&meta.Data{BlockIDs: []uint32{f.blockID + 1}}, nil)
+	store.On("Get", mock.Anything, hashPtr(*f.unminedChild.TxIDChainHash()), mock.Anything).Return(nil, errors.NewTxNotFoundError("not found"))
+
+	r, _ := newRepairer(t, store, idleChain(t, f), p.serve(t).URL, Options{TxIDs: []chainhash.Hash{*f.parent.TxIDChainHash()}})
+
+	res := runOne(t, r)
+	require.Equal(t, OutcomeAlreadyPresent, res.Outcome, res.Detail)
+	assertNoWrites(t, store)
 }

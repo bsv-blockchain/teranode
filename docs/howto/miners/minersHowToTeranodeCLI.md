@@ -337,6 +337,12 @@ Rebuilds UTXO-store parent records that the pruner deleted while an unmined chil
 
 For each missing parent the tool reads the transaction, its block heights and its per-output spent state from a healthy peer's asset service. It maps the peer's blocks to local blocks on the current chain, recreates the record as mined, and replays each recorded spend with the real spending transaction. The record is then read back and compared with the peer.
 
+The rebuilt record follows what this node knows, not only what the peer reports:
+
+- An output that a local unmined child spends must be spent by that child at the peer too. If it is not, the parent is refused.
+- An output whose spender this node does not hold and that is not mined on our current chain is rebuilt unspent. The report names the spender. If a later block mines it, block validation writes the spend.
+- A spender that is mined on our chain but that the pruner deleted here is replayed and recorded as a deleted child, so a re-broadcast of it is refused. This works only when all of its inputs are on the rebuilt parent. Otherwise the parent is refused.
+
 Preconditions:
 
 1. The blockchain service must be running. The tool reads the FSM state and resolves block hashes through it.
@@ -361,7 +367,10 @@ Pass `--txids`, `--scan`, or both. The tool plans every parent first and prints 
 - `peer output state unusable`: the peer reports an output as `FROZEN`, `CONFLICTING`, `LOCKED`, `NOT_FOUND`, or `SPENT` without a spender. The asset service also reports `NOT_FOUND` when its own lookup fails.
 - `peer block not on our chain`: the peer's main-chain block for the transaction is unknown, invalid, or not on our current chain
 - `spender touches outputs outside the repair`: replaying a spender would also change another record, because one of its other inputs is not already recorded locally as spent by it
-- `store records a different spender` or `failed`: the write failed. The rebuilt record is deleted again.
+- `contradicts a local unmined spend`: a local unmined child spends an output that the peer reports as unspent or as spent by another transaction
+- `spender pruned here; cannot replay`: a spender is mined on our chain but was pruned here, and it has inputs outside the parent
+- `store records a different spender`: the replay found an output already spent by another transaction. The rebuilt record is deleted again.
+- `failed`: planning or the write failed; see the detail column. If the write failed after the record was created, the record is deleted again.
 
 The command exits non-zero when any parent is not `repaired`, `planned` or `already present`.
 
