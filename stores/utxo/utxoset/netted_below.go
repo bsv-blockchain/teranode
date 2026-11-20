@@ -220,8 +220,9 @@ type netBelowTx struct {
 	tx    *bt.Tx
 	txid  chainhash.Hash
 	ident bool
-	// burn says why the transaction's lane position burned once its chunk failed: rolled_back, or
-	// outcome_unknown when the chunk's COMMIT failed and may have landed. A byte in ident's padding,
+	// burn says why the transaction's lane position burned once its chunk failed: outcome_unknown,
+	// set before the chunk sends its COMMIT, since a failure from then on may have landed, or
+	// rolled_back for one that failed before. A byte in ident's padding,
 	// so the struct does not grow. Each chunk writes only its own transactions', and they are read
 	// after every chunk ends.
 	burn listBurn
@@ -328,6 +329,8 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 				return err
 			}
 
+			// A transaction with no reason yet failed before its chunk sent the COMMIT (see
+			// netBelowChunk), so nothing of it was written.
 			err := s.netBelowChunk(gCtx, chunk, list, blockHeight, spender, positions)
 			if err != nil {
 				for _, it := range chunk {
@@ -560,12 +563,14 @@ func (s *Store) netBelowChunk(ctx context.Context, chunk []*netBelowTx, list *ut
 		return err
 	}
 
-	if err = commitCreates(ctx, dbTx); err != nil {
-		// The commit may have landed, so the positions may be on records.
-		for _, it := range chunk {
-			it.burn = listBurnOutcomeUnknown
-		}
+	// Marked before the COMMIT is sent: from then on a failure may have landed, so the chunk's
+	// positions must not count as rolled_back, which would send them back. A chunk that commits
+	// gives every transaction a result, which burnList reads first.
+	for _, it := range chunk {
+		it.burn = listBurnOutcomeUnknown
+	}
 
+	if err = commitCreates(ctx, dbTx); err != nil {
 		return errors.NewStorageError("[utxoset][SpendAndCreateMulti] commit netted chunk", err)
 	}
 

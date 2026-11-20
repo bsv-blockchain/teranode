@@ -554,10 +554,14 @@ func (w *nettedWrite) runChunks(ctx context.Context, plan *chunkPlan, stats *fam
 					firstErr = err
 				}
 
+				// familyAttempt records a reason for every transaction of a chunk that failed, so
+				// this fallback does not fire today. It says outcome_unknown, not rolled_back: a
+				// rolled_back position goes back for reuse, which must never follow an error this
+				// code cannot place before the COMMIT.
 				if err != nil {
 					for _, i := range plan.chunks[idx].pos {
 						if w.burns != nil && w.burns[i] == listBurnNone {
-							w.burns[i] = listBurnRolledBack
+							w.burns[i] = listBurnOutcomeUnknown
 						}
 					}
 				}
@@ -627,8 +631,10 @@ type chunkRun struct {
 	// refused spend turned out to be its own earlier spend.
 	forcedExisted []bool
 	parentDead    []bool
-	// commitFailed is true once the chunk's COMMIT reported failure; it may have landed.
-	commitFailed bool
+	// commitSent is true once the chunk has sent its COMMIT. From then on a failure may have
+	// landed, so recordFailedBurns counts its written transactions outcome_unknown, never
+	// rolled_back, which would send their positions back.
+	commitSent bool
 	// netted[k][vin] is true when input vin's parent is a live transaction of this same chunk.
 	netted [][]bool
 }
@@ -788,14 +794,12 @@ func (w *nettedWrite) familyRound(ctx context.Context, run *chunkRun, stats *fam
 
 		// The commit runs on a context the caller cannot cancel; see multiCommitTimeout.
 		commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), multiCommitTimeout)
+		run.commitSent = true
 		err = commitCreates(commitCtx, dbTx)
 
 		cancel()
 
 		if err != nil {
-			// The commit may have landed, so the positions may be on records.
-			run.commitFailed = true
-
 			return false, errors.NewStorageError("[utxoset][SpendAndCreateMulti] commit chunk", err)
 		}
 
@@ -806,8 +810,6 @@ func (w *nettedWrite) familyRound(ctx context.Context, run *chunkRun, stats *fam
 
 		if multiCreateAfterCommit != nil {
 			if err = multiCreateAfterCommit(); err != nil {
-				run.commitFailed = true
-
 				return false, err
 			}
 		}
@@ -1210,7 +1212,7 @@ func (w *nettedWrite) recordFailedBurns(run *chunkRun) {
 			b = listBurnParentFailed
 		case run.st[k] == chunkFailed:
 			b = listBurnFor(utxo.LaneBurnReason(run.res[k].Err, run.res[k].Spends))
-		case run.commitFailed:
+		case run.commitSent:
 			b = listBurnOutcomeUnknown
 		default:
 			b = listBurnRolledBack

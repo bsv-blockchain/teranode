@@ -190,12 +190,22 @@ func (l *LanePositions) NameLaneBurns(store string) {
 
 // BurnLanePosition counts one burned position.
 func (l *LanePositions) BurnLanePosition(caller Caller, reason string) {
+	l.BurnLanePositions(caller, reason, 1)
+}
+
+// BurnLanePositions counts n positions burned for the same reason and caller, with one counter
+// lookup. A list counts its burns this way, once per reason.
+func (l *LanePositions) BurnLanePositions(caller Caller, reason string, n int) {
+	if n <= 0 {
+		return
+	}
+
 	store := l.burnStore
 	if store == "" {
 		store = "unknown"
 	}
 
-	prometheusLanePositionsBurned.WithLabelValues(store, reason, caller.String()).Inc()
+	prometheusLanePositionsBurned.WithLabelValues(store, reason, caller.String()).Add(float64(n))
 }
 
 // BurnCreateLanePosition records the burn of a create that took position from the source and

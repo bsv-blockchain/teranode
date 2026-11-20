@@ -106,6 +106,11 @@ func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeig
 // for a transaction with no result and no failed chunk, the position burned for unsettled.
 func (s *Store) burnList(list *utxo.SpendAndCreateMultiList, positions []uint64, unsettled string,
 	outcome func(i int) (utxo.SpendAndCreateMultiResult, string)) {
+	// Tallied per reason and counted once each: at the tip most of a mined list is found stored,
+	// and one counter lookup per transaction would cost a million lookups for a million-transaction
+	// block.
+	var counts map[string]int
+
 	for i, position := range positions {
 		if position == lane.None {
 			continue
@@ -137,7 +142,15 @@ func (s *Store) burnList(list *utxo.SpendAndCreateMultiList, positions []uint64,
 			reason = unsettled
 		}
 
-		s.BurnLanePosition(list.Options.Caller, reason)
+		if counts == nil {
+			counts = make(map[string]int, 4)
+		}
+
+		counts[reason]++
+	}
+
+	for reason, n := range counts {
+		s.BurnLanePositions(list.Options.Caller, reason, n)
 	}
 }
 

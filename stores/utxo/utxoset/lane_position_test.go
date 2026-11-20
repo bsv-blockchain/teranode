@@ -1786,6 +1786,31 @@ func TestLanePositionBurnOfACommitThatReportedFailure(t *testing.T) {
 		}, tests.ReadLaneBurns(t, "utxoset").Since(before))
 	})
 
+	// A list counts its burns once per reason, so two burned for the same reason must count two.
+	t.Run("two transactions of a list found stored count two", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+
+		root := storedParent(t, s, ctx)
+		first := spendOutput(t, root, 0, 2)
+		second := spendOutput(t, root, 1, 3)
+
+		_, _, err := s.SpendAndCreate(ctx, first, 1_100)
+		require.NoError(t, err)
+		_, _, err = s.SpendAndCreate(ctx, second, 1_100)
+		require.NoError(t, err)
+
+		useBurnSource(t, s, burnPositions(2)...)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err = s.SpendAndCreateMulti(ctx, []*bt.Tx{first, second}, 1_100, utxo.WithIgnoreLocked(true),
+			utxo.WithCaller(utxo.CallerSubtreeValidation))
+		require.NoError(t, err)
+
+		require.Equal(t, tests.LaneBurns{utxo.LaneBurnExists + "/subtree_validation": 2},
+			tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
 	t.Run("a list chunk below the checkpoint", func(t *testing.T) {
 		const height = 900
 
