@@ -3341,12 +3341,13 @@ func TestLoadUnminedTransactionsKeepsParentLinksWithSubtreeMetaOff(t *testing.T)
 type skippingUtxoStore struct {
 	*utxoStore.MockUtxostore
 	skippingCalls int
+	err           error
 }
 
 func (s *skippingUtxoStore) GetUnminedTxIteratorSkippingMissingExternal() (utxoStore.UnminedTxIterator, error) {
 	s.skippingCalls++
 
-	return nil, nil
+	return nil, s.err
 }
 
 // Block assembly's load asks a store for the scan that skips a missing external
@@ -3361,6 +3362,14 @@ func TestUnminedTxIteratorForLoad(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 1, store.skippingCalls)
 		store.AssertNotCalled(t, "GetUnminedTxIterator")
+	})
+
+	t.Run("an error from the skipping scan reaches the caller", func(t *testing.T) {
+		store := &skippingUtxoStore{MockUtxostore: new(utxoStore.MockUtxostore), err: errors.NewProcessingError("scan unavailable")}
+		b := &BlockAssembler{utxoStore: store}
+
+		_, err := b.unminedTxIteratorForLoad()
+		require.ErrorIs(t, err, store.err)
 	})
 
 	t.Run("store without it", func(t *testing.T) {
