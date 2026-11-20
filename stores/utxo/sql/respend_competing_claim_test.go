@@ -264,6 +264,84 @@ func TestSpendBatchBulkUpdateFailureDoesNotInventConflict(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// Per-row: a later claim reads an earlier claim's uncommitted write in the same
+// transaction. When the transaction rolls back at any of its three exits, the
+// later claim must get a storage error, not UTXO_SPENT naming the winner.
+func TestSpendBatchPerRowRollbackDoesNotInventConflict(t *testing.T) {
+	const (
+		exitLaterItemFails = "later item UPDATE fails"
+		exitDAHFails       = "DAH recompute fails"
+		exitCommitFails    = "commit fails"
+	)
+
+	for _, exit := range []string{exitLaterItemFails, exitDAHFails, exitCommitFails} {
+		t.Run(exit, func(t *testing.T) {
+			store, mock := CreateMockStore(ulogger.TestLogger{})
+			t.Cleanup(func() { _ = store.db.Close() })
+			store.settings = test.CreateBaseTestSettings(t)
+			store.settings.GlobalBlockHeightRetention = 0
+			store.settings.UtxoStore.BlockHeightRetentionAdjustment = 0
+
+			if exit == exitDAHFails {
+				store.settings.GlobalBlockHeightRetention = 1
+			}
+
+			winner, err := utxo.GetSpends(spendOf(t, tests.Tx, 1, 0))
+			require.NoError(t, err)
+			loser, err := utxo.GetSpends(spendOf(t, tests.Tx, 2, 0))
+			require.NoError(t, err)
+			other, err := utxo.GetSpends(spendOf(t, tests.Tx, 3, 1))
+			require.NoError(t, err)
+
+			batch := []*batchSpend{
+				{spend: winner[0], blockHeight: 2, errCh: make(chan error, 1)},
+				{spend: loser[0], blockHeight: 2, errCh: make(chan error, 1)},
+			}
+			if exit == exitLaterItemFails {
+				batch = append(batch, &batchSpend{spend: other[0], blockHeight: 2, errCh: make(chan error, 1)})
+			}
+
+			columns := []string{
+				"transaction_id", "coinbase_spending_height", "utxo_hash",
+				"spending_data", "frozen", "conflicting", "locked", "spendableIn",
+			}
+			unspentRow := func(item *batchSpend) *sqlmock.Rows {
+				return sqlmock.NewRows(columns).AddRow(1, 0, item.spend.UTXOHash[:], nil, false, false, false, nil)
+			}
+
+			mock.ExpectBegin()
+			mock.ExpectQuery("o.transaction_id").WillReturnRows(unspentRow(batch[0]))
+			mock.ExpectExec("UPDATE outputs").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectQuery("o.transaction_id").WillReturnRows(sqlmock.NewRows(columns).AddRow(
+				1, 0, batch[1].spend.UTXOHash[:], winner[0].SpendingData.Bytes(), false, false, false, nil))
+
+			switch exit {
+			case exitLaterItemFails:
+				mock.ExpectQuery("o.transaction_id").WillReturnRows(unspentRow(batch[2]))
+				mock.ExpectExec("UPDATE outputs").WillReturnError(errors.NewStorageError("forced UPDATE failure"))
+			case exitDAHFails:
+				mock.ExpectQuery("count").WillReturnError(errors.NewStorageError("forced DAH failure"))
+			case exitCommitFails:
+				mock.ExpectCommit().WillReturnError(errors.NewStorageError("forced commit failure"))
+			}
+
+			if exit != exitCommitFails {
+				mock.ExpectRollback()
+			}
+
+			require.False(t, store.trySendSpendBatchPerRow(context.Background(), batch))
+
+			for i, item := range batch {
+				result := <-item.errCh
+				require.ErrorIs(t, result, errors.ErrStorageError, "batch item %d", i)
+				require.NotErrorIs(t, result, errors.ErrSpent, "batch item %d must not name an uncommitted owner", i)
+			}
+
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
 // Alternating claims on one unspent outpoint: the first claim wins in the
 // store, and every competing claim is refused naming it.
 func TestSpendBatchAlternatingClaimsNameTheWinner(t *testing.T) {
