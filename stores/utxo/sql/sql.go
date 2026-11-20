@@ -4668,7 +4668,16 @@ func (s *Store) unspendOnce(ctx context.Context, spends []*utxo.Spend, flagAsLoc
 // Delete removes a transaction and all its associated data.
 // This includes inputs, outputs, and block references.
 func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	// No single lock order suits every writer of a transaction's rows: the
+	// pruner locks the row and then cascades into outputs, while Spend and
+	// Unspend lock outputs and then the row. So Delete retries a deadlock, with
+	// Unspend's budget, as those writers do.
+	return retryOnLockError(ctx, s.logger, setMinedMultiRetries, setMinedMultiLockBackoff, "[Delete]", func() error {
+		return s.deleteOnce(ctx, hash)
+	})
+}
 
+func (s *Store) deleteOnce(ctx context.Context, hash *chainhash.Hash) error {
 	// Start a database transaction
 	txn, err := s.db.Begin()
 	if err != nil {

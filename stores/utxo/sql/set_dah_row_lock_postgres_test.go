@@ -167,6 +167,79 @@ func TestDeleteAndSpendUseTheSameRowLockOrder_Postgres(t *testing.T) {
 	require.False(t, rowExists(ctx, t, store, *tx.TxIDChainHash()))
 }
 
+// The pruner locks a candidate's row and then cascades into its outputs, the
+// opposite of Delete's order. The holder here does the same on one row. Delete's
+// short deadlock timeout makes it the victim, so it must retry and still delete.
+func TestDeleteRetriesADeadlockWithThePrune_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+
+	dbURL := startPostgresContainer(t, ctx)
+	store := newPostgresTestStore(t, ctx, dbURL)
+	t.Cleanup(func() { _ = store.Close(context.Background()) })
+
+	tx := replayParent(t, ctx, store, "3333333333333333333333333333333333333333333333333333333333333333")
+
+	store.db.SetMaxOpenConns(1)
+	store.db.SetMaxIdleConns(1)
+	_, err := store.db.ExecContext(ctx, "SET deadlock_timeout = '100ms'; SET application_name = 'delete-prune-delete'")
+	require.NoError(t, err)
+
+	control, err := pgx.Connect(ctx, dbURL.String())
+	require.NoError(t, err)
+
+	defer func() { _ = control.Close(context.Background()) }()
+
+	prune, err := control.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = prune.Rollback(context.Background()) }()
+
+	_, err = prune.Exec(ctx, "SET LOCAL deadlock_timeout = '10s'")
+	require.NoError(t, err)
+
+	var id int64
+	require.NoError(t, prune.QueryRow(ctx, "SELECT id FROM transactions WHERE hash = $1 FOR NO KEY UPDATE", tx.TxIDChainHash()[:]).Scan(&id))
+
+	observer, err := pgx.Connect(ctx, dbURL.String())
+	require.NoError(t, err)
+
+	defer func() { _ = observer.Close(context.Background()) }()
+
+	deleted := make(chan error, 1)
+
+	go func() { deleted <- store.Delete(ctx, tx.TxIDChainHash()) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+
+	for {
+		var waiting bool
+
+		require.NoError(t, observer.QueryRow(ctx,
+			"SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name = 'delete-prune-delete' AND wait_event_type = 'Lock')").Scan(&waiting))
+
+		if waiting {
+			break
+		}
+
+		require.True(t, time.Now().Before(deadline), "Delete must wait on the prune's row lock")
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// The prune's cascade into outputs now waits on Delete: a cycle Postgres breaks
+	// by aborting Delete, whose timeout is shorter.
+	_, err = prune.Exec(ctx, "DELETE FROM outputs WHERE transaction_id = $1", id)
+	require.NoError(t, err)
+	require.NoError(t, prune.Rollback(ctx))
+
+	require.NoError(t, <-deleted, "Delete must retry a deadlock with the prune")
+	require.False(t, rowExists(ctx, t, store, *tx.TxIDChainHash()))
+}
+
 func pruneRowsAtHeight(ctx context.Context, t *testing.T, store *Store, height uint32) {
 	t.Helper()
 
