@@ -420,6 +420,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		batcherWait:            batcherWaitTimeout(tSettings),
 	}
 
+	s.NameLaneReturns("aerospike")
+
 	// Initialize spendLuaPackages array with configurable count
 	if s.settings.Aerospike.SeparateSpendUDFModuleCount > 0 {
 		s.spendLuaPackages = make([]string, s.settings.Aerospike.SeparateSpendUDFModuleCount)

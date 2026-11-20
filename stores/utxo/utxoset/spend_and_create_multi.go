@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -81,7 +82,30 @@ func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeig
 	w := s.newNettedWrite(txs, list, blockHeight)
 	w.positions = positions
 
-	return w.writeFamilies(ctx)
+	if positions != nil {
+		w.rolledBack = make([]bool, len(positions))
+	}
+
+	results, err := w.writeFamilies(ctx)
+
+	s.returnRolledBackList(positions, func(i int) bool {
+		return w.rolledBack[i] && w.items[i].result.Status == utxo.MultiTxNotAttempted
+	})
+
+	return results, err
+}
+
+// returnRolledBackList hands back, once a netted list has ended and no chunk can still commit, the
+// lane position of every transaction rolledBack says was rolled back whole before its chunk's COMMIT
+// was sent and that has no result from a later attempt. Nothing else of a list goes back: a
+// transaction found stored or with a refused spend may share its round's containment and journal
+// writes, which this does not prove unwritten.
+func (s *Store) returnRolledBackList(positions []uint64, rolledBack func(i int) bool) {
+	for i, position := range positions {
+		if position != lane.None && rolledBack(i) {
+			s.ReturnLanePosition(position, utxo.LaneReturnRolledBack, true)
+		}
+	}
 }
 
 // listItemOptions are the options transaction pos of a list is written with, carrying the position
@@ -178,6 +202,10 @@ type nettedWrite struct {
 	position map[chainhash.Hash]int
 	// positions are the lane positions taken at the entry, by list index; nil with no source.
 	positions []uint64
+	// rolledBack says, by list index, which transactions were being written when their chunk failed
+	// before sending its COMMIT; see recordRolledBack. Allocated only with positions. Each chunk
+	// writes only its own transactions', and they are read after every chunk ends.
+	rolledBack []bool
 }
 
 // multiSlowListLog is the write time above which a list gets an info log line saying where the

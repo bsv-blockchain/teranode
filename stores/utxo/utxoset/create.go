@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -114,7 +115,7 @@ func minedBlock(infos []utxo.MinedBlockInfo) (utxo.MinedBlockInfo, bool) {
 // table forever and the UTXO table's size is the entire budget. This mirrors the
 // PR 684 queue store's spendable_count and the aerospike store's ShouldStoreOutputAsUTXO
 // gate, so all three agree on what "spendable" means.
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (_ *meta.Data, err error) {
 	// Parsed up front rather than only on the batched path, because the single path now needs
 	// to know whether this create carries block information before it opens its transaction:
 	// that is what decides which tx_mined partition has to exist.
@@ -129,6 +130,24 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	position, err := s.Take(ctx, options)
 	if err != nil {
 		return nil, err
+	}
+
+	// A position this call took from the source goes back for reuse when the create provably wrote
+	// nothing: a batch that failed before its COMMIT was sent rolled back whole, and a refused claim
+	// of a create with no block wrote nothing (refusedUnwritten). A position the caller named is the
+	// caller's.
+	var rolledBack bool
+
+	if options.LanePosition == lane.None && position != lane.None {
+		defer func() {
+			switch {
+			case err == nil:
+			case rolledBack:
+				s.ReturnLanePosition(position, utxo.LaneReturnRolledBack, true)
+			default:
+				s.ReturnLanePosition(position, utxo.LaneReturnExists, refusedUnwritten(err, options))
+			}
+		}()
 	}
 
 	options.LanePosition = position
@@ -157,6 +176,8 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 			}) {
 				select {
 				case res := <-done:
+					rolledBack = res.rolledBack
+
 					return res.data, res.err
 				case <-ctx.Done():
 					return nil, ctx.Err()
@@ -228,6 +249,21 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	committed = true
 
 	return data, cerr
+}
+
+// refusedUnwritten reports whether err, the final answer of a create, proves that no record carries
+// the create's lane position: ErrTxExists for a create that carries no block. The claim that refused
+// it wrote nothing (see createPlan.settle), and with no block there is no containment row, the one
+// write a refused claim still makes, whose position can be the create's own (minedLaneValue). The
+// answer must be final: a rerun after a batch whose COMMIT may have landed can meet its own record.
+func refusedUnwritten(err error, options *utxo.CreateOptions) bool {
+	if !errors.Is(err, errors.ErrTxExists) {
+		return false
+	}
+
+	_, mined := minedBlock(options.MinedBlockInfos)
+
+	return !mined
 }
 
 // appendCreate adds one transaction to the plan: its identity row, its serialized bytes, and

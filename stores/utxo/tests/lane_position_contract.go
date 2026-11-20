@@ -9,7 +9,9 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -428,4 +430,364 @@ func LanePositionContract(t *testing.T, db utxostore.Store) {
 	t.Run("from a source", func(t *testing.T) { LanePositionFromSource(t, db) })
 	t.Run("multi", func(t *testing.T) { LanePositionMulti(t, db) })
 	t.Run("absent without the option", func(t *testing.T) { LanePositionAbsentWithoutOption(t, db) })
+}
+
+// laneCreator is a store's own Create, which SpendAndCreate wraps on the Aerospike and SQL stores.
+type laneCreator interface {
+	Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, error)
+}
+
+// ReturningLanePositions is ScriptedLanePositions that also takes positions back, as the allocator
+// does, and records them. It never hands a returned position out again, so after a test every
+// position it holds must be on no record.
+type ReturningLanePositions struct {
+	*ScriptedLanePositions
+
+	returned []uint64
+}
+
+// NewReturningLanePositions returns a source that hands out positions in order and records returns.
+func NewReturningLanePositions(positions ...uint64) *ReturningLanePositions {
+	return &ReturningLanePositions{ScriptedLanePositions: NewScriptedLanePositions(positions...)}
+}
+
+// Return implements utxostore.LanePositionReturner.
+func (r *ReturningLanePositions) Return(position uint64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.returned = append(r.returned, position)
+
+	return true
+}
+
+// Returned is every position handed back, in order.
+func (r *ReturningLanePositions) Returned() []uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]uint64(nil), r.returned...)
+}
+
+// LaneReturnRules says which refusals a store proves wrote no record carrying the create's
+// position, and so returns. A refused spend before any create is returned by every store, and a
+// failure for a reason other than exists, spend_rejected or rolled_back by none, so neither is a
+// rule.
+type LaneReturnRules struct {
+	// Exists: a create with no block refused because the transaction is stored.
+	Exists bool
+	// MinedExists: the same for a create that carries the block it is mined in.
+	MinedExists bool
+	// ListExists: a transaction of a SpendAndCreateMulti list that is already stored.
+	ListExists bool
+}
+
+// LaneReturns is the returned lane position counter of one store at a moment, keyed by reason.
+type LaneReturns map[string]float64
+
+// ReadLaneReturns reads teranode_lane_positions_returned_total for one store from the default
+// registry.
+func ReadLaneReturns(t testing.TB, store string) LaneReturns {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	returns := LaneReturns{}
+
+	for _, family := range families {
+		if family.GetName() != "teranode_lane_positions_returned_total" {
+			continue
+		}
+
+		for _, m := range family.GetMetric() {
+			labels := make(map[string]string, 2)
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+
+			if labels["store"] == store {
+				returns[labels["reason"]] = m.GetCounter().GetValue()
+			}
+		}
+	}
+
+	return returns
+}
+
+// Since returns what the counter gained after before, leaving out every reason that did not move.
+func (r LaneReturns) Since(before LaneReturns) LaneReturns {
+	diff := LaneReturns{}
+
+	for k, v := range r {
+		if d := v - before[k]; d != 0 {
+			diff[k] = d
+		}
+	}
+
+	return diff
+}
+
+// LanePositionCounter counts the rows of a store's own tables that carry any of positions. A store
+// passes one to LanePositionReturns so the check covers rows a Get does not read; nil leaves the Get
+// check alone.
+type LanePositionCounter func(t testing.TB, positions []uint64) int
+
+// requireReturned requires source to have taken back exactly want, and no record of txs, nor any
+// row count reports, to carry a position it holds.
+func requireReturned(t *testing.T, db utxostore.Store, count LanePositionCounter, source *ReturningLanePositions,
+	store string, before LaneReturns, reason string, want []uint64, txs ...*bt.Tx) {
+	t.Helper()
+
+	returned := source.Returned()
+
+	wantCounted := LaneReturns{}
+	if len(returned) > 0 {
+		wantCounted[reason] = float64(len(returned))
+	}
+
+	require.Equal(t, wantCounted, ReadLaneReturns(t, store).Since(before), "returned lane positions counted for store %q", store)
+
+	if len(want) == 0 {
+		require.Empty(t, returned, "nothing goes back")
+	} else {
+		require.Equal(t, want, returned)
+	}
+
+	held := make(map[uint64]bool, len(returned))
+	for _, p := range returned {
+		held[p] = true
+	}
+
+	for i, tx := range txs {
+		md, err := db.Get(context.Background(), tx.TxIDChainHash(), fields.LanePosition)
+		if errors.Is(err, errors.ErrTxNotFound) {
+			continue
+		}
+
+		require.NoError(t, err, "record %d", i)
+		require.False(t, held[md.LanePosition], "record %d carries a returned position", i)
+	}
+
+	if count != nil && len(returned) > 0 {
+		require.Zero(t, count(t, returned), "a row carries a returned position")
+	}
+}
+
+// LanePositionReturns: a position a store took and proved no record carries goes back to its source
+// once the create has its outcome, and every other burned position stays burned. Whatever goes back
+// is on no record the test wrote. rules says what the store proves; count, if not nil, checks its
+// raw rows as well.
+func LanePositionReturns(t *testing.T, db utxostore.Store, store string, rules LaneReturnRules, count LanePositionCounter) {
+	ctx := context.Background()
+
+	ifReturned := func(ok bool, position uint64) []uint64 {
+		if ok {
+			return []uint64{position}
+		}
+
+		return nil
+	}
+
+	t.Run("a create refused because the transaction is stored", func(t *testing.T) {
+		root := BuildMultiWorkload(t, 0xb8, 1, 1).Roots[0]
+		source := NewReturningLanePositions(lanePositionsFrom(40, 2)...)
+		useLanePositionSource(t, db, source)
+
+		before := ReadLaneReturns(t, store)
+
+		_, _, err := db.SpendAndCreate(ctx, root, 950, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		_, _, err = db.SpendAndCreate(ctx, root, 950, utxostore.WithCreateOnly())
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnExists, ifReturned(rules.Exists, lane.Pack(40, 2)), root)
+		requireLanePosition(t, db, root, lane.Pack(40, 1), "the stored record keeps its position")
+	})
+
+	t.Run("a direct Create refused because the transaction is stored", func(t *testing.T) {
+		creator, ok := utxostore.As[laneCreator](db)
+		require.True(t, ok)
+
+		root := BuildMultiWorkload(t, 0xb9, 1, 1).Roots[0]
+		source := NewReturningLanePositions(lanePositionsFrom(41, 2)...)
+		useLanePositionSource(t, db, source)
+
+		before := ReadLaneReturns(t, store)
+
+		_, err := creator.Create(ctx, root, 950)
+		require.NoError(t, err)
+
+		_, err = creator.Create(ctx, root, 950)
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnExists, ifReturned(rules.Exists, lane.Pack(41, 2)), root)
+	})
+
+	t.Run("a direct Create with a block refused because the transaction is stored", func(t *testing.T) {
+		creator, ok := utxostore.As[laneCreator](db)
+		require.True(t, ok)
+
+		root := BuildMultiWorkload(t, 0xb3, 1, 1).Roots[0]
+		source := NewReturningLanePositions(lanePositionsFrom(48, 2)...)
+		useLanePositionSource(t, db, source)
+
+		before := ReadLaneReturns(t, store)
+
+		mined := utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 52, BlockHeight: 952, SubtreeIdx: 0})
+
+		_, err := creator.Create(ctx, root, 952, mined)
+		require.NoError(t, err)
+
+		_, err = creator.Create(ctx, root, 952, mined)
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnExists, ifReturned(rules.MinedExists, lane.Pack(48, 2)), root)
+	})
+
+	t.Run("a create with a block refused because the transaction is stored", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xba, 1, 1)
+		w.StoreRoots(t, db, 950)
+
+		source := NewReturningLanePositions(lanePositionsFrom(42, 2)...)
+		useLanePositionSource(t, db, source)
+
+		before := ReadLaneReturns(t, store)
+
+		mined := utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 51, BlockHeight: 951, SubtreeIdx: 0})
+
+		_, _, err := db.SpendAndCreate(ctx, w.Txs[0], 951, utxostore.WithIgnoreLocked(true), mined)
+		require.NoError(t, err)
+
+		_, _, err = db.SpendAndCreate(ctx, w.Txs[0], 951, utxostore.WithCreateOnly(), utxostore.WithIgnoreLocked(true), mined)
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnExists, ifReturned(rules.MinedExists, lane.Pack(42, 2)), w.Txs[0])
+	})
+
+	// The block-application order: the record is stored before its inputs are spent. The spends go
+	// through and commit, the create is refused, and its unused position goes back.
+	t.Run("a create refused after its spends succeeded", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xb4, 1, 1)
+		w.StoreRoots(t, db, 950)
+
+		source := NewReturningLanePositions(lanePositionsFrom(47, 2)...)
+		useLanePositionSource(t, db, source)
+
+		before := ReadLaneReturns(t, store)
+
+		child := w.Txs[0]
+
+		_, _, err := db.SpendAndCreate(ctx, child, 951, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		_, spends, err := db.SpendAndCreate(ctx, child, 951)
+		require.ErrorIs(t, err, errors.ErrTxExists)
+		require.NotEmpty(t, spends, "the spends stay in place")
+
+		inputs, err := utxostore.GetSpends(child)
+		require.NoError(t, err)
+
+		for i, in := range inputs {
+			resp, err := db.GetSpend(ctx, in)
+			require.NoError(t, err, "input %d", i)
+			require.NotEqual(t, int(utxostore.Status_OK), resp.Status, "input %d is spent", i)
+		}
+
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnExists, ifReturned(rules.Exists, lane.Pack(47, 2)), child)
+		requireLanePosition(t, db, child, lane.Pack(47, 1), "the stored record keeps its position")
+	})
+
+	t.Run("a spend refused before any create", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xbb, 1, 1)
+		w.StoreRoots(t, db, 950)
+
+		source := NewReturningLanePositions(lanePositionsFrom(43, 2)...)
+		useLanePositionSource(t, db, source)
+
+		before := ReadLaneReturns(t, store)
+
+		_, _, err := db.SpendAndCreate(ctx, w.Txs[0], 951)
+		require.NoError(t, err)
+
+		double := spendOneOutput(t, w.Roots[0], 0)
+
+		_, _, err = db.SpendAndCreate(ctx, double, 951)
+		require.Error(t, err)
+
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnSpendRejected, []uint64{lane.Pack(43, 2)}, w.Txs[0], double)
+		requireNotStored(t, db, double)
+	})
+
+	t.Run("a stored transaction of a list", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xbc, 1, 3)
+		w.StoreRoots(t, db, 950)
+
+		source := NewReturningLanePositions(lanePositionsFrom(44, 8)...)
+		useLanePositionSource(t, db, source)
+
+		before := ReadLaneReturns(t, store)
+
+		_, _, err := db.SpendAndCreate(ctx, w.Txs[1], 951)
+		require.NoError(t, err)
+
+		results, err := db.SpendAndCreateMulti(ctx, w.Txs, 951, utxostore.WithIgnoreLocked(true))
+		require.NoError(t, err)
+		require.Equal(t, utxostore.MultiTxExisted, results[1].Status)
+
+		// Which position the list gave the stored transaction depends on the store's order, so
+		// only the count is fixed.
+		returned := source.Returned()
+		if rules.ListExists {
+			require.Len(t, returned, 1)
+		} else {
+			require.Empty(t, returned)
+		}
+
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnExists, returned, w.Txs...)
+	})
+
+	t.Run("a position the caller named is the caller's", func(t *testing.T) {
+		creator, ok := utxostore.As[laneCreator](db)
+		require.True(t, ok)
+
+		root := BuildMultiWorkload(t, 0xb2, 1, 1).Roots[0]
+		source := NewReturningLanePositions(lanePositionsFrom(49, 1)...)
+		useLanePositionSource(t, db, source)
+
+		before := ReadLaneReturns(t, store)
+
+		_, _, err := db.SpendAndCreate(ctx, root, 950, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		_, _, err = db.SpendAndCreate(ctx, root, 950, utxostore.WithCreateOnly(), utxostore.WithLanePosition(lane.Pack(49, 7)))
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		_, err = creator.Create(ctx, root, 950, utxostore.WithLanePosition(lane.Pack(49, 8)))
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		requireReturned(t, db, count, source, store, before, "", nil, root)
+	})
+
+	t.Run("a call whose caller had already given up", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xbd, 1, 1)
+		w.StoreRoots(t, db, 950)
+
+		source := NewReturningLanePositions(lanePositionsFrom(45, 1)...)
+		useLanePositionSource(t, db, source)
+
+		before := ReadLaneReturns(t, store)
+
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+
+		// Nothing is written, but the reason is error, which never goes back.
+		_, _, err := db.SpendAndCreate(cancelled, w.Txs[0], 951)
+		require.Error(t, err)
+		require.False(t, errors.Is(err, errors.ErrServiceUnavailable), "the call took its position before it gave up: %v", err)
+		require.Zero(t, source.Remaining())
+
+		requireReturned(t, db, count, source, store, before, "", nil, w.Txs[0])
+	})
 }

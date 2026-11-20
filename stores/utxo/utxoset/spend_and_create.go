@@ -7,6 +7,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 // SpendAndCreate spends the transaction's inputs and creates its outputs in ONE
@@ -41,7 +42,10 @@ import (
 // mechanism covers both arrival paths, the re-applied block and the duplicate mempool
 // submission, which is what retires the applied_block ledger.
 func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
-	opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	opts ...utxo.CreateOption) (_ *meta.Data, spends []*utxo.Spend, err error) {
+	// Set from the batch's answer; see spendAndCreateResult.
+	var rerunAfterBatchError bool
+
 	options := &utxo.CreateOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -62,9 +66,27 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 	// call that cannot get one fails having spent and written nothing. A call that creates nothing
 	// takes no position. createIn parses opts again, so the position goes there too.
 	if !options.SpendOnly {
-		position, err := s.Take(ctx, options)
-		if err != nil {
-			return nil, nil, err
+		position, takeErr := s.Take(ctx, options)
+		if takeErr != nil {
+			return nil, nil, takeErr
+		}
+
+		// A position this call took from the source goes back for reuse when the final answer proves
+		// nothing carries it: refusedUnwritten for exists, utxo.RefusedSpend for a refused spend. A
+		// rerun after a failed batch never returns
+		// it: that batch's COMMIT may have landed with it.
+		if options.LanePosition == lane.None && position != lane.None {
+			defer func() {
+				if err == nil || rerunAfterBatchError {
+					return
+				}
+
+				if refusedUnwritten(err, options) {
+					s.ReturnLanePosition(position, utxo.LaneReturnExists, true)
+				} else if !options.CreateOnly && utxo.RefusedSpend(err, spends) {
+					s.ReturnLanePosition(position, utxo.LaneReturnSpendRejected, true)
+				}
+			}()
 		}
 
 		options.LanePosition = position
@@ -83,8 +105,8 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 	if s.spendAndCreateBatcher != nil && !options.Conflicting && !s.closed.Load() {
 		// A caller that has already given up gets its answer before anything is queued.
 		// Once queued the item is applied whether or not anyone is waiting.
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, nil, ctxErr
 		}
 
 		item := newSpendAndCreateItem(tx, blockHeight, options, opts)
@@ -100,6 +122,7 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		// acts on that: it would neither hand the transaction to block assembly nor accept a
 		// resubmission, which meets ErrTxExists. The only truthful answer is the batch's.
 		res := <-item.done
+		rerunAfterBatchError = res.rerunAfterBatchError
 
 		return res.data, res.spends, res.err
 	}
