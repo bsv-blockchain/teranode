@@ -5449,10 +5449,12 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 			content := data[offset : offset+int(contentLen)]
 			offset += int(contentLen)
 
-			laneTxMetaReceived.Count(action == txmetacache.WireActionADDLane)
+			if action == txmetacache.WireActionADDLane || (sm.settings != nil && sm.settings.UtxoStore.LaneMigration.Stamps()) {
+				laneTxMetaReceived.Count(action == txmetacache.WireActionADDLane)
+			}
 
 			if action == txmetacache.WireActionADDLane {
-				legacy, _, _, err := txmetacache.LaneMetaContent(content)
+				legacy, err := txmetacache.LaneMetaContent(content)
 				if err != nil {
 					sm.logger.Errorf("Failed to decode lane tx meta data for %s: %v", hash, err)
 					continue

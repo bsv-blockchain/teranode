@@ -47,8 +47,13 @@ func TestLaneMetaContentIsTheMetaBytes(t *testing.T) {
 	content, err := d.LaneMetaBytesInto(nil, parents)
 	require.NoError(t, err)
 
-	legacy, own, gotParents, err := LaneMetaContent(content)
+	legacy, err := LaneMetaContent(content)
 	require.NoError(t, err)
+
+	var full meta.Data
+	gotParents, err := meta.NewDataFromLaneMetaBytes(content, &full)
+	require.NoError(t, err)
+	own := full.LanePosition
 
 	want, err := d.MetaBytes()
 	require.NoError(t, err)
@@ -75,14 +80,16 @@ func TestLaneMetaContentCountsWhatDoesNotDecode(t *testing.T) {
 
 	for name, bad := range map[string][]byte{
 		"truncated":      content[:len(content)-1],
+		"one byte extra": append(append([]byte(nil), content...), 0),
+		"zero position":  append(append([]byte(nil), content[:len(content)-8]...), 0, 0, 0, 0, 0, 0, 0, 0),
 		"legacy content": func() []byte { b, _ := d.MetaBytes(); return b }(),
 		"empty":          nil,
 	} {
-		_, _, _, err := LaneMetaContent(bad)
+		_, err := LaneMetaContent(bad)
 		require.Error(t, err, name)
 	}
 
-	require.Equal(t, before+3, testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode)))
+	require.Equal(t, before+5, testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode)))
 }
 
 // The sender counts every entry at shadow, lane or legacy, and the reason for each legacy one.
@@ -99,4 +106,18 @@ func TestCountLaneTxMetaSent(t *testing.T) {
 	require.Equal(t, beforeLane+1, testutil.ToFloat64(lanes))
 	require.Equal(t, beforeLegacy+1, testutil.ToFloat64(legacy))
 	require.Equal(t, beforeMiss+1, testutil.ToFloat64(parentMissing))
+}
+
+// The view allocates nothing, so a receiver pays no more for a lane entry than for a plain one.
+func TestLaneMetaContentDoesNotAllocate(t *testing.T) {
+	d := laneTestData(t)
+
+	content, err := d.LaneMetaBytesInto(nil, []uint64{lane.Pack(3, 1), lane.Pack(4, 2)})
+	require.NoError(t, err)
+
+	require.Zero(t, testing.AllocsPerRun(1000, func() {
+		if _, err := LaneMetaContent(content); err != nil {
+			t.Fatal(err)
+		}
+	}))
 }

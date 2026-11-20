@@ -701,6 +701,16 @@ func (s *Store) netBelowClaim(ctx context.Context, dbTx pgx.Tx, p *createPlan) (
 		return nil, errors.NewStorageError("[utxoset][SpendAndCreateMulti] claim rows", err)
 	}
 
+	// The netted claim writes no inpoints, so its records are counted for their own position only,
+	// as the block-path claim's are. A chunk that rolls back and runs again counts twice.
+	if s.laneShadow {
+		for k, id := range p.txids {
+			if claimed[string(id)] {
+				utxo.CountLaneRecord(laneStoreName, p.lanes != nil && p.lanes[k] != 0, false, false)
+			}
+		}
+	}
+
 	return claimed, nil
 }
 

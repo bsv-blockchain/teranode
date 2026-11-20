@@ -853,7 +853,7 @@ For `ADD` entries, `content` is the serialized `meta.Data` for the transaction â
 - Coinbase flag
 - Lock time
 
-For `ADDLane` entries, `content` is produced by `(*meta.Data).LaneMetaBytesInto` and parsed by `meta.NewDataFromLaneMetaBytes`: a magic byte `0xA7`, a version byte `0x01` and the transaction's 8-byte lane position, then exactly the `MetaBytes` above, then one 8-byte lane position per distinct parent in `TxInpoints` order. The action byte, not the magic byte, tells the two encodings apart, because a fee of 423 satoshis also begins with `0xA7 0x01`. `txmetacache.LaneMetaContent` returns the embedded `MetaBytes` without copying.
+For `ADDLane` entries, `content` is produced by `(*meta.Data).LaneMetaBytesInto` and parsed by `meta.NewDataFromLaneMetaBytes`: a magic byte `0xA7`, a version byte `0x01` and the transaction's 8-byte lane position, then exactly the `MetaBytes` above, then one 8-byte lane position per distinct parent in `TxInpoints` order. The action byte, not the magic byte, tells the two encodings apart, because a fee of 423 satoshis also begins with `0xA7 0x01`. `txmetacache.LaneMetaContent` returns the embedded `MetaBytes` without copying or allocating.
 
 ### Code Examples
 

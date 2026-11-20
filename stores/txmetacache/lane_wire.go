@@ -2,7 +2,6 @@ package txmetacache
 
 import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
-	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -34,7 +33,7 @@ var (
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "txmeta_messages_total",
-			Help:      "Txmeta entries for created transactions at utxostore_laneMigration shadow, by side (sent by the validator, or received by consumer) and format (lane: own and parent lane positions; legacy: none)",
+			Help:      "Txmeta entries for created transactions at utxostore_laneMigration shadow, by side (sent by the validator, or received by the named consumer) and format (lane: own and parent lane positions; legacy: none); nothing is counted with lane positions off",
 		},
 		[]string{"side", "format"},
 	)
@@ -85,24 +84,16 @@ func (c *LaneTxMetaReceived) Count(laneFormat bool) {
 	}
 }
 
-// LaneMetaContent turns the content of a WireActionADDLane entry into the MetaBytes a plain ADD
-// entry carries, with the transaction's own lane position and its parents'. The MetaBytes are a
-// sub-slice of content, because the lane encoding holds them whole between its header and its
-// parent positions, so nothing is copied. An entry that does not decode is counted as a miss
-// (LaneMissDecode) and returned as an error, for the receiver to drop like any malformed entry.
-func LaneMetaContent(content []byte) (legacy []byte, own uint64, parents []uint64, err error) {
-	var d meta.Data
-
-	if parents, err = meta.NewDataFromLaneMetaBytes(content, &d); err != nil {
+// LaneMetaContent returns the MetaBytes a WireActionADDLane entry carries, which a plain ADD entry
+// would carry, as a sub-slice of content with nothing copied or allocated (meta.LaneMetaBytesView).
+// An entry that does not check out is counted as a miss (LaneMissDecode) and returned as an error,
+// for the receiver to drop like any malformed entry.
+func LaneMetaContent(content []byte) ([]byte, error) {
+	legacy, err := meta.LaneMetaBytesView(content)
+	if err != nil {
 		prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode).Inc()
-		return nil, 0, nil, err
+		return nil, err
 	}
 
-	end := len(content) - len(parents)*lane.PositionSize
-
-	return content[laneMetaPrefix:end:end], d.LanePosition, parents, nil
+	return legacy, nil
 }
-
-// laneMetaPrefix is the lane encoding's magic, version and own position, which precede the bytes
-// MetaBytes writes.
-const laneMetaPrefix = 2 + lane.PositionSize

@@ -314,8 +314,10 @@ type CreateOptions struct {
 	// ParentLanePositions is the lane position of each distinct parent of the record, in the
 	// order of its TxInpoints parents, which a store that has the column writes beside the
 	// inpoints. The validator names it at utxostore_laneMigration shadow from the parent reads it
-	// already makes. nil means no parent positions: lane positions off, a parent that has none, or
-	// a caller that read no parents. A store never reads a parent to fill it.
+	// already makes. nil means the caller read no parent positions: lane positions off, or a path
+	// that reads no parents. Otherwise it has one entry per distinct parent, and a parent with no
+	// position is 0 there; a store writes the list only when every entry is a valid position. A
+	// store never reads a parent to fill it.
 	ParentLanePositions []uint64
 }
 

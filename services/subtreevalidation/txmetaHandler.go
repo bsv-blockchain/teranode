@@ -206,7 +206,9 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 				bufs.hashes = append(bufs.hashes, entryHash)
 			}
 
-			laneTxMetaReceived.Count(false)
+			if u.laneShadow() {
+				laneTxMetaReceived.Count(false)
+			}
 		case txmetacache.WireActionADDLane:
 			// The lane encoding, sent at utxostore_laneMigration shadow. The cache keeps the
 			// MetaBytes it always kept, which the lane encoding holds whole, so the positions
@@ -215,7 +217,7 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 			laneTxMetaReceived.Count(true)
 
 			end := offset + int(contentLen)
-			legacy, _, _, err := txmetacache.LaneMetaContent(data[offset:end:end])
+			legacy, err := txmetacache.LaneMetaContent(data[offset:end:end])
 			if err != nil {
 				prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
 				u.logger.Debugf("[txmetaHandler] dropping lane txmeta entry %d: %v", i, err)
@@ -278,3 +280,9 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 // laneTxMetaReceived counts the txmeta entries subtree validation receives, by whether they carry
 // lane positions.
 var laneTxMetaReceived = txmetacache.NewLaneTxMetaReceived("subtreevalidation")
+
+// laneShadow reports whether lane positions are on, which is when this consumer counts the formats
+// of the txmeta entries it receives.
+func (u *Server) laneShadow() bool {
+	return u.settings != nil && u.settings.UtxoStore.LaneMigration.Stamps()
+}
