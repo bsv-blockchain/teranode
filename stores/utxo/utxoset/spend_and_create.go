@@ -80,8 +80,10 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		// is the final one.
 		//
 		// It also goes back for reuse when the final answer proves nothing carries it:
-		// refusedUnwritten for exists, utxo.RefusedSpend for a refused spend. A rerun after a failed
-		// batch never returns it: that batch's COMMIT may have landed with it.
+		// refusedUnwritten for exists, utxo.RefusedSpend for a refused spend. A rerun after a batch
+		// whose COMMIT reported failure never returns it: that COMMIT may have landed with it. A
+		// rerun after a batch that failed before its COMMIT is an ordinary single call and returns
+		// as one.
 		if utxo.TookLanePosition(options.LanePosition, position) {
 			defer func() {
 				if err == nil {
