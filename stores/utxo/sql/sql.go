@@ -3861,7 +3861,9 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 	// committed row, so the spend writes nothing instead of spending a frozen coin.
 	// transactions.frozen is only set when the row is created, so q1's read of it
 	// cannot go stale and needs no guard here. A concurrent attempt at
-	// the same spend is a young match, as on the bulk path.
+	// the same spend that commits after q1 saw the output unspent makes this
+	// write miss, and the recheck below reports the output spent; unlike the
+	// bulk path, only a match already visible to q1 is classified by age.
 	q2 := `
 		UPDATE outputs
 		SET spending_data = $1, spending_height = $4
