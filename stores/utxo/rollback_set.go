@@ -29,9 +29,13 @@ func HistoricalSpendAge(retention uint32) uint32 {
 
 // IsHistoricalSpend reports whether an idempotent match is a spend from
 // history rather than an earlier attempt at the current call. recorded is false
-// for a spend written before spend heights were stored; such a spend counts as
-// history. A recorded height above the incoming one (a re-applied block below
-// the tip) is not history. With retention 0 nothing is ever pruned, so no match
+// for a spend written before spend heights were stored; such a spend is not
+// history. Counting it as history would refuse, for good, a block holding a
+// transaction whose earlier attempt left a spend behind before the upgrade. The
+// cost is a window of about the retention after the upgrade: a child spent
+// before it and pruned after it has no height and no marker, so its replay is
+// accepted as on a store without this check. A recorded height above the
+// incoming one (a re-applied block below the tip) is not history. With retention 0 nothing is ever pruned, so no match
 // is history: HistoricalSpendAge would otherwise clamp to one block and refuse
 // an honest retry that follows its failed attempt by a block.
 func IsHistoricalSpend(recordedHeight uint32, recorded bool, incomingHeight, retention uint32) bool {
@@ -40,7 +44,7 @@ func IsHistoricalSpend(recordedHeight uint32, recorded bool, incomingHeight, ret
 	}
 
 	if !recorded {
-		return true
+		return false
 	}
 
 	if incomingHeight < recordedHeight {
@@ -58,8 +62,7 @@ func IsHistoricalSpend(recordedHeight uint32, recorded bool, incomingHeight, ret
 // this spender" reads the same whether a mined transaction committed it long
 // ago or an earlier failed attempt at this very call did. The recorded spend
 // height settles most cases. A match at least HistoricalSpendAge blocks older
-// than the incoming spend, or one written before heights were recorded, is
-// history (IsHistoricalSpend). The stores never pass such a match in
+// than the incoming spend is history (IsHistoricalSpend). The stores never pass such a match in
 // idempotent, so a rollback never reverses it: reversing a confirmed spend
 // would hand a confirmed output to the next spender.
 //

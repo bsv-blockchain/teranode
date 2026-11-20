@@ -52,7 +52,6 @@ import (
 	"runtime/debug"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3105,7 +3104,8 @@ type spendSelectResult struct {
 // its spend. recorded is the height stored with that spend and spenderExists
 // says whether the spender's transactions row is in the store.
 //
-// A match is historical by its age (utxo.IsHistoricalSpend). A historical match
+// A match is historical by its age (utxo.IsHistoricalSpend); a match with no
+// recorded height never is. A historical match
 // whose spender has no record is a replay of a transaction the pruner removed,
 // and refused. A historical match whose spender is stored is an ordinary match,
 // for a transaction that outlived the retention (one that waited unmined, say),
@@ -3122,22 +3122,13 @@ func (s *Store) classifyIdempotentMatch(item *batchSpend, recorded sql.NullInt64
 		// a pruned replay, or an earlier attempt that left the spend behind and
 		// never created its transaction. Name both heights, so an operator can
 		// find and free the output if it is the second.
-		s.logger.Warnf("[Spend] refusing %s:%d as a replay of pruned transaction %s: spend recorded at %s, incoming at %d, spender has no record",
-			item.spend.TxID, item.spend.Vout, item.spend.SpendingData.TxID, recordedHeightString(recorded), item.blockHeight)
+		s.logger.Warnf("[Spend] refusing %s:%d as a replay of pruned transaction %s: spend recorded at %d, incoming at %d, spender has no record",
+			item.spend.TxID, item.spend.Vout, item.spend.SpendingData.TxID, recorded.Int64, item.blockHeight)
 
 		return false, errors.NewUtxoSpendingTxPrunedError(errSpendTxPruned, item.spend.TxID, item.spend.Vout)
 	}
 
 	return true, nil
-}
-
-// recordedHeightString renders a recorded spend height for a log line.
-func recordedHeightString(recorded sql.NullInt64) string {
-	if !recorded.Valid {
-		return "no height (spent before heights were recorded)"
-	}
-
-	return strconv.FormatInt(recorded.Int64, 10)
 }
 
 // trySendSpendBatchBulk uses bulk SELECT + bulk UPDATE for PostgreSQL.

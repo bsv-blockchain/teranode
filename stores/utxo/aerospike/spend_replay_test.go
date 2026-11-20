@@ -360,30 +360,23 @@ func TestFailedReplayKeepsItsHistoricalMatch_Aerospike(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrSpent)
 }
 
-// TestPreUpgradeEntryWithoutSpenderIsRefused_Aerospike: an output spent before heights were stored
-// has no height in the spendHeights bin. It counts as history, so the replay of a pruned spender is
-// refused all the same, and a stored spender still gets its ordinary answer.
-func TestPreUpgradeEntryWithoutSpenderIsRefused_Aerospike(t *testing.T) {
+// TestPreUpgradeEntryWithoutSpenderIsAccepted_Aerospike: an output spent before heights were
+// stored has no height in the spendHeights bin. It never counts as history, so a spend left behind
+// before the upgrade cannot stall a block. The cost is that a spender pruned after the upgrade, by
+// a pruner that writes no marker, is accepted again as on a store without the check.
+func TestPreUpgradeEntryWithoutSpenderIsAccepted_Aerospike(t *testing.T) {
 	f := newReplayFixture(t, replayConfig{})
 
-	oldEntry := func() {
-		key := f.keyOf(f.parents[0].TxIDChainHash())
-		spendHeightClear(t, f.client, key, int(f.outputIndex))
-		_, ok := spendHeightAt(t, f.client, key, int(f.outputIndex))
-		require.False(t, ok)
-	}
-
-	oldEntry()
-
-	// C is stored: the match is history by default but the spender exists
-	_, err := f.store.Spend(f.ctx, f.child, replaySpendBlock+1)
-	require.NoError(t, err, "a stored spender gets its ordinary answer whatever the entry's age")
+	key := f.keyOf(f.parents[0].TxIDChainHash())
+	spendHeightClear(t, f.client, key, int(f.outputIndex))
+	_, ok := spendHeightAt(t, f.client, key, int(f.outputIndex))
+	require.False(t, ok)
 
 	f.prune(replayPruneBlock)
 
-	_, _, err = f.store.SpendAndCreate(f.ctx, f.child, replaySpendBlock+1)
-	require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "no height recorded and no spender record: refused even one block on")
-	require.False(t, f.childExists())
+	_, _, err := f.store.SpendAndCreate(f.ctx, f.child, replayPruneBlock+1000)
+	require.NoError(t, err, "no height recorded: not history, however late the spend comes")
+	require.True(t, f.childExists())
 	f.requireStillSpentByChild(0)
 }
 

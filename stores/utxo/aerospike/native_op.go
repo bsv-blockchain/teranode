@@ -914,8 +914,8 @@ func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospi
 //     and an idempotent match reports the height it recorded, in idempotentHeights
 //     keyed by the spend's idx. The store refuses a replay of a pruned
 //     transaction from that height (utxo.IsHistoricalSpend). A dispatcher that
-//     records and reports none makes every match count as history, so an honest
-//     retry whose spender has no record yet would be refused as a replay.
+//     records and reports none makes every match count as young, so no replay of a
+//     pruned transaction would ever be refused.
 //
 // A failure keeps spendMulti, spend and addDeletedChildren on the UDF path,
 // where all of this is enforced in-repo; every other sub-op keeps its routing,

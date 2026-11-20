@@ -289,8 +289,8 @@ type LuaMapResponse struct {
 	Idempotent []int `json:"idempotent,omitempty"`
 	// IdempotentHeights holds, for each idempotent index whose entry recorded one, the block height
 	// of the spend it matched. An index with no entry here matched a spend written without a height,
-	// which counts as historical (utxo.IsHistoricalSpend). A native-op server that does not report it
-	// fails probeNativeReplayProtection.
+	// which never counts as historical (utxo.IsHistoricalSpend). A native-op server that does not
+	// report it fails probeNativeReplayProtection.
 	IdempotentHeights map[int]uint32 `json:"-"`
 	// DeleteAtHeight is the master record's stamped delete-at-height, present only with a DAHSET signal from a Lua package that reports it.
 	DeleteAtHeight    int  `json:"deleteAtHeight,omitempty"`

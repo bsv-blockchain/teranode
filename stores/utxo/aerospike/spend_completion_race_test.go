@@ -159,28 +159,22 @@ func TestAbortPathKeepsAHistoricalMatchOutOfTheRollbackWithoutReading(t *testing
 	historical.recordedHeight = 1000
 	historical.hasRecordedHeight = true
 
-	// a pre-upgrade entry with no height counts as history too
-	noHeight := mkSpendItem(2, nil)
-	noHeight.idempotent = true
-	noHeight.blockHeight = 2001
-
 	fresh := mkSpendItem(3, nil)
 
 	spent := mkSpendItem(4, nil)
 	spent.spend.Err = errors.NewUtxoSpentError(*spent.spend.TxID, spent.spend.Vout, *spent.spend.UTXOHash, spendpkg.NewSpendingData(spent.spend.TxID, 0))
 
-	for _, item := range []*batchSpend{historical, noHeight, fresh, spent} {
+	for _, item := range []*batchSpend{historical, fresh, spent} {
 		item.completed.Store(true)
 		item.published.Store(true)
 	}
 
-	res := s.resolveSpendCompletions(context.Background(), bt.NewTx(), []*batchSpend{historical, noHeight, fresh, spent}, true)
+	res := s.resolveSpendCompletions(context.Background(), bt.NewTx(), []*batchSpend{historical, fresh, spent}, true)
 
 	require.True(t, res.rollbackNeeded, "fixture: the ErrSpent input warrants a rollback")
 	require.Empty(t, res.idempotentSpends, "a historical match never enters the rollback")
 	require.Equal(t, []*utxo.Spend{fresh.spend}, res.rollbackSet(), "only the fresh write is reversed")
 	require.NoError(t, historical.spend.Err, "nothing is refused on the abort path")
-	require.NoError(t, noHeight.spend.Err)
 }
 
 // TestHistoricalMatchWhoseSpenderCannotBeReadFailsTheInput: the existence read cannot answer, so the

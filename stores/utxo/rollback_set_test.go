@@ -104,7 +104,7 @@ func TestIsHistoricalSpend(t *testing.T) {
 		{"an honest retry 2 blocks later", 2001, true, 2003, 288, false},
 		{"one block under half the retention", 1000, true, 1143, 288, false},
 		{"exactly half the retention", 1000, true, 1144, 288, true},
-		{"a spend written before heights were stored", 0, false, 5, 288, true},
+		{"a spend written before heights were stored", 0, false, 5000, 288, false},
 		{"a re-applied block below the recorded height", 2005, true, 2001, 288, false},
 		{"retention 0 prunes nothing, so nothing is history", 10, true, 5000, 0, false},
 		{"retention 0 with no recorded height", 0, false, 5000, 0, false},

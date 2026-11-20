@@ -155,9 +155,10 @@ func TestFailedReplayReversesItsFreshSpendAndKeepsTheHistoricalMatch(t *testing.
 	})
 }
 
-// An output recorded with no height, by a build that stored none, counts as
-// history. With no record for its spender it is refused.
-func TestSpendRefusesAnUnrecordedHeightWhenTheSpenderHasNoRecord(t *testing.T) {
+// An output recorded with no height, by a build that stored none, is never
+// history. A spend left behind before the upgrade must not stall a block, so a
+// spender with no record is accepted as it was before heights were stored.
+func TestSpendAcceptsAnUnrecordedHeightWhenTheSpenderHasNoRecord(t *testing.T) {
 	forEachSpendPath(t, func(t *testing.T, ctx context.Context, store *Store) {
 		p := newTwoOutputParent(t, 24)
 		_, err := store.Create(ctx, p, 1000)
@@ -165,11 +166,13 @@ func TestSpendRefusesAnUnrecordedHeightWhenTheSpenderHasNoRecord(t *testing.T) {
 
 		c := newSpenderOf(t, p, 24, 0)
 		plantHistoricalSpend(t, ctx, store, p, c, 0)
+		_, err = store.db.ExecContext(ctx, `UPDATE outputs SET spending_height = NULL WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)`, p.TxIDChainHash()[:])
+		require.NoError(t, err)
 		require.False(t, recordedSpendHeight(t, ctx, store, p, 0).Valid, "fixture: no height was recorded")
 
-		_, err = store.Spend(ctx, c, 1001)
-		require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "NULL height is history, and C has no record")
-		require.NotEmpty(t, outputSpendingData(t, ctx, store, p, 0), "the refusal writes nothing and clears nothing")
+		_, err = store.Spend(ctx, c, 5000)
+		require.NoError(t, err, "a NULL height is not history, however far the incoming spend is")
+		require.Equal(t, spendpkg.NewSpendingData(c.TxIDChainHash(), 0).Bytes(), outputSpendingData(t, ctx, store, p, 0))
 	})
 }
 
@@ -210,8 +213,8 @@ func TestSpendAtZeroRetentionNeverTreatsAMatchAsAReplay(t *testing.T) {
 		_, err = store.Spend(ctx, d, 1201)
 		require.NoError(t, err)
 
-		// A spend recorded without a height and with no record for its spender is
-		// refused at any other retention; with none it is an ordinary match.
+		// A spend recorded long ago with no record for its spender is refused at
+		// any other retention; with none it is an ordinary match.
 		c := newSpenderOf(t, p, 29, 1)
 		plantHistoricalSpend(t, ctx, store, p, c, 0)
 

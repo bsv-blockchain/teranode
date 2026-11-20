@@ -229,7 +229,7 @@ func TestSpendRollbackReversesOrphanWhenASiblingParentIsMissing(t *testing.T) {
 
 // TestSpendRetryReversesAFreshWriteWhenAReplayAnswerFollows is the variant of the test above
 // that tells the rollback sets apart. A replay answer in the batch (here Q:0, which records C
-// with no height and no record of C) makes the rollback leave idempotent matches alone and reverse only what
+// at height 1, far older than the replay, and no record of C) makes the rollback leave idempotent matches alone and reverse only what
 // the call wrote. P:0 is an idempotent match on attempt 1, is released inside the retry window,
 // and is written fresh on attempt 2. A stale idempotent flag would keep it out of the
 // rollback, leaving P:0 spent by a transaction that is never created.
@@ -249,11 +249,11 @@ func TestSpendRetryReversesAFreshWriteWhenAReplayAnswerFollows(t *testing.T) {
 			utxo.MinedBlockInfo{BlockID: 1000, BlockHeight: 1000, OnLongestChain: true})
 		require.NoError(t, err)
 
-		// Q:0 records C with no height, as a build that stored none left it, and C
+		// Q:0 records C at height 1, a thousand blocks before the replay, and C
 		// has no record: a replay of C is refused on it as history. P:0 keeps its
 		// height of 1000, so on the replay at 1001 it is young.
 		_, err = store.db.ExecContext(ctx,
-			"UPDATE outputs SET spending_height = NULL WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
+			"UPDATE outputs SET spending_height = 1 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
 			q.TxIDChainHash()[:])
 		require.NoError(t, err)
 

@@ -58,7 +58,6 @@ package aerospike
 import (
 	"context"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -130,7 +129,7 @@ type batchSpend struct {
 	// recordedHeight is the block height the matched spend was recorded at,
 	// from the Lua response's idempotentHeights. hasRecordedHeight is false when
 	// the match carried none, a spend written before heights were stored, which
-	// counts as historical.
+	// does not count as historical.
 	recordedHeight    uint32
 	hasRecordedHeight bool
 }
@@ -1163,7 +1162,7 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 // items whose match is historical.
 //
 // A match is historical when its recorded spend is at least utxo.HistoricalSpendAge blocks
-// older than the incoming one, or recorded no height. The call's spender is the transaction being
+// older than the incoming one. A match with no recorded height is never historical. The call's spender is the transaction being
 // spent for, so one existence read of its record answers for every historical match of the call:
 // absent, each of them is a replay of a transaction the pruner removed and fails with
 // ErrUtxoSpendingTxPruned, which writes nothing; present, they are ordinary matches (a stored
@@ -1226,13 +1225,8 @@ func (s *Store) refuseHistoricalReplays(ctx context.Context, tx *bt.Tx, items []
 			// A pruned replay, or an earlier attempt that left the spend behind and never
 			// created its transaction. Name both heights, so an operator can find and free the
 			// output if it is the second.
-			recorded := "no height (spent before heights were recorded)"
-			if item.hasRecordedHeight {
-				recorded = strconv.FormatUint(uint64(item.recordedHeight), 10)
-			}
-
-			s.logger.Warnf("[SPEND][%s] refusing vout %d of %s as a replay of a pruned transaction: spend recorded at %s, incoming at %d, spender has no record",
-				tx.TxID(), item.spend.Vout, item.spend.TxID.String(), recorded, item.blockHeight)
+			s.logger.Warnf("[SPEND][%s] refusing vout %d of %s as a replay of a pruned transaction: spend recorded at %d, incoming at %d, spender has no record",
+				tx.TxID(), item.spend.Vout, item.spend.TxID.String(), item.recordedHeight, item.blockHeight)
 
 			item.spend.Err = errors.NewUtxoSpendingTxPrunedError("[SPEND][%s] invalid spend for vout %d of %s: spending transaction was pruned",
 				tx.TxID(), item.spend.Vout, item.spend.TxID.String())

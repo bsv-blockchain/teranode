@@ -36,7 +36,7 @@ func TestMarkIdempotentSpendsOnlyMarksThisRecordsItems(t *testing.T) {
 	require.False(t, batch[1].hasRecordedHeight, "a height reported for another record's index is ignored")
 	require.False(t, batch[2].hasRecordedHeight, "a height for an index not reported idempotent is ignored")
 
-	// a match reported without a height has none, so it counts as historical
+	// a match reported without a height has none, so it never counts as historical
 	other := []*batchSpend{{}, {}, {}, {}}
 	markIdempotentSpends([]int{3}, nil, batchByKey, other)
 	require.True(t, other[3].idempotent)

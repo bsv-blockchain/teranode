@@ -691,14 +691,14 @@ func replaySpender(t *testing.T, parents ...*bt.Tx) *bt.Tx {
 	return tx
 }
 
-// plantHistoricalSpend makes output 0 of parent record spender at vin with no spend height, as a
-// build that did not store heights left it. The spender has no record, so a spend of the same
-// call is a replay of a pruned transaction.
+// plantHistoricalSpend makes output 0 of parent record spender at vin, spent at height 1, older
+// than any spend these tests make by far more than the 144-block age. The spender has no record,
+// so a spend of the same call is a replay of a pruned transaction.
 func plantHistoricalSpend(t *testing.T, ctx context.Context, store *Store, parent, spender *bt.Tx, vin int) {
 	t.Helper()
 
 	_, err := store.db.ExecContext(ctx,
-		"UPDATE outputs SET spending_data = $2 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
+		"UPDATE outputs SET spending_data = $2, spending_height = 1 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
 		parent.TxIDChainHash()[:], spendpkg.NewSpendingData(spender.TxIDChainHash(), vin).Bytes())
 	require.NoError(t, err)
 }
