@@ -184,8 +184,9 @@ func (s *SQL) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (g
 	return grant, granted, closed, nil
 }
 
-// ReleaseLaneLease closes a lease cleanly and records the last position its holder took. It
-// reports alreadyClosed when the lease was closed before, and then writes nothing.
+// ReleaseLaneLease closes a lease cleanly and records the highest position its holder gave out that
+// may carry a record, which is below the last position it took when positions at the top came back
+// unwritten. It reports alreadyClosed when the lease was closed before, and then writes nothing.
 func (s *SQL) ReleaseLaneLease(ctx context.Context, req options.LaneLeaseRelease) (alreadyClosed bool, err error) {
 	err = s.leaseTx(ctx, false, func(tx *sql.Tx) error {
 		res, err := s.laneExec(ctx, tx, releaseLeaseSQL,

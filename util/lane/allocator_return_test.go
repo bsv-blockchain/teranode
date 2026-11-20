@@ -186,9 +186,21 @@ func TestAllocatorDropsReturnedPositionsWhenItsLeaseIsClosed(t *testing.T) {
 	src.closeAll()
 	require.Eventually(t, func() bool { return src.openCount() == 2 }, 5*time.Second, time.Millisecond, "a new lease is opened")
 
-	_, n := Unpack(next(t, a))
+	v := next(t, a)
+	_, n := Unpack(v)
 	require.Greater(t, n, uint64(1000), "from the new lease's grant, not the returned position")
 	require.False(t, a.Return(Pack(0, 2)), "a position of the closed lease")
+
+	// The new lease gives back the one position it gave out, so it releases at 0, not at the
+	// closed lease's number: that lease's positions are not the new lease's to report.
+	require.True(t, a.Return(v))
+	require.NoError(t, a.Close())
+
+	src.mu.Lock()
+	defer src.mu.Unlock()
+
+	require.NotEmpty(t, src.releases)
+	require.Equal(t, uint64(0), src.releases[len(src.releases)-1].LastTaken)
 }
 
 // Return and Next on the reuse path allocate nothing.
