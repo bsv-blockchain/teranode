@@ -569,6 +569,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		return nil, errors.NewStorageError("Failed to register udfLUA mined", err)
 	}
 
+	// With lane positions on, check that the server records a spender's lane position in the
+	// parent's slot, on the route spends take. It only decides how spends are counted; with lane
+	// positions off it does not run.
+	if s.laneShadow() {
+		s.laneSlotWrites.Store(s.probeLaneSlotWrites(ctx))
+	}
+
 	spendBatchSize := s.settings.UtxoStore.SpendBatcherSize
 	spendBatchDurationStr := s.settings.UtxoStore.SpendBatcherDurationMillis
 	spendBatchDuration := time.Duration(spendBatchDurationStr) * time.Millisecond

@@ -64,29 +64,25 @@ func TestDecodeParentLanePositionsRejects(t *testing.T) {
 	require.Empty(t, got)
 }
 
-func TestSpendingLanePositionsBin(t *testing.T) {
-	bin := spendingLanePositionsBin(3)
-	require.Equal(t, fields.SpendingLanePositions.String(), bin.Name)
-
-	list, ok := bin.Value.GetObject().([]interface{})
-	require.True(t, ok)
-	require.Equal(t, []interface{}{int64(0), int64(0), int64(0)}, list, "an unspent slot is written as 0, not nil")
-
-	got, err := decodeSpendingLanePositions(list, 3)
+func TestSpendingLanePositionsBytes(t *testing.T) {
+	got, err := decodeSpendingLanePositions(nil, 3)
 	require.NoError(t, err)
-	require.Equal(t, []uint64{0, 0, 0}, got, "every slot unspent")
+	require.Equal(t, []uint64{0, 0, 0}, got, "no bin: no output has a position")
 
-	list[1] = lane.ToSigned(lane.Pack(254, 77))
-	list[2] = int64(0)
-	got, err = decodeSpendingLanePositions(list, 3)
+	// Grown only to output 1, the last one spent with a position; lane 254 sets the top bit.
+	b := appendSlotLanePositions(nil, []uint64{0, lane.Pack(254, 77)})
+	require.Len(t, b, 16)
+
+	got, err = decodeSpendingLanePositions(b, 3)
 	require.NoError(t, err)
-	require.Equal(t, []uint64{0, lane.Pack(254, 77), 0}, got)
+	require.Equal(t, []uint64{0, lane.Pack(254, 77), 0}, got, "an output past the end has none")
 
 	for name, v := range map[string]interface{}{
-		"wrong length": []interface{}{nil, nil},
-		"lane only":    []interface{}{nil, lane.ToSigned(lane.Pack(9, 0)), nil},
-		"wrong type":   []interface{}{nil, []byte{1}, nil},
-		"not a list":   "spent",
+		"not whole":  []byte{1, 2, 3},
+		"too long":   appendSlotLanePositions(nil, []uint64{0, 0, 0, 0}),
+		"lane only":  appendSlotLanePositions(nil, []uint64{lane.Pack(9, 0)}),
+		"wrong type": []interface{}{int64(1)},
+		"not bytes":  "spent",
 	} {
 		_, err := decodeSpendingLanePositions(v, 3)
 		require.Error(t, err, name)

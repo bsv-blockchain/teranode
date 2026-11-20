@@ -2,6 +2,7 @@ package aerospike_test
 
 import (
 	"context"
+	"encoding/binary"
 	"sync/atomic"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranodeaerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -19,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -209,4 +212,225 @@ func TestLanePositionCreateConflictingWithNoPositionLeavesParentsAlone(t *testin
 	got, err := store.Get(ctx, parent.TxIDChainHash(), fields.ConflictingChildren)
 	require.NoError(t, err)
 	require.Empty(t, got.ConflictingChildren, "a create with no position wrote a conflict note onto its parent")
+}
+
+// laneParent is a parent with n outputs, distinct by seed.
+func laneParent(t *testing.T, seed uint32, n int) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+	require.NoError(t, tx.From("00000000000000000000000000000000000000000000000000000000000000aa", seed,
+		"76a914000000000000000000000000000000000000000088ac", 1_000_000))
+
+	for range n {
+		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1_000))
+	}
+
+	return tx
+}
+
+// laneChild spends the named outputs of parent.
+func laneChild(t *testing.T, parent *bt.Tx, vouts ...uint32) *bt.Tx {
+	t.Helper()
+
+	child := bt.NewTx()
+
+	for _, vout := range vouts {
+		require.NoError(t, child.FromUTXOs(&bt.UTXO{
+			TxIDHash:      parent.TxIDChainHash(),
+			Vout:          vout,
+			LockingScript: parent.Outputs[vout].LockingScript,
+			Satoshis:      parent.Outputs[vout].Satoshis,
+		}))
+	}
+
+	require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
+
+	return child
+}
+
+// recordBin reads one bin of the record recordIdx of tx; ok is false when the bin is absent.
+func recordBin(t *testing.T, client *uaerospike.Client, store *teranodeaerospike.Store, tx *bt.Tx, recordIdx uint32,
+	bin fields.FieldName) (interface{}, bool) {
+	t.Helper()
+
+	keySource := uaerospike.CalculateKeySourceInternal(tx.TxIDChainHash(), recordIdx)
+	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
+	require.NoError(t, err)
+
+	rec, err := client.Get(nil, key)
+	require.NoError(t, err)
+
+	v, ok := rec.Bins[bin.String()]
+
+	return v, ok
+}
+
+// slotLanes decodes the slot bin's bytes into one position per output it covers.
+func slotLanes(t *testing.T, v interface{}) []uint64 {
+	t.Helper()
+
+	b, ok := v.([]byte)
+	require.True(t, ok, "the slot bin is bytes, got %T", v)
+	require.Zero(t, len(b)%8)
+
+	out := make([]uint64, len(b)/8)
+	for i := range out {
+		out[i] = binary.LittleEndian.Uint64(b[i*8:])
+	}
+
+	return out
+}
+
+// A spend that carries the spender's lane position records it in each parent output's slot, in the
+// same write: teranode.lua on the stock server the tests run. A spend repeated by the same spender
+// writes nothing, Unspend clears the position, and a spend without one leaves the record exactly as
+// before, with no slot bin at all.
+func TestSpendRecordsTheSpenderLanePositionInTheSlot(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, _, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	// Lane 200 sets the top bit, so the bytes must carry every bit.
+	position := lane.Pack(200, 41_000)
+
+	t.Run("fresh spends, a repeat and an unspend", func(t *testing.T) {
+		parent := laneParent(t, 1, 3)
+		_, err := store.Create(ctx, parent, 100)
+		require.NoError(t, err)
+
+		child := laneChild(t, parent, 0, 2)
+
+		spends, err := store.SpendWithLanePosition(ctx, child, 101, position, utxo.IgnoreFlags{})
+		require.NoError(t, err)
+		require.Len(t, spends, 2)
+
+		v, ok := recordBin(t, client, store, parent, 0, fields.SpendingLanePositions)
+		require.True(t, ok, "the spend wrote the slot bin")
+		require.Equal(t, []uint64{position, 0, position}, slotLanes(t, v), "grown to cover output 2, output 1 unspent")
+
+		// The same spender again, with another position: an idempotent spend writes nothing.
+		_, err = store.SpendWithLanePosition(ctx, child, 101, lane.Pack(3, 3), utxo.IgnoreFlags{})
+		require.NoError(t, err)
+
+		v, _ = recordBin(t, client, store, parent, 0, fields.SpendingLanePositions)
+		require.Equal(t, []uint64{position, 0, position}, slotLanes(t, v), "a stored position never changes")
+
+		require.NoError(t, store.Unspend(ctx, spends))
+
+		v, _ = recordBin(t, client, store, parent, 0, fields.SpendingLanePositions)
+		require.Equal(t, []uint64{0, 0, 0}, slotLanes(t, v), "Unspend clears the positions")
+	})
+
+	t.Run("a spend without a position writes no slot bin", func(t *testing.T) {
+		parent := laneParent(t, 2, 2)
+		_, err := store.Create(ctx, parent, 100)
+		require.NoError(t, err)
+
+		spends, err := store.Spend(ctx, laneChild(t, parent, 1), 101)
+		require.NoError(t, err)
+
+		_, ok := recordBin(t, client, store, parent, 0, fields.SpendingLanePositions)
+		require.False(t, ok, "lane positions off: the record is what it always was")
+
+		require.NoError(t, store.Unspend(ctx, spends))
+
+		_, ok = recordBin(t, client, store, parent, 0, fields.SpendingLanePositions)
+		require.False(t, ok)
+	})
+
+	t.Run("an output on a page record gets its slot on that record", func(t *testing.T) {
+		batch := tSettings.UtxoStore.UtxoBatchSize
+		parent := laneParent(t, 3, batch+2)
+		_, err := store.Create(ctx, parent, 100)
+		require.NoError(t, err)
+
+		vout := uint32(batch + 1) //nolint:gosec // a small test batch size
+		_, err = store.SpendWithLanePosition(ctx, laneChild(t, parent, vout), 101, position, utxo.IgnoreFlags{})
+		require.NoError(t, err)
+
+		_, ok := recordBin(t, client, store, parent, 0, fields.SpendingLanePositions)
+		require.False(t, ok, "the master holds none of the spent outputs")
+
+		v, ok := recordBin(t, client, store, parent, 1, fields.SpendingLanePositions)
+		require.True(t, ok)
+		require.Equal(t, []uint64{0, position}, slotLanes(t, v), "the page's second output")
+	})
+}
+
+// A create names its parents' positions on the master record, and the validator's parent read
+// gives back the parent's own position, at shadow only.
+func TestParentLanePositionsOnAerospike(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	client, store, _, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	require.True(t, store.LaneSlotPositionsRecorded(), "the server, running this build's Lua, passes the slot probe")
+
+	parentPosition, childPosition := lane.Pack(7, 100), lane.Pack(7, 101)
+
+	parent := laneParent(t, 4, 1)
+	_, err := store.Create(ctx, parent, 100, utxo.WithLanePosition(parentPosition))
+	require.NoError(t, err)
+
+	answers, err := store.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *parent.TxIDChainHash(), Vout: 0}})
+	require.NoError(t, err)
+	require.NoError(t, answers[0].Err)
+	require.Equal(t, parentPosition, answers[0].LanePosition, "the parent read gives the parent's position")
+
+	child := laneChild(t, parent, 0)
+	md, err := store.Create(ctx, child, 101, utxo.WithLanePosition(childPosition), utxo.WithParentLanePositions([]uint64{parentPosition}))
+	require.NoError(t, err)
+	require.Equal(t, childPosition, md.LanePosition, "the create returns the position it wrote")
+
+	v, ok := recordBin(t, client, store, child, 0, fields.ParentLanePositions)
+	require.True(t, ok)
+	require.Equal(t, []interface{}{int(lane.ToSigned(parentPosition))}, v)
+
+	other := laneChild(t, laneParent(t, 5, 1), 0)
+	_, err = store.Create(ctx, other, 101, utxo.WithLanePosition(lane.Pack(7, 102)), utxo.WithParentLanePositions([]uint64{lane.None}))
+	require.NoError(t, err)
+
+	_, ok = recordBin(t, client, store, other, 0, fields.ParentLanePositions)
+	require.False(t, ok, "a parent without a position leaves the bin out")
+
+	// A spend at shadow on a server that passed the probe counts as carrying its position.
+	before := laneSpendsCarried(t)
+	_, err = store.SpendWithLanePosition(ctx, laneChild(t, child, 0), 102, lane.Pack(7, 103), utxo.IgnoreFlags{})
+	require.NoError(t, err)
+	require.Equal(t, before+1, laneSpendsCarried(t))
+}
+
+// laneSpendsCarried reads teranode_lane_spend_positions_total{store="aerospike", carried="yes"}.
+func laneSpendsCarried(t *testing.T) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range families {
+		if family.GetName() != "teranode_lane_spend_positions_total" {
+			continue
+		}
+
+		for _, m := range family.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+
+			if labels["store"] == "aerospike" && labels["carried"] == "yes" {
+				return m.GetCounter().GetValue()
+			}
+		}
+	}
+
+	return 0
 }
