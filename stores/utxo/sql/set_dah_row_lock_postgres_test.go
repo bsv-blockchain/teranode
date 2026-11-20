@@ -98,6 +98,75 @@ func TestDeleteAndMiningUseTheSameRowLockOrder_Postgres(t *testing.T) {
 	}
 }
 
+// Delete must lock outputs before the transaction row, as Spend and Unspend do.
+// The spend here has locked P's output and then asks setDAH for P's row while
+// Delete runs. With Delete taking the row first, the two form a cycle and the
+// short deadlock timeout makes Delete the victim; Delete does not retry.
+func TestDeleteAndSpendUseTheSameRowLockOrder_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+
+	dbURL := startPostgresContainer(t, ctx)
+	store, spender := newPostgresTestStore(t, ctx, dbURL), newPostgresTestStore(t, ctx, dbURL)
+	t.Cleanup(func() { _ = store.Close(context.Background()); _ = spender.Close(context.Background()) })
+	floorRetention(t, spender)
+
+	tx := replayParent(t, ctx, store, "2222222222222222222222222222222222222222222222222222222222222222")
+
+	// One connection each, so the session settings apply to the real Delete.
+	store.db.SetMaxOpenConns(1)
+	store.db.SetMaxIdleConns(1)
+	_, err := store.db.ExecContext(ctx, "SET deadlock_timeout = '100ms'; SET application_name = 'delete-spend-delete'")
+	require.NoError(t, err)
+
+	spend, err := spender.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	defer func() { _ = spend.Rollback() }()
+
+	_, err = spend.ExecContext(ctx, "SET LOCAL deadlock_timeout = '10s'")
+	require.NoError(t, err)
+
+	var id int
+	require.NoError(t, spend.QueryRowContext(ctx,
+		"UPDATE outputs SET spending_data = $2 WHERE transaction_id = (SELECT id FROM transactions WHERE hash = $1) AND idx = 0 RETURNING transaction_id",
+		tx.TxIDChainHash()[:], bytes.Repeat([]byte{0x42}, 36)).Scan(&id))
+
+	observer, err := pgx.Connect(ctx, dbURL.String())
+	require.NoError(t, err)
+
+	defer func() { _ = observer.Close(context.Background()) }()
+
+	deleted := make(chan error, 1)
+
+	go func() { deleted <- store.Delete(ctx, tx.TxIDChainHash()) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+
+	for {
+		var waiting bool
+
+		require.NoError(t, observer.QueryRow(ctx,
+			"SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name = 'delete-spend-delete' AND wait_event_type = 'Lock')").Scan(&waiting))
+
+		if waiting {
+			break
+		}
+
+		require.True(t, time.Now().Before(deadline), "Delete must wait on the spend's output lock")
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	require.NoError(t, spender.setDAH(ctx, spend, id), "the spend must get the row lock Delete has not taken")
+	require.NoError(t, spend.Commit())
+	require.NoError(t, <-deleted, "Delete must not become the deadlock victim of a spend")
+	require.False(t, rowExists(ctx, t, store, *tx.TxIDChainHash()))
+}
+
 func pruneRowsAtHeight(ctx context.Context, t *testing.T, store *Store, height uint32) {
 	t.Helper()
 

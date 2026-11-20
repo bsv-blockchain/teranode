@@ -2934,7 +2934,8 @@ func readBlockIDs(rows sqlRows) (map[chainhash.Hash][]uint32, error) {
 // Mirrors aerospike/spend.go sendSpendBatchLua.
 //
 // Single-phase design: SELECT + UPDATE outputs (validates and marks each output as spent).
-// DAH updates are handled separately by SetMinedMulti and setDAH, not during Spend.
+// Parents this batch spent or matched then have delete_at_height recomputed by
+// setDAHIfPresent, in the same transaction and after the output update.
 //
 // The batcher is configured with background=false so batch callbacks are serialized.
 // This prevents PostgreSQL deadlocks that occur when concurrent batches lock
@@ -4678,62 +4679,53 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 		_ = txn.Rollback()
 	}()
 
-	// Delete the block_ids
-	q := `
+	deleteBlockIDs := `
 		DELETE FROM block_ids
 		WHERE transaction_id IN (
 			SELECT id FROM transactions WHERE hash = $1
 		)
 	`
-	if s.engine == "postgres" {
-		// Lock the transaction before its block references, as mining does.
-		// Keep this in the existing first statement so Delete adds no trip.
-		q = `DELETE FROM block_ids
-		WHERE transaction_id IN (
-			SELECT id FROM transactions WHERE hash = $1 FOR UPDATE
-		)`
-	}
-
-	_, err = txn.ExecContext(ctx, q, hash[:])
-	if err != nil {
-		return err
-	}
-
-	// Delete the outputs
-	q = `
+	deleteOutputs := `
 		DELETE FROM outputs
 		WHERE transaction_id IN (
 			SELECT id FROM transactions WHERE hash = $1
 		)
 	`
-
-	_, err = txn.ExecContext(ctx, q, hash[:])
-	if err != nil {
-		return err
-	}
-
-	// Delete the inputs
-	q = `
+	deleteInputs := `
 		DELETE FROM inputs
 		WHERE transaction_id IN (
 			SELECT id FROM transactions WHERE hash = $1
 		)
 	`
-
-	_, err = txn.ExecContext(ctx, q, hash[:])
-	if err != nil {
-		return err
-	}
-
-	// Delete the transaction
-	q = `
+	deleteTransaction := `
 		DELETE FROM transactions
 		WHERE hash = $1
 	`
 
-	_, err = txn.ExecContext(ctx, q, hash[:])
-	if err != nil {
-		return err
+	statements := []string{deleteBlockIDs, deleteOutputs, deleteInputs, deleteTransaction}
+
+	if s.engine == "postgres" {
+		// Postgres row locks must follow the order the other writers use, or
+		// Delete deadlocks with them and, unlike them, does not retry. Spend and
+		// Unspend lock outputs and then the transaction row (setDAH); mining
+		// locks the transaction row and then block_ids. So Delete removes the
+		// outputs and inputs first, then locks the transaction row inside the
+		// block_ids statement, then deletes the row. Same four statements.
+		statements = []string{
+			deleteOutputs,
+			deleteInputs,
+			`DELETE FROM block_ids
+			WHERE transaction_id IN (
+				SELECT id FROM transactions WHERE hash = $1 FOR UPDATE
+			)`,
+			deleteTransaction,
+		}
+	}
+
+	for _, q := range statements {
+		if _, err = txn.ExecContext(ctx, q, hash[:]); err != nil {
+			return err
+		}
 	}
 
 	// Commit the transaction
