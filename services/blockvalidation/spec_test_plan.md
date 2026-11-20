@@ -17,10 +17,10 @@ It ends with a prioritised test backlog and the test infrastructure needed to bu
 > - GAP-BV-005 (bsv-blockchain/teranode#2021)
 > - GAP-BV-020 and GAP-BV-021 (bsv-blockchain/teranode#2034)
 > - GAP-BV-029 and GAP-BV-056 (bsv-blockchain/teranode#2011)
-> - GAP-BV-043, partly (bsv-blockchain/teranode#2033, bsv-blockchain/teranode#2174): only a failed `markBlockAsInvalid` is still swallowed
+> - GAP-BV-043's original revalidation case (bsv-blockchain/teranode#2033, bsv-blockchain/teranode#2174); the entry now records the optimistic background path, where a failed `InvalidateBlock` is not retried
 > - GAP-BV-045 (bsv-blockchain/teranode#2017)
 > - GAP-BV-054 (bsv-blockchain/teranode#2012, bsv-blockchain/teranode#2035)
-> - GAP-BV-057 (bsv-blockchain/teranode#2016)
+> - GAP-BV-057, partly (bsv-blockchain/teranode#2016): a subtree with no usable copy is still skipped, as an accepted operational limit
 >
 > GAP-BV-031 and GAP-BV-055 were resolved by bsv-blockchain/teranode#1909. The coverage rows and backlog items below still describe the 2026-10-19 assessment. For a backlog item on a resolved gap, the expected result is now "passes" rather than "fails today".
 >
@@ -266,7 +266,7 @@ Status codes: **C** covered, **P** partial, **G** pins a gap, **N** none. Unless
 | COMMIT-008 | P | sweep unit tests | single-flight for (a) (GAP-BV-059); startup ordering |
 | COMMIT-009 | N | the two relevant tests are `t.Skip`'d | backoff, re-trigger, final code (GAP-BV-014) |
 | COMMIT-010 | N | quick-path option test only | non-zero `block_id` on other routes (GAP-BV-039) |
-| COMMIT-011 | G | `model/update-tx-mined_test.go` ~1396 asserts revert errors are swallowed (GAP-BV-057) | revert verified in UTXO store |
+| COMMIT-011 | P | `TestMinedTagRevertFailure_LeavesMinedSetUnsetAndSurfacesError` (bsv-blockchain/teranode#2016); `unset_mined_reload_test.go` (skipped absent or corrupt subtree) | revert verified in the UTXO store for every usable subtree |
 | COMMIT-012 | N | — | finite delete-at-height; never promoted by Block Validation |
 
 ### Revalidation and `ValidateBlock`
@@ -444,7 +444,6 @@ These should be fixed or deleted before anyone relies on them. Items marked ✓ 
 | `block_processing_retry_test.go` "unbound invalid-transaction verdict recovers via a cached alternative" | GAP-BV-044 |
 | `check_duplicate_txs_test.go`, `block_dedup_during_load_test.go` (every duplicate CORRUPT) | GAP-BV-051 |
 | `model/Block_test.go` ~603, `cheap_header_no_persist_test.go` ~345 (future-dated INVALID) | GAP-BV-050 |
-| `model/update-tx-mined_test.go` ~1396 (revert errors swallowed) | GAP-BV-057 |
 | `TestBlockValidation_RevalidateIsCalledOnHeaderError` | GAP-BV-016 |
 | `catchup_release_policy_test.go` ~65 (expects `ERR_BLOCK_ERROR` from the parent-mined wait) | GAP-BV-014 |
 
@@ -488,7 +487,7 @@ A crash point is a moment where the process can stop, or a call can fail, betwee
 | I1 | invalidation written, before tag revert | invalid block still tagged | sweep (b) if `subtrees_set` | tags reverted, `mined_set` true |
 | I2 | descendants of an invalidated block | only the root gets a notification | sweep (b) | every descendant reverted |
 | I3 | invalidation concurrent with in-flight tagging | tagging's `mined_set` write refused (generation check, bsv-blockchain/teranode#2018) | unset queued | invalid ⇒ no tags |
-| I4 | revert fails or a subtree file is missing | errors swallowed, `mined_set` set | **none** (GAP-BV-057) | invalid block with `mined_set` has no tags |
+| I4 | revert fails or a subtree file is missing | a revert error leaves `mined_set` false (bsv-blockchain/teranode#2016); a subtree with no usable copy is skipped and `mined_set` set | sweep retries a failed revert; skipped subtree needs the operator runbook (GAP-BV-057) | invalid block with `mined_set` has no tags, except those of skipped subtrees |
 | V1 | revalidation written, before re-tagging | valid, `mined_set` false | sweep (b) if `subtrees_set` | re-tagged |
 | V2 | revalidation concurrent with in-flight revert | `mined_set` write refused (bsv-blockchain/teranode#2018); `subtrees_set` can still be overwritten (GAP-BV-058) | sweep re-tags | `mined_set` ⇒ every transaction tagged |
 
@@ -520,7 +519,7 @@ The chain-reconciliation oracle in bsv-blockchain/teranode#1958 (branch `test/ch
 |---|---|---|---|
 | I-1 | `subtrees_set` and not invalid ⇒ every subtree file exists (within retention) | COMMIT-002, QUICK-021 | GAP-BV-029, 056 |
 | I-2 | `mined_set` and not invalid ⇒ every transaction carries the block ID and height | COMMIT-005 | — |
-| I-3 | invalid and `mined_set` ⇒ no transaction carries the block ID | COMMIT-011 | GAP-BV-057 |
+| I-3 | invalid and `mined_set` ⇒ no transaction carries the block ID, except transactions of a subtree with no usable copy (BV-COMMIT-011) | COMMIT-011 | GAP-BV-057 (accepted limit) |
 | I-4 | not `subtrees_set` (full-validation route) ⇒ no transaction carries the block ID | COMMIT-004 | — |
 | I-5 | `mined_set` ⇒ `subtrees_set` (except pre-assigned-ID blocks) | COMMIT-004, 005 | — |
 | I-6 | no block awaits mined-tagging; only blocks with a missing file await `subtrees_set` | COMMIT-008, NFR-004 | sweep failures |
@@ -579,7 +578,7 @@ Priorities: **P0** catches a consensus divergence, data loss or state corruption
 |---|---|---|---|---|---|
 | 20 | P0 | property + fail-point | Sweep convergence generator | random fault step (AddBlock, `subtrees_set`, `SetMinedMulti` batch k, `mined_set`, invalidate, revalidate) × kill position × restart; after two intervals all section 8 invariants hold. Covers N3, N5, N10, N14, I1, V1 | COMMIT-*, NFR-004 |
 | 21 | P0 | race | Invalidate or revalidate vs in-flight tagging (mined_set part fixed by bsv-blockchain/teranode#2018; regression `TestGapBV058_*`; subtrees_set part open, GAP-BV-058) | block tagging inside the store; invalidate; release. Invalid ⇒ no tags; revalidated ⇒ `mined_set` implies tags | COMMIT-011, REVALIDATE-003 |
-| 22 | P0 | fail-point | Revert failure (fails today, GAP-BV-057) | `SetMinedMulti` fails during revert ⇒ `mined_set` stays false and the sweep retries | COMMIT-011 |
+| 22 | P0 | fail-point | Revert failure (passes since bsv-blockchain/teranode#2016) | `SetMinedMulti` fails during revert ⇒ `mined_set` stays false and the sweep retries | COMMIT-011 |
 | 23 | P0 | fail-point | Optimistic restart (fails today, GAP-BV-013) | optimistic add, crash before background validation, restart; block is not marked until validated | OPTIMISTIC-008 |
 | 24 | P0 | e2e | Optimistic mining end to end | daemon with both optimistic flags true: a peer block that fails in the background (double spend, floater, bad merkle) is reorged out, tags reverted, notification published | OPTIMISTIC-005–007 |
 | 25 | P0 | fail-point | `subtrees_set` fails or notification lost (first fails today, GAP-BV-015) | caller gets success; the sweep tags | COMMIT-003, 004 |
@@ -732,7 +731,7 @@ Each was confirmed by reading the code, and is now recorded in the spec's Confor
 | GAP-BV-054 | The priority-queue workers, the catchup consumer and the Kafka handler goroutine have no panic recovery. A panic on any of them terminates the node. Resolved by bsv-blockchain/teranode#2012. | High |
 | GAP-BV-055 | The chained create wave of quick validation can be cancelled while a store call is in flight. Resolved by bsv-blockchain/teranode#1909 after this assessment. | Medium |
 | GAP-BV-056 | On the quick route, an error after `AddBlock` (e.g. unlock fails) deletes the committed block's subtree files and leaves its outputs locked. Resolved by bsv-blockchain/teranode#2011. | High |
-| GAP-BV-057 | Errors while reverting an invalid block's mined tags are swallowed, and `mined_set` is set anyway, so stale tags are never revisited. Resolved by bsv-blockchain/teranode#2016. | High |
+| GAP-BV-057 | Errors while reverting an invalid block's mined tags are swallowed, and `mined_set` is set anyway, so stale tags are never revisited. Partly resolved by bsv-blockchain/teranode#2016; a subtree with no usable copy is still skipped (accepted, with an operator runbook). | High |
 | GAP-BV-058 | Partly resolved by bsv-blockchain/teranode#2018: `SetBlockMinedSet` is now generation-checked (regression `TestGapBV058_*`). `SetBlockSubtreesSet` is still an unconditional update. | Medium |
 | GAP-BV-059 | The subtrees sweep is not single-flight, unlike the mined sweep. | Low |
 | GAP-BV-060 | On the default non-optimistic path, a contextual header failure (median time past, version floor) is not published as an invalid-block notification, so the peer is never struck. Found in review; proven by `TestKnownDefect_HeaderFinalVerdict_PublishesInvalidBlockNotification`. | Medium |

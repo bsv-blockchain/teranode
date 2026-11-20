@@ -307,7 +307,7 @@ Each pass SHALL be single-flight.
 
 **BV-COMMIT-010.** A quick-validated block is inserted with `mined_set` already true (BV-QUICK-020), because quick validation has stamped its transactions; mined-tagging is not run for it. Any other block MUST go through mined-tagging (BV-COMMIT-005), whether or not its ID was supplied by the caller or reserved earlier.
 
-**BV-COMMIT-011.** When a block is invalidated, the mined tags of its transactions SHALL be reverted in the UTXO store, after which `mined_set` is set for the block.
+**BV-COMMIT-011.** When a block is invalidated, the mined tags of its transactions SHALL be reverted in the UTXO store, after which `mined_set` is set for the block. A subtree with no usable copy (absent, pruned or corrupt) cannot be reverted and SHALL be skipped, with an `ERROR` log containing `manual_intervention_required`; its transactions keep the invalid block's ID under `mined_set = true`. The operator procedure is in `docs/topics/services/blockValidation.md`, "Unusable Subtree Files When Reverting an Invalid Block". A read failure a retry might clear MUST NOT be skipped: the revert MUST fail, leaving `mined_set` false.
 
 **BV-COMMIT-012.** Subtree files written by this service MUST carry a finite delete-at-height. Promotion to permanent retention is the Block Persister's responsibility and MUST NOT be performed by Block Validation.
 
@@ -411,7 +411,7 @@ A breaker MUST always be able to return to closed.
 
 **BV-CATCHUP-029.** On the netted route (heights at or below the highest checkpoint where the UTXO store writes blocks that only quick validation may validate, `model.NettedRouteAt`), a fork whose first block is on that route MUST be refused before any block is fetched and before `mined_set` is cleared, and charged to the peer as an invalid response. A fork rejected by BV-CATCHUP-011 on that route SHALL be refused this way instead, so the peer is rotated.
 
-**BV-CATCHUP-030.** When the header fetch reached the announced block and the offered chain carries less cumulative work than the local tip, the catchup SHALL end as a no-op before any block is fetched or `mined_set` is cleared, and MUST charge no peer. A chain with equal work SHALL still be fetched. A fetch that stopped on a cap before the announced block MUST NOT be weighed this way.
+**BV-CATCHUP-030.** When the header fetch reached the announced block, and an offered chain that has passed BV-CATCHUP-011, BV-CATCHUP-012 and BV-CATCHUP-029 carries less cumulative work than the local tip, the catchup SHALL end as a no-op before any block is fetched or `mined_set` is cleared, and MUST charge no peer. A chain with equal work SHALL still be fetched. A fetch that stopped on a cap before the announced block MUST NOT be weighed this way.
 
 ### Quick Validation Contract (`BV-QUICK-NNN`)
 
@@ -1397,13 +1397,11 @@ Effective priority is recomputed only when the queue is re-sorted, and a re-sort
 The invalid-block producer close is raced against the stop context, but the block consumer's `Close()` is not; it is bounded only by the consumer's internal drain timeout (`Server.go` ~1323; `util/kafka/kafka_consumer.go` ~198-229). Not fully confirmed: the internal bound may be short enough in practice.
 *Work required:* race the consumer close against the stop context as well.
 
-**GAP-BV-043.** Internal revalidation leaves a block on the chain after an INVALID ancestor verdict. **Partly resolved** by bsv-blockchain/teranode#2033 and bsv-blockchain/teranode#2174.
-*Affects:* BV-OPTIMISTIC-005, BV-VERDICT-009.
-The internal revalidation path ends by returning the ancestor-membership check's result without acting on it (`BlockValidation.go` ~3447). An INVALID verdict from that check is retried 3 times (~856), then logged as "retries exhausted". An optimistically added block found invalid this way stays on the chain, and nothing is published. Verified by reading the code.
-*Work required:* invalidate and publish on an INVALID verdict from that check, as the other branches of the same function do.
-*Resolved part:* bsv-blockchain/teranode#2033 invalidates and publishes on an INVALID ancestor verdict, and bsv-blockchain/teranode#2174 removed its main-chain condition (`ancestorVerdictIsSound`): `reValidateBlock` now acts on the verdict whichever chain the parent is on, because `checkOldBlockIDs` asks whether a parent's block is an ancestor of this block. Regression tests: `TestReValidateBlock_InvalidAncestorVerdictInvalidatesAndPublishes` and the other `TestReValidateBlock_InvalidAncestorVerdict*` tests.
-*Still open:* a failed `markBlockAsInvalid` is only logged (`BlockValidation.go` `reValidateBlock`, the `checkOldBlockIDs` branch), so a storage error is swallowed and the block stays on the chain with no notification.
-*Work required (remaining):* return a failed `markBlockAsInvalid` to the caller, so the worker retries.
+**GAP-BV-043.** The optimistic background path leaves a block on the chain when invalidating it fails.
+*Affects:* BV-OPTIMISTIC-005.
+On the optimistic background path, an INVALID verdict from the ancestor-membership check (`checkOldBlockIDs`) calls `InvalidateBlock`. If that call fails, the goroutine only logs and returns: nothing re-queues the block (`BlockValidation.go`, the optimistic `checkOldBlockIDs` branch; the comment on the subtrees sweep says so). A block already judged invalid stays on the chain at `invalid = false`, and the subtrees sweep later sets `subtrees_set` on it. (That this branch also publishes nothing is GAP-BV-012.)
+*Work required:* retry or re-queue the block when that `InvalidateBlock` call fails.
+*Resolved earlier versions of this gap:* the internal revalidation path once returned an INVALID ancestor verdict without acting on it. bsv-blockchain/teranode#2033 made it invalidate and publish, and bsv-blockchain/teranode#2174 removed its main-chain condition. A failed `markBlockAsInvalid` there is not swallowed: it publishes before calling `InvalidateBlock`, `reValidateBlock` returns `ERR_BLOCK_INVALID` either way, and `processRevalidation` retries. Regression tests: the `TestReValidateBlock_InvalidAncestorVerdict*` tests.
 
 **GAP-BV-044.** Catchup tries alternatives after an INVALID verdict on an unbound transaction list.
 *Affects:* BV-PEER-005.
@@ -1478,11 +1476,12 @@ The create-only wave called `SpendAndCreate` directly under the errgroup context
 *Work required:* treat any error after `AddBlock` as post-commit: never delete the block's files, and retry the unlock.
 *Resolved:* fixed by bsv-blockchain/teranode#2011; regression test: the `TestGapBV056_*` suite. The text above describes the behaviour before the fix.
 
-**GAP-BV-057.** Revert failures are swallowed and `mined_set` is still set. **Resolved** by bsv-blockchain/teranode#2016.
+**GAP-BV-057.** Revert failures are swallowed and `mined_set` is still set. **Partly resolved** by bsv-blockchain/teranode#2016.
 *Affects:* BV-COMMIT-011.
 When reverting an invalid block's mined tags, `UpdateTxMinedStatus` logs `SetMinedMulti` errors and coverage gaps and returns success (`model/update-tx-mined.go` ~424-427), and missing subtrees are skipped. The caller then sets `mined_set`, so the block is never revisited and its transactions can keep stale tags. `model/update-tx-mined_test.go` ~1396 pins the swallowing. Verified by reading the code.
 *Work required:* return the error on the revert path, so `mined_set` stays false and the sweep retries.
-*Resolved:* fixed by bsv-blockchain/teranode#2016; regression test: `TestMinedTagRevertFailure_LeavesMinedSetUnsetAndSurfacesError`. The text above describes the behaviour before the fix.
+*Resolved part:* bsv-blockchain/teranode#2016 returns `SetMinedMulti` errors and coverage gaps on the revert path, so `mined_set` stays false and the sweep retries; regression test: `TestMinedTagRevertFailure_LeavesMinedSetUnsetAndSurfacesError`.
+*Still open, accepted as an operational limit:* a subtree with no usable copy is still skipped. `reloadSubtreeForInvalidBlock` returns nil for an absent subtree (kept by #2016) and, since bsv-blockchain/teranode#2213, for one with no usable copy; the revert skips it (`model/update-tx-mined.go`, the `unsetMined` missing-subtree branch) and `SetBlockMinedSet` still runs, so those transactions keep the invalid block's ID under `mined_set = true`. `unset_mined_reload_test.go` pins this. BV-COMMIT-011 now states the exception, and the runbook in `docs/topics/services/blockValidation.md` covers recovery.
 
 **GAP-BV-058.** Flag updates are unconditional and can overwrite an invalidation or revalidation. **Partly resolved** by bsv-blockchain/teranode#2018.
 *Affects:* BV-COMMIT-005, BV-COMMIT-011, BV-REVALIDATE-003.
