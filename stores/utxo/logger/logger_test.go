@@ -81,7 +81,7 @@ func (m *MockStore) Close(ctx context.Context) error {
 
 func (m *MockStore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpointOnlySpendResult }
 func (m *MockStore) SupportsCreateFirst() bool       { return false }
-func (m *MockStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
+func (m *MockStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
 	return nil
 }
 func (m *MockStore) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
@@ -1445,7 +1445,7 @@ func TestLoggerStore_CreateFirstDelegates(t *testing.T) {
 	ctx := context.Background()
 
 	require.False(t, store.SupportsCreateFirst())
-	require.NoError(t, store.FinalizeTransaction(ctx, &bt.Tx{}, nil))
+	require.NoError(t, store.FinalizeTransaction(ctx, &bt.Tx{}, nil, nil))
 
 	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)
 	require.NoError(t, err)

@@ -1325,8 +1325,8 @@ func (t *TxMetaCache) SupportsCreateFirst() bool { return t.utxoStore.SupportsCr
 
 // FinalizeTransaction delegates and invalidates the cached meta so a stale
 // Creating=true entry cannot be served after the flag is cleared.
-func (t *TxMetaCache) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
-	err := t.utxoStore.FinalizeTransaction(ctx, tx, attempt)
+func (t *TxMetaCache) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
+	err := t.utxoStore.FinalizeTransaction(ctx, tx, attempt, lease)
 	if err != nil && !utxo.IsAlreadyFinal(err) {
 		return err
 	}

@@ -427,7 +427,7 @@ type finalizeAnswerStore struct {
 	calls int
 }
 
-func (s *finalizeAnswerStore) FinalizeTransaction(_ context.Context, _ *bt.Tx, _ []byte) error {
+func (s *finalizeAnswerStore) FinalizeTransaction(_ context.Context, _ *bt.Tx, _, _ []byte) error {
 	s.calls++
 
 	return s.err
@@ -476,7 +476,7 @@ func TestTxMetaCache_FinalizeTransaction_EvictsWhenTheRecordIsFinal(t *testing.T
 		_, found := cache.GetMetaCached(ctx, hash)
 		require.True(t, found, "%s: precondition: the entry is in the cache", name)
 
-		got := cache.FinalizeTransaction(ctx, tx, []byte{1})
+		got := cache.FinalizeTransaction(ctx, tx, []byte{1}, []byte{1})
 		require.Equal(t, 1, answering.calls, name)
 
 		if tc.answer == nil {

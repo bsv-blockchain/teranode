@@ -177,7 +177,7 @@ func TestBeginCreateFirstRollback(t *testing.T) {
 
 		_, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
 		require.NoError(t, err)
-		require.NoError(t, store.FinalizeTransaction(ctx, child, attemptOf(t, ctx, store, child.TxIDChainHash())))
+		require.NoError(t, store.FinalizeTransaction(ctx, child, attemptOf(t, ctx, store, child.TxIDChainHash()), attemptOf(t, ctx, store, child.TxIDChainHash())))
 
 		began, err := beginAsCreator(ctx, store, hash, attemptOf(t, ctx, store, hash))
 		require.NoError(t, err)
@@ -405,7 +405,7 @@ func TestRollbackHold(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, took)
 
-		require.ErrorIs(t, store.FinalizeTransaction(ctx, child, old), errors.ErrTxNotFound, "a stale roll-forward cannot finalize the adopted record")
+		require.ErrorIs(t, store.FinalizeTransaction(ctx, child, old, old), errors.ErrTxNotFound, "a stale roll-forward cannot finalize the adopted record")
 
 		_, _, err = utxo.RollForwardCreating(ctx, logger, store, child, old, 102)
 		require.ErrorIs(t, err, errors.ErrProcessing, "the fence refuses a roll-forward that read an earlier attempt")
@@ -802,7 +802,7 @@ func TestSpendLease(t *testing.T) {
 
 		md, err := store.Create(ctx, final, 101, utxo.WithCreating(true))
 		require.NoError(t, err)
-		require.NoError(t, store.FinalizeTransaction(ctx, final, md.Attempt))
+		require.NoError(t, store.FinalizeTransaction(ctx, final, md.Attempt, md.Attempt))
 		require.NotContains(t, recordBins(t, client, store, final.TxIDChainHash(), 0, fields.Spenders), fields.Spenders.String(), "the finalize removes the leases with the creating state")
 
 		_, took, err = store.TakeSpendLease(ctx, final.TxIDChainHash(), md.Attempt)
@@ -1082,4 +1082,116 @@ func TestSpendBesideAHold_PartialSpendIsReversed(t *testing.T) {
 
 	requireHeld(t, ctx, store, hash)
 	require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Busy), fields.Busy.String(), "the store released the hold after its rollback")
+}
+
+// TestSpendBesideABusyHold_PartialSpendWaitsForTheHold covers a spend-first spend that takes one
+// input and fails on another while the hold of a rollback at its txid is taken. The store must
+// not give up at the refused take: the hold expires, and the input would then name a txid with no
+// record and nothing left to reverse it. It waits for the hold and reverts under it.
+func TestSpendBesideABusyHold_PartialSpendWaitsForTheHold(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UseCreateFirstOrder = false
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	winner := spendableChildTx(t, tests.ParentTx, 1)
+	_, err = store.Spend(ctx, winner, 101, utxo.IgnoreFlags{SkipUTXOHashCheck: true})
+	require.NoError(t, err)
+
+	loser := spendableChildTx(t, tests.ParentTx, 1)
+	require.NoError(t, loser.From(
+		tests.ParentTx.TxIDChainHash().String(), 2,
+		tests.ParentTx.Outputs[2].LockingScript.String(),
+		tests.ParentTx.Outputs[2].Satoshis,
+	))
+	loser.Version = 55
+	hash := loser.TxIDChainHash()
+
+	inputs, err := utxo.GetSpends(loser)
+	require.NoError(t, err)
+
+	attempt := rolledBackHold(t, ctx, store, loser)
+
+	// Another actor holds the hold, as the owner of the rollback or its cleanup does.
+	took, err := store.TakeRollbackHold(ctx, hash, attempt)
+	require.NoError(t, err)
+	require.True(t, took)
+
+	const held = 400 * time.Millisecond
+
+	released := make(chan error, 1)
+
+	go func() {
+		time.Sleep(held)
+
+		released <- store.ReleaseRollbackHold(ctx, hash, attempt)
+	}()
+
+	start := time.Now()
+
+	_, _, err = store.SpendAndCreate(ctx, loser, 102)
+	require.ErrorIs(t, err, errors.ErrSpent, "the spend fails on the input the rival took")
+	require.NoError(t, <-released)
+	require.GreaterOrEqual(t, time.Since(start), held, "the store waited for the hold")
+
+	resp, err := store.GetSpend(ctx, inputs[1])
+	require.NoError(t, err)
+	require.Nil(t, resp.SpendingData, "the free input must not stay spent by a txid that is only a hold")
+
+	resp, err = store.GetSpend(ctx, inputs[0])
+	require.NoError(t, err)
+	require.NotNil(t, resp.SpendingData)
+	require.Equal(t, winner.TxIDChainHash().String(), resp.SpendingData.TxID.String(), "the rival's spend is intact")
+
+	requireHeld(t, ctx, store, hash)
+	require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Busy), fields.Busy.String(), "the store released the hold after its rollback")
+}
+
+// TestDeleteComplete_RefusedWhileASpendLeaseIsLive covers the shed unwind of a creator beside a
+// roll-forward that took a lease while the record was creating. The creator's finalize leaves that
+// lease on the record, and the delete is refused while it is live: the roll-forward may still spend
+// the inputs, and an unspend that followed the delete would leave that spend naming nothing.
+func TestDeleteComplete_RefusedWhileASpendLeaseIsLive(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	child := spendableChildTx(t, tests.ParentTx, 0)
+	hash := child.TxIDChainHash()
+
+	md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	lease, took, err := store.TakeSpendLease(ctx, hash, md.Attempt)
+	require.NoError(t, err)
+	require.True(t, took)
+
+	require.NoError(t, store.FinalizeTransaction(ctx, child, md.Attempt, md.Attempt), "the creator owns the record")
+
+	err = store.DeleteComplete(ctx, hash)
+	require.Error(t, err, "a spender still holds a lease")
+	require.Contains(t, err.Error(), "live spend lease")
+
+	got := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, hash, got), "the record is left in place")
+
+	_, taken, err := store.TakeSpendLease(ctx, hash, md.Attempt)
+	require.NoError(t, err)
+	require.False(t, taken, "no spender starts on a record that is final, so none can start after the delete")
+
+	require.NoError(t, store.ReleaseSpendLease(ctx, hash, md.Attempt, lease))
+	require.NoError(t, store.DeleteComplete(ctx, hash))
+	require.ErrorIs(t, store.GetMeta(ctx, hash, got), errors.ErrTxNotFound)
 }

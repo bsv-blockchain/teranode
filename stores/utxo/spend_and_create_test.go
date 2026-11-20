@@ -42,6 +42,9 @@ type fakeSequentialStore struct {
 	// existingSeq is popped once per GetMeta call; existing applies when exhausted.
 	existingSeq []meta.Data
 	getMetaErr  error
+	// getMetaErrs is popped once per GetMeta call, and a nil entry lets the call answer from
+	// existingSeq or existing; getMetaErr applies when exhausted.
+	getMetaErrs []error
 	// unspendErrs is popped once per Unspend call; nil result when exhausted.
 	unspendErrs []error
 	// createErrs is popped once per Create call; createErr applies when exhausted.
@@ -83,6 +86,7 @@ type fakeSequentialStore struct {
 	clearCalls     int
 	clearAdopt     []bool
 	finalizeTokens [][]byte
+	finalizeLeases [][]byte
 	beginTokens    [][]byte
 	endTokens      [][]byte
 	leaseTokens    [][]byte
@@ -179,9 +183,10 @@ func TestSequentialSpendAndCreateRejectsInvalidPositionBeforeSpending(t *testing
 
 func (b *boundedSequentialStore) SpendRollbackTimeout() time.Duration { return b.bound }
 
-func (f *fakeSequentialStore) FinalizeTransaction(_ context.Context, _ *bt.Tx, attempt []byte) error {
+func (f *fakeSequentialStore) FinalizeTransaction(_ context.Context, _ *bt.Tx, attempt, lease []byte) error {
 	f.finalizeCalls++
 	f.finalizeTokens = append(f.finalizeTokens, attempt)
+	f.finalizeLeases = append(f.finalizeLeases, lease)
 	f.callSeq = append(f.callSeq, "finalize")
 
 	if len(f.finalizeErrs) > 0 {
@@ -330,7 +335,14 @@ func (f *fakeSequentialStore) BeginCreateFirstRollback(_ context.Context, _ *cha
 func (f *fakeSequentialStore) GetMeta(_ context.Context, _ *chainhash.Hash, data *meta.Data) error {
 	f.callSeq = append(f.callSeq, "getmeta")
 
-	if f.getMetaErr != nil {
+	if len(f.getMetaErrs) > 0 {
+		err := f.getMetaErrs[0]
+		f.getMetaErrs = f.getMetaErrs[1:]
+
+		if err != nil {
+			return err
+		}
+	} else if f.getMetaErr != nil {
 		return f.getMetaErr
 	}
 
@@ -550,14 +562,16 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.NoError(t, err)
 		require.Same(t, f.createMeta, md)
 		require.Equal(t, second, spends, "the spends in effect are those made after the hold was gone")
-		require.Equal(t, []string{"spend", "create", "getmeta", "clear", "spend", "create"}, f.callSeq,
+		require.Equal(t, []string{"spend", "create", "getmeta", "getmeta", "clear", "spend", "create"}, f.callSeq,
 			"the rollback of the hold's attempt may have reversed the first spends, so the record is never created over them")
 		require.Equal(t, []bool{false}, f.clearAdopt, "outside block context only an expired hold goes")
 		require.Equal(t, 0, f.unspendCalls)
 		require.Equal(t, 0, f.takeCalls)
 	})
 
-	t.Run("a second spend that fails after the hold was cleared is returned like any failed spend", func(t *testing.T) {
+	t.Run("a second spend that fails after the hold was cleared is returned, and the first spends are reversed", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+
 		f := &fakeSequentialStore{
 			spends:      []*Spend{{}},
 			spendErrs:   []error{nil, errors.NewUtxoError("taken meanwhile")},
@@ -570,7 +584,8 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.ErrorIs(t, err, errors.ErrUtxoError)
 		require.Nil(t, md)
 		require.Len(t, spends, 1)
-		require.Equal(t, []string{"spend", "create", "getmeta", "clear", "spend"}, f.callSeq)
+		require.Equal(t, []string{"spend", "create", "getmeta", "getmeta", "clear", "spend", "getmeta", "take", "unspend", "release"}, f.callSeq,
+			"a hold is at the txid again, so the spends of the first round are reversed under it")
 	})
 
 	t.Run("create over a hold that stands reverses the spends under the hold and is a retryable error", func(t *testing.T) {
@@ -590,7 +605,7 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 			require.NotErrorIs(t, err, errors.ErrTxExists, "%s: a hold is not a duplicate: the caller must not treat the tx as stored", name)
 			require.Nil(t, md, name)
 			require.Nil(t, spends, "%s: the spends were reversed, so none is in effect", name)
-			require.Equal(t, []string{"spend", "create", "getmeta", "clear", "take", "unspend", "release"}, f.callSeq,
+			require.Equal(t, []string{"spend", "create", "getmeta", "getmeta", "clear", "take", "unspend", "release"}, f.callSeq,
 				"%s: the reversal runs only while the call holds the hold, which no create can adopt", name)
 			require.Equal(t, [][]byte{{7}}, f.takeTokens, "%s: the hold taken is that of the attempt the record carries", name)
 			require.Equal(t, f.spends, f.unspentWith, name)
@@ -614,7 +629,7 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 			require.NotErrorIs(t, err, errors.ErrTxExists, "%s: a record that is being rolled back is not a stored transaction", name)
 			require.Nil(t, md, name)
 			require.Nil(t, spends, "%s: the rollback reverses the inputs only once, so this call reverses its own spends", name)
-			require.Equal(t, []string{"spend", "create", "getmeta", "take", "unspend", "release"}, f.callSeq, name)
+			require.Equal(t, []string{"spend", "create", "getmeta", "getmeta", "take", "unspend", "release"}, f.callSeq, name)
 			require.Equal(t, [][]byte{{8}}, f.takeTokens, name)
 			require.Equal(t, f.spends, f.unspentWith, name)
 			require.Equal(t, 0, f.clearCalls, "%s: a record that is not a hold is not cleared", name)
@@ -634,7 +649,7 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.NotErrorIs(t, err, errors.ErrTxExists)
 		require.Contains(t, err.Error(), "take boom")
 		require.Len(t, spends, 1, "without the hold a reversal could clear the spends of a create that adopted it")
-		require.Equal(t, []string{"spend", "create", "getmeta", "clear", "take"}, f.callSeq)
+		require.Equal(t, []string{"spend", "create", "getmeta", "getmeta", "clear", "take"}, f.callSeq)
 		require.Equal(t, 0, f.unspendCalls)
 		require.Equal(t, 0, f.releaseCalls)
 	})
@@ -658,10 +673,10 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.NotErrorIs(t, err, errors.ErrTxExists)
 		require.Contains(t, err.Error(), "u3")
 		require.Len(t, spends, 1, "the spends are still in effect")
-		require.Equal(t, []string{"spend", "create", "getmeta", "clear", "take", "unspend", "unspend", "unspend", "release"}, f.callSeq)
+		require.Equal(t, []string{"spend", "create", "getmeta", "getmeta", "clear", "take", "unspend", "unspend", "unspend", "release"}, f.callSeq)
 	})
 
-	t.Run("a take that is refused waits, runs the spend and the create again, and reverses once the hold is free", func(t *testing.T) {
+	t.Run("a take that is refused waits at the record, spends nothing more, and reverses once the hold is free", func(t *testing.T) {
 		f := &fakeSequentialStore{
 			spends:    []*Spend{{}},
 			createErr: errors.NewTxExistsError("held"),
@@ -673,10 +688,11 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.ErrorIs(t, err, errors.ErrProcessing)
 		require.Nil(t, spends)
 		require.Equal(t, []string{
-			"spend", "create", "getmeta", "take",
-			"spend", "create", "getmeta", "take",
-			"spend", "create", "getmeta", "take", "unspend", "release",
-		}, f.callSeq, "while the owner of the rollback is busy nothing is reversed")
+			"spend", "create", "getmeta",
+			"getmeta", "take",
+			"getmeta", "take",
+			"getmeta", "take", "unspend", "release",
+		}, f.callSeq, "while the owner of the rollback is busy nothing is reversed, and no round spends again")
 	})
 
 	t.Run("a take that is refused and then finds the record gone creates over the spends it has just made again", func(t *testing.T) {
@@ -686,13 +702,15 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 			createMeta: &meta.Data{},
 			existing:   meta.Data{Creating: true, RollingBack: true, Hold: true},
 			takeSeq:    []bool{false},
+			// The record is there for the two reads before the take, and gone for the one after it.
+			getMetaErrs: []error{nil, nil, errors.NewTxNotFoundError("the hold expired")},
 		}
 
 		md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, false)
 		require.NoError(t, err)
 		require.Same(t, f.createMeta, md)
 		require.Len(t, spends, 1)
-		require.Equal(t, []string{"spend", "create", "getmeta", "clear", "take", "spend", "create"}, f.callSeq)
+		require.Equal(t, []string{"spend", "create", "getmeta", "getmeta", "clear", "take", "getmeta", "spend", "create"}, f.callSeq)
 		require.Equal(t, 0, f.unspendCalls)
 	})
 
@@ -711,7 +729,7 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.ErrorIs(t, err, errors.ErrProcessing)
 		require.NotErrorIs(t, err, errors.ErrTxExists)
 		require.Len(t, spends, 1)
-		require.Equal(t, []string{"spend", "create", "getmeta", "take"}, f.callSeq)
+		require.Equal(t, []string{"spend", "create", "getmeta", "getmeta", "take"}, f.callSeq)
 		require.Equal(t, 0, f.unspendCalls)
 	})
 
@@ -739,7 +757,7 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		}
 	})
 
-	t.Run("a refused take is retried until the rollback bound and then the spends are kept", func(t *testing.T) {
+	t.Run("a refused take is retried until twice the rollback bound and then the spends are kept", func(t *testing.T) {
 		f := &boundedSequentialStore{
 			fakeSequentialStore: fakeSequentialStore{
 				spends:       []*Spend{{}},
@@ -756,9 +774,64 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.Len(t, spends, 1)
 		require.Less(t, time.Since(start), 5*time.Second)
 		require.Greater(t, f.takeCalls, 1, "the take is tried again while the bound lasts")
-		require.Equal(t, f.takeCalls+1, f.spendCalls, "every round runs the spend again, and the last one stops before its take")
+		require.Equal(t, 1, f.spendCalls, "the call waits at the record and does not spend again")
 		require.Equal(t, 0, f.unspendCalls)
-		require.Equal(t, "getmeta", f.callSeq[len(f.callSeq)-1])
+		require.Equal(t, "take", f.callSeq[len(f.callSeq)-1])
+	})
+
+	t.Run("a spend that fails in a later round reverses the spends of the earlier round", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+
+		earlier := []*Spend{{Vout: 0}, {Vout: 1}}
+		spendErr := errors.NewStorageError("the spend of the second round failed")
+
+		// No record is left at the txid: the earlier spends name nothing and are reversed at once.
+		gone := &fakeSequentialStore{
+			spendsSeq:   [][]*Spend{earlier, {{Vout: 0}}},
+			spendErrs:   []error{nil, spendErr},
+			createErr:   errors.NewTxExistsError("held"),
+			existing:    meta.Data{Creating: true, RollingBack: true, Hold: true},
+			clearResult: true,
+			getMetaErrs: []error{nil, nil, errors.NewTxNotFoundError("no record")},
+		}
+
+		md, spends, err := SequentialSpendAndCreate(ctx, logger, gone, tx, 100, false)
+		require.ErrorIs(t, err, spendErr)
+		require.Nil(t, md)
+		require.Len(t, spends, 1, "the spends of the failed round are returned for the caller to classify")
+		require.Equal(t, []string{"spend", "create", "getmeta", "getmeta", "clear", "spend", "getmeta", "unspend"}, gone.callSeq)
+		require.Equal(t, earlier, gone.unspentWith, "the store's own rollback covers only the inputs the failed spend took")
+
+		// The record of a rollback is back at the txid: they are reversed under its hold.
+		back := &fakeSequentialStore{
+			spendsSeq:   [][]*Spend{earlier, {{Vout: 0}}},
+			spendErrs:   []error{nil, spendErr},
+			createErr:   errors.NewTxExistsError("held"),
+			existingSeq: []meta.Data{{Creating: true, RollingBack: true, Hold: true}, {Creating: true, RollingBack: true, Hold: true}},
+			existing:    meta.Data{Creating: true, RollingBack: true, Attempt: []byte{6}},
+			clearResult: true,
+		}
+
+		_, _, err = SequentialSpendAndCreate(ctx, logger, back, tx, 100, false)
+		require.ErrorIs(t, err, spendErr)
+		require.Equal(t, []string{"spend", "create", "getmeta", "getmeta", "clear", "spend", "getmeta", "take", "unspend", "release"}, back.callSeq)
+		require.Equal(t, [][]byte{{6}}, back.takeTokens)
+		require.Equal(t, earlier, back.unspentWith)
+
+		// A record of a later attempt owns the spends of its txid: they stay.
+		replaced := &fakeSequentialStore{
+			spendsSeq:   [][]*Spend{earlier, {{Vout: 0}}},
+			spendErrs:   []error{nil, spendErr},
+			createErr:   errors.NewTxExistsError("held"),
+			existingSeq: []meta.Data{{Creating: true, RollingBack: true, Hold: true}, {Creating: true, RollingBack: true, Hold: true}},
+			existing:    meta.Data{},
+			clearResult: true,
+		}
+
+		_, _, err = SequentialSpendAndCreate(ctx, logger, replaced, tx, 100, false)
+		require.ErrorIs(t, err, spendErr)
+		require.Equal(t, 0, replaced.unspendCalls)
+		require.Equal(t, 0, replaced.takeCalls)
 	})
 
 	t.Run("create over a hold adopts it in block context only", func(t *testing.T) {
@@ -960,6 +1033,8 @@ type fakeRollForwarder struct {
 	spends        []*Spend
 	spendErr      error
 	finalizeErr   error
+	finalizeErrs  []error
+	finalizeLease []byte
 	finalizeCalls int
 	lastOpts      CreateOptions
 	spendCalls    int
@@ -1033,11 +1108,19 @@ func (f *fakeRollForwarder) SpendAndCreate(ctx context.Context, _ *bt.Tx, _ uint
 	return nil, f.spends, f.spendErr
 }
 
-func (f *fakeRollForwarder) FinalizeTransaction(ctx context.Context, _ *bt.Tx, attempt []byte) error {
+func (f *fakeRollForwarder) FinalizeTransaction(ctx context.Context, _ *bt.Tx, attempt, lease []byte) error {
 	f.finalizeDeadline, _ = ctx.Deadline()
 	f.finalizeCalls++
 	f.finalizeToken = attempt
+	f.finalizeLease = lease
 	f.callSeq = append(f.callSeq, "finalize")
+
+	if len(f.finalizeErrs) > 0 {
+		err := f.finalizeErrs[0]
+		f.finalizeErrs = f.finalizeErrs[1:]
+
+		return err
+	}
 
 	return f.finalizeErr
 }
@@ -1165,24 +1248,33 @@ func TestRollForwardCreating(t *testing.T) {
 		require.NoError(t, err, "the record is complete, so this is not a failure")
 		require.False(t, completed, "another actor's finalize completed the record and owns its hand-off")
 		require.Equal(t, lost.spends, spends)
-		require.Equal(t, []string{"lease", "spend", "finalize"}, lost.callSeq, "the finalize removed the leases, so none is released")
-
-		inDoubt := &fakeRollForwarder{spends: []*Spend{{}, {}}, finalizeErr: MarkFinalInDoubt(errors.NewTxExistsError("final, sent more than once"))}
-
-		spends, completed, err = RollForwardCreating(ctx, ulogger.TestLogger{}, inDoubt, tx, []byte{1}, 100)
-		require.NoError(t, err)
-		require.True(t, completed, "an earlier send of this finalize may be the write that completed the record, so the hand-off is not dropped")
-		require.Equal(t, inDoubt.spends, spends)
-		require.Equal(t, []string{"lease", "spend", "finalize"}, inDoubt.callSeq)
+		require.Equal(t, []string{"lease", "spend", "finalize", "unlease"}, lost.callSeq, "a finalize removes only the lease of its caller, so the loser releases its own")
 	})
 
-	t.Run("a finalize failure releases the lease, returns the spends and leaves them in place", func(t *testing.T) {
+	t.Run("the finalize names the lease of the roll-forward, and a try that failed is repeated under it", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+
+		f := &fakeRollForwarder{spends: []*Spend{{}, {}}, finalizeErrs: []error{errors.NewStorageError("answer lost")}}
+
+		spends, completed, err := RollForwardCreating(ctx, ulogger.TestLogger{}, f, tx, []byte{1}, 100)
+		require.NoError(t, err)
+		require.True(t, completed, "the store tells the repeat whether its own write cleared the state, so a lost answer does not lose the hand-off")
+		require.Equal(t, f.spends, spends)
+		require.Equal(t, []string{"lease", "spend", "finalize", "finalize"}, f.callSeq)
+		require.NotEmpty(t, f.finalizeLease)
+		require.Equal(t, fakeLease, f.finalizeLease, "the store records this lease as the caller of the write")
+		require.NotEqual(t, []byte{1}, f.finalizeLease, "the lease of a roll-forward is not the attempt token")
+	})
+
+	t.Run("a finalize that fails on every try releases the lease, returns the spends and leaves them in place", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+
 		f := &fakeRollForwarder{spends: []*Spend{{}, {}}, finalizeErr: errors.NewStorageError("finalize boom")}
 
 		spends, _, err := RollForwardCreating(ctx, ulogger.TestLogger{}, f, tx, []byte{1}, 100)
 		require.ErrorIs(t, err, errors.ErrStorageError)
 		require.Equal(t, f.spends, spends)
-		require.Equal(t, []string{"lease", "spend", "finalize", "unlease"}, f.callSeq, "the record is still creating, so it stays the recovery journal and nothing is reversed")
+		require.Equal(t, []string{"lease", "spend", "finalize", "finalize", "finalize", "unlease"}, f.callSeq, "the record is still creating, so it stays the recovery journal and nothing is reversed")
 		require.Equal(t, [][2][]byte{{{1}, fakeLease}}, f.unleased)
 	})
 
@@ -1837,6 +1929,8 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 	})
 
 	t.Run("create ErrTxExists roll-forward whose finalize fails otherwise releases its lease and leaves the spends", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+
 		two := twoInputTx()
 		f := &fakeSequentialStore{
 			createErr:   errors.NewTxExistsError("already there"),
@@ -1848,7 +1942,7 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		_, spends, err := SequentialSpendAndCreate(ctx, logger, f, two, 100, true)
 		require.ErrorIs(t, err, errors.ErrStorageError)
 		require.Equal(t, f.spends, spends)
-		require.Equal(t, []string{"create", "getmeta", "lease", "spend", "finalize", "unlease"}, f.callSeq)
+		require.Equal(t, []string{"create", "getmeta", "lease", "spend", "finalize", "finalize", "finalize", "unlease"}, f.callSeq)
 		require.Equal(t, 0, f.unspendCalls)
 	})
 
@@ -2036,39 +2130,41 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		require.False(t, IsRolledForward(err), "the actor that cleared the creating state owns the hand-off, so this call must not hand the tx on")
 		require.Nil(t, md)
 		require.Len(t, spends, 1, "the spends are in effect")
-		require.Equal(t, []string{"create", "spend", "finalize"}, f.callSeq, "no retry, no lease release, no rollback")
+		require.Equal(t, []string{"create", "spend", "finalize", "unlease"}, f.callSeq, "no retry and no rollback; the creator releases its lease, which the other actor's finalize left on the record")
 	})
 
-	t.Run("an already-final answer after a failed try is in doubt: the call hands the tx on and owns no unwind", func(t *testing.T) {
+	t.Run("a finalize try that failed is repeated, and the store says whose write cleared the state", func(t *testing.T) {
 		shortenUnspendBackoff(t)
 
-		f := &fakeSequentialStore{
+		// The store answers nil to the repeat when the write of the first try was this caller's.
+		own := &fakeSequentialStore{
 			spends:       []*Spend{{}},
-			createMeta:   &meta.Data{Creating: true},
-			finalizeErrs: []error{errors.NewStorageError("answer lost"), MarkAlreadyFinal(errors.NewTxExistsError("already final"))},
+			createMeta:   &meta.Data{Creating: true, Attempt: []byte{9}},
+			finalizeErrs: []error{errors.NewStorageError("answer lost")},
 		}
 
-		md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
-		require.ErrorIs(t, err, errors.ErrTxExists)
-		require.True(t, IsRolledForward(err), "the write of the first try may be the one that cleared the state, so the hand-off must not be dropped")
-		require.Nil(t, md, "a roll-forward of this attempt may have delivered the tx, so this call must not return a record it may unwind")
+		md, spends, err := SequentialSpendAndCreate(ctx, logger, own, tx, 100, true)
+		require.NoError(t, err)
+		require.NotNil(t, md)
+		require.False(t, md.Creating)
 		require.Len(t, spends, 1)
-		require.Equal(t, []string{"create", "spend", "finalize", "finalize"}, f.callSeq)
-	})
+		require.Equal(t, []string{"create", "spend", "finalize", "finalize"}, own.callSeq)
+		require.Equal(t, [][]byte{{9}, {9}}, own.finalizeLeases, "the lease of the call that creates a record is its attempt token, on every try")
 
-	t.Run("an already-final answer to a write the client sent more than once is in doubt on the first try", func(t *testing.T) {
-		f := &fakeSequentialStore{
-			spends:      []*Spend{{}},
-			createMeta:  &meta.Data{Creating: true, Attempt: []byte{9}},
-			finalizeErr: MarkFinalInDoubt(errors.NewTxExistsError("final, sent more than once")),
+		// It answers already final when a roll-forward cleared the state during the backoff. The
+		// creator then owns neither the hand-off nor an unwind, whatever the number of the try.
+		other := &fakeSequentialStore{
+			spends:       []*Spend{{}},
+			createMeta:   &meta.Data{Creating: true, Attempt: []byte{9}},
+			finalizeErrs: []error{errors.NewStorageError("not applied"), MarkAlreadyFinal(errors.NewTxExistsError("already final"))},
 		}
 
-		md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
+		md, spends, err = SequentialSpendAndCreate(ctx, logger, other, tx, 100, true)
 		require.ErrorIs(t, err, errors.ErrTxExists)
-		require.True(t, IsRolledForward(err), "this call may be the only one that finalized the record, so it hands the tx on")
-		require.Nil(t, md)
+		require.False(t, IsRolledForward(err), "the roll-forward delivered the tx, so this call must not hand it on")
+		require.Nil(t, md, "a call that returns no record has nothing to unwind")
 		require.Len(t, spends, 1)
-		require.Equal(t, []string{"create", "spend", "finalize"}, f.callSeq, "no retry, no lease release, no rollback")
+		require.Equal(t, []string{"create", "spend", "finalize", "finalize", "unlease"}, other.callSeq, "the loser releases its own lease")
 	})
 
 	t.Run("finalize failure after every retry returns an error and leaves the record creating", func(t *testing.T) {
@@ -2510,17 +2606,6 @@ func TestIsSpendLeaseLive(t *testing.T) {
 	require.True(t, IsSpendLeaseLive(marked))
 	require.True(t, IsSpendLeaseLive(errors.NewStorageError("wrapped", marked)))
 	require.False(t, IsAlreadyFinal(marked))
-}
-
-func TestIsFinalInDoubt(t *testing.T) {
-	require.Nil(t, MarkFinalInDoubt(nil))
-	require.False(t, IsFinalInDoubt(nil))
-	require.False(t, IsFinalInDoubt(MarkAlreadyFinal(errors.NewTxExistsError("another actor"))))
-
-	marked := MarkFinalInDoubt(errors.NewTxExistsError("sent more than once"))
-	require.True(t, IsFinalInDoubt(marked))
-	require.True(t, IsAlreadyFinal(marked), "the record is final in both cases")
-	require.True(t, IsFinalInDoubt(errors.NewProcessingError("wrapped", marked)))
 }
 
 func TestSpendOutcomeUnknown(t *testing.T) {

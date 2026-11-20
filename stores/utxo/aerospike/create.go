@@ -1519,9 +1519,13 @@ func (s *Store) storeExternallyWithLock(
 		//
 		// Without this cleanup attempt, creating flags would remain set indefinitely, requiring
 		// manual intervention. This ensures eventual consistency through automatic recovery.
-		// Create-first: leave the creating flag set whoever the duplicate is. This request's
-		// own option says nothing about another attempt's tentative record, so only
-		// FinalizeTransaction and the roll-forward healers clear it, once the inputs are spent.
+		// Create-first: leave the creating flag of a tentative record set whoever the duplicate
+		// is. This request's own option says nothing about another attempt's tentative record,
+		// so only FinalizeTransaction and the roll-forward healers clear it, once the inputs are
+		// spent. A tentative record is one that carries an attempt token. A creating record with
+		// no token was written by a create that did not defer the spend of its inputs, a coinbase
+		// or a seeded transaction for example, and its clear failed: it is cleared here whatever
+		// the setting says, because no healer of create-first reaches it.
 		//
 		// A child this call wrote, or one an attempt before the master's left, carries a token the
 		// master does not. It is given the master's token here, so that the finalize of the master's
@@ -1530,8 +1534,8 @@ func (s *Store) storeExternallyWithLock(
 			s.logger.Warnf("[%s] Transaction %s exists but its child records could not be given the token of its master: %v", funcName, bItem.txHash, alignErr)
 		}
 
-		if !s.settings.UtxoStore.UseCreateFirstOrder {
-			clearErr := unlessAlreadyFinal(s.clearCreatingFlag(bItem.txHash, len(binsToStore), s.masterAttempt(bItem.txHash)))
+		if masterToken := s.masterAttempt(bItem.txHash); len(masterToken) == 0 || !s.settings.UtxoStore.UseCreateFirstOrder {
+			clearErr := unlessAlreadyFinal(s.clearCreatingFlag(bItem.txHash, len(binsToStore), masterToken, nil))
 			if clearErr != nil {
 				// A mined create's caller may read ErrTxExists as done: the seeder and
 				// block assembly's coinbase store do. See creatingNotClearedError.
@@ -1556,7 +1560,7 @@ func (s *Store) storeExternallyWithLock(
 		return
 	}
 
-	clearErr := unlessAlreadyFinal(s.clearCreatingFlag(bItem.txHash, len(binsToStore), bItem.attempt))
+	clearErr := unlessAlreadyFinal(s.clearCreatingFlag(bItem.txHash, len(binsToStore), bItem.attempt, nil))
 	if clearErr != nil && len(bItem.blockIDs) > 0 {
 		// A create that carries mined block info is not reliably reached by the
 		// recovery paths listed below. See creatingNotClearedError.
@@ -1796,7 +1800,7 @@ func (s *Store) ensureCreatingBin(bins []*aerospike.Bin, creating bool) []*aeros
 // cleared only when it is no longer creating. One that is still creating, under another attempt's
 // token or this one, fails the call before the master is written, so the master stays creating
 // while any child is.
-func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int, attempt []byte) error {
+func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int, attempt, lease []byte) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
 	// Expression filter: only update records where creating bin exists, the token matches and the record is not rolling back
@@ -1827,7 +1831,7 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int, attemp
 		// This saves storage space and makes absence of bin = not creating
 		ops := []*aerospike.Operation{aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))}
 		if i == 0 {
-			ops = append(ops, aerospike.PutOp(aerospike.NewBin(fields.Spenders.String(), nil)), removeUnminedSinceIfMinedOp())
+			ops = finalizeMasterOps(attempt, lease)
 		}
 
 		writeOp := aerospike.NewBatchWrite(writePolicy, key, ops...)
@@ -1884,7 +1888,7 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int, attemp
 			// FILTERED_OUT is success when the bin didn't exist, nothing to clear; a rolling
 			// back master is refused
 			if ok && aErr.ResultCode == types.FILTERED_OUT {
-				return s.finalizeFilteredOutResult(txHash, attempt, writeInDoubt(masterWrite.BatchRec()))
+				return s.finalizeFilteredOutResult(txHash, attempt, lease)
 			}
 			s.logger.Errorf("[clearCreatingFlag] Failed to clear creating flag for master record for tx %s: %v", txHash, masterWrite.BatchRec().Err)
 			return errors.NewProcessingError("failed to unlock master record for tx %s", txHash)

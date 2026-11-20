@@ -3121,6 +3121,16 @@ func (v *Validator) handoffFloor() time.Duration {
 //     this function; on the spend-only shape the record gate immediately before the
 //     unspend is what enforces it.
 //
+//     Under create-first two more things hold it up. The store returns nil from its
+//     finalize only to the caller whose write cleared the creating state, and it
+//     records that caller with the write, so a creator that reaches here did finalize
+//     the record itself and no roll-forward of the attempt delivered it. And the
+//     store's DeleteComplete refuses, with the record left in place, while a
+//     roll-forward still holds a spend lease on the record: its spend of the inputs
+//     could otherwise land after the unspend below. A refused delete takes the
+//     "master still present" arm, which leaves the transaction locked for the
+//     unmined reload.
+//
 //     Read that in one direction only. It means this call never undoes another
 //     submitter's STORE WORK. The converse is NOT claimed: a concurrent duplicate
 //     of the same txid that took the already-exists early return in Validate was

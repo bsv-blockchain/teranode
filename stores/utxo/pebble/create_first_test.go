@@ -21,7 +21,7 @@ func TestCreateFirstContractWithoutTentativeState(t *testing.T) {
 
 	hash := tx.TxIDChainHash()
 
-	require.NoError(t, s.FinalizeTransaction(ctx, tx, nil))
+	require.NoError(t, s.FinalizeTransaction(ctx, tx, nil, nil))
 
 	stale, err := s.QueryStaleCreatingTxs(ctx, testStoreHeight+1_000, 0)
 	require.NoError(t, err)

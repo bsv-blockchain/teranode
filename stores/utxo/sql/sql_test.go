@@ -4008,7 +4008,7 @@ func TestSQLStore_CreateFirstNoOps(t *testing.T) {
 
 	// SQL is spend-first: no create-first support, finalize is a no-op, no stale creating txs.
 	require.False(t, store.SupportsCreateFirst())
-	require.NoError(t, store.FinalizeTransaction(ctx, &bt.Tx{}, nil))
+	require.NoError(t, store.FinalizeTransaction(ctx, &bt.Tx{}, nil, nil))
 
 	// Every record is final, so the rollback marker reports false and deletes nothing.
 	_, err = store.Create(ctx, tests.Tx, 100)

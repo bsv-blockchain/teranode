@@ -1,6 +1,7 @@
 package aerospike_test
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"testing"
@@ -274,7 +275,7 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrTxCreating), "child spend before finalize must be ErrTxCreating, got: %v", err)
 
-		require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash())))
+		require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()), attemptOf(t, ctx, store, tx.TxIDChainHash())))
 
 		_, err = store.Spend(ctx, child, 102)
 		require.NoError(t, err, "child spend must succeed after the parent is finalized")
@@ -309,7 +310,7 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		_, err = store.Spend(ctx, parent2, 103)
 		require.NoError(t, err, "re-spending the same inputs by the same tx must be idempotent-success (roll-forward safety)")
 
-		require.NoError(t, store.FinalizeTransaction(ctx, parent2, attemptOf(t, ctx, store, parent2.TxIDChainHash())))
+		require.NoError(t, store.FinalizeTransaction(ctx, parent2, attemptOf(t, ctx, store, parent2.TxIDChainHash()), attemptOf(t, ctx, store, parent2.TxIDChainHash())))
 
 		_, err = store.Spend(ctx, child2, 104)
 		require.NoError(t, err, "child must be spendable once the parent is rolled forward")
@@ -1127,23 +1128,36 @@ func TestCreateFirst_OpenRollbackIsFinishedByTheNextCreate(t *testing.T) {
 }
 
 // finalizedElsewhereStore lets another actor finalize the attempt once, just before the first
-// FinalizeTransaction of its user reaches the store. Every store call is the real store's.
+// FinalizeTransaction of its user reaches the store. The other actor is a roll-forward under its
+// own lease when the user is the creator, and the creator when the user is a roll-forward. Every
+// store call is the real store's.
 type finalizedElsewhereStore struct {
 	*teranode_aerospike.Store
 
 	done bool
 }
 
-func (s *finalizedElsewhereStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
+func (s *finalizedElsewhereStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
 	if !s.done {
 		s.done = true
 
-		if err := s.Store.FinalizeTransaction(ctx, tx, attempt); err != nil {
+		other := attempt
+
+		if bytes.Equal(lease, attempt) {
+			taken, took, err := s.Store.TakeSpendLease(ctx, tx.TxIDChainHash(), attempt)
+			if err != nil || !took {
+				return errors.NewProcessingError("the other actor could not take a spend lease (took %t)", took, err)
+			}
+
+			other = taken
+		}
+
+		if err := s.Store.FinalizeTransaction(ctx, tx, attempt, other); err != nil {
 			return err
 		}
 	}
 
-	return s.Store.FinalizeTransaction(ctx, tx, attempt)
+	return s.Store.FinalizeTransaction(ctx, tx, attempt, lease)
 }
 
 // TestCreateFirst_OnlyTheFinalizeThatClearedTheStateOwnsTheHandOff pins that the creator of a record

@@ -132,7 +132,7 @@ func (m *MockUTXOStore) Stamper() pruner.Stamper { return pruner.NoStamp }
 // Implement remaining interface methods as no-ops for testing
 func (m *MockUTXOStore) SupportsOutpointOnlySpend() bool { return false }
 func (m *MockUTXOStore) SupportsCreateFirst() bool       { return false }
-func (m *MockUTXOStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
+func (m *MockUTXOStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
 	return nil
 }
 func (m *MockUTXOStore) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {

@@ -990,7 +990,7 @@ func (m *MockUTXOStore) Close(context.Context) error { return nil }
 // Required interface methods for utxo.Store
 func (m *MockUTXOStore) SupportsOutpointOnlySpend() bool { return false }
 func (m *MockUTXOStore) SupportsCreateFirst() bool       { return false }
-func (m *MockUTXOStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
+func (m *MockUTXOStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
 	return nil
 }
 func (m *MockUTXOStore) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {

@@ -632,14 +632,18 @@ type Store interface {
 	// attempt is the token of the attempt the caller created or read: the clear touches only
 	// a record that carries that token, so a finalize left over from an earlier attempt of the
 	// same txid cannot clear a later attempt's state. A record that is absent, rolling back or
-	// owned by another attempt is refused with ErrTxNotFound. It returns nil only to the call
-	// whose write cleared the state, and that call owns the hand-off of the transaction and any
-	// unwind of it. A call that finds the record already final changes nothing and returns an
-	// ErrTxExists for which IsAlreadyFinal is true. When the store cannot tell whether an
-	// earlier send of the same call cleared the state, IsFinalInDoubt is true as well: the
-	// caller hands the transaction on and unwinds nothing. Stores without create-first support
-	// return nil.
-	FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error
+	// owned by another attempt is refused with ErrTxNotFound. It returns nil only to the
+	// caller whose write cleared the state, and that caller owns the hand-off of the
+	// transaction and any unwind of it. lease says who the caller is: the spend lease it holds
+	// on the attempt, which is the attempt token for the call that created the record and the
+	// lease of TakeSpendLease for a roll-forward, or nil for a caller with none. The store
+	// records it with the write, so a call that finds the record final is told exactly whose
+	// write did it: nil when an earlier send of the same caller did, and an ErrTxExists for
+	// which IsAlreadyFinal is true when another actor did. A finalize can therefore be repeated
+	// after an error, and exactly one caller of an attempt gets nil. The write removes the
+	// lease of its caller and leaves the leases of other spenders. Stores without create-first
+	// support return nil.
+	FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error
 
 	// QueryStaleCreatingTxs returns the hashes of transactions still in the "creating"
 	// state whose unminedSince height is strictly below unminedSinceBefore. Used by the
@@ -688,7 +692,9 @@ type Store interface {
 	// the ordering rationale and what that costs the descendant. It is idempotent:
 	// an absent record, absent children and absent blobs are all treated as success.
 	// On a backend whose Delete is already complete (e.g. SQL) this is equivalent to
-	// Delete.
+	// Delete. A store that grants spend leases refuses the delete, with an error and the
+	// record left in place, while a lease on the record is live: its holder may still spend
+	// the inputs of the transaction.
 	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
 
 	// BeginCreateFirstRollback claims the rollback of a record that is still creating, by
@@ -751,8 +757,10 @@ type Store interface {
 	TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error)
 
 	// ReleaseSpendLease removes a lease once the spend it covers has returned with a known
-	// outcome. A spender whose spend may still commit does not call it, and the lease then stays
-	// live until it is stale. An absent record, or one that carries no such lease, is success.
+	// outcome and the caller will not finalize the record. A spender whose spend may still
+	// commit does not call it, and the lease then stays live until it is stale. A lease also
+	// stays on a record that another spender finalized, and it is released there as well. An
+	// absent record, or one that carries no such lease, is success.
 	ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error
 
 	// SpendLeasesLive reports whether a spender of the attempt that carries the token may still be

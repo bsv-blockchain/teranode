@@ -103,9 +103,9 @@ func (s *creatingExistsShim) GetMeta(ctx context.Context, hash *chainhash.Hash, 
 	return s.Store.GetMeta(ctx, hash, data)
 }
 
-func (s *creatingExistsShim) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
+func (s *creatingExistsShim) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
 	s.finalizeCalls++
-	return s.Store.FinalizeTransaction(ctx, tx, attempt)
+	return s.Store.FinalizeTransaction(ctx, tx, attempt, attempt)
 }
 
 // SetLocked is a no-op here: the roll-forward unlocks the record, but the shim intercepts

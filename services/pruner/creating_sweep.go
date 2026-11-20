@@ -158,6 +158,27 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 			continue
 		}
 
+		if len(md.Attempt) == 0 {
+			// A creating record with no attempt token was not written by a create-first attempt.
+			// The create that wrote it did not defer the spend of its inputs, and its clear of the
+			// creating bin failed. There is no spend to repeat and nothing to roll back: the
+			// sweep clears the bin, which is all that the record still needs. Its creator
+			// reported it as stored, so it is not announced again.
+			finErr := s.utxoStore.FinalizeTransaction(ctx, md.Tx, nil, nil)
+			if finErr != nil && !utxo.IsAlreadyFinal(finErr) {
+				s.logger.Warnf("[pruner][creating-sweep][%d] clearing the creating state of %s, which carries no attempt token, failed, will retry next block: %v", blockHeight, hash, finErr)
+				prunerCreatingSweepFailures.Inc()
+
+				continue
+			}
+
+			progressed++
+
+			s.logger.Infof("[pruner][creating-sweep][%d] cleared the creating state of %s, which carries no attempt token", blockHeight, hash)
+
+			continue
+		}
+
 		// Re-spend the inputs only (the record already exists in the creating state) and
 		// finalize, through the shared roll-forward rule. Spends are idempotent for the same
 		// spender, which makes roll-forward safe. Locks are not ignored: a locked parent is

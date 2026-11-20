@@ -2,6 +2,7 @@ package aerospike_test
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -9,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
@@ -36,7 +36,7 @@ func TestFinalizeTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Finalize clears the creating state...
-	require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash())))
+	require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()), attemptOf(t, ctx, store, tx.TxIDChainHash())))
 
 	got := &meta.Data{}
 	require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
@@ -47,62 +47,145 @@ func TestFinalizeTransaction(t *testing.T) {
 	_, err = store.Spend(ctx, child, 101)
 	require.NoError(t, err)
 
-	// Finalizing again changes nothing and says that this call did not clear the state: only the
-	// call that did owns the hand-off of the transaction.
-	again := store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()))
-	require.ErrorIs(t, again, errors.ErrTxExists)
-	require.True(t, utxo.IsAlreadyFinal(again), "a second finalize reports the record as already final, got: %v", again)
+	// The store recorded the lease of the caller whose write cleared the state. A repeat of the
+	// finalize under that lease is told that the write was its own, so a caller whose answer was
+	// lost can ask again. A caller under another lease, or under none, is told that it was not.
+	creatorLease := attemptOf(t, ctx, store, tx.TxIDChainHash())
+	require.NoError(t, store.FinalizeTransaction(ctx, tx, creatorLease, creatorLease))
+
+	other := store.FinalizeTransaction(ctx, tx, creatorLease, []byte("another spender01"))
+	require.ErrorIs(t, other, errors.ErrTxExists)
+	require.True(t, utxo.IsAlreadyFinal(other), "another caller did not clear the state, got: %v", other)
+
+	require.True(t, utxo.IsAlreadyFinal(store.FinalizeTransaction(ctx, tx, creatorLease, nil)), "a caller with no lease is never told the write was its own")
 
 	require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
 	require.False(t, got.Creating)
 
 	// A tx that was never created in the creating state is already final too.
-	require.True(t, utxo.IsAlreadyFinal(store.FinalizeTransaction(ctx, tests.ParentTx, nil)))
+	require.True(t, utxo.IsAlreadyFinal(store.FinalizeTransaction(ctx, tests.ParentTx, nil, nil)))
 }
 
-// TestFinalizeTransaction_FilteredOutAfterARepeatedSendIsInDoubt covers a finalize whose first
-// send applied with its answer lost. The client sends the write again, the record no longer
-// carries the creating bin, and the server filters the second send out. That answer must not read
-// as another actor's finalize: this call may be the only one, and then nobody else hands the
-// transaction to block assembly.
-func TestFinalizeTransaction_FilteredOutAfterARepeatedSendIsInDoubt(t *testing.T) {
+// TestFinalizeTransaction_OneCallerOwnsTheHandOff covers the creator of a record and a
+// roll-forward of the same attempt, which can both reach the finalize. Exactly one of them gets
+// nil, whichever send the server applied, and each can tell after a lost answer.
+func TestFinalizeTransaction_OneCallerOwnsTheHandOff(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 	t.Cleanup(deferFn)
-	cleanDB(t, client)
 
-	_, err := store.Create(ctx, tests.ParentTx, 100)
-	require.NoError(t, err)
+	hash := tx.TxIDChainHash()
 
-	_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
-	require.NoError(t, err)
+	tentative := func(t *testing.T) (token, lease []byte) {
+		t.Helper()
+		cleanDB(t, client)
 
-	attempt := attemptOf(t, ctx, store, tx.TxIDChainHash())
+		_, err := store.Create(ctx, tests.ParentTx, 100)
+		require.NoError(t, err)
 
-	// While the record is creating under this attempt, a filtered-out write is a fault, in doubt or not.
-	stillCreating := store.FinalizeFilteredOutResult(tx.TxIDChainHash(), attempt, true)
-	require.Error(t, stillCreating)
-	require.False(t, utxo.IsAlreadyFinal(stillCreating), "a record that is still creating is not final")
+		_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
+		require.NoError(t, err)
 
-	require.NoError(t, store.FinalizeTransaction(ctx, tx, attempt))
+		token = attemptOf(t, ctx, store, hash)
 
-	sentOnce := store.FinalizeFilteredOutResult(tx.TxIDChainHash(), attempt, false)
-	require.ErrorIs(t, sentOnce, errors.ErrTxExists)
-	require.True(t, utxo.IsAlreadyFinal(sentOnce))
-	require.False(t, utxo.IsFinalInDoubt(sentOnce), "a write the client sent once did not clear the state: another actor did")
+		lease, took, err := store.TakeSpendLease(ctx, hash, token)
+		require.NoError(t, err)
+		require.True(t, took)
 
-	sentAgain := store.FinalizeFilteredOutResult(tx.TxIDChainHash(), attempt, true)
-	require.ErrorIs(t, sentAgain, errors.ErrTxExists)
-	require.True(t, utxo.IsAlreadyFinal(sentAgain))
-	require.True(t, utxo.IsFinalInDoubt(sentAgain), "an earlier send of the same write may be the one that cleared the state")
-}
+		return token, lease
+	}
 
-func TestWriteInDoubt(t *testing.T) {
-	require.False(t, teranode_aerospike.WriteInDoubt(&aerospike.BatchRecord{}))
-	require.False(t, teranode_aerospike.WriteInDoubt(&aerospike.BatchRecord{ResultCode: types.FILTERED_OUT}), "a first send that was filtered out")
-	require.True(t, teranode_aerospike.WriteInDoubt(&aerospike.BatchRecord{ResultCode: types.FILTERED_OUT, InDoubt: true}), "the client sets the flag when it sent the write more than once")
+	t.Run("the roll-forward clears the state: it owns the hand-off, and the creator is told so on every try", func(t *testing.T) {
+		token, lease := tentative(t)
+
+		require.NoError(t, store.FinalizeTransaction(ctx, tx, token, lease))
+
+		for try := 0; try < 2; try++ {
+			lost := store.FinalizeTransaction(ctx, tx, token, token)
+			require.ErrorIs(t, lost, errors.ErrTxExists)
+			require.True(t, utxo.IsAlreadyFinal(lost), "try %d: the creator must not take the hand-off of a record that the roll-forward delivered", try)
+		}
+
+		require.NoError(t, store.FinalizeTransaction(ctx, tx, token, lease), "a repeat by the roll-forward is its own write")
+
+		// The finalize took only the lease of its caller: the creator's is still on the record.
+		require.Len(t, leasesOf(t, client, store, hash), 1)
+
+		require.NoError(t, store.ReleaseSpendLease(ctx, hash, token, token))
+		require.Empty(t, leasesOf(t, client, store, hash))
+		require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Spenders), fields.Spenders.String(), "a record with no spender carries no empty spenders bin")
+	})
+
+	t.Run("the creator clears the state: it owns the hand-off, and the roll-forward is told so", func(t *testing.T) {
+		token, lease := tentative(t)
+
+		require.NoError(t, store.FinalizeTransaction(ctx, tx, token, token))
+
+		lost := store.FinalizeTransaction(ctx, tx, token, lease)
+		require.True(t, utxo.IsAlreadyFinal(lost), "got: %v", lost)
+
+		require.NoError(t, store.FinalizeTransaction(ctx, tx, token, token), "a repeat by the creator is its own write")
+
+		// The lease of the roll-forward is still live on the final record.
+		require.Len(t, leasesOf(t, client, store, hash), 1)
+
+		require.NoError(t, store.ReleaseSpendLease(ctx, hash, token, lease))
+		require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Spenders), fields.Spenders.String())
+	})
+
+	t.Run("a finalize under a lease that is no longer on the record still clears the state", func(t *testing.T) {
+		token, lease := tentative(t)
+
+		require.NoError(t, store.ReleaseSpendLease(ctx, hash, token, lease))
+		require.NoError(t, store.ReleaseSpendLease(ctx, hash, token, token))
+		require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Spenders), fields.Spenders.String(), "precondition: the record carries no spenders bin")
+
+		require.NoError(t, store.FinalizeTransaction(ctx, tx, token, token))
+
+		got := &meta.Data{}
+		require.NoError(t, store.GetMeta(ctx, hash, got))
+		require.False(t, got.Creating)
+	})
+
+	t.Run("a finalize whose answer is lost is its own write on the next try", func(t *testing.T) {
+		for name, asCreator := range map[string]bool{"creator": true, "roll-forward": false} {
+			token, lease := tentative(t)
+
+			caller := lease
+			if asCreator {
+				caller = token
+			}
+
+			// The server applies the write and the caller gets an error in place of the answer.
+			var lostOnce atomic.Bool
+
+			store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+				applied := client.BatchOperate(policy, records)
+
+				if write, ok := records[0].(*aerospike.BatchWrite); ok && write.Policy != nil &&
+					write.Policy.RecordExistsAction == aerospike.UPDATE_ONLY && lostOnce.CompareAndSwap(false, true) {
+					return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+				}
+
+				return applied
+			})
+
+			first := store.FinalizeTransaction(ctx, tx, token, caller)
+
+			store.SetBatchOperateFn(nil)
+
+			require.Error(t, first, name)
+			require.False(t, utxo.IsAlreadyFinal(first), name)
+
+			got := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, hash, got))
+			require.False(t, got.Creating, "%s: the write was applied", name)
+
+			require.NoError(t, store.FinalizeTransaction(ctx, tx, token, caller), "%s: the record is final under this caller's own write, so the repeat owns the hand-off", name)
+		}
+	})
 }
 
 // cancelledAfterStartContext reports itself cancelled through Err but never closes Done, so a
@@ -137,7 +220,7 @@ func TestFinalizeTransaction_ContextCancellation(t *testing.T) {
 		cancelledCtx, cancel := context.WithCancel(ctx)
 		cancel()
 
-		err = store.FinalizeTransaction(cancelledCtx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()))
+		err = store.FinalizeTransaction(cancelledCtx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()), attemptOf(t, ctx, store, tx.TxIDChainHash()))
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
@@ -150,7 +233,7 @@ func TestFinalizeTransaction_ContextCancellation(t *testing.T) {
 		_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
 		require.NoError(t, err)
 
-		err = store.FinalizeTransaction(cancelledAfterStartContext{Context: ctx}, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()))
+		err = store.FinalizeTransaction(cancelledAfterStartContext{Context: ctx}, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()), attemptOf(t, ctx, store, tx.TxIDChainHash()))
 		require.NoError(t, err, "a finalize that landed must not be reported as failed")
 
 		got := &meta.Data{}
@@ -175,7 +258,7 @@ func TestFinalizeTransaction_MultiRecord(t *testing.T) {
 	_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
 	require.NoError(t, err)
 
-	require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash())))
+	require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()), attemptOf(t, ctx, store, tx.TxIDChainHash())))
 
 	got := &meta.Data{}
 	require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
@@ -213,7 +296,7 @@ func TestFinalizeTransaction_RollingBack(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, began)
 
-			err = store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()))
+			err = store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()), attemptOf(t, ctx, store, tx.TxIDChainHash()))
 			require.ErrorIs(t, err, errors.ErrTxNotFound, "a rolling-back record must not be finalized")
 			require.Contains(t, err.Error(), "rolling back")
 
@@ -318,7 +401,7 @@ func TestCreatingRecordWithMinedBlockInfo_UnminedSinceLifecycle(t *testing.T) {
 			require.NoError(t, err)
 			require.Contains(t, stale, *tx.TxIDChainHash())
 
-			require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash())))
+			require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()), attemptOf(t, ctx, store, tx.TxIDChainHash())))
 
 			_, unminedSince = readMasterBins(t, client, store.GetNamespace(), store.GetName(), tx.TxIDChainHash())
 			require.Nil(t, unminedSince, "finalize removes unminedSince from a record that has block IDs")
@@ -362,7 +445,7 @@ func TestFinalizeTransaction_KeepsUnminedSinceWithoutBlockIDs(t *testing.T) {
 			_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
 			require.NoError(t, err)
 
-			require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash())))
+			require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()), attemptOf(t, ctx, store, tx.TxIDChainHash())))
 
 			_, unminedSince := readMasterBins(t, client, store.GetNamespace(), store.GetName(), tx.TxIDChainHash())
 			require.Equal(t, 100, unminedSince)
@@ -414,11 +497,11 @@ func TestFinalizeTransaction_StaleAttemptIsRefused(t *testing.T) {
 			require.NoError(t, err)
 			require.NotEqual(t, first.Attempt, second.Attempt, "every attempt draws its own token")
 
-			err = store.FinalizeTransaction(ctx, tx, first.Attempt)
+			err = store.FinalizeTransaction(ctx, tx, first.Attempt, first.Attempt)
 			require.ErrorIs(t, err, errors.ErrTxNotFound, "a finalize of the earlier attempt must be refused on the later attempt's record")
 			require.Contains(t, err.Error(), "another attempt")
 
-			require.ErrorIs(t, store.FinalizeTransaction(ctx, tx, nil), errors.ErrTxNotFound, "a finalize with no token is not the later attempt's either")
+			require.ErrorIs(t, store.FinalizeTransaction(ctx, tx, nil, nil), errors.ErrTxNotFound, "a finalize with no token is not the later attempt's either")
 
 			got := &meta.Data{}
 			require.NoError(t, store.GetMeta(ctx, hash, got))
@@ -434,7 +517,7 @@ func TestFinalizeTransaction_StaleAttemptIsRefused(t *testing.T) {
 				}
 			}
 
-			require.NoError(t, store.FinalizeTransaction(ctx, tx, second.Attempt), "the later attempt finalizes with its own token")
+			require.NoError(t, store.FinalizeTransaction(ctx, tx, second.Attempt, second.Attempt), "the later attempt finalizes with its own token")
 			require.NoError(t, store.GetMeta(ctx, hash, got))
 			require.False(t, got.Creating)
 
@@ -477,10 +560,42 @@ func TestFinalizeTransaction_AdoptsSurvivingChildren(t *testing.T) {
 		require.Equal(t, second.Attempt, bins[fields.Attempt.String()], "child record %d is adopted by the new master's attempt", idx)
 	}
 
-	require.NoError(t, store.FinalizeTransaction(ctx, tx, second.Attempt))
+	require.NoError(t, store.FinalizeTransaction(ctx, tx, second.Attempt, second.Attempt))
 
 	for idx := uint32(1); idx < 3; idx++ {
 		bins := recordBins(t, client, store, hash, idx, fields.Creating)
 		require.NotContains(t, bins, fields.Creating.String(), "child record %d is cleared by the finalize", idx)
+	}
+}
+
+// TestFinalizeTransaction_PaginatedRecordsItsCaller is the ownership rule on a transaction with
+// pagination children, whose finalize goes through clearCreatingFlag.
+func TestFinalizeTransaction_PaginatedRecordsItsCaller(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	paginated := createTransactionWithOutputs(10)
+	hash := paginated.TxIDChainHash()
+
+	md, err := store.Create(ctx, paginated, 100, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	lease, took, err := store.TakeSpendLease(ctx, hash, md.Attempt)
+	require.NoError(t, err)
+	require.True(t, took)
+
+	require.NoError(t, store.FinalizeTransaction(ctx, paginated, md.Attempt, lease))
+	require.NoError(t, store.FinalizeTransaction(ctx, paginated, md.Attempt, lease), "a repeat is the caller's own write")
+
+	lost := store.FinalizeTransaction(ctx, paginated, md.Attempt, md.Attempt)
+	require.True(t, utxo.IsAlreadyFinal(lost), "the creator did not clear the state, got: %v", lost)
+
+	for idx := uint32(0); idx <= 2; idx++ {
+		require.NotContains(t, recordBins(t, client, store, hash, idx, fields.Creating), fields.Creating.String(), "record %d", idx)
 	}
 }

@@ -157,8 +157,8 @@ func (s *Store) SupportsCreateFirst() bool {
 }
 
 // FinalizeTransaction delegates to the wrapped store.
-func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
-	return s.store.FinalizeTransaction(ctx, tx, attempt)
+func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
+	return s.store.FinalizeTransaction(ctx, tx, attempt, lease)
 }
 
 // QueryStaleCreatingTxs delegates to the wrapped store.
