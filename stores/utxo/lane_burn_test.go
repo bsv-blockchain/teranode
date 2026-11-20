@@ -44,6 +44,10 @@ func TestLaneBurnReason(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			require.Equal(t, c.want, LaneBurnReason(c.err, c.spends))
+
+			// A position is returned as spend_rejected only when it also burns as spend_rejected,
+			// so the returned counter never runs ahead of the burned one for that reason.
+			require.Equal(t, c.want == LaneBurnSpendRejected, RefusedSpend(c.err, c.spends))
 		})
 	}
 }
