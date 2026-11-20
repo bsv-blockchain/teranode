@@ -297,6 +297,8 @@ func runSpendAndCreateBench(b *testing.B, s *Store, ctx context.Context, opts ..
 		children[i] = child
 	}
 
+	walBefore := walPosition(b, s, ctx)
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -307,6 +309,7 @@ func runSpendAndCreateBench(b *testing.B, s *Store, ctx context.Context, opts ..
 
 	b.StopTimer()
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N), "ns/tx")
+	b.ReportMetric(float64(walPosition(b, s, ctx)-walBefore)/float64(b.N), "walB/tx")
 	wipe(b, s, ctx)
 }
 
@@ -555,4 +558,17 @@ func runCreatePathBench(b *testing.B, s *Store, ctx context.Context, n int, mine
 
 	b.StopTimer()
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(n), "ns/row")
+}
+
+// walPosition is the database's current write-ahead log position in bytes, so a benchmark can
+// report how much log its writes cost: the bytes every write of a spend or create pays on disk,
+// which a wall-clock time dominated by the commit's flush hides. Nothing else writes to the bench
+// database while it runs.
+func walPosition(b *testing.B, s *Store, ctx context.Context) int64 {
+	b.Helper()
+
+	var lsn int64
+	require.NoError(b, s.pool.QueryRow(ctx, `SELECT (pg_current_wal_lsn() - '0/0'::pg_lsn)::bigint`).Scan(&lsn))
+
+	return lsn
 }
