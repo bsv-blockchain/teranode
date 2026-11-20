@@ -81,8 +81,8 @@ func TestFailpointSpendBeforeCreate(t *testing.T) {
 	_, err = node3.SendRawTransaction(ctx, harness.TxHex(tx))
 	require.NoError(t, err, "resubmitting the crashed tx should succeed")
 
-	minedIn := mineUntilMined(ctx, t, node3, crashNode, txid)
-	waitForTipOn(t, []*harness.RPCClient{node1, s.Node(2), node3}, minedIn)
+	minedIn, tip := mineUntilMined(ctx, t, node3, crashNode, txid)
+	waitForMinedBlockOn(t, []*harness.RPCClient{node1, s.Node(2), node3}, minedIn, tip)
 
 	for _, n := range []int{crashNode, 1} {
 		meta, status, err := harness.GetTxMeta(ctx, n, txid)
@@ -100,9 +100,9 @@ func TestFailpointSpendBeforeCreate(t *testing.T) {
 }
 
 // mineUntilMined waits for txid to be known to node n, then mines blocks on c
-// one at a time until node n reports txid as mined. It returns the hash of the
-// block that mined it, which is c's tip.
-func mineUntilMined(ctx context.Context, t *testing.T, c *harness.RPCClient, node int, txid string) string {
+// one at a time until node n reports txid as mined on the main chain. It
+// returns that block's hash and the latest generated tip, which may differ.
+func mineUntilMined(ctx context.Context, t *testing.T, c *harness.RPCClient, node int, txid string) (string, string) {
 	t.Helper()
 
 	harness.WaitForCondition(t, "tx "+short(txid)+" known to teranode", time.Minute, time.Second,
@@ -111,31 +111,45 @@ func mineUntilMined(ctx context.Context, t *testing.T, c *harness.RPCClient, nod
 			return status == http.StatusOK, err
 		})
 
-	var minedIn string
+	var minedIn, tip string
+	var generated []string
 	harness.WaitForCondition(t, "tx "+short(txid)+" mined", 3*time.Minute, 3*time.Second,
 		func(ctx context.Context) (bool, error) {
 			hashes, err := c.Generate(ctx, 1)
 			if err != nil || len(hashes) != 1 {
 				return false, err
 			}
+			tip = hashes[0]
+			generated = append(generated, tip)
 			meta, status, err := harness.GetTxMeta(ctx, node, txid)
 			if err != nil || status != http.StatusOK {
 				return false, err
 			}
-			minedIn = hashes[0]
-			return len(meta.BlockIDs) > 0, nil
+			minedIn = harness.MinedBlockHash(meta, generated)
+			return minedIn != "", nil
 		})
 
 	t.Logf("tx %s mined in %s", short(txid), short(minedIn))
-	return minedIn
+	return minedIn, tip
 }
 
-// waitForTipOn waits until every client's best block is want. Unlike
-// WaitForConverged it cannot pass on a stale (cached) shared tip.
-func waitForTipOn(t *testing.T, clients []*harness.RPCClient, want string) {
+// waitForMinedBlockOn waits for the latest generated tip on every client, then
+// checks that the block containing the transaction is on each active chain.
+func waitForMinedBlockOn(t *testing.T, clients []*harness.RPCClient, minedIn, tip string) {
 	t.Helper()
 
 	for _, c := range clients {
-		harness.WaitForTip(t, c, want, 3*time.Minute)
+		harness.WaitForTip(t, c, tip, 3*time.Minute)
+		harness.WaitForCondition(t, "teranode block "+short(minedIn)+" on active chain", 3*time.Minute, time.Second,
+			func(ctx context.Context) (bool, error) {
+				var header struct {
+					Hash          string `json:"hash"`
+					Confirmations int64  `json:"confirmations"`
+				}
+				if err := c.Call(ctx, "getblockheader", []any{minedIn, true}, &header); err != nil {
+					return false, err
+				}
+				return header.Hash == minedIn && header.Confirmations > 0, nil
+			})
 	}
 }

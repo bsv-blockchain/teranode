@@ -87,11 +87,11 @@ func TestFailpointPersistBeforeAddBlock(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, baseline, tip.Hash, "restarted teranode%d should be on its pre-crash tip", crashNode)
 
-	minedIn := mineUntilMined(ctx, t, node3, crashNode, txid)
-	waitForTipOn(t, participants, minedIn)
+	minedIn, latestTip := mineUntilMined(ctx, t, node3, crashNode, txid)
+	waitForMinedBlockOn(t, participants, minedIn, latestTip)
 
-	// The block that mined the pending tx is the announced tip; every one of its
-	// subtrees must be retrievable from each node's subtree store.
+	// Every subtree of the block that mined the pending tx must be retrievable
+	// from each node's subtree store.
 	for _, n := range []int{crashNode, 1} {
 		block, err := harness.GetBlock(ctx, n, minedIn)
 		require.NoError(t, err)

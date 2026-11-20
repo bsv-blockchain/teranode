@@ -77,8 +77,28 @@ func UTXOs(ctx context.Context, node int, txid string) ([]UTXOItem, int, error) 
 
 // TxMeta mirrors the subset of /txmeta/:hash/json the harness uses.
 type TxMeta struct {
-	BlockIDs    []uint32 `json:"blockIDs"`
-	BlockHashes []string `json:"blockHashes"`
+	BlockIDs       []uint32 `json:"blockIDs"`
+	BlockHashes    []string `json:"blockHashes"`
+	MainChainIndex int      `json:"mainChainIndex"`
+}
+
+// MinedBlockHash returns the main-chain block containing the transaction if
+// that block was generated during this mining attempt.
+func MinedBlockHash(meta *TxMeta, generated []string) string {
+	if meta == nil || meta.MainChainIndex < 0 || meta.MainChainIndex >= len(meta.BlockIDs) ||
+		meta.MainChainIndex >= len(meta.BlockHashes) {
+		return ""
+	}
+	minedIn := meta.BlockHashes[meta.MainChainIndex]
+	if minedIn == "" {
+		return ""
+	}
+	for _, hash := range generated {
+		if hash == minedIn {
+			return minedIn
+		}
+	}
+	return ""
 }
 
 // GetTxMeta returns the tx meta of txid as seen by node n. The status is 404
