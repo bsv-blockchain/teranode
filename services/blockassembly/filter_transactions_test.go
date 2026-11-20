@@ -359,6 +359,56 @@ func TestValidateParentChain_RejectsChildOfConflictingParent(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
+// TestValidateParentChain_RejectsChildOfUnloadedUnminedParent covers a parent the
+// unmined scan left out, such as an external record whose file is missing: the
+// store still says the parent is unmined, but it is not in the loaded list. The
+// child, and the grandchild through it, must not reach a block template.
+func TestValidateParentChain_RejectsChildOfUnloadedUnminedParent(t *testing.T) {
+	ctx := context.Background()
+
+	mockStore := new(utxo.MockUtxostore)
+
+	testSettings := &settings.Settings{}
+	testSettings.BlockAssembly.ParentValidationBatchSize = 50
+	testSettings.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = true
+
+	blockAssembler := &BlockAssembler{
+		utxoStore: mockStore,
+		settings:  testSettings,
+		logger:    ulogger.TestLogger{},
+	}
+
+	var parentHash, childHash, grandchildHash chainhash.Hash
+	for j := range parentHash {
+		parentHash[j] = 0xAA
+		childHash[j] = 0xBB
+		grandchildHash[j] = 0xCC
+	}
+
+	childTx := &utxo.UnminedTransaction{
+		Node:       &subtree.Node{Hash: childHash, Fee: 1000, SizeInBytes: 250},
+		TxInpoints: singleParentInpointsPtr(parentHash, 0),
+		CreatedAt:  1,
+	}
+	grandchildTx := &utxo.UnminedTransaction{
+		Node:       &subtree.Node{Hash: grandchildHash, Fee: 1000, SizeInBytes: 250},
+		TxInpoints: singleParentInpointsPtr(childHash, 0),
+		CreatedAt:  2,
+	}
+
+	mockStore.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			for _, unresolved := range args.Get(1).([]*utxo.UnresolvedMetaData) {
+				unresolved.Data = &meta.Data{BlockIDs: []uint32{}, UnminedSince: 1}
+			}
+		}).
+		Return(nil)
+
+	validTxs, err := blockAssembler.validateParentChain(ctx, []*utxo.UnminedTransaction{childTx, grandchildTx}, map[uint32]bool{1: true})
+	require.NoError(t, err)
+	require.Empty(t, validTxs)
+}
+
 // TestValidateParentChain_BatchDecorateRequestsConflicting verifies that validateParentChain
 // asks the store for the Conflicting field. Without this field in the decorate call, the
 // defence-in-depth check would read a zero value and always accept the child.

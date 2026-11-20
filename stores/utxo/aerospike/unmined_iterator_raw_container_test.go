@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
@@ -117,4 +118,60 @@ func TestUnminedIterator_RawScanMatchesStore(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A record whose external file has gone is left out of the block assembly scan,
+// against a real Aerospike and file blob store: the scan must not fail, and
+// every other unmined transaction, external ones included, still comes back.
+func TestUnminedIterator_SkipsExternalRecordWithMissingFile(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.ExternalizeAllTransactions = true
+
+	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	height := store.GetBlockHeight() + 1
+
+	healthy := paginatedSpendAndCreateTx(t, 0, 1000, 2)
+	_, _, err := store.SpendAndCreate(ctx, healthy, height, utxo.WithCreateOnly())
+	require.NoError(t, err)
+
+	broken := paginatedSpendAndCreateTx(t, 1, 2000, 2)
+	_, _, err = store.SpendAndCreate(ctx, broken, height, utxo.WithCreateOnly())
+	require.NoError(t, err)
+
+	// The unmined_since index is built asynchronously; wait while both files
+	// still exist, so a missing record below can only be the skip.
+	require.True(t, waitUnminedIteratorHas(t, ctx, store, broken.TxIDChainHash(), 30*time.Second))
+	require.True(t, waitUnminedIteratorHas(t, ctx, store, healthy.TxIDChainHash(), 30*time.Second))
+
+	require.NoError(t, store.GetExternalStore().Del(ctx, broken.TxIDChainHash()[:], fileformat.FileTypeTx))
+
+	it, err := store.GetUnminedTxIterator()
+	require.NoError(t, err)
+
+	got := map[chainhash.Hash]*utxo.UnminedTransaction{}
+
+	for {
+		batch, err := it.Next(ctx)
+		require.NoError(t, err)
+
+		if len(batch) == 0 {
+			break
+		}
+
+		for _, tx := range batch {
+			if !tx.Skip {
+				got[tx.Hash] = tx
+			}
+		}
+	}
+
+	require.NoError(t, it.Err())
+	require.NoError(t, it.Close())
+
+	require.NotContains(t, got, *broken.TxIDChainHash())
+	require.Contains(t, got, *healthy.TxIDChainHash())
+	require.Equal(t, []chainhash.Hash{*tests.Tx.TxIDChainHash()}, got[*healthy.TxIDChainHash()].TxInpoints.GetParentTxHashes())
 }

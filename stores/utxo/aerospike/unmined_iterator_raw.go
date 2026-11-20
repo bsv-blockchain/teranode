@@ -223,10 +223,15 @@ func (h *rawUnminedHandler) EndRecord() error {
 		return err
 	}
 
+	if tx == nil {
+		return nil
+	}
+
 	return h.add(tx)
 }
 
-// buildTx mirrors processRecord for a raw record.
+// buildTx mirrors processRecord for a raw record. It returns a nil transaction
+// and no error for a record the scan leaves out.
 func (h *rawUnminedHandler) buildTx() (*utxo.UnminedTransaction, error) {
 	r := &h.cur
 
@@ -275,6 +280,17 @@ func (h *rawUnminedHandler) buildTx() (*utxo.UnminedTransaction, error) {
 		h.busy.Store(true)
 		*txInpoints, err = h.it.processExternalTransactionInpoints(h.ctx, &r.txid)
 		h.busy.Store(false)
+
+		// The record says the transaction is in the external store, but its file
+		// is not there. No retry or restart brings it back, so failing the scan
+		// would stop block assembly loading every other unmined transaction, on
+		// every start. Leave this one out instead. Its children are left out too
+		// by the parent chain check on reload (blockassembly_onRestartValidateParentChain).
+		if errors.Is(err, errors.ErrNotFound) {
+			h.it.store.logger.Errorf("[unminedTxIterator][%s] skipping unmined transaction: its record is external but the external store has no file for it: %v", r.txid.String(), err)
+
+			return nil, nil
+		}
 	case r.fastInputs:
 		*txInpoints, err = h.txInpointsFromBuffer()
 	case r.inputsErr != nil:

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
 	"testing"
 	"time"
 
@@ -13,7 +14,10 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -691,4 +695,54 @@ func TestRawUnminedHandler_FastInputsFallBackOnUnexpectedShape(t *testing.T) {
 		bins := withBin(rawMainRecordBins(1), fields.Inputs.String(), particle_type.LIST, encInputs(whole[:len(whole)-1]))
 		require.ErrorContains(t, feed(t, h, bins), "failed to process transaction inpoints")
 	})
+}
+
+// rawExternalRecordBins is record i stored externally: no inputs bin, so its
+// inpoints can only come from the external store.
+func rawExternalRecordBins(i int) []rawBin {
+	var bins []rawBin
+
+	for _, b := range rawMainRecordBins(i) {
+		if b.name != fields.Inputs.String() {
+			bins = append(bins, b)
+		}
+	}
+
+	return append(bins, rawBin{fields.External.String(), particle_type.BOOL, encBool(true)})
+}
+
+// An external record whose file is gone can never be read, so the scan leaves
+// it out and goes on: one such record must not stop block assembly loading
+// every other unmined transaction.
+func TestRawUnminedHandler_SkipsExternalRecordWithMissingFile(t *testing.T) {
+	InitPrometheusMetrics()
+
+	it, h := newRawTestHandler(t)
+	it.store.externalStore = memory.New()
+
+	require.NoError(t, feed(t, h, rawExternalRecordBins(1)))
+	require.NoError(t, feed(t, h, rawMainRecordBins(2)))
+	require.NoError(t, h.flush())
+
+	txs := collectResults(it)
+	require.Len(t, txs, 1)
+
+	var want chainhash.Hash
+	binary.LittleEndian.PutUint64(want[:], 3)
+	require.Equal(t, want, txs[0].Hash)
+}
+
+// Any other external store failure may pass, so it still fails the scan
+// rather than dropping a transaction that could be read on the next attempt.
+func TestRawUnminedHandler_ExternalStoreErrorStillFails(t *testing.T) {
+	InitPrometheusMetrics()
+
+	it, h := newRawTestHandler(t)
+
+	externalStore := &blob.MockStore{}
+	externalStore.On("GetIoReader", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(io.NopCloser(bytes.NewReader(nil)), errors.NewStorageError("disk unavailable"))
+	it.store.externalStore = externalStore
+
+	require.ErrorContains(t, feed(t, h, rawExternalRecordBins(1)), "failed to process transaction inpoints")
 }
