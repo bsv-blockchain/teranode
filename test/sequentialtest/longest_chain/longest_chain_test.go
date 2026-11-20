@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -212,12 +213,22 @@ func testLongestChainInvalidateBlockWithOldTx(t *testing.T, utxoStore string) {
 
 	// create a block with tx1 and tx2 that will be invalid as tx2 is already on block4a
 	_, block5a := td.CreateTestBlock(t, block4a, 5001, tx1, tx2)
-	// processing the block as "test" will allow us to do optimistic mining
-	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5a, "test", false), "Failed to process block")
 
-	td.WaitForBlock(t, block5a, blockWait)
+	// BV-BODY-017 requires block5a to be rejected ERR_BLOCK_INVALID before it can become the tip.
+	// Today it is added and only invalidated once mined-tagging finds tx2 already on the chain
+	// (GAP-BV-011, proven by TestKnownDefect_BlockReincludingAncestorMinedTx_RejectedBeforeAddBlock).
+	// This test is about what happens to tx1 and tx2 afterwards, so it accepts either route to the
+	// invalid verdict and waits for it before checking the end state.
+	if err := td.BlockValidation.ValidateBlock(td.Ctx, block5a, "test", false); err != nil {
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "block5a re-includes tx2 from block4a, got: %v", err)
+	} else {
+		require.Eventually(t, func() bool {
+			_, meta, err := td.BlockchainClient.GetBlockHeader(td.Ctx, block5a.Hash())
+			return err == nil && meta.Invalid
+		}, blockWait, 100*time.Millisecond, "block5a must be marked invalid once tx2 is found already mined in block4a")
+	}
 
-	// should return back to block4a as block5a is invalid
+	// block5a is invalid, so the tip is block4a
 
 	td.WaitForBlock(t, block4a, blockWait)
 
