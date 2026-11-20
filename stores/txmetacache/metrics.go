@@ -42,6 +42,8 @@ var (
 	prometheusBlockValidationTxMetaCacheCurrentGenEntries prometheus.Gauge
 	// Count of valid entries from the previous generation not yet overwritten
 	prometheusBlockValidationTxMetaCachePreviousGenEntries prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheBytes              prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheCapacityBytes      prometheus.Gauge
 
 	// prometheusTxMetaCacheTombstonedWritesEvicted counts writes of a tx that
 	// DeleteDemoted had evicted: dropped before the write, or evicted right
@@ -57,9 +59,10 @@ var (
 )
 
 var txMetaCacheMetricsRegistry = struct {
-	mu     sync.Mutex
-	caches map[*TxMetaCache]struct{}
-	cancel context.CancelFunc
+	mu        sync.Mutex
+	publishMu sync.Mutex
+	caches    map[*TxMetaCache]struct{}
+	cancel    context.CancelFunc
 }{}
 
 const txMetaCachePrometheusUpdateInterval = 5 * time.Second
@@ -120,6 +123,13 @@ func txMetaCacheMetricsSnapshot() []*TxMetaCache {
 }
 
 func updateTxMetaCachePrometheusMetrics() {
+	txMetaCacheMetricsRegistry.publishMu.Lock()
+	defer txMetaCacheMetricsRegistry.publishMu.Unlock()
+
+	updateTxMetaCachePrometheusMetricsLocked()
+}
+
+func updateTxMetaCachePrometheusMetricsLocked() {
 	if prometheusBlockValidationTxMetaCacheInsertions == nil {
 		return
 	}
@@ -139,6 +149,8 @@ func updateTxMetaCachePrometheusMetrics() {
 		currentGenEntries  uint64
 		previousGenEntries uint64
 		laneWaits          uint64
+		bytes              uint64
+		capacityBytes      uint64
 	)
 
 	for _, cache := range caches {
@@ -157,6 +169,8 @@ func updateTxMetaCachePrometheusMetrics() {
 		previousGenEntries += cacheStats.PreviousGenEntries
 		laneWaits += cacheStats.LaneWaits
 		evictions += cacheStats.Evictions
+		bytes += cacheStats.Bytes
+		capacityBytes += cacheStats.CapacityBytes
 	}
 
 	prometheusBlockValidationTxMetaCacheInsertions.Set(float64(insertions))
@@ -171,6 +185,8 @@ func updateTxMetaCachePrometheusMetrics() {
 	prometheusBlockValidationTxMetaCacheCurrentGenEntries.Set(float64(currentGenEntries))
 	prometheusBlockValidationTxMetaCachePreviousGenEntries.Set(float64(previousGenEntries))
 	prometheusBlockValidationTxMetaCacheLaneWaits.Set(float64(laneWaits))
+	prometheusBlockValidationTxMetaCacheBytes.Set(float64(bytes))
+	prometheusBlockValidationTxMetaCacheCapacityBytes.Set(float64(capacityBytes))
 }
 
 // initPrometheusMetrics initializes all Prometheus metrics for the txmetacache package.
@@ -349,6 +365,24 @@ func _initPrometheusMetrics() {
 			Subsystem: "tx_meta_cache",
 			Name:      "previous_gen_entries",
 			Help:      "Number of valid entries from the previous generation in the tx meta cache",
+		},
+	)
+
+	prometheusBlockValidationTxMetaCacheBytes = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "bytes",
+			Help:      "Bytes of the tx meta cache capacity that hold entries",
+		},
+	)
+
+	prometheusBlockValidationTxMetaCacheCapacityBytes = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "capacity_bytes",
+			Help:      "Usable capacity of the tx meta cache in bytes, the bound for teranode_tx_meta_cache_bytes",
 		},
 	)
 
