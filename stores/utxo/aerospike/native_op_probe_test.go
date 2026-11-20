@@ -9,9 +9,7 @@ import (
 	"time"
 
 	aerospike "github.com/bsv-blockchain/aerospike-client-go/v8"
-	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	aeropruner "github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -124,72 +122,6 @@ func TestNativeTeranodeOpProbe_Container(t *testing.T) {
 			"a cancelled probe must demote rather than pass by default")
 	})
 
-	// Sub-op 15 has its own probe, because a fork build older than it serves
-	// every other native op. AEROSPIKE_EXPECT_NATIVE_VERIFIED_MARKER=false runs
-	// these against such a build (aerospike-tn:mark) with native ops expected.
-	expectVerifiedMarker := expectNative
-	if v := os.Getenv("AEROSPIKE_EXPECT_NATIVE_VERIFIED_MARKER"); v != "" {
-		expectVerifiedMarker = v == "true"
-	}
-
-	t.Run("verified_marker_probe_decision_matches_server", func(t *testing.T) {
-		require.Equal(t, expectVerifiedMarker, store.useNativeVerifiedMarkerWrite(),
-			"the pruner's marker write must use sub-op 15 exactly when the server serves it")
-	})
-
-	t.Run("verified_marker_probe_direct", func(t *testing.T) {
-		require.Equal(t, expectVerifiedMarker, store.detectNativeVerifiedMarkerSupport(ctx),
-			"the sub-op 15 probe must accept a server that writes the verified marker and refuses the two non-spenders, and reject any other")
-	})
-
-	t.Run("verified_marker_probe_honours_cancelled_context", func(t *testing.T) {
-		cancelled, cancel := context.WithCancel(ctx)
-		cancel()
-		require.False(t, store.detectNativeVerifiedMarkerSupport(cancelled))
-	})
-
-	// A server without sub-op 15 answers a live marker write with
-	// PARAMETER_ERROR. The observer the pruner calls must turn the native
-	// marker write off and leave the other native ops alone.
-	t.Run("verified_marker_parameter_error_turns_sub_op_15_off", func(t *testing.T) {
-		if expectVerifiedMarker {
-			t.Skip("the server serves sub-op 15")
-		}
-
-		prevOps, prevMarker := store.useNativeTeranodeOps.Load(), store.useNativeVerifiedMarker.Load()
-		store.useNativeTeranodeOps.Store(true)
-		store.useNativeVerifiedMarker.Store(true)
-
-		defer func() {
-			store.useNativeTeranodeOps.Store(prevOps)
-			store.useNativeVerifiedMarker.Store(prevMarker)
-		}()
-
-		key, err := aerospike.NewKey(store.namespace, store.setName, "_native-verified-marker-demote-test")
-		require.NoError(t, err)
-
-		child := chainhash.HashH([]byte("child"))
-		spent := make([]byte, 68)
-		copy(spent[32:64], child.CloneBytes())
-
-		policy := probePolicy()
-		require.NoError(t, store.client.PutBins(policy, key, aerospike.NewBin(fields.Utxos.String(), []any{spent})))
-
-		defer func() {
-			_, _ = store.client.Delete(policy, key)
-		}()
-
-		record, native := store.prunerVerifiedMarkerRecord(key, []aeropruner.MarkerChild{{Hash: &child, Offsets: []uint32{0}}})
-		require.True(t, native)
-
-		_ = store.client.BatchOperate(nil, []aerospike.BatchRecordIfc{record})
-		require.True(t, hasResultCode(record.BatchRec().Err, types.PARAMETER_ERROR), "got %v", record.BatchRec().Err)
-
-		store.observePrunerNativeOpError(record.BatchRec().Err)
-		require.False(t, store.useNativeVerifiedMarkerWrite())
-		require.True(t, store.useNativeTeranodeOps.Load(), "the other native ops stay on")
-	})
-
 	// The probe reads the dispatcher's answers under probeSpendIdx, which differs from the probe
 	// record's offset and vout. Whatever serves spendMulti here, the UDF on a stock image or the
 	// native dispatcher on the fork image, must key what it reports by that idx.
@@ -201,9 +133,9 @@ func TestNativeTeranodeOpProbe_Container(t *testing.T) {
 
 		spender := spendpkg.NewSpendingData(&chainhash.Hash{0x04}, 0)
 
-		spend := func(data *spendpkg.SpendingData) *LuaMapResponse {
+		spendAt := func(data *spendpkg.SpendingData, height uint32) *LuaMapResponse {
 			raw, aerr := store.executeTeranodeOp(probePolicy(), key, subOpSpendMulti, "spendMulti",
-				[]aerospike.MapValue{store.probeSpendItem(hashes[0], data, 0)}, false, false, uint32(1000), store.settings.GetUtxoStoreBlockHeightRetention())
+				[]aerospike.MapValue{store.probeSpendItem(hashes[0], data, 0)}, false, false, height, store.settings.GetUtxoStoreBlockHeightRetention())
 			require.Nil(t, aerr)
 
 			res, err := store.ParseLuaMapResponse(raw)
@@ -212,14 +144,19 @@ func TestNativeTeranodeOpProbe_Container(t *testing.T) {
 			return res
 		}
 
+		spend := func(data *spendpkg.SpendingData) *LuaMapResponse { return spendAt(data, 1000) }
+
 		first := spend(spender)
 		require.Equal(t, LuaStatusOK, first.Status)
 		require.Empty(t, first.Idempotent, "the spend that wrote is not idempotent")
 
-		repeat := spend(spender)
+		// the repeat comes later, so a reply that echoes the incoming height cannot pass
+		repeat := spendAt(spender, 1005)
 		require.Equal(t, LuaStatusOK, repeat.Status)
 		require.Equal(t, []int{probeSpendIdx}, repeat.Idempotent, "the match is reported under the spend's idx")
 		require.True(t, probeReportsIdempotent(repeat))
+		require.Equal(t, map[int]uint32{probeSpendIdx: 1000}, repeat.IdempotentHeights, "the match carries the height the first spend recorded")
+		require.True(t, probeReportsHeight(repeat, 1000))
 
 		other := spend(spendpkg.NewSpendingData(&chainhash.Hash{0x05}, 0))
 		require.Equal(t, LuaStatusError, other.Status)
@@ -242,9 +179,13 @@ func TestNativeTeranodeOpProbe_Container(t *testing.T) {
 		// Force the native single-record path regardless of the probe outcome:
 		// the stock server exercises the error + runtime-demotion branch, the
 		// fork server the success branch with a verified mutation.
-		prev := store.useNativeTeranodeOps.Load()
+		prev, prevReplay := store.useNativeTeranodeOps.Load(), store.nativeReplayProtection.Load()
 		store.useNativeTeranodeOps.Store(true)
-		defer store.useNativeTeranodeOps.Store(prev)
+		store.nativeReplayProtection.Store(true)
+		defer func() {
+			store.useNativeTeranodeOps.Store(prev)
+			store.nativeReplayProtection.Store(prevReplay)
+		}()
 
 		key, err := aerospike.NewKey(store.namespace, store.setName, "_native-op-exec-test")
 		require.NoError(t, err)

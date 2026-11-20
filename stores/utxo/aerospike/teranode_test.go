@@ -428,10 +428,16 @@ func TestParseLuaMapResponse_Conflicting(t *testing.T) {
 func TestLuaMapResponseResetClearsIdempotent(t *testing.T) {
 	s := &Store{}
 
-	res, err := s.ParseLuaMapResponse(map[interface{}]interface{}{"status": "OK", "idempotent": []interface{}{0, 2}})
+	res, err := s.ParseLuaMapResponse(map[interface{}]interface{}{
+		"status":            "OK",
+		"idempotent":        []interface{}{0, 2},
+		"idempotentHeights": map[interface{}]interface{}{0: 1200, 2: int64(1300)},
+	})
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 2}, res.Idempotent, "fixture: the list is parsed")
+	require.Equal(t, map[int]uint32{0: 1200, 2: 1300}, res.IdempotentHeights, "fixture: the heights are parsed")
 
 	res.Reset()
 	require.Nil(t, res.Idempotent)
+	require.Nil(t, res.IdempotentHeights)
 }

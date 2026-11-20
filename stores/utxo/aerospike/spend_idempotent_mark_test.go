@@ -21,10 +21,24 @@ func TestMarkIdempotentSpendsOnlyMarksThisRecordsItems(t *testing.T) {
 	// This record was asked about items 2 and 3 only.
 	batchByKey := []aerospike.MapValue{{"idx": 2}, {"idx": 3}}
 
-	markIdempotentSpends([]int{1, 3, 9, -1}, batchByKey, batch)
+	// The heights come back from the same dispatcher: one for an index of another record, one for
+	// this record's own match, and one for an index that was not reported idempotent.
+	markIdempotentSpends([]int{1, 3, 9, -1}, map[int]uint32{1: 1100, 2: 1150, 3: 1200}, batchByKey, batch)
 
 	require.False(t, batch[0].idempotent)
 	require.False(t, batch[1].idempotent, "index 1 is in the batch but belongs to another record")
 	require.False(t, batch[2].idempotent, "not reported idempotent")
 	require.True(t, batch[3].idempotent, "this record's own idempotent match is flagged")
+
+	require.True(t, batch[3].hasRecordedHeight)
+	require.Equal(t, uint32(1200), batch[3].recordedHeight, "the match carries the height its spend recorded")
+
+	require.False(t, batch[1].hasRecordedHeight, "a height reported for another record's index is ignored")
+	require.False(t, batch[2].hasRecordedHeight, "a height for an index not reported idempotent is ignored")
+
+	// a match reported without a height has none, so it counts as historical
+	other := []*batchSpend{{}, {}, {}, {}}
+	markIdempotentSpends([]int{3}, nil, batchByKey, other)
+	require.True(t, other[3].idempotent)
+	require.False(t, other[3].hasRecordedHeight)
 }

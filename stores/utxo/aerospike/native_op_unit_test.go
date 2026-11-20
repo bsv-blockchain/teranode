@@ -321,12 +321,11 @@ func TestRecordReplayProtection(t *testing.T) {
 	}
 }
 
-// TestInitNativeTeranodeOpsPublishesRouting: the replay probe records its verdict from inside
-// detectNativeTeranodeOpSupport, before initNativeTeranodeOps stores useNativeTeranodeOps and
-// useNativeVerifiedMarker, so only the publish at the end of initNativeTeranodeOps sees the whole
-// decision. The probes are stubbed in the order production runs them. A healthy native cluster
-// reports 1 for both routes, a server that fails a probe reports 0 for that route, and native
-// ops off reports 0 for both, whatever the gauge held before.
+// TestInitNativeTeranodeOpsPublishesRouting: the replay-protection verdict is recorded inside
+// detectNativeTeranodeOpSupport, before initNativeTeranodeOps stores useNativeTeranodeOps, so only
+// the publish at the end of initNativeTeranodeOps sees the whole decision. A healthy native
+// cluster reports 1, a server that fails the probe reports 0, and native ops off reports 0,
+// whatever the gauge held before.
 func TestInitNativeTeranodeOpsPublishesRouting(t *testing.T) {
 	InitPrometheusMetrics()
 
@@ -337,21 +336,17 @@ func TestInitNativeTeranodeOpsPublishesRouting(t *testing.T) {
 		name       string
 		ops        bool
 		replay     replayProbeVerdict
-		marker     bool
 		wantReplay float64
-		wantMarker float64
 	}{
-		{name: "native ops and both probes proven", ops: true, replay: replayProbeProven, marker: true, wantReplay: 1, wantMarker: 1},
-		{name: "replay protection not proven", ops: true, replay: replayProbeMismatch, marker: true, wantReplay: 0, wantMarker: 1},
-		{name: "sub-op 15 not proven", ops: true, replay: replayProbeProven, marker: false, wantReplay: 1, wantMarker: 0},
-		{name: "native ops off", ops: false, replay: replayProbeProven, marker: true, wantReplay: 0, wantMarker: 0},
+		{name: "native ops and the probe proven", ops: true, replay: replayProbeProven, wantReplay: 1},
+		{name: "replay protection not proven", ops: true, replay: replayProbeMismatch, wantReplay: 0},
+		{name: "native ops off", ops: false, replay: replayProbeProven, wantReplay: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &Store{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t)}
 
 			// The opposite of what the run should publish, so a missing publish shows.
 			prometheusAerospikeNativeRouting.WithLabelValues(nativeRouteReplayProtection).Set(1 - tc.wantReplay)
-			prometheusAerospikeNativeRouting.WithLabelValues(nativeRouteVerifiedMarker).Set(1 - tc.wantMarker)
 
 			opsProbe := no
 			if tc.ops {
@@ -362,42 +357,28 @@ func TestInitNativeTeranodeOpsPublishesRouting(t *testing.T) {
 				}
 			}
 
-			markerProbe := no
-			if tc.marker {
-				markerProbe = yes
-			}
-
-			s.nativeProbes = &nativeSupportProbes{ops: opsProbe, markLongestChain: yes, verifiedMarker: markerProbe}
+			s.nativeProbes = &nativeSupportProbes{ops: opsProbe, markLongestChain: yes}
 
 			s.initNativeTeranodeOps(context.Background())
 
 			require.Equal(t, tc.wantReplay, nativeRoutingGauge(nativeRouteReplayProtection))
-			require.Equal(t, tc.wantMarker, nativeRoutingGauge(nativeRouteVerifiedMarker))
 		})
 	}
 }
 
-// TestNativeRoutingGaugeFollowsDemotion: a runtime PARAMETER_ERROR turns native ops off, and
-// a sub-op 15 rejection turns the native marker write off on its own. The gauge follows both.
+// TestNativeRoutingGaugeFollowsDemotion: a runtime PARAMETER_ERROR turns native ops off and the
+// gauge follows it.
 func TestNativeRoutingGaugeFollowsDemotion(t *testing.T) {
 	InitPrometheusMetrics()
 
 	s := &Store{logger: ulogger.TestLogger{}}
 	s.useNativeTeranodeOps.Store(true)
 	s.nativeReplayProtection.Store(true)
-	s.useNativeVerifiedMarker.Store(true)
 	s.publishNativeRouting()
 
 	require.Equal(t, 1.0, nativeRoutingGauge(nativeRouteReplayProtection))
-	require.Equal(t, 1.0, nativeRoutingGauge(nativeRouteVerifiedMarker))
-
-	s.observePrunerNativeOpError(aeroErr(types.PARAMETER_ERROR))
-
-	require.Equal(t, 1.0, nativeRoutingGauge(nativeRouteReplayProtection), "sub-op 15 is separate from replay protection")
-	require.Equal(t, 0.0, nativeRoutingGauge(nativeRouteVerifiedMarker), "the marker write is back on the filtered path")
 
 	s.demoteNativeOnUnsupported(aeroErr(types.PARAMETER_ERROR))
 
 	require.Equal(t, 0.0, nativeRoutingGauge(nativeRouteReplayProtection), "native ops are off")
-	require.Equal(t, 0.0, nativeRoutingGauge(nativeRouteVerifiedMarker))
 }

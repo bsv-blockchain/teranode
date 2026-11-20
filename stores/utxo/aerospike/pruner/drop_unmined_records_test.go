@@ -72,7 +72,7 @@ func TestDropUnminedRecords(t *testing.T) {
 
 			before := testutil.ToFloat64(prometheusUtxoRecordsSkippedUnmined)
 
-			kept, dropped, _, _ := svc.dropUnminedRecords([]*aerospike.Result{tt.rec})
+			kept, dropped, _ := svc.dropUnminedRecords([]*aerospike.Result{tt.rec})
 
 			require.Equal(t, tt.wantReads, called)
 
@@ -107,7 +107,7 @@ func TestDropUnminedRecords_Clears(t *testing.T) {
 	}
 
 	t.Run("unmined master with 2 pages", func(t *testing.T) {
-		_, dropped, clears, _ := svc.dropUnminedRecords([]*aerospike.Result{
+		_, dropped, clears := svc.dropUnminedRecords([]*aerospike.Result{
 			record(0, aerospike.BinMap{svc.fieldUnminedSince: 7, svc.fieldTotalExtraRecs: 2}),
 		})
 		require.Equal(t, 1, dropped)
@@ -121,7 +121,7 @@ func TestDropUnminedRecords_Clears(t *testing.T) {
 		}
 		defer func() { svc.readMastersFn = nil }()
 
-		_, dropped, clears, _ := svc.dropUnminedRecords([]*aerospike.Result{record(1, aerospike.BinMap{})})
+		_, dropped, clears := svc.dropUnminedRecords([]*aerospike.Result{record(1, aerospike.BinMap{})})
 		require.Equal(t, 1, dropped)
 		require.Len(t, clears, 1)
 		require.Len(t, clears[0].pageKeys, 1)
@@ -133,13 +133,13 @@ func TestDropUnminedRecords_Clears(t *testing.T) {
 		}
 		defer func() { svc.readMastersFn = nil }()
 
-		_, dropped, clears, _ := svc.dropUnminedRecords([]*aerospike.Result{record(1, aerospike.BinMap{})})
+		_, dropped, clears := svc.dropUnminedRecords([]*aerospike.Result{record(1, aerospike.BinMap{})})
 		require.Equal(t, 1, dropped)
 		require.Empty(t, clears)
 	})
 
 	t.Run("mined master is not cleared", func(t *testing.T) {
-		_, dropped, clears, _ := svc.dropUnminedRecords([]*aerospike.Result{record(0, aerospike.BinMap{svc.fieldTotalExtraRecs: 1})})
+		_, dropped, clears := svc.dropUnminedRecords([]*aerospike.Result{record(0, aerospike.BinMap{svc.fieldTotalExtraRecs: 1})})
 		require.Zero(t, dropped)
 		require.Empty(t, clears)
 	})

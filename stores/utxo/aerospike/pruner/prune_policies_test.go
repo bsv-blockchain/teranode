@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,7 +59,7 @@ func TestBuildDeletionBatchRecordsHardDelete(t *testing.T) {
 	for _, commitLevel := range []aerospike.CommitLevel{aerospike.COMMIT_MASTER, aerospike.COMMIT_ALL} {
 		keys := testKeys(t, 3)
 
-		records := buildDeletionBatchRecords(keys, nil, testPruneHeight, false, commitLevel)
+		records := buildDeletionBatchRecords(keys, false, commitLevel)
 
 		require.Len(t, records, 3)
 
@@ -77,7 +76,7 @@ func TestBuildDeletionBatchRecordsTTLTouch(t *testing.T) {
 	for _, commitLevel := range []aerospike.CommitLevel{aerospike.COMMIT_MASTER, aerospike.COMMIT_ALL} {
 		keys := testKeys(t, 3)
 
-		records := buildDeletionBatchRecords(keys, nil, testPruneHeight, true, commitLevel)
+		records := buildDeletionBatchRecords(keys, true, commitLevel)
 
 		require.Len(t, records, 3)
 
@@ -94,122 +93,6 @@ func TestBuildDeletionBatchRecordsTTLTouch(t *testing.T) {
 }
 
 func TestBuildDeletionBatchRecordsEmpty(t *testing.T) {
-	require.Empty(t, buildDeletionBatchRecords(nil, nil, testPruneHeight, false, aerospike.COMMIT_MASTER))
-	require.Empty(t, buildDeletionBatchRecords(nil, nil, testPruneHeight, true, aerospike.COMMIT_MASTER))
-}
-
-func testParentUpdates(t *testing.T, n int) map[string]*parentUpdateInfo {
-	t.Helper()
-
-	updates := make(map[string]*parentUpdateInfo, n)
-
-	for i := range n {
-		key, err := aerospike.NewKey("test", "utxo", 1000+i)
-		require.NoError(t, err)
-
-		updates[key.String()] = &parentUpdateInfo{key: key, childHashes: []*chainhash.Hash{{}}}
-	}
-
-	return updates
-}
-
-// Marker writes mutate records that SURVIVE the prune, so they must stay on
-// COMMIT_ALL even when removals are relaxed. Asserted against the records the
-// pruner actually builds; asserting the aerospike client's constructor
-// defaults instead would guard nothing about this package.
-func TestBuildVerifiedMarkerRecordsKeepCommitAll(t *testing.T) {
-	updates := testParentUpdates(t, 2)
-	keys := testKeys(t, 3)
-
-	s := &Service{
-		utxoSetTTL:           false,
-		removalCommitLevel:   aerospike.COMMIT_MASTER,
-		fieldDeletedChildren: "deletedChildren",
-		fieldUtxos:           "utxos",
-	}
-
-	batchRecords, _, _ := s.buildVerifiedMarkerRecords(updates)
-
-	require.Len(t, batchRecords, len(updates))
-
-	for i, record := range batchRecords {
-		batchWrite, ok := record.(*aerospike.BatchWrite)
-		require.True(t, ok, "marker record %d should be a BatchWrite", i)
-		require.Equal(t, aerospike.COMMIT_ALL, batchWrite.Policy.CommitLevel, "marker write %d must not inherit the relaxed removal commit level", i)
-		require.Equal(t, aerospike.UPDATE_ONLY, batchWrite.Policy.RecordExistsAction)
-	}
-
-	for i, record := range buildDeletionBatchRecords(keys, nil, testPruneHeight, s.utxoSetTTL, s.removalCommitLevel) {
-		batchDelete, ok := record.(*aerospike.BatchDelete)
-		require.True(t, ok, "child record %d should be a BatchDelete", i)
-		require.Equal(t, aerospike.COMMIT_MASTER, batchDelete.Policy.CommitLevel)
-	}
-}
-
-// TestBuildVerifiedMarkerRecordsChoosesThePath: the marker write is the native
-// sub-op 15 record when the store's builder says the server serves it, and the
-// filtered map write when there is no builder or it declines. The builder gets
-// every queued child with the offsets it claims.
-func TestBuildVerifiedMarkerRecordsChoosesThePath(t *testing.T) {
-	child := chainhash.HashH([]byte("child"))
-
-	newUpdates := func() map[string]*parentUpdateInfo {
-		key, err := aerospike.NewKey("test", "utxo", 2000)
-		require.NoError(t, err)
-
-		info := &parentUpdateInfo{key: key, seen: make(map[chainhash.Hash]struct{})}
-		info.add(&child, 3)
-		info.add(&child, 5)
-
-		return map[string]*parentUpdateInfo{key.String(): info}
-	}
-
-	s := &Service{fieldDeletedChildren: "deletedChildren", fieldUtxos: "utxos"}
-
-	filtered := func(t *testing.T, records []aerospike.BatchRecordIfc, native []bool) {
-		t.Helper()
-		require.Len(t, records, 1)
-		require.Equal(t, []bool{false}, native)
-
-		batchWrite, ok := records[0].(*aerospike.BatchWrite)
-		require.True(t, ok)
-		require.NotNil(t, batchWrite.Policy.FilterExpression, "the filtered write carries markerFilter")
-		require.Equal(t, uint32(aerospike.TTLDontUpdate), batchWrite.Policy.Expiration)
-		require.Equal(t, aerospike.UPDATE_ONLY, batchWrite.Policy.RecordExistsAction)
-	}
-
-	t.Run("no builder takes the filtered write", func(t *testing.T) {
-		records, _, native := s.buildVerifiedMarkerRecords(newUpdates())
-		filtered(t, records, native)
-	})
-
-	t.Run("a builder that declines takes the filtered write", func(t *testing.T) {
-		s.buildVerifiedMarkerRecord = func(*aerospike.Key, []MarkerChild) (aerospike.BatchRecordIfc, bool) { return nil, false }
-		t.Cleanup(func() { s.buildVerifiedMarkerRecord = nil })
-
-		records, _, native := s.buildVerifiedMarkerRecords(newUpdates())
-		filtered(t, records, native)
-	})
-
-	t.Run("a builder that serves sub-op 15 takes the native write", func(t *testing.T) {
-		var got []MarkerChild
-
-		s.buildVerifiedMarkerRecord = func(key *aerospike.Key, children []MarkerChild) (aerospike.BatchRecordIfc, bool) {
-			got = children
-			return testNativeMarkerRecord(key, children)
-		}
-		t.Cleanup(func() { s.buildVerifiedMarkerRecord = nil })
-
-		records, _, native := s.buildVerifiedMarkerRecords(newUpdates())
-		require.Len(t, records, 1)
-		require.Equal(t, []bool{true}, native)
-		require.Equal(t, []MarkerChild{{Hash: &child, Offsets: []uint32{3, 5}}}, got)
-
-		batchWrite, ok := records[0].(*aerospike.BatchWrite)
-		require.True(t, ok)
-		require.Nil(t, batchWrite.Policy.FilterExpression, "the native write checks the spender itself")
-		require.Equal(t, uint32(aerospike.TTLDontUpdate), batchWrite.Policy.Expiration)
-		require.Equal(t, aerospike.UPDATE_ONLY, batchWrite.Policy.RecordExistsAction)
-		require.Equal(t, aerospike.COMMIT_ALL, batchWrite.Policy.CommitLevel)
-	})
+	require.Empty(t, buildDeletionBatchRecords(nil, false, aerospike.COMMIT_MASTER))
+	require.Empty(t, buildDeletionBatchRecords(nil, true, aerospike.COMMIT_MASTER))
 }

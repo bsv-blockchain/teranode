@@ -27,6 +27,16 @@ func mkSpendItem(tag byte, group *completion.Group) *batchSpend {
 	}
 }
 
+// youngMatch marks item as an idempotent match recorded at the height the call spends at, so it is
+// not historical (utxo.IsHistoricalSpend) and the rollback may still reverse it.
+func youngMatch(item *batchSpend) *batchSpend {
+	item.idempotent = true
+	item.recordedHeight = item.blockHeight
+	item.hasRecordedHeight = true
+
+	return item
+}
+
 // TestBatchSpendComplete_PublishesAndNoClobber pins the two invariants the P0
 // abort-race fix relies on:
 //  1. complete() writes spend.Err, then sets published — so an abort-path
@@ -93,8 +103,7 @@ func TestAbortPathNeverReversesAnIdempotentMatchWhileAnInputIsUnanswered(t *test
 
 	a := mkSpendItem(1, nil) // in flight: not published
 
-	b := mkSpendItem(2, nil)
-	b.idempotent = true
+	b := youngMatch(mkSpendItem(2, nil))
 	b.completed.Store(true)
 	b.published.Store(true)
 
@@ -134,6 +143,85 @@ func TestAbortPathNeverReversesAnIdempotentMatchWhileAnInputIsUnanswered(t *test
 	require.Empty(t, res.rollbackSet())
 }
 
+// TestAbortPathKeepsAHistoricalMatchOutOfTheRollbackWithoutReading: a historical idempotent match
+// is a confirmed spend and is never reversed. On the abort path the caller's context is dead and
+// the dispatcher may still be writing the unpublished slots, so nothing is read or refused there:
+// the store has no client here, and a read would panic.
+func TestAbortPathKeepsAHistoricalMatchOutOfTheRollbackWithoutReading(t *testing.T) {
+	s := newTestStoreForGet(t)
+	// The rule needs a retention: with 0 nothing is pruned and no match is history.
+	s.settings.GlobalBlockHeightRetention = 288
+
+	// recorded 1,000 blocks before the call spends: history, whatever the spender's record says
+	historical := mkSpendItem(1, nil)
+	historical.idempotent = true
+	historical.blockHeight = 2001
+	historical.recordedHeight = 1000
+	historical.hasRecordedHeight = true
+
+	// a pre-upgrade entry with no height counts as history too
+	noHeight := mkSpendItem(2, nil)
+	noHeight.idempotent = true
+	noHeight.blockHeight = 2001
+
+	fresh := mkSpendItem(3, nil)
+
+	spent := mkSpendItem(4, nil)
+	spent.spend.Err = errors.NewUtxoSpentError(*spent.spend.TxID, spent.spend.Vout, *spent.spend.UTXOHash, spendpkg.NewSpendingData(spent.spend.TxID, 0))
+
+	for _, item := range []*batchSpend{historical, noHeight, fresh, spent} {
+		item.completed.Store(true)
+		item.published.Store(true)
+	}
+
+	res := s.resolveSpendCompletions(context.Background(), bt.NewTx(), []*batchSpend{historical, noHeight, fresh, spent}, true)
+
+	require.True(t, res.rollbackNeeded, "fixture: the ErrSpent input warrants a rollback")
+	require.Empty(t, res.idempotentSpends, "a historical match never enters the rollback")
+	require.Equal(t, []*utxo.Spend{fresh.spend}, res.rollbackSet(), "only the fresh write is reversed")
+	require.NoError(t, historical.spend.Err, "nothing is refused on the abort path")
+	require.NoError(t, noHeight.spend.Err)
+}
+
+// TestHistoricalMatchWhoseSpenderCannotBeReadFailsTheInput: the existence read cannot answer, so the
+// historical inputs are neither accepted nor refused as a replay. They fail with a storage error
+// that is not a replay answer, and the call's other matches are held back, not reversed, since an
+// input is unanswered.
+func TestHistoricalMatchWhoseSpenderCannotBeReadFailsTheInput(t *testing.T) {
+	s := newTestStoreForGet(t)
+	// The rule needs a retention: with 0 nothing is pruned and no match is history.
+	s.settings.GlobalBlockHeightRetention = 288
+
+	historical := mkSpendItem(1, nil)
+	historical.idempotent = true
+	historical.blockHeight = 2001
+	historical.recordedHeight = 1000
+	historical.hasRecordedHeight = true
+
+	young := youngMatch(mkSpendItem(2, nil))
+	young.blockHeight = 2001
+	young.recordedHeight = 2001
+
+	fresh := mkSpendItem(3, nil)
+
+	for _, item := range []*batchSpend{historical, young, fresh} {
+		item.completed.Store(true)
+		item.published.Store(true)
+	}
+
+	// a cancelled context makes the existence read fail before it is sent
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	res := s.resolveSpendCompletions(ctx, bt.NewTx(), []*batchSpend{historical, young, fresh}, false)
+
+	require.Error(t, historical.spend.Err)
+	require.False(t, utxo.IsReplayAnswer(historical.spend.Err), "an unanswered read is not the replay answer")
+	require.NotErrorIs(t, historical.spend.Err, errors.ErrUtxoSpendingTxPruned)
+	require.Equal(t, 1, res.unresolved, "the input whose answer is unknown")
+	require.Equal(t, []*utxo.Spend{fresh.spend}, res.rollbackSet(), "the young match is held back, the fresh write reversed")
+}
+
 // TestRollbackSet_RequireParentOutputsKeepsIdempotentMatches: on the second
 // wave of DefaultSpendAndCreateMulti (RequireParentOutputs) an idempotent match
 // is the first wave's own write or a confirmed spend, never an orphan to heal,
@@ -155,8 +243,7 @@ func TestRollbackSet_RequireParentOutputsKeepsIdempotentMatches(t *testing.T) {
 func TestResolveSpendCompletions_CarriesRequireParentOutputs(t *testing.T) {
 	s := newTestStoreForGet(t)
 
-	match := mkSpendItem(1, nil)
-	match.idempotent = true
+	match := youngMatch(mkSpendItem(1, nil))
 
 	fresh := mkSpendItem(2, nil)
 
@@ -219,4 +306,35 @@ func TestProcessSingleBatchResult_FlagsIdempotentBeforePublishing(t *testing.T) 
 	require.NoError(t, group.Wait(context.Background(), 5*time.Second))
 	require.True(t, item.published.Load())
 	require.True(t, item.idempotent, "the flag is set before the item is published")
+}
+
+// TestRetentionZeroAcceptsAnOldIdempotentMatch: with retention 0 the pruner sets no delete-at
+// heights, so no transaction is ever pruned and no match is historical. An old match, and one with
+// no recorded height, is an ordinary match: nothing is read (the store has no client here) and
+// nothing is refused. Relies on utxo.IsHistoricalSpend returning false for retention 0.
+func TestRetentionZeroAcceptsAnOldIdempotentMatch(t *testing.T) {
+	s := newTestStoreForGet(t)
+	s.settings.GlobalBlockHeightRetention = 0
+	s.settings.UtxoStore.BlockHeightRetentionAdjustment = 0
+
+	old := mkSpendItem(1, nil)
+	old.idempotent = true
+	old.blockHeight = 2001
+	old.recordedHeight = 1000
+	old.hasRecordedHeight = true
+
+	noHeight := mkSpendItem(2, nil)
+	noHeight.idempotent = true
+	noHeight.blockHeight = 2001
+
+	for _, item := range []*batchSpend{old, noHeight} {
+		item.completed.Store(true)
+		item.published.Store(true)
+	}
+
+	res := s.resolveSpendCompletions(context.Background(), bt.NewTx(), []*batchSpend{old, noHeight}, false)
+
+	require.NoError(t, old.spend.Err)
+	require.NoError(t, noHeight.spend.Err)
+	require.Len(t, res.idempotentSpends, 2, "ordinary matches, so a failed call may still heal them")
 }

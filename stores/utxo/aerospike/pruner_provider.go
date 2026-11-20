@@ -53,29 +53,10 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 		return prunerServiceInstance, prunerServiceError
 	}
 
-	// Create a new pruner service
-	prunerService, err := aeropruner.NewService(s.settings, s.prunerOptions())
-	if err != nil {
-		prunerServiceError = err
-		return nil, err
-	}
-
-	// Store the singleton instance
-	prunerServiceInstance = prunerService
-	prunerServiceError = nil
-
-	return prunerServiceInstance, nil
-}
-
-// prunerOptions is what the store hands the pruner service.
-//
-// BuildVerifiedMarkerRecord sends the replay-marker write as native sub-op 15
-// when the server serves it (detectNativeVerifiedMarkerSupport), and the
-// pruner falls back to its filtered map write otherwise. ObserveNativeOpError
-// turns sub-op 15 off on a runtime PARAMETER_ERROR, for a node of a
-// mixed-version cluster the start-up probe did not reach.
-func (s *Store) prunerOptions() aeropruner.Options {
-	return aeropruner.Options{
+	// Create options for the pruner service. The pruner only deletes: it writes no replay
+	// markers, so it makes no native-op or UDF call and needs no demotion hook. A replay of a
+	// pruned transaction is refused when it is spent, from the height stored with the spend.
+	opts := aeropruner.Options{
 		Logger:        s.logger,
 		Ctx:           s.ctx,
 		Client:        s.client,
@@ -86,7 +67,18 @@ func (s *Store) prunerOptions() aeropruner.Options {
 		ClearParentRefs: func(ctx context.Context, txHash *chainhash.Hash) error {
 			return utxo.ClearParentRefs(ctx, s, txHash)
 		},
-		BuildVerifiedMarkerRecord: s.prunerVerifiedMarkerRecord,
-		ObserveNativeOpError:      s.observePrunerNativeOpError,
 	}
+
+	// Create a new pruner service
+	prunerService, err := aeropruner.NewService(s.settings, opts)
+	if err != nil {
+		prunerServiceError = err
+		return nil, err
+	}
+
+	// Store the singleton instance
+	prunerServiceInstance = prunerService
+	prunerServiceError = nil
+
+	return prunerServiceInstance, nil
 }

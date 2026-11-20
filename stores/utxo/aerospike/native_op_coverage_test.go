@@ -34,12 +34,12 @@ func TestUseNativeForSubOp_Fencing(t *testing.T) {
 	for _, op := range allSubOps {
 		require.Falsef(t, off.useNativeForSubOp(op), "sub-op %d must use UDF when native disabled", op)
 
-		// unspend is fenced to UDF even when native is on; the replay-protection
-		// sub-ops are native only once that probe has passed.
-		want := op != subOpUnspend && !isReplayProtectionSubOp(op)
-		require.Equalf(t, want, on.useNativeForSubOp(op), "sub-op %d native routing without replay protection", op)
+		// Without the replay-protection probe nothing is native: a server
+		// that fails it may not read the 72-byte spent entries. unspend is
+		// fenced to UDF even once the probe has passed.
+		require.Falsef(t, on.useNativeForSubOp(op), "sub-op %d must use UDF without replay protection", op)
 
-		want = op != subOpUnspend
+		want := op != subOpUnspend
 		require.Equalf(t, want, proven.useNativeForSubOp(op), "sub-op %d native routing with replay protection", op)
 	}
 }
@@ -106,8 +106,9 @@ func TestTeranodeBatchRecord_Routing(t *testing.T) {
 		logger:                   ulogger.TestLogger{},
 	}
 	on.useNativeTeranodeOps.Store(true)
+	on.nativeReplayProtection.Store(true)
 
-	// Native enabled, non-fenced sub-op -> native BatchWrite.
+	// Native enabled and the replay probe passed, non-fenced sub-op -> native BatchWrite.
 	require.IsType(t, &aerospike.BatchWrite{}, on.teranodeBatchRecord(udfPolicy, "pkg", key, subOpSetLocked, "setLocked", true))
 
 	// Unspend is fenced -> UDF even when native is enabled.

@@ -287,7 +287,7 @@ func TestDropUnminedRecords_DedupesPageKeys(t *testing.T) {
 		return []masterRead{{record: &aerospike.Record{Bins: aerospike.BinMap{svc.fieldUnminedSince: 7}}}}, nil
 	}
 
-	_, dropped, clears, _ := svc.dropUnminedRecords([]*aerospike.Result{master, page})
+	_, dropped, clears := svc.dropUnminedRecords([]*aerospike.Result{master, page})
 	require.Equal(t, 2, dropped)
 	require.Len(t, clears, 1)
 	require.Len(t, clears[0].pageKeys, 1)

@@ -115,7 +115,7 @@ func TestStore_SpendExpressions_CrossBatchDoubleSpend(t *testing.T) {
 			// must be exactly 1 (the double-spend attempt must not overwrite or
 			// re-increment).
 			elem, spentUtxos := readSingleUtxoRecord(t, client, tSettings, store)
-			require.Len(t, elem, 68, "spent element must be 68 bytes (hash + spendingData)")
+			require.Len(t, elem, 72, "spent element must be 72 bytes (hash + spendingData + spend height)")
 			require.Equal(t, firstSpends[0].UTXOHash[:], elem[0:32], "stored utxo hash must be unchanged")
 			require.Equal(t, firstSpenderBytes, elem[32:68],
 				"stored spender must still be the first-seen spender, not the double-spender")

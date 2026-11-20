@@ -3,6 +3,7 @@ package aerospike
 
 import (
 	"context"
+	"encoding/binary"
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -199,7 +200,7 @@ func (s *Store) buildSpendFilterExpression(
 
 	// First-seen guard: the element at offset must be exactly the unspent
 	// 32-byte UTXO hash. An unspent element is the bare 32-byte hash; once
-	// spent it becomes 68 bytes (hash + 36-byte spendingData), so this
+	// spent it becomes 68 or 72 bytes (hash + 36-byte spendingData, and the spend height), so this
 	// equality is false the moment the UTXO has been spent — including by a
 	// different spender in an earlier batch. Without this clause ListSetOp
 	// would overwrite an already-spent element unconditionally, letting a
@@ -252,10 +253,15 @@ func (s *Store) buildSpendOperations(
 		aerospike.GetBinOp(fields.BlockIDs.String()),
 	}
 
-	// Create new UTXO bytes (32-byte hash + 36-byte spending data = 68 bytes)
-	newUtxo := make([]byte, 68)
+	// Create new UTXO bytes: 32-byte hash + 36-byte spending data + the spend's block height as
+	// 4 little-endian bytes = 72 bytes, the entry teranode.lua writes. An entry without the height
+	// would count as historical, and an honest retry of this spend would then be refused as a
+	// replay. A re-spend of an output that names the spender fails the first-seen filter and is
+	// answered by the Lua spend, which reports the recorded height.
+	newUtxo := make([]byte, spentUTXOWithHeightSize)
 	copy(newUtxo[0:32], utxoHash)
-	copy(newUtxo[32:68], spendingData)
+	copy(newUtxo[32:spentUTXOSize], spendingData)
+	binary.LittleEndian.PutUint32(newUtxo[spentUTXOSize:], currentBlockHeight)
 
 	// Update the UTXO at the specified offset
 	ops = append(ops,

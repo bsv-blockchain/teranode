@@ -42,6 +42,23 @@ func TestProbeVerdicts(t *testing.T) {
 		require.False(t, reportsIdempotent(nil, 0))
 	})
 
+	t.Run("a match must carry the height the first spend recorded, under the spend's idx", func(t *testing.T) {
+		withHeight := func(heights map[int]uint32) *LuaMapResponse {
+			return &LuaMapResponse{Status: LuaStatusOK, Idempotent: []int{probeSpendIdx}, IdempotentHeights: heights}
+		}
+
+		require.True(t, probeReportsHeight(withHeight(map[int]uint32{probeSpendIdx: 1}), 1))
+
+		require.False(t, probeReportsHeight(withHeight(nil), 1),
+			"a native answer without the recorded height fails the probe, so spends stay on the UDF")
+		require.False(t, probeReportsHeight(withHeight(map[int]uint32{}), 1))
+		require.False(t, probeReportsHeight(withHeight(map[int]uint32{probeSpendIdx: 5}), 1),
+			"echoing the incoming height is not reporting the recorded one")
+		require.False(t, probeReportsHeight(withHeight(map[int]uint32{0: 1}), 1), "a height keyed by offset or vout is not keyed by idx")
+		require.False(t, probeReportsHeight(&LuaMapResponse{Status: LuaStatusError, IdempotentHeights: map[int]uint32{probeSpendIdx: 1}}, 1))
+		require.False(t, probeReportsHeight(nil, 1))
+	})
+
 	t.Run("the probe spend's idx differs from its offset and vout", func(t *testing.T) {
 		store := &Store{utxoBatchSize: 128}
 		item := store.probeSpendItem(&chainhash.Hash{0x01}, spendpkg.NewSpendingData(&chainhash.Hash{0x02}, 0), 0)

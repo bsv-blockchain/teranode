@@ -118,13 +118,20 @@ type batchSpend struct {
 	// (spendCompletionResult.rollbackSet).
 	requireParentOutput bool
 	// idempotent is set from the Lua response when the utxo already recorded
-	// exactly this spend, so nothing was written. A failed call reverses such an
-	// input only when utxo.RollbackSet allows it: no input of the call got the
-	// pruned-replay answer, none was left unanswered, and the call is not a
-	// RequireParentOutputs one. Otherwise the match may be a confirmed,
-	// historical spend, and reversing it would hand a confirmed output to any
-	// new spender.
+	// exactly this spend, so nothing was written. Whether the match is history
+	// is decided from recordedHeight by the age rule (utxo.IsHistoricalSpend): a
+	// historical match is never reversed by a rollback, and when the call's own
+	// transaction has no record it is refused as a pruned replay. A failed call
+	// reverses a match that is not historical only when utxo.RollbackSet allows
+	// it: no input of the call got the pruned-replay answer, none was left
+	// unanswered, and the call is not a RequireParentOutputs one.
 	idempotent bool
+	// recordedHeight is the block height the matched spend was recorded at,
+	// from the Lua response's idempotentHeights. hasRecordedHeight is false when
+	// the match carried none, a spend written before heights were stored, which
+	// counts as historical.
+	recordedHeight    uint32
+	hasRecordedHeight bool
 }
 
 // complete writes err into the item's result slot (spend.Err) and marks the
@@ -605,11 +612,11 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		// rather than invisible; closing it needs attempt identity or
 		// create-before-spend ordering, tracked in #1291.
 		//
-		// Whether an idempotent match is historical is decided from the
-		// completed items only (result.prunedRejection), and an input still in
-		// flight counts as a possible marker hit (result.unresolved): its slot
-		// cannot be read without racing the dispatcher, and an unanswered
-		// marker hit read as "no marker" reversed a confirmed spend.
+		// A historical idempotent match is never reversed, and one input of a
+		// call that is still in flight counts as a possible replay refusal
+		// (result.unresolved): its slot cannot be read without racing the
+		// dispatcher, and an unanswered refusal read as "no refusal" reversed a
+		// confirmed spend.
 		s.rollbackPartialSpends(tx, result, "batched mode, after wait error")
 
 		// Do NOT return the live spends slice on the abort path: items still
@@ -668,11 +675,11 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 // fresh probe (see rollbackPartialSpends for why).
 type spendCompletionResult struct {
 	spentSpends      []*utxo.Spend // written by this call
-	idempotentSpends []*utxo.Spend // already recorded; this call wrote nothing
+	idempotentSpends []*utxo.Spend // already recorded, and not historical; this call wrote nothing
 	succeeded        int           // every input that did not fail, idempotent matches included
 	rollbackNeeded   bool
-	// prunedRejection is true when a resolved input failed on a pruned-replay
-	// marker; see utxo.RollbackSet.
+	// prunedRejection is true when a resolved input was refused as a pruned
+	// replay; see utxo.RollbackSet.
 	prunedRejection bool
 	// unresolved counts inputs skipped because they were still in flight on the
 	// abort path. Their answers are unknown.
@@ -701,7 +708,7 @@ type spendCompletionResult struct {
 
 	// sawUnwinnable records that at least one completed spend failed with an
 	// error class meaning this txid can never win (ErrSpent, ErrTxConflicting,
-	// ErrFrozen, ErrUtxoHashMismatch, or a pruned-replay marker). When set, it overrides sawTransientLock's
+	// ErrFrozen, ErrUtxoHashMismatch, or a pruned replay). When set, it overrides sawTransientLock's
 	// suppression: a concurrent attempt at the SAME txid sees the same
 	// outpoints and hits the same unwinnable failure, so it can never reach
 	// Create either, meaning nobody can be a legitimate owner of the partial
@@ -709,10 +716,11 @@ type spendCompletionResult struct {
 	sawUnwinnable bool
 }
 
-// rollbackSet is the set a failed call reverses (see utxo.RollbackSet). An
-// idempotent match is held back when a resolved input hit a pruned-replay marker,
-// when any input is still unanswered, since that input may be the marker hit, or
-// on a RequireParentOutputs call, whose record exists so its matches are its own
+// rollbackSet is the set a failed call reverses (see utxo.RollbackSet). A
+// historical match is never in idempotentSpends. A match that is not historical
+// is held back when a resolved input was refused as a pruned replay, when any
+// input is still unanswered, since that input may be the refused one, or on a
+// RequireParentOutputs call, whose record exists so its matches are its own
 // spends. On the normal path every input is answered, so unresolved is zero there.
 func (r *spendCompletionResult) rollbackSet() []*utxo.Spend {
 	return utxo.RollbackSet(r.spentSpends, r.idempotentSpends, r.prunedRejection || r.unresolved > 0 || r.requireParentOutput)
@@ -853,7 +861,7 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	//
 	// That exclusion only holds while nothing else in the batch proves the tx
 	// unwinnable. If the batch ALSO contains ErrSpent, ErrTxConflicting,
-	// ErrFrozen, ErrUtxoHashMismatch or a pruned-replay marker
+	// ErrFrozen, ErrUtxoHashMismatch or a pruned replay
 	// (ErrUtxoSpendingTxPruned) (sawUnwinnable), this txid can never
 	// reach Create no matter who is racing it: a concurrent attempt sees the
 	// same outpoints and hits the same unwinnable failure, so nobody can be a
@@ -934,10 +942,6 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	case rollbackFire:
 	}
 
-	if rollback = s.withoutMarkedMatches(rbCtx, tx, rollback, result.idempotentSpends, phase); len(rollback) == 0 {
-		return
-	}
-
 	// Unspend is ownership-checked (teranode.lua only clears spending_data it
 	// still owns), which stops this from wiping a *different* tx's spend. It
 	// does not answer the question that matters here: SpendingData is just
@@ -949,96 +953,6 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	// parents — tracked in #1291; the outcome metrics here make the residual
 	// window measurable in the meantime.
 	s.unspendRollback(rbCtx, tx, rollback, phase)
-}
-
-// withoutMarkedMatches drops from rollback every idempotent match whose parent
-// now carries a replay marker for this spender.
-//
-// The spend read the parent's deletedChildren bin before the existence probe
-// ran, and the pruner can work in between: it writes the marker for (parent,
-// spender), and only once that write has answered does it delete the spender.
-// The input read before the marker answered as an idempotent match, a sibling
-// whose parent was already gone failed, and the probe then finds no spender.
-// The match is then a spend by a pruned transaction. When that transaction
-// was mined, which is the usual case, it is a confirmed spend, and reversing it
-// would release a confirmed output. Because the marker lands before the delete,
-// a probe that found no spender comes after it, so reading it here closes the
-// window.
-//
-// A spend this call wrote is never dropped: its output was free before the
-// call, so a marker naming this spender says nothing about it. A read that
-// fails drops the match too, leaving the output spent by a transaction the store
-// does not hold, which the next attempt heals (utxo.RollbackSet), and each one
-// counts on utxo_spend_rollback_marker_unread. A parent that is gone keeps its
-// match: there is no output left to release.
-func (s *Store) withoutMarkedMatches(ctx context.Context, tx *bt.Tx, rollback, idempotent []*utxo.Spend, phase string) []*utxo.Spend {
-	if len(idempotent) == 0 {
-		return rollback
-	}
-
-	isIdempotent := make(map[*utxo.Spend]struct{}, len(idempotent))
-	for _, spend := range idempotent {
-		isIdempotent[spend] = struct{}{}
-	}
-
-	spender := tx.TxIDChainHash().String()
-	bin := fields.DeletedChildren.String()
-	kept := make([]*utxo.Spend, 0, len(rollback))
-
-	countMarkerUnread := func() {
-		if prometheusUtxoSpendRollbackMarkerUnread != nil {
-			prometheusUtxoSpendRollbackMarkerUnread.Inc()
-		}
-	}
-
-	for _, spend := range rollback {
-		if _, ok := isIdempotent[spend]; !ok {
-			kept = append(kept, spend)
-
-			continue
-		}
-
-		key, err := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySource(spend.TxID, spend.Vout, s.utxoBatchSize))
-		if err != nil {
-			s.logger.Errorf("[SPEND][%s] cannot read the replay marker on %s:%d (%s), leaving its idempotent match in place: %v", tx.TxID(), spend.TxID, spend.Vout, phase, err)
-			countMarkerUnread()
-
-			continue
-		}
-
-		if ctx.Err() != nil {
-			s.logger.Errorf("[SPEND][%s] rollback budget spent before reading the replay marker on %s:%d (%s), leaving its idempotent match in place", tx.TxID(), spend.TxID, spend.Vout, phase)
-			countMarkerUnread()
-
-			continue
-		}
-
-		rec, getErr := s.client.Get(util.GetAerospikeReadPolicy(s.settings), key, bin)
-		if getErr != nil {
-			if getErr.Matches(types.KEY_NOT_FOUND_ERROR) {
-				kept = append(kept, spend)
-
-				continue
-			}
-
-			s.logger.Errorf("[SPEND][%s] cannot read the replay marker on %s:%d (%s), leaving its idempotent match in place: %v", tx.TxID(), spend.TxID, spend.Vout, phase, getErr)
-			countMarkerUnread()
-
-			continue
-		}
-
-		if markers, ok := rec.Bins[bin].(map[interface{}]interface{}); ok {
-			if _, marked := markers[spender]; marked {
-				s.logger.Warnf("[SPEND][%s] %s:%d now carries a replay marker for this spender (%s), leaving its confirmed spend in place", tx.TxID(), spend.TxID, spend.Vout, phase)
-
-				continue
-			}
-		}
-
-		kept = append(kept, spend)
-	}
-
-	return kept
 }
 
 // spendRollbackContext is the context a rollback runs under; see
@@ -1091,6 +1005,12 @@ func (s *Store) unspendRollback(rbCtx context.Context, tx *bt.Tx, rollback []*ut
 // guarantees every item completed, so the flag is a no-op safety check here,
 // not the source of truth.
 //
+// An idempotent match that is historical (utxo.IsHistoricalSpend: its recorded
+// spend is at least utxo.HistoricalSpendAge blocks older than this call's) is
+// kept out of the rollback. When the call's own transaction has no record, such
+// a match is a replay of a transaction the pruner removed, and it fails with
+// ErrUtxoSpendingTxPruned; see refuseHistoricalReplays.
+//
 // An unpublished item is skipped in its entirety on the abort path: it is
 // invisible not just to spentSpends but also to sawTransientLock,
 // sawTransientCreating and sawUnwinnable, for the same race reason (reading
@@ -1104,6 +1024,8 @@ func (s *Store) unspendRollback(rbCtx context.Context, tx *bt.Tx, rollback []*ut
 // itself.
 func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []*batchSpend, onlyCompleted bool) *spendCompletionResult {
 	result := &spendCompletionResult{spentSpends: make([]*utxo.Spend, 0, len(items))}
+
+	historical := s.refuseHistoricalReplays(ctx, tx, items, onlyCompleted, result)
 
 	for _, item := range items {
 		// Set when the call was built, never written by the dispatcher, so it
@@ -1223,13 +1145,109 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 		switch {
 		case blessed:
 		case item.idempotent:
-			result.idempotentSpends = append(result.idempotentSpends, spend)
+			// A historical match is a confirmed spend made by this transaction in
+			// the past, never this call's to reverse.
+			if _, isHistorical := historical[item]; !isHistorical {
+				result.idempotentSpends = append(result.idempotentSpends, spend)
+			}
 		default:
 			result.spentSpends = append(result.spentSpends, spend)
 		}
 	}
 
 	return result
+}
+
+// refuseHistoricalReplays applies the age rule to the call's idempotent matches and returns the
+// items whose match is historical.
+//
+// A match is historical when its recorded spend is at least utxo.HistoricalSpendAge blocks
+// older than the incoming one, or recorded no height. The call's spender is the transaction being
+// spent for, so one existence read of its record answers for every historical match of the call:
+// absent, each of them is a replay of a transaction the pruner removed and fails with
+// ErrUtxoSpendingTxPruned, which writes nothing; present, they are ordinary matches (a stored
+// transaction resubmitted after waiting unmined, or a block re-applying one). The read is made
+// only when a historical match turns up, so a spend that meets none costs nothing extra.
+//
+// A read that cannot answer fails the historical inputs with a storage error and counts them as
+// unanswered (result.unresolved), so the rest of the call's matches are held back, not reversed.
+// On the abort path (onlyCompleted) the caller's context is dead and the dispatcher may still be
+// writing the unpublished slots, so nothing is read or refused: the historical matches are only
+// kept out of the rollback.
+func (s *Store) refuseHistoricalReplays(ctx context.Context, tx *bt.Tx, items []*batchSpend, onlyCompleted bool, result *spendCompletionResult) map[*batchSpend]struct{} {
+	var (
+		historical map[*batchSpend]struct{}
+		retention  uint32
+		haveRetain bool
+	)
+
+	for _, item := range items {
+		// idempotent and the recorded height are written before the item is published, and
+		// spend.Err is read only once it is: an unpublished item's slot may still be written.
+		if onlyCompleted && !item.published.Load() {
+			continue
+		}
+
+		if !item.idempotent || item.spend.Err != nil {
+			continue
+		}
+
+		// read on the first match only: a call with no idempotent match never needs it
+		if !haveRetain {
+			retention, haveRetain = s.settings.GetUtxoStoreBlockHeightRetention(), true
+		}
+
+		if !utxo.IsHistoricalSpend(item.recordedHeight, item.hasRecordedHeight, item.blockHeight, retention) {
+			continue
+		}
+
+		if historical == nil {
+			historical = make(map[*batchSpend]struct{})
+		}
+
+		historical[item] = struct{}{}
+	}
+
+	if len(historical) == 0 || onlyCompleted {
+		return historical
+	}
+
+	exists, err := s.spenderRecordExists(ctx, tx.TxIDChainHash())
+
+	for item := range historical {
+		switch {
+		case err != nil:
+			result.unresolved++
+
+			item.spend.Err = errors.NewStorageError("[SPEND][%s] cannot tell whether the spending transaction exists, so cannot tell whether vout %d of %s is a replay of a pruned transaction: %v",
+				tx.TxID(), item.spend.Vout, item.spend.TxID.String(), err)
+		case !exists:
+			item.spend.Err = errors.NewUtxoSpendingTxPrunedError("[SPEND][%s] invalid spend for vout %d of %s: spending transaction was pruned",
+				tx.TxID(), item.spend.Vout, item.spend.TxID.String())
+		}
+	}
+
+	return historical
+}
+
+// spenderRecordExists reads whether the transaction has a record in the store: one existence read
+// of its master record, the key every transaction's own record lives under.
+func (s *Store) spenderRecordExists(ctx context.Context, txHash *chainhash.Hash) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+
+	key, err := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySource(txHash, 0, s.utxoBatchSize))
+	if err != nil {
+		return false, err
+	}
+
+	exists, aErr := s.client.Exists(util.GetAerospikeReadPolicy(s.settings), key)
+	if aErr != nil {
+		return false, aErr
+	}
+
+	return exists, nil
 }
 
 type keyIgnoreLocked struct {
@@ -1530,7 +1548,7 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 	// Handle signals
 	// Flag idempotent matches before any item is completed: the rollback
 	// decision reads the flag once the item is published.
-	markIdempotentSpends(res.Idempotent, batchByKey, batch)
+	markIdempotentSpends(res.Idempotent, res.IdempotentHeights, batchByKey, batch)
 
 	if res.Signal != "" {
 		s.handleSpendSignal(ctx, res, txID, thisBlockHeight)
@@ -1630,7 +1648,10 @@ func (s *Store) handleSpendSignal(ctx context.Context, res *LuaMapResponse, txID
 // have been completed and published in an earlier iteration: writing its flag
 // then is an unsynchronised write, and it changes the rollback set of an
 // unrelated transaction. Bounding against the whole batch did not catch that.
-func markIdempotentSpends(idempotent []int, batchByKey []aerospike.MapValue, batch []*batchSpend) {
+//
+// heights holds, by index, the block height each matched spend was recorded at; an index with no
+// entry matched a spend written without one.
+func markIdempotentSpends(idempotent []int, heights map[int]uint32, batchByKey []aerospike.MapValue, batch []*batchSpend) {
 	if len(idempotent) == 0 {
 		return
 	}
@@ -1650,6 +1671,11 @@ func markIdempotentSpends(idempotent []int, batchByKey []aerospike.MapValue, bat
 
 		if idx >= 0 && idx < len(batch) && batch[idx] != nil {
 			batch[idx].idempotent = true
+
+			if height, ok := heights[idx]; ok {
+				batch[idx].recordedHeight = height
+				batch[idx].hasRecordedHeight = true
+			}
 		}
 	}
 }

@@ -38,11 +38,6 @@ func (s *Store) UsesNativeOps() bool {
 	return s.useNativeTeranodeOps.Load()
 }
 
-// UsesNativeVerifiedMarker reports whether the pruner's replay-marker write uses native sub-op 15.
-func (s *Store) UsesNativeVerifiedMarker() bool {
-	return s.useNativeVerifiedMarkerWrite()
-}
-
 // UsesNativeMark reports whether MarkTransactionsOnLongestChain sends native sub-op 14.
 func (s *Store) UsesNativeMark() bool {
 	return s.useNativeMark()
@@ -58,6 +53,7 @@ func (s *Store) UsesNativeTeranodeOps() bool {
 // drive the mark's native result handling through SetBatchOperateFn.
 func (s *Store) SetNativeMarkForTest(on bool) {
 	s.useNativeTeranodeOps.Store(on)
+	s.nativeReplayProtection.Store(on)
 	s.useNativeMarkLongestChain.Store(on)
 }
 
@@ -99,24 +95,6 @@ func (s *Store) RollbackIdempotentMatchesForTest(tx *bt.Tx, idempotent []*utxo.S
 // spender-existence probe, and clears it when given nil.
 func (s *Store) SetRollbackBeforeProbeForTest(f func()) {
 	s.rollbackBeforeProbe = f
-}
-
-// WithoutMarkedMatchesForTest runs the rollback's replay-marker re-read on its
-// own and returns the spends it leaves in the rollback.
-func (s *Store) WithoutMarkedMatchesForTest(tx *bt.Tx, rollback, idempotent []*utxo.Spend) []*utxo.Spend {
-	return s.withoutMarkedMatches(context.Background(), tx, rollback, idempotent, "test")
-}
-
-// WithoutMarkedMatchesInForTest is WithoutMarkedMatchesForTest under ctx, so a test can spend
-// the rollback budget before the re-read.
-func (s *Store) WithoutMarkedMatchesInForTest(ctx context.Context, tx *bt.Tx, rollback, idempotent []*utxo.Spend) []*utxo.Spend {
-	return s.withoutMarkedMatches(ctx, tx, rollback, idempotent, "test")
-}
-
-// RollbackMarkerUnread is the number of idempotent matches a rollback left spent because it
-// could not re-read the parent's replay marker, for this process.
-func RollbackMarkerUnread() float64 {
-	return testutil.ToFloat64(prometheusUtxoSpendRollbackMarkerUnread)
 }
 
 // RollbackRequiredParentSpendsForTest runs the rollback of a failed

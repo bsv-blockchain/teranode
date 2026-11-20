@@ -73,10 +73,6 @@ var (
 	prometheusUtxoSpendRollbackFailed   prometheus.Counter
 	prometheusUtxoSpendAbortInFlight    prometheus.Counter
 
-	// prometheusUtxoSpendRollbackMarkerUnread counts idempotent matches a rollback left spent
-	// because it could not re-read the parent's replay marker.
-	prometheusUtxoSpendRollbackMarkerUnread prometheus.Counter
-
 	// prometheusAerospikeNativeRouting says, per route, whether the store sends the operation as a
 	// native mod-teranode op (1) or on the UDF or filtered-expression path (0). A native-ops
 	// deployment on a server build that fails a probe falls back silently otherwise.
@@ -331,21 +327,12 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusUtxoSpendRollbackMarkerUnread = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "aerospike",
-			Name:      "utxo_spend_rollback_marker_unread",
-			Help:      "Idempotent matches a rollback left spent because it could not re-read the parent's replay marker (key, rollback budget or read failure); the output stays spent by a transaction the store may not hold until a retry heals it (a count of spends, not of calls)",
-		},
-	)
-
 	prometheusAerospikeNativeRouting = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "teranode",
 			Subsystem: "aerospike",
 			Name:      "native_routing",
-			Help:      "1 when the route is sent as a native mod-teranode op, 0 when it runs on the UDF or filtered-expression path. replay_protection covers spendMulti, spend and addDeletedChildren, verified_marker the pruner's sub-op 15 marker write",
+			Help:      "1 when the route is sent as a native mod-teranode op, 0 when it runs on the UDF or filtered-expression path. replay_protection covers spendMulti, spend and addDeletedChildren",
 		},
 		[]string{"route"},
 	)

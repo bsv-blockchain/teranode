@@ -265,12 +265,6 @@ type Store struct {
 	// from that sub-op only, so an older server keeps every other native op.
 	useNativeMarkLongestChain atomic.Bool
 
-	// useNativeVerifiedMarker is whether the server serves native sub-op 15, addVerifiedDeletedChildren,
-	// which the pruner uses for its replay-marker write in place of the filtered map write. Set by its
-	// own start-up probe (detectNativeVerifiedMarkerSupport) and cleared on a runtime PARAMETER_ERROR
-	// from that sub-op only, so an older server keeps every other native op.
-	useNativeVerifiedMarker atomic.Bool
-
 	// conflictingIndexState is whether this process trusts the conflicting index
 	// (conflictingIndexUnchecked/Usable/Unusable); see conflicting_index.go.
 	// conflictingIndexCancel and conflictingIndexDone stop and await the

@@ -730,7 +730,7 @@ func TestAerospike(t *testing.T) {
 		utxos, ok = resp.Bins["utxos"].([]interface{})
 		require.True(t, ok)
 		require.Len(t, utxos, 5)
-		require.Len(t, utxos[0].([]byte), 68)
+		require.Len(t, utxos[0].([]byte), 72)
 
 		spendUtxos, ok := resp.Bins["spentUtxos"].(int)
 		require.True(t, ok)
@@ -2748,120 +2748,4 @@ func TestAerospikeCleanupService(t *testing.T) {
 
 	// Start the cleanup service
 	cleanupService.Start(ctx)
-}
-
-func TestDeletedChildren(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings(t)
-
-	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
-
-	t.Cleanup(func() {
-		deferFn()
-	})
-
-	privKey, _ := bec.PrivateKeyFromBytes([]byte("ALWAYS_THE_SAME"))
-
-	// Create the coinbase tx
-	coinbaseTx := transactions.Create(t,
-		transactions.WithCoinbaseData(100, "/Test miner/"),
-		transactions.WithP2PKHOutputs(1, 5_000_000_000, privKey.PubKey()),
-	)
-
-	_, err := store.Create(ctx, coinbaseTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
-		BlockID:        1,
-		BlockHeight:    1,
-		OnLongestChain: true,
-	}))
-	require.NoError(t, err)
-
-	t.Logf("Coinbase tx: %s", coinbaseTx.TxIDChainHash().String())
-
-	// Create the parentTx with 500 outputs
-	parentTxOptions := []transactions.TxOption{
-		transactions.WithInput(coinbaseTx, 0, privKey),
-	}
-
-	for i := 0; i < 500; i++ {
-		parentTxOptions = append(parentTxOptions, transactions.WithP2PKHOutputs(1, 10_000_000, privKey.PubKey()))
-	}
-
-	parentTx := transactions.Create(t, parentTxOptions...)
-
-	_, err = store.Create(ctx, parentTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
-		BlockID:        1,
-		BlockHeight:    1,
-		OnLongestChain: true,
-	}))
-	require.NoError(t, err)
-
-	t.Logf("Parent tx: %s", parentTx.TxIDChainHash().String())
-
-	// Create the childTx with 100 outputs
-	childTxOptions := []transactions.TxOption{
-		transactions.WithInput(parentTx, 0, privKey),
-	}
-
-	for i := 0; i < 100; i++ {
-		childTxOptions = append(childTxOptions, transactions.WithP2PKHOutputs(1, 100_000, privKey.PubKey()))
-	}
-
-	childTx := transactions.Create(t, childTxOptions...)
-
-	_, err = store.Spend(ctx, childTx, 1)
-	require.NoError(t, err)
-
-	_, err = store.Create(ctx, childTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
-		BlockID:        1,
-		BlockHeight:    1,
-		OnLongestChain: true,
-	}))
-
-	require.NoError(t, err)
-
-	t.Logf("Child tx: %s", childTx.TxIDChainHash().String())
-
-	// Now we spend all the outputs in the childTx so it can be deleted...
-	for i := 0; i < len(childTx.Outputs); i++ {
-		spendTx := transactions.Create(t,
-			transactions.WithInput(childTx, uint32(i), privKey),
-			transactions.WithP2PKHOutputs(1, 100, privKey.PubKey()),
-		)
-
-		_, err = store.Spend(ctx, spendTx, 1)
-		require.NoError(t, err)
-	}
-
-	parentKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), parentTx.TxIDChainHash().CloneBytes())
-	require.NoError(t, err)
-
-	childKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), childTx.TxIDChainHash().CloneBytes())
-	require.NoError(t, err)
-
-	childResp, err := client.Get(nil, childKey, fields.DeleteAtHeight.String())
-	require.NoError(t, err)
-
-	assert.Equal(t, 11, childResp.Bins[fields.DeleteAtHeight.String()])
-
-	opts := pruner.Options{
-		Ctx:           ctx,
-		Logger:        logger,
-		Client:        client,
-		ExternalStore: memory.New(),
-		Namespace:     store.GetNamespace(),
-		Set:           store.GetName(),
-		IndexWaiter:   &mockIndexWaiter{},
-	}
-
-	cleanupService, err := pruner.NewService(tSettings, opts)
-	require.NoError(t, err)
-
-	err = cleanupService.ProcessSingleRecord(childTx.TxIDChainHash(), childTx.Inputs)
-	require.NoError(t, err)
-
-	parentResp, err := client.Get(nil, parentKey, fields.DeletedChildren.String())
-	require.NoError(t, err)
-
-	deletedChildrenMap := parentResp.Bins[fields.DeletedChildren.String()].(map[interface{}]interface{})
-	assert.Len(t, deletedChildrenMap, 1)
 }
