@@ -216,7 +216,7 @@ func testLongestChainInvalidateBlockWithOldTx(t *testing.T, utxoStore string) {
 
 	// BV-BODY-017 requires block5a to be rejected ERR_BLOCK_INVALID before it can become the tip.
 	// Today it is added and only invalidated once mined-tagging finds tx2 already on the chain
-	// (GAP-BV-011, proven by TestKnownDefect_BlockReincludingAncestorMinedTx_RejectedBeforeAddBlock).
+	// (GAP-BV-011, which has no TestKnownDefect_ proof yet).
 	// This test is about what happens to tx1 and tx2 afterwards, so it accepts either route to the
 	// invalid verdict and waits for it before checking the end state.
 	if err := td.BlockValidation.ValidateBlock(td.Ctx, block5a, "test", false); err != nil {
