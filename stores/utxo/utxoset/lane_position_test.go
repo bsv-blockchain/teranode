@@ -1278,7 +1278,7 @@ func TestPrepareLaneSchemaWaitsOutAShortLock(t *testing.T) {
 	require.True(t, hasColumn(t, s, ctx, "spend_journal", "lane_position"))
 }
 
-// The limit is one deadline for a column, not one per attempt: with the table held well past the
+// The limit is one deadline for the pass, not one per attempt: with the table held well past the
 // limit, the add gives up soon after the limit instead of retrying until the holder lets go.
 func TestLaneColumnAddGivesUpAtItsLimitAcrossRetries(t *testing.T) {
 	s, ctx := newTestStore(t)
@@ -1300,6 +1300,42 @@ func TestLaneColumnAddGivesUpAtItsLimitAcrossRetries(t *testing.T) {
 	err = addLanePositionColumns(addCtx, s.pool, 1500*time.Millisecond)
 	require.Error(t, err, "the table is still held at the limit")
 	require.Less(t, time.Since(started), 8*time.Second)
+}
+
+// The deadline is shared by every column of a pass. The first column's table is held for two of
+// the three seconds and then released; the second's is held throughout. The pass gives up on the
+// second column at the shared deadline, about 3.6 s in. A fresh deadline per column would keep
+// retrying the second until about 7 s.
+func TestLaneColumnPassSharesOneDeadline(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	holdMined, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = holdMined.Rollback(ctx) }()
+
+	var n int64
+	require.NoError(t, holdMined.QueryRow(ctx, `SELECT count(*) FROM tx_mined`).Scan(&n))
+
+	holdIdent, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = holdIdent.Rollback(ctx) }()
+
+	require.NoError(t, holdIdent.QueryRow(ctx, `SELECT count(*) FROM tx_ident`).Scan(&n))
+
+	time.AfterFunc(2*time.Second, func() { _ = holdIdent.Rollback(context.Background()) })
+
+	addCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	err = addLanePositionColumns(addCtx, s.pool, 3*time.Second)
+	elapsed := time.Since(started)
+
+	require.ErrorContains(t, err, "tx_mined", "the second column is still held")
+	require.True(t, hasLaneColumn(t, s, ctx, "tx_ident"), "the first column went in once its table was free")
+	require.Less(t, elapsed, 5500*time.Millisecond, "one deadline for the pass, not one per column")
 }
 
 // hasColumn reports whether table has column, nullable with no default.

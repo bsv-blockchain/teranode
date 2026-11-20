@@ -794,9 +794,9 @@ var laneSchemaColumns = []laneSchemaColumn{
 	{"spend_journal", "lane_position", "BIGINT"},
 }
 
-// laneColumnMigrationLimit is how long addLaneColumns keeps retrying one column before the
-// store refuses to open, or PrepareLaneSchema fails, with the error. It only matters beside another
-// process that keeps a transaction open on that table for all of this time.
+// laneColumnMigrationLimit is how long one addLaneColumns pass keeps retrying, across all its
+// columns, before the store refuses to open, or PrepareLaneSchema fails, with the error. It only
+// matters beside another process that keeps a transaction open on one of the tables for that long.
 const laneColumnMigrationLimit = 5 * time.Minute
 
 // PrepareLaneSchema installs every lane column of the utxoset schema on a database at any lane

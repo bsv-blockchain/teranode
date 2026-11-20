@@ -178,6 +178,9 @@ func TestLaneConversionSegmentLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, complete)
 
+		_, err = s.LaneConversionComplete(ctx, 9)
+		require.Error(t, err, "an unrecorded segment is an error, not false")
+
 		segs, err := s.LaneConversionSegments(ctx)
 		require.NoError(t, err)
 		require.Equal(t, []lane.ConversionSegment{seg}, segs)
