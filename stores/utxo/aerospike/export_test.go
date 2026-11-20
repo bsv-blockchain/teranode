@@ -53,7 +53,6 @@ func (s *Store) UsesNativeTeranodeOps() bool {
 // drive the mark's native result handling through SetBatchOperateFn.
 func (s *Store) SetNativeMarkForTest(on bool) {
 	s.useNativeTeranodeOps.Store(on)
-	s.nativeReplayProtection.Store(on)
 	s.useNativeMarkLongestChain.Store(on)
 }
 

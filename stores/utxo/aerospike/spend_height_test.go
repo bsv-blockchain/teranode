@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,22 +46,32 @@ func spendHeightEntry(t *testing.T, store *teranode_aerospike.Store, hash *chain
 	return entry
 }
 
-// spendHeightSetEntry replaces the entry at offset, to stage an entry written by older code.
-func spendHeightSetEntry(t *testing.T, store *teranode_aerospike.Store, hash *chainhash.Hash, offset int, entry []byte) {
+// spendHeightAt reads the spend height recorded for the output at offset of the record at key:
+// the 4 little-endian bytes at offset*4 of its spendHeights bin. ok is false when the bin does not
+// cover the output or holds zero there, which is how an output spent by older code reads.
+func spendHeightAt(t *testing.T, client *uaerospike.Client, key *aerospike.Key, offset int) (height uint32, ok bool) {
 	t.Helper()
 
-	tSettings := test.CreateBaseTestSettings(t)
-	key := spendHeightKey(t, store, hash)
-
-	rec, err := store.GetClient().Get(util.GetAerospikeReadPolicy(tSettings), key, "utxos")
+	rec, err := client.Get(nil, key, fields.SpendHeights.String())
 	require.NoError(t, err)
 
-	utxos, ok := rec.Bins["utxos"].([]interface{})
-	require.True(t, ok)
+	heights, _ := rec.Bins[fields.SpendHeights.String()].([]byte)
+	if len(heights) < (offset+1)*4 {
+		return 0, false
+	}
 
-	utxos[offset] = entry
+	height = binary.LittleEndian.Uint32(heights[offset*4:])
 
-	require.NoError(t, store.GetClient().Put(util.GetAerospikeWritePolicy(tSettings, 0), key, aerospike.BinMap{"utxos": utxos}))
+	return height, height != 0
+}
+
+// spendHeightClear zeroes the spend height of the output at offset, to stage an output spent by
+// code that recorded none.
+func spendHeightClear(t *testing.T, client *uaerospike.Client, key *aerospike.Key, offset int) {
+	t.Helper()
+
+	_, err := client.Operate(nil, key, aerospike.BitSetOp(aerospike.DefaultBitPolicy(), fields.SpendHeights.String(), offset*32, 32, make([]byte, 4)))
+	require.NoError(t, err)
 }
 
 // spendHeightUDF calls the spend UDF directly and parses its answer, so a test sees what the UDF
@@ -96,9 +107,9 @@ func spendHeightSpendsOf(t *testing.T, child *bt.Tx) []*utxo.Spend {
 	return spends
 }
 
-// TestSpendRecordsItsHeight_Aerospike pins the entry layout: a fresh spend writes the 72-byte entry
-// with its block height, a match reports that height, an unspend leaves 32 bytes, and a frozen
-// output keeps its 68-byte form and is never read as a historical spend.
+// TestSpendRecordsItsHeight_Aerospike pins the layout: a fresh spend writes the 68-byte entry older
+// code reads and records its block height in the spendHeights bin, a match reports that height, a
+// re-spend after an unspend overwrites it, and a frozen output is never read as a historical spend.
 func TestSpendRecordsItsHeight_Aerospike(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -108,15 +119,19 @@ func TestSpendRecordsItsHeight_Aerospike(t *testing.T) {
 
 	parent := conflictingIndexParent(t, ctx, store, 7001, 3)
 	child := conflictingIndexTx(t, parent, []uint32{0}, 1)
+	parentKey := spendHeightKey(t, store, parent.TxIDChainHash())
 
-	t.Run("a spend writes a 72-byte entry carrying its height", func(t *testing.T) {
+	t.Run("a spend keeps the 68-byte entry and records its height in its own bin", func(t *testing.T) {
 		spends, err := store.Spend(ctx, child, 1200)
 		require.NoError(t, err)
 
 		entry := spendHeightEntry(t, store, parent.TxIDChainHash(), 0)
-		require.Len(t, entry, 72)
-		require.Equal(t, uint32(1200), binary.LittleEndian.Uint32(entry[68:72]))
+		require.Len(t, entry, 68, "an older teranode.lua reads only a 68-byte entry as spent")
 		require.Equal(t, spends[0].SpendingData.Bytes(), entry[32:68])
+
+		height, ok := spendHeightAt(t, store.GetClient(), parentKey, 0)
+		require.True(t, ok)
+		require.Equal(t, uint32(1200), height)
 	})
 
 	t.Run("an idempotent match reports the recorded height", func(t *testing.T) {
@@ -128,12 +143,12 @@ func TestSpendRecordsItsHeight_Aerospike(t *testing.T) {
 		require.Equal(t, map[int]uint32{0: 1200}, res.IdempotentHeights)
 
 		// a match writes nothing: the recorded height stays the first spend's
-		entry := spendHeightEntry(t, store, parent.TxIDChainHash(), 0)
-		require.Len(t, entry, 72)
-		require.Equal(t, uint32(1200), binary.LittleEndian.Uint32(entry[68:72]))
+		height, ok := spendHeightAt(t, store.GetClient(), parentKey, 0)
+		require.True(t, ok)
+		require.Equal(t, uint32(1200), height)
 	})
 
-	t.Run("an unspend leaves a 32-byte entry that can be spent again", func(t *testing.T) {
+	t.Run("a spend after an unspend records the new height", func(t *testing.T) {
 		spends := spendHeightSpendsOf(t, child)
 
 		require.NoError(t, store.Unspend(ctx, spends))
@@ -143,12 +158,12 @@ func TestSpendRecordsItsHeight_Aerospike(t *testing.T) {
 		_, err := store.Spend(ctx, other, 1300)
 		require.NoError(t, err)
 
-		entry := spendHeightEntry(t, store, parent.TxIDChainHash(), 0)
-		require.Len(t, entry, 72)
-		require.Equal(t, uint32(1300), binary.LittleEndian.Uint32(entry[68:72]))
+		height, ok := spendHeightAt(t, store.GetClient(), parentKey, 0)
+		require.True(t, ok)
+		require.Equal(t, uint32(1300), height)
 	})
 
-	t.Run("a frozen output keeps its 68-byte form and is not a historical spend", func(t *testing.T) {
+	t.Run("a frozen output is not a historical spend", func(t *testing.T) {
 		frozen := conflictingIndexTx(t, parent, []uint32{1}, 1)
 		frozenSpends := spendHeightSpendsOf(t, frozen)
 		freeze := []*utxo.Spend{{TxID: parent.TxIDChainHash(), Vout: 1, UTXOHash: frozenSpends[0].UTXOHash}}
@@ -166,61 +181,105 @@ func TestSpendRecordsItsHeight_Aerospike(t *testing.T) {
 
 		_, err := store.Spend(ctx, frozen, 5001)
 		require.NoError(t, err)
-		require.Len(t, spendHeightEntry(t, store, parent.TxIDChainHash(), 1), 72)
+
+		height, ok := spendHeightAt(t, store.GetClient(), parentKey, 1)
+		require.True(t, ok)
+		require.Equal(t, uint32(5001), height)
 	})
 
-	t.Run("an entry written without a height reports no height", func(t *testing.T) {
+	t.Run("an output spent without a height reports none", func(t *testing.T) {
 		old := conflictingIndexTx(t, parent, []uint32{2}, 1)
 		oldSpends := spendHeightSpendsOf(t, old)
 
-		// stage what code before the height wrote: hash + spending data, 68 bytes
-		entry := append(append([]byte{}, oldSpends[0].UTXOHash[:]...), oldSpends[0].SpendingData.Bytes()...)
-		require.Len(t, entry, 68)
-		spendHeightSetEntry(t, store, parent.TxIDChainHash(), 2, entry)
+		_, err := store.Spend(ctx, old, 6000)
+		require.NoError(t, err)
+
+		// stage what code before the height wrote: the same entry, no height
+		spendHeightClear(t, store.GetClient(), parentKey, 2)
 
 		res := spendHeightUDF(t, store, parent, oldSpends[0], 9000)
 		require.Equal(t, teranode_aerospike.LuaStatusOK, res.Status)
 		require.Equal(t, []int{0}, res.Idempotent)
-		require.Empty(t, res.IdempotentHeights, "a 68-byte entry has no height to report")
+		require.Empty(t, res.IdempotentHeights, "an output with no height recorded has none to report")
 
-		// and the match did not upgrade the entry: it wrote nothing
-		require.Len(t, spendHeightEntry(t, store, parent.TxIDChainHash(), 2), 68)
+		// and the match did not record one: it wrote nothing
+		_, ok := spendHeightAt(t, store.GetClient(), parentKey, 2)
+		require.False(t, ok)
 	})
 }
 
-// TestGetReadsBothSpentEntrySizes_Aerospike: every reader decodes the spending data of a 68-byte
-// entry (spent before the height was recorded) and of a 72-byte one.
-func TestGetReadsBothSpentEntrySizes_Aerospike(t *testing.T) {
+// TestSpendHeightsBinGrowsToCoverTheOutput_Aerospike: the bin holds 4 bytes per output in output
+// order and grows only as far as the highest output spent. A record spent only by older code has
+// no bin at all, and a match on it reports no height.
+func TestSpendHeightsBinGrowsToCoverTheOutput_Aerospike(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
 	_, store, ctx, cleanup := initAerospike(t, tSettings, logger)
 	t.Cleanup(cleanup)
 
-	parent := conflictingIndexParent(t, ctx, store, 7002, 2)
-	child := conflictingIndexTx(t, parent, []uint32{0, 1}, 1)
+	parent := conflictingIndexParent(t, ctx, store, 7002, 4)
+	parentKey := spendHeightKey(t, store, parent.TxIDChainHash())
 
-	spends, err := store.Spend(ctx, child, 1200)
-	require.NoError(t, err)
+	readBin := func() []byte {
+		rec, err := store.GetClient().Get(nil, parentKey, fields.SpendHeights.String())
+		require.NoError(t, err)
 
-	// output 0 stays a 72-byte entry; output 1 is rewritten as a 68-byte one
-	require.Len(t, spendHeightEntry(t, store, parent.TxIDChainHash(), 0), 72)
-	spendHeightSetEntry(t, store, parent.TxIDChainHash(), 1, spendHeightEntry(t, store, parent.TxIDChainHash(), 1)[:68])
+		heights, _ := rec.Bins[fields.SpendHeights.String()].([]byte)
 
-	for _, spend := range spends {
-		resp, getErr := store.GetSpend(ctx, spend)
-		require.NoError(t, getErr)
-		require.Equal(t, int(utxo.Status_SPENT), resp.Status, "output %d", spend.Vout)
-		require.Equal(t, child.TxIDChainHash(), resp.SpendingData.TxID, "output %d", spend.Vout)
-		require.Equal(t, int(spend.Vout), resp.SpendingData.Vin, "output %d", spend.Vout)
+		return heights
 	}
 
-	data, err := store.Get(ctx, parent.TxIDChainHash(), fields.Utxos)
-	require.NoError(t, err)
-	require.Len(t, data.SpendingDatas, 2)
+	t.Run("a record with no spend has no bin", func(t *testing.T) {
+		require.Nil(t, readBin())
+	})
 
-	for i, spendingData := range data.SpendingDatas {
-		require.NotNil(t, spendingData, "output %d", i)
-		require.Equal(t, child.TxIDChainHash(), spendingData.TxID, "output %d", i)
-	}
+	t.Run("spending output 2 first writes 12 bytes", func(t *testing.T) {
+		_, err := store.Spend(ctx, conflictingIndexTx(t, parent, []uint32{2}, 1), 1500)
+		require.NoError(t, err)
+
+		heights := readBin()
+		require.Len(t, heights, 12)
+		require.Equal(t, make([]byte, 8), heights[:8], "outputs 0 and 1 are not spent and read as no height")
+		require.Equal(t, uint32(1500), binary.LittleEndian.Uint32(heights[8:12]))
+	})
+
+	t.Run("spending output 0 fills its slot without growing the bin", func(t *testing.T) {
+		_, err := store.Spend(ctx, conflictingIndexTx(t, parent, []uint32{0}, 1), 1501)
+		require.NoError(t, err)
+
+		heights := readBin()
+		require.Len(t, heights, 12)
+		require.Equal(t, uint32(1501), binary.LittleEndian.Uint32(heights[0:4]))
+		require.Equal(t, uint32(1500), binary.LittleEndian.Uint32(heights[8:12]))
+	})
+
+	t.Run("spending output 3 grows the bin and keeps the others", func(t *testing.T) {
+		_, err := store.Spend(ctx, conflictingIndexTx(t, parent, []uint32{3}, 1), 1502)
+		require.NoError(t, err)
+
+		heights := readBin()
+		require.Len(t, heights, 16)
+		require.Equal(t, uint32(1501), binary.LittleEndian.Uint32(heights[0:4]))
+		require.Equal(t, uint32(0), binary.LittleEndian.Uint32(heights[4:8]))
+		require.Equal(t, uint32(1500), binary.LittleEndian.Uint32(heights[8:12]))
+		require.Equal(t, uint32(1502), binary.LittleEndian.Uint32(heights[12:16]))
+	})
+
+	t.Run("a match on a record without the bin reports no height", func(t *testing.T) {
+		other := conflictingIndexParent(t, ctx, store, 7003, 1)
+		child := conflictingIndexTx(t, other, []uint32{0}, 1)
+
+		_, err := store.Spend(ctx, child, 1600)
+		require.NoError(t, err)
+
+		// stage a record spent only by older code: drop the bin
+		otherKey := spendHeightKey(t, store, other.TxIDChainHash())
+		require.NoError(t, store.GetClient().Put(nil, otherKey, aerospike.BinMap{fields.SpendHeights.String(): nil}))
+
+		res := spendHeightUDF(t, store, other, spendHeightSpendsOf(t, child)[0], 1601)
+		require.Equal(t, teranode_aerospike.LuaStatusOK, res.Status)
+		require.Equal(t, []int{0}, res.Idempotent)
+		require.Empty(t, res.IdempotentHeights)
+	})
 }

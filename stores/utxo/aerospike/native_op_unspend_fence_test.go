@@ -39,26 +39,27 @@ func TestUseNativeForSubOp_FencesUnspend(t *testing.T) {
 	}
 }
 
-// TestUseNativeForSubOp_FailedReplayProbeFencesEverySubOp: a dispatcher that
-// passes the first-seen probe but not the replay-protection probe predates the
-// spend height, so it may not read the 72-byte spent entries the UDF spend
-// writes. Every sub-op then runs through the UDF.
-func TestUseNativeForSubOp_FailedReplayProbeFencesEverySubOp(t *testing.T) {
+// TestUseNativeForSubOp_FencesReplayProtectionSubOpsOnly: a dispatcher that
+// passes the first-seen probe but not the replay-protection probe keeps the
+// native path for every other sub-op, and runs spend, spendMulti and
+// addDeletedChildren through the UDF, where the marker and the idempotent report
+// are enforced in-repo. Before, the failed probe demoted the whole store.
+func TestUseNativeForSubOp_FencesReplayProtectionSubOpsOnly(t *testing.T) {
 	unproven := &Store{}
 	unproven.useNativeTeranodeOps.Store(true)
-	unproven.useNativeMarkLongestChain.Store(true)
 
-	for _, op := range []uint8{
-		subOpSpend, subOpSpendMulti, subOpAddDeletedChildren, subOpUnspend,
-		subOpSetMined, subOpFreeze, subOpUnfreeze, subOpReassign, subOpSetConflicting,
-		subOpPreserveUntil, subOpSetLocked, subOpIncrementSpentExtraRec, subOpSetDeleteAtHeight,
-	} {
+	for _, op := range []uint8{subOpSpend, subOpSpendMulti, subOpAddDeletedChildren, subOpUnspend} {
 		if unproven.useNativeForSubOp(op) {
 			t.Fatalf("sub-op %d must stay on the UDF path until replay protection is proven", op)
 		}
 	}
 
-	if unproven.useNativeMark() {
-		t.Fatal("the native longest-chain mark must stay off until replay protection is proven")
+	for _, op := range []uint8{
+		subOpSetMined, subOpFreeze, subOpUnfreeze, subOpReassign, subOpSetConflicting,
+		subOpPreserveUntil, subOpSetLocked, subOpIncrementSpentExtraRec, subOpSetDeleteAtHeight,
+	} {
+		if !unproven.useNativeForSubOp(op) {
+			t.Fatalf("sub-op %d should keep the native path when only replay protection is unproven", op)
+		}
 	}
 }

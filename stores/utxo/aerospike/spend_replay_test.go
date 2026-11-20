@@ -2,7 +2,6 @@ package aerospike_test
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"testing"
 	"time"
@@ -272,20 +271,17 @@ func TestHonestRetryIsNotARejectedReplay_Aerospike(t *testing.T) {
 			_, err := f.store.Spend(f.ctx, retry, replayBlock)
 			require.NoError(t, err)
 
-			// the 72-byte entry, whichever path wrote it
+			// the spend height, whichever path wrote it
 			entryKey := f.parents[0].TxIDChainHash()
+			heightKey, heightOffset := f.keyOf(entryKey), 1
 			if tc.cfg.expressions {
-				// one utxo per record: output 1 lives on its own record
-				rec, getErr := f.client.Get(nil, parentKeyForOutput(t, f.store, entryKey, 1, 1), "utxos")
-				require.NoError(t, getErr)
-				entry, ok := rec.Bins["utxos"].([]interface{})[0].([]byte)
-				require.True(t, ok)
-				require.Len(t, entry, 72, "the expression path records the spend height too")
-				require.Equal(t, uint32(replayBlock), binary.LittleEndian.Uint32(entry[68:72]))
-			} else {
-				entry := spendHeightEntry(t, f.store, entryKey, 1)
-				require.Len(t, entry, 72)
+				// one utxo per record: output 1 lives on its own record, at offset 0
+				heightKey, heightOffset = parentKeyForOutput(t, f.store, entryKey, 1, 1), 0
 			}
+
+			height, ok := spendHeightAt(t, f.client, heightKey, heightOffset)
+			require.True(t, ok, "the spend records its height")
+			require.Equal(t, uint32(replayBlock), height)
 
 			_, _, err = f.store.SpendAndCreate(f.ctx, retry, replayBlock+2)
 			require.NoError(t, err, "a retry within a few blocks of its own spend must not be refused")
@@ -365,16 +361,16 @@ func TestFailedReplayKeepsItsHistoricalMatch_Aerospike(t *testing.T) {
 }
 
 // TestPreUpgradeEntryWithoutSpenderIsRefused_Aerospike: an output spent before heights were stored
-// is a 68-byte entry with no height. It counts as history, so the replay of a pruned spender is
+// has no height in the spendHeights bin. It counts as history, so the replay of a pruned spender is
 // refused all the same, and a stored spender still gets its ordinary answer.
 func TestPreUpgradeEntryWithoutSpenderIsRefused_Aerospike(t *testing.T) {
 	f := newReplayFixture(t, replayConfig{})
 
 	oldEntry := func() {
-		entry := spendHeightEntry(t, f.store, f.parents[0].TxIDChainHash(), int(f.outputIndex))
-		require.Len(t, entry, 72)
-		spendHeightSetEntry(t, f.store, f.parents[0].TxIDChainHash(), int(f.outputIndex), entry[:68])
-		require.Len(t, spendHeightEntry(t, f.store, f.parents[0].TxIDChainHash(), int(f.outputIndex)), 68)
+		key := f.keyOf(f.parents[0].TxIDChainHash())
+		spendHeightClear(t, f.client, key, int(f.outputIndex))
+		_, ok := spendHeightAt(t, f.client, key, int(f.outputIndex))
+		require.False(t, ok)
 	}
 
 	oldEntry()

@@ -78,14 +78,10 @@ var (
 	LuaPackageMined = LuaPackage + "_mined"
 )
 
-// Sizes of a utxos-bin entry. An unspent output is the 32-byte hash alone. A spent output adds the
-// 36-byte spending data (68 bytes, also the form of a frozen output and of a spend written before
-// the height was recorded) and, when the spend recorded it, the 4-byte little-endian block height
-// of the spend (72 bytes). Readers accept both spent sizes.
-const (
-	spentUTXOSize           = 68
-	spentUTXOWithHeightSize = 72
-)
+// spendHeightSize is the width of one output's slot in the spendHeights bin: the block height of
+// the output's spend as a little-endian uint32, at offset*4. Zero means none was recorded. See
+// setSpendHeight in teranode.lua for why the height lives in its own bin and not in the utxos entry.
+const spendHeightSize = 4
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
 var frozenUTXOBytes = subtree.FrozenBytes[:]

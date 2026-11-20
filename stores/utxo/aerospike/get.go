@@ -381,13 +381,13 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 					}
 				}
 
-				if len(b) == spentUTXOSize || len(b) == spentUTXOWithHeightSize {
+				if len(b) == 68 {
 					txID, err := chainhash.NewHash(b[32:64])
 					if err != nil {
 						return nil, errors.NewProcessingError("chain hash error", err)
 					}
 
-					vin := binary.LittleEndian.Uint32(b[64:spentUTXOSize])
+					vin := binary.LittleEndian.Uint32(b[64:])
 
 					spendingData = spendpkg.NewSpendingData(txID, int(vin))
 				}
@@ -1446,8 +1446,8 @@ func (s *Store) processUTXOs(ctx context.Context, txid *chainhash.Hash, bins aer
 		}
 
 		u, ok := ui.([]uint8)
-		if ok && (len(u) == spentUTXOSize || len(u) == spentUTXOWithHeightSize) {
-			spendingData, err := spendpkg.NewSpendingDataFromBytes(u[32:spentUTXOSize])
+		if ok && len(u) == 68 {
+			spendingData, err := spendpkg.NewSpendingDataFromBytes(u[32:])
 			if err != nil {
 				return nil, errors.NewStorageError("failed to get spending data", err)
 			}
@@ -1599,9 +1599,7 @@ func applyExtraRecordBins(txID *chainhash.Hash, recordNum int, extraRecord *aero
 //     transaction carrying a data output has nils in its extra records.
 //   - 32 bytes — an unspent output: the utxo hash alone, no spending data.
 //   - 68 bytes — a spent (or frozen) output: 32-byte utxo hash + 36-byte
-//     spending data. Entries spent before the height was recorded stay this size.
-//   - 72 bytes — a spent output with the block height of its spend: the 68 bytes
-//     plus a 4-byte little-endian height.
+//     spending data.
 //
 // All three correctly leave, or set, the caller's slot. Any other length, or a
 // non-nil non-byte element, is a torn or partially-applied record.
@@ -1636,15 +1634,15 @@ func applyExtraRecordUTXOs(txID *chainhash.Hash, recordNum int, extraUtxos []int
 		switch len(u) {
 		case 32:
 			// Unspent: hash only, no spending data. Slot stays nil.
-		case spentUTXOSize, spentUTXOWithHeightSize:
-			spendingData, err := spendpkg.NewSpendingDataFromBytes(u[32:spentUTXOSize])
+		case 68:
+			spendingData, err := spendpkg.NewSpendingDataFromBytes(u[32:])
 			if err != nil {
 				return errors.NewStorageError("failed to parse spending data from extra record", err)
 			}
 
 			spendingDatas[offset] = spendingData
 		default:
-			return errors.NewStorageError("[getAllExtraUTXOs][%s] extra record %d output %d is %d bytes, expected 32 (unspent), 68 (spent or frozen) or 72 (spent, with its height) — torn or short record", txID.String(), recordNum, i, len(u))
+			return errors.NewStorageError("[getAllExtraUTXOs][%s] extra record %d output %d is %d bytes, expected 32 (unspent) or 68 (spent) — torn or short record", txID.String(), recordNum, i, len(u))
 		}
 	}
 

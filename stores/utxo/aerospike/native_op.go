@@ -96,24 +96,38 @@ func encodeNativeOpPayload(subOp uint8, args []any) ([]byte, error) {
 // ownership-rejection probe analogous to the spend probe could un-fence it in
 // a follow-up once that scenario is exercised end-to-end.
 //
-// Every sub-op is fenced on probeNativeReplayProtection. A dispatcher that fails
-// it predates the spend height, so it may not read the 72-byte spent entries the
-// UDF spend writes: not in spendMulti or spend, and not in the sub-ops that
-// inspect an entry (freeze, reassign, setMined and the delete-at height
-// recomputation). Such a server runs every sub-op through the UDF.
+// The sub-ops that carry replay protection are fenced separately, on the
+// outcome of probeNativeReplayProtection rather than for everyone: spendMulti
+// and the single-output spend must consult the replay marker, report idempotent
+// matches and record and report each spend's height. addDeletedChildren, which
+// nothing in production calls, stays fenced with them. A fork build that passes
+// the first-seen probe but predates those semantics keeps the native path for
+// every other sub-op and runs these three through the UDF. Those other sub-ops
+// do not read the spend heights, which live in their own bin, so an older
+// dispatcher serves them correctly.
 func (s *Store) useNativeForSubOp(subOp uint8) bool {
 	if !s.useNativeTeranodeOps.Load() || subOp == subOpUnspend {
 		return false
 	}
 
-	return s.nativeReplayProtection.Load()
+	if isReplayProtectionSubOp(subOp) {
+		return s.nativeReplayProtection.Load()
+	}
+
+	return true
+}
+
+// isReplayProtectionSubOp reports whether subOp carries replay-protection
+// semantics that only probeNativeReplayProtection can vouch for.
+func isReplayProtectionSubOp(subOp uint8) bool {
+	return subOp == subOpSpendMulti || subOp == subOpSpend || subOp == subOpAddDeletedChildren
 }
 
 // useNativeMarkLongestChain reports whether MarkTransactionsOnLongestChain sends native sub-op 14.
 // It needs native ops on and its own probe passed, because a server built before sub-op 14 serves
 // every other native op.
 func (s *Store) useNativeMark() bool {
-	return s.useNativeTeranodeOps.Load() && s.nativeReplayProtection.Load() && s.useNativeMarkLongestChain.Load()
+	return s.useNativeTeranodeOps.Load() && s.useNativeMarkLongestChain.Load()
 }
 
 // encodeMarkLongestChainPayload builds the sub-op 14 payload
@@ -836,9 +850,9 @@ func (s *Store) recordReplayProtection(verdict replayProbeVerdict) {
 
 	switch verdict {
 	case replayProbeMismatch:
-		s.logger.Errorf("[teranode-native-op] native ops are enabled but the dispatcher does not prove replay protection (it does not enforce the replay marker, does not report idempotent matches or does not record and report the spend height); every sub-op runs on the UDF path for the life of this process, slower but correct. Deploy the mod-teranode build that records the spend height")
+		s.logger.Errorf("[teranode-native-op] native ops are enabled but the dispatcher does not prove replay protection (it does not enforce the replay marker, does not report idempotent matches or does not record and report the spend height); spendMulti, spend and addDeletedChildren run on the UDF path for the life of this process, slower but correct. Deploy the mod-teranode build that records the spend height. Every other sub-op keeps its routing and unspend is always UDF")
 	case replayProbeUnavailable:
-		s.logger.Warnf("[teranode-native-op] the replay-protection probe could not finish (see the probe message above); every sub-op runs on the UDF path for the life of this process because the verdict is not retried")
+		s.logger.Warnf("[teranode-native-op] the replay-protection probe could not finish (see the probe message above); spendMulti, spend and addDeletedChildren run on the UDF path for the life of this process because the verdict is not retried, every other sub-op keeps its routing and unspend is always UDF")
 	}
 }
 
@@ -896,7 +910,7 @@ func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospi
 //     the same transaction fails; a dispatcher that omits the list makes the
 //     store unspend a confirmed output, which is a double-spend of it.
 //
-//  3. The spend height. A fresh spend records its block height with the spender,
+//  3. The spend height. A fresh spend records its block height in the spendHeights bin,
 //     and an idempotent match reports the height it recorded, in idempotentHeights
 //     keyed by the spend's idx. The store refuses a replay of a pruned
 //     transaction from that height (utxo.IsHistoricalSpend). A dispatcher that

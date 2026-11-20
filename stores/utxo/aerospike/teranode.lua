@@ -2,11 +2,8 @@
 local UTXO_HASH_SIZE = 32
 local SPENDING_DATA_SIZE = 36
 local FULL_UTXO_SIZE = UTXO_HASH_SIZE + SPENDING_DATA_SIZE
--- A spend also records the block height it was made at, as 4 little-endian bytes after the
--- spending data. An entry is 32 bytes (unspent), 68 (frozen, or spent by code that recorded no
--- height) or 72 (spent, with its height). Readers accept both spent sizes.
+-- Each output's spend height is 4 little-endian bytes in the spendHeights bin (see setSpendHeight).
 local SPEND_HEIGHT_SIZE = 4
-local HEIGHT_UTXO_SIZE = FULL_UTXO_SIZE + SPEND_HEIGHT_SIZE
 local FROZEN_BYTE = 255
 
 -- Bin name constants
@@ -31,6 +28,7 @@ local BIN_UTXOS = "utxos"
 local BIN_UTXO_SPENDABLE_IN = "utxoSpendableIn"
 local BIN_LAST_SPENT_STATE = "lastSpentState"  -- Tracks last signaled state: "ALLSPENT" or "NOTALLSPENT"
 local BIN_DELETED_CHILDREN = "deletedChildren"  -- Tracks which child transactions have already been deleted
+local BIN_SPEND_HEIGHTS = "spendHeights"  -- 4 little-endian bytes per output: the block height of its spend
 
 -- Status constants
 local STATUS_OK = "OK"
@@ -184,15 +182,12 @@ local function spendingDataBytesToTxHex(b)
     return table_concat(t)
 end
 
--- Creates a new UTXO with spending data. spendHeight, when given with spending data, is recorded
--- after it (a 72-byte entry); freeze passes none and keeps its 68-byte entry.
-local function createUTXOWithSpendingData(utxoHash, spendingData, spendHeight)
+-- Creates a new UTXO with spending data
+local function createUTXOWithSpendingData(utxoHash, spendingData)
     local newUtxo
 
     if spendingData == nil then
         newUtxo = bytes(UTXO_HASH_SIZE)
-    elseif spendHeight ~= nil then
-        newUtxo = bytes(HEIGHT_UTXO_SIZE)
     else
         newUtxo = bytes(FULL_UTXO_SIZE)
     end
@@ -211,16 +206,77 @@ local function createUTXOWithSpendingData(utxoHash, spendingData, spendHeight)
         newUtxo[UTXO_HASH_SIZE + i] = spendingData[i]
     end
 
-    if spendHeight ~= nil then
-        -- little-endian uint32
-        local h = spendHeight
-        for i = 1, SPEND_HEIGHT_SIZE do
-            newUtxo[FULL_UTXO_SIZE + i] = h % 256
-            h = (h - h % 256) / 256
-        end
+    return newUtxo
+end
+
+-- The spend heights live in their own bin, not in the utxos entry, so a utxos entry keeps the
+-- 32-byte (unspent) and 68-byte (spent or frozen) sizes every older teranode.lua reads. An older
+-- package ignores the bin, so during a rolling upgrade or after a downgrade it still reads every
+-- spent output as spent.
+--
+-- The bin is a byte string with 4 little-endian bytes per output, in output order: the height of
+-- output 3's spend is bytes 13 to 16 (1-based). It grows on demand to cover the output being
+-- spent and is never shrunk. Zero means no height was recorded: an output spent by an older
+-- package, or not spent. No real spend is made at height 0, because the genesis coinbase is
+-- unspendable and the mempool spends at the tip plus one. Unspend leaves the 4 bytes in place:
+-- they are only read on an idempotent match, which needs a spend, and a spend overwrites them.
+
+-- Returns the height recorded for the output at offset (0-based), or nil if none is.
+local function getSpendHeight(heights, offset)
+    if heights == nil then
+        return nil
     end
 
-    return newUtxo
+    local base = offset * SPEND_HEIGHT_SIZE
+
+    if bytes_size(heights) < base + SPEND_HEIGHT_SIZE then
+        return nil
+    end
+
+    local height = heights[base + 1]
+        + heights[base + 2] * 256
+        + heights[base + 3] * 65536
+        + heights[base + 4] * 16777216
+
+    if height == 0 then
+        return nil
+    end
+
+    return height
+end
+
+-- Records height for the output at offset (0-based) and returns the bin to write back, which is
+-- a new, longer byte string when heights did not yet cover the output.
+local function setSpendHeight(heights, offset, height)
+    local base = offset * SPEND_HEIGHT_SIZE
+    local needed = base + SPEND_HEIGHT_SIZE
+    local size = 0
+
+    if heights ~= nil then
+        size = bytes_size(heights)
+    end
+
+    if size < needed then
+        local grown = bytes(needed)
+
+        for i = 1, size do
+            grown[i] = heights[i]
+        end
+
+        for i = size + 1, needed do
+            grown[i] = 0
+        end
+
+        heights = grown
+    end
+
+    local h = height
+    for i = 1, SPEND_HEIGHT_SIZE do
+        heights[base + i] = h % 256
+        h = (h - h % 256) / 256
+    end
+
+    return heights
 end
 
 --- Retrieves and validates a UTXO and its spending data
@@ -230,8 +286,6 @@ end
 -- @return string|nil utxo The specific UTXO if found
 -- @return string|nil spendingData The spending data if present
 -- @return table|nil errorInfo A map containing errorCode and message if an error occurs
--- @return number|nil spendHeight The block height recorded with the spend. nil for an entry
---         that carries none (unspent, frozen, or spent by code that recorded no height).
 local function getUTXOAndSpendingData(utxos, offset, expectedHash)
     -- assert(utxos ~= nil, "utxos must be non-nil") -- Removed for performance, caller ensures
     -- assert(type(offset) == "number" and offset >= 0, "offset must be a non-negative number")
@@ -263,21 +317,12 @@ local function getUTXOAndSpendingData(utxos, offset, expectedHash)
     end
 
     local spendingData = nil
-    local spendHeight = nil
-    local size = bytes_size(utxo)
 
-    if size >= FULL_UTXO_SIZE then
+    if bytes_size(utxo) == FULL_UTXO_SIZE then
         spendingData = bytes_get_bytes(utxo, UTXO_HASH_SIZE + 1, SPENDING_DATA_SIZE)
     end
 
-    if size >= HEIGHT_UTXO_SIZE then
-        spendHeight = utxo[FULL_UTXO_SIZE + 1]
-            + utxo[FULL_UTXO_SIZE + 2] * 256
-            + utxo[FULL_UTXO_SIZE + 3] * 65536
-            + utxo[FULL_UTXO_SIZE + 4] * 16777216
-    end
-
-    return utxo, spendingData, nil, spendHeight
+    return utxo, spendingData, nil
 end
 
 -- Function to check if a spending data indicates a frozen UTXO
@@ -401,9 +446,11 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
     -- (utxo.RollbackSet): the match may be a confirmed, historical spend or an
     -- earlier failed attempt's orphan.
     local idempotent = list()
-    -- idx -> the block height recorded with the matched spend; absent for an entry that has none.
+    -- idx -> the block height recorded with the matched spend; absent for an output that has none.
     -- The caller applies the age rule (utxo.IsHistoricalSpend) to it.
     local idempotentHeights = map()
+    local spendHeights = rec[BIN_SPEND_HEIGHTS]
+    local spendHeightsChanged = false
     local deletedChildren = rec[BIN_DELETED_CHILDREN]
     local spendableIn = rec[BIN_UTXO_SPENDABLE_IN]
     local spendCount = #spends
@@ -418,7 +465,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         local idx = spend['idx']
 
         -- Get and validate specific UTXO
-        local utxo, existingSpendingData, errorInfo, existingSpendHeight = getUTXOAndSpendingData(utxos, offset, utxoHash)
+        local utxo, existingSpendingData, errorInfo = getUTXOAndSpendingData(utxos, offset, utxoHash)
         if errorInfo then
             local error = map()
 
@@ -464,6 +511,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 
                 list.append(idempotent, idx)
 
+                local existingSpendHeight = getSpendHeight(spendHeights, offset)
                 if existingSpendHeight ~= nil then
                     idempotentHeights[idx] = existingSpendHeight
                 end
@@ -492,11 +540,13 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         end
 
         -- Create new UTXO with spending data
-        local newUtxo = createUTXOWithSpendingData(utxoHash, spendingData, currentBlockHeight)
+        local newUtxo = createUTXOWithSpendingData(utxoHash, spendingData)
 
         -- Update the record
         utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
         spentUtxos = spentUtxos + 1
+        spendHeights = setSpendHeight(spendHeights, offset, currentBlockHeight)
+        spendHeightsChanged = true
 
         ::continue::
     end
@@ -504,6 +554,10 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
     -- Update the record with the new values
     rec[BIN_UTXOS] = utxos
     rec[BIN_SPENT_UTXOS] = spentUtxos
+
+    if spendHeightsChanged then
+        rec[BIN_SPEND_HEIGHTS] = spendHeights
+    end
 
     local signal, childCount, conflicting = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
@@ -945,7 +999,7 @@ function unfreeze(rec, offset, utxoHash)
         return response
     end
 
-    if bytes.size(utxo) < FULL_UTXO_SIZE then
+    if bytes.size(utxo) ~= FULL_UTXO_SIZE then
         response[FIELD_STATUS] = STATUS_ERROR
         response[FIELD_ERROR_CODE] = ERROR_CODE_UTXO_INVALID_SIZE
         response[FIELD_MESSAGE] = ERR_UTXO_INVALID_SIZE
@@ -1020,7 +1074,7 @@ function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfte
         return response
     end
 
-    if bytes.size(utxo) < FULL_UTXO_SIZE then
+    if bytes.size(utxo) ~= FULL_UTXO_SIZE then
         response[FIELD_STATUS] = STATUS_ERROR
         response[FIELD_ERROR_CODE] = ERROR_CODE_UTXO_INVALID_SIZE
         response[FIELD_MESSAGE] = ERR_UTXO_INVALID_SIZE
