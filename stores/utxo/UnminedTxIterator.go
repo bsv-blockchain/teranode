@@ -21,6 +21,9 @@ type UnminedTransaction struct {
 	Skip         bool
 	UnminedSince int
 	BlockIDs     []uint32
+	// LockTime is the transaction's nLockTime, 0 when the store did not read it. Block
+	// assembly keeps out a reloaded transaction it holds back at the next block.
+	LockTime uint32
 }
 
 // InconsistentTxRecord is a lightweight record used by the consistency scan.

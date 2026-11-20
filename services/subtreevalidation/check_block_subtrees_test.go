@@ -474,6 +474,7 @@ func TestCheckBlockSubtrees_SiblingFailureDoesNotCancelInFlight(t *testing.T) {
 
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
 		mock.Anything, mock.Anything, mock.Anything).
@@ -605,6 +606,7 @@ func TestCheckBlockSubtrees_Optimistic_SkipsFetchSubtreeData(t *testing.T) {
 
 		server, cleanup := setupTestServer(t)
 		defer cleanup()
+		mockBestBlockHeader(server)
 
 		// New starts pessimistic regardless of bootstrap; Arm applies the intent.
 		afCfg := adaptivefetch.DefaultConfig()
@@ -690,6 +692,7 @@ func TestCheckBlockSubtrees_OversizedBody(t *testing.T) {
 
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	server.settings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap
 
@@ -743,6 +746,7 @@ func TestCheckBlockSubtrees_RetriesSubtreeFetchOn429(t *testing.T) {
 
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	server.settings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap
 
@@ -808,6 +812,7 @@ func TestCheckBlockSubtrees_LocalAssemblyPolicyIgnored(t *testing.T) {
 
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	// Docker quickstart profile: small local assembly cap, generous receive cap.
 	server.settings.BlockAssembly.MaximumMerkleItemsPerSubtree = 32768
@@ -1631,7 +1636,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		var allTransactions []*bt.Tx
 		blockIds := make(map[uint32]bool)
 
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true, nil)
 		require.NoError(t, err)
 	})
 
@@ -1655,7 +1660,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true, nil)
 		require.NoError(t, err)
 	})
 
@@ -1682,7 +1687,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should fail with validation errors (errors are logged but not returned)
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true, nil)
 		require.Error(t, err)
 	})
 
@@ -1706,7 +1711,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		// Missing-parent errors are deferred (not fatal) so the caller's
 		// sequential revalidation pass can re-run the failed subtrees in
 		// block order and resolve cross-subtree parent dependencies.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true, nil)
 		require.NoError(t, err)
 	})
 
@@ -1731,7 +1736,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		// The walk-limit error is deterministic for the block: it must fail the
 		// level immediately and keep its distinct code through the wrapping, not
 		// be swallowed into a countless summary error.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true, nil)
 		require.Error(t, err)
 		require.ErrorIs(t, err, errors.ErrUtxoWalkLimitExceeded)
 	})
@@ -1756,7 +1761,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 
 		// Generic per-tx errors are counted and deferred, but the summary error
 		// must chain the first cause instead of reporting bare counts.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true, nil)
 		require.Error(t, err)
 		require.ErrorIs(t, err, errors.ErrStorageError)
 		require.Contains(t, err.Error(), "distinctive storage failure for testing")
@@ -1771,7 +1776,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Should fail with nil transaction
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "transaction is nil")
 	})
@@ -1806,7 +1811,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true, nil)
 		require.NoError(t, err)
 	})
 
@@ -1839,7 +1844,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should return error even some validation failures
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true, nil)
 		require.Error(t, err)
 	})
 
@@ -2332,6 +2337,24 @@ func blessedSubtreeBytes(t *testing.T) []byte {
 	require.NoError(t, err)
 
 	return b
+}
+
+// mockBestBlockHeader serves a tip for tests that reach the block assembly feed
+// decision without testing it. It is not part of setupTestServer: testify serves
+// the first matching expectation, so a default there would shadow every test's
+// own GetBestBlockHeader.
+func mockBestBlockHeader(server *Server) {
+	tip := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+	server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader", mock.Anything).
+		Return(tip, &model.BlockHeaderMeta{ID: 100}, nil).Maybe()
+	mockTipHeaders(server, tip)
+}
+
+// mockTipHeaders serves tip for the median-time-past lookup feedsBlockAssembly makes
+// for a block whose parent is not the tip.
+func mockTipHeaders(server *Server, tip *model.BlockHeader) {
+	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaders", mock.Anything, tip.Hash(), mock.Anything).
+		Return([]*model.BlockHeader{tip}, []*model.BlockHeaderMeta{{ID: 100}}, nil).Maybe()
 }
 
 func setupTestServer(t *testing.T) (*Server, func()) {

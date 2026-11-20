@@ -25,6 +25,13 @@ type Data struct {
 
 	// Parents is a list of parent transaction hashes
 	TxInpoints subtree.TxInpoints
+
+	// ValidatedHeight is the block height the transaction was validated at
+	ValidatedHeight uint32
+
+	// LockTime is the transaction's nLockTime when it can hold the transaction back (some
+	// input sequence is not final), 0 otherwise
+	LockTime uint32
 }
 
 // NewFromBytes deserializes a byte array into a Data structure.

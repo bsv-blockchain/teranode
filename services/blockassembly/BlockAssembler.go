@@ -107,6 +107,22 @@ type BlockAssembler struct {
 	// logger provides logging functionality for the assembler
 	logger ulogger.Logger
 
+	// templateTxEra is the transaction rules the template was last loaded from the UTXO
+	// store under; nil before the first load. A block that moves the subtree processor to
+	// other rules makes the template stale until a reload succeeds. See
+	// templateTxEraIsStale.
+	templateTxEra atomic.Pointer[txEraRange]
+
+	// movedBackFloor tracks the height and timestamp of blocks moved back with transactions, until
+	// a reset rebuilds the template (checkTemplateFinality). templateUnsettled is set while a
+	// settleTemplate after a block move has not succeeded: the template may then hold
+	// transactions the next block cannot mine, so mining candidates are empty.
+	movedBackFloor    atomic.Pointer[reorgFinalityCheck]
+	templateUnsettled atomic.Bool
+
+	// settleRetryScheduled is set while a retry of a failed settleTemplate is scheduled.
+	settleRetryScheduled atomic.Bool
+
 	// undecidedMu guards undecidedSince: each unmined transaction whose input check the store
 	// has not answered, with the time it was first left undecided. One undecided for longer than
 	// undecidedExcludeAfter is left out of a load instead of failing it (see undecidedLoad).
@@ -187,6 +203,10 @@ type BlockAssembler struct {
 	// Protected by stateChangeMu to prevent race conditions
 	stateChangeMu sync.RWMutex
 	stateChangeCh chan BestBlockInfo
+
+	// pendingStateChanges holds, under stateChangeMu, the tips set since block assembly last
+	// ran, to announce on stateChangeCh once it runs again (flushStateChanges).
+	pendingStateChanges []BestBlockInfo
 
 	// heartbeat records that the main select loop is still being serviced, so
 	// the liveness probe can distinguish a wedged assembler from an idle one
@@ -1335,8 +1355,22 @@ func (b *BlockAssembler) resetToBlockWithResponse(ctx context.Context, bestBlock
 	// define a post process function to be called after the reset is complete, but before we release the lock
 	// in the for/select in the subtreeprocessor
 	postProcessFn := func() error {
+		// The reload rebuilds the template under the target's rules and keeps out every
+		// transaction validated under other ones, re-deriving which from the UTXO store.
+		b.subtreeProcessor.SetTxEra(currentHeight + 1)
+
+		// The reload keeps out the transactions the target's next block cannot mine.
+		if _, _, err := b.updateTxCandidate(ctx, bestBlockchainBlockHeader, currentHeight); err != nil {
+			return errors.NewProcessingError("[Reset] error setting the block the template is mined in", err)
+		}
+
+		finishDropped := b.subtreeProcessor.RestartDroppedTxs()
+
 		// reload the unmined transactions
-		if err = b.loadUnminedTransactions(ctx, true, shouldValidateInputs); err != nil {
+		err = b.loadUnminedTransactions(ctx, true, shouldValidateInputs)
+		finishDropped(err == nil)
+
+		if err != nil {
 			// The reset has already cleared the subtrees, so the mempool is out of every
 			// template until a load succeeds. The callers only log this error, so the retry
 			// is queued here rather than left to an operator.
@@ -1458,6 +1492,10 @@ func (b *BlockAssembler) resetToBlockWithResponse(ctx context.Context, bestBlock
 	}
 
 	b.setBestBlockHeader(bestBlockchainBlockHeader, currentHeight)
+
+	// The reload filtered the whole template against the new next block, and tracks the lock
+	// time of every transaction it brought in.
+	b.movedBackFloor.Store(nil)
 
 	if err = b.SetState(ctx); err != nil {
 		return resp, errors.NewProcessingError("[Reset] error setting state", err)
@@ -1623,6 +1661,10 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	b.lastBestTipReplay.Store(time.Now().UnixNano())
 
 	if !b.followBestTipChanges(ctx) {
+		// Nothing left to move to. A settle that failed after the last block move is retried
+		// here, on the tip block assembly is on: no new block would otherwise retry it.
+		b.retryUnsettledTemplate(ctx)
+
 		return
 	}
 
@@ -1708,6 +1750,10 @@ func (b *BlockAssembler) moveToBlock(ctx context.Context, bestBlockchainBlockHea
 	switch {
 	case bestBlockAccordingToBlockchain.Hash().IsEqual(bestBlockAccordingToBlockAssembly.Hash()):
 		ctxLogger.Infof("[BlockAssembler][%s] best block header is the same as the current best block header: %s", bestBlockchainBlockHeader.Hash(), bestBlockAccordingToBlockAssembly.Hash())
+
+		// A settle that failed after the last block move is retried here, on the same tip.
+		b.retryUnsettledTemplate(ctx)
+
 		return nil
 
 	case !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(bestBlockAccordingToBlockAssembly.Hash()):
@@ -1735,6 +1781,8 @@ func (b *BlockAssembler) moveToBlock(ctx context.Context, bestBlockchainBlockHea
 		} else {
 			ctxLogger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), bestBlockAccordingToBlockAssembly.Hash())
 			b.setCurrentRunningState(StateReorging)
+
+			b.recordMovedBackFloor(moveBackBlocksWithMeta)
 
 			if err = b.handleReorg(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height); err != nil {
 				if errors.Is(err, errors.ErrBlockAssemblyReset) {
@@ -1773,6 +1821,10 @@ func (b *BlockAssembler) moveToBlock(ctx context.Context, bestBlockchainBlockHea
 	}
 
 	b.setBestBlockHeader(bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height)
+
+	// The move itself succeeded, so a failed settle does not fail it: settleTemplate logs and
+	// counts its own failure, keeps candidates empty and queues the retry.
+	b.settleTemplate(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height)
 
 	// Block assembly advanced to the chain tip we observed this round: it is no longer
 	// behind, so clear the lag gauge (issue #980, Bug B).
@@ -1830,6 +1882,9 @@ func (b *BlockAssembler) resetAfterRefusedMove(ctx context.Context, header *mode
 // Parameters:
 //   - bestBlockchainBlockHeader: The new best block header to set
 //   - Height: The height of the new best block
+//
+// It also moves the subtree processor to the transaction rules of the next block (see
+// subtreeprocessor.SetTxEra).
 func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.BlockHeader, height uint32) {
 	b.logger.Infof("[BlockAssembler][%s] setting best block header to height %d", bestBlockchainBlockHeader.Hash(), height)
 
@@ -1838,12 +1893,40 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 		Height: height,
 	})
 
-	// Send state change notification if a listener is registered
-	b.stateChangeMu.RLock()
-	stateChangeCh := b.stateChangeCh
-	b.stateChangeMu.RUnlock()
+	if b.subtreeProcessor != nil {
+		b.subtreeProcessor.SetTxEra(height + 1)
+	}
 
-	if stateChangeCh != nil {
+	// A listener hears of the tip once block assembly runs on it again: a move sets it before
+	// it settles the template, and a mining candidate asked for meanwhile is an empty one.
+	b.stateChangeMu.Lock()
+	if b.stateChangeCh != nil {
+		b.pendingStateChanges = append(b.pendingStateChanges, BestBlockInfo{
+			Header: bestBlockchainBlockHeader,
+			Height: height,
+		})
+	}
+	b.stateChangeMu.Unlock()
+
+	if state, ok := b.currentRunningState.Load().(State); ok && state == StateRunning {
+		b.flushStateChanges()
+	}
+}
+
+// flushStateChanges announces the pending tips to the state change listener, in the order they
+// were set.
+func (b *BlockAssembler) flushStateChanges() {
+	b.stateChangeMu.Lock()
+	pending := b.pendingStateChanges
+	b.pendingStateChanges = nil
+	stateChangeCh := b.stateChangeCh
+	b.stateChangeMu.Unlock()
+
+	if stateChangeCh == nil {
+		return
+	}
+
+	for _, info := range pending {
 		// Protect against send on closed channel
 		func() {
 			defer func() {
@@ -1851,12 +1934,316 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 					b.logger.Debugf("[BlockAssembler] stateChangeCh closed; skipping state change notification")
 				}
 			}()
-			stateChangeCh <- BestBlockInfo{
-				Header: bestBlockchainBlockHeader,
-				Height: height,
-			}
+			stateChangeCh <- info
 		}()
 	}
+}
+
+// txEraRange is a subtree processor's transaction rules: the range of validated heights it
+// admits, or ok false when it admits every height.
+type txEraRange struct {
+	lo, hi uint32
+	ok     bool
+}
+
+func (b *BlockAssembler) currentTxEra() txEraRange {
+	if b.subtreeProcessor == nil {
+		return txEraRange{}
+	}
+
+	lo, hi, ok := b.subtreeProcessor.TxEra()
+	return txEraRange{lo: lo, hi: hi, ok: ok}
+}
+
+// filterReloadByTxEra keeps out of a reload the transactions validated under other rules
+// than the next block's, and their descendants (subtreeprocessor.FilterUnminedTxEra).
+// blockHeights caches block id to height across the calls of one reload.
+func (b *BlockAssembler) filterReloadByTxEra(ctx context.Context, txs []*utxo.UnminedTransaction, blockHeights map[uint32]uint32) ([]*utxo.UnminedTransaction, error) {
+	// Without an era the heights are not needed, but the lock times still are.
+	if _, _, ok := b.subtreeProcessor.TxEra(); !ok {
+		return b.subtreeProcessor.FilterUnminedTxEra(txs, nil), nil
+	}
+
+	heights, err := b.reloadValidatedHeights(ctx, txs, blockHeights)
+	if err != nil {
+		return nil, err
+	}
+
+	return b.subtreeProcessor.FilterUnminedTxEra(txs, heights), nil
+}
+
+// reloadValidatedHeights returns the height each reloaded transaction was validated at, 0
+// when unknown. One mined in blocks that are not on the main chain (a side block, or moved
+// back by a reorg) was validated at those blocks' heights, and takes the highest. Otherwise
+// a transaction was created, and validated, at its unmined_since, unless a reorg or an
+// invalidation moved it back: then unmined_since is backdated to the tip less the unmined
+// retention, or 1 (utxo.BackdatedUnminedSince), and says nothing about the rules it was
+// validated under. Such a value, 1 or at least the retention below the tip, is unknown; a
+// transaction created that long ago is due for pruning anyway.
+func (b *BlockAssembler) reloadValidatedHeights(ctx context.Context, txs []*utxo.UnminedTransaction, blockHeights map[uint32]uint32) ([]uint32, error) {
+	heights := make([]uint32, len(txs))
+
+	_, tip := b.CurrentBlock()
+
+	for i, tx := range txs {
+		height, err := b.reloadValidatedHeight(ctx, tx, tip, blockHeights)
+		if err != nil {
+			return nil, err
+		}
+
+		heights[i] = height
+	}
+
+	return heights, nil
+}
+
+// reloadValidatedHeight is reloadValidatedHeights for one transaction, with the tip read once
+// by the caller.
+func (b *BlockAssembler) reloadValidatedHeight(ctx context.Context, tx *utxo.UnminedTransaction, tip uint32, blockHeights map[uint32]uint32) (uint32, error) {
+	if len(tx.BlockIDs) == 0 {
+		retention := b.settings.UtxoStore.UnminedTxRetention
+
+		unminedSince := uint32(max(tx.UnminedSince, 0)) //nolint:gosec // a block height
+		if unminedSince > 1 && (tip <= retention || unminedSince > tip-retention) {
+			return unminedSince, nil
+		}
+
+		return 0, nil
+	}
+
+	var validatedHeight uint32
+
+	for _, id := range tx.BlockIDs {
+		height, ok := blockHeights[id]
+		if !ok {
+			block, err := b.blockchainClient.GetBlockByID(ctx, uint64(id))
+			if err != nil {
+				return 0, errors.NewProcessingError("[loadUnminedTransactions] error getting block %d for the transaction rules of %s", id, tx.Hash, err)
+			}
+
+			height = block.Height
+			blockHeights[id] = height
+		}
+
+		validatedHeight = max(validatedHeight, height)
+	}
+
+	return validatedHeight, nil
+}
+
+// templateTxEraIsStale reports whether the subtree processor admits other transaction
+// rules than the ones the template was last loaded under. The template then still holds
+// transactions validated under the old rules, and must be reloaded. Comparing with the
+// last successful load, rather than reacting to a change, keeps a failed reload stale, so
+// the next block retries it.
+func (b *BlockAssembler) templateTxEraIsStale() bool {
+	built := b.templateTxEra.Load()
+
+	return built != nil && *built != b.currentTxEra()
+}
+
+// reorgFinalityCheck is the moved-back floor a reorg leaves for checkTemplateFinality: the
+// highest block it moved back that held transactions besides the coinbase, and the latest
+// timestamp of any such block for pre-CSV time locks.
+type reorgFinalityCheck struct {
+	movedBack       *model.BlockHeader
+	movedBackHeight uint32
+	movedBackTime   uint32
+}
+
+// recordMovedBackFloor raises the moved-back height and timestamp floors for blocks that held
+// transactions. The floors only rise until a reset rebuilds the template: the moved-back
+// transactions stay in the template untracked, and a later reorg can lower the next block
+// below them.
+func (b *BlockAssembler) recordMovedBackFloor(moveBack []blockWithMeta) {
+	next := b.movedBackFloor.Load()
+
+	for _, m := range moveBack {
+		if m.block == nil || m.meta == nil || m.block.TransactionCount <= 1 {
+			continue
+		}
+
+		if next == nil || m.meta.Height > next.movedBackHeight {
+			movedBackTime := m.block.Header.Timestamp
+			if next != nil && next.movedBackTime > movedBackTime {
+				movedBackTime = next.movedBackTime
+			}
+			next = &reorgFinalityCheck{movedBack: m.block.Header, movedBackHeight: m.meta.Height, movedBackTime: movedBackTime}
+		} else if m.block.Header.Timestamp > next.movedBackTime {
+			copy := *next
+			copy.movedBackTime = m.block.Header.Timestamp
+			next = &copy
+		}
+	}
+
+	if next != nil {
+		b.movedBackFloor.Store(next)
+	}
+}
+
+// updateTxCandidate tells the subtree processor which block the template is mined in: the one
+// after header, at height+1. Time locks use that block's timestamp before CSV, and header's
+// median time past afterward. It returns both times for the moved-back floor check.
+func (b *BlockAssembler) updateTxCandidate(ctx context.Context, header *model.BlockHeader, height uint32) (uint32, uint32, error) {
+	medianTimePast, err := b.ParentMedianTimePast(ctx, header.Hash())
+	if err != nil {
+		return 0, 0, err
+	}
+
+	lockTimeCutoff := medianTimePast
+	if height+1 < b.settings.ChainCfgParams.CSVHeight {
+		candidateTime, err := b.candidateTime(ctx, header)
+		if err != nil {
+			return 0, 0, err
+		}
+		lockTimeCutoff, err = safeconversion.Int64ToUint32(candidateTime)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+
+	if b.subtreeProcessor != nil {
+		b.subtreeProcessor.SetTxCandidate(header.Hash(), height+1, lockTimeCutoff)
+	}
+
+	return medianTimePast, lockTimeCutoff, nil
+}
+
+// checkTemplateFinality sets the block the template is mined in after a block move and reports
+// whether the template must be rebuilt because it holds a transaction that block cannot mine.
+//
+// The subtree processor checks a transaction's lock time when it admits it, against the
+// candidate as it was then. It tracks the ones whose nLockTime can hold them back, and a reorg
+// can lower the candidate under them, as can a transaction admitted while the candidate still
+// described the previous block (NotFinalTemplateTxs). The transactions of the blocks a reorg
+// moved back are not tracked: each was final in its block, so they remain final when the next
+// height and time are at least those of every moved-back block holding transactions
+// (recordMovedBackFloor). Before CSV, time means the candidate's own timestamp; afterward it
+// means its parent's median time past.
+func (b *BlockAssembler) checkTemplateFinality(ctx context.Context, header *model.BlockHeader, height uint32) (bool, error) {
+	medianTimePast, lockTimeCutoff, err := b.updateTxCandidate(ctx, header, height)
+	if err != nil {
+		return false, err
+	}
+
+	if b.subtreeProcessor == nil {
+		return false, nil
+	}
+
+	if floor := b.movedBackFloor.Load(); floor != nil {
+		if height+1 < b.settings.ChainCfgParams.CSVHeight && lockTimeCutoff < floor.movedBackTime {
+			return true, nil
+		}
+
+		movedBackParentMedianTimePast, err := b.ParentMedianTimePast(ctx, floor.movedBack.HashPrevBlock)
+		if err != nil {
+			return false, err
+		}
+
+		if height+1 < floor.movedBackHeight || medianTimePast < movedBackParentMedianTimePast {
+			return true, nil
+		}
+	}
+
+	return b.subtreeProcessor.NotFinalTemplateTxs() > 0, nil
+}
+
+// retryUnsettledTemplate runs settleTemplate again on block assembly's tip when the last one
+// failed, or the template is under other rules than the next block's.
+func (b *BlockAssembler) retryUnsettledTemplate(ctx context.Context) {
+	if !b.templateUnsettled.Load() && !b.templateTxEraIsStale() {
+		return
+	}
+
+	header, height := b.CurrentBlock()
+	if header == nil {
+		return
+	}
+
+	if b.settleTemplate(ctx, header, height) {
+		if err := b.SetState(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			b.logger.Errorf("[BlockAssembler][%s] error setting state: %v", header.Hash(), err)
+		}
+	}
+}
+
+// settleTemplateRetryDelay is how long a failed settleTemplate check waits before it is retried
+// on the same tip. A failed rebuild waits as long as main's unmined reload retry
+// (defaultUnminedReloadRetryInterval), so the two do not stack resets.
+const settleTemplateRetryDelay = 5 * time.Second
+
+// settleTemplate brings the template in line with the block it is now mined on, after a block
+// move or a failed earlier attempt. It rebuilds the template from the UTXO store when it holds
+// a transaction the next block cannot mine (checkTemplateFinality), or one validated under
+// other rules than the next block's (templateTxEraIsStale). Until it succeeds the template is
+// unsettled, mining candidates are empty, and it is retried on the same tip. It reports whether
+// it succeeded.
+func (b *BlockAssembler) settleTemplate(ctx context.Context, header *model.BlockHeader, height uint32) bool {
+	ctxLogger := b.logger.WithTraceContext(ctx)
+
+	// One retry is scheduled at a time, however often settling fails.
+	fail := func(reason string, delay time.Duration) bool {
+		b.templateUnsettled.Store(true)
+		prometheusBlockAssemblyProcessingStuck.WithLabelValues(reason).Inc()
+
+		if b.settleRetryScheduled.CompareAndSwap(false, true) {
+			time.AfterFunc(delay, func() {
+				b.settleRetryScheduled.Store(false)
+				b.triggerReconcile()
+			})
+		}
+
+		return false
+	}
+
+	needsReset, err := b.checkTemplateFinality(ctx, header, height)
+	if err != nil {
+		ctxLogger.Errorf("[BlockAssembler][%s] error checking the template's transactions are final at the next block: %v", header.Hash(), err)
+		return fail("tx_finality", settleTemplateRetryDelay)
+	}
+
+	if needsReset {
+		ctxLogger.Warnf("[BlockAssembler][%s] the template holds transactions the next block cannot mine; rebuilding the template", header.Hash())
+
+		if err = b.reset(ctx); err != nil {
+			ctxLogger.Errorf("[BlockAssembler][%s] error rebuilding the template for transactions the next block cannot mine: %v", header.Hash(), err)
+			return fail("tx_finality_reset", defaultUnminedReloadRetryInterval)
+		}
+	}
+
+	// The template holds transactions validated for an earlier next height. When the next
+	// height falls under other transaction rules (an activation height), rebuild it from the
+	// UTXO store, whose reload keeps out the ones validated under the old rules.
+	// An empty template with no transaction kept out or held has nothing to rebuild: the queue is
+	// decided under the new rules. That is the first block on a fresh regtest chain, whose next
+	// height enables P2SH. A transaction kept out under the old rules is recovered by the
+	// reload, so a template that recorded one still reloads.
+	if b.templateTxEraIsStale() && b.subtreeProcessor != nil && b.subtreeProcessor.NothingToReload() {
+		era := b.currentTxEra()
+		b.templateTxEra.Store(&era)
+	}
+
+	if b.templateTxEraIsStale() {
+		ctxLogger.Warnf("[BlockAssembler][%s] the next block falls under other transaction rules; rebuilding the template", header.Hash())
+
+		if err = b.reset(ctx); err != nil {
+			ctxLogger.Errorf("[BlockAssembler][%s] error rebuilding the template for new transaction rules: %v", header.Hash(), err)
+			return fail("tx_rules_reset", defaultUnminedReloadRetryInterval)
+		}
+	}
+
+	// The transactions held back for their lock time go back to the queue, against the block
+	// just set; the ones a block mined or a conflict displaced are not.
+	if b.subtreeProcessor != nil {
+		if err = b.subtreeProcessor.OfferLockHeldTxs(ctx); err != nil {
+			ctxLogger.Errorf("[BlockAssembler][%s] error offering the transactions held back for their lock time again: %v", header.Hash(), err)
+			return fail("tx_finality_offer", settleTemplateRetryDelay)
+		}
+	}
+
+	b.templateUnsettled.Store(false)
+
+	return true
 }
 
 // setCurrentRunningState sets the current operational state.
@@ -1886,6 +2273,10 @@ func (b *BlockAssembler) setCurrentRunningState(state State) {
 	b.currentRunningState.Store(state)
 	b.stateStartTime.Store(now)
 	prometheusBlockAssemblerCurrentState.Set(float64(state))
+
+	if state == StateRunning {
+		b.flushStateChanges()
+	}
 }
 
 // GetCurrentRunningState returns the current operational state.
@@ -2590,6 +2981,13 @@ func (b *BlockAssembler) initState(ctx context.Context) error {
 		}
 	}
 
+	// The unmined reload that follows keeps out the transactions the next block cannot mine.
+	if header, height := b.CurrentBlock(); header != nil {
+		if _, _, err = b.updateTxCandidate(ctx, header, height); err != nil {
+			return errors.NewProcessingError("[BlockAssembler] error setting the block the template is mined in", err)
+		}
+	}
+
 	if err = b.SetState(ctx); err != nil {
 		b.logger.Errorf("[BlockAssembler] error setting state: %v", err)
 	}
@@ -2637,6 +3035,7 @@ func (b *BlockAssembler) SetStateChangeCh(ch chan BestBlockInfo) {
 	b.stateChangeMu.Lock()
 	defer b.stateChangeMu.Unlock()
 	b.stateChangeCh = ch
+	b.pendingStateChanges = nil
 }
 
 // CurrentBlock returns the current best block header and height atomically.
@@ -2662,11 +3061,13 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 //   - inBlock: Whether the transactions arrived inside a block
+//   - validatedHeights: Height each node was validated at, or nil when untagged
+//   - lockTimes: Each node's nLockTime where it can hold the node back, or nil
 //
 // Returns:
 //   - subtreeprocessor.Admission: Admitted, or the bound that refused the batch
-func (b *BlockAssembler) AddTxBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, inBlock bool) subtreeprocessor.Admission {
-	return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, inBlock)
+func (b *BlockAssembler) AddTxBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, inBlock bool, validatedHeights, lockTimes []uint32) subtreeprocessor.Admission {
+	return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, inBlock, validatedHeights, lockTimes)
 }
 
 // HeldCount returns the transactions held in memory: queued, dequeued but not yet counted, and
@@ -2930,6 +3331,14 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 		}
 
 		return b.generateEmptyBlockCandidate(ctx, chainTipHeader, chainTipMeta.Height)
+	}
+
+	// The template may hold transactions the next block cannot mine until settleTemplate
+	// succeeds on this tip, which retries on its own. Hand out an empty block meanwhile.
+	if b.templateUnsettled.Load() || b.templateTxEraIsStale() {
+		b.logger.Warnf("[GetMiningCandidate] the template is not yet settled on %s, returning empty block template", baBestBlockHeader.Hash())
+
+		return b.generateEmptyBlockCandidate(ctx, baBestBlockHeader, baBestBlockHeight)
 	}
 
 	// Get pre-computed data (atomic read, no locks, no channel sync)
@@ -3880,6 +4289,13 @@ func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) bool {
 // children. Only same-timestamp transactions can be misordered, so unrelated
 // timestamps are left untouched.
 func orderEqualCreatedAtRunsParentsFirst(txs []*utxo.UnminedTransaction) {
+	orderEqualCreatedAtRunsParentsFirstWithHeights(txs, nil)
+}
+
+// orderEqualCreatedAtRunsParentsFirstWithHeights is orderEqualCreatedAtRunsParentsFirst for a
+// batch whose validated heights sit in a parallel slice, nil when there are none: each height
+// moves with its transaction.
+func orderEqualCreatedAtRunsParentsFirstWithHeights(txs []*utxo.UnminedTransaction, heights []uint32) {
 	var scratch runOrderScratch
 
 	for start := 0; start < len(txs); {
@@ -3889,7 +4305,12 @@ func orderEqualCreatedAtRunsParentsFirst(txs []*utxo.UnminedTransaction) {
 		}
 
 		if end-start > 1 {
-			orderRunParentsFirst(txs[start:end], &scratch)
+			var runHeights []uint32
+			if heights != nil {
+				runHeights = heights[start:end]
+			}
+
+			orderRunParentsFirst(txs[start:end], runHeights, &scratch)
 		}
 
 		start = end
@@ -3909,6 +4330,7 @@ type runOrderScratch struct {
 	stack     []int
 	count     []int
 	reordered []*utxo.UnminedTransaction
+	heights   []uint32
 }
 
 // hashPrefix is the first 8 bytes of a tx hash, the slot table's key.
@@ -3921,7 +4343,9 @@ func hashPrefix(h *chainhash.Hash) uint64 {
 // appears before its children. Transactions with no parent/child relationship
 // inside the run keep their incoming relative order (the sort is stable), which
 // preserves the iterator's ordering for unrelated transactions.
-func orderRunParentsFirst(run []*utxo.UnminedTransaction, s *runOrderScratch) {
+//
+// heights, when not nil, holds a value per transaction of run, and is reordered with it.
+func orderRunParentsFirst(run []*utxo.UnminedTransaction, heights []uint32, s *runOrderScratch) {
 	n := len(run)
 
 	// Map each hash in the run to its slot so intra-run parent edges can be found:
@@ -4075,13 +4499,33 @@ func orderRunParentsFirst(run []*utxo.UnminedTransaction, s *runOrderScratch) {
 
 	reordered := s.reordered[:n]
 
+	var reorderedHeights []uint32
+
+	if heights != nil {
+		if cap(s.heights) < n {
+			s.heights = make([]uint32, n)
+		}
+
+		reorderedHeights = s.heights[:n]
+	}
+
 	for i, tx := range run {
-		reordered[s.count[depth[i]]] = tx
+		pos := s.count[depth[i]]
+		reordered[pos] = tx
+
+		if heights != nil {
+			reorderedHeights[pos] = heights[i]
+		}
+
 		s.count[depth[i]]++
 	}
 
 	copy(run, reordered)
 	clear(reordered)
+
+	if heights != nil {
+		copy(heights, reorderedHeights)
+	}
 }
 
 // resizeInts returns buf with length n, reallocating only when it is too small.
@@ -4274,6 +4718,15 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 		tracing.WithLogMessage(b.logger, "[loadUnminedTransactions] called with validateInputs=%t", shouldValidateInputs),
 	)
 	defer deferFn()
+
+	// The reload filters under these rules; record them once it has succeeded.
+	loadTxEra := b.currentTxEra()
+
+	defer func() {
+		if err == nil {
+			b.templateTxEra.Store(&loadTxEra)
+		}
+	}()
 
 	// Set flag to indicate unmined transactions are being loaded
 	b.unminedTransactionsLoading.Store(true)
@@ -4608,6 +5061,10 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 	batchStart := time.Now()
 	addStart := time.Now()
 	addTxs := float64(0)
+
+	if unminedTransactions, err = b.filterReloadByTxEra(ctx, unminedTransactions, map[uint32]uint32{}); err != nil {
+		return err
+	}
 
 	// Use batch insertion if UnminedLoadingBatchSize is set (> 0)
 	batchSize := b.settings.BlockAssembly.UnminedLoadingBatchSize // default 10 million
@@ -5365,6 +5822,12 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 		}
 	}()
 
+	// What the era filter needs, read once: whether an era is set, the tip that dates
+	// unmined_since, and the heights of the blocks a transaction is mined in.
+	_, _, eraOn := b.subtreeProcessor.TxEra()
+	_, tip := b.CurrentBlock()
+	blockHeights := map[uint32]uint32{}
+
 	lockedTransactions := make([]chainhash.Hash, 0, 1024)
 	markAsMinedOnLongestChain := make([]chainhash.Hash, 0, 1024)
 
@@ -5416,7 +5879,16 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 				}
 			}
 
-			if err = sorter.Add(int64(unminedTx.CreatedAt), *unminedTx.Node, unminedTx.TxInpoints); err != nil {
+			// The sort keeps only what block assembly needs, so the height the era filter
+			// reads off unmined_since and the block ids is worked out here and sorted with it.
+			var validatedHeight uint32
+			if eraOn {
+				if validatedHeight, err = b.reloadValidatedHeight(ctx, unminedTx, tip, blockHeights); err != nil {
+					return err
+				}
+			}
+
+			if err = sorter.Add(int64(unminedTx.CreatedAt), *unminedTx.Node, unminedTx.TxInpoints, validatedHeight, unminedTx.LockTime); err != nil {
 				return errors.NewProcessingError("error buffering unmined transaction %s for sorting", unminedTx.Node.Hash, err)
 			}
 
@@ -5462,14 +5934,16 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 
 	addStart := time.Now()
 
-	err = sorter.Drain(ctx, batchSize, func(batch []*utxo.UnminedTransaction) error {
+	err = sorter.Drain(ctx, batchSize, func(batch []*utxo.UnminedTransaction, validatedHeights []uint32) error {
 		// One beat per drained batch (issue 1447): a 10M batch adds in about a
 		// second (BenchmarkAddNodesDirectly), well inside any stall timeout.
 		b.heartbeat.BeatIfStarted()
 
 		// Drain never splits an equal-CreatedAt group across batches, so the
 		// parents-first tiebreak sees every member of a group.
-		orderEqualCreatedAtRunsParentsFirst(batch)
+		orderEqualCreatedAtRunsParentsFirstWithHeights(batch, validatedHeights)
+
+		batch = b.subtreeProcessor.FilterUnminedTxEra(batch, validatedHeights)
 
 		var addErr error
 		if isReload {

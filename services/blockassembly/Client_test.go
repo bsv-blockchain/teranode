@@ -177,7 +177,7 @@ func TestNewClientWithAddress_UnaryModeBuildsNoBatchers(t *testing.T) {
 		mockClient.On("AddTx", mock.Anything, mock.MatchedBy(func(req *blockassembly_api.AddTxRequest) bool { return req.InBlock }), mock.Anything).
 			Return(&blockassembly_api.AddTxResponse{}, nil)
 
-		ok, err := client.Store(ContextWithInBlock(ctx), hash, 1000, 250, subtree.TxInpoints{})
+		ok, err := client.Store(ContextWithInBlock(ctx), hash, 1000, 250, subtree.TxInpoints{}, 0, 0)
 		require.NoError(t, err)
 		require.True(t, ok, "a block transaction is stored in unary mode without a batcher")
 		mockClient.AssertExpectations(t)
@@ -286,10 +286,10 @@ func TestClient_Store_NonBatchMode(t *testing.T) {
 	t.Run("successful store", func(t *testing.T) {
 		mockClient.ExpectedCalls = nil
 		mockClient.On("AddTx", ctx, mock.MatchedBy(func(req *blockassembly_api.AddTxRequest) bool {
-			return req.Fee == fee && req.Size == size
+			return req.Fee == fee && req.Size == size && req.ValidatedHeight == 943_900
 		}), mock.Anything).Return(&blockassembly_api.AddTxResponse{}, nil)
 
-		success, err := client.Store(ctx, hash, fee, size, txInpoints)
+		success, err := client.Store(ctx, hash, fee, size, txInpoints, 943_900, 0)
 		assert.True(t, success)
 		assert.NoError(t, err)
 		mockClient.AssertExpectations(t)
@@ -300,7 +300,7 @@ func TestClient_Store_NonBatchMode(t *testing.T) {
 		mockClient.On("AddTx", ctx, mock.Anything, mock.Anything).Return(
 			nil, status.Error(codes.Internal, "internal error"))
 
-		success, err := client.Store(ctx, hash, fee, size, txInpoints)
+		success, err := client.Store(ctx, hash, fee, size, txInpoints, 0, 0)
 		assert.False(t, success)
 		assert.Error(t, err)
 		mockClient.AssertExpectations(t)
@@ -311,7 +311,7 @@ func TestClient_Store_NonBatchMode(t *testing.T) {
 		mockClient.On("AddTx", ctx, mock.Anything, mock.Anything).Return(&blockassembly_api.AddTxResponse{}, nil)
 
 		emptyTxInpoints := subtree.TxInpoints{}
-		success, err := client.Store(ctx, hash, fee, size, emptyTxInpoints)
+		success, err := client.Store(ctx, hash, fee, size, emptyTxInpoints, 0, 0)
 		assert.True(t, success)
 		assert.NoError(t, err) // Serialization of empty txInpoints should succeed
 		mockClient.AssertExpectations(t)
@@ -323,7 +323,7 @@ func TestClient_Store_NonBatchMode(t *testing.T) {
 
 		// Create a valid txInpoints structure
 		validTxInpoints := subtree.TxInpoints{}
-		success, err := client.Store(ctx, hash, fee, size, validTxInpoints)
+		success, err := client.Store(ctx, hash, fee, size, validTxInpoints, 0, 0)
 		assert.True(t, success)
 		assert.NoError(t, err)
 		mockClient.AssertExpectations(t)
@@ -346,7 +346,7 @@ func TestClient_Store_BatchMode(t *testing.T) {
 			return len(req.TxRequests) == 1
 		}), mock.Anything).Return(&blockassembly_api.AddTxBatchResponse{}, nil)
 
-		success, err := client.Store(ctx, hash, fee, size, txInpoints)
+		success, err := client.Store(ctx, hash, fee, size, txInpoints, 0, 0)
 		assert.True(t, success)
 		assert.NoError(t, err)
 		mockClient.AssertExpectations(t)
@@ -357,7 +357,7 @@ func TestClient_Store_BatchMode(t *testing.T) {
 		mockClient.On("AddTxBatch", mock.Anything, mock.Anything, mock.Anything).Return(
 			nil, status.Error(codes.Internal, "batch error"))
 
-		success, err := client.Store(ctx, hash, fee, size, txInpoints)
+		success, err := client.Store(ctx, hash, fee, size, txInpoints, 0, 0)
 		assert.False(t, success)
 		assert.Error(t, err)
 		mockClient.AssertExpectations(t)
@@ -452,7 +452,7 @@ func storeAsync(ctx context.Context, client *Client, hash *chainhash.Hash) <-cha
 	out := make(chan storeOutcome, 1)
 
 	go func() {
-		success, err := client.Store(ctx, hash, 1000, 250, subtree.TxInpoints{})
+		success, err := client.Store(ctx, hash, 1000, 250, subtree.TxInpoints{}, 0, 0)
 		out <- storeOutcome{success: success, err: err}
 	}()
 
@@ -569,7 +569,7 @@ func TestClient_Store_BatchMode_LateCompletionAfterAbandonIsSafe(t *testing.T) {
 
 	// The client is still usable: a fresh hand-off on an uncancelled context waits to
 	// completion and succeeds, exactly as batch mode always did.
-	success, err := h.client.Store(context.Background(), hash, 1000, 250, subtree.TxInpoints{})
+	success, err := h.client.Store(context.Background(), hash, 1000, 250, subtree.TxInpoints{}, 0, 0)
 	require.NoError(t, err, "abandoning a wait must not leave the batcher or the completion group broken")
 	require.True(t, success)
 }
@@ -1078,7 +1078,7 @@ func TestClient_Store_BatchMode_MaxConcurrent(t *testing.T) {
 	// Submit enough items to fill multiple batches (6 items = 3 batches of 2)
 	for i := 0; i < 6; i++ {
 		go func() {
-			_, _ = client.Store(ctx, hash, 1000, 250, txInpoints)
+			_, _ = client.Store(ctx, hash, 1000, 250, txInpoints, 0, 0)
 		}()
 	}
 
@@ -1156,11 +1156,11 @@ func TestClient_Store_BothBatchersShareTheMaxConcurrentCap(t *testing.T) {
 
 	for i := 0; i < 6; i++ {
 		go func() {
-			_, _ = client.Store(ctx, hash, 1000, 250, txInpoints)
+			_, _ = client.Store(ctx, hash, 1000, 250, txInpoints, 0, 0)
 		}()
 
 		go func() {
-			_, _ = client.Store(ContextWithInBlock(ctx), hash, 1000, 250, txInpoints)
+			_, _ = client.Store(ContextWithInBlock(ctx), hash, 1000, 250, txInpoints, 0, 0)
 		}()
 	}
 
@@ -1309,11 +1309,11 @@ func TestClient_StoreMarksBlockTransactionsInTheirOwnBatch(t *testing.T) {
 					record(args.Get(1).(*blockassembly_api.AddTxBatchColumnarRequest).GetInBlock())
 				}).Return(&blockassembly_api.AddTxBatchResponse{}, nil)
 
-			ok, err := client.Store(context.Background(), hash, 1, 250, subtree.TxInpoints{})
+			ok, err := client.Store(context.Background(), hash, 1, 250, subtree.TxInpoints{}, 0, 0)
 			require.NoError(t, err)
 			require.True(t, ok)
 
-			ok, err = client.Store(ContextWithInBlock(context.Background()), hash, 1, 250, subtree.TxInpoints{})
+			ok, err = client.Store(ContextWithInBlock(context.Background()), hash, 1, 250, subtree.TxInpoints{}, 0, 0)
 			require.NoError(t, err)
 			require.True(t, ok)
 
@@ -1338,10 +1338,10 @@ func TestClient_StoreUnaryMarksBlockTransactions(t *testing.T) {
 			seen = append(seen, args.Get(1).(*blockassembly_api.AddTxRequest).GetInBlock())
 		}).Return(&blockassembly_api.AddTxResponse{Ok: true}, nil)
 
-	_, err := client.Store(context.Background(), hash, 1, 250, subtree.TxInpoints{})
+	_, err := client.Store(context.Background(), hash, 1, 250, subtree.TxInpoints{}, 0, 0)
 	require.NoError(t, err)
 
-	_, err = client.Store(ContextWithInBlock(context.Background()), hash, 1, 250, subtree.TxInpoints{})
+	_, err = client.Store(ContextWithInBlock(context.Background()), hash, 1, 250, subtree.TxInpoints{}, 0, 0)
 	require.NoError(t, err)
 
 	require.Equal(t, []bool{false, true}, seen)

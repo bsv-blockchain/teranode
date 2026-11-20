@@ -236,8 +236,38 @@ func (m *MockSubtreeProcessor) AddBatch(nodes []subtree.Node, txInpoints []*subt
 	m.Called(nodes, txInpoints)
 }
 
+// SetTxEra implements Interface.SetTxEra. A no-op, so tests need no expectation for it.
+func (m *MockSubtreeProcessor) SetTxEra(uint32) {}
+
+// TxEra implements Interface.TxEra: no era, so nothing is ever reset for one.
+func (m *MockSubtreeProcessor) TxEra() (lo, hi uint32, ok bool) {
+	return 0, 0, false
+}
+
+// SetTxCandidate implements Interface.SetTxCandidate. A no-op.
+func (m *MockSubtreeProcessor) SetTxCandidate(*chainhash.Hash, uint32, uint32) {}
+
+// NotFinalTemplateTxs implements Interface.NotFinalTemplateTxs: none.
+func (m *MockSubtreeProcessor) NotFinalTemplateTxs() int { return 0 }
+
+// NothingToReload implements Interface.NothingToReload: never, so a rules change reloads.
+func (m *MockSubtreeProcessor) NothingToReload() bool { return false }
+
+// OfferLockHeldTxs implements Interface.OfferLockHeldTxs. A no-op.
+func (m *MockSubtreeProcessor) OfferLockHeldTxs(context.Context) error { return nil }
+
+// RestartDroppedTxs implements Interface.RestartDroppedTxs. A no-op.
+func (m *MockSubtreeProcessor) RestartDroppedTxs() func(bool) {
+	return func(bool) {}
+}
+
+// FilterUnminedTxEra implements Interface.FilterUnminedTxEra: admits everything.
+func (m *MockSubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransaction, _ []uint32) []*utxostore.UnminedTransaction {
+	return txs
+}
+
 // AddBatchBounded implements Interface.AddBatchBounded
-func (m *MockSubtreeProcessor) AddBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, inBlock bool) Admission {
+func (m *MockSubtreeProcessor) AddBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, inBlock bool, _, _ []uint32) Admission {
 	args := m.Called(nodes, txInpoints, inBlock)
 	return args.Get(0).(Admission)
 }

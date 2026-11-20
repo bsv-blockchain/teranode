@@ -332,7 +332,28 @@ func buildValidateTxRequest(transactionData []byte, blockHeight uint32, opts *Op
 		UnconfirmedParentsAtCandidateHeight: unconfirmedParentsAtCandidateHeightPtr(opts),
 		SkipScriptValidation:                &opts.SkipScriptValidation,
 		OutpointOnlySpend:                   &opts.OutpointOnlySpend,
+		BlockAssemblyCandidateHeight:        blockAssemblyCandidateHeightPtr(opts),
+		BlockAssemblyCandidateMedianTime:    blockAssemblyCandidateMedianTimePtr(opts),
 	}
+}
+
+// blockAssemblyCandidateHeightPtr returns the candidate height, or nil when no candidate is set.
+func blockAssemblyCandidateHeightPtr(opts *Options) *uint32 {
+	if opts.BlockAssemblyCandidate == nil {
+		return nil
+	}
+
+	return &opts.BlockAssemblyCandidate.Height
+}
+
+// blockAssemblyCandidateMedianTimePtr returns the candidate's median time past, or nil when
+// no candidate is set.
+func blockAssemblyCandidateMedianTimePtr(opts *Options) *uint32 {
+	if opts.BlockAssemblyCandidate == nil {
+		return nil
+	}
+
+	return &opts.BlockAssemblyCandidate.MedianTimePast
 }
 
 // Validate performs transaction validation by applying the given options and delegating

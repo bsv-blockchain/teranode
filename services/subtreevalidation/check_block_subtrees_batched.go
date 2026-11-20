@@ -229,7 +229,7 @@ func (u *Server) processTransactionsBatched(ctx context.Context, checker validat
 		prometheusSubtreeValidationBatchStep.WithLabelValues("fallback").Observe(time.Since(start).Seconds())
 	}()
 
-	return u.processTransactionsInLevels(ctx, fallbackTxs, blockHash, chainhash.Hash{}, blockHeight, candidateBlockTime, candidateParentMedianTime, blockIds, false)
+	return u.processTransactionsInLevels(ctx, fallbackTxs, blockHash, chainhash.Hash{}, blockHeight, candidateBlockTime, candidateParentMedianTime, blockIds, false, nil)
 }
 
 // batchState is one load batch on the batch path. Indices are positions in txs.
