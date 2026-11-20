@@ -365,23 +365,24 @@ func TestKnownDefect_BlockRepeatingUnspentAncestorTxIDBelowBIP34_IsRejected(t *t
 	})
 }
 
-// bip30CollisionChainBIP34Height is where the coinbase-collision chain activates BIP34: block 3.
-const bip30CollisionChainBIP34Height = 3
+// bip30CollisionChainBIP34Height is where the coinbase-collision chain activates BIP34: block 2, so
+// the colliding coinbase in block 3 sits one block above activation.
+const bip30CollisionChainBIP34Height = 2
 
 // buildBIP34CoinbaseCollisionChain builds the BIP34 coinbase-collision shape on the honest chain,
-// with BIP34 active from height 3: block 1, below BIP34, has a coinbase whose scriptSig happens to
-// start with a height push of 3; block 2 is ordinary; block 3 is at BIP34 and carries, as its
-// coinbase, either a byte-identical copy of block 1's coinbase (valid for BIP34 at height 3, and
-// outside BIP30, which applies only below BIP0034Height) or a fresh one. This is the shape of the
-// future mainnet coinbase collisions the spec names (from ~1,983,702). Blocks 1 and 2 are accepted
-// and moved forward; block 3 is returned unvalidated, with block 1's coinbase.
+// with BIP34 active from height 2: block 1, below BIP34, has a coinbase whose scriptSig happens to
+// start with a height push of 3; block 2, at BIP34Height, is ordinary; block 3, one block above
+// BIP34Height, carries as its coinbase either a byte-identical copy of block 1's coinbase (valid for
+// BIP34 at height 3, and outside BIP30, which the spec scopes to below BIP0034Height) or a fresh one.
+// Like the future mainnet coinbase collisions the spec names (from ~1,983,702), the collision is
+// above BIP34Height. Blocks 1 and 2 are accepted and moved forward; block 3 is returned unvalidated.
 func buildBIP34CoinbaseCollisionChain(t *testing.T, harness *bip30Harness, block3Coinbase bip30Block3Coinbase) (coinbase1 *bt.Tx, block3 *model.Block) {
 	t.Helper()
 
 	const (
 		block1Height = 1
 		block2Height = 2
-		block3Height = bip30CollisionChainBIP34Height
+		block3Height = bip30CollisionChainBIP34Height + 1
 	)
 
 	coinbase1 = harness.newCoinbase(util.EncodeCoinbaseHeightPush(block3Height))
@@ -407,7 +408,7 @@ func buildBIP34CoinbaseCollisionChain(t *testing.T, harness *bip30Harness, block
 //
 // Spec: BV-BODY-022, second sentence (tracked as GAP-BV-049).
 //
-// Scenario: Given BIP34 active from height 3, block 1 (below BIP34) whose coinbase starts with a
+// Scenario: Given BIP34 active from height 2, block 1 (below BIP34) whose coinbase starts with a
 // height push of 3, and an ordinary block 2, When block 3 carries a byte-identical copy of block 1's
 // coinbase and is accepted and moved forward, Then the outputs that stand are block 3's, maturing at
 // 3 + 1 = 4, so spending them at height 1 + 1 = 2 is refused as immature. bitcoin-sv overwrites the
@@ -424,15 +425,16 @@ func buildBIP34CoinbaseCollisionChain(t *testing.T, harness *bip30Harness, block
 // height 4 succeeds: the harness creates coinbase UTXOs through processCoinbaseUtxos and the maturity
 // probe tells the two maturities apart.
 //
-// The shape models mainnet, where the block at BIP34Height carries consensus BIP34Hash. The
-// precondition that block 3 is accepted follows BV-BODY-022's "below BIP0034Height" scope, not
-// bitcoin-sv's BIP34Hash gate (validation.cpp ConnectBlock), under which a regtest-like chain whose
-// block at BIP34Height does not match BIP34Hash would keep enforcing BIP30 and reject block 3 with
-// bad-txns-BIP30.
+// bitcoin-sv (validation.cpp ConnectBlock) enforces BIP30 on the block at BIP34Height itself, where
+// GetPrev()->GetAncestor(BIP34Height) is null, and above it unless the block at BIP34Height matches
+// consensus BIP34Hash. The collision is therefore placed one block above BIP34Height, and the
+// precondition that block 3 is accepted follows the spec's scope above BIP34Height (as on mainnet,
+// where the block at BIP34Height matches BIP34Hash), not the BIP34Hash gate, under which this
+// regtest-like chain would keep enforcing BIP30 and reject block 3 with bad-txns-BIP30.
 func TestKnownDefect_CollidingCoinbase_LeavesNoEarlierCoinbaseOutputs(t *testing.T) {
 	const (
 		block1Height                = 1
-		block3Height                = bip30CollisionChainBIP34Height
+		block3Height                = bip30CollisionChainBIP34Height + 1
 		block1CoinbaseMatureHeight  = block1Height + bip30CoinbaseMaturity
 		block3CoinbaseMaturedHeight = block3Height + bip30CoinbaseMaturity
 	)
@@ -448,7 +450,7 @@ func TestKnownDefect_CollidingCoinbase_LeavesNoEarlierCoinbaseOutputs(t *testing
 		require.Equal(t, *coinbase1.TxIDChainHash(), *block3.CoinbaseTx.TxIDChainHash(), "fixture: block 3's coinbase must collide with block 1's")
 
 		// When
-		harness.requireBlockAccepted(block3, harness.validateFromPeer(block3), "precondition: at BIP0034Height the colliding coinbase is outside BIP30 and must be accepted")
+		harness.requireBlockAccepted(block3, harness.validateFromPeer(block3), "precondition: above BIP0034Height the colliding coinbase is outside BIP30 and must be accepted")
 		harness.moveBlockAssemblyOnto(block3)
 
 		// Then
