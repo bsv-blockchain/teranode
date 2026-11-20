@@ -44,6 +44,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/bump"
+	"github.com/bsv-blockchain/teranode/util/failpoint"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/retry"
@@ -2424,6 +2425,10 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 			ba.logger.Errorf("[BlockAssembly][%s][%s] error storing coinbase tx in tx store: %v", jobID, block.Hash().String(), err)
 		}
 	}
+
+	// crash-consistency seam: after the coinbase write attempt, before AddBlock (block not yet
+	// added or announced); subtree storage may still be in flight on the async workers
+	failpoint.Inject(failpoint.BlockAssemblyPersistBeforeAddBlock)
 
 	ba.logger.Debugf("[BlockAssembly][%s][%s] add block to blockchain", jobID, block.Header.Hash())
 	ba.logger.Debugf("[BlockAssembly][%s][%s] block difficulty: %s", jobID, block.Header.Hash(), block.Header.Bits.CalculateDifficulty().String())
