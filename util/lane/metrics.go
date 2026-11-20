@@ -31,7 +31,7 @@ func initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "positions_total",
-			Help:      "Lane positions this process handed to new records",
+			Help:      "Lane positions this process handed to new records, a returned position handed out again counted each time; minus teranode_lane_positions_reused_total, the new positions it used",
 		})
 		prometheusLaneGrants = promauto.NewCounter(prometheus.CounterOpts{
 			Namespace: "teranode",
