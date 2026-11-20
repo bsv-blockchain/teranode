@@ -351,6 +351,45 @@ func TestLanePositionMigrationPostgresBoundsTheLockWait(t *testing.T) {
 	require.NotNil(t, store)
 }
 
+// Once the lane columns exist, opening the store asks for no ACCESS EXCLUSIVE lock on outputs:
+// the catalog check skips the ALTER of spending_lane_position. A transaction that has only read
+// outputs holds ACCESS SHARE, which conflicts with ACCESS EXCLUSIVE alone. Without the check, the
+// ALTER ... IF NOT EXISTS would still queue for ACCESS EXCLUSIVE before finding the column, time
+// out after 200ms each try, and the open would fail at the one-second limit. (transactions is not
+// held here: an older migration's ALTER of conflict_owner takes it at every open, with no timeout.)
+func TestLaneColumnsOnACurrentSchemaTakeNoOutputsLock(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	dbURL := startLanePositionPostgres(t)
+
+	_, err := New(context.Background(), ulogger.TestLogger{}, lanePositionSettings(t), dbURL)
+	require.NoError(t, err)
+
+	reader, err := sql.Open("pgx", dbURL.String())
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, reader.Close()) }()
+
+	holder, err := reader.Begin()
+	require.NoError(t, err)
+
+	defer func() { _ = holder.Rollback() }()
+
+	_, err = holder.Exec(`SELECT count(*) FROM outputs`)
+	require.NoError(t, err)
+
+	saved := laneColumnMigrationLimit
+	t.Cleanup(func() { laneColumnMigrationLimit = saved })
+
+	laneColumnMigrationLimit = time.Second
+
+	store, err := New(context.Background(), ulogger.TestLogger{}, lanePositionSettings(t), dbURL)
+	require.NoError(t, err)
+	require.NoError(t, store.PrepareLaneSchema(context.Background()))
+}
+
 // sqlLaneColumnsWant is every lane column of the SQL store, written out here rather than read
 // from sqlLaneColumns so a column dropped from that list fails these tests.
 // Each entry is table, column, the Postgres data_type and the SQLite declared type: a lane
