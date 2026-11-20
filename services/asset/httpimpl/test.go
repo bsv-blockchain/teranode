@@ -126,7 +126,7 @@ func GetMockHTTP(t testing.TB, body io.Reader) (*HTTP, *repository.Mock, echo.Co
 	// Create HTTP handler
 	httpServer := &HTTP{
 		logger:     ulogger.TestLogger{},
-		settings:   &settings.Settings{},
+		settings:   DefaultAssetTestSettings(),
 		repository: mockRepo,
 		e:          e,
 		startTime:  time.Now(),
@@ -134,4 +134,18 @@ func GetMockHTTP(t testing.TB, body io.Reader) (*HTTP, *repository.Mock, echo.Co
 	}
 
 	return httpServer, mockRepo, c, rec
+}
+
+// DefaultAssetTestSettings returns settings carrying the shipped defaults for
+// the Asset public-disclosure switches. A zero-value Settings turns all of them
+// off, which is not what a default deployment does, so tests that exercise the
+// default response shapes must start from these.
+func DefaultAssetTestSettings() *settings.Settings {
+	tSettings := &settings.Settings{}
+	tSettings.Asset.PublicErrorDetail = true
+	tSettings.Asset.PublicHealthDetail = true
+	tSettings.Asset.PublicPeersDetail = true
+	tSettings.Asset.TxMetaRawEnabled = true
+
+	return tSettings
 }

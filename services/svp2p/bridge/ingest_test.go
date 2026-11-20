@@ -46,7 +46,7 @@ type captureBlockValidation struct {
 	got *model.Block
 }
 
-func (c *captureBlockValidation) ProcessBlock(_ context.Context, block *model.Block, _ uint32, _, _ string, _ uint32) error {
+func (c *captureBlockValidation) ProcessBlock(_ context.Context, block *model.Block, _ uint32, _, _ string, _ uint32, _ bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

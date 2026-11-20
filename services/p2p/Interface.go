@@ -14,19 +14,23 @@ import (
 // any transport-specific representations (like protobuf).
 // Thread safety: All access to peer data is protected by PeerRegistry's mutex.
 type PeerInfo struct {
-	ID              peer.ID
-	ClientName      string // Human-readable name of the client software
-	Height          uint32
-	BlockHash       *chainhash.Hash
-	DataHubURL      string
-	BanScore        int
-	IsBanned        bool
-	IsConnected     bool // Whether this peer is directly connected (vs gossiped)
-	ConnectedAt     time.Time
-	BytesReceived   uint64
-	LastBlockTime   time.Time
-	LastMessageTime time.Time // Last time we received any message from this peer
-	Storage         string    // Storage mode: "full", "pruned", or empty (unknown/old version)
+	ID         peer.ID
+	ClientName string // Human-readable name of the client software
+	Height     uint32 // Capped against local progress; drives sync decisions
+	// AdvertisedHeight is the height the peer actually claimed, before the
+	// unvalidated-lead cap. Reported to operators so a catching-up node does
+	// not display every peer at localHeight+maxLead.
+	AdvertisedHeight uint32
+	BlockHash        *chainhash.Hash
+	DataHubURL       string
+	BanScore         int
+	IsBanned         bool
+	IsConnected      bool // Whether this peer is directly connected (vs gossiped)
+	ConnectedAt      time.Time
+	BytesReceived    uint64
+	LastBlockTime    time.Time
+	LastMessageTime  time.Time // Last time we received any message from this peer
+	Storage          string    // Storage mode: "full", "pruned", or empty (unknown/old version)
 
 	// Interaction metrics - track peer reliability across all interactions (blocks, subtrees, catchup, etc.)
 	InteractionAttempts    int64         // Total number of interactions with this peer
@@ -60,6 +64,17 @@ type PeerInfo struct {
 	// Catchup error tracking
 	LastCatchupError     string    // Last error message from catchup attempt with this peer
 	LastCatchupErrorTime time.Time // When the last catchup error occurred
+}
+
+// DisplayHeight is the height to show an operator: what the peer advertised,
+// or the capped Height for peers on versions that predate AdvertisedHeight.
+// Never use it for sync decisions; those read Height.
+func (p *PeerInfo) DisplayHeight() uint32 {
+	if p.AdvertisedHeight != 0 {
+		return p.AdvertisedHeight
+	}
+
+	return p.Height
 }
 
 // ClientI defines the interface for P2P client operations.
@@ -204,15 +219,22 @@ type ClientI interface {
 	ReportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) error
 
 	// IsPeerMalicious checks if a peer is considered malicious based on their behavior.
-	// A peer is considered malicious if they are banned or have a very low reputation score.
+	// A peer is considered malicious if it is banned or has malicious behavior recorded
+	// against it (e.g. via RecordCatchupMalicious).
 	IsPeerMalicious(ctx context.Context, peerID string) (bool, string, error)
 
 	// IsPeerUnhealthy checks if a peer is considered unhealthy based on their performance.
 	// A peer is considered unhealthy if they have poor performance metrics or low reputation.
-	IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, error)
+	// The unknown return value is true when the peer is absent from the registry: this is an
+	// absence of information, not a verdict, and callers must not treat it the same as a
+	// positive unhealthy finding.
+	IsPeerUnhealthy(ctx context.Context, peerID string) (isUnhealthy bool, reason string, reputationScore float32, unknown bool, err error)
 
 	// GetPeerRegistry retrieves the comprehensive peer registry data.
-	// Returns all peers in the registry with their complete information.
+	// Returns all peers in the registry with the subset of PeerInfo carried by
+	// p2p_api.PeerRegistryInfo (see convertFromAPIPeerInfo); in-process sync
+	// backoff state (LastSyncAttempt, SyncAttemptCount, LastReputationReset,
+	// ReputationResetCount) and CatchupBlocks are not transmitted.
 	GetPeerRegistry(ctx context.Context) ([]*PeerInfo, error)
 
 	// RecordBytesDownloaded records the number of bytes downloaded via HTTP from a peer.

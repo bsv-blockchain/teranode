@@ -25,6 +25,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
@@ -34,6 +35,11 @@ type Store struct {
 	logger ulogger.Logger
 	store  utxo.Store
 }
+
+// Callers that check the store for an optional method, such as the pruner
+// service looking for a pruner, use utxo.As, which looks through the wrapper by
+// way of Unwrap. Without it, turning logging on would hide those methods.
+var _ utxo.Unwrapper = (*Store)(nil)
 
 // New creates a new logging wrapper around the provided UTXO store.
 // All operations on the returned store will be logged with detailed information
@@ -130,9 +136,18 @@ func (s *Store) GetBlockState() utxo.BlockState {
 	return blockState
 }
 
+func (s *Store) Stamper() pruner.Stamper {
+	return s.store.Stamper()
+}
+
 // SupportsOutpointOnlySpend delegates to the wrapped store.
 func (s *Store) SupportsOutpointOnlySpend() bool {
 	return s.store.SupportsOutpointOnlySpend()
+}
+
+// NetsBelowCheckpoint forwards the wrapped store's answer.
+func (s *Store) NetsBelowCheckpoint() bool {
+	return utxo.NetsBelowCheckpoint(s.store)
 }
 
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -232,6 +247,13 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return err
 }
 
+func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	err := s.store.DeleteComplete(ctx, hash)
+	s.logger.Debugf("[UTXOStore][logger][DeleteComplete] hash %s err %v : %s", hash.String(), err, caller())
+
+	return err
+}
+
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	blockIDsMap, err := s.store.SetMinedMulti(ctx, hashes, minedBlockInfo)
 	s.logger.Debugf("[UTXOStore][logger][SetMinedMulti] hashes %v blockID %d err %v : %s", hashes, minedBlockInfo.BlockID, err, caller())
@@ -253,6 +275,10 @@ func (s *Store) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.Unm
 
 func (s *Store) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 	return s.store.GetConflictingTxIterator()
+}
+
+func (s *Store) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	return s.store.ConflictingTxHashes(ctx)
 }
 
 func (s *Store) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
@@ -288,6 +314,20 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	s.logger.Debugf("[UTXOStore][logger][PreviousOutputsDecorate] outpoints %v err %v : %s", tx, err, caller())
 
 	return err
+}
+
+func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	results, err := s.store.SpendAndCreateMulti(ctx, txs, blockHeight, opts...)
+	s.logger.Debugf("[UTXOStore][logger][SpendAndCreateMulti] txCount=%d blockHeight=%d err=%v : %s", len(txs), blockHeight, err, caller())
+
+	return results, err
+}
+
+func (s *Store) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, opts ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	answers, err := s.store.ParentOutputsForValidation(ctx, outpoints, opts...)
+	s.logger.Debugf("[UTXOStore][logger][ParentOutputsForValidation] outpoints=%d err=%v : %s", len(outpoints), err, caller())
+
+	return answers, err
 }
 
 func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
@@ -393,4 +433,36 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 	s.logger.Debugf("[UTXOStore][logger][ProcessExpiredPreservations] currentHeight %d err %v : %s", currentHeight, err, caller())
 
 	return err
+}
+
+// SpendsMadeBy passes through, with the record count logged. The records themselves are not
+// logged: undoing a conflict on a wide transaction would produce thousands.
+func (s *Store) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	spends, err := s.store.SpendsMadeBy(ctx, txHash)
+	s.logger.Debugf("[UTXOStore][logger][SpendsMadeBy] %s returned %d spends, err %v", txHash.String(), len(spends), err)
+
+	return spends, err
+}
+
+// Unwrap returns the wrapped store.
+func (s *Store) Unwrap() utxo.Store {
+	return s.store
+}
+
+func (s *Store) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return s.store.SaveConflictRecovery(ctx, id, r)
+}
+func (s *Store) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return s.store.LoadConflictRecovery(ctx, id)
+}
+func (s *Store) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return s.store.RestoreConflictSpends(ctx, spends, height)
+}
+
+func (s *Store) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return s.store.SetConflictLocks(ctx, id, parents, locked)
+}
+
+func (s *Store) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
+	return s.store.ReleaseConflictLocks(ctx, id, parents)
 }

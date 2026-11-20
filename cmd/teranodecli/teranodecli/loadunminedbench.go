@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
@@ -57,7 +58,10 @@ func runLoadUnminedBenchmark(txCount int, cpuProfile, memProfile, aerospikeURL s
 	// Parse Aerospike URL and create store
 	aerospikeURI, err := url.Parse(aerospikeURL)
 	if err != nil {
-		return errors.NewProcessingError("failed to parse Aerospike URL", err)
+		// Same shape as fix_chainwork: --aerospike-url can carry userinfo and
+		// url.Parse echoes its whole input in the error, and part of the password
+		// in its bare reason.
+		return errors.NewProcessingError("failed to parse Aerospike URL", urlutil.ParseErrorReason(err))
 	}
 
 	aerospikeStore, err = aerospike.New(ctx, ulogger.TestLogger{}, tSettings, aerospikeURI)

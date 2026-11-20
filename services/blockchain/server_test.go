@@ -2,10 +2,10 @@
 package blockchain
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -36,6 +36,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -1827,109 +1829,6 @@ func TestGetHashOfAncestorBlock(t *testing.T) {
 	})
 }
 
-func TestGetLatestBlockHeaderFromBlockLocatorRequest(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings(t)
-
-	t.Run("error - store returns error", func(t *testing.T) {
-		best := chainhash.DoubleHashH([]byte("best"))
-		locator := chainhash.DoubleHashH([]byte("locator"))
-
-		errorStore := &errorStore{}
-		errorStore.On(
-			"GetLatestBlockHeaderFromBlockLocator",
-			mock.Anything,                           // ctx
-			mock.AnythingOfType("*chainhash.Hash"),  // bestBlockHash
-			mock.AnythingOfType("[]chainhash.Hash"), // blockLocator
-		).Return(nil, nil, errors.NewProcessingError("forced error"))
-
-		server, _ := New(ctx, logger, tSettings, errorStore, nil)
-
-		req := &blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest{
-			BestBlockHash:      (&best).CloneBytes(),
-			BlockLocatorHashes: [][]byte{(&locator).CloneBytes()},
-		}
-
-		resp, err := server.GetLatestBlockHeaderFromBlockLocatorRequest(ctx, req)
-		require.Error(t, err)
-		require.Nil(t, resp)
-		assert.Contains(t, err.Error(), "forced error")
-	})
-}
-
-func TestGetBlockHeadersFromOldestRequest(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings(t)
-
-	t.Run("success - returns headers and metas", func(t *testing.T) {
-		store := &fakeStoreOldest{
-			fn: func(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-				h := &chainhash.Hash{}
-				copy(h[:], bytes.Repeat([]byte{0x01}, 32))
-
-				header := &model.BlockHeader{
-					Version:        1,
-					HashPrevBlock:  h, // not nil
-					HashMerkleRoot: h, // not nil
-					Timestamp:      uint32(time.Now().Unix()),
-					Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
-					Nonce:          12345,
-				}
-
-				meta := &model.BlockHeaderMeta{
-					Height:    1,
-					TxCount:   1,
-					BlockTime: uint32(time.Now().Unix()),
-				}
-
-				return []*model.BlockHeader{header}, []*model.BlockHeaderMeta{meta}, nil
-			},
-		}
-
-		server, _ := New(ctx, logger, tSettings, store, nil)
-
-		tip := chainhash.DoubleHashH([]byte("tip"))
-		target := chainhash.DoubleHashH([]byte("target"))
-
-		req := &blockchain_api.GetBlockHeadersFromOldestRequest{
-			ChainTipHash:    tip.CloneBytes(),
-			TargetHash:      target.CloneBytes(),
-			NumberOfHeaders: 1,
-		}
-
-		resp, err := server.GetBlockHeadersFromOldestRequest(ctx, req)
-		require.NoError(t, err)
-		require.NotNil(t, resp)
-		require.Len(t, resp.BlockHeaders, 1)
-		require.Len(t, resp.Metas, 1)
-	})
-
-	t.Run("error - store returns error", func(t *testing.T) {
-		store := &fakeStoreOldest{
-			fn: func(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-				return nil, nil, errors.NewProcessingError("forced error")
-			},
-		}
-
-		server, _ := New(ctx, logger, tSettings, store, nil)
-
-		chainTip := chainhash.DoubleHashH([]byte("tip"))
-		target := chainhash.DoubleHashH([]byte("target"))
-
-		req := &blockchain_api.GetBlockHeadersFromOldestRequest{
-			ChainTipHash:    chainTip.CloneBytes(),
-			TargetHash:      target.CloneBytes(),
-			NumberOfHeaders: 1,
-		}
-
-		resp, err := server.GetBlockHeadersFromOldestRequest(ctx, req)
-		require.Error(t, err)
-		require.Nil(t, resp)
-	})
-}
-
 func TestGetBlockExists(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
@@ -2540,7 +2439,7 @@ func TestSetBlockMinedSet(t *testing.T) {
 	t.Run("error - store returns error", func(t *testing.T) {
 		hash := chainhash.DoubleHashH([]byte("error-case"))
 		mockStore := &mockStoreGetSetBlockIsMined{}
-		mockStore.On("SetBlockMinedSet", mock.Anything, &hash).
+		mockStore.On("SetBlockMinedSet", mock.Anything, &hash, (*uint64)(nil)).
 			Return(errors.NewProcessingError("forced error"))
 
 		server, _ := New(ctx, logger, tSettings, mockStore, nil)
@@ -2558,7 +2457,7 @@ func TestSetBlockMinedSet(t *testing.T) {
 	t.Run("success - block marked as mined", func(t *testing.T) {
 		hash := chainhash.DoubleHashH([]byte("success-case"))
 		mockStore := &mockStoreGetSetBlockIsMined{}
-		mockStore.On("SetBlockMinedSet", mock.Anything, &hash).
+		mockStore.On("SetBlockMinedSet", mock.Anything, &hash, (*uint64)(nil)).
 			Return(nil)
 
 		server, _ := New(ctx, logger, tSettings, mockStore, nil)
@@ -2568,6 +2467,27 @@ func TestSetBlockMinedSet(t *testing.T) {
 		}
 
 		resp, err := server.SetBlockMinedSet(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("a present generation reaches the store", func(t *testing.T) {
+		// the two cases above send no generation, as an older blockvalidation does, and the
+		// store gets nil (the unconditional write); a present one must arrive intact
+		hash := chainhash.DoubleHashH([]byte("generation-case"))
+		gen := uint64(3)
+		mockStore := &mockStoreGetSetBlockIsMined{}
+		mockStore.On("SetBlockMinedSet", mock.Anything, &hash, mock.MatchedBy(func(g *uint64) bool {
+			return g != nil && *g == gen
+		})).Return(nil)
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		resp, err := server.SetBlockMinedSet(ctx, &blockchain_api.SetBlockMinedSetRequest{
+			BlockHash:          hash.CloneBytes(),
+			MinedSetGeneration: &gen,
+		})
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		mockStore.AssertExpectations(t)
@@ -2823,152 +2743,48 @@ func TestLocateBlockHeaders(t *testing.T) {
 		require.Len(t, resp.BlockHeaders, 1)
 		assert.NotNil(t, resp.BlockHeaders[0])
 	})
-}
 
-// Test_GetBlockHeadersFromTill tests the GetBlockHeadersFromTill gRPC method
-func Test_GetBlockHeadersFromTill(t *testing.T) {
-	ctx := setup(t)
+	t.Run("error - short locator hash rejected instead of reaching the store", func(t *testing.T) {
+		// mockStoreLocateBlockHeaders has no expectations set, so the test fails
+		// if the handler reaches the store with an unparsed nil locator hash.
+		mockStore := &mockStoreLocateBlockHeaders{}
 
-	// Create a chain of blocks for testing
-	headers := make([]*model.BlockHeader, 0, 10)
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
-	prevHash := tSettings.ChainCfgParams.GenesisHash
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
 
-	// Create and store a chain of blocks
-	for i := 0; i < 10; i++ {
-		merkleRoot := &chainhash.Hash{}
-		merkleRoot[0] = byte(i)
+		stop := chainhash.DoubleHashH([]byte("stop"))
 
-		coinbaseTx := bt.NewTx()
-		err := coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
-		require.NoError(t, err)
-
-		arbitraryData := []byte{0x03, byte(i), 0x00, 0x00}
-		coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
-		coinbaseTx.Inputs[0].SequenceNumber = 0xffffffff
-
-		err = coinbaseTx.AddP2PKHOutputFromAddress("mrs6FYWPcb441b4qfcEPyvLvzj64WHtwCU", 5000000000)
-		require.NoError(t, err)
-
-		block := &model.Block{
-			Header: &model.BlockHeader{
-				Version:        1,
-				HashPrevBlock:  prevHash,
-				HashMerkleRoot: merkleRoot,
-				Timestamp:      uint32(time.Now().Unix() + int64(i)),
-				Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
-				Nonce:          uint32(i),
-			},
-			CoinbaseTx:       coinbaseTx,
-			TransactionCount: 1,
-			SizeInBytes:      1000,
-			Height:           uint32(i + 1),
-			ID:               uint32(i + 1),
+		req := &blockchain_api.LocateBlockHeadersRequest{
+			Locator:   [][]byte{{0x01, 0x02, 0x03}}, // not 32 bytes
+			HashStop:  (&stop).CloneBytes(),
+			MaxHashes: 5,
 		}
 
-		headers = append(headers, block.Header)
-		_, _, err = ctx.server.store.StoreBlock(context.Background(), block, "test")
-		require.NoError(t, err)
-		prevHash = block.Header.Hash()
-	}
+		resp, err := server.LocateBlockHeaders(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Equal(t, codes.InvalidArgument, status.Code(err))
+		mockStore.AssertNotCalled(t, "LocateBlockHeaders", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
 
-	tests := []struct {
-		name        string
-		startHash   []byte
-		endHash     []byte
-		expectError bool
-		errorType   string
-		minLength   int
-	}{
-		{
-			name:        "valid range from start to end",
-			startHash:   headers[2].Hash().CloneBytes(),
-			endHash:     headers[5].Hash().CloneBytes(),
-			expectError: false,
-			minLength:   1, // Should return at least the range
-		},
-		{
-			name:        "same start and end hash",
-			startHash:   headers[3].Hash().CloneBytes(),
-			endHash:     headers[3].Hash().CloneBytes(),
-			expectError: false,
-			minLength:   1,
-		},
-		{
-			name:        "invalid start hash",
-			startHash:   []byte("invalid"),
-			endHash:     headers[2].Hash().CloneBytes(),
-			expectError: true,
-			errorType:   "start hash is not valid",
-		},
-		{
-			name:        "invalid end hash",
-			startHash:   headers[1].Hash().CloneBytes(),
-			endHash:     []byte("invalid"),
-			expectError: true,
-			errorType:   "end hash is not valid",
-		},
-		{
-			name:        "nil start hash",
-			startHash:   nil,
-			endHash:     headers[2].Hash().CloneBytes(),
-			expectError: true,
-			errorType:   "start hash is not valid",
-		},
-		{
-			name:        "nil end hash",
-			startHash:   headers[1].Hash().CloneBytes(),
-			endHash:     nil,
-			expectError: true,
-			errorType:   "end hash is not valid",
-		},
-		{
-			name:        "empty start hash",
-			startHash:   []byte{},
-			endHash:     headers[2].Hash().CloneBytes(),
-			expectError: true,
-			errorType:   "start hash is not valid",
-		},
-		{
-			name:        "empty end hash",
-			startHash:   headers[1].Hash().CloneBytes(),
-			endHash:     []byte{},
-			expectError: true,
-			errorType:   "end hash is not valid",
-		},
-	}
+	t.Run("error - short hash stop rejected instead of reaching the store", func(t *testing.T) {
+		mockStore := &mockStoreLocateBlockHeaders{}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			request := &blockchain_api.GetBlockHeadersFromTillRequest{
-				StartHash: tt.startHash,
-				EndHash:   tt.endHash,
-			}
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
 
-			response, err := ctx.server.GetBlockHeadersFromTill(context.Background(), request)
+		locator := chainhash.DoubleHashH([]byte("locator"))
 
-			if tt.expectError {
-				require.Error(t, err)
-				if tt.errorType != "" {
-					require.Contains(t, err.Error(), tt.errorType)
-				}
-				require.Nil(t, response)
-				return
-			}
+		req := &blockchain_api.LocateBlockHeadersRequest{
+			Locator:   [][]byte{(&locator).CloneBytes()},
+			HashStop:  []byte{0x01, 0x02, 0x03}, // not 32 bytes
+			MaxHashes: 5,
+		}
 
-			require.NoError(t, err)
-			require.NotNil(t, response)
-			require.GreaterOrEqual(t, len(response.BlockHeaders), tt.minLength)
-			require.Equal(t, len(response.BlockHeaders), len(response.Metas))
-
-			// Verify all responses are valid
-			for i, headerBytes := range response.BlockHeaders {
-				require.NotEmpty(t, headerBytes)
-				require.NotEmpty(t, response.Metas[i])
-			}
-		})
-	}
+		resp, err := server.LocateBlockHeaders(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Equal(t, codes.InvalidArgument, status.Code(err))
+		mockStore.AssertNotCalled(t, "LocateBlockHeaders", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
 }
 
 // Test_GetBlockHeadersFromHeight tests the GetBlockHeadersFromHeight gRPC method
@@ -3713,32 +3529,11 @@ func Test_IsFullyReady(t *testing.T) {
 func Test_Idle(t *testing.T) {
 	ctx := setup(t)
 
-	tests := []struct {
-		name        string
-		expectError bool
-	}{
-		{
-			name:        "idle request",
-			expectError: true, // Fresh node starts in CATCHINGBLOCKS; STOP event has no CATCHINGBLOCKS->IDLE edge
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			request := &emptypb.Empty{}
-
-			response, err := ctx.server.Idle(context.Background(), request)
-
-			if tt.expectError {
-				require.Error(t, err)
-				require.Nil(t, response)
-				return
-			}
-
-			require.NoError(t, err)
-			require.NotNil(t, response)
-		})
-	}
+	// A fresh node starts in CATCHINGBLOCKS; STOP parks it in IDLE.
+	response, err := ctx.server.Idle(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	require.Equal(t, blockchain_api.FSMStateType_IDLE.String(), ctx.server.finiteStateMachine.Current())
 }
 
 // Test_WaitUntilFSMTransitionFromIdleState tests the WaitUntilFSMTransitionFromIdleState gRPC method
@@ -3913,4 +3708,60 @@ func TestServerAssignBlockID(t *testing.T) {
 
 	_, err = ctx.server.AssignBlockID(c, &blockchain_api.AssignBlockIDRequest{BlockHash: []byte{0x01, 0x02}})
 	require.Error(t, err, "a non-32-byte hash must be rejected as invalid argument")
+}
+
+// warnCapturingLogger records every Warnf call so a test can assert both
+// that a coercion warning fired and what it said, rather than only that no
+// panic occurred.
+type warnCapturingLogger struct {
+	ulogger.TestLogger
+	warnings []string
+}
+
+func (l *warnCapturingLogger) Warnf(format string, args ...interface{}) {
+	l.warnings = append(l.warnings, fmt.Sprintf(format, args...))
+}
+
+// TestResolvePeerRegistryTTL_FloorsTooShortValue guards the p2p_peer_registry_ttl
+// floor: a connected peer only refreshes its registry entry every ~10s
+// (node_status) and the gossip-handler batcher can coalesce that for up to a
+// minute (registryReassertTTL) before re-asserting, so a TTL configured well
+// below that window risks evicting an actively-connected peer between
+// refreshes. A too-short positive value must be coerced up to
+// minPeerRegistryTTL, and the coercion must be logged — a silently-corrected
+// setting is exactly the failure mode this settings-wiring batch exists to fix.
+func TestResolvePeerRegistryTTL_FloorsTooShortValue(t *testing.T) {
+	logger := &warnCapturingLogger{}
+
+	got := resolvePeerRegistryTTL(logger, 30*time.Second)
+
+	require.Equal(t, minPeerRegistryTTL, got, "a too-short TTL must be coerced up to the floor")
+	require.Len(t, logger.warnings, 1, "the coercion must be logged")
+	require.Contains(t, logger.warnings[0], "30s")
+	require.Contains(t, logger.warnings[0], minPeerRegistryTTL.String())
+}
+
+// TestResolvePeerRegistryTTL_LeavesLegitimateSentinelAlone guards the other
+// half: ttl<=0 is the documented "use the 24h default" sentinel (distinct
+// from the too-short-but-positive case above) and must not be treated as a
+// too-short value to warn about and coerce to the floor — it already resolves
+// to a value far above the floor.
+func TestResolvePeerRegistryTTL_LeavesLegitimateSentinelAlone(t *testing.T) {
+	logger := &warnCapturingLogger{}
+
+	got := resolvePeerRegistryTTL(logger, 0)
+
+	require.Equal(t, 24*time.Hour, got)
+	require.Empty(t, logger.warnings, "the zero-sentinel path must not log a coercion warning")
+}
+
+// TestResolvePeerRegistryTTL_LeavesValidValueAlone confirms a configured value
+// at or above the floor passes through unchanged and unwarned.
+func TestResolvePeerRegistryTTL_LeavesValidValueAlone(t *testing.T) {
+	logger := &warnCapturingLogger{}
+
+	got := resolvePeerRegistryTTL(logger, 7*time.Minute)
+
+	require.Equal(t, 7*time.Minute, got)
+	require.Empty(t, logger.warnings)
 }

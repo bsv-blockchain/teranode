@@ -1,4 +1,4 @@
-import { formatNum, formatSatoshi } from '$lib/utils/format'
+import { formatNum } from '$lib/utils/format'
 import { valueSet } from '$lib/utils/types'
 import { getDetailsUrl, DetailType, getHashLinkProps } from '$internal/utils/urls'
 // eslint-ignore-next-line
@@ -63,7 +63,7 @@ export const getRenderCells = (t, blockHash) => {
       return {
         component: valueSet(item[colId]) ? RenderLink : null,
         props: {
-          href: getDetailsUrl(DetailType.subtree, item.hash, { blockHash }),
+          href: getDetailsUrl(DetailType.subtree, item.hash, { blockHash, index: item.index }),
           external: false,
           text: formatNum(item[colId]),
           className: 'num',
@@ -76,7 +76,7 @@ export const getRenderCells = (t, blockHash) => {
         component: item[colId] ? LinkHashCopy : null,
         props: {
           ...getHashLinkProps(DetailType.subtree, item.hash, t),
-          href: getDetailsUrl(DetailType.subtree, item.hash, { blockHash }),
+          href: getDetailsUrl(DetailType.subtree, item.hash, { blockHash, index: item.index }),
         },
         value: '',
       }

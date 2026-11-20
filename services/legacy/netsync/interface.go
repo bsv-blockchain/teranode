@@ -30,6 +30,10 @@ type PeerNotifier interface {
 	// the availability of new blocks, transactions, or other data.
 	RelayInventory(invVect *wire.InvVect, data interface{})
 
+	// BlockConnected signals that a new valid block has been added, which is
+	// when peers that rejected a tx for a temporary reason may accept it.
+	BlockConnected()
+
 	// TransactionConfirmed notifies peers that a transaction has been confirmed
 	// by inclusion in a block, typically used for cleanup and state updates.
 	TransactionConfirmed(tx *bsvutil.Tx)
@@ -56,4 +60,8 @@ type Config struct {
 	// MinSyncPeerNetworkSpeed defines the minimum network speed (in bytes per second)
 	// required for a peer to be considered suitable for blockchain synchronization.
 	MinSyncPeerNetworkSpeed uint64
+
+	// DataDir is the legacy service's absolute data directory, where peers.json is. The sync
+	// manager keeps each peer address's download rate there (peerRatesFile). Empty keeps no rates.
+	DataDir string
 }

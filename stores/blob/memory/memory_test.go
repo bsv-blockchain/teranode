@@ -322,28 +322,24 @@ func TestMemory_CloseStopsTTLCleaner(t *testing.T) {
 	require.NoError(t, store.Close(context.Background()))
 }
 
-// TestMemory_BlockHeightIsRaceFree: the TTL cleaner reads the current block
-// height on its own goroutine while services write it from a blockchain
-// subscription (subtreevalidation.updateBestBlock). Seen as a DATA RACE by the
-// svp2p parity harness on CI.
-func TestMemory_BlockHeightIsRaceFree(t *testing.T) {
-	m := New()
+// TestMemoryBlockHeightAcrossGoroutines: the current block height is set while other goroutines
+// store blobs whose delete height derives from it; run with -race.
+func TestMemoryBlockHeightAcrossGoroutines(t *testing.T) {
+	store := New(options.WithDefaultBlockHeightRetention(10))
 
 	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
 
-		for i := uint32(1); i <= 200; i++ {
-			m.SetCurrentBlockHeight(i)
-			m.SetBlockHeight(i)
+		for height := uint32(0); height < 200; height++ {
+			store.SetCurrentBlockHeight(height)
 		}
 	}()
 
-	for i := 0; i < 200; i++ {
-		cleanExpiredFiles(m, m.blockHeight())
+	for i := byte(0); i < 200; i++ {
+		require.NoError(t, store.Set(context.Background(), []byte{i}, fileformat.FileTypeTesting, []byte{i}))
 	}
 
 	<-done
-	require.Equal(t, uint32(200), m.blockHeight())
 }

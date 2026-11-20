@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
@@ -112,6 +113,75 @@ func TestBanAddBanScore_ConfigReasonLookup(t *testing.T) {
 	r2 := NewCentralizedPeerRegistry(DefaultBanConfig())
 	score, _ = r2.AddBanScore("peer-2", "unknown_reason", 42)
 	require.Equal(t, int32(42), score)
+}
+
+// TestCatchupMaliciousPointsOutrunWindowDecay pins the invariant the p2p-side
+// catchupMaliciousChargeWindow depends on: one catchup_malicious charge must
+// outrun the ban-score decay across one throttle window, or repeated offenders
+// never accumulate to a ban. It reproduces the real timeline the p2p throttle
+// produces (>= one window between charges) by advancing the decay clock instead
+// of sleeping, and asserts a ban takes three charges, not two.
+func TestCatchupMaliciousPointsOutrunWindowDecay(t *testing.T) {
+	cfg := DefaultBanConfig()
+
+	// The values the coupling rests on. If any of these change, the p2p
+	// catchupMaliciousChargeWindow must be re-checked against them.
+	require.Equal(t, int32(50), cfg.ReasonPoints["catchup_malicious"])
+	require.Equal(t, int32(1), cfg.DecayAmount)
+	require.Equal(t, time.Minute, cfg.DecayInterval)
+	require.Equal(t, int32(100), cfg.Threshold)
+
+	// Mirror of services/p2p catchupMaliciousChargeWindow (not importable here
+	// without a cycle). points(50) > window/decayInterval * decayAmount (10).
+	const chargeWindow = 10 * time.Minute
+	decayPerWindow := int32(chargeWindow/cfg.DecayInterval) * cfg.DecayAmount
+	require.Greater(t, cfg.ReasonPoints["catchup_malicious"], decayPerWindow,
+		"one charge must exceed the decay across a throttle window, else no offender is ever banned")
+
+	r := NewCentralizedPeerRegistry(cfg)
+	const peerID = "malicious-peer"
+
+	// First charge.
+	score, banned := r.AddBanScore(peerID, "catchup_malicious", 0)
+	require.Equal(t, int32(50), score)
+	require.False(t, banned)
+
+	// Advance the decay clock by one window and charge again: 50 - 10 + 50 = 90,
+	// still below the threshold.
+	agebanEntryDecay(t, r, peerID, chargeWindow)
+	score, banned = r.AddBanScore(peerID, "catchup_malicious", 0)
+	require.Equal(t, int32(90), score)
+	require.False(t, banned, "second charge must not ban: production is a 3-strike rule over 20+ minutes")
+
+	// One more window: 90 - 10 + 50 = 130, crossing the threshold on the third.
+	agebanEntryDecay(t, r, peerID, chargeWindow)
+	score, banned = r.AddBanScore(peerID, "catchup_malicious", 0)
+	require.Equal(t, int32(130), score)
+	require.True(t, banned, "third charge crosses the threshold")
+}
+
+// agebanEntryDecay backdates a peer's ban-score decay anchor by d so the next
+// AddBanScore applies d worth of decay without waiting real time.
+func agebanEntryDecay(t *testing.T, r *CentralizedPeerRegistry, peerID string, d time.Duration) {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.banScores[peerID]
+	require.True(t, ok)
+	entry.LastDecay = entry.LastDecay.Add(-d)
+}
+
+// TestBanAddBanScore_CorruptBlockBodyPinnedToConstant pins the corrupt-block-body ban score to the
+// shared constant end to end (bitcoin-sv/teranode#4692): scoring under
+// p2pconstants.ReasonCorruptBlockBody.String() must resolve to the configured 10 points, not the
+// caller-supplied default. This binds the points-table key to the constant so a rename of the
+// constant that is not mirrored in the table can no longer silently zero the strike.
+func TestBanAddBanScore_CorruptBlockBodyPinnedToConstant(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// Pass a bogus default; the table value keyed off the constant must win.
+	score, _ := r.AddBanScore("peer-1", p2pconstants.ReasonCorruptBlockBody.String(), 9999)
+	require.Equal(t, int32(10), score)
 }
 
 func TestBanAddBanScore_ReasonHistoryCappedAt20(t *testing.T) {

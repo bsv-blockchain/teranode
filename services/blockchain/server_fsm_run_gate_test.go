@@ -363,11 +363,11 @@ func TestSendFSMEvent_RunFromIdle_NoCheckpoints(t *testing.T) {
 	store.AssertNotCalled(t, "GetBestBlockHeader", mock.Anything)
 }
 
-// TestRunFromIdle_BelowCheckpointRejectsAndPreservesIdle protects the Run RPC
-// contract: a nil error means the node reached RUNNING. A below-checkpoint node
+// TestExplicitRunFromIdle_BelowCheckpointRejectsAndPreservesIdle protects the operator RUN
+// contract for an explicit operator RUN. A below-checkpoint node
 // must therefore reject RUN and remain durably parked in IDLE rather than
 // silently entering the irreversible CATCHINGBLOCKS state.
-func TestRunFromIdle_BelowCheckpointRejectsAndPreservesIdle(t *testing.T) {
+func TestExplicitRunFromIdle_BelowCheckpointRejectsAndPreservesIdle(t *testing.T) {
 	ctx := context.Background()
 	highest := HighestCheckpointHeight(chaincfg.MainNetParams.Checkpoints)
 	require.Greater(t, highest, uint32(0))
@@ -382,7 +382,7 @@ func TestRunFromIdle_BelowCheckpointRejectsAndPreservesIdle(t *testing.T) {
 	b.finiteStateMachine.SetState(blockchain_api.FSMStateType_IDLE.String())
 	require.NoError(t, store.SetFSMState(ctx, blockchain_api.FSMStateType_IDLE.String()))
 
-	_, err := b.Run(ctx, nil)
+	_, err := b.SendFSMEvent(ctx, &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType_RUN})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "below highest checkpoint")
 	require.ErrorContains(t, err, "setfsmstate --fsmstate catchingblocks")

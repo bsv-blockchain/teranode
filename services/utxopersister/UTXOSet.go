@@ -19,6 +19,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -89,6 +90,11 @@ type UTXOSet struct {
 
 	// blockHeight represents the height of the current block
 	blockHeight uint32
+
+	// blockHeightKnown records whether blockHeight is the height this set was opened for.
+	// Zero is a valid block height, so it cannot double as "unknown". The additions and
+	// deletions readers refuse to open a set where this is false.
+	blockHeightKnown bool
 
 	// additionsStorer manages storage of UTXO additions
 	additionsStorer *filestorer.FileStorer
@@ -183,15 +189,16 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 	}
 
 	return &UTXOSet{
-		ctx:             ctx,
-		logger:          logger,
-		settings:        tSettings,
-		blockHash:       *blockHash,
-		blockHeight:     blockHeight,
-		additionsStorer: additionsStorer,
-		deletionsStorer: deletionsStorer,
-		store:           store,
-		stats:           gocore.NewStat("utxopersister"),
+		ctx:              ctx,
+		logger:           logger,
+		settings:         tSettings,
+		blockHash:        *blockHash,
+		blockHeight:      blockHeight,
+		blockHeightKnown: true,
+		additionsStorer:  additionsStorer,
+		deletionsStorer:  deletionsStorer,
+		store:            store,
+		stats:            gocore.NewStat("utxopersister"),
 	}, nil
 }
 
@@ -206,6 +213,7 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 // - tSettings: Configuration settings that control behavior
 // - store: Blob store instance for accessing persisted UTXO data
 // - blockHash: Pointer to the hash of the block whose UTXO set is being accessed
+// - blockHeight: Height the block is being opened at, checked against each delta's header
 //
 // Returns:
 // - *UTXOSet: The initialized UTXOSet instance
@@ -215,14 +223,19 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 // It only initializes a UTXOSet instance with the necessary references to access existing data.
 // Use this method when you need to read from an existing UTXO set but don't need to
 // verify its existence first. For verification, use GetUTXOSetWithExistCheck instead.
-func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error) {
+//
+// The height is required because the additions and deletions readers check the header each
+// file carries against the block hash and height the set was opened for.
+func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, error) {
 	return &UTXOSet{
-		ctx:       ctx,
-		logger:    logger,
-		settings:  tSettings,
-		blockHash: *blockHash,
-		store:     store,
-		stats:     gocore.NewStat("utxopersister"),
+		ctx:              ctx,
+		logger:           logger,
+		settings:         tSettings,
+		blockHash:        *blockHash,
+		blockHeight:      blockHeight,
+		blockHeightKnown: true,
+		store:            store,
+		stats:            gocore.NewStat("utxopersister"),
 	}, nil
 }
 
@@ -236,6 +249,7 @@ func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 // - tSettings: Configuration settings that control behavior
 // - store: Blob store instance for accessing persisted UTXO data
 // - blockHash: Pointer to the hash of the block whose UTXO set is being accessed
+// - blockHeight: Height the block is being opened at, checked against each delta's header
 //
 // Returns:
 // - *UTXOSet: The initialized UTXOSet instance
@@ -246,14 +260,16 @@ func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 // It initializes a UTXOSet instance and then verifies whether a UTXO set file
 // exists for the specified block hash. This is useful when you need to determine
 // if a UTXO set needs to be created before attempting to read from it.
-func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, bool, error) {
+func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, bool, error) {
 	us := &UTXOSet{
-		ctx:       ctx,
-		logger:    logger,
-		settings:  tSettings,
-		blockHash: *blockHash,
-		store:     store,
-		stats:     gocore.NewStat("utxopersister"),
+		ctx:              ctx,
+		logger:           logger,
+		settings:         tSettings,
+		blockHash:        *blockHash,
+		blockHeight:      blockHeight,
+		blockHeightKnown: true,
+		store:            store,
+		stats:            gocore.NewStat("utxopersister"),
 	}
 
 	// Check to see if the utxo-set already exists
@@ -380,39 +396,127 @@ func (us *UTXOSet) Abort(err error) {
 	}
 }
 
-type readCloserWrapper struct {
-	*bufio.Reader
-	io.Closer
+// pooledBufReader owns a pooled *bufio.Reader for the lifetime of one read, returning it on
+// Close.
+//
+// The reader is a named field rather than an embedded one, and that is the point of the type.
+// Embedding promotes the whole bufio.Reader method set, including WriteTo; io.Copy selects a
+// source's WriteTo before it ever calls Read, so a caller could stream straight past the guard
+// in Read below and dereference a buffer this type had already given back. With a named field
+// the type is exactly an io.ReadCloser, which is all that GetUTXOAdditionsReader and
+// GetUTXODeletionsReader promise.
+//
+// Not safe for concurrent use: a Close must not overlap a Read, the same contract bufio.Reader
+// itself carries. Every consumer in this repository closes on the frame that reads.
+type pooledBufReader struct {
+	reader *bufio.Reader
+	closer io.Closer
+	once   sync.Once
+}
+
+// Read delegates to the pooled buffer, or reports that the buffer has already been returned.
+func (p *pooledBufReader) Read(b []byte) (int, error) {
+	if p.reader == nil {
+		return 0, errors.NewProcessingError("read from a utxo-persister reader that is already closed")
+	}
+
+	return p.reader.Read(b)
+}
+
+// Close returns the buffer to the pool and closes the underlying reader. The sync.Once keeps
+// both to exactly one occurrence: releasing twice would hand one buffer to two owners, and the
+// underlying close is what releases the file store's read permit. Repeat calls return nil.
+func (p *pooledBufReader) Close() error {
+	var err error
+
+	p.once.Do(func() {
+		reader := p.reader
+		p.reader = nil
+
+		filestorer.ReleaseReader(reader)
+
+		if p.closer != nil {
+			err = p.closer.Close()
+		}
+	})
+
+	return err
+}
+
+// readDeltaHeader reads the 36-byte block hash and height header that NewUTXOSet writes at the
+// front of an additions or deletions file, and checks it against the key and height this UTXOSet
+// was opened under. A delta naming a different block is not this block's delta, whatever the
+// store returned it for, and folding it into the cumulative set would carry its outputs into the
+// snapshot and its commitment.
+//
+// Use io.ReadFull rather than r.Read because the longterm-client fallback in
+// openFileWithFallback returns a reader that can short-read without error, which would
+// silently misalign every subsequent record.
+func (us *UTXOSet) readDeltaHeader(r io.Reader, fileType fileformat.FileType) error {
+	var storedHash chainhash.Hash
+
+	if _, err := io.ReadFull(r, storedHash[:]); err != nil {
+		return errors.NewStorageError("error reading block hash", err)
+	}
+
+	var storedHeight uint32
+
+	if err := binary.Read(r, binary.LittleEndian, &storedHeight); err != nil {
+		return errors.NewStorageError("error reading block height", err)
+	}
+
+	if !storedHash.IsEqual(&us.blockHash) {
+		return us.headerMismatch("%s header names block %s but was opened for %s", fileType, storedHash.String(), us.blockHash.String())
+	}
+
+	if storedHeight != us.blockHeight {
+		return us.headerMismatch("%s header for %s names height %d but was opened at height %d", fileType, us.blockHash.String(), storedHeight, us.blockHeight)
+	}
+
+	return nil
+}
+
+// headerMismatch logs a persisted file whose header names a different block, then returns the
+// same condition as a storage error. The persister cannot advance past such a file, and the
+// caller's generic retry log would read as a transient fault, so this gets a distinct signal.
+// Read errors do not come here: those can be transient.
+func (us *UTXOSet) headerMismatch(format string, args ...interface{}) error {
+	msg := fmt.Sprintf(format, args...)
+
+	if us.logger != nil {
+		us.logger.Errorf("[UTXOPersister] integrity: %s - the file is corrupt or was replaced; processing cannot advance past this block until it is restored", msg)
+	}
+
+	return errors.NewStorageError(format, args...)
 }
 
 // GetUTXOAdditionsReader returns a reader for accessing UTXO additions.
 // It creates a reader for the additions file of the current block or a specified block.
 // This reader can be used to iterate through all UTXOs added in the block.
 // Returns a ReadCloser interface and any error encountered.
+//
+// The set must have been opened with the block height: the file's header is checked against
+// both the block hash and the height, so a set opened without one is refused.
 func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, error) {
 	ctx, _, deferFn := tracing.Tracer("utxopersister").Start(ctx, "GetUTXOAdditionsReader",
 		tracing.WithDebugLogMessage(us.logger, "[GetUTXOAdditionsReader] called"),
 	)
 	defer deferFn()
 
+	if !us.blockHeightKnown {
+		return nil, errors.NewProcessingError("utxo delta reader for %s requires the block height the set was opened for", us.blockHash.String())
+	}
+
 	r, err := us.store.GetIoReader(ctx, us.blockHash[:], fileformat.FileTypeUtxoAdditions, options.WithDeleteAt(0))
 	if err != nil {
 		return nil, errors.NewStorageError("error getting utxo-additions reader", err)
 	}
 
-	// Close on the Read failure paths so the underlying file-store read
-	// permit (held by semaphoreReadCloser) is released. Use io.ReadFull
-	// rather than r.Read because the longterm-client fallback in
-	// openFileWithFallback returns a reader that can short-read without
-	// error, which would silently misalign every subsequent record.
-	if _, err = io.ReadFull(r, make([]byte, 32)); err != nil {
+	// Close on the header failure paths so the underlying file-store read
+	// permit (held by semaphoreReadCloser) is released.
+	if err = us.readDeltaHeader(r, fileformat.FileTypeUtxoAdditions); err != nil {
 		_ = r.Close()
-		return nil, errors.NewStorageError("error reading block hash", err)
-	}
-
-	if _, err = io.ReadFull(r, make([]byte, 4)); err != nil {
-		_ = r.Close()
-		return nil, errors.NewStorageError("error reading block height", err)
+		return nil, err
 	}
 
 	utxopersisterBufferSize := us.settings.Block.UTXOPersisterBufferSize
@@ -426,9 +530,9 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 
 	us.logger.Debugf("Using %s buffer for utxo-additions reader", bufferSize)
 
-	r = &readCloserWrapper{
-		Reader: bufio.NewReaderSize(r, bufferSize.Int()),
-		Closer: r.(io.Closer),
+	r = &pooledBufReader{
+		reader: filestorer.AcquireReader(r, bufferSize.Int()),
+		closer: r,
 	}
 
 	return r, nil
@@ -438,21 +542,23 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 // It creates a reader for the deletions file of the current block or a specified block.
 // This reader can be used to iterate through all UTXOs deleted (spent) in the block.
 // Returns a ReadCloser interface and any error encountered.
+//
+// The set must have been opened with the block height: the file's header is checked against
+// both the block hash and the height, so a set opened without one is refused.
 func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, error) {
+	if !us.blockHeightKnown {
+		return nil, errors.NewProcessingError("utxo delta reader for %s requires the block height the set was opened for", us.blockHash.String())
+	}
+
 	r, err := us.store.GetIoReader(ctx, us.blockHash[:], fileformat.FileTypeUtxoDeletions, options.WithDeleteAt(0))
 	if err != nil {
 		return nil, errors.NewStorageError("error getting utxo-deletions reader", err)
 	}
 
-	// See GetUTXOAdditionsReader for the rationale on Close + io.ReadFull.
-	if _, err = io.ReadFull(r, make([]byte, 32)); err != nil {
+	// See GetUTXOAdditionsReader for the rationale on Close.
+	if err = us.readDeltaHeader(r, fileformat.FileTypeUtxoDeletions); err != nil {
 		_ = r.Close()
-		return nil, errors.NewStorageError("error reading block hash", err)
-	}
-
-	if _, err = io.ReadFull(r, make([]byte, 4)); err != nil {
-		_ = r.Close()
-		return nil, errors.NewStorageError("error reading block height", err)
+		return nil, err
 	}
 
 	utxopersisterBufferSize := us.settings.Block.UTXOPersisterBufferSize
@@ -466,9 +572,9 @@ func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, e
 
 	us.logger.Debugf("Using %s buffer for utxo-deletions reader", bufferSize)
 
-	r = &readCloserWrapper{
-		Reader: bufio.NewReaderSize(r, bufferSize.Int()),
-		Closer: r.(io.Closer),
+	r = &pooledBufReader{
+		reader: filestorer.AcquireReader(r, bufferSize.Int()),
+		closer: r,
 	}
 
 	return r, nil
@@ -616,9 +722,9 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 
 		us.logger.Infof("Using %s buffer for previous UTXOSet reader", bufferSize)
 
-		previousUTXOSetReader = &readCloserWrapper{
-			Reader: bufio.NewReaderSize(previousUTXOSetReader, bufferSize.Int()),
-			Closer: previousUTXOSetReader.(io.Closer),
+		previousUTXOSetReader = &pooledBufReader{
+			reader: filestorer.AcquireReader(previousUTXOSetReader, bufferSize.Int()),
+			closer: previousUTXOSetReader,
 		}
 
 		defer previousUTXOSetReader.Close()
@@ -630,24 +736,40 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 		// Consume the per-file header fields written by CreateUTXOSet
 		// (32 bytes current block hash + 4 bytes height + 32 bytes
 		// previous block hash) so the loop below starts at the first
-		// UTXOWrapper record. Validate the stored current-block hash
-		// matches what we expected to open, to catch file/key confusion
-		// loudly rather than silently consolidate the wrong UTXOs.
+		// UTXOWrapper record. Validate the stored current-block hash and
+		// height against the block before the range start, to catch
+		// file/key confusion loudly rather than silently consolidate the
+		// wrong UTXOs.
 		var storedCurrentBlockHash chainhash.Hash
 		if _, err := io.ReadFull(previousUTXOSetReader, storedCurrentBlockHash[:]); err != nil {
 			return errors.NewStorageError("error reading previous utxo-set block hash", err)
 		}
 		if !storedCurrentBlockHash.IsEqual(c.firstPreviousBlockHash) {
-			return errors.NewStorageError("previous utxo-set block hash mismatch: want %s got %s",
+			return us.headerMismatch("previous utxo-set block hash mismatch: want %s got %s",
 				c.firstPreviousBlockHash.String(), storedCurrentBlockHash.String())
 		}
-		// Skip the remaining 36 bytes of per-file metadata (4-byte height
-		// + 32-byte previous block hash). The new set being written
-		// doesn't natively carry the previous set's stored height /
-		// grandparent hash to compare against, so consuming rather than
-		// parsing avoids dead variables.
-		if _, err := io.CopyN(io.Discard, previousUTXOSetReader, 36); err != nil {
-			return errors.NewStorageError("error skipping previous utxo-set header trailer", err)
+
+		// The previous set belongs to the block just before the range start,
+		// so its stored height must be firstBlockHeight - 1. A non-genesis
+		// previous block means the range cannot start at height 0.
+		if !c.firstBlockHeightKnown || c.firstBlockHeight == 0 {
+			return errors.NewProcessingError("previous utxo-set for %s cannot be checked: the range start height is not known",
+				c.firstPreviousBlockHash.String())
+		}
+
+		var storedHeight uint32
+		if err := binary.Read(previousUTXOSetReader, binary.LittleEndian, &storedHeight); err != nil {
+			return errors.NewStorageError("error reading previous utxo-set block height", err)
+		}
+		if storedHeight != c.firstBlockHeight-1 {
+			return us.headerMismatch("previous utxo-set height mismatch: want %d got %d for %s",
+				c.firstBlockHeight-1, storedHeight, c.firstPreviousBlockHash.String())
+		}
+
+		// Skip the 32-byte grandparent hash: nothing available here to
+		// compare it against.
+		if _, err := io.CopyN(io.Discard, previousUTXOSetReader, 32); err != nil {
+			return errors.NewStorageError("error skipping previous utxo-set previous block hash", err)
 		}
 
 	OUTER:
@@ -808,12 +930,21 @@ func filterUTXOs(utxos []*UTXO, deletions map[UTXODeletion]struct{}, txID *chain
 	return filteredUTXOs
 }
 
+// MaxOutputIndex is the highest output index a consensus-valid transaction can
+// have: 1,000,000,000 bytes (MAX_TX_SIZE_CONSENSUS_AFTER_GENESIS, see
+// model/block_coinbase_common_rules.go) divided by the 9-byte minimum output
+// (8-byte value, 1-byte script length), minus one. Output indices read from a
+// UTXO-set file are untrusted and are checked against it before anything is
+// sized from them.
+const MaxOutputIndex = 1_000_000_000/9 - 1
+
 // PadUTXOsWithNil pads a slice of UTXOs with nil values to match their indices.
 // It creates a new slice with nil values at positions where no UTXO exists,
 // ensuring that UTXOs are at positions matching their output index.
 // This helps maintain the correct mapping between output indices and their UTXOs.
-// Returns the padded slice.
-func PadUTXOsWithNil(utxos []*UTXO) []*UTXO {
+// It returns an error for an index above MaxOutputIndex, which no valid
+// transaction can have: the slice is sized from the highest index.
+func PadUTXOsWithNil(utxos []*UTXO) ([]*UTXO, error) {
 	// Determine the size of the new slice
 	var maxIndex uint32
 
@@ -823,15 +954,19 @@ func PadUTXOsWithNil(utxos []*UTXO) []*UTXO {
 		}
 	}
 
+	if maxIndex > MaxOutputIndex {
+		return nil, errors.NewProcessingError("output index %d exceeds the maximum %d a valid transaction can have", maxIndex, MaxOutputIndex)
+	}
+
 	// Create a slice with nil values of length maxIdx+1
-	padded := make([]*UTXO, maxIndex+1)
+	padded := make([]*UTXO, int(maxIndex)+1)
 
 	// Place each item in its corresponding index position
 	for _, utxo := range utxos {
 		padded[utxo.Index] = utxo
 	}
 
-	return padded
+	return padded, nil
 }
 
 // UnpadSlice removes nil values from a padded slice.

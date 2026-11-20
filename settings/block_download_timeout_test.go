@@ -72,7 +72,7 @@ func TestBlockDownloadTimeout_LoaderReadsAllKeys(t *testing.T) {
 			}
 
 			gocore.Config().Set(winKey, tc.probe)
-			t.Cleanup(func() { gocore.Config().Set(winKey, "") })
+			t.Cleanup(func() { gocore.Config().Unset(winKey) })
 
 			require.Equal(t, tc.wantHit, tc.read(NewSettings()),
 				"loader must read %s under context %q", tc.key, ctx)
@@ -103,7 +103,7 @@ func TestBlockDownloadParallelFetch_LoaderReadsAllKeys(t *testing.T) {
 		}
 
 		gocore.Config().Set(winKey(key), "90s")
-		t.Cleanup(func() { gocore.Config().Set(winKey(key), "") })
+		t.Cleanup(func() { gocore.Config().Unset(winKey(key)) })
 
 		require.Equal(t, 90*time.Second, NewSettings().Legacy.BlockDownloadSlowFetchTimeout,
 			"loader must read %s under context %q", key, ctx)
@@ -117,7 +117,7 @@ func TestBlockDownloadParallelFetch_LoaderReadsAllKeys(t *testing.T) {
 		}
 
 		gocore.Config().Set(winKey(key), "5")
-		t.Cleanup(func() { gocore.Config().Set(winKey(key), "") })
+		t.Cleanup(func() { gocore.Config().Unset(winKey(key)) })
 
 		require.Equal(t, 5, NewSettings().Legacy.BlockDownloadMaxParallelFetch,
 			"loader must read %s under context %q", key, ctx)

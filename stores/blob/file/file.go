@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"io/fs"
 	"math"
 	"math/big"
 	"net/http"
@@ -42,6 +43,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -91,6 +93,73 @@ func parseFsyncMode(s string) (fsyncMode, error) {
 	}
 }
 
+// parseChecksum interprets the `checksum` URL parameter. An absent parameter leaves
+// checksumming enabled, so a store URL that does not mention it behaves exactly as it
+// always has. A value that is neither boolean-true nor boolean-false is a configuration
+// error rather than a silently ignored typo, mirroring parseFsyncMode.
+//
+// The truthy and falsy spellings are accepted broadly on purpose. Nothing read this
+// parameter until it was implemented, so any value anywhere was inert; a store URL outside
+// this repository carrying checksum=yes or checksum=on would otherwise turn a previously
+// harmless string into a node that does not start.
+func parseChecksum(s string) (bool, error) {
+	switch strings.ToLower(s) {
+	case "", "true", "1", "yes", "on", "enabled":
+		return true, nil
+	case "false", "0", "no", "off", "disabled":
+		return false, nil
+	default:
+		return true, errors.NewConfigurationError("[File] invalid checksum %q (must be true|false, or one of 1|0|yes|no|on|off|enabled|disabled)", s)
+	}
+}
+
+// onlyWriter hides any ReadFrom method on the wrapped writer. io.CopyBuffer discards the
+// caller's buffer when dst implements io.ReaderFrom, and *os.File does; for the sources this
+// store actually sees (a bytes.Reader or an io.Pipe, both behind an io.TeeReader) ReadFrom has
+// no kernel fast path to offer and merely falls back to its own 32 KiB buffer. Hiding it keeps
+// the configured buffer in force.
+type onlyWriter struct{ io.Writer }
+
+const copyBufferSize = 1 << 20 // 1 MiB
+
+// copyBufPool keeps the copy buffers alive between blob writes. The pool is not an
+// optimisation: at the blob write rates this store sustains, allocating a megabyte per
+// write would trade copy time for garbage-collection time and lose.
+//
+// What it costs. One buffer is checked out per streaming write (copyWithPooledBuffer); Set
+// checks out none, because an in-memory payload goes down the memReader arm of writeBody.
+// Streaming writes are bounded by writeSemaphore, which is process-global across every file
+// store instance and is sized at the applied write concurrency. Checked-out copy-buffer
+// memory is therefore roughly the applied write concurrency times copyBufferSize: at the
+// default write limit of 256 that is 256 MiB. That figure is the default-limit example, not
+// a ceiling — the limit is configurable and validated only into [MinSemaphoreLimit,
+// MaxSemaphoreLimit]. Retained memory is a different quantity: a sync.Pool is neither a cap
+// nor a guaranteed floor, and buffers nobody is using are dropped by the collector. Before
+// pooling, each concurrent write instead held a transient 32 KiB genericReadFrom buffer.
+//
+// The 1 MiB size matches the subtree path, whose own pooled reader is 1 MiB. Note that for
+// the per-record writes the utxo-persister path issues, the pipe writer's own buffer bounds
+// each PipeReader.Read, so most of a 1 MiB copy buffer goes unused on that path.
+var copyBufPool = sync.Pool{
+	New: func() any { b := make([]byte, copyBufferSize); return &b },
+}
+
+func copyWithPooledBuffer(dst *os.File, src io.Reader) (int64, error) {
+	bufp := copyBufPool.Get().(*[]byte)
+	defer copyBufPool.Put(bufp)
+
+	return io.CopyBuffer(onlyWriter{dst}, src, *bufp)
+}
+
+// memReader carries an in-memory payload from Set into SetFromReader so the body can be
+// hashed and written in one shot instead of running a chunked copy loop over it.
+type memReader struct {
+	*bytes.Reader
+	buf []byte
+}
+
+func (memReader) Close() error { return nil }
+
 // File implements the blob.Store interface using the local filesystem for storage.
 // It provides a robust, persistent blob storage solution with features like automatic
 // cleanup of expired blobs, data integrity verification, and efficient handling of
@@ -127,6 +196,25 @@ type File struct {
 	storeType storetypes.BlobStoreType
 	// fsyncMode controls fsync behaviour during atomic publication; see fsyncMode docs.
 	fsyncMode fsyncMode
+	// checksum controls whether a blob's payload is digested and published as a
+	// "<filename>.sha256" sidecar. Set via the `checksum` URL parameter; default true.
+	//
+	// With it disabled the store neither hashes the payload nor publishes the sidecar, which
+	// removes a full-payload SHA-256 and a second create/write/fsync/rename/dir-fsync cycle
+	// from every write. Nothing in this repository reads a sidecar back, and no read path
+	// verifies one, so disabling it is a write-cost decision rather than an integrity one.
+	//
+	// Switching the flag on an existing store directory has these semantics:
+	//
+	//   - true -> false, key rewritten: the sidecar left by the earlier write is removed
+	//     best-effort as part of the new publication, so it cannot survive describing content
+	//     that is gone.
+	//   - true -> false, key not rewritten: the sidecar persists and still matches the content
+	//     present.
+	//   - false -> true: the sidecar is regenerated on the next write to that key only. Keys
+	//     that are not rewritten have none; there is no backfill.
+	//   - Del removes the sidecar either way, and treats an absent one as success.
+	checksum bool
 }
 
 func (s *File) debugEnabled() bool {
@@ -427,9 +515,16 @@ func releaseWritePermit() {
 //
 // The storeURL format follows the pattern: file:///path/to/storage/directory?param1=value1&param2=value2
 // Supported URL parameters include:
-// - header: Custom header to prepend to blobs (can be hex-encoded or plain text)
-// - eofmarker: Custom footer marker to append to blobs (can be hex-encoded or plain text)
-// - checksum: When set to "true", enables SHA256 checksumming of blobs
+//   - header: Custom header to prepend to blobs (can be hex-encoded or plain text)
+//   - eofmarker: Custom footer marker to append to blobs (can be hex-encoded or plain text)
+//   - checksum: "true" (the default when the parameter is absent) digests every blob and
+//     publishes a "<filename>.sha256" sidecar beside it. "false" skips both the digest and
+//     the sidecar, and removes any sidecar an earlier write left behind. "1"/"yes"/"on"/
+//     "enabled" and "0"/"no"/"off"/"disabled" are accepted as the respective synonyms; any
+//     other value is a configuration error. See the checksum field on File for the
+//     mode-transition semantics.
+//   - fsyncMode: "full" (the default when the parameter is absent), "data" or "none". Controls
+//     how much of the atomic publication is flushed to stable storage; see the fsyncMode docs.
 //
 // Parameters:
 //   - logger: Logger instance for recording operations and errors
@@ -456,16 +551,31 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 
 	var path string
 	if storeURL.Host == "." {
-		path = storeURL.Path[1:] // relative path
+		path = strings.TrimPrefix(storeURL.Path, "/") // relative path
 	} else {
 		path = storeURL.Path // absolute path
 	}
 
+	// An empty path would resolve to the working directory below, and MkdirAll accepts that
+	// without complaint, so a misconfigured URL such as "file://./" or "file:" would quietly put
+	// blobs wherever the process started. Reject it instead.
+	if path == "" {
+		return nil, errors.NewConfigurationError("[File] store URL %q has no path", urlutil.Redact(storeURL))
+	}
+
+	// Resolve the base path once, here, rather than on every read and write. ConstructFilename
+	// checks each filename it builds against the base, and with a relative base that check went
+	// through filepath.Abs and so os.Getwd, which stats "." and $PWD on every call: 11% of
+	// teranode CPU in a 30 s profile of a mainnet sync. An absolute base also pins the store to
+	// the directory it was created in, whatever the process later does to its working directory.
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return nil, errors.NewStorageError("[File] failed to resolve directory", err)
+	}
+
 	// create the path if necessary
-	if len(path) > 0 {
-		if err := os.MkdirAll(path, 0755); err != nil {
-			return nil, errors.NewStorageError("[File] failed to create directory", err)
-		}
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return nil, errors.NewStorageError("[File] failed to create directory", err)
 	}
 
 	storeOpts := options.NewStoreOptions(opts...)
@@ -500,6 +610,11 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		return nil, err
 	}
 
+	parsedChecksum, err := parseChecksum(storeURL.Query().Get("checksum"))
+	if err != nil {
+		return nil, err
+	}
+
 	if len(storeOpts.SubDirectory) > 0 {
 		if err := os.MkdirAll(filepath.Join(path, storeOpts.SubDirectory), 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create sub directory", err)
@@ -514,6 +629,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		blobDeletionScheduler: storeOpts.BlobDeletionScheduler,
 		storeType:             storeOpts.StoreType,
 		fsyncMode:             parsedFsyncMode,
+		checksum:              parsedChecksum,
 	}
 
 	// Check if longterm storage options are provided
@@ -672,9 +788,12 @@ func (s *File) Close(_ context.Context) error {
 
 func (s *File) errorOnOverwrite(filename string, opts *options.Options) error {
 	if !opts.AllowOverwrite {
-		// Note: No semaphore acquisition here because this is only called from SetFromReader
-		// which already holds the write semaphore. The os.Stat call is safe because we're
-		// within the write operation's semaphore protection.
+		// This Stat decides nothing between two concurrent writers of one key. The write
+		// semaphore the callers hold is a pool of defaultWriteLimit permits, not a mutex, so
+		// both can be here at once and both find nothing. With options.WithExclusivePublish
+		// the authoritative check is renameTempFile's link(2), which fails if the name exists,
+		// and this is only a shortcut; without it this is the whole no-overwrite check, and of
+		// two writers past it the later rename wins.
 		if _, err := os.Stat(filename); err == nil {
 			return errors.NewBlobAlreadyExistsError("[File][allowOverwrite] [%s] already exists in store", filename)
 		}
@@ -755,12 +874,12 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 	keyHex := formatKeyHex(key)
 	s.debugf("[File] SetFromReader start key=%s type=%s", keyHex, fileType)
 
-	filename, err := s.constructFilename(key, fileType, opts)
+	merged := options.MergeOptions(s.options, opts)
+
+	filename, err := s.publishFilename(key, fileType, merged, opts)
 	if err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", util.ReverseAndHexEncodeSlice(key), err)
 	}
-
-	merged := options.MergeOptions(s.options, opts)
 
 	if err := s.errorOnOverwrite(filename, merged); err != nil {
 		return err
@@ -789,19 +908,28 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 		}
 	}()
 
-	// Set up the hasher; keep destination as the raw *os.File so io.Copy can use the ReadFrom fast path
-	hasher := sha256.New()
+	// Set up the hasher. A store with checksums disabled has none at all: the payload is
+	// neither teed nor digested, and no sidecar is published.
+	var hasher hash.Hash
+	if s.checksum {
+		hasher = sha256.New()
+	}
 
 	// Write header unless SkipHeader option is set. Write it to both the file and the hasher.
 	if !merged.SkipHeader {
 		header := fileformat.NewHeader(fileType)
-		if err := header.Write(io.MultiWriter(file, hasher)); err != nil {
+
+		headerDst := io.Writer(file)
+		if hasher != nil {
+			headerDst = io.MultiWriter(file, hasher)
+		}
+
+		if err := header.Write(headerDst); err != nil {
 			return errors.NewStorageError("[File][SetFromReader] [%s] failed to write header to file", filename, err)
 		}
 	}
 
-	// Stream the body using io.Copy with io.TeeReader so the file can use ReadFrom fast path while also hashing.
-	bytesWritten, err := io.Copy(file, io.TeeReader(reader, hasher))
+	bytesWritten, err := writeBody(file, reader, hasher)
 	if err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to write data to file", filename, err)
 	}
@@ -817,14 +945,53 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 	}
 	file = nil
 
-	// rename the file to remove the .tmp extension
-	if err = s.renameTempFile(tmpFilename, filename, merged.AllowOverwrite); err != nil {
+	if err = s.publish(ctx, key, fileType, tmpFilename, filename, merged, hasher); err != nil {
 		return err
 	}
 	cleanupTmpFile = false
 
+	s.debugf("[File] SetFromReader completed key=%s type=%s filename=%s", keyHex, fileType, filename)
+	return nil
+}
+
+// publishTempFile gives a finished, synced and closed temporary file its final name and
+// publishes or clears its checksum sidecar. It is the last step of every streamed write, reached
+// through publish from SetFromReader and a pending file's Commit. After a nil
+// return the temporary name has been given up (renamed, or unlinked after the link), so a caller
+// must not remove it; after an error the caller still owns it.
+func (s *File) publishTempFile(tmpFilename, filename string, merged *options.Options, hasher hash.Hash) error {
+	if err := s.renameTempFile(tmpFilename, filename, merged.AllowOverwrite, merged.ExclusivePublish); err != nil {
+		return err
+	}
+
+	if !s.checksum {
+		// A blob written while checksums were enabled leaves a sidecar behind; republishing the
+		// blob without checksums would leave that sidecar describing content that no longer
+		// exists. Nothing in this package can prove a sidecar is absent (errorOnOverwrite treats
+		// every Stat error as "missing", and Del swallows a failed sidecar unlink), so the
+		// removal is attempted unconditionally rather than predicated on any such proof.
+		//
+		// Best-effort: a stale sidecar is inert (nothing in this repository reads one) and must
+		// not turn a successfully published blob into a failed write.
+		//
+		// Plain os.Remove rather than removeStorePath, because this runs on every write while
+		// checksums are off and the sidecar is almost never there. os.Remove is an unlink and,
+		// only if that fails, an rmdir: two syscalls on the common missing-sidecar path, against
+		// removeStorePath's fresh os.OpenRoot (which fstats the descriptor), a walk of every path
+		// component, the unlink and the close. What it gives up is os.Root confinement against
+		// symlinked path components; validatePathWithinBase does not replace it, being Abs, Clean
+		// and a prefix test with no symlink resolution, and ConstructFilename rejects ".." in
+		// SubDirectory without rejecting separators there. Accepted, not disproved: no component
+		// of the store's own directory tree is assumed to be an attacker-controlled symlink, since
+		// planting one already requires write access to the node's data directory, and Del removes
+		// this exact path with plain os.Remove under the same assumption.
+		if removeErr := os.Remove(filename + checksumExtension); removeErr != nil && !os.IsNotExist(removeErr) {
+			s.logger.Warnf("[File][SetFromReader] failed to remove stale checksum file for %s: %v", filename, removeErr)
+		}
+	}
+
 	// Write SHA256 hash file
-	if err = s.writeHashFile(hasher, filename); err != nil {
+	if err := s.writeHashFile(hasher, filename); err != nil {
 		if removeErr := s.removeStorePath(filename); removeErr != nil && !os.IsNotExist(removeErr) {
 			s.logger.Warnf("[File][SetFromReader] failed to remove blob file %s after hash write error: %v", filename, removeErr)
 		}
@@ -832,10 +999,47 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 		return errors.NewStorageError("[File][SetFromReader] failed to write hash file", err)
 	}
 
-	s.debugf("[File] SetFromReader completed key=%s type=%s filename=%s", keyHex, fileType, filename)
 	return nil
 }
 
+// writeBody streams the blob body from reader into file, digesting it into hasher when the
+// store has checksums enabled, and returns the number of body bytes written.
+//
+// Set hands down a memReader carrying the whole payload. That lets the body be written and
+// hashed with one call each instead of running a chunked copy loop over a payload the caller
+// already holds complete in memory. Every other source is copied through the shared 1 MiB
+// buffer; onlyWriter is what keeps that buffer in force against io.CopyBuffer's ReaderFrom
+// shortcut.
+func writeBody(file *os.File, reader io.Reader, hasher hash.Hash) (int64, error) {
+	if mr, ok := reader.(memReader); ok {
+		if hasher != nil {
+			_, _ = hasher.Write(mr.buf) // hash.Hash never reports a write error
+		}
+
+		n, err := file.Write(mr.buf)
+
+		return int64(n), err
+	}
+
+	if hasher != nil {
+		return copyWithPooledBuffer(file, io.TeeReader(reader, hasher))
+	}
+
+	// No TeeReader in the way: if the source can write itself, let it drive the copy — no
+	// buffer of ours is involved. How many file.Write calls that costs is the source's
+	// business, and io.WriterTo puts no bound on it.
+	if wt, ok := reader.(io.WriterTo); ok {
+		return wt.WriteTo(file)
+	}
+
+	return copyWithPooledBuffer(file, reader)
+}
+
+// writeHashFile publishes the "<filename>.sha256" sidecar for a completed blob.
+//
+// A nil hasher means the store has checksums disabled, in which case there is nothing to
+// digest and nothing to publish: the function is a no-op success. Callers rely on that
+// contract rather than guarding the call themselves.
 func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
 	if hasher == nil {
 		return nil
@@ -864,6 +1068,10 @@ func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
 // This method is a convenience wrapper around SetFromReader that converts the byte slice
 // to a reader before delegating to SetFromReader for the actual storage operation.
 //
+// The reader it passes down is a memReader, which keeps the complete payload visible to
+// SetFromReader so the body can be written and hashed in a single call each rather than
+// through a chunked copy loop.
+//
 // Parameters:
 //   - ctx: Context for the operation
 //   - key: The key identifying the blob
@@ -877,7 +1085,7 @@ func (s *File) Set(ctx context.Context, key []byte, fileType fileformat.FileType
 	keyHex := formatKeyHex(key)
 	s.debugf("[File] Set start key=%s type=%s size=%d", keyHex, fileType, len(value))
 
-	reader := io.NopCloser(bytes.NewReader(value))
+	reader := memReader{Reader: bytes.NewReader(value), buf: value}
 
 	err := s.SetFromReader(ctx, key, fileType, reader, opts...)
 	if err == nil {
@@ -890,21 +1098,39 @@ func (s *File) Set(ctx context.Context, key []byte, fileType fileformat.FileType
 func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts []options.FileOption) (string, error) {
 	merged := options.MergeOptions(s.options, opts)
 
+	fileName, err := s.filenameFor(key, fileType, merged)
+	if err != nil {
+		return "", err
+	}
+
+	// Use background context since SetFromReader might be cancelled but we still want the
+	// deletion to be scheduled. No lock is held here.
+	if err := s.scheduleDAH(context.Background(), key, fileType, merged); err != nil {
+		return "", err
+	}
+
+	return fileName, nil
+}
+
+// filenameFor is the blob's file name, creating its sub directory if it has one. Unlike
+// constructFilename it schedules no deletion.
+func (s *File) filenameFor(key []byte, fileType fileformat.FileType, merged *options.Options) (string, error) {
 	if merged.SubDirectory != "" {
 		if err := os.MkdirAll(filepath.Join(s.path, merged.SubDirectory), 0755); err != nil {
 			return "", errors.NewStorageError("[File] failed to create sub directory", err)
 		}
 	}
 
-	fileName, err := merged.ConstructFilename(s.path, key, fileType)
-	if err != nil {
-		return "", err
-	}
+	return merged.ConstructFilename(s.path, key, fileType)
+}
 
+// scheduleDAH schedules the blob's deletion at its delete-at-height, when merged gives one, with
+// ctx on the scheduler call.
+func (s *File) scheduleDAH(ctx context.Context, key []byte, fileType fileformat.FileType, merged *options.Options) error {
 	// Skip DAH functionality entirely if disabled for this store
 	// Lifecycle is managed externally (e.g., by Aerospike pruner)
 	if merged.DisableDAH {
-		return fileName, nil
+		return nil
 	}
 
 	dah := merged.DAH
@@ -918,18 +1144,80 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 	if dah > 0 {
 		// Schedule deletion via blockchain service
 		if s.blobDeletionScheduler == nil {
-			return "", errors.NewConfigurationError("cannot schedule blob deletion: blob deletion scheduler not configured")
+			return errors.NewConfigurationError("cannot schedule blob deletion: blob deletion scheduler not configured")
 		}
 
-		// Use background context since SetFromReader might be cancelled
-		// but we still want the deletion to be scheduled
-		bgCtx := context.Background()
-		if _, _, err := s.blobDeletionScheduler.ScheduleBlobDeletion(bgCtx, key, string(fileType), s.storeType, dah); err != nil {
-			return "", errors.NewStorageError("failed to schedule blob deletion", err)
+		if _, _, err := s.blobDeletionScheduler.ScheduleBlobDeletion(ctx, key, string(fileType), s.storeType, dah); err != nil {
+			return errors.NewStorageError("failed to schedule blob deletion", err)
 		}
 	}
 
-	return fileName, nil
+	return nil
+}
+
+// publishFilename is the name a streamed write publishes under. A plain write schedules its
+// delete-at-height here, before the publish, as constructFilename always has. An exclusive
+// publish (options.WithExclusivePublish) does not: publish schedules it under the blob's key
+// lock, once it has found the name free, so a writer that loses the publish never replaces the
+// winner's delete-at-height with its own.
+func (s *File) publishFilename(key []byte, fileType fileformat.FileType, merged *options.Options, opts []options.FileOption) (string, error) {
+	if merged.ExclusivePublish {
+		return s.filenameFor(key, fileType, merged)
+	}
+
+	return s.constructFilename(key, fileType, opts)
+}
+
+// publish gives a finished temporary file its final name, the last step of SetFromReader and of
+// a pending file's Commit, so the two publish a blob identically. A plain write's
+// delete-at-height was scheduled in publishFilename, and this only publishes.
+//
+// An exclusive publish holds the blob's key lock (blobKeyLocks) across three steps: it checks
+// the name is free, schedules the blob's delete-at-height, and publishes. SetDAH takes the same
+// lock, so a promotion (SetDAH 0) cannot land between the publish and its schedule: the blob is
+// never visible without its delete-at-height, and a promotion that overlaps the publish runs
+// after it and wins. Scheduling after the publish, as this used to, let a promotion in that gap
+// find nothing to cancel and then be overwritten (external review of e4698b219). It also meant
+// a failed schedule had to remove a blob that was already visible, which another writer could
+// have adopted; a failed schedule now leaves nothing published.
+//
+// What the lock does not cover: a plain write of the same name takes no lock, so if one
+// publishes between the check and the link, the link is refused and this writer's schedule
+// has replaced the plain write's. A publish that fails after its schedule (a link error other
+// than the name being taken, or a checksum sidecar that cannot be written) leaves a
+// delete-at-height for a blob that is not there; the next writer of the name schedules its own.
+//
+// The wait for the lock ends with ctx, and the schedule under the lock is bounded by
+// keyLockedSchedulerTimeout, so a scheduler call that hangs holds the key, and the write permits
+// of the callers waiting on it, for that long and no longer.
+func (s *File) publish(ctx context.Context, key []byte, fileType fileformat.FileType, tmpFilename, filename string, merged *options.Options, hasher hash.Hash) error {
+	if !merged.ExclusivePublish {
+		return s.publishTempFile(tmpFilename, filename, merged, hasher)
+	}
+
+	unlock, err := blobKeyLocks.lock(ctx, filename)
+	if err != nil {
+		return errors.NewStorageError("[File][publish] [%s] gave up waiting for the blob's key lock", filename, err)
+	}
+	defer unlock()
+
+	// Under the lock this check decides between exclusive publishers, so a writer that loses
+	// schedules nothing. The link in publishTempFile stays the authority against anything
+	// else that writes the name.
+	if err := s.errorOnOverwrite(filename, merged); err != nil {
+		return err
+	}
+
+	// Detached from ctx as the plain path's schedule is, so a cancelled write that got this far
+	// still schedules before it publishes, but bounded, because the key lock is held.
+	scheduleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), keyLockedSchedulerTimeout)
+	defer cancel()
+
+	if err := s.scheduleDAH(scheduleCtx, key, fileType, merged); err != nil {
+		return err
+	}
+
+	return s.publishTempFile(tmpFilename, filename, merged, hasher)
 }
 
 // SetDAH sets the Delete-At-Height (DAH) value for a blob in the file store.
@@ -975,6 +1263,19 @@ func (s *File) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 	if s.blobDeletionScheduler == nil {
 		return errors.NewConfigurationError("cannot modify DAH: blob deletion scheduler not configured")
 	}
+
+	// After any exclusive publish of this blob in flight has scheduled and published, so this
+	// change is the later one (see publish).
+	// The wait ends with ctx: this caller holds a write permit while it waits.
+	unlock, err := blobKeyLocks.lock(ctx, fileName)
+	if err != nil {
+		return errors.NewStorageError("[File][SetDAH] [%s] gave up waiting for the blob's key lock", fileName, err)
+	}
+	defer unlock()
+
+	// Bounded while the key lock is held, so one hung scheduler call cannot pin the key.
+	ctx, cancel := context.WithTimeout(ctx, keyLockedSchedulerTimeout)
+	defer cancel()
 
 	if newDAH == 0 {
 		// Cancel scheduled deletion
@@ -1401,7 +1702,8 @@ func (s *File) syncAndCloseTempFile(file *os.File, tmpFilename string) error {
 // and the next checkpoint can therefore lose the freshly published file's name even when
 // the file's data has been fsynced. Removing this call regresses crash safety on those
 // filesystems; future maintainers should not delete it under the assumption that "best
-// effort" implies optional.
+// effort" implies optional. The same holds for the exclusive publish in renameTempFile,
+// which is link then unlink: both change only directory entries, so both need this sync.
 //
 // The "best-effort" framing applies only to failure handling: directory sync is not
 // supported uniformly across platforms (notably some Windows and network-attached
@@ -1440,28 +1742,48 @@ func (s *File) syncParentDirBestEffort(filename string) {
 
 // renameTempFile publishes a completed temp file at its final filename.
 //
-// The temp file must be a sibling of filename; createTempSibling enforces that pattern.
-// When source and destination are on the same filesystem, rename makes the final path
-// appear atomically, so readers either see the previous complete file or the new complete
-// file, never a partially written final file.
+// The temp file is on the same filesystem as filename: createTempSibling puts it in the
+// final name's own directory, and a PendingFile's temp sits in the zero-key prefix directory
+// of the same store tree. Either way the final name appears in one step, so a reader sees
+// the previous complete file or the new complete file, never a partial one.
 //
-// Cross-platform rename semantics differ when the destination already exists:
+// Which step depends on allowOverwrite and exclusive:
 //
-//   - POSIX (Linux, macOS, *BSD): rename(2) atomically replaces an existing regular file
-//     with the same name. The "destination exists" branch below is therefore unreachable
-//     on those platforms; an existing final file is silently overwritten on rename. The
-//     blob store's no-overwrite contract is enforced by SetFromReader's earlier call to
-//     errorOnOverwrite, not here. There is a small TOCTOU window between that check and
-//     this rename in which two concurrent writers can both pass the check and then race
-//     on rename — that race is out of scope for this helper.
-//   - Windows / some non-POSIX targets: rename can fail when the destination exists. The
-//     fallback handles that case: if allowOverwrite is true we remove the destination and
-//     retry the rename; otherwise we normalize the error to ErrBlobAlreadyExists.
+//   - allowOverwrite=false and exclusive=true (options.WithExclusivePublish): the
+//     no-overwrite contract is enforced here, by link(2). Linking the temp file to its final
+//     name fails with EEXIST if that name exists, atomically; that is POSIX, tested here on
+//     APFS (the dev Macs) and not yet run on ext4 (the Hetzner nodes). The refusal is
+//     returned as ErrBlobAlreadyExists, and the temp name is then unlinked. Of two writers
+//     that both passed errorOnOverwrite's Stat, exactly one is told it created the blob,
+//     which is what the legacy subtree writer's DeleteAll relies on (services/legacy/netsync/
+//     subtree_writer.go), the only caller that asks for it. The blob's delete-at-height is
+//     scheduled just before this, under the blob's key lock and only once the name was found
+//     free (publish), so the writer that is refused never schedules one over the winner's.
+//   - otherwise: rename(2). On POSIX (Linux, macOS, *BSD) rename atomically replaces an
+//     existing regular file, so the "destination exists" branch below is unreachable there
+//     and the no-overwrite contract rests on SetFromReader's earlier call to
+//     errorOnOverwrite, with a TOCTOU window in which two writers can both pass that check
+//     and the later rename wins. On Windows and some non-POSIX targets rename can fail when
+//     the destination exists: with allowOverwrite the destination is removed and the rename
+//     retried; without it the error is normalized to ErrBlobAlreadyExists.
+//
+// The cost of link then unlink: a crash between the two leaves a ".tmp" sibling that is a
+// second hard link to the published blob. Del and delete-at-height free the name, not the
+// inode, until that sibling is removed; the block park sweeps its dot-prefixed files at
+// Start (block_park.go), the subtree store has no such sweep yet. This was chosen over
+// renameat2(RENAME_NOREPLACE) on Linux plus renameatx_np(RENAME_EXCL) on macOS so one code
+// path is tested identically on the dev Macs and the Hetzner nodes.
+//
+// A filesystem without hard links (FAT, some FUSE and network mounts) refuses link(2) with
+// EPERM or ENOTSUP. An exclusive publish there falls back to the rename path, and warns
+// once per process that publishes there are not exclusive. The fallback stays until hard
+// links are confirmed on the Hetzner containers' data directory and on the Docker Desktop
+// bind mounts the Mac docker contexts use; neither has been checked yet.
 //
 // On success this helper also attempts to sync the parent directory so the newly published
 // name is more likely to survive a crash. That directory sync is correctness-critical on
 // ext4/xfs/btrfs and best-effort everywhere else; see syncParentDirBestEffort.
-func (s *File) renameTempFile(tmpFilename, filename string, allowOverwrite bool) error {
+func (s *File) renameTempFile(tmpFilename, filename string, allowOverwrite, exclusive bool) error {
 	tmpRel, err := s.storeRelPath(tmpFilename)
 	if err != nil {
 		return err
@@ -1478,8 +1800,38 @@ func (s *File) renameTempFile(tmpFilename, filename string, allowOverwrite bool)
 	}
 	defer root.Close()
 
+	if !allowOverwrite && exclusive {
+		switch err := root.Link(tmpRel, finalRel); {
+		case err == nil:
+			if removeErr := root.Remove(tmpRel); removeErr != nil && !os.IsNotExist(removeErr) {
+				s.logger.Warnf("[File][%s] published but failed to remove temporary name %s, which is now a second link to the blob: %v", filename, tmpFilename, removeErr)
+			}
+
+			s.syncParentDirBestEffort(filename)
+
+			return nil
+
+		case errors.Is(err, fs.ErrExist):
+			if info, statErr := root.Stat(finalRel); statErr == nil && info.IsDir() {
+				return errors.NewStorageError("[File][%s] a directory occupies the blob's name", filename, err)
+			}
+
+			return errors.NewBlobAlreadyExistsError("[File][%s] already exists in store", filename)
+
+		case hardLinksUnsupported(err):
+			linkUnsupportedWarning.Do(func() {
+				s.logger.Warnf("[File][%s] filesystem refused a hard link (%v); publishing by rename instead, so two writers of one blob are not detected on this store", s.path, err)
+			})
+
+		default:
+			return errors.NewStorageError("[File][%s] failed to publish temporary file %s", filename, tmpFilename, err)
+		}
+	}
+
 	if err := root.Rename(tmpRel, finalRel); err != nil {
 		if fileInfo, statErr := root.Stat(finalRel); statErr == nil && !fileInfo.IsDir() {
+			// Reached only where rename refuses to replace an existing name. On Linux and
+			// macOS rename replaces it silently.
 			if !allowOverwrite {
 				return errors.NewBlobAlreadyExistsError("[File][%s] already exists in store", filename)
 			}
@@ -1503,6 +1855,18 @@ func (s *File) renameTempFile(tmpFilename, filename string, allowOverwrite bool)
 
 	s.syncParentDirBestEffort(filename)
 	return nil
+}
+
+// linkUnsupportedWarning limits the hard-link fallback warning to once per process; the
+// filesystem does not change under a running store.
+var linkUnsupportedWarning sync.Once
+
+// hardLinksUnsupported reports whether a link(2) failure means the filesystem has no hard
+// links at all, which is EPERM on Linux (link(2): "the filesystem ... does not support the
+// creation of hard links") and ENOTSUP or EOPNOTSUPP elsewhere. On Linux the last two are one
+// errno. EEXIST is never one of these: it is the refusal the no-overwrite publish wants.
+func hardLinksUnsupported(err error) bool {
+	return errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP)
 }
 
 // writeFileAtomically writes a small sidecar file via temp-file publication.
@@ -1555,7 +1919,7 @@ func (s *File) writeFileAtomically(filename string, data []byte, perm os.FileMod
 	}
 	file = nil
 
-	if err = s.renameTempFile(tmpFilename, filename, allowOverwrite); err != nil {
+	if err = s.renameTempFile(tmpFilename, filename, allowOverwrite, false); err != nil {
 		return err
 	}
 	cleanupTmpFile = false

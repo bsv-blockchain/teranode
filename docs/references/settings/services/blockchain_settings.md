@@ -14,28 +14,42 @@
 | StoreURL | *url.URL | "sqlite:///blockchain" | blockchain_store | **CRITICAL** - Database connection (fails during daemon startup if null) |
 | FSMStateRestore | bool | false | fsm_state_restore | **UNUSED** - Previously triggered FSM restore via RPC service, implementation is currently disabled |
 | FSMStateChangeDelay | time.Duration | 0 | fsm_state_change_delay | **TESTING ONLY** - Delays FSM state transitions |
-| StoreDBTimeoutMillis | int | 5000 | blockchain_store_dbTimeoutMillis | Database operation timeout (store-level) |
-| InitializeNodeInState | string | "" | blockchain_initializeNodeInState | **UNUSED** - Defined but not referenced in code |
+| StoreDBTimeoutMillis | int | 5000 | blockchain_store_dbTimeoutMillis | Per-operation FSM checkpoint-read and persistence timeout; non-positive uses 5000 ms |
+| InitializeNodeInState | string | "" (`IDLE` for `operator`/`docker.m`) | blockchain_initializeNodeInState | Fresh-node FSM state: IDLE, CATCHINGBLOCKS, or RUNNING. Empty means CATCHINGBLOCKS; persisted state takes precedence and bypasses this setting’s validation; invalid values fail fresh-node startup |
 | PostgresPool | *PostgresSettings | (see below) | blockchain_postgres_pool | PostgreSQL connection pool settings |
+
+**Configured RUNNING:** on a checkpointed network, use only with a pre-seeded
+store whose tip is at or above the highest checkpoint. A lower tip or a tip-read
+failure aborts startup without falling back to CATCHINGBLOCKS. Choose
+`CATCHINGBLOCKS` to synchronize a fresh node. Networks without checkpoints allow
+configured RUNNING directly.
 
 ### PostgreSQL Connection Pool (PostgresPool)
 
-When using PostgreSQL as the blockchain store, these nested settings configure connection pooling and resilience. All settings are prefixed with `blockchain_postgres_pool_`.
+When using PostgreSQL as the blockchain store, these settings override the [global Postgres pool
+settings](../global_settings.md#postgresql-connection-pool) for this service only. Each is read directly
+(not through `PostgresPool`'s own struct tags, which only describe the opaque `blockchain_postgres_pool`
+field as a whole) via `getPostgresPoolSettings("blockchain", ...)`, and all default to the zero value.
+The family is six numeric/duration settings plus `RetryEnabled` and five circuit breaker settings
+(`blockchain_postgres_circuitBreakerEnabled`, `..._circuitBreakerFailureThreshold`, `..._circuitBreakerHalfOpenMax`,
+`..._circuitBreakerCooldown`, `..._circuitBreakerFailureWindow`; documented in the
+[global table](../global_settings.md#postgresql-connection-pool)). `PostgresPool` stays `nil` only when
+none of the twelve is configured: any non-zero numeric/duration value, `RetryEnabled=true`, or an
+explicit `CircuitBreakerEnabled` (`true` or `false`) creates it, so a lone `blockchain_postgres_retryEnabled = true`
+does take effect. Once the pool exists, zero numeric/duration values and an unset `CircuitBreakerEnabled`
+fall back to the global values; an explicit `CircuitBreakerEnabled=false` is preserved. `RetryEnabled` has
+no global fallback: the service's value (`false` included) replaces the global one outright. Note that
+`blockchain_postgres_retryEnabled = false` alone is indistinguishable from unset and does not create the pool.
 
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
-| MaxOpenConns | int | 50 | blockchain_postgres_pool_postgres_maxOpenConns | Maximum concurrent database connections |
-| MaxIdleConns | int | 10 | blockchain_postgres_pool_postgres_maxIdleConns | Maximum idle connections in pool |
-| ConnMaxLifetime | time.Duration | 5m | blockchain_postgres_pool_postgres_connMaxLifetime | Maximum connection reuse duration |
-| ConnMaxIdleTime | time.Duration | 1m | blockchain_postgres_pool_postgres_connMaxIdleTime | Maximum idle time before closing |
-| RetryEnabled | bool | false | blockchain_postgres_pool_postgres_retryEnabled | Enable retries for transient errors |
-| RetryMaxAttempts | int | 3 | blockchain_postgres_pool_postgres_retryMaxAttempts | Maximum retry attempts |
-| RetryBaseDelay | time.Duration | 100ms | blockchain_postgres_pool_postgres_retryBaseDelay | Base delay for retry backoff |
-| CircuitBreakerEnabled | bool | false | blockchain_postgres_pool_postgres_circuitBreakerEnabled | Enable circuit breaker for database operations |
-| CircuitBreakerFailureThreshold | int | 5 | blockchain_postgres_pool_postgres_circuitBreakerFailureThreshold | Consecutive failures before opening circuit |
-| CircuitBreakerHalfOpenMax | int | 3 | blockchain_postgres_pool_postgres_circuitBreakerHalfOpenMax | Successful probes required to close circuit |
-| CircuitBreakerCooldown | time.Duration | 30s | blockchain_postgres_pool_postgres_circuitBreakerCooldown | Duration circuit stays open before testing |
-| CircuitBreakerFailureWindow | time.Duration | 10s | blockchain_postgres_pool_postgres_circuitBreakerFailureWindow | Time window for counting consecutive failures |
+| MaxOpenConns | int | 0 (falls back to global if unset) | blockchain_postgres_maxOpenConns | Maximum concurrent database connections |
+| MaxIdleConns | int | 0 (falls back to global if unset) | blockchain_postgres_maxIdleConns | Maximum idle connections in pool |
+| ConnMaxLifetime | time.Duration | 0 (falls back to global if unset) | blockchain_postgres_connMaxLifetime | Maximum connection reuse duration |
+| ConnMaxIdleTime | time.Duration | 0 (falls back to global if unset) | blockchain_postgres_connMaxIdleTime | Maximum idle time before closing |
+| RetryEnabled | bool | false (no global fallback; see above) | blockchain_postgres_retryEnabled | Enable retries for transient errors |
+| RetryMaxAttempts | int | 0 (falls back to global if unset) | blockchain_postgres_retryMaxAttempts | Maximum retry attempts |
+| RetryBaseDelay | time.Duration | 0 (falls back to global if unset) | blockchain_postgres_retryBaseDelay | Base delay for retry backoff |
 
 ## Configuration Dependencies
 
@@ -62,7 +76,19 @@ When using PostgreSQL as the blockchain store, these nested settings configure c
 
 - `StoreURL` determines database backend
 - Service fails during daemon startup if null
-- `StoreDBTimeoutMillis` passed to blockchain store for database timeout configuration
+- `StoreDBTimeoutMillis` bounds FSM checkpoint reads and persistence writes in the
+  blockchain service; it is not a general store query timeout.
+- Zero or negative values use the 5000 ms default, rather than disabling timeouts.
+- Checkpoint reads respect an earlier caller deadline. Admitted writes run with
+  their own bounded context even after the caller disconnects.
+- A RUN transition can consume two independent store budgets while holding the
+  transition lock. Notification delivery and the complete RPC are not bounded
+  by this setting. Large values can delay other transitions after a caller exits.
+- The store helper does not retry. Automatic catchup promotion retries transient
+  failures at most three times with cancellable backoff and warns on exhaustion.
+  Explicit operator requests can be retried after store recovery.
+- Tune using observed store latency under load; the five-second default is not
+  a measured production p99 guarantee.
 
 ## Service Dependencies
 

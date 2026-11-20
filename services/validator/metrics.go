@@ -43,6 +43,18 @@ var (
 	// or fails structural validation checks. High values may indicate network attacks or client issues.
 	prometheusInvalidTransactions prometheus.Counter
 
+	// prometheusMissingParentTransactions counts Kafka-sourced transactions rejected only because
+	// their parent UTXO has not been seen yet (ErrTxMissingParent). Kept separate from
+	// prometheusInvalidTransactions because this is an ordering artifact of the validatortxs
+	// topic's concurrent per-partition consumption, not a genuinely invalid or attack transaction.
+	prometheusMissingParentTransactions prometheus.Counter
+
+	// prometheusHeldLimitShedTransactions counts Kafka-sourced transactions that block assembly
+	// refused at its in-memory transaction limit. Kept separate from
+	// prometheusInvalidTransactions because the transaction was valid; the node had no room for
+	// it, and the validator unwound and dropped it.
+	prometheusHeldLimitShedTransactions prometheus.Counter
+
 	// prometheusValidatorParentCommitRetries counts retries spent waiting for a parent
 	// transaction to finish its own commit, labelled by condition (TX_LOCKED or
 	// TX_CREATING). Paired with prometheusValidatorParentCommitExhausted, this gives the
@@ -58,6 +70,11 @@ var (
 	// except legacy p2p relay (which parks it in netsync's orphan pool) nothing is
 	// holding it, so the increment marks a transaction the node lost.
 	prometheusValidatorParentCommitExhausted *prometheus.CounterVec
+
+	// prometheusValidatorUnlockFailed counts accepted transactions whose two-phase-commit
+	// unlock failed or timed out. The transaction was spent and created; it stays locked
+	// until it is mined, so its descendants are answered TX_LOCKED until then.
+	prometheusValidatorUnlockFailed prometheus.Counter
 
 	// prometheusTransactionValidateTotal measures the complete end-to-end validation time for transactions.
 	// This histogram tracks the total time spent validating a transaction from initial receipt through
@@ -124,6 +141,126 @@ var (
 	// This histogram tracks database operations for storing and updating transaction metadata,
 	// including validation status, processing timestamps, and related transaction information. Units: seconds.
 	prometheusValidatorSetTxMeta prometheus.Histogram
+
+	// prometheusKafkaBackpressurePaused is 1 while the backpressure controller
+	// has the tx Kafka consumer paused, 0 otherwise.
+	prometheusKafkaBackpressurePaused prometheus.Gauge
+
+	// prometheusKafkaBackpressurePauseTotal counts pause transitions.
+	prometheusKafkaBackpressurePauseTotal prometheus.Counter
+
+	// prometheusKafkaBackpressureResumeTotal counts resume transitions (including
+	// fail-open and max-pause resumes).
+	prometheusKafkaBackpressureResumeTotal prometheus.Counter
+
+	// prometheusKafkaBackpressurePausedSecondsTotal accumulates total seconds the
+	// consumer has spent paused by the controller.
+	prometheusKafkaBackpressurePausedSecondsTotal prometheus.Counter
+
+	// prometheusKafkaBackpressurePauseSeconds holds how long the current pause has run, in
+	// seconds, under the cause label age, fill or held, and 0 once the consumer resumes.
+	prometheusKafkaBackpressurePauseSeconds *prometheus.GaugeVec
+
+	// prometheusKafkaBackpressureReadErrors tracks the current consecutive
+	// queue-stats read-error streak (resets to 0 on a good read).
+	prometheusKafkaBackpressureReadErrors prometheus.Gauge
+
+	// prometheusValidatorShedUnwindTotal counts attempted unwinds of a queue-full
+	// shed's store work (delete the record, then unspend the inputs).
+	prometheusValidatorShedUnwindTotal prometheus.Counter
+
+	// prometheusValidatorShedUnwindFailures counts unwinds whose delete or unspend
+	// returned an error, whatever the outcome then was. It is the "something in the
+	// unwind failed at all" signal and deliberately overlaps the two counters below:
+	// a delete that failed after the master record had already gone still counts
+	// here, even though the unwind went on to unspend the inputs successfully —
+	// shed_unwind_residue_total is the one that says so. What every increment
+	// guarantees is an error log carrying the txid and the outpoints; what it no
+	// longer implies on its own is that the transaction was left locked or its
+	// inputs left spent.
+	//
+	// It counts UNWINDS, not failing operations: one unwind moves it by at most one,
+	// including on the residue arm where the delete failed and the unspend then
+	// failed too. That is what keeps it comparable against shed_unwind_total and
+	// pairable with the residue, aborted and unverified counters — the arithmetic
+	// the metrics reference asks operators to do.
+	prometheusValidatorShedUnwindFailures prometheus.Counter
+
+	// prometheusValidatorShedUnwindAborted counts unwinds abandoned by the
+	// verify-after-delete guard because the store reported a successful delete but the
+	// record was still readable. Kept distinct from the failure counter so "the store
+	// did not honour Delete" is visibly different from "the unspend failed", and
+	// distinct from the unverified counter below because this one is a store-contract
+	// violation an operator fixes by wiring, not by reconciling outpoints.
+	prometheusValidatorShedUnwindAborted prometheus.Counter
+
+	// prometheusValidatorShedUnwindUnverified counts unwinds abandoned because the
+	// record's absence could not be CONFIRMED after the bounded retry — a read that
+	// kept failing, rather than a record that was still there. It covers both
+	// read-back rounds, the one after the delete and the one before the unspend. The
+	// inputs are left spent by a record whose deletion is unconfirmed; the error log
+	// carries the txid and the outpoints to reconcile from.
+	prometheusValidatorShedUnwindUnverified prometheus.Counter
+
+	// prometheusValidatorShedUnwindResidue counts unwinds whose complete delete
+	// failed AFTER the master record had already gone: nothing mineable survives
+	// and the inputs are safely unspent, but orphan pagination children and/or an
+	// external blob may remain. Counted in addition to shed_unwind_failures_total,
+	// which is the "the delete failed at all" signal.
+	prometheusValidatorShedUnwindResidue prometheus.Counter
+
+	// prometheusValidatorShedDroppedTotal counts transactions dropped after the
+	// bounded block-assembly handoff retry on the Kafka ingest path. Propagation has
+	// already returned success to the submitter by then, so these drops are silent
+	// from the client's point of view — this is the counter to alert on.
+	prometheusValidatorShedDroppedTotal prometheus.Counter
+
+	// prometheusValidatorShedInBlockDroppedTotal counts block-context transactions
+	// kept Locked outside the block-assembly template because the ingest queue was
+	// full. The transaction is valid and stays Locked; it is simply not
+	// mineable by this node until the next unmined reload. The validator schedules a
+	// check for each burst of them and resets block assembly if no block has unlocked
+	// them (prometheusValidatorShedInBlockRecoveryResets). The reload reads Locked
+	// unmined records, adds them to the template and unlocks them.
+	prometheusValidatorShedInBlockDroppedTotal prometheus.Counter
+
+	// prometheusValidatorShedInBlockRecoveryResets counts the block assembly resets the
+	// validator requested to recover transactions an in-block shed kept Locked.
+	prometheusValidatorShedInBlockRecoveryResets prometheus.Counter
+
+	// prometheusValidatorShedUnwindReappeared counts shed unwinds aborted because the
+	// record was CONCLUSIVELY readable again immediately before the unspend: another
+	// submission of the same txid now owns those spends, and clearing them would free
+	// the inputs of a live transaction. A pre-unspend read that merely kept failing is
+	// shed_unwind_unverified_total instead, so this counter stays a clean signal that
+	// concurrent same-txid submissions are real in this deployment.
+	prometheusValidatorShedUnwindReappeared prometheus.Counter
+
+	// prometheusValidatorShedUnwindUnownedRecord counts shed unwinds aborted on the
+	// spend-only (SkipUtxoCreation) shape because a record this call did not create is
+	// present, so its inputs must not be freed. Kept apart from the reappearance
+	// counter deliberately: that one means a record came back after this call deleted
+	// it, while this one means a record was there all along — a different operator
+	// problem, and folding them would destroy the reappearance counter as the signal
+	// that per-txid serialisation is needed.
+	prometheusValidatorShedUnwindUnownedRecord prometheus.Counter
+
+	// prometheusValidatorHandoffDeadlineTotal counts block-assembly handoffs that hit
+	// the validator's own handoff deadline instead of returning a shed or a success. A
+	// recurring non-zero value points at a settings skew between this process's copy of
+	// blockassembly_queueFullWaitTimeout and the value the block-assembly process
+	// enforces: the deadline then fires before the shed arrives, so the shed is neither
+	// classified nor unwound and the transaction is left locked for the unmined reload.
+	prometheusValidatorHandoffDeadlineTotal prometheus.Counter
+
+	// prometheusValidatorExistingTxLockedUnmined counts resubmits that found an
+	// existing record locked, unmined and not conflicting. The causes are a conflict
+	// resolution in flight, a submission interrupted before its hand-off, and a
+	// block-context transaction shed from the ingest queue, which is left Locked
+	// outside the template on purpose. The store cannot distinguish them, so a
+	// rising value is not by itself a fault; compare it with
+	// shed_inblock_dropped_total.
+	prometheusValidatorExistingTxLockedUnmined prometheus.Counter
 )
 
 // Synchronization primitives
@@ -158,6 +295,26 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "invalid_transactions",
 			Help:      "Number of transactions found invalid by the validator service",
+		},
+	)
+
+	// Missing-parent transactions counter (Kafka intake only)
+	prometheusMissingParentTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "missing_parent_transactions",
+			Help:      "Number of Kafka-sourced transactions rejected because their parent UTXO had not been seen yet (ordering artifact, not necessarily invalid)",
+		},
+	)
+
+	// Held-limit shed counter (Kafka intake only)
+	prometheusHeldLimitShedTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "held_limit_shed_transactions",
+			Help:      "Number of Kafka-sourced transactions dropped because block assembly refused them at its in-memory transaction limit (valid transactions, not invalid ones)",
 		},
 	)
 
@@ -291,6 +448,15 @@ func _initPrometheusMetrics() {
 		[]string{"condition"},
 	)
 
+	prometheusValidatorUnlockFailed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "unlock_failed",
+			Help:      "Accepted transactions whose two-phase-commit unlock failed and stay locked until mined",
+		},
+	)
+
 	// Block assembly operations histogram
 	prometheusValidatorSendToBlockAssembly = promauto.NewHistogram(
 		prometheus.HistogramOpts{
@@ -332,6 +498,169 @@ func _initPrometheusMetrics() {
 			Name:      "set_tx_meta",
 			Help:      "Histogram of validator set tx meta",
 			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusKafkaBackpressurePaused = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "kafka_backpressure_paused",
+			Help:      "1 while the backpressure controller has the tx Kafka consumer paused, 0 otherwise",
+		},
+	)
+
+	prometheusKafkaBackpressurePauseTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "kafka_backpressure_pause_total",
+			Help:      "Number of times the backpressure controller paused the tx Kafka consumer",
+		},
+	)
+
+	prometheusKafkaBackpressureResumeTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "kafka_backpressure_resume_total",
+			Help:      "Number of times the backpressure controller resumed the tx Kafka consumer (including fail-open and max-pause resumes)",
+		},
+	)
+
+	prometheusKafkaBackpressurePausedSecondsTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "kafka_backpressure_paused_seconds_total",
+			Help:      "Total seconds the tx Kafka consumer has spent paused by the backpressure controller",
+		},
+	)
+
+	prometheusKafkaBackpressurePauseSeconds = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "kafka_backpressure_pause_seconds",
+			Help:      "Seconds the current backpressure pause has run, by cause (age, fill or held), 0 once the consumer resumes",
+		},
+		[]string{"cause"},
+	)
+
+	prometheusKafkaBackpressureReadErrors = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "kafka_backpressure_read_errors",
+			Help:      "Current consecutive queue-stats read-error streak (resets to 0 on a good read)",
+		},
+	)
+
+	prometheusValidatorShedUnwindTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_unwind_total",
+			Help:      "Number of times a queue-full shed's store work was unwound (record deleted, then inputs unspent)",
+		},
+	)
+
+	prometheusValidatorShedUnwindFailures = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_unwind_failures_total",
+			Help:      "Number of shed unwinds whose delete or unspend returned an error; pair with shed_unwind_residue_total, shed_unwind_aborted_total and shed_unwind_unverified_total to see what the failure left behind",
+		},
+	)
+
+	prometheusValidatorShedUnwindAborted = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_unwind_aborted_total",
+			Help:      "Number of shed unwinds abandoned because the record was still readable after a delete the store reported as successful",
+		},
+	)
+
+	prometheusValidatorShedUnwindUnverified = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_unwind_unverified_total",
+			Help:      "Number of shed unwinds abandoned because the record's deletion could not be confirmed after the bounded retry, leaving its inputs spent",
+		},
+	)
+
+	prometheusValidatorShedUnwindResidue = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_unwind_residue_total",
+			Help:      "Number of shed unwinds where the master record was deleted but the rest of the cascade failed, leaving orphan pagination children or an external blob",
+		},
+	)
+
+	prometheusValidatorShedDroppedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_dropped_total",
+			Help:      "Number of transactions dropped after the bounded block assembly handoff retry on the Kafka ingest path, whose submitter was already told the transaction was accepted",
+		},
+	)
+
+	prometheusValidatorShedInBlockDroppedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_inblock_dropped_total",
+			Help:      "Number of block-context transactions kept Locked outside the block-assembly template because the ingest queue was full; a block assembly reset or restart restores them",
+		},
+	)
+
+	prometheusValidatorShedInBlockRecoveryResets = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_inblock_recovery_resets_total",
+			Help:      "Number of block assembly resets the validator requested because transactions an in-block shed kept Locked were still outside the template",
+		},
+	)
+
+	prometheusValidatorShedUnwindReappeared = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_unwind_reappeared_total",
+			Help:      "Number of shed unwinds aborted because the record was present again immediately before the unspend, so another submission owns those spends",
+		},
+	)
+
+	prometheusValidatorShedUnwindUnownedRecord = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_unwind_unowned_record_total",
+			Help:      "Number of shed unwinds aborted on the spend-only (SkipUtxoCreation) shape because a record this call did not create is present, so its inputs must not be freed",
+		},
+	)
+
+	prometheusValidatorHandoffDeadlineTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "handoff_deadline_total",
+			Help:      "Number of block assembly handoffs that hit the validator's own handoff deadline, so the shed was neither classified nor unwound",
+		},
+	)
+
+	prometheusValidatorExistingTxLockedUnmined = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "existing_tx_locked_unmined_total",
+			Help:      "Number of resubmits that found an existing transaction record locked, unmined and not conflicting. Causes include a conflict resolution in flight, an interrupted submission and a block-context transaction left outside the template by a queue shed",
 		},
 	)
 }

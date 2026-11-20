@@ -102,7 +102,7 @@ func (m *Memory) ttlCleaner(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-time.After(interval):
-			cleanExpiredFiles(m, m.blockHeight())
+			cleanExpiredFiles(m, m.currentBlockHeight.Load())
 		}
 	}
 }
@@ -223,7 +223,7 @@ func (m *Memory) Set(ctx context.Context, key []byte, fileType fileformat.FileTy
 	dah := merged.DAH
 
 	if dah == 0 && merged.BlockHeightRetention > 0 {
-		dah = m.blockHeight() + merged.BlockHeightRetention
+		dah = m.currentBlockHeight.Load() + merged.BlockHeightRetention
 	}
 
 	var data []byte
@@ -346,8 +346,4 @@ func (m *Memory) ListKeys() [][]byte {
 
 func (m *Memory) SetCurrentBlockHeight(height uint32) {
 	m.currentBlockHeight.Store(height)
-}
-
-func (m *Memory) blockHeight() uint32 {
-	return m.currentBlockHeight.Load()
 }

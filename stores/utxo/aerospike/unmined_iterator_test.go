@@ -123,7 +123,7 @@ func Test_extractTransactionData(t *testing.T) {
 		txData, err := it.extractTransactionData(bins)
 		assert.NoError(t, err)
 		assert.NotNil(t, txData)
-		assert.Equal(t, validHash, *txData.hash)
+		assert.Equal(t, validHash, txData.hash)
 		assert.Equal(t, uint64(1000), txData.fee)
 		assert.Equal(t, uint64(250), txData.size)
 	})
@@ -232,7 +232,7 @@ func Test_processTransactionInpoints(t *testing.T) {
 	it := &unminedTxIterator{}
 	ctx := context.Background()
 	txData := &transactionData{
-		hash: &chainhash.Hash{},
+		hash: chainhash.Hash{},
 	}
 
 	t.Run("InternalTransaction", func(t *testing.T) {
@@ -368,7 +368,7 @@ func Test_extractTxIDAndUnminedSince(t *testing.T) {
 		}
 		hash, unminedSince, err := extractTxIDAndUnminedSince(bins)
 		require.NoError(t, err)
-		assert.Equal(t, validHash, *hash)
+		assert.Equal(t, validHash, hash)
 		assert.Equal(t, 42, unminedSince)
 	})
 

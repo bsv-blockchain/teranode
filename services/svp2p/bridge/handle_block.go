@@ -307,7 +307,7 @@ func (sm *svp2pBridge) ProcessBlock(ctx context.Context, teranodeBlock *model.Bl
 	// teranodeBlock.ID was set by model.NewBlock from the pre-assigned ID returned by prepareSubtrees.
 	// Read it from the struct here — avoids duplicating it as a parameter. It still has to travel as
 	// a separate proto field in the gRPC request because block.Bytes() does not serialize ID.
-	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, "", "legacy", teranodeBlock.ID); err != nil {
+	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, "", "legacy", teranodeBlock.ID, false); err != nil {
 		if errors.Is(err, errors.ErrBlockExists) {
 			sm.logger.Infof("[svp2pBridge:processBlock][%s %d] block already exists", teranodeBlock.Hash().String(), teranodeBlock.Height)
 			return nil
@@ -596,18 +596,12 @@ func (sm *svp2pBridge) legacyOutpointOnly(height uint32) bool {
 }
 
 // legacyUnified reports whether this block takes the unified below-checkpoint
-// route: the operator enabled blockvalidation_legacy_unified_below_checkpoint
-// AND the full outpoint-only gate holds. When true, prepareSubtrees becomes a
-// protocol adapter — it still partitions the wire block, builds the txMap,
-// extends in-block parents, creates and writes the subtree files, and
-// HandleBlockDirect verifies the merkle root — but UTXO create+spend and block
-// ID assignment move server-side into quickValidateBlock (the same machinery
-// native catchup uses). Default off; with the flag off the inline pipeline is
-// byte-identical.
-func (sm *svp2pBridge) legacyUnified(height uint32) bool {
-	return sm.settings != nil &&
-		sm.settings.BlockValidation.LegacyUnifiedBelowCheckpoint &&
-		sm.legacyOutpointOnly(height)
+// route. It is always false: blockvalidation quick-validates a legacy block only
+// when the caller passes a header proof (ProcessBlock headerProven), and svp2p
+// does not compute one yet. Without the proof blockvalidation fully validates the
+// block, so svp2p must do the UTXO work inline.
+func (sm *svp2pBridge) legacyUnified(uint32) bool {
+	return false
 }
 
 // legacyFailClosed reports whether this block takes the fail-closed variant of the

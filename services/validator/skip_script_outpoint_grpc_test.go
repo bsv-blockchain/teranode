@@ -3,7 +3,6 @@ package validator
 import (
 	"testing"
 
-	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,21 +46,7 @@ func TestOptionsFromValidateRequest_SkipScriptAndOutpointOnlyDefaultFalse(t *tes
 	require.False(t, got.OutpointOnlySpend, "OutpointOnlySpend must default to false")
 }
 
-// TestHTTPHandlerPath_SkipScriptAndOutpointOnly_EndToEnd mirrors the /tx HTTP
-// fallback handler: client builds the query string, server parses it back into
-// Options. Confirms the HTTP fallback path carries the below-checkpoint flags
-// end-to-end alongside the gRPC path.
-func TestHTTPHandlerPath_SkipScriptAndOutpointOnly_EndToEnd(t *testing.T) {
-	q := buildValidateTxHTTPQuery(&Options{
-		SkipScriptValidation: true,
-		OutpointOnlySpend:    true,
-	}, 620000)
-
-	e := echo.New()
-	ctx, err := echoRequestWithQuery(e, q.Encode())
-	require.NoError(t, err)
-
-	_, opts := extractValidationParams(ctx)
-	require.True(t, opts.SkipScriptValidation, "SkipScriptValidation must survive HTTP fallback round-trip")
-	require.True(t, opts.OutpointOnlySpend, "OutpointOnlySpend must survive HTTP fallback round-trip")
-}
+// The HTTP leg of this pair is deliberately gone: the /tx endpoint no longer
+// carries validation options on any body shape, so there is no HTTP round trip
+// left to pin. The gRPC round trips above are the surviving wire. The refusal
+// itself is pinned by http_trust_flags_test.go.
