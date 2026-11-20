@@ -43,6 +43,23 @@ func (s *Store) spendLeaseOp(lease []byte) *aerospike.Operation {
 	}))
 }
 
+// removeSpendLeaseOps returns the writes that take one lease out of the spenders bin, and remove
+// the bin when no lease is left, so that a record with no spender carries no empty map.
+func removeSpendLeaseOps(lease []byte) []*aerospike.Operation {
+	return []*aerospike.Operation{
+		aerospike.MapRemoveByKeyOp(fields.Spenders.String(), hex.EncodeToString(lease), aerospike.MapReturnType.NONE),
+		aerospike.ExpWriteOp(
+			fields.Spenders.String(),
+			aerospike.ExpCond(
+				aerospike.ExpEq(aerospike.ExpMapSize(aerospike.ExpMapBin(fields.Spenders.String())), aerospike.ExpIntVal(0)),
+				aerospike.ExpNilValue(),
+				aerospike.ExpUnknown(),
+			),
+			aerospike.ExpWriteFlagAllowDelete|aerospike.ExpWriteFlagEvalNoFail,
+		),
+	}
+}
+
 // TakeSpendLease registers the caller as a spender of the inputs of the attempt that carries the
 // token, before the caller spends. One UPDATE_ONLY write, filtered on the record still creating,
 // not rolling back and carrying the token, adds a random lease to the spenders bin with the time
@@ -91,9 +108,12 @@ func (s *Store) TakeSpendLease(_ context.Context, hash *chainhash.Hash, attempt 
 	return nil, false, errors.NewStorageError("error taking a spend lease on %s", hash.String(), putErr)
 }
 
-// ReleaseSpendLease removes a lease from the spenders bin of the attempt that carries the token.
-// The caller calls it once its spend has returned with a known outcome. A record that is absent,
-// final, a hold or owned by another attempt carries no such lease and the call reports success.
+// ReleaseSpendLease removes a lease from the spenders bin. The caller calls it once its spend has
+// returned with a known outcome and it will not finalize the record. While the record is creating
+// the write is filtered on the token, so it touches only the attempt the caller names. A record
+// that is final is not filtered on it: another caller's finalize put its own lease in the attempt
+// bin, and the lease of this caller is still on the record and must go. A record that is absent,
+// creating under another attempt, or without such a lease is success.
 func (s *Store) ReleaseSpendLease(_ context.Context, hash *chainhash.Hash, attempt, lease []byte) error {
 	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if err != nil {
@@ -104,12 +124,13 @@ func (s *Store) ReleaseSpendLease(_ context.Context, hash *chainhash.Hash, attem
 	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 	writePolicy.FilterExpression = aerospike.ExpAnd(
 		aerospike.ExpBinExists(fields.Spenders.String()),
-		attemptFilter(attempt),
+		aerospike.ExpOr(
+			aerospike.ExpNot(aerospike.ExpBinExists(fields.Creating.String())),
+			attemptFilter(attempt),
+		),
 	)
 
-	_, putErr := s.client.Operate(writePolicy, key,
-		aerospike.MapRemoveByKeyOp(fields.Spenders.String(), hex.EncodeToString(lease), aerospike.MapReturnType.NONE),
-	)
+	_, putErr := s.client.Operate(writePolicy, key, removeSpendLeaseOps(lease)...)
 	if putErr == nil || errors.Is(putErr, aerospike.ErrKeyNotFound) || isFilteredOut(putErr) {
 		return nil
 	}

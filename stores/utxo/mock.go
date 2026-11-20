@@ -73,7 +73,7 @@ func (m *MockUtxostore) SupportsOutpointOnlySpend() bool { return m.SupportsOutp
 func (m *MockUtxostore) SupportsCreateFirst() bool { return m.SupportsCreateFirstResult }
 
 // FinalizeTransaction mocks clearing the tentative creating state.
-func (m *MockUtxostore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
+func (m *MockUtxostore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
 	return nil
 }
 

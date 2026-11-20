@@ -451,6 +451,12 @@ reorg/conflict helpers) are single-phase and bypass the create-first ordering.
   that contains the transaction does not depend on the sweep. With the flag off, a spend-first
   `SpendAndCreate` that finds a hold or an open rollback reverses its own spends and returns a
   transient error, and it creates over a hold it may clear.
+- **Duplicate create of a record with no token** — a create that finds the master of a creating
+  record with no `attempt` token clears the record (`clearCreatingFlag`), whatever
+  `utxostore_useCreateFirstOrder` says. No create-first attempt wrote such a record: it is a
+  coinbase, a seeded transaction or a spend-first create whose clear failed, and no healer of
+  create-first reaches it once it is mined. A mined create whose clear fails again returns the
+  retryable `creatingNotClearedError`, not `ErrTxExists`.
 - **Pruner sweeper** — `QueryStaleCreatingTxs` (secondary index on `unminedSince` +
   `creating` filter) finds abandoned creating records older than
   `pruner_creatingTxSweepMinAgeBlocks`; the sweeper re-spends (`SpendAndCreate(WithSpendOnly)`,
@@ -458,7 +464,9 @@ reorg/conflict helpers) are single-phase and bypass the create-first ordering.
   another transaction, finishes a rollback a crashed owner left marked, and deletes a hold that
   a namespace without record expiry kept past its time. Every step names the token it read from
   the record. The sweep reverses nothing while a spend lease of the attempt is live (see "Spend
-  lease" below): it leaves the record for a later pass.
+  lease" below): it leaves the record for a later pass. A creating record with no `attempt` token
+  is only cleared (`FinalizeTransaction` with no token): the sweep spends nothing for it, never
+  rolls it back and does not announce it.
 - **setMined** — a pre-flight in `SetMinedMulti` rolls a still-creating record forward
   (re-spend, then finalize) before the mined write. It does this only for a record that carries
   an `attempt` token. A creating record with no token was not written by a create-first attempt:
@@ -492,8 +500,24 @@ other, with a lease on the master record.
   pagination children is also never overtaken by a rollback that deletes them, so a descendant
   cannot spend an output of a page that a rollback then removes.
 - **Release.** A spender calls `ReleaseSpendLease` when its spend has returned with a known
-  outcome, and after a finalize that failed. A roll-forward never reverses a spend itself. The
-  finalize removes the bin with the `creating` bin.
+  outcome and it will not finalize the record: after a finalize that failed, or one that found
+  the record final under another actor's write. A roll-forward never reverses a spend itself. A
+  finalize removes the lease of its caller only, and the bin goes with the last lease. A lease
+  of another spender therefore stays live on a record that is final, and `DeleteComplete`
+  refuses to delete the master while it is: the shed unwind of the validator deletes a record and
+  then unspends its inputs, and a roll-forward that still held a lease could spend them after
+  that. No lease is granted on a record that is final, so no spender starts after the delete.
+- **A queued spend ends with its lease.** The context of a spend under a lease ends at the time
+  the lease names. The caller stops waiting then, but its batch is queued on the context of the
+  store. The store keeps the deadline for it (`splitSpendsByDeadline`): an item whose deadline
+  has passed is completed with an error and is not sent, and the items with a deadline are sent
+  apart from the others under the earliest of their deadlines. Each send, a repeat after an
+  overload included, carries only the time that is left as its timeout
+  (`uaerospike.Client.BatchOperateBefore`). The client stops at that timeout, and the server
+  does not start a command whose timeout has passed. No write of a spend therefore starts after
+  the time its lease names, and the lease is live for a further
+  `utxostore_spendRollbackTimeout` after it. `aerospike_batchPolicy` can no longer make a spend
+  under a lease outlast it.
 - **Unknown outcome and crash.** A spend that gave no per-input result, whose context ended, that
   hit `utxostore_spendWaitTimeout`, or that carries a per-input error which is not a verdict of the
   store on that input (a storage fault, a timeout) may still commit. Its lease is not released. A
@@ -517,15 +541,18 @@ that cleared the state hands the transaction to block assembly, and only it may 
 hand-off. The other reports an ordinary duplicate and takes neither step, so a creator cannot
 delete a record that another instance has already delivered.
 
-One answer is in doubt. The client can send a finalize write again after a send whose answer was
-lost, and the second send is filtered out because the first one cleared the bin. The client marks
-such a record in doubt, and the store then returns an error for which `utxo.IsFinalInDoubt` is
-true as well. An already-final answer after a finalize try that failed is in doubt in the same
-way. The caller cannot tell its own write from another actor's, so it hands the transaction on and
-unwinds nothing: the creator returns the result of a roll-forward (`utxo.IsRolledForward`), and a
-roll-forward reports the record as completed. Block assembly drops a second hand-off of the same
-transaction. One case stays open: a roll-forward whose answer is in doubt hands the transaction
-on, and a creator that is still alive and did clear the state may then unwind a shed hand-off.
+The store does not infer which call that was. The finalize write records its caller: every
+caller passes the spend lease it holds on the attempt, the attempt token for the call that
+created the record and the lease of `TakeSpendLease` for a roll-forward, and the write puts it in
+the `attempt` bin of the master, which no write filters on once the record is final. A call that
+finds the record final reads that bin. Its own lease there means that an earlier send of this
+same finalize cleared the state and its answer was lost, and the call returns nil. Any other
+value means that another actor did. A finalize can therefore be repeated after any error: a
+client-internal resend, a timeout and a try that failed all end in the same exact answer, and
+`RollForwardCreating` repeats its finalize as the creator does. Two callers never both own the
+hand-off, and a hand-off is not lost with an answer. What stays open: three tries that all fail
+with the store unreachable leave the caller with an error and the record possibly final, and
+the transaction then waits for the unmined reload.
 
 ### Rollback of a failed create-first spend
 
@@ -611,7 +638,14 @@ from touching the next.
   it treats the record of a rollback at its txid, a hold included, as follows. It never creates
   over spends it made before a hold was gone: after it has cleared a hold it spends again and
   then creates. It reverses its own spends only under the hold of the attempt, and then returns a
-  transient error. The store's own partial-spend rollback follows the same rule.
+  transient error. While the hold is taken, by the owner of the rollback, its cleanup or another
+  holder, the call waits at the record and spends nothing more, for up to twice
+  `utxostore_spendRollbackTimeout`: each of those ends within one timeout, and a holder that
+  crashed counts as gone after two. A spend that fails after the call went around once reverses
+  the spends of the earlier round as well, under the hold when a rollback record is back at the
+  txid. The store's own partial-spend rollback (`partialSpendRollbackDecision`) follows the same
+  rule and waits in the same way, so a spend that takes one input and fails on another beside a
+  busy rollback is reverted and not left beside a hold that expires.
 - **Expiry.** A hold expires with its time to live. `ClearCreateFirstHold(hash, adopt)` deletes
   one earlier, or one that has no time to live, filtered on `hold` and on the `holdUntil` that
   was read. Without `adopt` it goes
@@ -624,11 +658,10 @@ from touching the next.
   its take.
 
 `RollForwardCreating` and the fresh create-first spend run under a context bounded by
-`utxostore_spendRollbackTimeout`, the time their lease names. What this does not close: a spend
-write that the store applies later than a further `utxostore_spendRollbackTimeout` after its
-lease ran out, and an owner of a rollback that stalls past its own bound and then unspends after
-a new attempt of the same txid has spent. Closing those needs the attempt in the spend record
-(issue 1291).
+`utxostore_spendRollbackTimeout`, the time their lease names, and the store sends no spend of
+theirs after it (see "A queued spend ends with its lease"). What this does not close: an owner
+of a rollback that stalls past its own bound and then unspends after a new attempt of the same
+txid has spent. Closing that needs the attempt in the spend record (issue 1291).
 
 ### Sweep visibility of mined creating records
 

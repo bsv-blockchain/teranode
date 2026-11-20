@@ -138,7 +138,7 @@ func TestNullStoreCreateFirstNoOps(t *testing.T) {
 	tx := &bt.Tx{}
 
 	assert.False(t, store.SupportsCreateFirst())
-	assert.NoError(t, store.FinalizeTransaction(ctx, tx, nil))
+	assert.NoError(t, store.FinalizeTransaction(ctx, tx, nil, nil))
 
 	began, err := store.BeginCreateFirstRollback(ctx, tx.TxIDChainHash(), nil)
 	assert.NoError(t, err)

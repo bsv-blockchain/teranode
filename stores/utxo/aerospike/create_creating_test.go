@@ -228,7 +228,7 @@ func TestCreateWithCreating_SurvivingChildThatCannotBeAdoptedFailsTheCreate(t *t
 			require.NotEqual(t, first.Attempt, second.Attempt)
 			require.NotEqual(t, failed, second.Attempt)
 
-			require.NoError(t, store.FinalizeTransaction(ctx, tx, second.Attempt))
+			require.NoError(t, store.FinalizeTransaction(ctx, tx, second.Attempt, second.Attempt))
 
 			got := &meta.Data{}
 			require.NoError(t, store.GetMeta(ctx, hash, got))
@@ -262,7 +262,7 @@ func TestFinalizeTransaction_ChildCreatingUnderAnotherAttemptKeepsMasterCreating
 
 	writeRawBins(t, client, store, hash, 1, aerospike.NewBin(fields.Attempt.String(), []byte("another attempt!")))
 
-	err = store.FinalizeTransaction(ctx, tx, md.Attempt)
+	err = store.FinalizeTransaction(ctx, tx, md.Attempt, md.Attempt)
 	require.Error(t, err, "a child that is creating under another attempt is not cleared")
 	require.Contains(t, err.Error(), "child")
 
@@ -272,7 +272,7 @@ func TestFinalizeTransaction_ChildCreatingUnderAnotherAttemptKeepsMasterCreating
 	require.Equal(t, md.Attempt, got.Attempt)
 
 	writeRawBins(t, client, store, hash, 1, aerospike.NewBin(fields.Attempt.String(), md.Attempt))
-	require.NoError(t, store.FinalizeTransaction(ctx, tx, md.Attempt), "once the child carries the token the finalize completes")
+	require.NoError(t, store.FinalizeTransaction(ctx, tx, md.Attempt, md.Attempt), "once the child carries the token the finalize completes")
 
 	require.NoError(t, store.GetMeta(ctx, hash, got))
 	require.False(t, got.Creating)
@@ -299,7 +299,7 @@ func TestFinalizeTransaction_ChildAlreadyFinalIsCleared(t *testing.T) {
 
 	writeRawBins(t, client, store, hash, 1, aerospike.NewBin(fields.Creating.String(), nil))
 
-	require.NoError(t, store.FinalizeTransaction(ctx, tx, md.Attempt))
+	require.NoError(t, store.FinalizeTransaction(ctx, tx, md.Attempt, md.Attempt))
 
 	got := &meta.Data{}
 	require.NoError(t, store.GetMeta(ctx, hash, got))

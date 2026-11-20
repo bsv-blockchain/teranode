@@ -73,7 +73,7 @@ func TestUnminedIteratorSkipsCreatingRecords(t *testing.T) {
 	require.NotContains(t, seen, *txB.TxIDChainHash(), "a creating-state tx must not be restored into block assembly")
 
 	// After finalize, txB becomes a normal unmined tx and is emitted.
-	require.NoError(t, store.FinalizeTransaction(ctx, txB, attemptOf(t, ctx, store, txB.TxIDChainHash())))
+	require.NoError(t, store.FinalizeTransaction(ctx, txB, attemptOf(t, ctx, store, txB.TxIDChainHash()), attemptOf(t, ctx, store, txB.TxIDChainHash())))
 
 	seen = drainUnmined(t, ctx, store)
 	require.Contains(t, seen, *txB.TxIDChainHash(), "a finalized tx must be restored on the next pass")

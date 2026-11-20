@@ -27,6 +27,10 @@ import (
 
 // fakeSweepStore scripts the store methods the creating-sweep uses; everything
 // else falls through to the null store's no-ops.
+// sweepToken is the attempt token of the creating records in these tests. A creating record with
+// no token was not written by a create-first attempt, and the sweep only clears it.
+var sweepToken = []byte{0x5e}
+
 type fakeSweepStore struct {
 	*nullstore.NullStore
 
@@ -199,7 +203,7 @@ func (f *fakeSweepStore) SpendAndCreate(_ context.Context, tx *bt.Tx, _ uint32, 
 	return nil, spent, nil
 }
 
-func (f *fakeSweepStore) FinalizeTransaction(_ context.Context, tx *bt.Tx, _ []byte) error {
+func (f *fakeSweepStore) FinalizeTransaction(_ context.Context, tx *bt.Tx, _, _ []byte) error {
 	f.finalized = append(f.finalized, *tx.TxIDChainHash())
 	f.trace = append(f.trace, "finalize")
 
@@ -314,7 +318,7 @@ func TestSweepCreatingTxsRollsForward(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 	}
 
 	ba := blockassembly.NewMock()
@@ -346,7 +350,7 @@ func TestSweepCreatingTxsDoesNotFinalizeIncompleteSpend(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore:       ns,
 		stale:           []chainhash.Hash{hashA},
-		getResp:         map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:         map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 		spendIncomplete: true, // nil error, but zero per-input spends returned
 	}
 
@@ -394,7 +398,7 @@ func TestSweepCreatingTxsRunsWithCreateFirstDisabled(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 	}
 
 	ba := blockassembly.NewMock()
@@ -419,7 +423,7 @@ func TestSweepCreatingTxsAnnouncesBeforeUnlock(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA, Fee: 7, SizeInBytes: 99, TxInpoints: inpoints}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA, Fee: 7, SizeInBytes: 99, TxInpoints: inpoints}},
 	}
 
 	var events []string
@@ -449,7 +453,7 @@ func TestSweepCreatingTxsStoreFailureLeavesLocked(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 	}
 
 	ba := blockassembly.NewMock()
@@ -473,7 +477,7 @@ func TestSweepCreatingTxsNoBlockAssemblyLeavesLocked(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 	}
 
 	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
@@ -494,7 +498,7 @@ func TestSweepCreatingTxsHonorsCancellation(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -517,7 +521,7 @@ func TestSweepCreatingTxsDoubleSpendRollsBack(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore:   ns,
 		stale:       []chainhash.Hash{hashA},
-		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 		spendErr:    errors.ErrSpent,
 		spendSpends: []*utxo.Spend{failed},
 	}
@@ -549,7 +553,7 @@ func TestSweepCreatingTxsEveryUnwinnableErrorRollsBack(t *testing.T) {
 		store := &fakeSweepStore{
 			NullStore: ns,
 			stale:     []chainhash.Hash{hashA},
-			getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+			getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 			spendErr:  spendErr,
 		}
 
@@ -573,7 +577,7 @@ func TestSweepCreatingTxsRollsBackCreatingRecordWithMissingVout(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 		spendErr:  errors.NewTxNotFoundError("[SPEND_BATCH_LUA][%s] UTXO not found for vout 9", hashA.String()),
 	}
 
@@ -594,7 +598,7 @@ func TestSweepCreatingTxsLockedParentRetriesNextBlock(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 		spendErr:  errors.ErrTxLocked,
 		// A per-input result makes the outcome of the spend known, so its lease is released.
 		spendSpends: []*utxo.Spend{{Err: errors.ErrTxLocked}},
@@ -620,7 +624,7 @@ func TestSweepCreatingTxsRollForwardDoesNotIgnoreLocks(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 	}
 
 	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
@@ -647,7 +651,7 @@ func TestSweepCreatingTxsFinishesAbandonedRollback(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, RollingBack: true, Tx: txA}},
 	}
 
 	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
@@ -674,7 +678,7 @@ func TestSweepCreatingTxsFinishesRollbackPastUnspendableInput(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, RollingBack: true, Tx: txA}},
 		unspendFn: func(spends []*utxo.Spend) error {
 			for _, sp := range spends {
 				if sp.Vout == 9 {
@@ -713,6 +717,39 @@ func TestSweepCreatingTxsSkipsAlreadyFinalized(t *testing.T) {
 	require.Empty(t, store.finalized)
 }
 
+// A creating record with no attempt token is the record of a create whose clear of the creating
+// bin failed. Its inputs were spent before it was written, or it never had any to spend. The sweep
+// clears the bin: it spends nothing, rolls nothing back and announces nothing.
+func TestSweepCreatingTxsClearsARecordWithNoAttemptToken(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	for name, finalizeErr := range map[string]error{
+		"cleared":       nil,
+		"already clear": utxo.MarkAlreadyFinal(errors.NewTxExistsError("already final")),
+		// A spend error would send a record with a token to the rollback. This one must not go.
+		"clear fails": errors.NewStorageError("clear boom"),
+	} {
+		store := &fakeSweepStore{
+			NullStore:   ns,
+			stale:       []chainhash.Hash{hashA},
+			getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+			finalizeErr: finalizeErr,
+			spendErr:    errors.ErrTxNotFound,
+		}
+
+		newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+		require.Equal(t, []chainhash.Hash{hashA}, store.finalized, name)
+		require.Empty(t, store.spends, "%s: there is no spend to repeat", name)
+		require.Empty(t, store.began, "%s: a record that no create-first attempt wrote is never rolled back", name)
+		require.Empty(t, store.unspent, name)
+	}
+}
+
 func TestSweepCreatingTxsLeavesUnrecoverable(t *testing.T) {
 	ns, err := nullstore.NewNullStore()
 	require.NoError(t, err)
@@ -723,7 +760,7 @@ func TestSweepCreatingTxsLeavesUnrecoverable(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 		spendErr:  errors.ErrTxNotFound, // e.g. a parent was evicted
 	}
 
@@ -798,7 +835,7 @@ func TestSweepCreatingTxsFinalizeOfGoneRecordReleasesItsLeaseAndReversesNothing(
 	store := &fakeSweepStore{
 		NullStore:   ns,
 		stale:       []chainhash.Hash{hashA},
-		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 		finalizeErr: errors.NewTxNotFoundError("tx is rolling back"),
 
 		beginDeclined: true,
@@ -826,7 +863,7 @@ func TestSweepCreatingTxsDoesNotSpendForRecordThatBeganRollingBack(t *testing.T)
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 	}
 
 	srv := newSweepServer(t, store)
@@ -835,7 +872,7 @@ func TestSweepCreatingTxsDoesNotSpendForRecordThatBeganRollingBack(t *testing.T)
 		gets++
 
 		if gets == 2 {
-			store.getResp[hashA] = &meta.Data{Creating: true, RollingBack: true, Tx: txA}
+			store.getResp[hashA] = &meta.Data{Creating: true, Attempt: sweepToken, RollingBack: true, Tx: txA}
 		}
 	}
 
@@ -921,7 +958,7 @@ func TestSweepCreatingTxsLeavesReversedRollbackWhoseEndFails(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore:    ns,
 		stale:        []chainhash.Hash{hashA},
-		getResp:      map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Reversed: true, Tx: txA}},
+		getResp:      map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, RollingBack: true, Reversed: true, Tx: txA}},
 		txUnreadable: map[chainhash.Hash]bool{hashA: true},
 		endErr:       errors.NewStorageError("end boom"),
 	}
@@ -945,7 +982,7 @@ func TestSweepCreatingTxsDoesNotEndARollbackWhoseHoldWasNotReleased(t *testing.T
 	store := &fakeSweepStore{
 		NullStore:  ns,
 		stale:      []chainhash.Hash{hashA},
-		getResp:    map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Tx: txA}},
+		getResp:    map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, RollingBack: true, Tx: txA}},
 		releaseErr: errors.NewStorageError("release boom"),
 	}
 
@@ -966,7 +1003,7 @@ func TestSweepCreatingTxsDeletesExpiredHold(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore:   ns,
 		stale:       []chainhash.Hash{hash},
-		getResp:     map[chainhash.Hash]*meta.Data{hash: {Creating: true, RollingBack: true, Hold: true}},
+		getResp:     map[chainhash.Hash]*meta.Data{hash: {Creating: true, Attempt: sweepToken, RollingBack: true, Hold: true}},
 		clearResult: true,
 	}
 
@@ -989,7 +1026,7 @@ func TestSweepCreatingTxsLeavesLiveHold(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hash},
-		getResp:   map[chainhash.Hash]*meta.Data{hash: {Creating: true, RollingBack: true, Hold: true}},
+		getResp:   map[chainhash.Hash]*meta.Data{hash: {Creating: true, Attempt: sweepToken, RollingBack: true, Hold: true}},
 	}
 
 	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
@@ -1017,7 +1054,7 @@ func TestSweepCreatingTxsLeavesUnwinnableRecordWhoseLeaseIsLive(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore:   ns,
 		stale:       []chainhash.Hash{hashA},
-		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 		spendErr:    errors.ErrSpent,
 		spendSpends: []*utxo.Spend{{Err: errors.ErrSpent}},
 		leasesLive:  []bool{true},
@@ -1048,7 +1085,7 @@ func TestSweepCreatingTxsLeavesUnwinnableRecordWhoseLeasesCannotBeRead(t *testin
 	store := &fakeSweepStore{
 		NullStore:     ns,
 		stale:         []chainhash.Hash{hashA},
-		getResp:       map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:       map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 		spendErr:      errors.ErrSpent,
 		leasesLiveErr: errors.NewStorageError("lease read boom"),
 	}
@@ -1077,7 +1114,7 @@ func TestSweepCreatingTxsKeepsLeaseOfSpendWithUnknownOutcome(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 		spendErr:  errors.NewServiceUnavailableError("spend batch did not complete"),
 		// Per-input results do not make a spend known when the store stopped waiting for its batch.
 		spendSpends: []*utxo.Spend{{}},
@@ -1103,7 +1140,7 @@ func TestSweepCreatingTxsFinishRollbackWaitsForALiveLease(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore:  ns,
 		stale:      []chainhash.Hash{hashA},
-		getResp:    map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Tx: txA}},
+		getResp:    map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, RollingBack: true, Tx: txA}},
 		leasesLive: []bool{true},
 	}
 
@@ -1135,7 +1172,7 @@ func TestSweepCreatingTxsFinishRollbackReleasesTheHoldWhenLeasesCannotBeRead(t *
 	store := &fakeSweepStore{
 		NullStore:     ns,
 		stale:         []chainhash.Hash{hashA},
-		getResp:       map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Tx: txA}},
+		getResp:       map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, RollingBack: true, Tx: txA}},
 		leasesLiveErr: errors.NewStorageError("lease read boom"),
 	}
 
@@ -1185,7 +1222,7 @@ func TestSweepCreatingTxsLeaseErrorSpendsNothing(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 		leaseErr:  errors.NewStorageError("lease boom"),
 	}
 
@@ -1208,7 +1245,7 @@ func TestSweepCreatingTxsKeepsLeaseOfSpendWithNoPerInputResult(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
-		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 		spendErr:  errors.ErrTxLocked,
 	}
 
@@ -1256,7 +1293,7 @@ func TestSweepCreatingTxsCountsARollbackAsFinishedOnlyWhenItEnded(t *testing.T) 
 	store := &fakeSweepStore{
 		NullStore:  ns,
 		stale:      []chainhash.Hash{hashA},
-		getResp:    map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Tx: txA}},
+		getResp:    map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, RollingBack: true, Tx: txA}},
 		leasesLive: []bool{true},
 	}
 
@@ -1296,7 +1333,7 @@ func TestSweepCreatingTxsLeavesTheHandOffToTheActorThatFinalized(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore:   ns,
 		stale:       []chainhash.Hash{hashA},
-		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA, Fee: 7, SizeInBytes: 99}},
+		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA, Fee: 7, SizeInBytes: 99}},
 		finalizeErr: utxo.MarkAlreadyFinal(errors.NewTxExistsError("already final")),
 	}
 
@@ -1309,7 +1346,7 @@ func TestSweepCreatingTxsLeavesTheHandOffToTheActorThatFinalized(t *testing.T) {
 
 	srv.sweepCreatingTxs(context.Background(), 100)
 
-	require.Equal(t, []string{"lease", "spend", "finalize"}, store.trace, "the finalize removed the leases, so none is released, and nothing is rolled back")
+	require.Equal(t, []string{"lease", "spend", "finalize", "unlease"}, store.trace, "a finalize removes only the lease of its caller, so the sweep releases its own, and nothing is rolled back")
 	ba.AssertNotCalled(t, "Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	require.Empty(t, store.unlocked, "the lock belongs to the actor that hands the transaction off")
 	require.Empty(t, store.began)
@@ -1329,7 +1366,7 @@ func TestSweepCreatingTxsRollbackRefusedForALiveLeaseLeavesTheRecordCreating(t *
 	store := &fakeSweepStore{
 		NullStore:   ns,
 		stale:       []chainhash.Hash{hashA},
-		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 		spendErr:    errors.ErrSpent,
 		spendSpends: []*utxo.Spend{{Err: errors.ErrSpent}},
 		beginErr:    utxo.MarkSpendLeaseLive(errors.NewProcessingError("a spender of the attempt holds a live lease")),
@@ -1364,7 +1401,7 @@ func TestSweepCreatingTxsKeepsLeaseOfSpendWithAnInputInDoubt(t *testing.T) {
 	store := &fakeSweepStore{
 		NullStore:   ns,
 		stale:       []chainhash.Hash{hashA},
-		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
 		spendErr:    errors.NewUtxoError("spend failed"),
 		spendSpends: []*utxo.Spend{{Err: errors.NewStorageError("write timed out")}},
 	}

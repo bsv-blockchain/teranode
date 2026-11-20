@@ -400,7 +400,9 @@ func (s *Store) SupportsOutpointOnlySpend() bool { return true }
 func (s *Store) SupportsCreateFirst() bool { return false }
 
 // FinalizeTransaction is a no-op: the SQL store has no tentative-create state.
-func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error { return nil }
+func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
+	return nil
+}
 
 // QueryStaleCreatingTxs returns nothing: the SQL store has no tentative-create state.
 func (s *Store) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {

@@ -59,7 +59,7 @@ func (m *NullStore) SupportsOutpointOnlySpend() bool { return false }
 func (m *NullStore) SupportsCreateFirst() bool { return false }
 
 // FinalizeTransaction is a no-op: the null store has no tentative-create state.
-func (m *NullStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
+func (m *NullStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
 	return nil
 }
 

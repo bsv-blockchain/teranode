@@ -705,3 +705,43 @@ func TestMockAerospikeClient_CompleteCoverage(t *testing.T) {
 		assert.Nil(t, mockError.Unwrap())
 	})
 }
+
+// A write that must not start after a deadline carries only the time that is left, on every send.
+func TestBatchPolicyBefore(t *testing.T) {
+	policy := aerospike.NewBatchPolicy()
+	policy.TotalTimeout = 5 * time.Minute
+	policy.SocketTimeout = time.Minute
+
+	bounded, err := batchPolicyBefore(policy, time.Now().Add(2*time.Second))
+	require.Nil(t, err)
+	require.LessOrEqual(t, bounded.TotalTimeout, 2*time.Second)
+	require.Greater(t, bounded.TotalTimeout, time.Second)
+	require.LessOrEqual(t, bounded.SocketTimeout, 2*time.Second)
+	require.Equal(t, 5*time.Minute, policy.TotalTimeout, "the policy of the caller is not changed, so a repeat reads the time left again")
+
+	unlimited := aerospike.NewBatchPolicy()
+	unlimited.TotalTimeout = 0
+	unlimited.SocketTimeout = 0
+
+	bounded, err = batchPolicyBefore(unlimited, time.Now().Add(2*time.Second))
+	require.Nil(t, err)
+	require.Greater(t, bounded.TotalTimeout, time.Duration(0), "a policy with no timeout gets the time left")
+	require.Greater(t, bounded.SocketTimeout, time.Duration(0))
+
+	roomy, err := batchPolicyBefore(policy, time.Now().Add(time.Hour))
+	require.Nil(t, err)
+	require.Equal(t, 5*time.Minute, roomy.TotalTimeout, "a deadline further away than the timeout changes nothing")
+
+	_, err = batchPolicyBefore(policy, time.Now())
+	require.NotNil(t, err)
+	require.True(t, err.Matches(types.TIMEOUT))
+}
+
+// A batch whose deadline has passed is not sent: the call returns before it touches the client.
+func TestBatchOperateBefore_SendsNothingAfterTheDeadline(t *testing.T) {
+	c := &Client{}
+
+	err := c.BatchOperateBefore(time.Now().Add(-time.Second), aerospike.NewBatchPolicy(), nil)
+	require.NotNil(t, err)
+	require.True(t, err.Matches(types.TIMEOUT))
+}

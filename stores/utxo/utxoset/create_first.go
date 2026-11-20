@@ -13,7 +13,7 @@ func (s *Store) SupportsCreateFirst() bool {
 }
 
 // FinalizeTransaction is a no-op: records are never created in a tentative state.
-func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
+func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
 	return nil
 }
 

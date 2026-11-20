@@ -25,6 +25,7 @@ type batchFinalize struct {
 	ctx       context.Context
 	tx        *bt.Tx
 	attempt   []byte
+	lease     []byte
 	group     *completion.Group
 	completed atomic.Bool
 	result    error // written by the CAS winner, after the CAS and before group.Done(); see complete
@@ -47,11 +48,21 @@ func (b *batchFinalize) complete(err error) {
 
 // FinalizeTransaction clears the tentative creating state set by
 // Create(..., WithCreating(true)), making the transaction's outputs spendable.
-// It returns nil only to the call whose write cleared the state. A call that finds the tx
-// already final (creating bin already absent) changes nothing and returns an ErrTxExists for
-// which utxo.IsAlreadyFinal is true: the transaction is stored, and the call that cleared the
-// state owns its hand-off. When the client sent the finalize write more than once, an earlier
-// send may be the write that cleared the state, and utxo.IsFinalInDoubt is true as well. attempt is the token of the attempt the caller created or read: the clear is
+//
+// It returns nil only to the caller whose write cleared the state, and that caller owns the
+// hand-off of the transaction. The write records who made it: lease is the spend lease the caller
+// holds on the attempt, the attempt token for the call that created the record and the lease of
+// TakeSpendLease for a roll-forward, and the write puts it in the attempt bin of the master. A
+// call that finds the record final reads that bin. Its own lease there means that an earlier send
+// of this same finalize cleared the state, with its answer lost, and the call returns nil. Any
+// other value means that another actor did, and the call returns an ErrTxExists for which
+// utxo.IsAlreadyFinal is true. A repeat of a finalize is therefore safe, and exactly one caller
+// gets nil. A caller with no lease passes nil and is never told that the write was its own.
+//
+// The write removes the caller's lease from the spenders bin and leaves the leases of other
+// spenders, so a delete of the record is refused while one of them may still spend.
+//
+// attempt is the token of the attempt the caller created or read: the clear is
 // filtered on it, on the master and on every pagination child, so a finalize left over from an
 // earlier attempt of the same txid cannot clear a later attempt's creating state. Returns
 // ErrTxNotFound if the record has vanished, is rolling back (BeginCreateFirstRollback) or
@@ -60,7 +71,7 @@ func (b *batchFinalize) complete(err error) {
 // its spend lease. A batch that completed cleanly returns nil even if
 // ctx was cancelled afterwards, because the record is finalized. Otherwise a cancelled ctx returns
 // its context error, then a recorded batch error, then a timeout error.
-func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
+func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
 	if tx == nil {
 		return errors.NewProcessingError("[FinalizeTransaction] nil tx")
 	}
@@ -80,6 +91,7 @@ func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []by
 		ctx:     ctx,
 		tx:      tx,
 		attempt: attempt,
+		lease:   lease,
 		group:   group,
 		onError: func(err error) {
 			mu.Lock()
@@ -91,7 +103,9 @@ func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []by
 		},
 	}
 
-	s.finalizeBatcher.PutCtx(ctx, item)
+	if putErr := safeBatcherPutCtx(s.finalizeBatcher, ctx, item, "FinalizeTransaction"); putErr != nil {
+		return putErr
+	}
 
 	waitErr := group.Wait(waitCtx, s.batcherWait)
 
@@ -171,7 +185,7 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 			// Multi-record: reuse the create-path phase-2 clearer (children first,
 			// master last) so the master's creating flag stays the atomic completion
 			// indicator, exactly as at create time.
-			item.complete(s.clearCreatingFlag(item.tx.TxIDChainHash(), numRecords, item.attempt))
+			item.complete(s.clearCreatingFlag(item.tx.TxIDChainHash(), numRecords, item.attempt, item.lease))
 			continue
 		}
 
@@ -187,13 +201,7 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 		writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 		writePolicy.FilterExpression = finalizeFilter(item.attempt) // only touch records that still carry the creating bin and the token and are not rolling back
 
-		// Clear by writing nil (bin absence == not creating).
-		clearOp := aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))
-
-		// The spend leases end with the creating state.
-		leasesOp := aerospike.PutOp(aerospike.NewBin(fields.Spenders.String(), nil))
-
-		singleRecords = append(singleRecords, aerospike.NewBatchWrite(writePolicy, key, clearOp, leasesOp, removeUnminedSinceIfMinedOp()))
+		singleRecords = append(singleRecords, aerospike.NewBatchWrite(writePolicy, key, finalizeMasterOps(item.attempt, item.lease)...))
 		singleOwner = append(singleOwner, idx)
 	}
 
@@ -223,7 +231,7 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 		case ok && aErr.ResultCode == types.FILTERED_OUT:
 			// Creating bin already absent → already finalized, idempotent success. A rolling
 			// back record, or one owned by another attempt, is refused.
-			batch[idx].complete(s.finalizeFilteredOutResult(batch[idx].tx.TxIDChainHash(), batch[idx].attempt, writeInDoubt(rec.BatchRec())))
+			batch[idx].complete(s.finalizeFilteredOutResult(batch[idx].tx.TxIDChainHash(), batch[idx].attempt, batch[idx].lease))
 		case ok && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR:
 			// The record vanished between create and finalize — surface it so the
 			// caller (validator roll-forward / sweeper) knows the state is broken.
@@ -257,21 +265,35 @@ func attemptFilter(attempt []byte) *aerospike.Expression {
 	)
 }
 
-// writeInDoubt reports whether the client sent the write of a batch record more than once. The
-// client marks a record in doubt only then, so an answer to the last send says nothing about
-// what an earlier send did on the server.
-func writeInDoubt(rec *aerospike.BatchRecord) bool {
-	return rec.InDoubt || isInDoubt(rec.Err)
+// finalizeMasterOps returns the writes of a finalize on the master record: the creating bin goes,
+// unminedSince goes from a mined record, and the write records its caller. A caller that holds a
+// lease puts it in the attempt bin, which no write filters on once the record is final, and takes
+// only its own lease out of the spenders bin. A caller with no lease has none to take out, and
+// the leases of the spenders of the record stay until they are released or stale.
+func finalizeMasterOps(attempt, lease []byte) []*aerospike.Operation {
+	ops := []*aerospike.Operation{
+		// Clear by writing nil (bin absence == not creating).
+		aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil)),
+	}
+
+	if len(lease) > 0 {
+		if !bytes.Equal(lease, attempt) {
+			ops = append(ops, aerospike.PutOp(aerospike.NewBin(fields.Attempt.String(), lease)))
+		}
+
+		ops = append(ops, removeSpendLeaseOps(lease)...)
+	}
+
+	return append(ops, removeUnminedSinceIfMinedOp())
 }
 
 // finalizeFilteredOutResult reads the master record after a finalize write was filtered out
-// and returns the finalize result: an error marked with utxo.MarkAlreadyFinal when the creating
-// bin is gone, because another write cleared it, and
-// ErrTxNotFound when the record is rolling back, has vanished or is creating under another
-// attempt. inDoubt says that the filtered-out answer belongs to a send the client repeated. An
-// earlier send of the same finalize may then be the write that cleared the bin, so the error is
-// marked with utxo.MarkFinalInDoubt.
-func (s *Store) finalizeFilteredOutResult(txHash *chainhash.Hash, attempt []byte, inDoubt bool) error {
+// and returns the finalize result. A record that is final carries the lease of the caller whose
+// write cleared the creating bin: when that is the lease of this call, an earlier send of its own
+// write did it and the result is nil. Otherwise another actor did, and the result is an error
+// marked with utxo.MarkAlreadyFinal. It is ErrTxNotFound when the record is rolling back, has
+// vanished or is creating under another attempt.
+func (s *Store) finalizeFilteredOutResult(txHash *chainhash.Hash, attempt, lease []byte) error {
 	key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
 	if err != nil {
 		return errors.NewProcessingError("[finalizeFilteredOutResult] failed to create key for %s", txHash.String(), err)
@@ -287,8 +309,8 @@ func (s *Store) finalizeFilteredOutResult(txHash *chainhash.Hash, attempt []byte
 		return errors.NewTxNotFoundError("[sendFinalizeBatch] record not found for tx %s", txHash.String())
 	case state.rollingBack:
 		return errors.NewTxNotFoundError("[sendFinalizeBatch] tx %s is rolling back", txHash.String())
-	case !state.creating && inDoubt:
-		return utxo.MarkFinalInDoubt(errors.NewTxExistsError("[sendFinalizeBatch] tx %s is final and the finalize write was sent more than once", txHash.String()))
+	case !state.creating && len(lease) > 0 && bytes.Equal(state.attempt, lease):
+		return nil
 	case !state.creating:
 		return utxo.MarkAlreadyFinal(errors.NewTxExistsError("[sendFinalizeBatch] tx %s is already final", txHash.String()))
 	case !bytes.Equal(state.attempt, attempt):

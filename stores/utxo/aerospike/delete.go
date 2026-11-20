@@ -248,11 +248,46 @@ func (s *Store) deleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 
 	// 1. Delete the master record first, so any failure from here on leaves nothing
 	// that can be read back, enumerated or mined.
-	if err := s.Delete(ctx, hash); err != nil {
+	if err := s.deleteMasterWithNoSpender(key, hash); err != nil {
 		return err
 	}
 
 	return s.deleteCompleteTail(ctx, hash, childCount)
+}
+
+// deleteMasterWithNoSpender deletes the master record of a complete delete, and refuses while a
+// spend lease on it is live. A finalize removes only the lease of its caller, so a roll-forward
+// that took a lease while the record was creating, and has not released it, may still spend the
+// inputs of the transaction. A delete under it would be followed by an unspend, and the spend of
+// that roll-forward would then name a transaction that no longer exists. The server evaluates the
+// filter inside the delete, and no lease is granted on a record that is final, so no spender can
+// start after it. A refusal is an error and leaves the record in place.
+func (s *Store) deleteMasterWithNoSpender(key *aerospike.Key, hash *chainhash.Hash) error {
+	policy := util.GetAerospikeWritePolicy(s.settings, 0)
+	policy.FilterExpression = s.noLiveSpendLease(time.Now().Unix())
+
+	_, err := s.client.Delete(policy, key)
+	if err == nil {
+		prometheusUtxoMapDelete.Inc()
+
+		return nil
+	}
+
+	if errors.Is(err, aerospike.ErrKeyNotFound) {
+		return nil
+	}
+
+	if isFilteredOut(err) {
+		return errors.NewProcessingError("complete delete of %s refused: a spender of the transaction holds a live spend lease, the record is left in place", hash.String())
+	}
+
+	if e, ok := err.(*aerospike.AerospikeError); ok {
+		prometheusUtxoMapErrors.WithLabelValues("DeleteComplete", e.ResultCode.String()).Inc()
+	} else {
+		prometheusUtxoMapErrors.WithLabelValues("DeleteComplete", "unknown").Inc()
+	}
+
+	return errors.NewStorageError("error in aerospike delete key", err)
 }
 
 // deleteCompleteTail removes the pagination children and external blob(s) of a

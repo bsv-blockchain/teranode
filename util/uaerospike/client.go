@@ -592,6 +592,62 @@ func (c *Client) BatchOperate(policy *aerospike.BatchPolicy, records []aerospike
 	})
 }
 
+// BatchOperateBefore is BatchOperate with an end time. No send starts after deadline, and every
+// send, a repeat of an overloaded batch included, carries only the time that is left as its
+// total and socket timeout. The client stops at that timeout, and the server does not start a
+// command whose timeout has passed, so a write of this batch does not start after deadline. A
+// call that finds deadline passed returns a TIMEOUT error and sends nothing.
+func (c *Client) BatchOperateBefore(deadline time.Time, policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+	bounded, err := batchPolicyBefore(policy, deadline)
+	if err != nil {
+		return err
+	}
+
+	c.beginOp()
+	defer c.endOp()
+
+	if err := c.acquirePermit(bounded); err != nil {
+		return err
+	}
+	defer c.releasePermit()
+
+	start := gocore.CurrentTime()
+	defer func() {
+		c.stats.batchOperateStat.AddTimeForRange(start, len(records))
+	}()
+
+	return c.retryBatchOnOverload(records, func(recs []aerospike.BatchRecordIfc) aerospike.Error {
+		// The time left is read again for every send: a repeat starts later than the first one.
+		p, err := batchPolicyBefore(policy, deadline)
+		if err != nil {
+			return err
+		}
+
+		return c.Client.BatchOperate(p, recs)
+	})
+}
+
+// batchPolicyBefore returns a copy of policy whose timeouts do not run past deadline, or a
+// TIMEOUT error when deadline has passed.
+func batchPolicyBefore(policy *aerospike.BatchPolicy, deadline time.Time) (*aerospike.BatchPolicy, aerospike.Error) {
+	remaining := time.Until(deadline)
+	if remaining < time.Millisecond {
+		return nil, &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+	}
+
+	bounded := *policy
+
+	if bounded.TotalTimeout == 0 || bounded.TotalTimeout > remaining {
+		bounded.TotalTimeout = remaining
+	}
+
+	if bounded.SocketTimeout == 0 || bounded.SocketTimeout > remaining {
+		bounded.SocketTimeout = remaining
+	}
+
+	return &bounded, nil
+}
+
 // GetConnectionQueueSize returns the size of the connection semaphore. When
 // the semaphore is disabled (multiplier <= 0) the in-process throttle is gone
 // and concurrency is governed only by the underlying aerospike-client-go
