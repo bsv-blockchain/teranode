@@ -94,7 +94,7 @@ func spendOf(t *testing.T, parent *bt.Tx, lockTime uint32, vouts ...uint32) *bt.
 func assertRespendBehindLoserInSameBatch(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
 
-	parent := twoOutParent(ctx, t, store, "4934-batch")
+	parent := twoOutParent(ctx, t, store, "respend-batch")
 
 	respend := spendOf(t, parent, 1, 0, 1) // S0: legitimate spender of outputs 0 and 1
 	loser := spendOf(t, parent, 2, 0)      // double-spend attempt on output 0
@@ -155,7 +155,7 @@ func TestRespendBehindLoserInSameBatchSQLite(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store := setupSharedBatch(ctx, t, "4934batch-sqlite")
+	store := setupSharedBatch(ctx, t, "respendbatch-sqlite")
 	require.NoError(t, store.SetBlockHeight(2))
 
 	assertRespendBehindLoserInSameBatch(t, ctx, store)
@@ -178,9 +178,9 @@ func TestRespendBehindLoserInSameBatchPostgresBulk(t *testing.T) {
 func TestSpendBatchReportsPersistedOwnerOutsideBatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	store := setupSharedBatch(ctx, t, "4934-third-owner")
+	store := setupSharedBatch(ctx, t, "third-owner")
 	require.NoError(t, store.SetBlockHeight(2))
-	parent := twoOutParent(ctx, t, store, "4934-third-owner")
+	parent := twoOutParent(ctx, t, store, "third-owner")
 	owner := spendOf(t, parent, 1, 0)
 	_, err := store.Spend(ctx, owner, 2)
 	require.NoError(t, err)
@@ -203,9 +203,9 @@ func TestSpendBatchReportsPersistedOwnerOutsideBatch(t *testing.T) {
 func TestSpendBatchStorageFailureDoesNotInventConflict(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	store := setupSharedBatch(ctx, t, "4934-read-failure")
+	store := setupSharedBatch(ctx, t, "read-failure")
 	require.NoError(t, store.SetBlockHeight(2))
-	parent := twoOutParent(ctx, t, store, "4934-read-failure")
+	parent := twoOutParent(ctx, t, store, "read-failure")
 	owner := spendOf(t, parent, 1, 0, 1)
 	_, err := store.Spend(ctx, owner, 2)
 	require.NoError(t, err)
@@ -347,9 +347,9 @@ func TestSpendBatchPerRowRollbackDoesNotInventConflict(t *testing.T) {
 func TestSpendBatchAlternatingClaimsNameTheWinner(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	store := setupSharedBatch(ctx, t, "4934-alternating")
+	store := setupSharedBatch(ctx, t, "alternating")
 	require.NoError(t, store.SetBlockHeight(2))
-	parent := twoOutParent(ctx, t, store, "4934-alternating")
+	parent := twoOutParent(ctx, t, store, "alternating")
 	winnerSpends, err := utxo.GetSpends(spendOf(t, parent, 1, 0))
 	require.NoError(t, err)
 	loserSpends, err := utxo.GetSpends(spendOf(t, parent, 2, 0))
@@ -397,10 +397,10 @@ func TestRespendBehindLoserInSameBatchKeepsLegitimateSpends(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store := setupSharedBatch(ctx, t, "4934respend")
+	store := setupSharedBatch(ctx, t, "respendfresh")
 	require.NoError(t, store.SetBlockHeight(2))
 
-	parent := twoOutParent(ctx, t, store, "4934-parent")
+	parent := twoOutParent(ctx, t, store, "respend-parent")
 
 	s0 := spendOf(t, parent, 1, 0, 1) // legitimate spender of both outputs
 	s1 := spendOf(t, parent, 2, 0)    // double-spend attempt on output 0

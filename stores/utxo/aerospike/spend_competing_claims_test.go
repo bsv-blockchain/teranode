@@ -49,7 +49,7 @@ func TestRespendBehindLoserInSameBatch(t *testing.T) {
 			require.NoError(t, store.SetBlockHeight(2))
 
 			parent := bt.NewTx()
-			prev := chainhash.DoubleHashH([]byte("4934-as-" + tc.name))
+			prev := chainhash.DoubleHashH([]byte("respend-behind-loser-" + tc.name))
 			require.NoError(t, parent.From(prev.String(), 0,
 				"76a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac", 1e8))
 			parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{bscript.OpTRUE})
@@ -119,12 +119,18 @@ func TestRespendBehindLoserInSameBatch(t *testing.T) {
 // storage holds the winner, and the loser gets UTXO_SPENT naming the winner.
 // Lua decides the claims of one record in order, and the expression path filters
 // out a claim on an already spent output and retries it through Lua.
+//
+// prepareSpendBatches groups claims by the input's hash pointer, so claims built
+// separately are separate UDF records on one key, and the record lock decides.
+// The "lua, one record" case gives both claims the same hash pointer, so one
+// spendMulti call holds both claims.
 func TestSpendBatchFreshCompetingClaimsHaveOneWinner(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		batchSize   int
 		expressions bool
-	}{{"lua", 128, false}, {"expressions", 1, true}} {
+		oneRecord   bool
+	}{{"lua", 128, false, false}, {"lua, one record", 128, false, true}, {"expressions", 1, true, false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.UtxoStore.UtxoBatchSize = tc.batchSize
@@ -155,6 +161,10 @@ func TestSpendBatchFreshCompetingClaimsHaveOneWinner(t *testing.T) {
 				}
 
 				a, b := claim(1), claim(2)
+				if tc.oneRecord {
+					b.TxID = a.TxID
+				}
+
 				batch := []*utxo.Spend{a, b}
 				if round%2 == 1 {
 					batch = []*utxo.Spend{b, a}
