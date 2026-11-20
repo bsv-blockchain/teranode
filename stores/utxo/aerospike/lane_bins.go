@@ -3,6 +3,7 @@ package aerospike
 import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util/lane"
 )
@@ -122,3 +123,25 @@ func laneListElement(e interface{}, bin fields.FieldName, i int) (uint64, error)
 		return 0, errors.NewProcessingError("%s entry %d is %T, not an integer", bin, i, e)
 	}
 }
+
+// laneShadow reports whether lane positions are on (utxostore_laneMigration shadow or later). Only
+// then does a create carry its parents' positions and a spend its spender's, and only then does the
+// store count lane position coverage.
+func (s *Store) laneShadow() bool {
+	return s.settings != nil && s.settings.UtxoStore.LaneMigration.Stamps()
+}
+
+// countLaneSpends counts n spent outputs whose spend carried the spender's lane position. They count
+// as carried only when the route records it: the Lua and native spends do, on a server the start-up
+// probe found writing it (laneSlotWrites); the expression spend does not.
+func (s *Store) countLaneSpends(n int) {
+	if s.laneSlotWrites.Load() && !s.useExpressionSpend() {
+		utxo.CountLaneSpends(laneStoreName, n, 0)
+		return
+	}
+
+	utxo.CountLaneSpends(laneStoreName, 0, n)
+}
+
+// laneStoreName labels this store's lane position counters.
+const laneStoreName = "aerospike"

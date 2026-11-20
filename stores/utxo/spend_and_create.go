@@ -104,6 +104,17 @@ type SequentialStore interface {
 	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
 }
 
+// LaneSpender is a SequentialStore whose spend can record the spender's lane position (util/lane)
+// in each parent's slot, in the same write that marks the output spent. SequentialSpendAndCreate
+// calls it, in place of Spend, only when the record it creates has a position, which is only with
+// lane positions on; with them off every spend goes through Spend exactly as before. It is an
+// interface of its own rather than a field of IgnoreFlags, because IgnoreFlags sits inside
+// CreateOptions, which every create allocates, and eight more bytes there would move it up a size
+// class.
+type LaneSpender interface {
+	SpendWithLanePosition(ctx context.Context, tx *bt.Tx, blockHeight uint32, position uint64, ignoreFlags IgnoreFlags) ([]*Spend, error)
+}
+
 // SequentialSpendAndCreate implements the Store.SpendAndCreate contract as the
 // original two-call sequence: spend the inputs, create the outputs, and roll the
 // spends back (with retries) when the create definitely failed. Concrete stores
@@ -152,6 +163,9 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	var (
 		taker LanePositionTaker
 		taken uint64
+		// spender is the record's position, which a LaneSpender records in each parent's slot;
+		// zero with lane positions off, so the spends go out exactly as before.
+		spender uint64
 	)
 
 	if !options.SpendOnly {
@@ -169,13 +183,19 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 			if TookLanePosition(options.LanePosition, position) {
 				taken = position
 			}
+
+			spender = position
 		}
 	}
 
 	var spends []*Spend
 
 	if !options.CreateOnly {
-		spends, err = s.Spend(ctx, tx, blockHeight, options.IgnoreFlags)
+		if laneSpender, ok := s.(LaneSpender); ok && spender != lane.None {
+			spends, err = laneSpender.SpendWithLanePosition(ctx, tx, blockHeight, spender, options.IgnoreFlags)
+		} else {
+			spends, err = s.Spend(ctx, tx, blockHeight, options.IgnoreFlags)
+		}
 		if err != nil {
 			if taken != lane.None {
 				// The spend half failed, so the create never ran and its outcome is known even

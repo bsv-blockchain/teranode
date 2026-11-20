@@ -137,6 +137,10 @@ type BatchStoreItem struct {
 	// beside blockHeight, so a create allocates no more than it did.
 	lanePosition uint64
 
+	// parentLanePositions is the lane position of each distinct parent, written to the master
+	// record's parentLanePos bin; nil writes no bin.
+	parentLanePositions []uint64
+
 	// group signals completion of the whole batch; the producer waits on it
 	// once instead of one channel receive per item.
 	group *completion.Group
@@ -274,6 +278,8 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		locked:       createOptions.Locked,
 		lanePosition: lanePosition,
 		group:        group,
+
+		parentLanePositions: validParentLanes(createOptions.ParentLanePositions),
 	}
 
 	// Guard the enqueue: Store.Close closes the store batcher first, so a Create
@@ -308,7 +314,49 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	prometheusUtxostoreCreate.Inc()
 
+	// The position the record was written with, zero with lane positions off, so the validator can
+	// publish it in the transaction's metadata without reading the record back.
+	txMeta.LanePosition = lanePosition
+
+	if s.laneShadow() {
+		utxo.CountLaneRecord(laneStoreName, lanePosition != lane.None, !isCoinbase, item.parentLanePositions != nil)
+	}
+
 	return txMeta, nil
+}
+
+// validParentLanes is positions when every one is a valid lane position, and nil otherwise, so a
+// parent read that found no position leaves the record without a parentLanePos bin rather than
+// with a zero in it.
+func validParentLanes(positions []uint64) []uint64 {
+	if len(positions) == 0 {
+		return nil
+	}
+
+	for _, position := range positions {
+		if !lane.Valid(position) {
+			return nil
+		}
+	}
+
+	return positions
+}
+
+// withParentLanes adds the parentLanePos bin to the master record's bins when the item carries its
+// parents' positions.
+func withParentLanes(bins [][]*aerospike.Bin, positions []uint64) ([][]*aerospike.Bin, error) {
+	if positions == nil || len(bins) == 0 {
+		return bins, nil
+	}
+
+	bin, err := parentLanePositionsBin(positions)
+	if err != nil {
+		return nil, err
+	}
+
+	bins[0] = append(bins[0], bin)
+
+	return bins, nil
 }
 
 // sendStoreBatch processes a batch of transaction storage requests.
@@ -442,6 +490,9 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 		}
 
 		binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, bItem.lanePosition, arena) // false is to say this is a normal record, not external.
+		if err == nil {
+			binsToStore, err = withParentLanes(binsToStore, bItem.parentLanePositions)
+		}
 		if err != nil {
 			bItem.complete(errors.NewProcessingError("could not get bins to store", err))
 			resultHandledElsewhere[idx] = true
@@ -460,6 +511,9 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			// bins with heap-owned backing (nil arena) so the deferred arena reset
 			// cannot corrupt the bytes the goroutine still references.
 			binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, bItem.lanePosition, nil)
+			if err == nil {
+				binsToStore, err = withParentLanes(binsToStore, bItem.parentLanePositions)
+			}
 			if err != nil {
 				bItem.complete(errors.NewProcessingError("could not rebuild bins for external store", err))
 				resultHandledElsewhere[idx] = true
@@ -640,6 +694,9 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
 					binsToStore, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, batch[idx].blockHeights, batch[idx].subtreeIdxs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting, batch[idx].locked, batch[idx].lanePosition, nil) // true is to say this is a big record
+					if err == nil {
+						binsToStore, err = withParentLanes(binsToStore, batch[idx].parentLanePositions)
+					}
 					if err != nil {
 						batch[idx].complete(errors.NewProcessingError("could not get bins to store", err))
 						continue

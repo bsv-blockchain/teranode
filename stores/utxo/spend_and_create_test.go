@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
 
@@ -308,5 +309,57 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.ErrorIs(t, err, errors.ErrInvalidArgument)
 		require.Equal(t, 0, f.spendCalls)
 		require.Equal(t, 0, f.createCalls)
+	})
+}
+
+// laneSpenderStore is a laneSequentialStore whose spend can record the spender's lane position.
+type laneSpenderStore struct {
+	laneSequentialStore
+	laneSpendCalls int
+	laneSpendPos   uint64
+}
+
+func (l *laneSpenderStore) SpendWithLanePosition(_ context.Context, _ *bt.Tx, _ uint32, position uint64, _ IgnoreFlags) ([]*Spend, error) {
+	l.laneSpendCalls++
+	l.laneSpendPos = position
+
+	return l.spends, l.spendErr
+}
+
+// A store that can record the spender's position gets it only when the record has one: with lane
+// positions off there is no source and every spend goes through the plain Spend, as before.
+func TestSequentialSpendAndCreateRecordsTheSpenderPositionOnlyWithOne(t *testing.T) {
+	tx := bt.NewTx()
+
+	t.Run("off", func(t *testing.T) {
+		f := &laneSpenderStore{}
+		f.createMeta = &meta.Data{}
+
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, f, tx, 100)
+		require.NoError(t, err)
+		require.Equal(t, 1, f.spendCalls)
+		require.Zero(t, f.laneSpendCalls)
+	})
+
+	t.Run("shadow", func(t *testing.T) {
+		f := &laneSpenderStore{}
+		f.createMeta = &meta.Data{}
+		f.SetLanePositionSource(fixedLanePosition(lane.Pack(3, 9)))
+
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, f, tx, 100)
+		require.NoError(t, err)
+		require.Zero(t, f.spendCalls)
+		require.Equal(t, 1, f.laneSpendCalls)
+		require.Equal(t, lane.Pack(3, 9), f.laneSpendPos)
+	})
+
+	t.Run("spend only takes no position", func(t *testing.T) {
+		f := &laneSpenderStore{}
+		f.SetLanePositionSource(fixedLanePosition(lane.Pack(3, 9)))
+
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, f, tx, 100, WithSpendOnly())
+		require.NoError(t, err)
+		require.Equal(t, 1, f.spendCalls)
+		require.Zero(t, f.laneSpendCalls)
 	})
 }
