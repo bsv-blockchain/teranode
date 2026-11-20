@@ -752,6 +752,40 @@ func openLaneColumns(ctx context.Context, pool *pgxpool.Pool, on bool) (bool, er
 	return true, nil
 }
 
+// openLaneCopyColumns reports whether the database has the lane columns the copies need, beyond the
+// three openLaneColumns opens: parent_lane_positions on every table that carries a record's
+// payload (parents), and lane_position on utxo and spend_journal (coins). It only looks. These
+// columns arrive with PrepareLaneSchema, run as the table owner with the node stopped, so a store
+// opened with lane positions on but without them writes what it can and counts the rest. Each needs
+// the identity columns too, because the statements that write them are the lane forms.
+func openLaneCopyColumns(ctx context.Context, pool *pgxpool.Pool, laneColumn bool) (parents, coins bool, err error) {
+	if !laneColumn {
+		return false, false, nil
+	}
+
+	if parents, err = schemaHasAll(ctx, pool, laneColumnTables, "parent_lane_positions"); err != nil {
+		return false, false, err
+	}
+
+	if coins, err = schemaHasAll(ctx, pool, []string{"utxo", "spend_journal"}, "lane_position"); err != nil {
+		return false, false, err
+	}
+
+	return parents, coins, nil
+}
+
+// schemaHasAll reports whether every one of tables has column.
+func schemaHasAll(ctx context.Context, pool *pgxpool.Pool, tables []string, column string) (bool, error) {
+	for _, table := range tables {
+		found, err := schemaHas(ctx, pool, table, column)
+		if err != nil || !found {
+			return false, err
+		}
+	}
+
+	return true, nil
+}
+
 // laneColumnTables are the identity and containment tables that carry the record's own
 // lane_position, which the create path writes.
 var laneColumnTables = []string{"tx_ident", "tx_mined", "preserved_parent"}
@@ -782,7 +816,9 @@ type laneSchemaColumn struct{ table, column, sqlType string }
 //     spend_journal.lane_position the copy a spend takes of it, so a fully spent parent answered
 //     from the journal, and an output Unspend restores from it, keep their position.
 //
-// Nothing in this build writes the last five; the steps that make them mandatory do.
+// Opening the store never adds the last five; PrepareLaneSchema does. Where they exist the store
+// writes them and every copy carries them (openLaneCopyColumns), with lane positions on or off, as
+// it does lane_position; a create with lane positions off has none to write, so it writes NULL.
 var laneSchemaColumns = []laneSchemaColumn{
 	{"tx_ident", "lane_position", "BIGINT"},
 	{"tx_mined", "lane_position", "BIGINT"},

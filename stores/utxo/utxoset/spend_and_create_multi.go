@@ -272,6 +272,9 @@ type nettedRows struct {
 	spenders  [][]byte
 	vins      []int32
 	scripts   [][]byte
+	// lanes is each row's output's lane position, the creating transaction's, in signed form, 0
+	// for none; nil when no transaction in the plan has a position.
+	lanes []int64
 }
 
 // takeNetted removes from the plan every UTXO a child in the list spends and returns the
@@ -280,6 +283,7 @@ type nettedRows struct {
 func (p *createPlan) takeNetted(spender map[nettedKey]nettedSpender) *nettedRows {
 	j := &nettedRows{}
 	keep := 0
+	lanes := p.lanesByTxid()
 
 	for c := range p.utxoTxids {
 		by, ok := spender[newNettedKey(p.utxoTxids[c], p.utxoUkeys[c])]
@@ -310,6 +314,10 @@ func (p *createPlan) takeNetted(spender map[nettedKey]nettedSpender) *nettedRows
 		j.spenders = append(j.spenders, by.txid)
 		j.vins = append(j.vins, by.vin)
 		j.scripts = append(j.scripts, p.utxoScripts[c])
+
+		if lanes != nil {
+			j.lanes = append(j.lanes, lanes[string(p.utxoTxids[c])])
+		}
 	}
 
 	p.utxoSats = p.utxoSats[:keep]
@@ -339,14 +347,46 @@ SELECT $1::int, j.spending_vin, j.satoshis, j.created_height, j.spendable_from, 
     AS j(satoshis, created_height, spendable_from, flags, mined_height, block_id,
          ukey, txid, spending_txid, script, spending_vin)`
 
+// nettedJournalLaneSQL is nettedJournalSQL carrying each output's lane position, for a database with
+// lane_position on spend_journal (Store.laneCoinColumn).
+var nettedJournalLaneSQL = laneStatement(nettedJournalSQL,
+	"spending_txid, script)\nSELECT", "spending_txid, script, lane_position)\nSELECT",
+	"j.spending_txid, j.script\n  FROM unnest", "j.spending_txid, j.script, NULLIF(j.lane_position, 0)\n  FROM unnest",
+	"$11::bytea[], $12::int[])", "$11::bytea[], $12::int[], $13::bigint[])",
+	"spending_txid, script, spending_vin)", "spending_txid, script, spending_vin, lane_position)",
+)
+
 func (w *nettedWrite) writeNettedJournal(ctx context.Context, dbTx pgx.Tx, j *nettedRows) error {
 	if len(j.ukeys) == 0 {
 		return nil
 	}
 
-	if _, err := dbTx.Exec(ctx, nettedJournalSQL, int32(w.blockHeight), //nolint:gosec // a height fits int32
-		j.sats, j.created, j.spendable, j.flags, j.mined, j.blockIDs, j.ukeys, j.txids, j.spenders, j.scripts, j.vins); err != nil {
+	stmt := nettedJournalSQL
+	args := []any{int32(w.blockHeight), //nolint:gosec // a height fits int32
+		j.sats, j.created, j.spendable, j.flags, j.mined, j.blockIDs, j.ukeys, j.txids, j.spenders, j.scripts, j.vins}
+
+	if w.s.laneCoinColumn {
+		stmt = nettedJournalLaneSQL
+		args = append(args, j.lanes)
+	}
+
+	if _, err := dbTx.Exec(ctx, stmt, args...); err != nil {
 		return errors.NewStorageError("[utxoset][SpendAndCreateMulti] journal netted spends", err)
+	}
+
+	if w.s.laneShadow {
+		carried := 0
+		for _, position := range j.lanes {
+			if position != 0 {
+				carried++
+			}
+		}
+
+		if !w.s.laneCoinColumn {
+			carried = 0
+		}
+
+		utxo.CountLaneSpends(laneStoreName, carried, len(j.ukeys)-carried)
 	}
 
 	return nil

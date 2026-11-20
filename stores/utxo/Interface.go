@@ -306,6 +306,13 @@ type CreateOptions struct {
 	// padding, so this struct, which every create allocates, stays the size it was: the bools above
 	// are grouped for that reason, and TestCreateOptionsSize holds it.
 	LanePosition uint64
+
+	// ParentLanePositions is the lane position of each distinct parent of the record, in the
+	// order of its TxInpoints parents, which a store that has the column writes beside the
+	// inpoints. The validator names it at utxostore_laneMigration shadow from the parent reads it
+	// already makes. nil means no parent positions: lane positions off, a parent that has none, or
+	// a caller that read no parents. A store never reads a parent to fill it.
+	ParentLanePositions []uint64
 }
 
 // WithMinedBlockInfo returns a CreateOption that sets the block IDs for a UTXO.
@@ -360,6 +367,7 @@ func (o *CreateOptions) ItemOptions(i int) *CreateOptions {
 	c.TxIDs = nil
 	c.SubtreeIdxs = nil
 	c.BelowCheckpoint = false
+	c.ParentLanePositions = nil
 	if o.SubtreeIdxs != nil && i < len(o.SubtreeIdxs) && len(o.MinedBlockInfos) > 0 {
 		c.MinedBlockInfos = make([]MinedBlockInfo, len(o.MinedBlockInfos))
 		copy(c.MinedBlockInfos, o.MinedBlockInfos)
@@ -432,6 +440,15 @@ func WithTXIDs(txIDs []chainhash.Hash) CreateOption {
 func WithLanePosition(position uint64) CreateOption {
 	return func(o *CreateOptions) {
 		o.LanePosition = position
+	}
+}
+
+// WithParentLanePositions names the lane positions of the record's distinct parents, in
+// TxInpoints parent order; see CreateOptions.ParentLanePositions. A list ignores it, because it
+// describes one record.
+func WithParentLanePositions(positions []uint64) CreateOption {
+	return func(o *CreateOptions) {
+		o.ParentLanePositions = positions
 	}
 }
 
@@ -565,6 +582,10 @@ type ParentOutput struct {
 	LockingScript *bscript.Script
 	// Height is the creation height, valid only when Status is ParentOutputMined.
 	Height uint32
+	// LanePosition is the parent transaction's own lane position (util/lane), read in the same
+	// call. Zero means the store did not read it or holds none: a store reads it only with lane
+	// positions on (utxostore_laneMigration shadow), and a parent created before that has none.
+	LanePosition uint64
 	// Err is set when this outpoint could not be answered; Status is then Unknown.
 	Err error
 }

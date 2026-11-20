@@ -448,6 +448,13 @@ func (s *Store) appendCreate(p *createPlan, item int, tx *bt.Tx, blockHeight uin
 	if s.laneColumn {
 		p.addLane(options.LanePosition)
 	}
+
+	// The parents' positions go beside the inpoints, so only a create that stores inpoints writes
+	// them, and only on a database with the column. A list that does not match the inpoints is
+	// left out, never written partly: the coverage counter shows it.
+	if s.laneParentColumn {
+		p.addParentLanes(encodeParentLanes(inpoints, options.ParentLanePositions, txInpoints.ParentTxHashes))
+	}
 	p.bodies = append(p.bodies, body)
 	p.minedRows = append(p.minedRows, atBirth)
 	p.seedRows = append(p.seedRows, s.seedingCreate(options))
@@ -512,7 +519,27 @@ func (s *Store) appendCreate(p *createPlan, item int, tx *bt.Tx, blockHeight uin
 		IsCoinbase:  isCoinbase,
 		Conflicting: options.Conflicting,
 		Locked:      options.Locked,
+		// The position the record is written with, zero with lane positions off, so the validator
+		// can publish it in the transaction's metadata without reading the record back.
+		LanePosition: options.LanePosition,
 	}, nil
+}
+
+// encodeParentLanes is parent_lane_positions for a create: eight bytes per distinct parent, in the
+// order of parentHashes, the transaction's TxInpoints parents. It is nil when the create stores no
+// inpoints, or when positions is not one valid position per parent; nothing is written then.
+func encodeParentLanes(inpoints []byte, positions []uint64, parentHashes []chainhash.Hash) []byte {
+	if inpoints == nil || len(positions) == 0 || len(positions) != len(parentHashes) {
+		return nil
+	}
+
+	for _, position := range positions {
+		if !lane.Valid(position) {
+			return nil
+		}
+	}
+
+	return lane.AppendPositions(make([]byte, 0, len(positions)*lane.PositionSize), positions)
 }
 
 // txFee is the transaction's fee, or nil when the store cannot know it.
