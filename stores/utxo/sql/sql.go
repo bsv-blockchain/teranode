@@ -2903,7 +2903,12 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 		return
 	}
 	// A batch containing one call uses that call's cancellation directly.
-	// A mixed batch merges only the distinct calls that can abort its SQL.
+	// A mixed batch is aborted only once every call in it has ended. One
+	// caller's cancellation or wait timeout must not fail the spends of the
+	// others: they are still waiting for an answer, and a client that
+	// disconnects could otherwise abort every transaction batched with its
+	// own. A call that ended before the batch finishes still gets the
+	// batch's real answer, since its caller waits for it before any rollback.
 	ctx := s.ctx
 	primary := batch[0].call
 	singleCall := primary != nil
@@ -2916,25 +2921,9 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 	if singleCall {
 		ctx = primary.ctx
 	} else {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithCancel(s.ctx)
-		stops := make([]func() bool, 0, len(batch))
-		seen := make(map[*spendCall]struct{})
-		for _, item := range batch {
-			if item.call == nil {
-				continue
-			}
-			if _, ok := seen[item.call]; !ok {
-				seen[item.call] = struct{}{}
-				stops = append(stops, context.AfterFunc(item.call.ctx, cancel))
-			}
-		}
-		defer func() {
-			for _, stop := range stops {
-				stop()
-			}
-			cancel()
-		}()
+		var release func()
+		ctx, release = s.mixedSpendBatchContext(batch)
+		defer release()
 	}
 	defer func() {
 		if ctx.Err() != nil {
@@ -2961,6 +2950,45 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 	s.retrySpendBatchContext(ctx, batch, func(batch []*batchSpend) bool {
 		return s.trySendSpendBatch(ctx, batch)
 	})
+}
+
+// mixedSpendBatchContext returns the context a batch holding several calls runs
+// under: the store's, cancelled once every call in the batch has ended. An item
+// with no call has no caller that can end, so a batch holding one never aborts.
+// The caller defers release once the batch is done.
+func (s *Store) mixedSpendBatchContext(batch []*batchSpend) (ctx context.Context, release func()) {
+	calls := make(map[*spendCall]struct{})
+
+	for _, item := range batch {
+		if item.call == nil {
+			return s.ctx, func() {}
+		}
+
+		calls[item.call] = struct{}{}
+	}
+
+	ctx, cancel := context.WithCancel(s.ctx)
+
+	var remaining atomic.Int64
+	remaining.Store(int64(len(calls)))
+
+	stops := make([]func() bool, 0, len(calls))
+
+	for call := range calls {
+		stops = append(stops, context.AfterFunc(call.ctx, func() {
+			if remaining.Add(-1) == 0 {
+				cancel()
+			}
+		}))
+	}
+
+	return ctx, func() {
+		for _, stop := range stops {
+			stop()
+		}
+
+		cancel()
+	}
 }
 
 // retrySpendBatch runs try over batch until it reports no lock error, and

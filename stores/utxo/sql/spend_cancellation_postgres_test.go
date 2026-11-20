@@ -144,3 +144,82 @@ func TestSpendDoesNotCommitAfterAbandoningRowLockWait_Postgres(t *testing.T) {
 		}
 	}
 }
+
+// TestCanceledCallDoesNotFailTheOtherCallsInItsBatch_Postgres: spends of child
+// A and child B share one batch, which waits on a lock held on B's parent. A's
+// caller cancels while the batch waits. B's caller has not, so the batch must
+// run on and B's spend must commit; A's caller gets the batch's real answer, so
+// A's parent output is spent only if A's Spend reported success.
+func TestCanceledCallDoesNotFailTheOtherCallsInItsBatch_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	for _, bulk := range []bool{false, true} {
+		t.Run(fmt.Sprintf("bulk_%t", bulk), func(t *testing.T) {
+			store, ctx := setupPostgresStore(t)
+			store.settings.UtxoStore.BatchSQLOperations = bulk
+			store.settings.UtxoStore.SpendWaitTimeout = time.Minute
+
+			parentA := replayParent(t, ctx, store, strings.Repeat("31", 32))
+			parentB := replayParent(t, ctx, store, strings.Repeat("32", 32))
+			childA := replaySpender(t, parentA)
+			childB := replaySpender(t, parentB)
+
+			holder, err := store.db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer func() { _ = holder.Rollback() }()
+			_, err = holder.ExecContext(ctx, "SELECT id FROM transactions WHERE hash = $1 FOR NO KEY UPDATE", parentB.TxIDChainHash()[:])
+			require.NoError(t, err)
+
+			callbackDone := make(chan struct{})
+			store.spendBatcher.Close()
+			store.spendBatcher = batcher.NewWithPool(2, time.Minute, func(batch []*batchSpend) {
+				defer close(callbackDone)
+				require.Len(t, batch, 2, "fixture: both calls share one batch")
+				store.sendSpendBatch(batch)
+			}, false)
+
+			ctxA, cancelA := context.WithCancel(ctx)
+			defer cancelA()
+
+			doneA := make(chan error, 1)
+			doneB := make(chan error, 1)
+
+			go func() {
+				_, spendErr := store.Spend(ctxA, childA, 1000)
+				doneA <- spendErr
+			}()
+			go func() {
+				_, spendErr := store.Spend(ctx, childB, 1000)
+				doneB <- spendErr
+			}()
+
+			require.Eventually(t, func() bool {
+				var waiting int
+				queryErr := store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'").Scan(&waiting)
+				return queryErr == nil && waiting > 0
+			}, 5*time.Second, 10*time.Millisecond, "the batch must reach the lock on B's parent")
+
+			cancelA()
+			// Give a cancellation that wrongly aborts the batch time to land.
+			time.Sleep(200 * time.Millisecond)
+			require.NoError(t, holder.Rollback())
+
+			select {
+			case <-callbackDone:
+			case <-time.After(10 * time.Second):
+				t.Fatal("spend callback did not settle")
+			}
+
+			require.NoError(t, <-doneB, "B's caller did not cancel, so its spend must commit")
+			require.Equal(t, spendpkg.NewSpendingData(childB.TxIDChainHash(), 0).Bytes(), outputSpendingData(t, ctx, store, parentB, 0))
+
+			if errA := <-doneA; errA != nil {
+				require.Empty(t, outputSpendingData(t, ctx, store, parentA, 0), "A reported failure, so A's spend must not stay written")
+			} else {
+				require.Equal(t, spendpkg.NewSpendingData(childA.TxIDChainHash(), 0).Bytes(), outputSpendingData(t, ctx, store, parentA, 0))
+			}
+		})
+	}
+}
