@@ -222,3 +222,56 @@ func TestFileLongtermMissIsNotFound(t *testing.T) {
 			"reporting a failed read as absence would let callers silently fall back to stale data")
 	})
 }
+
+// TestFileLongtermFallbackReadsAHealthyBlob reads a blob that is only in the longterm store,
+// through the public Get and GetIoReader. The longterm store reads and checks the header
+// itself, so the file store must not read a second header from the body it hands back:
+// doing so took body bytes as a header and reported a healthy blob as corrupt.
+func TestFileLongtermFallbackReadsAHealthyBlob(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	longtermDir := filepath.Join(tempDir, "longterm")
+
+	longtermURL, err := url.Parse("file://" + longtermDir)
+	require.NoError(t, err)
+
+	longterm, err := New(ulogger.TestLogger{}, longtermURL)
+	require.NoError(t, err)
+
+	key := []byte("longterm-only")
+	value := []byte("a body long enough to be read as a header if anyone tried")
+
+	require.NoError(t, longterm.Set(ctx, key, fileformat.FileTypeSubtree, value))
+
+	primaryURL, err := url.Parse("file://" + tempDir)
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, primaryURL, options.WithLongtermStorage(persistSubDir, longtermURL))
+	require.NoError(t, err)
+
+	got, err := store.Get(ctx, key, fileformat.FileTypeSubtree)
+	require.NoError(t, err, "a healthy longterm blob must read, not be reported corrupt")
+	require.Equal(t, value, got)
+
+	reader, err := store.GetIoReader(ctx, key, fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+
+	streamed, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	require.Equal(t, value, streamed)
+
+	// A wrong-type longterm blob is still reported corrupt, by the longterm store's own check.
+	require.NoError(t, longterm.Set(ctx, key, fileformat.FileTypeTx, value))
+
+	wrongTypeFile, err := longterm.options.ConstructFilename(longterm.path, key, fileformat.FileTypeTx)
+	require.NoError(t, err)
+
+	wantTypeFile, err := longterm.options.ConstructFilename(longterm.path, key, fileformat.FileTypeSubtreeToCheck)
+	require.NoError(t, err)
+	require.NoError(t, os.Rename(wrongTypeFile, wantTypeFile))
+
+	_, err = store.Get(ctx, key, fileformat.FileTypeSubtreeToCheck)
+	require.ErrorIs(t, err, errors.ErrStorageError)
+	require.True(t, errors.IsBlobCorrupt(err), "the longterm store's corrupt cause must reach the caller")
+}

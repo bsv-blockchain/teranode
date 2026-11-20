@@ -108,13 +108,16 @@ loader (0, false and false), so for these keys the two agree. The
 ### Optimistic Mining
 
 - `OptimisticMining` defaults to `true`: once the block's subtrees have been validated
-  (transaction and script checks, synchronously), the block is added to the chain and mining can
-  start on it, before the remaining block-level checks have run
-- Those block-level checks continue in the background - merkle root, coinbase and BIP34 checks,
-  duplicate transactions, transaction ordering and parent-spend checks, and the old-block-ID
-  double-spend scan. If a background check proves the block invalid it is invalidated and its
-  UTXO effects are rolled back; a transient storage or processing failure instead schedules a
-  re-validation and leaves the block on the chain in the meantime
+  (transaction and script checks, synchronously) and the checks before the add below have passed,
+  the block is added to the chain and mining can start on it, before the full block validation
+  has run
+- The full block validation continues in the background - the merkle root over every subtree, the
+  coinbase rules again, duplicate transactions, transaction ordering and parent-spend checks, and
+  the old-block-ID check that a parent not found among the block's recent ancestors
+  (`blockvalidation_maxPreviousBlockHeadersToCheck`) is in the block's own history. If a background
+  check proves the block invalid it is
+  invalidated and its UTXO effects are rolled back; a transient storage or processing failure
+  instead schedules a re-validation and leaves the block on the chain in the meantime
 - Can be overridden per-validation via the `DisableOptimisticMining` option
 - **On every validation path optimistic mining is OFF unless BOTH
   `blockvalidation_optimistic_mining` AND `blockvalidation_optimistic_mining_peer_blocks` are set**
@@ -128,16 +131,19 @@ loader (0, false and false), so for these keys the two agree. The
   against a cached header run holding only the block's in-batch predecessors, which cannot carry the
   median-time-past window the optimistic branch checks synchronously; lifting this requires the
   header cache to top up short windows from the store first (issue 1499).
-- **Opt-in tradeoff:** with both flags set, a corrupt body on the optimistic-background path is
-  already added before background validation runs, so it takes the *invalidate route* (it is
-  invalidated/poisoned rather than re-downloaded) until the `block.Valid` integrity-floor split lands
-  and removes that path. With the default (peer-blocks off) a corrupt body is never added and is
-  re-downloaded, not poisoned.
-- **Known exposure under the opt-in:** a received body that carries subtrees is still added before
-  it is bound to its header, and when it is invalidated its coinbase is persisted with the invalid
-  record (bitcoin-sv/teranode#4844). A body carrying no subtrees is bound by the coinbase-only rule
-  and rejected before the add. Keep `blockvalidation_optimistic_mining_peer_blocks` off until the
-  `block.Valid` split lands.
+- **Checks before the add:** with both flags set, the header-context checks and, for a body with
+  no subtrees, the coinbase-only binding run first and are verdicts: a block that fails them is
+  rejected, not added. Then the integrity floor binds a body with subtrees to its header through its
+  first and last subtrees, and the coinbase rules run on it: shape, the common transaction rules,
+  coinbase length, finality and BIP34. A block that fails the floor is not added early; it is
+  validated fully first, exactly as with the peer-blocks flag off. The floor reads, deserializes and
+  hashes the first and last subtrees once more than validation alone would, because the full
+  validation loads its own copies.
+- **Opt-in tradeoff:** the floor does not check duplicate transactions, the lengths of the subtrees
+  between the first and last, fees, or transaction order and spends. A body that breaks one of those
+  is found only after the add, so a corrupt one takes the *invalidate route* (it is
+  invalidated/poisoned rather than re-downloaded). With the default (peer-blocks off) a corrupt body
+  is never added and is re-downloaded, not poisoned.
 - Checkpoint-verified blocks take the quick-validation pipeline instead, which never consults this
   setting.
 

@@ -37,6 +37,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/usql"
 )
 
@@ -260,22 +261,6 @@ type Store interface {
 	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error encountered
 	GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
-	// GetBlockHeadersFromTill retrieves block headers between two blocks.
-	// Parameters:
-	//   - ctx: Context for the operation
-	//   - blockHashFrom: Starting block hash
-	//   - blockHashTill: Ending block hash
-	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error encountered
-	GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-
-	// GetForkedBlockHeaders retrieves headers of forked blocks.
-	// Parameters:
-	//   - ctx: Context for the operation
-	//   - blockHash: Starting block hash
-	//   - numberOfHeaders: Number of headers to retrieve
-	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error encountered
-	GetForkedBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-
 	// GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
 	// Parameters:
 	//   - ctx: Context for the operation
@@ -285,7 +270,7 @@ type Store interface {
 	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
 	// BlocksBetterThan returns the valid blocks that sort better than after in the order the
-	// best tip is picked by (chain_work DESC, peer_id ASC, id ASC), worst first. When from is not
+	// best tip is picked by (chain_work DESC, id ASC), worst first. When from is not
 	// nil it also returns the valid blocks that sort better than or level with from.
 	// Parameters:
 	//   - ctx: Context for the operation
@@ -404,12 +389,15 @@ type Store interface {
 	SetState(ctx context.Context, key string, data []byte) error
 	GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error)
 
-	// SetBlockMinedSet marks a block as mined.
+	// SetBlockMinedSet marks a block as mined. With a non-nil expectedGeneration the
+	// write only lands while the block's mined_set generation still equals it.
 	// Parameters:
 	//   - ctx: Context for the operation
 	//   - blockHash: Hash of the block to mark
-	// Returns: Any error encountered
-	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+	//   - expectedGeneration: BlockHeaderMeta.MinedSetGeneration when the caller's tagging
+	//     run started, or nil for the unconditional write older callers expect
+	// Returns: errors.ErrStateError if the generation has moved, else any error encountered
+	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, expectedGeneration *uint64) error
 
 	// ClearBlockMinedSet resets the mined_set flag to false for a block,
 	// triggering background job processing to update transaction states.
@@ -439,14 +427,6 @@ type Store interface {
 	//   - ctx: Context for the operation
 	// Returns: Slice of blocks with unprocessed subtrees and any error encountered
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
-
-	// GetBlocksByTime retrieves blocks within a specified time range.
-	// Parameters:
-	//   - ctx: Context for the operation
-	//   - fromTime: Start time
-	//   - toTime: End time
-	// Returns: Slice of block data and any error encountered
-	GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error)
 
 	// CheckBlockIsInCurrentChain checks if blocks are in the current chain.
 	// Parameters:
@@ -485,6 +465,22 @@ type Store interface {
 	//   - state: State to set
 	// Returns: Any error encountered
 	SetFSMState(ctx context.Context, state string) error
+
+	// OpenLaneLease closes stale leases, then opens a lease on a free lane with its first grant.
+	// lapsed is how many stale leases it closed first. See SQL.OpenLaneLease for the lane choice
+	// rule an implementation must follow.
+	OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (id lane.LeaseID, grant lane.Grant, lapsed int, err error)
+
+	// RenewLaneLease renews a lease and, if asked, records its next grant. closed reports a lease
+	// that is closed or no longer the lane's current one; nothing is written for it.
+	RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (grant lane.Grant, granted, closed bool, err error)
+
+	// ReleaseLaneLease closes a lease cleanly. alreadyClosed reports a lease closed before.
+	ReleaseLaneLease(ctx context.Context, req options.LaneLeaseRelease) (alreadyClosed bool, err error)
+
+	// CloseStaleLaneLeases closes, as lapsed, every open lease not renewed for closeAfter on the
+	// database clock, and returns how many it closed.
+	CloseStaleLaneLeases(ctx context.Context, closeAfter time.Duration) (int, error)
 
 	// LocateBlockHeaders retrieves block headers using a locator and stop hash.
 	// Legacy endpoint.

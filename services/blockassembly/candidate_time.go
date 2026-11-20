@@ -2,10 +2,13 @@ package blockassembly
 
 import (
 	"context"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -47,10 +50,23 @@ type mtpFloorEntry struct {
 // clock — or a run of forward-stamped blocks dragging the median above
 // wall-clock time — makes the assembler hand miners a candidate that the
 // network refuses once mined. SV Node applies the same floor in UpdateTime, as
-// max(median-time-past+1, GetAdjustedTime()); note it floors against
-// network-adjusted time where this floors against the raw local clock, so a
-// skewed node here has nothing pulling it back towards its peers. Consulting
-// the MedianTimeSource in services/legacy/blockchain would close that gap.
+// max(median-time-past+1, GetAdjustedTime()). It floors against
+// network-adjusted time where this floors against the raw local clock, and the
+// difference is deliberately left in place. GetAdjustedTime moves the local
+// clock by the median peer offset only when that offset is within 70 minutes,
+// and applies no offset at all beyond it. It recomputes that median as new peers
+// are sampled. Its 200-entry filter includes a local zero, so four peers
+// suffice for the first offset and updates freeze after 199 peers. A long-running
+// node therefore stops following drift. On a chain whose median-time-past trails
+// real time by about an hour, the clock-skew failure below needs the local clock
+// roughly three hours behind, and at that skew SV Node's adjustment is zero too,
+// so its own template build fails the same consensus check. Forward-stamped blocks
+// that push median-time-past ahead of real time can trigger the failure at a smaller
+// skew. There a node whose clock was already slow while it sampled its first
+// peers can be rescued by SV Node's capped offset, where this code refuses the
+// poll; that gap is accepted. Otherwise peer time would only nudge a candidate
+// by under 70 minutes, at the cost of a call into the legacy service and a
+// clock that peers can influence.
 //
 // The two consensus bounds on a block timestamp are a pair, and this function
 // honours both. The median rule is the floor; the two-hours-in-the-future rule
@@ -86,7 +102,7 @@ func (b *BlockAssembler) candidateTime(ctx context.Context, parentHeader *model.
 	if entry == nil {
 		// mtpFloor has already logged the cause. Serve the wall clock rather
 		// than stopping mining on a blockchain hiccup.
-		return timeNow, nil
+		return b.holdCandidateTime(parentHeader, timeNow, 0), nil
 	}
 
 	// Check the ceiling before applying the floor: when the two cross there is
@@ -135,7 +151,80 @@ func (b *BlockAssembler) candidateTime(ctx context.Context, parentHeader *model.
 		timeNow = entry.minTime
 	}
 
-	return timeNow, nil
+	return b.holdCandidateTime(parentHeader, timeNow, entry.minTime), nil
+}
+
+func (b *BlockAssembler) holdCandidateTime(parentHeader *model.BlockHeader, timeNow, minTime int64) int64 {
+	held := b.delayEmergencyDifficulty(parentHeader, timeNow, minTime)
+	if held == timeNow {
+		return held
+	}
+
+	parentHash := parentHeader.Hash()
+
+	if b.heldParents.firstSight(*parentHash) {
+		b.logger.Infof("[candidateTime] holding candidate time at %d for parent %s to delay the minimum-difficulty rule by %s (blockassembly_emergencyDifficultyDelay)", held, parentHash.String(), b.settings.BlockAssembly.EmergencyDifficultyDelay)
+	}
+
+	return held
+}
+
+const heldParentsRemembered = 16
+
+type heldParentLatch struct {
+	mu   sync.Mutex
+	seen []chainhash.Hash
+}
+
+func (l *heldParentLatch) firstSight(parent chainhash.Hash) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if slices.Contains(l.seen, parent) {
+		return false
+	}
+
+	if len(l.seen) == heldParentsRemembered {
+		l.seen = l.seen[1:]
+	}
+
+	l.seen = append(l.seen, parent)
+
+	return true
+}
+
+func minDifficultyRule(params *chaincfg.Params) bool {
+	return params.ReduceMinDifficulty && !params.NoDifficultyAdjustment
+}
+
+func (b *BlockAssembler) currentDifficultyTime(parentHeader *model.BlockHeader) int64 {
+	var minTime int64
+
+	if entry := b.memoizedMtpFloor(parentHeader.Hash()); entry != nil {
+		minTime = entry.minTime
+	}
+
+	return b.delayEmergencyDifficulty(parentHeader, time.Now().Unix(), minTime)
+}
+
+func (b *BlockAssembler) delayEmergencyDifficulty(parentHeader *model.BlockHeader, timeNow, minTime int64) int64 {
+	if b.settings == nil || b.settings.ChainCfgParams == nil {
+		return timeNow
+	}
+
+	params := b.settings.ChainCfgParams
+	delay := int64(b.settings.BlockAssembly.EmergencyDifficultyDelay / time.Second)
+
+	if delay <= 0 || !minDifficultyRule(params) {
+		return timeNow
+	}
+
+	threshold := int64(parentHeader.Timestamp) + 2*int64(params.TargetTimePerBlock/time.Second)
+	if timeNow <= threshold || timeNow > threshold+delay || minTime > threshold {
+		return timeNow
+	}
+
+	return threshold
 }
 
 // MinCandidateTime returns the median-time-past floor candidateTime computed for

@@ -66,6 +66,13 @@ type SyncCoordinator struct {
 	// monitor tick (see considerReputationRecoveryThrottled). Guarded by
 	// decisionMu like the latch fields above.
 	lastReputationRecovery time.Time
+	// deferredTriggerPeer names the sync peer whose Kafka sync trigger was
+	// dropped because the blocks producer was backlogged. The trigger is sent
+	// without blocking (a blocking send here would park decisionMu behind a
+	// dead broker), and once a peer holds the slot nothing else re-sends it,
+	// so checkFSMState retries it each tick while that peer still holds the
+	// slot. Guarded by decisionMu.
+	deferredTriggerPeer string
 
 	// Current sync state. currentSyncPeer holds the canonical libp2p ID string.
 	mu                         sync.RWMutex
@@ -745,20 +752,33 @@ func (sc *SyncCoordinator) HandleCatchupFailure(reason string) {
 
 // selectNewSyncPeer selects a new sync peer based on current criteria.
 // The returned ID is a canonical libp2p ID string.
-func (sc *SyncCoordinator) selectNewSyncPeer() string {
+//
+// previousPeerFailed states whether the incumbent sync peer has demonstrably
+// failed (a no-progress stall). When it has, the incumbent is excluded from the
+// candidate set so the call returns a genuine replacement. When it has not, the
+// incumbent stays in the candidate set and the selector's hysteresis re-selects
+// it unless a challenger is materially better — so an opportunistic evaluation
+// returns the incumbent (meaning "stay put") instead of rotating the slot onto a
+// near-equal peer and re-triggering catchup every cycle.
+func (sc *SyncCoordinator) selectNewSyncPeer(previousPeerFailed bool) string {
 	localHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe()
 	previousPeer := sc.currentSyncPeerLocked()
 
+	excludedPeer := ""
+	if previousPeerFailed {
+		excludedPeer = previousPeer
+	}
+
 	peers := sc.listAllPeers()
-	eligiblePeers := sc.filterEligiblePeersWithTip(peers, previousPeer, localHeight, localChainWork, localWorkOK)
+	eligiblePeers := sc.filterEligiblePeersWithTip(peers, excludedPeer, localHeight, localChainWork, localWorkOK)
 	if sc.settings != nil && sc.settings.P2P.ForceSyncPeer != "" {
 		eligiblePeers = peers
 	}
 
-	return sc.selectSyncPeerFromCandidates(eligiblePeers, localHeight, localChainWork, previousPeer)
+	return sc.selectSyncPeerFromCandidates(eligiblePeers, localHeight, localChainWork, previousPeer, previousPeerFailed)
 }
 
-func (sc *SyncCoordinator) selectionCriteria(localHeight uint32, localChainWork []byte, previousPeer string) SelectionCriteria {
+func (sc *SyncCoordinator) selectionCriteria(localHeight uint32, localChainWork []byte, previousPeer string, previousPeerFailed bool) SelectionCriteria {
 	unprovenProbeBudgetRemaining := sc.unprovenProbeBudgetRemainingValue()
 	criteria := SelectionCriteria{
 		LocalHeight:                  int32(localHeight),
@@ -767,6 +787,7 @@ func (sc *SyncCoordinator) selectionCriteria(localHeight uint32, localChainWork 
 		UnprovenProbeBudgetRemaining: unprovenProbeBudgetRemaining,
 		FullDeliveryFreshnessWindow:  sc.fullDeliveryFreshnessWindow(),
 		PreviousPeer:                 previousPeer,
+		PreviousPeerFailed:           previousPeerFailed,
 		SyncAttemptCooldown:          1 * time.Minute, // Don't retry peers for at least 1 minute
 	}
 	// Check for forced peer
@@ -784,8 +805,8 @@ func (sc *SyncCoordinator) selectionCriteria(localHeight uint32, localChainWork 
 	return criteria
 }
 
-func (sc *SyncCoordinator) selectSyncPeerFromCandidates(peers []*blockchain.PeerInfo, localHeight uint32, localChainWork []byte, previousPeer string) string {
-	criteria := sc.selectionCriteria(localHeight, localChainWork, previousPeer)
+func (sc *SyncCoordinator) selectSyncPeerFromCandidates(peers []*blockchain.PeerInfo, localHeight uint32, localChainWork []byte, previousPeer string, previousPeerFailed bool) string {
+	criteria := sc.selectionCriteria(localHeight, localChainWork, previousPeer, previousPeerFailed)
 	return sc.selector.SelectSyncPeer(sc.ctx, peers, criteria)
 }
 
@@ -830,6 +851,7 @@ func (sc *SyncCoordinator) checkFSMState() {
 	defer sc.decisionMu.Unlock()
 
 	sc.refreshProbeBudgetFromLocalTip()
+	sc.retryDeferredSyncTrigger()
 
 	// Check if we're in backoff mode
 	if sc.checkAndClearExpiredBackoff() {
@@ -1139,7 +1161,9 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 	}
 
 	// Select from eligible peers
-	newSyncPeer := sc.selectSyncPeerFromCandidates(eligiblePeers, localHeight, localChainWork, oldPeer)
+	// oldPeer is always empty here (the guard above returns early otherwise), so
+	// there is no incumbent to keep or rotate off.
+	newSyncPeer := sc.selectSyncPeerFromCandidates(eligiblePeers, localHeight, localChainWork, oldPeer, false)
 	if newSyncPeer == "" {
 		sc.logger.Warnf("[SyncCoordinator] No suitable new sync peer found (different from %s)", oldPeer)
 		sc.logCandidateList(eligiblePeers)
@@ -1172,11 +1196,14 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 		sc.warnfUnlessStopping("[SyncCoordinator] RecordSyncAttempt failed for %s: %v", newSyncPeer, err)
 	}
 
-	if err := sc.sendSyncMessage(newSyncPeer); err != nil {
+	deferred, err := sc.sendSyncMessage(newSyncPeer)
+	if err != nil {
 		sc.logger.Errorf("[SyncCoordinator] Failed to trigger sync: %v", err)
 		return err
 	}
-	sc.logger.Infof("[SyncCoordinator] Triggered sync with peer %s via Kafka", newSyncPeer)
+	if !deferred {
+		sc.logger.Infof("[SyncCoordinator] Triggered sync with peer %s via Kafka", newSyncPeer)
+	}
 	return nil
 }
 
@@ -1360,7 +1387,13 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	if !peerAheadByValidatedWork(peerInfo, localChainWork) {
 		sc.logger.Infof("[SyncCoordinator] Caught up to sync peer %s by validated work", currentPeer)
 		// Don't clear peer yet, but look for better peer.
-		if betterPeer := sc.selectNewSyncPeer(); betterPeer != currentPeer && betterPeer != "" {
+		// The incumbent has not failed — we simply caught up to it — so it is not
+		// excluded. It is also not ahead of the local tip by validated work, so
+		// filterEligiblePeersWithTip drops it whenever a validated peer is ahead; a
+		// switch here therefore means a peer with work to offer exists, not that a
+		// near-equal peer displaced a healthy incumbent. With no such peer the call
+		// returns "" and the incumbent stays.
+		if betterPeer := sc.selectNewSyncPeer(false); betterPeer != currentPeer && betterPeer != "" {
 			sc.logger.Infof("[SyncCoordinator] Found better sync peer %s", betterPeer)
 			sc.clearSyncPeerIfCurrent("")
 			_ = sc.triggerSyncLocked()
@@ -1384,7 +1417,11 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	if progressAge <= sc.preemptionProgressGuard() {
 		return
 	}
-	candidate := sc.selectNewSyncPeer()
+	// The incumbent has gone longer than preemptionProgressGuard() without
+	// delivering a validated block: that is an actual failure signal, so it is
+	// excluded from the candidate set and this call returns a real replacement
+	// rather than the (sticky) incumbent.
+	candidate := sc.selectNewSyncPeer(true)
 	if candidate == "" || candidate == currentPeer {
 		return
 	}
@@ -1412,7 +1449,7 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 		if err := sc.registryRecordSyncAttempt(candidate); err != nil {
 			sc.warnfUnlessStopping("[SyncCoordinator] RecordSyncAttempt failed for %s: %v", candidate, err)
 		}
-		if err := sc.sendSyncMessage(candidate); err != nil {
+		if _, err := sc.sendSyncMessage(candidate); err != nil {
 			sc.logger.Errorf("[SyncCoordinator] Failed to trigger preemptive sync: %v", err)
 		}
 	}
@@ -1650,16 +1687,16 @@ func (sc *SyncCoordinator) considerReputationRecovery() {
 }
 
 // sendSyncTriggerToKafka sends a sync trigger message to Kafka.
-// syncPeer is the canonical libp2p ID string.
-func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer string, bestHash string) {
+// syncPeer is the canonical libp2p ID string and dataHubURL is the URL the
+// caller read from the same registry lookup as bestHash, so hash and URL always
+// come from one read. It returns true only when the
+// trigger was dropped because the producer is backlogged, the one outcome a
+// later retry can fix. Every caller holds decisionMu, so the send is
+// non-blocking: a blocking Publish against a dead broker would park the lock
+// and with it every other sync decision.
+func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer, bestHash, dataHubURL string) (backlogged bool) {
 	if sc.blocksKafkaProducerClient == nil || bestHash == "" {
-		return
-	}
-
-	// Get the peer's DataHub URL if available
-	dataHubURL := ""
-	if peerInfo, exists, err := sc.registryGetPeer(syncPeer); err == nil && exists {
-		dataHubURL = peerInfo.DataHubURL
+		return false
 	}
 
 	// Enforce the operator blacklist on the URL read from the registry: it may
@@ -1669,7 +1706,7 @@ func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer string, bestHash stri
 	// never be pointed at a blacklisted host.
 	if dataHubURL != "" && sc.settings != nil && isBaseURLBlacklisted(dataHubURL, sc.settings.SubtreeValidation.BlacklistedBaseURLs) {
 		sc.logger.Warnf("[sendSyncTriggerToKafka] not sending sync trigger for peer %s: DataHubURL %s is blacklisted", syncPeer, dataHubURL)
-		return
+		return false
 	}
 
 	sc.logger.Infof("[sendSyncTriggerToKafka] Sending sync trigger with primary URL %s from peer %s", dataHubURL, syncPeer)
@@ -1683,43 +1720,90 @@ func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer string, bestHash stri
 	value, err := proto.Marshal(msg)
 	if err != nil {
 		sc.logger.Errorf("[sendSyncTriggerToKafka] error marshaling sync peer's best block: %v", err)
-		return
+		return false
 	}
 
-	sc.blocksKafkaProducerClient.Publish(&kafka.Message{
+	if !sc.blocksKafkaProducerClient.TryPublish(&kafka.Message{
 		Key:   []byte(bestHash),
 		Value: value,
-	})
+	}) {
+		return true
+	}
 	sc.logger.Infof("[sendSyncTriggerToKafka] Sent sync trigger to Kafka for block %s from peer %s", bestHash, syncPeer)
+	return false
 }
 
 // sendSyncMessage sends a sync message to a specific peer (canonical libp2p ID string).
-func (sc *SyncCoordinator) sendSyncMessage(peerID string) error {
+// It requires decisionMu to be held. deferred is true only when the blocks
+// producer was backlogged; the trigger is then remembered in deferredTriggerPeer
+// and retried by retryDeferredSyncTrigger, so the claim on the peer stands and is
+// not charged a second sync attempt. deferred is false both when the trigger was
+// handed to the producer and when sendSyncTriggerToKafka dropped it for good (no
+// producer, a blacklisted DataHub URL or a marshal error), so false does not mean
+// the trigger was sent.
+func (sc *SyncCoordinator) sendSyncMessage(peerID string) (deferred bool, err error) {
 	sc.logger.Infof("[sendSyncMessage] Preparing to send sync message to peer %s", peerID)
 
 	peerInfo, exists, err := sc.registryGetPeer(peerID)
 	if err != nil {
 		sc.logger.Errorf("[sendSyncMessage] GetPeer %s failed: %v", peerID, err)
-		return errors.NewServiceError(fmt.Sprintf("get peer %s: %v", peerID, err))
+		return false, errors.NewServiceError(fmt.Sprintf("get peer %s: %v", peerID, err))
 	}
 	if !exists {
 		sc.logger.Errorf("[sendSyncMessage] Peer %s not found in registry", peerID)
-		return errors.NewServiceError(fmt.Sprintf("peer %s not found in registry", peerID))
+		return false, errors.NewServiceError(fmt.Sprintf("peer %s not found in registry", peerID))
 	}
 
 	bestHash := ""
-	if peerInfo.BlockHash != nil {
+	switch {
+	case peerInfo.BlockHash != nil:
 		bestHash = peerInfo.BlockHash.String()
 		sc.logger.Infof("[sendSyncMessage] Found block hash %s for peer %s", bestHash, peerID)
-	} else {
+	case peerInfo.ValidatedBlockHash != nil:
+		bestHash = peerInfo.ValidatedBlockHash.String()
+		sc.logger.Infof("[sendSyncMessage] No advertised block hash for peer %s, using validated block hash %s", peerID, bestHash)
+	default:
 		sc.logger.Warnf("[sendSyncMessage] No block hash found in registry for peer %s", peerID)
 	}
 
 	if bestHash != "" {
 		sc.logger.Infof("[sendSyncMessage] Sending sync trigger to Kafka for peer %s with hash %s", peerID, bestHash)
-		sc.sendSyncTriggerToKafka(peerID, bestHash)
-		return nil
+		if sc.sendSyncTriggerToKafka(peerID, bestHash, peerInfo.DataHubURL) {
+			if sc.deferredTriggerPeer != peerID {
+				sc.logger.Warnf("[sendSyncMessage] Kafka blocks producer backlogged, deferring sync trigger for peer %s; retrying each FSM tick", peerID)
+			}
+			sc.deferredTriggerPeer = peerID
+			return true, nil
+		}
+		sc.deferredTriggerPeer = ""
+		return false, nil
 	}
 	sc.logger.Errorf("[sendSyncMessage] Cannot send sync - no best block hash available for peer %s", peerID)
-	return errors.NewServiceError(fmt.Sprintf("no block hash available for peer %s", peerID))
+	return false, errors.NewServiceError(fmt.Sprintf("no block hash available for peer %s", peerID))
+}
+
+// retryDeferredSyncTrigger re-sends a sync trigger that a backlogged producer
+// dropped, while the peer it was built for still holds the slot. The message is
+// rebuilt from the registry, so the blacklist check runs again and the hash is
+// the peer's current one. A failed registry lookup keeps the trigger deferred:
+// nothing else re-sends it while the peer holds the slot, so clearing it on a
+// transient error would leave that peer claimed with no trigger ever sent. Only
+// the slot moving on, a send, or a permanent drop ends the deferral. It
+// requires decisionMu to be held.
+func (sc *SyncCoordinator) retryDeferredSyncTrigger() {
+	peerID := sc.deferredTriggerPeer
+	if peerID == "" {
+		return
+	}
+	if sc.currentSyncPeerLocked() != peerID {
+		sc.deferredTriggerPeer = ""
+		return
+	}
+	deferred, err := sc.sendSyncMessage(peerID)
+	if err != nil {
+		return
+	}
+	if !deferred {
+		sc.logger.Infof("[SyncCoordinator] Stopped deferring sync trigger for peer %s: the producer took it or sendSyncTriggerToKafka dropped it", peerID)
+	}
 }

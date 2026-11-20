@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/mining"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -120,9 +121,10 @@ func TestSubtreesPersistedBeforeBlockAnnounced(t *testing.T) {
 	parentHash := chainhash.HashH([]byte("persist-before-announce-parent"))
 	for i := range subtreeSize - 1 {
 		txHash := chainhash.HashH(fmt.Appendf(nil, "persist-before-announce-tx-%d", i))
-		require.True(t, server.blockAssembler.AddTxBatchIfRoom(
+		require.Equal(t, subtreeprocessor.Admitted, server.blockAssembler.AddTxBatchBounded(
 			[]subtreepkg.Node{{Hash: txHash, Fee: uint64(1000 + i), SizeInBytes: 250}},
 			[]*subtreepkg.TxInpoints{singleParentInpointsPtr(parentHash, uint32(i))},
+			false,
 		))
 	}
 

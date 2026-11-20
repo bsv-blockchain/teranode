@@ -45,6 +45,16 @@ type QueueStats struct {
 	// capacity.
 	MaxItems int64
 
+	// HeldCount is the transactions the reporting process holds in memory, queued plus already
+	// in subtrees. The ingest queue alone reads near empty while the in-memory limit is the
+	// bound that is full, so the fill predicate reads this next to Count.
+	HeldCount int64
+
+	// MaxHeld is the enforced in-memory transaction limit the reporting process applies, or
+	// <= 0 when there is none. It is the denominator for HeldCount, reported for the same
+	// reason as MaxItems.
+	MaxHeld int64
+
 	// HeadAge is how long the oldest queued batch has waited (0 when empty).
 	// It is the raw age, hold-back included.
 	HeadAge time.Duration

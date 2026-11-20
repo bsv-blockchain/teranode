@@ -190,6 +190,7 @@ type AddTxRequest struct {
 	Locktime      uint32                 `protobuf:"varint,2,opt,name=locktime,proto3" json:"locktime,omitempty"`    // the earliest time a transaction can be mined into a block
 	Utxos         [][]byte               `protobuf:"bytes,5,rep,name=utxos,proto3" json:"utxos,omitempty"`           // the UTXOs consumed by this transaction
 	TxInpoints    []byte                 `protobuf:"bytes,6,opt,name=txInpoints,proto3" json:"txInpoints,omitempty"` // a serialized list of input outpoints for this transaction
+	InBlock       bool                   `protobuf:"varint,7,opt,name=inBlock,proto3" json:"inBlock,omitempty"`      // the transaction arrived inside a block, so the in-memory transaction limit does not refuse it
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -266,10 +267,18 @@ func (x *AddTxRequest) GetTxInpoints() []byte {
 	return nil
 }
 
+func (x *AddTxRequest) GetInBlock() bool {
+	if x != nil {
+		return x.InBlock
+	}
+	return false
+}
+
 // Request for adding a batch of transactions to the mining candidate block.
 type AddTxBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TxRequests    []*AddTxRequest        `protobuf:"bytes,1,rep,name=txRequests,proto3" json:"txRequests,omitempty"` // a batch of transaction requests
+	InBlock       bool                   `protobuf:"varint,2,opt,name=inBlock,proto3" json:"inBlock,omitempty"`      // every transaction in the batch arrived inside a block, so the in-memory transaction limit does not refuse the batch
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -309,6 +318,13 @@ func (x *AddTxBatchRequest) GetTxRequests() []*AddTxRequest {
 		return x.TxRequests
 	}
 	return nil
+}
+
+func (x *AddTxBatchRequest) GetInBlock() bool {
+	if x != nil {
+		return x.InBlock
+	}
+	return false
 }
 
 // Request for adding a batch of transactions using columnar format.
@@ -371,8 +387,12 @@ type AddTxBatchColumnarRequest struct {
 	//
 	// Assigned a fresh field number (11) — see note on field 10.
 	VoutIdxsTxOffsets []uint32 `protobuf:"varint,11,rep,packed,name=vout_idxs_tx_offsets,json=voutIdxsTxOffsets,proto3" json:"vout_idxs_tx_offsets,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Every transaction in the batch arrived inside a block, so the in-memory
+	// transaction limit does not refuse the batch. A server that predates this
+	// field ignores it and applies the limit, which is the previous behaviour.
+	InBlock       bool `protobuf:"varint,12,opt,name=in_block,json=inBlock,proto3" json:"in_block,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AddTxBatchColumnarRequest) Reset() {
@@ -452,6 +472,13 @@ func (x *AddTxBatchColumnarRequest) GetVoutIdxsTxOffsets() []uint32 {
 		return x.VoutIdxsTxOffsets
 	}
 	return nil
+}
+
+func (x *AddTxBatchColumnarRequest) GetInBlock() bool {
+	if x != nil {
+		return x.InBlock
+	}
+	return false
 }
 
 // Request for retrieving a mining candidate block template.
@@ -901,6 +928,14 @@ type QueueStatsMessage struct {
 	// settings for the same reason as doubleSpendWindowMillis: the two settings
 	// contexts are independent processes.
 	QueueMaxItems int64 `protobuf:"varint,4,opt,name=queueMaxItems,proto3" json:"queueMaxItems,omitempty"`
+	// The transactions this producer holds in memory, queued plus already in
+	// subtrees. Reported next to the ingest queue depth because the queue alone
+	// reads near empty while the in-memory limit is the bound that is full.
+	HeldCount int64 `protobuf:"varint,5,opt,name=heldCount,proto3" json:"heldCount,omitempty"`
+	// The enforced (normalized) in-memory transaction limit, or <= 0 when there is
+	// none. Reported rather than read from the reader's own settings for the same
+	// reason as queueMaxItems.
+	MaxHeld       int64 `protobuf:"varint,6,opt,name=maxHeld,proto3" json:"maxHeld,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -959,6 +994,20 @@ func (x *QueueStatsMessage) GetDoubleSpendWindowMillis() int64 {
 func (x *QueueStatsMessage) GetQueueMaxItems() int64 {
 	if x != nil {
 		return x.QueueMaxItems
+	}
+	return 0
+}
+
+func (x *QueueStatsMessage) GetHeldCount() int64 {
+	if x != nil {
+		return x.HeldCount
+	}
+	return 0
+}
+
+func (x *QueueStatsMessage) GetMaxHeld() int64 {
+	if x != nil {
+		return x.MaxHeld
 	}
 	return 0
 }
@@ -1347,7 +1396,7 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"Q\n" +
 	"\x1bNewChaintipAndHeightRequest\x12\x1a\n" +
 	"\bchaintip\x18\x01 \x01(\fR\bchaintip\x12\x16\n" +
-	"\x06height\x18\x02 \x01(\rR\x06height\"\x9a\x01\n" +
+	"\x06height\x18\x02 \x01(\rR\x06height\"\xb4\x01\n" +
 	"\fAddTxRequest\x12\x12\n" +
 	"\x04txid\x18\x01 \x01(\fR\x04txid\x12\x10\n" +
 	"\x03fee\x18\x03 \x01(\x04R\x03fee\x12\x12\n" +
@@ -1356,11 +1405,13 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\x05utxos\x18\x05 \x03(\fR\x05utxos\x12\x1e\n" +
 	"\n" +
 	"txInpoints\x18\x06 \x01(\fR\n" +
-	"txInpoints\"T\n" +
+	"txInpoints\x12\x18\n" +
+	"\ainBlock\x18\a \x01(\bR\ainBlock\"n\n" +
 	"\x11AddTxBatchRequest\x12?\n" +
 	"\n" +
 	"txRequests\x18\x01 \x03(\v2\x1f.blockassembly_api.AddTxRequestR\n" +
-	"txRequests\"\xd9\x02\n" +
+	"txRequests\x12\x18\n" +
+	"\ainBlock\x18\x02 \x01(\bR\ainBlock\"\xf4\x02\n" +
 	"\x19AddTxBatchColumnarRequest\x12!\n" +
 	"\ftxids_packed\x18\x01 \x01(\fR\vtxidsPacked\x12\x12\n" +
 	"\x04fees\x18\x02 \x03(\x04R\x04fees\x12\x14\n" +
@@ -1369,7 +1420,8 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\x11parent_tx_offsets\x18\a \x03(\rR\x0fparentTxOffsets\x12(\n" +
 	"\x10vout_idxs_packed\x18\n" +
 	" \x03(\rR\x0evoutIdxsPacked\x12/\n" +
-	"\x14vout_idxs_tx_offsets\x18\v \x03(\rR\x11voutIdxsTxOffsetsJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"\x14vout_idxs_tx_offsets\x18\v \x03(\rR\x11voutIdxsTxOffsets\x12\x19\n" +
+	"\bin_block\x18\f \x01(\bR\ainBlockJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
 	"R\x13parent_vout_indicesR\x10vout_idx_offsets\"E\n" +
 	"\x19GetMiningCandidateRequest\x12(\n" +
 	"\x0fincludeSubtrees\x18\x01 \x01(\bR\x0fincludeSubtrees\"%\n" +
@@ -1406,14 +1458,16 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\x0eremoveMapCount\x18\t \x01(\rR\x0eremoveMapCount\x12\x1a\n" +
 	"\bsubtrees\x18\n" +
 	" \x03(\tR\bsubtrees\x12.\n" +
-	"\x12queueHeadAgeMillis\x18\v \x01(\x03R\x12queueHeadAgeMillis\"\xc3\x01\n" +
+	"\x12queueHeadAgeMillis\x18\v \x01(\x03R\x12queueHeadAgeMillis\"\xfb\x01\n" +
 	"\x11QueueStatsMessage\x12\x1e\n" +
 	"\n" +
 	"queueCount\x18\x01 \x01(\x03R\n" +
 	"queueCount\x12.\n" +
 	"\x12queueHeadAgeMillis\x18\x02 \x01(\x03R\x12queueHeadAgeMillis\x128\n" +
 	"\x17doubleSpendWindowMillis\x18\x03 \x01(\x03R\x17doubleSpendWindowMillis\x12$\n" +
-	"\rqueueMaxItems\x18\x04 \x01(\x03R\rqueueMaxItems\"\\\n" +
+	"\rqueueMaxItems\x18\x04 \x01(\x03R\rqueueMaxItems\x12\x1c\n" +
+	"\theldCount\x18\x05 \x01(\x03R\theldCount\x12\x18\n" +
+	"\amaxHeld\x18\x06 \x01(\x03R\amaxHeld\"\\\n" +
 	"\x1cGetCurrentDifficultyResponse\x12\x1e\n" +
 	"\n" +
 	"difficulty\x18\x01 \x01(\x01R\n" +

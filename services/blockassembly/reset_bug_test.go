@@ -87,6 +87,7 @@ func setupBlockAssemblyTestWithUtxoStore(t *testing.T, withSettings ...func(*set
 		}
 	})
 
+	ba.endStartupLoad()
 	ba.subtreeProcessor.Start(t.Context())
 	items.blockAssembler = ba
 
@@ -109,6 +110,17 @@ func addBlockWithMinedSet(ctx context.Context, t *testing.T, items *baTestItems,
 		Subtrees:         []*chainhash.Hash{},
 	}, "", blockchainoptions.WithMinedSet(true))
 	require.NoError(t, err)
+}
+
+// setBlockMinedSetAtCurrentGeneration tags a block mined the way a tagging run does: it reads the
+// block's current mined_set generation and writes against it, so the write is not refused.
+func setBlockMinedSetAtCurrentGeneration(ctx context.Context, t *testing.T, items *baTestItems, hash *chainhash.Hash) {
+	t.Helper()
+
+	_, meta, err := items.blockchainClient.GetBlockHeader(ctx, hash)
+	require.NoError(t, err)
+
+	require.NoError(t, items.blockchainClient.SetBlockMinedSet(ctx, hash, meta.MinedSetGeneration))
 }
 
 // TestResetWithBlockchainAhead_MissesIntermediateBlockProcessing covers a bug where,

@@ -5,6 +5,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/jackc/pgx/v5"
 )
 
 // unspendSQL restores UTXOs from the journal and CONSUMES the journal rows doing it.
@@ -103,6 +104,28 @@ import (
 // restored UTXO comes back unlocked. $4 is still added on top, for a caller that asks for the
 // restore to be locked.
 //
+// THE ROWS THE LOCK IS READ FROM ARE SHARE-LOCKED, each arm in a derived table of its own
+// because a locking clause cannot sit on the UNION. Without the locks a SetLocked running beside
+// the restore could give the coin a lock its transaction no longer has, in either order.
+// SetLocked updates the transaction's rows in one statement and its UTXOs in a later one, and
+// under READ COMMITTED each statement sees only what had committed when it began. A SetLocked
+// that had updated the rows but not committed was invisible here, so the coin took the old lock,
+// and its UTXO update had already run and missed the coin. A restore that had read the rows but
+// not committed was invisible to SetLocked's UTXO update in the same way. With FOR SHARE the
+// restore waits for an uncommitted change to those rows and reads the new value, and a SetLocked
+// that comes second waits on the share lock, so its UTXO update starts after the restore commits
+// and finds the coin. It must be FOR SHARE: FOR KEY SHARE does not conflict with an update that
+// changes only flags. A transaction found in neither table has no lock for SetLocked to change,
+// because SetLocked keeps the transaction's lock on those same rows. A share lock writes nothing
+// to the row's data, but it does set the row's locker, which dirties its page, so every restore
+// pays that on each row it reads the lock from.
+//
+// The containment arm locks from the dropped floor ($5), wider than the lookup floor ($8) the
+// lock bit is read from, because the conflicting bit is read from the dropped floor up and
+// SetConflicting writes every containment row of the transaction, whatever its height. A row
+// between the floors read without the lock would show its bit from before a SetConflicting the
+// restore had waited out on another row, the same race the lock bit had.
+//
 // The restored UTXO's pair is the copy's own, verbatim, whenever it is non-zero: a non-zero
 // pair was final when it was copied and stays final. A copy at (0,0) is the REPAIR's case. The
 // UTXO was spent while still unstamped, and if its partition has since been stamped, the stamp
@@ -176,13 +199,17 @@ restored AS (
      CROSS JOIN LATERAL (
        SELECT count(*) > 0 AS known, coalesce(bool_or((x.flags & $7::smallint) <> 0), false) AS conflicting,
               coalesce(bool_or((x.flags & $9::smallint) <> 0 AND x.h >= $8::int), false) AS locked
-         FROM (SELECT i.flags, 2147483647 AS h FROM tx_ident i
-                WHERE i.leaf = (get_byte(t.txid, 0) & 7)::smallint
-                  AND i.txid = t.txid
+         FROM (SELECT a.flags, a.h FROM (
+                 SELECT i.flags, 2147483647 AS h FROM tx_ident i
+                  WHERE i.leaf = (get_byte(t.txid, 0) & 7)::smallint
+                    AND i.txid = t.txid
+                    FOR SHARE OF i) AS a
                UNION ALL
-               SELECT m.flags, m.mined_height AS h FROM tx_mined m
-                WHERE m.txid = t.txid
-                  AND m.mined_height >= $5::int) AS x
+               SELECT b.flags, b.h FROM (
+                 SELECT m.flags, m.mined_height AS h FROM tx_mined m
+                  WHERE m.txid = t.txid
+                    AND m.mined_height >= $5::int
+                    FOR SHARE OF m) AS b) AS x
        OFFSET 0
      ) AS cf
      WHERE NOT EXISTS (
@@ -263,102 +290,47 @@ SELECT (SELECT count(*) FROM restored),
 // block disconnect does NOT come through here: a transaction in a disconnected block is
 // still valid and returns to assembly unmined, so its spends must STAY -- restoring them
 // would create a UTXO that a still-live transaction is already spending.
+//
+// Nothing in the store bounds how long the restore waits for the rows it share-locks; the
+// caller's context does. A writer holding them, a mine of a whole batch until it commits or a
+// deadlock until PostgreSQL detects it, can run a short deadline out. A deadline that cuts the wait
+// returns a storage error and rolls the attempt back whole: no UTXO of the call is restored and
+// every undo record it would have consumed is still there, so a later Unspend of the same spends
+// can restore them. A deadline that runs out during the commit leaves the outcome unknown. The
+// validator's shed unwind is the caller with a short deadline (validator_shedUnwindTimeout).
 func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
-	if len(spends) == 0 {
-		return nil
-	}
-
-	var extraFlags int16
-	if len(flagAsLocked) > 0 && flagAsLocked[0] {
-		extraFlags |= FlagLocked
-	}
-
-	ukeys := make([][16]byte, 0, len(spends))
-	ptxids := make([][]byte, 0, len(spends))
-	stxids := make([][]byte, 0, len(spends))
-
-	for _, sp := range spends {
-		if sp == nil || sp.TxID == nil {
-			continue
-		}
-
-		if sp.SpendingData == nil || sp.SpendingData.TxID == nil {
-			// Without the spender there is no ownership token, and restoring on the
-			// outpoint alone could resurrect a UTXO a different transaction now owns.
-			// Refuse rather than guess.
-			return errors.NewProcessingError("[utxoset][Unspend] %s:%d has no SpendingData; the spender is required as the restore ownership token",
-				sp.TxID.String(), sp.Vout)
-		}
-
-		ukeys = append(ukeys, Pack(sp.TxID[:], sp.Vout))
-		ptxids = append(ptxids, sp.TxID[:])
-		stxids = append(stxids, sp.SpendingData.TxID[:])
-	}
-
-	if len(ukeys) == 0 {
-		return nil
-	}
-
-	// One short transaction of three statements: the shared fence lock first and on its own,
-	// because whether a restored pair is (0,0) is not known until the undo row has been read;
-	// the fence, read after the lock so it cannot move under the restore; then the restore.
-	dbTx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return errors.NewStorageError("[utxoset][Unspend] begin", err)
-	}
-
-	defer func() { _ = dbTx.Rollback(ctx) }()
-
-	fence, err := s.takeFenceShared(ctx, dbTx)
-	if err != nil {
+	req, err := newUnspendRequest(spends, len(flagAsLocked) > 0 && flagAsLocked[0])
+	if err != nil || len(req.ukeys) == 0 {
 		return err
 	}
 
-	var (
-		restored, requested, alreadyLive int
-		otherOwner                       int
-		repaired, noSource, ambiguous    int
-		offending                        *string
-	)
+	// The restore share-locks the identity and containment rows it reads the lock from, and other
+	// writers lock those rows in another order, so PostgreSQL can stop the restore as a deadlock:
+	// a SetLocked or a mine naming several of the same transactions, an un-mine even on one
+	// shared transaction (unMine deletes containment rows before it updates the identity rows),
+	// and a Delete of the restored coin's transaction (it takes the identity rows before the
+	// undo records).
+	// SetConflicting, MarkTransactionsOnLongestChain and the stamp also write those rows, and can
+	// cross the restore when they name several of its transactions. The attempt is one transaction
+	// that rolls back whole, so it runs again from the start, as SetLocked, the mine, the un-mine,
+	// SetConflicting and Delete do; MarkTransactionsOnLongestChain and the stamp do not retry and
+	// hand the deadlock to their caller. Each crossing costs at least PostgreSQL's
+	// deadlock_timeout, a second by default, before the retry, and the shared fence lock is held
+	// for all of it.
+	var res unspendResult
 
-	if err := dbTx.QueryRow(ctx, unspendSQL, ukeys, ptxids, stxids, extraFlags,
-		int32(fence.droppedFloor), int32(fence.fence), FlagConflicting, s.lookupFloor(), FlagLocked). //nolint:gosec // heights fit int32
-		Scan(&restored, &requested, &alreadyLive, &otherOwner, &repaired, &noSource, &ambiguous, &offending); err != nil {
-		return errors.NewStorageError("[utxoset][Unspend] restore", err)
+	if err := withDeadlockRetry(ctx, "unspend", func() (err error) {
+		res, err = s.unspendOnce(ctx, req)
+		return err
+	}); err != nil {
+		return err
 	}
 
-	// One bad UTXO fails the whole call, before the commit, so no UTXO of the call is restored
-	// and no undo copy is consumed. The accounting check below runs after the commit and so
-	// does NOT behave this way: what it reports missing was never restored, and what was
-	// restored stays restored.
-	if noSource > 0 || ambiguous > 0 {
-		names := ""
-		if offending != nil {
-			names = *offending
-		}
-
-		if noSource > 0 {
-			unspendRepairNoSource.Inc()
-
-			return errors.NewStorageError("[utxoset][Unspend] %d UTXOs restored at (0,0) have no containment row below the stamp fence %d and no identity row, so nothing could ever stamp them; the call is rolled back (%s)",
-				noSource, fence.fence, names)
-		}
-
-		unspendRepairAmbiguous.Inc()
-
-		return errors.NewStorageError("[utxoset][Unspend] %d UTXOs restored at (0,0) have more than one containment row below the stamp fence %d, where every row should name a winner; the call is rolled back (%s)",
-			ambiguous, fence.fence, names)
+	if res.repaired > 0 {
+		unspendRepaired.Add(float64(res.repaired))
 	}
 
-	if err := dbTx.Commit(ctx); err != nil {
-		return errors.NewStorageError("[utxoset][Unspend] commit", err)
-	}
-
-	if repaired > 0 {
-		unspendRepaired.Add(float64(repaired))
-	}
-
-	if restored+alreadyLive+otherOwner != requested {
+	if res.restored+res.alreadyLive+res.otherOwner != res.requested {
 		// Silence here would be the dangerous outcome: a reorg that believes it has
 		// restored UTXOs which are in fact still missing leaves the UTXO set wrong and
 		// consensus-divergent, with nothing to indicate it. Either every requested UTXO
@@ -378,8 +350,125 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 		// `held` arm above has just put the hold on them, so the caller gets the UTXO
 		// unspent and held, which is the whole instruction.
 		return errors.NewProcessingError("[utxoset][Unspend] restored %d, already live %d, owned by another spender %d, of %d requested; the rest are beyond journal retention",
-			restored, alreadyLive, otherOwner, requested)
+			res.restored, res.alreadyLive, res.otherOwner, res.requested)
 	}
 
 	return nil
+}
+
+// unspendOnce is one attempt of Unspend, in one database transaction of three statements: the
+// shared fence lock first and on its own, because whether a restored pair is (0,0) is not known
+// until the undo row has been read; the fence, read after the lock so it cannot move under the
+// restore; then the restore.
+func (s *Store) unspendOnce(ctx context.Context, req unspendRequest) (unspendResult, error) {
+	dbTx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return unspendResult{}, errors.NewStorageError("[utxoset][Unspend] begin", err)
+	}
+
+	defer func() { _ = dbTx.Rollback(ctx) }()
+
+	res, err := s.restoreIn(ctx, dbTx, req)
+	if err != nil {
+		return unspendResult{}, err
+	}
+
+	if err := dbTx.Commit(ctx); err != nil {
+		return unspendResult{}, errors.NewStorageError("[utxoset][Unspend] commit", err)
+	}
+
+	return res, nil
+}
+
+// unspendRequest is an Unspend call's arguments in the shape unspendSQL binds them.
+type unspendRequest struct {
+	ukeys      [][16]byte
+	ptxids     [][]byte
+	stxids     [][]byte
+	extraFlags int16
+}
+
+func newUnspendRequest(spends []*utxo.Spend, flagAsLocked bool) (unspendRequest, error) {
+	req := unspendRequest{
+		ukeys:  make([][16]byte, 0, len(spends)),
+		ptxids: make([][]byte, 0, len(spends)),
+		stxids: make([][]byte, 0, len(spends)),
+	}
+
+	if flagAsLocked {
+		req.extraFlags |= FlagLocked
+	}
+
+	for _, sp := range spends {
+		if sp == nil || sp.TxID == nil {
+			continue
+		}
+
+		if sp.SpendingData == nil || sp.SpendingData.TxID == nil {
+			// Without the spender there is no ownership token, and restoring on the
+			// outpoint alone could resurrect a UTXO a different transaction now owns.
+			// Refuse rather than guess.
+			return unspendRequest{}, errors.NewProcessingError("[utxoset][Unspend] %s:%d has no SpendingData; the spender is required as the restore ownership token",
+				sp.TxID.String(), sp.Vout)
+		}
+
+		req.ukeys = append(req.ukeys, Pack(sp.TxID[:], sp.Vout))
+		req.ptxids = append(req.ptxids, sp.TxID[:])
+		req.stxids = append(req.stxids, sp.SpendingData.TxID[:])
+	}
+
+	return req, nil
+}
+
+// unspendResult is what unspendSQL counted.
+type unspendResult struct {
+	restored, requested, alreadyLive int
+	otherOwner                       int
+	repaired                         int
+}
+
+// restoreIn takes the shared fence lock and runs the restore inside the caller's transaction,
+// which commits it. A UTXO it cannot give a pair to fails the call here, before the commit.
+func (s *Store) restoreIn(ctx context.Context, dbTx pgx.Tx, req unspendRequest) (unspendResult, error) {
+	fence, err := s.takeFenceShared(ctx, dbTx)
+	if err != nil {
+		return unspendResult{}, err
+	}
+
+	var (
+		res                 unspendResult
+		noSource, ambiguous int
+		offending           *string
+	)
+
+	if err := dbTx.QueryRow(ctx, unspendSQL, req.ukeys, req.ptxids, req.stxids, req.extraFlags,
+		int32(fence.droppedFloor), int32(fence.fence), FlagConflicting, s.lookupFloor(), FlagLocked). //nolint:gosec // heights fit int32
+		Scan(&res.restored, &res.requested, &res.alreadyLive, &res.otherOwner, &res.repaired, &noSource, &ambiguous, &offending); err != nil {
+		return unspendResult{}, errors.NewStorageError("[utxoset][Unspend] restore", err)
+	}
+
+	// One bad UTXO fails the whole call, before the commit, so no UTXO of the call is restored
+	// and no undo copy is consumed. The accounting check in Unspend runs after the commit and so
+	// does NOT behave this way: what it reports missing was never restored, and what was
+	// restored stays restored.
+	if noSource > 0 || ambiguous > 0 {
+		names := ""
+		if offending != nil {
+			names = *offending
+		}
+
+		if noSource > 0 {
+			unspendRepairNoSource.Inc()
+
+			return unspendResult{}, errors.NewStorageError("[utxoset][Unspend] %d UTXOs restored at (0,0) have no containment row below the stamp fence %d and no identity row, so nothing could ever stamp them; the call is rolled back (%s)",
+				noSource, fence.fence, names)
+		}
+
+		unspendRepairAmbiguous.Inc()
+
+		return unspendResult{}, errors.NewStorageError("[utxoset][Unspend] %d UTXOs restored at (0,0) have more than one containment row below the stamp fence %d, where every row should name a winner; the call is rolled back (%s)",
+			ambiguous, fence.fence, names)
+	}
+
+	return res, nil
 }

@@ -50,17 +50,42 @@ type Interface interface {
 	//   - txInpoints: Transaction input points for each node for dependency tracking
 	AddBatch(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints)
 
-	// AddBatchIfRoom adds a batch only if the configured capacity bound would not
-	// be exceeded, reporting whether it did. When no bound is configured it never
-	// refuses and behaves identically to AddBatch.
+	// AddBatchBounded offers a batch under the configured capacity bounds and reports which
+	// bound refused it, if one did. When no bound is configured it never refuses and behaves
+	// identically to AddBatch. inBlock marks transactions that arrived inside a block: the
+	// in-memory transaction limit does not refuse them; the ingest queue bound still does.
 	//
 	// Parameters:
 	//   - nodes: The transaction nodes to add to processing
 	//   - txInpoints: Transaction input points for each node for dependency tracking
+	//   - inBlock: Whether the transactions arrived inside a block
 	//
 	// Returns:
-	//   - bool: true if the batch was enqueued, false if it was refused for room
-	AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool
+	//   - Admission: Admitted, or the bound that refused the batch
+	AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) Admission
+
+	// HeldCount returns the transactions held in memory: queued, dequeued but not yet counted,
+	// and already in subtrees.
+	//
+	// Returns:
+	//   - int64: Transactions held in memory
+	HeldCount() int64
+
+	// SetUnminedLoading marks the start (true) or end (false) of a load or reload of the unmined
+	// transactions. While any is in progress the held count reads at least the in-memory limit,
+	// because the transactions being loaded raise the subtree count one at a time and a partial
+	// count would admit mempool ingest that the load then adds to. Calls nest.
+	//
+	// Parameters:
+	//   - loading: true when a load starts, false when it ends
+	SetUnminedLoading(loading bool)
+
+	// UnminedLoading reports whether a load or reload of the unmined transactions holds the held
+	// count full, see SetUnminedLoading.
+	//
+	// Returns:
+	//   - bool: true while the hold is active
+	UnminedLoading() bool
 
 	// Start starts the main processing goroutine for the SubtreeProcessor.
 	// This should be called after loading unmined transactions at startup to avoid race conditions.
@@ -372,7 +397,7 @@ type Interface interface {
 
 	// QueueLength returns the number of transactions currently queued, not
 	// the number of batches. This indicates the processor's current workload.
-	// For items added through the bounded AddBatchIfRoom path it counts
+	// For items added through the bounded AddBatchBounded path it counts
 	// reserved-or-published items and never reads below the published-outstanding
 	// count; the unbounded AddBatch path now reserves before publishing too, so it
 	// upholds that same guarantee and additionally does not participate in the cap.
@@ -388,6 +413,14 @@ type Interface interface {
 	// Returns:
 	//   - int64: The enforced item cap (<= 0 when unbounded)
 	QueueMaxItems() int64
+
+	// MaxTransactionsInMemory returns the enforced (normalized) limit on
+	// transactions held in memory, queued plus already in subtrees, or a value
+	// <= 0 when there is no limit. It is reported in the shed message.
+	//
+	// Returns:
+	//   - int64: The enforced limit (<= 0 when unlimited)
+	MaxTransactionsInMemory() int64
 
 	// QueueHeadAge returns how long the oldest queued batch has been waiting.
 	// It is a diagnostic gauge for dispatcher-stall visibility and returns 0

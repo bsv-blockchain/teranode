@@ -49,6 +49,14 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	}
 	failedIterations := make([]catchup.IterationError, 0, 10) // Preallocate for up to 10 failed iterations
 
+	// The peer's response time, summed over the header requests that succeeded.
+	// Credited as one average per request at the end, so what reaches the peer's
+	// AvgResponseTimeMs is the latency of a request, not the length of the fetch.
+	var (
+		headerRequestTime  time.Duration
+		headerRequestCount int64
+	)
+
 	// Validate that we have a baseURL for making HTTP requests
 	if baseURL == "" {
 		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "No baseURL provided"), nil, errors.NewInvalidArgumentError("baseURL is required for fetching headers")
@@ -144,11 +152,11 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	// header above the UTXO height was rejected outright). The outcome is unchanged only while
 	// the lag stays below CatchupMaxAccumulatedHeaders: the fetch truncates there (see the
 	// maxAccumulatedHeaders check below), so a larger lag ends the served stream *below* our
-	// tip, the walk takes its ancestor at that point, and the depth is overstated by
-	// (lag - CatchupMaxAccumulatedHeaders) — the same over-measurement this ceiling change
-	// exists to remove, reached by a different route. That needs a lag of 100k blocks by
-	// default, so the cap is kept for now rather than removed alongside the ceiling fix, but
-	// it is a correctness trade and not the free conservatism it looks like. On the netted
+	// tip with every header in it one we hold. The fetch marks that StoppedOnCap, and catchup
+	// ends the run as a local fault rather than reading the end of the list as a fork
+	// (handleExhaustedAncestorWalk), so the peer is not charged, but the catchup cannot get past
+	// that point until the lag shrinks. That needs a lag of 100k blocks by default, so the cap is
+	// kept for now, but it is a trade and not the free conservatism it looks like. On the netted
 	// route the caveat does not apply: the window there counts from the locator height to the
 	// next checkpoint (model.NettedRouteCatchupWindow), so lag lengthens the window instead of
 	// truncating it. Note it also sets
@@ -206,6 +214,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	windowEndsAtCheckpoint := model.NettedRouteAt(u.settings, u.utxoStore, bestBlockMeta.Height+1)
 	totalHeadersFetched := 0
 	reachedTarget := false
+	stoppedOnCap := false
 	stopReason := ""
 
 	// Iterate until we reach the target or chain tip
@@ -260,8 +269,13 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		// dedup at "GetBlockHeadersFromOldest includes the starting block" below). +1 accounts
 		// for that extra header so a well-behaved peer's response is never rejected.
 		maxHeaderBytes := int64(maxBlockHeadersPerRequest+1) * int64(model.BlockHeaderSize)
+		requestStart := time.Now()
 		blockHeadersBytes, err := catchup.FetchHeadersWithRetry(iterCtx, u.logger, requestURL, maxRetries, maxHeaderBytes)
 		iterCancel() // Clean up the iteration context
+		if err == nil {
+			headerRequestTime += time.Since(requestStart)
+			headerRequestCount++
+		}
 		if err != nil {
 			// Check if it's specifically a context deadline exceeded from the iteration timeout
 			// This indicates the peer is too slow to respond within our timeout
@@ -458,6 +472,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 					allCatchupHeaders = append(allCatchupHeaders, headersToAppend...)
 					totalHeadersFetched += len(headersToAppend)
 				}
+				stoppedOnCap = true
 				stopReason = fmt.Sprintf("Memory limit reached (%d headers)", maxAccumulatedHeaders)
 				if windowEndsAtCheckpoint {
 					stopReason = fmt.Sprintf("Reached the next checkpoint (%d headers)", maxAccumulatedHeaders)
@@ -505,6 +520,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 
 	// Check if we hit the iteration limit
 	if iteration >= maxCatchupIterations && stopReason == "" {
+		stoppedOnCap = true
 		stopReason = fmt.Sprintf("Reached maximum iterations (%d)", maxCatchupIterations)
 		u.logger.Warnf("[catchup][%s] stopped after %d iterations without reaching target", chainTipHash.String(), iteration)
 	}
@@ -513,8 +529,8 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	// (reputation), deliberately NOT a catchup success: the whole catchup records
 	// exactly one attempt (doCatchup) and one outcome, so counting this stage as a
 	// catchup success would let CatchupSuccesses exceed CatchupAttempts.
-	if totalHeadersFetched > 0 {
-		u.reportValidBlockHeaders(ctx, identifier, time.Since(startTime))
+	if totalHeadersFetched > 0 && headerRequestCount > 0 {
+		u.reportValidBlockHeaders(ctx, identifier, headerRequestTime/time.Duration(headerRequestCount))
 	}
 
 	// Set default stop reason if none was set
@@ -534,6 +550,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	u.logger.Infof("[catchup][%s] completed: %d headers fetched in %d iterations, reached target: %v, reason: %s", chainTipHash.String(), totalHeadersFetched, iteration, reachedTarget, stopReason)
 
 	result := catchup.CreateCatchupResultWithLocator(allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL, iteration, failedIterations, reachedTarget, stopReason, locatorHashes)
+	result.StoppedOnCap = stoppedOnCap
 
 	return result, bestBlockHeader, nil
 }

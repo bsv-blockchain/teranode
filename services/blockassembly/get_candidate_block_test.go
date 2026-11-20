@@ -9,6 +9,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -48,11 +49,11 @@ func TestGetCandidateBlock(t *testing.T) {
 		// Add transactions to create subtrees
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte{byte(i), 0xca, 0xfe})
-			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
+			require.Equal(t, subtreeprocessor.Admitted, server.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}}))
+			}}, []*subtreepkg.TxInpoints{{}}, false))
 		}
 
 		time.Sleep(50 * time.Millisecond)

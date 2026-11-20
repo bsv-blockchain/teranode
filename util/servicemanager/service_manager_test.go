@@ -13,6 +13,8 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestNewServiceManager(t *testing.T) {
@@ -478,6 +480,176 @@ func TestServiceManagerWait(t *testing.T) {
 		assert.True(t, stop2)
 		assert.True(t, stop3)
 	})
+}
+
+// cancelStub is a service whose Start signals ready and then returns one of
+// two ways: onRelease when release is closed while its context is still live
+// (a failure arriving from elsewhere), or onCancel once its context is
+// cancelled (ctx.Err() when onCancel is nil). ctxErrAtReturn records whether
+// its own context was cancelled at the moment Start returned.
+type cancelStub struct {
+	release   chan struct{}
+	onRelease error
+	onCancel  error
+
+	ctxErrAtReturn chan error
+}
+
+func newCancelStub() *cancelStub {
+	return &cancelStub{release: make(chan struct{}), ctxErrAtReturn: make(chan error, 1)}
+}
+
+func (s *cancelStub) Init(context.Context) error { return nil }
+
+func (s *cancelStub) Start(ctx context.Context, ready chan<- struct{}) error {
+	close(ready)
+
+	select {
+	case <-s.release:
+		s.ctxErrAtReturn <- ctx.Err()
+		return s.onRelease
+	case <-ctx.Done():
+		s.ctxErrAtReturn <- ctx.Err()
+
+		if s.onCancel != nil {
+			return s.onCancel
+		}
+
+		return ctx.Err()
+	}
+}
+
+func (s *cancelStub) Stop(context.Context) error { return nil }
+
+func (s *cancelStub) Health(context.Context, bool) (int, string, error) {
+	return http.StatusOK, "OK", nil
+}
+
+func waitResult(t *testing.T, sm *ServiceManager) error {
+	t.Helper()
+
+	result := make(chan error, 1)
+
+	go func() { result <- sm.Wait() }()
+
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(10 * time.Second):
+		t.Fatal("Wait did not return")
+		return nil
+	}
+}
+
+// TestWait_LocalCancellationIsClean: a service that returns because its own
+// context was cancelled has stopped cleanly, whatever form the cancellation
+// takes: ctx.Err() itself, a project error wrapping it, or the gRPC
+// codes.Canceled a local client call returns when that context is cancelled.
+// Both ForceShutdown (what the signal handler calls) and a cancelled parent
+// context count.
+func TestWait_LocalCancellationIsClean(t *testing.T) {
+	forms := map[string]error{
+		"ctx.Err":             nil,
+		"wrapped ctx.Err":     errors.NewServiceError("subscription ended", context.Canceled),
+		"gRPC codes.Canceled": status.Error(codes.Canceled, "context canceled"),
+	}
+
+	for name, onCancel := range forms {
+		t.Run(name+" after ForceShutdown", func(t *testing.T) {
+			sm := NewServiceManager(context.Background(), ulogger.New("test", ulogger.WithWriter(io.Discard)))
+
+			svc := newCancelStub()
+			svc.onCancel = onCancel
+
+			require.NoError(t, sm.AddService("svc", svc))
+
+			sm.ForceShutdown()
+
+			require.NoError(t, waitResult(t, sm))
+		})
+
+		t.Run(name+" after parent cancel", func(t *testing.T) {
+			parent, cancel := context.WithCancel(context.Background())
+			sm := NewServiceManager(parent, ulogger.New("test", ulogger.WithWriter(io.Discard)))
+
+			svc := newCancelStub()
+			svc.onCancel = onCancel
+
+			require.NoError(t, sm.AddService("svc", svc))
+
+			cancel()
+
+			require.NoError(t, waitResult(t, sm))
+		})
+	}
+}
+
+// TestWait_RemoteCancelWhileRunningIsReturned: a running service gets a gRPC
+// codes.Canceled from a remote service that is stopping (P2P, SubtreeValidation
+// and UTXOPersister wait on the blockchain FSM in Start). The project errors.Is
+// matches it against context.Canceled, but this process's context is live, so
+// it is a failure and Wait must return it.
+func TestWait_RemoteCancelWhileRunningIsReturned(t *testing.T) {
+	sm := NewServiceManager(context.Background(), ulogger.New("test", ulogger.WithWriter(io.Discard)))
+
+	svc := newCancelStub()
+	svc.onRelease = status.Error(codes.Canceled, "remote handler stopped")
+
+	require.NoError(t, sm.AddService("svc", svc))
+
+	close(svc.release)
+
+	err := waitResult(t, sm)
+	require.NoError(t, <-svc.ctxErrAtReturn, "premise: the local context was live when Start returned")
+	require.Error(t, err)
+	// Wait passes it through the project errors.Join, which keeps a non-project
+	// error as text only, so check the message rather than the status code.
+	require.Contains(t, err.Error(), "remote handler stopped")
+}
+
+// TestWait_FirstRealErrorSurvivesSiblingCancellations: the first service's
+// remote codes.Canceled is the failure. The errgroup then cancels the
+// siblings, which return their own (now local) cancellations; those are clean
+// stops and must not hide or replace the first error.
+func TestWait_FirstRealErrorSurvivesSiblingCancellations(t *testing.T) {
+	sm := NewServiceManager(context.Background(), ulogger.New("test", ulogger.WithWriter(io.Discard)))
+
+	failing := newCancelStub()
+	failing.onRelease = status.Error(codes.Canceled, "first: remote handler stopped")
+
+	sibling := newCancelStub()
+	sibling.onCancel = status.Error(codes.Canceled, "sibling: context canceled")
+
+	require.NoError(t, sm.AddService("failing", failing))
+	require.NoError(t, sm.AddService("sibling", sibling))
+
+	close(failing.release)
+
+	err := waitResult(t, sm)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "first: remote handler stopped")
+	require.NotContains(t, err.Error(), "sibling")
+	require.Error(t, <-sibling.ctxErrAtReturn, "premise: the sibling returned after the errgroup cancelled it")
+}
+
+// TestWait_ErrorDuringRequestedShutdownIsReturned: a requested shutdown is
+// clean only if the service returns a cancellation. A service that fails some
+// other way while stopping (a flush, a drain) has failed, and Wait must say so.
+func TestWait_ErrorDuringRequestedShutdownIsReturned(t *testing.T) {
+	sm := NewServiceManager(context.Background(), ulogger.New("test", ulogger.WithWriter(io.Discard)))
+
+	flushErr := errors.NewProcessingError("failed to flush on shutdown")
+
+	svc := newCancelStub()
+	svc.onCancel = flushErr
+
+	require.NoError(t, sm.AddService("svc", svc))
+
+	sm.ForceShutdown()
+
+	err := waitResult(t, sm)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, flushErr))
 }
 
 func TestServiceManagerHealthHandler(t *testing.T) {

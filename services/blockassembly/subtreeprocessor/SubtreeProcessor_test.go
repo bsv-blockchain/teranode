@@ -4918,3 +4918,123 @@ func TestMoveForwardBlockRecreatesChildrenOfAnEmptyBlockMovedBackEarlier(t *test
 	require.NoError(t, err, "moving the block forward must recreate the child")
 	require.NotNil(t, f.otherParentSpend(t).SpendingData, "the recreated child spends the surviving parent again")
 }
+
+// With blockassembly_storeTxInpointsForSubtreeMeta off no subtree meta is written, so a moved-back
+// block's parent links come from the utxo store. A tx whose record is gone, and the coinbase
+// placeholder, get none.
+func TestMoveBackBlockGetSubtreesReadsParentLinksFromTheStoreWithSubtreeMetaOff(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+	tSettings.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	blobStore := blob_memory.New()
+
+	stp, err := NewSubtreeProcessor(t.Context(), ulogger.TestLogger{}, tSettings, blobStore, nil, utxoStore, make(chan NewSubtreeRequest, 1))
+	require.NoError(t, err)
+
+	parentHash := chainhash.Hash{0x01}
+
+	stored := bt.NewTx()
+	stored.Inputs = []*bt.Input{{PreviousTxOutIndex: 0, PreviousTxSatoshis: 2000, UnlockingScript: bscript.NewFromBytes([]byte{})}}
+	require.NoError(t, stored.Inputs[0].PreviousTxIDAdd(&parentHash))
+	require.NoError(t, stored.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+
+	_, err = utxoStore.Create(t.Context(), stored, 0)
+	require.NoError(t, err)
+
+	goneHash := chainhash.Hash{0x02}
+
+	blockSubtree, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, blockSubtree.AddCoinbaseNode())
+	require.NoError(t, blockSubtree.AddNode(*stored.TxIDChainHash(), 1, 1))
+	require.NoError(t, blockSubtree.AddNode(goneHash, 1, 1))
+
+	subtreeBytes, err := blockSubtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, blobStore.Set(t.Context(), blockSubtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	_, txInpoints, _, err := stp.moveBackBlockGetSubtrees(t.Context(), &model.Block{
+		Header:   prevBlockHeader,
+		Subtrees: []*chainhash.Hash{blockSubtree.RootHash()},
+	})
+	require.NoError(t, err)
+	require.Len(t, txInpoints, 1)
+	require.Len(t, txInpoints[0], 3)
+
+	require.Empty(t, txInpoints[0][0].ParentTxHashes, "the coinbase placeholder has no parents")
+	require.Equal(t, []chainhash.Hash{parentHash}, txInpoints[0][1].ParentTxHashes, "a moved-back tx gets its parent links from the store")
+	require.Empty(t, txInpoints[0][2].ParentTxHashes, "a tx whose record is gone has no links to read")
+}
+
+// batchSizeRecordingStore records how many records each BatchDecorate call asks for.
+type batchSizeRecordingStore struct {
+	utxo.Store
+	batchSizes []int
+}
+
+func (s *batchSizeRecordingStore) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, fieldNames ...fields.FieldName) error {
+	s.batchSizes = append(s.batchSizes, len(items))
+
+	return s.Store.BatchDecorate(ctx, items, fieldNames...)
+}
+
+// A subtree can hold more nodes than one Aerospike batch request can carry, so the subtree-meta-off
+// move-back reads parent links in bounded batches, and every link still lands on its own node.
+func TestTxInpointsFromUtxoStoreReadsInBoundedBatches(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	sqlStore, err := sql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	store := &batchSizeRecordingStore{Store: sqlStore}
+
+	stp := &SubtreeProcessor{utxoStore: store}
+
+	previous := moveBackStoreReadBatchSize
+	moveBackStoreReadBatchSize = 2
+
+	t.Cleanup(func() { moveBackStoreReadBatchSize = previous })
+
+	nodes := []subtreepkg.Node{{Hash: subtreepkg.CoinbasePlaceholderHashValue}}
+	parents := make([]chainhash.Hash, 0, 3)
+
+	for i := byte(1); i <= 3; i++ {
+		parentHash := chainhash.Hash{i}
+		parents = append(parents, parentHash)
+
+		tx := bt.NewTx()
+		tx.Inputs = []*bt.Input{{PreviousTxOutIndex: 0, PreviousTxSatoshis: 2000, UnlockingScript: bscript.NewFromBytes([]byte{})}}
+		require.NoError(t, tx.Inputs[0].PreviousTxIDAdd(&parentHash))
+		require.NoError(t, tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(1000+int(i))))
+
+		_, err = sqlStore.Create(t.Context(), tx, 0)
+		require.NoError(t, err)
+
+		nodes = append(nodes, subtreepkg.Node{Hash: *tx.TxIDChainHash()})
+	}
+
+	nodes = append(nodes, subtreepkg.Node{Hash: chainhash.Hash{0xff}})
+
+	txInpoints, err := stp.txInpointsFromUtxoStore(t.Context(), nodes)
+	require.NoError(t, err)
+
+	require.Equal(t, []int{2, 2}, store.batchSizes, "four records in batches of two, the coinbase placeholder skipped")
+	require.Len(t, txInpoints, len(nodes))
+	require.Empty(t, txInpoints[0].ParentTxHashes, "the coinbase placeholder has no parents")
+
+	for i, parentHash := range parents {
+		require.Equal(t, []chainhash.Hash{parentHash}, txInpoints[i+1].ParentTxHashes, "node %d gets its own parent links", i+1)
+	}
+
+	require.Empty(t, txInpoints[4].ParentTxHashes, "a tx whose record is gone has no links to read")
+}

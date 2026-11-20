@@ -25,6 +25,14 @@ func setupPostgresStore(t *testing.T) (*Store, context.Context) {
 	t.Helper()
 	ctx := context.Background()
 
+	return newPostgresTestStore(t, ctx, startPostgresContainer(t, ctx)), ctx
+}
+
+// startPostgresContainer starts a Postgres testcontainer, skipping the test
+// when no container runtime is reachable, and returns its connection URL.
+func startPostgresContainer(t *testing.T, ctx context.Context) *url.URL {
+	t.Helper()
+
 	pgContainer, err := postgres.Run(ctx,
 		"postgres:13",
 		postgres.WithDatabase("testdb"),
@@ -47,6 +55,14 @@ func setupPostgresStore(t *testing.T) (*Store, context.Context) {
 	dbURL, err := url.Parse(connStr)
 	require.NoError(t, err)
 
+	return dbURL
+}
+
+// newPostgresTestStore opens a *Store on dbURL with the settings
+// setupPostgresStore uses.
+func newPostgresTestStore(t *testing.T, ctx context.Context, dbURL *url.URL) *Store {
+	t.Helper()
+
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.DBTimeout = 30 * time.Second
 	tSettings.BatcherDrainMode = true // batcher fires immediately in tests
@@ -62,7 +78,7 @@ func setupPostgresStore(t *testing.T) (*Store, context.Context) {
 
 	require.NotNil(t, store.unlockBatcher, "unlockBatcher should be initialised for Postgres with LockedBatcherSize > 1")
 
-	return store, ctx
+	return store
 }
 
 // TestConflictWAL_Postgres exercises the conflict-resolution write-ahead log

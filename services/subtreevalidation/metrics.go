@@ -146,6 +146,10 @@ var (
 	// a metric a spike in the rate would be invisible.
 	prometheusSubtreeAlreadyExistsSkipped prometheus.Counter
 
+	// prometheusRecentlyFailedPeerSubtreesSkipped counts peer subtree announcements skipped because
+	// the subtree failed validation within subtreevalidation_failedSubtreeNegativeCacheTTL.
+	prometheusRecentlyFailedPeerSubtreesSkipped prometheus.Counter
+
 	// prometheusSkippedSubtrees counts peer subtrees announced while the node was catching up, by
 	// outcome: recorded (newly kept), evicted (oldest dropped when full), expired (announced more
 	// than skippedSubtreeMaxAge before its replay), requeued (kept again because the node was
@@ -377,6 +381,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "subtreevalidation",
 			Name:      "subtree_already_exists_skipped_total",
 			Help:      "Number of subtree Kafka messages skipped because the subtree already exists",
+		},
+	)
+
+	prometheusRecentlyFailedPeerSubtreesSkipped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "recently_failed_peer_subtrees_skipped_total",
+			Help:      "Peer subtree announcements skipped because the subtree failed validation within subtreevalidation_failedSubtreeNegativeCacheTTL",
 		},
 	)
 

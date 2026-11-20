@@ -333,5 +333,10 @@ func (s *SQL) processBlockHeadersRows(rows *sql.Rows, numberOfHeaders uint64, ha
 		blockHeaderMetas = append(blockHeaderMetas, blockHeaderMeta)
 	}
 
+	// An error part way through the rows would otherwise return a short list.
+	if err := rows.Err(); err != nil {
+		return nil, nil, errors.NewStorageError("failed to read block headers", err)
+	}
+
 	return blockHeaders, blockHeaderMetas, nil
 }

@@ -23,6 +23,12 @@ type BlockHeaderMeta struct {
 	SubtreesSet    bool       `json:"subtrees_set"`     // Whether the block has its subtrees set.
 	Invalid        bool       `json:"invalid"`          // Whether the block is marked as invalid.
 	ProcessedAt    *time.Time `json:"processed_at"`     // Timestamp when the block was processed (nullable).
+
+	// MinedSetGeneration counts the writes that cleared mined_set (ClearBlockMinedSet,
+	// InvalidateBlock, RevalidateBlock). A tagging run captures it at start and passes it
+	// to SetBlockMinedSet, which refuses the write if it has moved. Only GetBlockHeader
+	// fills it; it is not part of Bytes(), so list endpoints leave it zero.
+	MinedSetGeneration uint64 `json:"mined_set_generation"`
 }
 
 func (m *BlockHeaderMeta) Bytes() []byte {
