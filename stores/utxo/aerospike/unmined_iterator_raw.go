@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,7 +42,6 @@ var (
 	rawBinIsCoinbase   = fields.IsCoinbase.String()
 	rawBinExternal     = fields.External.String()
 	rawBinInputs       = fields.Inputs.String()
-	rawBinLockTime     = fields.LockTime.String()
 )
 
 // rawUnminedRecord holds the decoded bins of the record being delivered.
@@ -53,7 +51,6 @@ type rawUnminedRecord struct {
 	size         uint64
 	createdAt    int
 	unminedSince int
-	lockTime     uint32
 
 	// hasCreatedAt is set whenever the bin is present, whatever its type:
 	// its absence is what marks a split record.
@@ -153,11 +150,6 @@ func (h *rawUnminedHandler) Bin(name []byte, particleType int, value []byte) err
 	case rawBinUnminedSince:
 		if particleType == particle_type.INTEGER && len(value) == 8 {
 			r.unminedSince = int(int64(binary.BigEndian.Uint64(value))) //nolint:gosec // wire int64
-		}
-	case rawBinLockTime:
-		// A lock time that doesn't convert is 0, as an unset one.
-		if lockTime, ok := rawUint64(particleType, value); ok && lockTime <= math.MaxUint32 {
-			r.lockTime = uint32(lockTime)
 		}
 	case rawBinConflicting:
 		r.conflicting = rawBool(particleType, value)
@@ -308,7 +300,6 @@ func (h *rawUnminedHandler) buildTx() (*utxo.UnminedTransaction, error) {
 		CreatedAt:    r.createdAt,
 		Locked:       r.locked,
 		BlockIDs:     blockIDs,
-		LockTime:     r.lockTime,
 	}
 
 	return &rec.tx, nil

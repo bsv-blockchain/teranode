@@ -7,7 +7,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestIsTransactionFinal(t *testing.T) {
@@ -238,24 +237,4 @@ func TestIsTransactionFinalFromRequirements(t *testing.T) {
 	// Locktime < 500M, Block Height higher	TRUE	TRUE
 	assert.NoError(t, IsTransactionFinal(txFinal, 124, 500000006))
 	assert.NoError(t, IsTransactionFinal(txNonFinal, 124, 500000006))
-}
-
-// TestBlockingLockTime pins which nLockTime block assembly is told about: only one that can
-// hold the transaction back, so a transaction final at every height and time costs nothing.
-func TestBlockingLockTime(t *testing.T) {
-	tx := func(lockTime uint32, sequences ...uint32) *bt.Tx {
-		tx := bt.NewTx()
-		tx.LockTime = lockTime
-
-		for _, seq := range sequences {
-			tx.Inputs = append(tx.Inputs, &bt.Input{SequenceNumber: seq})
-		}
-
-		return tx
-	}
-
-	require.Equal(t, uint32(0), BlockingLockTime(tx(0, 0)), "no lock time")
-	require.Equal(t, uint32(0), BlockingLockTime(tx(800_000, bt.DefaultSequenceNumber, bt.DefaultSequenceNumber)), "every sequence final")
-	require.Equal(t, uint32(800_000), BlockingLockTime(tx(800_000, bt.DefaultSequenceNumber, bt.DefaultSequenceNumber-1)), "one sequence not final")
-	require.Equal(t, uint32(1_700_000_000), BlockingLockTime(tx(1_700_000_000, 0)), "time lock")
 }

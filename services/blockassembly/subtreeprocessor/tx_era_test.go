@@ -13,7 +13,6 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -90,14 +89,12 @@ func TestTxEra_DequeueDropsOtherRulesAndDescendants(t *testing.T) {
 		[]*subtreepkg.TxInpoints{{}, {}, {}},
 		false,
 		[]uint32{99, 150, 0},
-		nil,
 	))
 	require.Equal(t, Admitted, stp.AddBatchBounded(
 		[]subtreepkg.Node{{Hash: f.child, Fee: 1, SizeInBytes: 1}, {Hash: f.grandchild, Fee: 1, SizeInBytes: 1}},
 		[]*subtreepkg.TxInpoints{inpointsWithParent(f.parent), inpointsWithParent(f.child)},
 		false,
 		[]uint32{150, 150},
-		nil,
 	))
 
 	stp.Start(ctx)
@@ -177,17 +174,6 @@ func TestTxEra_ReadmittedParentReleasesItsDescendants(t *testing.T) {
 	})
 	require.Len(t, kept, 2, "the parent, now in era, and its child are both admitted")
 	require.Zero(t, stp.droppedCount.Load())
-
-	// A grandchild dropped for the child, before the child was admitted, comes back with it.
-	stp2 := newTestSubtreeProcessorForDequeueStaleness(t, context.Background())
-	stp2.SetTxEra(150)
-	require.Empty(t, filterUnmined(stp2, []*utxostore.UnminedTransaction{
-		unmined(f.parent, &subtreepkg.TxInpoints{}, 99),
-		unmined(f.child, inpointsWithParent(f.parent), 150),
-	}))
-	require.Len(t, filterUnmined(stp2, []*utxostore.UnminedTransaction{unmined(f.parent, &subtreepkg.TxInpoints{}, 150)}), 1)
-	require.Equal(t, 1, stp2.lockHeldTxCount(), "the child waiting on the readmitted parent is held, to be offered again")
-	require.Zero(t, stp2.droppedCount.Load())
 }
 
 // TestTxEra_BlockMovementDrainDropsOtherRulesAndDescendants pins the drain a block move
@@ -203,14 +189,12 @@ func TestTxEra_BlockMovementDrainDropsOtherRulesAndDescendants(t *testing.T) {
 		[]*subtreepkg.TxInpoints{{}, {}, {}},
 		false,
 		[]uint32{99, 150, 0},
-		nil,
 	))
 	require.Equal(t, Admitted, stp.AddBatchBounded(
 		[]subtreepkg.Node{{Hash: f.child, Fee: 1, SizeInBytes: 1}, {Hash: f.grandchild, Fee: 1, SizeInBytes: 1}},
 		[]*subtreepkg.TxInpoints{inpointsWithParent(f.parent), inpointsWithParent(f.child)},
 		false,
 		[]uint32{150, 150},
-		nil,
 	))
 
 	// The queue's double-spend window holds back batches younger than it.
@@ -284,12 +268,6 @@ func TestTxEra_MoveBackKeepsOutABlockUnderOtherRules(t *testing.T) {
 			_, ok := stp.currentTxMap.Get(child)
 			require.Equal(t, tt.returned, ok, "the template child of a moved-back transaction")
 			require.Equal(t, tt.returned, templateHolds(stp, child), "the template child of a moved-back transaction")
-
-			if !tt.returned {
-				// A block that mines the kept-out parent brings the child back.
-				stp.forgetMinedDroppedTxs(minedSet(t, st.Nodes[1].Hash))
-				require.Equal(t, 1, stp.lockHeldTxCount(), "the child is held, to be offered again")
-			}
 		})
 	}
 }
@@ -313,16 +291,10 @@ func TestTxEra_MinedDroppedParentReleasesItsDescendants(t *testing.T) {
 		return &utxostore.UnminedTransaction{Node: &subtreepkg.Node{Hash: hash, Fee: 1, SizeInBytes: 1}, TxInpoints: inpoints, UnminedSince: unminedSince}
 	}
 
-	// txA validated under other rules, then mined by another miner in block1. A child of it,
-	// dropped for it before then, waits on it.
-	waiting := chainhash.HashH([]byte("tx-era-child-dropped-before-mined"))
-	require.Empty(t, filterUnmined(f.stp, []*utxostore.UnminedTransaction{
-		unmined(f.txA, &subtreepkg.TxInpoints{}, 99),
-		unmined(waiting, inpointsWithParent(f.txA), 150),
-	}))
+	// txA validated under other rules, then mined by another miner in block1.
+	require.Empty(t, filterUnmined(f.stp, []*utxostore.UnminedTransaction{unmined(f.txA, &subtreepkg.TxInpoints{}, 99)}))
 
 	require.NoError(t, f.stp.reorgBlocks(t.Context(), []*model.Block{}, []*model.Block{f.block1, f.block2}))
-	require.Equal(t, 1, f.stp.lockHeldTxCount(), "the block move holds the waiting child, for block assembly to offer")
 
 	child := chainhash.HashH([]byte("tx-era-child-of-mined"))
 	require.Len(t, filterUnmined(f.stp, []*utxostore.UnminedTransaction{unmined(child, inpointsWithParent(f.txA), 150)}), 1,
@@ -415,138 +387,35 @@ func templateHolds(stp *SubtreeProcessor, hash chainhash.Hash) bool {
 	return false
 }
 
-// minedSet is the set of transactions a block mines, as forgetMinedDroppedTxs receives it.
-func minedSet(t *testing.T, hashes ...chainhash.Hash) *SortedHashSet {
-	t.Helper()
+// TestNothingToReload_AnswersWhateverTheProcessorState pins that NothingToReload never waits on a
+// processor that is not serving requests: block assembly asks it after every block move, and a
+// processor not started, or stopped, would otherwise hold it for good. It answers false there,
+// so the caller rebuilds as before.
+func TestNothingToReload_AnswersWhateverTheProcessorState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	s := NewSortedHashSet(len(hashes))
-	for _, h := range hashes {
-		require.NoError(t, s.Put(h))
-	}
+	stp := newTestSubtreeProcessorForDequeueStaleness(t, ctx)
+	stp.InitCurrentBlockHeader(blockHeader)
 
-	require.NoError(t, s.Freeze(1))
+	answer := func() bool {
+		done := make(chan bool, 1)
+		go func() { done <- stp.NothingToReload() }()
 
-	return s
-}
-
-// offeredTemplateTxs offers the held transactions, as block assembly does once the block move
-// is done, and returns those admitTxLocked then lets into the template, in queue order.
-func offeredTemplateTxs(t *testing.T, stp *SubtreeProcessor) []chainhash.Hash {
-	t.Helper()
-
-	require.NoError(t, stp.OfferLockHeldTxs(context.Background()))
-
-	var admitted []chainhash.Hash
-
-	for {
-		b, ok := stp.queue.dequeueBatch(math.MaxInt64)
-		if !ok {
-			break
-		}
-
-		stp.filterTxEra([]*TxBatch{b})
-
-		for _, n := range b.nodes {
-			admitted = append(admitted, n.Hash)
+		select {
+		case empty := <-done:
+			return empty
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "NothingToReload did not answer")
+			return false
 		}
 	}
 
-	return admitted
-}
+	require.False(t, answer(), "a processor not started answers false")
 
-// TestTxEra_MinedDroppedParentReturnsItsDroppedDescendants pins the descendants a drop kept
-// out before their parent was mined: a block that mines the parent brings them back, after
-// the UTXO store confirms they are still unmined, parents first. One that is in a conflict,
-// one with another parent still kept out, and one the same block mined do not come back.
-func TestTxEra_MinedDroppedParentReturnsItsDroppedDescendants(t *testing.T) {
-	const otherRules = 150 // before Chronicle, the template's era is past it
+	stp.Start(ctx)
+	require.True(t, answer(), "a running processor with nothing in the template answers true")
 
-	parent := chainhash.HashH([]byte("tx-era-mined-parent"))
-	otherParent := chainhash.HashH([]byte("tx-era-unmined-other-parent"))
-	child := chainhash.HashH([]byte("tx-era-dropped-child"))
-	grandchild := chainhash.HashH([]byte("tx-era-dropped-grandchild"))
-
-	dropAll := func(t *testing.T, stp *SubtreeProcessor, childInpoints *subtreepkg.TxInpoints) {
-		t.Helper()
-
-		require.Empty(t, stp.FilterUnminedTxEra([]*utxostore.UnminedTransaction{
-			{Node: &subtreepkg.Node{Hash: parent, Fee: 1, SizeInBytes: 1}, TxInpoints: &subtreepkg.TxInpoints{}},
-			{Node: &subtreepkg.Node{Hash: otherParent, Fee: 1, SizeInBytes: 1}, TxInpoints: &subtreepkg.TxInpoints{}},
-			{Node: &subtreepkg.Node{Hash: child, Fee: 1, SizeInBytes: 1}, TxInpoints: childInpoints},
-			{Node: &subtreepkg.Node{Hash: grandchild, Fee: 1, SizeInBytes: 1}, TxInpoints: inpointsWithParent(child)},
-		}, []uint32{otherRules, otherRules, finalityTestHeight, finalityTestHeight}))
-	}
-
-	t.Run("child and grandchild return", func(t *testing.T) {
-		stp := newFinalityTestProcessor(t, context.Background())
-		dropAll(t, stp, inpointsWithParent(parent))
-		storeAnswers(stp, allUnmined)
-
-		stp.forgetMinedDroppedTxs(minedSet(t, parent))
-
-		// A new spend of the child, dequeued before the child is offered, waits behind it
-		// rather than being dropped for it.
-		newcomer := chainhash.HashH([]byte("tx-era-spends-the-returning-child"))
-		batch := &TxBatch{
-			nodes:      []subtreepkg.Node{{Hash: newcomer, Fee: 1, SizeInBytes: 1}},
-			txInpoints: []*subtreepkg.TxInpoints{inpointsWithParent(child)},
-		}
-		stp.filterTxEra([]*TxBatch{batch})
-		require.Empty(t, batch.nodes)
-
-		require.Equal(t, []chainhash.Hash{child, grandchild, newcomer}, offeredTemplateTxs(t, stp))
-		require.Equal(t, int64(1), stp.droppedCount.Load(), "only the other parent stays kept out")
-	})
-
-	t.Run("a conflicting child stays out", func(t *testing.T) {
-		stp := newFinalityTestProcessor(t, context.Background())
-		dropAll(t, stp, inpointsWithParent(parent))
-		storeAnswers(stp, func(hash chainhash.Hash) *meta.Data {
-			if hash == child {
-				return &meta.Data{Conflicting: true, UnminedSince: finalityTestHeight}
-			}
-
-			return unminedInStore
-		})
-
-		stp.forgetMinedDroppedTxs(minedSet(t, parent))
-
-		require.Empty(t, offeredTemplateTxs(t, stp))
-	})
-
-	t.Run("a child with another kept-out parent stays out until that one is mined", func(t *testing.T) {
-		stp := newFinalityTestProcessor(t, context.Background())
-		dropAll(t, stp, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parent, otherParent}})
-		storeAnswers(stp, allUnmined)
-
-		stp.forgetMinedDroppedTxs(minedSet(t, parent))
-		require.Empty(t, offeredTemplateTxs(t, stp))
-
-		stp.forgetMinedDroppedTxs(minedSet(t, otherParent))
-		require.Equal(t, []chainhash.Hash{child, grandchild}, offeredTemplateTxs(t, stp))
-	})
-
-	t.Run("a child the same block mines is not offered", func(t *testing.T) {
-		stp := newFinalityTestProcessor(t, context.Background())
-		dropAll(t, stp, inpointsWithParent(parent))
-		storeAnswers(stp, allUnmined)
-
-		stp.forgetMinedDroppedTxs(minedSet(t, parent, child))
-
-		require.Equal(t, []chainhash.Hash{grandchild}, offeredTemplateTxs(t, stp))
-		require.Equal(t, int64(1), stp.droppedCount.Load(), "only the other parent stays kept out")
-	})
-
-	t.Run("a failed reload keeps the kept-out descendants", func(t *testing.T) {
-		stp := newFinalityTestProcessor(t, context.Background())
-		dropAll(t, stp, inpointsWithParent(parent))
-		storeAnswers(stp, allUnmined)
-
-		finish := stp.RestartDroppedTxs()
-		finish(false)
-
-		stp.forgetMinedDroppedTxs(minedSet(t, parent))
-
-		require.Equal(t, []chainhash.Hash{child, grandchild}, offeredTemplateTxs(t, stp))
-	})
+	stp.Stop(ctx)
+	require.False(t, answer(), "a stopped processor answers false")
 }

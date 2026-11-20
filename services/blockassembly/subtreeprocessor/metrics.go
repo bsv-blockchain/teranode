@@ -300,7 +300,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "subtreeprocessor",
 			Name:      "tx_era_dropped_total",
-			Help:      "Number of transactions kept out of the template because they were validated under other consensus rules than the next block's, or their nLockTime holds them back at the next block, or they descend from one that was",
+			Help:      "Number of transactions kept out of the template because they were validated under other consensus rules than the next block's, or because they descend from one that was",
 		},
 	)
 

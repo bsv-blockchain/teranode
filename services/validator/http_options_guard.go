@@ -90,13 +90,5 @@ func nonDefaultValidationOptions(req *validator_api.ValidateTransactionRequest) 
 		return "outpointOnlySpend"
 	}
 
-	if req.BlockAssemblyCandidateHeight != nil {
-		return "blockAssemblyCandidateHeight"
-	}
-
-	if req.BlockAssemblyCandidateMedianTime != nil {
-		return "blockAssemblyCandidateMedianTime"
-	}
-
 	return ""
 }

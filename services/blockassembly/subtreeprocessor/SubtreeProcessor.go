@@ -214,26 +214,6 @@ type SubtreeProcessor struct {
 	droppedTxs   map[chainhash.Hash]struct{}
 	droppedCount atomic.Int64
 
-	// droppedWaiters holds, under droppedMu and by the kept-out parent that kept each one out,
-	// the transactions dropped for a parent alone, so a block that mines that parent can bring
-	// them back (forgetMinedDroppedTxs).
-	droppedWaiters map[chainhash.Hash][]lockHeldTx
-
-	// txCandidate is the block the template is mined in. lockedTxs holds, under droppedMu,
-	// the nLockTime of every admitted transaction it can hold back, so a reorg that lowers
-	// the candidate can find the ones it no longer lets in (tx_finality.go).
-	txCandidate atomic.Pointer[txCandidate]
-	lockedTxs   map[chainhash.Hash]uint32
-	lockedCount atomic.Int64
-
-	// lockHeldTxs holds, under droppedMu and in queue order, the transactions their lock time
-	// holds back at the candidate and their descendants, to offer again when the candidate
-	// moves. lockHeldSet holds every held transaction until admitTxLocked decides it again:
-	// true while in lockHeldTxs, false once offered (holdForLockTimeLocked).
-	lockHeldTxs   []lockHeldTx
-	lockHeldSet   map[chainhash.Hash]bool
-	lockHeldCount atomic.Int64
-
 	// currentItemsPerFile specifies the maximum number of items per subtree file
 	currentItemsPerFile atomic.Int32
 
@@ -1124,7 +1104,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 				case emptyCh := <-stp.templateEmptyCh:
 					// Answered between dequeue iterations, so no dequeued batch is half placed.
 					current := stp.currentSubtree.Load()
-					emptyCh <- len(stp.chainedSubtrees) == 0 && (current == nil || current.Length() <= 1) && stp.droppedCount.Load() == 0 && stp.lockHeldCount.Load() == 0
+					emptyCh <- len(stp.chainedSubtrees) == 0 && (current == nil || current.Length() <= 1) && stp.droppedCount.Load() == 0
 
 				case errCh := <-stp.checkSubtreeProcessorCh:
 					errCh <- stp.runHandlerWithRecover("checkSubtreeProcessor", func() error {
@@ -3525,12 +3505,11 @@ func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*sub
 //   - txInpoints: Parent transaction references for each node
 //   - inBlock: Whether the transactions arrived inside a block
 //   - validatedHeights: Height each node was validated at, or nil when untagged
-//   - lockTimes: Each node's nLockTime where it can hold the node back, or nil
 //
 // Returns:
 //   - Admission: Admitted, or the bound that refused the batch
-func (stp *SubtreeProcessor) AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights, lockTimes []uint32) Admission {
-	return stp.queue.enqueueBatchBounded(nodes, txInpoints, inBlock, validatedHeights, lockTimes)
+func (stp *SubtreeProcessor) AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights []uint32) Admission {
+	return stp.queue.enqueueBatchBounded(nodes, txInpoints, inBlock, validatedHeights)
 }
 
 // heldBase is the count of transactions the subtrees hold, which the queue's in-memory limit
@@ -6491,7 +6470,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 			startIdx = 1 // skip coinbase in first subtree
 		}
 		for i := startIdx; i < len(subtreeNodes); i++ {
-			if !stp.admitTxLocked(subtreeNodes[i], &subtreeMetaTxInpoints[idx][i], block.Height, 0) {
+			if !stp.admitTxLocked(subtreeNodes[i].Hash, &subtreeMetaTxInpoints[idx][i], block.Height) {
 				droppedFromBlock = true
 				continue
 			}
@@ -6527,7 +6506,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 
 	for _, st := range previousChainedSubtrees {
 		for _, node := range st.Nodes {
-			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node) {
+			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node.Hash) {
 				continue
 			}
 			allNodes = append(allNodes, node)
@@ -6535,7 +6514,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	}
 	if previousCurrentSubtree != nil {
 		for _, node := range previousCurrentSubtree.Nodes {
-			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node) {
+			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node.Hash) {
 				continue
 			}
 			allNodes = append(allNodes, node)
@@ -7751,7 +7730,6 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 	}
 
 	stp.forgetMinedDroppedTxs(transactionMap)
-	stp.pruneLockedTxs()
 
 	if stp.reorgForwardTxMapSubtrees != nil {
 		for subtreeHash := range blockSubtreesMap {

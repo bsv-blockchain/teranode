@@ -408,7 +408,7 @@ func TestReset_FailedReloadKeepsTheHeldCountFullUntilTheRetrySucceeds(t *testing
 	require.GreaterOrEqual(t, stp.HeldCount(), limit, "the subtrees are empty and the retry is pending, which must not read as room")
 	require.True(t, items.blockAssembler.HeldByUnminedLoad())
 	require.Equal(t, subtreeprocessor.RefusedHeld, stp.AddBatchBounded(
-		[]subtreepkg.Node{{Hash: chainhash.HashH([]byte("while-retry-pending"))}}, []*subtreepkg.TxInpoints{{}}, false, nil, nil),
+		[]subtreepkg.Node{{Hash: chainhash.HashH([]byte("while-retry-pending"))}}, []*subtreepkg.TxInpoints{{}}, false, nil),
 		"mempool ingest is refused until the retry has reloaded the mempool")
 
 	flaky.down.Store(false)

@@ -67,14 +67,12 @@ type Options struct {
 // record is one buffered transaction. seq is its position in the buffer at
 // insertion, which makes (createdAt, seq) a total order that reproduces a
 // stable sort, and indexes the inpoints arena offsets. validatedHeight is the
-// height the transaction was validated at, 0 when unknown, and lockTime its
-// nLockTime as the store holds it.
+// height the transaction was validated at, 0 when unknown.
 type record struct {
 	createdAt       int64
 	node            subtreepkg.Node
 	seq             uint32
 	validatedHeight uint32
-	lockTime        uint32
 }
 
 // batchBuf is one buffer of records. arena holds serialized inpoints; the
@@ -243,9 +241,8 @@ func (s *Sorter) buffered() int {
 
 // Add buffers one transaction. inpoints is ignored unless the sorter was
 // created WithInpoints; nil means no inpoints. validatedHeight, the height the
-// transaction was validated at (0 when unknown), comes back with it from Drain,
-// and so does lockTime, as the drained transaction's LockTime.
-func (s *Sorter) Add(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg.TxInpoints, validatedHeight, lockTime uint32) error {
+// transaction was validated at (0 when unknown), comes back with it from Drain.
+func (s *Sorter) Add(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg.TxInpoints, validatedHeight uint32) error {
 	if s.drained {
 		return errors.NewProcessingError("unminedsort: Add after Drain")
 	}
@@ -256,7 +253,7 @@ func (s *Sorter) Add(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg
 		return errors.NewProcessingError("unminedsort: buffer exceeds %d records; set a spill directory or lower BufferRecords", 1<<32-1)
 	}
 
-	b.recs = append(b.recs, record{createdAt: createdAt, node: node, seq: uint32(len(b.recs)), validatedHeight: validatedHeight, lockTime: lockTime}) //nolint:gosec // bounded above
+	b.recs = append(b.recs, record{createdAt: createdAt, node: node, seq: uint32(len(b.recs)), validatedHeight: validatedHeight}) //nolint:gosec // bounded above
 
 	if s.opts.WithInpoints {
 		if inpoints != nil {
@@ -404,7 +401,6 @@ func (s *Sorter) writeRun(b *batchBuf, path string) error {
 		scratch = binary.AppendUvarint(scratch, rec.node.Fee)
 		scratch = binary.AppendUvarint(scratch, rec.node.SizeInBytes)
 		scratch = binary.AppendUvarint(scratch, uint64(rec.validatedHeight))
-		scratch = binary.AppendUvarint(scratch, uint64(rec.lockTime))
 
 		if s.opts.WithInpoints {
 			inp := b.inpoints(rec.seq)
@@ -502,7 +498,6 @@ type entry struct {
 	node            subtreepkg.Node
 	inpoints        []byte
 	validatedHeight uint32
-	lockTime        uint32
 }
 
 type fileSource struct {
@@ -577,13 +572,6 @@ func (fs *fileSource) next() (bool, error) {
 
 	fs.cur.validatedHeight = uint32(validatedHeight) //nolint:gosec // written by this package from a uint32
 
-	lockTime, err := binary.ReadUvarint(fs.r)
-	if err != nil {
-		return false, fs.readErr(err)
-	}
-
-	fs.cur.lockTime = uint32(lockTime) //nolint:gosec // written by this package from a uint32
-
 	fs.cur.inpoints = nil
 
 	if fs.withI {
@@ -636,7 +624,6 @@ func (ms *memSource) next() (bool, error) {
 	ms.cur.createdAt = rec.createdAt
 	ms.cur.node = rec.node
 	ms.cur.validatedHeight = rec.validatedHeight
-	ms.cur.lockTime = rec.lockTime
 	ms.cur.inpoints = nil
 
 	if ms.withI {
@@ -796,7 +783,6 @@ func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo
 			tx: utxo.UnminedTransaction{
 				TxInpoints: inpoints,
 				CreatedAt:  int(e.createdAt),
-				LockTime:   e.lockTime,
 			},
 			node: e.node,
 		})

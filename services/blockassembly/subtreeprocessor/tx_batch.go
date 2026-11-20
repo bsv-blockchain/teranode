@@ -18,10 +18,6 @@ type TxBatch struct {
 	// at, so the processor can drop one validated under other rules than the next block's.
 	// Nil, or 0 for a node, means untagged: the node is admitted as before.
 	validatedHeights []uint32
-	// lockTimes holds, per node, its transaction's nLockTime when that can hold it back
-	// (some input sequence is not final), so the processor can drop one that is not final at
-	// the next block. Nil, or 0 for a node, means it is always final.
-	lockTimes []uint32
-	time      int64                   // Single timestamp for the entire batch
-	next      atomic.Pointer[TxBatch] // Pointer to next batch in queue
+	time             int64                   // Single timestamp for the entire batch
+	next             atomic.Pointer[TxBatch] // Pointer to next batch in queue
 }
