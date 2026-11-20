@@ -60,8 +60,8 @@ type Timings struct {
 //
 // It holds the grant it is handing out and one spare. At half the current grant used it asks for
 // the next grant and keeps it as the spare. It takes from the current grant until the grant is used
-// up or GrantDuration has passed since its first position was taken, and only then moves to the
-// spare. An unused grant expires GrantDuration after its request was sent, including a spare.
+// up, with no returned position (Return) still waiting in it, or GrantDuration has passed since its
+// first position was taken, and only then moves to the spare. An unused grant expires GrantDuration after its request was sent, including a spare.
 // The grant it leaves is settled by the next request: the grant's first position and its
 // final number, which is the grant's last position if used up or the highest position taken if it
 // aged out, travel on the next grant request or on the release.
@@ -249,8 +249,10 @@ func (a *Allocator) Close() error {
 		a.leaseTaken = a.leaseTakenAfterLocked(a.settledFinalLocked(a.next - 1))
 	}
 
-	// With two pairs held the release carries the older. The newer is the grant last left, and its
-	// final number is the LastTaken the release carries anyway.
+	// With two pairs held the release carries the older. The newer is the grant last left: its final
+	// number is the LastTaken the release carries, or, when that grant gave back every position it
+	// gave out and settled at 0, LastTaken stays the number before it and the newer pair is not sent.
+	// Either way no position above LastTaken carries a record.
 	leased, release := a.leased, Release{Lease: a.lease, Lane: a.lane, LastTaken: a.leaseTaken, Settles: a.pending[0]}
 	a.mu.Unlock()
 
