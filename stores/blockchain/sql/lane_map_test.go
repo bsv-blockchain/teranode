@@ -766,6 +766,21 @@ func TestLaneMapHoleDataStorageNeverBlocksStartup(t *testing.T) {
 	// The owner's next start applies it.
 	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true))
 	require.Equal(t, "e", storage())
+
+	// Once the storage is set, a start runs no DDL on lane_map: the catalog check returns first, so
+	// a session holding lane_map costs it nothing. The ALTER would take its lock before looking at
+	// the current value, and wait out the whole timeout here.
+	held, err := db.Begin()
+	require.NoError(t, err)
+
+	_, err = held.Exec(`LOCK TABLE lane_map IN ACCESS EXCLUSIVE MODE`)
+	require.NoError(t, err)
+
+	started = time.Now()
+	setLaneMapHoleDataStorage(ulogger.TestLogger{}, db)
+	require.Less(t, time.Since(started), 500*time.Millisecond, "a current schema does not wait for the lane_map lock")
+	require.NoError(t, held.Rollback())
+	require.Equal(t, "e", storage())
 }
 
 // The literal lock_timeout statement names the same wait as laneMapStorageLockTimeout.
