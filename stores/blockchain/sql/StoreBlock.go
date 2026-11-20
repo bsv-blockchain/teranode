@@ -734,7 +734,7 @@ const bestValidHeightQuery = `
 	SELECT height
 	FROM blocks
 	WHERE invalid = false
-	ORDER BY chain_work DESC, peer_id ASC, id ASC
+	ORDER BY chain_work DESC, id ASC
 	LIMIT 1
 `
 
@@ -755,9 +755,10 @@ func (s *SQL) readBestValidHeight(ctx context.Context, exec execQuerier, bestHei
 
 // rejectForkBelowPassedCheckpoint returns a BlockInvalid error when a block at height
 // is below a checkpoint the best valid block (at bestHeight) has reached: bitcoin-sv's
-// bad-fork-prior-to-checkpoint. Callers read bestHeight under slowPathMu, and under the chain
-// write lock where other processes write the chain, so the best block cannot move between
-// that read and their write.
+// bad-fork-prior-to-checkpoint. Callers read bestHeight under slowPathMu, and again under the
+// chain write lock where other processes write the chain, so no writer that takes that lock can
+// move the best block between the read and their write. A main-chain extend inserts without it;
+// a single block-validation instance, the documented deployment, holds slowPathMu for both.
 func (s *SQL) rejectForkBelowPassedCheckpoint(hash *chainhash.Hash, height, bestHeight uint32) error {
 	if s.chainParams == nil || !model.ForkBelowCheckpoint(s.chainParams.Checkpoints, height, bestHeight) {
 		return nil
