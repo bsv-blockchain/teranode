@@ -1431,6 +1431,27 @@ func TestLanePositionReturnsOfAUtxosetStore(t *testing.T) {
 		requireGetLane(t, s, ctx, parent, returnPositions(1)[0], "the commit landed with the position")
 	})
 
+	// A create batch whose COMMIT reported failure may have landed, and here it did: the record carries
+	// the position, so it must not go back.
+	t.Run("a create batch whose commit reported failure", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+		require.NotNil(t, s.createBatcher)
+
+		source := useReturningSource(t, s, returnPositions(1)...)
+
+		createBatchAfterCommit = func() error { return failure }
+		t.Cleanup(func() { createBatchAfterCommit = nil })
+
+		tx := mkTx(t, 1, 5_000)
+
+		_, err := s.Create(ctx, tx, 1_000)
+		createBatchAfterCommit = nil
+		require.Error(t, err)
+
+		requireReturnedNowhere(t, s, source)
+		requireGetLane(t, s, ctx, tx, returnPositions(1)[0], "the commit landed with the position")
+	})
+
 	// The batch's COMMIT landed and reported failure, so the item reruns alone and meets its own
 	// record. That ErrTxExists is the item's own write and must not send the position back.
 	t.Run("a rerun that meets the record its batch wrote", func(t *testing.T) {

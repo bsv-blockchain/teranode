@@ -748,6 +748,28 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, store string, rules L
 		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnExists, returned, w.Txs...)
 	})
 
+	t.Run("a position the caller named is the caller's", func(t *testing.T) {
+		creator, ok := utxostore.As[laneCreator](db)
+		require.True(t, ok)
+
+		root := BuildMultiWorkload(t, 0xb2, 1, 1).Roots[0]
+		source := NewReturningLanePositions(lanePositionsFrom(49, 1)...)
+		useLanePositionSource(t, db, source)
+
+		before := ReadLaneReturns(t, store)
+
+		_, _, err := db.SpendAndCreate(ctx, root, 950, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		_, _, err = db.SpendAndCreate(ctx, root, 950, utxostore.WithCreateOnly(), utxostore.WithLanePosition(lane.Pack(49, 7)))
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		_, err = creator.Create(ctx, root, 950, utxostore.WithLanePosition(lane.Pack(49, 8)))
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		requireReturned(t, db, count, source, store, before, "", nil, root)
+	})
+
 	t.Run("a call whose caller had already given up", func(t *testing.T) {
 		w := BuildMultiWorkload(t, 0xbd, 1, 1)
 		w.StoreRoots(t, db, 950)

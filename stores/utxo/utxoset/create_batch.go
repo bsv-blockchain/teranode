@@ -1093,6 +1093,13 @@ func (s *Store) sendCreateBatch(batch []*createItem) {
 
 	committed = true
 
+	if createBatchAfterCommit != nil {
+		if err := createBatchAfterCommit(); err != nil {
+			s.failBatch(batch, errors.NewStorageError("[utxoset][Create] commit", err))
+			return
+		}
+	}
+
 	for i, item := range batch {
 		item.done <- createResult{data: plan.perItem[i], err: plan.errs[i]}
 	}
@@ -1114,6 +1121,11 @@ func (s *Store) failBatchRolledBack(items []*createItem, err error) {
 		item.done <- createResult{err: err, rolledBack: true}
 	}
 }
+
+// createBatchAfterCommit is a test hook called after a create batch commits. An error from it is
+// returned as the commit's, the shape of a commit the server made and the client did not hear
+// about. nil in production.
+var createBatchAfterCommit func() error
 
 // createBatchBeforeCommit is a test hook called after a create batch's statements and before its
 // COMMIT. An error from it fails the batch with its transaction open. nil in production.
