@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS packed_txs (
    utxo_hashes              BYTEA NOT NULL,
    inputs                   BYTEA NOT NULL,
    outputs                  BYTEA NOT NULL,
+   conflict_owner           BYTEA,
    PRIMARY KEY (hash)
 ) PARTITION BY HASH (hash);
 
@@ -69,7 +70,8 @@ CREATE TABLE IF NOT EXISTS conflict_intents (
    block_height  BIGINT NOT NULL,
    block_hash    BYTEA NOT NULL,
    tx_hashes     BYTEA NOT NULL,
-   started_at    BIGINT NOT NULL
+   started_at    BIGINT NOT NULL,
+   recovery      BYTEA
 );
 
 ALTER TABLE packed_txs ALTER COLUMN utxo_hashes SET STORAGE EXTERNAL;

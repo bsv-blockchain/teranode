@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -62,6 +63,14 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 					return nil, spends, errors.NewStorageError("packedsql: savepoint rollback failed after spend error", rbErr, err)
 				}
 
+				if !options.SpendOnly && s.onlyMissingParents(spends) && s.recordExists(ctx, dbTx, recordHash(tx, options)) {
+					for _, sp := range spends {
+						sp.Err = nil
+					}
+
+					err = errors.NewTxExistsError("packedsql: transaction %s already exists, its spends were made by an earlier call", recordHash(tx, options))
+				}
+
 				if cErr := commit(); cErr != nil {
 					return nil, spends, cErr
 				}
@@ -113,4 +122,44 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 	}
 
 	return md, spends, nil
+}
+
+// SpendAndCreateMulti writes each dependency level of the list concurrently through the atomic
+// SpendAndCreate, as the shared DefaultSpendAndCreateMulti does for every store without a
+// faster implementation.
+func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	return utxo.DefaultSpendAndCreateMulti(ctx, s, utxo.SpendAndCreateMultiWidthsFor(s.settings), txs, blockHeight, opts...)
+}
+
+// onlyMissingParents reports whether every failed spend failed because its parent has no
+// record, and at least one did.
+func (s *Store) onlyMissingParents(spends []*utxo.Spend) bool {
+	failed := false
+
+	for _, sp := range spends {
+		if sp.Err == nil {
+			continue
+		}
+
+		if !errors.Is(sp.Err, errors.ErrTxNotFound) {
+			return false
+		}
+
+		failed = true
+	}
+
+	return failed
+}
+
+// recordExists reports whether the transaction already has a record. SpendAndCreate spends and
+// creates in one database transaction, so a record written by it proves its spends were made,
+// even when a parent has since been pruned.
+func (s *Store) recordExists(ctx context.Context, q pgxQuerier, hash *chainhash.Hash) bool {
+	var exists bool
+
+	if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM packed_txs WHERE hash = $1)`, hash[:]).Scan(&exists); err != nil {
+		return false
+	}
+
+	return exists
 }

@@ -85,6 +85,14 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	return md, nil
 }
 
+func recordHash(tx *bt.Tx, options *utxo.CreateOptions) *chainhash.Hash {
+	if options.TxID != nil {
+		return options.TxID
+	}
+
+	return tx.TxIDChainHash()
+}
+
 func (s *Store) buildTxRows(tx *bt.Tx, blockHeight uint32, options *utxo.CreateOptions) (*txRows, *meta.Data, error) {
 	var (
 		md  *meta.Data
@@ -109,10 +117,7 @@ func (s *Store) buildTxRows(tx *bt.Tx, blockHeight uint32, options *utxo.CreateO
 		md.Locked = true
 	}
 
-	txHash := tx.TxIDChainHash()
-	if options.TxID != nil {
-		txHash = options.TxID
-	}
+	txHash := recordHash(tx, options)
 
 	isCoinbase := tx.IsCoinbase()
 	if options.IsCoinbase != nil {
@@ -276,7 +281,9 @@ func packOutputs(tx *bt.Tx) []byte {
 	items := make([][]byte, len(tx.Outputs))
 
 	for i, output := range tx.Outputs {
-		items[i] = output.Bytes()
+		if output != nil {
+			items[i] = output.Bytes()
+		}
 	}
 
 	return packOffsetBlob(items)

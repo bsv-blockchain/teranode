@@ -21,6 +21,12 @@ func ResetPrunerServiceForTests() {
 	prunerServiceInstance = nil
 }
 
+// Stamper returns pruner.NoStamp: every UTXO carries its block from the moment it is mined, so
+// there is nothing to stamp.
+func (s *Store) Stamper() pruner.Stamper {
+	return pruner.NoStamp
+}
+
 func (s *Store) GetPrunerService() (pruner.Service, error) {
 	prunerServiceMutex.Lock()
 	defer prunerServiceMutex.Unlock()

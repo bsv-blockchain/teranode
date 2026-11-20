@@ -29,7 +29,7 @@ func (s *Store) unspendOne(ctx context.Context, sp *utxo.Spend, setLocked bool) 
 
 	lockedExpr := ""
 	if setLocked {
-		lockedExpr = ", flags = flags | 8"
+		lockedExpr = ", flags = flags | 8, conflict_owner = NULL"
 	}
 
 	if page == 0 {

@@ -126,3 +126,29 @@ func TestOutputsColumnPartialRead(t *testing.T) {
 	require.NoError(t, store.PreviousOutputsDecorate(context.Background(), child))
 	require.Equal(t, *parent.Outputs[0].LockingScript, *child.Inputs[0].PreviousTxScript)
 }
+
+func TestPreviousOutputsDecorateHugeVoutIsNotFound(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	parent := newExtendedTx(t, 2, 130_000)
+	_, err := store.Create(ctx, parent, 100)
+	require.NoError(t, err)
+
+	sibling := newExtendedTx(t, 1, 131_000)
+	_, err = store.Create(ctx, sibling, 100)
+	require.NoError(t, err)
+
+	hugeVout := newSpendingTx(t, parent, 0)
+	hugeVout.Inputs[0].PreviousTxOutIndex = 4_000_000_000
+	hugeVout.Inputs[0].PreviousTxScript = nil
+
+	err = store.PreviousOutputsDecorate(ctx, hugeVout)
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "a vout no transaction can have is a missing output, not a storage fault")
+
+	ok := newSpendingTx(t, sibling, 0)
+	ok.Inputs[0].PreviousTxScript = nil
+
+	require.NoError(t, store.PreviousOutputsDecorate(ctx, ok), "an unrelated transaction still decorates")
+	require.NotNil(t, ok.Inputs[0].PreviousTxScript)
+}

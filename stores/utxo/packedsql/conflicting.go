@@ -21,6 +21,39 @@ func (s *Store) GetConflictingChildren(ctx context.Context, txHash chainhash.Has
 	return utxo.GetConflictingChildren(ctx, s, txHash, s.settings.UtxoStore.ConflictingChildrenMaxNodes)
 }
 
+// ConflictingTxHashes answers from the px_ptxs_conflict partial index, which
+// createSchema builds before the store accepts writes, so it is always indexed.
+func (s *Store) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	rows, err := s.pool.Query(ctx, `SELECT hash FROM packed_txs WHERE (flags & 4) <> 0`)
+	if err != nil {
+		return nil, false, errors.NewStorageError("packedsql: conflicting tx hashes query failed", err)
+	}
+
+	defer rows.Close()
+
+	var hashes []chainhash.Hash
+
+	for rows.Next() {
+		var raw []byte
+		if err = rows.Scan(&raw); err != nil {
+			return nil, false, errors.NewStorageError("packedsql: conflicting tx hashes scan failed", err)
+		}
+
+		hash, hashErr := chainhash.NewHash(raw)
+		if hashErr != nil {
+			return nil, false, errors.NewStorageError("packedsql: bad hash in packed_txs row", hashErr)
+		}
+
+		hashes = append(hashes, *hash)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, false, errors.NewStorageError("packedsql: conflicting tx hashes iteration failed", err)
+	}
+
+	return hashes, true, nil
+}
+
 func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, value bool) ([]*utxo.Spend, []chainhash.Hash, error) {
 	var newDAH *int64
 
@@ -98,6 +131,37 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, v
 	return affectedParentSpends, spendingTxHashes, nil
 }
 
+// SpendsMadeBy returns the coins the transaction consumed. A transaction stored without
+// extended inputs (the below-checkpoint fast path strips them) carries no amount or locking
+// script, so its previous outputs are read back before the coin hashes are computed.
+func (s *Store) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	md, err := s.Get(ctx, &txHash, fields.Tx)
+	if err != nil {
+		return nil, err
+	}
+
+	if md == nil || md.Tx == nil {
+		return nil, errors.NewTxNotFoundError("packedsql: no transaction %s", txHash)
+	}
+
+	stripped := false
+
+	for _, input := range md.Tx.Inputs {
+		if input.PreviousTxScript == nil || len(*input.PreviousTxScript) == 0 {
+			input.PreviousTxScript = nil
+			stripped = true
+		}
+	}
+
+	if stripped {
+		if err = s.PreviousOutputsDecorate(ctx, md.Tx); err != nil {
+			return nil, err
+		}
+	}
+
+	return utxo.SpendsForTx(md.Tx)
+}
+
 func (s *Store) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
 	if len(removals) == 0 {
 		return nil
@@ -129,6 +193,24 @@ func (s *Store) RemoveFromConflictingChildren(ctx context.Context, removals []ut
 	return nil
 }
 
+const unlockDAHSQL = `delete_at_height = CASE
+		     WHEN $2::bigint IS NOT NULL AND preserve_until IS NULL AND (flags & 4) = 0
+		          AND unmined_since IS NULL
+		          AND octet_length(coalesce(block_refs, ''::bytea)) > 0
+		          AND spent_count >= page0_count AND pages_spent >= pages_total
+		     THEN $2 ELSE delete_at_height END`
+
+func (s *Store) unlockDAH() *int64 {
+	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	if retention == 0 {
+		return nil
+	}
+
+	dah := int64(s.GetBlockHeight()) + 1 + int64(retention)
+
+	return &dah
+}
+
 func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
 	if len(txHashes) == 0 {
 		return nil
@@ -141,7 +223,7 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value 
 
 	if value {
 		if _, err := s.pool.Exec(ctx,
-			`UPDATE packed_txs SET flags = flags | 8, delete_at_height = NULL WHERE hash = ANY($1::bytea[])`,
+			`UPDATE packed_txs SET flags = flags | 8, conflict_owner = NULL, delete_at_height = NULL WHERE hash = ANY($1::bytea[])`,
 			hashBytes); err != nil {
 			return errors.NewStorageError("packedsql: failed to set locked flag", err)
 		}
@@ -149,23 +231,10 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value 
 		return nil
 	}
 
-	var newDAH *int64
-
-	if retention := s.settings.GetUtxoStoreBlockHeightRetention(); retention > 0 {
-		dah := int64(s.GetBlockHeight()) + 1 + int64(retention)
-		newDAH = &dah
-	}
-
 	if _, err := s.pool.Exec(ctx,
-		`UPDATE packed_txs SET flags = flags & ~8,
-		   delete_at_height = CASE
-		     WHEN $2::bigint IS NOT NULL AND preserve_until IS NULL AND (flags & 4) = 0
-		          AND unmined_since IS NULL
-		          AND octet_length(coalesce(block_refs, ''::bytea)) > 0
-		          AND spent_count >= page0_count AND pages_spent >= pages_total
-		     THEN $2 ELSE delete_at_height END
+		`UPDATE packed_txs SET flags = flags & ~8, conflict_owner = NULL, `+unlockDAHSQL+`
 		 WHERE hash = ANY($1::bytea[])`,
-		hashBytes, newDAH); err != nil {
+		hashBytes, s.unlockDAH()); err != nil {
 		return errors.NewStorageError("packedsql: failed to clear locked flag", err)
 	}
 

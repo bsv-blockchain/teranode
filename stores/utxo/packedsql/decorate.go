@@ -82,6 +82,11 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 	return nil
 }
 
+type outputSpan struct {
+	start  int64
+	length int64
+}
+
 type outpointRef struct {
 	txIdx int
 	vin   int
@@ -151,12 +156,7 @@ func (s *Store) decorateChunk(ctx context.Context, txs []*bt.Tx, refs []outpoint
 		return errors.NewStorageError("packedsql: outpoint offset query failed", err)
 	}
 
-	type span struct {
-		start  int64
-		length int64
-	}
-
-	spans := make([]span, len(refs))
+	spans := make([]outputSpan, len(refs))
 	seen := make([]bool, len(refs))
 
 	for rows.Next() {
@@ -178,11 +178,11 @@ func (s *Store) decorateChunk(ctx context.Context, txs []*bt.Tx, refs []outpoint
 		start := int64(binary.LittleEndian.Uint32(offsetBytes[:4]))
 		end := int64(binary.LittleEndian.Uint32(offsetBytes[4:]))
 
-		if end < start || start > totalLen || end > totalLen {
+		if end <= start || start > totalLen || end > totalLen {
 			continue
 		}
 
-		spans[idx] = span{start: start + 1, length: end - start}
+		spans[idx] = outputSpan{start: start + 1, length: end - start}
 		seen[idx] = true
 	}
 
@@ -199,6 +199,24 @@ func (s *Store) decorateChunk(ctx context.Context, txs []*bt.Tx, refs []outpoint
 		}
 	}
 
+	return s.fetchOutputBytes(ctx, refs, spans, func(idx int, outputBytes []byte) error {
+		output := &bt.Output{}
+		if _, err := output.ReadFrom(bytes.NewReader(outputBytes)); err != nil {
+			return errors.NewTxInvalidError("packedsql: could not read previous output", err)
+		}
+
+		ref := refs[idx]
+		input := txs[ref.txIdx].Inputs[ref.vin]
+		input.PreviousTxScript = output.LockingScript
+		input.PreviousTxSatoshis = output.Satoshis
+
+		return nil
+	})
+}
+
+// fetchOutputBytes reads the output at each span with one substring read per outpoint, so a
+// large parent is never read whole, and hands each result to fn with its index into refs.
+func (s *Store) fetchOutputBytes(ctx context.Context, refs []outpointRef, spans []outputSpan, fn func(idx int, outputBytes []byte) error) error {
 	var sb strings.Builder
 
 	sb.WriteString(`SELECT v.idx, substring(t.outputs FROM v.strt FOR v.len) FROM (VALUES `)
@@ -216,7 +234,7 @@ func (s *Store) decorateChunk(ctx context.Context, txs []*bt.Tx, refs []outpoint
 			fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d)", i*4+1, i*4+2, i*4+3, i*4+4)
 		}
 
-		// Bounded by octet_length(outputs) above, so the int32 narrowing cannot overflow.
+		// Bounded by octet_length(outputs) by the caller, so the int32 narrowing cannot overflow.
 		args = append(args, r.hash, i, int32(spans[i].start), int32(spans[i].length)) //nolint:gosec
 	}
 
@@ -239,15 +257,9 @@ func (s *Store) decorateChunk(ctx context.Context, txs []*bt.Tx, refs []outpoint
 			return errors.NewStorageError("packedsql: outpoint data scan failed", err)
 		}
 
-		output := &bt.Output{}
-		if _, err = output.ReadFrom(bytes.NewReader(outputBytes)); err != nil {
-			return errors.NewTxInvalidError("packedsql: could not read previous output", err)
+		if err = fn(idx, outputBytes); err != nil {
+			return err
 		}
-
-		ref := refs[idx]
-		input := txs[ref.txIdx].Inputs[ref.vin]
-		input.PreviousTxScript = output.LockingScript
-		input.PreviousTxSatoshis = output.Satoshis
 	}
 
 	return dataRows.Err()
@@ -259,6 +271,13 @@ const outputCountExpr = `(get_byte(t.outputs, 0)
 	     + get_byte(t.outputs, 1) * 256
 	     + get_byte(t.outputs, 2) * 65536
 	     + get_byte(t.outputs, 3) * 16777216)`
+
+// maxQueryVout bounds the vout bound into the outpoint queries. A bytea column holds at most
+// 1GB and the offset table costs four bytes per output, so no transaction has an output past
+// this index. The queries compute vout*4+5, which Postgres folds at plan time even in a CASE
+// branch that never runs, so an unbounded wire vout would overflow int4 and fail every
+// outpoint of the chunk. The clamped value still reads as no such output.
+const maxQueryVout = 1 << 28
 
 func buildOutpointQuery(refs []outpointRef, expr string) (string, []any) {
 	var sb strings.Builder
@@ -280,7 +299,7 @@ func buildOutpointQuery(refs []outpointRef, expr string) (string, []any) {
 			fmt.Fprintf(&sb, "($%d,$%d,$%d)", i*3+1, i*3+2, i*3+3)
 		}
 
-		args = append(args, r.hash, int(r.vout), i)
+		args = append(args, r.hash, int(min(r.vout, maxQueryVout)), i)
 	}
 
 	sb.WriteString(`) AS v(hash, vout, idx) JOIN packed_txs t ON t.hash = v.hash`)

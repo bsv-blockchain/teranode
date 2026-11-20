@@ -140,7 +140,8 @@ func (s *Store) setMinedChunk(ctx context.Context, hashes []*chainhash.Hash, inf
 		}
 
 		if _, err = dbTx.Exec(ctx,
-			`UPDATE packed_txs SET flags = $2, block_refs = $3, unmined_since = $4, delete_at_height = $5 WHERE hash = $1`,
+			`UPDATE packed_txs SET flags = $2, block_refs = $3, unmined_since = $4, delete_at_height = $5,
+			   conflict_owner = CASE WHEN ($2::smallint & 8) = 0 THEN NULL ELSE conflict_owner END WHERE hash = $1`,
 			st.hash[:], newFlags, newRefs, newUnmined, newDAHValue); err != nil {
 			return errors.NewStorageError("packedsql: SetMinedMulti update failed for %s", st.hash, err)
 		}

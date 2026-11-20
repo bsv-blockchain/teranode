@@ -182,6 +182,10 @@ func (s *Store) rowToMeta(ctx context.Context, r *packedRow, bins []fields.Field
 				return nil, err
 			}
 
+			if len(item) == 0 {
+				continue
+			}
+
 			tx.Outputs[i] = &bt.Output{}
 			if _, err = tx.Outputs[i].ReadFrom(bytes.NewReader(item)); err != nil {
 				return nil, errors.NewTxInvalidError("packedsql: could not read output %d", i, err)
