@@ -726,7 +726,17 @@ func TestLaneMapHoleDataStorageNeverBlocksStartup(t *testing.T) {
 	_, err = holder.Exec(`LOCK TABLE lane_map IN ACCESS EXCLUSIVE MODE`)
 	require.NoError(t, err)
 
+	// The wait is the 2s the godoc and the PR state. The storage step alone is timed, so the
+	// bound is tight: a raised timeout fails here even where startup as a whole stays quick.
+	require.Equal(t, 2*time.Second, laneMapStorageLockTimeout)
+
 	started := time.Now()
+	setLaneMapHoleDataStorage(ulogger.TestLogger{}, db)
+	waited := time.Since(started)
+	require.GreaterOrEqual(t, waited, laneMapStorageLockTimeout-100*time.Millisecond, "it waits for the lock, up to the timeout")
+	require.Less(t, waited, laneMapStorageLockTimeout+time.Second, "then gives up, not waiting for the holder")
+
+	started = time.Now()
 	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true), "a held lane_map lock does not fail startup")
 	require.Less(t, time.Since(started), laneMapStorageLockTimeout+10*time.Second, "startup waits about the lock timeout, not for the holder")
 	require.NoError(t, holder.Rollback())
