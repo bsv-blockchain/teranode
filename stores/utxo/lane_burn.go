@@ -27,6 +27,10 @@ const (
 	// One exception: a utxoset create that carries a block, for a transaction held only as UTXO
 	// rows with no identity or containment row, writes the new position on the containment row it
 	// adds and still answers ErrTxExists, so it is counted here though the position was written.
+	// Another: a conflicting create on SQL with the create batcher off commits its record, then
+	// writes the conflict links in a second transaction. If that write fails with a lock error,
+	// the retry meets the create's own record and answers ErrTxExists, so it is counted here
+	// though the record carries the position, and the position is not returned.
 	LaneBurnExists = "exists"
 
 	// LaneBurnSpendRejected: an input could not be spent, so the transaction was not created.
@@ -55,7 +59,9 @@ const (
 	// positions already taken were never used.
 	LaneBurnTakeFailed = "take_failed"
 
-	// LaneBurnError: any other failed create.
+	// LaneBurnError: any other failed create. One exception: a conflicting create on SQL with the
+	// create batcher off whose conflict-link write fails with an error that is not a lock error is
+	// counted here, though its record committed carrying the position (see LaneBurnExists).
 	LaneBurnError = "error"
 )
 
@@ -116,7 +122,7 @@ var prometheusLanePositionsBurned = promauto.NewCounterVec(
 		Namespace: "teranode",
 		Subsystem: "lane",
 		Name:      "positions_burned_total",
-		Help:      "Lane positions a store took for a create and wrote no record with, by store, reason and the service that asked for the create. Reason outcome_unknown counts positions whose write could not be confirmed and may have been written; reason exists can include a utxoset block create that wrote the position on a containment row",
+		Help:      "Lane positions a store took for a create and wrote no record with, by store, reason and the service that asked for the create. Reason outcome_unknown counts positions whose write could not be confirmed and may have been written; reason exists can include a utxoset block create that wrote the position on a containment row; reasons exists and error can include a SQL conflicting create whose record committed before its conflict-link write failed",
 	},
 	[]string{"store", "reason", "caller"},
 )
