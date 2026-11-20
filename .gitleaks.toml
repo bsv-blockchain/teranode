@@ -64,6 +64,11 @@ regexes = [
   # tests use it (02/03/04-prefixed) wherever they need any valid public key.
   # generic-api-key flags it when it is assigned to a name containing "key".
   '''79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798''',
+  # Benchmark keypair published in the btcsuite/btcd btcec bench_test.go files
+  # (BenchmarkSigVerify "randomly generated keypair"). Copied verbatim into
+  # services/legacy/bsvec and compat/bsvec. A public test fixture, never a
+  # node or wallet secret.
+  '''9e0699c91ca1e3b7e3c9ba71eb71c89890872be97576010fe593fbf3fd57e66d''',
 ]
 paths = [
   # Generated dev libp2p peer keys for local multi-node docker setups, and the

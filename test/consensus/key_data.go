@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
-	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
+	hash "github.com/bsv-blockchain/go-sdk/primitives/hash"
 )
 
 // Test keys from C++ implementation
@@ -81,9 +81,9 @@ func NewKeyData() *KeyData {
 	kd.Pubkey2U = kd.Pubkey2
 
 	// Calculate hash160s
-	kd.Pubkey0Hash = bsvutil.Hash160(kd.Pubkey0)
-	kd.Pubkey1Hash = bsvutil.Hash160(kd.Pubkey1)
-	kd.Pubkey2Hash = bsvutil.Hash160(kd.Pubkey2)
+	kd.Pubkey0Hash = hash.Hash160(kd.Pubkey0)
+	kd.Pubkey1Hash = hash.Hash160(kd.Pubkey1)
+	kd.Pubkey2Hash = hash.Hash160(kd.Pubkey2)
 
 	return kd
 }
