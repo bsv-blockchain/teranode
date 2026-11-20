@@ -108,8 +108,13 @@ func noopEndFn(...error) {}
 // addLogMessage adds a log message to the trace options
 func (s *TraceOptions) addLogMessage(logger ulogger.Logger, message, level string, args []interface{}) {
 	if s.Logger == nil && logger != nil {
-		// duplicate the logger so that the skip frame is correct
-		s.Logger = logger.Duplicate(ulogger.WithSkipFrame(1))
+		s.Logger = logger
+	}
+
+	// Debug completion messages are only promoted to errors at debug level.
+	// Suppressing them here therefore preserves error logging at higher levels.
+	if level == "DEBUG" && s.Logger != nil && !debugLoggingEnabled(s.Logger) {
+		return
 	}
 
 	if s.LogMessages == nil {
@@ -117,6 +122,22 @@ func (s *TraceOptions) addLogMessage(logger ulogger.Logger, message, level strin
 	} else {
 		s.LogMessages = append(s.LogMessages, logMessage{message: message, args: args, level: level})
 	}
+}
+
+func debugLoggingEnabled(logger ulogger.Logger) bool {
+	// A debug-level logger promotes failures to errors even when a global
+	// threshold suppresses debug output, so retain its completion message.
+	if logger.LogLevel() <= ulogger.LogLevelDebug {
+		return true
+	}
+
+	// Zerolog can have a second output with a different threshold, and its
+	// trace/global levels cannot be represented by the legacy LogLevel values.
+	if logger, ok := logger.(interface{ DebugEnabled() bool }); ok {
+		return logger.DebugEnabled()
+	}
+
+	return false
 }
 
 // IsTracingEnabled returns whether tracing is currently enabled.
@@ -531,6 +552,7 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 	// This is done AFTER starting the span so that WithTraceContext can extract
 	// traceId/spanId from the context for log-trace correlation.
 	if options.Logger != nil && len(options.LogMessages) > 0 {
+		options.Logger = options.Logger.Duplicate(ulogger.WithSkipFrame(1))
 		ctxLogger := options.Logger.WithTraceContext(ctx)
 		for _, l := range options.LogMessages {
 			switch l.level {
