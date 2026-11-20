@@ -108,23 +108,16 @@ func LanePositionUnwritten(err error) bool {
 }
 
 // RefusedSpend reports whether err and spends, the failure of a spend, say an input's spend was
-// refused: a Spend record carries an error that is not the context ending, or the call failed with a
-// UTXO or spent error. A spend cut short by the context ending is reported the same way, so the
-// context is ruled out first. A refused spend is LaneReturnSpendRejected when no create ran.
+// refused: a Spend record carries an error that is not the context ending or a transient local
+// failure, or the call failed with a UTXO or spent error. A spend cut short by the context ending, or
+// failed by a timeout or an unavailable service or storage, is reported the same way, so both are
+// ruled out first. It agrees with the burned lane position counter (LaneBurnReason), so a position
+// returned as LaneReturnSpendRejected is also counted as burned for spend_rejected. A refused spend
+// is LaneReturnSpendRejected when no create ran.
 func RefusedSpend(err error, spends []*Spend) bool {
-	if err == nil || errors.Is(err, errors.ErrTxExists) {
+	if err == nil {
 		return false
 	}
 
-	for _, s := range spends {
-		if s != nil && s.Err != nil && !errors.IsContextError(s.Err) {
-			return true
-		}
-	}
-
-	if IsCreateOutcomeUnknown(err) {
-		return false
-	}
-
-	return errors.Is(err, errors.ErrUtxoError) || errors.Is(err, errors.ErrSpent)
+	return LaneBurnReason(err, spends) == LaneBurnSpendRejected
 }

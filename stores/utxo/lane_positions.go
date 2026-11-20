@@ -31,6 +31,10 @@ type LanePositionTaker interface {
 	// TakeLanePosition returns the position for the record that o describes; see LanePositions.Take.
 	TakeLanePosition(ctx context.Context, o *CreateOptions) (uint64, error)
 
+	// BurnLanePosition counts a position taken from the source that no record carries; see
+	// LanePositions.BurnLanePosition.
+	BurnLanePosition(caller Caller, reason string)
+
 	// ReturnLanePosition hands back a position taken from the source that the caller proved no
 	// record carries; see LanePositions.ReturnLanePosition.
 	ReturnLanePosition(position uint64, reason string, unwritten bool)
@@ -40,6 +44,9 @@ type LanePositionTaker interface {
 // is every store with lane positions off, a create pays one nil check.
 type LanePositions struct {
 	source LanePositionSource
+
+	// burnStore labels the positions this store burns; see NameLaneBurns.
+	burnStore string
 	// returner is source when it takes positions back, and nil otherwise.
 	returner LanePositionReturner
 	// returnStore labels the positions this store returns; see NameLaneReturns.
@@ -83,6 +90,30 @@ func (l *LanePositions) TakeLanePosition(ctx context.Context, o *CreateOptions) 
 
 // TakeLanePositions takes n positions, one per transaction of a list, or returns nil with no source.
 func (l *LanePositions) TakeLanePositions(ctx context.Context, n int) ([]uint64, error) {
+	positions, err := l.takeLanePositions(ctx, n)
+	if err != nil {
+		return nil, err
+	}
+
+	return positions, nil
+}
+
+// TakeListLanePositions is TakeLanePositions for the transactions of list. A take that fails leaves
+// the positions taken before it unused, so it records them as burned before it returns nil.
+func (l *LanePositions) TakeListLanePositions(ctx context.Context, list *SpendAndCreateMultiList) ([]uint64, error) {
+	positions, err := l.takeLanePositions(ctx, len(list.TxIDs))
+	if err != nil {
+		l.BurnLanePositions(list.Options.Caller, LaneBurnTakeFailed, len(positions))
+
+		return nil, err
+	}
+
+	return positions, nil
+}
+
+// takeLanePositions takes n positions. On a failure it returns the positions it took before the
+// failure with the error.
+func (l *LanePositions) takeLanePositions(ctx context.Context, n int) ([]uint64, error) {
 	if l.source == nil {
 		return nil, nil
 	}
@@ -92,7 +123,7 @@ func (l *LanePositions) TakeLanePositions(ctx context.Context, n int) ([]uint64,
 	for i := range positions {
 		p, err := l.Take(ctx, &CreateOptions{})
 		if err != nil {
-			return nil, err
+			return positions[:i], err
 		}
 
 		positions[i] = p

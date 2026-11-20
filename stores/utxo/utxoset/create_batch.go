@@ -314,9 +314,11 @@ func (s *Store) claimFloor() int32 {
 type createResult struct {
 	data *meta.Data
 	err  error
-	// rolledBack is true when the batch failed with its database transaction open, before its
-	// COMMIT was sent, so nothing of it was written.
-	rolledBack bool
+
+	// burnReason says why the item's lane position burned when the batch failed with its database
+	// transaction open: rolled_back, or outcome_unknown when the COMMIT itself failed and may have
+	// landed. Empty for any other answer.
+	burnReason string
 }
 
 // createItem is a single Create waiting for its batch to flush.
@@ -1117,6 +1119,10 @@ func newCreateBatcher(s *Store, size int, duration time.Duration, drainMode, gre
 	return b
 }
 
+// createBatchBeforeCommit is a test hook called just before a create batch commits. An error from it
+// fails the batch, which rolls back. nil in production.
+var createBatchBeforeCommit func() error
+
 // sendCreateBatch flushes a batch of Creates as one statement.
 func (s *Store) sendCreateBatch(batch []*createItem) {
 	// Marks this batch as in flight so Close waits for the database work, not merely for the
@@ -1213,35 +1219,28 @@ func (s *Store) sendCreateBatch(batch []*createItem) {
 	}()
 
 	if err := s.lockTxids(ctx, dbTx, plan.txids); err != nil {
-		s.failBatchRolledBack(batch, err)
+		s.failBatchWith(batch, err, utxo.LaneBurnRolledBack)
 		return
 	}
 
 	if err := s.runCreatePlan(ctx, dbTx, plan); err != nil {
-		s.failBatchRolledBack(batch, err)
+		s.failBatchWith(batch, err, utxo.LaneBurnRolledBack)
 		return
 	}
 
 	if createBatchBeforeCommit != nil {
 		if err := createBatchBeforeCommit(); err != nil {
-			s.failBatchRolledBack(batch, err)
+			s.failBatchWith(batch, err, utxo.LaneBurnRolledBack)
 			return
 		}
 	}
 
-	if err := dbTx.Commit(ctx); err != nil {
-		s.failBatch(batch, errors.NewStorageError("[utxoset][Create] commit", err))
+	if err := commitCreates(ctx, dbTx); err != nil {
+		s.failBatchWith(batch, errors.NewStorageError("[utxoset][Create] commit", err), utxo.LaneBurnOutcomeUnknown)
 		return
 	}
 
 	committed = true
-
-	if createBatchAfterCommit != nil {
-		if err := createBatchAfterCommit(); err != nil {
-			s.failBatch(batch, errors.NewStorageError("[utxoset][Create] commit", err))
-			return
-		}
-	}
 
 	for i, item := range batch {
 		item.done <- createResult{data: plan.perItem[i], err: plan.errs[i]}
@@ -1256,20 +1255,10 @@ func (s *Store) failBatch(items []*createItem, err error) {
 	}
 }
 
-// failBatchRolledBack is failBatch for a batch that failed with its database transaction open,
-// before its COMMIT was sent: the deferred rollback undoes it whole, so no item's lane position was
-// written.
-func (s *Store) failBatchRolledBack(items []*createItem, err error) {
+// failBatchWith is failBatch for a batch whose database transaction was open, with the reason its
+// items' lane positions burned.
+func (s *Store) failBatchWith(items []*createItem, err error, burnReason string) {
 	for _, item := range items {
-		item.done <- createResult{err: err, rolledBack: true}
+		item.done <- createResult{err: err, burnReason: burnReason}
 	}
 }
-
-// createBatchAfterCommit is a test hook called after a create batch commits. An error from it is
-// returned as the commit's, the shape of a commit the server made and the client did not hear
-// about. nil in production.
-var createBatchAfterCommit func() error
-
-// createBatchBeforeCommit is a test hook called after a create batch's statements and before its
-// COMMIT. An error from it fails the batch with its transaction open. nil in production.
-var createBatchBeforeCommit func() error

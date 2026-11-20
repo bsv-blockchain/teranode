@@ -1351,7 +1351,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				// fallback (reached during legacy below-checkpoint catchup on a stale/double
 				// spend — see handle_block.go PreValidateTransactions, which sets both
 				// CreateConflicting and OutpointOnlySpend) does not hard-fail the block.
-				var conflictingCreateOpts []utxo.CreateOption
+				conflictingCreateOpts := []utxo.CreateOption{utxo.WithCaller(createCaller(validationOptions))}
 				if validationOptions.OutpointOnlySpend {
 					conflictingCreateOpts = append(conflictingCreateOpts, utxo.WithSkipExtendedInputs(true))
 				}
@@ -2361,6 +2361,23 @@ func (v *Validator) TriggerBatcher() {
 	// Noop
 }
 
+// createCaller names the service a validator create is made for, for the burned lane position
+// counter. A caller the options name wins: subtree validation names itself on a peer's subtree,
+// which it validates without InBlock. Otherwise a create for a transaction that arrived in a block
+// (InBlock) is subtree validation's, since today only subtree validation sets InBlock, and every
+// other create is the validator's own, a mempool submission.
+func createCaller(validationOptions *Options) utxo.Caller {
+	if validationOptions != nil && validationOptions.Caller != utxo.CallerUnknown {
+		return validationOptions.Caller
+	}
+
+	if validationOptions != nil && validationOptions.InBlock {
+		return utxo.CallerSubtreeValidation
+	}
+
+	return utxo.CallerValidator
+}
+
 // CreateInUtxoStore stores transaction metadata in the UTXO store without
 // spending any inputs (SpendAndCreate with WithCreateOnly).
 // Returns transaction metadata and error if storage fails.
@@ -2840,6 +2857,7 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 
 	opts := []utxo.CreateOption{
 		utxo.WithIgnoreLocked(validationOptions.IgnoreLocked),
+		utxo.WithCaller(createCaller(validationOptions)),
 	}
 
 	if validationOptions.OutpointOnlySpend {
