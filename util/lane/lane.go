@@ -16,8 +16,9 @@
 // which block took a record by keeping, per lane per block, the range of positions
 // it took and the holes in that range, instead of writing to the record. A range
 // alone does not say it: a position returned and reused can be written in a later
-// block, below a position an earlier block took, and is a hole in the earlier one. Restoring an older blockchain
-// database could reuse positions, which is a listed limit of this phase.
+// block, below a position an earlier block took, and is a hole in the earlier one.
+// Restoring an older blockchain database could reuse positions, which is a listed
+// limit of this phase.
 //
 // Positions start at 1. Lane 0 is a real lane, so the packed value 0 can only
 // mean "no lane position": a record created with the migration off, before it

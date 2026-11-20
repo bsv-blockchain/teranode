@@ -121,7 +121,7 @@ service BlockchainAPI {
   // A lease that is closed is answered with closed set, not an error, and the holder opens a new one.
   rpc RenewLaneLease(RenewLaneLeaseRequest) returns (RenewLaneLeaseResponse) {}
 
-  // ReleaseLaneLease closes a lane lease cleanly and records the last position its holder took.
+  // ReleaseLaneLease closes a lane lease cleanly and records the highest position its holder gave out that may carry a record (positions at the top that came back unwritten are left out).
   rpc ReleaseLaneLease(ReleaseLaneLeaseRequest) returns (ReleaseLaneLeaseResponse) {}
 
   // GetBestBlockHeader retrieves the header of the current best block.

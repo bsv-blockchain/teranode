@@ -61,7 +61,8 @@ type Timings struct {
 // It holds the grant it is handing out and one spare. At half the current grant used it asks for
 // the next grant and keeps it as the spare. It takes from the current grant until the grant is used
 // up, with no returned position (Return) still waiting in it, or GrantDuration has passed since its
-// first position was taken, and only then moves to the spare. An unused grant expires GrantDuration after its request was sent, including a spare.
+// first position was taken, and only then moves to the spare. An unused grant expires GrantDuration
+// after its request was sent, including a spare.
 // The grant it leaves is settled by the next request: the grant's first position and its
 // final number, which is the grant's last position if used up or the highest position taken if it
 // aged out, travel on the next grant request or on the release.
