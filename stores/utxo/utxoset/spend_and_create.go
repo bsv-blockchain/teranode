@@ -303,13 +303,14 @@ var laneBurnProbeTimeout = 5 * time.Second
 
 // burnUnlessStored records the burn of position for a create whose rerun, after its batch's COMMIT
 // reported failure, failed with err. That COMMIT may have landed with this very position, whatever
-// the rerun then met, so the stored record is read. A batch that failed before sending its COMMIT
-// rolled back whole, and its reruns burn like any single call. Carrying the position, nothing burned. Carrying
-// another position is taken as a burn for the rerun's own reason, exists for ErrTxExists, though
-// it does not prove one: block assembly can delete the record and re-create it with a new
-// position between the rerun and this read, and this read holds no lock against that. Missing, or
-// unreadable within laneBurnProbeTimeout, or read without a position (the read can answer from a
-// row that does not carry one, such as a live UTXO below the lookup floor), the outcome is unknown.
+// the rerun then met, so the stored record is read. If the stored record carries the position,
+// nothing burned. Carrying another position is taken as a burn for the rerun's own reason, exists
+// for ErrTxExists, though it does not prove one: block assembly can delete the record and re-create
+// it with a new position between the rerun and this read, and this read holds no lock against that.
+// Missing, or unreadable within laneBurnProbeTimeout, or read without a position (the read can
+// answer from a row that does not carry one, such as a live UTXO below the lookup floor), the
+// outcome is unknown. A batch that failed before sending its COMMIT rolled back whole, so its
+// reruns burn like any single call and never come here.
 func (s *Store) burnUnlessStored(ctx context.Context, tx *bt.Tx, options *utxo.CreateOptions, position uint64,
 	err error, spends []*utxo.Spend) {
 	txid := utxo.CreatedTxID(tx, options)
