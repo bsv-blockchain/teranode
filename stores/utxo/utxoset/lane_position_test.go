@@ -2500,6 +2500,32 @@ func columnType(t *testing.T, s *Store, ctx context.Context, table, column strin
 	return typ
 }
 
+// The copy columns are usable only beside the identity tables' lane_position, because the statements
+// that write them are the lane forms: a database that has the copy columns but lost an identity
+// lane_position opens with neither copy flag set.
+func TestLaneCopyColumnsNeedTheIdentityColumns(t *testing.T) {
+	s, ctx := newTestStore(t)
+	require.NoError(t, s.PrepareLaneSchema(ctx))
+
+	parents, coins, err := openLaneCopyColumns(ctx, s.pool, true)
+	require.NoError(t, err)
+	require.True(t, parents)
+	require.True(t, coins)
+
+	parents, coins, err = openLaneCopyColumns(ctx, s.pool, false)
+	require.NoError(t, err)
+	require.False(t, parents, "without the identity columns the parents copy is not usable")
+	require.False(t, coins, "nor the coin copy")
+
+	_, err = s.pool.Exec(ctx, `ALTER TABLE tx_ident DROP COLUMN lane_position`)
+	require.NoError(t, err)
+
+	reopened := reopenWithFlag(t, s, false)
+	require.False(t, reopened.laneColumn)
+	require.False(t, reopened.laneParentColumn)
+	require.False(t, reopened.laneCoinColumn)
+}
+
 // Opening the store with lane positions on adds only the record's own lane_position, on the three
 // identity tables; the other five lane columns wait for PrepareLaneSchema, and this build writes
 // them only once it has installed them, so turning lane positions on adds no columns.

@@ -2761,6 +2761,7 @@ func TestTxMetaPayloadCarriesLanePositionsAtShadow(t *testing.T) {
 		reason  string
 	}{
 		{"no own position", lane.None, good, txmetacache.LaneMissOwn},
+		{"one more position than parents", lane.Pack(1, 1), []uint64{lane.Pack(2, 1), lane.Pack(3, 1), lane.Pack(4, 1)}, txmetacache.LaneMissParentsNotRead},
 		{"parents not read", lane.Pack(1, 1), nil, txmetacache.LaneMissParentsNotRead},
 		{"a parent without a position", lane.Pack(1, 1), []uint64{lane.Pack(2, 1), lane.None}, txmetacache.LaneMissParent},
 	} {
