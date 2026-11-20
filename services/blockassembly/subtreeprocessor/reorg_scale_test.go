@@ -9,7 +9,10 @@ package subtreeprocessor
 //
 // and keep the JSON report next to the build it measured. Settings, all optional:
 //
-//	REORG_SCALE_CASE        reorg (default) or reset: what is timed after the scenario is built
+//	REORG_SCALE_CASE        reorg (default) or reset: what is timed after the scenario is built.
+//	                        reset times the processor's part of a reset; the reload of the unmined
+//	                        transactions that follows it is BlockAssembler.loadUnminedTransactions,
+//	                        timed by BenchmarkLoadUnminedTransactions
 //	REORG_SCALE_P           pending transactions (default 10M)
 //	REORG_SCALE_LOST_RATIO  lost block size as a multiple of P (default 1)
 //	REORG_SCALE_LOST_IN_F   fraction of the lost block in the winners (default 0.995)
@@ -60,7 +63,11 @@ type reorgScaleReport struct {
 	IntakeSent     int     `json:"intake_sent"`
 	AssemblyLength int     `json:"assembly_length"`
 	OrderVerified  bool    `json:"order_verified"`
-	Error          string  `json:"error,omitempty"`
+
+	// PhaseSeconds is the time of each phase of the timed run (reorg_phase_seconds), summed over
+	// repeats such as the forward steps.
+	PhaseSeconds map[string]float64 `json:"phase_seconds"`
+	Error        string             `json:"error,omitempty"`
 }
 
 func scaleEnvInt(t *testing.T, key string, def int) int {
@@ -175,6 +182,9 @@ func TestReorgScale(t *testing.T) {
 		stopIntake = sc.startIntake(report.IntakeTPS)
 	}
 
+	phaseOp := map[string]string{"reorg": "reorgBlocks", "reset": "reset"}[report.Case]
+	phasesBefore := reorgPhaseSeconds(phaseOp)
+
 	stopHeap := sampleHeap()
 	start = time.Now()
 
@@ -189,6 +199,11 @@ func TestReorgScale(t *testing.T) {
 
 	report.RunSeconds = time.Since(start).Seconds()
 	report.PeakHeapBytes = stopHeap()
+
+	report.PhaseSeconds = make(map[string]float64)
+	for phase, seconds := range reorgPhaseSeconds(phaseOp) {
+		report.PhaseSeconds[phase] = seconds - phasesBefore[phase]
+	}
 
 	if stopIntake != nil {
 		report.IntakeSent = stopIntake()

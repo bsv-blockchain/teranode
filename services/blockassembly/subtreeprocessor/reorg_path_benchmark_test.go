@@ -2,8 +2,13 @@ package subtreeprocessor
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 // BenchmarkReorgPath times a fork reorg of one block back and two forward through reorgBlocks, the
@@ -57,9 +62,12 @@ func benchmarkReorgPath(b *testing.B, cfg reorgScenarioConfig, path reorgPath) {
 
 	var total time.Duration
 
+	phases := make(map[string]float64)
+
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		sc := newReorgScenario(b, cfg)
+		before := reorgPhaseSeconds("reorgBlocks")
 		b.StartTimer()
 
 		start := time.Now()
@@ -71,7 +79,53 @@ func benchmarkReorgPath(b *testing.B, cfg reorgScenarioConfig, path reorgPath) {
 		if err != nil {
 			b.Fatal(err)
 		}
+
+		for phase, seconds := range reorgPhaseSeconds("reorgBlocks") {
+			phases[phase] += seconds - before[phase]
+		}
 	}
 
 	b.ReportMetric(float64(total.Nanoseconds())/float64(b.N)/float64(cfg.pending), "ns/pending_tx")
+
+	for _, phase := range slices.Sorted(maps.Keys(phases)) {
+		b.ReportMetric(phases[phase]*1000/float64(b.N), phase+"_ms")
+	}
+}
+
+// reorgPhaseSeconds is the total time reorg_phase_seconds has recorded for each phase of op.
+func reorgPhaseSeconds(op string) map[string]float64 {
+	initPrometheusMetrics()
+
+	ch := make(chan prometheus.Metric, 64)
+
+	go func() {
+		prometheusSubtreeProcessorReorgPhase.Collect(ch)
+		close(ch)
+	}()
+
+	out := make(map[string]float64)
+
+	for metric := range ch {
+		m := &dto.Metric{}
+		if err := metric.Write(m); err != nil {
+			continue
+		}
+
+		var labelOp, phase string
+
+		for _, l := range m.GetLabel() {
+			switch l.GetName() {
+			case "op":
+				labelOp = l.GetValue()
+			case "phase":
+				phase = l.GetValue()
+			}
+		}
+
+		if labelOp == op {
+			out[phase] = m.GetHistogram().GetSampleSum()
+		}
+	}
+
+	return out
 }
