@@ -166,7 +166,7 @@ func formatUtxoHex(b []byte) string {
 	if len(b) > 32 && len(b) <= 64 {
 		result += " " + fmt.Sprintf("%x", b[32:])
 	} else if len(b) > 64 {
-		result += " " + fmt.Sprintf("%x", b[32:64]) + " " + fmt.Sprintf("%x", b[64:68])
+		result += " " + fmt.Sprintf("%x", b[32:64]) + " " + fmt.Sprintf("%x", b[64:])
 	}
 
 	return result

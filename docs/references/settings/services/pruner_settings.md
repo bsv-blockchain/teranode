@@ -29,7 +29,7 @@ Settings are organized under the `Pruner` struct in `settings.Settings`.
 | SkipPreserveParents | bool | false | pruner_skipPreserveParents | Skip Phase 1 - parent preservation for unmined transactions |
 | SkipProcessExpiredPreservations | bool | false | pruner_skipProcessExpiredPreservations | Skip Phase 1b - expiry of old parent preservations |
 | MinBlockHeight | uint32 | 0 | pruner_min_block_height | Skip all pruning until block height exceeds this value |
-| SkipDeletions | bool | false | pruner_skipDeletions | Aerospike deletion-phase dry run: skips record deletes, parent replay markers, external blob deletes and unmined delete-height clears. With pruner_utxoDefensiveEnabled, the cleanup of expired conflicting records still releases their parent outputs and conflictingChildren entries. The logged count is candidates before the hold-back and page checks. Parent preservation and expiry still run. Not read by the SQL pruner |
+| SkipDeletions | bool | false | pruner_skipDeletions | Skip deletion operations during pruning |
 
 ### Service Control
 
@@ -143,9 +143,6 @@ full-replication ACK buys no correctness, only latency in the per-block removal 
 
 **Scope** - record removal only:
 
-- Pruner **parent updates** (the `deletedChildren` marker writes, each native sub-op 15 or a map write filtered on
-  the parent output, and their withdrawals, a plain map remove) mutate records that survive the prune and always use
-  `COMMIT_ALL`.
 - Every write **outside** the pruner always uses `COMMIT_ALL`. There is no cluster-wide commit-level
   setting: UTXO record creation, the transaction-creation lock, the conflict WAL, setMined, unspend
   and the preserve / delete-at-height writes are none of them self-healing, so relaxing them would

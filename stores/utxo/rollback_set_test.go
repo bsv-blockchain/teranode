@@ -62,26 +62,13 @@ func TestRollbackSetLeavesCallerSliceUntouched(t *testing.T) {
 	require.Nil(t, backing[:2][1], "the caller's spare capacity must not receive the idempotent match")
 }
 
-// TestIsReplayAnswerIsTheMarkerOnly: a missing parent is what an ordinary retry
-// sees too, so only the marker rejection marks an idempotent match historical.
-func TestIsReplayAnswerIsTheMarkerOnly(t *testing.T) {
+// TestIsReplayAnswerIsThePrunedReplayOnly: a missing parent is what an ordinary
+// retry sees too, so only the pruned-replay refusal holds idempotent matches back.
+func TestIsReplayAnswerIsThePrunedReplayOnly(t *testing.T) {
 	require.True(t, IsReplayAnswer(errors.NewUtxoSpendingTxPrunedError("pruned")))
 	require.False(t, IsReplayAnswer(errors.NewTxNotFoundError("parent missing")))
 	require.False(t, IsReplayAnswer(nil))
 	require.False(t, AnyPrunedReplay([]*Spend{{Err: errors.NewTxNotFoundError("parent missing")}}))
-}
-
-// TestIsPrunedReplayRejectionIsTheMarkerOnly: the SQL bulk spend gives a duplicate input its
-// representative's refusal only for the marker rejection. A missing parent, a spent output or any
-// other error is not one, and the answer is read through a wrapping error as well.
-func TestIsPrunedReplayRejectionIsTheMarkerOnly(t *testing.T) {
-	pruned := errors.NewUtxoSpendingTxPrunedError("pruned")
-
-	require.True(t, IsPrunedReplayRejection(pruned))
-	require.True(t, IsPrunedReplayRejection(errors.NewProcessingError("wrapped", pruned)))
-	require.False(t, IsPrunedReplayRejection(errors.NewTxNotFoundError("parent missing")), "a missing parent is not a replay answer")
-	require.False(t, IsPrunedReplayRejection(errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil)))
-	require.False(t, IsPrunedReplayRejection(nil))
 }
 
 // TestAnyPrunedReplayAndNeedsSpendRollbackSkipNilSpends: a spend list can hold nil entries, which

@@ -236,10 +236,8 @@ When a transaction remains unmined for a long time, its parent transactions (UTX
 5. For each record to delete:
 
     - If defensive mode enabled: Verify all spending children are stable
-    - Hold back a non-conflicting record whose parent claim cannot be verified: SQL checks each claimed output, while Aerospike checks whether any claimed output on each parent record names the child. If an output is unspent or malformed and no other claimed output on that record verifies the child (Aerospike), or that input cannot be verified (SQL), keep the child for another cycle. Conflicting records are exempt from this hold-back
-    - Write a replay marker on each parent output that still records the record as its spender, before the delete. On Aerospike a record whose marker cannot be written is held back; on SQL the markers and the delete commit in one transaction. In SQL defensive mode expired conflicting records are reaped separately: each reap transaction clears the parent outputs that name the record and deletes it without writing a marker
     - Delete UTXO record from database
-    - If external transaction data exists: Delete `.tx` or `.outputs` file from Blob Store once the record delete is confirmed (Aerospike)
+    - If external transaction data exists: Delete `.tx` or `.outputs` file from Blob Store once the record delete is confirmed
 
 6. Pruner updates metrics
     - `teranode_pruner_duration_seconds{operation="dah_pruner"}`
@@ -352,15 +350,15 @@ For large transactions stored externally in Blob Store (S3 or filesystem), the P
 
     - Has inputs → FileTypeTx (`.tx` file)
     - No inputs → FileTypeOutputs (`.outputs` file)
-3. Write the required replay markers on its parents and confirm the Aerospike master removal operation (a delete, or a one-second TTL touch when TTL pruning is enabled)
-4. Delete the external file only after that operation is confirmed
+3. Delete the Aerospike record, and delete the file from Blob Store only once that delete is confirmed
+4. If file already deleted (by previous cleanup), treat the cleanup as done
 
 **Error Handling:**
 
-- If the master removal operation fails or its outcome is unknown: Keep its external files
-- If file deletion fails: Log and return the error; the master is already removed or scheduled to expire, so the failure can leave an orphan blob
-- If file not found (ErrNotFound): Treat cleanup as successful (file already cleaned up)
-- External files have no delete-at-height, and a deleted master is not scanned again, so a failed blob deletion is not automatically retried by a later pruning pass
+- If the record delete fails or its outcome is unknown: Keep the file
+- If file deletion fails: Log the error; the record is already gone, so the file is left behind
+- If file not found (ErrNotFound): Treat as cleaned up
+- With `pruner_skipDeletions` on, neither records nor files are deleted
 
 ### 2.7 Channel-Based Deduplication
 
@@ -468,7 +466,7 @@ For large transactions stored externally:
 #### SQL Implementation
 
 - **Location**: `/stores/utxo/sql/pruner/`
-- **Query**: One READ COMMITTED transaction per prune for the candidates. In defensive mode expired conflicting records are left out of it and reaped afterwards, one transaction each: the reap clears the parent outputs that name the record and deletes it, with no marker. The main transaction selects the candidates into a temporary table (on Postgres it locks them `FOR NO KEY UPDATE` in ascending id and skips rows another transaction holds), holds back a candidate that is not conflicting and whose claimed parent output is present but unspent or malformed, writes a `deleted_children` replay marker for each surviving parent output that records a deleted candidate as its spender, then deletes the candidates that were not held back. On Postgres the role needs the `TEMPORARY` privilege
+- **Query**: Simple `DELETE WHERE delete_at_height <= ?`
 - **Workers**: 2 goroutines (configurable)
 - **No External Dependencies**: All data inline
 - **Max Job History**: 10 jobs

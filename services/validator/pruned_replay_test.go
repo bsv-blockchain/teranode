@@ -24,13 +24,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestValidateReportsPrunedReplayRatherThanConflict: replay C spends P:0, whose
-// parent carries C's marker, and Q:0, which after a reorg a different
-// transaction X now holds. The store answers the marker for P:0 and ErrSpent for
-// Q:0. With CreateConflicting set, as the legacy block path sets it, a spend set
-// whose every failure is a double spend takes the conflicting-create branch,
-// which returns ErrTxConflicting, and netsync swallows that below the
-// checkpoint. The marker answer carries its own code, ERR_UTXO_SPENDING_TX_PRUNED,
+// TestValidateReportsPrunedReplayRatherThanConflict: replay C spends P:0, which
+// still names C from a spend 400 blocks old while C has no record, and Q:0,
+// which after a reorg a different transaction X now holds. The store refuses
+// P:0 as a pruned replay and answers ErrSpent for Q:0. With CreateConflicting
+// set, as the legacy block path sets it, a spend set whose every failure is a
+// double spend takes the conflicting-create branch, which returns
+// ErrTxConflicting, and netsync swallows that below the checkpoint. The refusal
+// carries its own code, ERR_UTXO_SPENDING_TX_PRUNED,
 // which spendConflicts does not count, so the validator stays off that branch and
 // the replay reaches the caller as one. The test fails if that code is ever
 // counted as a double spend.
@@ -111,8 +112,8 @@ func TestValidateReportsPrunedReplayRatherThanConflict(t *testing.T) {
 	require.NoError(t, err)
 	mined(1001, g)
 
-	// Q:0 is released and X takes it before C is pruned, so the prune marks only
-	// P (the marker is written only where the output still names C) and C's
+	// Q:0 is released and X takes it before C is pruned, so only P:0 still
+	// names C and C's
 	// input on Q answers ErrSpent.
 	q0Hash, err := util.UTXOHashFromOutput(q.TxIDChainHash(), q.Outputs[0], 0)
 	require.NoError(t, err)
@@ -131,11 +132,6 @@ func TestValidateReportsPrunedReplayRatherThanConflict(t *testing.T) {
 
 	_, err = store.Get(ctx, c.TxIDChainHash())
 	require.ErrorIs(t, err, errors.ErrTxNotFound, "fixture: C is pruned")
-
-	// The legacy create phase writes C again, locked and mined, before validating.
-	_, _, err = store.SpendAndCreate(ctx, c, 1400, utxostore.WithCreateOnly(), utxostore.WithLocked(true),
-		utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 1400, BlockHeight: 1400}), utxostore.WithSkipExtendedInputs(true))
-	require.NoError(t, err)
 
 	v := &Validator{
 		logger:      logger,
@@ -160,24 +156,23 @@ func TestValidateReportsPrunedReplayRatherThanConflict(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay must be reported as a pruned replay")
 	require.NotErrorIs(t, err, errors.ErrTxConflicting, "a pruned replay is not a conflict to reconcile")
 
-	meta, err := store.Get(ctx, c.TxIDChainHash())
-	require.NoError(t, err)
-	require.False(t, meta.Conflicting, "the recreated record must not be flagged conflicting, which is what the conflicting branch did")
+	_, err = store.Get(ctx, c.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "C is not recreated, as a conflicting record or otherwise")
 }
 
 // TestValidatePrunedReplayInABlock: replay C spends n parents' output 0. The
 // first n-1 of those outputs were released and taken by X before C was pruned,
-// so they answer ErrSpent and only the last parent carries C's marker.
+// so they answer ErrSpent and only the last parent's output still names C.
 //
-// With 11 inputs the marker answer is the eleventh failed spend, past the
+// With 11 inputs the pruned-replay refusal is the eleventh failed spend, past the
 // validator's cap of 10 aggregated errors, and it must still reach the caller.
 // The validator appends its aggregate behind the store's own error chain and
-// never replaces it, so what carries the marker answer is the store's chain:
+// never replaces it, so what carries the refusal is the store's chain:
 // the SQL spend joins every per-input error into it, and the Aerospike batched
-// spend puts the marker answer first in its capped aggregate
+// spend puts the refusal first in its capped aggregate
 // (TestBatchedSpendKeepsReplayPastTheErrorCap).
 //
-// The answer is never a block verdict: the marker cannot show that C was mined
+// The answer is never a block verdict: the refusal cannot show that C was mined
 // on the chain the block extends.
 func TestValidatePrunedReplayInABlock(t *testing.T) {
 	tracing.SetupMockTracer()
@@ -245,8 +240,8 @@ func TestValidatePrunedReplayInABlock(t *testing.T) {
 			require.NoError(t, err)
 			mined(1001, g)
 
-			// Release the first n-1 outputs and let X take them, so the prune
-			// marks only the last parent, the one output that still names C.
+			// Release the first n-1 outputs and let X take them, so only the last
+			// parent's output still names C.
 			for i := 0; i < n-1; i++ {
 				hash, hashErr := util.UTXOHashFromOutput(parents[i].TxIDChainHash(), parents[i].Outputs[0], 0)
 				require.NoError(t, hashErr)
@@ -276,7 +271,7 @@ func TestValidatePrunedReplayInABlock(t *testing.T) {
 			}
 
 			// In a block the replay is refused and reported as one, and it stays
-			// a non-verdict error: the marker records only that this node's pruner
+			// a non-verdict error: the refusal says only that this node's pruner
 			// removed C, not on which chain C was mined, so a block that re-includes
 			// C on a competing branch may be valid.
 			opts := NewDefaultOptions()
@@ -286,7 +281,7 @@ func TestValidatePrunedReplayInABlock(t *testing.T) {
 
 			_, err = v.ValidateWithOptions(ctx, c, 1400, opts)
 			require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is reported as one, past the error cap")
-			require.NotErrorIs(t, err, errors.ErrTxInvalid, "a marker answer never condemns the block")
+			require.NotErrorIs(t, err, errors.ErrTxInvalid, "a pruned-replay refusal never condemns the block")
 			require.NotErrorIs(t, err, errors.ErrTxConflicting)
 		})
 	}

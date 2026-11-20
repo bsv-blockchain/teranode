@@ -4,15 +4,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 )
 
-// IsPrunedReplayRejection reports whether a spend-phase error carries the
-// pruner's marker rejection, ErrUtxoSpendingTxPruned, which names the spending
-// transaction as a replay of one the pruner removed. Its one production caller
-// is the SQL store's bulk spend, which gives a duplicate input the same answer
-// as its refused representative.
-func IsPrunedReplayRejection(err error) bool {
-	return errors.Is(err, errors.ErrUtxoSpendingTxPruned)
-}
-
 // HistoricalSpendAge is how many blocks older than the incoming spend a
 // recorded spend must be to count as history: half the pruning retention, 144
 // at the default of 288.
@@ -59,41 +50,30 @@ func IsHistoricalSpend(recordedHeight uint32, recorded bool, incomingHeight, ret
 // reversed: everything this call actually wrote, plus, in most cases, the
 // inputs whose output already recorded exactly this spend.
 //
-// An idempotent match is ambiguous on the record. "This output already records
-// this spender" is byte-identical whether the spend was committed by a mined
-// transaction long ago or by an earlier failed attempt at this very call, so
-// the record cannot tell the two apart and the answer has to come from why the
-// call is failing now.
+// An idempotent match is ambiguous on the record: "this output already records
+// this spender" reads the same whether a mined transaction committed it long
+// ago or an earlier failed attempt at this very call did. The recorded spend
+// height settles most cases. A match at least HistoricalSpendAge blocks older
+// than the incoming spend, or one written before heights were recorded, is
+// history (IsHistoricalSpend). The stores never pass such a match in
+// idempotent, so a rollback never reverses it: reversing a confirmed spend
+// would hand a confirmed output to the next spender.
 //
-// One rejection makes the match historical: the marker answer a pruned replay
-// gets (IsReplayAnswer). The marker fires only for a transaction this store
-// pruned. A mined transaction is pruned once it is fully spent and buried, so
-// an output recording it as spender is recording a confirmed spend, and
-// reversing it would hand a confirmed output to the next spender, which is the
-// double-spend this exclusion was added to prevent. The pruner also deletes
-// conflicting records that were never mined. SQL defensive mode reaps them
-// separately, clearing their parent claims without writing a marker. In the
-// default mode one whose parent claims were never released is marked
-// like a mined one. Its match is not a confirmed spend, but it is held back all
-// the same, so the output stays spent by a transaction that never confirmed.
+// A young match is reversible, and reversing it is what keeps the store
+// self-healing. The store leaves partial spends committed when a call fails on
+// a transient error, so an attempt that wrote one input and then failed on
+// another leaves that input spent by a transaction it never created. On the
+// next attempt that input reads as a young idempotent match. Holding it back
+// would make the orphan permanent: the output stays spent by a transaction the
+// store does not hold, and its next legitimate spender is refused.
 //
-// Every other rejection leaves the match reversible, and reversing it is what
-// keeps the store self-healing. The store leaves partial spends committed when
-// a call fails on a transient error, so an attempt that wrote one input and
-// then failed on another leaves that input spent by a transaction it never
-// created. On the next attempt that input reads as an idempotent match. Holding
-// it back unconditionally made the orphan permanent: the output stayed spent by
-// a transaction the store does not hold, and its next legitimate spender was
-// refused with a txid this node has never seen.
-//
-// historical is the caller's answer to "might this call have been rejected as a
-// pruned replay?". It must be true when any input was, and also whenever
-// the caller does not know every input's answer, as on a spend call aborted
-// while some inputs were still in flight: an input not yet answered may be the
-// marker hit, and reading an in-flight slot is a data race besides. Holding an
-// idempotent match back fails towards an output left spent by a transaction the
-// store does not hold, which the next attempt heals; reversing it wrongly hands
-// a confirmed output to anyone.
+// historical holds back the young matches too. The caller sets it when an input
+// was refused as a pruned replay (IsReplayAnswer), and whenever it does not know
+// every input's answer, as on a spend call aborted while some inputs were still
+// in flight: an unanswered input may be the refusal, and reading an in-flight
+// slot is a data race besides. Holding a match back fails towards an output
+// left spent by a transaction the store does not hold, which the next attempt
+// heals; reversing it wrongly hands a confirmed output to anyone.
 func RollbackSet(written, idempotent []*Spend, historical bool) []*Spend {
 	if len(idempotent) == 0 || historical {
 		return written
@@ -107,9 +87,8 @@ func RollbackSet(written, idempotent []*Spend, historical bool) []*Spend {
 	return append(rollback, idempotent...)
 }
 
-// AnyPrunedReplay reports whether any spend failed with an answer that can mean
-// a pruned replay (IsReplayAnswer). Only for spends whose Err slot is safe to
-// read.
+// AnyPrunedReplay reports whether any spend was refused as a pruned replay
+// (IsReplayAnswer). Only for spends whose Err slot is safe to read.
 func AnyPrunedReplay(spends []*Spend) bool {
 	for _, spend := range spends {
 		if spend != nil && IsReplayAnswer(spend.Err) {
@@ -156,38 +135,28 @@ func NeedsSpendRollback(spends []*Spend, requireParentOutputs bool) bool {
 	return false
 }
 
-// IsReplayAnswer reports whether a per-input spend error is the answer a
-// replay of a pruned transaction gets: the marker rejection. The stores use it
-// to decide that an idempotent match in the same call is historical and must
-// not be reversed (RollbackSet).
+// IsReplayAnswer reports whether a per-input spend error is the refusal a replay
+// of a pruned transaction gets, ErrUtxoSpendingTxPruned: a historical
+// idempotent match whose spender has no record, or a spender an older pruner
+// marked in the parent's replay markers. The stores use it to hold back every
+// idempotent match of the call (RollbackSet).
 //
-// A missing parent does not count. Before the quick-validation cleanup was
-// removed it stood in for a chain the pruner removed end to end, but on its own
-// it is also what an ordinary retry sees: an earlier attempt that wrote one
-// input and failed left that input spent by a transaction with no record, and
-// treating the missing sibling parent as a replay kept that orphan spent for
-// good. For a child this code pruned, the surviving parent carries the marker,
-// so the marker answer alone covers it. A child pruned before this upgrade, or
-// one whose marker write failed under the old pruner, has no marker: a replay
-// of it beside a missing sibling parent still reverses the confirmed spend, as
-// on main (see the LIMITATION in stores/utxo/sql/pruner/pruner_service.go). A
-// prune that lands
-// after an input's marker read is caught by the rollback instead, which reads
-// the marker again once the spender is gone (withoutMarkedMatches in each
-// store).
+// A missing parent does not count. On its own it is also what an ordinary
+// retry sees: an earlier attempt that wrote one input and failed left that
+// input spent by a transaction with no record, and treating the missing
+// sibling parent as a replay would keep that orphan spent for good.
 func IsReplayAnswer(err error) bool {
 	return err != nil && errors.Is(err, errors.ErrUtxoSpendingTxPruned)
 }
 
-// ReplayRejectionsFirst reorders per-input spend errors so the marker
-// rejection comes first, then a missing parent, then the rest. The Aerospike
+// ReplayRejectionsFirst reorders per-input spend errors so the pruned-replay
+// refusal comes first, then a missing parent, then the rest. The Aerospike
 // batched spend aggregates these with errors.JoinCapped, which keeps only the
-// first few links. On a wide transaction whose marker hit sat past the cap the
-// rejection vanished from the error, and the block paths could not recognise
-// the replay. A missing parent ranks second not as a replay signal
-// (IsReplayAnswer counts only the marker) but because the legacy block path
-// treats it as a fault of this node's store (parkCommitFailure), so that link
-// must survive the cap too. The order within each group is preserved.
+// first few links. On a wide transaction whose refusal sat past the cap it
+// vanished from the error, and the block paths could not recognise the replay.
+// A missing parent ranks second not as a replay signal but because the legacy
+// block path treats it as a fault of this node's store (parkCommitFailure), so
+// that link must survive the cap too. The order within each group is preserved.
 func ReplayRejectionsFirst(errs []error) []error {
 	ordered := make([]error, 0, len(errs))
 

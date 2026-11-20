@@ -536,11 +536,10 @@ func NewUtxoWalkLimitExceededError(message string, params ...interface{}) *Error
 
 // NewUtxoSpendingTxPrunedError creates a new error indicating that the
 // transaction attempting to spend an output is one the pruner has already
-// removed. The pruner marks a parent for each child whose output on that parent
-// still names the child as its spender, so a replay of that child is rejected
-// here instead of silently succeeding as an idempotent re-spend and letting the
-// caller recreate the pruned transaction. A child whose output names another
-// spender, or a released conflicting loser, is pruned with no marker.
+// removed. The output still names the transaction as its spender, the spend was
+// recorded long enough ago to be history (utxo.IsHistoricalSpend), and the
+// transaction has no record. Without this answer the spend would succeed as an
+// idempotent re-spend and let the caller recreate the pruned transaction.
 //
 // It carries its own code rather than ERR_UTXO_ERROR because callers have to
 // tell it apart from the generic utxo error: it is one of the rejections that

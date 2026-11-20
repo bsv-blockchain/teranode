@@ -495,8 +495,10 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         if existingSpendingData then
 
             if bytes_equal(existingSpendingData, spendingData) then
-                -- Already spent with same data. A marker for this spender is a
-                -- replay of a transaction the pruner removed.
+                -- Already spent with same data. A marker an older pruner left for
+                -- this spender is a replay of a transaction it removed. The pruner
+                -- writes no markers now; the caller refuses a replay from the
+                -- recorded spend height instead.
                 if deletedChildren ~= nil and deletedChildren[spendingDataBytesToTxHex(existingSpendingData)] then
                     local error = map()
 
