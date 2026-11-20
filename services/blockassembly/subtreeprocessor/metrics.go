@@ -28,7 +28,12 @@ var (
 	prometheusSubtreeProcessorCreateTransactionMapDuration prometheus.Histogram
 	prometheusSubtreeProcessorRemoveTx                     prometheus.Histogram
 	prometheusSubtreeProcessorReset                        prometheus.Histogram
-	prometheusSubtreeProcessorDynamicSubtreeSize           prometheus.Gauge
+
+	// prometheusSubtreeProcessorReorgPhase is the wall time of each phase of a fork reorg
+	// (op="reorgBlocks") and of a reset (op="reset"); see phaseTimer.
+	prometheusSubtreeProcessorReorgPhase *prometheus.HistogramVec
+
+	prometheusSubtreeProcessorDynamicSubtreeSize prometheus.Gauge
 
 	// prometheusSubtreeProcessorBlockMaxSizeResizes counts re-chunks of the queue because
 	// the first subtree exceeded blockmaxsize. A resize lasts for one block, so a steadily
@@ -206,6 +211,17 @@ func _initPrometheusMetrics() {
 			Help:      "Duration of resetting subtree processor",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
+	)
+
+	prometheusSubtreeProcessorReorgPhase = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "reorg_phase_seconds",
+			Help:      "Wall time of each phase of a fork reorg (op=reorgBlocks) or reset (op=reset)",
+			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 19),
+		},
+		[]string{"op", "phase"},
 	)
 
 	prometheusSubtreeProcessorDynamicSubtreeSize = promauto.NewGauge(
