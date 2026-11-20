@@ -5368,9 +5368,6 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	)
 	defer deferFn()
 
-	// Times each phase; the forward steps report their own sub-phases (issue 2269).
-	defer stp.startPhases("reorgBlocks")()
-
 	// set by the fork branch's final return, read by its defer below
 	forkReorgSucceeded := false
 
@@ -5490,6 +5487,10 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 				stp.failedForkReorgNeedsReset.Store(true)
 			}
 		}()
+
+		// Times each phase of the fork reorg; the forward steps report their own sub-phases
+		// (issue 2269). A catch-up above is not timed.
+		defer stp.startPhases("reorgBlocks")()
 
 		// other operation, wait for all blocks to be processed first, mined_set etc.
 		if err = stp.WaitForPendingBlocks(ctx); err != nil {
@@ -5846,13 +5847,15 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		// failure by the next iteration's moveForwardBlock call.
 		stp.drainAndLogDiskTxMapErr("reorgBlocks_moveforward_commit")
 
+		stp.phases.done("forward_mark_sets")
+
 		// The step's input is no longer a rollback target: refresh the mining
 		// snapshot and unmap the subtrees it replaced, as finalizeBlockProcessing
 		// does for a block outside a reorg.
 		stp.updatePrecomputedMiningData()
 		stp.closeRetiredSubtrees()
 
-		stp.phases.done("forward_mark_sets")
+		stp.phases.done("forward_snapshot")
 	}
 
 	// Last chance to fail the whole reorg before the external, irreversible

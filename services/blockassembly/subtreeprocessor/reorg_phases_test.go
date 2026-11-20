@@ -104,9 +104,10 @@ func TestPhaseTimer_LogsAndObservesEachPhase(t *testing.T) {
 	p.done("beta")
 	p.finish()
 
-	require.Equal(t, []string{"alpha", "beta"}, logger.phases("unittest"))
+	require.Equal(t, []string{"alpha", "beta", "after_last_phase"}, logger.phases("unittest"),
+		"finish records the time after the last phase: on a failure that is the phase that failed")
 	require.Contains(t, logger.lines, "[unittest] phase alpha took 1s")
-	require.Equal(t, "[unittest] phases total=2s pending=42 alpha=1s beta=1s", logger.summary("unittest"))
+	require.Equal(t, "[unittest] phases total=3s pending=42 alpha=1s beta=1s after_last_phase=1s", logger.summary("unittest"))
 	require.Equal(t, before+1, phaseSampleCount(t, "unittest", "alpha"))
 }
 
@@ -125,7 +126,7 @@ func TestPhaseTimer_NilIsANoOp(t *testing.T) {
 var forwardStepPhases = []string{
 	"forward_set_build", "forward_conflicts", "forward_reset_state",
 	"remainder_flag_copy", "remainder_map_insert", "remainder_build",
-	"forward_drain", "forward_commit", "forward_mark_sets",
+	"forward_drain", "forward_commit", "forward_mark_sets", "forward_snapshot",
 }
 
 func TestReorgBlocks_LogsEachPhaseOnceInOrder(t *testing.T) {
@@ -143,7 +144,7 @@ func TestReorgBlocks_LogsEachPhaseOnceInOrder(t *testing.T) {
 		want = append(want, forwardStepPhases...)
 	}
 
-	want = append(want, "mark_sets", "marks", "store_wait", "processed_at", "finalize")
+	want = append(want, "mark_sets", "marks", "store_wait", "processed_at", "finalize", "after_last_phase")
 
 	require.Equal(t, want, logger.phases("reorgBlocks"))
 }
@@ -193,6 +194,7 @@ func TestReset_LogsEachPhaseOnceInOrder(t *testing.T) {
 
 	require.Equal(t, []string{
 		"upfront_reads", "mark_assembly", "clear_and_retire", "move_back", "move_forward", "post_process", "queue_discard",
+		"after_last_phase",
 	}, logger.phases("reset"))
 }
 
@@ -213,4 +215,40 @@ func TestMoveForwardBlock_OutsideAReorgLogsNoPhases(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Empty(t, slices.Concat(logger.phases("reorgBlocks"), logger.phases("reset"), logger.phases("moveForwardBlock")))
+}
+
+// A catch-up (nothing to move back) is not a fork reorg: it must not be recorded as one.
+func TestReorgBlocks_CatchUpLogsNoPhases(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+
+	// Back to genesis, then catch up onto the winners.
+	require.NoError(t, sc.stp.reorgBlocks(t.Context(), []*model.Block{sc.lost}, []*model.Block{}))
+
+	logger := &phaseLogger{}
+	sc.stp.logger = logger
+
+	require.NoError(t, sc.stp.reorgBlocks(t.Context(), []*model.Block{}, sc.forward))
+	require.Equal(t, sc.forward[len(sc.forward)-1].Header.Hash(), sc.stp.GetCurrentBlockHeader().Hash())
+
+	require.Empty(t, logger.phases("reorgBlocks"))
+	require.Empty(t, logger.summary("reorgBlocks"))
+}
+
+// A fork reorg that fails part way records the phase it failed in as the time after its last
+// completed phase, and still logs its summary.
+func TestReorgBlocks_FailedReorgRecordsTheFailingPhase(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+
+	// The second forward block has a subtree that cannot be opened.
+	sc.stp.subtreeStore = openFailingStore{Memory: sc.blobStore, key: *sc.forward[1].Subtrees[0]}
+
+	logger := &phaseLogger{}
+	sc.stp.logger = logger
+
+	require.Error(t, sc.run(t))
+
+	phases := logger.phases("reorgBlocks")
+	require.NotEmpty(t, phases)
+	require.Equal(t, "after_last_phase", phases[len(phases)-1])
+	require.NotEmpty(t, logger.summary("reorgBlocks"))
 }

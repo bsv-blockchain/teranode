@@ -69,12 +69,15 @@ func (p *phaseTimer) done(phase string) {
 	prometheusSubtreeProcessorReorgPhase.WithLabelValues(p.op, phase).Observe(d.Seconds())
 }
 
-// finish logs the summary line: the time from start to the end of the last phase, the counts, and
-// every phase in order.
+// finish records the time since the last phase as after_last_phase, which is the phase that failed
+// when the operation returns an error part way, then logs the summary line: the total, the counts,
+// and every phase in order.
 func (p *phaseTimer) finish() {
 	if p == nil {
 		return
 	}
+
+	p.done("after_last_phase")
 
 	var b strings.Builder
 
