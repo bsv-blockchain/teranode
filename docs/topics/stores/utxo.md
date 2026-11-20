@@ -347,9 +347,9 @@ In both models, the parents stay spent by that transaction.
 
 #### When a spend is refused with error 78 (`ERR_UTXO_SPENDING_TX_PRUNED`)
 
-The Aerospike and Sql stores refuse a spend as a replay of a pruned transaction when three things hold. The parent output already records exactly this spender and input. That spend was recorded 144 or more blocks before the incoming block (half of `global_blockHeightRetention`, 288). The spender has no record. Usually this is right: the spender was mined, fully spent and pruned, and a block that mines it again is not valid.
+The Aerospike and Sql stores refuse a spend as a replay of a pruned transaction when three things hold. The parent output already records exactly this spender and input. That spend was recorded at least half the effective UTXO retention before the incoming block. The effective retention is `global_blockHeightRetention` plus `utxostore_blockHeightRetentionAdjustment`, so the threshold is 144 blocks at the defaults (288 plus 0, halved). With an effective retention of 0, nothing is refused. The spender has no record. Usually this is right: the spender was mined, fully spent and pruned, and a block that mines it again is not valid.
 
-One case is not a replay. An earlier attempt spent the parent output, then failed before it created the spender's record, and nothing undid the spend. If the same transaction is then mined 144 or more blocks later, the store refuses it. Legacy sync keeps the block parked as a local UTXO fault and retries it, and every retry gets the same answer until the output is freed.
+One case is not a replay. An earlier attempt spent the parent output, then failed before it created the spender's record, and nothing undid the spend. If the same transaction is then mined at least that threshold later, the store refuses it. Legacy sync keeps the block parked as a local UTXO fault and retries it, and every retry gets the same answer until the output is freed.
 
 The store logs one line per refused input. Sql:
 
