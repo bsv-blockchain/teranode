@@ -409,6 +409,49 @@ func (h *PauseTestHandler) ConsumeClaim(session ConsumerGroupSession, claim Cons
 	}
 }
 
+// TestConsumerGroupCloseStopsIdleConsumeGoroutine: Close() on an idle topic must let
+// Consume return and unregister its channel, with no further message. The handler is a
+// plain range over Messages(), the shape util/kafka's inMemoryConsumerHandler uses, so it
+// can only return if Messages() itself stops on the cancelled context.
+func TestConsumerGroupCloseStopsIdleConsumeGoroutine(t *testing.T) {
+	broker := NewInMemoryBroker()
+	cg := NewInMemoryConsumerGroup(broker, "idle-topic", "idle-group")
+
+	consumeReturned := make(chan struct{})
+
+	go func() {
+		_ = cg.Consume(context.Background(), []string{"idle-topic"}, rangeOnlyHandler{})
+		close(consumeReturned)
+	}()
+
+	require.Eventually(t, func() bool {
+		return broker.HasConsumer("idle-topic")
+	}, time.Second, 5*time.Millisecond)
+
+	require.NoError(t, cg.Close())
+
+	select {
+	case <-consumeReturned:
+	case <-time.After(time.Second):
+		t.Fatal("Consume did not return after Close on an idle topic")
+	}
+
+	require.False(t, broker.HasConsumer("idle-topic"), "Consume must unregister its channel when it returns")
+}
+
+// rangeOnlyHandler drains Messages() with a plain range and never selects on the
+// session's context, like util/kafka's inMemoryConsumerHandler.
+type rangeOnlyHandler struct{}
+
+func (rangeOnlyHandler) Setup(ConsumerGroupSession) error   { return nil }
+func (rangeOnlyHandler) Cleanup(ConsumerGroupSession) error { return nil }
+func (rangeOnlyHandler) ConsumeClaim(_ ConsumerGroupSession, claim ConsumerGroupClaim) error {
+	for range claim.Messages() { //nolint:revive // draining only, mirrors inMemoryConsumerHandler
+	}
+
+	return nil
+}
+
 func TestConsumerGroupCloseNotRunning(t *testing.T) {
 	broker := NewInMemoryBroker()
 	cg := NewInMemoryConsumerGroup(broker, "test-topic", "test-group")

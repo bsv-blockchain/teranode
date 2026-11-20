@@ -32,6 +32,7 @@ const (
 	SubscriberUTXOPersister       = "utxo-persister"
 	SubscriberFileBlockHeight     = "File BlockHeight"
 	SubscriberAssetMainChainCache = "asset-mainchain-cache"
+	SubscriberSVP2P               = "svp2p"
 )
 
 // ClientI defines the interface for blockchain client operations.
