@@ -12,9 +12,11 @@
 // and every grant in a lane starts above the lane's last one, so no two records
 // carry the same position in a lane, and the grants rise in the order they were
 // recorded. A lane position is unique among the records created under the grants
-// recorded in one blockchain database and is written once, so
-// later work can say which block took a record by keeping a range of positions per
-// lane per block, instead of writing to the record. Restoring an older blockchain
+// recorded in one blockchain database and is written once, so later work can say
+// which block took a record by keeping, per lane per block, the range of positions
+// it took and the holes in that range, instead of writing to the record. A range
+// alone does not say it: a position returned and reused can be written in a later
+// block, below a position an earlier block took, and is a hole in the earlier one. Restoring an older blockchain
 // database could reuse positions, which is a listed limit of this phase.
 //
 // Positions start at 1. Lane 0 is a real lane, so the packed value 0 can only
