@@ -85,7 +85,7 @@ func TestExtraRecordElementShapes(t *testing.T) {
 
 		err := applyExtraRecordUTXOs(&chainhash.Hash{}, 1, []interface{}{make([]uint8, 40)}, 0, spendingDatas, 1)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "expected 32 (unspent) or 68 (spent)")
+		require.Contains(t, err.Error(), "expected 32 (unspent), 68 (spent or frozen) or 72")
 	})
 
 	t.Run("a non-byte element fails the read", func(t *testing.T) {
@@ -202,7 +202,7 @@ func TestApplyExtraRecordBins(t *testing.T) {
 
 		err := applyExtraRecordBins(&chainhash.Hash{}, 4, record, 0, spendingDatas, 1)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "expected 32 (unspent) or 68 (spent)")
+		require.Contains(t, err.Error(), "expected 32 (unspent), 68 (spent or frozen) or 72")
 	})
 }
 

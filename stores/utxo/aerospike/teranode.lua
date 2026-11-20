@@ -2,6 +2,11 @@
 local UTXO_HASH_SIZE = 32
 local SPENDING_DATA_SIZE = 36
 local FULL_UTXO_SIZE = UTXO_HASH_SIZE + SPENDING_DATA_SIZE
+-- A spend also records the block height it was made at, as 4 little-endian bytes after the
+-- spending data. An entry is 32 bytes (unspent), 68 (frozen, or spent by code that recorded no
+-- height) or 72 (spent, with its height). Readers accept both spent sizes.
+local SPEND_HEIGHT_SIZE = 4
+local HEIGHT_UTXO_SIZE = FULL_UTXO_SIZE + SPEND_HEIGHT_SIZE
 local FROZEN_BYTE = 255
 
 -- Bin name constants
@@ -91,6 +96,7 @@ local FIELD_DAH_VERSION = "dahVer"
 local FIELD_CONFLICTING = "conflicting"
 local FIELD_SPENDING_DATA = "spendingData"
 local FIELD_IDEMPOTENT = "idempotent"      -- spend: indexes whose utxo already recorded exactly this spend (nothing written)
+local FIELD_IDEMPOTENT_HEIGHTS = "idempotentHeights" -- spend: index -> block height recorded with that spend; absent for an entry written without one
 
 -- Assigns the record's deleteAtHeight and bumps the master's version. Every writer of the bin
 -- goes through here so the version orders the writes; a nil height clears the bin. A pagination
@@ -178,12 +184,15 @@ local function spendingDataBytesToTxHex(b)
     return table_concat(t)
 end
 
--- Creates a new UTXO with spending data
-local function createUTXOWithSpendingData(utxoHash, spendingData)
+-- Creates a new UTXO with spending data. spendHeight, when given with spending data, is recorded
+-- after it (a 72-byte entry); freeze passes none and keeps its 68-byte entry.
+local function createUTXOWithSpendingData(utxoHash, spendingData, spendHeight)
     local newUtxo
 
     if spendingData == nil then
         newUtxo = bytes(UTXO_HASH_SIZE)
+    elseif spendHeight ~= nil then
+        newUtxo = bytes(HEIGHT_UTXO_SIZE)
     else
         newUtxo = bytes(FULL_UTXO_SIZE)
     end
@@ -202,6 +211,15 @@ local function createUTXOWithSpendingData(utxoHash, spendingData)
         newUtxo[UTXO_HASH_SIZE + i] = spendingData[i]
     end
 
+    if spendHeight ~= nil then
+        -- little-endian uint32
+        local h = spendHeight
+        for i = 1, SPEND_HEIGHT_SIZE do
+            newUtxo[FULL_UTXO_SIZE + i] = h % 256
+            h = (h - h % 256) / 256
+        end
+    end
+
     return newUtxo
 end
 
@@ -212,6 +230,8 @@ end
 -- @return string|nil utxo The specific UTXO if found
 -- @return string|nil spendingData The spending data if present
 -- @return table|nil errorInfo A map containing errorCode and message if an error occurs
+-- @return number|nil spendHeight The block height recorded with the spend. nil for an entry
+--         that carries none (unspent, frozen, or spent by code that recorded no height).
 local function getUTXOAndSpendingData(utxos, offset, expectedHash)
     -- assert(utxos ~= nil, "utxos must be non-nil") -- Removed for performance, caller ensures
     -- assert(type(offset) == "number" and offset >= 0, "offset must be a non-negative number")
@@ -243,12 +263,21 @@ local function getUTXOAndSpendingData(utxos, offset, expectedHash)
     end
 
     local spendingData = nil
+    local spendHeight = nil
+    local size = bytes_size(utxo)
 
-    if bytes_size(utxo) == FULL_UTXO_SIZE then
+    if size >= FULL_UTXO_SIZE then
         spendingData = bytes_get_bytes(utxo, UTXO_HASH_SIZE + 1, SPENDING_DATA_SIZE)
     end
 
-    return utxo, spendingData, nil
+    if size >= HEIGHT_UTXO_SIZE then
+        spendHeight = utxo[FULL_UTXO_SIZE + 1]
+            + utxo[FULL_UTXO_SIZE + 2] * 256
+            + utxo[FULL_UTXO_SIZE + 3] * 65536
+            + utxo[FULL_UTXO_SIZE + 4] * 16777216
+    end
+
+    return utxo, spendingData, nil, spendHeight
 end
 
 -- Function to check if a spending data indicates a frozen UTXO
@@ -372,6 +401,9 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
     -- (utxo.RollbackSet): the match may be a confirmed, historical spend or an
     -- earlier failed attempt's orphan.
     local idempotent = list()
+    -- idx -> the block height recorded with the matched spend; absent for an entry that has none.
+    -- The caller applies the age rule (utxo.IsHistoricalSpend) to it.
+    local idempotentHeights = map()
     local deletedChildren = rec[BIN_DELETED_CHILDREN]
     local spendableIn = rec[BIN_UTXO_SPENDABLE_IN]
     local spendCount = #spends
@@ -386,7 +418,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         local idx = spend['idx']
 
         -- Get and validate specific UTXO
-        local utxo, existingSpendingData, errorInfo = getUTXOAndSpendingData(utxos, offset, utxoHash)
+        local utxo, existingSpendingData, errorInfo, existingSpendHeight = getUTXOAndSpendingData(utxos, offset, utxoHash)
         if errorInfo then
             local error = map()
 
@@ -431,6 +463,11 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
                 end
 
                 list.append(idempotent, idx)
+
+                if existingSpendHeight ~= nil then
+                    idempotentHeights[idx] = existingSpendHeight
+                end
+
                 goto continue
             elseif isFrozen(existingSpendingData) then
                 local error = map()
@@ -455,7 +492,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         end
 
         -- Create new UTXO with spending data
-        local newUtxo = createUTXOWithSpendingData(utxoHash, spendingData)
+        local newUtxo = createUTXOWithSpendingData(utxoHash, spendingData, currentBlockHeight)
 
         -- Update the record
         utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
@@ -482,6 +519,10 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 
     if list.size(idempotent) > 0 then
         response[FIELD_IDEMPOTENT] = idempotent
+
+        if map.size(idempotentHeights) > 0 then
+            response[FIELD_IDEMPOTENT_HEIGHTS] = idempotentHeights
+        end
     end
 
     if blockIDs then
@@ -904,7 +945,7 @@ function unfreeze(rec, offset, utxoHash)
         return response
     end
 
-    if bytes.size(utxo) ~= FULL_UTXO_SIZE then
+    if bytes.size(utxo) < FULL_UTXO_SIZE then
         response[FIELD_STATUS] = STATUS_ERROR
         response[FIELD_ERROR_CODE] = ERROR_CODE_UTXO_INVALID_SIZE
         response[FIELD_MESSAGE] = ERR_UTXO_INVALID_SIZE
@@ -979,7 +1020,7 @@ function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfte
         return response
     end
 
-    if bytes.size(utxo) ~= FULL_UTXO_SIZE then
+    if bytes.size(utxo) < FULL_UTXO_SIZE then
         response[FIELD_STATUS] = STATUS_ERROR
         response[FIELD_ERROR_CODE] = ERROR_CODE_UTXO_INVALID_SIZE
         response[FIELD_MESSAGE] = ERR_UTXO_INVALID_SIZE

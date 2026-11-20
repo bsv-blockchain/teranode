@@ -74,8 +74,17 @@ import (
 var teranodeLUA []byte
 
 var (
-	LuaPackage      = "teranode_v69" // N.B. Do not have any "." in this string
+	LuaPackage      = "teranode_v70" // N.B. Do not have any "." in this string
 	LuaPackageMined = LuaPackage + "_mined"
+)
+
+// Sizes of a utxos-bin entry. An unspent output is the 32-byte hash alone. A spent output adds the
+// 36-byte spending data (68 bytes, also the form of a frozen output and of a spend written before
+// the height was recorded) and, when the spend recorded it, the 4-byte little-endian block height
+// of the spend (72 bytes). Readers accept both spent sizes.
+const (
+	spentUTXOSize           = 68
+	spentUTXOWithHeightSize = 72
 )
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
@@ -285,6 +294,11 @@ type LuaMapResponse struct {
 	// report it fails probeNativeReplayProtection, and spend and spendMulti then
 	// run on the UDF path.
 	Idempotent []int `json:"idempotent,omitempty"`
+	// IdempotentHeights holds, for each idempotent index whose entry recorded one, the block height
+	// of the spend it matched. An index with no entry here matched a spend written without a height,
+	// which counts as historical (utxo.IsHistoricalSpend). A native-op server that does not report it
+	// fails probeNativeReplayProtection.
+	IdempotentHeights map[int]uint32 `json:"-"`
 	// DeleteAtHeight is the master record's stamped delete-at-height, present only with a DAHSET signal from a Lua package that reports it.
 	DeleteAtHeight    int  `json:"deleteAtHeight,omitempty"`
 	HasDeleteAtHeight bool `json:"-"`
@@ -322,6 +336,7 @@ type LuaMapResponse struct {
 func (r *LuaMapResponse) Reset() {
 	r.Status = ""
 	r.Idempotent = nil
+	r.IdempotentHeights = nil
 	r.ErrorCode = ""
 	r.Message = ""
 	r.Signal = ""
@@ -486,6 +501,30 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 		}
 
 		result.Idempotent = append(result.Idempotent[:0], offsets...)
+	}
+
+	// Parse the heights recorded with the idempotent matches, keyed by index.
+	if heightsField, ok := respMap["idempotentHeights"]; ok {
+		heightsMap, ok := luaResponseMap(heightsField)
+		if !ok {
+			return errors.NewProcessingError("invalid idempotentHeights (%T)", heightsField)
+		}
+
+		result.IdempotentHeights = make(map[int]uint32, len(heightsMap))
+
+		for k, v := range heightsMap {
+			idx, ok := luaResponseInt(k)
+			if !ok {
+				return errors.NewProcessingError("invalid idempotentHeights index type: %T", k)
+			}
+
+			height, ok := luaResponseInt(v)
+			if !ok || height < 0 || height > math.MaxUint32 {
+				return errors.NewProcessingError("invalid idempotentHeights height for index %d: %v (%T)", idx, v, v)
+			}
+
+			result.IdempotentHeights[idx] = uint32(height)
+		}
 	}
 
 	// Parse childCount
