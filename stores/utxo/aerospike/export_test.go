@@ -3,6 +3,7 @@ package aerospike
 import (
 	"context"
 
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -29,6 +30,12 @@ func (s *Store) StopConflictingIndexSelfTest() {
 // writes, and clears it when given nil.
 func SetChildDAHBeforeWrite(f func()) {
 	childDAHBeforeWrite = f
+}
+
+// SetAfterChildAdoptionFailure installs the hook that runs after a create fails to give the surviving
+// pagination children its attempt token, and clears it when given nil.
+func SetAfterChildAdoptionFailure(f func()) {
+	afterChildAdoptionFailure = f
 }
 
 // UsesNativeMark reports whether MarkTransactionsOnLongestChain sends native sub-op 14.
@@ -74,4 +81,34 @@ func (s *Store) QueryConflictWALIndex(ctx context.Context) (int, bool, error) {
 // ConflictWALFallbackScans is the number of WAL reads that scanned the set, for this process.
 func ConflictWALFallbackScans() float64 {
 	return testutil.ToFloat64(prometheusConflictWALFallbackScans)
+}
+
+// FailChildAdoption makes the batch that gives surviving pagination children the attempt token
+// fail, and delegates every other batch to the real client. With batchLevel the batch call itself
+// returns the error, otherwise each record carries it. RestoreBatchOperate undoes it.
+func (s *Store) FailChildAdoption(batchLevel bool) {
+	failure := aerospike.ErrTimeout
+
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		if len(records) > 0 {
+			if bw, ok := records[0].(*aerospike.BatchWrite); ok && bw.Policy != nil && bw.Policy.RecordExistsAction == aerospike.UPDATE_ONLY {
+				if batchLevel {
+					return failure
+				}
+
+				for _, record := range records {
+					record.BatchRec().Err = failure
+				}
+
+				return nil
+			}
+		}
+
+		return s.client.BatchOperate(policy, records)
+	}
+}
+
+// RestoreBatchOperate removes the override that FailChildAdoption installed.
+func (s *Store) RestoreBatchOperate() {
+	s.batchOperateFn = nil
 }

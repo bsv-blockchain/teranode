@@ -80,6 +80,13 @@ func (m *MockStore) Close(ctx context.Context) error {
 }
 
 func (m *MockStore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpointOnlySpendResult }
+func (m *MockStore) SupportsCreateFirst() bool       { return false }
+func (m *MockStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
+	return nil
+}
+func (m *MockStore) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return nil, nil
+}
 
 // TestSupportsOutpointOnlySpend_Delegates verifies the logger decorator forwards the
 // wrapped store's fast-path capability in both directions (so a SQL store wrapped by the
@@ -159,6 +166,49 @@ func (m *MockStore) Delete(ctx context.Context, hash *chainhash.Hash) error {
 func (m *MockStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	args := m.Called(ctx, hash)
 	return args.Error(0)
+}
+
+func (m *MockStore) EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	args := m.Called(ctx, hash, attempt)
+	return args.Error(0)
+}
+
+func (m *MockStore) TakeRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	args := m.Called(ctx, hash, attempt)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockStore) ReleaseRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	args := m.Called(ctx, hash, attempt)
+	return args.Error(0)
+}
+
+func (m *MockStore) ClearCreateFirstHold(ctx context.Context, hash *chainhash.Hash, adopt bool) (bool, error) {
+	args := m.Called(ctx, hash, adopt)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockStore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	args := m.Called(ctx, hash, attempt)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockStore) TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	args := m.Called(ctx, hash, attempt)
+
+	lease, _ := args.Get(0).([]byte)
+
+	return lease, args.Bool(1), args.Error(2)
+}
+
+func (m *MockStore) ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error {
+	args := m.Called(ctx, hash, attempt, lease)
+	return args.Error(0)
+}
+
+func (m *MockStore) SpendLeasesLive(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	args := m.Called(ctx, hash, attempt)
+	return args.Bool(0), args.Error(1)
 }
 
 func (m *MockStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
@@ -513,6 +563,23 @@ func TestSpendAndCreate(t *testing.T) {
 
 	assert.Equal(t, expectedData, data)
 	assert.Equal(t, expectedSpends, spends)
+	assert.Equal(t, expectedErr, err)
+	mockStore.AssertExpectations(t)
+}
+
+func TestBeginCreateFirstRollback_Delegates(t *testing.T) {
+	mockStore := &MockStore{}
+	store := New(context.Background(), ulogger.TestLogger{}, mockStore).(*Store)
+
+	ctx := context.Background()
+	hash := createTestTx(1).TxIDChainHash()
+	expectedErr := errors.NewError("begin error")
+
+	mockStore.On("BeginCreateFirstRollback", ctx, hash, []byte{1}).Return(true, expectedErr)
+
+	began, err := store.BeginCreateFirstRollback(ctx, hash, []byte{1})
+
+	assert.True(t, began)
 	assert.Equal(t, expectedErr, err)
 	mockStore.AssertExpectations(t)
 }
@@ -1370,4 +1437,118 @@ func TestLoggerStore_ForwardsConflictRecovery(t *testing.T) {
 	require.NoError(t, store.SetConflictLocks(ctx, id, nil, true))
 	require.NoError(t, store.ReleaseConflictLocks(ctx, id, nil))
 	require.Equal(t, []string{"save", "load", "restore", "lock", "release"}, inner.calls)
+}
+
+func TestLoggerStore_CreateFirstDelegates(t *testing.T) {
+	inner := &MockStore{}
+	store := New(context.Background(), ulogger.TestLogger{}, inner).(*Store)
+	ctx := context.Background()
+
+	require.False(t, store.SupportsCreateFirst())
+	require.NoError(t, store.FinalizeTransaction(ctx, &bt.Tx{}, nil, nil))
+
+	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)
+	require.NoError(t, err)
+	require.Nil(t, hashes)
+}
+
+func TestHoldMethods_Delegate(t *testing.T) {
+	mockStore := &MockStore{}
+	store := New(context.Background(), ulogger.TestLogger{}, mockStore).(*Store)
+
+	ctx := context.Background()
+	hash := createTestTx(1).TxIDChainHash()
+	attempt := []byte{1, 2}
+	expectedErr := errors.NewError("hold error")
+
+	mockStore.On("EndCreateFirstRollback", ctx, hash, attempt).Return(expectedErr)
+	mockStore.On("TakeRollbackHold", ctx, hash, attempt).Return(true, expectedErr)
+	mockStore.On("ReleaseRollbackHold", ctx, hash, attempt).Return(expectedErr)
+	mockStore.On("ClearCreateFirstHold", ctx, hash, true).Return(true, expectedErr)
+
+	require.Equal(t, expectedErr, store.EndCreateFirstRollback(ctx, hash, attempt))
+
+	took, err := store.TakeRollbackHold(ctx, hash, attempt)
+	require.True(t, took)
+	require.Equal(t, expectedErr, err)
+
+	require.Equal(t, expectedErr, store.ReleaseRollbackHold(ctx, hash, attempt))
+
+	cleared, err := store.ClearCreateFirstHold(ctx, hash, true)
+	require.True(t, cleared)
+	require.Equal(t, expectedErr, err)
+
+	mockStore.AssertExpectations(t)
+}
+
+func TestSpendLeaseMethods_Delegate(t *testing.T) {
+	mockStore := &MockStore{}
+	store := New(context.Background(), ulogger.TestLogger{}, mockStore).(*Store)
+
+	ctx := context.Background()
+	hash := createTestTx(1).TxIDChainHash()
+	attempt := []byte{1, 2}
+	lease := []byte{3, 4}
+	expectedErr := errors.NewError("lease error")
+
+	mockStore.On("TakeSpendLease", ctx, hash, attempt).Return(lease, true, expectedErr)
+	mockStore.On("ReleaseSpendLease", ctx, hash, attempt, lease).Return(expectedErr)
+	mockStore.On("SpendLeasesLive", ctx, hash, attempt).Return(true, expectedErr)
+
+	gotLease, took, err := store.TakeSpendLease(ctx, hash, attempt)
+	require.Equal(t, lease, gotLease)
+	require.True(t, took)
+	require.Equal(t, expectedErr, err)
+
+	require.Equal(t, expectedErr, store.ReleaseSpendLease(ctx, hash, attempt, lease))
+
+	live, err := store.SpendLeasesLive(ctx, hash, attempt)
+	require.True(t, live)
+	require.Equal(t, expectedErr, err)
+
+	mockStore.AssertExpectations(t)
+}
+
+// boundedMockStore is a wrapped store that names its own rollback bound.
+type boundedMockStore struct {
+	*MockStore
+
+	bound time.Duration
+}
+
+func (b *boundedMockStore) SpendRollbackTimeout() time.Duration { return b.bound }
+
+// TestSpendRollbackTimeout_ComesFromTheWrappedStore pins that the shared rollback and roll-forward
+// see the bound of the store behind the wrapper, and zero, which selects the shared default, when
+// that store names none.
+func TestSpendRollbackTimeout_ComesFromTheWrappedStore(t *testing.T) {
+	ctx := context.Background()
+
+	bounded := New(ctx, ulogger.TestLogger{}, &boundedMockStore{MockStore: &MockStore{}, bound: 30 * time.Second}).(*Store)
+	require.Equal(t, 30*time.Second, bounded.SpendRollbackTimeout())
+
+	unbounded := New(ctx, ulogger.TestLogger{}, &MockStore{}).(*Store)
+	require.Equal(t, time.Duration(0), unbounded.SpendRollbackTimeout())
+}
+
+// waitBoundedMockStore is a wrapped store that names its own spend wait.
+type waitBoundedMockStore struct {
+	*MockStore
+
+	wait time.Duration
+}
+
+func (b *waitBoundedMockStore) SpendWaitTimeout() time.Duration { return b.wait }
+
+// TestSpendWaitTimeout_ComesFromTheWrappedStore pins that a create-first rollback sees the spend
+// wait of the store behind the wrapper, and zero, which selects the shared default, when that store
+// names none.
+func TestSpendWaitTimeout_ComesFromTheWrappedStore(t *testing.T) {
+	ctx := context.Background()
+
+	bounded := New(ctx, ulogger.TestLogger{}, &waitBoundedMockStore{MockStore: &MockStore{}, wait: 45 * time.Second}).(*Store)
+	require.Equal(t, 45*time.Second, bounded.SpendWaitTimeout())
+
+	unbounded := New(ctx, ulogger.TestLogger{}, &MockStore{}).(*Store)
+	require.Equal(t, time.Duration(0), unbounded.SpendWaitTimeout())
 }

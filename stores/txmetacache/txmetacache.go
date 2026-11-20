@@ -1184,6 +1184,91 @@ func (t *TxMetaCache) DeleteComplete(ctx context.Context, hash *chainhash.Hash) 
 	return err
 }
 
+// EndCreateFirstRollback ends the rollback of a record in the underlying store and evicts the
+// cache entry whatever the outcome, for the same reason DeleteComplete does.
+func (t *TxMetaCache) EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	err := t.utxoStore.EndCreateFirstRollback(ctx, hash, attempt)
+
+	t.cache.Del(hash[:])
+	t.metrics.evictions.Add(1)
+
+	return err
+}
+
+// TakeRollbackHold delegates to the wrapped store and evicts the cache entry, which would keep
+// reporting the record as it was before the hold was taken.
+func (t *TxMetaCache) TakeRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	took, err := t.utxoStore.TakeRollbackHold(ctx, hash, attempt)
+
+	t.cache.Del(hash[:])
+	t.metrics.evictions.Add(1)
+
+	return took, err
+}
+
+// ReleaseRollbackHold delegates to the wrapped store.
+func (t *TxMetaCache) ReleaseRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	return t.utxoStore.ReleaseRollbackHold(ctx, hash, attempt)
+}
+
+// SpendRollbackTimeout returns the rollback bound of the wrapped store, so that the shared
+// rollback and roll-forward run under the same bound through the cache. Zero when the wrapped
+// store names none.
+func (t *TxMetaCache) SpendRollbackTimeout() time.Duration {
+	if b, ok := t.utxoStore.(interface{ SpendRollbackTimeout() time.Duration }); ok {
+		return b.SpendRollbackTimeout()
+	}
+
+	return 0
+}
+
+// SpendWaitTimeout returns the spend wait of the wrapped store, zero when it names none.
+func (t *TxMetaCache) SpendWaitTimeout() time.Duration {
+	if b, ok := t.utxoStore.(interface{ SpendWaitTimeout() time.Duration }); ok {
+		return b.SpendWaitTimeout()
+	}
+
+	return 0
+}
+
+// TakeSpendLease delegates to the wrapped store.
+func (t *TxMetaCache) TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	return t.utxoStore.TakeSpendLease(ctx, hash, attempt)
+}
+
+// ReleaseSpendLease delegates to the wrapped store.
+func (t *TxMetaCache) ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error {
+	return t.utxoStore.ReleaseSpendLease(ctx, hash, attempt, lease)
+}
+
+// SpendLeasesLive delegates to the wrapped store.
+func (t *TxMetaCache) SpendLeasesLive(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	return t.utxoStore.SpendLeasesLive(ctx, hash, attempt)
+}
+
+// ClearCreateFirstHold clears a hold in the underlying store and evicts the cache entry
+// whatever the outcome, for the same reason DeleteComplete does.
+func (t *TxMetaCache) ClearCreateFirstHold(ctx context.Context, hash *chainhash.Hash, adopt bool) (bool, error) {
+	cleared, err := t.utxoStore.ClearCreateFirstHold(ctx, hash, adopt)
+
+	t.cache.Del(hash[:])
+	t.metrics.evictions.Add(1)
+
+	return cleared, err
+}
+
+// BeginCreateFirstRollback marks a creating record as rolling back in the underlying store
+// and evicts the cache entry whatever the outcome, for the same reason DeleteComplete does:
+// a cached entry would keep reporting the record as an ordinary creating one.
+func (t *TxMetaCache) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	began, err := t.utxoStore.BeginCreateFirstRollback(ctx, hash, attempt)
+
+	t.cache.Del(hash[:])
+	t.metrics.evictions.Add(1)
+
+	return began, err
+}
+
 // GetCacheStats retrieves current operational statistics from the underlying cache.
 // These statistics are useful for monitoring cache performance and behavior.
 //
@@ -1233,6 +1318,27 @@ func (t *TxMetaCache) SupportsOutpointOnlySpend() bool {
 // NetsBelowCheckpoint forwards the wrapped store's answer.
 func (t *TxMetaCache) NetsBelowCheckpoint() bool {
 	return utxo.NetsBelowCheckpoint(t.utxoStore)
+}
+
+// SupportsCreateFirst delegates to the wrapped store.
+func (t *TxMetaCache) SupportsCreateFirst() bool { return t.utxoStore.SupportsCreateFirst() }
+
+// FinalizeTransaction delegates and invalidates the cached meta so a stale
+// Creating=true entry cannot be served after the flag is cleared.
+func (t *TxMetaCache) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
+	err := t.utxoStore.FinalizeTransaction(ctx, tx, attempt, lease)
+	if err != nil && !utxo.IsAlreadyFinal(err) {
+		return err
+	}
+
+	_ = t.Delete(ctx, tx.TxIDChainHash())
+
+	return err
+}
+
+// QueryStaleCreatingTxs delegates to the wrapped store.
+func (t *TxMetaCache) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return t.utxoStore.QueryStaleCreatingTxs(ctx, unminedSinceBefore, limit)
 }
 
 // Close delegates to the wrapped UTXO store so its in-flight batched writes

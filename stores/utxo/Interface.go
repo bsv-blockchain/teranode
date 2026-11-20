@@ -235,6 +235,9 @@ type IgnoreFlags struct {
 	// ONLY by DefaultSpendAndCreateMulti's second-wave spends for a WithBelowCheckpoint list,
 	// whose records the first wave created before any of those spends, so the record proves
 	// nothing. Its first-wave combined calls spend before they create and leave it unset.
+	// The fresh create-first spend sets it too: the record it would find is its own tentative
+	// one, so it proves nothing. A create-first roll-forward re-spend leaves it unset: that
+	// record exists by design, and a parent is pruned only once every output is spent.
 	RequireParentOutputs bool
 }
 
@@ -256,7 +259,7 @@ type BlockIDsRemoval struct {
 
 var (
 	// MetaFields defines the standard set of metadata fields that can be queried.
-	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Locked, fields.Creating}
+	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Locked, fields.Creating, fields.RollingBack, fields.Attempt}
 	// MetaFieldsWithTx defines the set of metadata fields including the transaction data.
 	MetaFieldsWithTx = append(MetaFields, fields.Tx)
 )
@@ -294,6 +297,7 @@ type CreateOptions struct {
 	Frozen             bool
 	Conflicting        bool
 	Locked             bool
+	Creating           bool
 	SkipExtendedInputs bool
 
 	// SpendAndCreate-specific options.
@@ -469,6 +473,17 @@ func WithLocked(b bool) CreateOption {
 	return optLockedFalse
 }
 
+// WithCreating creates the transaction in the tentative "creating" state: the
+// record exists (Get/GetMeta return it with meta.Data.Creating=true) but every
+// spend of its outputs is rejected with ErrTxCreating until FinalizeTransaction
+// clears the flag. Used by the create-first ordering inside SpendAndCreate
+// (create → spend inputs → finalize).
+func WithCreating(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.Creating = b
+	}
+}
+
 // WithSkipExtendedInputs marks a create as minimal: compute meta with fee=0 (no GetFees) and
 // persist per-input parent script/satoshis as empty/zero, while ALWAYS retaining the per-input
 // outpoint and every output. Set ONLY on the gated below-checkpoint path (spec §3.2 Seam 3, §3.3).
@@ -603,6 +618,41 @@ type Store interface {
 	// delegate to the wrapped store.
 	SupportsOutpointOnlySpend() bool
 
+	// SupportsCreateFirst reports whether this store implements the tentative-create
+	// contract: SpendAndCreate's create phase honours CreateOptions.Creating (spends of
+	// the tx's outputs are rejected with ErrTxCreating while set), FinalizeTransaction
+	// clears the state, and QueryStaleCreatingTxs finds abandoned tentative records.
+	// SpendAndCreate only uses the create-first ordering when this returns true; stores
+	// that ignore CreateOptions.Creating MUST return false.
+	SupportsCreateFirst() bool
+
+	// FinalizeTransaction clears the tentative "creating" state set by the create-first
+	// phase of SpendAndCreate, making the transaction's outputs spendable. It takes the
+	// full tx so multi-record stores can derive the record count without a read.
+	// attempt is the token of the attempt the caller created or read: the clear touches only
+	// a record that carries that token, so a finalize left over from an earlier attempt of the
+	// same txid cannot clear a later attempt's state. A record that is absent, rolling back or
+	// owned by another attempt is refused with ErrTxNotFound. It returns nil only to the
+	// caller whose write cleared the state, and that caller owns the hand-off of the
+	// transaction and any unwind of it. lease says who the caller is: the spend lease it holds
+	// on the attempt, which is the attempt token for the call that created the record and the
+	// lease of TakeSpendLease for a roll-forward, or nil for a caller with none. The store
+	// records it with the write, so a call that finds the record final is told exactly whose
+	// write did it: nil when an earlier send of the same caller did, and an ErrTxExists for
+	// which IsAlreadyFinal is true when another actor did. A finalize can therefore be repeated
+	// after an error, and exactly one caller of an attempt gets nil. The write removes the
+	// lease of its caller and leaves the leases of other spenders. Stores without create-first
+	// support return nil.
+	FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error
+
+	// QueryStaleCreatingTxs returns the hashes of transactions still in the "creating"
+	// state whose unminedSince height is strictly below unminedSinceBefore. Used by the
+	// pruner sweeper to roll forward abandoned tentative creates. When limit > 0 the
+	// result is bounded to that many hashes (the caller sweeps any remainder next pass)
+	// and the query is aborted early; limit <= 0 means unbounded. The context aborts an
+	// in-progress scan. Stores without create-first support return (nil, nil).
+	QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error)
+
 	// Close drains any in-flight batched writes (Create, Spend, Get, Unlock,
 	// or any other batched operations the implementation owns) and releases
 	// backing resources (connection pools, file handles, batcher workers).
@@ -642,8 +692,94 @@ type Store interface {
 	// the ordering rationale and what that costs the descendant. It is idempotent:
 	// an absent record, absent children and absent blobs are all treated as success.
 	// On a backend whose Delete is already complete (e.g. SQL) this is equivalent to
-	// Delete.
+	// Delete. A store that grants spend leases refuses the delete, with an error and the
+	// record left in place, while a lease on the record is live: its holder may still spend
+	// the inputs of the transaction.
 	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
+
+	// BeginCreateFirstRollback claims the rollback of a record that is still creating, by
+	// marking it as rolling back, so no concurrent roll-forward can finalize it. attempt is the
+	// token of the attempt the caller created or read, and the claim touches only a record that
+	// carries it. The claim is exclusive: it reports true only to the one caller whose write set
+	// the marker, and that caller alone reverses the spends and ends the rollback. The store
+	// refuses the claim while a spend lease of the attempt is live: it writes nothing and returns
+	// an error for which IsSpendLeaseLive is true (MarkSpendLeaseLive), and the caller tries again
+	// until the lease is released or stale. A store that can grant a lease must refuse the claim
+	// this way, because the caller reverses the spends as soon as the claim succeeds. It reports
+	// false, and writes nothing, when the record is absent, already finalized, owned by another
+	// attempt, or already rolling back under another caller. A store with no tentative state
+	// reports false. Used by the create-first rollback, which then reverses its spends and calls
+	// EndCreateFirstRollback. The pruner sweep resumes an abandoned rollback without this call,
+	// because the record already carries the marker.
+	BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error)
+
+	// EndCreateFirstRollback ends the create-first rollback of the attempt that carries the
+	// token: it removes the pagination children and the external blobs of the transaction, then
+	// turns the master record into a hold. The hold keeps the txid, the creating and rollingBack
+	// markers and the token, and refuses a new create of the txid until it expires, one
+	// utxostore_spendRollbackTimeout after it was written or last taken. The master stays in
+	// place throughout, so no attempt at the same txid can create records while the children and
+	// blobs are removed. A record that is absent, a hold already, or owned by another attempt is
+	// left alone and the call reports success. The call marks the record busy for its own
+	// cleanup, so it fails while a holder is reversing spends under TakeRollbackHold or another
+	// caller is ending the rollback. The hold expires on its own where the store can expire a
+	// record. A store with no tentative state treats it as DeleteComplete, because it is never
+	// called for a record that store marked.
+	EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) error
+
+	// TakeRollbackHold reserves the right to reverse the spends of the inputs of a transaction
+	// whose attempt, identified by the token, was marked as rolling back. A spend record is the
+	// txid and the input index, so a reversal cannot tell two attempts of one txid apart. This
+	// call is the proof that the attempt it names still owns the txid: it reports true only when
+	// the record is rolling back, carries the token and is not already held by another actor, and
+	// then marks the record busy. Two states can be taken: a rollback whose spends are not yet
+	// recorded as reversed, and the hold that EndCreateFirstRollback left, whose time to live the
+	// take renews. A record that is recorded as reversed and is not yet a hold is refused, because
+	// its cleanup is running. A caller that gets false, because the record is absent, belongs to
+	// another attempt, is busy or is in that state, must not reverse any spend. The
+	// caller reverses under a context bounded by utxostore_spendRollbackTimeout and then calls
+	// ReleaseRollbackHold. A store with no tentative state reports false.
+	TakeRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error)
+
+	// ReleaseRollbackHold clears the busy marker that TakeRollbackHold set. It touches only a
+	// record that carries the token, and an absent record or one owned by another attempt is
+	// success.
+	ReleaseRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) error
+
+	// TakeSpendLease registers the caller as a spender of the inputs of a creating record, before
+	// it spends them. attempt is the token of the attempt the caller read. The grant is one write
+	// that the store refuses once the record is rolling back, so a spend either starts before the
+	// rollback and is waited for, or never starts. It returns the lease and true, or false when the
+	// record is absent, final, rolling back or owned by another attempt. The attempt that creates a
+	// record holds a lease from its create on, under its own token. A lease names the time by
+	// which its spend must end, utxostore_spendRollbackTimeout after it was taken. A store with no
+	// tentative state reports false.
+	TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error)
+
+	// ReleaseSpendLease removes a lease once the spend it covers has returned with a known
+	// outcome and the caller will not finalize the record. A spender whose spend may still
+	// commit does not call it, and the lease then stays live until it is stale. A lease also
+	// stays on a record that another spender finalized, and it is released there as well. An
+	// absent record, or one that carries no such lease, is success.
+	ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error
+
+	// SpendLeasesLive reports whether a spender of the attempt that carries the token may still be
+	// spending: a lease is live until the time it names has passed by a further
+	// utxostore_spendRollbackTimeout. BeginCreateFirstRollback is refused while it reports true.
+	// The pruner sweep reads it before it claims or resumes a rollback. A store with no tentative
+	// state reports false.
+	SpendLeasesLive(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error)
+
+	// ClearCreateFirstHold removes the hold that EndCreateFirstRollback left for the txid, when
+	// it may go, and reports whether the txid is free of a hold afterwards: true when the record
+	// is absent or the hold was removed, false when a hold stands or the record is not a hold.
+	// With adopt false the hold goes only once it has expired: utxostore_spendRollbackTimeout
+	// after its last write while no holder is busy, or twice that while a holder is busy, which
+	// is a holder that crashed. With adopt true, used by a create in block context that must not
+	// wait out the hold, the hold goes at once unless a holder is busy. The delete is filtered on
+	// the hold, so it never removes a record of a later attempt. A store with no tentative state
+	// reports false.
+	ClearCreateFirstHold(ctx context.Context, hash *chainhash.Hash, adopt bool) (bool, error)
 
 	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) // Remove? Only used in tests
 	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
@@ -660,6 +796,11 @@ type Store interface {
 	//     ErrTxExists, successful spends are rolled back before returning.
 	//   - ErrTxExists from the create phase is returned to the caller WITH the
 	//     spends left in place; the caller decides what to do with the existing tx.
+	//     The create-first path differs: when the existing record is still creating,
+	//     the call rolls it forward itself (re-spend, finalize) under the caller's
+	//     ignore flags and returns an error for which IsRolledForward is true, with the
+	//     spends. When it cannot complete the record it returns that failure instead,
+	//     and a rolling-back record is an error that is not ErrTxExists.
 	//   - WithCreateOnly(): skip the spend phase (coinbase, seeding, batch flows
 	//     whose inputs are spent elsewhere). Returned []*Spend is nil.
 	//   - WithSpendOnly(): skip the create phase (reorg/conflict helpers, batch

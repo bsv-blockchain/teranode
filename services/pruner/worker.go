@@ -324,6 +324,18 @@ func (s *Server) runPrunePhases(ctx context.Context, blockHeight uint32, blockHa
 		s.logger.Infof("[pruner][%s:%d] phase 1b: skipped (pruner_skipProcessExpiredPreservations=true)", blockHashStr, blockHeight)
 	}
 
+	// Phase 1c: roll forward transactions abandoned in the create-first
+	// "creating" state (crash between spend and finalize). Not gated on the
+	// create-first flag: the consumer-side guards are unconditional, so turning
+	// the flag off must not strand mid-flight records. A store without
+	// create-first support returns nothing, which keeps the pass cheap.
+	// pruner_creatingTxSweepMinAgeBlocks = 0 disables it.
+	if s.utxoStore != nil && s.settings.Pruner.CreatingTxSweepMinAgeBlocks > 0 {
+		startTime := time.Now()
+		s.sweepCreatingTxs(ctx, blockHeight)
+		prunerDuration.WithLabelValues("creating_sweep").Observe(time.Since(startTime).Seconds())
+	}
+
 	// Phase 2: DAH pruning (deletion)
 	// Deletes transactions marked for deletion at or before the current height.
 	// Never runs in a cycle where Phase 1 failed: a stale DeleteAtHeight on a parent of an old

@@ -207,6 +207,27 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 
 	thisBlockHeight := s.GetBlockHeight() + 1
 
+	// Roll forward any still-"creating" record being mined, on every call and whatever
+	// UseCreateFirstOrder says: the consumer-side guards are unconditional, so turning the
+	// flag off with creating records on disk must not strand them. The roll-forward spends the
+	// inputs and clears the flag, so the outputs become spendable on the normal mined path.
+	//
+	// Correctness rests on this pre-flight, which fails closed, not on the write paths
+	// preserving the creating bin. There are three of them: the Lua write, the filter-expression
+	// write, and the native sub-op (subOpSetMined, dispatched to the out-of-tree server module
+	// by useNativeForSubOp). The first two preserve the bin; how the native path treats it is
+	// unknown from this repo, which is why the pre-flight runs before it on every call.
+	// Block validation re-runs setMined for the block if the roll-forward cannot complete.
+	//
+	// blockHeight is the height of the block being marked mined (not the store's cached
+	// tip+1), which is the correct input for the coinbase-maturity/DAH arithmetic in Spend
+	// when the store's height lags during catchup.
+	if !minedBlockInfo.UnsetMined {
+		if err := s.rollForwardCreatingBeforeSetMined(ctx, hashes, minedBlockInfo.BlockHeight); err != nil {
+			return nil, err
+		}
+	}
+
 	if !minedBlockInfo.UnsetMined && s.settings.Aerospike.EnableSetMinedFilterExpressions {
 		return s.SetMinedMultiWithExpressions(ctx, hashes, minedBlockInfo)
 	}
@@ -763,4 +784,138 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 	}
 
 	return aggErr
+}
+
+// rollForwardCreatingBeforeSetMined completes any still-"creating" record among the
+// to-be-mined hashes BEFORE setMined can clear the creating/unminedSince selectors the
+// pruner sweeper relies on. setMined clears unminedSince on the longest chain, and the
+// native write path's handling of the creating bin is unknown, so once a write has run a
+// mid-flight record may never be found again — a tx whose inputs were never spent would be
+// mined and finalized, its parents' outputs left permanently unspent (the #1214 shape). Running the roll-forward first, and FAILING CLOSED on any
+// record it cannot complete, keeps every crash point safe: before finalize the selectors
+// are intact and the sweeper still finds the record; after finalize the record is a
+// correctly-finalized unmined tx and the next block-validation pass re-runs setMined.
+//
+// The pre-flight is cheap on the common path: it batch-reads only the creating flag for
+// the block's hashes (creating records are rare and transient), and does per-tx work only
+// for the few that are actually mid-flight.
+func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []*chainhash.Hash, blockHeight uint32) error {
+	items := make([]*utxo.UnresolvedMetaData, 0, len(hashes))
+
+	for i, h := range hashes {
+		if h == nil {
+			continue
+		}
+
+		items = append(items, &utxo.UnresolvedMetaData{Hash: *h, Idx: i, Fields: []fields.FieldName{fields.Creating, fields.RollingBack, fields.Attempt}})
+	}
+
+	if len(items) == 0 {
+		return nil
+	}
+
+	if err := s.BatchDecorate(ctx, items, fields.Creating, fields.RollingBack, fields.Attempt); err != nil {
+		return errors.NewProcessingError("[setMined] create-first pre-flight: batch read of creating flag failed", err)
+	}
+
+	var legacy []*chainhash.Hash
+
+	for _, item := range items {
+		if item.Err != nil {
+			if errors.Is(item.Err, errors.ErrTxNotFound) {
+				continue // nothing to roll forward
+			}
+
+			return errors.NewProcessingError("[setMined] create-first pre-flight: read of %s failed", item.Hash.String(), item.Err)
+		}
+
+		if item.Data == nil || !item.Data.Creating {
+			continue
+		}
+
+		// A creating record with no attempt token was not written by a create-first attempt. It
+		// is a record whose clearCreatingFlag failed, and the write that made it did not defer
+		// the spend of its inputs. There is nothing to roll forward: mining clears the bin.
+		if len(item.Data.Attempt) == 0 && !item.Data.RollingBack {
+			legacy = append(legacy, &item.Hash)
+
+			continue
+		}
+
+		// Mid-flight record: fetch the tx bytes and roll it forward (re-spend + finalize).
+		md, err := s.Get(ctx, &item.Hash, fields.Tx, fields.Creating, fields.RollingBack, fields.Attempt)
+		if err != nil {
+			if errors.Is(err, errors.ErrTxNotFound) {
+				continue
+			}
+
+			return errors.NewProcessingError("[setMined] create-first pre-flight: get tx %s failed", item.Hash.String(), err)
+		}
+
+		if !md.Creating {
+			continue // finalized between the batch read and this get
+		}
+
+		if md.RollingBack {
+			// Its owner is undoing it, and the hold it leaves carries no transaction at all, so it
+			// must not be completed or mined against. Fail closed: the block is retried once the
+			// rollback completes or the hold expires.
+			return errors.NewProcessingError("[setMined] create-first pre-flight: tx %s is rolling back", item.Hash.String())
+		}
+
+		if md.Tx == nil {
+			continue // finalized between the batch read and this get
+		}
+
+		// WithIgnoreLocked: a mined tx's parents may still be locked (e.g. their own
+		// create-first tentative lock); the roll-forward completes an already-committed
+		// spend, so a locked parent must not fail-close setMined for the whole block.
+		if _, _, err := utxo.RollForwardCreating(ctx, s.logger, s, md.Tx, md.Attempt, blockHeight, utxo.WithIgnoreLocked(true)); err != nil {
+			return errors.NewProcessingError("[setMined] create-first pre-flight: roll-forward of %s failed", item.Hash.String(), err)
+		}
+	}
+
+	return s.clearCreatingWithoutAttempt(legacy)
+}
+
+// clearCreatingWithoutAttempt deletes the creating bin from the master records that carry no
+// attempt token and are not rolling back. The setMined writes cleared this bin on every master
+// before create-first existed, and they no longer do, because they cannot tell such a record from
+// a tentative one. The filter tells them apart on the server, so a record that a create-first
+// attempt owns is never cleared here. The extra records are cleared by clearLockedOnRecordsMulti.
+func (s *Store) clearCreatingWithoutAttempt(hashes []*chainhash.Hash) error {
+	if len(hashes) == 0 {
+		return nil
+	}
+
+	writePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	writePolicy.FilterExpression = finalizeFilter(nil)
+
+	clearOp := aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))
+	records := make([]aerospike.BatchRecordIfc, 0, len(hashes))
+
+	for _, h := range hashes {
+		key, err := aerospike.NewKey(s.namespace, s.setName, h[:])
+		if err != nil {
+			return errors.NewProcessingError("[setMined] failed to create key for %s", h.String(), err)
+		}
+
+		records = append(records, aerospike.NewBatchWrite(writePolicy, key, clearOp))
+	}
+
+	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), records); err != nil {
+		return errors.NewStorageError("[setMined] failed to clear the creating bin of %d records with no attempt token", len(hashes), err)
+	}
+
+	for i, record := range records {
+		recErr := record.BatchRec().Err
+		if recErr == nil || isKeyNotFound(recErr) || isFilteredOut(recErr) {
+			continue
+		}
+
+		return errors.NewStorageError("[setMined] failed to clear the creating bin of %s", hashes[i].String(), recErr)
+	}
+
+	return nil
 }

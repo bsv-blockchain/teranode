@@ -42,7 +42,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 
 	t.Run("TestStore_GetBinsToStore empty", func(t *testing.T) {
 		tx := &bt.Tx{}
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, lane.None, nil)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, false, lane.None, nil)
 		require.Error(t, err)
 		require.Nil(t, bins)
 	})
@@ -57,7 +57,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		tx, err := bt.NewTxFromString(string(txHex))
 		require.NoError(t, err)
 
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, lane.None, nil)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, false, lane.None, nil)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 
@@ -138,7 +138,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		// external should be set by the aerospike create function for huge txs
 		external := len(tx.ExtendedBytes()) > teranodeaerospike.MaxTxSizeInStoreInBytes
 
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), false, false, false, lane.None, nil)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), false, false, false, false, lane.None, nil)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 	})
@@ -156,7 +156,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		// external should be set by the aerospike create function for huge txs
 		external := len(tx.ExtendedBytes()) > teranodeaerospike.MaxTxSizeInStoreInBytes
 
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), true, true, true, lane.None, nil)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), true, true, true, false, lane.None, nil)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 
@@ -248,7 +248,7 @@ func TestStore_GetBinsToStore_UnspendableTransactionExpires(t *testing.T) {
 
 		bins, err := s.GetBinsToStore(tx, minedHeight,
 			[]uint32{1}, []uint32{minedHeight}, []int{0},
-			false, tx.TxIDChainHash(), false, false, false, lane.None, nil)
+			false, tx.TxIDChainHash(), false, false, false, false, lane.None, nil)
 		require.NoError(t, err)
 
 		dah, ok := findBin(t, bins, fields.DeleteAtHeight.String())
@@ -264,7 +264,7 @@ func TestStore_GetBinsToStore_UnspendableTransactionExpires(t *testing.T) {
 
 		bins, err := s.GetBinsToStore(tx, minedHeight,
 			nil, nil, nil,
-			false, tx.TxIDChainHash(), false, false, false, lane.None, nil)
+			false, tx.TxIDChainHash(), false, false, false, false, lane.None, nil)
 		require.NoError(t, err)
 
 		_, ok := findBin(t, bins, fields.DeleteAtHeight.String())
@@ -282,7 +282,7 @@ func TestStore_GetBinsToStore_UnspendableTransactionExpires(t *testing.T) {
 
 		bins, err := s.GetBinsToStore(tx, minedHeight,
 			[]uint32{1}, []uint32{minedHeight}, []int{0},
-			false, tx.TxIDChainHash(), false, false, false, lane.None, nil)
+			false, tx.TxIDChainHash(), false, false, false, false, lane.None, nil)
 		require.NoError(t, err)
 
 		_, ok := findBin(t, bins, fields.DeleteAtHeight.String())
@@ -486,8 +486,10 @@ func BenchmarkStore_Create(b *testing.B) {
 }
 
 // BatchStoreItem is allocated once per create, so a new field must not make it bigger.
+// The create-first attempt token (attempt, 24 bytes) took it from 144 to 168 bytes. The creating
+// flag beside it fits in the padding of the other flags.
 func TestBatchStoreItemSize(t *testing.T) {
-	require.Equal(t, uintptr(144), unsafe.Sizeof(teranodeaerospike.BatchStoreItem{}))
+	require.Equal(t, uintptr(168), unsafe.Sizeof(teranodeaerospike.BatchStoreItem{}))
 }
 
 // BenchmarkStore_CreateLanePosition is BenchmarkStore_Create with the store taking a position from
@@ -552,7 +554,7 @@ func BenchmarkStore_GetBinsToStoreLanePosition(b *testing.B) {
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
-				if _, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, c.pos, nil); err != nil {
+				if _, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, false, c.pos, nil); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -984,4 +986,72 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 		_, err = store.Get(ctx, parent.TxIDChainHash())
 		require.ErrorIs(t, err, errors.ErrTxNotFound, "the failed lock write stores nothing")
 	})
+}
+
+// TestCreateMinedReportsCreatingNotCleared_WithCreateFirstOn is the repeat case of
+// TestCreateMinedReportsCreatingNotCleared with utxostore_useCreateFirstOrder on. The records of
+// a mined create carry no attempt token: no create-first attempt wrote them, and no healer of
+// create-first reaches them. The repeat must clear them, and must report a clear that fails,
+// whatever the setting says.
+func TestCreateMinedReportsCreatingNotCleared_WithCreateFirstOn(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 4
+	tSettings.UtxoStore.UseCreateFirstOrder = true
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	const (
+		blockHeight = 604315
+		blockID     = 11
+		spendHeight = blockHeight + 1_000
+	)
+
+	var left atomic.Int32
+
+	left.Store(2)
+
+	store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		if write, ok := records[0].(*aerospike.BatchWrite); ok && write.Policy != nil &&
+			write.Policy.RecordExistsAction == aerospike.UPDATE_ONLY && left.Add(-1) >= 0 {
+			return &aerospike.AerospikeError{ResultCode: types.SERVER_NOT_AVAILABLE}
+		}
+
+		return client.BatchOperate(policy, records)
+	})
+	t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+
+	parent := createTransactionWithOutputs(10)
+	mined := utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: blockID, BlockHeight: blockHeight})
+
+	for try := 0; try < 2; try++ {
+		_, err := store.Create(ctx, parent, blockHeight, mined)
+		require.Error(t, err, "try %d", try)
+		require.NotErrorIs(t, err, errors.ErrTxExists, "try %d: a failed clear must not read as a finished create", try)
+		require.True(t, errors.IsRetryableError(err), "try %d: the caller must repeat the create: %v", try, err)
+	}
+
+	_, err := store.Create(ctx, parent, blockHeight, mined)
+	require.ErrorIs(t, err, errors.ErrTxExists, "the repeat finds the records and finishes the clear")
+
+	for idx := uint32(0); idx <= 2; idx++ {
+		key, keyErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(parent.TxIDChainHash(), idx))
+		require.NoError(t, keyErr)
+
+		rec, getErr := client.Get(nil, key)
+		require.NoError(t, getErr)
+		require.NotContains(t, rec.Bins, fields.Creating.String(), "record %d must lose the creating bin", idx)
+	}
+
+	out := parent.Outputs[9]
+
+	child := bt.NewTx()
+	require.NoError(t, child.From(parent.TxIDChainHash().String(), 9, out.LockingScript.String(), out.Satoshis))
+	child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00, 0x48, 0x30, 0x45})
+	require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", out.Satoshis-100))
+
+	_, err = store.Spend(ctx, child, spendHeight)
+	require.NoError(t, err, "an output on an extra record must be spendable")
 }

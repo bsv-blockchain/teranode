@@ -36,6 +36,7 @@ var (
 	rawBinSizeInBytes  = fields.SizeInBytes.String()
 	rawBinCreatedAt    = fields.CreatedAt.String()
 	rawBinConflicting  = fields.Conflicting.String()
+	rawBinCreating     = fields.Creating.String()
 	rawBinLocked       = fields.Locked.String()
 	rawBinBlockIDs     = fields.BlockIDs.String()
 	rawBinUnminedSince = fields.UnminedSince.String()
@@ -56,7 +57,7 @@ type rawUnminedRecord struct {
 	// its absence is what marks a split record.
 	hasTxID, hasFee, hasSize, hasCreatedAt bool
 
-	conflicting, locked, coinbase, external bool
+	conflicting, creating, locked, coinbase, external bool
 
 	// fastInputs is set when the inputs bin was read straight into the
 	// handler's inpoints buffer. Otherwise inputs holds it decoded by the
@@ -153,6 +154,8 @@ func (h *rawUnminedHandler) Bin(name []byte, particleType int, value []byte) err
 		}
 	case rawBinConflicting:
 		r.conflicting = rawBool(particleType, value)
+	case rawBinCreating:
+		r.creating = rawBool(particleType, value)
 	case rawBinLocked:
 		r.locked = rawBool(particleType, value)
 	case rawBinIsCoinbase:
@@ -207,6 +210,12 @@ func (h *rawUnminedHandler) EndRecord() error {
 	}
 
 	if r.conflicting {
+		return nil
+	}
+
+	// A record still carrying the creating bin is mid create-first flight: its input spends
+	// are not confirmed done, so block assembly must not restore it. Recovery finalizes it.
+	if r.creating {
 		return nil
 	}
 

@@ -114,6 +114,9 @@ type batchSpend struct {
 	// requireParentOutput turns off the "already blessed" fallback for this item;
 	// see utxo.IgnoreFlags.RequireParentOutputs.
 	requireParentOutput bool
+	// deadline is the deadline of the caller's context, zero when it has none. The store does
+	// not send the write of this item after it; see splitSpendsByDeadline.
+	deadline time.Time
 }
 
 // complete writes err into the item's result slot (spend.Err) and marks the
@@ -504,6 +507,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	items := make([]*batchSpend, len(spends))
 	group := completion.NewGroup(int32(len(spends)))
 
+	// Zero when the caller has no deadline. The store keeps it for the queued items.
+	deadline, _ := ctx.Deadline()
+
 	// Enqueue all inputs of this tx as one ordered group via a single
 	// PutBatchCtx, instead of one PutCtx per input — cutting the per-item
 	// channel-send and collector-select overhead to a single operation for the
@@ -529,6 +535,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			ignoreConflicting:   useIgnoreConflicting,
 			ignoreLocked:        useIgnoreLocked,
 			requireParentOutput: useRequireParentOutputs,
+			deadline:            deadline,
 		}
 		items[idx] = item
 
@@ -756,7 +763,9 @@ func decideRollback(getErr error) rollbackDecision {
 // and permanently wedges block validation on any later block that spends the
 // same output (#1214).
 //
-// It IS gated on the spending tx having no record. With a record present the ref
+// It IS gated on the spending tx having no record, or only the record of a
+// create-first rollback, which is handled under its hold (see below). With a
+// record present the ref
 // is not dangling and rolling back would be the harmful move: it would clear a
 // slot a live (possibly mined) tx legitimately owns. That case is reachable
 // because the record-level locked/conflicting checks run before the per-UTXO
@@ -846,12 +855,11 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 		rbTimeout = 120 * time.Second
 	}
 
+	decision, releaseHold, getErr := s.partialSpendRollbackDecision(tx.TxIDChainHash(), rbTimeout)
+	defer releaseHold()
+
 	rbCtx, cancel := context.WithTimeout(context.Background(), rbTimeout)
 	defer cancel()
-
-	_, getErr := s.Get(rbCtx, tx.TxIDChainHash(), fields.Fee)
-
-	decision := decideRollback(getErr)
 
 	if prometheusUtxoPartialSpendRollbacks != nil {
 		prometheusUtxoPartialSpendRollbacks.WithLabelValues(decision.String()).Inc()
@@ -896,6 +904,77 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 
 	s.logger.Warnf("[SPEND][%s] rolled back %d partial spend(s) (%s)", tx.TxID(), len(result.spentSpends), phase)
 }
+
+// partialSpendRollbackDecision probes for the record of the spending transaction and decides
+// whether its partial spends are reverted. A record that is final or creating is a spender, and
+// the spends stay. No record means that they name nothing, and they are reverted.
+//
+// A record that is rolling back, a hold included, is not a spender: its rollback reverses the
+// inputs of the txid once, and the hold it leaves carries no transaction and expires. A spend
+// this call made beside it would then name a txid with no record, so it is reverted, but only
+// while this call holds the hold of the attempt. Under the hold no create can adopt the record
+// and no other actor reverses, so the revert cannot clear the spends of a replacement. The
+// returned release gives the hold back, and the caller runs it after the revert.
+//
+// A take that is refused is not the end. The hold is taken by the owner of the rollback, by its
+// cleanup or by another holder, and each of those ends within the rollback timeout. The call then
+// probes again, for up to twice that timeout, after which a holder that crashed counts as gone.
+// The record is then a hold that is free, or a record that is not rolling back, or no record, and
+// each of those has an answer above. Giving up at the first refusal would leave the spend in
+// place beside a hold that expires, with nothing left to reverse it.
+func (s *Store) partialSpendRollbackDecision(hash *chainhash.Hash, rbTimeout time.Duration) (rollbackDecision, func(), error) {
+	noHold := func() {}
+
+	// Detached from the caller and from the store, as the revert is: see rollbackPartialSpends.
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*rbTimeout)
+	defer cancel()
+
+	wait := partialSpendHoldPollMin
+
+	for {
+		spender, getErr := s.Get(waitCtx, hash, fields.Fee, fields.Creating, fields.RollingBack, fields.Attempt)
+		if getErr != nil || spender == nil || !spender.RollingBack {
+			return decideRollback(getErr), noHold, getErr
+		}
+
+		took, takeErr := s.TakeRollbackHold(waitCtx, hash, spender.Attempt)
+		if takeErr != nil {
+			return rollbackSkipIndeterminate, noHold, takeErr
+		}
+
+		if took {
+			attempt := spender.Attempt
+
+			return rollbackFire, func() {
+				relCtx, relCancel := context.WithTimeout(context.Background(), rbTimeout)
+				defer relCancel()
+
+				if relErr := s.ReleaseRollbackHold(relCtx, hash, attempt); relErr != nil {
+					s.logger.Errorf("[SPEND][%s] releasing the hold of the rolling back spender record failed, it expires on its own: %v", hash.String(), relErr)
+				}
+			}, nil
+		}
+
+		timer := time.NewTimer(wait)
+
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+
+			return rollbackSkipIndeterminate, noHold, errors.NewProcessingError("the spender record is rolling back and its hold was not free within %s", 2*rbTimeout)
+		case <-timer.C:
+		}
+
+		wait = min(wait*2, partialSpendHoldPollMax)
+	}
+}
+
+// partialSpendHoldPollMin and partialSpendHoldPollMax bound the wait between two probes of a
+// spender record whose hold is taken.
+const (
+	partialSpendHoldPollMin = 10 * time.Millisecond
+	partialSpendHoldPollMax = 2 * time.Second
+)
 
 // resolveSpendCompletions applies the ErrTxNotFound "already blessed"
 // fallback and conflict-data extraction to each item exactly once, and
@@ -962,12 +1041,24 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 			// NOT memoized — result.spenderChecked stays false — so it is retried
 			// on the next ErrTxNotFound item in this batch. rollbackPartialSpends
 			// does not read this memo at all; it always probes fresh.
+			//
+			// A parent is pruned only once every output is spent, so a final spender record
+			// whose parent is gone has had that input taken, by this tx or by a rival. A
+			// rival's take is the same exposure spend-first has, and it is bounded by the
+			// conflict path. A record that is still creating or rolling back is not that
+			// evidence: it is the tentative record of a create-first attempt whose spends
+			// are not yet proven, so ErrTxNotFound stays and the sweep rolls the record back.
 			if !result.spenderChecked {
-				if _, getErr := s.Get(ctx, tx.TxIDChainHash(), fields.Fee); getErr == nil {
-					s.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", tx.TxID())
-
-					result.spenderExists = true
+				if md, getErr := s.Get(ctx, tx.TxIDChainHash(), fields.Fee, fields.Creating, fields.RollingBack); getErr == nil {
 					result.spenderChecked = true
+
+					if md != nil && (md.Creating || md.RollingBack) {
+						s.logger.Debugf("[Validate][%s] parent tx not found and the tx record is still creating or rolling back, which is no evidence of this tx's spend", tx.TxID())
+					} else {
+						s.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", tx.TxID())
+
+						result.spenderExists = true
+					}
 				} else if errors.Is(getErr, errors.ErrTxNotFound) {
 					result.spenderChecked = true
 				}
@@ -1071,16 +1162,76 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		return
 	}
 
-	// Use expression-based implementation only when each Aerospike record holds a single
-	// UTXO (utxoBatchSize == 1). With multiple UTXOs per record, the expression cannot
-	// byte-compare the specific UTXO hash at a list offset, so we fall back to Lua which
-	// performs the strict precondition check inside the UDF.
-	if s.useExpressionSpend() {
-		s.SpendMultiWithExpressions(s.ctx, batch)
-		return
+	for _, part := range splitSpendsByDeadline(batch, time.Now()) {
+		// Use expression-based implementation only when each Aerospike record holds a single
+		// UTXO (utxoBatchSize == 1). With multiple UTXOs per record, the expression cannot
+		// byte-compare the specific UTXO hash at a list offset, so we fall back to Lua which
+		// performs the strict precondition check inside the UDF.
+		if s.useExpressionSpend() {
+			s.SpendMultiWithExpressions(s.ctx, part)
+			continue
+		}
+
+		s.executeLuaSpendBatch(part)
+	}
+}
+
+// splitSpendsByDeadline is the end-to-end bound on a queued spend. A caller whose context has a
+// deadline stops waiting at it, and a create-first spender tells every other actor, with its spend
+// lease, that it spends no later than that. The batch of such a caller is still queued here, on
+// the context of the store, so the store must keep the promise itself:
+//   - an item whose deadline has passed is completed with an error and is not sent;
+//   - the items with a deadline are sent apart from the others, under the earliest of their
+//     deadlines (spendWriteContext), so no send of theirs starts after it and each send carries
+//     only the time that is left. The items with no deadline keep the timeouts of the policy.
+//
+// A lease is live for a further utxostore_spendRollbackTimeout after the deadline it names, which
+// covers a write that started just before it.
+func splitSpendsByDeadline(batch []*batchSpend, now time.Time) [][]*batchSpend {
+	var unbounded, bounded []*batchSpend
+
+	for _, item := range batch {
+		switch {
+		case item == nil:
+			continue
+		case item.deadline.IsZero():
+			unbounded = append(unbounded, item)
+		case !item.deadline.After(now):
+			item.complete(errors.NewServiceUnavailableError("[SPEND] the spend of %s was not sent: the deadline of its caller passed while it was queued", item.spend.TxID.String()))
+		default:
+			bounded = append(bounded, item)
+		}
 	}
 
-	s.executeLuaSpendBatch(batch)
+	parts := make([][]*batchSpend, 0, 2)
+
+	if len(unbounded) > 0 {
+		parts = append(parts, unbounded)
+	}
+
+	if len(bounded) > 0 {
+		parts = append(parts, bounded)
+	}
+
+	return parts
+}
+
+// spendWriteContext returns ctx bounded by the earliest deadline of the items, for the batch write
+// only. The work that follows a write that was applied keeps the context it had.
+func spendWriteContext(ctx context.Context, batch []*batchSpend) (context.Context, context.CancelFunc) {
+	var earliest time.Time
+
+	for _, item := range batch {
+		if item != nil && !item.deadline.IsZero() && (earliest.IsZero() || item.deadline.Before(earliest)) {
+			earliest = item.deadline
+		}
+	}
+
+	if earliest.IsZero() {
+		return ctx, func() {}
+	}
+
+	return context.WithDeadline(ctx, earliest)
 }
 
 // executeLuaSpendBatch runs the Lua UDF spend pipeline for the provided batch. It is the
@@ -1131,7 +1282,12 @@ func (s *Store) executeLuaSpendBatchContext(parentCtx context.Context, batch []*
 
 	batchRecords, batchRecordKeys := s.createBatchRecords(batchesByKey)
 
-	if err := s.executeSpendBatchContext(ctx, batchRecords, batch, batchID); err != nil {
+	writeCtx, cancelWrite := spendWriteContext(ctx, batch)
+	err = s.executeSpendBatchContext(writeCtx, batchRecords, batch, batchID)
+
+	cancelWrite()
+
+	if err != nil {
 		return
 	}
 
@@ -1247,11 +1403,7 @@ func (s *Store) executeSpendBatch(batchRecords []aerospike.BatchRecordIfc, batch
 }
 
 func (s *Store) executeSpendBatchContext(ctx context.Context, batchRecords []aerospike.BatchRecordIfc, batch []*batchSpend, batchID uint64) error {
-	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
-	err := boundConflictBatchPolicy(ctx, batchPolicy)
-	if err == nil {
-		err = s.batchOperate(batchPolicy, batchRecords)
-	}
+	err := s.batchOperateWithin(ctx, util.GetAerospikeBatchPolicy(s.settings), batchRecords)
 	if err != nil {
 		// complete is CAS-guarded: items already completed in prepareSpendBatches
 		// (key-creation/validation failures) are simply no-ops here, so this
