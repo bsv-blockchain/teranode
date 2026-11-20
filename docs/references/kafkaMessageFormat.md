@@ -839,6 +839,7 @@ The 1-byte action enum is defined in `stores/txmetacache/wire.go`:
 |----------|-------|---------|
 | `WireActionADD` | `0x00` | Add or replace cached metadata for the given tx hash. `content` carries the serialized `meta.Data`. |
 | `WireActionDELETE` | `0x01` | Remove the entry for the given tx hash from the cache. `contLen` is `0` and no content follows. |
+| `WireActionADDLane` | `0x02` | `ADD` whose `content` is the lane metadata encoding, carrying the transaction's lane position and one per distinct parent. Sent only at `utxostore_laneMigration=shadow`; consumers accept both `ADD` forms. |
 
 ### Content Payload
 
@@ -851,6 +852,8 @@ For `ADD` entries, `content` is the serialized `meta.Data` for the transaction â
 - Size in bytes
 - Coinbase flag
 - Lock time
+
+For `ADDLane` entries, `content` is produced by `(*meta.Data).LaneMetaBytesInto` and parsed by `meta.NewDataFromLaneMetaBytes`: a magic byte `0xA7`, a version byte `0x01` and the transaction's 8-byte lane position, then exactly the `MetaBytes` above, then one 8-byte lane position per distinct parent in `TxInpoints` order. The action byte, not the magic byte, tells the two encodings apart, because a fee of 423 satoshis also begins with `0xA7 0x01`. `txmetacache.LaneMetaContent` returns the embedded `MetaBytes` without copying.
 
 ### Code Examples
 

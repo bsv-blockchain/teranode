@@ -2009,6 +2009,12 @@ func (u *Server) prefetchLevelParents(ctx context.Context, levelTxs []missingTx)
 
 	prefetchFields := append(append([]fields.FieldName(nil), prefetchParentBaseFields...), fields.Outputs)
 
+	// With lane positions on, the same read also gives each parent's own lane position, which the
+	// validator copies onto the child (validator.Options.PrefetchedParents).
+	if u.settings.UtxoStore.LaneMigration.Stamps() {
+		prefetchFields = append(prefetchFields, fields.LanePosition)
+	}
+
 	items := make([]*utxostore.UnresolvedMetaData, 0, len(distinct))
 	for parentHash := range distinct {
 		parentHash := parentHash

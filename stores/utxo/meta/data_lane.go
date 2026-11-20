@@ -30,9 +30,10 @@ import (
 const (
 	// LaneMetaMagic is the first byte of the lane metadata encoding. It is not a discriminator: a
 	// legacy MetaBytes begins with a fee, and a fee whose low 16 bits are 0x01A7 (423 satoshis,
-	// say) starts with the same two bytes as LaneMetaMagic and LaneMetaVersion. So the lane encoding
-	// must travel on its own topic and in its own cache, never mixed with MetaBytes, for a reader
-	// to know which it holds. Nothing produces or consumes it yet; that rule binds the step that does.
+	// say) starts with the same two bytes as LaneMetaMagic and LaneMetaVersion. So whatever carries
+	// the lane encoding must say so outside it, never leaving a reader to guess from the bytes. On
+	// the txmeta topic each entry's action byte says it (txmetacache.WireActionADDLane); the txmeta
+	// cache keeps MetaBytes only.
 	LaneMetaMagic = byte(0xA7)
 
 	// LaneMetaVersion is the only version of the lane metadata encoding.
