@@ -115,10 +115,11 @@ type batchSpend struct {
 	// match may be a confirmed historical spend, and reversing it would hand a
 	// confirmed output to any new spender.
 	idempotent bool
-	// historical is set when the output already recorded exactly this spend and
-	// that record is history: at least utxo.HistoricalSpendAge blocks older than
-	// this spend, or written without a height, with the spender's record still
-	// stored (a historical match without one is refused as a pruned replay). Such
+	// historical is set when the output already recorded exactly this spend at
+	// least utxo.HistoricalSpendAge blocks before this spend, and the spender's
+	// record is still stored. An aged match whose spender has no record is
+	// refused as a pruned replay and does not set it. A spend written without a
+	// height is never historical. Such
 	// a match is a confirmed spend, so it never joins a rollback, and it is not
 	// idempotent either: idempotent matches are the young ones, which may be
 	// an earlier failed attempt at this call.

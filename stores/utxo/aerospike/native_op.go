@@ -1016,11 +1016,12 @@ func (s *Store) probeNativeReplayProtectionVerdict(ctx context.Context, policy *
 	}
 
 	// Stage 3: the match must carry the height the first spend recorded. The store refuses a
-	// replay of a pruned transaction from that height, and a match reported without one counts as
-	// history, so a dispatcher that does not record and report it would refuse an honest retry.
+	// replay of a pruned transaction from that height. A match reported without one never counts
+	// as history, so on a dispatcher that does not record and report it every match is young and
+	// no replay of a pruned transaction is refused. The UDF path records the height.
 	if !probeReportsHeight(repeatRes, probeBlockHeight) {
 		s.logger.Warnf("[teranode-native-op] spend-height probe: the re-spend was reported as idempotent without the height the first spend recorded (%+v, want %d); "+
-			"the dispatcher does not record and report the spend height, so the store would refuse an honest retry as a replay; falling back to UDF path", repeatRes, probeBlockHeight)
+			"the dispatcher does not record and report the spend height, so no replay of a pruned transaction would be refused; falling back to UDF path", repeatRes, probeBlockHeight)
 		return replayProbeMismatch
 	}
 
