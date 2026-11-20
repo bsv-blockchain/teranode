@@ -185,6 +185,11 @@ test:
 test-heavy:
 	SETTINGS_CONTEXT=test TERANODE_HEAVY_TESTS=1 go test -tags "testtxmetacache" -count=1 -timeout=10m -run '^(TestSortedHashSet_|Test_queueLarge$$|TestDiskTxMap_(ExistenceLayerThroughput|ThroughputTarget|MultiDiskThroughput)$$|TestSubtreeProcessorSizePerformance$$|TestDirectSubtreeCreationPerformance$$|TestOverheadBreakdownDetailed$$)' ./services/blockassembly/subtreeprocessor
 
+# kill every reorg mutant in services/blockassembly/subtreeprocessor/testdata/mutants (issue 2269)
+.PHONY: reorg-mutants
+reorg-mutants:
+	SETTINGS_CONTEXT=test ./scripts/reorg-mutants.sh
+
 # run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest
 longtest:
