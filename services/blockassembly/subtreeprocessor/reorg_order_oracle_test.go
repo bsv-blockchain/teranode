@@ -119,3 +119,25 @@ func TestSubtreeShapeOracle(t *testing.T) {
 	require.NoError(t, checkSubtreeShape([]*subtreepkg.Subtree{build(4), build(4), build(2)}))
 	require.ErrorContains(t, checkSubtreeShape([]*subtreepkg.Subtree{build(4), build(3), build(4)}), "size")
 }
+
+func TestOrderOracle_RejectsATransactionAlreadyOnChain(t *testing.T) {
+	chainParent, x := oracleHash(1), oracleHash(2)
+
+	err := oracleCase{
+		seq:      []chainhash.Hash{x},
+		inpoints: map[chainhash.Hash]*subtreepkg.TxInpoints{x: oracleInpoints(chainParent)},
+		onChain:  map[chainhash.Hash]struct{}{chainParent: {}, x: {}},
+	}.check()
+	require.ErrorContains(t, err, "already on chain")
+}
+
+func TestOrderOracle_RejectsCoinbasePlaceholderPastTheFront(t *testing.T) {
+	chainParent, x := oracleHash(1), oracleHash(2)
+
+	err := oracleCase{
+		seq:      []chainhash.Hash{x, subtreepkg.CoinbasePlaceholderHashValue},
+		inpoints: map[chainhash.Hash]*subtreepkg.TxInpoints{x: oracleInpoints(chainParent)},
+		onChain:  map[chainhash.Hash]struct{}{chainParent: {}},
+	}.check()
+	require.ErrorContains(t, err, "coinbase placeholder")
+}

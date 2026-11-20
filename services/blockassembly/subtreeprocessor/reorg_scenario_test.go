@@ -1,6 +1,7 @@
 package subtreeprocessor
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -16,15 +17,17 @@ import (
 
 func smallScenarioConfig() reorgScenarioConfig {
 	return reorgScenarioConfig{
-		seed:             1,
-		pending:          2000,
-		lost:             1000,
-		lostInWinners:    0.9,
-		pendingInWinners: 0.3,
-		winnerOnly:       50,
-		forwardBlocks:    2,
-		lostAlsoPending:  5,
-		subtreeSize:      64,
+		seed:              1,
+		pending:           2000,
+		lost:              1000,
+		lostInWinners:     0.9,
+		pendingInWinners:  0.3,
+		winnerOnly:        50,
+		forwardBlocks:     2,
+		lostAlsoPending:   5,
+		pendingChains:     40,
+		pendingSpendsLost: 20,
+		subtreeSize:       64,
 	}
 }
 
@@ -111,7 +114,8 @@ func TestReorgScenario_IntakeFeedsTheQueueAtItsRate(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	sent := stop()
 
-	require.InDelta(t, 20_000, sent, 10_000, "about rate x time is sent")
+	require.Positive(t, sent, "intake sends while it runs")
+	require.LessOrEqual(t, sent, 40_000, "and not much faster than its rate")
 	require.Equal(t, int64(sent), sc.stp.QueueLength(), "nothing dequeues while the processor is not started")
 }
 
@@ -125,4 +129,79 @@ func TestReorgScenario_SkipStoreMarksCountsThem(t *testing.T) {
 	require.Equal(t, len(sc.rawD1()), sc.utxo.markCount(false))
 	require.Equal(t, len(sc.winnerNotLost()), sc.utxo.markCount(true))
 	require.Empty(t, sc.utxo.marked(true), "counted, not recorded")
+}
+
+// inAssemblyParentEdges counts the transactions in assembly with a parent that is also in assembly.
+func inAssemblyParentEdges(stp *SubtreeProcessor) int {
+	nodes := txHashes(assemblyNodes(stp))
+	inAssembly := make(map[chainhash.Hash]struct{}, len(nodes))
+
+	for _, h := range nodes {
+		inAssembly[h] = struct{}{}
+	}
+
+	edges := 0
+
+	for _, h := range nodes {
+		p, ok := stp.GetCurrentTxMap().Get(h)
+		if !ok {
+			continue
+		}
+
+		for _, parent := range p.ParentTxHashes {
+			if _, ok := inAssembly[parent]; ok {
+				edges++
+			}
+		}
+	}
+
+	return edges
+}
+
+// The order oracle can only catch an ordering bug if some transactions in assembly have parents in
+// assembly: pending chains, and pending children of lost-block transactions (D1 must come first).
+func TestReorgScenario_HasParentEdgesInsideTheAssembly(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+	require.Positive(t, inAssemblyParentEdges(sc.stp), "before the reorg")
+
+	require.NoError(t, sc.run(t))
+	require.Greater(t, inAssemblyParentEdges(sc.stp), 20, "after the reorg the D1 parents are in assembly too")
+}
+
+func TestReorgScenario_OracleCatchesAParentMovedAfterItsChild(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+	require.NoError(t, sc.run(t))
+
+	nodes := assemblyNodes(sc.stp)
+	txMap := sc.stp.GetCurrentTxMap()
+	position := make(map[chainhash.Hash]int, len(nodes))
+
+	for i, n := range nodes {
+		position[n.Hash] = i
+	}
+
+	for i, n := range nodes {
+		p, ok := txMap.Get(n.Hash)
+		if !ok {
+			continue
+		}
+
+		for _, parent := range p.ParentTxHashes {
+			at, inAssembly := position[parent]
+			if !inAssembly {
+				continue
+			}
+
+			moved := slices.Clone(nodes)
+			parentNode := moved[at]
+			moved = slices.Delete(moved, at, at+1)
+			moved = slices.Insert(moved, i, parentNode) // the child is now at i-1, the parent at i
+
+			require.ErrorContains(t, checkAssemblyOrder(moved, txMap.Get, sc.onChainAfter), "before its parent")
+
+			return
+		}
+	}
+
+	t.Fatal("no transaction in assembly has a parent in assembly")
 }

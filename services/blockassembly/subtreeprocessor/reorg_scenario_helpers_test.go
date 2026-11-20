@@ -40,6 +40,10 @@ import (
 //     when hitsAtFront is set (the winner takes the oldest transactions), spread through it otherwise.
 //   - F: B's shared transactions, the hits and winnerOnly transactions no one else has, shuffled and
 //     split across the forward blocks.
+//   - Parents inside the scenario, so the order of the result matters: pendingChains pending
+//     transactions also spend the pending transaction before them, and pendingSpendsLost pending
+//     transactions spend a raw D1 transaction (so D1 must come first after the reorg). Neither
+//     kind of child is ever a hit unless its parent is.
 //
 // Raw D1 transactions are real transactions with records in the UTXO store, because a reorg marks
 // them not on the longest chain and the store treats a missing record there as fatal. Every other
@@ -47,17 +51,19 @@ import (
 // so the scenario keeps 8 bytes per transaction per order and builds hundreds of millions of them
 // (the reorgscale suite). The hash sets behind the expectations are built only when a test asks.
 type reorgScenarioConfig struct {
-	seed             uint64
-	pending          int
-	lost             int
-	lostInWinners    float64
-	pendingInWinners float64
-	hitsAtFront      bool
-	winnerOnly       int
-	forwardBlocks    int
-	lostAlsoPending  int
-	subtreeSize      int
-	diskTxMap        bool
+	seed              uint64
+	pending           int
+	lost              int
+	lostInWinners     float64
+	pendingInWinners  float64
+	hitsAtFront       bool
+	winnerOnly        int
+	forwardBlocks     int
+	lostAlsoPending   int
+	pendingChains     int
+	pendingSpendsLost int
+	subtreeSize       int
+	diskTxMap         bool
 
 	// skipStoreMarks counts the longest-chain marks instead of sending them to the UTXO store, and
 	// creates no raw D1 records. The reorgscale suite sets it to time the processor's phases; the
@@ -79,6 +85,10 @@ type reorgScenario struct {
 	pendingIDs []scenarioID
 	winnerIDs  []scenarioID
 	rawD1Txs   []*bt.Tx
+
+	// extraParent is the second parent of a pending transaction that spends another scenario
+	// transaction, with the output it spends.
+	extraParent map[scenarioID]scenarioOutpoint
 
 	setsOnce   sync.Once
 	lostSet    map[chainhash.Hash]struct{}
@@ -107,6 +117,11 @@ const confirmedParentMarker = 0xc0ffee2269c0ffee
 
 func isConfirmedParent(h chainhash.Hash) bool {
 	return binary.LittleEndian.Uint64(h[24:]) == confirmedParentMarker
+}
+
+type scenarioOutpoint struct {
+	parent scenarioID
+	vout   uint32
 }
 
 // scenarioTx is a node of the scenario with the parents it spends.
@@ -165,8 +180,22 @@ func (sc *reorgScenario) tx(t testing.TB, id scenarioID) scenarioTx {
 
 	return scenarioTx{
 		node:     subtreepkg.Node{Hash: sc.hash(id), Fee: 200, SizeInBytes: 250},
-		inpoints: voutZeroInpoints(sc.confirmedParent(id)),
+		inpoints: sc.inpoints(id),
 	}
+}
+
+// inpoints is what a synthetic transaction spends: output 0 of its confirmed parent and, when it
+// has one, its extra parent's output.
+func (sc *reorgScenario) inpoints(id scenarioID) subtreepkg.TxInpoints {
+	extra, ok := sc.extraParent[id]
+	if !ok {
+		return voutZeroInpoints(sc.confirmedParent(id))
+	}
+
+	return subtreepkg.NewTxInpointsFromPacked(
+		[]chainhash.Hash{sc.confirmedParent(id), sc.hash(extra.parent)},
+		[]uint32{1, 0, 1, extra.vout},
+	)
 }
 
 // rawD1Tx is a real transaction, unique to i, spending its confirmed parent.
@@ -237,14 +266,24 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 		i++
 	}
 
-	// The hits: pending transactions the winners mined. Never a lostAlsoPending transaction.
+	sc.addParentEdges(t, synthetic, rawD1Count)
+
+	// The hits: pending transactions the winners mined. Never a lostAlsoPending transaction, never a
+	// child of a raw D1 transaction (the winners do not have its parent), and never a chain child
+	// whose parent might not be a hit.
 	hitCount := int(math.Round(float64(cfg.pending) * cfg.pendingInWinners))
 	candidates := make([]uint32, 0, synthetic)
 
 	for pos, id := range sc.pendingIDs {
-		if id.kind() == kindPending {
-			candidates = append(candidates, uint32(pos))
+		if id.kind() != kindPending {
+			continue
 		}
+
+		if extra, ok := sc.extraParent[id]; ok && (extra.parent.kind() == kindRawD1 || !cfg.hitsAtFront) {
+			continue
+		}
+
+		candidates = append(candidates, uint32(pos))
 	}
 
 	if !cfg.hitsAtFront {
@@ -273,6 +312,54 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 	sc.buildProcessor(t)
 
 	return sc
+}
+
+// addParentEdges picks the pending transactions that spend another scenario transaction: first the
+// children of raw D1 transactions that are not pending, then the chain children, each spending the
+// synthetic pending transaction before it. A transaction gets at most one extra parent, and a chain
+// parent is never a D1 child, so with hits at the front a hit chain child always has a hit parent.
+func (sc *reorgScenario) addParentEdges(t testing.TB, synthetic, rawD1Count int) {
+	t.Helper()
+
+	cfg := sc.cfg
+	sc.extraParent = make(map[scenarioID]scenarioOutpoint, cfg.pendingChains+cfg.pendingSpendsLost)
+
+	require.LessOrEqual(t, cfg.pendingSpendsLost, rawD1Count-cfg.lostAlsoPending, "each D1 parent has one child")
+	require.Less(t, 2*(cfg.pendingChains+cfg.pendingSpendsLost), synthetic, "room for the edges")
+
+	free := func(i int) int {
+		for {
+			_, taken := sc.extraParent[kindPending|scenarioID(i)]
+			if !taken {
+				return i
+			}
+
+			// index 0 has no transaction before it to spend
+			i = max(1, (i+1)%synthetic)
+		}
+	}
+
+	for j := range cfg.pendingSpendsLost {
+		child := free((2*j + 1) * synthetic / (2 * cfg.pendingSpendsLost))
+		sc.extraParent[kindPending|scenarioID(child)] = scenarioOutpoint{kindRawD1 | scenarioID(cfg.lostAlsoPending+j), 0}
+	}
+
+	for j := range cfg.pendingChains {
+		child := max(1, (j+1)*synthetic/(cfg.pendingChains+1))
+
+		for {
+			child = free(max(1, child))
+			_, parentIsChild := sc.extraParent[kindPending|scenarioID(child-1)]
+
+			if !parentIsChild {
+				break
+			}
+
+			child = (child + 1) % synthetic
+		}
+
+		sc.extraParent[kindPending|scenarioID(child)] = scenarioOutpoint{kindPending | scenarioID(child-1), 1}
+	}
 }
 
 // buildChain stores the blocks' subtrees and the chain genesis -> B and genesis -> F1 -> .. -> Fn,
@@ -589,9 +676,10 @@ func (sc *reorgScenario) expectedOrderAfter() []chainhash.Hash {
 	return append(effectiveD1, filter(sc.pendingOrder(), func(h chainhash.Hash) bool { return !sc.inWinners(h) })...)
 }
 
-// onChainBefore reports whether h's outputs are on the chain ending in B.
+// onChainBefore reports whether h's outputs are on the chain ending in B. A lost-block transaction
+// that is also pending (the X case) counts as pending, not as mined.
 func (sc *reorgScenario) onChainBefore(h chainhash.Hash) bool {
-	return isConfirmedParent(h) || sc.inLost(h)
+	return isConfirmedParent(h) || (sc.inLost(h) && !sc.inPending(h))
 }
 
 // onChainAfter reports whether h's outputs are on the chain ending in Fn.

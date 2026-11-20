@@ -44,7 +44,15 @@ func checkAssemblyOrder(seq []subtreepkg.Node, inpoints inpointsLookup, onChain 
 
 	for i, node := range seq {
 		if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			if i != 0 {
+				return errors.NewProcessingError("coinbase placeholder at %d; it may only be the first node", i)
+			}
+
 			continue
+		}
+
+		if onChain(node.Hash) {
+			return errors.NewProcessingError("tx %s at %d is already on chain", node.Hash, i)
 		}
 
 		if _, dup := position[node.Hash]; dup {
@@ -151,11 +159,17 @@ func assemblyNodes(stp *SubtreeProcessor) []subtreepkg.Node {
 }
 
 // requireAssemblyValid runs both oracles on the processor: the order rule over the whole assembly,
-// with inpoints from its tx map, and the shape rule over its chained subtrees.
+// with inpoints from its tx map, and the shape rule over its chained subtrees and the current one.
 func requireAssemblyValid(t testing.TB, stp *SubtreeProcessor, onChain func(chainhash.Hash) bool) {
 	t.Helper()
 
 	txMap := stp.GetCurrentTxMap()
 	require.NoError(t, checkAssemblyOrder(assemblyNodes(stp), txMap.Get, onChain), "assembly order")
-	require.NoError(t, checkSubtreeShape(stp.GetChainedSubtrees()), "chained subtree shape")
+
+	subtrees := stp.GetChainedSubtrees()
+	if current := stp.GetCurrentSubtree(); current != nil {
+		subtrees = append(subtrees[:len(subtrees):len(subtrees)], current)
+	}
+
+	require.NoError(t, checkSubtreeShape(subtrees), "subtree shape")
 }

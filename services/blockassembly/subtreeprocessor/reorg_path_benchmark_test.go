@@ -53,6 +53,9 @@ func reorgPathBenchConfig(pending int, hits float64, disk bool) reorgScenarioCon
 		forwardBlocks:    2,
 		subtreeSize:      1 << 14,
 		diskTxMap:        disk,
+		// sqlite marks of synthetic hashes would be most of the time and log mid-line, which
+		// breaks benchstat's parsing; the marks are measured on their own against Aerospike.
+		skipStoreMarks: true,
 	}
 }
 

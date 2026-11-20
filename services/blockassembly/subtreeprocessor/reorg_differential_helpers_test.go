@@ -45,11 +45,13 @@ type reorgDivergence struct {
 	normalize func(o *reorgOutcome)
 }
 
+// sortedHashes sorts a copy of hashes and keeps duplicates, so a path that marks a hash twice
+// differs from one that marks it once.
 func sortedHashes(hashes []chainhash.Hash) []chainhash.Hash {
 	out := slices.Clone(hashes)
 	slices.SortFunc(out, func(a, b chainhash.Hash) int { return bytes.Compare(a[:], b[:]) })
 
-	return slices.Compact(out)
+	return out
 }
 
 // captureReorgOutcome reads the outcome from the scenario's processor and stores after a run that
