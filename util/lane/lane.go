@@ -12,9 +12,11 @@
 // and every grant in a lane starts above the lane's last one, so no two records
 // carry the same position in a lane, and the grants rise in the order they were
 // recorded. A lane position is unique among the records created under the grants
-// recorded in one blockchain database and is written once, so
-// later work can say which block took a record by keeping a range of positions per
-// lane per block, instead of writing to the record. Restoring an older blockchain
+// recorded in one blockchain database and is written once, so later work can say
+// which block took a record by keeping, per lane per block, the range of positions
+// it took and the holes in that range, instead of writing to the record. A range
+// alone does not say it: a position returned and reused can be written in a later
+// block, below a position an earlier block took, and is a hole in the earlier one. Restoring an older blockchain
 // database could reuse positions, which is a listed limit of this phase.
 //
 // Positions start at 1. Lane 0 is a real lane, so the packed value 0 can only
@@ -135,7 +137,7 @@ func (g Grant) Len() uint64 {
 // Settles finishes a grant the holder has left: the grant's first position and its final number,
 // which is the grant's last position if it was used up, or the highest position taken if it aged
 // out, lowered past any positions at the top of that range that came back unwritten (Allocator.Return)
-// and were not given out again. No position above the final number carries a record. The holder
+// and were not given out again. No position of that grant above the final number carries a record. The holder
 // sends it on its next grant request and on its release, and the service writes it on that hand-out
 // row or close row. A grant is settled only once it has been used; LastTaken is zero in a pair the
 // holder sends only when every position the grant gave out came back, so none carries a record. A

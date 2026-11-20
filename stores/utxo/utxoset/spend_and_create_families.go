@@ -1190,7 +1190,9 @@ func (w *nettedWrite) createInChunk(ctx context.Context, dbTx pgx.Tx, run *chunk
 // recordFailedBurns records why each transaction's lane position burned when the chunk failed. A
 // transaction an earlier round settled keeps its known reason, since it was not in the write that
 // failed. One in the final write burned as rolled_back, or as outcome_unknown when the COMMIT
-// itself failed and may have landed.
+// itself failed and may have landed. A later attempt that fails overwrites what an earlier one
+// recorded; one that commits leaves it set, so burnList and the list's return read a transaction's
+// result first, which settleChunk gives it.
 func (w *nettedWrite) recordFailedBurns(run *chunkRun) {
 	if w.burns == nil {
 		return
