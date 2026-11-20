@@ -82,7 +82,7 @@ func TestSubtreePositionsRoundTrip(t *testing.T) {
 	require.Equal(t, len(view), cap(view))
 }
 
-// Decoding costs three allocations for the arrays plus the struct, however many nodes.
+// Decoding costs four allocations, the result and its three arrays, however many nodes.
 func TestDecodeSubtreePositionsAllocatesPerSubtreeNotPerNode(t *testing.T) {
 	s := NewSubtreePositions(chainhash.Hash{1}, 10_000, 10_000)
 	for i := 0; i < 10_000; i++ {
@@ -203,6 +203,19 @@ func TestDecodeSubtreePositionsBoundsItsAllocationByTheBuffer(t *testing.T) {
 	n = allocatedBy(func() { _, err = DecodeSubtreePositions(one) })
 	require.Error(t, err)
 	require.Less(t, n, uint64(1<<20), "allocated %d bytes for counts claiming 2^31 parents", n)
+
+	// Counts that sum past 2^32, with no parent block, are refused: by the 32-bit total check
+	// first, and by the length check if it were removed. The total check alone is not pinned,
+	// since a parent block that really holds 2^32 positions is over 34 GB.
+	two := append([]byte(subtreePositionsMagic), SubtreePositionsVersion)
+	two = append(two, make([]byte, 32)...)
+	two = binary.LittleEndian.AppendUint32(two, 2)
+	two = AppendPositions(two, []uint64{Pack(1, 1), Pack(1, 2)})
+	two = binary.LittleEndian.AppendUint32(two, 0xFFFFFFFF)
+	two = binary.LittleEndian.AppendUint32(two, 1)
+
+	_, err = DecodeSubtreePositions(two)
+	require.Error(t, err)
 }
 
 func withUint32(b []byte, at int, v uint32) []byte {

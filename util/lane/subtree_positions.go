@@ -12,8 +12,8 @@ import (
 // The subtree lane positions file sits beside a subtree's meta file (go-subtree Meta, which has
 // no version and is not changed). For each node of the subtree, in node order, it carries the
 // transaction's own lane position and one lane position per distinct parent, in the parent order
-// of that node's TxInpoints in the meta file. The file is laid out in columns, so it decodes in one
-// pass into three flat arrays, the same shape SubtreePositions holds in memory:
+// of that node's TxInpoints in the meta file. The file is laid out in columns, so it decodes into
+// three flat arrays, the same shape SubtreePositions holds in memory, reading each byte once:
 //
 //	[4]    magic "LNSP"
 //	[1]    format version, 1
@@ -27,8 +27,8 @@ import (
 // as own position 0 with no parents. No other node may carry a zero or invalid position.
 //
 // A reader that needs both the meta and the positions should fetch the two files concurrently;
-// decoding the positions costs one pass over the bytes and three allocations however many nodes
-// the subtree holds.
+// decoding the positions reads each byte once and allocates the result and its three arrays,
+// however many nodes the subtree holds.
 
 const (
 	// SubtreePositionsVersion is the only version of the subtree lane positions file.
@@ -43,7 +43,7 @@ const (
 )
 
 // SubtreePositions holds a subtree's lane positions in three flat arrays indexed by node, so a
-// million-node subtree costs three allocations, not one per node. Node i's own position is Own[i]
+// million-node subtree costs three array allocations, not one per node. Node i's own position is Own[i]
 // and its parent positions are Parents[ParentStart[i]:ParentStart[i+1]]. ParentStart has one more
 // entry than Own. Build one with NewSubtreePositions and AppendNode, or by decoding a file.
 type SubtreePositions struct {
@@ -147,8 +147,9 @@ func EncodeSubtreePositions(s *SubtreePositions) ([]byte, error) {
 }
 
 // DecodeSubtreePositions parses a subtree lane positions file and checks every position. It reads
-// the bytes once and allocates three arrays, each sized only after the buffer is known to hold
-// what the counts claim. It does not compare the result with the subtree; CheckSubtreePositions
+// each byte once and allocates the result and its three arrays, each sized only after the buffer is
+// known to hold what it claims: the own and offset arrays from the checked node count, the parent
+// array from the counted total once the parent block's length matches it. It does not compare the result with the subtree; CheckSubtreePositions
 // does.
 func DecodeSubtreePositions(b []byte) (*SubtreePositions, error) {
 	if len(b) < subtreePositionsHead {
@@ -174,28 +175,36 @@ func DecodeSubtreePositions(b []byte) (*SubtreePositions, error) {
 	countBytes := rest[n*PositionSize : n*perNodeFixed]
 	parentBytes := rest[n*perNodeFixed:]
 
-	// Sum the counts before allocating: the parent block must hold exactly that many positions.
-	var total uint64
-	for i := uint64(0); i < n; i++ {
-		total += uint64(binary.LittleEndian.Uint32(countBytes[i*4:]))
-	}
-
-	if total > math.MaxUint32 || total*PositionSize != uint64(len(parentBytes)) {
-		return nil, errors.NewProcessingError("subtree lane positions file: counts sum to %d parents, %d bytes remain", total, len(parentBytes))
-	}
-
+	// The own and offset arrays are sized from n, which the buffer has already been checked to
+	// hold. One pass over the own and count columns fills both and totals the parents.
 	s := &SubtreePositions{
 		Own:         make([]uint64, n),
 		ParentStart: make([]uint32, n+1),
-		Parents:     make([]uint64, total),
 	}
 	copy(s.RootHash[:], b[len(subtreePositionsMagic)+1:])
 
+	var total uint64
+
 	for i := range s.Own {
 		s.Own[i] = binary.LittleEndian.Uint64(ownBytes[i*PositionSize:])
-		s.ParentStart[i+1] = s.ParentStart[i] + binary.LittleEndian.Uint32(countBytes[i*4:])
+		total += uint64(binary.LittleEndian.Uint32(countBytes[i*4:]))
+
+		// The offsets are 32-bit: refuse a total they cannot hold before it wraps. A parent block
+		// that large is over 34 GB, so no test reaches this.
+		if total > math.MaxUint32 {
+			return nil, errors.NewProcessingError("subtree lane positions file: counts sum past 2^32 parents")
+		}
+
+		s.ParentStart[i+1] = uint32(total)
 	}
 
+	// The parent block must hold exactly the counted positions. Compare by division, so a large
+	// total cannot wrap a multiplication into a match.
+	if uint64(len(parentBytes))%PositionSize != 0 || uint64(len(parentBytes))/PositionSize != total {
+		return nil, errors.NewProcessingError("subtree lane positions file: counts sum to %d parents, %d bytes remain", total, len(parentBytes))
+	}
+
+	s.Parents = make([]uint64, total)
 	for j := range s.Parents {
 		s.Parents[j] = binary.LittleEndian.Uint64(parentBytes[j*PositionSize:])
 	}
