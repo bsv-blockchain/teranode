@@ -112,6 +112,10 @@ type SQL struct {
 	// transaction once it has read the best block, so a test can hold a walk at its
 	// snapshot while another writer commits. Always nil in production.
 	rebuildSnapshotHook func(full bool)
+	// forkBestReadHook, when set by a test, runs on StoreBlock's fork path after the best
+	// height is read and before the transaction takes the chain write lock, so a test can move
+	// the best chain from another process in between. Always nil in production.
+	forkBestReadHook func()
 	// unlockedFullRepair is true when the background on_main_chain repair runs its full
 	// walk without slowPathMu. Only PostgreSQL, which lets other writers in while the walk
 	// runs; see attemptOnMainChainRepair.

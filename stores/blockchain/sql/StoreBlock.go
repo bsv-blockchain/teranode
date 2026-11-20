@@ -344,6 +344,10 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 			}
 		}
 
+		if s.forkBestReadHook != nil {
+			s.forkBestReadHook()
+		}
+
 		// RetryTx keeps the pool's retry and circuit-breaker behaviour, but retries
 		// the whole transaction rather than one statement: a statement that fails
 		// inside a PostgreSQL transaction aborts it, so only a fresh BEGIN can retry.
