@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/teranode/errors"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/stretchr/testify/require"
 )
@@ -221,5 +222,44 @@ func TestCanceledCallDoesNotFailTheOtherCallsInItsBatch_Postgres(t *testing.T) {
 				require.Equal(t, spendpkg.NewSpendingData(childA.TxIDChainHash(), 0).Bytes(), outputSpendingData(t, ctx, store, parentA, 0))
 			}
 		})
+	}
+}
+
+// TestSpendReturnsWhenItsBatchEndsWithoutAnAnswer_Postgres: the batch takes the
+// input and settles without answering it, as a batch function that panics and
+// is recovered by the batcher does. Once the input's wait timer fires, Spend
+// must return a storage error instead of waiting on the answer for good.
+func TestSpendReturnsWhenItsBatchEndsWithoutAnAnswer_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, ctx := setupPostgresStore(t)
+	store.settings.UtxoStore.SpendWaitTimeout = 200 * time.Millisecond
+
+	parent := replayParent(t, ctx, store, strings.Repeat("41", 32))
+	child := replaySpender(t, parent)
+
+	store.spendBatcher.Close()
+	store.spendBatcher = batcher.NewWithPool(1, time.Millisecond, func(batch []*batchSpend) {
+		settled := make(chan struct{})
+		for _, item := range batch {
+			item.settled = settled
+			item.execution.CompareAndSwap(spendQueued, spendExecuting)
+		}
+		close(settled)
+	}, false)
+
+	done := make(chan error, 1)
+	go func() {
+		_, spendErr := store.Spend(ctx, child, 1000)
+		done <- spendErr
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, errors.ErrStorageError)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Spend hung on a batch that never answered its input")
 	}
 }

@@ -2409,8 +2409,17 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				}
 				// The callback owns this item. Cancellation aborts its SQL;
 				// wait for cleanup and its actual answer before rollback.
+				// Every answer is sent before settled closes, so an empty
+				// errCh here means the batch ended without answering, as a
+				// panic the batcher recovered does. Waiting on errCh then
+				// would hang this call for good.
 				<-item.settled
-				batchErr = <-errCh
+				select {
+				case batchErr = <-errCh:
+				default:
+					batchErr = errors.NewStorageError("[SPEND][%s:%d] the spend batch ended without answering this input", spend.TxID.String(), spend.Vout)
+					item.interrupted = true
+				}
 			}
 			if item.settled != nil {
 				<-item.settled
@@ -3639,9 +3648,10 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		}
 
 		// Anything still not in updatedSet after the re-check, and not already
-		// answered as a pruned replay there, is either frozen by a concurrent
-		// freeze or a genuine UtxoSpentError (row was
-		// concurrently spent by a DIFFERENT spender).
+		// answered (a vanished parent, say), is either frozen by a concurrent
+		// freeze or a genuine UtxoSpentError (row was concurrently spent by a
+		// DIFFERENT spender). Pruned replays never get here: they are refused
+		// before the update, from the age of the recorded spend.
 		for _, u := range dedupedUpdate {
 			if _, answered := validationErrors[u.batchIdx]; answered {
 				continue
@@ -3658,11 +3668,10 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		// A duplicate (same UTXO, same spending data) takes its representative's
 		// answer, whatever it was. Double-spend duplicates (different spending
 		// data) are already in validationErrors and are skipped. The
-		// representative can be refused after the dedup: as a pruned replay by
-		// the re-check above, as frozen, or as spent by a concurrent spender.
-		// Promoting only successes left a refused representative's duplicate with
-		// no entry, so it was signalled nil, and a second concurrent Spend of the
-		// same replayed transaction went on to recreate the pruned transaction.
+		// representative can be refused after the dedup: as frozen, or as spent
+		// by a concurrent spender. Promoting only successes left a refused
+		// representative's duplicate with no entry, so it was signalled nil, and
+		// its caller went on as if the spend had succeeded.
 		// The duplicate gets its own error value: Spend() joins a tx's input
 		// errors in place, so a shared value would chain two callers' errors together.
 		for _, u := range toUpdate {
