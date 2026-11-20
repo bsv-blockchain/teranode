@@ -1,44 +1,41 @@
 # deploy/docker
 
-Raw Docker Compose definitions used internally by Teranode releases.
+Docker Compose files for the infrastructure a Teranode developer runs next to a
+natively built node: Aerospike, PostgreSQL, Kafka and the monitoring stack.
+Nothing here runs Teranode itself.
 
-> **Most operators should not start here.** The supported Docker path is the
-> [teranode-quickstart](https://github.com/bsv-blockchain/teranode-quickstart)
-> repository. It wraps these compose files with setup, start, status, RPC,
-> seeding, update, and cleanup scripts, and writes a `.env` you can edit.
+> To run a Teranode node with Docker, use
+> [teranode-quickstart](https://github.com/bsv-blockchain/teranode-quickstart).
 
-## Use the quickstart
+## Layout
 
-```bash
-git clone https://github.com/bsv-blockchain/teranode-quickstart.git
-cd teranode-quickstart
-./setup.sh
-./start.sh
-```
+| Directory | What it runs | Started by |
+| --- | --- | --- |
+| `aerospike/` | Aerospike UTXO store: `docker-compose-ee.yml` (Enterprise evaluation), `docker-compose-tn.yml` (TN edition), `docker-compose-cluster.yml` (3 nodes) | `scripts/aerospike.sh`, `scripts/aerospike-tn.sh`, `scripts/aerospike-cluster.sh`; `teranode-dev up` with the `aerospike` UTXO backend |
+| `postgres/` | PostgreSQL | `scripts/postgres.sh`; `teranode-dev up` with the `postgres` UTXO backend |
+| `kafka/` | Redpanda (`kafka-shared`) and Redpanda Console | `scripts/kafka.sh`; `teranode-dev up` with Docker Kafka enabled |
+| `monitoring/` | Prometheus and Grafana scraping a node on the host (see [`monitoring/README.md`](monitoring/README.md)) | `scripts/monitoring.sh`; `teranode-dev up` with monitoring enabled |
+| `base/` | Shared service definitions and the config files they mount | see below |
 
-See the operator guides:
+The compose files in `aerospike/`, `postgres/`, `kafka/` and `monitoring/`
+`extends` services from `base/docker-services.yml`. Data lands under
+`${DATA_PATH}`, which the scripts and `teranode-dev` set to a local `data/`
+directory.
 
-- [Install Teranode with Docker](../../docs/howto/miners/docker/minersHowToInstallation.md)
-- [Configure Docker Teranode](../../docs/howto/miners/docker/minersHowToConfigureTheNode.md)
-- [Sync the Blockchain](../../docs/howto/miners/docker/minersHowToSyncTheNode.md)
-- [Update Teranode](../../docs/howto/miners/docker/minersUpdatingTeranode.md)
+## base/
 
-## When to use this directory directly
-
-You only need the files here for development against a checked-out Teranode
-source tree, custom compose layouts, or environments where the quickstart
-defaults do not fit. Familiarity with Docker Compose, the network-specific
-overrides under `mainnet/`, `testnet/`, and `teratestnet/`, and the settings
-in `base/` is required.
-
-## Required shared service key
-
-Before starting the stack, generate `grpc_admin_api_key` with
-`openssl rand -hex 32` and export it, or source it from a file that git does not
-track. Do not add it to `mainnet/.env` or `testnet/.env`: compose reads those
-files, but they are tracked. The base compose file passes the same key to all
-services and refuses to render without it. Blockchain refuses startup without a
-valid key. Reuse the key for CLI clients. If you previously set
-`grpc_admin_api_key.docker.m` in `base/settings_local.conf`, move that value into
-the environment and delete the line. See
-[authentication and upgrade order](../../docs/topics/services/blockchainAuthentication.md).
+- `docker-services.yml`: service definitions (postgres, kafka-shared,
+  kafka-console-shared, aerospike*, aerospike-exporter, prometheus,
+  alertmanager, grafana, asset-cache) and the configs they mount:
+  `aerospike*.conf`, `aerospike-asmt-wrapper.sh`, `kafka-console-config.yml`,
+  `prometheus.yml`, `alertmanager.yml`, `grafana_datasource.yaml`,
+  `grafana_dashboards/`, `asset-cache-nginx.conf`.
+- `asset-cache-nginx.conf`: also used by `scripts/nginx-cache.sh`, which runs
+  the nginx asset cache in front of a local asset service.
+- `blockassembly.rules.yml`: the canonical block-assembly alert rules. Mounted
+  by `monitoring/`, the `compose/` multi-node stacks and
+  `test/docker-compose-host.yml`. `blockassembly.rules_test.yml` holds their
+  unit tests; `.github/workflows/prometheus_rules.yaml` runs both through
+  `promtool`.
+- `grafana_dashboards/`: dashboards provisioned by the Grafana service (see
+  [`grafana_dashboards/README.md`](base/grafana_dashboards/README.md)).

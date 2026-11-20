@@ -55,8 +55,6 @@ var allowedFixtures = map[string]bool{
 var knownSettingsFiles = []string{
 	"settings.conf",
 	"compose/settings_test.conf",
-	"deploy/docker/base/settings_local.conf",
-	"deploy/docker/base/settings_local.conf.template",
 	"util/servicemanager/example/settings_local.conf",
 }
 

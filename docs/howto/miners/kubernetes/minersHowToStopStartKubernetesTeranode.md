@@ -83,10 +83,9 @@ sends `SIGKILL` mid-flush and defeats the bounded drain:
   `terminationGracePeriodSeconds` above `service_manager_stopTimeout` (recommended
   **≥ 45s** for the default 30s timeout, to leave margin for the kubelet's own
   SIGTERM→SIGKILL accounting).
-- **Docker Compose:** set `stop_grace_period` above the timeout. The base
-  Compose definition (`deploy/docker/base/docker-teranode.yml`) ships `60s` for
-  every Teranode app service; Compose's unset default is only `10s`, which is
-  below the 30s budget.
+- **Docker Compose:** set `stop_grace_period` above the timeout on every
+  Teranode app service. Compose's unset default is only `10s`, which is below
+  the 30s budget.
 
 If you raise `service_manager_stopTimeout` (for deployments with large in-flight
 batches), raise the grace period above the new value at the same time.
