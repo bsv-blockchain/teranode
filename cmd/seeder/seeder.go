@@ -110,6 +110,10 @@ func usage(msg string) {
 //nolint:gocognit // Requires refactoring to reduce cognitive complexity
 func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir string, hash string,
 	skipHeaders bool, skipUTXOs bool, force bool, recoverCheckpoint bool, skipChecksum bool) error {
+	if !skipUTXOs && !recoverCheckpoint && appSettings.UtxoStore.LaneMigration != settings.LaneMigrationOff {
+		return errors.NewConfigurationError("seeder imports require utxostore_laneMigration=off; lane-enabled imports are not supported")
+	}
+
 	if force && recoverCheckpoint {
 		return errors.NewProcessingError("-force and -recover-checkpoint are mutually exclusive: -force re-imports the UTXO set, -recover-checkpoint never imports")
 	}

@@ -546,6 +546,12 @@ func createPostgresSchema(logger ulogger.Logger, db *usql.DB, withIndexes bool) 
 		// blocks, so it cannot be blocked by the rebuild UPDATE. If
 		// everything we expect is already in place we return early and no
 		// blocks-table lock is ever requested.
+		// The lane tables are created here rather than listed in the probe, so a
+		// database from before them does not fall through to the full DDL.
+		if err := createPostgresLaneTables(db); err != nil {
+			return err
+		}
+
 		current, err := isBlockchainSchemaCurrent(db, withIndexes)
 		if err != nil {
 			logger.Warnf("[blockchain schema] current-schema probe failed, will run full DDL: %v", err)
@@ -561,6 +567,14 @@ func createPostgresSchema(logger ulogger.Logger, db *usql.DB, withIndexes bool) 
 		logger.Infof("[blockchain schema] DDL sequence complete")
 		return nil
 	})
+}
+
+// blockchainSchemaExpectedTables lists tables the DDL guarantees, so the
+// fast-path probe notices a database that predates one of them. A new table
+// goes here, or is created before the probe as the lane tables are.
+var blockchainSchemaExpectedTables = []string{
+	"blocks",
+	"block_id_reservations",
 }
 
 // blockchainSchemaExpectedColumns is the list of columns createPostgresSchemaUnlocked
@@ -683,28 +697,21 @@ func createChainWorkIndexes(db *usql.DB) error {
 // Returns (false, nil) if anything is missing. Returns (false, err) only for
 // transport errors — a missing column / table / index is not an error.
 func isBlockchainSchemaCurrent(db *usql.DB, withIndexes bool) (bool, error) {
-	// blocks table present?
-	var hasBlocks bool
-	if err := db.QueryRow(
-		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'blocks')`,
-	).Scan(&hasBlocks); err != nil {
-		return false, err
-	}
-	if !hasBlocks {
-		return false, nil
-	}
-
-	// block_id_reservations table present? Added after blocks; an existing
-	// deployment that predates it must re-run the DDL (CREATE TABLE IF NOT EXISTS)
-	// to gain it, so treat its absence as "not current".
-	var hasReservations bool
-	if err := db.QueryRow(
-		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'block_id_reservations')`,
-	).Scan(&hasReservations); err != nil {
-		return false, err
-	}
-	if !hasReservations {
-		return false, nil
+	// Every table in blockchainSchemaExpectedTables (blocks and
+	// block_id_reservations) must be present. A deployment that predates one of them
+	// must re-run the DDL (CREATE TABLE IF NOT EXISTS) to gain it, so a missing
+	// table means "not current".
+	for _, table := range blockchainSchemaExpectedTables {
+		var exists bool
+		if err := db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)`,
+			table,
+		).Scan(&exists); err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, nil
+		}
 	}
 
 	// peer_id must exist and already be TEXT — otherwise we still need the
@@ -1064,6 +1071,96 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 		return errors.NewStorageError("could not create idx_scheduled_blob_deletions_height index", err)
 	}
 
+	if err := createPostgresLaneTables(db); err != nil {
+		_ = db.Close()
+		return err
+	}
+
+	return nil
+}
+
+// createPostgresLaneTables creates the lane tables: lane_handout, lane_lease and lane_close, and
+// the lease columns on a lane_handout from before the lease. It touches no other table, so
+// createPostgresSchema runs it ahead of the fast-path probe: a database from before the lane tables
+// gains them without taking the full DDL path, whose peer_id ALTER takes ACCESS EXCLUSIVE on blocks.
+//
+// It reads the catalog first and issues no DDL when everything is there, because CREATE TABLE IF
+// NOT EXISTS checks the CREATE privilege on the schema before it checks for the table: a node role
+// without that privilege would otherwise fail every start, where a current schema on main runs no
+// DDL at all.
+func createPostgresLaneTables(db *usql.DB) error {
+	tables := []struct{ name, ddl string }{
+		{"lane_handout", `
+			CREATE TABLE IF NOT EXISTS lane_handout (
+				lane               SMALLINT    NOT NULL,
+				first              BIGINT      NOT NULL,
+				last               BIGINT      NOT NULL,
+				holder             TEXT        NOT NULL,
+				height             BIGINT      NOT NULL,
+				handed_at          TIMESTAMPTZ NOT NULL,
+				lease_id           UUID,
+				settles_first      BIGINT,
+				settles_last_taken BIGINT,
+				PRIMARY KEY (lane, first)
+			);`},
+		{"lane_lease", `
+			CREATE TABLE IF NOT EXISTS lane_lease (
+				lane       SMALLINT    PRIMARY KEY,
+				lease_id   UUID        NOT NULL,
+				holder     TEXT        NOT NULL,
+				opened_at  TIMESTAMPTZ NOT NULL,
+				renewed_at TIMESTAMPTZ NOT NULL,
+				closed_at  TIMESTAMPTZ
+			);`},
+		{"lane_close", `
+			CREATE TABLE IF NOT EXISTS lane_close (
+				lease_id           UUID        PRIMARY KEY,
+				lane               SMALLINT    NOT NULL,
+				kind               TEXT        NOT NULL,
+				last               BIGINT      NOT NULL,
+				settles_first      BIGINT,
+				settles_last_taken BIGINT,
+				closed_at          TIMESTAMPTZ NOT NULL
+			);`},
+	}
+
+	for _, table := range tables {
+		var exists bool
+		if err := db.QueryRow(`SELECT to_regclass($1) IS NOT NULL`, table.name).Scan(&exists); err != nil {
+			return errors.NewStorageError("could not check for the %s table", table.name, err)
+		}
+
+		if exists {
+			continue
+		}
+
+		if _, err := db.Exec(table.ddl); err != nil {
+			return errors.NewStorageError("could not create %s table", table.name, err)
+		}
+	}
+
+	// A lane_handout from before the lease lacks the lease columns. Its rows keep NULLs. Only a
+	// database written by an earlier build of the lane change has such a table, so this ALTER runs
+	// at most once per database, and the catalog check above skips it on every later start. It sets
+	// no lock_timeout: it waits for that build's hand-out transactions, which are short.
+	for _, column := range laneHandoutLeaseColumns {
+		var exists bool
+		if err := db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'lane_handout' AND column_name = $1)`,
+			column.name,
+		).Scan(&exists); err != nil {
+			return errors.NewStorageError("could not check for lane_handout.%s", column.name, err)
+		}
+
+		if exists {
+			continue
+		}
+
+		if _, err := db.Exec(`ALTER TABLE lane_handout ADD COLUMN IF NOT EXISTS ` + column.name + ` ` + column.postgresType); err != nil {
+			return errors.NewStorageError("could not add lane_handout.%s", column.name, err)
+		}
+	}
+
 	return nil
 }
 
@@ -1087,6 +1184,13 @@ func addMinedSetGenColumn(db *usql.DB, probeQuery string) error {
 	}
 
 	return nil
+}
+
+// laneHandoutLeaseColumns are the columns the lease added to lane_handout.
+var laneHandoutLeaseColumns = []struct{ name, postgresType, sqliteType string }{
+	{"lease_id", "UUID", "BLOB"},
+	{"settles_first", "BIGINT", "INTEGER"},
+	{"settles_last_taken", "BIGINT", "INTEGER"},
 }
 
 func createSqliteSchema(db *usql.DB) error {
@@ -1351,6 +1455,76 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_scheduled_blob_deletions_height ON scheduled_blob_deletions(delete_at_height ASC, id ASC);`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_scheduled_blob_deletions_height index", err)
+	}
+
+	if err := createSqliteLaneTables(db); err != nil {
+		_ = db.Close()
+		return err
+	}
+
+	return nil
+}
+
+// createSqliteLaneTables is createPostgresLaneTables for SQLite. Times are TIMESTAMP text in the
+// form strftime('%Y-%m-%d %H:%M:%f') writes, so they compare as text in time order.
+func createSqliteLaneTables(db *usql.DB) error {
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS lane_handout (
+			lane               INTEGER   NOT NULL,
+			first              INTEGER   NOT NULL,
+			last               INTEGER   NOT NULL,
+			holder             TEXT      NOT NULL,
+			height             INTEGER   NOT NULL,
+			handed_at          TIMESTAMP NOT NULL,
+			lease_id           BLOB,
+			settles_first      INTEGER,
+			settles_last_taken INTEGER,
+			PRIMARY KEY (lane, first)
+		);
+	`); err != nil {
+		return errors.NewStorageError("could not create lane_handout table", err)
+	}
+
+	for _, column := range laneHandoutLeaseColumns {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('lane_handout') WHERE name = $1`, column.name).Scan(&n); err != nil {
+			return errors.NewStorageError("could not check for lane_handout.%s", column.name, err)
+		}
+
+		if n > 0 {
+			continue
+		}
+
+		if _, err := db.Exec(`ALTER TABLE lane_handout ADD COLUMN ` + column.name + ` ` + column.sqliteType); err != nil {
+			return errors.NewStorageError("could not add lane_handout.%s", column.name, err)
+		}
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS lane_lease (
+			lane       INTEGER   PRIMARY KEY,
+			lease_id   BLOB      NOT NULL,
+			holder     TEXT      NOT NULL,
+			opened_at  TIMESTAMP NOT NULL,
+			renewed_at TIMESTAMP NOT NULL,
+			closed_at  TIMESTAMP
+		);
+	`); err != nil {
+		return errors.NewStorageError("could not create lane_lease table", err)
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS lane_close (
+			lease_id           BLOB      PRIMARY KEY,
+			lane               INTEGER   NOT NULL,
+			kind               TEXT      NOT NULL,
+			last               INTEGER   NOT NULL,
+			settles_first      INTEGER,
+			settles_last_taken INTEGER,
+			closed_at          TIMESTAMP NOT NULL
+		);
+	`); err != nil {
+		return errors.NewStorageError("could not create lane_close table", err)
 	}
 
 	return nil

@@ -36,6 +36,12 @@ type querier interface {
 // so the store-agnostic conformance suite in stores/utxo/tests applies to it unchanged.
 // That suite is the specification: M1 is complete when it passes.
 type Store struct {
+	utxo.LanePositions
+
+	// laneColumn is whether this database has lane_position, read once at open. Without it the
+	// store runs the statements main runs and writes no position. See openLaneColumns.
+	laneColumn bool
+
 	logger   ulogger.Logger
 	settings *settings.Settings
 	pool     *pgxpool.Pool
@@ -234,6 +240,14 @@ var poolTracer pgx.QueryTracer
 // which surfaces as a baffling "unrecognized configuration parameter" against the wrong
 // host. So normalise it here, at the one place that owns the connection.
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, storeURL *url.URL) (*Store, error) {
+	// A stamping step this build does not implement is refused before any connection, so a tool
+	// that opens the store without the daemon never adds the lane columns for it.
+	if tSettings.UtxoStore.LaneMigration.Stamps() {
+		if err := settings.CheckLaneMigration(tSettings.UtxoStore.LaneMigration); err != nil {
+			return nil, err
+		}
+	}
+
 	dsn := *storeURL
 	if dsn.Scheme == "utxoset" {
 		dsn.Scheme = "postgres"
@@ -376,6 +390,14 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		pool.Close()
 		return nil, errors.NewStorageError("[utxoset] create schema", err)
 	}
+
+	laneColumn, err := openLaneColumns(ctx, pool, tSettings.UtxoStore.LaneMigration.Stamps())
+	if err != nil {
+		pool.Close()
+		return nil, errors.NewStorageError("[utxoset] lane position columns", err)
+	}
+
+	s.laneColumn = laneColumn
 
 	if err := s.loadOldestUndoLeaf(ctx); err != nil {
 		pool.Close()

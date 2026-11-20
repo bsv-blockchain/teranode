@@ -31,6 +31,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/stretchr/testify/assert"
@@ -815,6 +816,15 @@ func (m *MockBlockchainClient) GetFSMCurrentStateForE2ETestMode() blockchain.FSM
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.fsmState
+}
+func (m *MockBlockchainClient) OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
+	return lane.LeaseID{}, lane.Grant{}, nil
+}
+func (m *MockBlockchainClient) RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error) {
+	return lane.RenewResult{}, nil
+}
+func (m *MockBlockchainClient) ReleaseLaneLease(ctx context.Context, r lane.Release) (bool, error) {
+	return false, nil
 }
 func (m *MockBlockchainClient) IsFullyReady(ctx context.Context) (bool, error) { return true, nil }
 func (m *MockBlockchainClient) Run(ctx context.Context, source string) error   { return nil }
