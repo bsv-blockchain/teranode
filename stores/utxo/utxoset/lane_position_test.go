@@ -2483,3 +2483,291 @@ func TestARefusedCreatesPositionIsWrittenByTheNextCreate(t *testing.T) {
 	requireGetLane(t, s, ctx, w.Roots[0], lane.Pack(5, 1), "the first create")
 	requireGetLane(t, s, ctx, w.Roots[1], lane.Pack(5, 2), "the refused create's position, written by the next")
 }
+
+// laneSchemaColumnsWant is every lane column PrepareLaneSchema installs, written out here rather
+// than read from laneSchemaColumns so a column dropped from that list fails these tests.
+// Each entry is table, column and the Postgres data_type: a lane position is a signed 64-bit
+// integer (lane 128 and up is negative) and a parent list is eight bytes per parent.
+var laneSchemaColumnsWant = [][3]string{
+	{"tx_ident", "lane_position", "bigint"},
+	{"tx_mined", "lane_position", "bigint"},
+	{"preserved_parent", "lane_position", "bigint"},
+	{"tx_ident", "parent_lane_positions", "bytea"},
+	{"tx_mined", "parent_lane_positions", "bytea"},
+	{"preserved_parent", "parent_lane_positions", "bytea"},
+	{"utxo", "lane_position", "bigint"},
+	{"spend_journal", "lane_position", "bigint"},
+}
+
+// columnType is a column's Postgres data_type, or "" when it has none.
+func columnType(t *testing.T, s *Store, ctx context.Context, table, column string) string {
+	t.Helper()
+
+	var typ string
+
+	err := s.pool.QueryRow(ctx, `SELECT data_type FROM information_schema.columns
+	                              WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2`, table, column).Scan(&typ)
+	if err != nil {
+		return ""
+	}
+
+	return typ
+}
+
+// Opening the store with lane positions on adds only the record's own lane_position, on the three
+// identity tables; the other five lane columns, which nothing in this build writes, wait for
+// PrepareLaneSchema, so rows do not carry a null bitmap for columns that stay empty.
+func TestLanePositionsOnAddsOnlyTheOwnPositionColumns(t *testing.T) {
+	s, ctx := newTestStore(t)
+	on := reopenWithFlag(t, s, true)
+
+	for _, table := range []string{"tx_ident", "tx_mined", "preserved_parent"} {
+		require.True(t, hasColumn(t, on, ctx, table, "lane_position"), table)
+	}
+
+	for _, c := range laneSchemaColumnsWant[3:] {
+		require.False(t, hasColumn(t, on, ctx, c[0], c[1]), "%s.%s arrives only with PrepareLaneSchema", c[0], c[1])
+	}
+
+	installed, err := on.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.False(t, installed)
+
+	require.NoError(t, on.PrepareLaneSchema(ctx))
+
+	for _, c := range laneSchemaColumnsWant {
+		require.True(t, hasColumn(t, on, ctx, c[0], c[1]), "%s.%s", c[0], c[1])
+		require.Equal(t, c[2], columnType(t, on, ctx, c[0], c[1]), "%s.%s type", c[0], c[1])
+	}
+
+	installed, err = on.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.True(t, installed)
+
+	// Any one column missing, the last in the list included, is not installed.
+	_, err = on.pool.Exec(ctx, `ALTER TABLE spend_journal DROP COLUMN lane_position`)
+	require.NoError(t, err)
+
+	installed, err = on.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.False(t, installed)
+
+	// A catalog query that fails is reported, not read as "not installed".
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	_, err = on.LaneSchemaInstalled(cancelled)
+	require.Error(t, err)
+}
+
+// PrepareLaneSchema keeps retrying a lock timeout for its limit: a transaction that holds the
+// table for a second delays it and does not fail it.
+func TestPrepareLaneSchemaWaitsOutAShortLock(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	blocker, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	var n int64
+	require.NoError(t, blocker.QueryRow(ctx, `SELECT count(*) FROM spend_journal`).Scan(&n))
+
+	// Only this goroutine touches the blocking transaction from here on, and the test waits for it.
+	released := make(chan struct{})
+
+	go func() {
+		defer close(released)
+
+		time.Sleep(time.Second)
+
+		_ = blocker.Rollback(ctx)
+	}()
+
+	err = s.PrepareLaneSchema(ctx)
+	<-released
+
+	require.NoError(t, err)
+	require.True(t, hasColumn(t, s, ctx, "spend_journal", "lane_position"))
+}
+
+// The limit is one deadline for the pass, not one per attempt: with the table held well past the
+// limit, the add gives up soon after the limit instead of retrying until the holder lets go.
+func TestLaneColumnAddGivesUpAtItsLimitAcrossRetries(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	blocker, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = blocker.Rollback(ctx) }()
+
+	var n int64
+	require.NoError(t, blocker.QueryRow(ctx, `SELECT count(*) FROM tx_ident`).Scan(&n))
+
+	// The context ends long after the limit, so an add that kept renewing its deadline stops only
+	// there, and too late.
+	addCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	err = addLanePositionColumns(addCtx, s.pool, 1500*time.Millisecond)
+	require.Error(t, err, "the table is still held at the limit")
+	require.Less(t, time.Since(started), 8*time.Second)
+}
+
+// The deadline is shared by every column of a pass. The first column's table is held for two of
+// the three seconds and then released; the second's is held throughout. The pass gives up on the
+// second column at the shared deadline, about 3.6 s in. A fresh deadline per column would keep
+// retrying the second until about 7 s.
+func TestLaneColumnPassSharesOneDeadline(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	holdMined, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = holdMined.Rollback(ctx) }()
+
+	var n int64
+	require.NoError(t, holdMined.QueryRow(ctx, `SELECT count(*) FROM tx_mined`).Scan(&n))
+
+	holdIdent, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, holdIdent.QueryRow(ctx, `SELECT count(*) FROM tx_ident`).Scan(&n))
+
+	// One release, from whichever goroutine gets there first: the timer, or the test ending.
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { _ = holdIdent.Rollback(context.Background()) }) }
+
+	timer := time.AfterFunc(2*time.Second, release)
+	defer func() {
+		timer.Stop()
+		release()
+	}()
+
+	addCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	err = addLanePositionColumns(addCtx, s.pool, 3*time.Second)
+	elapsed := time.Since(started)
+
+	require.ErrorContains(t, err, "tx_mined", "the second column is still held")
+	require.True(t, hasLaneColumn(t, s, ctx, "tx_ident"), "the first column went in once its table was free")
+	require.Less(t, elapsed, 5500*time.Millisecond, "one deadline for the pass, not one per column")
+}
+
+// hasColumn reports whether table has column, nullable with no default.
+func hasColumn(t *testing.T, s *Store, ctx context.Context, table, column string) bool {
+	t.Helper()
+
+	var found bool
+
+	require.NoError(t, s.pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		                WHERE table_schema = current_schema() AND table_name = $1
+		                  AND column_name = $2 AND is_nullable = 'YES' AND column_default IS NULL)`, table, column).Scan(&found))
+
+	return found
+}
+
+// The lane schema is installed at off, on a database holding outputs, journal rows and mined
+// records, before any historical numbering. It rewrites no row, every attached partition gets the
+// columns, and every disabled writer keeps working against it: create, spend, mine, the journal
+// copy-forward and drop, Unspend and lookup, in the process that installed it and after a restart.
+func TestLaneSchemaInstalledAtOffKeepsDisabledWritersWorking(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent := mkTx(t, 3, 5_000)
+	_, err := s.Create(ctx, parent, 1_000, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1_000, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	waiting := spendOneOutput(t, s, ctx, parent, 0, 1_010)
+	spendOneOutputInBlock(t, s, ctx, parent, 1, 1_010, 2)
+
+	installed, err := s.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.False(t, installed, "off adds nothing on open")
+
+	var before string
+	require.NoError(t, s.pool.QueryRow(ctx, `SELECT string_agg(encode(ukey::text::bytea, 'hex') || satoshis::text, ',' ORDER BY ukey) FROM utxo`).Scan(&before))
+
+	require.NoError(t, s.PrepareLaneSchema(ctx))
+	require.NoError(t, s.PrepareLaneSchema(ctx), "a second run is a no-op")
+
+	installed, err = s.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.True(t, installed)
+
+	for _, c := range laneSchemaColumnsWant {
+		require.True(t, hasColumn(t, s, ctx, c[0], c[1]), "%s.%s", c[0], c[1])
+	}
+
+	for _, leaf := range []string{"utxo_p0", "utxo_p7", "tx_ident_l0"} {
+		require.True(t, hasColumn(t, s, ctx, leaf, "lane_position"), "partition %s", leaf)
+	}
+
+	var journalLeaves []string
+
+	rows, err := s.pool.Query(ctx, `SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid WHERE i.inhparent = 'spend_journal'::regclass`)
+	require.NoError(t, err)
+
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+
+		journalLeaves = append(journalLeaves, name)
+	}
+
+	rows.Close()
+	require.NotEmpty(t, journalLeaves)
+
+	for _, leaf := range journalLeaves {
+		require.True(t, hasColumn(t, s, ctx, leaf, "lane_position"), "journal partition %s", leaf)
+	}
+
+	// No row was rewritten or given a value.
+	var after string
+	require.NoError(t, s.pool.QueryRow(ctx, `SELECT string_agg(encode(ukey::text::bytea, 'hex') || satoshis::text, ',' ORDER BY ukey) FROM utxo`).Scan(&after))
+	require.Equal(t, before, after)
+
+	for _, c := range laneSchemaColumnsWant {
+		var n int
+		require.NoError(t, s.pool.QueryRow(ctx, `SELECT count(*) FROM `+c[0]+` WHERE `+c[1]+` IS NOT NULL`).Scan(&n))
+		require.Zero(t, n, "%s.%s holds no value", c[0], c[1])
+	}
+
+	// The process that installed the schema still runs main's statements, and a restart at off
+	// sees the columns and carries on.
+	for name, store := range map[string]*Store{"installing process": s, "restarted at off": reopenWithFlag(t, s, false)} {
+		fresh := mkTx(t, 2, 6_000+uint64(len(name)))
+		_, err = store.Create(ctx, fresh, 1_020)
+		require.NoError(t, err, name)
+
+		spender := spendOneOutput(t, store, ctx, fresh, 0, 1_021)
+
+		_, err = store.SetMinedMulti(ctx, hashes(fresh), utxo.MinedBlockInfo{BlockID: 3, BlockHeight: 1_022, OnLongestChain: true})
+		require.NoError(t, err, name)
+
+		spends, err := utxo.GetSpends(spender)
+		require.NoError(t, err)
+		require.NoError(t, store.Unspend(ctx, spends), name)
+		require.Equal(t, 2, utxoCount(t, store, ctx, fresh), "%s: Unspend restores from the journal", name)
+
+		_, err = store.Get(ctx, fresh.TxIDChainHash())
+		require.NoError(t, err, name)
+	}
+
+	// The journal partition holding the waiting spend is retired: its row is copied forward into
+	// a live partition and survives with the new column present.
+	require.NoError(t, s.SetBlockHeight(1_728))
+
+	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
+	require.NoError(t, err)
+	require.Positive(t, dropped)
+	require.Equal(t, 1, journalRowsFor(t, s, ctx, parent, 0), "the waiting spend is carried forward")
+
+	spends, err := utxo.GetSpends(waiting)
+	require.NoError(t, err)
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Equal(t, 2, utxoCount(t, s, ctx, parent), "the carried row rebuilds the coin")
+}
