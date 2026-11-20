@@ -54,6 +54,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
+	"github.com/bsv-blockchain/teranode/stores/utxo/utxoset"
+	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -63,6 +65,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/cespare/xxhash/v2"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -2772,4 +2775,71 @@ func TestSerializeTxMetaBatchMarksLaneEntries(t *testing.T) {
 	require.Equal(t, txmetacache.WireActionADD, v2[off+8+32])
 	off += 8 + 32 + 1 + 4 + len("legacy")
 	require.Equal(t, txmetacache.WireActionADDLane, v2[off+8+32])
+}
+
+// From the parent read to the record and the txmeta entry, on a real utxoset store at
+// utxostore_laneMigration shadow with the lane schema installed: the parent's position comes back
+// with the read, the create writes it beside the child's inpoints, and the child's txmeta entry
+// carries the child's own position and its parent's.
+func TestLanePositionsFlowThroughAUtxosetStore(t *testing.T) {
+	ctx := context.Background()
+
+	dsn, cleanup, err := tpostgres.SetupTestPostgresContainer()
+	if err != nil {
+		test.SkipIfContainerUnavailable(t, err)
+		t.Fatalf("postgres container unavailable: %v", err)
+	}
+
+	t.Cleanup(func() { _ = cleanup() })
+
+	u, err := url.Parse(dsn)
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	first, err := utxoset.New(ctx, ulogger.TestLogger{}, tSettings, u)
+	require.NoError(t, err)
+	require.NoError(t, first.PrepareLaneSchema(ctx))
+	require.NoError(t, first.Close(ctx))
+
+	store, err := utxoset.New(ctx, ulogger.TestLogger{}, tSettings, u)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close(ctx) })
+	require.NoError(t, store.SetBlockHeight(200))
+
+	parentPosition, childPosition := lane.Pack(12, 1), lane.Pack(12, 2)
+	store.SetLanePositionSource(tests.NewScriptedLanePositions(parentPosition, childPosition))
+
+	parent := storedParent(t, store, 0x61, 0, bscript.NewFromBytes([]byte{0x76, 0xa9, 0x61}))
+	child := parentOutputsChild(t, []chainhash.Hash{*parent.TxIDChainHash()}, []uint32{0})
+
+	v := laneShadowValidator(t, store)
+
+	_, parentLanes, _, err := v.getTransactionInputBlockHeightsAndExtendTx(ctx, child, child.TxID(), &Options{})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{parentPosition}, parentLanes, "the parent read gives the parent's position")
+
+	md, _, err := v.spendAndCreateInUtxoStore(ctx, child, 201, false, &Options{}, parentLanes)
+	require.NoError(t, err)
+	require.Equal(t, childPosition, md.LanePosition, "the create returns the position it wrote")
+
+	b, laneFormat, err := v.txMetaPayload(md, parentLanes)
+	require.NoError(t, err)
+	require.True(t, laneFormat)
+
+	var back meta.Data
+	gotParents, err := meta.NewDataFromLaneMetaBytes(b, &back)
+	require.NoError(t, err)
+	require.Equal(t, childPosition, back.LanePosition)
+	require.Equal(t, []uint64{parentPosition}, gotParents)
+
+	pool, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+
+	var stored []byte
+	require.NoError(t, pool.QueryRow(ctx, `SELECT parent_lane_positions FROM tx_ident WHERE txid = $1`,
+		child.TxIDChainHash()[:]).Scan(&stored))
+	require.Equal(t, lane.AppendPositions(nil, []uint64{parentPosition}), stored, "the record keeps its parent's position")
 }
