@@ -220,12 +220,12 @@ type netBelowTx struct {
 	tx    *bt.Tx
 	txid  chainhash.Hash
 	ident bool
-	// commitSent is set on every transaction of a chunk just before its COMMIT is sent, and
-	// rolledBack on every one of a chunk that failed before then, so nothing of it was written. Both
-	// sit in ident's padding. Each chunk writes only its own transactions', read after every chunk
-	// ends.
-	commitSent bool
-	rolledBack bool
+	// burn says why the transaction's lane position burned once its chunk failed: outcome_unknown,
+	// set before the chunk sends its COMMIT, since a failure from then on may have landed, or
+	// rolled_back for one that failed before. A byte in ident's padding,
+	// so the struct does not grow. Each chunk writes only its own transactions', and they are read
+	// after every chunk ends.
+	burn listBurn
 	// netted[vin] is true when input vin spends an output of an earlier transaction of the
 	// list. nil when none does.
 	netted []bool
@@ -237,6 +237,27 @@ type netBelowTx struct {
 func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndCreateMultiList,
 	blockHeight uint32, positions []uint64) ([]utxo.SpendAndCreateMultiResult, error) {
 	mi, _ := minedBlock(list.Options.MinedBlockInfos)
+
+	// Every position taken for the list that no record carries burns, whichever way the list
+	// ends. A failure before the items exist burns them all; after, the chunks that committed
+	// gave their transactions results even when the list as a whole failed.
+	var items []*netBelowTx
+
+	defer func() {
+		var outcome func(int) (utxo.SpendAndCreateMultiResult, string)
+
+		if items != nil {
+			outcome = func(i int) (utxo.SpendAndCreateMultiResult, string) {
+				if items[i] == nil {
+					return utxo.SpendAndCreateMultiResult{}, ""
+				}
+
+				return items[i].result, items[i].burn.String()
+			}
+		}
+
+		s.burnList(list, positions, utxo.LaneBurnListFailed, outcome)
+	}()
 
 	for i, tx := range txs {
 		if tx.IsCoinbase() {
@@ -254,7 +275,7 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 		position[list.TxIDs[i]] = i
 	}
 
-	items := make([]*netBelowTx, len(txs))
+	items = make([]*netBelowTx, len(txs))
 	spender := make(map[nettedKey]nettedSpender)
 
 	for i, tx := range txs {
@@ -302,16 +323,20 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 
 	for _, chunk := range netBelowChunks(items, size, nettedBelowMaxChunkOutputs) {
 		g.Go(func() error {
-			// A chunk admitted after a sibling failed never starts: it writes nothing, and its
-			// positions stay burned like the rest of a failed list's.
+			// A chunk admitted after a sibling failed never starts: it would fail at its begin
+			// anyway, and left untouched its positions count as list_failed, not rolled_back.
 			if err := gCtx.Err(); err != nil {
 				return err
 			}
 
+			// A transaction with no reason yet failed before its chunk sent the COMMIT (see
+			// netBelowChunk), so nothing of it was written.
 			err := s.netBelowChunk(gCtx, chunk, list, blockHeight, spender, positions)
 			if err != nil {
 				for _, it := range chunk {
-					it.rolledBack = !it.commitSent
+					if it.burn == listBurnNone {
+						it.burn = listBurnRolledBack
+					}
 				}
 			}
 
@@ -321,8 +346,10 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 
 	err = g.Wait()
 
+	// A transaction its chunk rolled back whole before sending the COMMIT wrote nothing, so its
+	// position also goes back once every chunk has ended. The deferred burnList counts it as burned.
 	s.returnRolledBackList(positions, func(i int) bool {
-		return items[i].rolledBack && items[i].result.Status == utxo.MultiTxNotAttempted
+		return items[i].burn == listBurnRolledBack && items[i].result.Status == utxo.MultiTxNotAttempted
 	})
 
 	if err != nil {
@@ -536,11 +563,14 @@ func (s *Store) netBelowChunk(ctx context.Context, chunk []*netBelowTx, list *ut
 		return err
 	}
 
+	// Marked before the COMMIT is sent: from then on a failure may have landed, so the chunk's
+	// positions must not count as rolled_back, which would send them back. A chunk that commits
+	// gives every transaction a result, which burnList reads first.
 	for _, it := range chunk {
-		it.commitSent = true
+		it.burn = listBurnOutcomeUnknown
 	}
 
-	if err = dbTx.Commit(ctx); err != nil {
+	if err = commitCreates(ctx, dbTx); err != nil {
 		return errors.NewStorageError("[utxoset][SpendAndCreateMulti] commit netted chunk", err)
 	}
 

@@ -217,6 +217,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		ctx:      ctx,
 	}
 
+	s.NameLaneBurns("sql")
 	s.NameLaneReturns("sql")
 
 	otelTracer := tracing.Tracer("utxo").OTelTracer()
@@ -421,10 +422,14 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		return nil, takeErr
 	}
 
-	// A position this call took from the source goes back for reuse when the create was refused in a
-	// way markRefusedCreate proves wrote nothing. A position the caller named is the caller's.
-	if options.LanePosition == lane.None && position != lane.None {
+	// A position this call took from the source is its own to record if the create fails, and to
+	// return for reuse when the create was refused in a way markRefusedCreate proves wrote nothing.
+	// A caller that stopped waiting for the batcher gets a context error while the batch may still
+	// write the record, and LaneBurnReason says so. A position the caller named is the caller's.
+	if utxo.TookLanePosition(options.LanePosition, position) {
 		defer func() {
+			s.BurnCreateLanePosition(options, position, err, nil)
+
 			if err != nil {
 				s.ReturnLanePosition(position, utxo.LaneReturnExists, utxo.LanePositionUnwritten(err))
 			}

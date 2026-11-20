@@ -2,12 +2,14 @@ package utxoset
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/jackc/pgx/v5"
 )
 
 // SpendAndCreate spends the transaction's inputs and creates its outputs in ONE
@@ -43,8 +45,9 @@ import (
 // submission, which is what retires the applied_block ledger.
 func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	opts ...utxo.CreateOption) (_ *meta.Data, spends []*utxo.Spend, err error) {
-	// Set from the batch's answer; see spendAndCreateResult.
-	var rerunAfterBatchError bool
+	// Set from the batch's answer; see spendAndCreateResult. notSubmitted is set when the caller had
+	// already given up before anything was queued or sent, so nothing was written.
+	var rerunAfterCommitError, notSubmitted bool
 
 	options := &utxo.CreateOptions{}
 	for _, opt := range opts {
@@ -71,13 +74,32 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 			return nil, nil, takeErr
 		}
 
-		// A position this call took from the source goes back for reuse when the final answer proves
-		// nothing carries it: refusedUnwritten for exists, utxo.RefusedSpend for a refused spend. A
-		// rerun after a failed batch never returns
-		// it: that batch's COMMIT may have landed with it.
-		if options.LanePosition == lane.None && position != lane.None {
+		// A position this call took from the source is its own to record if the call fails. The
+		// batched path waits for its batch's answer whatever the caller's context does, and a batch
+		// that rolls back runs the item again with the same position, so the answer returned here
+		// is the final one.
+		//
+		// It also goes back for reuse when the final answer proves nothing carries it:
+		// refusedUnwritten for exists, utxo.RefusedSpend for a refused spend. A rerun after a batch
+		// whose COMMIT reported failure never returns it: that COMMIT may have landed with it. A
+		// rerun after a batch that failed before its COMMIT is an ordinary single call and returns
+		// as one.
+		if utxo.TookLanePosition(options.LanePosition, position) {
 			defer func() {
-				if err == nil || rerunAfterBatchError {
+				if err == nil {
+					return
+				}
+
+				switch {
+				case notSubmitted:
+					s.BurnLanePosition(options.Caller, utxo.LaneBurnError)
+				case rerunAfterCommitError:
+					s.burnUnlessStored(ctx, tx, options, position, err, spends)
+				default:
+					s.BurnCreateLanePosition(options, position, err, spends)
+				}
+
+				if rerunAfterCommitError {
 					return
 				}
 
@@ -106,6 +128,9 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		// A caller that has already given up gets its answer before anything is queued.
 		// Once queued the item is applied whether or not anyone is waiting.
 		if ctxErr := ctx.Err(); ctxErr != nil {
+			// Nothing was queued, so the position certainly burned.
+			notSubmitted = true
+
 			return nil, nil, ctxErr
 		}
 
@@ -122,9 +147,14 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		// acts on that: it would neither hand the transaction to block assembly nor accept a
 		// resubmission, which meets ErrTxExists. The only truthful answer is the batch's.
 		res := <-item.done
-		rerunAfterBatchError = res.rerunAfterBatchError
+		rerunAfterCommitError = res.rerunAfterCommitError
 
 		return res.data, res.spends, res.err
+	}
+
+	// A call whose context has already ended fails before it opens a database transaction.
+	if ctx.Err() != nil {
+		notSubmitted = true
 	}
 
 	return s.spendAndCreateOne(ctx, tx, blockHeight, options, opts...)
@@ -255,8 +285,9 @@ func (s *Store) spendAndCreateOne(ctx context.Context, tx *bt.Tx, blockHeight ui
 		return nil, spends, err
 	}
 
-	if cerr := dbTx.Commit(ctx); cerr != nil {
-		return nil, spends, errors.NewStorageError("[utxoset][SpendAndCreate] commit", cerr)
+	if cerr := commitCreates(ctx, dbTx); cerr != nil {
+		// The commit may have landed, as the SQL store marks the same failure.
+		return nil, spends, utxo.MarkCreateOutcomeUnknown(errors.NewStorageError("[utxoset][SpendAndCreate] commit", cerr))
 	}
 
 	committed = true
@@ -266,4 +297,61 @@ func (s *Store) spendAndCreateOne(ctx context.Context, tx *bt.Tx, blockHeight ui
 	}
 
 	return data, spends, nil
+}
+
+// laneBurnProbeTimeout bounds burnUnlessStored's read. The read only labels a metric, and the
+// caller waits for it, so it must never hold the caller, or the validator's lock on the txid, long.
+var laneBurnProbeTimeout = 5 * time.Second
+
+// burnUnlessStored records the burn of position for a create whose rerun, after its batch's COMMIT
+// reported failure, failed with err. That COMMIT may have landed with this very position, whatever
+// the rerun then met, so the stored record is read. If the stored record carries the position,
+// nothing burned. Carrying another position is taken as a burn for the rerun's own reason, exists
+// for ErrTxExists, though it does not prove one: block assembly can delete the record and re-create
+// it with a new position between the rerun and this read, and this read holds no lock against that.
+// Missing, or unreadable within laneBurnProbeTimeout, or read without a position (the read can
+// answer from a row that does not carry one, such as a live UTXO below the lookup floor), the
+// outcome is unknown. A batch that failed before sending its COMMIT rolled back whole, so its
+// reruns burn like any single call and never come here.
+func (s *Store) burnUnlessStored(ctx context.Context, tx *bt.Tx, options *utxo.CreateOptions, position uint64,
+	err error, spends []*utxo.Spend) {
+	txid := utxo.CreatedTxID(tx, options)
+
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), laneBurnProbeTimeout)
+	defer cancel()
+
+	// Read directly, not through the get batcher: queueing on it takes the store's close lock,
+	// which a closing store with a writer stuck on a full queue can hold past any deadline.
+	md, getErr := s.getDirect(probeCtx, &txid, false, false, true)
+
+	switch {
+	case getErr == nil && md != nil && md.LanePosition == position:
+		return
+	case getErr == nil && md != nil && md.LanePosition != lane.None:
+		s.BurnLanePosition(options.Caller, utxo.LaneBurnReason(err, spends))
+	default:
+		// No record proves nothing: the batch's failed COMMIT may still be completing on its own
+		// connection, and this read does not wait for it.
+		s.BurnLanePosition(options.Caller, utxo.LaneBurnOutcomeUnknown)
+	}
+}
+
+// createCommitFault is a test hook called after a transaction that writes creates commits. An error
+// from it is returned as the commit's, which is the shape of a commit the server made and the client
+// did not hear about. nil in production.
+var createCommitFault func() error
+
+// commitCreates commits a transaction that writes creates. A failure may have landed: the server
+// can commit and the client not hear, so a caller counts a lane position it carried as
+// outcome_unknown.
+func commitCreates(ctx context.Context, dbTx pgx.Tx) error {
+	if err := dbTx.Commit(ctx); err != nil {
+		return err
+	}
+
+	if createCommitFault != nil {
+		return createCommitFault()
+	}
+
+	return nil
 }

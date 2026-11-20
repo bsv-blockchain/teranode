@@ -335,6 +335,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		utxoIndexDecider: utxoIndexNeedsRebuild,
 		seeding:          seeding}
 
+	s.NameLaneBurns("utxoset")
 	s.NameLaneReturns("utxoset")
 
 	if seeding {

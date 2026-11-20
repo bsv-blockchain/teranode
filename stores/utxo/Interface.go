@@ -301,6 +301,10 @@ type CreateOptions struct {
 	SpendOnly   bool        // skip the create phase
 	IgnoreFlags IgnoreFlags // spend-phase flags (ignored with CreateOnly)
 
+	// Caller names the service the create is made for. It only labels a burned lane position;
+	// see WithCaller. It sits after the bools so this struct does not grow.
+	Caller Caller
+
 	// LanePosition is a lane position (util/lane) the caller names for this one record, which
 	// takes the place of the one the store's source would give it. It is 8 bytes of what was
 	// padding, so this struct, which every create allocates, stays the size it was: the bools above

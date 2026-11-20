@@ -13,7 +13,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
-	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -132,19 +131,32 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		return nil, err
 	}
 
-	// A position this call took from the source goes back for reuse when the create provably wrote
-	// nothing: a batch that failed before its COMMIT was sent rolled back whole, and a refused claim
-	// of a create with no block wrote nothing (refusedUnwritten). A position the caller named is the
-	// caller's.
-	var rolledBack bool
+	// A position this call took from the source is its own to record if the create fails. A
+	// caller that stops waiting for the batch gets its context error while the batch may still
+	// write the record, and LaneBurnReason says so. A batch that failed with its database
+	// transaction open says why on its result, and so does a direct call whose context had
+	// already ended.
+	//
+	// It also goes back for reuse when the create provably wrote nothing: a batch that failed
+	// before its COMMIT was sent rolled back whole, and a refused claim of a create with no block
+	// wrote nothing (refusedUnwritten). A position the caller named is the caller's.
+	var knownBurnReason string
 
-	if options.LanePosition == lane.None && position != lane.None {
+	if utxo.TookLanePosition(options.LanePosition, position) {
 		defer func() {
-			switch {
-			case err == nil:
-			case rolledBack:
+			if err == nil {
+				return
+			}
+
+			if knownBurnReason != "" {
+				s.BurnLanePosition(options.Caller, knownBurnReason)
+			} else {
+				s.BurnCreateLanePosition(options, position, err, nil)
+			}
+
+			if knownBurnReason == utxo.LaneBurnRolledBack {
 				s.ReturnLanePosition(position, utxo.LaneReturnRolledBack, true)
-			default:
+			} else {
 				s.ReturnLanePosition(position, utxo.LaneReturnExists, refusedUnwritten(err, options))
 			}
 		}()
@@ -176,7 +188,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 			}) {
 				select {
 				case res := <-done:
-					rolledBack = res.rolledBack
+					knownBurnReason = res.burnReason
 
 					return res.data, res.err
 				case <-ctx.Done():
@@ -184,6 +196,12 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 				}
 			}
 		}
+	}
+
+	// A call whose context has already ended fails before it opens a database transaction, so its
+	// position was certainly not written.
+	if ctx.Err() != nil {
+		knownBurnReason = utxo.LaneBurnError
 	}
 
 	// Both partitions BEFORE the transaction is opened, never inside it: the DDL needs its own
@@ -242,8 +260,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		return nil, cerr
 	}
 
-	if err := dbTx.Commit(ctx); err != nil {
-		return nil, errors.NewStorageError("[utxoset][Create] commit", err)
+	if err := commitCreates(ctx, dbTx); err != nil {
+		// The commit may have landed, as the SQL store marks the same failure.
+		return nil, utxo.MarkCreateOutcomeUnknown(errors.NewStorageError("[utxoset][Create] commit", err))
 	}
 
 	committed = true

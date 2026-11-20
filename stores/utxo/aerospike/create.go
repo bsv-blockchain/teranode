@@ -188,7 +188,7 @@ func (b *BatchStoreItem) complete(err error) {
 // Returns:
 //   - Transaction metadata
 //   - Any error that occurred
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (_ *meta.Data, err error) {
 	createOptions := &utxo.CreateOptions{}
 	for _, opt := range opts {
 		opt(createOptions)
@@ -201,6 +201,15 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	lanePosition, err := s.Take(ctx, createOptions)
 	if err != nil {
 		return nil, err
+	}
+
+	// A position this call took from the source is its own to record if the create fails. A
+	// caller that stopped waiting gets a context or outcome-unknown error while the batch may
+	// still write the record, and LaneBurnReason says so.
+	if utxo.TookLanePosition(createOptions.LanePosition, lanePosition) {
+		defer func() {
+			s.BurnCreateLanePosition(createOptions, lanePosition, err, nil)
+		}()
 	}
 
 	txMeta, err := util.TxMetaDataFromTx(tx)
