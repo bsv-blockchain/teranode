@@ -4271,8 +4271,18 @@ func (b *BlockAssembler) drainUnminedDropHashes(where string, isReload bool) err
 // Aerospike store) is asked to: the file never comes back, so failing the scan
 // would stop block assembly on every restart. Other callers keep the scan that
 // fails.
+//
+// The skip is taken only when the load drops the children of a transaction it
+// did not load, which is when blockassembly_onRestartValidateParentChain and
+// blockassembly_onRestartRemoveInvalidParentChainTxs are both on. Otherwise a
+// skipped transaction's children would reach a block template without their
+// parent, so the load keeps the scan that fails. The disk-sorted load runs only
+// with the parent check off, so it always keeps the failing scan.
 func (b *BlockAssembler) unminedTxIteratorForLoad() (utxo.UnminedTxIterator, error) {
-	if skipper, ok := utxo.As[utxo.MissingExternalSkipper](b.utxoStore); ok {
+	dropsOrphanedChildren := b.settings.BlockAssembly.OnRestartValidateParentChain &&
+		b.settings.BlockAssembly.OnRestartRemoveInvalidParentChainTxs
+
+	if skipper, ok := utxo.As[utxo.MissingExternalSkipper](b.utxoStore); ok && dropsOrphanedChildren {
 		return skipper.GetUnminedTxIteratorSkippingMissingExternal()
 	}
 

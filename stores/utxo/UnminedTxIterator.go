@@ -35,7 +35,9 @@ type InconsistentTxRecord struct {
 // MissingExternalSkipper is a store that offers block assembly's load scan: an
 // unmined record marked external whose file the external store does not have is
 // left out and counted, instead of failing the scan. Block assembly finds it with
-// As and falls back to GetUnminedTxIterator on a store without it.
+// As, and uses it only while its parent chain check drops a skipped record's
+// children. It falls back to GetUnminedTxIterator otherwise, and on a store
+// without it.
 type MissingExternalSkipper interface {
 	GetUnminedTxIteratorSkippingMissingExternal() (UnminedTxIterator, error)
 }

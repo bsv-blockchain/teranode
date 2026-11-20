@@ -283,9 +283,9 @@ func (h *rawUnminedHandler) buildTx() (*utxo.UnminedTransaction, error) {
 
 		// The record says the transaction is in the external store, but its file
 		// is not there. For block assembly's load, leave it out rather than fail
-		// the scan (see GetUnminedTxIteratorSkippingMissingExternal). On reload its
-		// children are left out by the parent chain check, when
-		// blockassembly_onRestartValidateParentChain and
+		// the scan (see GetUnminedTxIteratorSkippingMissingExternal). Its children
+		// are left out by the load's parent chain check: block assembly opens this
+		// scan only while blockassembly_onRestartValidateParentChain and
 		// blockassembly_onRestartRemoveInvalidParentChainTxs are both on (the defaults).
 		if h.it.skipMissingExternal && errors.Is(err, errors.ErrNotFound) {
 			h.it.missingExternalSkipped.Add(1)

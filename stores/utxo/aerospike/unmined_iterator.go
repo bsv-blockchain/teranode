@@ -963,7 +963,10 @@ func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 var _ utxo.MissingExternalSkipper = (*Store)(nil)
 
 // GetUnminedTxIteratorSkippingMissingExternal is GetUnminedTxIterator for block
-// assembly's load, which runs at start, on reload and on reset. An unmined
+// assembly's load, which runs at start, on reload and on reset, and opens it
+// only while that load's parent chain check drops a skipped record's children
+// (blockassembly_onRestartValidateParentChain and
+// blockassembly_onRestartRemoveInvalidParentChainTxs both on). An unmined
 // record marked external whose file the external store does not have is logged,
 // counted and left out, instead of failing the scan: the file does not come
 // back, so failing would stop block assembly from starting on every restart.
