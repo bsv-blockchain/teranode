@@ -72,20 +72,16 @@ If all the inputs of a transaction are “final inputs” then the transaction i
 If one or more of the inputs of a transaction are “non-final inputs” then:
 
 - If the value of the transaction’s nLockTime field is less than 500,000,000 then the field represents a block height.
-- If the node is working on a block whose height is greater or equal to the value of this field, then the transaction is “final”.
+- If the node is working on a block whose height is greater than the value of this field, then the transaction is “final”.
 - Otherwise, the transaction is “non-final”.
 
 - If the value of the transaction’s nLockTime field is greater or equal to 500,000,000 then the field is a UNIX epoch timestamp.
-- If the median time passed of the last 11 blocks is greater or equal to the value of this field, then the transaction is “final”.
+- If the median time past of the last 11 blocks is greater than the value of this field, then the transaction is “final”.
 - Otherwise, the transaction is “non-final”.
 
-A new transaction must replace a prior “non-final” transaction if it has the same inputs in the same order, every sequence number for every input in the new transaction is not less than the sequence number for the corresponding input in the prior transaction, and the sequence number of at least one input in the new transaction is greater than the sequence number for the corresponding input in the prior transaction.
+SV Node also lets a new transaction replace a non-final transaction held in its time-locked mempool. The replacement must spend the same inputs in the same order, must not lower the sequence number of any input, and must raise at least one. A conflicting transaction whose inputs differ loses to the first-seen non-final transaction.
 
-If a new transaction is detected which does not fulfill all these requirements, then it must be rejected.
-
-If a new transaction is detected which has inputs that conflict with the inputs of a “non-final” transaction, but which are not identical to the inputs of the
-
-“non-final” transaction, then the “non-final” transaction is the “first seen” transaction and takes priority over the new transaction.
+That replacement rule is SV Node mempool policy, not a consensus rule, and Teranode does not implement it. Teranode has no mempool and no holding pool for non-final transactions, so it rejects every non-final transaction (`UTXO_NON_FINAL` wrapping `TX_LOCK_TIME`). A client that updates a transaction by raising sequence numbers, as a payment channel does, must keep the transaction itself and submit it once it is final. See the design note in [Validating the Transaction](../topics/services/validator.md#23-validating-the-transaction).
 
 The sum value of the inputs to a transaction must be greater than or equal to the sum value of its outputs:
 
