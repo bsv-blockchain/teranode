@@ -244,8 +244,9 @@ func TestCheckBlockSubtrees_OnlyRunningFeedsBlockAssembly(t *testing.T) {
 // TestCheckBlockSubtrees_BlockAssemblyFeedFollowsScriptEra pins the block assembly
 // feed in RUNNING. A block's txs are validated at the block's own height, while
 // assembly mines them at tip+1 without re-checking scripts. A side block below
-// Genesis would put pre-Genesis-valid txs into the template; a
-// same-era competitor whose parent is not the tip must still feed, or its txs are
+// Genesis feeds too: its txs carry the block's height, and block assembly's era filter
+// drops them and records the drop, so a descendant in a later block of the same fork
+// is dropped with them. A same-era competitor whose parent is not the tip must feed, or its txs are
 // stranded when it loses: ErrTxExists keeps them out of assembly on resubmission.
 // A block above tip+1 does not feed: a height locktime final there may not be
 // final at tip+1.
@@ -256,7 +257,7 @@ func TestCheckBlockSubtrees_BlockAssemblyFeedFollowsScriptEra(t *testing.T) {
 		extendsTip  bool
 		feeds       bool
 	}{
-		{"side block below Genesis", func(genesis uint32) uint32 { return genesis - 1 }, false, false},
+		{"side block below Genesis", func(genesis uint32) uint32 { return genesis - 1 }, false, true},
 		{"same-era competitor at the tip height", func(genesis uint32) uint32 { return genesis + 50 }, false, true},
 		{"same-era block above tip+1", func(genesis uint32) uint32 { return genesis + 52 }, false, false},
 		{"block extending the tip", func(genesis uint32) uint32 { return genesis + 51 }, true, true},

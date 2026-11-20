@@ -3338,10 +3338,9 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	// enabled in RUNNING for reorg resilience. The combination is safe: a
 	// floater child blessed at the candidate height and added to assembly is
 	// the same tx policy-mode admission would have accepted into assembly
-	// (policy substitutes tip+1 for unconfirmed parents; subtreevalidation
-	// feeds assembly only when the candidate height and tip+1 share the same
-	// transaction rules), and accepted-block txs are mined-removed from
-	// assembly as always.
+	// (policy substitutes tip+1 for unconfirmed parents; block assembly drops
+	// a tx validated at a height under other transaction rules than tip+1),
+	// and accepted-block txs are mined-removed from assembly as always.
 	if validationOptions.UnconfirmedParentsAtCandidateHeight {
 		utxoHeights = resolveUnconfirmedParentsAtCandidateHeight(utxoHeights, blockHeight)
 	}

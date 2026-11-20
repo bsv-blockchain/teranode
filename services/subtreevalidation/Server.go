@@ -979,9 +979,9 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		// enabled in RUNNING): a floater child blessed at the candidate
 		// height and added to assembly is the same transaction policy-mode
 		// admission would have accepted into assembly anyway (policy
-		// substitutes tip+1 for unconfirmed parents). Assembly is fed only
-		// when the candidate height and tip+1 share the same transaction
-		// rules; see feedsBlockAssembly.
+		// substitutes tip+1 for unconfirmed parents). Block assembly drops a
+		// tx validated at a height under other transaction rules than tip+1;
+		// see feedsBlockAssembly.
 		// Accepted-block txs are mined-removed from assembly as always.
 		validatorOptions := []validator.Option{
 			validator.WithSkipPolicyChecks(true),
@@ -1001,8 +1001,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		// assembly: bulk-history txs do not belong in our template. In
 		// RUNNING, assembly stays enabled so txs from a legacy-bridge block
 		// survive in the mempool if the block loses a reorg, unless the block
-		// is above tip+1 or under different transaction rules from tip+1. See
-		// feedsBlockAssembly.
+		// is above tip+1. See feedsBlockAssembly.
 		feeds, err := u.feedsBlockAssembly(ctx, *currentState == blockchain.FSMStateRUNNING, request.BlockHeight)
 		if err != nil {
 			return false, errors.NewProcessingError("[CheckSubtree] Failed to decide block assembly feed", err)
@@ -1046,8 +1045,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	}
 
 	// The same gate as the legacy branch: the block's txs feed block assembly only when the
-	// node is RUNNING, the block is not above tip+1 and both heights share the transaction
-	// rules (feedsBlockAssembly).
+	// node is RUNNING and the block is not above tip+1 (feedsBlockAssembly).
 	peerState, err := u.blockchainClient.GetFSMCurrentState(ctx)
 	if err != nil {
 		return false, errors.NewProcessingError("[CheckSubtree] Failed to get FSM current state", err)

@@ -185,11 +185,13 @@ func TestCheckSubtreeFromBlockLegacyUnconfirmedParents(t *testing.T) {
 		}
 	})
 
-	t.Run("RUNNING state, side block below Genesis: assembly disabled", func(t *testing.T) {
+	t.Run("RUNNING state, side block below Genesis: fed, tagged with its height", func(t *testing.T) {
 		InitPrometheusMetrics()
 
 		// A side block is validated at its own height, here one below the tip+1
-		// (Genesis) block assembly mines at, so under older script rules.
+		// (Genesis) block assembly mines at, so under older script rules. It still feeds
+		// block assembly, whose era filter drops its txs by that height and records the
+		// drop, so a descendant in a later block of the same fork is dropped with them.
 		childSubtree := singleNodeSubtree(t, childHash)
 		server, recordingClient := newServerWithFSMState(t, blockchain.FSMStateRUNNING, subtreeFixture{childSubtree, childTx.ExtendedBytes()})
 		require.Equal(t, blockHeight, server.settings.ChainCfgParams.GenesisActivationHeight)
@@ -205,11 +207,11 @@ func TestCheckSubtreeFromBlockLegacyUnconfirmedParents(t *testing.T) {
 		require.NotEmpty(t, recorded, "child transaction was not validated")
 
 		for _, opts := range recorded {
-			require.False(t, opts.AddTXToBlockAssembly, "a block in an older script era than tip+1 must not feed block assembly")
+			require.True(t, opts.AddTXToBlockAssembly, "block assembly, not this gate, keeps an older era's txs out")
 		}
 	})
 
-	t.Run("RUNNING state, peer branch, side block below Genesis: assembly disabled", func(t *testing.T) {
+	t.Run("RUNNING state, peer branch, block above tip+1: assembly disabled", func(t *testing.T) {
 		InitPrometheusMetrics()
 
 		// The peer-served branch feeds block assembly under the same gate as the legacy one.
@@ -218,7 +220,7 @@ func TestCheckSubtreeFromBlockLegacyUnconfirmedParents(t *testing.T) {
 
 		request := legacyRequest(childSubtree)
 		request.BaseUrl = "http://peer.invalid"
-		request.BlockHeight = blockHeight - 1
+		request.BlockHeight = blockHeight + 1
 
 		response, err := server.CheckSubtreeFromBlock(context.Background(), request)
 		require.NoError(t, err)
@@ -228,7 +230,7 @@ func TestCheckSubtreeFromBlockLegacyUnconfirmedParents(t *testing.T) {
 		require.NotEmpty(t, recorded, "child transaction was not validated")
 
 		for _, opts := range recorded {
-			require.False(t, opts.AddTXToBlockAssembly, "a block in an older script era than tip+1 must not feed block assembly")
+			require.False(t, opts.AddTXToBlockAssembly, "a block above tip+1 must not feed block assembly")
 		}
 	})
 

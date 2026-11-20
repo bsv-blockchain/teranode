@@ -16,7 +16,6 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/pkg/txrules"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bsv-blockchain/teranode/services/validator"
@@ -396,14 +395,16 @@ func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidati
 
 // feedsBlockAssembly reports whether a block's transactions may be added to
 // block assembly. Only when the FSM state allows it (stateFeeds: RUNNING, or a
-// short catchup from RUNNING that keeps the hand-off), only when the block is
-// not above tip+1, and only when the block's height and tip+1 share the same
-// transaction rules (txrules.SameTxRules): the txs are validated at the
-// block's own height, while assembly mines them at tip+1 without re-checking
-// them. A side block in an older era (below Genesis or Chronicle) would otherwise
-// put txs into the template that the rest of the network rejects. A same-era
-// block feeds even when it does not extend the tip, so the txs of a competitor
-// that loses stay in the template.
+// short catchup from RUNNING that keeps the hand-off), and only when the block is
+// not above tip+1: a height locktime final there may not be final at tip+1.
+//
+// A block under other transaction rules than tip+1 (a side block below Genesis or
+// Chronicle) still feeds. Its txs carry the block's height, and block assembly's era
+// filter drops them and records the drop, so a descendant in a later block of the
+// same fork, under tip+1's rules, is dropped with them. Withholding them here would
+// leave block assembly unaware of them, and let such a descendant in without its
+// parent. A block that feeds even when it does not extend the tip keeps the txs of a
+// competitor that loses in the template.
 func (u *Server) feedsBlockAssembly(ctx context.Context, stateFeeds bool, blockHeight uint32) (bool, error) {
 	if !stateFeeds {
 		return false, nil
@@ -414,9 +415,7 @@ func (u *Server) feedsBlockAssembly(ctx context.Context, stateFeeds bool, blockH
 		return false, errors.NewServiceError("failed to get best block header", err)
 	}
 
-	next := tipMeta.Height + 1
-
-	return blockHeight <= next && txrules.SameTxRules(u.settings.ChainCfgParams, blockHeight, next), nil
+	return blockHeight <= tipMeta.Height+1, nil
 }
 
 // CheckBlockSubtrees validates every subtree a block references, fetching any it
