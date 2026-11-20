@@ -1,0 +1,13 @@
+# Modules whose code decides whether a transaction or block is valid. A pull
+# request that changes the version (or replace directive) of one of these runs
+# the consensus vectors with the old and the new version, and fails if any
+# outcome differs, unless a maintainer adds the consensus-change-acknowledged
+# label. See scripts/consensus_lib_gate.sh and
+# .github/workflows/consensus-lib-gate.yaml.
+#
+# One module path per line.
+
+github.com/bitcoin-sv/bdk/module/gobdk   # script engine
+github.com/bsv-blockchain/go-bt/v2       # transaction parse and serialize
+github.com/bsv-blockchain/go-subtree     # merkle trees and subtree metadata
+github.com/bsv-blockchain/go-wire        # legacy block and message parse
