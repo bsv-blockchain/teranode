@@ -312,6 +312,124 @@ func TestLaneConversionBlocksRefuseAStoredListPastThePrefix(t *testing.T) {
 	})
 }
 
+// The readers refuse a stored integer outside its Go type's range before casting it, rather than
+// return a truncated value that looks valid: lane 257 would read as lane 1, block -1 as block
+// 4294967295. Each case stores one valid row with one value out of range, and names the error the
+// range check gives, so no later check can stand in for it.
+func TestLaneReadersRefuseOutOfRangeStoredValues(t *testing.T) {
+	const tooWide = int64(1) << 32
+
+	runLaneHandoutTests(t, "out of range", func(t *testing.T, s *SQL) {
+		ctx := t.Context()
+
+		mapRow := func(blockID, laneNum, first, last, firstHole, tag int64) {
+			t.Helper()
+
+			_, err := s.db.ExecContext(ctx, `DELETE FROM lane_map`)
+			require.NoError(t, err)
+
+			_, err = s.db.ExecContext(ctx, `INSERT INTO lane_map (block_id, lane, first, last, first_hole, tag, hole_data) VALUES ($1, $2, $3, $4, $5, $6, NULL)`,
+				blockID, laneNum, first, last, firstHole, tag)
+			require.NoError(t, err)
+		}
+
+		mapRow(5, 1, 1, 10, 0, 0)
+		rows, err := s.LaneMapRows(ctx, 5)
+		require.NoError(t, err)
+		require.Len(t, rows, 1, "the base row is valid")
+
+		for name, c := range map[string][6]int64{
+			"lane below 0":        {5, -1, 1, 10, 0, 0},
+			"lane above 255":      {5, 257, 1, 10, 0, 0},
+			"tag below 0":         {5, 1, 1, 10, 0, -1},
+			"tag above 255":       {5, 1, 1, 10, 0, 257},
+			"negative first":      {5, 1, -1, 10, 0, 0},
+			"negative last":       {5, 1, 1, -1, 0, 0},
+			"negative first hole": {5, 1, 1, 10, -1, 0},
+		} {
+			mapRow(c[0], c[1], c[2], c[3], c[4], c[5])
+
+			_, err := s.LaneMapRows(ctx, 5)
+			require.ErrorContains(t, err, "out-of-range values", name)
+		}
+
+		// A block ID out of range cannot be asked for by block, so it is read by lane.
+		for name, blockID := range map[string]int64{"block below 0": -1, "block above 2^32-1": tooWide} {
+			mapRow(blockID, 1, 1, 10, 0, 0)
+
+			_, err := s.LaneMapRowsEndingAbove(ctx, 1, 0)
+			require.ErrorContains(t, err, "out-of-range values", name)
+		}
+
+		hash := make([]byte, chainhash.HashSize)
+
+		segment := func(id, tip int64, tipHash, digest []byte) {
+			t.Helper()
+
+			_, err := s.db.ExecContext(ctx, `DELETE FROM lane_conversion_segment`)
+			require.NoError(t, err)
+
+			_, err = s.db.ExecContext(ctx, `INSERT INTO lane_conversion_segment (segment, first, prefix_last, last, source_tip_block_id, source_tip_hash, manifest_digest, created_at) VALUES ($1, 2, 4, 10, $2, $3, $4, CURRENT_TIMESTAMP)`,
+				id, tip, tipHash, digest)
+			require.NoError(t, err)
+		}
+
+		segment(1, 900_000, hash, hash)
+		segs, err := s.LaneConversionSegments(ctx)
+		require.NoError(t, err)
+		require.Len(t, segs, 1, "the base segment is valid")
+
+		for name, c := range map[string]struct {
+			id, tip         int64
+			tipHash, digest []byte
+		}{
+			"segment 0":             {0, 900_000, hash, hash},
+			"segment above 2^32-1":  {tooWide, 900_000, hash, hash},
+			"tip below 0":           {1, -1, hash, hash},
+			"tip above 2^32-1":      {1, tooWide, hash, hash},
+			"short tip hash":        {1, 900_000, hash[:31], hash},
+			"short manifest digest": {1, 900_000, hash, hash[:31]},
+		} {
+			segment(c.id, c.tip, c.tipHash, c.digest)
+
+			_, err := s.LaneConversionSegments(ctx)
+			require.ErrorContains(t, err, "is malformed", name)
+		}
+
+		block := func(seq, blockID, height, first, count int64) {
+			t.Helper()
+
+			_, err := s.db.ExecContext(ctx, `DELETE FROM lane_conversion_block`)
+			require.NoError(t, err)
+
+			_, err = s.db.ExecContext(ctx, `INSERT INTO lane_conversion_block (segment, seq, block_id, height, first, count) VALUES (1, $1, $2, $3, $4, $5)`,
+				seq, blockID, height, first, count)
+			require.NoError(t, err)
+		}
+
+		block(0, 100, 100, 2, 1)
+		blocks, err := s.LaneConversionBlocks(ctx, 1)
+		require.NoError(t, err)
+		require.Len(t, blocks, 1, "the base block is valid")
+
+		for name, c := range map[string][5]int64{
+			"seq below 0":         {-1, 100, 100, 2, 1},
+			"seq above 2^32-1":    {tooWide, 100, 100, 2, 1},
+			"block below 0":       {0, -1, 100, 2, 1},
+			"block above 2^32-1":  {0, tooWide, 100, 2, 1},
+			"height below 0":      {0, 100, -1, 2, 1},
+			"height above 2^32-1": {0, 100, tooWide, 2, 1},
+			"negative first":      {0, 100, 100, -1, 1},
+			"negative count":      {0, 100, 100, 2, -1},
+		} {
+			block(c[0], c[1], c[2], c[3], c[4])
+
+			_, err := s.LaneConversionBlocks(ctx, 1)
+			require.ErrorContains(t, err, "is malformed", name)
+		}
+	})
+}
+
 // A segment or completion insert that the database refuses is reported, and nothing is recorded.
 // A SQLite trigger stands in for the refusal, such as a role without INSERT.
 func TestLaneConversionInsertsReportARefusedInsert(t *testing.T) {
