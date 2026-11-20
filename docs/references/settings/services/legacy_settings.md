@@ -58,6 +58,23 @@ context), and `${LEGACY_GRPC_PORT}` is `8099`.
 | ParkStoreTimeout | time.Duration | 10s | not set | legacy_parkStoreTimeout | Deadline on each park blob store operation, bounding the wait for the file store's shared permits. Values below 1s are raised to 1s |
 | PeerRegistryEnabled | bool | true | not set | legacy_peerRegistryEnabled | Mirror connected legacy peers into the centralized peer registry so the dashboard can show them |
 | PeerRegistrySyncInterval | time.Duration | 10s | not set | legacy_peerRegistrySyncInterval | How often that mirror reconciles connected legacy peers into the registry |
+| StoreBatcherSize | int | 1024 | 1024 | legacy_storeBatcherSize | svp2p: **CRITICAL** - Store operation batch size |
+| StoreBatcherConcurrency | int | 32 | 32 | legacy_storeBatcherConcurrency | svp2p: **CRITICAL** - Store operation parallelism |
+| SpendBatcherSize | int | 1024 | 1024 | legacy_spendBatcherSize | svp2p: **CRITICAL** - Spend operation batch size |
+| SpendBatcherConcurrency | int | 4 | 4 | legacy_spendBatcherConcurrency | svp2p: **CRITICAL** - Spend operation parallelism |
+| OutpointBatcherSize | int | 1024 | 1024 | legacy_outpointBatcherSize | svp2p: **CRITICAL** - Outpoint operation batch size |
+| OutpointBatcherConcurrency | int | 32 | 32 | legacy_outpointBatcherConcurrency | svp2p: Outpoint operation parallelism |
+| BlockFailureBackoffBase | time.Duration | 5s | not set | legacy_blockFailureBackoffBase | svp2p: Base per-block backoff after a transient storage/service failure (0 disables) |
+| BlockFailureBackoffMaxDuration | time.Duration | 150s | not set | legacy_blockFailureBackoffMaxDuration | svp2p: Cap on the per-block backoff window and the failure-tracking map TTL, kept below the 180s sync-peer stall window (0 disables) |
+| BlockPrefetchBufferBytes | int64 | 268435456 | not set | legacy_blockPrefetchBufferBytes | svp2p: Byte budget for blocks downloaded ahead of processing during sync (0 disables prefetch) |
+| TargetOutboundPeers | int | 8 | not set | legacy_targetOutboundPeers | svp2p: outbound peers the addrman-driven dialer keeps (SVNode DEFAULT_MAX_OUTBOUND_CONNECTIONS) |
+| BlockDownloadSlowFetchTimeout | time.Duration | 30s | not set | legacy_blockDownloadSlowFetchTimeout | svp2p: a block still not delivered after this may be fetched in parallel from another peer |
+| BlockDownloadMaxParallelFetch | int | 3 | not set | legacy_blockDownloadMaxParallelFetch | svp2p: maximum peers a single block is fetched from at once |
+| MinSyncPeerNetworkSpeed | uint64 | 51200 | not set | legacy_minSyncPeerNetworkSpeed | svp2p: bytes/s below which the sync peer is rotated (0 disables). Falls back to `legacy_config_MinSyncPeerNetworkSpeed` with a deprecation warning |
+| DisableBanning | bool | false | not set | legacy_disableBanning | svp2p: the bsvd `--nobanning` switch. Falls back to `legacy_config_DisableBanning` with a deprecation warning |
+| DisableDNSSeed | bool | false | not set | legacy_disableDNSSeed | svp2p: the bsvd `--nodnsseed` switch; with it off the fixed-seed list still applies after 60 s. Falls back to `legacy_config_DisableDNSSeed` with a deprecation warning |
+| CompactBlocks | bool | false | not set | legacy_compactBlocks | svp2p: send `sendcmpct(0,1)` after verack and accept `cmpctblock` (the BIP152 receive path). Every failure falls back to a full `getdata` |
+| CompactBlocksRecentTxs | int | 5000000 | not set | legacy_compactBlocksRecentTxs | svp2p: capacity of the recent-transaction hash ring that compact-block reconstruction matches short IDs against. About 105 bytes per hash (~504 MiB at the default), allocated only when `legacy_compactBlocks` is on |
 
 ## Configuration Dependencies
 
@@ -77,6 +94,76 @@ context), and `${LEGACY_GRPC_PORT}` is `8099`.
 - There is no working `legacy_upnp` key. The struct field exists but nothing
   loads it, so it is always false. UPnP is reached through `legacy_config_Upnp`,
   which is copied onto the legacy config struct by field name.
+- In svp2p, a non-empty `ConnectPeers` also switches off DNS seeding, the
+  fixed-seed fallback and the address-book dialler.
+
+### svp2p and the `legacy_config_*` namespace
+
+The svp2p service (`-svp2p=1`, mutually exclusive with `-legacy=1`) reuses the `legacy_*` keys
+above so a cutover changes no settings. Three keys the legacy service reads through its
+reflective `legacy_config_<Field>` loader have svp2p-owned names: `legacy_disableBanning`,
+`legacy_disableDNSSeed` and `legacy_minSyncPeerNetworkSpeed`. svp2p reads the old spelling as
+a fallback when the new key is unset and prints
+`WARN: setting legacy_config_X is deprecated ... set legacy_Y instead` at startup. The
+`legacy_config_*` namespace is removed with the legacy service.
+
+svp2p also honours `excessiveblocksize` at the wire: it is the receive cap for a single block
+(blocks over 4 GiB use the SVNode extended message header), and a value of 0 — documented as
+"unlimited" for validation — is mapped to the 4 GiB default at the wire, with a warning at start.
+
+### Compact blocks (svp2p)
+
+`legacy_compactBlocks` turns on the BIP152 compact-block RECEIVE path, and nothing else. svp2p
+sends `sendcmpct(announce=false, version=1)` once per peer after verack, and it accepts a
+`cmpctblock` a peer sends. svp2p never announces a block as `cmpctblock` and never serves one.
+
+`announce=false` tells the peer to keep announcing by `headers` or `inv`. That announce bool is
+the FIRST of `sendcmpct`'s two fields and the version is the second
+(`net_processing.cpp:2390-2394`; go-wire's `MsgSendcmpct` is `{SendCmpct bool, Version uint64}`),
+and it IS BIP152 high-bandwidth mode. There is no separate flag for it.
+
+svp2p also answers NOTHING when a peer asks it for a compact block. A `getdata` for
+`MSG_CMPCT_BLOCK` is not a recognised inv type (`services/svp2p/protocol/serving.go:495-505`,
+`:336-339`), so the entry draws a warning log and no reply — not even a `notfound`
+(`services/svp2p/protocol/getdata.go:246-248`). An inbound `getblocktxn` is refused the same way
+(`services/svp2p/protocol/peer.go:843-849`). SVNode falls back to the full block in that case
+(`net_processing.cpp:1310-1312`); this port does not. Turning the flag on makes such a request
+possible, because SVNode reads our `sendcmpct` as a willingness to provide compact blocks
+(`net_processing.cpp:1942-1946`).
+
+Every reconstruction failure falls back to an ordinary `getdata` for the whole block, so the flag
+costs bandwidth rather than correctness. It is not free of consequence for the announcing peer: a
+`readFailed` costs that peer nothing, and any known holder may then serve the block, but a
+`readInvalid` scores it 100 and disconnects it. When that peer was the only known holder, the
+block waits for another announcement. See
+[svp2p compact blocks](../../../topics/services/svp2p_compact_blocks.md) for the message flow,
+the outcome table, and the divergences from SVNode.
+
+`legacy_compactBlocksRecentTxs` sizes `bridge.RecentTxIndex`, the ring of recently seen
+transaction hashes that stands in for the mempool SVNode matches short IDs against. Teranode has
+no mempool, so the ring is fed by the txmeta topic's ADD entries alone — those
+that are neither coinbase nor block-originated, since `services/svp2p/bridge/kafka.go:337-340`
+and `:344-351` skip both classes, which is what keeps mined transactions out of the ring. Budget
+about 105 bytes per hash: a 32-byte ring slot plus roughly 70 bytes in the dedup map. At the
+5,000,000 default that is about 504 MiB of resident heap once the ring is full — a 160 MiB ring
+and a ~344 MiB map, measured by `TestRecentTxIndex_FootprintAtDefaultCapacity`. That test LOGS
+the breakdown and asserts only loose bounds — a heap delta above 300 MiB and below 1 GiB — and it
+is skipped unless `SVP2P_MEASURE_INDEX=1` is set, so no CI run re-checks the 504 MiB figure. A
+match adds a
+transient 160 MiB copy of the ring for the length of one call. The ring grows into its capacity
+as hashes arrive, so a node that never fills it never pays for the whole of it. A value of 0 or
+below falls back to the default rather than disabling the index.
+
+Cutover guidance:
+
+- Leave `legacy_compactBlocks` at `false` unless the node has the ~504 MiB of headroom the
+  default ring needs, plus the CPU for one pass over the ring per announced block.
+- Turn it on for one node first and watch the reconstruction log lines. A low hit rate is not a
+  fault: it degrades to one `getblocktxn` that carries most of the block, which is no worse than
+  a `getdata`.
+- Lower `legacy_compactBlocksRecentTxs` on a memory-tight node before turning the feature off. A
+  smaller ring reconstructs less and still saves the round trip on the transactions it holds.
+- The index is allocated only when the flag is on, so a node with the flag off pays nothing.
 
 ### Feeler Probes
 
