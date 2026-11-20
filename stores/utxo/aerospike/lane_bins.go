@@ -144,11 +144,11 @@ func (s *Store) laneShadow() bool {
 	return s.settings != nil && s.settings.UtxoStore.LaneMigration.Stamps()
 }
 
-// countLaneSpends counts n spent outputs whose spend carried the spender's lane position. They count
-// as carried only when the route records it: the Lua and native spends do, on a server the start-up
-// probe found writing it (laneSlotWrites); the expression spend does not.
-func (s *Store) countLaneSpends(n int) {
-	if s.laneSlotWrites.Load() && !s.useExpressionSpend() {
+// countLaneSpends counts n spent outputs of one spend. They count as carried only when the spend
+// carried the spender's lane position and its route records it: the Lua and native spends do, on a
+// server the start-up probe found writing it (laneSlotWrites); the expression spend does not.
+func (s *Store) countLaneSpends(n int, carriedPosition bool) {
+	if carriedPosition && s.laneSlotWrites.Load() && !s.useExpressionSpend() {
 		utxo.CountLaneSpends(laneStoreName, n, 0)
 		return
 	}

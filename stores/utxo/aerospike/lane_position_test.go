@@ -434,3 +434,36 @@ func laneSpendsCarried(t *testing.T) float64 {
 
 	return 0
 }
+
+// Through SpendAndCreate, the route the validator takes, a store with a position source spends with
+// the position the create then writes: the parent's slot, the child's own lanePos bin and the
+// position the create returns are one value.
+func TestSpendAndCreateRecordsTheCreatesPositionInTheParentsSlot(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, _, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	parentPosition, childPosition := lane.Pack(201, 5), lane.Pack(201, 6)
+	store.SetLanePositionSource(tests.NewScriptedLanePositions(parentPosition, childPosition))
+	t.Cleanup(func() { store.SetLanePositionSource(nil) })
+
+	parent := laneParent(t, 6, 2)
+	_, _, err := store.SpendAndCreate(ctx, parent, 100, utxo.WithCreateOnly())
+	require.NoError(t, err)
+
+	child := laneChild(t, parent, 1)
+	md, _, err := store.SpendAndCreate(ctx, child, 101)
+	require.NoError(t, err)
+	require.Equal(t, childPosition, md.LanePosition)
+
+	v, ok := recordBin(t, client, store, parent, 0, fields.SpendingLanePositions)
+	require.True(t, ok)
+	require.Equal(t, []uint64{0, childPosition}, slotLanes(t, v))
+
+	v, ok = recordBin(t, client, store, child, 0, fields.LanePosition)
+	require.True(t, ok)
+	require.Equal(t, int(lane.ToSigned(childPosition)), v)
+}

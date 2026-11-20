@@ -496,15 +496,24 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 // not know the lanePos key ignores it; see laneSlotWrites.
 func (s *Store) SpendWithLanePosition(ctx context.Context, tx *bt.Tx, blockHeight uint32, position uint64,
 	ignoreFlags utxo.IgnoreFlags) ([]*utxo.Spend, error) {
-	spends, err := s.spend(ctx, tx, blockHeight, position, ignoreFlags)
+	return s.spend(ctx, tx, blockHeight, position, ignoreFlags)
+}
+
+var _ utxo.LaneSpender = (*Store)(nil)
+
+// spend is Spend with the spender's lane position, lane.None for none. With lane positions on it
+// counts every spent output, carried or not, so the coverage share covers every spend this store
+// makes, a plain Spend included.
+func (s *Store) spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, lanePos uint64, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+	spends, err := s.spendItems(ctx, tx, blockHeight, lanePos, ignoreFlags...)
 	if err == nil && s.laneShadow() {
-		s.countLaneSpends(len(spends))
+		s.countLaneSpends(len(spends), lanePos != lane.None)
 	}
 
 	return spends, err
 }
 
-func (s *Store) spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, lanePos uint64, ignoreFlags ...utxo.IgnoreFlags) (spends []*utxo.Spend, err error) {
+func (s *Store) spendItems(ctx context.Context, tx *bt.Tx, blockHeight uint32, lanePos uint64, ignoreFlags ...utxo.IgnoreFlags) (spends []*utxo.Spend, err error) {
 	defer func() {
 		handleSpendPanic(recover(), &err, s.logger)
 	}()
