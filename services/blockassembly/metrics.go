@@ -81,6 +81,10 @@ var (
 	// prometheusBlockAssemblyQueueShed counts transactions shed because the ingest queue was full past the bounded wait
 	prometheusBlockAssemblyQueueShed prometheus.Counter
 
+	// prometheusBlockAssemblySubtreeStoreStep times the steps of a subtree store that
+	// subtree_stored does not: subtree_stored ends when the writes start. See storeSubtreeData.
+	prometheusBlockAssemblySubtreeStoreStep *prometheus.HistogramVec
+
 	// prometheusBlockAssemblyHeldShed counts the subset of those sheds caused by the in-memory transaction limit rather than the ingest queue bound
 	prometheusBlockAssemblyHeldShed prometheus.Counter
 
@@ -208,6 +212,17 @@ func _initPrometheusMetrics() {
 			Help:      "Histogram of subtree stored duration in block assembler",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
+	)
+
+	prometheusBlockAssemblySubtreeStoreStep = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "subtree_store_step_seconds",
+			Help:      "Wall time of each step of storing a subtree: meta_build, meta_write, subtree_write",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 16),
+		},
+		[]string{"step"},
 	)
 
 	prometheusBlockAssemblerConflictIntentsPending = promauto.NewGauge(
