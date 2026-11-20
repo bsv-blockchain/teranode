@@ -74,7 +74,7 @@ doesn't matter.
 | `scenario_02_crash_recovery_test.go` | nodes 1-3 | no | A killed node rejoins and catches up to tip. |
 | `scenario_03_blast_under_latency_test.go` | nodes 1-3 | yes | Added latency on one node does not stall propagation or create persistent forks. |
 | `scenario_04_failpoint_spend_test.go` | nodes 1-3 | no | A crash between the UTXO spend and the child-tx create leaves a half-applied spend that resubmitting the tx heals. Needs `failpoints`. |
-| `scenario_05_failpoint_persist_announce_test.go` | nodes 1-3 | no | A crash after the subtrees are persisted but before `AddBlock` announces nothing, and later blocks' subtrees are retrievable. Needs `failpoints`. |
+| `scenario_05_failpoint_persist_announce_test.go` | nodes 1-3 | no | A crash after the coinbase write attempt but before `AddBlock` announces nothing, the pending tx survives, and the later block's subtrees are retrievable. Needs `failpoints`. |
 
 Scenarios 01-03 mine via `generate` RPC rather than the
 coinbase-blaster, so the chaos mechanics are isolated from tx-load

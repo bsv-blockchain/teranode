@@ -2426,7 +2426,8 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		}
 	}
 
-	// crash-consistency seam: subtrees and coinbase persisted, block not yet added or announced
+	// crash-consistency seam: after the coinbase write attempt, before AddBlock (block not yet
+	// added or announced); subtree storage may still be in flight on the async workers
 	failpoint.Inject(failpoint.BlockAssemblyPersistBeforeAddBlock)
 
 	ba.logger.Debugf("[BlockAssembly][%s][%s] add block to blockchain", jobID, block.Header.Hash())
