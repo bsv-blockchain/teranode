@@ -204,9 +204,9 @@ func TestDecodeSubtreePositionsBoundsItsAllocationByTheBuffer(t *testing.T) {
 	require.Error(t, err)
 	require.Less(t, n, uint64(1<<20), "allocated %d bytes for counts claiming 2^31 parents", n)
 
-	// Counts that sum past 2^32, with no parent block, are refused: by the 32-bit total check
-	// first, and by the length check if it were removed. The total check alone is not pinned,
-	// since a parent block that really holds 2^32 positions is over 34 GB.
+	// Counts that sum past 2^32 are refused by the 32-bit total check, which runs before the
+	// length check. Its own error text pins it: with the check gone, this file would fail only
+	// the length check, and a parent block that matches a 2^32 total is over 34 GB.
 	two := append([]byte(subtreePositionsMagic), SubtreePositionsVersion)
 	two = append(two, make([]byte, 32)...)
 	two = binary.LittleEndian.AppendUint32(two, 2)
@@ -215,7 +215,7 @@ func TestDecodeSubtreePositionsBoundsItsAllocationByTheBuffer(t *testing.T) {
 	two = binary.LittleEndian.AppendUint32(two, 1)
 
 	_, err = DecodeSubtreePositions(two)
-	require.Error(t, err)
+	require.ErrorContains(t, err, "past 2^32")
 }
 
 func withUint32(b []byte, at int, v uint32) []byte {

@@ -189,8 +189,9 @@ func DecodeSubtreePositions(b []byte) (*SubtreePositions, error) {
 		s.Own[i] = binary.LittleEndian.Uint64(ownBytes[i*PositionSize:])
 		total += uint64(binary.LittleEndian.Uint32(countBytes[i*4:]))
 
-		// The offsets are 32-bit: refuse a total they cannot hold before it wraps. A parent block
-		// that large is over 34 GB, so no test reaches this.
+		// The offsets are 32-bit: refuse a total they cannot hold before it wraps. It runs before
+		// the parent block's length is compared, so a total past 2^32 is refused here even when
+		// the block's length would match it.
 		if total > math.MaxUint32 {
 			return nil, errors.NewProcessingError("subtree lane positions file: counts sum past 2^32 parents")
 		}
