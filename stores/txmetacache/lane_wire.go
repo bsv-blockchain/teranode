@@ -9,7 +9,8 @@ import (
 // Lane positions on the txmeta topic, for the Phase 1 soak at utxostore_laneMigration shadow. The
 // validator sends an entry in the lane metadata encoding (WireActionADDLane) when it knows the
 // transaction's own lane position and every parent's, and a plain ADD entry otherwise, counting why.
-// A receiver takes both. Nothing reads the positions yet, so a missing one is counted, never an error.
+// A receiver takes both. Nothing decides on a lane position yet, so a missing one is counted, never
+// an error.
 
 // The reasons a txmeta entry goes without lane positions.
 const (
@@ -33,7 +34,7 @@ var (
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "txmeta_messages_total",
-			Help:      "Txmeta entries for created transactions at utxostore_laneMigration shadow, by side (sent by the validator, or received by the named consumer) and format (lane: own and parent lane positions; legacy: none); nothing is counted with lane positions off",
+			Help:      "Txmeta entries for created transactions, by side (sent by the validator, or received by the named consumer) and format (lane: own and parent lane positions; legacy: none). The validator counts a sent entry only while its own utxostore_laneMigration is shadow or later; a consumer counts every ADDLane entry it receives, even with its own setting off, and a plain ADD entry only while its own setting is shadow or later; a malformed ADDLane entry still counts as format=lane",
 		},
 		[]string{"side", "format"},
 	)
@@ -43,7 +44,7 @@ var (
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "txmeta_position_misses_total",
-			Help:      "Txmeta entries at utxostore_laneMigration shadow that carry no lane positions, by reason; counted, never an error",
+			Help:      "Txmeta entries that carry no lane positions, by reason; counted, never an error. The validator counts its reasons only at utxostore_laneMigration shadow or later; decode_failed is counted by any consumer that receives an ADDLane entry it cannot decode, whatever its own setting",
 		},
 		[]string{"reason"},
 	)

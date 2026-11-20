@@ -2481,7 +2481,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash, p
 // metadata encoding, carrying the transaction's own lane position and its parents', when every one
 // of them is a valid position; otherwise, and always with lane positions off, it is MetaBytes. A
 // message that goes without positions at shadow is counted with the reason, never refused: nothing
-// reads positions yet, and Phase 1 measures how many messages carry them.
+// decides on a lane position yet, and Phase 1 measures how many messages carry them.
 func (v *Validator) txMetaPayload(data *meta.Data, parentLanes []uint64) ([]byte, bool, error) {
 	if !v.laneShadow() {
 		b, err := data.MetaBytes()

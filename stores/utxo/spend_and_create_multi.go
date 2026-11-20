@@ -517,6 +517,7 @@ func (l *listItems) option(i int) CreateOption {
 		o.TxIDs = nil
 		o.SubtreeIdxs = nil
 		o.BelowCheckpoint = false
+		o.ParentLanePositions = nil
 		o.TxID = &l.txids[i]
 		o.MinedBlockInfos = l.base.MinedBlockInfos[:l.k:l.k]
 
