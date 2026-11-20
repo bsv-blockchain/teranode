@@ -58,6 +58,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
@@ -2606,4 +2607,169 @@ func TestReadMTPsLocked_GuardFiresOnUnpopulatedStore(t *testing.T) {
 	require.Contains(t, err.Error(), "MTP store not loaded up to height 5")
 	require.Nil(t, utxoMTPs)
 	require.Equal(t, uint32(0), blockMTP)
+}
+
+// laneShadowValidator is parentOutputsValidator at utxostore_laneMigration shadow.
+func laneShadowValidator(t *testing.T, store utxostore.Store) *Validator {
+	t.Helper()
+
+	v := parentOutputsValidator(t, store)
+	v.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	return v
+}
+
+// The parents' lane positions come out in the order subtree.TxInpoints lists the parents, which is
+// the order the lane txmeta encoding and the store's parent_lane_positions use.
+func TestParentLanePositionsFollowTxInpointsOrder(t *testing.T) {
+	parents := []chainhash.Hash{{3}, {1}, {3}, {2}, {1}}
+	tx := parentOutputsChild(t, parents, []uint32{0, 0, 1, 0, 1})
+
+	inputLanes := []uint64{lane.Pack(3, 1), lane.Pack(1, 1), lane.Pack(3, 1), lane.Pack(2, 1), lane.Pack(1, 1)}
+
+	inpoints, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+	require.Equal(t, []chainhash.Hash{{3}, {1}, {2}}, inpoints.ParentTxHashes)
+
+	require.Equal(t, []uint64{lane.Pack(3, 1), lane.Pack(1, 1), lane.Pack(2, 1)}, parentLanePositions(tx, inputLanes))
+	require.Nil(t, parentLanePositions(tx, nil), "lane positions off")
+}
+
+// At shadow the parents' lane positions come from the one parent read the validator already makes,
+// whether the store answers it or the caller prefetched the parent.
+func TestParentLanePositionsComeFromTheParentRead(t *testing.T) {
+	ctx := context.Background()
+	base := parentOutputsStore(t)
+
+	s0 := bscript.NewFromBytes([]byte{0x76, 0xa9, 0x00})
+	first := storedParent(t, base, 1, 120, s0, s0)
+	second := storedParent(t, base, 2, 0, s0)
+
+	positions := map[chainhash.Hash]uint64{
+		*first.TxIDChainHash():  lane.Pack(7, 100),
+		*second.TxIDChainHash(): lane.Pack(8, 200),
+	}
+
+	store := &countingParentStore{Store: base}
+	store.override = func(answers []utxostore.ParentOutput) ([]utxostore.ParentOutput, error) {
+		for i := range answers {
+			answers[i].LanePosition = positions[store.outpoints[len(store.outpoints)-len(answers)+i].TxID]
+		}
+
+		return answers, nil
+	}
+
+	tx := parentOutputsChild(t, []chainhash.Hash{*second.TxIDChainHash(), *first.TxIDChainHash(), *first.TxIDChainHash()}, []uint32{0, 0, 1})
+
+	_, parentLanes, _, err := laneShadowValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), &Options{})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{lane.Pack(8, 200), lane.Pack(7, 100)}, parentLanes)
+	require.Equal(t, 1, store.calls, "no read is added for the positions")
+
+	t.Run("prefetched", func(t *testing.T) {
+		prefetched := map[chainhash.Hash]*meta.Data{
+			*first.TxIDChainHash(): {Tx: first, BlockHeights: []uint32{120}, LanePosition: lane.Pack(9, 1)},
+		}
+
+		calls := store.calls
+
+		_, parentLanes, _, err := laneShadowValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(),
+			&Options{PrefetchedParents: prefetched})
+		require.NoError(t, err)
+		require.Equal(t, []uint64{lane.Pack(8, 200), lane.Pack(9, 1)}, parentLanes)
+		require.Equal(t, calls+1, store.calls, "only the parent not prefetched is read")
+	})
+
+	t.Run("off", func(t *testing.T) {
+		_, parentLanes, _, err := parentOutputsValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), &Options{})
+		require.NoError(t, err)
+		require.Nil(t, parentLanes)
+	})
+}
+
+// At shadow the txmeta entry carries the lane positions when every one is valid, and is the legacy
+// entry otherwise, counted with its reason; off, it is always the legacy entry.
+func TestTxMetaPayloadCarriesLanePositionsAtShadow(t *testing.T) {
+	parents := []chainhash.Hash{{1}, {2}}
+	tx := parentOutputsChild(t, parents, []uint32{0, 0})
+
+	inpoints, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+
+	data := func(own uint64) *meta.Data {
+		return &meta.Data{TxInpoints: inpoints, Fee: 500, SizeInBytes: 250, LanePosition: own}
+	}
+
+	legacy, err := data(lane.Pack(1, 1)).MetaBytes()
+	require.NoError(t, err)
+
+	shadow := laneShadowValidator(t, nil)
+	good := []uint64{lane.Pack(2, 1), lane.Pack(3, 1)}
+
+	t.Run("off", func(t *testing.T) {
+		b, laneFormat, err := parentOutputsValidator(t, nil).txMetaPayload(data(lane.Pack(1, 1)), good)
+		require.NoError(t, err)
+		require.False(t, laneFormat)
+		require.Equal(t, legacy, b)
+	})
+
+	t.Run("every position valid", func(t *testing.T) {
+		b, laneFormat, err := shadow.txMetaPayload(data(lane.Pack(1, 1)), good)
+		require.NoError(t, err)
+		require.True(t, laneFormat)
+
+		var back meta.Data
+		gotParents, err := meta.NewDataFromLaneMetaBytes(b, &back)
+		require.NoError(t, err)
+		require.Equal(t, lane.Pack(1, 1), back.LanePosition)
+		require.Equal(t, good, gotParents)
+	})
+
+	for _, c := range []struct {
+		name    string
+		own     uint64
+		parents []uint64
+		reason  string
+	}{
+		{"no own position", lane.None, good, txmetacache.LaneMissOwn},
+		{"parents not read", lane.Pack(1, 1), nil, txmetacache.LaneMissParentsNotRead},
+		{"a parent without a position", lane.Pack(1, 1), []uint64{lane.Pack(2, 1), lane.None}, txmetacache.LaneMissParent},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			require.Equal(t, c.reason, laneTxMetaMiss(data(c.own), c.parents))
+
+			b, laneFormat, err := shadow.txMetaPayload(data(c.own), c.parents)
+			require.NoError(t, err, "a miss is counted, never an error")
+			require.False(t, laneFormat)
+
+			want, err := data(c.own).MetaBytes()
+			require.NoError(t, err)
+			require.Equal(t, want, b)
+		})
+	}
+
+	t.Run("no parents", func(t *testing.T) {
+		require.Empty(t, laneTxMetaMiss(&meta.Data{LanePosition: lane.Pack(1, 1), IsCoinbase: true}, nil))
+	})
+}
+
+// A lane entry goes on the wire with the ADDLane action, in both wire formats.
+func TestSerializeTxMetaBatchMarksLaneEntries(t *testing.T) {
+	h1, h2 := chainhash.Hash{1}, chainhash.Hash{2}
+	batch := []*txmetaBatchItem{
+		{hash: &h1, metaBytes: []byte("legacy")},
+		{hash: &h2, metaBytes: []byte("lane"), lane: true},
+	}
+
+	v1 := serializeTxMetaBatch(batch)
+	off := 4
+	require.Equal(t, txmetacache.WireActionADD, v1[off+32])
+	off += 32 + 1 + 4 + len("legacy")
+	require.Equal(t, txmetacache.WireActionADDLane, v1[off+32])
+
+	v2 := serializeTxMetaBatchV2([]txmetaItemWithHash{{item: batch[0]}, {item: batch[1]}})
+	off = txmetacache.WireV2HeaderLen
+	require.Equal(t, txmetacache.WireActionADD, v2[off+8+32])
+	off += 8 + 32 + 1 + 4 + len("legacy")
+	require.Equal(t, txmetacache.WireActionADDLane, v2[off+8+32])
 }

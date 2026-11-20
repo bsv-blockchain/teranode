@@ -10,6 +10,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
@@ -18,8 +19,10 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMain(m *testing.M) {
@@ -641,4 +644,57 @@ func TestServer_txmetaHandler_V1_CollidesWithV2Magic(t *testing.T) {
 				mock.Anything, mock.Anything, mock.Anything)
 		})
 	}
+}
+
+// v1LaneMessage is a one-entry v1 txmeta message whose entry has the ADDLane action.
+func v1LaneMessage(hash chainhash.Hash, content []byte) *kafka.KafkaMessage {
+	data := make([]byte, 4+32+1+4+len(content))
+	binary.LittleEndian.PutUint32(data, 1)
+	copy(data[4:], hash[:])
+	data[36] = txmetacache.WireActionADDLane
+	binary.LittleEndian.PutUint32(data[37:], uint32(len(content))) //nolint:gosec // test content is small
+	copy(data[41:], content)
+
+	return &kafka.KafkaMessage{Value: data}
+}
+
+// An entry in the lane encoding, which the validator sends at utxostore_laneMigration shadow, goes
+// into the cache as the MetaBytes a plain entry carries; one that does not decode is dropped.
+func TestServer_txmetaHandler_LaneEntries(t *testing.T) {
+	tx := bt.NewTx()
+	in := &bt.Input{}
+	require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{5}))
+	tx.Inputs = append(tx.Inputs, in)
+
+	inpoints, err := subtreepkg.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+
+	d := &meta.Data{TxInpoints: inpoints, Fee: 423, SizeInBytes: 250, LanePosition: lane.Pack(9, 1)}
+
+	content, err := d.LaneMetaBytesInto(nil, []uint64{lane.Pack(9, 2)})
+	require.NoError(t, err)
+
+	legacy, err := d.MetaBytes()
+	require.NoError(t, err)
+
+	t.Run("decodes into the cache", func(t *testing.T) {
+		mCache := &mockCache{}
+		mCache.On("SetCacheMultiSequential", mock.Anything, [][]byte{legacy}).Return(nil)
+
+		server := &Server{logger: &mockLogger{}, utxoStore: mCache}
+
+		require.NoError(t, server.txmetaHandler(context.Background(), v1LaneMessage(chainhash.Hash{1}, content)))
+		mCache.AssertExpectations(t)
+	})
+
+	t.Run("one that does not decode is dropped", func(t *testing.T) {
+		mCache := &mockCache{}
+		mLogger := &mockLogger{}
+		mLogger.On("Debugf", mock.Anything, mock.Anything).Return()
+
+		server := &Server{logger: mLogger, utxoStore: mCache}
+
+		require.NoError(t, server.txmetaHandler(context.Background(), v1LaneMessage(chainhash.Hash{1}, legacy)))
+		mCache.AssertNotCalled(t, "SetCacheMultiSequential", mock.Anything, mock.Anything)
+	})
 }

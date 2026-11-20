@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,9 +31,8 @@ func buildTXmetaBatchMessage(t *testing.T, entries []txmetaTestEntry) []byte {
 		// 1-byte action
 		buf = append(buf, entry.action)
 
-		if entry.action == txmetacache.WireActionADD {
-			metaBytes, err := entry.meta.MetaBytes()
-			require.NoError(t, err)
+		if entry.action == txmetacache.WireActionADD || entry.action == txmetacache.WireActionADDLane {
+			metaBytes := entryContent(t, entry)
 
 			// 4-byte content length
 			lenBuf := make([]byte, 4)
@@ -54,6 +54,83 @@ type txmetaTestEntry struct {
 	hash   chainhash.Hash
 	action byte
 	meta   meta.Data
+}
+
+// entryContent is an ADD entry's MetaBytes, or an ADDLane entry's lane encoding with one position
+// per parent.
+func entryContent(t *testing.T, entry txmetaTestEntry) []byte {
+	t.Helper()
+
+	if entry.action == txmetacache.WireActionADDLane {
+		parents := make([]uint64, len(entry.meta.TxInpoints.ParentTxHashes))
+		for i := range parents {
+			parents[i] = lane.Pack(9, uint64(i)+1) //nolint:gosec // i counts up from 0
+		}
+
+		b, err := entry.meta.LaneMetaBytesInto(nil, parents)
+		require.NoError(t, err)
+
+		return b
+	}
+
+	b, err := entry.meta.MetaBytes()
+	require.NoError(t, err)
+
+	return b
+}
+
+// Relay announces a transaction whose entry is in the lane encoding, which the validator sends at
+// utxostore_laneMigration shadow, exactly as one in the plain encoding, in both wire formats, and
+// still skips one that arrived in a block.
+func TestProcessTXmetaBatchMessage_LaneEntriesAreAnnounced(t *testing.T) {
+	relayed, err := chainhash.NewHashFromStr("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	require.NoError(t, err)
+
+	inBlock, err := chainhash.NewHashFromStr("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	require.NoError(t, err)
+
+	entries := []txmetaTestEntry{
+		{hash: *relayed, action: txmetacache.WireActionADDLane, meta: meta.Data{Fee: 423, SizeInBytes: 250, LanePosition: lane.Pack(9, 100)}},
+		{hash: *inBlock, action: txmetacache.WireActionADDLane, meta: meta.Data{Fee: 500, SizeInBytes: 250, InBlock: true, LanePosition: lane.Pack(9, 101)}},
+	}
+
+	for name, build := range map[string]func(*testing.T, []txmetaTestEntry) []byte{
+		"v1": buildTXmetaBatchMessage,
+		"v2": buildTXmetaBatchMessageV2,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var mu sync.Mutex
+			var announced []*TxHashAndFee
+
+			sm := &SyncManager{
+				logger: ulogger.TestLogger{},
+				txAnnounceBatcher: batcher.NewWithDeduplication[TxHashAndFee](100, 50*time.Millisecond, func(batch []*TxHashAndFee) {
+					mu.Lock()
+					announced = append(announced, batch...)
+					mu.Unlock()
+				}, false),
+			}
+
+			require.NoError(t, sm.processTXmetaBatchMessage(build(t, entries)))
+
+			require.Eventually(t, func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+
+				return len(announced) == 1
+			}, 2*time.Second, 10*time.Millisecond)
+
+			time.Sleep(100 * time.Millisecond)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			require.Len(t, announced, 1, "the in-block entry is not announced")
+			require.Equal(t, *relayed, announced[0].TxHash)
+			require.Equal(t, uint64(423), announced[0].Fee)
+			require.Equal(t, uint64(250), announced[0].Size)
+		})
+	}
 }
 
 // buildTXmetaBatchMessageV2 constructs a v2 wire-format batch message: an
@@ -79,9 +156,8 @@ func buildTXmetaBatchMessageV2(t *testing.T, entries []txmetaTestEntry) []byte {
 		// 1-byte action
 		buf = append(buf, entry.action)
 
-		if entry.action == txmetacache.WireActionADD {
-			metaBytes, err := entry.meta.MetaBytes()
-			require.NoError(t, err)
+		if entry.action == txmetacache.WireActionADD || entry.action == txmetacache.WireActionADDLane {
+			metaBytes := entryContent(t, entry)
 
 			lenBuf := make([]byte, 4)
 			binary.LittleEndian.PutUint32(lenBuf, uint32(len(metaBytes)))
