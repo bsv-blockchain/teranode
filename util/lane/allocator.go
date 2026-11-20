@@ -130,7 +130,8 @@ type Allocator struct {
 	released bool
 	// changed is closed and replaced whenever a waiting Next could now succeed or should give up.
 	changed chan struct{}
-	// taken counts positions given out, and samples hold it at the last two renewals, for the rate.
+	// taken counts new positions given out, not returned ones given out again, and samples hold it
+	// at the last two renewals, for the rate.
 	taken   uint64
 	samples [2]rateSample
 
@@ -397,7 +398,8 @@ func (a *Allocator) takeLocked() (v uint64, ok bool, changed chan struct{}, err 
 
 // leaveCurrentLocked settles the current grant and moves to the spare, or to no grant when there is
 // no spare, in which case the loop asks for one at once. The grant's returned positions are dropped
-// and stay burned, each at or below the final number it settles at: installLocked clears them, and with no
+// and stay burned. Those at the top of the taken range settledFinalLocked removes, and the grant
+// settles below them; those left sit below that final number and installLocked clears them. With no
 // grant installed next is 0, which Return and takeLocked both refuse.
 func (a *Allocator) leaveCurrentLocked(usedUp bool) {
 	final := a.next - 1
@@ -733,9 +735,10 @@ func (a *Allocator) renew(want bool) error {
 	return nil
 }
 
-// rateLocked is positions given out per second since the request before last that succeeded,
-// renewal or grant request alike: between 30 and 60 seconds at a 30-second renewal with no grant
-// request in between, and shorter when grant requests come close together.
+// rateLocked is new positions given out per second, returned ones given out again left out, since
+// the request before last that succeeded, renewal or grant request alike: between 30 and 60 seconds
+// at a 30-second renewal with no grant request in between, and shorter when grant requests come
+// close together.
 func (a *Allocator) rateLocked(at time.Time) uint64 {
 	base := a.samples[0]
 
