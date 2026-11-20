@@ -1,6 +1,9 @@
 package lane
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"math/rand"
 	"testing"
 	"time"
@@ -424,4 +427,96 @@ func mustBytesF(f *testing.F, bm *roaring64.Bitmap) []byte {
 	}
 
 	return b
+}
+
+// canonicalHex is the canonical encoding of bm, the form every writer here produces.
+// holeDataBitmapDigest is the SHA-256 of the canonical bitmap-container fixture's hex.
+const holeDataBitmapDigest = "72bf401984116de162c09d298a87bac2c3f6684ca06b4fbb188df7d947293c87"
+
+func canonicalHex(t *testing.T, bm *roaring64.Bitmap) string {
+	t.Helper()
+
+	c := bm.Clone()
+	c.RunOptimize()
+
+	return hex.EncodeToString(mustBytes(t, c))
+}
+
+// The canonical hole-data bytes are pinned literally, not computed by the same library, so a
+// Roaring upgrade that changes how it picks array, run or bitmap containers fails here instead of
+// making every stored row unreadable. Each literal also decodes.
+func TestHoleDataCanonicalBytesArePinned(t *testing.T) {
+	array := bitmapOf(1, 5, 9)
+
+	run := roaring64.New()
+	run.AddRange(1, 1001)
+
+	bitmap := roaring64.New()
+	for v := uint64(1); v < 20_001; v += 2 {
+		bitmap.Add(v)
+	}
+
+	twoBuckets := bitmapOf(1, 1<<32+1)
+
+	for name, c := range map[string]struct {
+		bm   *roaring64.Bitmap
+		want string
+	}{
+		"array container": {array, "0100000000000000000000003a300000010000000000020010000000010005000900"},
+		"run container":   {run, "0100000000000000000000003b300000010000e70301000100e703"},
+		"two buckets":     {twoBuckets, "0200000000000000000000003a3000000100000000000000100000000100010000003a3000000100000000000000100000000100"},
+	} {
+		require.Equal(t, c.want, canonicalHex(t, c.bm), name)
+
+		raw, err := hex.DecodeString(c.want)
+		require.NoError(t, err)
+
+		got, err := DecodeHoleData(raw)
+		require.NoError(t, err, name)
+		require.True(t, got.Equals(c.bm), name)
+	}
+
+	// The bitmap container is 8,220 bytes: pin its header and a digest of the whole.
+	enc := canonicalHex(t, bitmap)
+	require.Equal(t, "0100000000000000000000003a3000000100000000000f2710000000", enc[:56])
+	sum := sha256.Sum256([]byte(enc))
+	require.Equal(t, holeDataBitmapDigest, hex.EncodeToString(sum[:]))
+}
+
+// A run container of tens of thousands of runs would make Roaring's Validate compare every pair of
+// runs, seconds of CPU per container. The canonical form never holds more than 2,047 runs, so more
+// is refused first, quickly; a real 2,047-run container still decodes.
+func TestDecodeHoleDataRefusesMoreRunsThanCanonical(t *testing.T) {
+	const runs = 32_767
+
+	b := binary.LittleEndian.AppendUint64(nil, 1)         // one 64-bit bucket
+	b = binary.LittleEndian.AppendUint32(b, 0)            // its key
+	b = binary.LittleEndian.AppendUint32(b, serialCookie) // one container, with runs
+	b = append(b, 0x01)                                   // container 0 is a run container
+	b = binary.LittleEndian.AppendUint16(b, 0)            // container key
+	b = binary.LittleEndian.AppendUint16(b, runs-1)       // cardinality less one
+	b = binary.LittleEndian.AppendUint16(b, runs)         // run count
+
+	for i := 0; i < runs; i++ {
+		b = binary.LittleEndian.AppendUint16(b, uint16(2*i+1)) // start
+		b = binary.LittleEndian.AppendUint16(b, 0)             // length less one
+	}
+
+	started := time.Now()
+	_, err := DecodeHoleData(b)
+	require.ErrorContains(t, err, "more than the canonical")
+	require.Less(t, time.Since(started), 200*time.Millisecond)
+
+	most := roaring64.New()
+	for i := uint64(0); i < maxCanonicalRuns; i++ {
+		most.AddRange(i*6+1, i*6+4) // runs of three, so a run container beats a bitmap
+	}
+
+	raw, err := hex.DecodeString(canonicalHex(t, most))
+	require.NoError(t, err)
+	require.Equal(t, uint16(maxCanonicalRuns), binary.LittleEndian.Uint16(raw[len(raw)-4*maxCanonicalRuns-2:]), "the fixture really is a 2,047-run container")
+
+	got, err := DecodeHoleData(raw)
+	require.NoError(t, err)
+	require.True(t, got.Equals(most))
 }

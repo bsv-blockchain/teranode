@@ -2,6 +2,7 @@ package lane
 
 import (
 	"bytes"
+	"encoding/binary"
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
@@ -255,6 +256,13 @@ func DecodeHoleData(data []byte) (*roaring64.Bitmap, error) {
 		return nil, errors.NewProcessingError("lane hole data has %d trailing bytes", r.Len())
 	}
 
+	// Roaring's Validate compares every pair of runs in a run container, so a container of tens of
+	// thousands of runs costs seconds. The canonical form never holds more than maxCanonicalRuns,
+	// so refuse more before Validate runs.
+	if err := checkRunCounts(data); err != nil {
+		return nil, err
+	}
+
 	if err := bm.Validate(); err != nil {
 		return nil, errors.NewProcessingError("lane hole data is inconsistent", err)
 	}
@@ -276,6 +284,132 @@ func DecodeHoleData(data []byte) (*roaring64.Bitmap, error) {
 	}
 
 	return bm, nil
+}
+
+// Roaring's serialized form, as far as checkRunCounts reads it. A 64-bit bitmap is a bucket count,
+// then per bucket a 4-byte key and a 32-bit bitmap. A 32-bit bitmap starts with a cookie: with run
+// containers, the low 16 bits are serialCookie, the high 16 bits the container count less one,
+// then a run flag per container; without, serialCookieNoRunContainer then a 4-byte count. Then a
+// key and a cardinality less one per container, 2 bytes each, then 4-byte offsets unless the
+// bitmap has run containers and fewer than noOffsetThreshold containers. Then each container: a
+// run container is a 2-byte run count and 4 bytes per run, a bitmap container 8,192 bytes, and an
+// array container 2 bytes per value.
+const (
+	serialCookie               = 12347
+	serialCookieNoRunContainer = 12346
+	noOffsetThreshold          = 4
+	arrayContainerMax          = 4096
+	bitmapContainerBytes       = 8192
+
+	// maxCanonicalRuns is the most runs a run-optimized container holds: a run container takes 2
+	// bytes plus 4 per run, and with more than 2,047 runs a bitmap container's 8,192 bytes is
+	// smaller, so RunOptimize stores it as a bitmap instead.
+	maxCanonicalRuns = (bitmapContainerBytes - 2) / 4
+)
+
+// checkRunCounts walks the serialized form of a 64-bit Roaring bitmap and refuses a run container
+// of more than maxCanonicalRuns runs. It reads only headers and run counts, in time linear in the
+// number of containers. A buffer it cannot walk is refused too; ReadPortableFrom has already
+// accepted the buffer, so that means it is not the format checkRunCounts reads.
+func checkRunCounts(data []byte) error {
+	refuse := func() error {
+		return errors.NewProcessingError("lane hole data: unreadable container headers")
+	}
+
+	if len(data) < 8 {
+		return refuse()
+	}
+
+	buckets := binary.LittleEndian.Uint64(data)
+	b := data[8:]
+
+	for i := uint64(0); i < buckets; i++ {
+		if len(b) < 8 {
+			return refuse()
+		}
+
+		b = b[4:] // the bucket key
+
+		cookie := binary.LittleEndian.Uint32(b)
+
+		var (
+			size    uint32
+			runFlag []byte
+		)
+
+		switch {
+		case cookie&0xFFFF == serialCookie:
+			size = cookie>>16 + 1
+			b = b[4:]
+
+			flagBytes := int(size+7) / 8
+			if len(b) < flagBytes {
+				return refuse()
+			}
+
+			runFlag, b = b[:flagBytes], b[flagBytes:]
+		case cookie == serialCookieNoRunContainer:
+			if len(b) < 8 {
+				return refuse()
+			}
+
+			size = binary.LittleEndian.Uint32(b[4:])
+			b = b[8:]
+		default:
+			return refuse()
+		}
+
+		if uint64(len(b)) < uint64(size)*4 {
+			return refuse()
+		}
+
+		keyCard, rest := b[:size*4], b[size*4:]
+		b = rest
+
+		if runFlag == nil || size >= noOffsetThreshold {
+			if uint64(len(b)) < uint64(size)*4 {
+				return refuse()
+			}
+
+			b = b[size*4:]
+		}
+
+		for c := uint32(0); c < size; c++ {
+			card := int(binary.LittleEndian.Uint16(keyCard[c*4+2:])) + 1
+
+			switch {
+			case runFlag != nil && runFlag[c/8]&(1<<(c%8)) != 0:
+				if len(b) < 2 {
+					return refuse()
+				}
+
+				runs := int(binary.LittleEndian.Uint16(b))
+				if runs > maxCanonicalRuns {
+					return errors.NewProcessingError("lane hole data: a run container of %d runs, more than the canonical %d", runs, maxCanonicalRuns)
+				}
+
+				if len(b) < 2+runs*4 {
+					return refuse()
+				}
+
+				b = b[2+runs*4:]
+			case card > arrayContainerMax:
+				if len(b) < bitmapContainerBytes {
+					return refuse()
+				}
+
+				b = b[bitmapContainerBytes:]
+			default:
+				if len(b) < card*2 {
+					return refuse()
+				}
+
+				b = b[card*2:]
+			}
+		}
+	}
+
+	return nil
 }
 
 // Check validates a stored row against itself: range bounds, tag, first hole and hole data. It
