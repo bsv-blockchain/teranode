@@ -3092,6 +3092,7 @@ type spendUpdateRow struct {
 	transactionID int
 	vout          uint32
 	spendingData  []byte
+	blockHeight   uint32
 }
 
 // sortSpendUpdateRows orders rows by (transaction_id, idx), the order every bulk
@@ -3304,6 +3305,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			transactionID: r.transactionID,
 			vout:          spend.Vout,
 			spendingData:  spend.SpendingData.Bytes(),
+			blockHeight:   item.blockHeight,
 		})
 	}
 
@@ -3381,16 +3383,16 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		// unconditionally true and every fresh write came back flagged idempotent.
 		// Splitting the write from the already-matching rows is the only way to
 		// read that distinction, so both branches now do it.
-		ub.WriteString(`WITH v(transaction_id,idx,spending_data,batch_idx) AS (VALUES `)
-		updateArgs := make([]interface{}, 0, len(dedupedUpdate)*4+1)
+		ub.WriteString(`WITH v(transaction_id,idx,spending_data,batch_idx,spending_height) AS (VALUES `)
+		updateArgs := make([]interface{}, 0, len(dedupedUpdate)*5+1)
 		pidx := 1
 		for j, u := range dedupedUpdate {
 			if j > 0 {
 				ub.WriteByte(',')
 			}
-			ub.WriteString(fmt.Sprintf("($%d::int,$%d::int,$%d::bytea,$%d::int)", pidx, pidx+1, pidx+2, pidx+3))
-			updateArgs = append(updateArgs, u.transactionID, u.vout, u.spendingData, u.batchIdx)
-			pidx += 4
+			ub.WriteString(fmt.Sprintf("($%d::int,$%d::int,$%d::bytea,$%d::int,$%d::int)", pidx, pidx+1, pidx+2, pidx+3, pidx+4))
+			updateArgs = append(updateArgs, u.transactionID, u.vout, u.spendingData, u.batchIdx, u.blockHeight)
+			pidx += 5
 		}
 		if wrapDAH {
 			newDAH := int64(s.GetBlockHeight() + 1 + retention)
@@ -3419,7 +3421,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			// concurrent-idempotent re-check below.
 			ub.WriteString(fmt.Sprintf(`),
 			upd_spent AS (
-				UPDATE outputs o SET spending_data = v.spending_data FROM v
+				UPDATE outputs o SET spending_data = v.spending_data, spending_height = v.spending_height FROM v
 				WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
 				  AND o.spending_data IS NULL
 				  AND o.frozen = false
@@ -3484,7 +3486,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			ub.WriteString(`),
 			upd_spent AS (
 				UPDATE outputs o
-				SET spending_data = v.spending_data
+				SET spending_data = v.spending_data, spending_height = v.spending_height
 				FROM v
 				WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
 				  AND o.spending_data IS NULL
@@ -3965,7 +3967,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 	// spender the output records.
 	q2 := `
 		UPDATE outputs
-		SET spending_data = $1
+		SET spending_data = $1, spending_height = $4
 		WHERE transaction_id = $2
 		AND idx = $3
 		AND spending_data IS NULL
@@ -4096,7 +4098,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 		}
 
 		// UPDATE outputs with optimistic locking
-		result, err := txn.ExecContext(ctx, q2, spend.SpendingData.Bytes(), transactionID, spend.Vout)
+		result, err := txn.ExecContext(ctx, q2, spend.SpendingData.Bytes(), transactionID, spend.Vout, item.blockHeight)
 		if err != nil {
 			if isDeadlock(err) {
 				return true // retryable
@@ -4548,7 +4550,7 @@ func (s *Store) unspendOnce(ctx context.Context, spends []*utxo.Spend, flagAsLoc
 	// Spend()/SetConflicting()/GetSpends(), all of which populate it.
 	q1 := `
 		UPDATE outputs
-		SET spending_data = NULL
+		SET spending_data = NULL, spending_height = NULL
 		WHERE transaction_id IN (
 			SELECT id FROM transactions WHERE hash = $1
 		)
@@ -6645,42 +6647,46 @@ func (c connExecutor) Exec(query string, args ...interface{}) (sql.Result, error
 
 func (c connExecutor) Close() error { return nil }
 
-// addLanePositionColumnSQL adds the nullable lane_position column to transactions when it is
-// missing. With no default, Postgres only changes its catalog and does not rewrite the table, and
-// every row already stored reads NULL, meaning no lane position. lock_timeout bounds the wait for
-// the table lock: ADD COLUMN needs ACCESS EXCLUSIVE, and while it waits behind an open transaction
-// on transactions (a pruner batch on a pod still running the old build, say) every later read and
-// write on the table queues behind it.
-const addLanePositionColumnSQL = `
+// addNullableColumnSQL adds a nullable column with no default to table when it is missing. With
+// no default, Postgres only changes its catalog and does not rewrite the table, and every row
+// already stored reads NULL. lock_timeout bounds the wait for the table lock: ADD COLUMN needs
+// ACCESS EXCLUSIVE, and while it waits behind an open transaction on the table (a pruner batch on a
+// pod still running the old build, say) every later read and write on the table queues behind it.
+// table, column and sqlType are constants of this package, never input, so they are formatted in.
+func addNullableColumnSQL(table, column, sqlType string) string {
+	return fmt.Sprintf(`
 		DO $$
 		BEGIN
-			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'transactions'::regclass AND attname = 'lane_position' AND NOT attisdropped) THEN
+			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '%[1]s'::regclass AND attname = '%[2]s' AND NOT attisdropped) THEN
 				PERFORM set_config('lock_timeout', '200ms', true);
-				ALTER TABLE transactions ADD COLUMN lane_position BIGINT;
+				ALTER TABLE %[1]s ADD COLUMN %[2]s %[3]s;
 			END IF;
 		END $$;
-	`
+	`, table, column, sqlType)
+}
 
-// laneColumnMigrationLimit is how long addLanePositionColumn retries before the store refuses to
-// open. It only matters on the first start of this build against a database from before it,
-// beside a process that keeps a transaction open on transactions for all of this time. Other
-// processes opening the store wait on the schema lock for at most this long too.
+// laneColumnMigrationLimit is how long addNullableColumn retries before the store refuses to
+// open. It only matters on the first start of a build that adds a column to a database from before
+// it, beside a process that keeps a transaction open on the table for all of this time. Other
+// processes opening the store wait on the schema lock for at most this long too. It bounds every
+// column migration, not only lane_position.
 var laneColumnMigrationLimit = 5 * time.Minute
 
-// addLanePositionColumn runs addLanePositionColumnSQL, and when the table lock is not granted
-// within the lock_timeout it backs off and tries again, until limit has passed. Each attempt is its
-// own statement, so between attempts nothing holds or waits for a lock on transactions.
-func addLanePositionColumn(db DBExecutor, limit time.Duration) error {
+// addNullableColumn runs addNullableColumnSQL, and when the table lock is not granted within the
+// lock_timeout it backs off and tries again, until limit has passed. Each attempt is its own
+// statement, so between attempts nothing holds or waits for a lock on the table.
+func addNullableColumn(db DBExecutor, table, column, sqlType string, limit time.Duration) error {
 	ctx := context.Background()
 	if c, ok := db.(connExecutor); ok {
 		ctx = c.ctx
 	}
 
+	statement := addNullableColumnSQL(table, column, sqlType)
 	deadline := time.Now().Add(limit)
 	backoff := 50 * time.Millisecond
 
 	for {
-		_, err := db.Exec(addLanePositionColumnSQL)
+		_, err := db.Exec(statement)
 		if err == nil || !isLockNotAvailable(err) || time.Now().After(deadline) {
 			return err
 		}
@@ -6798,6 +6804,7 @@ func createPostgresSchemaImpl(db DBExecutor, logger ulogger.Logger) error {
         ,spending_data            BYTEA
         ,frozen                   BOOLEAN DEFAULT FALSE
         ,spendableIn              INT
+        ,spending_height          INTEGER
         ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
@@ -6877,9 +6884,16 @@ func createPostgresSchemaImpl(db DBExecutor, logger ulogger.Logger) error {
 		return errors.NewStorageError("could not add preserve_until column to transactions table - [%+v]", err)
 	}
 
-	if err := addLanePositionColumn(db, laneColumnMigrationLimit); err != nil {
+	if err := addNullableColumn(db, "transactions", "lane_position", "BIGINT", laneColumnMigrationLimit); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not add lane_position column to transactions table - [%+v]", err)
+	}
+
+	// The block height of the spend recorded in spending_data. NULL for an output
+	// unspent or spent by a build that did not record it.
+	if err := addNullableColumn(db, "outputs", "spending_height", "INTEGER", laneColumnMigrationLimit); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not add spending_height column to outputs table - [%+v]", err)
 	}
 
 	// Ensure block_ids FK has ON DELETE CASCADE — only drop+recreate if it exists without CASCADE
@@ -7094,6 +7108,7 @@ func createSqliteSchema(db *usql.DB) error {
         ,spending_data            BLOB
         ,frozen                   BOOLEAN DEFAULT FALSE
         ,spendableIn              INT
+        ,spending_height          INTEGER
         ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
@@ -7335,6 +7350,22 @@ func createSqliteSchema(db *usql.DB) error {
 		if _, err := db.Exec(`ALTER TABLE transactions ADD COLUMN lane_position BIGINT`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not add lane_position column to transactions table - [%+v]", err)
+		}
+	}
+
+	// Add the nullable spending_height column to an outputs table created before
+	// it existed. No default and no backfill: NULL reads as a spend recorded
+	// without a height.
+	var spendingHeightColumns int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('outputs') WHERE name = 'spending_height'`).Scan(&spendingHeightColumns); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not check outputs table for spending_height column - [%+v]", err)
+	}
+
+	if spendingHeightColumns == 0 {
+		if _, err := db.Exec(`ALTER TABLE outputs ADD COLUMN spending_height INTEGER`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not add spending_height column to outputs table - [%+v]", err)
 		}
 	}
 

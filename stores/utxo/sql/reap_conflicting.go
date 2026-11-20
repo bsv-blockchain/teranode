@@ -67,7 +67,7 @@ func (s *Store) reapConflicting(ctx context.Context, txHash chainhash.Hash, bloc
 
 	rows, err := txn.QueryContext(ctx, `
 		UPDATE outputs
-		SET spending_data = NULL
+		SET spending_data = NULL, spending_height = NULL
 		WHERE (transaction_id, idx) IN (
 			SELECT p.id, i.previous_tx_idx
 			FROM inputs i
