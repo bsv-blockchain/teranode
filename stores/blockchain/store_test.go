@@ -234,3 +234,24 @@ func TestDBEngine(t *testing.T) {
 	engine := store.GetDBEngine()
 	assert.Equal(t, util.SQLEngine("sqlite"), engine)
 }
+
+// The lane map and conversion calls are part of the Store contract, not only methods of the SQL
+// store: the later steps reach them through this interface. Each method expression below stops
+// compiling if its method leaves the interface.
+func TestStoreCarriesTheLaneMapAndConversionMethods(t *testing.T) {
+	methods := []any{
+		Store.InsertLaneMapRows,
+		Store.LaneMapRows,
+		Store.LaneMapRowsEndingAbove,
+		Store.InsertLaneConversionSegment,
+		Store.LaneConversionSegments,
+		Store.InsertLaneConversionBlocks,
+		Store.LaneConversionBlocks,
+		Store.CompleteLaneConversionSegment,
+		Store.LaneConversionComplete,
+	}
+
+	for _, m := range methods {
+		require.NotNil(t, m)
+	}
+}
