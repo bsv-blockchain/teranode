@@ -252,7 +252,8 @@ func TestPrunedReplayIsRefusedAtSpend_Aerospike(t *testing.T) {
 // crashes before D's record is created. Retried two blocks later it meets its own spend, an
 // idempotent match 2 blocks old, which is accepted as before so the create can run. On the
 // expression path (one utxo per record) the first spend is written without Lua and must record its
-// height as well, or the retry would count as historical and be refused.
+// height as well: a spend without one never counts as historical, so a replay of it after
+// pruning would be accepted.
 func TestHonestRetryIsNotARejectedReplay_Aerospike(t *testing.T) {
 	for _, tc := range []struct {
 		name string

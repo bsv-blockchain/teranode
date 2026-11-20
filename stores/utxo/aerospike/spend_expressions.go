@@ -264,9 +264,9 @@ func (s *Store) buildSpendOperations(
 	)
 
 	// Record the spend's block height in the spendHeights bin, as teranode.lua's setSpendHeight
-	// does: 4 little-endian bytes at offset*4, the bin grown to cover them. A spend without its
-	// height would count as historical, and an honest retry of it would then be refused as a
-	// replay. A re-spend that names the same spender fails the first-seen filter and is answered
+	// does: 4 little-endian bytes at offset*4, the bin grown to cover them. A spend written without
+	// its height never counts as historical (utxo.IsHistoricalSpend), so a later replay of a
+	// pruned transaction that matches it would be accepted instead of refused. A re-spend that names the same spender fails the first-seen filter and is answered
 	// by the Lua spend, which reports the recorded height. The resize only grows the bin; NoFail
 	// keeps a bin already long enough from failing the call.
 	height := make([]byte, spendHeightSize)

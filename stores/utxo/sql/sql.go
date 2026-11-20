@@ -2382,8 +2382,10 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				skipUTXOHashCheck: useSkipUTXOHashCheck,
 			}
 			// Reuse the input's wait timer to cancel this call's database
-			// work too. The callback may include inputs from other calls;
-			// those share its transaction's abort, as on any SQL failure.
+			// work too. A batch holding only this call's inputs aborts at
+			// once. A batch shared with other calls aborts only once every
+			// call in it has ended (mixedSpendBatchContext), and until then
+			// this caller waits for the batch's answer.
 			timer := time.AfterFunc(spendTimeout, cancelCall)
 			defer timer.Stop()
 			s.spendBatcher.PutCtx(callCtx, item)
@@ -6566,7 +6568,8 @@ func addLaneColumnSQL(c sqlLaneColumn) string {
 }
 
 // laneColumnMigrationLimit is how long addLanePositionColumn retries, across all the lane
-// columns together, before the store refuses to open. It only matters on the first start of a
+// columns together, before the store refuses to open. At open, outputs.spending_height shares the
+// same deadline. It only matters on the first start of a
 // build against a database from before the columns, beside a process that keeps a transaction open
 // on transactions or outputs for all of this time. Other processes opening the store wait on the
 // schema lock for at most this long too, plus one last attempt.
@@ -6844,7 +6847,11 @@ func createPostgresSchemaImpl(db DBExecutor, logger ulogger.Logger) error {
 		return errors.NewStorageError("could not add preserve_until column to transactions table - [%+v]", err)
 	}
 
-	if err := addLanePositionColumn(db, laneColumnMigrationLimit); err != nil {
+	// One deadline bounds every column migration of this open, the lane columns
+	// and spending_height together.
+	migrationDeadline := time.Now().Add(laneColumnMigrationLimit)
+
+	if err := addLanePositionColumn(db, time.Until(migrationDeadline)); err != nil {
 		_ = db.Close()
 		return err
 	}
@@ -6852,7 +6859,7 @@ func createPostgresSchemaImpl(db DBExecutor, logger ulogger.Logger) error {
 	// The block height of the spend recorded in spending_data. NULL for an output
 	// unspent or spent by a build that did not record it. It is not a lane column,
 	// but it is added the same way: nullable, no default, a bounded lock wait.
-	if err := addLaneColumn(db, spendingHeightColumn, time.Now().Add(laneColumnMigrationLimit)); err != nil {
+	if err := addLaneColumn(db, spendingHeightColumn, migrationDeadline); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not add spending_height column to outputs table - [%+v]", err)
 	}
