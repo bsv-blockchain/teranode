@@ -380,10 +380,16 @@ func TestValidateParentChain_RejectsChildOfUnloadedUnminedParent(t *testing.T) {
 	loaded := make([]*utxo.UnminedTransaction, 0, 2)
 
 	for i, tx := range []*bt.Tx{parent, child, grandchild} {
-		_, _, err := items.utxoStore.SpendAndCreate(ctx, tx, 0, utxo.WithCreateOnly())
+		// at a non-zero height, so the store records each one as unmined since then
+		_, _, err := items.utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		if tx == parent {
+			stored, err := items.utxoStore.Get(ctx, tx.TxIDChainHash(), fields.UnminedSince, fields.BlockIDs)
+			require.NoError(t, err)
+			require.Positive(t, stored.UnminedSince, "the parent must read back as unmined, not as an inconsistent record")
+			require.Empty(t, stored.BlockIDs)
+
 			continue // the scan left the parent out
 		}
 
