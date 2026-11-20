@@ -813,7 +813,8 @@ func (s *Store) PrepareLaneSchema(ctx context.Context) error {
 	return PrepareLaneSchema(ctx, s.pool)
 }
 
-// LaneSchemaInstalled reports whether every lane column is installed.
+// LaneSchemaInstalled reports whether every lane column is installed. It implements
+// utxo.LaneSchemaChecker, which teranode-cli prepare-lane-schema checks after the install.
 func (s *Store) LaneSchemaInstalled(ctx context.Context) (bool, error) {
 	for _, c := range laneSchemaColumns {
 		found, err := schemaHas(ctx, s.pool, c.table, c.column)

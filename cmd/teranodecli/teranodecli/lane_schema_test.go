@@ -67,6 +67,44 @@ func TestPrepareLaneSchemaReportsAFailedInstall(t *testing.T) {
 	require.NotContains(t, out.String(), "installed")
 }
 
+// checkedPreparer is a real SQL store whose install returns success, with a lane column check that
+// gives the answer and error set here.
+type checkedPreparer struct {
+	*utxosql.Store
+	installed bool
+	err       error
+}
+
+func (checkedPreparer) PrepareLaneSchema(context.Context) error { return nil }
+
+func (c checkedPreparer) LaneSchemaInstalled(context.Context) (bool, error) {
+	return c.installed, c.err
+}
+
+// Where the store can check its lane columns, the command checks them after the install and
+// reports success only when all are there.
+func TestPrepareLaneSchemaChecksTheColumnsAfterTheInstall(t *testing.T) {
+	u, err := url.Parse("sqlitememory:///lane_schema_cli_check")
+	require.NoError(t, err)
+
+	store, err := utxosql.New(context.Background(), ulogger.TestLogger{}, test.CreateBaseTestSettings(t), u)
+	require.NoError(t, err)
+
+	var out bytes.Buffer
+	require.NoError(t, prepareLaneSchema(context.Background(), checkedPreparer{Store: store, installed: true}, &out))
+	require.Contains(t, out.String(), "Lane schema installed")
+
+	out.Reset()
+	err = prepareLaneSchema(context.Background(), checkedPreparer{Store: store}, &out)
+	require.ErrorContains(t, err, "still missing")
+	require.NotContains(t, out.String(), "installed")
+
+	out.Reset()
+	err = prepareLaneSchema(context.Background(), checkedPreparer{Store: store, err: errors.NewStorageError("connection reset")}, &out)
+	require.ErrorContains(t, err, "connection reset")
+	require.NotContains(t, out.String(), "installed")
+}
+
 // teranode-cli dispatches prepare-lane-schema to this command: its --help prints the command's
 // long help and exits 0, where an unknown command exits 1. Start exits the process, so it runs in
 // a child copy of this test binary.

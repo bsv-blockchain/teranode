@@ -57,6 +57,18 @@ func prepareLaneSchema(ctx context.Context, store utxostore.Store, out io.Writer
 		return errors.NewStorageError("failed to install the lane schema", err)
 	}
 
+	// Where the store can list its lane columns, confirm every one is there before saying so.
+	if checker, ok := utxostore.As[utxostore.LaneSchemaChecker](store); ok {
+		installed, err := checker.LaneSchemaInstalled(ctx)
+		if err != nil {
+			return errors.NewStorageError("failed to check the lane schema", err)
+		}
+
+		if !installed {
+			return errors.NewStorageError("the lane schema install returned without error but a lane column is still missing")
+		}
+	}
+
 	_, _ = fmt.Fprintln(out, "Lane schema installed. Start every teranode process of the node again so each sees it.")
 
 	return nil

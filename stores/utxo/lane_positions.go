@@ -139,3 +139,9 @@ func WithTakenLanePosition(opts []CreateOption, position uint64) []CreateOption 
 type LaneSchemaPreparer interface {
 	PrepareLaneSchema(ctx context.Context) error
 }
+
+// LaneSchemaChecker is a store that can report whether every one of its lane columns is installed,
+// which teranode-cli prepare-lane-schema checks after PrepareLaneSchema returns. Find it with As.
+type LaneSchemaChecker interface {
+	LaneSchemaInstalled(ctx context.Context) (bool, error)
+}
