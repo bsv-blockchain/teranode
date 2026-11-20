@@ -3,6 +3,7 @@ package netsync
 import (
 	"encoding/binary"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -57,16 +58,16 @@ type txmetaTestEntry struct {
 }
 
 // buildTXmetaBatchMessageV2 constructs a v2 wire-format batch message: an
-// 8-byte header (magic 0xFF, version 0x02, 2 reserved bytes, uint32 LE entry
-// count) followed by per-entry records prefixed with an 8-byte xxhash. The
-// xxhash is filled with zeros — the netsync consumer ignores it.
+// 8-byte header (magic 0xFF, version 0x02, uint16 LE BucketsCount, uint32
+// LE entry count) followed by per-entry records prefixed with an 8-byte
+// xxhash. The xxhash is filled with zeros — the netsync consumer ignores it.
 func buildTXmetaBatchMessageV2(t *testing.T, entries []txmetaTestEntry) []byte {
 	t.Helper()
 
 	buf := make([]byte, 8)
 	buf[0] = txmetacache.WireV2Magic
 	buf[1] = txmetacache.WireV2Version
-	// buf[2:4] reserved (zeros)
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(txmetacache.BucketsCount))
 	binary.LittleEndian.PutUint32(buf[4:], uint32(len(entries)))
 
 	for _, entry := range entries {
@@ -510,5 +511,63 @@ func TestProcessTXmetaBatchMessage_CoinbaseFiltering(t *testing.T) {
 		defer mu.Unlock()
 
 		require.Empty(t, announced)
+	})
+}
+
+type warnCountingLogger struct {
+	ulogger.TestLogger
+	warns *atomic.Int32
+}
+
+func (l warnCountingLogger) Warnf(string, ...interface{}) {
+	l.warns.Add(1)
+}
+
+func TestProcessTXmetaBatchMessage_BucketsCountWarning(t *testing.T) {
+	hash, err := chainhash.NewHashFromStr("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	require.NoError(t, err)
+
+	entries := []txmetaTestEntry{{hash: *hash, action: txmetacache.WireActionDELETE}}
+
+	newManager := func() (*SyncManager, *atomic.Int32) {
+		lastTxmetaBucketsWarnNano.Store(0)
+
+		warns := &atomic.Int32{}
+
+		return &SyncManager{logger: warnCountingLogger{warns: warns}}, warns
+	}
+
+	t.Run("pre-buckets producer (zero header) does not warn", func(t *testing.T) {
+		sm, warns := newManager()
+
+		msg := buildTXmetaBatchMessageV2(t, entries)
+		binary.LittleEndian.PutUint16(msg[txmetacache.WireV2BucketsOffset:], 0)
+
+		for i := 0; i < 5; i++ {
+			require.NoError(t, sm.processTXmetaBatchMessage(msg))
+		}
+
+		require.Zero(t, warns.Load())
+	})
+
+	t.Run("matching producer does not warn", func(t *testing.T) {
+		sm, warns := newManager()
+
+		msg := buildTXmetaBatchMessageV2(t, entries)
+		require.NoError(t, sm.processTXmetaBatchMessage(msg))
+		require.Zero(t, warns.Load())
+	})
+
+	t.Run("mismatched producer warns once per throttle window", func(t *testing.T) {
+		sm, warns := newManager()
+
+		msg := buildTXmetaBatchMessageV2(t, entries)
+		binary.LittleEndian.PutUint16(msg[txmetacache.WireV2BucketsOffset:], uint16(txmetacache.BucketsCount*2))
+
+		for i := 0; i < 5; i++ {
+			require.NoError(t, sm.processTXmetaBatchMessage(msg))
+		}
+
+		require.Equal(t, int32(1), warns.Load())
 	})
 }
