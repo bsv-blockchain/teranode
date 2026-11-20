@@ -617,7 +617,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// short catchup that started from RUNNING: block validation asks to keep the
 	// hand-off on, offering unseen fork transactions to the pool through the
 	// existing RUNNING path (including its block-context queue-shed policy).
-	// Either way the block must also pass feedsBlockAssembly's height and era gate.
+	// Either way the block must also pass feedsBlockAssembly's height gate.
 	stateFeeds := *currentState == blockchain.FSMStateRUNNING ||
 		(*currentState == blockchain.FSMStateCATCHINGBLOCKS && request.GetKeepBlockAssemblyHandoff())
 
