@@ -958,6 +958,10 @@ func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 	return newUnminedTxIterator(s, false)
 }
 
+// Block assembly finds the skipping scan through this interface; a rename here
+// must not silently drop the store back to the failing scan.
+var _ utxo.MissingExternalSkipper = (*Store)(nil)
+
 // GetUnminedTxIteratorSkippingMissingExternal is GetUnminedTxIterator for block
 // assembly's load, which runs at start, on reload and on reset. An unmined
 // record marked external whose file the external store does not have is logged,

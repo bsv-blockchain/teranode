@@ -4272,9 +4272,7 @@ func (b *BlockAssembler) drainUnminedDropHashes(where string, isReload bool) err
 // would stop block assembly on every restart. Other callers keep the scan that
 // fails.
 func (b *BlockAssembler) unminedTxIteratorForLoad() (utxo.UnminedTxIterator, error) {
-	if skipper, ok := utxo.As[interface {
-		GetUnminedTxIteratorSkippingMissingExternal() (utxo.UnminedTxIterator, error)
-	}](b.utxoStore); ok {
+	if skipper, ok := utxo.As[utxo.MissingExternalSkipper](b.utxoStore); ok {
 		return skipper.GetUnminedTxIteratorSkippingMissingExternal()
 	}
 
