@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -130,6 +131,62 @@ func TestUnconfirmedParentsOptionDoesNotLeakToPeerPaths(t *testing.T) {
 		require.NoError(t, server.subtreesHandler(context.Background(), time.Now(), childSubtree.RootHash(), baseURL, "peer-1"))
 
 		requireFlagNeverSet(t, recordingClient, "Kafka subtreesHandler")
+
+		// Validated without InBlock, a peer subtree's creates name subtree validation themselves on
+		// the burned lane position counter, rather than counting as the validator's own.
+		for i, opts := range recordingClient.recordedOptions(*childHash) {
+			require.Equal(t, utxo.CallerSubtreeValidation, opts.Caller, "Kafka subtreesHandler call #%d", i)
+		}
+	})
+
+	t.Run("a replayed peer subtree names subtree validation too", func(t *testing.T) {
+		InitPrometheusMetrics()
+
+		server, recordingClient, childSubtree := newServer(t)
+
+		server.bestBlockHeaderMeta.Store(&model.BlockHeaderMeta{Height: blockHeight - 1})
+		blockIDsMap := map[uint32]bool{}
+		server.currentBlockIDsMap.Store(&blockIDsMap)
+
+		baseURL, err := url.Parse("http://peer.invalid:8090")
+		require.NoError(t, err)
+
+		// A peer subtree kept while catching up is validated later by replaySubtree, which does not
+		// go through subtreesHandler.
+		outcome, err := server.replaySubtree(context.Background(),
+			skippedSubtree{hash: *childSubtree.RootHash(), baseURL: baseURL, peerID: "peer-1", recordedAt: time.Now()})
+		require.NoError(t, err)
+		require.Equal(t, "replayed", outcome)
+
+		recorded := recordingClient.recordedOptions(*childHash)
+		require.NotEmpty(t, recorded, "the replay validated the child")
+
+		for i, opts := range recorded {
+			require.Equal(t, utxo.CallerSubtreeValidation, opts.Caller, "replay call #%d", i)
+		}
+	})
+
+	t.Run("a caller the handler is given wins over its default", func(t *testing.T) {
+		InitPrometheusMetrics()
+
+		server, recordingClient, childSubtree := newServer(t)
+
+		server.bestBlockHeaderMeta.Store(&model.BlockHeaderMeta{Height: blockHeight - 1})
+		blockIDsMap := map[uint32]bool{}
+		server.currentBlockIDsMap.Store(&blockIDsMap)
+
+		baseURL, err := url.Parse("http://peer.invalid:8090")
+		require.NoError(t, err)
+
+		require.NoError(t, server.subtreesHandler(context.Background(), time.Now(), childSubtree.RootHash(), baseURL, "peer-1",
+			validator.WithCaller(utxo.CallerBlockValidation)))
+
+		recorded := recordingClient.recordedOptions(*childHash)
+		require.NotEmpty(t, recorded)
+
+		for i, opts := range recorded {
+			require.Equal(t, utxo.CallerBlockValidation, opts.Caller, "call #%d", i)
+		}
 	})
 
 	// Guard against hash drift in the fixture: the child must really spend
