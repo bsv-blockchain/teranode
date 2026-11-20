@@ -248,7 +248,9 @@ func TestCheckBlockSubtrees_OnlyRunningFeedsBlockAssembly(t *testing.T) {
 // same-era competitor whose parent is not the tip must still feed, or its txs are
 // stranded when it loses: ErrTxExists keeps them out of assembly on resubmission.
 // A block above tip+1 does not feed: a height locktime final there may not be
-// final at tip+1.
+// final at tip+1. A side block's txs carry the candidate (tip+1, MTP of the tip)
+// so the validator can check their finality there; a block extending the tip
+// carries none, since its own context is the candidate's.
 func TestCheckBlockSubtrees_BlockAssemblyFeedFollowsScriptEra(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -304,6 +306,13 @@ func TestCheckBlockSubtrees_BlockAssemblyFeedFollowsScriptEra(t *testing.T) {
 			for _, calls := range recording.callsByTx {
 				for _, opts := range calls {
 					require.Equal(t, tt.feeds, opts.AddTXToBlockAssembly)
+
+					if !tt.feeds || tt.extendsTip {
+						require.Nil(t, opts.BlockAssemblyCandidate)
+						continue
+					}
+
+					require.Equal(t, &validator.BlockAssemblyCandidate{Height: genesis + 51, MedianTimePast: tipHeader.Timestamp}, opts.BlockAssemblyCandidate)
 				}
 			}
 		})

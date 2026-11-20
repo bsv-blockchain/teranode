@@ -1003,13 +1003,15 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		// survive in the mempool if the block loses a reorg, unless the block
 		// is above tip+1 or under different transaction rules from tip+1. See
 		// feedsBlockAssembly.
-		feeds, err := u.feedsBlockAssembly(ctx, *currentState == blockchain.FSMStateRUNNING, request.BlockHeight)
+		feeds, baCandidate, err := u.feedsBlockAssembly(ctx, *currentState == blockchain.FSMStateRUNNING, request.BlockHeight, previousBlockHash)
 		if err != nil {
 			return false, errors.NewProcessingError("[CheckSubtree] Failed to decide block assembly feed", err)
 		}
 
 		if !feeds {
 			validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
+		} else if baCandidate != nil {
+			validatorOptions = append(validatorOptions, validator.WithBlockAssemblyCandidate(baCandidate))
 		}
 
 		// Call the validateSubtreeInternal method
@@ -1053,13 +1055,15 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		return false, errors.NewProcessingError("[CheckSubtree] Failed to get FSM current state", err)
 	}
 
-	peerFeeds, err := u.feedsBlockAssembly(ctx, *peerState == blockchain.FSMStateRUNNING, request.BlockHeight)
+	peerFeeds, peerCandidate, err := u.feedsBlockAssembly(ctx, *peerState == blockchain.FSMStateRUNNING, request.BlockHeight, previousBlockHash)
 	if err != nil {
 		return false, errors.NewProcessingError("[CheckSubtree] Failed to decide block assembly feed", err)
 	}
 
 	if !peerFeeds {
 		peerValidatorOptions = append(peerValidatorOptions, validator.WithAddTXToBlockAssembly(false))
+	} else if peerCandidate != nil {
+		peerValidatorOptions = append(peerValidatorOptions, validator.WithBlockAssemblyCandidate(peerCandidate))
 	}
 
 	// Call the ValidateSubtreeInternal method

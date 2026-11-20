@@ -22,6 +22,7 @@ type input struct {
 	node            subtreepkg.Node
 	inpoints        subtreepkg.TxInpoints
 	validatedHeight uint32
+	lockTime        uint32
 }
 
 func hashOf(i int) chainhash.Hash {
@@ -46,6 +47,7 @@ func makeInputs(n int, withInpoints bool) []input {
 				SizeInBytes: 100 + rng.Uint64N(1<<20),
 			},
 			validatedHeight: rng.Uint32(),
+			lockTime:        rng.Uint32(),
 		}
 
 		if withInpoints && i > 0 {
@@ -77,6 +79,7 @@ type drained struct {
 	node            subtreepkg.Node
 	inpoints        *subtreepkg.TxInpoints
 	validatedHeight uint32
+	lockTime        uint32
 }
 
 func drainAll(t *testing.T, s *Sorter, batchSize int) ([]drained, [][]int64) {
@@ -92,7 +95,7 @@ func drainAll(t *testing.T, s *Sorter, batchSize int) ([]drained, [][]int64) {
 
 		created := make([]int64, 0, len(batch))
 		for i, tx := range batch {
-			out = append(out, drained{createdAt: int64(tx.CreatedAt), node: *tx.Node, inpoints: tx.TxInpoints, validatedHeight: validatedHeights[i]})
+			out = append(out, drained{createdAt: int64(tx.CreatedAt), node: *tx.Node, inpoints: tx.TxInpoints, validatedHeight: validatedHeights[i], lockTime: tx.LockTime})
 			created = append(created, int64(tx.CreatedAt))
 		}
 
@@ -115,6 +118,7 @@ func requireOrder(t *testing.T, in []input, out []drained, withInpoints bool) {
 		require.Equal(t, in[i].createdAt, out[pos].createdAt, "createdAt at %d", pos)
 		require.Equal(t, in[i].node, out[pos].node, "node at %d", pos)
 		require.Equal(t, in[i].validatedHeight, out[pos].validatedHeight, "validated height at %d", pos)
+		require.Equal(t, in[i].lockTime, out[pos].lockTime, "lock time at %d", pos)
 		require.NotNil(t, out[pos].inpoints)
 
 		if withInpoints {
@@ -146,7 +150,7 @@ func addAll(t *testing.T, s *Sorter, in []input, withInpoints bool) {
 			inp = &in[i].inpoints
 		}
 
-		require.NoError(t, s.Add(in[i].createdAt, in[i].node, inp, in[i].validatedHeight))
+		require.NoError(t, s.Add(in[i].createdAt, in[i].node, inp, in[i].validatedHeight, in[i].lockTime))
 	}
 }
 
@@ -234,8 +238,9 @@ func TestSorter_RunEncodingIsCompact(t *testing.T) {
 	for i := range in {
 		in[i].node.Fee = 50 + uint64(i%1000)
 		in[i].node.SizeInBytes = 200 + uint64(i%500)
-		// A mainnet height, as nearly every transaction has.
+		// A mainnet height, and no lock time, as nearly every transaction has.
 		in[i].validatedHeight = 950_000
+		in[i].lockTime = 0
 	}
 
 	s, err := New(Options{Dirs: []string{dir}, BufferRecords: 10_000})
@@ -267,9 +272,9 @@ func TestSorter_RunEncodingIsCompact(t *testing.T) {
 	require.NoError(t, err)
 
 	// About 37 bytes for the timestamp delta, hash, fee and size, plus 3 for a mainnet
-	// validated height.
+	// validated height and 1 for no lock time.
 	perRecord := float64(total) / float64(len(in)-s.buffered())
-	require.Less(t, perRecord, 43.0)
+	require.Less(t, perRecord, 44.0)
 }
 
 // Every drained tx must get its own TxInpoints: the subtree processor keeps the
@@ -388,7 +393,7 @@ func BenchmarkSorter_SpillAndDrain(b *testing.B) {
 		}
 
 		for j := range in {
-			if err := s.Add(in[j].createdAt, in[j].node, nil, 0); err != nil {
+			if err := s.Add(in[j].createdAt, in[j].node, nil, 0, 0); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -488,7 +493,7 @@ func TestSorter_AddAndDrainAfterDrain(t *testing.T) {
 	defer s.Close()
 
 	require.NoError(t, s.Drain(context.Background(), 10, func([]*utxo.UnminedTransaction, []uint32) error { return nil }))
-	require.Error(t, s.Add(1, subtreepkg.Node{}, nil, 0), "Add after Drain")
+	require.Error(t, s.Add(1, subtreepkg.Node{}, nil, 0, 0), "Add after Drain")
 	require.Error(t, s.Drain(context.Background(), 10, func([]*utxo.UnminedTransaction, []uint32) error { return nil }), "second Drain")
 }
 
@@ -519,7 +524,7 @@ func TestSorter_SpillWriteFailure(t *testing.T) {
 
 	var addErr error
 	for i := range in {
-		if addErr = s.Add(in[i].createdAt, in[i].node, nil, 0); addErr != nil {
+		if addErr = s.Add(in[i].createdAt, in[i].node, nil, 0, 0); addErr != nil {
 			break
 		}
 	}
@@ -703,7 +708,7 @@ func TestSorter_SpillErrorIsSticky(t *testing.T) {
 
 	next := 0
 	for ; next < len(in) && addErr == nil; next++ {
-		addErr = s.Add(in[next].createdAt, in[next].node, nil, 0)
+		addErr = s.Add(in[next].createdAt, in[next].node, nil, 0, 0)
 	}
 
 	require.Error(t, addErr, "the second spill surfaces the first one's failure")
@@ -712,7 +717,7 @@ func TestSorter_SpillErrorIsSticky(t *testing.T) {
 		require.NoError(t, os.Chmod(d, 0o755))
 	}
 
-	require.Error(t, s.Add(in[next].createdAt, in[next].node, nil, 0), "an Add after a failed spill fails too")
+	require.Error(t, s.Add(in[next].createdAt, in[next].node, nil, 0, 0), "an Add after a failed spill fails too")
 	require.Error(t, s.Drain(context.Background(), 100, func([]*utxo.UnminedTransaction, []uint32) error { return nil }))
 }
 

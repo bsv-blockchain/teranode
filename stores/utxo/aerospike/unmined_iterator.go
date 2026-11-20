@@ -272,6 +272,9 @@ func (it *unminedTxIterator) partitionWorker(ctx context.Context, policy *as.Que
 			// blockassembly_storeTxInpointsForSubtreeMeta says
 			fields.External.String(),
 			fields.Inputs.String(),
+			// Block assembly holds back a transaction the next block cannot mine. The
+			// input sequences are not decoded, so it checks every stored lock time.
+			fields.LockTime.String(),
 		}
 	}
 

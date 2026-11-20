@@ -22,6 +22,13 @@ type Options struct {
 	// When true, validated transactions are forwarded to the block assembly process
 	AddTXToBlockAssembly bool
 
+	// BlockAssemblyCandidate is the block assembly candidate a block-context transaction
+	// would be mined in, when it differs from the block it was validated in (a side block).
+	// The transaction is handed to block assembly only if it is final at the candidate and
+	// carries no active BIP68 relative lock; otherwise it is accepted without a template
+	// entry. Nil when the block extends the tip, so its own context is the candidate's.
+	BlockAssemblyCandidate *BlockAssemblyCandidate
+
 	// SkipPolicyChecks determines whether policy checks should be skipped
 	// this is done when validating transaction from a block that has been mined
 	SkipPolicyChecks bool
@@ -386,6 +393,21 @@ func WithCandidateBlockTime(timestamp uint32) Option {
 func WithCandidateParentMedianTime(mtp uint32) Option {
 	return func(o *Options) {
 		o.CandidateParentMedianTime = mtp
+	}
+}
+
+// BlockAssemblyCandidate is the context block assembly mines its next block in: the height
+// after the tip and the tip's median time past.
+type BlockAssemblyCandidate struct {
+	Height         uint32
+	MedianTimePast uint32
+}
+
+// WithBlockAssemblyCandidate sets the block assembly candidate a side block's transaction
+// is checked against before it is handed to block assembly. See Options.BlockAssemblyCandidate.
+func WithBlockAssemblyCandidate(candidate *BlockAssemblyCandidate) Option {
+	return func(o *Options) {
+		o.BlockAssemblyCandidate = candidate
 	}
 }
 

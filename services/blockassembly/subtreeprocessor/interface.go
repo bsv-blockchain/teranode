@@ -62,7 +62,7 @@ type Interface interface {
 	//
 	// Returns:
 	//   - Admission: Admitted, or the bound that refused the batch
-	AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights []uint32) Admission
+	AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights, lockTimes []uint32) Admission
 
 	// HeldCount returns the transactions held in memory: queued, dequeued but not yet counted,
 	// and already in subtrees.
@@ -99,9 +99,21 @@ type Interface interface {
 	// height each was validated at.
 	FilterUnminedTxEra(txs []*utxostore.UnminedTransaction, validatedHeights []uint32) []*utxostore.UnminedTransaction
 
+	// SetTxCandidate sets the block the template is mined in: the tip it extends, its
+	// height and the time used for nLockTime at that height. See tx_finality.go.
+	SetTxCandidate(tip *chainhash.Hash, height, lockTimeCutoff uint32)
+
+	// NotFinalTemplateTxs returns how many transactions in the template are not final at
+	// the candidate, among those whose nLockTime can hold them back.
+	NotFinalTemplateTxs() int
+
 	// NothingToReload reports whether the template holds no transaction besides the coinbase
-	// and none is recorded as kept out, so a reload would change nothing.
+	// and none is recorded as kept out or held, so a reload would change nothing.
 	NothingToReload() bool
+
+	// OfferLockHeldTxs queues again the transactions held back for their lock time that are
+	// still unmined and not conflicting, after the candidate moved. See tx_finality.go.
+	OfferLockHeldTxs(ctx context.Context) error
 
 	// RestartDroppedTxs starts a reload's own record of the transactions kept out; finish
 	// keeps it when the reload succeeded and restores the previous one when it did not.

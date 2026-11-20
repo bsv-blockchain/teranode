@@ -97,6 +97,7 @@ func TestSubmitMiningSolution_AddsBlockWithSubtreesSetTrue(t *testing.T) {
 			[]*subtreepkg.TxInpoints{singleParentInpointsPtr(parentHash, uint32(i))},
 			false,
 			nil,
+			nil,
 		))
 	}
 

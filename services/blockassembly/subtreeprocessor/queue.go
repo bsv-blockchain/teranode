@@ -216,11 +216,13 @@ func (q *LockFreeQueue) length() int64 {
 //   - nodes: The transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 //   - validatedHeights: Height each node was validated at, or nil when untagged
-func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, validatedHeights []uint32) {
+//   - lockTimes: Each node's nLockTime where it can hold the node back, or nil
+func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, validatedHeights, lockTimes []uint32) {
 	batch := &TxBatch{
 		nodes:            nodes,
 		txInpoints:       txInpoints,
 		validatedHeights: validatedHeights,
+		lockTimes:        lockTimes,
 		time:             q.clock.Now().UnixMilli(),
 	}
 	batch.next.Store(nil)
@@ -298,7 +300,15 @@ func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxIn
 //   - txInpoints: Parent transaction references for each node
 func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
 	q.queueLength.Add(int64(len(nodes))) // gosec:nolint  reserve before publishing
-	q.publish(nodes, txInpoints, nil)
+	q.publish(nodes, txInpoints, nil, nil)
+}
+
+// enqueueTaggedBatch adds a batch with its validated heights and lock times, without a bound.
+// The subtree processor uses it to offer again the transactions it held back for their lock
+// time: they were admitted to the queue once already.
+func (q *LockFreeQueue) enqueueTaggedBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, validatedHeights, lockTimes []uint32) {
+	q.queueLength.Add(int64(len(nodes))) // gosec:nolint  reserve before publishing
+	q.publish(nodes, txInpoints, validatedHeights, lockTimes)
 }
 
 // Admission is the outcome of offering a batch to the bounded queue. A refusal says which bound
@@ -395,16 +405,15 @@ func (a Admission) String() string {
 //   - txInpoints: Parent transaction references for each node
 //   - exemptHeld: Whether the in-memory limit is lifted for this batch
 //   - validatedHeights: Height each node was validated at, or nil when untagged
+//   - lockTimes: Each node's nLockTime where it can hold the node back, or nil
 //
 // Returns:
 //   - Admission: Admitted, or the bound that refused the batch
-func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, exemptHeld bool, validatedHeights []uint32) Admission {
+func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, exemptHeld bool, validatedHeights, lockTimes []uint32) Admission {
 	n := int64(len(nodes)) // gosec:nolint
 
 	if q.maxItems <= 0 && (q.maxHeld <= 0 || exemptHeld) {
-		q.queueLength.Add(n) // reserve before publishing
-		q.publish(nodes, txInpoints, validatedHeights)
-
+		q.enqueueTaggedBatch(nodes, txInpoints, validatedHeights, lockTimes)
 		return Admitted
 	}
 
@@ -414,7 +423,7 @@ func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*
 	heldRoom := exemptHeld || q.maxHeld <= 0 || q.heldTotal(after) <= q.maxHeld
 
 	if queueRoom && heldRoom {
-		q.publish(nodes, txInpoints, validatedHeights) // reservation already accounted
+		q.publish(nodes, txInpoints, validatedHeights, lockTimes) // reservation already accounted
 
 		return Admitted
 	}
@@ -434,7 +443,7 @@ func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*
 			prometheusSubtreeProcessorOversizeBatchAdmitted.Inc()
 		}
 
-		q.publish(nodes, txInpoints, validatedHeights)
+		q.publish(nodes, txInpoints, validatedHeights, lockTimes)
 
 		return Admitted
 	}

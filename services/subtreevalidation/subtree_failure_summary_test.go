@@ -139,7 +139,7 @@ func TestProcessTransactionsInLevels_FailuresAreSummarisedOncePerBatch(t *testin
 
 	blockHash := chainhash.HashH([]byte("block"))
 
-	err := server.processTransactionsInLevels(context.Background(), []*bt.Tx{txs[1], txs[2]}, blockHash, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true)
+	err := server.processTransactionsInLevels(context.Background(), []*bt.Tx{txs[1], txs[2]}, blockHash, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true, nil)
 	require.Error(t, err)
 	require.ErrorIs(t, err, errors.ErrSpent)
 	require.NotErrorIs(t, err, errors.ErrTxInvalid)
@@ -248,7 +248,7 @@ func TestProcessTransactionsInLevels_SummaryIsLoggedWhenAnInvalidTxEndsTheLevel(
 
 	blockHash := chainhash.HashH([]byte("block"))
 
-	err := server.processTransactionsInLevels(context.Background(), []*bt.Tx{txs[1], txs[2]}, blockHash, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true)
+	err := server.processTransactionsInLevels(context.Background(), []*bt.Tx{txs[1], txs[2]}, blockHash, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true, nil)
 	require.Error(t, err)
 	require.ErrorIs(t, err, errors.ErrTxInvalid)
 
@@ -273,7 +273,7 @@ func TestProcessTransactionsInLevels_MixedCausesAreTalliedAgainstTheBatch(t *tes
 
 	blockHash := chainhash.HashH([]byte("block"))
 
-	err := server.processTransactionsInLevels(context.Background(), []*bt.Tx{txs[1], txs[2], child}, blockHash, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true)
+	err := server.processTransactionsInLevels(context.Background(), []*bt.Tx{txs[1], txs[2], child}, blockHash, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true, nil)
 	require.Error(t, err)
 	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
 	require.Contains(t, err.Error(), "Completed processing with 2 errors (1 missing-parent): ")
