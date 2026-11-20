@@ -438,21 +438,18 @@ func TestNetUnmined_InMemoryReportsTheForwardSetItHeld(t *testing.T) {
 	require.Equal(t, uint64(119), res.PeakForwardInMemory)
 }
 
-// A cancellation that lands while the last range is scanned must come back as an
-// error even when that range has nothing to emit, where no store call would
-// notice it: a range can hold billions of records, and a cancelled reset must not
-// scan them to the end and report success.
-func TestNetUnmined_OnDiskACancellationInTheLastRangeIsReturned(t *testing.T) {
-	old := netUnminedBeatEvery
-	netUnminedBeatEvery = 8
-
-	t.Cleanup(func() { netUnminedBeatEvery = old })
-
+// A cancellation that lands in the last range, after the scan's last look at the
+// context, must come back as an error even when that range has nothing to emit,
+// where no store call would notice it. Here the files are far shorter than the
+// interval the scan checks at, so only the check after the last range can see it.
+func TestNetUnmined_OnDiskACancellationAfterTheLastScanCheckIsReturned(t *testing.T) {
 	r := rand.New(rand.NewSource(31))
 	forward := makeBlocks(r, []int{400}, 50)
 
 	// every back hash is a forward hash, so nothing is emitted
 	back := []blockHashes{{hashes: append([]chainhash.Hash(nil), forward[0].hashes[:200]...), subtreeLen: 50}}
+
+	require.Less(t, 400, netUnminedBeatEvery, "precondition: the scan never reaches its own check")
 
 	run := func(ctx context.Context, beat func()) error {
 		_, err := netUnmined(ctx, 1, streamOf(back), 1, streamOf(forward),
@@ -466,7 +463,7 @@ func TestNetUnmined_OnDiskACancellationInTheLastRangeIsReturned(t *testing.T) {
 	}
 
 	// The last two beats are around the removal of the scratch directory. The one
-	// before them is inside the last range, after its check of the context.
+	// before them starts the last range, after the loop's check of the context.
 	beats := 0
 	require.NoError(t, run(context.Background(), func() { beats++ }))
 	require.Greater(t, beats, 4)
@@ -482,6 +479,42 @@ func TestNetUnmined_OnDiskACancellationInTheLastRangeIsReturned(t *testing.T) {
 		}
 	})
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+// A range can hold billions of records, so a scan must stop when the context is
+// cancelled, not read on to the end of the file.
+func TestForEachScratchHash_StopsWhenTheContextIsCancelled(t *testing.T) {
+	old := netUnminedBeatEvery
+	netUnminedBeatEvery = 8
+
+	t.Cleanup(func() { netUnminedBeatEvery = old })
+
+	const records = 100
+
+	r := rand.New(rand.NewSource(32))
+	path := filepath.Join(t.TempDir(), "back-0")
+
+	var file []byte
+
+	for i := 0; i < records; i++ {
+		h := randomHash(r)
+		file = append(file, h[:]...)
+	}
+
+	require.NoError(t, os.WriteFile(path, file, 0o600))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	visited := 0
+
+	// cancelled at the scan's first beat, eight records in
+	err := forEachScratchHash(ctx, path, cancel, nil, func(h []chainhash.Hash) error {
+		visited += len(h)
+		return nil
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Less(t, visited, records, "the scan stops before the end of the file")
 }
 
 func TestNetUnmined_RemovesItsScratchFiles(t *testing.T) {
