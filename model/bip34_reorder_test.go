@@ -210,7 +210,9 @@ func TestBlock_Valid_UnboundCoinbaseHeightDecodeFailureIsCorrupt(t *testing.T) {
 }
 
 // TestBlock_Valid_BIP34HeightPrefixAtEncodingBoundaries runs the BIP34 check through Block.Valid at
-// every height where the canonical encoding changes shape.
+// the heights where the canonical encoding changes shape, up to 8388607/8388608. The later changes
+// (65535/65536, 16777215/16777216 and 2147483647/2147483648) are covered only by
+// util.TestExtractCoinbaseHeight_AcceptsExactlyTheBitcoinSVPrefix.
 //
 // Spec: BV-BODY-009. util.TestExtractCoinbaseHeight_AcceptsExactlyTheBitcoinSVPrefix proves the
 // encoder equals bitcoin-sv's CScript() << height over sampled heights; this test proves Block.Valid
