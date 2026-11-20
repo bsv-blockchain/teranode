@@ -3373,3 +3373,51 @@ func TestUnminedTxIteratorForLoad(t *testing.T) {
 		store.AssertExpectations(t)
 	})
 }
+
+// loadSkippingStore offers the skipping scan over a real store, and refuses the
+// plain one, so a load that opens the plain scan fails.
+type loadSkippingStore struct {
+	utxoStore.Store
+	skippingCalls int
+}
+
+func (s *loadSkippingStore) GetUnminedTxIteratorSkippingMissingExternal() (utxoStore.UnminedTxIterator, error) {
+	s.skippingCalls++
+
+	return s.Store.GetUnminedTxIterator()
+}
+
+func (s *loadSkippingStore) GetUnminedTxIterator() (utxoStore.UnminedTxIterator, error) {
+	return nil, errors.NewProcessingError("the load opened the plain unmined scan")
+}
+
+// Both load paths, in memory and disk-sorted, open the scan that skips a
+// missing external file when the store offers it.
+func TestLoadUnminedTransactionsUsesTheSkippingScan(t *testing.T) {
+	for _, diskSort := range []bool{false, true} {
+		t.Run(fmt.Sprintf("diskSort=%t", diskSort), func(t *testing.T) {
+			initPrometheusMetrics()
+
+			ctx := t.Context()
+			items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+				// disk sort only runs with the parent chain check off
+				s.BlockAssembly.OnRestartValidateParentChain = false
+				s.BlockAssembly.UnminedTxDiskSortEnabled = diskSort
+				s.BlockAssembly.UnminedTxDiskSortPaths = []string{t.TempDir()}
+			})
+
+			tx := newTx(43)
+			_, _, err := items.utxoStore.SpendAndCreate(ctx, tx, 0, utxoStore.WithCreateOnly())
+			require.NoError(t, err)
+
+			store := &loadSkippingStore{Store: items.blockAssembler.utxoStore}
+			items.blockAssembler.utxoStore = store
+
+			require.NoError(t, items.blockAssembler.loadUnminedTransactions(ctx, false))
+			require.Equal(t, 1, store.skippingCalls)
+
+			_, ok := items.blockAssembler.subtreeProcessor.GetCurrentTxMap().Get(*tx.TxIDChainHash())
+			require.True(t, ok, "the load must put the tx in block assembly")
+		})
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -721,7 +722,10 @@ func TestRawUnminedHandler_SkipsExternalRecordWithMissingFile(t *testing.T) {
 	it.store.externalStore = memory.New()
 	it.skipMissingExternal = true
 
+	skippedBefore := testutil.ToFloat64(prometheusUnminedMissingExternalSkipped)
+
 	require.NoError(t, feed(t, h, rawExternalRecordBins(1)))
+	require.InDelta(t, skippedBefore+1, testutil.ToFloat64(prometheusUnminedMissingExternalSkipped), 0)
 
 	// The skip must not leave the handler marked busy, or the idle watchdog
 	// would take a later stall on Aerospike for time spent on the external store.
