@@ -22,7 +22,23 @@ import (
 // begun after the reap commits finds the record and its conflicting-children entries gone: a reverse intent
 // finds no conflicting counter to restore (ReverseProcessConflicting skips an input with no conflicting
 // counter) and a forward intent fails on the missing winner, both as before the reap cleared parent spends.
-func (s *Store) reapConflicting(ctx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error) {
+func (s *Store) reapConflicting(ctx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (reaped bool, err error) {
+	// The reap locks the conflicting record's row first and then deletes its outputs, the opposite of
+	// Spend, Unspend and Delete, which lock outputs and then the row, so Postgres can abort it with a
+	// deadlock (40P01). A reorder is not safe here: the reap clears parent spends and recomputes parent
+	// delete heights between those two steps. So it retries a deadlock, with Delete's budget, and each
+	// attempt is a whole transaction.
+	err = retryOnLockError(ctx, s.logger, setMinedMultiRetries, setMinedMultiLockBackoff, "[reapConflicting]", func() error {
+		var attemptErr error
+		reaped, attemptErr = s.reapConflictingOnce(ctx, txHash, blockHeight, safetyWindow)
+
+		return attemptErr
+	})
+
+	return reaped, err
+}
+
+func (s *Store) reapConflictingOnce(ctx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error) {
 	txn, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, errors.NewStorageError("[reapConflicting] failed to begin transaction for %s", txHash.String(), err)
