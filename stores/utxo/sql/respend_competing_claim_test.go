@@ -252,7 +252,7 @@ func TestSpendBatchBulkUpdateFailureDoesNotInventConflict(t *testing.T) {
 	}
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT v.batch_idx").WillReturnRows(rows)
-	mock.ExpectQuery("UPDATE outputs o").WillReturnError(fmt.Errorf("forced bulk UPDATE failure"))
+	mock.ExpectQuery("UPDATE outputs o").WillReturnError(errors.NewStorageError("forced bulk UPDATE failure"))
 	mock.ExpectRollback()
 
 	require.False(t, store.trySendSpendBatchBulk(context.Background(), batch))
