@@ -9,6 +9,7 @@ package validator
 
 import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 )
 
@@ -50,6 +51,12 @@ type Options struct {
 	// checks run and how block assembly treats the transaction; for example,
 	// the DAH-evicted-parent grace runs only when InBlock is false.
 	InBlock bool
+
+	// Caller names the service the validation's create is made for, on the burned lane position
+	// counter (stores/utxo, WithCaller). Zero lets the validator choose: subtree validation for
+	// InBlock, the validator otherwise. It changes nothing about validation, and it is not sent to
+	// a remote validator over gRPC, which then chooses as for zero.
+	Caller utxo.Caller
 
 	// SkipScriptValidation determines whether BDK transaction/script validation should be skipped.
 	// When true, the validator skips the BDK ValidateTransaction call (script execution,
@@ -342,6 +349,14 @@ func WithSkipTxMetaPublishing(skip bool) Option {
 func WithInBlock(inBlock bool) Option {
 	return func(o *Options) {
 		o.InBlock = inBlock
+	}
+}
+
+// WithCaller names the service a validation's create is made for, on the burned lane position
+// counter. See Options.Caller.
+func WithCaller(caller utxo.Caller) Option {
+	return func(o *Options) {
+		o.Caller = caller
 	}
 }
 

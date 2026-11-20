@@ -32,6 +32,11 @@ func TestLanePositionContract(t *testing.T) {
 	t.Cleanup(deferFn)
 
 	tests.LanePositionContract(t, store)
+	t.Run("burns", func(t *testing.T) { tests.LanePositionBurns(t, store, "aerospike") })
+
+	// A KEY_EXISTS can be the create's own retried write, so no refusal goes back; only a spend
+	// refused before the create ran does.
+	t.Run("returns", func(t *testing.T) { tests.LanePositionReturns(t, store, "aerospike", tests.LaneReturnRules{}, nil) })
 }
 
 // TestLanePositionBin checks what the contract cannot see: the raw bin, on the

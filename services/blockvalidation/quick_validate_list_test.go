@@ -40,6 +40,7 @@ type recordedApply struct {
 	txID       chainhash.Hash
 	createOnly bool
 	spendOnly  bool
+	caller     utxo.Caller
 	err        error
 }
 
@@ -69,6 +70,7 @@ type recordedList struct {
 	txids           []chainhash.Hash
 	subtreeIdxs     []int
 	belowCheckpoint bool
+	caller          utxo.Caller
 	results         []utxo.SpendAndCreateMultiResult
 	err             error
 }
@@ -77,7 +79,7 @@ func (a *applyRecorder) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, b
 	opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
 	options := parseCreateOptions(opts)
 
-	rec := recordedList{subtreeIdxs: options.SubtreeIdxs, belowCheckpoint: options.BelowCheckpoint}
+	rec := recordedList{subtreeIdxs: options.SubtreeIdxs, belowCheckpoint: options.BelowCheckpoint, caller: options.Caller}
 	for _, tx := range txs {
 		rec.txids = append(rec.txids, *tx.TxIDChainHash())
 	}
@@ -155,6 +157,7 @@ func (a *applyRecorder) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeig
 		txID:       *tx.TxIDChainHash(),
 		createOnly: options.CreateOnly,
 		spendOnly:  options.SpendOnly,
+		caller:     options.Caller,
 		err:        err,
 	})
 	a.mu.Unlock()
@@ -378,6 +381,7 @@ func TestBatchList_BatchIsOneListInBlockOrder(t *testing.T) {
 	lists := recorder.recordedLists()
 	require.Len(t, lists, 1, "one list for the batch")
 	require.Equal(t, []int{0, 1, 2}, lists[0].subtreeIdxs, "each transaction's own subtree index")
+	require.Equal(t, utxo.CallerBlockValidation, lists[0].caller, "the list names block validation for the burned lane position counter")
 
 	for i, tx := range txs {
 		require.Equal(t, *tx.TxIDChainHash(), lists[0].txids[i], "block order")
@@ -1063,5 +1067,31 @@ func TestBatchList_RetryKeepsAFailedChildsParent(t *testing.T) {
 			require.Equal(t, []chainhash.Hash{*child.TxIDChainHash()}, recorder.recordedMined(),
 				"a carried parent is not stamped with mined info again")
 		})
+	}
+}
+
+// TestBatchList_OneAtATimeNamesBlockValidation: a list the store refuses is applied one transaction
+// at a time, and each of those creates names block validation as its caller, as the list did.
+func TestBatchList_OneAtATimeNamesBlockValidation(t *testing.T) {
+	bv, recorder, cleanup := newListHarness(t, "netted_one_at_a_time_caller", false)
+	defer cleanup()
+
+	root, key := seedRoot(t, recorder.Store, 1, "NETTED_ONE_AT_A_TIME_CALLER_KEY")
+	tx := spendOf(t, key, root, 0, 90_000)
+
+	// The same transaction twice is a list the store refuses.
+	txs := []*bt.Tx{tx, tx}
+	txids := []chainhash.Hash{*tx.TxIDChainHash(), *tx.TxIDChainHash()}
+
+	recorder.reset()
+
+	_ = bv.applyList(context.Background(), &model.Block{Height: 100, ID: 42}, txs, txids, make([]int, len(txs)), true, false,
+		func(*bt.Tx, int) {})
+
+	calls := recorder.callsFor(tx.TxIDChainHash())
+	require.NotEmpty(t, calls, "the refused list was applied one transaction at a time")
+
+	for i, c := range calls {
+		require.Equal(t, utxo.CallerBlockValidation, c.caller, "call %d", i)
 	}
 }

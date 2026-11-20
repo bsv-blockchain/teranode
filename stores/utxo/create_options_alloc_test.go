@@ -63,6 +63,7 @@ func TestCreateOptionsDoNotAllocate(t *testing.T) {
 		{"WithConflicting", func() { escapeOption(WithConflicting(true)) }},
 		{"WithCreateOnly", func() { escapeOption(WithCreateOnly()) }},
 		{"WithSpendOnly", func() { escapeOption(WithSpendOnly()) }},
+		{"WithCaller", func() { escapeOption(WithCaller(CallerValidator)) }},
 	}
 
 	for _, c := range cases {
