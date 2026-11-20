@@ -7,12 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
@@ -223,6 +225,43 @@ func TestSpendBatchStorageFailureDoesNotInventConflict(t *testing.T) {
 		require.Error(t, err)
 		require.NotErrorIs(t, err, errors.ErrSpent, "storage failure is not evidence of a conflicting owner")
 	}
+}
+
+func TestSpendBatchBulkUpdateFailureDoesNotInventConflict(t *testing.T) {
+	store, mock := CreateMockStore(ulogger.TestLogger{})
+	t.Cleanup(func() { _ = store.db.Close() })
+	store.settings = test.CreateBaseTestSettings(t)
+	store.settings.GlobalBlockHeightRetention = 0
+	store.settings.UtxoStore.BlockHeightRetentionAdjustment = 0
+	require.Zero(t, store.settings.GetUtxoStoreBlockHeightRetention())
+
+	first, err := utxo.GetSpends(spendOf(t, tests.Tx, 1, 0))
+	require.NoError(t, err)
+	second, err := utxo.GetSpends(spendOf(t, tests.Tx, 2, 0))
+	require.NoError(t, err)
+	batch := []*batchSpend{
+		{spend: first[0], blockHeight: 2, errCh: make(chan error, 1)},
+		{spend: second[0], blockHeight: 2, errCh: make(chan error, 1)},
+	}
+	rows := sqlmock.NewRows([]string{
+		"batch_idx", "transaction_id", "coinbase_spending_height", "utxo_hash",
+		"spending_data", "frozen", "conflicting", "locked", "spendableIn",
+	})
+	for i, item := range batch {
+		rows.AddRow(i, 1, 0, item.spend.UTXOHash[:], nil, false, false, false, nil)
+	}
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT v.batch_idx").WillReturnRows(rows)
+	mock.ExpectQuery("UPDATE outputs o").WillReturnError(fmt.Errorf("forced bulk UPDATE failure"))
+	mock.ExpectRollback()
+
+	require.False(t, store.trySendSpendBatchBulk(context.Background(), batch))
+	for i, item := range batch {
+		result := <-item.errCh
+		require.ErrorIs(t, result, errors.ErrStorageError, "batch item %d", i)
+		require.NotErrorIs(t, result, errors.ErrSpent, "batch item %d must not name an uncommitted owner", i)
+	}
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // Alternating claims on one unspent outpoint: the first claim wins in the

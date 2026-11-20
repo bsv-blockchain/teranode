@@ -2980,6 +2980,9 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		spendingData []byte
 	}
 	seenKeys := make(map[utxoKey]seenEntry, len(toUpdate)) // key -> first entry
+	// These conflicts name a winner from this transaction, so they cannot
+	// survive an UPDATE, DAH, or commit failure that rolls its writes back.
+	uncommittedConflicts := make(map[int]struct{})
 	var dedupedUpdate []spendUpdateRow
 	for _, u := range toUpdate {
 		key := utxoKey{u.transactionID, u.vout}
@@ -2993,6 +2996,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 					validationErrors[u.batchIdx] = errors.NewProcessingError(errFailedCreateSpendingData, parseErr)
 				} else {
 					validationErrors[u.batchIdx] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existingSpendData)
+					uncommittedConflicts[u.batchIdx] = struct{}{}
 				}
 			}
 			// else: same spending data — idempotent re-spend, will be marked successful after UPDATE
@@ -3133,6 +3137,9 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		if err != nil {
 			if isDeadlock(err) {
 				return true
+			}
+			for i := range uncommittedConflicts {
+				delete(validationErrors, i)
 			}
 			for i, item := range batch {
 				if valErr, ok := validationErrors[i]; ok {
@@ -3361,6 +3368,9 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				if isDeadlock(err) {
 					return true
 				}
+				for i := range uncommittedConflicts {
+					delete(validationErrors, i)
+				}
 				for i, item := range batch {
 					if valErr, ok := validationErrors[i]; ok {
 						item.errCh <- valErr
@@ -3377,6 +3387,9 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 	if err := txn.Commit(); err != nil {
 		if isDeadlock(err) {
 			return true
+		}
+		for i := range uncommittedConflicts {
+			delete(validationErrors, i)
 		}
 		for i, item := range batch {
 			if valErr, ok := validationErrors[i]; ok {
