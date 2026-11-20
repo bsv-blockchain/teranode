@@ -114,6 +114,10 @@ type batchSpend struct {
 	// requireParentOutput turns off the "already blessed" fallback for this item;
 	// see utxo.IgnoreFlags.RequireParentOutputs.
 	requireParentOutput bool
+	// breakerSlot is the half-open probe slot Admit gave the item, if any. Spend
+	// sets it before the enqueue. After that only the batcher goroutine reads it,
+	// and takeSlot hands it to exactly one outcome or release.
+	breakerSlot breakerSlot
 }
 
 // complete writes err into the item's result slot (spend.Err) and marks the
@@ -533,7 +537,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		items[idx] = item
 
 		// Fast-fail check: if circuit breaker is already open, reject immediately.
-		if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
+		admitted, slot := s.spendCircuitBreaker.Admit()
+		if !admitted {
 			// First rejection: every earlier item was accepted, so items[:idx] is
 			// exactly the accepted prefix. Tracked with a bool rather than a nil
 			// test on toEnqueue, because make([]T, 0, n) is non-nil and a nil test
@@ -548,6 +553,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			continue
 		}
 
+		item.breakerSlot = slot
+
 		if filtered {
 			toEnqueue = append(toEnqueue, item)
 		}
@@ -561,6 +568,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	// group.Wait for the full spendTimeout and reporting a bogus timeout.
 	if enqueueErr := safeBatcherPutBatchCtx(s.spendBatcher, ctx, toEnqueue, "spend"); enqueueErr != nil {
 		for _, item := range toEnqueue {
+			// The batcher never saw the item, so its probe slot comes back here.
+			s.spendCircuitBreaker.Release(takeSlot(item))
 			item.complete(enqueueErr)
 		}
 	}
@@ -1056,6 +1065,8 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		})
 	}()
 
+	defer s.releaseUnsettledSlots(batch)
+
 	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
 		func(item *batchSpend) *utxo.Spend {
 			if item == nil {
@@ -1104,6 +1115,8 @@ func (s *Store) executeLuaSpendBatchContext(parentCtx context.Context, batch []*
 			}
 		})
 	}()
+
+	defer s.releaseUnsettledSlots(batch)
 	if len(batch) == 0 {
 		return
 	}
@@ -1260,6 +1273,9 @@ func (s *Store) executeSpendBatchContext(ctx context.Context, batchRecords []aer
 			var sendErr error = errors.NewStorageError("[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d idx %d", bItem.spend.TxID.String(), batchID, idx, err)
 			bItem.complete(sendErr)
 		}
+
+		s.recordSpendOutcome(err, takeSlots(batch))
+
 		return err
 	}
 	return nil
@@ -1286,21 +1302,29 @@ func (s *Store) processSpendBatchResults(ctx context.Context, batchRecords []aer
 
 // processSingleBatchResult processes a single batch record result
 func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerospike.BatchRecordIfc, batchByKey []aerospike.MapValue, batch []*batchSpend, txID *chainhash.Hash, thisBlockHeight uint32, batchID uint64) {
+	slots := takeRecordSlots(batchByKey, batch)
+
 	batchErr := batchRecord.BatchRec().Err
 	if batchErr != nil {
 		s.handleBatchError(batchByKey, batch, thisBlockHeight, batchID, batchErr)
+		s.recordSpendOutcome(batchErr, slots)
+
 		return
 	}
 
 	response := batchRecord.BatchRec().Record
 	if response == nil || response.Bins == nil || response.Bins[LuaSuccess.String()] == nil {
 		s.handleMissingResponse(batchByKey, batch, txID)
+		s.releaseSlots(slots)
+
 		return
 	}
 
 	res, parseErr := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
 	if parseErr != nil {
 		s.handleParseError(batchByKey, batch, txID, parseErr)
+		s.releaseSlots(slots)
+
 		return
 	}
 
@@ -1313,8 +1337,120 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 	switch res.Status {
 	case LuaStatusOK:
 		s.handleSuccessfulSpends(batchByKey, batch)
+		s.recordSpendSuccess(slots)
 	case LuaStatusError:
+		// The server evaluated the request and answered with data state, so a
+		// probe among the items reports a success.
 		s.handleErrorSpends(res, batchByKey, batch, txID, thisBlockHeight, batchID)
+		s.recordServerAnswer(slots)
+	default:
+		// Answer the items, so their callers do not wait until the timeout.
+		for _, batchItem := range batchByKey {
+			idx := batchItem["idx"].(int)
+			batch[idx].complete(errors.NewProcessingError("[SPEND_BATCH_LUA][%s] unknown response status %q", txID.String(), res.Status))
+		}
+
+		s.releaseSlots(slots)
+	}
+}
+
+// takeSlot hands over the breaker slot of item, so exactly one outcome or
+// release accounts for it. Only the batcher goroutine calls it once the item is
+// enqueued.
+func takeSlot(item *batchSpend) breakerSlot {
+	if item == nil {
+		return breakerSlot{}
+	}
+
+	slot := item.breakerSlot
+	item.breakerSlot = breakerSlot{}
+
+	return slot
+}
+
+// takeSlots hands over the breaker slots of every item in batch.
+func takeSlots(batch []*batchSpend) []breakerSlot {
+	slots := make([]breakerSlot, 0, len(batch))
+
+	for _, item := range batch {
+		slots = append(slots, takeSlot(item))
+	}
+
+	return slots
+}
+
+// takeRecordSlots hands over the breaker slots of the items in one batch record.
+func takeRecordSlots(batchByKey []aerospike.MapValue, batch []*batchSpend) []breakerSlot {
+	slots := make([]breakerSlot, 0, len(batchByKey))
+
+	for _, batchItem := range batchByKey {
+		slots = append(slots, takeSlot(batch[batchItem["idx"].(int)]))
+	}
+
+	return slots
+}
+
+// releaseUnsettledSlots gives back every probe slot in batch that no outcome
+// has taken: items completed before they reached the backend, a status this
+// store does not know, or a panic part way through the results.
+func (s *Store) releaseUnsettledSlots(batch []*batchSpend) {
+	for _, item := range batch {
+		s.spendCircuitBreaker.Release(takeSlot(item))
+	}
+}
+
+// releaseSlots gives back slots whose requests produced no usable answer.
+func (s *Store) releaseSlots(slots []breakerSlot) {
+	for _, slot := range slots {
+		s.spendCircuitBreaker.Release(slot)
+	}
+}
+
+// recordSpendSuccess reports a successful round trip. In the closed state it
+// resets the failure count once. In the half-open state each probe slot of the
+// current epoch counts toward closing.
+func (s *Store) recordSpendSuccess(slots []breakerSlot) {
+	probed := false
+
+	for _, slot := range slots {
+		if slot.taken {
+			probed = true
+
+			s.spendCircuitBreaker.RecordSuccess(slot)
+		}
+	}
+
+	if !probed {
+		s.spendCircuitBreaker.RecordSuccess(breakerSlot{})
+	}
+}
+
+// recordServerAnswer reports a request the server answered with data state,
+// such as spent, frozen or not found. It proves the server is healthy, so a
+// probe slot among slots counts as a success. In the closed state it changes
+// nothing, as before.
+func (s *Store) recordServerAnswer(slots []breakerSlot) {
+	for _, slot := range slots {
+		if slot.taken {
+			s.spendCircuitBreaker.RecordSuccess(slot)
+		}
+	}
+}
+
+// recordSpendOutcome accounts for slots whose requests failed with err. An
+// infrastructure failure counts once toward tripping, and trips a half-open
+// breaker if any slot is a current probe (issue #953 keeps data-state errors
+// out of this). A data-state answer from the server counts as a probe success.
+// Any other error, such as DEVICE_OVERLOAD or a client-side error, is weak
+// evidence either way, so its slots are released.
+func (s *Store) recordSpendOutcome(err error, slots []breakerSlot) {
+	switch {
+	case isInfrastructureFailure(err):
+		s.spendCircuitBreaker.RecordBatchFailure(slots)
+	case isServerAnswer(err):
+		s.recordServerAnswer(slots)
+	default:
+		s.releaseSlots(slots)
 	}
 }
 
@@ -1338,12 +1474,6 @@ func (s *Store) handleBatchError(batchByKey []aerospike.MapValue, batch []*batch
 	for _, batchItem := range batchByKey {
 		idx := batchItem["idx"].(int)
 		batch[idx].complete(errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err))
-	}
-	// Only count infrastructure failures toward the circuit breaker.
-	// Per-record data-state errors (e.g. KEY_NOT_FOUND_ERROR from missing
-	// parents during catch-up sync) must not trip the breaker — issue #953.
-	if s.spendCircuitBreaker != nil && isInfrastructureFailure(err) {
-		s.spendCircuitBreaker.RecordFailure()
 	}
 }
 
@@ -1398,10 +1528,6 @@ func (s *Store) handleSuccessfulSpends(batchByKey []aerospike.MapValue, batch []
 	for _, batchItem := range batchByKey {
 		idx := batchItem["idx"].(int)
 		batch[idx].complete(nil)
-	}
-	// Record successful batch operation for circuit breaker
-	if s.spendCircuitBreaker != nil {
-		s.spendCircuitBreaker.RecordSuccess()
 	}
 }
 
