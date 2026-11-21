@@ -779,6 +779,17 @@ var publicCauseCodes = map[ERR]struct{}{
 	ERR_TX_CONFLICTING:          {},
 	ERR_UTXO_SPENT:              {},
 	ERR_TX_LOCKED:               {},
+	// ERR_UTXO_SPENDING_TX_PRUNED is answered like ERR_UTXO_SPENT, but it is this
+	// node's record and not a consensus verdict: this node pruned this
+	// transaction, usually after it was mined, fully spent and buried, and it
+	// keeps that answer while the parent output still records it as the
+	// spender. The pruner also deletes conflicting records that were never
+	// mined, so the answer does not by itself say the transaction confirmed.
+	// Every producer's message names the transaction, and
+	// the outpoint where the answer is per input, both of which the submitter
+	// already sent, and carries no node-internal state; the stores log the
+	// detail instead.
+	ERR_UTXO_SPENDING_TX_PRUNED: {},
 	// ERR_TX_CREATING is the same kind of verdict as ERR_TX_LOCKED: the parent
 	// tx this one spends from is still completing its own commit. It carries no
 	// node-internal state and is actionable by the submitter (resubmit shortly),
@@ -1145,7 +1156,7 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 	// asked. The HTTP layer answers 403 for the same error and the two maps are
 	// independent by design; see httpStatusForTxError in services/propagation.
 	case ERR_TX_INVALID_DOUBLE_SPEND, ERR_TX_CONFLICTING, ERR_TX_REJECTED_CONFLICTING, ERR_UTXO_SPENT, ERR_TX_LOCKED,
-		ERR_TX_CREATING, ERR_UTXO_FROZEN, ERR_TX_MISSING_PARENT:
+		ERR_TX_CREATING, ERR_UTXO_FROZEN, ERR_TX_MISSING_PARENT, ERR_UTXO_SPENDING_TX_PRUNED:
 		return codes.FailedPrecondition
 	// ERR_TX_UNLOCK_FAILED is not in the family above: the transaction WAS accepted
 	// (spent, created, delivered to block assembly) and only the post-acceptance

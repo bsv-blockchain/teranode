@@ -3,6 +3,8 @@ package aerospike
 import (
 	"context"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -29,6 +31,11 @@ func (s *Store) StopConflictingIndexSelfTest() {
 // writes, and clears it when given nil.
 func SetChildDAHBeforeWrite(f func()) {
 	childDAHBeforeWrite = f
+}
+
+// UsesNativeOps reports whether the store engaged the native operate-path at start-up and still has it.
+func (s *Store) UsesNativeOps() bool {
+	return s.useNativeTeranodeOps.Load()
 }
 
 // UsesNativeMark reports whether MarkTransactionsOnLongestChain sends native sub-op 14.
@@ -74,4 +81,42 @@ func (s *Store) QueryConflictWALIndex(ctx context.Context) (int, bool, error) {
 // ConflictWALFallbackScans is the number of WAL reads that scanned the set, for this process.
 func ConflictWALFallbackScans() float64 {
 	return testutil.ToFloat64(prometheusConflictWALFallbackScans)
+}
+
+// RollbackIdempotentMatchesForTest runs the abort path's rollback for a failed
+// spend by tx whose only successful inputs were the given idempotent matches,
+// with an unwinnable sibling failure so no transient window suppresses it.
+func (s *Store) RollbackIdempotentMatchesForTest(tx *bt.Tx, idempotent []*utxo.Spend) {
+	s.rollbackPartialSpends(tx, &spendCompletionResult{idempotentSpends: idempotent, rollbackNeeded: true, sawUnwinnable: true}, "test")
+}
+
+// SetRollbackBeforeProbeForTest installs the hook rollbackPartialSpends runs right before its
+// spender-existence probe, and clears it when given nil.
+func (s *Store) SetRollbackBeforeProbeForTest(f func()) {
+	s.rollbackBeforeProbe = f
+}
+
+// RollbackRequiredParentSpendsForTest runs the rollback of a failed
+// RequireParentOutputs call (the second wave of DefaultSpendAndCreateMulti)
+// that wrote the given spends. rollbackNeeded says whether its failure was a
+// validation error (utxo.IsSpendRollbackError) rather than an infrastructure one.
+func (s *Store) RollbackRequiredParentSpendsForTest(tx *bt.Tx, written []*utxo.Spend, rollbackNeeded bool) {
+	s.rollbackPartialSpends(tx, &spendCompletionResult{spentSpends: written, requireParentOutput: true, rollbackNeeded: rollbackNeeded}, "test")
+}
+
+// ResolveSpendCompletionsForTest resolves the answered spends of a call by tx,
+// each carrying its own Err, and returns the spends the call wrote and the
+// number of inputs that succeeded.
+func (s *Store) ResolveSpendCompletionsForTest(ctx context.Context, tx *bt.Tx, spends []*utxo.Spend) (written []*utxo.Spend, succeeded int) {
+	items := make([]*batchSpend, len(spends))
+
+	for i, spend := range spends {
+		items[i] = &batchSpend{spend: spend}
+		items[i].completed.Store(true)
+		items[i].published.Store(true)
+	}
+
+	res := s.resolveSpendCompletions(ctx, tx, items, false)
+
+	return res.spentSpends, res.succeeded
 }
