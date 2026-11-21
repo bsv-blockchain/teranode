@@ -3896,8 +3896,8 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 	// transactions.frozen is only set when the row is created, so q1's read of it
 	// cannot go stale and needs no guard here. A concurrent attempt at
 	// the same spend that commits after q1 saw the output unspent makes this
-	// write miss, and the recheck below reports the output spent; unlike the
-	// bulk path, only a match already visible to q1 is classified by age.
+	// write miss. The recheck below then reads that match's height and spender
+	// and classifies it by age, as q1's matches and the bulk path's are.
 	q2 := `
 		UPDATE outputs
 		SET spending_data = $1, spending_height = $4
@@ -3909,7 +3909,8 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 
 	// qRow reads the row again when q2 wrote nothing, to tell a freeze from a spend.
 	qRow := `
-		SELECT spending_data, frozen
+		SELECT spending_data, frozen, spending_height,
+		       EXISTS (SELECT 1 FROM transactions st WHERE st.hash = substr(spending_data, 1, 32))
 		FROM outputs
 		WHERE transaction_id = $1
 		AND idx = $2
@@ -4065,11 +4066,13 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 			}
 
 			var (
-				currentSpendingData []byte
-				currentFrozen       bool
+				currentSpendingData   []byte
+				currentFrozen         bool
+				currentHeight         sql.NullInt64
+				currentSpenderPresent bool
 			)
 
-			if err = txn.QueryRowContext(ctx, qRow, transactionID, spend.Vout).Scan(&currentSpendingData, &currentFrozen); err != nil {
+			if err = txn.QueryRowContext(ctx, qRow, transactionID, spend.Vout).Scan(&currentSpendingData, &currentFrozen, &currentHeight, &currentSpenderPresent); err != nil {
 				// The output was deleted after q1 read it: fail this item only, as q1 does.
 				if errors.Is(err, sql.ErrNoRows) {
 					validationErrors[i] = errors.NewTxNotFoundError(errOutputNotFound, spend.TxID, spend.Vout)
@@ -4093,6 +4096,25 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 				// coin is unspent and spendable again. Reporting it spent would mark the
 				// spending tx as conflicting, so retry the batch instead.
 				return true
+			}
+
+			if spend.SpendingData != nil && bytes.Equal(currentSpendingData, spend.SpendingData.Bytes()) {
+				// A concurrent attempt at this same spend committed after q1. It may
+				// have run at a much lower height, so classify it by age as q1's
+				// matches are: a historical match with no spender is refused, and one
+				// with a spender stays out of any rollback.
+				historical, refused := s.classifyIdempotentMatch(item, currentHeight, currentSpenderPresent)
+				if refused != nil {
+					validationErrors[i] = refused
+					continue
+				}
+
+				item.idempotent = !historical
+				item.historical = historical
+				successItems = append(successItems, item)
+				parentOfItem[item] = transactionID
+				spentParentIDs[transactionID] = struct{}{}
+				continue
 			}
 
 			// spendingDataBytes was NULL from SELECT (WHERE spending_data IS NULL),

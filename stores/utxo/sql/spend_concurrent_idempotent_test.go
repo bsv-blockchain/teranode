@@ -194,30 +194,34 @@ func TestRollbackKeepsADuplicateOfAMatchAnotherWriterRecorded(t *testing.T) {
 		"neither call wrote A:0, so neither may reverse it")
 }
 
-// TestBulkSpendClassifiesALateMatchByAge: C spends A:0, free when the SELECT reads it, and
+// TestSpendClassifiesALateMatchByAge: C spends A:0, free when the SELECT reads it, and
 // M:0, which another transaction already spent, so the call fails as spent. Between the
 // SELECT and the UPDATE another attempt at C records A:0 at height 1,000, while this call
 // runs at 1,200. That match is 200 blocks old against the retention's 144, and C has no
 // record, so it is a pruned replay and is refused. Read as a young match it would join the
 // rollback, and the call's failure would free A:0 for a replay of C. Both ways the UPDATE
-// learns about the write are run: upd_idem sees it, or the missed-row re-check does.
+// learns about the write are run, on the bulk path (upd_idem or the missed-row re-check)
+// and on the per-row path (its re-read after a write that matched nothing).
 //
 // Postgres only, for the same reason as TestSpendRefusesMarkerCommittedAfterSelect.
-func TestBulkSpendClassifiesALateMatchByAge(t *testing.T) {
+func TestSpendClassifiesALateMatchByAge(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
 
 	for _, tc := range []struct {
 		name                    string
+		perRow                  bool
 		commitsWhileUpdateWaits bool
 	}{
-		{name: "committed_before_the_update"},
-		{name: "committed_while_the_update_waits", commitsWhileUpdateWaits: true},
+		{name: "bulk_committed_before_the_update"},
+		{name: "bulk_committed_while_the_update_waits", commitsWhileUpdateWaits: true},
+		{name: "per_row_committed_before_the_update", perRow: true},
+		{name: "per_row_committed_while_the_update_waits", perRow: true, commitsWhileUpdateWaits: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, ctx := setupPostgresStore(t)
-			store.settings.UtxoStore.BatchSQLOperations = true
+			store.settings.UtxoStore.BatchSQLOperations = !tc.perRow
 			require.NoError(t, store.SetBlockHeight(1200))
 
 			a := replayParent(t, ctx, store, "5555555555555555555555555555555555555555555555555555555555555555")
