@@ -351,7 +351,7 @@ The Aerospike and Sql stores refuse a spend as a replay of a pruned transaction 
 
 One case is not a replay. An earlier attempt spent the parent output, then failed before it created the spender's record, and nothing undid the spend. If the same transaction is then mined at least that threshold later, the store refuses it. Legacy sync keeps the block parked as a local UTXO fault, above or below the checkpoint. It logs an Error line saying the UTXO set needs an operator, and retries the block every few seconds. Every retry gets the same answer until the output is freed.
 
-The store logs one line per refused input. Sql:
+The age rule logs one Warn line per refused input, in the two formats below. On Aerospike, a refusal from an older pruner's `deletedChildren` marker is also error 78 but does not log this line; legacy sync's Error line for the parked block is what shows it. Sql:
 
 ```text
 [Spend] refusing <parent>:<vout> as a replay of pruned transaction <spender>: spend recorded at <recorded height>, incoming at <incoming height>, spender has no record
