@@ -536,9 +536,12 @@ func NewUtxoWalkLimitExceededError(message string, params ...interface{}) *Error
 
 // NewUtxoSpendingTxPrunedError creates a new error indicating that the
 // transaction attempting to spend an output is one the pruner has already
-// removed. The output still names the transaction as its spender, the spend was
-// recorded long enough ago to be history (utxo.IsHistoricalSpend), and the
-// transaction has no record. Without this answer the spend would succeed as an
+// removed. It has two producers. In both stores, the output still names the
+// transaction as its spender, the spend was recorded long enough ago to be
+// history (utxo.IsHistoricalSpend), and the transaction has no record. In the
+// Aerospike store it is also the answer to a deletedChildren marker the pruner
+// wrote before spend heights were recorded (Lua INVALID_SPEND), which checks
+// neither the height nor whether the transaction's record exists. Without this answer the spend would succeed as an
 // idempotent re-spend and let the caller recreate the pruned transaction.
 //
 // It carries its own code rather than ERR_UTXO_ERROR because callers have to

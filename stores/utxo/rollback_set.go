@@ -13,10 +13,12 @@ import (
 // of a pruned transaction usually meets a spend about the retention old. That
 // is not a bound: a mempool spend is recorded at the tip plus one, and a reorg
 // to a heavier but shorter chain can mine it lower without clearing that
-// height. Half the retention is the margin for that gap; a spend recorded more
-// than 144 blocks above the block that mined it is accepted on replay. An honest retry after a failed attempt
-// usually comes back within minutes. One that comes back 144 or more blocks
-// later is refused as a replay when its transaction has no record, including
+// height. Half the retention is the margin for that gap. A spend recorded more
+// than half the retention above the block that mined it is still young when the
+// pruner deletes the transaction, so a replay at that moment is accepted; once
+// the chain is half the retention past the recorded height, the replay is
+// refused. An honest retry after a failed attempt usually comes back within
+// minutes. One that comes back half the retention or more later is refused as a replay when its transaction has no record, including
 // in a block: an earlier attempt that left a spend behind (a rollback skipped
 // for a transient lock, or one that failed) and never created the transaction
 // reads the same as a pruned one.

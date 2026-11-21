@@ -476,12 +476,15 @@ func TestParkCommitFailure_APrunedReplayAnswerIsALocalUtxoFault(t *testing.T) {
 	require.False(t, d.markFailed, "the block is canonical below the checkpoint")
 	require.False(t, d.blamePeer, "the peer sent a good block")
 
-	// The row sits below the transient and verdict arms. The full route wraps
-	// the store's answer in a ServiceError, which the transient arm takes first,
-	// and a verdict that happens to wrap the answer stays a verdict.
+	// The full route wraps the store's answer in a ServiceError. It is still
+	// this node's UTXO fault, so the drain stamps it and waits before the next
+	// try instead of re-dispatching it on every turn. A verdict that happens to
+	// wrap the answer stays a verdict, and so does a corrupt body.
 	pruned := errors.NewUtxoSpendingTxPrunedError("[Spend] invalid spend for %s:%d: spending transaction was pruned", "ef01", 0)
-	require.Equal(t, parkDispositionRetryLater, parkCommitFailure(parkCommitChain(errors.NewServiceError("[processBlockFound] failed", pruned))),
-		"the full route's ServiceError wrap is retried, not read as this node's UTXO fault")
+	require.Equal(t, parkDispositionLocalUtxoFault, parkCommitFailure(parkCommitChain(errors.NewServiceError("[processBlockFound] failed", pruned))),
+		"the full route's ServiceError wrap is this node's UTXO fault, not a transient retry")
+	require.Equal(t, parkDispositionRecordCorrupt, parkCommitFailure(parkCommitChain(errors.NewBlockCorruptError("[processBlockFound] corrupt", pruned))),
+		"a corrupt body that wraps the answer is still corrupt")
 	require.Equal(t, parkDispositionBlockInvalid, parkCommitFailure(parkCommitChain(errors.NewBlockInvalidError("[ValidateBlock] invalid", pruned))),
 		"a verdict that wraps the answer is still a verdict")
 }

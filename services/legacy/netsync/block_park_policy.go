@@ -451,6 +451,15 @@ func parkCommitFailure(err error) parkDisposition {
 		// it here, so keep this list current when touching those call sites.
 		return parkDispositionParentNotMinedYet
 
+	case errors.Is(err, errors.ErrUtxoSpendingTxPruned) && !outranksPrunedReplay(err):
+		// Above the checkpoint the full route wraps this answer in a
+		// ServiceError, which the transient arm below would read as retry
+		// later. That row carries no stamp, so the drain re-dispatched the block
+		// on every turn, and the answer does not change until an operator frees
+		// the output (docs/topics/stores/utxo.md, error 78). It is this node's
+		// UTXO fault on either route.
+		return parkDispositionLocalUtxoFault
+
 	case errors.IsContextError(err), errors.IsTransientLocalError(err):
 		return parkDispositionRetryLater
 
@@ -478,8 +487,9 @@ func parkCommitFailure(err error) parkDisposition {
 		// The two answers a replay of a transaction this node already pruned
 		// gets. Below the checkpoint the block is certified, so the store is
 		// ahead of the chain, which is this node's state, not the peer's block.
-		// Above it the full route wraps this answer in a ServiceError, which
-		// the transient arm has already taken. On neither route is a pruned
+		// Above it the full route wraps this answer in a ServiceError; the
+		// pruned answer is taken by its own arm above the transient one. On
+		// neither route is a pruned
 		// replay a block verdict: the answer says only that this node pruned
 		// the transaction, not whether, or on which chain, it was mined.
 		return parkDispositionLocalUtxoFault
@@ -487,6 +497,18 @@ func parkCommitFailure(err error) parkDisposition {
 	default:
 		return parkDispositionBlockRejected
 	}
+}
+
+// outranksPrunedReplay reports whether err also carries an answer that the rows
+// below the transient arm rank above a pruned replay: a verdict on the block, a
+// corrupt body, a policy refusal, or missing files. Those keep their own rows when
+// one failure carries both.
+func outranksPrunedReplay(err error) bool {
+	return errors.IsBlockCorrupt(err) ||
+		errors.Is(err, errors.ErrBlockInvalid) ||
+		errors.Is(err, errors.ErrBlockPolicyDeclined) ||
+		errors.Is(err, errors.ErrNotFound) ||
+		errors.Is(err, errors.ErrBlobNotFound)
 }
 
 // withoutBlame returns the same row with the reject left unsent. Used while the
