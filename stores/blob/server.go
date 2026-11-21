@@ -254,6 +254,9 @@ func (s *HTTPBlobServer) handleExists(w http.ResponseWriter, r *http.Request, op
 	if exists {
 		w.WriteHeader(http.StatusOK)
 	} else {
+		// Mark our own miss so the client's Exists can tell it from a wrong base URL or a
+		// proxy 404 - a HEAD has no body to carry NotFoundMsg.
+		w.Header().Set(blobhttp.MissHeader, "1")
 		w.WriteHeader(http.StatusNotFound)
 	}
 }
@@ -687,6 +690,10 @@ func (s *HTTPBlobServer) handleDelete(w http.ResponseWriter, r *http.Request, op
 // its caller as a miss, so a fault answered 404 would reach that caller as an absent blob.
 func writeStoreError(w http.ResponseWriter, err error) {
 	if errors.Is(err, errors.ErrNotFound) && !errors.Is(err, errors.ErrStorageError) {
+		// Mark our own miss (GET, ranged GET, PATCH) so the client reads a 404 as a miss
+		// only when it came from here, not from a proxy. http.Error sets the status after
+		// this, so the header survives.
+		w.Header().Set(blobhttp.MissHeader, "1")
 		http.Error(w, NotFoundMsg, http.StatusNotFound)
 		return
 	}
