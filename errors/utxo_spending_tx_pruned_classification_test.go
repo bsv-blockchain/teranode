@@ -9,8 +9,11 @@ import (
 
 // TestUtxoSpendingTxPrunedIsClassified pins ERR_UTXO_SPENDING_TX_PRUNED on the
 // two client-facing classifiers in this package. It is this node's record, not a
-// consensus verdict: the spending transaction was mined, fully spent and pruned
-// here, and it keeps that answer while the parent output still names it.
+// consensus verdict. Usually the spender was mined, fully spent and pruned here,
+// and the answer stays while the parent output still names it. The same code also
+// answers a spend an attempt left behind without creating its transaction, and an
+// Aerospike deletedChildren marker, so it does not by itself say the transaction
+// confirmed.
 // Unclassified it fell to codes.Internal with no verdict in the body, reporting a
 // settled answer to a submitter as a server fault.
 func TestUtxoSpendingTxPrunedIsClassified(t *testing.T) {

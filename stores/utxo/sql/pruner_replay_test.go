@@ -364,9 +364,11 @@ func TestSpendDoesNotBlessWithRequireParentOutputs(t *testing.T) {
 // the store does not hold, and its next legitimate spender was refused naming a
 // txid this node has never seen. Found by oskarszoon.
 //
-// Only a pruned-replay rejection makes an idempotent match historical, because
-// only a transaction this store pruned was mined, fully spent and buried. Every
-// other rejection, here a frozen output, leaves it reversible.
+// A young idempotent match stays reversible when the call fails for any reason
+// other than a pruned replay and every input was answered, here a frozen output.
+// A match at least half the retention old is history whether or not this store
+// ever mined the spender, and an unanswered input holds back every match of that
+// call too.
 func TestOrphanedSpendIsReversedOnTheNextAttempt(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		p := bt.NewTx()

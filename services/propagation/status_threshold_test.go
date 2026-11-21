@@ -19,10 +19,12 @@ func TestHTTPStatusForTxError_ThresholdExceeded(t *testing.T) {
 }
 
 // TestStatusForPrunedSpendingTx pins ERR_UTXO_SPENDING_TX_PRUNED on the HTTP
-// classifier. The spending transaction was mined, fully spent and pruned, so the
-// rejection is permanent and about chain state, exactly like ErrSpent beside it.
-// Unclassified it fell through to 500, telling a submitter their settled,
-// deterministic rejection was a server fault.
+// classifier. It is answered with HTTP 409, the same status as ErrSpent beside
+// it. It is this node's record, not a consensus verdict: usually the spender was
+// mined, fully spent and pruned here, but the same code also answers a spend an
+// attempt left behind without creating its transaction, and an Aerospike
+// deletedChildren marker. Unclassified it fell through to 500, telling a
+// submitter that the answer was a server fault.
 func TestStatusForPrunedSpendingTx(t *testing.T) {
 	require.Equal(t, http.StatusConflict, httpStatusForTxError(errors.ErrUtxoSpendingTxPruned))
 	require.Equal(t, http.StatusConflict,

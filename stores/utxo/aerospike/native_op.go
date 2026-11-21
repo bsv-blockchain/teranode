@@ -886,15 +886,16 @@ func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospi
 	return s.probeNativeReplayProtectionVerdict(ctx, policy) == replayProbeProven
 }
 
-// probeNativeReplayProtectionVerdict proves the native dispatcher honours the two
-// spendMulti semantics the pruner's replay protection depends on, before
-// spendMulti is allowed onto the native path.
+// probeNativeReplayProtectionVerdict proves the native dispatcher honours the three
+// spendMulti semantics replay protection depends on, before spendMulti is allowed
+// onto the native path: the deletedChildren refusal, the idempotent list, and the
+// spend height in idempotentHeights.
 //
-// Both are enforced in teranode.lua and neither is visible to the client, so
+// All three are enforced in teranode.lua and none is visible to the client, so
 // like the first-seen probe beside it they are exercised rather than assumed.
 // A Lua change is version-gated by bumping LuaPackage; the native dispatcher
-// lives in the server fork and has no such gate, so a build that predates either
-// semantic is indistinguishable from one that implements it except by asking.
+// lives in the server fork and has no such gate, so a build that predates any
+// of them is indistinguishable from one that implements it except by asking.
 //
 //  1. The replay marker. A pruner before the spend height wrote the pruned
 //     child's txid into the parent's deletedChildren bin before deleting it, and
