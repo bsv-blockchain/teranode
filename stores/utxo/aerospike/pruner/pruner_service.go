@@ -1837,8 +1837,11 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 // flushCleanupBatches deletes the accumulated records, then the external blobs of the records
 // whose delete was confirmed.
 //
-// The pruner only deletes. It writes nothing to a surviving parent: a replay of a pruned
-// transaction is refused when it is spent, from the height stored with the spend.
+// This batch writes no replay markers to a surviving parent: a replay of a pruned transaction is
+// refused when it is spent, from the height stored with the spend. Other parts of the cycle still
+// write to records they keep: defensive mode unspends a conflicting transaction's inputs on its
+// surviving parents before the delete (clearParentRefs), and an unmined record can have its
+// deleteAtHeight cleared.
 //
 // A blob goes only after its own record's delete is confirmed, and every confirmed record's blob
 // goes even when another delete in the batch failed. A record that is gone is never found again by

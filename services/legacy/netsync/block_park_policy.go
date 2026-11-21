@@ -260,7 +260,7 @@ var (
 	// wrong.
 	parkDispositionLocalUtxoFault = parkDisposition{
 		name:   "local_utxo_fault",
-		reason: "a parent output this node should already hold is missing from its UTXO set",
+		reason: "this node's UTXO set cannot take the block: a parent output it should hold is missing, or still names a spender this node pruned",
 		blob:   parkBlobKeep,
 	}
 
