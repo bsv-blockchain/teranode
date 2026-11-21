@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -112,17 +114,12 @@ func TestDeleteAndSpendUseTheSameRowLockOrder_Postgres(t *testing.T) {
 	t.Cleanup(cancel)
 
 	dbURL := startPostgresContainer(t, ctx)
+	setDatabaseDeadlockTimeout(t, ctx, dbURL, "1s")
 	store, spender := newPostgresTestStore(t, ctx, dbURL), newPostgresTestStore(t, ctx, dbURL)
 	t.Cleanup(func() { _ = store.Close(context.Background()); _ = spender.Close(context.Background()) })
 	floorRetention(t, spender)
 
 	tx := replayParent(t, ctx, store, "2222222222222222222222222222222222222222222222222222222222222222")
-
-	// One connection each, so the session settings apply to the real Delete.
-	store.db.SetMaxOpenConns(1)
-	store.db.SetMaxIdleConns(1)
-	_, err := store.db.ExecContext(ctx, "SET deadlock_timeout = '1s'; SET application_name = 'delete-spend-delete'")
-	require.NoError(t, err)
 
 	spend, err := spender.db.BeginTx(ctx, nil)
 	require.NoError(t, err)
@@ -152,11 +149,13 @@ func TestDeleteAndSpendUseTheSameRowLockOrder_Postgres(t *testing.T) {
 		var waiting bool
 
 		require.NoError(t, observer.QueryRow(ctx,
-			"SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name = 'delete-spend-delete' AND wait_event_type = 'Lock')").Scan(&waiting))
+			"SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%DELETE FROM outputs%')").Scan(&waiting))
 
 		if waiting {
 			break
 		}
+
+		requireDeleteStillRunning(t, deleted)
 
 		require.True(t, time.Now().Before(deadline), "Delete must wait on the spend's output lock")
 		time.Sleep(10 * time.Millisecond)
@@ -183,15 +182,11 @@ func TestDeleteRetriesADeadlockWithThePrune_Postgres(t *testing.T) {
 	t.Cleanup(cancel)
 
 	dbURL := startPostgresContainer(t, ctx)
+	setDatabaseDeadlockTimeout(t, ctx, dbURL, "100ms")
 	store := newPostgresTestStore(t, ctx, dbURL)
 	t.Cleanup(func() { _ = store.Close(context.Background()) })
 
 	tx := replayParent(t, ctx, store, "3333333333333333333333333333333333333333333333333333333333333333")
-
-	store.db.SetMaxOpenConns(1)
-	store.db.SetMaxIdleConns(1)
-	_, err := store.db.ExecContext(ctx, "SET deadlock_timeout = '100ms'; SET application_name = 'delete-prune-delete'")
-	require.NoError(t, err)
 
 	control, err := pgx.Connect(ctx, dbURL.String())
 	require.NoError(t, err)
@@ -224,12 +219,13 @@ func TestDeleteRetriesADeadlockWithThePrune_Postgres(t *testing.T) {
 		var waiting bool
 
 		require.NoError(t, observer.QueryRow(ctx,
-			"SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name = 'delete-prune-delete' AND wait_event_type = 'Lock')").Scan(&waiting))
+			"SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FOR UPDATE%')").Scan(&waiting))
 
 		if waiting {
 			break
 		}
 
+		requireDeleteStillRunning(t, deleted)
 		require.True(t, time.Now().Before(deadline), "Delete must wait on the prune's row lock")
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -799,4 +795,33 @@ func testSpendBatchSurvivesAParentThePruneDeletes(t *testing.T, bulk bool) {
 	require.False(t, rowExists(ctx, t, store, *candidate.TxIDChainHash()), "the prune deleted the candidate")
 	require.Equal(t, spendpkg.NewSpendingData(honest.TxIDChainHash(), 0).Bytes(), outputSpendingData(t, ctx, store, bystander, 0),
 		"the honest spend committed")
+}
+
+// setDatabaseDeadlockTimeout sets the test database's default deadlock_timeout
+// before any store connects, so every pooled connection the store opens has it,
+// whichever one its Delete runs on. The other side of each test takes a longer
+// timeout with SET LOCAL, so Delete is the one Postgres aborts.
+func setDatabaseDeadlockTimeout(t *testing.T, ctx context.Context, dbURL *url.URL, timeout string) {
+	t.Helper()
+
+	admin, err := pgx.Connect(ctx, dbURL.String())
+	require.NoError(t, err)
+
+	defer func() { _ = admin.Close(context.Background()) }()
+
+	_, err = admin.Exec(ctx, fmt.Sprintf("ALTER DATABASE %s SET deadlock_timeout = '%s'", pgx.Identifier{strings.TrimPrefix(dbURL.Path, "/")}.Sanitize(), timeout))
+	require.NoError(t, err)
+}
+
+// requireDeleteStillRunning fails at once if Delete has already returned while
+// the test waits for it to block, so the failure names Delete's answer instead
+// of a timeout.
+func requireDeleteStillRunning(t *testing.T, deleted chan error) {
+	t.Helper()
+
+	select {
+	case err := <-deleted:
+		require.Failf(t, "Delete returned before it waited on a lock", "error: %v", err)
+	default:
+	}
 }
