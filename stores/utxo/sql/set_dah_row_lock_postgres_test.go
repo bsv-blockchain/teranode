@@ -99,8 +99,10 @@ func TestDeleteAndMiningUseTheSameRowLockOrder_Postgres(t *testing.T) {
 
 // Delete must lock outputs before the transaction row, as Spend and Unspend do.
 // The spend here has locked P's output and then asks setDAH for P's row while
-// Delete runs. With Delete taking the row first, the two form a cycle and the
-// short deadlock timeout makes Delete the victim; Delete does not retry.
+// Delete waits on the output. With Delete in that order, setDAH gets the row at
+// once. With Delete taking the row first, setDAH waits until Delete's one-second
+// deadlock timeout aborts it. Delete retries a deadlock and would still delete
+// the row, so the test bounds setDAH's wait well below that timeout instead.
 func TestDeleteAndSpendUseTheSameRowLockOrder_Postgres(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -119,7 +121,7 @@ func TestDeleteAndSpendUseTheSameRowLockOrder_Postgres(t *testing.T) {
 	// One connection each, so the session settings apply to the real Delete.
 	store.db.SetMaxOpenConns(1)
 	store.db.SetMaxIdleConns(1)
-	_, err := store.db.ExecContext(ctx, "SET deadlock_timeout = '100ms'; SET application_name = 'delete-spend-delete'")
+	_, err := store.db.ExecContext(ctx, "SET deadlock_timeout = '1s'; SET application_name = 'delete-spend-delete'")
 	require.NoError(t, err)
 
 	spend, err := spender.db.BeginTx(ctx, nil)
@@ -160,7 +162,10 @@ func TestDeleteAndSpendUseTheSameRowLockOrder_Postgres(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	require.NoError(t, spender.setDAH(ctx, spend, id), "the spend must get the row lock Delete has not taken")
+	rowCtx, rowCancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer rowCancel()
+
+	require.NoError(t, spender.setDAH(rowCtx, spend, id), "the spend must get the row lock at once, because Delete has not taken it")
 	require.NoError(t, spend.Commit())
 	require.NoError(t, <-deleted, "Delete must not become the deadlock victim of a spend")
 	require.False(t, rowExists(ctx, t, store, *tx.TxIDChainHash()))

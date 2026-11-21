@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"testing"
@@ -191,4 +192,99 @@ func TestRollbackKeepsADuplicateOfAMatchAnotherWriterRecorded(t *testing.T) {
 
 	require.Equal(t, recorded, outputSpendingData(t, ctx, store, a, 0),
 		"neither call wrote A:0, so neither may reverse it")
+}
+
+// TestBulkSpendClassifiesALateMatchByAge: C spends A:0, free when the SELECT reads it, and
+// M:0, which another transaction already spent, so the call fails as spent. Between the
+// SELECT and the UPDATE another attempt at C records A:0 at height 1,000, while this call
+// runs at 1,200. That match is 200 blocks old against the retention's 144, and C has no
+// record, so it is a pruned replay and is refused. Read as a young match it would join the
+// rollback, and the call's failure would free A:0 for a replay of C. Both ways the UPDATE
+// learns about the write are run: upd_idem sees it, or the missed-row re-check does.
+//
+// Postgres only, for the same reason as TestSpendRefusesMarkerCommittedAfterSelect.
+func TestBulkSpendClassifiesALateMatchByAge(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	for _, tc := range []struct {
+		name                    string
+		commitsWhileUpdateWaits bool
+	}{
+		{name: "committed_before_the_update"},
+		{name: "committed_while_the_update_waits", commitsWhileUpdateWaits: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, ctx := setupPostgresStore(t)
+			store.settings.UtxoStore.BatchSQLOperations = true
+			require.NoError(t, store.SetBlockHeight(1200))
+
+			a := replayParent(t, ctx, store, "5555555555555555555555555555555555555555555555555555555555555555")
+			m := replayParent(t, ctx, store, "6666666666666666666666666666666666666666666666666666666666666666")
+			c := replaySpender(t, a, m)
+
+			other := bytes.Repeat([]byte{0x42}, 36)
+			_, err := store.db.ExecContext(ctx,
+				"UPDATE outputs SET spending_data = $2, spending_height = 1100 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)",
+				m.TxIDChainHash()[:], other)
+			require.NoError(t, err)
+
+			var batchSizes []int
+
+			store.spendBatcher.Close()
+			store.spendBatcher = batcher.NewWithPool(2, time.Minute, func(batch []*batchSpend) {
+				batchSizes = append(batchSizes, len(batch))
+				store.sendSpendBatch(batch)
+			}, false)
+
+			recorded := spendpkg.NewSpendingData(c.TxIDChainHash(), 0).Bytes()
+			const writeA = "UPDATE outputs SET spending_data = $2, spending_height = 1000 WHERE idx = 0 AND transaction_id IN (SELECT id FROM transactions WHERE hash = $1)"
+
+			var once sync.Once
+
+			store.afterSpendSelect = func() {
+				once.Do(func() {
+					if !tc.commitsWhileUpdateWaits {
+						_, err := store.db.ExecContext(context.Background(), writeA, a.TxIDChainHash()[:], recorded)
+						require.NoError(t, err)
+
+						return
+					}
+
+					holder, err := store.db.BeginTx(context.Background(), nil)
+					require.NoError(t, err)
+
+					_, err = holder.ExecContext(context.Background(), writeA, a.TxIDChainHash()[:], recorded)
+					require.NoError(t, err)
+
+					go func() {
+						deadline := time.Now().Add(10 * time.Second)
+
+						for time.Now().Before(deadline) {
+							var waiting int
+
+							if err := store.db.QueryRowContext(context.Background(), "SELECT count(*) FROM pg_locks WHERE NOT granted").Scan(&waiting); err == nil && waiting > 0 {
+								break
+							}
+
+							time.Sleep(10 * time.Millisecond)
+						}
+
+						_ = holder.Commit()
+					}()
+				})
+			}
+			t.Cleanup(func() { store.afterSpendSelect = nil })
+
+			spends, err := store.Spend(ctx, c, 1200)
+			store.afterSpendSelect = nil
+
+			require.Equal(t, []int{2}, batchSizes, "fixture: both of C's inputs must be in one batch")
+			require.Error(t, err)
+			require.ErrorIs(t, spends[1].Err, errors.ErrSpent, "fixture: M:0 is spent by another transaction")
+			require.ErrorIs(t, spends[0].Err, errors.ErrUtxoSpendingTxPruned, "a match 200 blocks old with no record for C is a pruned replay")
+			require.Equal(t, recorded, outputSpendingData(t, ctx, store, a, 0), "the rollback must not free the historical match")
+		})
+	}
 }

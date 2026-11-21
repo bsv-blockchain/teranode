@@ -3370,14 +3370,39 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 	//
 	// upd_idem, the arm for an output that already records this spend, and the
 	// re-check below catch a concurrent attempt at the same spend that committed
-	// after the SELECT. That is a young match, never history, so neither asks
-	// for the recorded height or the spender.
+	// after the SELECT. That attempt may have run at a different height, so both
+	// read the recorded height and whether the spender exists, and classify the
+	// match by age as the SELECT does (lateMatch).
 	//
 	// When retention > 0, the UPDATE is wrapped in a CTE that also runs a DAH
 	// recompute on any parent tx whose last unspent output was just drained.
 	// Mirrors aerospike's inline setDeleteAtHeight Lua call; without this, mined
 	// txs spent gradually over time never get a DAH and disk usage grows unbounded.
 	updatedSet := make(map[int]bool) // batchIdx -> updated
+
+	// lateMatch answers an output that records exactly this spend, written by a
+	// concurrent attempt after the SELECT. That attempt's height may be far below
+	// this call's, so the match is classified by age as the SELECT's are: a
+	// historical one with no spender is refused, and a historical one with a
+	// spender is kept out of any rollback.
+	lateMatch := func(bIdx int, recorded sql.NullInt64, spenderExists, healDAH bool) {
+		item := batch[bIdx]
+
+		historical, refused := s.classifyIdempotentMatch(item, recorded, spenderExists)
+		if refused != nil {
+			validationErrors[bIdx] = refused
+			return
+		}
+
+		updatedSet[bIdx] = true
+
+		if healDAH {
+			idempotentParentIDs[resultMap[bIdx].transactionID] = struct{}{}
+		}
+
+		item.idempotent = !historical
+		item.historical = historical
+	}
 	if len(dedupedUpdate) > 0 {
 		retention := s.settings.GetUtxoStoreBlockHeightRetention()
 		wrapDAH := retention > 0
@@ -3435,7 +3460,8 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				RETURNING v.batch_idx, o.transaction_id
 			),
 			upd_idem AS (
-				SELECT v.batch_idx
+				SELECT v.batch_idx, o.spending_height,
+				       EXISTS(SELECT 1 FROM transactions st WHERE st.hash = substring(o.spending_data from 1 for 32)) AS spender_exists
 				FROM v
 				JOIN outputs o
 				  ON o.transaction_id = v.transaction_id AND o.idx = v.idx
@@ -3481,9 +3507,9 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			-- Reported as a fresh write it would
 			-- join the rollback set and a later failure on a sibling input would
 			-- reverse a spend this call never made. See utxo.RollbackSet.
-			SELECT batch_idx, false AS idempotent FROM upd_spent
+			SELECT batch_idx, false AS idempotent, NULL::bigint AS spending_height, false AS spender_exists FROM upd_spent
 			UNION ALL
-			SELECT batch_idx, true AS idempotent FROM upd_idem`, flooredDAH))
+			SELECT batch_idx, true AS idempotent, spending_height::bigint, spender_exists FROM upd_idem`, flooredDAH))
 		} else {
 			ub.WriteString(`),
 			upd_spent AS (
@@ -3496,15 +3522,16 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				RETURNING v.batch_idx
 			),
 			upd_idem AS (
-				SELECT v.batch_idx
+				SELECT v.batch_idx, o.spending_height,
+				       EXISTS(SELECT 1 FROM transactions st WHERE st.hash = substring(o.spending_data from 1 for 32)) AS spender_exists
 				FROM v
 				JOIN outputs o
 				  ON o.transaction_id = v.transaction_id AND o.idx = v.idx
 				WHERE o.spending_data = v.spending_data
 			)
-			SELECT batch_idx, false AS idempotent FROM upd_spent
+			SELECT batch_idx, false AS idempotent, NULL::bigint AS spending_height, false AS spender_exists FROM upd_spent
 			UNION ALL
-			SELECT batch_idx, true AS idempotent FROM upd_idem`)
+			SELECT batch_idx, true AS idempotent, spending_height::bigint, spender_exists FROM upd_idem`)
 		}
 
 		if spendBeforeWrite != nil {
@@ -3522,11 +3549,13 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 
 		for uRows.Next() {
 			var (
-				bIdx    int
-				wasIdem bool
+				bIdx          int
+				wasIdem       bool
+				recorded      sql.NullInt64
+				spenderExists bool
 			)
 
-			if err := uRows.Scan(&bIdx, &wasIdem); err != nil {
+			if err := uRows.Scan(&bIdx, &wasIdem, &recorded, &spenderExists); err != nil {
 				uRows.Close()
 				if isDeadlock(err) {
 					return true
@@ -3534,11 +3563,12 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				failSpendBatch(batch, validationErrors, "[Spend] failed: scanning bulk UPDATE results", err)
 				return false
 			}
-			updatedSet[bIdx] = true
-
 			if wasIdem && bIdx >= 0 && bIdx < len(batch) && batch[bIdx] != nil {
-				batch[bIdx].idempotent = true
+				lateMatch(bIdx, recorded, spenderExists, false)
+				continue
 			}
+
+			updatedSet[bIdx] = true
 		}
 		if err := uRows.Close(); err != nil {
 			if isDeadlock(err) {
@@ -3586,11 +3616,12 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 
 			var sb strings.Builder
 			// A row that now records exactly this spend was written by a concurrent
-			// attempt at it after the SELECT found the output unspent, so it is
-			// young and no replay: it is never classified by age. Any other row
+			// attempt at it after the SELECT found the output unspent. It is
+			// classified by age like any match (lateMatch). Any other row
 			// is a concurrent spend, a freeze, or a lifted freeze to retry.
 			sb.WriteString(`SELECT v.batch_idx,
-			       o.spending_data = v.spending_data, o.frozen
+			       o.spending_data = v.spending_data, o.frozen, o.spending_height::bigint,
+			       EXISTS(SELECT 1 FROM transactions st WHERE st.hash = substring(o.spending_data from 1 for 32))
 			FROM (VALUES `)
 			args := make([]interface{}, 0, len(missedIdxs)*4)
 			pidx := 1
@@ -3619,11 +3650,13 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			}
 			for iRows.Next() {
 				var (
-					bIdx      int
-					idem      sql.NullBool
-					nowFrozen bool
+					bIdx          int
+					idem          sql.NullBool
+					nowFrozen     bool
+					recorded      sql.NullInt64
+					spenderExists bool
 				)
-				if err := iRows.Scan(&bIdx, &idem, &nowFrozen); err != nil {
+				if err := iRows.Scan(&bIdx, &idem, &nowFrozen, &recorded, &spenderExists); err != nil {
 					iRows.Close()
 					if isDeadlock(err) {
 						return true
@@ -3642,12 +3675,10 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				if !idem.Bool {
 					continue
 				}
-				updatedSet[bIdx] = true
 				// Parent has just had its output confirmed-spent by someone
 				// else with our exact spending_data. Treat it as an idempotent
-				// match for DAH-healing purposes, same as the in-statement path.
-				idempotentParentIDs[resultMap[bIdx].transactionID] = struct{}{}
-				batch[bIdx].idempotent = true
+				// match for DAH-healing purposes too.
+				lateMatch(bIdx, recorded, spenderExists, true)
 			}
 			if err := iRows.Close(); err != nil {
 				if isDeadlock(err) {
@@ -3697,9 +3728,12 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 					// The duplicate wrote nothing itself; it is idempotent exactly
 					// when its representative is, which decides its rollback.
 					batch[u.batchIdx].idempotent = batch[entry.batchIdx].idempotent
-				} else if _, refused := validationErrors[entry.batchIdx]; refused {
+					batch[u.batchIdx].historical = batch[entry.batchIdx].historical
+				} else if repErr, refused := validationErrors[entry.batchIdx]; refused {
 					spend := batch[u.batchIdx].spend
 					switch {
+					case errors.Is(repErr, errors.ErrUtxoSpendingTxPruned):
+						validationErrors[u.batchIdx] = errors.NewUtxoSpendingTxPrunedError(errSpendTxPruned, spend.TxID, spend.Vout)
 					case frozenSet[entry.batchIdx]:
 						validationErrors[u.batchIdx] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
 					default:
