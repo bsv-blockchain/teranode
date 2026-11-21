@@ -401,6 +401,20 @@ func TestParentLanePositionsOnAerospike(t *testing.T) {
 	_, ok = recordBin(t, client, store, other, 0, fields.ParentLanePositions)
 	require.False(t, ok, "a parent without a position leaves the bin out")
 
+	v, ok = recordBin(t, client, store, other, 0, fields.LanePosition)
+	require.True(t, ok, "and the record keeps its own position")
+	require.Equal(t, int(lane.ToSigned(lane.Pack(7, 102))), v)
+
+	// A parent list that does not match the parent count leaves the record its own position.
+	mismatched := laneChild(t, laneParent(t, 8, 1), 0)
+	_, err = store.Create(ctx, mismatched, 101, utxo.WithLanePosition(lane.Pack(7, 104)),
+		utxo.WithParentLanePositions([]uint64{lane.Pack(7, 1), lane.Pack(7, 2)}))
+	require.NoError(t, err)
+
+	v, ok = recordBin(t, client, store, mismatched, 0, fields.LanePosition)
+	require.True(t, ok)
+	require.Equal(t, int(lane.ToSigned(lane.Pack(7, 104))), v)
+
 	// A spend at shadow on a server that passed the probe counts as carrying its position.
 	before := laneSpendsCounted(t, "yes")
 	grandchild := laneChild(t, child, 0)
@@ -447,6 +461,81 @@ func laneSpendsCounted(t *testing.T, carried string) float64 {
 	}
 
 	return 0
+}
+
+// laneParentRecordsCounted reads
+// teranode_lane_record_positions_total{store="aerospike", kind="parents", carried=carried}.
+func laneParentRecordsCounted(t *testing.T, carried string) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range families {
+		if family.GetName() != "teranode_lane_record_positions_total" {
+			continue
+		}
+
+		for _, m := range family.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+
+			if labels["store"] == "aerospike" && labels["kind"] == utxo.LaneCoverageParents && labels["carried"] == carried {
+				return m.GetCounter().GetValue()
+			}
+		}
+	}
+
+	return 0
+}
+
+// A parent list too long for the master record is left off it: the create stores the transaction
+// with its own position and counts its parents as not carried, rather than failing at shadow on a
+// wide transaction whose list would pass the server's write block.
+func TestCreateLeavesOffAParentListTooLongForTheRecord(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	client, store, _, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	t.Cleanup(teranodeaerospike.SetMaxParentLanePositions(1))
+
+	first, second := laneParent(t, 11, 1), laneParent(t, 12, 1)
+
+	child := bt.NewTx()
+	for _, parent := range []*bt.Tx{first, second} {
+		require.NoError(t, child.FromUTXOs(&bt.UTXO{
+			TxIDHash:      parent.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: parent.Outputs[0].LockingScript,
+			Satoshis:      parent.Outputs[0].Satoshis,
+		}))
+	}
+
+	require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
+
+	own := lane.Pack(9, 50)
+	notCarried, carried := laneParentRecordsCounted(t, "no"), laneParentRecordsCounted(t, "yes")
+
+	md, err := store.Create(ctx, child, 101, utxo.WithLanePosition(own),
+		utxo.WithParentLanePositions([]uint64{lane.Pack(9, 1), lane.Pack(9, 2)}))
+	require.NoError(t, err, "the create stores the transaction")
+	require.Equal(t, own, md.LanePosition)
+
+	_, ok := recordBin(t, client, store, child, 0, fields.ParentLanePositions)
+	require.False(t, ok, "the list is left off the record")
+
+	v, ok := recordBin(t, client, store, child, 0, fields.LanePosition)
+	require.True(t, ok)
+	require.Equal(t, int(lane.ToSigned(own)), v, "the record keeps its own position")
+
+	require.Equal(t, notCarried+1, laneParentRecordsCounted(t, "no"), "the parents count as not carried")
+	require.Equal(t, carried, laneParentRecordsCounted(t, "yes"))
 }
 
 // Through SpendAndCreate, the route the validator takes, a store with a position source spends with

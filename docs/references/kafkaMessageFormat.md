@@ -853,7 +853,7 @@ For `ADD` entries, `content` is the serialized `meta.Data` for the transaction â
 - Coinbase flag
 - Lock time
 
-For `ADDLane` entries, `content` is produced by `(*meta.Data).LaneMetaBytesInto` and parsed by `meta.NewDataFromLaneMetaBytes`: a magic byte `0xA7`, a version byte `0x01` and the transaction's 8-byte lane position, then exactly the `MetaBytes` above, then one 8-byte lane position per distinct parent in `TxInpoints` order. The action byte, not the magic byte, tells the two encodings apart, because a fee of 423 satoshis also begins with `0xA7 0x01`. `txmetacache.LaneMetaContent` returns the embedded `MetaBytes` without copying or allocating.
+For `ADDLane` entries, `content` is produced by `(*meta.Data).LaneMetaBytesInto` and parsed by `meta.NewDataFromLaneMetaBytes`: a magic byte `0xA7`, a version byte `0x01` and the transaction's 8-byte lane position, then the `MetaBytes` layout (a `uint64` fee, a `uint64` size, the flags byte and the `TxInpoints`), then one 8-byte lane position per distinct parent in `TxInpoints` order. The action byte, not the magic byte, tells the two encodings apart, because a fee of 423 satoshis also begins with `0xA7 0x01`. `txmetacache.LaneMetaContent` returns the embedded `MetaBytes` without copying or allocating.
 
 ### Code Examples
 
@@ -917,7 +917,7 @@ if !isV2 {
 - **Truncated header**: buffer shorter than the minimum header (4 bytes for v1, 8 bytes for v2). Logged + acked.
 - **Truncated entry**: per-entry header or content runs off the end of the buffer. Logged + acked at the truncation point; preceding entries are still processed.
 - **Implausible entry count**: wire-side count exceeds what the buffer can hold at the minimum entry size. Logged + acked; nothing is dispatched. Protects the pool buffer from oversized pre-allocation.
-- **Unknown action byte** (not `0x00` or `0x01`): the entry is logged and skipped; remaining entries continue to be processed.
+- **Unknown action byte** (not `0x00`, `0x01` or `0x02`): the entry is logged and skipped; remaining entries continue to be processed.
 
 In all of the above the message is acknowledged (`return nil`) rather than re-delivered â€” a single corrupt message must not stall the topic.
 

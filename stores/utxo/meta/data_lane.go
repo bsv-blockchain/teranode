@@ -9,9 +9,9 @@ import (
 	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
-// The lane metadata encoding is the versioned form of MetaBytes that carries lane positions. It is
-// for the lane-format txmeta topic and cache, never mixed with the unversioned MetaBytes, which
-// stays byte for byte what it was:
+// The lane metadata encoding is the versioned form of MetaBytes that carries lane positions. On the
+// txmeta topic the action byte says which encoding an entry holds, and the txmeta cache keeps the
+// embedded MetaBytes only. MetaBytes stays byte for byte what it was:
 //
 //	[0]      LaneMetaMagic
 //	[1]      LaneMetaVersion

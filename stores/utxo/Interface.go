@@ -312,12 +312,14 @@ type CreateOptions struct {
 	LanePosition uint64
 
 	// ParentLanePositions is the lane position of each distinct parent of the record, in the
-	// order of its TxInpoints parents, which a store that has the column writes beside the
-	// inpoints. The validator names it at utxostore_laneMigration shadow from the parent reads it
-	// already makes. nil means the caller read no parent positions: lane positions off, or a path
-	// that reads no parents. Otherwise it has one entry per distinct parent, and a parent with no
-	// position is 0 there; a store writes the list only when every entry is a valid position. A
-	// store never reads a parent to fill it.
+	// order of its TxInpoints parents. The validator names it at utxostore_laneMigration shadow
+	// from the parent reads it already makes, with one entry per distinct parent and 0 for a
+	// parent with no position. nil means the caller read no parent positions: lane positions off,
+	// or a path that reads no parents. Utxoset writes the list beside the inpoints when it holds
+	// one valid position per distinct parent and the row stores inpoints. Aerospike writes its
+	// parentLanePos bin when every entry is valid, without checking the length against the parent
+	// count, and leaves a list too long for the record off. The SQL column is installed and not
+	// written in this build. A store never reads a parent to fill it.
 	ParentLanePositions []uint64
 }
 

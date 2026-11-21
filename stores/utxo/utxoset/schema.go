@@ -727,7 +727,7 @@ func CreateSchema(ctx context.Context, pool *pgxpool.Pool) error {
 // row with nothing to show for them. A database that has never had lane positions on keeps the
 // rows main writes, until an operator installs the lane schema with PrepareLaneSchema. The other
 // five lane columns arrive only that way, and this build writes them only once PrepareLaneSchema
-// has installed them, so turning lane positions on adds no columns.
+// has installed them, so turning lane positions on adds only those three identity columns.
 //
 // A process with the flag off still looks, because the columns outlive the flag: on a database
 // where they exist, the statements that copy a record's payload keep carrying the position. A process

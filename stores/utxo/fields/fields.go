@@ -96,9 +96,10 @@ const (
 	// SpendingLanePositions is the slot lane-position bin: a byte string on the
 	// master or page record that holds the outputs, eight little-endian bytes
 	// per output in output order, beside the utxos bin, zero for an output with
-	// no position. A fresh spend that carries the spender's lane position writes
-	// it in the same record write as the slot's spending data, growing the bin to
-	// cover that output; the slot's binary spending-data layout is unchanged.
+	// no position. A fresh Lua or native spend that carries the spender's lane
+	// position writes it in the same record write as the slot's spending data,
+	// growing the bin to cover that output; the expression operate writes no bin.
+	// The slot's binary spending-data layout is unchanged.
 	// It has the spendHeights bin's shape. See stores/utxo/aerospike/lane_bins.go.
 	SpendingLanePositions FieldName = "spendLanePos"
 	// ParentLanePositions is the child's copy of its parents' lane positions: a

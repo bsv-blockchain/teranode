@@ -254,6 +254,11 @@ func TestParentLanePositionsThatDoNotMatchAreNotWritten(t *testing.T) {
 			require.True(t, ok)
 			require.Nil(t, got)
 
+			own, null, ok := storedLane(t, s, ctx, "tx_ident", child)
+			require.True(t, ok)
+			require.False(t, null, "the record keeps its own position")
+			require.Equal(t, lane.ToSigned(lane.Pack(5, 9)), own)
+
 			require.NoError(t, s.Delete(ctx, child.TxIDChainHash()))
 		})
 	}

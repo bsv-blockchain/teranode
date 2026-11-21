@@ -355,11 +355,22 @@ func (b *BatchStoreItem) parentLanes() []uint64 {
 	return b.lanes.parents
 }
 
+// parentLanePositionsBinLimit bounds the parentLanePos bin, in bytes, well under the server's write
+// block (8 MiB by default). The transaction body can go to external storage, but this bin stays on
+// the master record and grows with the parent count, so without a bound a valid transaction with a
+// million distinct parents would fail its create at shadow and stall the block it is in.
+const parentLanePositionsBinLimit = 1 << 20
+
+// maxParentLanePositions is the most parent positions a create writes: the bin limit over the
+// largest packed position, a 9-byte msgpack integer. A variable only so a test can lower it.
+var maxParentLanePositions = parentLanePositionsBinLimit / 9
+
 // validParentLanes is positions when every one is a valid lane position, and nil otherwise, so a
 // parent read that found no position leaves the record without a parentLanePos bin rather than
-// with a zero in it.
+// with a zero in it. A list longer than maxParentLanePositions is nil too: the create stores the
+// transaction without it and counts its parents as not carried, rather than failing.
 func validParentLanes(positions []uint64) []uint64 {
-	if len(positions) == 0 {
+	if len(positions) == 0 || len(positions) > maxParentLanePositions {
 		return nil
 	}
 

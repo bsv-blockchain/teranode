@@ -106,8 +106,9 @@ type SequentialStore interface {
 
 // LaneSpender is a SequentialStore whose spend can record the spender's lane position (util/lane)
 // in each parent's slot, in the same write that marks the output spent. SequentialSpendAndCreate
-// calls it, in place of Spend, only when the record it creates has a position, which is only with
-// lane positions on; with them off every spend goes through Spend exactly as before. It is an
+// calls it, in place of Spend, when the call has a spender position: the one it just took for the
+// record it creates, or the one a spend-only caller names for a record already written. With lane
+// positions off every spend goes through Spend exactly as before. It is an
 // interface of its own rather than a field of IgnoreFlags, because IgnoreFlags sits inside
 // CreateOptions, which every create allocates, and eight more bytes there would move it up a size
 // class.
