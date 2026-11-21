@@ -93,18 +93,19 @@ const (
 	// meta.Data.LanePosition. At shadow the daemon refuses unsupported stores.
 	// Not part of utxo.MetaFields: a caller names it.
 	LanePosition FieldName = "lanePos"
-	// SpendingLanePositions is the slot lane-position bin: a list on the master
-	// record or page record that holds the outputs, one signed 64-bit lane
-	// position per output slot of that record, in the order of its utxos bin,
-	// 0 for a slot not spent. A spend writes the spender's position in the same
-	// single-record operation as the slot's spending data, so the two cannot
-	// race; the slot's binary spending-data layout is unchanged. Installed as a
-	// format only: no writer in this build fills it.
+	// SpendingLanePositions is the slot lane-position bin: a byte string on the
+	// master or page record that holds the outputs, eight little-endian bytes
+	// per output in output order, beside the utxos bin, zero for an output with
+	// no position. A fresh Lua or native spend that carries the spender's lane
+	// position writes it in the same record write as the slot's spending data,
+	// growing the bin to cover that output; the expression operate writes no bin.
+	// The slot's binary spending-data layout is unchanged.
+	// It has the spendHeights bin's shape. See stores/utxo/aerospike/lane_bins.go.
 	SpendingLanePositions FieldName = "spendLanePos"
 	// ParentLanePositions is the child's copy of its parents' lane positions: a
 	// list on the master record, one signed 64-bit lane position per distinct
-	// parent in TxInpoints parent order. Installed as a format only: no writer
-	// in this build fills it.
+	// parent in TxInpoints parent order. A create with lane positions on writes
+	// it when every parent read gave a valid position.
 	ParentLanePositions FieldName = "parentLanePos"
 )
 

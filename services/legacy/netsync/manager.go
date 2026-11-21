@@ -674,6 +674,9 @@ func maxInFlightForSize(avgSize int64) int {
 // it selects peers to sync from and starts the initial block download. Once the
 // chain is in sync, the SyncManager handles incoming block and header
 // notifications and relays announcements of new blocks to peers.
+// laneTxMetaReceived counts the txmeta entries relay receives, by whether they carry lane positions.
+var laneTxMetaReceived = txmetacache.NewLaneTxMetaReceived("legacy")
+
 type SyncManager struct {
 	// adoptions is the registry of subtree files a block relies on but did not create, shared by
 	// every subtree writer this manager makes; see subtreeAdoptions. Read through
@@ -5435,8 +5438,9 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 		contentLen := binary.LittleEndian.Uint32(data[offset:])
 		offset += 4
 
-		if action == txmetacache.WireActionADD {
-			// Handle ADD
+		if action == txmetacache.WireActionADD || action == txmetacache.WireActionADDLane {
+			// Handle ADD, in either encoding: the validator sends the lane one at
+			// utxostore_laneMigration shadow, and relay needs neither position.
 			if offset+int(contentLen) > len(data) {
 				sm.logger.Errorf("[kafkaTXmetaListener] truncated content at entry %d", i)
 				return nil
@@ -5444,6 +5448,20 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 
 			content := data[offset : offset+int(contentLen)]
 			offset += int(contentLen)
+
+			if action == txmetacache.WireActionADDLane || (sm.settings != nil && sm.settings.UtxoStore.LaneMigration.Stamps()) {
+				laneTxMetaReceived.Count(action == txmetacache.WireActionADDLane)
+			}
+
+			if action == txmetacache.WireActionADDLane {
+				legacy, err := txmetacache.LaneMetaContent(content)
+				if err != nil {
+					sm.logger.Errorf("Failed to decode lane tx meta data for %s: %v", hash, err)
+					continue
+				}
+
+				content = legacy
+			}
 
 			sm.logger.Debugf("Received tx message from Kafka: %v", hash)
 

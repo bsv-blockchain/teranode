@@ -73,6 +73,7 @@ import (
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/ordishs/gocore"
@@ -114,6 +115,9 @@ type batchSpend struct {
 	// requireParentOutput turns off the "already blessed" fallback for this item;
 	// see utxo.IgnoreFlags.RequireParentOutputs.
 	requireParentOutput bool
+	// lanePos is the spending transaction's lane position (util/lane), which the spend records in
+	// the parent's slot. Zero, always with lane positions off, sends the spend exactly as before.
+	lanePos uint64
 }
 
 // complete writes err into the item's result slot (spend.Err) and marks the
@@ -484,6 +488,32 @@ func handleSpendPanic(recovered any, err *error, logger ulogger.Logger) {
 //
 //	err := store.Spend(ctx, tx)
 func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) (spends []*utxo.Spend, err error) {
+	return s.spend(ctx, tx, blockHeight, lane.None, ignoreFlags...)
+}
+
+// SpendWithLanePosition implements utxo.LaneSpender: Spend, with each parent's slot also recording
+// position, the spending transaction's lane position, in the same record write. A server that does
+// not know the lanePos key ignores it; see laneSlotWrites.
+func (s *Store) SpendWithLanePosition(ctx context.Context, tx *bt.Tx, blockHeight uint32, position uint64,
+	ignoreFlags utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+	return s.spend(ctx, tx, blockHeight, position, ignoreFlags)
+}
+
+var _ utxo.LaneSpender = (*Store)(nil)
+
+// spend is Spend with the spender's lane position, lane.None for none. With lane positions on it
+// counts every spent output, carried or not, so the coverage share covers every spend this store
+// makes, a plain Spend included.
+func (s *Store) spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, lanePos uint64, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+	spends, err := s.spendItems(ctx, tx, blockHeight, lanePos, ignoreFlags...)
+	if err == nil && s.laneShadow() {
+		s.countLaneSpends(len(spends), lanePos != lane.None)
+	}
+
+	return spends, err
+}
+
+func (s *Store) spendItems(ctx context.Context, tx *bt.Tx, blockHeight uint32, lanePos uint64, ignoreFlags ...utxo.IgnoreFlags) (spends []*utxo.Spend, err error) {
 	defer func() {
 		handleSpendPanic(recover(), &err, s.logger)
 	}()
@@ -529,6 +559,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			ignoreConflicting:   useIgnoreConflicting,
 			ignoreLocked:        useIgnoreLocked,
 			requireParentOutput: useRequireParentOutputs,
+			lanePos:             lanePos,
 		}
 		items[idx] = item
 
@@ -1206,14 +1237,26 @@ func (s *Store) validateSpendItem(bItem *batchSpend) error {
 
 // createSpendMapValue creates the map value for a spend item
 func (s *Store) createSpendMapValue(idx int, bItem *batchSpend) aerospike.MapValue {
-	return aerospike.NewMapValue(map[any]any{
+	m := map[any]any{
 		"idx":          idx,
 		"offset":       s.calculateOffsetForOutput(bItem.spend.Vout),
 		"vOut":         bItem.spend.Vout,
 		"utxoHash":     bItem.spend.UTXOHash[:],
 		"spendingData": bItem.spend.SpendingData.Bytes(),
-	})
+	}
+
+	// Only with lane positions on does a spend carry its lane position, which teranode.lua and the
+	// C module record in the slot on a fresh spend. Without the key both behave exactly as before,
+	// and a server that predates it ignores the key.
+	if bItem.lanePos != lane.None {
+		m[spendItemLanePos] = lane.ToSigned(bItem.lanePos)
+	}
+
+	return aerospike.NewMapValue(m)
 }
+
+// spendItemLanePos is the spend item key that carries the spender's lane position.
+const spendItemLanePos = "lanePos"
 
 // createBatchRecords creates the batch records for Aerospike operations
 func (s *Store) createBatchRecords(batchesByKey map[keyIgnoreLocked][]aerospike.MapValue) ([]aerospike.BatchRecordIfc, []keyIgnoreLocked) {
