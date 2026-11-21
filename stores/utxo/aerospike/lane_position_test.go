@@ -536,6 +536,31 @@ func TestCreateLeavesOffAParentListTooLongForTheRecord(t *testing.T) {
 
 	require.Equal(t, notCarried+1, laneParentRecordsCounted(t, "no"), "the parents count as not carried")
 	require.Equal(t, carried, laneParentRecordsCounted(t, "yes"))
+
+	// A list exactly at the bound is written whole.
+	t.Cleanup(teranodeaerospike.SetMaxParentLanePositions(2))
+
+	third, fourth := laneParent(t, 13, 1), laneParent(t, 14, 1)
+
+	atBound := bt.NewTx()
+	for _, parent := range []*bt.Tx{third, fourth} {
+		require.NoError(t, atBound.FromUTXOs(&bt.UTXO{
+			TxIDHash:      parent.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: parent.Outputs[0].LockingScript,
+			Satoshis:      parent.Outputs[0].Satoshis,
+		}))
+	}
+
+	require.NoError(t, atBound.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
+
+	_, err = store.Create(ctx, atBound, 101, utxo.WithLanePosition(lane.Pack(9, 51)),
+		utxo.WithParentLanePositions([]uint64{lane.Pack(9, 3), lane.Pack(9, 4)}))
+	require.NoError(t, err)
+
+	v, ok = recordBin(t, client, store, atBound, 0, fields.ParentLanePositions)
+	require.True(t, ok, "a list at the bound is kept")
+	require.Equal(t, []interface{}{int(lane.ToSigned(lane.Pack(9, 3))), int(lane.ToSigned(lane.Pack(9, 4)))}, v)
 }
 
 // Through SpendAndCreate, the route the validator takes, a store with a position source spends with

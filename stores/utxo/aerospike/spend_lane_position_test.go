@@ -64,3 +64,29 @@ func TestValidParentLanes(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, bins[0], "no positions, no bin")
 }
+
+// The default bound keeps the widest list the bin can hold within its byte limit, and the limit well
+// under the server's default 8 MiB write block, so a create never fails on its parent list.
+func TestParentLanePositionsBinFitsTheDefaultBound(t *testing.T) {
+	const defaultWriteBlock = 8 << 20
+
+	require.LessOrEqual(t, 4*parentLanePositionsBinLimit, defaultWriteBlock, "the limit is well under the write block")
+
+	// The largest packed position is a 9-byte msgpack integer; check the arithmetic before building
+	// the list, so a bound far too large fails here rather than allocating it.
+	require.LessOrEqual(t, 9*maxParentLanePositions, parentLanePositionsBinLimit)
+
+	widest := make([]uint64, maxParentLanePositions)
+	for i := range widest {
+		widest[i] = lane.Pack(255, lane.MaxPosition)
+	}
+
+	require.Equal(t, widest, validParentLanes(widest), "a list at the default bound is kept")
+
+	bin, err := parentLanePositionsBin(widest)
+	require.NoError(t, err)
+
+	size, sizeErr := bin.Value.EstimateSize()
+	require.NoError(t, sizeErr)
+	require.LessOrEqual(t, size, parentLanePositionsBinLimit, "the encoded bin fits the limit")
+}
