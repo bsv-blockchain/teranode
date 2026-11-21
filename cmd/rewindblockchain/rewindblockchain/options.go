@@ -30,6 +30,20 @@ type Options struct {
 	// mined on surviving blocks.
 	ForceDeep bool
 
+	// ResetUTXOPersister opts in to deleting the UTXO persister's
+	// lastProcessed marker (and the stale utxo-set/-headers/-set-hash files
+	// for the block it pointed at) when it sits above the rewind target.
+	// Deleting the marker makes the persister rebuild from genesis on its
+	// next start, which is only safe when the node has full per-block delta
+	// history back to genesis. A UTXO-seeded node has no deltas below its
+	// seed height, so the rebuild stalls at ErrNotFound and the persister
+	// never advances. The tool cannot tell a seeded node from a full-history
+	// one — no seed height is recorded anywhere it can read — so the default
+	// is to leave the marker in place and tell the operator what to do; this
+	// flag is the operator asserting "this node has full delta history, reset
+	// it". It has no effect on a marker at or below the target.
+	ResetUTXOPersister bool
+
 	// Verify enables Phase 4 post-rewind consistency checks.
 	Verify bool
 

@@ -85,6 +85,7 @@ func TestRewindblockchainRegistration(t *testing.T) {
 		require.False(t, opts.AssumeYes)
 		require.False(t, opts.ForceNotIdle)
 		require.False(t, opts.ForceDeep)
+		require.False(t, opts.ResetUTXOPersister, "opt-in only: deleting the marker forces a genesis rebuild")
 		require.False(t, opts.Verify)
 		require.Zero(t, opts.Concurrency)
 		require.NotNil(t, opts.Stdin, "the confirmation prompt needs stdin wired")
@@ -103,6 +104,7 @@ func TestRewindblockchainRegistration(t *testing.T) {
 			"--assume-yes",
 			"--force-not-idle",
 			"--force-deep",
+			"--reset-utxo-persister",
 			"--verify",
 			"--concurrency", "8",
 		}))
@@ -113,6 +115,7 @@ func TestRewindblockchainRegistration(t *testing.T) {
 		require.True(t, opts.AssumeYes)
 		require.True(t, opts.ForceNotIdle)
 		require.True(t, opts.ForceDeep)
+		require.True(t, opts.ResetUTXOPersister)
 		require.True(t, opts.Verify)
 		require.Equal(t, 8, opts.Concurrency)
 	})
