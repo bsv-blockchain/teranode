@@ -26,8 +26,8 @@ func lanePositions(positions ...uint64) *roaring64.Bitmap {
 	return bm
 }
 
-// laneMetric sums a lane counter's samples whose labels include the given pair, or all of them
-// when name is "".
+// laneMetric sums a lane metric's samples whose labels include the given pair, or all of them
+// when label is "": a counter's value, or a histogram's observation count.
 func laneMetric(t *testing.T, metric, label, value string) float64 {
 	t.Helper()
 
@@ -52,6 +52,10 @@ func laneMetric(t *testing.T, metric, label, value string) float64 {
 
 			if match && m.GetCounter() != nil {
 				sum += m.GetCounter().GetValue()
+			}
+
+			if match && m.GetHistogram() != nil {
+				sum += float64(m.GetHistogram().GetSampleCount())
 			}
 		}
 	}
@@ -92,6 +96,7 @@ func TestLaneRowsAreTheBlockMembersPerLane(t *testing.T) {
 	u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
 
 	mismatches := laneMetric(t, "teranode_lane_row_count_mismatches_total", "", "")
+	builds := laneMetric(t, "teranode_lane_gate_seconds", "stage", lane.GateStageBuild)
 
 	rows := u.laneRows(context.Background(), block)
 	require.Len(t, rows, 2)
@@ -104,6 +109,7 @@ func TestLaneRowsAreTheBlockMembersPerLane(t *testing.T) {
 	require.Equal(t, []uint64{1, 3}, taken.ToArray())
 
 	require.Equal(t, mismatches, laneMetric(t, "teranode_lane_row_count_mismatches_total", "", ""), "six members for seven transactions with the coinbase is no mismatch")
+	require.Equal(t, builds+1, laneMetric(t, "teranode_lane_gate_seconds", "stage", lane.GateStageBuild), "the build stage is timed")
 
 	// The rows go to AddBlock with the block.
 	opts := blockchainoptions.ProcessStoreBlockOptions(u.buildAddBlockOpts(context.Background(), block)...)
@@ -117,6 +123,13 @@ func TestLaneRowsAreNotBuiltAtOff(t *testing.T) {
 	require.Nil(t, u.buildAddBlockOpts(context.Background(), block), "AddBlock gets the options it got without lanes")
 }
 
+func TestLaneRowsAreNotBuiltWithoutASubtreeStore(t *testing.T) {
+	u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
+	u.subtreeStore = nil
+
+	require.Nil(t, u.laneRows(context.Background(), block))
+}
+
 func TestLaneRowsCountAMismatchAndStillGoWithTheBlock(t *testing.T) {
 	u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
 
@@ -126,6 +139,7 @@ func TestLaneRowsCountAMismatchAndStillGoWithTheBlock(t *testing.T) {
 	}{
 		{txs: 9, direction: lane.MismatchFewer}, // two transactions without a position
 		{txs: 5, direction: lane.MismatchMore},
+		{txs: 0, direction: lane.MismatchMore}, // no count at all, not a wrap past zero
 	} {
 		block.TransactionCount = tc.txs
 		before := laneMetric(t, "teranode_lane_row_count_mismatches_total", "direction", tc.direction)

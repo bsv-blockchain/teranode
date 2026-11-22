@@ -18,6 +18,7 @@ import (
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -25,6 +26,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,6 +126,75 @@ func TestStoreSubtreeFiles_WritesLaneBitmapsBeforeTheSubtree(t *testing.T) {
 	}
 }
 
+// A lane bitmaps file already there, from an earlier validation of the same subtree, is kept.
+func TestStoreSubtreeFiles_KeepsLaneBitmapsAlreadyThere(t *testing.T) {
+	ctx := context.Background()
+
+	st, m := laneBitmapsSubtree(t)
+	root := st.RootHash()
+
+	store := blobmemory.New()
+
+	earlier, err := lane.EncodeSubtreeBitmaps(lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{7: bitmapOfPositions(1)}})
+	require.NoError(t, err)
+	require.NoError(t, store.Set(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, earlier))
+
+	utxoStore := &utxo.MockUtxostore{}
+	utxoStore.On("GetBlockHeight").Return(uint32(100)).Maybe()
+
+	server := &Server{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t), subtreeStore: store, utxoStore: utxoStore}
+
+	bitmaps := &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{9: bitmapOfPositions(5)}}
+	require.NoError(t, server.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps))
+
+	got, err := store.Get(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps)
+	require.NoError(t, err)
+	require.Equal(t, earlier, got)
+}
+
+// At shadow a store read asks for each transaction's own lane position and puts it in the
+// subtree's metadata; at off it asks for no position.
+func TestProcessTxMetaUsingStore_ReadsTheLanePositionAtShadow(t *testing.T) {
+	for _, mode := range []settings.LaneMigration{settings.LaneMigrationOff, settings.LaneMigrationShadow} {
+		t.Run(string(mode), func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.LaneMigration = mode
+
+			hashes := []chainhash.Hash{{0x01}, {0x02}}
+
+			var asked []fields.FieldName
+
+			store := &utxo.MockUtxostore{}
+			store.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				items := args.Get(1).([]*utxo.UnresolvedMetaData)
+				for _, f := range args[2:] {
+					asked = append(asked, f.([]fields.FieldName)...)
+				}
+
+				for _, it := range items {
+					it.Data = &meta.Data{Fee: 1, SizeInBytes: 1, LanePosition: lane.Pack(4, uint64(it.Idx)+1)} //nolint:gosec // a test index
+				}
+			}).Return(nil)
+
+			server := &Server{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: store}
+
+			txMetaSlice := make([]metaSliceItem, len(hashes))
+			missed, err := server.processTxMetaUsingStore(context.Background(), hashes, txMetaSlice, nil, true, false, true)
+			require.NoError(t, err)
+			require.Zero(t, missed)
+
+			if mode == settings.LaneMigrationOff {
+				require.NotContains(t, asked, fields.LanePosition)
+				return
+			}
+
+			require.Contains(t, asked, fields.LanePosition)
+			require.Equal(t, lane.Pack(4, 1), txMetaSlice[0].lanePosition)
+			require.Equal(t, lane.Pack(4, 2), txMetaSlice[1].lanePosition)
+		})
+	}
+}
+
 // At shadow nothing acts on lanes: a lane bitmaps file that cannot be written leaves the subtree
 // to be stored as it is stored without lanes, and its block goes without rows.
 func TestStoreSubtreeFiles_ALaneBitmapsFailureDoesNotStopTheSubtree(t *testing.T) {
@@ -184,8 +255,11 @@ func TestValidateSubtreeInternal_BuildsLaneBitmapsAtShadow(t *testing.T) {
 				require.NoError(t, cache.SetCache(tx.TxIDChainHash(), &meta.Data{Fee: 1, SizeInBytes: 1, TxInpoints: inpoints, LanePosition: position}))
 			}
 
-			st, err := subtreepkg.NewTreeByLeafCount(4)
+			// A block's first subtree: the coinbase placeholder, which has no position yet and is
+			// neither in the bitmaps nor counted, then the four transactions.
+			st, err := subtreepkg.NewTreeByLeafCount(8)
 			require.NoError(t, err)
+			require.NoError(t, st.AddCoinbaseNode())
 
 			for _, h := range []*chainhash.Hash{hash1, hash2, hash3, hash4} {
 				require.NoError(t, st.AddNode(*h, 1, 0))
@@ -196,7 +270,7 @@ func TestValidateSubtreeInternal_BuildsLaneBitmapsAtShadow(t *testing.T) {
 			_, err = server.ValidateSubtreeInternal(context.Background(), ValidateSubtree{
 				SubtreeHash: *st.RootHash(),
 				BaseURL:     "http://localhost:8000",
-				TxHashes:    []chainhash.Hash{*hash1, *hash2, *hash3, *hash4},
+				TxHashes:    []chainhash.Hash{*subtreepkg.CoinbasePlaceholderHash, *hash1, *hash2, *hash3, *hash4},
 				FromBlock:   true,
 			}, chaincfg.GenesisActivationHeight, nil)
 			require.NoError(t, err)
@@ -214,6 +288,7 @@ func TestValidateSubtreeInternal_BuildsLaneBitmapsAtShadow(t *testing.T) {
 
 			got, err := lane.DecodeSubtreeBitmaps(data)
 			require.NoError(t, err)
+			require.Equal(t, *st.RootHash(), got.SubtreeHash, "the file names its own subtree")
 			require.Len(t, got.Lanes, 2)
 			require.Equal(t, []uint64{10, 12}, got.Lanes[7].ToArray())
 			require.Equal(t, []uint64{1}, got.Lanes[3].ToArray())
