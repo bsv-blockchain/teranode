@@ -37,8 +37,8 @@ func TestLanePositionContract(t *testing.T) {
 	tests.LanePositionContract(t, store)
 	t.Run("burns", func(t *testing.T) { tests.LanePositionBurns(t, store, "aerospike") })
 
-	// A KEY_EXISTS can be the create's own retried write, so no refusal goes back; only a spend
-	// refused before the create ran does.
+	// A KEY_EXISTS can be the create's own retried write, so no refusal goes back, and a refused
+	// spend may have left its position in a parent's slot, so that one stays burned too.
 	t.Run("returns", func(t *testing.T) { tests.LanePositionReturns(t, store, "aerospike", tests.LaneReturnRules{}, nil) })
 }
 
@@ -594,6 +594,58 @@ func TestSpendAndCreateRecordsTheCreatesPositionInTheParentsSlot(t *testing.T) {
 	v, ok = recordBin(t, client, store, child, 0, fields.LanePosition)
 	require.True(t, ok)
 	require.Equal(t, int(lane.ToSigned(childPosition)), v)
+}
+
+// A spend that carried the spender's position and was refused partway keeps the position burned:
+// a parent spent before the refusal may keep it in its slot, because a rollback refused by a lock
+// is skipped, and a retry by the same spender writes nothing there. Handing the position to the
+// next create would leave that slot naming another transaction.
+func TestRefusedLaneSpendKeepsItsPositionBurned(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, _, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	free := laneParent(t, 21, 1)
+	_, err := store.Create(ctx, free, 100)
+	require.NoError(t, err)
+
+	locked := laneParent(t, 22, 1)
+	_, err = store.Create(ctx, locked, 100, utxo.WithLocked(true))
+	require.NoError(t, err)
+
+	position := lane.Pack(203, 7)
+	source := tests.NewReturningLanePositions(position, lane.Pack(203, 8))
+	store.SetLanePositionSource(source)
+	t.Cleanup(func() { store.SetLanePositionSource(nil) })
+
+	child := bt.NewTx()
+	for _, parent := range []*bt.Tx{free, locked} {
+		require.NoError(t, child.FromUTXOs(&bt.UTXO{
+			TxIDHash:      parent.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: parent.Outputs[0].LockingScript,
+			Satoshis:      parent.Outputs[0].Satoshis,
+		}))
+	}
+
+	require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
+
+	before := tests.ReadLaneReturns(t, "aerospike")
+
+	_, _, err = store.SpendAndCreate(ctx, child, 101)
+	require.ErrorIs(t, err, errors.ErrTxLocked)
+
+	require.Empty(t, source.Returned(), "the refused lane spend's position is not handed out again")
+	require.Empty(t, tests.ReadLaneReturns(t, "aerospike").Since(before), "and no return is counted")
+
+	if v, ok := recordBin(t, client, store, free, 0, fields.SpendingLanePositions); ok {
+		slot := slotLanes(t, v)
+		require.Len(t, slot, 1)
+		require.Contains(t, []uint64{lane.None, position}, slot[0], "the free parent's slot holds nothing or the burned position")
+	}
 }
 
 // A below-checkpoint list creates a child of a parent in the list first and spends its inputs in a

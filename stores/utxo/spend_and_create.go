@@ -198,10 +198,17 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 		spender = options.LanePosition
 	}
 
-	var spends []*Spend
+	var (
+		spends []*Spend
+		// spentWithLane is whether the spends carried the spender's position into the parents'
+		// slots. A refused spend of that kind may still have written a slot on a parent it spent
+		// before the refusal, so its position is burned and never returned.
+		spentWithLane bool
+	)
 
 	if !options.CreateOnly {
 		if laneSpender, ok := s.(LaneSpender); ok && spender != lane.None {
+			spentWithLane = true
 			spends, err = laneSpender.SpendWithLanePosition(ctx, tx, blockHeight, spender, options.IgnoreFlags)
 		} else {
 			spends, err = s.Spend(ctx, tx, blockHeight, options.IgnoreFlags)
@@ -217,8 +224,12 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 
 				taker.BurnLanePosition(options.Caller, reason)
 
-				// No record carries the position; a refused spend returns it.
-				if RefusedSpend(err, spends) {
+				// A refused plain spend wrote nothing that carries the position, so it goes back. A
+				// refused lane spend keeps it burned: on Aerospike a parent spent before the refusal
+				// keeps the position in its slot when the rollback is skipped, and a later spend of
+				// that output by the same spender writes nothing, so a reuse would leave the slot
+				// naming another transaction.
+				if RefusedSpend(err, spends) && !spentWithLane {
 					taker.ReturnLanePosition(taken, LaneReturnSpendRejected, true)
 				}
 			}
