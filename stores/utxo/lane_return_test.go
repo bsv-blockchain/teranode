@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -218,11 +219,78 @@ func TestSequentialSpendAndCreateReturnsOnlyProvenPositions(t *testing.T) {
 			s := &returningSequentialStore{fakeSequentialStore: c.store}
 			s.SetLanePositionSource(src)
 
-			_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100, c.opts...)
+			_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100, false, c.opts...)
 			require.Error(t, err)
 
 			if c.wantReturn {
 				require.Equal(t, []uint64{lane.Pack(9, 40)}, src.returned)
+			} else {
+				require.Empty(t, src.returned)
+			}
+		})
+	}
+}
+
+// The spend-first loop calls Create more than once with the position it took, when it goes around a
+// hold that it cleared. A position goes back only on a terminal exit: given back before a round
+// that goes around, it would be handed to another create while this call still uses it. It goes
+// back after a refused spend in a later round only when every earlier Create was proven unwritten.
+func TestSequentialSpendAndCreateReturnsAPositionOnlyOnATerminalExit(t *testing.T) {
+	shortenUnspendBackoff(t)
+
+	tx := bt.NewTx()
+	tx.LockTime = 13
+
+	hold := meta.Data{Creating: true, RollingBack: true, Hold: true}
+	refused := errors.NewUtxoError("1 of 1 inputs could not be spent")
+
+	cases := []struct {
+		name       string
+		store      fakeSequentialStore
+		wantErr    bool
+		wantReturn bool
+	}{
+		{"a create that goes around and then succeeds keeps its position", fakeSequentialStore{
+			spends:      []*Spend{{}},
+			createErrs:  []error{MarkLanePositionUnwritten(errors.NewTxExistsError("held"))},
+			createMeta:  &meta.Data{},
+			existing:    hold,
+			clearResult: true,
+		}, false, false},
+		{"a refused spend after a marked create failure returns the position once", fakeSequentialStore{
+			spendsSeq:   [][]*Spend{{{}}, {{Err: errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil)}}},
+			spendErrs:   []error{nil, refused},
+			createErrs:  []error{MarkLanePositionUnwritten(errors.NewTxExistsError("held"))},
+			existing:    hold,
+			clearResult: true,
+			getMetaErrs: []error{nil, nil, errors.NewTxNotFoundError("no record")},
+		}, true, true},
+		{"a refused spend after a create failure the store did not mark leaves the position burned", fakeSequentialStore{
+			spendsSeq:   [][]*Spend{{{}}, {{Err: errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil)}}},
+			spendErrs:   []error{nil, refused},
+			createErrs:  []error{errors.NewTxExistsError("held")},
+			existing:    hold,
+			clearResult: true,
+			getMetaErrs: []error{nil, nil, errors.NewTxNotFoundError("no record")},
+		}, true, false},
+		{"a marked refusal that ends the call returns the position once", fakeSequentialStore{
+			spends:    []*Spend{{}},
+			createErr: MarkLanePositionUnwritten(errors.NewTxExistsError("exists")),
+			existing:  meta.Data{},
+		}, true, true},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := &returningSource{position: lane.Pack(9, 50)}
+			s := &returningSequentialStore{fakeSequentialStore: c.store}
+			s.SetLanePositionSource(src)
+
+			_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100, false)
+			require.Equal(t, c.wantErr, err != nil, "%v", err)
+
+			if c.wantReturn {
+				require.Equal(t, []uint64{lane.Pack(9, 50)}, src.returned)
 			} else {
 				require.Empty(t, src.returned)
 			}
