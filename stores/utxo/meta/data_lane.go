@@ -10,8 +10,9 @@ import (
 )
 
 // The lane metadata encoding is the versioned form of MetaBytes that carries lane positions. On the
-// txmeta topic the action byte says which encoding an entry holds, and the txmeta cache keeps the
-// embedded MetaBytes only. MetaBytes stays byte for byte what it was:
+// txmeta topic the action byte says which encoding an entry holds. The txmeta cache keeps the
+// embedded MetaBytes, followed at shadow by the own position (CacheBytesInto); the parents'
+// positions stay out of it. MetaBytes stays byte for byte what it was:
 //
 //	[0]      LaneMetaMagic
 //	[1]      LaneMetaVersion
@@ -33,7 +34,8 @@ const (
 	// say) starts with the same two bytes as LaneMetaMagic and LaneMetaVersion. So whatever carries
 	// the lane encoding must say so outside it, never leaving a reader to guess from the bytes. On
 	// the txmeta topic each entry's action byte says it (txmetacache.WireActionADDLane); the txmeta
-	// cache keeps MetaBytes only.
+	// cache keeps MetaBytes, followed at shadow by the own position (CacheBytesInto), whose place is
+	// found by walking the inpoints, never by these bytes.
 	LaneMetaMagic = byte(0xA7)
 
 	// LaneMetaVersion is the only version of the lane metadata encoding.
@@ -208,8 +210,8 @@ func LaneMetaBytesView(b []byte) ([]byte, error) {
 // nothing else can be: a decoder that walks the inpoints, as every cache decoder does, reads the
 // position from what is left, and one that ignores trailing bytes, as NewMetaDataFromBytes does,
 // reads the entry as before. A value with no valid position is plain MetaBytes. The parents'
-// positions stay out of the cache; only the block gate reads the cached position, and it needs
-// the transaction's own.
+// positions stay out of the cache. Subtree validation reads the cached own position when it builds
+// a subtree's lane bitmaps; the block gate later reads those bitmap files, not the cache.
 
 // CacheBytesInto is MetaBytesInto followed by d.LanePosition when that is a valid position: the
 // txmeta cache form.

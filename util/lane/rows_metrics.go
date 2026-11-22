@@ -13,9 +13,9 @@ import (
 // not in each service, because the subtree writers, block validation and the blockchain store all
 // report into the same series.
 
-// Gate stages: building a block's rows from its subtrees' bitmaps, in the block's writer, and
-// inserting them in the block's database transaction, in the blockchain store. Their sum is a
-// block's gate time.
+// Gate stages: building a block's rows from its subtrees' bitmaps, in the block's writer, and in
+// the blockchain store checking them in memory before the block's database transaction begins,
+// then inserting them inside it. Their sum is a block's gate time.
 const (
 	GateStageBuild  = "build"
 	GateStageInsert = "insert"
@@ -54,7 +54,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "gate_seconds",
-			Help:      "Time per block of the lane gate at utxostore_laneMigration shadow, by stage: build (merging the subtrees' lane bitmaps into rows) and insert (writing the rows in the block's database transaction); a block's gate time is the sum",
+			Help:      "Time per block of the lane gate at utxostore_laneMigration shadow, by stage: build (reading and merging the subtrees' lane bitmaps into rows, in block validation) and insert (in the blockchain store, checking the rows in memory before the block's database transaction begins, then inserting them inside it); a block's gate time is the sum. The block's own INSERT and the commit are not included",
 			Buckets:   prometheus.ExponentialBuckets(0.0001, 4, 12),
 		}, []string{"stage"})
 		prometheusLaneRowBytes = promauto.NewHistogramVec(prometheus.HistogramOpts{
@@ -75,7 +75,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "row_count_mismatches_total",
-			Help:      "Blocks whose map rows hold fewer or more members than the block's transaction count less its coinbase; counted and logged, the block is stored as it is without lanes",
+			Help:      "Blocks whose map rows hold fewer or more members than the block's transaction count less its coinbase; counted and logged, and the rows still go with the block",
 		}, []string{"direction"})
 		prometheusLaneMissingBitmaps = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -93,7 +93,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "row_insert_failures_total",
-			Help:      "Blocks whose map rows the blockchain store failed to insert; the rows are rolled back and the block is stored without them",
+			Help:      "Blocks stored without their map rows because the rows could not be built (block validation), parsed (the blockchain service) or checked (the blockchain store), the block ID does not fit the map, or the insert failed, which is rolled back to its savepoint; the block is stored either way",
 		})
 	})
 }
@@ -144,7 +144,8 @@ func CountTxsWithoutPosition(service string, n int) {
 	prometheusLaneTxsNoPosition.WithLabelValues(service).Add(float64(n))
 }
 
-// CountRowInsertFailure counts a block whose rows the store could not insert.
+// CountRowInsertFailure counts a block stored without its rows: they could not be built, parsed or
+// checked, its block ID does not fit the map, or their insert failed and was rolled back.
 func CountRowInsertFailure() {
 	initRowsMetrics()
 	prometheusLaneRowInsertFailure.Inc()

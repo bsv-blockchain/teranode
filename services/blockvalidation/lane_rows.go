@@ -15,9 +15,9 @@ import (
 // block is stored, block validation reads the lane bitmaps subtree validation saved beside each of
 // the block's subtrees, merges them lane by lane into the block's map rows, and hands the rows to
 // AddBlock, which inserts them in the block's own database transaction. Nothing reads the rows
-// yet, so nothing here can stop a block: a subtree without bitmaps means the block goes without
-// rows, a count that does not match is counted and logged, and the block is stored as it is
-// without lanes either way.
+// yet, so nothing here can stop a block: a subtree without usable bitmaps means the block is
+// stored without rows, and a count that does not match is counted and logged while the rows still
+// go with the block.
 
 // laneBitmapReadConcurrency bounds the subtree bitmap reads of one block.
 const laneBitmapReadConcurrency = 16
