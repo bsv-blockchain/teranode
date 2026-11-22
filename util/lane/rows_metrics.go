@@ -27,6 +27,9 @@ const (
 	MissingBitmapsAbsent = "absent"
 	// MissingBitmapsUnreadable: a subtree's lane bitmaps file could not be read or decoded.
 	MissingBitmapsUnreadable = "unreadable"
+	// MissingBitmapsTimedOut: reading a block's lane bitmaps files ran past its deadline or was
+	// cancelled.
+	MissingBitmapsTimedOut = "timed_out"
 )
 
 // Directions of a count mismatch: the rows hold fewer members than the block has transactions

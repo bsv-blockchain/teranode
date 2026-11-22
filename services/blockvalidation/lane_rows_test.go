@@ -3,12 +3,14 @@ package blockvalidation
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
@@ -186,4 +188,36 @@ func TestLaneRowsSkipABlockWithMissingBitmaps(t *testing.T) {
 
 func withOverwrite() []bloboptions.FileOption {
 	return []bloboptions.FileOption{bloboptions.WithAllowOverwrite(true)}
+}
+
+// stallingStore holds every Get until its context ends, as a stalled subtree store would.
+type stallingStore struct {
+	blob.Store
+}
+
+func (s *stallingStore) Get(ctx context.Context, _ []byte, _ fileformat.FileType, _ ...bloboptions.FileOption) ([]byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A stalled subtree store holds up storing the block for at most the read deadline; the block then
+// goes without rows, counted as timed out, not as unreadable files.
+func TestLaneRowsGiveUpOnAStalledSubtreeStore(t *testing.T) {
+	u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
+	u.subtreeStore = &stallingStore{Store: u.subtreeStore}
+
+	saved := laneBitmapReadTimeout
+	laneBitmapReadTimeout = 50 * time.Millisecond
+
+	t.Cleanup(func() { laneBitmapReadTimeout = saved })
+
+	timedOut := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut)
+	unreadable := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsUnreadable)
+
+	started := time.Now()
+	require.Nil(t, u.laneRows(context.Background(), block))
+	require.Less(t, time.Since(started), 2*time.Second)
+
+	require.Equal(t, timedOut+2, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut))
+	require.Equal(t, unreadable, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsUnreadable))
 }

@@ -22,6 +22,12 @@ import (
 // laneBitmapReadConcurrency bounds the subtree bitmap reads of one block.
 const laneBitmapReadConcurrency = 16
 
+// laneBitmapReadTimeout bounds how long the reads of one block's lane bitmaps files may hold up
+// storing the block. The reads sit on the block-store path, and at shadow a slow or stalled
+// subtree store must not delay a block: past the deadline the block is stored without rows. A
+// variable so a test can shorten it.
+var laneBitmapReadTimeout = 5 * time.Second
+
 // laneRows builds block's lane map rows from its subtrees' lane bitmaps, or returns nil when lanes
 // are off or the rows cannot be built, which is counted and logged.
 func (u *BlockValidation) laneRows(ctx context.Context, block *model.Block) []lane.MapRow {
@@ -31,12 +37,13 @@ func (u *BlockValidation) laneRows(ctx context.Context, block *model.Block) []la
 
 	start := time.Now()
 
-	bitmaps, missing, unreadable := u.readSubtreeLaneBitmaps(ctx, block)
+	bitmaps, missing, unreadable, timedOut := u.readSubtreeLaneBitmaps(ctx, block)
 
-	if missing > 0 || unreadable > 0 {
+	if missing > 0 || unreadable > 0 || timedOut > 0 {
 		lane.CountMissingBitmaps(lane.MissingBitmapsAbsent, missing)
 		lane.CountMissingBitmaps(lane.MissingBitmapsUnreadable, unreadable)
-		u.logger.Warnf("[laneRows][%s] storing the block without lane rows: %d of its %d subtrees have no lane bitmaps and %d have unreadable ones", block.Hash().String(), missing, len(block.Subtrees), unreadable)
+		lane.CountMissingBitmaps(lane.MissingBitmapsTimedOut, timedOut)
+		u.logger.Warnf("[laneRows][%s] storing the block without lane rows: of its %d subtrees, %d have no lane bitmaps, %d have unreadable ones and %d were not read in time", block.Hash().String(), len(block.Subtrees), missing, unreadable, timedOut)
 
 		return nil
 	}
@@ -78,22 +85,35 @@ func (u *BlockValidation) checkLaneRowCount(block *model.Block, members uint64) 
 }
 
 // readSubtreeLaneBitmaps reads and decodes the lane bitmaps of every subtree of block, in subtree
-// order, and counts the subtrees whose file is absent and those whose file could not be read or
-// decoded, or belongs to another subtree.
-func (u *BlockValidation) readSubtreeLaneBitmaps(ctx context.Context, block *model.Block) ([]lane.LaneBitmaps, int, int) {
+// order, within laneBitmapReadTimeout. It counts the subtrees whose file is absent, those whose
+// file could not be read or decoded or belongs to another subtree, and those not read because the
+// deadline passed or ctx was cancelled.
+func (u *BlockValidation) readSubtreeLaneBitmaps(ctx context.Context, block *model.Block) ([]lane.LaneBitmaps, int, int, int) {
 	bitmaps := make([]lane.LaneBitmaps, len(block.Subtrees))
-	outcome := make([]int, len(block.Subtrees)) // 0 read, 1 absent, 2 unreadable
+	outcome := make([]int, len(block.Subtrees)) // 0 read, 1 absent, 2 unreadable, 3 timed out
 
-	g, gCtx := errgroup.WithContext(ctx)
+	readCtx, cancel := context.WithTimeout(ctx, laneBitmapReadTimeout)
+	defer cancel()
+
+	g, gCtx := errgroup.WithContext(readCtx)
 	g.SetLimit(laneBitmapReadConcurrency)
 
 	for i, hash := range block.Subtrees {
 		g.Go(func() error {
+			if gCtx.Err() != nil {
+				outcome[i] = 3
+				return nil
+			}
+
 			data, err := u.subtreeStore.Get(gCtx, hash[:], fileformat.FileTypeSubtreeLaneBitmaps)
 			if err != nil {
-				outcome[i] = 2
-				if errors.Is(err, errors.ErrNotFound) {
+				switch {
+				case gCtx.Err() != nil:
+					outcome[i] = 3
+				case errors.Is(err, errors.ErrNotFound):
 					outcome[i] = 1
+				default:
+					outcome[i] = 2
 				}
 
 				return nil
@@ -113,7 +133,7 @@ func (u *BlockValidation) readSubtreeLaneBitmaps(ctx context.Context, block *mod
 
 	_ = g.Wait()
 
-	var missing, unreadable int
+	var missing, unreadable, timedOut int
 
 	for _, o := range outcome {
 		switch o {
@@ -121,8 +141,10 @@ func (u *BlockValidation) readSubtreeLaneBitmaps(ctx context.Context, block *mod
 			missing++
 		case 2:
 			unreadable++
+		case 3:
+			timedOut++
 		}
 	}
 
-	return bitmaps, missing, unreadable
+	return bitmaps, missing, unreadable, timedOut
 }
