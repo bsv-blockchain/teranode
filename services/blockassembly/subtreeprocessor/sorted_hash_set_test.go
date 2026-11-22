@@ -444,3 +444,95 @@ func FuzzSortedHashSet(f *testing.F) {
 		require.Equal(t, sortedDistinct(hashes), collect(s))
 	})
 }
+
+// findReference is the position model of Find: the index of a hash's first
+// occurrence in the whole set laid out partition after partition, each sorted.
+// Partitions are the top bits of the hash, so that is the global sorted order.
+func findReference(hashes []chainhash.Hash) map[chainhash.Hash]uint64 {
+	all := append([]chainhash.Hash(nil), hashes...)
+	sort.Slice(all, func(i, j int) bool { return compareHash(&all[i], &all[j]) < 0 })
+
+	ref := make(map[chainhash.Hash]uint64, len(all))
+
+	for i, h := range all {
+		if _, ok := ref[h]; !ok {
+			ref[h] = uint64(i)
+		}
+	}
+
+	return ref
+}
+
+// TestSortedHashSet_Find pins the position contract of PR 5: Find agrees with Exists,
+// a position is in [0, Positions()), distinct hashes get distinct positions, a
+// duplicated hash maps to the first of its run, and IterPositions visits each
+// distinct hash once with the position Find returns.
+func TestSortedHashSet_Find(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		n, dupEach int // dupEach > 0: every dupEach-th hash is added a second time
+		capacity   int
+	}{
+		{"single partition", 5000, 0, 100},
+		{"many partitions", 300_000, 0, 300_000},
+		{"duplicates", 100_000, 7, 100_000},
+		{"duplicates in one partition", 3000, 3, 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hashes := randHashes(tc.n, 31)
+
+			for i := 0; tc.dupEach > 0 && i < tc.n; i += tc.dupEach {
+				hashes = append(hashes, hashes[i], hashes[i])
+			}
+
+			s := buildSet(t, hashes, tc.capacity, 4)
+			ref := findReference(hashes)
+
+			require.Equal(t, uint64(len(hashes)), s.Positions())
+
+			for _, h := range hashes {
+				pos, ok := s.Find(h)
+				require.True(t, ok)
+				require.Equal(t, ref[h], pos)
+			}
+
+			for _, h := range randHashes(5000, 4242) {
+				pos, ok := s.Find(h)
+				require.Equal(t, s.Exists(h), ok)
+
+				if !ok {
+					require.Zero(t, pos)
+				}
+			}
+
+			var (
+				mu   sync.Mutex
+				seen = make(map[chainhash.Hash]uint64)
+			)
+
+			s.IterPositions(4, func(_ int, pos uint64, h *chainhash.Hash) {
+				mu.Lock()
+				defer mu.Unlock()
+
+				_, dup := seen[*h]
+				require.False(t, dup, "hash visited twice")
+				seen[*h] = pos
+			})
+			require.Equal(t, ref, seen)
+		})
+	}
+}
+
+func TestSortedHashSet_FindEmptyAndUnfrozen(t *testing.T) {
+	empty := buildSet(t, nil, 0, 1)
+	pos, ok := empty.Find(chainhash.Hash{1})
+	require.False(t, ok)
+	require.Zero(t, pos)
+	require.Zero(t, empty.Positions())
+	empty.IterPositions(2, func(int, uint64, *chainhash.Hash) { t.Fatal("empty set visited") })
+
+	open := NewSortedHashSet(10)
+	require.Panics(t, func() { open.Find(chainhash.Hash{1}) })
+	require.Panics(t, func() { open.Positions() })
+	require.Panics(t, func() { open.IterPositions(1, func(int, uint64, *chainhash.Hash) {}) })
+}
