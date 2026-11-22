@@ -27,6 +27,13 @@ var probeLaneSlotPosition = lane.Pack(200, 1)
 // otherwise), reads the bin back and deletes the record. It runs only with lane positions on, and
 // its answer only decides how spends are counted: a spend carries its position either way, and a
 // server that predates the lanePos key ignores it. Every failure answers false, with a warning.
+//
+// Like probeConflictingIndex, the probe record is no transaction anything else reads: it carries no
+// txID, unminedSince or createdAt bin, so block assembly's unmined iterator and the pruner's
+// old-unmined query never pick it up, and its spend runs with a block height retention of 0, so it
+// never gets a deleteAtHeight. It is written without a TTL, because a namespace with expiration
+// disabled (nsup-period=0) refuses a write that carries one. The deferred delete removes it; a
+// process that dies in between leaves it behind, harmless but permanent.
 func (s *Store) probeLaneSlotWrites(ctx context.Context) bool {
 	warn := func(format string, args ...interface{}) bool {
 		s.logger.Warnf("[lane] slot position probe: "+format+"; spends are counted as not carrying lane positions", args...)
@@ -62,21 +69,25 @@ func (s *Store) probeLaneSlotWrites(ctx context.Context) bool {
 		return warn("record: %v", err)
 	}
 
+	probeBins := withoutProbeBins(bins[0])
+
 	key, err := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySource(txHash, 0, s.utxoBatchSize))
 	if err != nil {
 		return warn("key: %v", err)
 	}
 
-	policy := aerospike.NewWritePolicy(0, 0)
-	policy.Expiration = 60
+	policy := aerospike.NewWritePolicy(0, aerospike.TTLDontExpire)
 
-	if err := s.client.PutBins(policy, key, bins[0]...); err != nil {
+	// Deleted even when the write reports an error, which may have applied.
+	defer func() {
+		if _, delErr := s.client.Delete(policy, key); delErr != nil {
+			s.logger.Warnf("[lane] slot position probe: could not delete the probe record %s, delete it by hand: %v", key.Value(), delErr)
+		}
+	}()
+
+	if err := s.client.PutBins(policy, key, probeBins...); err != nil {
 		return warn("record setup: %v", err)
 	}
-
-	defer func() {
-		_, _ = s.client.Delete(policy, key)
-	}()
 
 	if ctx.Err() != nil {
 		return warn("context: %v", ctx.Err())
@@ -93,7 +104,7 @@ func (s *Store) probeLaneSlotWrites(ctx context.Context) bool {
 	})
 
 	record := s.teranodeBatchRecord(aerospike.NewBatchUDFPolicy(), LuaPackage, key, subOpSpendMulti, "spendMulti",
-		[]aerospike.MapValue{item}, false, false, uint32(1), s.settings.GetUtxoStoreBlockHeightRetention())
+		[]aerospike.MapValue{item}, false, false, uint32(1), uint32(0))
 
 	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), []aerospike.BatchRecordIfc{record}); err != nil {
 		return warn("spend: %v", err)
@@ -125,6 +136,24 @@ func (s *Store) probeLaneSlotWrites(ctx context.Context) bool {
 	s.logger.Infof("[lane] slot position probe: the server records spenders' lane positions")
 
 	return true
+}
+
+// withoutProbeBins is a probe record's bins without the ones that would make it a transaction other
+// readers see: txID, unminedSince and createdAt. Neither teranode.lua nor the C module's spend reads
+// them.
+func withoutProbeBins(bins []*aerospike.Bin) []*aerospike.Bin {
+	kept := make([]*aerospike.Bin, 0, len(bins))
+
+	for _, bin := range bins {
+		switch bin.Name {
+		case fields.TxID.String(), fields.UnminedSince.String(), fields.CreatedAt.String():
+			continue
+		}
+
+		kept = append(kept, bin)
+	}
+
+	return kept
 }
 
 // LaneSlotPositionsRecorded reports what the start-up probe found: whether the server records a

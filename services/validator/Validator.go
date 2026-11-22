@@ -2647,7 +2647,7 @@ func txMetaEntrySize(item *txmetaBatchItem) int {
 // For each entry:
 //
 //	[32 bytes] - tx hash (raw bytes)
-//	[1 byte]   - action (0=ADD, 1=DELETE)
+//	[1 byte]   - action (0=ADD, 1=DELETE, 2=ADDLane)
 //	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
 //	[N bytes]  - content (metaBytes) - only for ADD
 func serializeTxMetaBatch(batch []*txmetaBatchItem) []byte {
@@ -2713,7 +2713,7 @@ type txmetaItemWithHash struct {
 //	per entry:
 //	  [8 bytes]  xxhash(tx hash) (uint64 LE)
 //	  [32 bytes] tx hash
-//	  [1 byte]   action (0=ADD, 1=DELETE)
+//	  [1 byte]   action (0=ADD, 1=DELETE, 2=ADDLane)
 //	  [4 bytes]  content length (uint32 LE)
 //	  [N bytes]  content (only for ADD)
 //

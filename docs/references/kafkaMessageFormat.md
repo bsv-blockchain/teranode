@@ -917,7 +917,7 @@ if !isV2 {
 - **Truncated header**: buffer shorter than the minimum header (4 bytes for v1, 8 bytes for v2). Logged + acked.
 - **Truncated entry**: per-entry header or content runs off the end of the buffer. Logged + acked at the truncation point; preceding entries are still processed.
 - **Implausible entry count**: wire-side count exceeds what the buffer can hold at the minimum entry size. Logged + acked; nothing is dispatched. Protects the pool buffer from oversized pre-allocation.
-- **Unknown action byte** (not `0x00`, `0x01` or `0x02`): the entry is logged and skipped; remaining entries continue to be processed.
+- **Unknown action byte** (not `0x00`, `0x01` or `0x02`): subtree validation logs the entry and skips it, and legacy relay skips it without a log; remaining entries continue to be processed.
 
 In all of the above the message is acknowledged (`return nil`) rather than re-delivered — a single corrupt message must not stall the topic.
 

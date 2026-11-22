@@ -7,6 +7,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -127,4 +128,50 @@ func laneSpendCount(t *testing.T, carried string) float64 {
 	}
 
 	return 0
+}
+
+// The probe record is no transaction other readers see: it has no txID, unminedSince or createdAt
+// bin, no TTL, and its spend sets no deleteAtHeight. It is gone when the probe returns.
+func TestLaneSlotProbeRecordIsInvisibleAndRemoved(t *testing.T) {
+	s, client := setupStoreForLockTest(t)
+	ctx := t.Context()
+
+	var (
+		probeKey      *aerospike.Key
+		before, after *aerospike.Record
+	)
+
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		probeKey = records[0].BatchRec().Key
+
+		var err error
+
+		before, err = client.Get(nil, probeKey)
+		require.NoError(t, err)
+
+		opErr := s.client.BatchOperate(policy, records)
+
+		after, err = client.Get(nil, probeKey)
+		require.NoError(t, err)
+
+		return opErr
+	}
+	t.Cleanup(func() { s.batchOperateFn = nil })
+
+	require.True(t, s.probeLaneSlotWrites(ctx), "the real script passes the probe")
+	require.NotNil(t, before)
+	require.NotNil(t, after)
+
+	for _, bin := range []fields.FieldName{fields.TxID, fields.UnminedSince, fields.CreatedAt} {
+		_, ok := before.Bins[bin.String()]
+		require.False(t, ok, "the probe record has no %s bin", bin)
+	}
+
+	require.Equal(t, uint32(aerospike.TTLDontExpire), before.Expiration, "the probe record is written without a TTL")
+
+	_, ok := after.Bins[fields.DeleteAtHeight.String()]
+	require.False(t, ok, "the probe spend sets no deleteAtHeight")
+
+	_, err := client.Get(nil, probeKey)
+	require.True(t, isKeyNotFound(err), "no probe record is left behind: %v", err)
 }

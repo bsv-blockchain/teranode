@@ -669,14 +669,14 @@ func maxInFlightForSize(avgSize int64) int {
 	}
 }
 
+// laneTxMetaReceived counts the txmeta entries relay receives, by whether they carry lane positions.
+var laneTxMetaReceived = txmetacache.NewLaneTxMetaReceived("legacy")
+
 // SyncManager is used to communicate block related messages with peers. The
 // SyncManager is started as by executing Start() in a goroutine. Once started,
 // it selects peers to sync from and starts the initial block download. Once the
 // chain is in sync, the SyncManager handles incoming block and header
 // notifications and relays announcements of new blocks to peers.
-// laneTxMetaReceived counts the txmeta entries relay receives, by whether they carry lane positions.
-var laneTxMetaReceived = txmetacache.NewLaneTxMetaReceived("legacy")
-
 type SyncManager struct {
 	// adoptions is the registry of subtree files a block relies on but did not create, shared by
 	// every subtree writer this manager makes; see subtreeAdoptions. Read through
@@ -5339,7 +5339,7 @@ func (sm *SyncManager) processBlocksFinalMessage(msg *kafka.KafkaMessage) error 
 // For each entry:
 //
 //	[32 bytes] - tx hash (raw bytes)
-//	[1 byte]   - action (0=ADD, 1=DELETE)
+//	[1 byte]   - action (0=ADD, 1=DELETE, 2=ADDLane)
 //	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
 //	[N bytes]  - content (metaBytes) - only for ADD
 func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
