@@ -392,3 +392,33 @@ func TestLaneRowsEndTheReadsOfAStoreThatHonoursTheDeadline(t *testing.T) {
 
 	require.LessOrEqual(t, runtime.NumGoroutine(), baseline, "every read ends with the deadline")
 }
+
+// With the caller's context already ended, a free slot and the ended context are both ready on
+// every pass of the dispatcher, and its select picks between them at random. No read may start.
+// One pass picks the ended context half the time, so the scenario runs 30 times: a dispatcher
+// that could start a read gets past this test about once in a billion runs.
+func TestLaneRowsStartNoReadOnceTheCallerHasGivenUp(t *testing.T) {
+	for run := 0; run < 30; run++ {
+		u, block, store := hungLaneRowsBlock(t, laneBitmapReadConcurrency+4)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		baseline := runtime.NumGoroutine()
+
+		require.Nil(t, u.laneRows(ctx, block))
+
+		// laneRows returns at once; let the dispatcher and any read it started run to the end
+		// before counting. A plain loop, not require.Eventually, which runs its condition in a
+		// goroutine.
+		store.unhang()
+
+		deadline := time.Now().Add(5 * time.Second)
+		for runtime.NumGoroutine() > baseline && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+
+		require.LessOrEqual(t, runtime.NumGoroutine(), baseline, "run %d", run)
+		require.Zero(t, store.gets.Load(), "run %d: no read starts after the context ended", run)
+	}
+}

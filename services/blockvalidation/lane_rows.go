@@ -162,17 +162,30 @@ func (u *BlockValidation) readSubtreeLaneBitmaps(ctx context.Context, block *mod
 
 // dispatchSubtreeLaneBitmapReads starts one read per subtree of block, at most
 // laneBitmapReadConcurrency at a time, and reports each on results exactly once. A subtree whose
-// read has not started when readCtx ends is reported as timed out without a read.
+// read has not started when readCtx ends is reported as timed out without a read: no read starts
+// once readCtx has ended.
 func (u *BlockValidation) dispatchSubtreeLaneBitmapReads(readCtx context.Context, block *model.Block, results chan<- subtreeBitmapsRead) {
 	slots := make(chan struct{}, laneBitmapReadConcurrency)
+
+	timeOutFrom := func(i int) {
+		for j := i; j < len(block.Subtrees); j++ {
+			results <- subtreeBitmapsRead{index: j, outcome: bitmapsTimedOut}
+		}
+	}
 
 	for i, hash := range block.Subtrees {
 		select {
 		case slots <- struct{}{}:
 		case <-readCtx.Done():
-			for j := i; j < len(block.Subtrees); j++ {
-				results <- subtreeBitmapsRead{index: j, outcome: bitmapsTimedOut}
-			}
+			timeOutFrom(i)
+			return
+		}
+
+		// A slot that came free as the deadline passed can win the select above, which picks at
+		// random between ready cases. Check again, so no read starts after the deadline.
+		if readCtx.Err() != nil {
+			<-slots
+			timeOutFrom(i)
 
 			return
 		}
