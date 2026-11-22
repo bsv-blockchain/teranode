@@ -93,7 +93,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "row_insert_failures_total",
-			Help:      "Blocks whose map rows were dropped so the block's store could go on without them: the rows could not be built (block validation), parsed (the blockchain service) or checked (the blockchain store), the block ID does not fit the map, or their insert failed and was rolled back to its savepoint. The count is not undone if that store then fails for another reason; a failure of the savepoint itself aborts the block's transaction and is not counted",
+			Help:      "Blocks whose attempted map rows were not stored, so the block's store could go on: the rows could not be built (block validation), parsed (the blockchain service) or checked (the blockchain store), the block ID does not fit the map, or their insert failed and was rolled back to its savepoint. Rows already stored for that block ID are left in place. The count is not undone if that store then fails for another reason; a failure of the savepoint itself aborts the block's transaction and is not counted",
 		})
 	})
 }
@@ -144,9 +144,10 @@ func CountTxsWithoutPosition(service string, n int) {
 	prometheusLaneTxsNoPosition.WithLabelValues(service).Add(float64(n))
 }
 
-// CountRowInsertFailure counts a block whose rows were dropped so its store could go on without
-// them: they could not be built, parsed or checked, its block ID does not fit the map, or their
-// insert failed and was rolled back to its savepoint. It is not undone if the store then fails.
+// CountRowInsertFailure counts a block whose attempted rows were not stored, so its store could go
+// on: they could not be built, parsed or checked, its block ID does not fit the map, or their
+// insert failed and was rolled back to its savepoint, which leaves rows already stored for the
+// block ID in place. It is not undone if the store then fails.
 func CountRowInsertFailure() {
 	initRowsMetrics()
 	prometheusLaneRowInsertFailure.Inc()

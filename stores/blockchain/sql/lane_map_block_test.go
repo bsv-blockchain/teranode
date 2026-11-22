@@ -308,3 +308,23 @@ func benchmarkStore(b *testing.B, engine string) *SQL {
 
 	return newOnMainChainTestStore(b)
 }
+
+// A failure of the savepoint statement itself leaves the transaction unusable, so it is returned,
+// which fails the block's store, and it is not counted as rows dropped.
+func TestInsertLaneMapRowsWithBlockReturnsASavepointFailureUncounted(t *testing.T) {
+	runLaneHandoutTests(t, "savepoint fails", func(t *testing.T, s *SQL) {
+		ctx := t.Context()
+		failures := laneMetricValue(t, "teranode_lane_row_insert_failures_total")
+
+		tx, err := s.db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		require.NoError(t, tx.Rollback()) // every statement on tx now fails, SAVEPOINT first
+
+		rows := &laneRowsToStore{rows: blockLaneRows(t)}
+
+		err = s.insertLaneMapRowsWithBlock(ctx, tx, block1, 5, rows)
+		require.Error(t, err)
+		require.Equal(t, failures, laneMetricValue(t, "teranode_lane_row_insert_failures_total"))
+		requireRowsOf(t, s, 5, nil)
+	})
+}
