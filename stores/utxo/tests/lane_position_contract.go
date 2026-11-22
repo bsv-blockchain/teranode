@@ -593,8 +593,9 @@ func LanePositionBurns(t *testing.T, db utxostore.Store, store string) {
 		require.NoError(t, err)
 
 		// Spends root output 0, which w.Txs[0] has spent: the spend is refused before any create
-		// runs, so a store that writes nothing on a spend's parents hands the position back, and it
-		// still burned. A store that records the spender's position in the parents' slots keeps it.
+		// runs and before any write, so every store hands the position back, and it still burned. A
+		// store that records the spender's position in the parents' slots returns it too, because
+		// its only input was refused before its slot was written.
 		double := spendOneOutput(t, w.Roots[0], 0)
 
 		requireBurns(t, store, LaneBurns{utxostore.LaneBurnSpendRejected + "/validator": 1}, func() {
@@ -602,11 +603,7 @@ func LanePositionBurns(t *testing.T, db utxostore.Store, store string) {
 			require.Error(t, err)
 		})
 
-		if refusedSpendReturns(db) {
-			require.Equal(t, []uint64{lane.Pack(29, 2)}, source.Returned(), "the burned position went back to the source")
-		} else {
-			require.Empty(t, source.Returned(), "a refused lane spend keeps its position")
-		}
+		require.Equal(t, []uint64{lane.Pack(29, 2)}, source.Returned(), "the burned position went back to the source")
 	})
 
 	t.Run("a list with a stored transaction burns exists for it", func(t *testing.T) {
@@ -737,14 +734,6 @@ type LaneReturnRules struct {
 	MinedExists bool
 	// ListExists: a transaction of a SpendAndCreateMulti list that is already stored.
 	ListExists bool
-}
-
-// refusedSpendReturns reports whether db hands a refused spend's position back. A store whose spend
-// records the spender's position in each parent's slot (a utxo.LaneSpender) keeps it burned,
-// because a parent spent before the refusal may keep it in its slot.
-func refusedSpendReturns(db utxostore.Store) bool {
-	_, recordsSpender := db.(utxostore.LaneSpender)
-	return !recordsSpender
 }
 
 // LaneReturns is the returned lane position counter of one store at a moment, keyed by reason.
@@ -981,8 +970,7 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, store string, rules L
 		_, _, err = db.SpendAndCreate(ctx, double, 951)
 		require.Error(t, err)
 
-		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnSpendRejected,
-			ifReturned(refusedSpendReturns(db), lane.Pack(43, 2)), w.Txs[0], double)
+		requireReturned(t, db, count, source, store, before, utxostore.LaneReturnSpendRejected, []uint64{lane.Pack(43, 2)}, w.Txs[0], double)
 		requireNotStored(t, db, double)
 	})
 
