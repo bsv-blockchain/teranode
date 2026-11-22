@@ -35,6 +35,7 @@ func TestLanePositionContract(t *testing.T) {
 	t.Cleanup(deferFn)
 
 	tests.LanePositionContract(t, store)
+	t.Run("returned by spend and create", func(t *testing.T) { tests.LanePositionReturnedBySpendAndCreate(t, store) })
 	t.Run("burns", func(t *testing.T) { tests.LanePositionBurns(t, store, "aerospike") })
 
 	// A KEY_EXISTS can be the create's own retried write, so no refusal goes back, and a refused

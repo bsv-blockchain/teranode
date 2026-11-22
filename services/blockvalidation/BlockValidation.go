@@ -2097,14 +2097,20 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 // holding the id and only unlocks it.
 //
 // For a block with no id (block.ID == 0) this returns nil and the store assigns one.
-func (u *BlockValidation) buildAddBlockOpts(block *model.Block) []blockchainoptions.StoreBlockOption {
-	if block.ID == 0 {
-		return nil
+func (u *BlockValidation) buildAddBlockOpts(ctx context.Context, block *model.Block) []blockchainoptions.StoreBlockOption {
+	var opts []blockchainoptions.StoreBlockOption
+
+	if block.ID != 0 {
+		opts = append(opts, blockchainoptions.WithID(uint64(block.ID)))
 	}
 
-	return []blockchainoptions.StoreBlockOption{
-		blockchainoptions.WithID(uint64(block.ID)),
+	// At utxostore_laneMigration shadow the block's lane map rows, stored in the block's own
+	// transaction; see laneRows.
+	if rows := u.laneRows(ctx, block); rows != nil {
+		opts = append(opts, blockchainoptions.WithLaneMapRows(rows))
 	}
+
+	return opts
 }
 
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, disableOptimisticMining ...bool) error {
@@ -2756,7 +2762,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				ctxLogger.Warnf("[ValidateBlock][%s] failed to compute coinbase BUMP: %v", block.Hash().String(), err)
 			}
 
-			addBlockOpts := u.buildAddBlockOpts(block)
+			addBlockOpts := u.buildAddBlockOpts(ctx, block)
 			if err = u.blockchainClient.AddBlock(ctx, block, opts.PeerID, addBlockOpts...); err != nil {
 				return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
 			}
@@ -3093,7 +3099,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					u.logger.Warnf("[ValidateBlock][%s] failed to compute coinbase BUMP: %v", block.Hash().String(), err)
 				}
 
-				addBlockOpts := u.buildAddBlockOpts(block)
+				addBlockOpts := u.buildAddBlockOpts(storeCtx, block)
 				if err = u.blockchainClient.AddBlock(storeCtx, block, opts.PeerID, addBlockOpts...); err != nil {
 					releaseBlockNodes(block)
 					return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)

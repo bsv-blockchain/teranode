@@ -246,3 +246,65 @@ func FuzzNewDataFromLaneMetaBytes(f *testing.F) {
 		require.Equal(t, data, again)
 	})
 }
+
+func TestCacheBytesCarryTheOwnPositionAfterTheMetaBytes(t *testing.T) {
+	d, parents := laneSample()
+
+	legacy, err := d.MetaBytes()
+	require.NoError(t, err)
+
+	cached, err := d.CacheBytes()
+	require.NoError(t, err)
+	require.Equal(t, append(append([]byte(nil), legacy...), lane.AppendPosition(nil, d.LanePosition)...), cached)
+	require.Equal(t, d.LanePosition, CachedLanePosition(cached[len(legacy):]))
+
+	// A reader that ignores what follows the inpoints reads the entry as before.
+	var back Data
+	require.NoError(t, NewMetaDataFromBytes(cached, &back))
+	require.Equal(t, d.Fee, back.Fee)
+	require.Equal(t, d.TxInpoints.ParentTxHashes, back.TxInpoints.ParentTxHashes)
+
+	// The lane encoding gives the same cache form.
+	content, err := d.LaneMetaBytesInto(nil, parents)
+	require.NoError(t, err)
+
+	fromLane, err := AppendCacheFromLaneMetaBytes(nil, content)
+	require.NoError(t, err)
+	require.Equal(t, cached, fromLane)
+}
+
+func TestCacheBytesWithoutAPositionAreTheMetaBytes(t *testing.T) {
+	d, _ := laneSample()
+	d.LanePosition = lane.Pack(9, 0) // a lane but no position
+
+	legacy, err := d.MetaBytes()
+	require.NoError(t, err)
+
+	cached, err := d.CacheBytes()
+	require.NoError(t, err)
+	require.Equal(t, legacy, cached)
+
+	require.Zero(t, CachedLanePosition(nil))
+	require.Zero(t, CachedLanePosition([]byte{1, 2, 3}), "only exactly eight bytes are a position")
+}
+
+func TestAppendCacheFromLaneMetaBytesRefusesWithoutChangingDst(t *testing.T) {
+	d, parents := laneSample()
+
+	content, err := d.LaneMetaBytesInto(nil, parents)
+	require.NoError(t, err)
+
+	// An own position with a lane and no position is refused, as is a truncated entry.
+	bad := append([]byte(nil), content...)
+	copy(bad[2:10], lane.AppendPosition(nil, lane.Pack(4, 0)))
+
+	dst := []byte{0xAA}
+
+	got, err := AppendCacheFromLaneMetaBytes(dst, bad)
+	require.Error(t, err)
+	require.Equal(t, []byte{0xAA}, got)
+
+	got, err = AppendCacheFromLaneMetaBytes(dst, content[:len(content)-1])
+	require.Error(t, err)
+	require.Equal(t, []byte{0xAA}, got)
+}

@@ -238,7 +238,8 @@ func (s *SQL) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane
 // first, held to the end of tx, so two writers of one block never both see no rows and insert
 // different ones. On SQLite the lock is laneWriteMu, which only the caller can hold for the whole
 // transaction: the caller takes s.lockLaneProcess() before beginning tx and releases it after the
-// commit, as InsertLaneMapRows does. InsertLaneMapRows is its only caller today.
+// commit, as InsertLaneMapRows and StoreBlock do. StoreBlock calls it through
+// insertLaneMapRowsWithBlock, under a savepoint in the block's own transaction.
 func (s *SQL) insertLaneMapRowsTx(ctx context.Context, tx *sql.Tx, blockID uint32, rows []lane.MapRow) error {
 	if err := s.lockLaneWrite(ctx, tx, laneMapLockClass, blockID); err != nil {
 		return err

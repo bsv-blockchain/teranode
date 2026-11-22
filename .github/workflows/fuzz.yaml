@@ -93,6 +93,8 @@ jobs:
           - pkg: util/lane
             target: FuzzDecodeHoleData
           - pkg: util/lane
+            target: FuzzCheckContainersMatchesValidate
+          - pkg: util/lane
             target: FuzzDecodeSubtreePositions
           - pkg: util/lane
             target: FuzzDecodeProofFile

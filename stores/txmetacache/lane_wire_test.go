@@ -140,3 +140,27 @@ func TestLaneMetaContentDoesNotAllocate(t *testing.T) {
 		}
 	}))
 }
+
+// At shadow a receiver keeps the lane entry's own position after its MetaBytes: the cache form.
+func TestAppendLaneCacheContentIsTheCacheForm(t *testing.T) {
+	d := laneTestData(t)
+
+	content, err := d.LaneMetaBytesInto(nil, []uint64{lane.Pack(3, 1), lane.Pack(4, 2)})
+	require.NoError(t, err)
+
+	want, err := d.CacheBytes()
+	require.NoError(t, err)
+
+	got, err := AppendLaneCacheContent(make([]byte, 0, len(content)), content)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.LessOrEqual(t, len(got), len(content), "the cache form is never longer than the entry")
+
+	before := testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode))
+
+	dst := []byte{1}
+	got, err = AppendLaneCacheContent(dst, content[:len(content)-1])
+	require.Error(t, err)
+	require.Equal(t, []byte{1}, got)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode)))
+}

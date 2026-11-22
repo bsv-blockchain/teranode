@@ -262,6 +262,7 @@ FUZZ_TARGETS = \
 	services/rpc/bsvjson:FuzzUnmarshalCmd \
 	util/lane:FuzzDecodeDiskPayload \
 	util/lane:FuzzDecodeHoleData \
+	util/lane:FuzzCheckContainersMatchesValidate \
 	util/lane:FuzzDecodeSubtreePositions \
 	util/lane:FuzzDecodeProofFile \
 	util/lane:FuzzDecodeSubtreeBitmaps \

@@ -780,17 +780,55 @@ func TestServer_txmetaHandler_LaneEntriesKeepTheirPlace(t *testing.T) {
 	legacy, err := d.MetaBytes()
 	require.NoError(t, err)
 
+	// At shadow the cache keeps the own position after the MetaBytes, for the block gate.
+	cached, err := d.CacheBytes()
+	require.NoError(t, err)
+	require.Equal(t, append(append([]byte(nil), legacy...), lane.AppendPosition(nil, d.LanePosition)...), cached)
+
 	shadow := &settings.Settings{UtxoStore: settings.UtxoStoreSettings{LaneMigration: settings.LaneMigrationShadow}}
 
-	t.Run("v2: the key, the MetaBytes and the entry hash", func(t *testing.T) {
-		key := chainhash.Hash{7}
+	for _, tc := range []struct {
+		name     string
+		settings *settings.Settings
+		value    []byte
+	}{
+		{name: "off, the MetaBytes", settings: &settings.Settings{}, value: legacy},
+		{name: "shadow, the MetaBytes and the own position", settings: shadow, value: cached},
+	} {
+		t.Run("v2 at "+tc.name+": the key, the value and the entry hash", func(t *testing.T) {
+			key := chainhash.Hash{7}
+
+			mCache := &mockCache{}
+			mCache.On("SetCacheMultiSequentialWithHashes", [][]byte{key[:]}, [][]byte{tc.value}, []uint64{0xBEEF}).Return(nil)
+
+			server := &Server{logger: &mockLogger{}, utxoStore: mCache, settings: tc.settings}
+
+			msg := txmetaMessage(true, txmetaEntry{hash: key, entryHash: 0xBEEF, action: txmetacache.WireActionADDLane, content: content})
+			require.NoError(t, server.txmetaHandler(context.Background(), msg))
+			mCache.AssertExpectations(t)
+		})
+	}
+
+	t.Run("shadow: several lane entries each keep their own value in one message", func(t *testing.T) {
+		k1, k2 := chainhash.Hash{8}, chainhash.Hash{9}
+
+		other := &meta.Data{TxInpoints: inpoints, Fee: 1, SizeInBytes: 2, LanePosition: lane.Pack(3, 77)}
+
+		otherContent, err := other.LaneMetaBytesInto(nil, []uint64{lane.Pack(9, 2)})
+		require.NoError(t, err)
+
+		otherCached, err := other.CacheBytes()
+		require.NoError(t, err)
 
 		mCache := &mockCache{}
-		mCache.On("SetCacheMultiSequentialWithHashes", [][]byte{key[:]}, [][]byte{legacy}, []uint64{0xBEEF}).Return(nil)
+		mCache.On("SetCacheMultiSequentialWithHashes", [][]byte{k1[:], k2[:]}, [][]byte{cached, otherCached}, []uint64{1, 2}).Return(nil)
 
 		server := &Server{logger: &mockLogger{}, utxoStore: mCache, settings: shadow}
 
-		msg := txmetaMessage(true, txmetaEntry{hash: key, entryHash: 0xBEEF, action: txmetacache.WireActionADDLane, content: content})
+		msg := txmetaMessage(true,
+			txmetaEntry{hash: k1, entryHash: 1, action: txmetacache.WireActionADDLane, content: content},
+			txmetaEntry{hash: k2, entryHash: 2, action: txmetacache.WireActionADDLane, content: otherContent},
+		)
 		require.NoError(t, server.txmetaHandler(context.Background(), msg))
 		mCache.AssertExpectations(t)
 	})

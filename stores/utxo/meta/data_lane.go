@@ -197,3 +197,61 @@ func LaneMetaBytesView(b []byte) ([]byte, error) {
 
 	return b[2+lane.PositionSize : off : off], nil
 }
+
+// The txmeta cache form. The cache keeps MetaBytes, and at utxostore_laneMigration shadow the
+// record's own lane position after it:
+//
+//	MetaBytes
+//	then     the own lane position, uint64 LE, only when it is a valid position
+//
+// MetaBytes ends exactly where its TxInpoints end, so the 8 bytes after them are the position and
+// nothing else can be: a decoder that walks the inpoints, as every cache decoder does, reads the
+// position from what is left, and one that ignores trailing bytes, as NewMetaDataFromBytes does,
+// reads the entry as before. A value with no valid position is plain MetaBytes. The parents'
+// positions stay out of the cache; only the block gate reads the cached position, and it needs
+// the transaction's own.
+
+// CacheBytesInto is MetaBytesInto followed by d.LanePosition when that is a valid position: the
+// txmeta cache form.
+func (d *Data) CacheBytesInto(dst []byte) ([]byte, error) {
+	b, err := d.MetaBytesInto(dst)
+	if err != nil || !lane.Valid(d.LanePosition) {
+		return b, err
+	}
+
+	return lane.AppendPosition(b, d.LanePosition), nil
+}
+
+// CacheBytes is CacheBytesInto with a fresh buffer.
+func (d *Data) CacheBytes() ([]byte, error) {
+	return d.CacheBytesInto(nil)
+}
+
+// CachedLanePosition returns the own lane position a txmeta cache value carries after its
+// MetaBytes, given rest, the bytes after its TxInpoints, or 0 when it carries none.
+func CachedLanePosition(rest []byte) uint64 {
+	if len(rest) != lane.PositionSize {
+		return 0
+	}
+
+	return binary.LittleEndian.Uint64(rest)
+}
+
+// AppendCacheFromLaneMetaBytes appends the txmeta cache form of a lane metadata encoding, its
+// MetaBytes and own position, to dst, checking the encoding as LaneMetaBytesView does and the own
+// position too.
+func AppendCacheFromLaneMetaBytes(dst, b []byte) ([]byte, error) {
+	legacy, err := LaneMetaBytesView(b)
+	if err != nil {
+		return dst, err
+	}
+
+	own := binary.LittleEndian.Uint64(b[2:])
+	if err = lane.CheckPosition(own); err != nil {
+		return dst, errors.NewProcessingError("lane metadata own position", err)
+	}
+
+	dst = append(dst, legacy...)
+
+	return lane.AppendPosition(dst, own), nil
+}

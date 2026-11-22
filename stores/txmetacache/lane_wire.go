@@ -98,3 +98,18 @@ func LaneMetaContent(content []byte) ([]byte, error) {
 
 	return legacy, nil
 }
+
+// AppendLaneCacheContent appends the txmeta cache form of a WireActionADDLane entry, its MetaBytes
+// and own lane position (meta.CacheBytesInto), to dst, for a receiver at shadow whose cache keeps
+// the position for the block gate. The form is shorter than the entry, so a dst with room for the
+// whole message never grows. An entry that does not check out is counted as a miss
+// (LaneMissDecode) and returned as an error, with dst unchanged.
+func AppendLaneCacheContent(dst, content []byte) ([]byte, error) {
+	out, err := meta.AppendCacheFromLaneMetaBytes(dst, content)
+	if err != nil {
+		prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode).Inc()
+		return dst, err
+	}
+
+	return out, nil
+}

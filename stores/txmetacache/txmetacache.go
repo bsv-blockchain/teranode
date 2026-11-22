@@ -815,7 +815,7 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 	t.metrics.getOrigin.Add(uint64(len(hashes)))
 
 	// Batch cache population: build keys/values once and hand them to writeBack.
-	// Note: values are serialized the same way SetCache() does (via MetaBytes).
+	// Note: values are serialized the same way SetCache() does (meta.CacheBytesInto).
 	keys := make([][]byte, 0, len(hashes))
 	values := make([][]byte, 0, len(hashes))
 
@@ -862,7 +862,8 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 		// Serialize into a pooled buffer; the cache copies it on insert.
 		bufPtr := metaBytesBufPool.Get().(*[]byte)
 
-		txMetaBytes, err := data.Data.MetaBytesInto((*bufPtr)[:0])
+		// The cache form: MetaBytes, and the own lane position when the read asked for it.
+		txMetaBytes, err := data.Data.CacheBytesInto((*bufPtr)[:0])
 		if err != nil {
 			putMetaBytesBuf(bufPtr)
 

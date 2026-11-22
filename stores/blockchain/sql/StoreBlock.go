@@ -23,6 +23,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -326,7 +327,34 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 		err           error
 	)
 
-	if onMainChain {
+	// The block's lane map rows, at utxostore_laneMigration shadow, go in the block's own
+	// transaction (insertLaneMapRowsWithBlock). An invalid block gets none.
+	laneRows := s.checkedLaneMapRows(block, storeBlockOptions)
+
+	if laneRows != nil {
+		// On SQLite the lane write lock is a process mutex only the holder of the whole
+		// transaction can take, before it begins: see insertLaneMapRowsTx.
+		unlockLanes := s.lockLaneProcess()
+		defer unlockLanes()
+	}
+
+	if onMainChain && laneRows != nil {
+		// The common extend, with its rows: one transaction holding the INSERT and the rows,
+		// instead of the auto-committed INSERT below.
+		err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+			var storeErr error
+
+			newBlockID, height, _, storedInvalid, storeErr = s.storeBlock(ctx, tx, block, peerID, storeBlockOptions, onMainChain)
+			if storeErr != nil || storedInvalid {
+				return storeErr
+			}
+
+			return s.insertLaneMapRowsWithBlock(ctx, tx, block, newBlockID, laneRows)
+		})
+		if err != nil {
+			return 0, height, s.typedStoreBlockError(err, block)
+		}
+	} else if onMainChain {
 		newBlockID, height, _, storedInvalid, err = s.storeBlock(ctx, s.db, block, peerID, storeBlockOptions, onMainChain)
 		if err != nil {
 			return 0, height, s.typedStoreBlockError(err, block)
@@ -376,6 +404,12 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 			// statement that could only fail it.
 			if storedInvalid {
 				return nil
+			}
+
+			if laneRows != nil {
+				if storeErr = s.insertLaneMapRowsWithBlock(ctx, tx, block, newBlockID, laneRows); storeErr != nil {
+					return storeErr
+				}
 			}
 
 			reconcile := func() (bool, int64, error) {
@@ -455,6 +489,10 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 
 			return 0, height, s.typedStoreBlockError(err, block)
 		}
+	}
+
+	if laneRows != nil {
+		lane.ObserveGate(lane.GateStageInsert, laneRows.elapsed)
 	}
 
 	// Cache the timestamp only once the row is committed. Doing it inside storeBlock

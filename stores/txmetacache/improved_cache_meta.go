@@ -66,10 +66,10 @@ func (b *improvedCacheBackend) SetMultiSequentialWithHashes(keys, values [][]byt
 	return b.cache.SetMultiSequentialWithHashes(keys, values, hashes)
 }
 
-// Set serialises data via MetaBytes and forwards to the underlying byte Set.
-// Bridge cost: one MetaBytes() call per insert.
+// Set serialises data in the cache form (meta.CacheBytesInto) and forwards to
+// the underlying byte Set. Bridge cost: one serialization per insert.
 func (b *improvedCacheBackend) Set(hash *chainhash.Hash, data *meta.Data) error {
-	bts, err := data.MetaBytes()
+	bts, err := data.CacheBytes()
 	if err != nil {
 		return err
 	}

@@ -251,6 +251,12 @@ func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes [
 	// TxMetaCache.UnderlyingStore).
 	store, decorateFields := u.decorateReadPath(skipCachePopulation)
 
+	// At shadow the same read gives each transaction's own lane position, for the subtree's lane
+	// bitmaps. A fresh slice: the field sets are shared.
+	if u.laneShadow() {
+		decorateFields = append(append(make([]fields.FieldName, 0, len(decorateFields)+1), decorateFields...), fields.LanePosition)
+	}
+
 	var missed atomic.Int32
 
 	// Conflicting transactions are collected by whichever batch decorates them
@@ -339,13 +345,14 @@ func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes [
 						}
 
 						txMetaSlice[data.Idx] = metaSliceItem{
-							fee:         data.Data.Fee,
-							sizeInBytes: data.Data.SizeInBytes,
-							coinbase:    data.Data.IsCoinbase,
-							conflicting: data.Data.Conflicting,
-							creating:    data.Data.Creating,
-							isSet:       true,
-							txInpoints:  data.Data.TxInpoints,
+							fee:          data.Data.Fee,
+							sizeInBytes:  data.Data.SizeInBytes,
+							coinbase:     data.Data.IsCoinbase,
+							conflicting:  data.Data.Conflicting,
+							creating:     data.Data.Creating,
+							isSet:        true,
+							txInpoints:   data.Data.TxInpoints,
+							lanePosition: data.Data.LanePosition,
 						}
 
 						// if the tx is conflicting, we need to check if it is conflicting on the current chain
@@ -409,6 +416,8 @@ func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes [
 							// Auto-recovery: only use txMeta if it's not in the "creating" state
 							// If Creating is true, treat as missing to trigger re-processing
 							if !txMeta.Creating {
+								// GetMeta reads no lane position, so this path leaves
+								// the transaction out of the subtree's lane bitmaps.
 								txMetaSlice[i+j] = metaSliceItem{
 									fee:         txMeta.Fee,
 									sizeInBytes: txMeta.SizeInBytes,
