@@ -308,3 +308,38 @@ func TestAppendCacheFromLaneMetaBytesRefusesWithoutChangingDst(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, []byte{0xAA}, got)
 }
+
+func TestCacheBytesReportAMetaBytesError(t *testing.T) {
+	// Two parents and a single vout word, fewer than one count word per parent: the inpoints
+	// cannot serialize.
+	d := &Data{LanePosition: lane.Pack(3, 9), TxInpoints: subtree.NewTxInpointsFromPacked([]chainhash.Hash{*hash3, *hash4}, []uint32{0})}
+
+	_, wantErr := d.MetaBytes()
+	require.Error(t, wantErr, "the fixture really fails to serialize")
+
+	_, err := d.CacheBytes()
+	require.Error(t, err)
+}
+
+func TestCacheBytesIntoReuseTheCallersBuffer(t *testing.T) {
+	d, _ := laneSample()
+
+	dst := make([]byte, 0, 4096)
+
+	got, err := d.CacheBytesInto(dst)
+	require.NoError(t, err)
+	require.Same(t, &dst[:1][0], &got[0], "written into dst's backing array")
+}
+
+func TestCachedLanePositionReadsExactlyEightBytes(t *testing.T) {
+	nine := lane.AppendPosition(nil, lane.Pack(2, 5))
+	require.Equal(t, lane.Pack(2, 5), CachedLanePosition(nine))
+	require.Zero(t, CachedLanePosition(append(nine, 0)), "nine bytes are not a position")
+}
+
+func TestAppendCacheFromLaneMetaBytesRefusesShortInput(t *testing.T) {
+	for n := 0; n < 12; n++ {
+		_, err := AppendCacheFromLaneMetaBytes(nil, make([]byte, n))
+		require.Error(t, err, "%d bytes", n)
+	}
+}

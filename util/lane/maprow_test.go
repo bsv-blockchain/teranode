@@ -577,6 +577,17 @@ func holeDataOf(bucket uint32, containers []rawContainer) []byte {
 	return b
 }
 
+// twoBuckets is a two-bucket bitmap holding position 1 of each of buckets first and second, in
+// that order.
+func twoBuckets(first, second uint32) []byte {
+	one := []rawContainer{{key: 0, card: 1, body: u16s(1)}}
+
+	b := holeDataOf(first, one)
+	binary.LittleEndian.PutUint64(b, 2)
+
+	return append(b, holeDataOf(second, one)[8:]...)
+}
+
 type rawContainer struct {
 	key, card uint16
 	run       bool
@@ -609,16 +620,19 @@ func TestCheckContainersRefusesWhatValidateRefuses(t *testing.T) {
 		data  []byte
 		valid bool
 	}{
-		"valid runs":             {holeDataOf(0, []rawContainer{runs(1, 2, 10, 0)}), true},
-		"valid array":            {holeDataOf(0, []rawContainer{{key: 0, card: 3, body: u16s(1, 5, 9)}}), true},
-		"valid bitmap":           {holeDataOf(0, []rawContainer{{key: 0, card: 0x8000, body: fullBitmap}}), true},
-		"overlapping runs":       {holeDataOf(0, []rawContainer{runs(1, 2, 2, 0)}), false},
-		"touching runs":          {holeDataOf(0, []rawContainer{runs(1, 0, 2, 0)}), false},
-		"runs out of order":      {holeDataOf(0, []rawContainer{runs(10, 0, 1, 0)}), false},
-		"run past the container": {holeDataOf(0, []rawContainer{runs(0xFFFF, 1)}), false},
-		"array out of order":     {holeDataOf(0, []rawContainer{{key: 0, card: 3, body: u16s(5, 1, 9)}}), false},
-		"array repeats a value":  {holeDataOf(0, []rawContainer{{key: 0, card: 3, body: u16s(1, 1, 9)}}), false},
-		"bitmap miscounted":      {holeDataOf(0, []rawContainer{{key: 0, card: 0x7FFF, body: fullBitmap}}), false},
+		"valid runs":                 {holeDataOf(0, []rawContainer{runs(1, 2, 10, 0)}), true},
+		"valid array":                {holeDataOf(0, []rawContainer{{key: 0, card: 3, body: u16s(1, 5, 9)}}), true},
+		"valid bitmap":               {holeDataOf(0, []rawContainer{{key: 0, card: 0x8000, body: fullBitmap}}), true},
+		"overlapping runs":           {holeDataOf(0, []rawContainer{runs(1, 2, 2, 0)}), false},
+		"touching runs":              {holeDataOf(0, []rawContainer{runs(1, 0, 2, 0)}), false},
+		"runs out of order":          {holeDataOf(0, []rawContainer{runs(10, 0, 1, 0)}), false},
+		"run past the container":     {holeDataOf(0, []rawContainer{runs(0xFFFF, 1)}), false},
+		"array out of order":         {holeDataOf(0, []rawContainer{{key: 0, card: 3, body: u16s(5, 1, 9)}}), false},
+		"array repeats a value":      {holeDataOf(0, []rawContainer{{key: 0, card: 3, body: u16s(1, 1, 9)}}), false},
+		"bitmap miscounted":          {holeDataOf(0, []rawContainer{{key: 0, card: 0x7FFF, body: fullBitmap}}), false},
+		"run container with no runs": {holeDataOf(0, []rawContainer{{key: 0, card: 1, run: true, body: u16s(0)}}), false},
+		"buckets out of order":       {twoBuckets(5, 4), false},
+		"buckets in order":           {twoBuckets(4, 5), true},
 		"containers out of order": {holeDataOf(0, []rawContainer{
 			{key: 3, card: 1, body: u16s(1)}, {key: 2, card: 1, body: u16s(1)},
 		}), false},
@@ -638,6 +652,18 @@ func TestCheckContainersRefusesWhatValidateRefuses(t *testing.T) {
 			}
 		})
 	}
+}
+
+// An empty bucket is refused: no canonical encoding writes one. Roaring's Validate passes it, so
+// the canonical-bytes comparison in DecodeHoleData refuses it too.
+func TestCheckContainersRefusesAnEmptyBucket(t *testing.T) {
+	data := append(holeDataOf(0, nil), twoBuckets(4, 5)[8:]...)
+	binary.LittleEndian.PutUint64(data, 3)
+
+	require.Error(t, checkContainers(data))
+
+	_, err := DecodeHoleData(data)
+	require.Error(t, err)
 }
 
 // A block of scattered takes fills its containers with close to the canonical 2,047 runs. Each

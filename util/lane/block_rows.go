@@ -119,14 +119,7 @@ func BuildBlockRows(subtrees []LaneBitmaps) (BlockRows, error) {
 		for i, r := range rows {
 			stats.Bytes += RowFixedBytes + len(r.HoleData)
 
-			// The positions the block took in [First, Last], from the union, which every row of
-			// the lane was cut from.
-			taken := union.Rank(r.Last)
-			if r.First > 0 {
-				taken -= union.Rank(r.First - 1)
-			}
-
-			stats.Holes[i] = r.Last - r.First + 1 - taken
+			stats.Holes[i] = rowHoles(union, r)
 		}
 
 		out.Members += union.GetCardinality()
@@ -135,4 +128,15 @@ func BuildBlockRows(subtrees []LaneBitmaps) (BlockRows, error) {
 	}
 
 	return out, nil
+}
+
+// rowHoles is how many positions between r's first and last its block did not take, counted from
+// union, the lane's positions that every row of the lane was cut from.
+func rowHoles(union *roaring64.Bitmap, r MapRow) uint64 {
+	taken := union.Rank(r.Last)
+	if r.First > 0 {
+		taken -= union.Rank(r.First - 1)
+	}
+
+	return r.Last - r.First + 1 - taken
 }

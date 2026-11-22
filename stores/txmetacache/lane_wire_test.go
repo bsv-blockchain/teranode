@@ -141,6 +141,22 @@ func TestLaneMetaContentDoesNotAllocate(t *testing.T) {
 	}))
 }
 
+// With room for the whole message in dst, building an entry's cache form allocates nothing.
+func TestAppendLaneCacheContentDoesNotAllocate(t *testing.T) {
+	d := laneTestData(t)
+
+	content, err := d.LaneMetaBytesInto(nil, []uint64{lane.Pack(3, 1), lane.Pack(4, 2)})
+	require.NoError(t, err)
+
+	dst := make([]byte, 0, len(content))
+
+	require.Zero(t, testing.AllocsPerRun(1000, func() {
+		if _, err := AppendLaneCacheContent(dst[:0], content); err != nil {
+			t.Fatal(err)
+		}
+	}))
+}
+
 // At shadow a receiver keeps the lane entry's own position after its MetaBytes: the cache form.
 func TestAppendLaneCacheContentIsTheCacheForm(t *testing.T) {
 	d := laneTestData(t)

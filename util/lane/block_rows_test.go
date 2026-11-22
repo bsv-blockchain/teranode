@@ -7,6 +7,8 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,10 +93,37 @@ func TestBuildBlockRowsEqualsTheMembersPerLane(t *testing.T) {
 }
 
 func TestBuildBlockRowsOfNoPositionsHasNoRows(t *testing.T) {
-	rows, err := BuildBlockRows([]LaneBitmaps{{}, nil})
+	// No lanes, no subtree, and a lane whose only bitmap is empty: none of them is a row.
+	rows, err := BuildBlockRows([]LaneBitmaps{{}, nil, {7: roaring64.New()}})
 	require.NoError(t, err)
 	require.Empty(t, rows.Rows)
 	require.Zero(t, rows.Members)
+}
+
+func TestBuildBlockRowsRefusesAPositionNoLaneHolds(t *testing.T) {
+	_, err := BuildBlockRows([]LaneBitmaps{{7: bitmapOf(0, 1)}})
+	require.Error(t, err, "position 0 is no position")
+}
+
+func TestObserveBlockRowsRecordsBytesAndHoles(t *testing.T) {
+	initRowsMetrics()
+
+	bytesBefore := histogramCount(t, prometheusLaneRowBytes.WithLabelValues("9"))
+	holesBefore := histogramCount(t, prometheusLaneRowHoles)
+
+	ObserveBlockRows(BlockRows{Lanes: []LaneRowStats{{Lane: 9, Bytes: 100, Holes: []uint64{0, 3}}}})
+
+	require.Equal(t, bytesBefore+1, histogramCount(t, prometheusLaneRowBytes.WithLabelValues("9")))
+	require.Equal(t, holesBefore+2, histogramCount(t, prometheusLaneRowHoles))
+}
+
+func histogramCount(t *testing.T, o prometheus.Observer) uint64 {
+	t.Helper()
+
+	var m dto.Metric
+	require.NoError(t, o.(prometheus.Metric).Write(&m))
+
+	return m.GetHistogram().GetSampleCount()
 }
 
 func TestBuildBlockRowsCountsHolesPerSplitRow(t *testing.T) {
@@ -109,11 +138,11 @@ func TestBuildBlockRowsCountsHolesPerSplitRow(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(rows), 1, "the small limit splits the lane")
 
-	// BuildBlockRows uses the real limit, so check the hole count it would give each split row.
-	union := bm
-	for _, r := range rows {
-		taken := union.Rank(r.Last) - union.Rank(r.First-1)
-		require.Equal(t, (r.Last-r.First+1)/2, r.Last-r.First+1-taken, "half of a split row's span is holes")
+	// BuildBlockRows uses the real limit, so check the hole count rowHoles gives each split row.
+	// Each row after the first starts above the lane's lowest position, so its count must leave
+	// out what earlier rows took.
+	for i, r := range rows {
+		require.Equal(t, (r.Last-r.First)/2, rowHoles(bm, r), "row %d: half of its span less one is holes", i)
 	}
 }
 
