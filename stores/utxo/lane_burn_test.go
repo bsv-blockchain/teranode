@@ -171,7 +171,7 @@ func TestSequentialSpendAndCreateRecordsItsBurns(t *testing.T) {
 
 		before := burnCount("seqstore", LaneBurnSpendRejected, CallerValidator)
 
-		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100,
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100, false,
 			WithCaller(CallerValidator))
 		require.Error(t, err)
 
@@ -190,7 +190,7 @@ func TestSequentialSpendAndCreateRecordsItsBurns(t *testing.T) {
 
 		before := burnCount("seqstore", LaneBurnError, CallerValidator)
 
-		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100,
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100, false,
 			WithCaller(CallerValidator))
 		require.ErrorIs(t, err, errors.ErrUtxoError)
 
@@ -207,7 +207,7 @@ func TestSequentialSpendAndCreateRecordsItsBurns(t *testing.T) {
 
 		before := burnCount("seqstore", LaneBurnExists, CallerBlockAssembly)
 
-		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100,
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100, false,
 			WithCreateOnly(), WithCaller(CallerBlockAssembly))
 		require.ErrorIs(t, err, errors.ErrTxExists)
 
@@ -223,7 +223,7 @@ func TestSequentialSpendAndCreateRecordsItsBurns(t *testing.T) {
 
 		before := burnCount("seqstore", LaneBurnOutcomeUnknown, CallerValidator)
 
-		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100,
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100, false,
 			WithCreateOnly(), WithCaller(CallerValidator))
 		require.True(t, IsCreateOutcomeUnknown(err))
 
