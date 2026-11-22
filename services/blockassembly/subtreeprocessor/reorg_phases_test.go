@@ -184,6 +184,136 @@ func TestReorgBlocks_SummaryCarriesTheCounts(t *testing.T) {
 	}
 }
 
+// A forward step reports its counts in a fixed order: remainder, hits, last_hit_position, then
+// drain_queue, and d2 once the step's block is committed. The reorg's own counts come first and
+// mark_true and mark_false after the last step.
+func TestReorgBlocks_SummaryCountsHaveAStableOrder(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+
+	logger := &phaseLogger{}
+	sc.stp.logger = logger
+
+	require.NoError(t, sc.run(t))
+
+	var names []string
+	for _, c := range summaryCounts(logger.summary("reorgBlocks")) {
+		names = append(names, c.name)
+	}
+
+	want := []string{"pending", "tx_map", "queue"}
+	for range sc.forward {
+		want = append(want, "remainder", "hits", "last_hit_position", "drain_queue", "d2")
+	}
+
+	want = append(want, "mark_true", "mark_false")
+
+	require.Equal(t, want, names)
+}
+
+// hits counts the nodes a step's block mined that block assembly held, the nodes the lost block
+// moved back included: a transaction both blocks mined is flagged as in the block like a pending
+// one. Each transaction is in one block of the chain, so no step counts a transaction twice and
+// the steps sum to the pending hits plus the lost transactions the winners also mined.
+func TestReorgBlocks_HitsSumToWhatTheWinnersMined(t *testing.T) {
+	cfg := smallScenarioConfig()
+	cfg.hitsAtFront = true
+	sc := newReorgScenario(t, cfg)
+
+	logger := &phaseLogger{}
+	sc.stp.logger = logger
+
+	require.NoError(t, sc.run(t))
+
+	hits := countsNamed(logger.summary("reorgBlocks"), "hits")
+	require.Len(t, hits, len(sc.forward))
+
+	lostInWinners := len(sc.lostOrder()) - len(sc.rawD1())
+	require.NotZero(t, lostInWinners)
+	require.Equal(t, len(sc.hits())+lostInWinners, sum(hits))
+}
+
+// last_hit_position is the largest index, in the order block assembly holds the nodes (the
+// coinbase placeholder is index 0), of a node the step's block mined. With the winners taking the
+// oldest transactions every hit sits before the pending transactions it left, so the last one is
+// well before the end; with hits spread through the pending set it is near the end.
+func TestReorgBlocks_LastHitPositionTracksWhereTheHitsAre(t *testing.T) {
+	// positions returns each step's last hit position and the nodes it held (kept plus flagged).
+	positions := func(front bool) (last, held []int) {
+		cfg := smallScenarioConfig()
+		cfg.hitsAtFront = front
+		sc := newReorgScenario(t, cfg)
+
+		logger := &phaseLogger{}
+		sc.stp.logger = logger
+
+		require.NoError(t, sc.run(t))
+
+		summary := logger.summary("reorgBlocks")
+
+		held = countsNamed(summary, "remainder")
+		for i, h := range countsNamed(summary, "hits") {
+			held[i] += h
+		}
+
+		return countsNamed(summary, "last_hit_position"), held
+	}
+
+	frontLast, frontHeld := positions(true)
+	scatteredLast, scatteredHeld := positions(false)
+
+	for i := range scatteredLast {
+		require.Greater(t, scatteredLast[i], scatteredHeld[i]*9/10, "step %d, scattered hits", i)
+	}
+
+	for i := range frontLast {
+		require.GreaterOrEqual(t, frontLast[i], 0, "step %d, hits at the front", i)
+		require.Less(t, frontLast[i], frontHeld[i]*3/4, "step %d, hits at the front", i)
+	}
+}
+
+// A step that flags nothing reports -1.
+func TestReorgBlocks_LastHitPositionIsMinusOneWithoutHits(t *testing.T) {
+	cfg := smallScenarioConfig()
+	cfg.pendingInWinners = 0
+	cfg.lostInWinners = 0
+	sc := newReorgScenario(t, cfg)
+
+	logger := &phaseLogger{}
+	sc.stp.logger = logger
+
+	require.NoError(t, sc.run(t))
+
+	summary := logger.summary("reorgBlocks")
+	require.Equal(t, []int{0, 0}, countsNamed(summary, "hits"))
+	require.Equal(t, []int{-1, -1}, countsNamed(summary, "last_hit_position"))
+}
+
+// d2 is what a forward step adds to the longest-chain marks: its block's transactions the lost
+// block did not have. The steps sum to D2.
+func TestReorgBlocks_D2PerStepSumsToWinnerNotLost(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+
+	logger := &phaseLogger{}
+	sc.stp.logger = logger
+
+	require.NoError(t, sc.run(t))
+
+	d2 := countsNamed(logger.summary("reorgBlocks"), "d2")
+	require.Len(t, d2, len(sc.forward))
+	require.Equal(t, len(sc.winnerNotLost()), sum(d2))
+	require.NotZero(t, d2[0])
+	require.NotZero(t, d2[1])
+}
+
+func sum(values []int) int {
+	total := 0
+	for _, v := range values {
+		total += v
+	}
+
+	return total
+}
+
 func TestReset_LogsEachPhaseOnceInOrder(t *testing.T) {
 	sc := newReorgScenario(t, smallScenarioConfig())
 

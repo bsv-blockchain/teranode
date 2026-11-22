@@ -14,6 +14,12 @@ import (
 // counts and every phase. A phase that repeats, such as each forward step of a reorg, is logged and
 // observed each time.
 //
+// The counts of a fork reorg's summary line come in the order they are recorded: tip_to_start_ms
+// (only when the request carries when block assembly saw the tip change), pending, tx_map, queue;
+// then for each forward step remainder, hits, last_hit_position (-1 when the block mined none of
+// the nodes held), drain_queue (unless the step skips the drain) and d2; then mark_true and
+// mark_false. A count that repeats appears once per forward step, in step order.
+//
 // While such an operation runs, the processor holds its timer in stp.phases, so the steps it calls
 // (moveForwardBlock, the remainder pass) report their sub-phases without new parameters. Outside one
 // stp.phases is nil, and every method of a nil timer does nothing. Only the processor goroutine
@@ -103,4 +109,19 @@ func (stp *SubtreeProcessor) startPhases(op string) (finish func()) {
 		stp.phases.finish()
 		stp.phases = nil
 	}
+}
+
+// reportTipToStart records how long the request that started this reorg waited, from block
+// assembly first seeing the tip change (the processor's queue wait included) to now: the
+// tip_to_start_ms count and an observation of reorg_tip_to_start_seconds. A request that did not
+// say when the tip was seen reports nothing.
+func (stp *SubtreeProcessor) reportTipToStart() {
+	if stp.reorgTipSeenAt.IsZero() {
+		return
+	}
+
+	d := max(stp.clock.Now().Sub(stp.reorgTipSeenAt), 0)
+
+	stp.phases.count("tip_to_start_ms", int(d.Milliseconds()))
+	prometheusSubtreeProcessorReorgTipToStart.Observe(d.Seconds())
 }

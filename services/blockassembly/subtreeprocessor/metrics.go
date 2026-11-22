@@ -33,6 +33,12 @@ var (
 	// (op="reorgBlocks") and of a reset (op="reset"); see phaseTimer.
 	prometheusSubtreeProcessorReorgPhase *prometheus.HistogramVec
 
+	// prometheusSubtreeProcessorReorgTipToStart is the time from block assembly first seeing a tip
+	// change to the processor starting the fork reorg that follows it, the processor's queue wait
+	// included. It is not a phase of reorg_phase_seconds: those add up to the reorg's total, and
+	// this wait comes before it.
+	prometheusSubtreeProcessorReorgTipToStart prometheus.Histogram
+
 	prometheusSubtreeProcessorDynamicSubtreeSize prometheus.Gauge
 
 	// prometheusSubtreeProcessorBlockMaxSizeResizes counts re-chunks of the queue because
@@ -222,6 +228,16 @@ func _initPrometheusMetrics() {
 			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 19),
 		},
 		[]string{"op", "phase"},
+	)
+
+	prometheusSubtreeProcessorReorgTipToStart = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "reorg_tip_to_start_seconds",
+			Help:      "Time from block assembly first seeing a tip change to the processor starting the fork reorg that follows it",
+			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 19),
+		},
 	)
 
 	prometheusSubtreeProcessorDynamicSubtreeSize = promauto.NewGauge(

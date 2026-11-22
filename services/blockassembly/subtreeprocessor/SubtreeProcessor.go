@@ -111,6 +111,10 @@ type reorgBlocksRequest struct {
 	// moveForwardBlocks contains blocks that need to be added to form the new chain
 	moveForwardBlocks []*model.Block
 
+	// tipSeenAt is when block assembly first saw the tip change this reorg follows; zero when the
+	// caller did not say.
+	tipSeenAt time.Time
+
 	// errChan receives any error encountered during reorganization
 	errChan chan error
 }
@@ -456,6 +460,11 @@ type SubtreeProcessor struct {
 	// It is non-nil only while reorgBlocks moves its forward blocks, so no other block move records
 	// anything. Only the processor goroutine touches it.
 	reorgForwardTxMapSubtrees []chainhash.Hash
+
+	// reorgTipSeenAt is when block assembly first saw the tip change the running Reorg request
+	// follows, zero when the request did not say. The processor loop sets it around reorgBlocks
+	// and only the processor goroutine reads it.
+	reorgTipSeenAt time.Time
 
 	// diskTxMapShadow is the inactive half of the double-buffered disk-backed
 	// currentTxMap, mirroring currentTxMapShadow for the in-memory path. It is
@@ -1024,7 +1033,9 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 						stp.setCurrentRunningState(StateReorg)
 						logger.Infof("[SubtreeProcessor] reorgReq subtree processor: %d, %d", len(reorgReq.moveBackBlocks), len(reorgReq.moveForwardBlocks))
 
+						stp.reorgTipSeenAt = reorgReq.tipSeenAt
 						reorgErr := stp.reorgBlocks(processorCtx, reorgReq.moveBackBlocks, reorgReq.moveForwardBlocks)
+						stp.reorgTipSeenAt = time.Time{}
 						if reorgErr == nil {
 							// run on the next loop iteration so the caller is not held up by a resize
 							stp.blockMaxSizeCheckPending.Store(true)
@@ -5227,15 +5238,25 @@ func (stp *SubtreeProcessor) MoveForwardBlock(block *model.Block) error {
 	}
 }
 
+// ReorgOption adds optional information to a Reorg request.
+type ReorgOption func(*reorgBlocksRequest)
+
+// WithTipSeenAt tells the processor when block assembly first saw the tip change this reorg
+// follows, so a fork reorg reports how long the change waited before the reorg started (issue 2269).
+func WithTipSeenAt(t time.Time) ReorgOption {
+	return func(r *reorgBlocksRequest) { r.tipSeenAt = t }
+}
+
 // Reorg handles blockchain reorganization by processing moved blocks.
 //
 // Parameters:
 //   - moveBackBlocks: Blocks to move down in the chain
 //   - moveForwardBlocks: Blocks to move up in the chain
+//   - opts: Optional request information, such as WithTipSeenAt
 //
 // Returns:
 //   - error: Any error encountered during reorganization
-func (stp *SubtreeProcessor) Reorg(moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block) error {
+func (stp *SubtreeProcessor) Reorg(moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, opts ...ReorgOption) error {
 	ctx := stp.processorContext()
 
 	errChan := make(chan error, 1)
@@ -5243,6 +5264,10 @@ func (stp *SubtreeProcessor) Reorg(moveBackBlocks []*model.Block, moveForwardBlo
 		moveBackBlocks:    moveBackBlocks,
 		moveForwardBlocks: moveForwardBlocks,
 		errChan:           errChan,
+	}
+
+	for _, opt := range opts {
+		opt(&req)
 	}
 
 	select {
@@ -5491,6 +5516,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		// Times each phase of the fork reorg; the forward steps report their own sub-phases
 		// (issue 2269). A catch-up above is not timed.
 		defer stp.startPhases("reorgBlocks")()
+
+		stp.reportTipToStart()
 
 		// other operation, wait for all blocks to be processed first, mined_set etc.
 		if err = stp.WaitForPendingBlocks(ctx); err != nil {
@@ -5820,6 +5847,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 			return err
 		}
 
+		markedBefore := len(markOnLongestChain)
+
 		if transactionMap != nil {
 			transactionMap.Iter(func(hash chainhash.Hash) bool {
 				if !hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
@@ -5835,6 +5864,9 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 				return false
 			})
 		}
+
+		// D2 of this step: the block's transactions the moved-back blocks did not have.
+		stp.phases.count("d2", len(markOnLongestChain)-markedBefore)
 
 		if losingTxHashesMap != nil && losingTxHashesMap.Length() > 0 {
 			rawLosingTxHashes = appendAllTxHashes(rawLosingTxHashes, losingTxHashesMap)
@@ -8504,6 +8536,17 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 
 	chunkRemaining := make([]int, chunkFirst[len(chainedSubtrees)])
 
+	// A chunk also counts the nodes the block mined (flagExistedInTxMap) and the position of the
+	// last one, in the order of the subtrees, for the phase timer. Each chunk writes its own slot,
+	// like chunkRemaining, and the slots merge after the wait.
+	subtreeFirstPos := make([]int, len(chainedSubtrees))
+	chunkHits := make([]int, len(chunkRemaining))
+	chunkLastHit := make([]int, len(chunkRemaining))
+
+	for idx := 1; idx < len(chainedSubtrees); idx++ {
+		subtreeFirstPos[idx] = subtreeFirstPos[idx-1] + len(chainedSubtrees[idx-1].Nodes)
+	}
+
 	g, _ := errgroup.WithContext(ctx)
 	g.SetLimit(workers)
 
@@ -8515,9 +8558,10 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 		for start := 0; start < len(nodes); start += lookupChunk {
 			end := min(start+lookupChunk, len(nodes))
 			slot := chunkFirst[idx] + start/lookupChunk
+			firstPos := subtreeFirstPos[idx]
 
 			g.Go(func() error {
-				remaining := 0
+				remaining, hits, lastHit := 0, 0, -1
 
 				for i := start; i < end; i++ {
 					node := nodes[i]
@@ -8533,6 +8577,8 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 
 					if transactionMap.Exists(node.Hash) {
 						flags[i] = flagExistedInTxMap
+						hits++
+						lastHit = firstPos + i
 					} else if losingTxHashesMap != nil && losingTxHashesMap.Exists(node.Hash) {
 						flags[i] = flagExistsInLosingMap
 					} else {
@@ -8541,6 +8587,8 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 				}
 
 				chunkRemaining[slot] = remaining
+				chunkHits[slot] = hits
+				chunkLastHit[slot] = lastHit
 
 				return nil
 			})
@@ -8549,6 +8597,12 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 
 	if err := g.Wait(); err != nil {
 		return errors.NewProcessingError("error getting remainder tx difference", err)
+	}
+
+	hits, lastHit := 0, -1
+	for slot, h := range chunkHits {
+		hits += h
+		lastHit = max(lastHit, chunkLastHit[slot])
 	}
 
 	// Phase 2: copy each subtree's remainder, in order, into its own range of
@@ -8637,6 +8691,8 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 	totalNodes := len(remainder)
 
 	stp.phases.count("remainder", totalNodes)
+	stp.phases.count("hits", hits)
+	stp.phases.count("last_hit_position", lastHit)
 	stp.phases.done("remainder_flag_copy")
 
 	parallelThreshold := stp.settings.BlockAssembly.ParallelSetIfNotExistsThreshold
