@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/stretchr/testify/require"
 )
@@ -17,11 +18,19 @@ import (
 // the TLB and the cache far more (design section 4.4).
 func BenchmarkReorgSortedHashSetFind(b *testing.B) {
 	for _, n := range []int{1 << 20, 1 << 22} {
-		b.Run(fmt.Sprintf("n=%dM", n>>20), func(b *testing.B) {
-			hashes := randHashes(n, 5)
-			set := buildSet(b, hashes, n, 4)
+		// the benchmark function runs again for every b.N the framework tries: build once
+		var (
+			hashes []chainhash.Hash
+			set    *SortedHashSet
+		)
 
-			rand.New(rand.NewSource(6)).Shuffle(len(hashes), func(i, j int) { hashes[i], hashes[j] = hashes[j], hashes[i] }) //nolint:gosec // deterministic benchmark data
+		b.Run(fmt.Sprintf("n=%dM", n>>20), func(b *testing.B) {
+			if set == nil {
+				hashes = randHashes(n, 5)
+				set = buildSet(b, hashes, n, 4)
+
+				rand.New(rand.NewSource(6)).Shuffle(len(hashes), func(i, j int) { hashes[i], hashes[j] = hashes[j], hashes[i] }) //nolint:gosec // deterministic benchmark data
+			}
 
 			var sum uint64
 

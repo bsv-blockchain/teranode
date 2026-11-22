@@ -442,6 +442,15 @@ func FuzzSortedHashSet(f *testing.F) {
 		}
 
 		require.Equal(t, sortedDistinct(hashes), collect(s))
+
+		// Find answers Exists, at the first position of a run
+		pos := findReference(hashes)
+
+		for _, h := range hashes {
+			got, ok := s.Find(h)
+			require.True(t, ok)
+			require.Equal(t, pos[h], got)
+		}
 	})
 }
 
@@ -472,14 +481,24 @@ func TestSortedHashSet_Find(t *testing.T) {
 		name       string
 		n, dupEach int // dupEach > 0: every dupEach-th hash is added a second time
 		capacity   int
+		shared     int // leading bytes forced equal: overloaded slots take the binary search
 	}{
-		{"single partition", 5000, 0, 100},
-		{"many partitions", 300_000, 0, 300_000},
-		{"duplicates", 100_000, 7, 100_000},
-		{"duplicates in one partition", 3000, 3, 10},
+		{"single partition", 5000, 0, 100, 0},
+		{"many partitions", 300_000, 0, 300_000, 0},
+		{"duplicates", 100_000, 7, 100_000, 0},
+		{"duplicates in one partition", 3000, 3, 10, 0},
+		{"long slots", 3000, 0, 3000, 8},
+		{"long slots with duplicates", 3000, 3, 3000, 8},
+		{"long slots in many partitions", 20_000, 5, 20_000_000, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hashes := randHashes(tc.n, 31)
+
+			for i := range hashes {
+				for b := 0; b < tc.shared; b++ {
+					hashes[i][b] = 0xAB
+				}
+			}
 
 			for i := 0; tc.dupEach > 0 && i < tc.n; i += tc.dupEach {
 				hashes = append(hashes, hashes[i], hashes[i])
@@ -506,18 +525,19 @@ func TestSortedHashSet_Find(t *testing.T) {
 			}
 
 			var (
-				mu   sync.Mutex
-				seen = make(map[chainhash.Hash]uint64)
+				mu     sync.Mutex
+				seen   = make(map[chainhash.Hash]uint64)
+				visits int
 			)
 
 			s.IterPositions(4, func(_ int, pos uint64, h *chainhash.Hash) {
 				mu.Lock()
 				defer mu.Unlock()
 
-				_, dup := seen[*h]
-				require.False(t, dup, "hash visited twice")
 				seen[*h] = pos
+				visits++
 			})
+			require.Equal(t, len(ref), visits, "a hash was visited twice or not at all")
 			require.Equal(t, ref, seen)
 		})
 	}
