@@ -318,3 +318,77 @@ func TestLaneRowsStopWhenTheCallerGivesUp(t *testing.T) {
 func TestLaneBitmapReadTimeoutIsFiveSeconds(t *testing.T) {
 	require.Equal(t, 5*time.Second, laneBitmapReadTimeout)
 }
+
+// partlyHungStore hangs the reads of the subtrees it names and serves the rest.
+type partlyHungStore struct {
+	blob.Store
+	hung    map[chainhash.Hash]bool
+	release chan struct{}
+}
+
+func (s *partlyHungStore) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) ([]byte, error) {
+	if s.hung[chainhash.Hash(key)] {
+		<-s.release
+		return nil, errors.NewStorageError("released")
+	}
+
+	return s.Store.Get(ctx, key, fileType, opts...)
+}
+
+// When some reads finish and others hang, only the hung subtrees count as timed out.
+func TestLaneRowsCountOnlyTheHungSubtreesAsTimedOut(t *testing.T) {
+	u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
+
+	third := chainhash.Hash{0x53}
+	block.Subtrees = append(block.Subtrees, &third)
+
+	store := &partlyHungStore{Store: u.subtreeStore, hung: map[chainhash.Hash]bool{third: true}, release: make(chan struct{})}
+	t.Cleanup(func() { close(store.release) })
+
+	u.subtreeStore = store
+
+	saved := laneBitmapReadTimeout
+	laneBitmapReadTimeout = 200 * time.Millisecond
+
+	t.Cleanup(func() { laneBitmapReadTimeout = saved })
+
+	timedOut := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut)
+
+	require.Nil(t, u.laneRows(context.Background(), block))
+	require.Equal(t, timedOut+1, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut))
+}
+
+// stallingStore answers a Get only when its context ends, as a network store that honours its
+// context does.
+type stallingStore struct {
+	blob.Store
+}
+
+func (s *stallingStore) Get(ctx context.Context, _ []byte, _ fileformat.FileType, _ ...bloboptions.FileOption) ([]byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// The reads run under the deadline's context, so a store that honours it ends them at the deadline
+// and every read goroutine ends with them.
+func TestLaneRowsEndTheReadsOfAStoreThatHonoursTheDeadline(t *testing.T) {
+	u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
+	u.subtreeStore = &stallingStore{Store: u.subtreeStore}
+
+	saved := laneBitmapReadTimeout
+	laneBitmapReadTimeout = 50 * time.Millisecond
+
+	t.Cleanup(func() { laneBitmapReadTimeout = saved })
+
+	baseline := runtime.NumGoroutine()
+
+	require.Nil(t, u.laneRows(context.Background(), block))
+
+	// A plain loop, not require.Eventually, which runs its condition in a goroutine of its own.
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > baseline && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	require.LessOrEqual(t, runtime.NumGoroutine(), baseline, "every read ends with the deadline")
+}
