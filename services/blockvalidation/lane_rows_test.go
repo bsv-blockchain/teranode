@@ -266,6 +266,17 @@ func TestLaneRowsGiveUpOnAHungSubtreeStore(t *testing.T) {
 	// ever reach the store, and every read goroutine ends.
 	require.Equal(t, int32(laneBitmapReadConcurrency), store.gets.Load(), "the reads in flight at the deadline")
 
+	// While those reads still hang, only their goroutines are left: the dispatcher has stopped.
+	// A plain loop, not require.Eventually, which runs its condition in a goroutine of its own.
+	hungOnly := baseline + laneBitmapReadConcurrency
+
+	settle := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > hungOnly && time.Now().Before(settle) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	require.LessOrEqual(t, runtime.NumGoroutine(), hungOnly, "the dispatcher does not wait on a slot a hung read holds")
+
 	store.unhang()
 
 	// A plain loop, not require.Eventually, which runs its condition in a goroutine of its own.
