@@ -74,7 +74,8 @@ The probe also needs the Blockchain and P2P gRPC addresses from the normal setti
 
 The probe protects its data with a static bearer token.
 
-- Every API request must send `Authorization: Bearer <token>`. The probe compares the token in constant time.
+- Every REST API request and every health request must send `Authorization: Bearer <token>`. The probe compares the token in constant time.
+- The dashboard files (`/` and the files that it loads) are public and need no token. They hold no node data.
 - A request with no token or a wrong token gets `401` and an empty body.
 - The WebSocket must send `{"auth": "<token>"}` as its first message within 5 seconds. Otherwise the probe closes it with code `4401`.
 - When the probe is enabled and `probe_authToken` is empty, the node refuses to start.
@@ -169,7 +170,7 @@ The block part is the count of waiting blocks, up to the persister limit of abou
 
 The median peer height is the lower median of the heights that the node accepts from peers that are not banned. Peers that report no height are skipped. The node caps each claim at the local height plus `p2p_max_unvalidated_advertised_height_lead` (default 10,000) when it accepts the claim. No peer proves its height. The lower median limits the influence of a high claim when the other heights agree, but one peer can change it when the heights diverge. For example, heights 1,000 and 11,000 have a lower median of 1,000; adding a third peer at 11,000 raises it to 11,000. The median cannot exceed the highest accepted peer height. A high claim can therefore add up to the configured lead to the peer-gap estimate relative to the local height when that claim was accepted.
 
-When the backlog source fails, the probe skips the drain samples until the backlog is current again. The drain text keeps its last value.
+When the backlog source fails, the probe skips the drain samples until the backlog is current again. The probe also skips them while the FSM is in `CATCHINGBLOCKS` and the median peer height has no data. This is the case when the P2P source fails, and on every node that runs with P2P off. The drain text keeps its last value.
 It fits a line through the backlog samples of the last 5 minutes. The drain time is the backlog divided by the drain rate.
 When the backlog grows, the dashboard shows "growing" and no time.
 
@@ -240,7 +241,7 @@ After a restart, the tx meta cache is cold. For its first 30 samples, or while t
 If the node moves to a new normal level for good, the alarm stays. The baseline does not learn the new level.
 
 - To recalibrate, stop the node, delete the state file, and start the node again. This resets all baselines, and calibration starts again. It is the only way to recalibrate.
-- A snooze hides the alarm until the snooze expires. It does not change the baseline, so the alarm shows again after the snooze.
+- A snooze mutes the alarm until it expires: the alarm stays in the list with a snoozed mark. It does not change the baseline, so the alarm is live again after the snooze.
 - A floor adds a fixed limit (see [5.3 Floors](#53-floors)). It does not replace the baseline check, so it cannot clear a baseline alarm.
 
 ### 5.3 Floors
@@ -365,7 +366,7 @@ A probe that cannot start stops the node at startup, as any other enabled servic
 - The directory of the state file cannot be created or is not writable.
 - The state file cannot be read.
 
-A corrupt state file does not stop the node. The probe moves it aside and starts with an empty store.
+A corrupt state file does not stop the node. The probe moves it aside and starts with an empty store. When the probe cannot move the corrupt file aside, the probe stays down and the node keeps running. The probe logs one error line, and its health check returns `200` with the message about the stopped probe (see below).
 
 After a start, these rules apply:
 
@@ -397,7 +398,7 @@ The probe accepts at most 16 WebSocket clients at the same time. A further clien
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `startProbe` | bool | `false` | Start the Probe service. The `-probe=1` flag does the same |
-| `probe_authToken` | string | empty | Bearer token for every request. Required. An empty value stops the node at startup |
+| `probe_authToken` | string | empty | Bearer token for the REST API, the health check and the WebSocket. The dashboard files are public. Required. An empty value stops the node at startup |
 | `probe_httpListenAddress` | string | `localhost:8100` | Bind address of the dashboard and the API |
 | `probe_sampleInterval` | duration | `2s` | Interval between samples of the service metrics, the Blockchain and P2P |
 | `probe_slowSampleInterval` | duration | `15s` | Interval between samples of Aerospike, Kafka and PostgreSQL |
@@ -433,7 +434,7 @@ The probe accepts at most 16 WebSocket clients at the same time. A further clien
 | The tip chip is grey and says "no peers" | The P2P service has no peers | Check the peer connections of the node |
 | Aerospike read latency is grey | Read benchmarks are off | Set `enable-benchmarks-read true` on the namespace |
 | PostgreSQL disk fill says "disk capacity not set" | `probe_postgresDiskCapacityGB` is 0 | Set the volume size in GB |
-| An alarm stays after the node changed for good | The baseline is frozen while the alarm is active | Reset the baselines: stop the node, delete the state file and start it again (see [5.2](#52-learned-baselines)). A snooze only hides the alarm until it expires |
+| An alarm stays after the node changed for good | The baseline is frozen while the alarm is active | Reset the baselines: stop the node, delete the state file and start it again (see [5.2](#52-learned-baselines)). A snooze only mutes the alarm until it expires |
 | The log shows `state file was corrupt; moved it to ...` | The state file was not valid JSON | No action needed. The old file stays next to the new one |
 | The health check says "probe stopped after repeated failures" | Five consecutive panics stopped the probe | Collect the log, then restart the node |
 | A 17th or later browser tab gets no data, and the API returns `503` on `/ws` | More than 16 WebSocket clients | Close unused tabs |

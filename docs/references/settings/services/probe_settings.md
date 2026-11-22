@@ -9,7 +9,7 @@ Settings are organized under the `Probe` struct in `settings.Settings`.
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
 | HTTPListenAddress | string | "localhost:8100" | probe_httpListenAddress | Bind address of the dashboard and the API |
-| AuthToken | string | "" | probe_authToken | **CRITICAL** - Bearer token for every request. Required when the probe is on; an empty value stops the node at startup |
+| AuthToken | string | "" | probe_authToken | **CRITICAL** - Bearer token for the REST API, the health check and the WebSocket. The dashboard files are public. Required when the probe is on; an empty value stops the node at startup |
 | SampleInterval | time.Duration | 2s | probe_sampleInterval | Interval between samples of service metrics, Blockchain and P2P |
 | SlowSampleInterval | time.Duration | 15s | probe_slowSampleInterval | Interval between samples of Aerospike, Kafka and Postgres |
 | BaselineWarmup | time.Duration | 30m | probe_baselineWarmup | Minimum learning time before a baseline is ready |
