@@ -23,6 +23,7 @@ import (
 const (
 	readHeaderTimeout   = 10 * time.Second
 	defaultReadTimeout  = 15 * time.Second
+	defaultWriteTimeout = 30 * time.Second
 	defaultIdleTimeout  = 60 * time.Second
 	shutdownTimeout     = 5 * time.Second
 	defaultNodeName     = "node"
@@ -41,6 +42,7 @@ type Server struct {
 	processHook   func(*snapshot.Snapshot)
 	wsAuthTimeout time.Duration
 	readTimeout   time.Duration
+	writeTimeout  time.Duration
 	idleTimeout   time.Duration
 	wsWriteWait   time.Duration
 	flushEvery    time.Duration
@@ -78,6 +80,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, bc blockchain.Clie
 		now:              time.Now,
 		wsAuthTimeout:    defaultWSAuthTimeout,
 		readTimeout:      defaultReadTimeout,
+		writeTimeout:     defaultWriteTimeout,
 		idleTimeout:      defaultIdleTimeout,
 		wsWriteWait:      defaultWSWriteWait,
 		flushEvery:       defaultFlushEvery,
@@ -231,12 +234,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		closers: set.closers,
 		logger:  s.logger,
 		faults:  f,
-		httpSrv: &http.Server{
-			Handler:           s.newRouter(),
-			ReadHeaderTimeout: readHeaderTimeout,
-			ReadTimeout:       s.readTimeout,
-			IdleTimeout:       s.idleTimeout,
-		},
+		httpSrv: s.newHTTPServer(s.newRouter()),
 	}
 
 	s.mu.Lock()
@@ -270,6 +268,16 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return run.stop()
 	case <-f.signal.failed:
 		return s.selfStop(run, f.signal.Reason())
+	}
+}
+
+func (s *Server) newHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       s.readTimeout,
+		WriteTimeout:      s.writeTimeout,
+		IdleTimeout:       s.idleTimeout,
 	}
 }
 

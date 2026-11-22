@@ -586,3 +586,47 @@ func TestCollectReturnsReadError(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Nil(t, patch)
 }
+
+func TestNodeReadingsMarkAPartialAnswer(t *testing.T) {
+	both := []nodeStats{
+		{name: "a", answered: true, usage: true, sizeGB: 10, fill: 0.2, p99: 0.001, p99ok: true},
+		{name: "b", answered: true, usage: true, sizeGB: 14, fill: 0.4, p99: 0.009, p99ok: true},
+	}
+	oneDown := []nodeStats{both[0], {name: "b"}}
+
+	t.Run("every node answered", func(t *testing.T) {
+		r := nodeReadings(both)
+
+		require.Equal(t, snapshot.Reading{Value: 24, Status: snapshot.StatusOK}, r.size)
+		require.Equal(t, snapshot.Reading{Value: 0.4, Status: snapshot.StatusOK}, r.fill)
+		require.Equal(t, snapshot.Reading{Value: 0.009, Status: snapshot.StatusOK}, r.p99)
+	})
+
+	t.Run("one of two nodes answered", func(t *testing.T) {
+		r := nodeReadings(oneDown)
+
+		require.Equal(t, snapshot.Reading{Value: 10, Status: snapshot.StatusIdle, Note: "1 of 2 nodes answered"}, r.size)
+		require.Equal(t, snapshot.Reading{Value: 0.2, Status: snapshot.StatusIdle, Note: "1 of 2 nodes answered"}, r.fill)
+		require.Equal(t, snapshot.StatusNoData, r.p99.Status, "a latency from part of the cluster must not feed the alarm or the baseline")
+		require.Equal(t, "1 of 2 nodes answered", r.p99.Note)
+		require.Equal(t, 0.001, r.p99.Value)
+	})
+
+	t.Run("a partial answer without latency keeps the latency note", func(t *testing.T) {
+		nodes := []nodeStats{{name: "a", answered: true, usage: true, sizeGB: 10, fill: 0.2}, {name: "b"}}
+		r := nodeReadings(nodes)
+
+		require.Equal(t, snapshot.StatusNoData, r.p99.Status)
+		require.Equal(t, aerospikeLatencyNote, r.p99.Note)
+		require.Equal(t, snapshot.StatusIdle, r.size.Status)
+	})
+
+	t.Run("nodes answered without usage numbers", func(t *testing.T) {
+		nodes := []nodeStats{{name: "a", answered: true}}
+		r := nodeReadings(nodes)
+
+		require.Equal(t, snapshot.StatusNoData, r.size.Status)
+		require.Equal(t, snapshot.StatusNoData, r.fill.Status)
+		require.Empty(t, r.size.Note)
+	})
+}

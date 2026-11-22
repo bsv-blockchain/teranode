@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -204,4 +205,76 @@ func TestStartReleasesPortOnStop(t *testing.T) {
 	ln, err := net.Listen("tcp", addr)
 	require.NoError(t, err)
 	require.NoError(t, ln.Close())
+}
+
+func TestStalledReaderCannotHoldAResponseWriteOpen(t *testing.T) {
+	srv := newTestServer(t, testToken)
+	srv.writeTimeout = 300 * time.Millisecond
+
+	returned := make(chan struct{})
+
+	httpSrv := srv.newHTTPServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		defer close(returned)
+
+		chunk := make([]byte, 1<<20)
+
+		for range 256 {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	go func() { _ = httpSrv.Serve(ln) }()
+
+	defer func() { _ = httpSrv.Close() }()
+
+	dialer := net.Dialer{Control: func(_, _ string, c syscall.RawConn) error {
+		return c.Control(func(fd uintptr) {
+			_ = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, 2048)
+		})
+	}}
+
+	conn, err := dialer.Dial("tcp", ln.Addr().String())
+	require.NoError(t, err)
+
+	defer func() { _ = conn.Close() }()
+
+	_, err = conn.Write([]byte("GET /view.js HTTP/1.1\r\nHost: probe\r\n\r\n"))
+	require.NoError(t, err)
+
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the handler is still blocked in a write to a client that does not read")
+	}
+}
+
+func TestWebSocketOutlivesTheHTTPTimeouts(t *testing.T) {
+	srv := newTestServer(t, testToken)
+	srv.readTimeout = 200 * time.Millisecond
+	srv.writeTimeout = 200 * time.Millisecond
+	srv.idleTimeout = 200 * time.Millisecond
+
+	cancel, errCh := startServer(t, srv)
+	defer func() {
+		cancel()
+		<-errCh
+	}()
+
+	conn := authedWS(t, srv)
+
+	defer func() { _ = conn.Close() }()
+
+	deadline := time.Now().Add(1500 * time.Millisecond)
+
+	for time.Now().Before(deadline) {
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(3*time.Second)))
+
+		_, _, err := conn.ReadMessage()
+		require.NoError(t, err, "the socket must stay open past the read, write and idle timeouts")
+	}
 }

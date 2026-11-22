@@ -402,6 +402,15 @@ func (a *Aerospike) read() (aerospikeReadings, error) {
 		panic(panicked)
 	}
 
+	if countAnswered(results) == 0 {
+		a.dropClient(client)
+		return aerospikeReadings{}, errors.NewServiceError("no aerospike node returned statistics for namespace %s", a.namespace)
+	}
+
+	return nodeReadings(results), nil
+}
+
+func countAnswered(results []nodeStats) int {
 	answered := 0
 
 	for _, n := range results {
@@ -410,11 +419,10 @@ func (a *Aerospike) read() (aerospikeReadings, error) {
 		}
 	}
 
-	if answered == 0 {
-		a.dropClient(client)
-		return aerospikeReadings{}, errors.NewServiceError("no aerospike node returned statistics for namespace %s", a.namespace)
-	}
+	return answered
+}
 
+func nodeReadings(results []nodeStats) aerospikeReadings {
 	readings := aerospikeReadings{
 		size: snapshot.Reading{Status: snapshot.StatusNoData},
 		fill: snapshot.Reading{Status: snapshot.StatusNoData},
@@ -422,17 +430,29 @@ func (a *Aerospike) read() (aerospikeReadings, error) {
 	}
 
 	sizeGB, fill, p99, p99ok, ok := aggregateNodes(results)
+	answered := countAnswered(results)
+	partial := answered < len(results)
+	partialNote := fmt.Sprintf("%d of %d nodes answered", answered, len(results))
 
 	if ok {
 		readings.size = snapshot.Reading{Value: sizeGB, Status: snapshot.StatusOK}
 		readings.fill = snapshot.Reading{Value: fill, Status: snapshot.StatusOK}
+
+		if partial {
+			readings.size.Status, readings.size.Note = snapshot.StatusIdle, partialNote
+			readings.fill.Status, readings.fill.Note = snapshot.StatusIdle, partialNote
+		}
 	}
 
 	if p99ok {
 		readings.p99 = snapshot.Reading{Value: p99, Status: snapshot.StatusOK}
+
+		if partial {
+			readings.p99.Status, readings.p99.Note = snapshot.StatusNoData, partialNote
+		}
 	}
 
-	return readings, nil
+	return readings
 }
 
 func statsMap(info string) map[string]string {
