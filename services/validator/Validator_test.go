@@ -995,7 +995,7 @@ type MockBlockAssemblyStore struct {
 	removedTxs   []chainhash.Hash
 }
 
-func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error) {
+func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, _ uint64) (bool, error) {
 	if s.panicOnStore {
 		// Simulates a nil/misconfigured block-assembly client panicking mid-delivery,
 		// e.g. inside the real gRPC client's Store() call.
@@ -1670,7 +1670,7 @@ func TestValidator_LockedFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
 		stats:          gocore.NewStat("validator"),
 	}
 
-	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Times(1)
 
 	err = utxoStore.SetBlockHeight(2)
@@ -1730,7 +1730,7 @@ func TestValidator_ValidateWithOptions_ReturnsUnlockFailureError(t *testing.T) {
 		stats:          gocore.NewStat("validator"),
 	}
 
-	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Times(1)
 
 	require.NoError(t, utxoStore.SetBlockHeight(2))
@@ -2283,7 +2283,7 @@ func TestValidator_TwoPhaseCommitCompletesAfterTxMetaSerializationFailure(t *tes
 		txmetaKafkaProducerClient: kafkaMock,
 	}
 
-	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Times(1)
 
 	err = realStore.SetBlockHeight(2)

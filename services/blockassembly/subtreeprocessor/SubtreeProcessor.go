@@ -1249,6 +1249,12 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 								hash := b.nodes[i].Hash
 								inpoints := b.txInpoints[i]
 
+								// The tx's lane position, kept with its inpoints at utxostore_laneMigration shadow
+								var position uint64
+								if b.positions != nil {
+									position = b.positions[i]
+								}
+
 								// Fast reject path first (most common in practice)
 								if mapLength > 0 && removeMap.Exists(hash) {
 									_ = removeMap.Delete(hash)
@@ -1257,7 +1263,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 								}
 
 								// Check for duplicates and insert into txMap
-								if _, wasSet := currentTxMap.SetIfNotExists(hash, inpoints); !wasSet {
+								if _, wasSet := currentTxMap.SetIfNotExistsAt(hash, inpoints, position); !wasSet {
 									b.nodes[i].Hash = zeroHash // Mark as duplicate
 									continue
 								}
@@ -3022,7 +3028,14 @@ func (stp *SubtreeProcessor) InitCurrentBlockHeader(blockHeader *model.BlockHead
 // Returns:
 //   - error: Any error encountered during addition
 func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.TxInpoints, skipNotification bool) (err error) {
-	_, err = stp.placeNode(node, parents, skipNotification)
+	_, err = stp.placeNodeAt(node, parents, 0, skipNotification)
+
+	return err
+}
+
+// addNodeAt is addNode keeping the tx's lane position (util/lane) with its parents; 0 keeps none.
+func (stp *SubtreeProcessor) addNodeAt(node subtreepkg.Node, parents *subtreepkg.TxInpoints, position uint64, skipNotification bool) (err error) {
+	_, err = stp.placeNodeAt(node, parents, position, skipNotification)
 
 	return err
 }
@@ -3040,6 +3053,13 @@ func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.T
 //   - bool: True if the node was added to a subtree
 //   - error: Any error encountered during addition
 func (stp *SubtreeProcessor) placeNode(node subtreepkg.Node, parents *subtreepkg.TxInpoints, skipNotification bool) (placed bool, err error) {
+	return stp.placeNodeAt(node, parents, 0, skipNotification)
+}
+
+// placeNodeAt is placeNode keeping the tx's lane position (util/lane) with its parents in
+// currentTxMap; 0 keeps none. A position is ignored when parents is nil: the map already holds
+// the tx, with whatever position it was given.
+func (stp *SubtreeProcessor) placeNodeAt(node subtreepkg.Node, parents *subtreepkg.TxInpoints, position uint64, skipNotification bool) (placed bool, err error) {
 	// parents can only be set to nil, when they are already in the map
 	if parents == nil {
 		var held bool
@@ -3055,7 +3075,7 @@ func (stp *SubtreeProcessor) placeNode(node subtreepkg.Node, parents *subtreepkg
 		}
 	} else {
 		// SetIfNotExists returns (value, wasSet) where wasSet is true if the key was newly inserted
-		if _, wasSet := stp.currentTxMap.SetIfNotExists(node.Hash, parents); !wasSet {
+		if _, wasSet := stp.currentTxMap.SetIfNotExistsAt(node.Hash, parents, position); !wasSet {
 			// Key already existed, this is a duplicate
 			stp.logger.Debugf("[addNode] duplicate transaction ignored %s", node.Hash.String())
 
@@ -3459,6 +3479,14 @@ func (stp *SubtreeProcessor) AddBatchBounded(nodes []subtreepkg.Node, txInpoints
 	return stp.queue.enqueueBatchBounded(nodes, txInpoints, inBlock)
 }
 
+// AddPositionedBatchBounded is AddBatchBounded for a batch whose transactions carry their own lane
+// positions (util/lane), positions[i] for nodes[i] and 0 for none, at utxostore_laneMigration
+// shadow. The positions travel with the transactions into the pool, where the lane bitmaps a
+// sealed subtree is stored with are built from them. A nil positions is AddBatchBounded.
+func (stp *SubtreeProcessor) AddPositionedBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, positions []uint64, inBlock bool) Admission {
+	return stp.queue.enqueuePositionedBatchBounded(nodes, txInpoints, positions, inBlock)
+}
+
 // heldBase is the count of transactions the subtrees hold, which the queue's in-memory limit
 // adds the queued and dequeued items to. During a load of the unmined transactions it reports at
 // least the limit. The load raises txCount one transaction at a time, so a producer reading it
@@ -3542,7 +3570,17 @@ func (stp *SubtreeProcessor) AddDirectlyReportOnly(node *subtreepkg.Node, txInpo
 	return stp.addDirectly(node, txInpoints, skipNotification, false)
 }
 
+// AddDirectlyAt is AddDirectly, or with reportOnly AddDirectlyReportOnly, keeping the tx's own lane
+// position (util/lane) with its inpoints; 0 keeps none.
+func (stp *SubtreeProcessor) AddDirectlyAt(node *subtreepkg.Node, txInpoints *subtreepkg.TxInpoints, position uint64, skipNotification, reportOnly bool) error {
+	return stp.addDirectlyAt(node, txInpoints, position, skipNotification, !reportOnly)
+}
+
 func (stp *SubtreeProcessor) addDirectly(node *subtreepkg.Node, txInpoints *subtreepkg.TxInpoints, skipNotification bool, failOnMapErr bool) (err error) {
+	return stp.addDirectlyAt(node, txInpoints, 0, skipNotification, failOnMapErr)
+}
+
+func (stp *SubtreeProcessor) addDirectlyAt(node *subtreepkg.Node, txInpoints *subtreepkg.TxInpoints, position uint64, skipNotification bool, failOnMapErr bool) (err error) {
 	// Same load-path boundary as AddNodesDirectly (both add directly to the
 	// processor, bypassing the queue): report tx map storage errors once the
 	// node is placed, so a stale error never leaks to a later call, and a
@@ -3553,7 +3591,7 @@ func (stp *SubtreeProcessor) addDirectly(node *subtreepkg.Node, txInpoints *subt
 		defer stp.reportOrJoinDiskTxMapErr("AddDirectlyReportOnly", &err)
 	}
 
-	if err = stp.addNode(*node, txInpoints, skipNotification); err != nil {
+	if err = stp.addNodeAt(*node, txInpoints, position, skipNotification); err != nil {
 		return errors.NewProcessingError("error adding node directly to subtree", err)
 	}
 
@@ -3664,7 +3702,9 @@ func (stp *SubtreeProcessor) addNodesDirectly(txs []*utxostore.UnminedTransactio
 				}
 
 				for i := startIdx; i < endIdx; i++ {
-					currentTxMap.Set(txs[i].Hash, txs[i].TxInpoints)
+					// LanePosition is 0, kept as nothing, unless the reload ran at
+					// utxostore_laneMigration shadow.
+					currentTxMap.SetAt(txs[i].Hash, txs[i].TxInpoints, txs[i].LanePosition)
 				}
 			}(start, end)
 		}
@@ -4318,6 +4358,10 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 				return errors.NewProcessingError("error getting txInpoints from currentTxMap for %s", node.Hash.String())
 			}
 
+			// The tx's lane position goes back with it, so the re-chained subtrees' lane bitmaps
+			// still hold it. Zero without lanes.
+			position := stp.currentTxMap.Position(node.Hash)
+
 			// Save to deleted backup before removing (protects brief window during delete-and-readd)
 			stp.deletedTxs.Set(node.Hash, *parents)
 
@@ -4325,9 +4369,9 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 			stp.currentTxMap.Delete(node.Hash)
 
 			// Re-add the node (adds back to currentTxMap)
-			if err = stp.addNode(node, parents, true); err != nil {
+			if err = stp.addNodeAt(node, parents, position, true); err != nil {
 				// Restore to currentTxMap to avoid inconsistent state
-				stp.currentTxMap.Set(node.Hash, parents)
+				stp.currentTxMap.SetAt(node.Hash, parents, position)
 				stp.deletedTxs.Delete(node.Hash)
 				return errors.NewProcessingError(errAddingNodeToSubtree, err)
 			}
@@ -6419,12 +6463,21 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	}
 
 	if len(flatHashes) > 0 {
+		// At utxostore_laneMigration shadow the block's txs come back with the lane positions
+		// their records hold, so the subtrees rebuilt from them get complete lane bitmaps.
+		positions := stp.lanePositionsFromUtxoStore(ctx, block, flatHashes)
+
 		wasSet := make([]bool, len(flatHashes))
 		if splitMap, ok := stp.currentTxMap.(*SplitTxInpointsMap); ok {
-			splitMap.ParallelBulkSetIfNotExists(flatHashes, flatInpoints, wasSet)
+			splitMap.ParallelBulkSetIfNotExistsAt(flatHashes, flatInpoints, positions, wasSet)
 		} else {
 			for i, hash := range flatHashes {
-				_, wasSet[i] = stp.currentTxMap.SetIfNotExists(hash, flatInpoints[i])
+				var position uint64
+				if positions != nil {
+					position = positions[i]
+				}
+
+				_, wasSet[i] = stp.currentTxMap.SetIfNotExistsAt(hash, flatInpoints[i], position)
 			}
 		}
 		for i, set := range wasSet {
@@ -6806,6 +6859,43 @@ func (stp *SubtreeProcessor) txInpointsFromUtxoStore(ctx context.Context, nodes 
 	}
 
 	return txInpoints, nil
+}
+
+// lanePositionsFromUtxoStore returns the lane position (util/lane) each of hashes, txs of block
+// that a move-back returns to block assembly, has in the UTXO store, 0 for one it has none for, or
+// nil when the pool keeps no positions (utxostore_laneMigration off). The subtree files a block
+// comes back from carry no positions, so at shadow this reads the store, one read per tx, in the
+// batches the parent-link read uses. A failed read is logged and leaves positions 0: at shadow a
+// lanes read never stops a reorg, and the txs are counted as without position when their subtree
+// is sealed.
+func (stp *SubtreeProcessor) lanePositionsFromUtxoStore(ctx context.Context, block *model.Block, hashes []chainhash.Hash) []uint64 {
+	if !stp.keepsLanePositions() || stp.utxoStore == nil || len(hashes) == 0 {
+		return nil
+	}
+
+	positions := make([]uint64, len(hashes))
+	unresolved := make([]*utxostore.UnresolvedMetaData, len(hashes))
+
+	for i := range hashes {
+		unresolved[i] = &utxostore.UnresolvedMetaData{Hash: hashes[i], Idx: i}
+	}
+
+	for start := 0; start < len(unresolved); start += moveBackStoreReadBatchSize {
+		end := min(start+moveBackStoreReadBatchSize, len(unresolved))
+
+		if err := stp.utxoStore.BatchDecorate(ctx, unresolved[start:end], fields.LanePosition); err != nil {
+			stp.logger.Warnf("[moveBackBlock][%s] returning %d txs to block assembly without lane positions, which could not be read: %v", block.String(), end-start, err)
+			continue
+		}
+	}
+
+	for _, item := range unresolved {
+		if item.Err == nil && item.Data != nil {
+			positions[item.Idx] = item.Data.LanePosition
+		}
+	}
+
+	return positions
 }
 
 func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block *model.Block) ([][]subtreepkg.Node, [][]subtreepkg.TxInpoints, []chainhash.Hash, error) {
@@ -8050,6 +8140,11 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHa
 			for i, node := range batch.nodes {
 				txInpoints := batch.txInpoints[i]
 
+				var position uint64
+				if batch.positions != nil {
+					position = batch.positions[i]
+				}
+
 				if transactionMap != nil && transactionMap.Exists(node.Hash) {
 					continue
 				}
@@ -8061,7 +8156,7 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHa
 					continue
 				}
 
-				wasPlaced, addErr := stp.placeNode(node, txInpoints, skipNotification)
+				wasPlaced, addErr := stp.placeNodeAt(node, txInpoints, position, skipNotification)
 				if addErr != nil {
 					stp.logger.Errorf("[SubtreeProcessor] error adding node %s during sequential remainder processing: %v", node.Hash.String(), addErr)
 				}
@@ -8976,6 +9071,12 @@ func (stp *SubtreeProcessor) bucketShardedGetAndSetIfNotExists(
 			keys := make([]chainhash.Hash, len(indices))
 			vals := make([]*subtreepkg.TxInpoints, len(indices))
 
+			// The lane positions go with the inpoints at utxostore_laneMigration shadow.
+			var positions []uint64
+			if stp.keepsLanePositions() {
+				positions = make([]uint64, len(indices))
+			}
+
 			for j, origIdx := range indices {
 				hash := nodes[origIdx].Hash
 
@@ -8986,9 +9087,13 @@ func (stp *SubtreeProcessor) bucketShardedGetAndSetIfNotExists(
 
 				keys[j] = hash
 				vals[j] = parents
+
+				if positions != nil {
+					positions[j] = currentTxMap.Position(hash)
+				}
 			}
 
-			results := splitMap.PutMultiBucketTxInpoints(bucketIdx, keys, vals)
+			results := splitMap.PutMultiBucketTxInpointsAt(bucketIdx, keys, vals, positions)
 
 			for j, origIdx := range indices {
 				wasInserted[origIdx] = results[j]
@@ -9073,7 +9178,13 @@ func (stp *SubtreeProcessor) legacyParallelGetAndSetIfNotExists(
 					return errors.NewProcessingError("node %s not found in currentTxMap", node.Hash.String())
 				}
 
-				_, wasSet := stp.currentTxMap.SetIfNotExists(node.Hash, nodeParents)
+				// The lane position goes with the inpoints at utxostore_laneMigration shadow.
+				var position uint64
+				if stp.keepsLanePositions() {
+					position = currentTxMap.Position(node.Hash)
+				}
+
+				_, wasSet := stp.currentTxMap.SetIfNotExistsAt(node.Hash, nodeParents, position)
 				wasInserted[idx] = wasSet
 
 				if !wasSet {
@@ -9779,6 +9890,13 @@ func (stp *SubtreeProcessor) MarkRecoveredConflicts(ctx context.Context, hashes 
 // It resolves block IDs so a forward rollback accepts the winners' own block.
 func (stp *SubtreeProcessor) currentChainGuard() utxostore.CurrentChainGuard {
 	return CurrentChainGuard(stp.blockchainClient)
+}
+
+// keepsLanePositions reports whether the pool keeps each transaction's own lane position (util/lane)
+// with its inpoints, at utxostore_laneMigration shadow, so the lane bitmaps of every subtree block
+// assembly seals, and of every subtree it rebuilds, hold its members' positions.
+func (stp *SubtreeProcessor) keepsLanePositions() bool {
+	return stp.settings != nil && stp.settings.UtxoStore.LaneMigration.Stamps()
 }
 
 // CurrentChainGuard builds the guard that protects transactions confirmed on the current chain

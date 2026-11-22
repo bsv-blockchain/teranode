@@ -273,6 +273,13 @@ func (it *unminedTxIterator) partitionWorker(ctx context.Context, policy *as.Que
 			fields.External.String(),
 			fields.Inputs.String(),
 		}
+
+		// At utxostore_laneMigration shadow block assembly keeps each tx's own lane position in
+		// its pool, to build the lane bitmaps of the subtrees the reload makes. Without lanes the
+		// query names the bins it always did.
+		if it.store.laneShadow() {
+			stmt.BinNames = append(stmt.BinNames, fields.LanePosition.String())
+		}
 	}
 
 	// Create partition filter for this range

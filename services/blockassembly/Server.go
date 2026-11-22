@@ -1272,9 +1272,15 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}
 
 	if !ba.settings.BlockAssembly.Disabled {
+		var positions []uint64
+		if ba.keepsLanePositions() && req.GetLanePosition() != 0 {
+			positions = []uint64{req.GetLanePosition()}
+		}
+
 		if err = ba.addTxBatchWithBackpressure(ctx,
 			[]subtreepkg.Node{{Hash: chainhash.Hash(req.Txid), Fee: req.Fee, SizeInBytes: req.Size}},
 			[]*subtreepkg.TxInpoints{&txInpoints},
+			positions,
 			req.GetInBlock(),
 		); err != nil {
 			return nil, err
@@ -1375,8 +1381,8 @@ const queueFullPollInterval = 5 * time.Millisecond
 //
 // The wait is strictly bounded so it can never wedge the validator, whose
 // block-assembly client honours the caller's context (group.Wait(ctx, 0)).
-func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) error {
-	verdict := ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock)
+func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, positions []uint64, inBlock bool) error {
+	verdict := ba.blockAssembler.AddPositionedTxBatchBounded(nodes, txInpoints, positions, inBlock)
 	if verdict == subtreeprocessor.Admitted {
 		return nil
 	}
@@ -1401,7 +1407,7 @@ func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes [
 			case <-timeout:
 				return ba.shed(start)
 			case <-ticker.C:
-				switch ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock) {
+				switch ba.blockAssembler.AddPositionedTxBatchBounded(nodes, txInpoints, positions, inBlock) {
 				case subtreeprocessor.Admitted:
 					prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
 					return nil
@@ -1544,9 +1550,22 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	txInpointsArr := make([]subtreepkg.TxInpoints, len(requests))
 	txInpointsList := make([]*subtreepkg.TxInpoints, len(requests))
 
+	// Allocated only when a transaction carries a lane position, at utxostore_laneMigration shadow.
+	var positions []uint64
+
+	keepPositions := ba.keepsLanePositions()
+
 	for i, req := range requests {
 		if len(req.Txid) != 32 {
 			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid txid length at index %d: %d", i, len(req.Txid)))
+		}
+
+		if keepPositions && req.GetLanePosition() != 0 {
+			if positions == nil {
+				positions = make([]uint64, len(requests))
+			}
+
+			positions[i] = req.GetLanePosition()
 		}
 
 		nodes[i] = subtreepkg.Node{
@@ -1568,7 +1587,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 
 	// Add entire batch in one call
 	if !ba.settings.BlockAssembly.Disabled {
-		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, batch.GetInBlock()); err != nil {
+		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, positions, batch.GetInBlock()); err != nil {
 			return nil, err
 		}
 
@@ -1744,7 +1763,7 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 		txInpointsList[i] = &txInpointsArr[i]
 	}
 
-	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, req.GetInBlock()); err != nil {
+	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, ba.columnarLanePositions(req.GetLanePositions(), txCount), req.GetInBlock()); err != nil {
 		return nil, err
 	}
 
@@ -1753,6 +1772,32 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
 
 	return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
+}
+
+// keepsLanePositions reports whether block assembly keeps the lane positions (util/lane) the
+// validator hands it, at utxostore_laneMigration shadow, to build the lane bitmaps of the subtrees
+// it seals and the lane map rows of the blocks it mines. At off it keeps none, even if a validator
+// sends them.
+func (ba *BlockAssembly) keepsLanePositions() bool {
+	return ba.settings != nil && ba.settings.UtxoStore.LaneMigration.Stamps()
+}
+
+// columnarLanePositions returns a columnar batch's lane positions, or nil when block assembly
+// keeps none or the batch carries none. A column that does not have one position per transaction
+// is dropped with a warning: at shadow nothing about lanes may refuse a transaction, so the batch
+// is admitted without positions, and its transactions are counted as without position when their
+// subtree is sealed.
+func (ba *BlockAssembly) columnarLanePositions(positions []uint64, txCount int) []uint64 {
+	if len(positions) == 0 || !ba.keepsLanePositions() {
+		return nil
+	}
+
+	if len(positions) != txCount {
+		ba.logger.Warnf("[AddTxBatchColumnar] dropping the lane positions of a batch of %d transactions, which carries %d", txCount, len(positions))
+		return nil
+	}
+
+	return positions
 }
 
 // TxCount returns the total number of transactions processed.

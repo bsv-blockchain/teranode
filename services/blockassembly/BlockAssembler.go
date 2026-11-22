@@ -2669,6 +2669,17 @@ func (b *BlockAssembler) AddTxBatchBounded(nodes []subtree.Node, txInpoints []*s
 	return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, inBlock)
 }
 
+// AddPositionedTxBatchBounded is AddTxBatchBounded for a batch that carries each transaction's own
+// lane position (util/lane), positions[i] for nodes[i] and 0 for none, at utxostore_laneMigration
+// shadow. A nil positions takes AddTxBatchBounded's path unchanged.
+func (b *BlockAssembler) AddPositionedTxBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, positions []uint64, inBlock bool) subtreeprocessor.Admission {
+	if positions == nil {
+		return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, inBlock)
+	}
+
+	return b.subtreeProcessor.AddPositionedBatchBounded(nodes, txInpoints, positions, inBlock)
+}
+
 // HeldCount returns the transactions held in memory: queued, dequeued but not yet counted, and
 // already in subtrees.
 //
@@ -4650,9 +4661,13 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 	} else {
 		// Sequential mode: use AddDirectly for each transaction
 		for idx, unminedTransaction := range unminedTransactions {
-			if isReload {
+			switch {
+			case unminedTransaction.LanePosition != 0:
+				// at utxostore_laneMigration shadow the tx's lane position goes into the pool with it
+				err = b.subtreeProcessor.AddDirectlyAt(unminedTransaction.Node, unminedTransaction.TxInpoints, unminedTransaction.LanePosition, true, isReload)
+			case isReload:
 				err = b.subtreeProcessor.AddDirectlyReportOnly(unminedTransaction.Node, unminedTransaction.TxInpoints, true)
-			} else {
+			default:
 				err = b.subtreeProcessor.AddDirectly(unminedTransaction.Node, unminedTransaction.TxInpoints, true)
 			}
 			if err != nil {
@@ -5354,6 +5369,9 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 		Dirs:          unminedSortDirs(b.settings.BlockAssembly.UnminedTxDiskSortPaths),
 		BufferRecords: b.settings.BlockAssembly.UnminedTxSortBufferRecords,
 		WithInpoints:  true,
+		// At utxostore_laneMigration shadow each tx's lane position goes through the sort into
+		// the pool.
+		WithPositions: b.settings.UtxoStore.LaneMigration.Stamps(),
 	})
 	if err != nil {
 		return errors.NewProcessingError("error creating unmined transaction sorter", err)
@@ -5416,7 +5434,7 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 				}
 			}
 
-			if err = sorter.Add(int64(unminedTx.CreatedAt), *unminedTx.Node, unminedTx.TxInpoints); err != nil {
+			if err = sorter.AddAt(int64(unminedTx.CreatedAt), *unminedTx.Node, unminedTx.TxInpoints, unminedTx.LanePosition); err != nil {
 				return errors.NewProcessingError("error buffering unmined transaction %s for sorting", unminedTx.Node.Hash, err)
 			}
 

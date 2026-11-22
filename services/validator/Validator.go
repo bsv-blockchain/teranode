@@ -1489,6 +1489,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			TxInpoints:    txInpoints,
 		}
 
+		// At utxostore_laneMigration shadow block assembly builds its subtrees' lane bitmaps from
+		// the position the create gave the record. A record without one hands over 0, which block
+		// assembly counts and still mines.
+		if v.laneShadow() {
+			blockAssemblyData.LanePosition = txMetaData.LanePosition
+		}
+
 		// On the Kafka ingest path a queue-full shed is worth waiting out rather
 		// than dropping: ErrThresholdExceeded is a queue-depth condition
 		// independent of this transaction, and block assembly drains a batch per
@@ -2956,7 +2963,7 @@ func (v *Validator) sendToBlockAssembler(ctx context.Context, bData *blockassemb
 	v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
 	// }
 
-	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.TxInpoints); err != nil {
+	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.TxInpoints, bData.LanePosition); err != nil {
 		// A queue-full shed must keep its resource-exhausted classification so it
 		// surfaces as ResourceExhausted (retry gate skips it) rather than being
 		// masked as a generic service fault (Internal). Every other failure is a

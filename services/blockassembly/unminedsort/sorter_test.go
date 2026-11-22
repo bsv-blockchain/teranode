@@ -607,7 +607,7 @@ func TestFileSource_ChecksHeaderCount(t *testing.T) {
 
 	require.NoError(t, os.Truncate(s.runs[0], runHeaderSize))
 
-	fs, err := openFileSource(s.runs[0], false)
+	fs, err := openFileSource(s.runs[0], false, false)
 	require.NoError(t, err)
 
 	defer fs.close()
@@ -636,7 +636,7 @@ func TestFileSource_RejectsRecordsBeyondHeaderCount(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	fs, err := openFileSource(s.runs[0], false)
+	fs, err := openFileSource(s.runs[0], false, false)
 	require.NoError(t, err)
 
 	defer fs.close()

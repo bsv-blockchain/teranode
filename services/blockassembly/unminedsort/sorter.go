@@ -62,6 +62,11 @@ type Options struct {
 
 	// SortWorkers bounds the goroutines sorting a buffer; 0 means GOMAXPROCS.
 	SortWorkers int
+	// WithPositions carries each transaction's own lane position (util/lane)
+	// through the sort, at utxostore_laneMigration shadow: 8 bytes more per
+	// buffered record and per record in a run. When false, every drained
+	// transaction gets position 0, and nothing is buffered or written for it.
+	WithPositions bool
 }
 
 // record is one buffered transaction. seq is its position in the buffer at
@@ -80,11 +85,15 @@ type batchBuf struct {
 	recs  []record
 	arena []byte
 	offs  []uint64
+	// positions[seq] is the lane position of the record with seq i, only used
+	// WithPositions.
+	positions []uint64
 }
 
 func (b *batchBuf) reset(withInpoints bool) {
 	b.recs = b.recs[:0]
 	b.arena = b.arena[:0]
+	b.positions = b.positions[:0]
 
 	if withInpoints {
 		b.offs = append(b.offs[:0], 0)
@@ -93,7 +102,17 @@ func (b *batchBuf) reset(withInpoints bool) {
 
 // bytes is the memory the buffered records and their inpoints take.
 func (b *batchBuf) bytes() int {
-	return len(b.recs)*recordSize + len(b.arena) + len(b.offs)*8
+	return len(b.recs)*recordSize + len(b.arena) + len(b.offs)*8 + len(b.positions)*8
+}
+
+// position returns the lane position of the record with seq, or 0 when the
+// buffer keeps none.
+func (b *batchBuf) position(seq uint32) uint64 {
+	if int(seq) >= len(b.positions) {
+		return 0
+	}
+
+	return b.positions[seq]
 }
 
 func (b *batchBuf) inpoints(seq uint32) []byte {
@@ -240,6 +259,12 @@ func (s *Sorter) buffered() int {
 // Add buffers one transaction. inpoints is ignored unless the sorter was
 // created WithInpoints; nil means no inpoints.
 func (s *Sorter) Add(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg.TxInpoints) error {
+	return s.AddAt(createdAt, node, inpoints, 0)
+}
+
+// AddAt is Add for a transaction with its own lane position, which is ignored
+// unless the sorter was created WithPositions; 0 means none.
+func (s *Sorter) AddAt(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg.TxInpoints, position uint64) error {
 	if s.drained {
 		return errors.NewProcessingError("unminedsort: Add after Drain")
 	}
@@ -263,6 +288,10 @@ func (s *Sorter) Add(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg
 		}
 
 		b.offs = append(b.offs, uint64(len(b.arena)))
+	}
+
+	if s.opts.WithPositions {
+		b.positions = append(b.positions, position)
 	}
 
 	if len(s.dirs) > 0 && (len(b.recs) >= s.opts.BufferRecords || b.bytes() >= s.bufferBytes) {
@@ -404,6 +433,10 @@ func (s *Sorter) writeRun(b *batchBuf, path string) error {
 			scratch = append(scratch, inp...)
 		}
 
+		if s.opts.WithPositions {
+			scratch = binary.LittleEndian.AppendUint64(scratch, b.position(rec.seq))
+		}
+
 		prev = rec.createdAt
 
 		if _, err = w.Write(scratch); err != nil {
@@ -493,6 +526,7 @@ type entry struct {
 	createdAt int64
 	node      subtreepkg.Node
 	inpoints  []byte
+	position  uint64
 }
 
 type fileSource struct {
@@ -502,19 +536,20 @@ type fileSource struct {
 	prev  int64
 	inp   []byte
 	withI bool
+	withP bool
 
 	// want is the record count from the run's header; read counts the
 	// records read so far.
 	want, read uint64
 }
 
-func openFileSource(path string, withInpoints bool) (*fileSource, error) {
+func openFileSource(path string, withInpoints, withPositions bool) (*fileSource, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, errors.NewStorageError("unminedsort: opening run %s", path, err)
 	}
 
-	fs := &fileSource{f: f, r: bufio.NewReaderSize(f, ioBufferSize), withI: withInpoints}
+	fs := &fileSource{f: f, r: bufio.NewReaderSize(f, ioBufferSize), withI: withInpoints, withP: withPositions}
 
 	var header [runHeaderSize]byte
 	if _, err = io.ReadFull(fs.r, header[:]); err != nil {
@@ -578,6 +613,17 @@ func (fs *fileSource) next() (bool, error) {
 		}
 	}
 
+	fs.cur.position = 0
+
+	if fs.withP {
+		var b [8]byte
+		if _, err = io.ReadFull(fs.r, b[:]); err != nil {
+			return false, fs.readErr(err)
+		}
+
+		fs.cur.position = binary.LittleEndian.Uint64(b[:])
+	}
+
 	fs.read++
 
 	return true, nil
@@ -616,6 +662,8 @@ func (ms *memSource) next() (bool, error) {
 	if ms.withI {
 		ms.cur.inpoints = ms.b.inpoints(rec.seq)
 	}
+
+	ms.cur.position = ms.b.position(rec.seq)
 
 	return true, nil
 }
@@ -690,7 +738,7 @@ func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo
 	}()
 
 	for _, path := range s.runs {
-		fs, err := openFileSource(path, s.opts.WithInpoints)
+		fs, err := openFileSource(path, s.opts.WithInpoints, s.opts.WithPositions)
 		if err != nil {
 			return err
 		}
@@ -764,8 +812,9 @@ func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo
 
 		pairs = append(pairs, txPair{
 			tx: utxo.UnminedTransaction{
-				TxInpoints: inpoints,
-				CreatedAt:  int(e.createdAt),
+				TxInpoints:   inpoints,
+				CreatedAt:    int(e.createdAt),
+				LanePosition: e.position,
 			},
 			node: e.node,
 		})

@@ -14,6 +14,7 @@ import (
 type TxBatch struct {
 	nodes      []subtree.Node          // All transaction nodes in this batch
 	txInpoints []*subtree.TxInpoints   // Corresponding inpoints for each node
+	positions  []uint64                // Own lane position of each node (util/lane), 0 for none; nil when the batch carries none
 	time       int64                   // Single timestamp for the entire batch
 	next       atomic.Pointer[TxBatch] // Pointer to next batch in queue
 }

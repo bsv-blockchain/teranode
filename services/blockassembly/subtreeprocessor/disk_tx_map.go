@@ -45,6 +45,15 @@ const (
 	recordMagic      = 0xA5
 	recordHeaderSize = 5 // magic + uint32 payload length
 
+	// recordMagicPositioned starts a record whose payload ends with the tx's
+	// 8-byte lane position (util/lane, little-endian), after the serialized
+	// TxInpoints. Only utxostore_laneMigration shadow writes one, so without
+	// lanes every record is as before. The payload length counts the position.
+	recordMagicPositioned = 0xA6
+
+	// recordPositionSize is the size of the lane position a payload may end with.
+	recordPositionSize = 8
+
 	// indexBytesPerEntry is the measured RAM cost of one index entry (Go map
 	// of 32-byte key to uint64 value, averaged over map growth), for Stats.
 	indexBytesPerEntry = 80
@@ -429,11 +438,17 @@ func (m *DiskTxMap) serializePayload(hash chainhash.Hash, inpoints *subtreepkg.T
 // lock; a record whose entry loses a race to a duplicate is dead space until
 // the generation is cleared.
 func (m *DiskTxMap) appendPayload(g *generation, hash chainhash.Hash, payload []byte) int64 {
+	return m.appendRecord(g, hash, payload, recordMagic)
+}
+
+// appendRecord is appendPayload for a record started by magic: recordMagic, or
+// recordMagicPositioned when the payload ends with a lane position.
+func (m *DiskTxMap) appendRecord(g *generation, hash chainhash.Hash, payload []byte, magic byte) int64 {
 	logIdx := g.logOf(hash)
 	l := &g.logs[logIdx]
 
 	l.mu.Lock()
-	offset := m.appendLocked(l, logIdx, payload)
+	offset := m.appendLocked(l, logIdx, payload, magic)
 	m.afterAppendUnlock(g, logIdx)
 
 	return offset
@@ -441,7 +456,7 @@ func (m *DiskTxMap) appendPayload(g *generation, hash chainhash.Hash, payload []
 
 // appendLocked appends one record to segment l and returns its offset, or -1
 // (recorded as an error) past the addressable offset. The caller holds l.mu.
-func (m *DiskTxMap) appendLocked(l *payloadLog, logIdx int, payload []byte) int64 {
+func (m *DiskTxMap) appendLocked(l *payloadLog, logIdx int, payload []byte, magic byte) int64 {
 	offset := l.flushed + int64(len(l.inflight)) + int64(len(l.buf))
 	if offset > maxLogOffset {
 		m.recordErr(errors.NewStorageError("disk tx map: log segment %d exceeds the maximum offset", logIdx))
@@ -449,7 +464,7 @@ func (m *DiskTxMap) appendLocked(l *payloadLog, logIdx int, payload []byte) int6
 	}
 
 	var header [recordHeaderSize]byte
-	header[0] = recordMagic
+	header[0] = magic
 	binary.LittleEndian.PutUint32(header[1:], uint32(len(payload))) //nolint:gosec // a TxInpoints is far below 4GB
 
 	if l.buf == nil {
@@ -543,9 +558,15 @@ func (m *DiskTxMap) writeInflight(g *generation, logIdx int) {
 	l.spare = data
 }
 
-// readPayload returns the payload of the record at offset in segment logIdx
-// of g. The caller has pinned g (pinEntry), so its mappings stay valid.
-func readPayload(g *generation, logIdx int, offset int64) ([]byte, error) {
+// isRecordMagic reports whether b starts a record.
+func isRecordMagic(b byte) bool {
+	return b == recordMagic || b == recordMagicPositioned
+}
+
+// readRecord returns the payload of the record at offset in segment logIdx of g, and the magic
+// it starts with, which says whether the payload ends with a lane position. The caller has pinned
+// g (pinEntry), so its mappings stay valid.
+func readRecord(g *generation, logIdx int, offset int64) ([]byte, byte, error) {
 	l := &g.logs[logIdx]
 
 	l.mu.Lock()
@@ -559,17 +580,17 @@ func readPayload(g *generation, logIdx int, offset int64) ([]byte, error) {
 
 		if rel+recordHeaderSize > int64(len(mem)) {
 			l.mu.Unlock()
-			return nil, errors.NewStorageError("disk tx map: record at %d on log segment %d is past the end of the log", offset, logIdx)
+			return nil, 0, errors.NewStorageError("disk tx map: record at %d on log segment %d is past the end of the log", offset, logIdx)
 		}
 
-		payload, err := parseRecord(mem[rel:], logIdx, offset)
+		payload, magic, err := parseRecord(mem[rel:], logIdx, offset)
 		if err == nil {
 			payload = append([]byte(nil), payload...)
 		}
 
 		l.mu.Unlock()
 
-		return payload, err
+		return payload, magic, err
 	}
 
 	f, windows, written := l.file, l.windows, l.written
@@ -577,7 +598,7 @@ func readPayload(g *generation, logIdx int, offset int64) ([]byte, error) {
 	for _, r := range l.lost {
 		if offset >= r[0] && offset < r[1] {
 			l.mu.Unlock()
-			return nil, errors.NewStorageError("disk tx map: no record at %d on log segment %d (a lost write)", offset, logIdx)
+			return nil, 0, errors.NewStorageError("disk tx map: no record at %d on log segment %d (a lost write)", offset, logIdx)
 		}
 	}
 
@@ -586,15 +607,15 @@ func readPayload(g *generation, logIdx int, offset int64) ([]byte, error) {
 	// Bytes below flushed never change, so they are read unlocked. Past
 	// written they were lost to a failed write.
 	if offset+recordHeaderSize > written {
-		return nil, errors.NewStorageError("disk tx map: no record at %d on log segment %d (a lost write)", offset, logIdx)
+		return nil, 0, errors.NewStorageError("disk tx map: no record at %d on log segment %d (a lost write)", offset, logIdx)
 	}
 
 	if w, rel := offset/mapWindowSize, offset%mapWindowSize; w < int64(len(windows)) && rel+recordHeaderSize <= mapWindowSize {
 		window := windows[w]
 		end := rel + recordHeaderSize + int64(binary.LittleEndian.Uint32(window[rel+1:rel+recordHeaderSize]))
 
-		if window[rel] != recordMagic || offset+(end-rel) > written {
-			return nil, errors.NewStorageError("disk tx map: no record at %d on log segment %d (a lost write)", offset, logIdx)
+		if !isRecordMagic(window[rel]) || offset+(end-rel) > written {
+			return nil, 0, errors.NewStorageError("disk tx map: no record at %d on log segment %d (a lost write)", offset, logIdx)
 		}
 
 		if end <= mapWindowSize {
@@ -608,13 +629,13 @@ func readPayload(g *generation, logIdx int, offset int64) ([]byte, error) {
 
 	n, err := f.ReadAt(buf, offset)
 	if err != nil && !(errors.Is(err, io.EOF) && n >= recordHeaderSize) {
-		return nil, errors.NewStorageError("disk tx map: reading record at %d on log segment %d", offset, logIdx, err)
+		return nil, 0, errors.NewStorageError("disk tx map: reading record at %d on log segment %d", offset, logIdx, err)
 	}
 
 	buf = buf[:n]
 
-	if buf[0] != recordMagic {
-		return nil, errors.NewStorageError("disk tx map: no record at %d on log segment %d (a lost write)", offset, logIdx)
+	if !isRecordMagic(buf[0]) {
+		return nil, 0, errors.NewStorageError("disk tx map: no record at %d on log segment %d (a lost write)", offset, logIdx)
 	}
 
 	size := int(binary.LittleEndian.Uint32(buf[1:recordHeaderSize]))
@@ -624,31 +645,56 @@ func readPayload(g *generation, logIdx int, offset int64) ([]byte, error) {
 
 	// Don't size an allocation from a length the file doesn't back.
 	if offset+int64(recordHeaderSize+size) > written {
-		return nil, errors.NewStorageError("disk tx map: truncated record at %d on log segment %d", offset, logIdx)
+		return nil, 0, errors.NewStorageError("disk tx map: truncated record at %d on log segment %d", offset, logIdx)
 	}
 
 	full := make([]byte, recordHeaderSize+size)
 	copy(full, buf)
 
 	if _, err = f.ReadAt(full[len(buf):], offset+int64(len(buf))); err != nil {
-		return nil, errors.NewStorageError("disk tx map: reading record at %d on log segment %d", offset, logIdx, err)
+		return nil, 0, errors.NewStorageError("disk tx map: reading record at %d on log segment %d", offset, logIdx, err)
 	}
 
 	return parseRecord(full, logIdx, offset)
 }
 
-// parseRecord returns the payload of the record at the start of b.
-func parseRecord(b []byte, logIdx int, offset int64) ([]byte, error) {
-	if len(b) < recordHeaderSize || b[0] != recordMagic {
-		return nil, errors.NewStorageError("disk tx map: no record at %d on log segment %d (a lost write)", offset, logIdx)
+// parseRecord returns the payload and the magic of the record at the start of b.
+func parseRecord(b []byte, logIdx int, offset int64) ([]byte, byte, error) {
+	if len(b) < recordHeaderSize || !isRecordMagic(b[0]) {
+		return nil, 0, errors.NewStorageError("disk tx map: no record at %d on log segment %d (a lost write)", offset, logIdx)
 	}
 
 	size := int(binary.LittleEndian.Uint32(b[1:recordHeaderSize]))
-	if size == 0 || recordHeaderSize+size > len(b) {
-		return nil, errors.NewStorageError("disk tx map: truncated or empty record at %d on log segment %d", offset, logIdx)
+	if size == 0 || recordHeaderSize+size > len(b) || (b[0] == recordMagicPositioned && size <= recordPositionSize) {
+		return nil, 0, errors.NewStorageError("disk tx map: truncated or empty record at %d on log segment %d", offset, logIdx)
 	}
 
-	return b[recordHeaderSize : recordHeaderSize+size], nil
+	return b[recordHeaderSize : recordHeaderSize+size], b[0], nil
+}
+
+// splitPositioned returns the serialized TxInpoints of a payload and the lane position it ends
+// with, or 0 when its record, started by magic, keeps none.
+func splitPositioned(payload []byte, magic byte) ([]byte, uint64) {
+	if magic != recordMagicPositioned {
+		return payload, 0
+	}
+
+	cut := len(payload) - recordPositionSize
+
+	return payload[:cut], binary.LittleEndian.Uint64(payload[cut:])
+}
+
+// positionedPayload returns the payload stored for inpoints with the tx's lane position, and the
+// magic its record starts with: the serialized inpoints alone under recordMagic when position is
+// 0, or followed by the position under recordMagicPositioned. A TxInpoints that can't be
+// serialized is stored as serializePayload stores it, without the position.
+func (m *DiskTxMap) positionedPayload(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, position uint64) ([]byte, byte) {
+	payload := m.serializePayload(hash, inpoints)
+	if position == 0 || payload == nil {
+		return payload, recordMagic
+	}
+
+	return binary.LittleEndian.AppendUint64(payload, position), recordMagicPositioned
 }
 
 // pinEntry returns hash's entry and pins the generation it points into, so
@@ -698,6 +744,12 @@ func (m *DiskTxMap) waitForReaders(parity int) {
 // inpoints are not returned (no caller uses them): a duplicate returns nil,
 // false.
 func (m *DiskTxMap) SetIfNotExists(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) (*subtreepkg.TxInpoints, bool) {
+	return m.SetIfNotExistsAt(hash, inpoints, 0)
+}
+
+// SetIfNotExistsAt is SetIfNotExists keeping the tx's lane position in its record on disk, which
+// costs no RAM; 0 keeps none and is exactly SetIfNotExists.
+func (m *DiskTxMap) SetIfNotExistsAt(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, position uint64) (*subtreepkg.TxInpoints, bool) {
 	s := &m.shards[shardOf(hash)]
 
 	s.mu.Lock()
@@ -709,7 +761,9 @@ func (m *DiskTxMap) SetIfNotExists(hash chainhash.Hash, inpoints *subtreepkg.TxI
 
 	// Serialized and appended outside the lock; wasted only on a racing
 	// duplicate.
-	offset := m.appendPayload(m.gen.Load(), hash, m.serializePayload(hash, inpoints))
+	payload, magic := m.positionedPayload(hash, inpoints, position)
+
+	offset := m.appendRecord(m.gen.Load(), hash, payload, magic)
 	if offset < 0 {
 		return nil, false
 	}
@@ -859,6 +913,7 @@ func (m *DiskTxMap) MoveFrom(src *DiskTxMap, hashes []chainhash.Hash, wasSet []b
 
 	offsets := make([]int64, n)
 	payloads := make([][]byte, 0, 256)
+	magics := make([]byte, 0, 256)
 
 	for k := 0; k < numLogs; k++ {
 		group := bySeg[segStart[k]:segStart[k+1]]
@@ -867,6 +922,7 @@ func (m *DiskTxMap) MoveFrom(src *DiskTxMap, hashes []chainhash.Hash, wasSet []b
 		}
 
 		payloads = payloads[:0]
+		magics = magics[:0]
 		todo := group[:0:0]
 
 		for _, i := range group {
@@ -876,13 +932,14 @@ func (m *DiskTxMap) MoveFrom(src *DiskTxMap, hashes []chainhash.Hash, wasSet []b
 
 			sg := pinned[shardOf(hashes[i])]
 
-			payload, err := readPayload(sg, sg.logOf(hashes[i]), entryOffset(entries[i]))
+			payload, magic, err := readRecord(sg, sg.logOf(hashes[i]), entryOffset(entries[i]))
 			if err != nil {
 				src.recordErr(err)
 				return int(i), err
 			}
 
 			payloads = append(payloads, payload)
+			magics = append(magics, magic)
 			todo = append(todo, i)
 		}
 
@@ -894,7 +951,7 @@ func (m *DiskTxMap) MoveFrom(src *DiskTxMap, hashes []chainhash.Hash, wasSet []b
 		appended := 0
 
 		for j, i := range todo {
-			offsets[i] = m.appendLocked(l, k, payloads[j])
+			offsets[i] = m.appendLocked(l, k, payloads[j], magics[j])
 
 			if appended += recordHeaderSize + len(payloads[j]); appended >= logBufferSize {
 				m.afterAppendUnlock(dg, k)
@@ -966,21 +1023,72 @@ func (m *DiskTxMap) GetWithErr(hash chainhash.Hash) (*subtreepkg.TxInpoints, boo
 
 	defer unpin(s, g)
 
-	logIdx := g.logOf(hash)
-
-	payload, err := readPayload(g, logIdx, entryOffset(entry))
+	inpoints, _, err := m.readEntry(g, hash, entry)
 	if err != nil {
 		return nil, false, err
 	}
 
-	inpoints, err := subtreepkg.NewTxInpointsFromBytes(payload)
+	return inpoints, true, nil
+}
+
+// GetAtWithErr is GetWithErr that also returns the lane position kept with hash, or 0 when it
+// keeps none, from the same read.
+func (m *DiskTxMap) GetAtWithErr(hash chainhash.Hash) (*subtreepkg.TxInpoints, uint64, bool, error) {
+	s, g, entry, exists := m.pinEntry(hash)
+	if !exists {
+		return nil, 0, false, nil
+	}
+
+	defer unpin(s, g)
+
+	inpoints, position, err := m.readEntry(g, hash, entry)
 	if err != nil {
-		return nil, false, errors.NewStorageError("disk tx map: decoding inpoints of %s on log segment %d", hash.String(), logIdx, err)
+		return nil, 0, false, err
+	}
+
+	return inpoints, position, true, nil
+}
+
+// Position returns the lane position kept with hash, or 0 when the map does not hold hash, keeps
+// no position for it, or cannot read its record (an error recorded on the map, as Get records it).
+func (m *DiskTxMap) Position(hash chainhash.Hash) uint64 {
+	s, g, entry, exists := m.pinEntry(hash)
+	if !exists {
+		return 0
+	}
+
+	defer unpin(s, g)
+
+	payload, magic, err := readRecord(g, g.logOf(hash), entryOffset(entry))
+	if err != nil {
+		m.recordErr(err)
+		return 0
+	}
+
+	_, position := splitPositioned(payload, magic)
+
+	return position
+}
+
+// readEntry reads and decodes the record of hash's entry in g, which the caller has pinned.
+func (m *DiskTxMap) readEntry(g *generation, hash chainhash.Hash, entry uint64) (*subtreepkg.TxInpoints, uint64, error) {
+	logIdx := g.logOf(hash)
+
+	payload, magic, err := readRecord(g, logIdx, entryOffset(entry))
+	if err != nil {
+		return nil, 0, err
+	}
+
+	serialized, position := splitPositioned(payload, magic)
+
+	inpoints, err := subtreepkg.NewTxInpointsFromBytes(serialized)
+	if err != nil {
+		return nil, 0, errors.NewStorageError("disk tx map: decoding inpoints of %s on log segment %d", hash.String(), logIdx, err)
 	}
 
 	inpoints.SubtreeIndex = entrySubtreeIndex(entry)
 
-	return &inpoints, true, nil
+	return &inpoints, position, nil
 }
 
 // Delete removes a hash from the map, reporting whether it was there. Its
@@ -1011,7 +1119,15 @@ func (m *DiskTxMap) Length() int {
 
 // Set stores inpoints for a hash, overwriting any existing entry.
 func (m *DiskTxMap) Set(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) {
-	offset := m.appendPayload(m.gen.Load(), hash, m.serializePayload(hash, inpoints))
+	m.SetAt(hash, inpoints, 0)
+}
+
+// SetAt is Set keeping the tx's lane position in its record on disk; 0 keeps none and is exactly
+// Set.
+func (m *DiskTxMap) SetAt(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, position uint64) {
+	payload, magic := m.positionedPayload(hash, inpoints, position)
+
+	offset := m.appendRecord(m.gen.Load(), hash, payload, magic)
 	if offset < 0 {
 		return
 	}
@@ -1022,10 +1138,10 @@ func (m *DiskTxMap) Set(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) {
 	s.mu.Unlock()
 }
 
-// SetBatch stores each tx's inpoints like Set.
+// SetBatch stores each tx's inpoints like Set, with its lane position when it has one.
 func (m *DiskTxMap) SetBatch(txs []*utxostore.UnminedTransaction) {
 	for _, tx := range txs {
-		m.Set(tx.Hash, tx.TxInpoints)
+		m.SetAt(tx.Hash, tx.TxInpoints, tx.LanePosition)
 	}
 }
 

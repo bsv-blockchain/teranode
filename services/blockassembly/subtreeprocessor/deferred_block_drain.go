@@ -128,6 +128,7 @@ func (stp *SubtreeProcessor) addDrainedBatches(ctx context.Context, batches []*T
 
 	nodes := make([]subtreepkg.Node, 0, total)
 	inpoints := make([]*subtreepkg.TxInpoints, 0, total)
+	positions := drainedPositions(batches, total)
 
 	for _, batch := range batches {
 		nodes = append(nodes, batch.nodes...)
@@ -136,13 +137,13 @@ func (stp *SubtreeProcessor) addDrainedBatches(ctx context.Context, batches []*T
 
 	for _, ip := range inpoints {
 		if ip == nil {
-			return stp.addDrainedNodesSequentially(nodes, inpoints, drain.transactionMap, drain.losingTxHashesMap)
+			return stp.addDrainedNodesSequentially(nodes, inpoints, positions, drain.transactionMap, drain.losingTxHashesMap)
 		}
 	}
 
 	keep := filterDrainedNodes(nodes, drain.transactionMap, drain.losingTxHashesMap)
 
-	setIfNotExistsInOrder(stp.currentTxMap, nodes, inpoints, keep)
+	setIfNotExistsInOrder(stp.currentTxMap, nodes, inpoints, positions, keep)
 
 	// Compact in place: nodes is not read again, and each write lands at or
 	// before the position being read.
@@ -163,12 +164,34 @@ func (stp *SubtreeProcessor) addDrainedBatches(ctx context.Context, batches []*T
 	return len(kept), nil
 }
 
+// drainedPositions returns the lane positions of the batches' transactions in batch order, total
+// of them, or nil when no batch carries any, as at utxostore_laneMigration off.
+func drainedPositions(batches []*TxBatch, total int) []uint64 {
+	var positions []uint64
+
+	at := 0
+
+	for _, batch := range batches {
+		if batch.positions != nil {
+			if positions == nil {
+				positions = make([]uint64, total)
+			}
+
+			copy(positions[at:], batch.positions)
+		}
+
+		at += len(batch.nodes)
+	}
+
+	return positions
+}
+
 // addDrainedNodesSequentially is dequeueDuringBlockMovement's per-tx loop
 // for nodes already taken from the queue, without conflicting hashes. It
 // reports how many it placed in subtrees: a duplicate that placeNode skipped
 // is not counted, and a node that placeNode put in a subtree is counted even
 // when completing that subtree failed.
-func (stp *SubtreeProcessor) addDrainedNodesSequentially(nodes []subtreepkg.Node, inpoints []*subtreepkg.TxInpoints,
+func (stp *SubtreeProcessor) addDrainedNodesSequentially(nodes []subtreepkg.Node, inpoints []*subtreepkg.TxInpoints, positions []uint64,
 	transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap) (int, error) {
 	placed := 0
 
@@ -181,7 +204,12 @@ func (stp *SubtreeProcessor) addDrainedNodesSequentially(nodes []subtreepkg.Node
 			continue
 		}
 
-		wasPlaced, err := stp.placeNode(node, inpoints[i], false)
+		var position uint64
+		if positions != nil {
+			position = positions[i]
+		}
+
+		wasPlaced, err := stp.placeNodeAt(node, inpoints[i], position, false)
 		if err != nil {
 			stp.logger.Errorf("[SubtreeProcessor] error adding node %s during sequential remainder processing: %v", node.Hash.String(), err)
 		}
@@ -218,7 +246,9 @@ func filterDrainedNodes(nodes []subtreepkg.Node, transactionMap *SortedHashSet, 
 // same hash always go to the same worker, which walks its nodes in input
 // order, so the first copy is the one that is inserted and kept, as it is
 // when the nodes are added one by one.
-func setIfNotExistsInOrder(m TxInpointsMap, nodes []subtreepkg.Node, inpoints []*subtreepkg.TxInpoints, keep []bool) {
+//
+// positions, when not nil, holds each node's lane position, kept with its inpoints.
+func setIfNotExistsInOrder(m TxInpointsMap, nodes []subtreepkg.Node, inpoints []*subtreepkg.TxInpoints, positions []uint64, keep []bool) {
 	workers := runtime.GOMAXPROCS(0)
 
 	owned := make([][]int, workers)
@@ -238,7 +268,12 @@ func setIfNotExistsInOrder(m TxInpointsMap, nodes []subtreepkg.Node, inpoints []
 
 		wg.Go(func() {
 			for _, i := range idxs {
-				if _, wasSet := m.SetIfNotExists(nodes[i].Hash, inpoints[i]); !wasSet {
+				var position uint64
+				if positions != nil {
+					position = positions[i]
+				}
+
+				if _, wasSet := m.SetIfNotExistsAt(nodes[i].Hash, inpoints[i], position); !wasSet {
 					keep[i] = false
 				}
 			}

@@ -1273,7 +1273,7 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 		}
 
 		blockAssemblyClient := blockassembly.NewMock()
-		blockAssemblyClient.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+		blockAssemblyClient.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 		require.NoError(t, err)
@@ -1302,7 +1302,7 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 		}
 
 		blockAssemblyClient := blockassembly.NewMock()
-		blockAssemblyClient.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+		blockAssemblyClient.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 		require.NoError(t, err)

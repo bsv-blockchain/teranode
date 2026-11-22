@@ -25,6 +25,11 @@ type Data struct {
 
 	// Parents is a list of parent transaction hashes
 	TxInpoints subtree.TxInpoints
+
+	// LanePosition is the transaction's own lane position (util/lane), or 0 for none. Only the
+	// validator's handoff at utxostore_laneMigration shadow sets it. Bytes and NewFromBytes do not
+	// carry it.
+	LanePosition uint64
 }
 
 // NewFromBytes deserializes a byte array into a Data structure.

@@ -23,11 +23,15 @@ import (
 // offset of the record. The index and the chunks hold no pointers, so the GC does
 // not scan them, and there is no per-tx allocation to keep alive.
 //
-// A record is [2B subtree index][1B flags][4B payload length][payload]. The
-// payload is the TxInpoints.Serialize wire format, so the stored bytes can be
-// appended to subtree meta, or copied to the other half of the double buffer,
-// without decoding them. The flags only exist to give back exactly what was
-// stored for the shapes the wire format cannot tell apart (see the flag consts).
+// A record is [2B subtree index][1B flags][4B payload length][payload], then,
+// only when the recordHasPosition flag is set, the tx's 8-byte lane position
+// (util/lane, little-endian). The payload is the TxInpoints.Serialize wire
+// format, so the stored bytes can be appended to subtree meta, or copied to the
+// other half of the double buffer, without decoding them; the payload length
+// does not count the position. The flags only exist to give back exactly what
+// was stored for the shapes the wire format cannot tell apart (see the flag
+// consts), and to say a position follows. A position is kept only at
+// utxostore_laneMigration shadow, so without lanes every record is as before.
 //
 // Records are append-only. Set over an existing hash and Delete only touch the
 // index and leave the old record behind; Clear releases all of it, so the retired
@@ -94,7 +98,13 @@ const (
 	// decodes to parent hashes without vouts, which is what failed to serialize in
 	// the first place.
 	recordNoVouts
+	// recordHasPosition: the record ends with the tx's 8-byte lane position, after
+	// the payload, which its length does not count.
+	recordHasPosition
 )
+
+// txInpointsPositionSize is the size of the lane position a record may end with.
+const txInpointsPositionSize = 8
 
 var errNilInpoints = errors.NewProcessingError("the stored inpoints are nil")
 
@@ -129,7 +139,27 @@ func (b *txInpointsBucket) record(h uint64) []byte {
 	chunk, off := b.chunks[h>>32], uint32(h)
 	n := binary.LittleEndian.Uint32(chunk[off+3:])
 
+	if chunk[off+2]&recordHasPosition != 0 {
+		n += txInpointsPositionSize
+	}
+
 	return chunk[off : off+txInpointsRecordHeader+n]
+}
+
+// recordPayload returns the payload of a record, without the lane position that may follow it.
+func recordPayload(rec []byte) []byte {
+	n := binary.LittleEndian.Uint32(rec[3:])
+
+	return rec[txInpointsRecordHeader : txInpointsRecordHeader+n]
+}
+
+// recordPosition returns the lane position a record ends with, or 0 when it keeps none.
+func recordPosition(rec []byte) uint64 {
+	if rec[2]&recordHasPosition == 0 {
+		return 0
+	}
+
+	return binary.LittleEndian.Uint64(rec[len(rec)-txInpointsPositionSize:])
 }
 
 // copyRecord appends the record of hash to dst and reports whether hash exists.
@@ -176,14 +206,29 @@ func (b *txInpointsBucket) putRecord(hash chainhash.Hash, rec []byte) {
 // put encodes inpoints into the arena and indexes them under hash; the caller
 // holds the bucket lock.
 func (b *txInpointsBucket) put(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) {
+	b.putAt(hash, inpoints, 0)
+}
+
+// putAt is put keeping the tx's lane position after the payload; position 0 keeps none, and the
+// record is then exactly what put writes.
+func (b *txInpointsBucket) putAt(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, position uint64) {
 	payload, flags := payloadOf(inpoints)
 
 	if testHookAfterSizing != nil {
 		testHookAfterSizing(inpoints)
 	}
 
-	h, rec := b.alloc(txInpointsRecordHeader + payload)
-	writeRecord(rec, inpoints, flags)
+	if position == 0 {
+		h, rec := b.alloc(txInpointsRecordHeader + payload)
+		writeRecord(rec, inpoints, flags)
+		b.index().Put(hash, h)
+
+		return
+	}
+
+	h, rec := b.alloc(txInpointsRecordHeader + payload + txInpointsPositionSize)
+	writeRecord(rec[:txInpointsRecordHeader+payload], inpoints, flags|recordHasPosition)
+	binary.LittleEndian.PutUint64(rec[txInpointsRecordHeader+payload:], position)
 	b.index().Put(hash, h)
 }
 
@@ -267,7 +312,7 @@ func decodeRecord(rec []byte) *subtreepkg.TxInpoints {
 	}
 
 	subtreeIndex := int16(binary.LittleEndian.Uint16(rec)) //nolint:gosec // the bits written by writeRecord
-	payload := rec[txInpointsRecordHeader:]
+	payload := recordPayload(rec)
 
 	parentCount := int(binary.LittleEndian.Uint32(payload))
 	if parentCount == 0 {
@@ -375,7 +420,52 @@ func (s *SplitTxInpointsMap) appendPayload(dst []byte, hash chainhash.Hash, requ
 		return dst, true, subtreepkg.ErrCannotSerializeSubtreeNotSet
 	}
 
-	return append(dst, rec[txInpointsRecordHeader:]...), true, nil
+	return append(dst, recordPayload(rec)...), true, nil
+}
+
+// AppendMetaInpointsAt is AppendMetaInpoints that also returns the lane position kept with hash,
+// or 0 when it keeps none, read under the same lock, so the subtree meta and the subtree's lane
+// bitmaps are built in one pass over the map.
+func (s *SplitTxInpointsMap) AppendMetaInpointsAt(dst []byte, hash chainhash.Hash) (out []byte, position uint64, found bool, err error) {
+	b := s.bucket(hash)
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	h, ok := b.handle(hash)
+	if !ok {
+		return dst, 0, false, nil
+	}
+
+	rec := b.record(h)
+	position = recordPosition(rec)
+
+	switch flags := rec[2]; {
+	case flags&recordNil != 0:
+		return dst, position, true, errNilInpoints
+	case flags&recordNoVouts != 0:
+		return dst, position, true, subtreepkg.ErrParentTxHashesMismatch
+	case flags&recordParentsSet == 0:
+		return dst, position, true, subtreepkg.ErrCannotSerializeSubtreeNotSet
+	}
+
+	return append(dst, recordPayload(rec)...), position, true, nil
+}
+
+// Position returns the lane position kept with hash, or 0 when the map does not hold hash or
+// keeps no position for it.
+func (s *SplitTxInpointsMap) Position(hash chainhash.Hash) uint64 {
+	b := s.bucket(hash)
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	h, ok := b.handle(hash)
+	if !ok {
+		return 0
+	}
+
+	return recordPosition(b.record(h))
 }
 
 func (s *SplitTxInpointsMap) Length() int {
@@ -397,15 +487,26 @@ func (s *SplitTxInpointsMap) Length() int {
 }
 
 func (s *SplitTxInpointsMap) Set(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) {
+	s.SetAt(hash, inpoints, 0)
+}
+
+// SetAt is Set keeping the tx's lane position; 0 keeps none and is exactly Set.
+func (s *SplitTxInpointsMap) SetAt(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, position uint64) {
 	b := s.bucket(hash)
 
 	b.mu.Lock()
 	defer b.mu.Unlock() // put can panic (writeRecord), and block assembly recovers
 
-	b.put(hash, inpoints)
+	b.putAt(hash, inpoints, position)
 }
 
 func (s *SplitTxInpointsMap) SetIfNotExists(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) (*subtreepkg.TxInpoints, bool) {
+	return s.SetIfNotExistsAt(hash, inpoints, 0)
+}
+
+// SetIfNotExistsAt is SetIfNotExists keeping the tx's lane position; 0 keeps none and is exactly
+// SetIfNotExists. A hash already in the map keeps the position it has.
+func (s *SplitTxInpointsMap) SetIfNotExistsAt(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, position uint64) (*subtreepkg.TxInpoints, bool) {
 	b := s.bucket(hash)
 
 	var scratch [txInpointsScratch]byte
@@ -418,7 +519,7 @@ func (s *SplitTxInpointsMap) SetIfNotExists(hash chainhash.Hash, inpoints *subtr
 			return append(scratch[:0], b.record(h)...), false
 		}
 
-		b.put(hash, inpoints)
+		b.putAt(hash, inpoints, position)
 
 		return nil, true
 	}()
@@ -575,6 +676,17 @@ func (s *SplitTxInpointsMap) ParallelBulkSetIfNotExists(
 	inpoints []*subtreepkg.TxInpoints,
 	wasSet []bool,
 ) {
+	s.ParallelBulkSetIfNotExistsAt(hashes, inpoints, nil, wasSet)
+}
+
+// ParallelBulkSetIfNotExistsAt is ParallelBulkSetIfNotExists keeping positions[i], the lane
+// position of hashes[i], with each inserted entry; a nil positions keeps none.
+func (s *SplitTxInpointsMap) ParallelBulkSetIfNotExistsAt(
+	hashes []chainhash.Hash,
+	inpoints []*subtreepkg.TxInpoints,
+	positions []uint64,
+	wasSet []bool,
+) {
 	n := len(hashes)
 	if n == 0 {
 		return
@@ -585,6 +697,9 @@ func (s *SplitTxInpointsMap) ParallelBulkSetIfNotExists(
 	}
 	if wasSet == nil || len(wasSet) != n {
 		panic("SplitTxInpointsMap.ParallelBulkSetIfNotExists: len(wasSet) must equal len(hashes)")
+	}
+	if positions != nil && len(positions) != n {
+		panic("SplitTxInpointsMap.ParallelBulkSetIfNotExists: len(positions) must equal len(hashes)")
 	}
 
 	// Phase 1: Group indices by bucket (O(N), no locks)
@@ -617,7 +732,12 @@ func (s *SplitTxInpointsMap) ParallelBulkSetIfNotExists(
 		defer b.mu.Unlock()
 		for _, idx := range indices {
 			if !b.has(hashes[idx]) {
-				b.put(hashes[idx], inpoints[idx])
+				var position uint64
+				if positions != nil {
+					position = positions[idx]
+				}
+
+				b.putAt(hashes[idx], inpoints[idx], position)
 				wasSet[idx] = true
 			} else {
 				// Explicitly record the existing-key result so the contract
@@ -669,6 +789,12 @@ func (s *SplitTxInpointsMap) BucketFor(hash chainhash.Hash) uint16 {
 // min(len(keys), len(values)); wasInserted[i] is true if keys[i] was newly
 // added, false if it already existed.
 func (s *SplitTxInpointsMap) PutMultiBucketTxInpoints(bucket uint16, keys []chainhash.Hash, values []*subtreepkg.TxInpoints) []bool {
+	return s.PutMultiBucketTxInpointsAt(bucket, keys, values, nil)
+}
+
+// PutMultiBucketTxInpointsAt is PutMultiBucketTxInpoints keeping positions[i], the lane position of
+// keys[i], with each inserted entry; a nil positions keeps none.
+func (s *SplitTxInpointsMap) PutMultiBucketTxInpointsAt(bucket uint16, keys []chainhash.Hash, values []*subtreepkg.TxInpoints, positions []uint64) []bool {
 	n := len(keys)
 	if len(values) < n {
 		n = len(values)
@@ -682,7 +808,12 @@ func (s *SplitTxInpointsMap) PutMultiBucketTxInpoints(bucket uint16, keys []chai
 	defer b.mu.Unlock() // put can panic (writeRecord), and block assembly recovers
 	for i := 0; i < n; i++ {
 		if !b.has(keys[i]) {
-			b.put(keys[i], values[i])
+			var position uint64
+			if i < len(positions) {
+				position = positions[i]
+			}
+
+			b.putAt(keys[i], values[i], position)
 			wasInserted[i] = true
 		}
 	}

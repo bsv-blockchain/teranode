@@ -21,6 +21,10 @@ type UnminedTransaction struct {
 	Skip         bool
 	UnminedSince int
 	BlockIDs     []uint32
+	// LanePosition is the record's own lane position (util/lane), or 0 for none. Only an iterator
+	// asked for it fills it, at utxostore_laneMigration shadow, for block assembly's reload: the
+	// pool keeps it so the lane bitmaps of the subtrees the reload builds hold the tx.
+	LanePosition uint64
 }
 
 // InconsistentTxRecord is a lightweight record used by the consistency scan.

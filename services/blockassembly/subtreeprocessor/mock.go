@@ -242,6 +242,12 @@ func (m *MockSubtreeProcessor) AddBatchBounded(nodes []subtree.Node, txInpoints 
 	return args.Get(0).(Admission)
 }
 
+// AddPositionedBatchBounded implements Interface.AddPositionedBatchBounded
+func (m *MockSubtreeProcessor) AddPositionedBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, positions []uint64, inBlock bool) Admission {
+	args := m.Called(nodes, txInpoints, positions, inBlock)
+	return args.Get(0).(Admission)
+}
+
 // HeldCount implements Interface.HeldCount. It reports nothing held without consulting the
 // mock expectations, like MaxTransactionsInMemory.
 func (m *MockSubtreeProcessor) HeldCount() int64 {
@@ -265,6 +271,17 @@ func (m *MockSubtreeProcessor) AddDirectly(node *subtree.Node, txInpoints *subtr
 }
 
 // AddDirectlyReportOnly implements Interface.AddDirectlyReportOnly
+// AddDirectlyAt implements Interface.AddDirectlyAt
+func (m *MockSubtreeProcessor) AddDirectlyAt(node *subtree.Node, txInpoints *subtree.TxInpoints, position uint64, skipNotification, reportOnly bool) error {
+	args := m.Called(node, txInpoints, position, skipNotification, reportOnly)
+
+	if args.Get(0) == nil {
+		return nil
+	}
+
+	return args.Error(0)
+}
+
 func (m *MockSubtreeProcessor) AddDirectlyReportOnly(node *subtree.Node, txInpoints *subtree.TxInpoints, skipNotification bool) error {
 	args := m.Called(node, txInpoints, skipNotification)
 
