@@ -33,7 +33,7 @@ var (
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "spend_positions_total",
-			Help:      "Spent outputs a UTXO store recorded at utxostore_laneMigration shadow, by store and carried: yes on utxoset when the spend's journal row has a lane_position; yes on Aerospike when the spend sent the spender's lane position on the Lua or native route of a server the start-up probe found recording it (a same-spender repeat writes nothing and still counts yes)",
+			Help:      "Spent outputs a UTXO store recorded at utxostore_laneMigration shadow, by store and carried: yes on utxoset when the spend's journal row has a lane_position; yes on Aerospike when the spend sent the spender's lane position on the Lua or native route of a server the start-up probe found recording it (a same-spender repeat writes nothing and still counts yes). It covers spends that leave a spent record, a spend-journal row on utxoset or a parent slot on Aerospike; a below-checkpoint netted list on utxoset deletes its spent coins outright, writes neither, and is not counted",
 		},
 		[]string{"store", "carried"},
 	)
