@@ -2,6 +2,9 @@ package blockvalidation
 
 import (
 	"context"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -197,21 +200,30 @@ func withOverwrite() []bloboptions.FileOption {
 type hungStore struct {
 	blob.Store
 	release chan struct{}
+	once    sync.Once
+	gets    atomic.Int32
 }
 
 func (s *hungStore) Get(_ context.Context, _ []byte, _ fileformat.FileType, _ ...bloboptions.FileOption) ([]byte, error) {
+	s.gets.Add(1)
 	<-s.release
+
 	return nil, errors.NewStorageError("released")
 }
 
+// unhang lets every Get return, once.
+func (s *hungStore) unhang() {
+	s.once.Do(func() { close(s.release) })
+}
+
 // hungLaneRowsBlock is a shadow block of count subtrees in a store whose reads hang.
-func hungLaneRowsBlock(t *testing.T, count int) (*BlockValidation, *model.Block) {
+func hungLaneRowsBlock(t *testing.T, count int) (*BlockValidation, *model.Block, *hungStore) {
 	t.Helper()
 
 	u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
 
 	store := &hungStore{Store: u.subtreeStore, release: make(chan struct{})}
-	t.Cleanup(func() { close(store.release) })
+	t.Cleanup(store.unhang)
 
 	u.subtreeStore = store
 
@@ -221,7 +233,7 @@ func hungLaneRowsBlock(t *testing.T, count int) (*BlockValidation, *model.Block)
 		block.Subtrees = append(block.Subtrees, &h)
 	}
 
-	return u, block
+	return u, block, store
 }
 
 // A hung subtree store holds up storing the block for at most the read deadline, even with more
@@ -230,7 +242,7 @@ func hungLaneRowsBlock(t *testing.T, count int) (*BlockValidation, *model.Block)
 func TestLaneRowsGiveUpOnAHungSubtreeStore(t *testing.T) {
 	const subtrees = laneBitmapReadConcurrency + 4
 
-	u, block := hungLaneRowsBlock(t, subtrees)
+	u, block, store := hungLaneRowsBlock(t, subtrees)
 
 	saved := laneBitmapReadTimeout
 	laneBitmapReadTimeout = 50 * time.Millisecond
@@ -240,17 +252,60 @@ func TestLaneRowsGiveUpOnAHungSubtreeStore(t *testing.T) {
 	timedOut := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut)
 	unreadable := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsUnreadable)
 
+	baseline := runtime.NumGoroutine()
+
 	started := time.Now()
 	require.Nil(t, u.laneRows(context.Background(), block))
 	require.Less(t, time.Since(started), time.Second)
 
 	require.Equal(t, timedOut+subtrees, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut))
 	require.Equal(t, unreadable, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsUnreadable))
+
+	// The hung reads now finish, after laneRows has returned. Each reports without blocking and
+	// frees its slot, and no read starts after the deadline: only the reads that held a slot then
+	// ever reach the store, and every read goroutine ends.
+	require.Equal(t, int32(laneBitmapReadConcurrency), store.gets.Load(), "the reads in flight at the deadline")
+
+	store.unhang()
+
+	// A plain loop, not require.Eventually, which runs its condition in a goroutine of its own.
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > baseline && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	require.LessOrEqual(t, runtime.NumGoroutine(), baseline, "every late read reports and ends")
+	require.Equal(t, int32(laneBitmapReadConcurrency), store.gets.Load(), "no read starts after the deadline")
+}
+
+// A block of more subtrees than are read at once still gets its rows, well inside the deadline:
+// each finished read frees its slot for the next.
+func TestLaneRowsReadMoreSubtreesThanRunAtOnce(t *testing.T) {
+	const subtrees = laneBitmapReadConcurrency + 1
+
+	u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
+
+	block.Subtrees = nil
+	for i := 0; i < subtrees; i++ {
+		h := chainhash.Hash{byte(i), 0xdd}
+		data, err := lane.EncodeSubtreeBitmaps(lane.SubtreeBitmaps{SubtreeHash: h, Lanes: lane.LaneBitmaps{7: lanePositions(uint64(i) + 1)}})
+		require.NoError(t, err)
+		require.NoError(t, u.subtreeStore.Set(context.Background(), h[:], fileformat.FileTypeSubtreeLaneBitmaps, data))
+
+		block.Subtrees = append(block.Subtrees, &h)
+	}
+
+	block.TransactionCount = subtrees + 1
+
+	started := time.Now()
+	rows := u.laneRows(context.Background(), block)
+	require.Less(t, time.Since(started), time.Second)
+	require.Equal(t, []lane.MapRow{{Lane: 7, First: 1, Last: subtrees, Tag: lane.RowTagRange}}, rows)
 }
 
 // The caller ending its context ends the reads too, before the deadline.
 func TestLaneRowsStopWhenTheCallerGivesUp(t *testing.T) {
-	u, block := hungLaneRowsBlock(t, 2)
+	u, block, _ := hungLaneRowsBlock(t, 2)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
