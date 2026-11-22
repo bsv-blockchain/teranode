@@ -501,9 +501,12 @@ func (s *Store) SpendWithLanePosition(ctx context.Context, tx *bt.Tx, blockHeigh
 
 var _ utxo.LaneSpender = (*Store)(nil)
 
-// spend is Spend with the spender's lane position, lane.None for none. With lane positions on it
-// counts every spent output, carried or not, so the coverage share covers every spend this store
-// makes, a plain Spend included.
+// spend is Spend with the spender's lane position, lane.None for none. With lane positions on, a
+// spend that returns nil counts its outputs, a plain Spend included: as carried when lanePos is set
+// and the start-up probe found the route recording it, as not carried otherwise. A spend that
+// returns an error is not counted, including one whose rollback was skipped and whose slot write
+// remains, so the count can only fall short of the writes. RestoreConflictSpends counts its own
+// successful batches, as not carried.
 func (s *Store) spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, lanePos uint64, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	spends, err := s.spendItems(ctx, tx, blockHeight, lanePos, ignoreFlags...)
 	if err == nil && s.laneShadow() {
