@@ -279,13 +279,15 @@ func (ls *laneState) belowFloor(p uint64) bool {
 
 // snapshotBlock is a block as a snapshot holds it.
 type snapshotBlock struct {
-	id      uint32
-	height  uint32
-	parent  uint32 // 0 when the parent is not loaded
-	hasRows bool
-	folded  bool
-	rows    []*indexRow
-	lanes   []uint8 // rows[i] is in lanes[i]
+	id     uint32
+	height uint32
+	parent uint32
+	// parentLoaded is whether the parent is loaded; parent is meaningful only then.
+	parentLoaded bool
+	hasRows      bool
+	folded       bool
+	rows         []*indexRow
+	lanes        []uint8 // rows[i] is in lanes[i]
 }
 
 // IndexSnapshot is the index at one moment. It is never changed, so lookups need no lock.
@@ -299,9 +301,8 @@ type IndexSnapshot struct {
 	mainByHeight map[uint32]uint32
 	tipID        uint32
 	tipHeight    uint32
-	// anchorID is the newest folded block, the block every floor's claims rest on; 0 before any
-	// fold.
-	anchorID     uint32
+	// anchorHeight is the height of the newest folded block, the block every floor's claims rest
+	// on; 0 before any fold.
 	anchorHeight uint32
 	// startHeight is the lowest height on the main chain the index loaded.
 	startHeight uint32
@@ -442,7 +443,7 @@ func (s *IndexSnapshot) ViewFrom(hash chainhash.Hash) (*ChainView, bool) {
 
 		fork[id] = b.height
 
-		if b.parent == 0 {
+		if !b.parentLoaded {
 			// The chain leaves what the index loaded before it meets the main chain.
 			return &ChainView{snap: s, fork: fork, floorValid: false}, true
 		}
@@ -549,8 +550,10 @@ type Index struct {
 	main      map[uint32]uint32
 	tipID     uint32
 	tipHeight uint32
-	anchorID  uint32
-	anchorH   uint32
+	// anchored is whether any block has folded; anchorID and anchorH are the newest folded block.
+	anchored bool
+	anchorID uint32
+	anchorH  uint32
 }
 
 type indexBlockState struct {
@@ -591,10 +594,6 @@ func (x *Index) Has(hash chainhash.Hash) bool {
 // AddBlock loads one block and its rows, which must be the block's every row. Adding a block
 // already loaded does nothing. It is published with the next SetTip or Publish.
 func (x *Index) AddBlock(b IndexBlock, rows []MapRow) error {
-	if b.ID == 0 {
-		return errors.NewProcessingError("lane index: block %s has no ID", b.Hash.String())
-	}
-
 	loaded := make([]*indexRow, len(rows))
 	lanes := make([]uint8, len(rows))
 
@@ -721,7 +720,7 @@ func (x *Index) SetTip(hash chainhash.Hash) error {
 		id = parent
 	}
 
-	if x.anchorID != 0 {
+	if x.anchored {
 		if _, ok := main[x.anchorID]; !ok {
 			return ErrDeepReorg
 		}
@@ -813,8 +812,8 @@ func (x *Index) fold() {
 		b.folded = true
 		b.rows, b.lanes = nil, nil
 
-		if b.Height >= x.anchorH {
-			x.anchorID, x.anchorH = b.ID, b.Height
+		if !x.anchored || b.Height >= x.anchorH {
+			x.anchored, x.anchorID, x.anchorH = true, b.ID, b.Height
 		}
 	}
 
@@ -842,7 +841,7 @@ func (x *Index) forget() {
 	for id, b := range x.blocks {
 		_, onMain := x.main[id]
 
-		if !onMain && b.Height <= x.anchorH && x.anchorID != 0 {
+		if !onMain && x.anchored && b.Height <= x.anchorH {
 			for i, r := range b.rows {
 				if drops[b.lanes[i]] == nil {
 					drops[b.lanes[i]] = map[*indexRow]bool{}
@@ -889,7 +888,6 @@ func (x *Index) publish() {
 		mainByHeight: make(map[uint32]uint32, len(x.main)),
 		tipID:        x.tipID,
 		tipHeight:    x.tipHeight,
-		anchorID:     x.anchorID,
 		anchorHeight: x.anchorH,
 		startHeight:  x.tipHeight,
 	}
@@ -908,7 +906,7 @@ func (x *Index) publish() {
 		sb := &snapshotBlock{id: id, height: b.Height, hasRows: b.hasRows, folded: b.folded, rows: b.rows, lanes: b.lanes}
 
 		if p, ok := x.byHash[b.Parent]; ok {
-			sb.parent = p
+			sb.parent, sb.parentLoaded = p, true
 		}
 
 		s.blocks[id] = sb

@@ -33,6 +33,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lanereader"
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/felixge/fgprof"
@@ -122,6 +123,14 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 		{startPropagation, func() error { return d.startPropagationService(ctx, appSettings, createLogger) }},
 		{startLegacy, func() error { return d.startLegacyService(ctx, appSettings, createLogger) }},
 		{startPruner, func() error { return d.startPrunerService(ctx, appSettings, createLogger) }},
+	}
+
+	// At utxostore_laneMigration shadow, every process with a check that asks whether a parent is
+	// mined keeps an index of the lane map and answers it from there too (util/lanereader).
+	if startSubtreeValidation || startBlockValidation || startValidator || startPropagation || startLegacy {
+		if err := d.startLaneReader(ctx, appSettings, createLogger); err != nil {
+			return err
+		}
 	}
 
 	// Loop through and start each service if needed
@@ -772,6 +781,25 @@ func (d *Daemon) startBlockAssemblyService(ctx context.Context, appSettings *set
 		blockchainClient,
 		blockassembly.WithTxMetaProducer(txMetaProducer),
 	))
+}
+
+// startLaneReader starts the process's lane index at utxostore_laneMigration shadow; at off it
+// starts nothing and opens no connection.
+func (d *Daemon) startLaneReader(ctx context.Context, appSettings *settings.Settings, createLogger func(string) ulogger.Logger) error {
+	if !appSettings.UtxoStore.LaneMigration.Stamps() {
+		lanereader.Start(ctx, nil, appSettings, nil)
+
+		return nil
+	}
+
+	blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger(loggerBlockchainClient), appSettings, serviceLaneReader)
+	if err != nil {
+		return err
+	}
+
+	lanereader.Start(ctx, createLogger(loggerLaneReader), appSettings, blockchainClient)
+
+	return nil
 }
 
 // startSubtreeValidationService initializes and adds the SubtreeValidation service to the ServiceManager.

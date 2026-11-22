@@ -59,6 +59,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/bsv-blockchain/teranode/util/lanereader"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -623,6 +624,11 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 		}
 
 		return nil, false, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] tx meta is nil", blockHash.String(), subtreeHash.String(), tx.TxID())
+	}
+
+	// At utxostore_laneMigration shadow, the lanes shadow of the check below, counted only.
+	if r := lanereader.Current(); r != nil {
+		r.CompareBlocks(lanereader.ReaderSubtreeAlreadyMined, r.MainView(), *tx.TxIDChainHash(), txMeta.LanePosition, txMeta.BlockIDs)
 	}
 
 	// check whether this transaction was already mined on our chain by comparing the block ids

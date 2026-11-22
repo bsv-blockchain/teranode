@@ -1854,7 +1854,7 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 	}
 
 	// add the transactions in this block to the block IDs in the utxo store
-	if err = model.UpdateTxMinedStatus(
+	if err = shadowLaneDuplicates(ctx, block, ids[0], unsetMined, model.UpdateTxMinedStatus(
 		ctx,
 		u.logger,
 		u.settings,
@@ -1865,7 +1865,7 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		onLongestChain,
 		u.blockchainClient, // blockchain client for slow-path checks of older block IDs
 		unsetMined...,
-	); err != nil {
+	)); err != nil {
 		// check whether we got already mined errors and mark the block as invalid
 		if errors.Is(err, errors.ErrBlockInvalid) {
 			// mark the block as invalid in the blockchain
@@ -2951,7 +2951,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// Create meta regenerator with peer URL for potential meta file recovery
 			metaRegenerator := u.createMetaRegenerator([]string{baseURL})
 			block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, block))
-			if ok, bodyBoundToHeader, err := block.ValidWithBinding(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
+			if ok, bodyBoundToHeader, err := block.ValidWithBinding(laneParentsContext(ctx, block), u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 				reason := "unknown"
 				if err != nil {
 					reason = err.Error()
@@ -4075,7 +4075,7 @@ func (u *BlockValidation) reValidateBlock(ctx context.Context, blockData revalid
 	// Create meta regenerator with peer URL for potential meta file recovery during revalidation
 	metaRegenerator := u.createMetaRegenerator([]string{blockData.baseURL})
 	blockData.block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, blockData.block))
-	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
+	if ok, err := blockData.block.Valid(laneParentsContext(ctx, blockData.block), u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
 		// A corrupt error normally means "nothing was added, re-download" — invalidating would poison a
