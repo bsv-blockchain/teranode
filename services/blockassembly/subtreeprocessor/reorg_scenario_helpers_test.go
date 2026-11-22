@@ -65,6 +65,11 @@ type reorgScenarioConfig struct {
 	subtreeSize       int
 	diskTxMap         bool
 
+	// parallelThreshold is blockassembly_parallelSetIfNotExistsThreshold. Zero keeps the default of
+	// 10_000, below which the remainder pass adds node by node and never reaches the wasInserted
+	// compaction; a scenario of a few thousand transactions needs it lowered to run that branch.
+	parallelThreshold int
+
 	// skipStoreMarks counts the longest-chain marks instead of sending them to the UTXO store, and
 	// creates no raw D1 records. The reorgscale suite sets it to time the processor's phases; the
 	// marks are measured on their own against Aerospike.
@@ -491,6 +496,10 @@ func (sc *reorgScenario) buildProcessor(t testing.TB) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = sc.cfg.subtreeSize
 	tSettings.BlockAssembly.UseDynamicSubtreeSize = false
+
+	if sc.cfg.parallelThreshold > 0 {
+		tSettings.BlockAssembly.ParallelSetIfNotExistsThreshold = sc.cfg.parallelThreshold
+	}
 
 	var opts []Options
 	if sc.cfg.diskTxMap {
