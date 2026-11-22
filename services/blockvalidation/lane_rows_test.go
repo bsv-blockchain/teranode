@@ -7,6 +7,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -190,21 +191,46 @@ func withOverwrite() []bloboptions.FileOption {
 	return []bloboptions.FileOption{bloboptions.WithAllowOverwrite(true)}
 }
 
-// stallingStore holds every Get until its context ends, as a stalled subtree store would.
-type stallingStore struct {
+// hungStore never returns from a Get, whatever its context does, until released: the file subtree
+// store does not stop a read for its context once the read holds its read permit, so a hung disk
+// looks like this.
+type hungStore struct {
 	blob.Store
+	release chan struct{}
 }
 
-func (s *stallingStore) Get(ctx context.Context, _ []byte, _ fileformat.FileType, _ ...bloboptions.FileOption) ([]byte, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
+func (s *hungStore) Get(_ context.Context, _ []byte, _ fileformat.FileType, _ ...bloboptions.FileOption) ([]byte, error) {
+	<-s.release
+	return nil, errors.NewStorageError("released")
 }
 
-// A stalled subtree store holds up storing the block for at most the read deadline; the block then
-// goes without rows, counted as timed out, not as unreadable files.
-func TestLaneRowsGiveUpOnAStalledSubtreeStore(t *testing.T) {
+// hungLaneRowsBlock is a shadow block of count subtrees in a store whose reads hang.
+func hungLaneRowsBlock(t *testing.T, count int) (*BlockValidation, *model.Block) {
+	t.Helper()
+
 	u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
-	u.subtreeStore = &stallingStore{Store: u.subtreeStore}
+
+	store := &hungStore{Store: u.subtreeStore, release: make(chan struct{})}
+	t.Cleanup(func() { close(store.release) })
+
+	u.subtreeStore = store
+
+	block.Subtrees = nil
+	for i := 0; i < count; i++ {
+		h := chainhash.Hash{byte(i), 0xee}
+		block.Subtrees = append(block.Subtrees, &h)
+	}
+
+	return u, block
+}
+
+// A hung subtree store holds up storing the block for at most the read deadline, even with more
+// subtrees than reads run at once: every subtree not read by then is counted as timed out, not as an
+// unreadable file, and the block goes without rows.
+func TestLaneRowsGiveUpOnAHungSubtreeStore(t *testing.T) {
+	const subtrees = laneBitmapReadConcurrency + 4
+
+	u, block := hungLaneRowsBlock(t, subtrees)
 
 	saved := laneBitmapReadTimeout
 	laneBitmapReadTimeout = 50 * time.Millisecond
@@ -216,8 +242,24 @@ func TestLaneRowsGiveUpOnAStalledSubtreeStore(t *testing.T) {
 
 	started := time.Now()
 	require.Nil(t, u.laneRows(context.Background(), block))
-	require.Less(t, time.Since(started), 2*time.Second)
+	require.Less(t, time.Since(started), time.Second)
 
-	require.Equal(t, timedOut+2, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut))
+	require.Equal(t, timedOut+subtrees, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut))
 	require.Equal(t, unreadable, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsUnreadable))
+}
+
+// The caller ending its context ends the reads too, before the deadline.
+func TestLaneRowsStopWhenTheCallerGivesUp(t *testing.T) {
+	u, block := hungLaneRowsBlock(t, 2)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	require.Nil(t, u.laneRows(ctx, block))
+	require.Less(t, time.Since(started), time.Second, "well before the 5 s deadline")
+}
+
+func TestLaneBitmapReadTimeoutIsFiveSeconds(t *testing.T) {
+	require.Equal(t, 5*time.Second, laneBitmapReadTimeout)
 }

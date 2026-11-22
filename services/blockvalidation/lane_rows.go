@@ -4,11 +4,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/util/lane"
-	"golang.org/x/sync/errgroup"
 )
 
 // The block gate for a peer's block, at utxostore_laneMigration shadow (lanes Phase 1). Before the
@@ -24,8 +24,9 @@ const laneBitmapReadConcurrency = 16
 
 // laneBitmapReadTimeout bounds how long the reads of one block's lane bitmaps files may hold up
 // storing the block. The reads sit on the block-store path, and at shadow a slow or stalled
-// subtree store must not delay a block: past the deadline the block is stored without rows. A
-// variable so a test can shorten it.
+// subtree store must not delay a block: past the deadline the block is stored without rows, even
+// if a read is still stuck in the store (readSubtreeLaneBitmaps). A variable so a test can shorten
+// it.
 var laneBitmapReadTimeout = 5 * time.Second
 
 // laneRows builds block's lane map rows from its subtrees' lane bitmaps, or returns nil when lanes
@@ -84,67 +85,124 @@ func (u *BlockValidation) checkLaneRowCount(block *model.Block, members uint64) 
 	u.logger.Warnf("[laneRows][%s] lane rows hold %d members, the block has %d transactions besides its coinbase", block.Hash().String(), members, want)
 }
 
+// Outcomes of one subtree's lane bitmaps read.
+const (
+	bitmapsRead = iota
+	bitmapsAbsent
+	bitmapsUnreadable
+	bitmapsTimedOut
+)
+
+// subtreeBitmapsRead is one subtree's read: its index in the block, its outcome and, when read,
+// its lanes.
+type subtreeBitmapsRead struct {
+	index   int
+	outcome int
+	lanes   lane.LaneBitmaps
+}
+
 // readSubtreeLaneBitmaps reads and decodes the lane bitmaps of every subtree of block, in subtree
-// order, within laneBitmapReadTimeout. It counts the subtrees whose file is absent, those whose
-// file could not be read or decoded or belongs to another subtree, and those not read because the
-// deadline passed or ctx was cancelled.
+// order, and returns within laneBitmapReadTimeout, or when ctx ends, whether or not every read has.
+// It counts the subtrees whose file is absent, those whose file could not be read or decoded or
+// belongs to another subtree, and those not read by the deadline.
+//
+// It does not wait for a read past the deadline, because the file subtree store does not stop a
+// read for its context once the read holds its read permit: a hung disk would otherwise hold the
+// block for as long as the disk does. Each read reports on a channel with room for every subtree,
+// so a read that finishes late never blocks, and one that never finishes keeps only its own
+// goroutine and its store's read permit until the disk answers.
 func (u *BlockValidation) readSubtreeLaneBitmaps(ctx context.Context, block *model.Block) ([]lane.LaneBitmaps, int, int, int) {
-	bitmaps := make([]lane.LaneBitmaps, len(block.Subtrees))
-	outcome := make([]int, len(block.Subtrees)) // 0 read, 1 absent, 2 unreadable, 3 timed out
+	n := len(block.Subtrees)
 
 	readCtx, cancel := context.WithTimeout(ctx, laneBitmapReadTimeout)
 	defer cancel()
 
-	g, gCtx := errgroup.WithContext(readCtx)
-	g.SetLimit(laneBitmapReadConcurrency)
+	results := make(chan subtreeBitmapsRead, n)
 
-	for i, hash := range block.Subtrees {
-		g.Go(func() error {
-			if gCtx.Err() != nil {
-				outcome[i] = 3
-				return nil
-			}
+	go u.dispatchSubtreeLaneBitmapReads(readCtx, block, results)
 
-			data, err := u.subtreeStore.Get(gCtx, hash[:], fileformat.FileTypeSubtreeLaneBitmaps)
-			if err != nil {
-				switch {
-				case gCtx.Err() != nil:
-					outcome[i] = 3
-				case errors.Is(err, errors.ErrNotFound):
-					outcome[i] = 1
-				default:
-					outcome[i] = 2
+	bitmaps := make([]lane.LaneBitmaps, n)
+	outcome := make([]int, n)
+	reported := make([]bool, n)
+
+	for got := 0; got < n; {
+		select {
+		case r := <-results:
+			reported[r.index] = true
+			outcome[r.index] = r.outcome
+			bitmaps[r.index] = r.lanes
+			got++
+		case <-readCtx.Done():
+			for i := range reported {
+				if !reported[i] {
+					outcome[i] = bitmapsTimedOut
 				}
-
-				return nil
 			}
 
-			s, err := lane.DecodeSubtreeBitmaps(data)
-			if err != nil || s.SubtreeHash != *hash {
-				outcome[i] = 2
-				return nil
-			}
-
-			bitmaps[i] = s.Lanes
-
-			return nil
-		})
+			got = n
+		}
 	}
-
-	_ = g.Wait()
 
 	var missing, unreadable, timedOut int
 
-	for _, o := range outcome {
+	for i, o := range outcome {
 		switch o {
-		case 1:
+		case bitmapsAbsent:
 			missing++
-		case 2:
+		case bitmapsUnreadable:
 			unreadable++
-		case 3:
+		case bitmapsTimedOut:
 			timedOut++
+			bitmaps[i] = nil
 		}
 	}
 
 	return bitmaps, missing, unreadable, timedOut
+}
+
+// dispatchSubtreeLaneBitmapReads starts one read per subtree of block, at most
+// laneBitmapReadConcurrency at a time, and reports each on results exactly once. A subtree whose
+// read has not started when readCtx ends is reported as timed out without a read.
+func (u *BlockValidation) dispatchSubtreeLaneBitmapReads(readCtx context.Context, block *model.Block, results chan<- subtreeBitmapsRead) {
+	slots := make(chan struct{}, laneBitmapReadConcurrency)
+
+	for i, hash := range block.Subtrees {
+		select {
+		case slots <- struct{}{}:
+		case <-readCtx.Done():
+			for j := i; j < len(block.Subtrees); j++ {
+				results <- subtreeBitmapsRead{index: j, outcome: bitmapsTimedOut}
+			}
+
+			return
+		}
+
+		go func() {
+			defer func() { <-slots }()
+
+			results <- u.readSubtreeLaneBitmapsFile(readCtx, i, hash)
+		}()
+	}
+}
+
+// readSubtreeLaneBitmapsFile reads and decodes the lane bitmaps file of the subtree at index i.
+func (u *BlockValidation) readSubtreeLaneBitmapsFile(readCtx context.Context, i int, hash *chainhash.Hash) subtreeBitmapsRead {
+	data, err := u.subtreeStore.Get(readCtx, hash[:], fileformat.FileTypeSubtreeLaneBitmaps)
+	if err != nil {
+		switch {
+		case readCtx.Err() != nil:
+			return subtreeBitmapsRead{index: i, outcome: bitmapsTimedOut}
+		case errors.Is(err, errors.ErrNotFound):
+			return subtreeBitmapsRead{index: i, outcome: bitmapsAbsent}
+		default:
+			return subtreeBitmapsRead{index: i, outcome: bitmapsUnreadable}
+		}
+	}
+
+	s, err := lane.DecodeSubtreeBitmaps(data)
+	if err != nil || s.SubtreeHash != *hash {
+		return subtreeBitmapsRead{index: i, outcome: bitmapsUnreadable}
+	}
+
+	return subtreeBitmapsRead{index: i, outcome: bitmapsRead, lanes: s.Lanes}
 }

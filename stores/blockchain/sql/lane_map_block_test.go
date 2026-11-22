@@ -379,3 +379,23 @@ func TestInsertLaneMapRowsWithBlockCountsABlockIDTooWide(t *testing.T) {
 		require.Equal(t, failures+1, laneMetricValue(t, "teranode_lane_row_insert_failures_total"))
 	})
 }
+
+// DeleteBlock, which the rewind tool uses, removes the block and leaves its rows: rows are kept for
+// ever, and block IDs are never handed out again, so the rows name no block.
+func TestDeleteBlockLeavesItsLaneMapRows(t *testing.T) {
+	runLaneHandoutTests(t, "delete", func(t *testing.T, s *SQL) {
+		ctx := t.Context()
+		rows := blockLaneRows(t)
+
+		id1, _, err := s.StoreBlock(ctx, block1, "", options.WithLaneMapRows(rows))
+		require.NoError(t, err)
+
+		require.NoError(t, s.DeleteBlock(ctx, block1.Hash()))
+
+		stored, err := s.GetBlockExists(ctx, block1.Hash())
+		require.NoError(t, err)
+		require.False(t, stored)
+
+		requireRowsOf(t, s, id1, rows)
+	})
+}
