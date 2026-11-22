@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -18,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -170,6 +173,18 @@ func TestLanePositionContractUtxoset(t *testing.T) {
 	t.Run("no checkpoints", func(t *testing.T) {
 		s, _ := newUncheckpointedLaneStore(t)
 		tests.LanePositionContract(t, s)
+		t.Run("burns", func(t *testing.T) { tests.LanePositionBurns(t, s, "utxoset") })
+		t.Run("returns", func(t *testing.T) { tests.LanePositionReturns(t, s, "utxoset", utxosetLaneRules, utxosetLaneRows(s)) })
+	})
+
+	t.Run("no batchers, returns", func(t *testing.T) {
+		s, _ := newUnbatchedReturnStore(t)
+		tests.LanePositionReturns(t, s, "utxoset", utxosetLaneRules, utxosetLaneRows(s))
+	})
+
+	t.Run("no batchers", func(t *testing.T) {
+		s, _ := newUnbatchedLaneStore(t)
+		tests.LanePositionBurns(t, s, "utxoset")
 	})
 
 	t.Run("checkpointed", func(t *testing.T) {
@@ -178,6 +193,51 @@ func TestLanePositionContractUtxoset(t *testing.T) {
 		tests.LanePositionMulti(t, s)
 		tests.LanePositionAbsentWithoutOption(t, s)
 	})
+}
+
+// utxosetLaneRules: a refused claim goes back only for a create with no block, since one with a
+// block still writes a containment row; a list's netted write returns nothing.
+var utxosetLaneRules = tests.LaneReturnRules{Exists: true}
+
+// utxosetLaneRows counts the rows of every table with a lane_position column that carry any of
+// positions.
+func utxosetLaneRows(s *Store) tests.LanePositionCounter {
+	return func(t testing.TB, positions []uint64) int {
+		t.Helper()
+
+		signed := make([]int64, len(positions))
+		for i, p := range positions {
+			signed[i] = lane.ToSigned(p)
+		}
+
+		total := 0
+
+		for _, table := range laneColumnTables {
+			var n int
+			require.NoError(t, s.pool.QueryRow(context.Background(),
+				`SELECT count(*) FROM `+table+` WHERE lane_position = ANY($1)`, signed).Scan(&n))
+
+			total += n
+		}
+
+		return total
+	}
+}
+
+// newUnbatchedReturnStore is a lane store with no create or spend-and-create batcher, so every
+// create takes the single-write path.
+func newUnbatchedReturnStore(t *testing.T) (*Store, context.Context) {
+	t.Helper()
+
+	s, ctx := newTestStoreWith(t, func(ts *settings.Settings) {
+		withCheckpoints(ts, nil)
+		ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+		ts.UtxoStore.StoreBatcherSize = 1
+	})
+	require.Nil(t, s.createBatcher)
+	require.Nil(t, s.spendAndCreateBatcher)
+
+	return s, ctx
 }
 
 // storedLane reads the raw lane_position column of the named table for one transaction. ok is
@@ -1171,4 +1231,1543 @@ func lanePositionsOf(l uint8, n int) []uint64 {
 	}
 
 	return out
+}
+
+// useBurnSource gives s a source of positions for the rest of the test.
+func useBurnSource(t *testing.T, s *Store, positions ...uint64) *tests.ScriptedLanePositions {
+	t.Helper()
+
+	source := tests.NewScriptedLanePositions(positions...)
+	s.SetLanePositionSource(source)
+	t.Cleanup(func() { s.SetLanePositionSource(nil) })
+
+	return source
+}
+
+// burnPositions makes n positions in lane 30.
+func burnPositions(n int) []uint64 {
+	positions := make([]uint64, n)
+	for i := range positions {
+		positions[i] = lane.Pack(30, uint64(i)+1) //nolint:gosec // i counts up from 0
+	}
+
+	return positions
+}
+
+// The burn paths only the netted list writes have, which the shared contract cannot reach: a list
+// takes one position per transaction before it writes anything, so whatever stops a transaction
+// being written burns its position, and a list that fails part way still wrote the chunks that
+// committed.
+func TestLanePositionBurnsOfANettedList(t *testing.T) {
+	failure := errors.NewProcessingError("injected failure")
+	sv := utxo.WithCaller(utxo.CallerSubtreeValidation)
+
+	t.Run("a chunk that fails burns rolled_back, and a chunk behind it list_failed", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+		forceChunkOfOne(t)
+
+		root := storedParent(t, s, ctx)
+		parent := spendOutput(t, root, 0, 2)
+		child := spendOutput(t, parent, 0, 3)
+		grandchild := spendOutput(t, child, 0, 1)
+
+		// Chunk 0 holds parent and commits. Chunk 1 holds child and fails. Chunk 2 holds
+		// grandchild, waits for chunk 1, and never runs.
+		multiChunkFault = func(chunk int, stage string) error {
+			if chunk == 1 && stage == "spent" {
+				return failure
+			}
+
+			return nil
+		}
+
+		t.Cleanup(func() { multiChunkFault = nil })
+
+		useBurnSource(t, s, burnPositions(3)...)
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err := s.SpendAndCreateMulti(ctx, []*bt.Tx{parent, child, grandchild}, 1_100, utxo.WithIgnoreLocked(true), sv)
+		multiChunkFault = nil
+		require.ErrorIs(t, err, failure)
+
+		require.Equal(t, tests.LaneBurns{
+			utxo.LaneBurnRolledBack + "/subtree_validation": 1,
+			utxo.LaneBurnListFailed + "/subtree_validation": 1,
+		}, tests.ReadLaneBurns(t, "utxoset").Since(before))
+
+		require.Equal(t, 1, identityCount(t, s, ctx, parent), "the committed chunk's position was written")
+	})
+
+	t.Run("a refused spend burns spend_rejected, and its child parent_failed", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+
+		root := storedParent(t, s, ctx)
+
+		// Spends root output 0 first, so the list's own spend of it is refused.
+		_, _, err := s.SpendAndCreate(ctx, spendOutput(t, root, 0, 4), 1_100)
+		require.NoError(t, err)
+
+		parent := spendOutput(t, root, 0, 2)
+		child := spendOutput(t, parent, 0, 1)
+
+		useBurnSource(t, s, burnPositions(2)...)
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		results, err := s.SpendAndCreateMulti(ctx, []*bt.Tx{parent, child}, 1_100, utxo.WithIgnoreLocked(true), sv)
+		require.NoError(t, err)
+		require.Equal(t, utxo.MultiTxFailed, results[0].Status)
+		require.Equal(t, utxo.MultiTxParentFailed, results[1].Status)
+
+		require.Equal(t, tests.LaneBurns{
+			utxo.LaneBurnSpendRejected + "/subtree_validation": 1,
+			utxo.LaneBurnParentFailed + "/subtree_validation":  1,
+		}, tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
+	t.Run("a take that fails part way burns take_failed for the positions already taken", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+
+		root := storedParent(t, s, ctx)
+		a := spendOutput(t, root, 0, 1)
+		b := spendOutput(t, root, 1, 1)
+
+		source := useBurnSource(t, s, burnPositions(1)...)
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err := s.SpendAndCreateMulti(ctx, []*bt.Tx{a, b}, 1_100, utxo.WithIgnoreLocked(true), sv)
+		require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+		require.Equal(t, 2, source.Calls())
+
+		require.Equal(t, tests.LaneBurns{utxo.LaneBurnTakeFailed + "/subtree_validation": 1},
+			tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
+	t.Run("a below-checkpoint chunk that fails burns rolled_back, and the chunk after it list_failed", func(t *testing.T) {
+		const height = 900
+
+		// One worker runs the chunks in list order, so the first commits before the second fails:
+		// with chunks side by side, the failure could cancel the first one's commit, which counts
+		// outcome_unknown.
+		s, ctx := newTestStoreWith(t, func(ts *settings.Settings) {
+			ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+			ts.UtxoStore.NettedBelowWorkers = 1
+		})
+		require.Equal(t, 1, s.nettedBelowWorkers())
+		withNettedBelowChunkTxs(t, 1)
+
+		w := tests.BuildMultiWorkload(t, 0xc8, 1, 3)
+		w.StoreRoots(t, s, height-1)
+
+		list := outpointOnly(w.Txs)
+
+		// The second transaction's chunk fails; the first commits; the third never starts.
+		nettedBelowFault = func(chunk []int) error {
+			if len(chunk) == 1 && chunk[0] == 1 {
+				return failure
+			}
+
+			return nil
+		}
+
+		t.Cleanup(func() { nettedBelowFault = nil })
+
+		useBurnSource(t, s, burnPositions(3)...)
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err := s.SpendAndCreateMulti(ctx, list, height,
+			append(belowCheckpointOptions(height), utxo.WithCaller(utxo.CallerBlockValidation))...)
+		nettedBelowFault = nil
+		require.ErrorIs(t, err, failure)
+
+		require.Equal(t, tests.LaneBurns{
+			utxo.LaneBurnRolledBack + "/block_validation": 1,
+			utxo.LaneBurnListFailed + "/block_validation": 1,
+		}, tests.ReadLaneBurns(t, "utxoset").Since(before))
+
+		_, err = s.Get(ctx, list[0].TxIDChainHash())
+		require.NoError(t, err, "the first chunk committed its position")
+
+		for _, tx := range list[1:] {
+			_, err = s.Get(ctx, tx.TxIDChainHash())
+			require.ErrorIs(t, err, errors.ErrTxNotFound, "the failed chunk rolled back, and the one after it never ran")
+		}
+	})
+}
+
+// A create whose batch rolls back burns its position as rolled_back, not as a plain error.
+func TestLanePositionBurnOfARolledBackCreateBatch(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+	require.NotNil(t, s.createBatcher, "the test needs the batched create")
+
+	useBurnSource(t, s, burnPositions(1)...)
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	// The batch fails with its database transaction open, so it rolls back.
+	createBatchBeforeCommit = func() error { return errors.NewStorageError("injected failure before commit") }
+	t.Cleanup(func() { createBatchBeforeCommit = nil })
+
+	tx := mkTx(t, 1, 5_000)
+
+	_, err := s.Create(ctx, tx, 1_000, utxo.WithCaller(utxo.CallerBlockAssembly))
+	require.Error(t, err)
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnRolledBack + "/block_assembly": 1},
+		tests.ReadLaneBurns(t, "utxoset").Since(before))
+
+	// The batch really rolled back: nothing of the transaction is stored.
+	require.Equal(t, 0, identityCount(t, s, ctx, tx))
+	require.Equal(t, 0, utxoCount(t, s, ctx, tx))
+
+	_, err = s.Get(ctx, tx.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound)
+}
+
+// A batch whose COMMIT landed but reported failure reruns its items alone with the positions they
+// took. The rerun finds each item's own record and answers ErrTxExists, which is the item's own
+// write, not a burn.
+func TestLanePositionBurnOfABatchRerunAfterALandedCommit(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+	require.NotNil(t, s.spendAndCreateBatcher, "the test needs the batched spend-and-create")
+
+	root := tests.BuildMultiWorkload(t, 0xc9, 1, 1).Roots[0]
+	position := burnPositions(1)[0]
+
+	useBurnSource(t, s, position)
+
+	failed := false
+	spendAndCreateBatchAfterCommit = func() error {
+		if failed {
+			return nil
+		}
+
+		failed = true
+
+		return errors.NewStorageError("injected lost commit acknowledgement")
+	}
+
+	t.Cleanup(func() { spendAndCreateBatchAfterCommit = nil })
+
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, _, err := s.SpendAndCreate(ctx, root, 1_000, utxo.WithCreateOnly(), utxo.WithCaller(utxo.CallerValidator))
+	require.ErrorIs(t, err, errors.ErrTxExists, "the rerun finds the record the batch wrote")
+	require.True(t, failed)
+
+	require.Equal(t, tests.LaneBurns{}, tests.ReadLaneBurns(t, "utxoset").Since(before), "the record carries the position")
+
+	md, err := s.Get(ctx, root.TxIDChainHash(), fields.LanePosition)
+	require.NoError(t, err)
+	require.Equal(t, position, md.LanePosition)
+}
+
+// After a rerun fails, the stored record decides: the same position burned nothing, whatever the
+// rerun met; another position burned for the rerun's own reason; no record, or a record that
+// cannot be read within the bound, is an unknown outcome. The caller's context ending does not cut
+// the read short.
+func TestLanePositionBurnUnlessStored(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+
+	stored := tests.BuildMultiWorkload(t, 0xca, 1, 1).Roots[0]
+	mine := lane.Pack(31, 1)
+
+	_, _, err := s.SpendAndCreate(ctx, stored, 1_000, utxo.WithCreateOnly(), utxo.WithLanePosition(mine))
+	require.NoError(t, err)
+
+	options := &utxo.CreateOptions{Caller: utxo.CallerValidator}
+	exists := errors.NewTxExistsError("exists")
+	storage := errors.NewStorageError("begin failed")
+
+	burns := func(f func()) tests.LaneBurns {
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		f()
+
+		return tests.ReadLaneBurns(t, "utxoset").Since(before)
+	}
+
+	require.Equal(t, tests.LaneBurns{}, burns(func() { s.burnUnlessStored(ctx, stored, options, mine, exists, nil) }),
+		"the record carries the position")
+
+	require.Equal(t, tests.LaneBurns{}, burns(func() { s.burnUnlessStored(ctx, stored, options, mine, storage, nil) }),
+		"the record carries the position, though the rerun failed for another reason")
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	require.Equal(t, tests.LaneBurns{}, burns(func() { s.burnUnlessStored(cancelled, stored, options, mine, storage, nil) }),
+		"the caller's context ended, and the read still finds the position")
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnExists + "/validator": 1},
+		burns(func() { s.burnUnlessStored(ctx, stored, options, lane.Pack(31, 2), exists, nil) }),
+		"the record carries another position")
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnError + "/validator": 1},
+		burns(func() { s.burnUnlessStored(ctx, stored, options, lane.Pack(31, 6), storage, nil) }),
+		"another position, and the rerun failed for a storage error")
+
+	refused := []*utxo.Spend{{Err: errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil)}}
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnSpendRejected + "/validator": 1},
+		burns(func() { s.burnUnlessStored(ctx, stored, options, lane.Pack(31, 7), storage, refused) }),
+		"another position, and the rerun's spend was refused")
+
+	// A record read without a position proves nothing: the read can answer from a row that does not
+	// carry one.
+	unpositioned := tests.BuildMultiWorkload(t, 0xc9, 1, 2).Roots[1]
+
+	s.SetLanePositionSource(nil)
+
+	_, _, err = s.SpendAndCreate(ctx, unpositioned, 1_000, utxo.WithCreateOnly())
+	require.NoError(t, err)
+	requireNoLanePosition(t, s, ctx, unpositioned)
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/validator": 1},
+		burns(func() { s.burnUnlessStored(ctx, unpositioned, options, lane.Pack(31, 8), storage, nil) }),
+		"a record without a position is an unknown outcome")
+
+	missing := tests.BuildMultiWorkload(t, 0xcb, 1, 1).Roots[0]
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/validator": 1},
+		burns(func() { s.burnUnlessStored(ctx, missing, options, lane.Pack(31, 3), storage, nil) }),
+		"no record proves nothing: the failed batch's commit may still be completing")
+
+	// A read that cannot finish within the bound gives up, so it never holds the caller. The
+	// production bound is 5 seconds.
+	require.Equal(t, 5*time.Second, laneBurnProbeTimeout)
+
+	old := laneBurnProbeTimeout
+	laneBurnProbeTimeout = time.Nanosecond
+
+	t.Cleanup(func() { laneBurnProbeTimeout = old })
+
+	start := time.Now()
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/validator": 1},
+		burns(func() { s.burnUnlessStored(ctx, stored, options, lane.Pack(31, 4), exists, nil) }))
+	require.Less(t, time.Since(start), time.Second)
+}
+
+// A batch whose COMMIT landed but reported failure reruns its item, and the rerun can fail too,
+// here at its own commit. The record the batch wrote carries the position, so nothing burned.
+func TestLanePositionBurnOfAFailedRerunAfterALandedCommit(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+	require.NotNil(t, s.spendAndCreateBatcher)
+
+	root := tests.BuildMultiWorkload(t, 0xcd, 1, 1).Roots[0]
+	position := burnPositions(1)[0]
+
+	useBurnSource(t, s, position)
+
+	var batchFailed atomic.Bool
+
+	spendAndCreateBatchAfterCommit = func() error {
+		if batchFailed.CompareAndSwap(false, true) {
+			return errors.NewStorageError("injected lost batch commit acknowledgement")
+		}
+
+		return nil
+	}
+
+	t.Cleanup(func() { spendAndCreateBatchAfterCommit = nil })
+
+	_ = failNextCommit(t)
+
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, _, err := s.SpendAndCreate(ctx, root, 1_000, utxo.WithCreateOnly(), utxo.WithCaller(utxo.CallerValidator))
+	require.Error(t, err)
+	require.False(t, errors.Is(err, errors.ErrTxExists), "the rerun failed at its commit: %v", err)
+
+	require.Equal(t, tests.LaneBurns{}, tests.ReadLaneBurns(t, "utxoset").Since(before), "the record carries the position")
+
+	md, err := s.Get(ctx, root.TxIDChainHash(), fields.LanePosition)
+	require.NoError(t, err)
+	require.Equal(t, position, md.LanePosition)
+}
+
+// A batch that fails before sending its COMMIT rolls back whole, so its rerun is an ordinary single
+// call: a refused spend counts spend_rejected and its position goes back, rather than the read-back
+// after a failed COMMIT filing it under outcome_unknown.
+func TestLanePositionBurnOfARerunAfterABatchThatFailedBeforeItsCommit(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+	require.NotNil(t, s.spendAndCreateBatcher)
+
+	root := storedParent(t, s, ctx)
+
+	// Spends root output 0 first, so the call below has its spend refused.
+	_, _, err := s.SpendAndCreate(ctx, spendOutput(t, root, 0, 4), 1_100)
+	require.NoError(t, err)
+
+	refused := spendOutput(t, root, 0, 2)
+
+	source := useReturningSource(t, s, returnPositions(1)...)
+
+	var batchFailed atomic.Bool
+
+	spendAndCreateBatchFault = func() error {
+		if batchFailed.CompareAndSwap(false, true) {
+			return errors.NewStorageError("injected statement failure")
+		}
+
+		return nil
+	}
+
+	t.Cleanup(func() { spendAndCreateBatchFault = nil })
+
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, _, err = s.SpendAndCreate(ctx, refused, 1_100, utxo.WithCaller(utxo.CallerValidator))
+	spendAndCreateBatchFault = nil
+	require.Error(t, err)
+	require.True(t, batchFailed.Load(), "the batch failed before its commit")
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnSpendRejected + "/validator": 1},
+		tests.ReadLaneBurns(t, "utxoset").Since(before))
+	requireReturnedNowhere(t, s, source, returnPositions(1)[0])
+}
+
+// failNextCommit makes the next commit of a transaction that writes creates report failure after it
+// landed, as a lost acknowledgement does.
+func failNextCommit(t *testing.T) error {
+	t.Helper()
+
+	failure := errors.NewStorageError("injected lost commit acknowledgement")
+
+	var once atomic.Bool
+
+	createCommitFault = func() error {
+		if once.CompareAndSwap(false, true) {
+			return failure
+		}
+
+		return nil
+	}
+
+	t.Cleanup(func() { createCommitFault = nil })
+
+	return failure
+}
+
+// newUnbatchedLaneStore is a lane store with no create or spend-and-create batcher, so every create
+// takes the single-write path.
+func newUnbatchedLaneStore(t *testing.T) (*Store, context.Context) {
+	t.Helper()
+
+	s, ctx := newTestStoreWith(t, func(ts *settings.Settings) {
+		withCheckpoints(ts, nil)
+		ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+		ts.UtxoStore.StoreBatcherSize = 1
+	})
+	require.Nil(t, s.createBatcher)
+	require.Nil(t, s.spendAndCreateBatcher)
+
+	return s, ctx
+}
+
+// A COMMIT that reports failure may have landed, so the position it carried counts as
+// outcome_unknown, on every utxoset path that commits creates.
+func TestLanePositionBurnOfACommitThatReportedFailure(t *testing.T) {
+	unknown := func(caller string) tests.LaneBurns {
+		return tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/" + caller: 1}
+	}
+
+	t.Run("a single-write Create", func(t *testing.T) {
+		s, ctx := newUnbatchedLaneStore(t)
+		useBurnSource(t, s, burnPositions(1)...)
+		_ = failNextCommit(t)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err := s.Create(ctx, mkTx(t, 1, 5_000), 1_000, utxo.WithCaller(utxo.CallerBlockAssembly))
+		require.Error(t, err)
+
+		require.Equal(t, unknown("block_assembly"), tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
+	t.Run("a single-write SpendAndCreate", func(t *testing.T) {
+		s, ctx := newUnbatchedLaneStore(t)
+		useBurnSource(t, s, burnPositions(1)...)
+		_ = failNextCommit(t)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, _, err := s.SpendAndCreate(ctx, mkTx(t, 1, 5_000), 1_000, utxo.WithCreateOnly(), utxo.WithCaller(utxo.CallerValidator))
+		require.Error(t, err)
+
+		require.Equal(t, unknown("validator"), tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
+	t.Run("a create batch", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+		require.NotNil(t, s.createBatcher)
+		useBurnSource(t, s, burnPositions(1)...)
+		_ = failNextCommit(t)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err := s.Create(ctx, mkTx(t, 1, 5_000), 1_000, utxo.WithCaller(utxo.CallerBlockAssembly))
+		require.Error(t, err)
+
+		require.Equal(t, unknown("block_assembly"), tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
+	t.Run("a list chunk above the checkpoint", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+		forceChunkOfOne(t)
+
+		root := storedParent(t, s, ctx)
+		a := spendOutput(t, root, 0, 1)
+
+		useBurnSource(t, s, burnPositions(1)...)
+		failure := failNextCommit(t)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err := s.SpendAndCreateMulti(ctx, []*bt.Tx{a}, 1_100, utxo.WithIgnoreLocked(true),
+			utxo.WithCaller(utxo.CallerSubtreeValidation))
+		require.ErrorIs(t, err, failure)
+
+		require.Equal(t, unknown("subtree_validation"), tests.ReadLaneBurns(t, "utxoset").Since(before))
+		require.Equal(t, 1, identityCount(t, s, ctx, a), "the commit landed")
+	})
+
+	t.Run("a list chunk whose earlier round settled some transactions", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+
+		root := storedParent(t, s, ctx)
+
+		// Spends root output 0 first, so the list's own spend of it is refused.
+		_, _, err := s.SpendAndCreate(ctx, spendOutput(t, root, 0, 4), 1_100)
+		require.NoError(t, err)
+
+		refused := spendOutput(t, root, 0, 2)
+		child := spendOutput(t, refused, 0, 1)
+		valid := spendOutput(t, root, 1, 3)
+
+		useBurnSource(t, s, burnPositions(3)...)
+		failure := failNextCommit(t)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		// The first round finds the refused spend and rolls back; the second writes only valid,
+		// and its commit reports failure.
+		_, err = s.SpendAndCreateMulti(ctx, []*bt.Tx{refused, child, valid}, 1_100, utxo.WithIgnoreLocked(true),
+			utxo.WithCaller(utxo.CallerSubtreeValidation))
+		require.ErrorIs(t, err, failure)
+
+		require.Equal(t, tests.LaneBurns{
+			utxo.LaneBurnSpendRejected + "/subtree_validation":  1,
+			utxo.LaneBurnParentFailed + "/subtree_validation":   1,
+			utxo.LaneBurnOutcomeUnknown + "/subtree_validation": 1,
+		}, tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
+	t.Run("a list chunk that found a stored transaction", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+
+		root := storedParent(t, s, ctx)
+		stored := spendOutput(t, root, 0, 2)
+		fresh := spendOutput(t, root, 1, 3)
+
+		_, _, err := s.SpendAndCreate(ctx, stored, 1_100)
+		require.NoError(t, err)
+
+		useBurnSource(t, s, burnPositions(2)...)
+		failure := failNextCommit(t)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		// The chunk finds stored already held and settles it as existing; its write of fresh
+		// commits and reports failure.
+		_, err = s.SpendAndCreateMulti(ctx, []*bt.Tx{stored, fresh}, 1_100, utxo.WithIgnoreLocked(true),
+			utxo.WithCaller(utxo.CallerSubtreeValidation))
+		require.ErrorIs(t, err, failure)
+
+		require.Equal(t, tests.LaneBurns{
+			utxo.LaneBurnExists + "/subtree_validation":         1,
+			utxo.LaneBurnOutcomeUnknown + "/subtree_validation": 1,
+		}, tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
+	// A list counts its burns once per reason, so two burned for the same reason must count two.
+	t.Run("two transactions of a list found stored count two", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+
+		root := storedParent(t, s, ctx)
+		first := spendOutput(t, root, 0, 2)
+		second := spendOutput(t, root, 1, 3)
+
+		_, _, err := s.SpendAndCreate(ctx, first, 1_100)
+		require.NoError(t, err)
+		_, _, err = s.SpendAndCreate(ctx, second, 1_100)
+		require.NoError(t, err)
+
+		useBurnSource(t, s, burnPositions(2)...)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err = s.SpendAndCreateMulti(ctx, []*bt.Tx{first, second}, 1_100, utxo.WithIgnoreLocked(true),
+			utxo.WithCaller(utxo.CallerSubtreeValidation))
+		require.NoError(t, err)
+
+		require.Equal(t, tests.LaneBurns{utxo.LaneBurnExists + "/subtree_validation": 2},
+			tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
+	t.Run("a list chunk below the checkpoint", func(t *testing.T) {
+		const height = 900
+
+		s, ctx := newLaneStore(t)
+		withNettedBelowChunkTxs(t, 1)
+
+		w := tests.BuildMultiWorkload(t, 0xcc, 1, 1)
+		w.StoreRoots(t, s, height-1)
+
+		useBurnSource(t, s, burnPositions(1)...)
+		failure := failNextCommit(t)
+
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err := s.SpendAndCreateMulti(ctx, outpointOnly(w.Txs), height,
+			append(belowCheckpointOptions(height), utxo.WithCaller(utxo.CallerBlockValidation))...)
+		require.ErrorIs(t, err, failure)
+
+		require.Equal(t, unknown("block_validation"), tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+}
+
+// A caller that stops waiting for its queued create counts its position as outcome_unknown. The batch
+// still writes the record with the position, and its answer counts nothing more.
+func TestLanePositionBurnOfAWaiterThatGaveUp(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+	require.NotNil(t, s.createBatcher)
+
+	position := burnPositions(1)[0]
+	useBurnSource(t, s, position)
+
+	held := make(chan struct{})
+	release := make(chan struct{})
+	markHeld := sync.OnceFunc(func() { close(held) })
+	releaseBatch := sync.OnceFunc(func() { close(release) })
+
+	createBatchBeforeCommit = func() error {
+		markHeld()
+		<-release
+
+		return nil
+	}
+
+	// Released before the store closes, even when an assertion below fails, so a failure cannot
+	// leave the batch, and the store's Close, waiting forever.
+	t.Cleanup(func() {
+		releaseBatch()
+		createBatchBeforeCommit = nil
+	})
+
+	tx := mkTx(t, 1, 5_000)
+	callCtx, cancel := context.WithCancel(ctx)
+
+	before := tests.ReadLaneBurns(t, "utxoset")
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := s.Create(callCtx, tx, 1_000, utxo.WithCaller(utxo.CallerBlockAssembly))
+		done <- err
+	}()
+
+	<-held
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/block_assembly": 1},
+		tests.ReadLaneBurns(t, "utxoset").Since(before))
+
+	releaseBatch()
+
+	require.Eventually(t, func() bool {
+		md, err := s.Get(ctx, tx.TxIDChainHash(), fields.LanePosition)
+		return err == nil && md.LanePosition == position
+	}, 10*time.Second, 20*time.Millisecond, "the batch wrote the record with the position")
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnOutcomeUnknown + "/block_assembly": 1},
+		tests.ReadLaneBurns(t, "utxoset").Since(before), "the batch's answer counts nothing more")
+}
+
+// The read-back reads the database directly, so it keeps its deadline even when the store's close
+// lock is unavailable: a closing store, waiting on a writer stuck behind a full queue, holds it.
+// Reading through the get batcher would wait on that lock past any deadline.
+func TestLanePositionBurnUnlessStoredDoesNotWaitOnTheCloseLock(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+	require.NotNil(t, s.getBatcher, "the test needs the batched get it must avoid")
+
+	missing := tests.BuildMultiWorkload(t, 0xce, 1, 1).Roots[0]
+	options := &utxo.CreateOptions{Caller: utxo.CallerValidator}
+
+	old := laneBurnProbeTimeout
+	laneBurnProbeTimeout = 200 * time.Millisecond
+
+	t.Cleanup(func() { laneBurnProbeTimeout = old })
+
+	s.closeMu.Lock()
+
+	unlock := sync.OnceFunc(s.closeMu.Unlock)
+	t.Cleanup(unlock)
+
+	done := make(chan struct{})
+
+	go func() {
+		s.burnUnlessStored(ctx, missing, options, lane.Pack(31, 5), errors.NewStorageError("rerun failed"), nil)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		unlock()
+		<-done
+		t.Fatal("the read-back waited on the store's close lock")
+	}
+
+	unlock()
+}
+
+// A chunk round that fails before it re-marks what an earlier round found stored still counts that
+// transaction as exists: the transaction is live in this round's status, but known stored.
+func TestLanePositionFailedChunkKeepsAnEarlierRoundsExists(t *testing.T) {
+	stored, fresh := &multiTx{pos: 0}, &multiTx{pos: 1}
+
+	w := &nettedWrite{burns: make([]listBurn, 2)}
+	run := &chunkRun{
+		its:           []*multiTx{stored, fresh},
+		st:            []chunkStatus{chunkLive, chunkLive},
+		res:           make([]utxo.SpendAndCreateMultiResult, 2),
+		forcedExisted: []bool{true, false},
+	}
+
+	w.recordFailedBurns(run)
+
+	require.Equal(t, utxo.LaneBurnExists, w.burnAt(0))
+	require.Equal(t, utxo.LaneBurnRolledBack, w.burnAt(1))
+}
+
+// A list without lane positions records no burn reasons and allocates nothing for them; a list with
+// them gets one byte per transaction.
+func TestLanePositionListBurnsOnlyWithPositions(t *testing.T) {
+	require.Nil(t, newListBurns(nil), "no positions, nothing allocated")
+	require.Len(t, newListBurns(burnPositions(3)), 3)
+
+	w := &nettedWrite{}
+	run := &chunkRun{its: []*multiTx{{pos: 0}}, st: []chunkStatus{chunkLive}, res: make([]utxo.SpendAndCreateMultiResult, 1),
+		forcedExisted: []bool{false}}
+
+	w.recordFailedBurns(run)
+	w.setBurn(0, listBurnListFailed)
+
+	require.Nil(t, w.burns)
+	require.Empty(t, w.burnAt(0))
+}
+
+// Every reason label round-trips through its one-byte code.
+func TestListBurnCodes(t *testing.T) {
+	for _, reason := range []string{utxo.LaneBurnExists, utxo.LaneBurnSpendRejected, utxo.LaneBurnOutcomeUnknown,
+		utxo.LaneBurnRolledBack, utxo.LaneBurnParentFailed, utxo.LaneBurnListFailed, utxo.LaneBurnError} {
+		require.Equal(t, reason, listBurnFor(reason).String())
+	}
+
+	require.Equal(t, utxo.LaneBurnError, listBurnFor("no such reason").String())
+	require.Empty(t, listBurnNone.String())
+}
+
+// The burn code sits in padding the netted-below transaction already had, so it costs no memory.
+func TestNetBelowTxDidNotGrow(t *testing.T) {
+	require.Equal(t, unsafe.Sizeof(struct {
+		pos       int
+		tx        *bt.Tx
+		txid      chainhash.Hash
+		ident     bool
+		netted    []bool
+		listSpent []uint32
+		result    utxo.SpendAndCreateMultiResult
+	}{}), unsafe.Sizeof(netBelowTx{}))
+}
+
+// A direct Create whose context has already ended fails before it opens a database transaction, so
+// its position counts as error, and nothing is written.
+func TestLanePositionBurnOfADirectCreateWithAnEndedContext(t *testing.T) {
+	s, ctx := newUnbatchedLaneStore(t)
+	useBurnSource(t, s, burnPositions(1)...)
+
+	tx := mkTx(t, 1, 5_000)
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, err := s.Create(cancelled, tx, 1_000, utxo.WithCaller(utxo.CallerBlockAssembly))
+	require.Error(t, err)
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnError + "/block_assembly": 1},
+		tests.ReadLaneBurns(t, "utxoset").Since(before))
+	require.Equal(t, 0, identityCount(t, s, ctx, tx))
+	require.Equal(t, 0, utxoCount(t, s, ctx, tx))
+}
+
+// A list whose context has already ended when its chunk would start writes nothing, so its positions
+// count as list_failed, not rolled_back. The partitions are ensured by an earlier list first, so the
+// write reaches the chunk rather than failing at a partition.
+func TestLanePositionBurnOfAListThatNeverStarted(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+
+	root := storedParent(t, s, ctx)
+
+	_, err := s.SpendAndCreateMulti(ctx, []*bt.Tx{spendOutput(t, root, 0, 1)}, 1_100, utxo.WithIgnoreLocked(true))
+	require.NoError(t, err, "warms the partitions")
+
+	useBurnSource(t, s, burnPositions(1)...)
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, err = s.SpendAndCreateMulti(cancelled, []*bt.Tx{spendOutput(t, root, 1, 2)}, 1_100, utxo.WithIgnoreLocked(true),
+		utxo.WithCaller(utxo.CallerSubtreeValidation))
+	require.Error(t, err)
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnListFailed + "/subtree_validation": 1},
+		tests.ReadLaneBurns(t, "utxoset").Since(before))
+}
+
+// A below-checkpoint list that fails before it has built its transactions, here at the identity probe
+// on an ended context, counts every position it took as list_failed, and stores nothing.
+func TestLanePositionBurnOfABelowCheckpointListThatFailedEarly(t *testing.T) {
+	const height = 900
+
+	s, ctx := newLaneStore(t)
+
+	w := tests.BuildMultiWorkload(t, 0xcf, 1, 3)
+	w.StoreRoots(t, s, height-1)
+
+	list := outpointOnly(w.Txs)
+
+	useBurnSource(t, s, burnPositions(len(list))...)
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, err := s.SpendAndCreateMulti(cancelled, list, height,
+		append(belowCheckpointOptions(height), utxo.WithCaller(utxo.CallerBlockValidation))...)
+	require.Error(t, err)
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnListFailed + "/block_validation": float64(len(list))},
+		tests.ReadLaneBurns(t, "utxoset").Since(before))
+
+	for i, tx := range list {
+		_, err = s.Get(ctx, tx.TxIDChainHash())
+		require.ErrorIs(t, err, errors.ErrTxNotFound, "tx %d", i)
+	}
+}
+
+func requireNoLanePosition(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx) {
+	t.Helper()
+
+	md, err := s.Get(ctx, tx.TxIDChainHash(), fields.LanePosition)
+	require.NoError(t, err)
+	require.Equal(t, lane.None, md.LanePosition)
+}
+
+// A below-checkpoint list takes its positions one at a time too, and a take that fails part way burns
+// the positions already taken as take_failed, as the list above the checkpoint does.
+func TestLanePositionBurnOfABelowCheckpointTakeThatFailed(t *testing.T) {
+	const height = 900
+
+	s, ctx := newLaneStore(t)
+
+	w := tests.BuildMultiWorkload(t, 0xdb, 1, 3)
+	w.StoreRoots(t, s, height-1)
+
+	// Two positions are taken before the third take fails, so the count is one per position taken,
+	// not one per list.
+	source := useBurnSource(t, s, burnPositions(2)...)
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, err := s.SpendAndCreateMulti(ctx, outpointOnly(w.Txs), height,
+		append(belowCheckpointOptions(height), utxo.WithCaller(utxo.CallerBlockValidation))...)
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.Equal(t, 3, source.Calls())
+
+	require.Equal(t, tests.LaneBurns{utxo.LaneBurnTakeFailed + "/block_validation": 2},
+		tests.ReadLaneBurns(t, "utxoset").Since(before))
+}
+
+// A failed chunk records each transaction's reason at its place in the whole list, not its place in
+// the chunk: here the failing chunk is the list's second, so the two differ.
+func TestLanePositionFailedChunkRecordsReasonsAtListPositions(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+
+	old := multiCreateChunkTxs
+	multiCreateChunkTxs = 2
+
+	t.Cleanup(func() { multiCreateChunkTxs = old })
+
+	root := mkTx(t, 4, 7_000)
+	_, err := s.Create(ctx, root, 1_000, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1_000, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	a := spendOutput(t, root, 0, 1)
+	b := spendOutput(t, root, 1, 1)
+	stored := spendOutput(t, root, 2, 1)
+	fresh := spendOutput(t, root, 3, 1)
+
+	_, _, err = s.SpendAndCreate(ctx, stored, 1_100)
+	require.NoError(t, err)
+
+	// The second chunk, holding stored and fresh, fails after it has found stored existing.
+	failure := errors.NewProcessingError("injected failure")
+	multiChunkFault = func(chunk int, stage string) error {
+		if chunk == 1 && stage == "created" {
+			return failure
+		}
+
+		return nil
+	}
+
+	t.Cleanup(func() { multiChunkFault = nil })
+
+	useBurnSource(t, s, burnPositions(4)...)
+	before := tests.ReadLaneBurns(t, "utxoset")
+
+	_, err = s.SpendAndCreateMulti(ctx, []*bt.Tx{a, b, stored, fresh}, 1_100, utxo.WithIgnoreLocked(true),
+		utxo.WithCaller(utxo.CallerSubtreeValidation))
+	multiChunkFault = nil
+	require.ErrorIs(t, err, failure)
+
+	require.Equal(t, 1, identityCount(t, s, ctx, a), "the first chunk committed")
+	require.Equal(t, 1, identityCount(t, s, ctx, b), "the first chunk committed")
+	require.Equal(t, 0, identityCount(t, s, ctx, fresh), "the second chunk rolled back")
+
+	require.Equal(t, tests.LaneBurns{
+		utxo.LaneBurnExists + "/subtree_validation":     1,
+		utxo.LaneBurnRolledBack + "/subtree_validation": 1,
+	}, tests.ReadLaneBurns(t, "utxoset").Since(before))
+}
+
+// useReturningSource gives s a source that records the positions it hands back.
+func useReturningSource(t *testing.T, s *Store, positions ...uint64) *tests.ReturningLanePositions {
+	t.Helper()
+
+	source := tests.NewReturningLanePositions(positions...)
+	s.SetLanePositionSource(source)
+	t.Cleanup(func() { s.SetLanePositionSource(nil) })
+
+	return source
+}
+
+// returnPositions makes n positions in lane 30.
+func returnPositions(n int) []uint64 {
+	positions := make([]uint64, n)
+	for i := range positions {
+		positions[i] = lane.Pack(30, uint64(i)+1) //nolint:gosec // i counts up from 0
+	}
+
+	return positions
+}
+
+// requireReturnedNowhere requires source to have taken back exactly want, and no row of any table
+// with a lane_position column to carry what it took back.
+func requireReturnedNowhere(t *testing.T, s *Store, source *tests.ReturningLanePositions, want ...uint64) {
+	t.Helper()
+
+	returned := source.Returned()
+
+	if len(want) == 0 {
+		require.Empty(t, returned, "nothing goes back")
+		return
+	}
+
+	require.ElementsMatch(t, want, returned)
+	require.Zero(t, utxosetLaneRows(s)(t, returned), "a row carries a returned position")
+}
+
+// The returns only utxoset makes or refuses, which the shared contract cannot reach.
+func TestLanePositionReturnsOfAUtxosetStore(t *testing.T) {
+	failure := errors.NewProcessingError("injected failure")
+
+	// A batch that fails before its COMMIT is sent rolls back whole, so its positions go back.
+	t.Run("a create batch that rolled back", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+		require.NotNil(t, s.createBatcher)
+
+		source := useReturningSource(t, s, returnPositions(1)...)
+
+		createBatchBeforeCommit = func() error { return failure }
+		t.Cleanup(func() { createBatchBeforeCommit = nil })
+
+		_, err := s.Create(ctx, mkTx(t, 1, 5_000), 1_000)
+		require.Error(t, err)
+
+		requireReturnedNowhere(t, s, source, returnPositions(1)...)
+	})
+
+	// A list chunk that fails before its COMMIT is sent rolls back whole, so its positions go back.
+	// The chunk before it committed, and the chunk after it never started: neither returns.
+	t.Run("a list chunk that rolled back, and not the chunk that never ran", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+		forceChunkOfOne(t)
+
+		root := storedParent(t, s, ctx)
+		parent := spendOutput(t, root, 0, 2)
+		child := spendOutput(t, parent, 0, 3)
+		grandchild := spendOutput(t, child, 0, 1)
+
+		// Chunk 0 holds parent and commits, chunk 1 holds child and rolls back, chunk 2 holds
+		// grandchild, waits for chunk 1, and never runs.
+		multiChunkFault = func(chunk int, stage string) error {
+			if chunk == 1 && stage == "spent" {
+				return failure
+			}
+
+			return nil
+		}
+
+		t.Cleanup(func() { multiChunkFault = nil })
+
+		source := useReturningSource(t, s, returnPositions(3)...)
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err := s.SpendAndCreateMulti(ctx, []*bt.Tx{parent, child, grandchild}, 1_100, utxo.WithIgnoreLocked(true))
+		multiChunkFault = nil
+		require.ErrorIs(t, err, failure)
+
+		requireReturnedNowhere(t, s, source, returnPositions(3)[1])
+		requireGetLane(t, s, ctx, parent, returnPositions(3)[0], "the committed chunk keeps its position")
+
+		// The returned position still counts as burned, and the chunk that never ran stays burned.
+		require.Equal(t, tests.LaneBurns{
+			utxo.LaneBurnRolledBack + "/unknown": 1,
+			utxo.LaneBurnListFailed + "/unknown": 1,
+		}, tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
+	// The same below the checkpoint, through the netted below-checkpoint write. One worker runs the
+	// chunks in list order, so the first commits before the second fails.
+	t.Run("a below-checkpoint chunk that rolled back", func(t *testing.T) {
+		const height = 900
+
+		s, ctx := newTestStoreWith(t, func(ts *settings.Settings) {
+			ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+			ts.UtxoStore.NettedBelowWorkers = 1
+		})
+		require.Equal(t, 1, s.nettedBelowWorkers())
+		withNettedBelowChunkTxs(t, 1)
+
+		w := tests.BuildMultiWorkload(t, 0xbe, 1, 3)
+		w.StoreRoots(t, s, height-1)
+
+		list := outpointOnly(w.Txs)
+
+		nettedBelowFault = func(chunk []int) error {
+			if len(chunk) == 1 && chunk[0] == 1 {
+				return failure
+			}
+
+			return nil
+		}
+
+		t.Cleanup(func() { nettedBelowFault = nil })
+
+		source := useReturningSource(t, s, returnPositions(3)...)
+		before := tests.ReadLaneBurns(t, "utxoset")
+
+		_, err := s.SpendAndCreateMulti(ctx, list, height, belowCheckpointOptions(height)...)
+		nettedBelowFault = nil
+		require.ErrorIs(t, err, failure)
+
+		requireReturnedNowhere(t, s, source, returnPositions(3)[1])
+		requireGetLane(t, s, ctx, list[0], returnPositions(3)[0], "the committed chunk keeps its position")
+
+		// The returned position still counts as burned, and the chunk that never ran stays burned.
+		require.Equal(t, tests.LaneBurns{
+			utxo.LaneBurnRolledBack + "/unknown": 1,
+			utxo.LaneBurnListFailed + "/unknown": 1,
+		}, tests.ReadLaneBurns(t, "utxoset").Since(before))
+	})
+
+	// A chunk that deadlocks rolls back and runs again with the same positions. When the second
+	// attempt commits, the transaction carries its position, though the first attempt failed before
+	// its COMMIT: nothing goes back.
+	t.Run("a list chunk that deadlocked and then committed", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+
+		root := storedParent(t, s, ctx)
+		parent := spendOutput(t, root, 0, 2)
+
+		deadlocked := false
+		multiChunkFault = func(_ int, stage string) error {
+			if stage == "spent" && !deadlocked {
+				deadlocked = true
+
+				return &pgconn.PgError{Code: "40P01", Message: "deadlock detected"}
+			}
+
+			return nil
+		}
+
+		t.Cleanup(func() { multiChunkFault = nil })
+
+		source := useReturningSource(t, s, returnPositions(1)...)
+
+		results, err := s.SpendAndCreateMulti(ctx, []*bt.Tx{parent}, 1_100, utxo.WithIgnoreLocked(true))
+		multiChunkFault = nil
+		require.NoError(t, err)
+		require.True(t, deadlocked)
+		require.Equal(t, utxo.MultiTxCreated, results[0].Status)
+
+		requireReturnedNowhere(t, s, source)
+		requireGetLane(t, s, ctx, parent, returnPositions(1)[0], "the second attempt wrote the position")
+	})
+
+	// A list's refused spend and its parent-failed child were not written, but they share their
+	// round's writes, which this does not prove unwritten: both stay burned.
+	t.Run("a list's refused spend and its child stay burned", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+
+		root := storedParent(t, s, ctx)
+
+		_, _, err := s.SpendAndCreate(ctx, spendOutput(t, root, 0, 4), 1_100)
+		require.NoError(t, err)
+
+		parent := spendOutput(t, root, 0, 2)
+		child := spendOutput(t, parent, 0, 1)
+
+		source := useReturningSource(t, s, returnPositions(2)...)
+
+		results, err := s.SpendAndCreateMulti(ctx, []*bt.Tx{parent, child}, 1_100, utxo.WithIgnoreLocked(true))
+		require.NoError(t, err)
+		require.Equal(t, utxo.MultiTxFailed, results[0].Status)
+		require.Equal(t, utxo.MultiTxParentFailed, results[1].Status)
+
+		requireReturnedNowhere(t, s, source)
+	})
+
+	// A chunk whose COMMIT was sent may have landed, so a failure after it returns nothing.
+	t.Run("a list chunk that failed after its COMMIT was sent", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+		forceChunkOfOne(t)
+
+		root := storedParent(t, s, ctx)
+		parent := spendOutput(t, root, 0, 2)
+
+		multiCreateAfterCommit = func() error { return failure }
+		t.Cleanup(func() { multiCreateAfterCommit = nil })
+
+		source := useReturningSource(t, s, returnPositions(1)...)
+
+		_, err := s.SpendAndCreateMulti(ctx, []*bt.Tx{parent}, 1_100, utxo.WithIgnoreLocked(true))
+		multiCreateAfterCommit = nil
+		require.ErrorIs(t, err, failure)
+
+		requireReturnedNowhere(t, s, source)
+		requireGetLane(t, s, ctx, parent, returnPositions(1)[0], "the commit landed with the position")
+	})
+
+	// A create batch whose COMMIT reported failure may have landed, and here it did: the record carries
+	// the position, so it must not go back.
+	t.Run("a create batch whose commit reported failure", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+		require.NotNil(t, s.createBatcher)
+
+		source := useReturningSource(t, s, returnPositions(1)...)
+
+		createCommitFault = func() error { return failure }
+		t.Cleanup(func() { createCommitFault = nil })
+
+		tx := mkTx(t, 1, 5_000)
+
+		_, err := s.Create(ctx, tx, 1_000)
+		createCommitFault = nil
+		require.Error(t, err)
+
+		requireReturnedNowhere(t, s, source)
+		requireGetLane(t, s, ctx, tx, returnPositions(1)[0], "the commit landed with the position")
+	})
+
+	// The batch's COMMIT landed and reported failure, so the item reruns alone and meets its own
+	// record. That ErrTxExists is the item's own write and must not send the position back.
+	t.Run("a rerun that meets the record its batch wrote", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+		require.NotNil(t, s.spendAndCreateBatcher)
+
+		root := tests.BuildMultiWorkload(t, 0xbf, 1, 1).Roots[0]
+		source := useReturningSource(t, s, returnPositions(1)...)
+
+		failed := false
+		spendAndCreateBatchAfterCommit = func() error {
+			if failed {
+				return nil
+			}
+
+			failed = true
+
+			return failure
+		}
+
+		t.Cleanup(func() { spendAndCreateBatchAfterCommit = nil })
+
+		_, _, err := s.SpendAndCreate(ctx, root, 1_000, utxo.WithCreateOnly())
+		require.ErrorIs(t, err, errors.ErrTxExists)
+		require.True(t, failed)
+
+		requireReturnedNowhere(t, s, source)
+		requireGetLane(t, s, ctx, root, returnPositions(1)[0], "the record carries the position")
+	})
+}
+
+// laneLeases is a lane.LeaseSource with one lane and no other holder, enough for a real allocator.
+type laneLeases struct {
+	mu   sync.Mutex
+	high uint64
+}
+
+func (l *laneLeases) grant() lane.Grant {
+	g := lane.Grant{Lane: 5, First: l.high + 1, Last: l.high + 1_000}
+	l.high = g.Last
+
+	return g
+}
+
+func (l *laneLeases) OpenLaneLease(context.Context, string) (lane.LeaseID, lane.Grant, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return lane.LeaseID{1}, l.grant(), nil
+}
+
+func (l *laneLeases) RenewLaneLease(_ context.Context, r lane.Renewal) (lane.RenewResult, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if !r.WantGrant {
+		return lane.RenewResult{}, nil
+	}
+
+	return lane.RenewResult{Granted: true, Grant: l.grant()}, nil
+}
+
+func (l *laneLeases) ReleaseLaneLease(context.Context, lane.Release) (bool, error) {
+	return false, nil
+}
+
+// With the real allocator, a validator's second create of a stored transaction sends its position
+// back, and the next create writes it, so the lane keeps its run with no hole.
+func TestARefusedCreatesPositionIsWrittenByTheNextCreate(t *testing.T) {
+	s, ctx := newUncheckpointedLaneStore(t)
+
+	allocator := lane.NewAllocator(&laneLeases{}, "reuse-test", lane.Timings{Renew: time.Hour, Stop: 2 * time.Hour, GrantDuration: time.Hour}, nil)
+	t.Cleanup(func() { _ = allocator.Close() })
+
+	s.SetLanePositionSource(allocator)
+	t.Cleanup(func() { s.SetLanePositionSource(nil) })
+
+	w := tests.BuildMultiWorkload(t, 0xb6, 1, 2)
+
+	_, _, err := s.SpendAndCreate(ctx, w.Roots[0], 1_000, utxo.WithCreateOnly())
+	require.NoError(t, err)
+
+	_, _, err = s.SpendAndCreate(ctx, w.Roots[0], 1_000, utxo.WithCreateOnly())
+	require.ErrorIs(t, err, errors.ErrTxExists)
+
+	_, _, err = s.SpendAndCreate(ctx, w.Roots[1], 1_000, utxo.WithCreateOnly())
+	require.NoError(t, err)
+
+	requireGetLane(t, s, ctx, w.Roots[0], lane.Pack(5, 1), "the first create")
+	requireGetLane(t, s, ctx, w.Roots[1], lane.Pack(5, 2), "the refused create's position, written by the next")
+}
+
+// laneSchemaColumnsWant is every lane column PrepareLaneSchema installs, written out here rather
+// than read from laneSchemaColumns so a column dropped from that list fails these tests.
+// Each entry is table, column and the Postgres data_type: a lane position is a signed 64-bit
+// integer (lane 128 and up is negative) and a parent list is eight bytes per parent.
+var laneSchemaColumnsWant = [][3]string{
+	{"tx_ident", "lane_position", "bigint"},
+	{"tx_mined", "lane_position", "bigint"},
+	{"preserved_parent", "lane_position", "bigint"},
+	{"tx_ident", "parent_lane_positions", "bytea"},
+	{"tx_mined", "parent_lane_positions", "bytea"},
+	{"preserved_parent", "parent_lane_positions", "bytea"},
+	{"utxo", "lane_position", "bigint"},
+	{"spend_journal", "lane_position", "bigint"},
+}
+
+// columnType is a column's Postgres data_type, or "" when it has none.
+func columnType(t *testing.T, s *Store, ctx context.Context, table, column string) string {
+	t.Helper()
+
+	var typ string
+
+	err := s.pool.QueryRow(ctx, `SELECT data_type FROM information_schema.columns
+	                              WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2`, table, column).Scan(&typ)
+	if err != nil {
+		return ""
+	}
+
+	return typ
+}
+
+// Opening the store with lane positions on adds only the record's own lane_position, on the three
+// identity tables; the other five lane columns, which nothing in this build writes, wait for
+// PrepareLaneSchema, so rows do not carry a null bitmap for columns that stay empty.
+func TestLanePositionsOnAddsOnlyTheOwnPositionColumns(t *testing.T) {
+	s, ctx := newTestStore(t)
+	on := reopenWithFlag(t, s, true)
+
+	for _, table := range []string{"tx_ident", "tx_mined", "preserved_parent"} {
+		require.True(t, hasColumn(t, on, ctx, table, "lane_position"), table)
+	}
+
+	for _, c := range laneSchemaColumnsWant[3:] {
+		require.False(t, hasColumn(t, on, ctx, c[0], c[1]), "%s.%s arrives only with PrepareLaneSchema", c[0], c[1])
+	}
+
+	installed, err := on.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.False(t, installed)
+
+	require.NoError(t, on.PrepareLaneSchema(ctx))
+
+	for _, c := range laneSchemaColumnsWant {
+		require.True(t, hasColumn(t, on, ctx, c[0], c[1]), "%s.%s", c[0], c[1])
+		require.Equal(t, c[2], columnType(t, on, ctx, c[0], c[1]), "%s.%s type", c[0], c[1])
+	}
+
+	installed, err = on.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.True(t, installed)
+
+	// Any one column missing, the last in the list included, is not installed.
+	_, err = on.pool.Exec(ctx, `ALTER TABLE spend_journal DROP COLUMN lane_position`)
+	require.NoError(t, err)
+
+	installed, err = on.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.False(t, installed)
+
+	// A catalog query that fails is reported, not read as "not installed".
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	_, err = on.LaneSchemaInstalled(cancelled)
+	require.Error(t, err)
+}
+
+// PrepareLaneSchema keeps retrying a lock timeout for its limit: a transaction that holds the
+// table for a second delays it and does not fail it.
+func TestPrepareLaneSchemaWaitsOutAShortLock(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	blocker, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	var n int64
+	require.NoError(t, blocker.QueryRow(ctx, `SELECT count(*) FROM spend_journal`).Scan(&n))
+
+	// Only this goroutine touches the blocking transaction from here on, and the test waits for it.
+	released := make(chan struct{})
+
+	go func() {
+		defer close(released)
+
+		time.Sleep(time.Second)
+
+		_ = blocker.Rollback(ctx)
+	}()
+
+	err = s.PrepareLaneSchema(ctx)
+	<-released
+
+	require.NoError(t, err)
+	require.True(t, hasColumn(t, s, ctx, "spend_journal", "lane_position"))
+}
+
+// The limit is one deadline for the pass, not one per attempt: with the table held well past the
+// limit, the add gives up soon after the limit instead of retrying until the holder lets go.
+func TestLaneColumnAddGivesUpAtItsLimitAcrossRetries(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	blocker, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = blocker.Rollback(ctx) }()
+
+	var n int64
+	require.NoError(t, blocker.QueryRow(ctx, `SELECT count(*) FROM tx_ident`).Scan(&n))
+
+	// The context ends long after the limit, so an add that kept renewing its deadline stops only
+	// there, and too late.
+	addCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	err = addLanePositionColumns(addCtx, s.pool, 1500*time.Millisecond)
+	require.Error(t, err, "the table is still held at the limit")
+	require.Less(t, time.Since(started), 8*time.Second)
+}
+
+// The deadline is shared by every column of a pass. The first column's table is held for two of
+// the three seconds and then released; the second's is held throughout. The pass gives up on the
+// second column at the shared deadline, about 3.6 s in. A fresh deadline per column would keep
+// retrying the second until about 7 s.
+func TestLaneColumnPassSharesOneDeadline(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	holdMined, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = holdMined.Rollback(ctx) }()
+
+	var n int64
+	require.NoError(t, holdMined.QueryRow(ctx, `SELECT count(*) FROM tx_mined`).Scan(&n))
+
+	holdIdent, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, holdIdent.QueryRow(ctx, `SELECT count(*) FROM tx_ident`).Scan(&n))
+
+	// One release, from whichever goroutine gets there first: the timer, or the test ending.
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { _ = holdIdent.Rollback(context.Background()) }) }
+
+	timer := time.AfterFunc(2*time.Second, release)
+	defer func() {
+		timer.Stop()
+		release()
+	}()
+
+	addCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	err = addLanePositionColumns(addCtx, s.pool, 3*time.Second)
+	elapsed := time.Since(started)
+
+	require.ErrorContains(t, err, "tx_mined", "the second column is still held")
+	require.True(t, hasLaneColumn(t, s, ctx, "tx_ident"), "the first column went in once its table was free")
+	require.Less(t, elapsed, 5500*time.Millisecond, "one deadline for the pass, not one per column")
+}
+
+// hasColumn reports whether table has column, nullable with no default.
+func hasColumn(t *testing.T, s *Store, ctx context.Context, table, column string) bool {
+	t.Helper()
+
+	var found bool
+
+	require.NoError(t, s.pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		                WHERE table_schema = current_schema() AND table_name = $1
+		                  AND column_name = $2 AND is_nullable = 'YES' AND column_default IS NULL)`, table, column).Scan(&found))
+
+	return found
+}
+
+// The lane schema is installed at off, on a database holding outputs, journal rows and mined
+// records, before any historical numbering. It rewrites no row, every attached partition gets the
+// columns, and every disabled writer keeps working against it: create, spend, mine, the journal
+// copy-forward and drop, Unspend and lookup, in the process that installed it and after a restart.
+func TestLaneSchemaInstalledAtOffKeepsDisabledWritersWorking(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent := mkTx(t, 3, 5_000)
+	_, err := s.Create(ctx, parent, 1_000, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1_000, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	waiting := spendOneOutput(t, s, ctx, parent, 0, 1_010)
+	spendOneOutputInBlock(t, s, ctx, parent, 1, 1_010, 2)
+
+	installed, err := s.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.False(t, installed, "off adds nothing on open")
+
+	var before string
+	require.NoError(t, s.pool.QueryRow(ctx, `SELECT string_agg(encode(ukey::text::bytea, 'hex') || satoshis::text, ',' ORDER BY ukey) FROM utxo`).Scan(&before))
+
+	require.NoError(t, s.PrepareLaneSchema(ctx))
+	require.NoError(t, s.PrepareLaneSchema(ctx), "a second run is a no-op")
+
+	installed, err = s.LaneSchemaInstalled(ctx)
+	require.NoError(t, err)
+	require.True(t, installed)
+
+	for _, c := range laneSchemaColumnsWant {
+		require.True(t, hasColumn(t, s, ctx, c[0], c[1]), "%s.%s", c[0], c[1])
+	}
+
+	for _, leaf := range []string{"utxo_p0", "utxo_p7", "tx_ident_l0"} {
+		require.True(t, hasColumn(t, s, ctx, leaf, "lane_position"), "partition %s", leaf)
+	}
+
+	var journalLeaves []string
+
+	rows, err := s.pool.Query(ctx, `SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid WHERE i.inhparent = 'spend_journal'::regclass`)
+	require.NoError(t, err)
+
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+
+		journalLeaves = append(journalLeaves, name)
+	}
+
+	rows.Close()
+	require.NotEmpty(t, journalLeaves)
+
+	for _, leaf := range journalLeaves {
+		require.True(t, hasColumn(t, s, ctx, leaf, "lane_position"), "journal partition %s", leaf)
+	}
+
+	// No row was rewritten or given a value.
+	var after string
+	require.NoError(t, s.pool.QueryRow(ctx, `SELECT string_agg(encode(ukey::text::bytea, 'hex') || satoshis::text, ',' ORDER BY ukey) FROM utxo`).Scan(&after))
+	require.Equal(t, before, after)
+
+	for _, c := range laneSchemaColumnsWant {
+		var n int
+		require.NoError(t, s.pool.QueryRow(ctx, `SELECT count(*) FROM `+c[0]+` WHERE `+c[1]+` IS NOT NULL`).Scan(&n))
+		require.Zero(t, n, "%s.%s holds no value", c[0], c[1])
+	}
+
+	// The process that installed the schema still runs main's statements, and a restart at off
+	// sees the columns and carries on.
+	for name, store := range map[string]*Store{"installing process": s, "restarted at off": reopenWithFlag(t, s, false)} {
+		fresh := mkTx(t, 2, 6_000+uint64(len(name)))
+		_, err = store.Create(ctx, fresh, 1_020)
+		require.NoError(t, err, name)
+
+		spender := spendOneOutput(t, store, ctx, fresh, 0, 1_021)
+
+		_, err = store.SetMinedMulti(ctx, hashes(fresh), utxo.MinedBlockInfo{BlockID: 3, BlockHeight: 1_022, OnLongestChain: true})
+		require.NoError(t, err, name)
+
+		spends, err := utxo.GetSpends(spender)
+		require.NoError(t, err)
+		require.NoError(t, store.Unspend(ctx, spends), name)
+		require.Equal(t, 2, utxoCount(t, store, ctx, fresh), "%s: Unspend restores from the journal", name)
+
+		_, err = store.Get(ctx, fresh.TxIDChainHash())
+		require.NoError(t, err, name)
+	}
+
+	// The journal partition holding the waiting spend is retired: its row is copied forward into
+	// a live partition and survives with the new column present.
+	require.NoError(t, s.SetBlockHeight(1_728))
+
+	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
+	require.NoError(t, err)
+	require.Positive(t, dropped)
+	require.Equal(t, 1, journalRowsFor(t, s, ctx, parent, 0), "the waiting spend is carried forward")
+
+	spends, err := utxo.GetSpends(waiting)
+	require.NoError(t, err)
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Equal(t, 2, utxoCount(t, s, ctx, parent), "the carried row rebuilds the coin")
 }

@@ -259,7 +259,14 @@ FUZZ_TARGETS = \
 	services/legacy/peer:FuzzReadWireMessage \
 	services/legacy/peer:FuzzStreamingBlockFraming \
 	services/rpc/bsvjson:FuzzParseRPCRequest \
-	services/rpc/bsvjson:FuzzUnmarshalCmd
+	services/rpc/bsvjson:FuzzUnmarshalCmd \
+	util/lane:FuzzDecodeDiskPayload \
+	util/lane:FuzzDecodeHoleData \
+	util/lane:FuzzDecodeSubtreePositions \
+	util/lane:FuzzDecodeProofFile \
+	util/lane:FuzzDecodeSubtreeBitmaps \
+	util/lane/backfill:FuzzOpenManifest \
+	stores/utxo/meta:FuzzNewDataFromLaneMetaBytes
 
 # Per-target budget. The nightly workflow uses 5m; the default here is kept
 # short so `make fuzz` is usable as a pre-push check.

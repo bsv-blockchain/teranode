@@ -2874,6 +2874,7 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 			utxo.WithIgnoreLocked(true),
 			utxo.WithSkipExtendedInputs(outpointOnly),
 			utxo.WithSkipUTXOHashCheck(outpointOnly),
+			utxo.WithCaller(utxo.CallerBlockValidation),
 		}
 	}
 
@@ -3094,7 +3095,8 @@ func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block,
 				utxo.WithLocked(lockUTXOs),
 				utxo.WithIgnoreLocked(true),
 				utxo.WithSkipExtendedInputs(outpointOnly),
-				utxo.WithSkipUTXOHashCheck(outpointOnly))
+				utxo.WithSkipUTXOHashCheck(outpointOnly),
+				utxo.WithCaller(utxo.CallerBlockValidation))
 
 			cancel()
 

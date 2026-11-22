@@ -552,6 +552,8 @@ func createPostgresSchema(logger ulogger.Logger, db *usql.DB, withIndexes bool) 
 			return err
 		}
 
+		setLaneMapHoleDataStorage(logger, db)
+
 		current, err := isBlockchainSchemaCurrent(db, withIndexes)
 		if err != nil {
 			logger.Warnf("[blockchain schema] current-schema probe failed, will run full DDL: %v", err)
@@ -1079,8 +1081,8 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 	return nil
 }
 
-// createPostgresLaneTables creates the lane tables: lane_handout, lane_lease and lane_close, and
-// the lease columns on a lane_handout from before the lease. It touches no other table, so
+// createPostgresLaneTables creates the lane tables: lane_handout, lane_lease and lane_close, the
+// map, floor, gap and conversion tables of lane_map.go, and the lease columns on a lane_handout from before the lease. It touches no other table, so
 // createPostgresSchema runs it ahead of the fast-path probe: a database from before the lane tables
 // gains them without taking the full DDL path, whose peer_id ALTER takes ACCESS EXCLUSIVE on blocks.
 //
@@ -1124,6 +1126,9 @@ func createPostgresLaneTables(db *usql.DB) error {
 			);`},
 	}
 
+	// The map, floor, gap and conversion tables, and the map's index, go behind the same check.
+	tables = append(tables, laneMapPostgresTables...)
+
 	for _, table := range tables {
 		var exists bool
 		if err := db.QueryRow(`SELECT to_regclass($1) IS NOT NULL`, table.name).Scan(&exists); err != nil {
@@ -1135,7 +1140,7 @@ func createPostgresLaneTables(db *usql.DB) error {
 		}
 
 		if _, err := db.Exec(table.ddl); err != nil {
-			return errors.NewStorageError("could not create %s table", table.name, err)
+			return errors.NewStorageError("could not create %s", table.name, err)
 		}
 	}
 
@@ -1162,6 +1167,61 @@ func createPostgresLaneTables(db *usql.DB) error {
 	}
 
 	return nil
+}
+
+// laneMapStorageLockTimeout bounds how long startup waits for the lock that setting
+// lane_map.hole_data's storage needs, so a session holding lane_map cannot stall startup while it
+// holds the blockchain schema lock.
+const laneMapStorageLockTimeout = 2 * time.Second
+
+// laneMapStorageLockTimeoutSQL sets laneMapStorageLockTimeout for the ALTER's transaction. It is a
+// literal so the statement is never built at run time; a test keeps the two in step.
+const laneMapStorageLockTimeoutSQL = `SET LOCAL lock_timeout = '2000ms'`
+
+// setLaneMapHoleDataStorage asks Postgres to store lane_map.hole_data out of line without trying
+// to compress it, once a row is large enough to be moved out of line at all. Hole data is a Roaring
+// bitmap, already compact, so the default compression attempt costs CPU at commit for little or no
+// saving. Small hole data stays inline whatever the setting, and changing it rewrites no stored
+// value: it applies to later writes.
+//
+// It is a performance setting only, so it never stops startup. A current schema runs no DDL: the
+// catalog check comes first. Otherwise the ALTER waits at most laneMapStorageLockTimeout for its
+// lock, and a timeout, or a role that does not own lane_map, is logged as a warning and the store
+// starts with the default storage; the table's owner can run the ALTER by hand.
+func setLaneMapHoleDataStorage(logger ulogger.Logger, db *usql.DB) {
+	var storage string
+	if err := db.QueryRow(
+		`SELECT a.attstorage::text FROM pg_attribute a WHERE a.attrelid = 'lane_map'::regclass AND a.attname = 'hole_data' AND NOT a.attisdropped`,
+	).Scan(&storage); err != nil {
+		logger.Warnf("[blockchain schema] could not read lane_map.hole_data storage, leaving it as it is: %v", err)
+		return
+	}
+
+	if storage == "e" {
+		return
+	}
+
+	err := func() error {
+		tx, err := db.BeginTx(context.Background(), nil)
+		if err != nil {
+			return err
+		}
+
+		defer func() { _ = tx.Rollback() }()
+
+		if _, err = tx.Exec(laneMapStorageLockTimeoutSQL); err != nil {
+			return err
+		}
+
+		if _, err = tx.Exec(`ALTER TABLE lane_map ALTER COLUMN hole_data SET STORAGE EXTERNAL`); err != nil {
+			return err
+		}
+
+		return tx.Commit()
+	}()
+	if err != nil {
+		logger.Warnf("[blockchain schema] lane_map.hole_data keeps its default storage; the table owner can run ALTER TABLE lane_map ALTER COLUMN hole_data SET STORAGE EXTERNAL: %v", err)
+	}
 }
 
 // addMinedSetGenColumn adds the mined_set_gen column to blocks when probeQuery, which must
@@ -1525,6 +1585,10 @@ func createSqliteLaneTables(db *usql.DB) error {
 		);
 	`); err != nil {
 		return errors.NewStorageError("could not create lane_close table", err)
+	}
+
+	if _, err := db.Exec(laneMapSqliteDDL); err != nil {
+		return errors.NewStorageError("could not create the lane map tables", err)
 	}
 
 	return nil

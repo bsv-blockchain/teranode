@@ -782,6 +782,9 @@ func httpStatusForTxError(err error) int {
 		errors.Is(err, errors.ErrTxCreating):
 		return http.StatusConflict
 	case errors.Is(err, errors.ErrTxMissingParent):
+		// Must stay above the ErrServiceUnavailable arm. A DAH-grace fault is a
+		// missing-parent error that wraps a node fault (SERVICE_UNAVAILABLE or
+		// STORAGE_ERROR), and it keeps its pre-grace 422.
 		return http.StatusUnprocessableEntity
 	case errors.Is(err, errors.ErrServiceUnavailable):
 		// The node is syncing and refused the tx at intake (issue 2003).

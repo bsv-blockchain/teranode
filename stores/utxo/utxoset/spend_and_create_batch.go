@@ -45,11 +45,27 @@ import (
 // A variable rather than a constant so a test can force the split.
 var spendAndCreateBatchByteBudget = 16 << 20
 
+// spendAndCreateBatchAfterCommit is a test hook called after a batch commits. An error from it is
+// returned as the commit's, which is the shape of a commit the server made and the client did not
+// hear about. nil in production.
+var spendAndCreateBatchAfterCommit func() error
+
+// spendAndCreateBatchFault is a test hook called after a batch round's BEGIN, with its transaction
+// open. An error from it fails the batch as a failed statement does, before any COMMIT is sent. nil
+// in production.
+var spendAndCreateBatchFault func() error
+
 // spendAndCreateResult is what one queued SpendAndCreate gets back.
 type spendAndCreateResult struct {
 	data   *meta.Data
 	spends []*utxo.Spend
 	err    error
+
+	// rerunAfterCommitError is true when the item was rerun alone after its batch's COMMIT
+	// reported failure. That COMMIT may still have landed, so the rerun's ErrTxExists can be the
+	// item's own record, carrying the position the item took. A batch that failed before sending
+	// its COMMIT rolled back whole, so a rerun after it is an ordinary single call.
+	rerunAfterCommitError bool
 }
 
 // inputClaim is what an input said about the UTXO it spends when the call arrived.
@@ -233,7 +249,7 @@ func (s *Store) applyChunk(chunk []*spendAndCreateItem, delivered []bool) {
 		return
 	}
 
-	results, final, err := s.runSpendAndCreateBatch(ctx, chunk)
+	results, final, commitFailed, err := s.runSpendAndCreateBatch(ctx, chunk)
 	if err != nil {
 		// A batch-level failure: BEGIN, a statement, or COMMIT failed. Everything the batch
 		// did was rolled back, or on an ambiguous COMMIT may have landed, and the single path
@@ -276,7 +292,7 @@ func (s *Store) applyChunk(chunk []*spendAndCreateItem, delivered []bool) {
 		item.restoreClaims()
 
 		data, spends, ierr := s.spendAndCreateOne(ctx, item.tx, item.blockHeight, item.options, item.opts...)
-		deliver(i, spendAndCreateResult{data: data, spends: spends, err: ierr})
+		deliver(i, spendAndCreateResult{data: data, spends: spends, err: ierr, rerunAfterCommitError: commitFailed})
 	}
 }
 
@@ -387,8 +403,11 @@ func countSpendFailures(spends []*utxo.Spend) (int, error) {
 // round collects every failure at once, and a second round fails only if a competitor committed
 // in between, which it may well have, since the rollback is what released the rows it was
 // waiting on.
+//
+// commitFailed is true when the error came from the COMMIT, which may have landed. Any other error
+// came before the COMMIT was sent, and the batch rolled back whole.
 func (s *Store) runSpendAndCreateBatch(ctx context.Context, batch []*spendAndCreateItem) (
-	[]spendAndCreateResult, []bool, error) {
+	[]spendAndCreateResult, []bool, bool, error) {
 	results := make([]spendAndCreateResult, len(batch))
 
 	// rejected marks an item whose verdict is fixed: it failed the spend phase and nothing it
@@ -451,12 +470,19 @@ func (s *Store) runSpendAndCreateBatch(ctx context.Context, batch []*spendAndCre
 
 		dbTx, err = s.pool.Begin(ctx)
 		if err != nil {
-			return results, rejected, errors.NewStorageError("[utxoset][SpendAndCreate] begin batch", err)
+			return results, rejected, false, errors.NewStorageError("[utxoset][SpendAndCreate] begin batch", err)
+		}
+
+		if spendAndCreateBatchFault != nil {
+			if err = spendAndCreateBatchFault(); err != nil {
+				rollback()
+				return results, rejected, false, err
+			}
 		}
 
 		if err = s.lockTxids(ctx, dbTx, lockIDs); err != nil {
 			rollback()
-			return results, rejected, err
+			return results, rejected, false, err
 		}
 
 		items := make([]*spendItem, len(active))
@@ -469,7 +495,7 @@ func (s *Store) runSpendAndCreateBatch(ctx context.Context, batch []*spendAndCre
 
 		if err = s.runSpendPlan(ctx, dbTx, plan); err != nil {
 			rollback()
-			return results, rejected, err
+			return results, rejected, false, err
 		}
 
 		survivors := active[:0]
@@ -533,18 +559,18 @@ func (s *Store) runSpendAndCreateBatch(ctx context.Context, batch []*spendAndCre
 		if dbTx == nil {
 			dbTx, err = s.pool.Begin(ctx)
 			if err != nil {
-				return results, rejected, errors.NewStorageError("[utxoset][SpendAndCreate] begin creates", err)
+				return results, rejected, false, errors.NewStorageError("[utxoset][SpendAndCreate] begin creates", err)
 			}
 		}
 
 		if err = s.lockTxids(ctx, dbTx, plan.txids); err != nil {
 			rollback()
-			return results, rejected, err
+			return results, rejected, false, err
 		}
 
 		if err = s.runCreatePlan(ctx, dbTx, plan); err != nil {
 			rollback()
-			return results, rejected, err
+			return results, rejected, false, err
 		}
 
 		// ErrTxExists lands here, per item, with that item's spends still in the transaction
@@ -560,10 +586,16 @@ func (s *Store) runSpendAndCreateBatch(ctx context.Context, batch []*spendAndCre
 	if dbTx != nil {
 		if err = dbTx.Commit(ctx); err != nil {
 			rollback()
-			return results, rejected, errors.NewStorageError("[utxoset][SpendAndCreate] commit batch", err)
+			return results, rejected, true, errors.NewStorageError("[utxoset][SpendAndCreate] commit batch", err)
 		}
 
 		dbTx = nil
+
+		if spendAndCreateBatchAfterCommit != nil {
+			if err = spendAndCreateBatchAfterCommit(); err != nil {
+				return results, rejected, true, errors.NewStorageError("[utxoset][SpendAndCreate] commit batch", err)
+			}
+		}
 	}
 
 	// Durable. Everything is final now except the items still waiting on a sibling's fate.
@@ -572,7 +604,7 @@ func (s *Store) runSpendAndCreateBatch(ctx context.Context, batch []*spendAndCre
 		final[i] = !deferred[i]
 	}
 
-	return results, final, nil
+	return results, final, false, nil
 }
 
 // lostToASibling reports whether any failure on an item is a UTXO taken by another item of the
