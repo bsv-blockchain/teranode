@@ -41,9 +41,9 @@ func (u *BlockValidation) laneRows(ctx context.Context, block *model.Block) []la
 	bitmaps, missing, unreadable, timedOut := u.readSubtreeLaneBitmaps(ctx, block)
 
 	if missing > 0 || unreadable > 0 || timedOut > 0 {
-		lane.CountMissingBitmaps(lane.MissingBitmapsAbsent, missing)
-		lane.CountMissingBitmaps(lane.MissingBitmapsUnreadable, unreadable)
-		lane.CountMissingBitmaps(lane.MissingBitmapsTimedOut, timedOut)
+		lane.CountMissingBitmaps(lane.BlockPeer, lane.MissingBitmapsAbsent, missing)
+		lane.CountMissingBitmaps(lane.BlockPeer, lane.MissingBitmapsUnreadable, unreadable)
+		lane.CountMissingBitmaps(lane.BlockPeer, lane.MissingBitmapsTimedOut, timedOut)
 		u.logger.Warnf("[laneRows][%s] storing the block without lane rows: of its %d subtrees, %d have no lane bitmaps, %d have unreadable ones and %d were not read in time", block.Hash().String(), len(block.Subtrees), missing, unreadable, timedOut)
 
 		return nil
@@ -51,14 +51,14 @@ func (u *BlockValidation) laneRows(ctx context.Context, block *model.Block) []la
 
 	rows, err := lane.BuildBlockRows(bitmaps)
 	if err != nil {
-		lane.CountRowInsertFailure()
+		lane.CountRowInsertFailure(lane.BlockPeer)
 		u.logger.Warnf("[laneRows][%s] storing the block without lane rows, which could not be built: %v", block.Hash().String(), err)
 
 		return nil
 	}
 
-	lane.ObserveGate(lane.GateStageBuild, time.Since(start))
-	lane.ObserveBlockRows(rows)
+	lane.ObserveGate(lane.BlockPeer, lane.GateStageBuild, time.Since(start))
+	lane.ObserveBlockRows(lane.BlockPeer, rows)
 	u.checkLaneRowCount(block, rows.Members)
 
 	return rows.Rows
@@ -81,7 +81,7 @@ func (u *BlockValidation) checkLaneRowCount(block *model.Block, members uint64) 
 		direction = lane.MismatchMore
 	}
 
-	lane.CountRowMismatch(direction)
+	lane.CountRowMismatch(lane.BlockPeer, direction)
 	u.logger.Warnf("[laneRows][%s] lane rows hold %d members, the block has %d transactions besides its coinbase", block.Hash().String(), members, want)
 }
 

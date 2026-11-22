@@ -34,6 +34,8 @@ const (
 type laneRowsToStore struct {
 	rows    []lane.MapRow
 	elapsed time.Duration
+	// block is the lane metrics' block label, lane.BlockPeer or lane.BlockOwn.
+	block string
 }
 
 // checkedLaneMapRows returns the rows StoreBlock is to insert with block, checked with
@@ -47,13 +49,13 @@ func (s *SQL) checkedLaneMapRows(block *model.Block, o options.StoreBlockOptions
 	start := time.Now()
 
 	if err := lane.CheckMapRows(o.LaneMapRows); err != nil {
-		lane.CountRowInsertFailure()
+		lane.CountRowInsertFailure(o.LaneMetricsBlock())
 		s.logger.Warnf("[StoreBlock][%s] storing the block without its lane map rows, which fail their check: %v", block.Hash().String(), err)
 
 		return nil
 	}
 
-	return &laneRowsToStore{rows: o.LaneMapRows, elapsed: time.Since(start)}
+	return &laneRowsToStore{rows: o.LaneMapRows, elapsed: time.Since(start), block: o.LaneMetricsBlock()}
 }
 
 // insertLaneMapRowsWithBlock inserts rows for the block just written as blockID, inside tx, under
@@ -67,7 +69,7 @@ func (s *SQL) insertLaneMapRowsWithBlock(ctx context.Context, tx *sql.Tx, block 
 	defer func() { rows.elapsed += time.Since(start) }()
 
 	if blockID > math.MaxUint32 {
-		lane.CountRowInsertFailure()
+		lane.CountRowInsertFailure(rows.block)
 		s.logger.Warnf("[StoreBlock][%s] storing the block without its lane map rows: block ID %d is wider than the map's 32 bits", block.Hash().String(), blockID)
 
 		return nil
@@ -82,7 +84,7 @@ func (s *SQL) insertLaneMapRowsWithBlock(ctx context.Context, tx *sql.Tx, block 
 			return rbErr
 		}
 
-		lane.CountRowInsertFailure()
+		lane.CountRowInsertFailure(rows.block)
 		s.logger.Warnf("[StoreBlock][%s] storing the block without its lane map rows, whose insert failed: %v", block.Hash().String(), err)
 	}
 

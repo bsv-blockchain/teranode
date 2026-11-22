@@ -7,7 +7,19 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
+
+// positionedSerializedInpointsMap is a serializedInpointsMap that also gives the lane position it
+// keeps with a tx, read under the same lock as its inpoints (the in-memory SplitTxInpointsMap), so
+// a subtree's lane bitmaps are built in the pass that builds its meta.
+type positionedSerializedInpointsMap interface {
+	serializedInpointsMap
+	// AppendMetaInpointsAt is AppendMetaInpoints that also returns the lane position, 0 for none.
+	AppendMetaInpointsAt(dst []byte, hash chainhash.Hash) (out []byte, position uint64, found bool, err error)
+	// Position returns the lane position kept with hash, 0 for none.
+	Position(hash chainhash.Hash) uint64
+}
 
 // serializedInpointsMap is a parent tx map that keeps inpoints serialized (the
 // in-memory SplitTxInpointsMap). It copies a record into dst while holding its
@@ -34,8 +46,17 @@ var emptyInpointsWire = [4]byte{} // TxInpoints.Serialize of inpoints without pa
 // Meta and serializing it fails: a node with no inpoints anywhere, inpoints
 // that cannot be serialized, or parent hashes that were never set on any node
 // but the first.
-func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpointsMap, deletedTxs *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints]) ([]byte, error) {
+//
+// With laneBits, at utxostore_laneMigration shadow, it also adds every node's lane position to
+// laneBits, from the same read when parents keeps positions; a node found only in deletedTxs has
+// none. laneBits is complete only when it returns no error.
+func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpointsMap, deletedTxs *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints], laneBits *lane.BitmapsBuilder) ([]byte, error) {
 	nodes := subtree.Nodes
+
+	var positioned positionedSerializedInpointsMap
+	if laneBits != nil {
+		positioned, _ = parents.(positionedSerializedInpointsMap)
+	}
 
 	// root hash, node count, and for a typical tx one parent with a vout or two
 	out := make([]byte, 0, chainhash.HashSize+4+len(nodes)*(4+chainhash.HashSize+8))
@@ -54,18 +75,31 @@ func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpoin
 		}
 
 		var (
-			found bool
-			err   error
+			found    bool
+			err      error
+			position uint64
 		)
 
-		if idx == 0 {
+		switch {
+		case idx == 0:
 			out, found, err = parents.AppendSerialized(out, node.Hash)
-		} else {
+
+			if positioned != nil && found {
+				position = positioned.Position(node.Hash)
+			}
+		case positioned != nil:
+			out, position, found, err = positioned.AppendMetaInpointsAt(out, node.Hash)
+		default:
 			out, found, err = parents.AppendMetaInpoints(out, node.Hash)
 		}
 
 		if err != nil {
 			return nil, errors.NewProcessingError("inpoints of node %s cannot be serialized", node.Hash.String(), err)
+		}
+
+		if laneBits != nil {
+			// a node found only in deletedTxs, below, has no position
+			laneBits.Add(position)
 		}
 
 		if found {

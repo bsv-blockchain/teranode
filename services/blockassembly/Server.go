@@ -46,6 +46,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/bump"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
@@ -113,6 +114,10 @@ type BlockAssembly struct {
 
 	// jobStore caches mining jobs with TTL
 	jobStore *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job]
+
+	// ownLaneBitmaps keeps the lane bitmaps of the subtrees this service stored, by subtree hash,
+	// for the lane map rows of the blocks it mines, at utxostore_laneMigration shadow (lane_rows.go).
+	ownLaneBitmaps ownLaneBitmaps
 
 	// jobCoinbaseMu makes GetMiningCandidate's read of a job's coinbase and its store of the new
 	// job one step, so two polls that share a candidate id cannot each build a coinbase and leave
@@ -910,13 +915,16 @@ func (ba *BlockAssembly) sendSubtreeNotification(ctx context.Context, subtreeHas
 
 // buildSubtreeMeta returns the serialized subtree meta of the subtree in the
 // request, or false, after logging why, when it cannot be built.
-func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSubtreeRequest) ([]byte, bool) {
+//
+// With laneBits, at utxostore_laneMigration shadow, it adds every node's lane position to laneBits
+// in the same pass, read with its inpoints. laneBits is complete only when it reports true.
+func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSubtreeRequest, laneBits *lane.BitmapsBuilder) ([]byte, bool) {
 	subtree := subtreeRequest.Subtree
 
 	// An in-memory tx map keeps the inpoints serialized, so the meta is put
 	// together from those bytes without decoding and encoding every tx's inpoints.
 	if serialized, ok := subtreeRequest.ParentTxMap.(serializedInpointsMap); ok {
-		subtreeMetaBytes, err := buildSubtreeMetaBytes(subtree, serialized, subtreeRequest.DeletedTxs)
+		subtreeMetaBytes, err := buildSubtreeMetaBytes(subtree, serialized, subtreeRequest.DeletedTxs, laneBits)
 		if err != nil {
 			ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to build subtree meta: %s", subtree.RootHash().String(), err)
 			return nil, false
@@ -936,22 +944,51 @@ func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSub
 		GetWithErr(hash chainhash.Hash) (*subtreepkg.TxInpoints, bool, error)
 	})
 
+	// DiskTxMap reads a tx's lane position from the record its inpoints are read from.
+	var parentTxMapWithPosition interface {
+		GetAtWithErr(hash chainhash.Hash) (*subtreepkg.TxInpoints, uint64, bool, error)
+	}
+
+	if laneBits != nil {
+		parentTxMapWithPosition, _ = subtreeRequest.ParentTxMap.(interface {
+			GetAtWithErr(hash chainhash.Hash) (*subtreepkg.TxInpoints, uint64, bool, error)
+		})
+	}
+
 	for idx, node := range subtreeRequest.Subtree.Nodes {
 		if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 			var (
 				txInpoints *subtreepkg.TxInpoints
 				found      bool
+				position   uint64
 			)
 
-			if parentTxMapSupportsErr {
+			switch {
+			case parentTxMapWithPosition != nil:
+				var getErr error
+
+				txInpoints, position, found, getErr = parentTxMapWithPosition.GetAtWithErr(node.Hash)
+				if getErr != nil {
+					ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] error reading parent tx hashes for node %s: %s", subtreeRequest.Subtree.RootHash().String(), node.Hash.String(), getErr)
+				}
+			case parentTxMapSupportsErr:
 				var getErr error
 
 				txInpoints, found, getErr = parentTxMapWithErr.GetWithErr(node.Hash)
 				if getErr != nil {
 					ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] error reading parent tx hashes for node %s: %s", subtreeRequest.Subtree.RootHash().String(), node.Hash.String(), getErr)
 				}
-			} else {
+			default:
 				txInpoints, found = subtreeRequest.ParentTxMap.Get(node.Hash)
+
+				if laneBits != nil && found {
+					position = subtreeRequest.ParentTxMap.Position(node.Hash)
+				}
+			}
+
+			if laneBits != nil {
+				// a node found only in DeletedTxs, below, has no position
+				laneBits.Add(position)
 			}
 
 			if !found && subtreeRequest.DeletedTxs != nil {
@@ -1007,15 +1044,24 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	)
 	defer deferFn()
 
+	// At utxostore_laneMigration shadow the subtree's lane bitmaps are built from the positions the
+	// pool keeps, kept in memory for the rows of a block mined from it, and stored before the
+	// subtree file (lane_rows.go).
+	lanes := ba.keepsLanePositions()
+
 	// Check whether this subtree already exists in the store
 	if ok, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree); ok {
 		ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree already exists, updating DeleteAtHeight", subtree.RootHash().String())
-		dah := ba.blockAssembler.utxoStore.GetBlockHeight() + ba.settings.GlobalBlockHeightRetention
+		height := ba.blockAssembler.utxoStore.GetBlockHeight()
+		dah := height + ba.settings.GlobalBlockHeightRetention
 		if err := ba.subtreeStore.SetDAH(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, dah); err != nil {
 			return nil, nil, errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to update subtree DAH", subtree.RootHash().String(), err)
 		}
 		if err := ba.subtreeStore.SetDAH(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, dah); err != nil {
 			ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] could not update subtree meta DAH (meta may not exist): %s", subtree.RootHash().String(), err)
+		}
+		if lanes {
+			ba.keepExistingSubtreeLaneBitmaps(ctx, subtreeRequest, height, dah)
 		}
 		return nil, nil, errors.ErrBlobAlreadyExists
 	}
@@ -1026,19 +1072,44 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		return nil, nil, errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to serialize subtree", subtree.RootHash().String(), err)
 	}
 
-	dah := ba.blockAssembler.utxoStore.GetBlockHeight() + ba.settings.GlobalBlockHeightRetention
+	height := ba.blockAssembler.utxoStore.GetBlockHeight()
+	dah := height + ba.settings.GlobalBlockHeightRetention
 
 	subtreeDoneCh := make(chan bool, 1)
 	subtreeStorageDone := make(chan struct{}) // Separate signal for coordinator
 	metaDoneCh := make(chan struct{})
 	allDoneCh := make(chan struct{})
 
+	// laneBitmapsDone is closed once the subtree's lane bitmaps are stored. The subtree file waits
+	// for it, so, as subtree validation does for a peer's subtree, a stored subtree always has its
+	// lane bitmaps. Without lanes it is closed now and nothing waits.
+	laneBitmapsDone := make(chan struct{})
+	if !lanes {
+		close(laneBitmapsDone)
+	}
+
 	// Build, serialize, and store subtree meta in background
 	if subtreeRequest.ParentTxMap != nil && ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
 		go func() {
 			defer close(metaDoneCh)
 
-			subtreeMetaBytes, ok := ba.buildSubtreeMeta(subtreeRequest)
+			var laneBits *lane.BitmapsBuilder
+			if lanes {
+				laneBits = lane.NewBitmapsBuilder()
+			}
+
+			subtreeMetaBytes, ok := ba.buildSubtreeMeta(subtreeRequest, laneBits)
+
+			if lanes {
+				// a meta pass that failed part way collected only some positions
+				if !ok {
+					laneBits = subtreeLanePositions(subtree, subtreeRequest.ParentTxMap)
+				}
+
+				ba.storeSubtreeLaneBitmaps(ctx, subtree, laneBits, height, dah)
+				close(laneBitmapsDone)
+			}
+
 			if !ok {
 				return
 			}
@@ -1064,11 +1135,23 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		}()
 	} else {
 		close(metaDoneCh)
+
+		if lanes {
+			go func() {
+				defer close(laneBitmapsDone)
+
+				ba.storeSubtreeLaneBitmaps(ctx, subtree, subtreeLanePositions(subtree, subtreeRequest.ParentTxMap), height, dah)
+			}()
+		}
 	}
 
 	// Store subtree in background
 	go func() {
 		defer close(subtreeStorageDone) // Signal coordinator when done
+
+		// at shadow, after the subtree's lane bitmaps
+		<-laneBitmapsDone
+
 		storedOK := true
 		if err := ba.subtreeStore.Set(ctx,
 			subtree.RootHash()[:],
@@ -2489,7 +2572,15 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	// announcing a locally mined block until the SetBlockSubtreesSet call
 	// below fires its own notification, delaying the announcement by one
 	// extra RPC round trip for no reason.
-	if err = ba.blockchainClient.AddBlock(callerCtx, block, "", blockchainoptions.WithSubtreesSet(true)); err != nil {
+	addBlockOpts := []blockchainoptions.StoreBlockOption{blockchainoptions.WithSubtreesSet(true)}
+
+	// At utxostore_laneMigration shadow the block's lane map rows, built from its own subtrees'
+	// lane bitmaps and stored in the block's database transaction; see ownLaneRows.
+	if laneRows := ba.ownLaneRows(block); laneRows != nil {
+		addBlockOpts = append(addBlockOpts, blockchainoptions.WithOwnBlockLaneMapRows(laneRows))
+	}
+
+	if err = ba.blockchainClient.AddBlock(callerCtx, block, "", addBlockOpts...); err != nil {
 		return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] failed to add block", jobID, block.Hash().String(), err)
 	}
 

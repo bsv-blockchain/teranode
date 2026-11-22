@@ -32,6 +32,13 @@ const (
 	MissingBitmapsTimedOut = "timed_out"
 )
 
+// Whose block the measurement is of, the block label of every series here: a peer's block, whose
+// rows block validation builds, or a block this node mined, whose rows block assembly builds.
+const (
+	BlockPeer = "peer"
+	BlockOwn  = "own"
+)
+
 // Directions of a count mismatch: the rows hold fewer members than the block has transactions
 // besides its coinbase, or more.
 const (
@@ -42,11 +49,11 @@ const (
 var (
 	prometheusLaneGateSeconds      *prometheus.HistogramVec
 	prometheusLaneRowBytes         *prometheus.HistogramVec
-	prometheusLaneRowHoles         prometheus.Histogram
+	prometheusLaneRowHoles         *prometheus.HistogramVec
 	prometheusLaneRowMismatches    *prometheus.CounterVec
 	prometheusLaneMissingBitmaps   *prometheus.CounterVec
 	prometheusLaneTxsNoPosition    *prometheus.CounterVec
-	prometheusLaneRowInsertFailure prometheus.Counter
+	prometheusLaneRowInsertFailure *prometheus.CounterVec
 
 	rowsMetricsInitOnce sync.Once
 )
@@ -57,84 +64,87 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "gate_seconds",
-			Help:      "Time per block of the lane gate at utxostore_laneMigration shadow, by stage: build (reading and merging the subtrees' lane bitmaps into rows, in block validation) and insert (in the blockchain store, checking the rows in memory before the block's database transaction begins, then inserting them inside it); a block's gate time is the sum. The block's own INSERT and the commit are not included",
+			Help:      "Time per block of the lane gate at utxostore_laneMigration shadow, by stage: build (merging the subtrees' lane bitmaps into rows, in block validation for a peer's block, after reading them from the subtree store, and in block assembly for its own, from the bitmaps it kept when it stored each subtree) and insert (in the blockchain store, checking the rows in memory before the block's database transaction begins, then inserting them inside it); a block's gate time is the sum. The block's own INSERT and the commit are not included. block is peer or own",
 			Buckets:   prometheus.ExponentialBuckets(0.0001, 4, 12),
-		}, []string{"stage"})
+		}, []string{"block", "stage"})
 		prometheusLaneRowBytes = promauto.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "row_bytes",
-			Help:      "Bytes one block's map rows of one lane store, 36 per row plus its hole data, by lane",
+			Help:      "Bytes one block's map rows of one lane store, 36 per row plus its hole data, by lane; block is peer or own",
 			Buckets:   prometheus.ExponentialBuckets(32, 4, 13),
-		}, []string{"lane"})
-		prometheusLaneRowHoles = promauto.NewHistogram(prometheus.HistogramOpts{
+		}, []string{"block", "lane"})
+		prometheusLaneRowHoles = promauto.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "row_holes",
-			Help:      "Positions between a map row's first and last that its block did not take, one observation per row",
+			Help:      "Positions between a map row's first and last that its block did not take, one observation per row; block is peer or own",
 			Buckets:   append([]float64{0}, prometheus.ExponentialBuckets(1, 4, 15)...),
-		})
+		}, []string{"block"})
 		prometheusLaneRowMismatches = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "row_count_mismatches_total",
-			Help:      "Blocks whose map rows hold fewer or more members than the block's transaction count less its coinbase; counted and logged, and the rows still go with the block",
-		}, []string{"direction"})
+			Help:      "Blocks whose map rows hold fewer or more members than the block's transaction count less its coinbase; counted and logged, and the rows still go with the block. block is peer or own",
+		}, []string{"block", "direction"})
 		prometheusLaneMissingBitmaps = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "missing_bitmaps_total",
-			Help:      "Subtrees of a block with no usable lane bitmaps file, by reason; the block's rows are not built and the block is stored as it is without lanes",
-		}, []string{"reason"})
+			Help:      "Subtrees of a block with no usable lane bitmaps, by reason; the block's rows are not built and the block is stored as it is without lanes. For a peer's block the bitmaps are its subtrees' lane bitmaps files; for a block this node mined (block own) they are the bitmaps block assembly kept when it stored each subtree, and a missing one is absent",
+		}, []string{"block", "reason"})
 		prometheusLaneTxsNoPosition = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "txs_without_position_total",
 			Help:      "Transactions a subtree's lane bitmaps leave out because no valid lane position was known for them, by the service that built the bitmaps; the coinbase placeholder is not counted",
 		}, []string{"service"})
-		prometheusLaneRowInsertFailure = promauto.NewCounter(prometheus.CounterOpts{
+		prometheusLaneRowInsertFailure = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "row_insert_failures_total",
-			Help:      "Blocks whose attempted map rows were not stored, so the block's store could go on: the rows could not be built (block validation), parsed (the blockchain service) or checked (the blockchain store), the block ID does not fit the map, or their insert failed and was rolled back to its savepoint. Rows already stored for that block ID are left in place. The count is not undone if that store then fails for another reason; a failure of the savepoint itself aborts the block's transaction and is not counted",
-		})
+			Help:      "Blocks whose attempted map rows were not stored, so the block's store could go on: the rows could not be built (block validation or block assembly), parsed (the blockchain service) or checked (the blockchain store), the block ID does not fit the map, or their insert failed and was rolled back to its savepoint. Rows already stored for that block ID are left in place. The count is not undone if that store then fails for another reason; a failure of the savepoint itself aborts the block's transaction and is not counted. block is peer or own",
+		}, []string{"block"})
 	})
 }
 
-// ObserveGate records one block's time in a gate stage.
-func ObserveGate(stage string, d time.Duration) {
+// ObserveGate records one block's time in a gate stage; block is BlockPeer or BlockOwn.
+func ObserveGate(block, stage string, d time.Duration) {
 	initRowsMetrics()
-	prometheusLaneGateSeconds.WithLabelValues(stage).Observe(d.Seconds())
+	prometheusLaneGateSeconds.WithLabelValues(block, stage).Observe(d.Seconds())
 }
 
-// ObserveBlockRows records the size and holes of one block's rows.
-func ObserveBlockRows(rows BlockRows) {
+// ObserveBlockRows records the size and holes of one block's rows; block is BlockPeer or BlockOwn.
+func ObserveBlockRows(block string, rows BlockRows) {
 	initRowsMetrics()
 
+	holes := prometheusLaneRowHoles.WithLabelValues(block)
+
 	for _, s := range rows.Lanes {
-		prometheusLaneRowBytes.WithLabelValues(strconv.Itoa(int(s.Lane))).Observe(float64(s.Bytes))
+		prometheusLaneRowBytes.WithLabelValues(block, strconv.Itoa(int(s.Lane))).Observe(float64(s.Bytes))
 
 		for _, h := range s.Holes {
-			prometheusLaneRowHoles.Observe(float64(h))
+			holes.Observe(float64(h))
 		}
 	}
 }
 
 // CountRowMismatch counts a block whose rows hold members other than its transactions less the
-// coinbase, in direction MismatchFewer or MismatchMore.
-func CountRowMismatch(direction string) {
+// coinbase, in direction MismatchFewer or MismatchMore; block is BlockPeer or BlockOwn.
+func CountRowMismatch(block, direction string) {
 	initRowsMetrics()
-	prometheusLaneRowMismatches.WithLabelValues(direction).Inc()
+	prometheusLaneRowMismatches.WithLabelValues(block, direction).Inc()
 }
 
-// CountMissingBitmaps counts n subtrees of a block without usable lane bitmaps, for reason.
-func CountMissingBitmaps(reason string, n int) {
+// CountMissingBitmaps counts n subtrees of a block without usable lane bitmaps, for reason; block
+// is BlockPeer or BlockOwn.
+func CountMissingBitmaps(block, reason string, n int) {
 	if n <= 0 {
 		return
 	}
 
 	initRowsMetrics()
-	prometheusLaneMissingBitmaps.WithLabelValues(reason).Add(float64(n))
+	prometheusLaneMissingBitmaps.WithLabelValues(block, reason).Add(float64(n))
 }
 
 // CountTxsWithoutPosition counts n transactions left out of a subtree's bitmaps by service.
@@ -150,8 +160,8 @@ func CountTxsWithoutPosition(service string, n int) {
 // CountRowInsertFailure counts a block whose attempted rows were not stored, so its store could go
 // on: they could not be built, parsed or checked, its block ID does not fit the map, or their
 // insert failed and was rolled back to its savepoint, which leaves rows already stored for the
-// block ID in place. It is not undone if the store then fails.
-func CountRowInsertFailure() {
+// block ID in place. It is not undone if the store then fails. block is BlockPeer or BlockOwn.
+func CountRowInsertFailure(block string) {
 	initRowsMetrics()
-	prometheusLaneRowInsertFailure.Inc()
+	prometheusLaneRowInsertFailure.WithLabelValues(block).Inc()
 }

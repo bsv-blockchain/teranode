@@ -108,13 +108,22 @@ func TestBuildBlockRowsRefusesAPositionNoLaneHolds(t *testing.T) {
 func TestObserveBlockRowsRecordsBytesAndHoles(t *testing.T) {
 	initRowsMetrics()
 
-	bytesBefore := histogramCount(t, prometheusLaneRowBytes.WithLabelValues("9"))
-	holesBefore := histogramCount(t, prometheusLaneRowHoles)
+	for _, block := range []string{BlockPeer, BlockOwn} {
+		other := BlockOwn
+		if block == BlockOwn {
+			other = BlockPeer
+		}
 
-	ObserveBlockRows(BlockRows{Lanes: []LaneRowStats{{Lane: 9, Bytes: 100, Holes: []uint64{0, 3}}}})
+		bytesBefore := histogramCount(t, prometheusLaneRowBytes.WithLabelValues(block, "9"))
+		holesBefore := histogramCount(t, prometheusLaneRowHoles.WithLabelValues(block))
+		otherBefore := histogramCount(t, prometheusLaneRowHoles.WithLabelValues(other))
 
-	require.Equal(t, bytesBefore+1, histogramCount(t, prometheusLaneRowBytes.WithLabelValues("9")))
-	require.Equal(t, holesBefore+2, histogramCount(t, prometheusLaneRowHoles))
+		ObserveBlockRows(block, BlockRows{Lanes: []LaneRowStats{{Lane: 9, Bytes: 100, Holes: []uint64{0, 3}}}})
+
+		require.Equal(t, bytesBefore+1, histogramCount(t, prometheusLaneRowBytes.WithLabelValues(block, "9")))
+		require.Equal(t, holesBefore+2, histogramCount(t, prometheusLaneRowHoles.WithLabelValues(block)))
+		require.Equal(t, otherBefore, histogramCount(t, prometheusLaneRowHoles.WithLabelValues(other)), "a block is counted under its own label only")
+	}
 }
 
 func histogramCount(t *testing.T, o prometheus.Observer) uint64 {

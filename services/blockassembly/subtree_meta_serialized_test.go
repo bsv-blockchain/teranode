@@ -172,7 +172,7 @@ func TestBuildSubtreeMetaBytes_MatchesSubtreeMeta(t *testing.T) {
 			}
 
 			want, wantOK := legacyMetaBytes(subtree, m, deleted)
-			got, err := buildSubtreeMetaBytes(subtree, m, deleted)
+			got, err := buildSubtreeMetaBytes(subtree, m, deleted, nil)
 
 			if !wantOK {
 				require.Error(t, err)
@@ -240,7 +240,7 @@ func BenchmarkBuildSubtreeMeta(b *testing.B) {
 		b.ReportAllocs()
 
 		for i := 0; i < b.N; i++ {
-			if _, err := buildSubtreeMetaBytes(subtree, m, nil); err != nil {
+			if _, err := buildSubtreeMetaBytes(subtree, m, nil, nil); err != nil {
 				b.Fatal(err)
 			}
 		}

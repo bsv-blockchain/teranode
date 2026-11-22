@@ -492,7 +492,7 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 	}
 
 	if laneRows != nil {
-		lane.ObserveGate(lane.GateStageInsert, laneRows.elapsed)
+		lane.ObserveGate(laneRows.block, lane.GateStageInsert, laneRows.elapsed)
 	}
 
 	// Cache the timestamp only once the row is committed. Doing it inside storeBlock
