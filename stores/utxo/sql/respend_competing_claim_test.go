@@ -264,6 +264,62 @@ func TestSpendBatchBulkUpdateFailureDoesNotInventConflict(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// Bulk: the later claim's conflict names a winner from this transaction. When the
+// DAH recompute or the commit fails after the UPDATE landed, the winner's write
+// rolls back, so the later claim must get a storage error, not UTXO_SPENT.
+func TestSpendBatchBulkRollbackAfterUpdateDoesNotInventConflict(t *testing.T) {
+	for _, exit := range []string{"DAH recompute fails", "commit fails"} {
+		t.Run(exit, func(t *testing.T) {
+			store, mock := CreateMockStore(ulogger.TestLogger{})
+			t.Cleanup(func() { _ = store.db.Close() })
+			store.settings = test.CreateBaseTestSettings(t)
+			store.settings.GlobalBlockHeightRetention = 0
+			store.settings.UtxoStore.BlockHeightRetentionAdjustment = 0
+
+			if exit == "DAH recompute fails" {
+				store.settings.GlobalBlockHeightRetention = 1
+			}
+
+			first, err := utxo.GetSpends(spendOf(t, tests.Tx, 1, 0))
+			require.NoError(t, err)
+			second, err := utxo.GetSpends(spendOf(t, tests.Tx, 2, 0))
+			require.NoError(t, err)
+			batch := []*batchSpend{
+				{spend: first[0], blockHeight: 2, errCh: make(chan error, 1)},
+				{spend: second[0], blockHeight: 2, errCh: make(chan error, 1)},
+			}
+			rows := sqlmock.NewRows([]string{
+				"batch_idx", "transaction_id", "coinbase_spending_height", "utxo_hash",
+				"spending_data", "frozen", "conflicting", "locked", "spendableIn",
+			})
+			for i, item := range batch {
+				rows.AddRow(i, 1, 0, item.spend.UTXOHash[:], nil, false, false, false, nil)
+			}
+
+			mock.ExpectBegin()
+			mock.ExpectQuery("SELECT v.batch_idx").WillReturnRows(rows)
+			mock.ExpectQuery("UPDATE outputs o").WillReturnRows(sqlmock.NewRows([]string{"batch_idx"}).AddRow(0))
+
+			if exit == "DAH recompute fails" {
+				mock.ExpectQuery("count").WillReturnError(errors.NewStorageError("forced DAH failure"))
+				mock.ExpectRollback()
+			} else {
+				mock.ExpectCommit().WillReturnError(errors.NewStorageError("forced commit failure"))
+			}
+
+			require.False(t, store.trySendSpendBatchBulk(context.Background(), batch))
+
+			for i, item := range batch {
+				result := <-item.errCh
+				require.ErrorIs(t, result, errors.ErrStorageError, "batch item %d", i)
+				require.NotErrorIs(t, result, errors.ErrSpent, "batch item %d must not name an uncommitted owner", i)
+			}
+
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
 // Per-row: a later claim reads an earlier claim's uncommitted write in the same
 // transaction. When the transaction rolls back at any of its three exits, the
 // later claim must get a storage error, not UTXO_SPENT naming the winner.
