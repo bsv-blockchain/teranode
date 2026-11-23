@@ -124,7 +124,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 		{startPropagation, func() error { return d.startPropagationService(ctx, appSettings, createLogger) }},
 		{startLegacy, func() error { return d.startLegacyService(ctx, appSettings, createLogger) }},
 		{startPruner, func() error { return d.startPrunerService(ctx, appSettings, createLogger) }},
-		{startProbe, func() error { return d.startProbeService(ctx, appSettings, createLogger) }},
+		{startProbe, func() error { return d.startProbeService(ctx, appSettings, createLogger, startBlockPersister) }},
 	}
 
 	// Loop through and start each service if needed
@@ -1273,7 +1273,7 @@ func (d *Daemon) startPrunerService(ctx context.Context, appSettings *settings.S
 }
 
 func (d *Daemon) startProbeService(ctx context.Context, appSettings *settings.Settings,
-	createLogger func(string) ulogger.Logger) error {
+	createLogger func(string) ulogger.Logger, blockPersisterRuns bool) error {
 	blockchainClient, err := d.daemonStores.GetBlockchainClient(
 		ctx, createLogger(loggerBlockchainClient), appSettings, serviceProbe,
 	)
@@ -1286,12 +1286,18 @@ func (d *Daemon) startProbeService(ctx context.Context, appSettings *settings.Se
 		return err
 	}
 
-	return d.ServiceManager.AddService(serviceProbeFormal, probe.New(
+	probeServer := probe.New(
 		createLogger(loggerProbe),
 		appSettings,
 		blockchainClient,
 		p2pClient,
-	))
+	)
+
+	if !blockPersisterRuns {
+		probeServer.WithoutBlockPersister()
+	}
+
+	return d.ServiceManager.AddService(serviceProbeFormal, probeServer)
 }
 
 // createBanList creates, initializes, and starts periodic reload for a ban list.

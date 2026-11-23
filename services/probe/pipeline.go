@@ -263,7 +263,12 @@ func (s *Server) defaultCollectors(ctx context.Context, rec guard.Recorder) coll
 	set.fast = append(set.fast, collect.NewMetricsCollector(src, collect.NewRates(), s.settings))
 
 	if s.blockchainClient != nil {
-		chain := collect.NewChain(s.blockchainClient, s.logger)
+		var chainOpts []collect.ChainOption
+		if s.persisterOff {
+			chainOpts = append(chainOpts, collect.WithoutBlockPersister())
+		}
+
+		chain := collect.NewChain(s.blockchainClient, s.logger, chainOpts...)
 		set.fast = append(set.fast, chain)
 		set.triggers = append(set.triggers, chain.Events(ctx, rec))
 	} else {

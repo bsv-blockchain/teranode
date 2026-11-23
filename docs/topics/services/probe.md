@@ -133,6 +133,8 @@ When a source fails, every value from that source goes grey with the age of its 
 
 A reading shows `no data` when its metric does not exist on this node. For example, the Data stores stage shows no data for a store that the node does not use.
 The persister backlog is a lower bound. The probe asks for at most 25 blocks and shows "25 or more" at that limit. The waiting blocks are the blocks that the persister has not written yet.
+
+The probe shows the persister backlog only when this node starts the block persister (`startBlockPersister` or the `-blockpersister` flag). Without a persister, no block is ever marked as persisted, and the query would return the 25 lowest heights on every call. In that case the probe does not ask. "Persister behind" and the waiting count show 0 with the note "block persister off", the list of waiting heights is empty, and the drain time uses only the subtree queue (and the peer gap during `CATCHINGBLOCKS`). The probe reads only its own process. If the persister runs in another process of a split deployment, the probe shows "block persister off" on its node too.
 The Blockchain panel shows the count of waiting blocks and the lowest three heights. A "+N more" marker shows how many waiting blocks the panel does not list.
 The probe reads the FSM state from the Blockchain service on each sample. It does not use the cached state of the Blockchain client, because that cache shows `IDLE` while its subscription is broken or stale. So `IDLE` on the dashboard means that the FSM is idle. When the read fails, the FSM chip and the tip chip go grey with the age of the last good sample. The alarms keep using the last FSM state that the probe read.
 
@@ -324,6 +326,8 @@ The probe refuses to start when the directory of the state file cannot be create
 The probe reads Aerospike from `probe_aerospikeURL`. When that setting is empty and the UTXO store is Aerospike, the probe uses the UTXO store URL. The probe then connects with the node's own read-write credentials. It sends only info commands, but we recommend a read-only user in `probe_aerospikeURL`.
 The probe sends info commands to every node of the cluster. It adds the size of all nodes, and it shows the highest disk fill and the highest read latency.
 
+If only some nodes answer, the probe marks the result as partial. Size and disk fill turn `idle` with the note "N of M nodes answered". Read latency shows no data with the same note, so that the alarm and the learned baseline never use part of the cluster. If no node answers, the Aerospike source fails.
+
 Read latency p99 needs `enable-benchmarks-read true` on the namespace. Without it, the read latency reading shows no data.
 
 ### 7.2 PostgreSQL
@@ -374,7 +378,7 @@ After a start, these rules apply:
 - A slow or hung source times out. It cannot stop a sampling tick.
 - When a source fails, the probe logs one warning line with the cause. Credentials in URLs are masked. When the source works again, the probe logs one line. The probe does not repeat the warning on every sample.
 - A WebSocket client that does not read cannot block the sampler or other clients.
-- After five consecutive panics, the probe stops itself. Only the probe stops. The node keeps running.
+- The probe stops itself after five consecutive panics, or after one panic that ends a sampler, pipeline or hub loop. Only the probe stops. The node keeps running.
 - When the probe stops itself, it logs one error line. Its health check still returns `200` with the message "probe stopped after repeated failures; the node must be restarted to resume probe monitoring; the node itself is not affected".
 - To start the probe again, restart the node.
 
@@ -436,7 +440,7 @@ The probe accepts at most 16 WebSocket clients at the same time. A further clien
 | PostgreSQL disk fill says "disk capacity not set" | `probe_postgresDiskCapacityGB` is 0 | Set the volume size in GB |
 | An alarm stays after the node changed for good | The baseline is frozen while the alarm is active | Reset the baselines: stop the node, delete the state file and start it again (see [5.2](#52-learned-baselines)). A snooze only mutes the alarm until it expires |
 | The log shows `state file was corrupt; moved it to ...` | The state file was not valid JSON | No action needed. The old file stays next to the new one |
-| The health check says "probe stopped after repeated failures" | Five consecutive panics stopped the probe | Collect the log, then restart the node |
+| The health check says "probe stopped after repeated failures" | Five consecutive panics, or one panic that ended a loop, stopped the probe | Collect the log, then restart the node |
 | A 17th or later browser tab gets no data, and the API returns `503` on `/ws` | More than 16 WebSocket clients | Close unused tabs |
 
 ## 13. Directory Structure and Main Files

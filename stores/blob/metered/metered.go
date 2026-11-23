@@ -52,10 +52,10 @@ func histogramVec(name, help string) *prometheus.HistogramVec {
 func initPrometheusMetrics() {
 	metricsOnce.Do(func() {
 		prometheusBlobReads = counterVec("reads_total", "Number of read calls to a blob store (Exists, Get and GetIoReader), by store")
-		prometheusBlobWrites = counterVec("writes_total", "Number of write calls to a blob store (Set, SetFromReader, SetDAH and Del), by store")
+		prometheusBlobWrites = counterVec("writes_total", "Number of write calls to a blob store (Set, SetFromReader, SetDAH, Del and pending-file Commit), by store")
 		prometheusBlobErrors = counterVec("errors_total", "Number of blob store calls that failed, by store. Not-found results, cancelled calls and blobs that already exist are not counted")
 		prometheusBlobReadDuration = histogramVec("read_duration_seconds", "Duration of blob store read calls in seconds, by store. GetIoReader measures the time to open the reader")
-		prometheusBlobWriteDuration = histogramVec("write_duration_seconds", "Duration of blob store write calls in seconds, by store. SetFromReader includes the time to read the source")
+		prometheusBlobWriteDuration = histogramVec("write_duration_seconds", "Duration of blob store write calls (Set, SetFromReader, SetDAH, Del and pending-file Commit) in seconds, by store. SetFromReader includes the time to read the source")
 	})
 }
 

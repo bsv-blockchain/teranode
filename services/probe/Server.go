@@ -35,6 +35,7 @@ type Server struct {
 	logger           ulogger.Logger
 	settings         *settings.Settings
 	blockchainClient blockchain.ClientI
+	persisterOff     bool
 	p2pClient        p2p.ClientI
 
 	collectors    func(ctx context.Context, rec guard.Recorder) collectorSet
@@ -89,6 +90,12 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, bc blockchain.Clie
 	}
 
 	s.collectors = s.defaultCollectors
+
+	return s
+}
+
+func (s *Server) WithoutBlockPersister() *Server {
+	s.persisterOff = true
 
 	return s
 }

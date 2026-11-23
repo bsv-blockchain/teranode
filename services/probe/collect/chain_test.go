@@ -575,3 +575,21 @@ func TestWaitingHeights(t *testing.T) {
 		})
 	}
 }
+
+func TestBacklogWithoutBlockPersisterIsNotQueried(t *testing.T) {
+	rig, cc, _ := newCountingRig(t)
+	rig.addBlock(t, 1)
+
+	rig.chain = NewChain(cc, ulogger.TestLogger{}, WithoutBlockPersister())
+
+	s := collectSnapshot(t, rig.chain)
+
+	require.Zero(t, cc.notPersistedCalls)
+	require.Equal(t, uint32(1), s.Tip)
+	require.NotNil(t, s.Chain.BlocksWaiting)
+	require.Empty(t, s.Chain.BlocksWaiting)
+
+	off := snapshot.Reading{Status: snapshot.StatusIdle, Note: "block persister off"}
+	require.Equal(t, off, s.Chain.BlocksWaitingCount)
+	require.Equal(t, off, s.Chain.PersisterBehind)
+}

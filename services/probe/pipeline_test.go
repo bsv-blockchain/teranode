@@ -12,10 +12,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/probe/collect"
 	"github.com/bsv-blockchain/teranode/services/probe/guard"
@@ -723,4 +726,91 @@ func TestStaleBlockCountDoesNotShortenTheDrainTime(t *testing.T) {
 	require.Equal(t, snapshot.StatusNoData, snap.Chain.BlocksWaitingCount.Status)
 	require.NotNil(t, snap.DrainSeconds, "the drain text keeps its last value")
 	require.Greater(t, *snap.DrainSeconds, 500.0, "a stale count must not read as a backlog of 20 blocks")
+}
+
+type persisterProbeClient struct {
+	blockchain.ClientI
+
+	notPersistedCalls atomic.Int32
+}
+
+func (c *persisterProbeClient) GetFSMCurrentState(context.Context) (*blockchain.FSMStateType, error) {
+	state := blockchain.FSMStateRUNNING
+
+	return &state, nil
+}
+
+func (c *persisterProbeClient) Subscribe(context.Context, string) (chan *blockchain.Notification, error) {
+	return make(chan *blockchain.Notification), nil
+}
+
+func (c *persisterProbeClient) GetBestBlockHeader(context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1000}, nil
+}
+
+func (c *persisterProbeClient) GetBlocksNotPersisted(context.Context, int) ([]*model.Block, error) {
+	c.notPersistedCalls.Add(1)
+
+	blocks := make([]*model.Block, 25)
+	for i := range blocks {
+		blocks[i] = &model.Block{Height: uint32(i)}
+	}
+
+	return blocks, nil
+}
+
+func collectChain(t *testing.T, srv *Server) snapshot.Snapshot {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	set := srv.defaultCollectors(ctx, guard.RecorderFunc(func(string, any) {}))
+	defer closeAll(set.closers, nil)
+
+	for _, c := range set.fast {
+		if c.Name() != "chain" {
+			continue
+		}
+
+		patch, err := c.Collect(ctx)
+		require.NoError(t, err)
+
+		s := snapshot.NewSnapshot("n")
+		patch(&s)
+
+		return s
+	}
+
+	require.FailNow(t, "no chain collector")
+
+	return snapshot.Snapshot{}
+}
+
+func TestNodeWithoutBlockPersisterReportsNoPersisterBacklog(t *testing.T) {
+	bc := &persisterProbeClient{}
+	srv := New(&captureLogger{}, kafkaTestSettings("memory"), bc, nil).WithoutBlockPersister()
+
+	s := collectChain(t, srv)
+
+	require.Equal(t, int32(0), bc.notPersistedCalls.Load(), "with no persister, blocks never get persisted_at, so the query only returns the lowest heights")
+	require.Empty(t, s.Chain.BlocksWaiting)
+	require.Equal(t, snapshot.Reading{Status: snapshot.StatusIdle, Note: "block persister off"}, s.Chain.BlocksWaitingCount)
+	require.Equal(t, snapshot.Reading{Status: snapshot.StatusIdle, Note: "block persister off"}, s.Chain.PersisterBehind)
+	require.Equal(t, uint32(1000), s.Tip)
+
+	backlog, ok := blockBacklog(&s)
+	require.True(t, ok, "the subtree queue must still drive the drain estimate")
+	require.Zero(t, backlog)
+}
+
+func TestNodeWithBlockPersisterReadsTheBacklog(t *testing.T) {
+	bc := &persisterProbeClient{}
+	srv := New(&captureLogger{}, kafkaTestSettings("memory"), bc, nil)
+
+	s := collectChain(t, srv)
+
+	require.Equal(t, int32(1), bc.notPersistedCalls.Load())
+	require.Equal(t, snapshot.StatusOK, s.Chain.PersisterBehind.Status)
+	require.Equal(t, 25.0, s.Chain.PersisterBehind.Value)
 }

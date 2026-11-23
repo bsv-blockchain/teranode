@@ -21,12 +21,20 @@ const (
 	chainPersisterLimit = 25
 	chainBacklogEvery   = 10 * time.Second
 	noteBacklogStale    = "backlog unavailable"
+	notePersisterOff    = "block persister off"
 )
 
+type ChainOption func(*Chain)
+
+func WithoutBlockPersister() ChainOption {
+	return func(c *Chain) { c.persisterOff = true }
+}
+
 type Chain struct {
-	bc     blockchain.ClientI
-	logger ulogger.Logger
-	now    func() time.Time
+	bc           blockchain.ClientI
+	logger       ulogger.Logger
+	now          func() time.Time
+	persisterOff bool
 
 	mu         sync.Mutex
 	haveLast   bool
@@ -38,8 +46,14 @@ type Chain struct {
 	lastBehind snapshot.Reading
 }
 
-func NewChain(bc blockchain.ClientI, logger ulogger.Logger) *Chain {
-	return &Chain{bc: bc, logger: logger, now: time.Now}
+func NewChain(bc blockchain.ClientI, logger ulogger.Logger, opts ...ChainOption) *Chain {
+	c := &Chain{bc: bc, logger: logger, now: time.Now}
+
+	for _, o := range opts {
+		o(c)
+	}
+
+	return c
 }
 
 func (c *Chain) Name() string {
@@ -73,6 +87,12 @@ func (c *Chain) Collect(ctx context.Context) (snapshot.Patch, error) {
 }
 
 func (c *Chain) backlog(ctx context.Context) ([]uint32, snapshot.Reading, snapshot.Reading) {
+	if c.persisterOff {
+		off := snapshot.Reading{Status: snapshot.StatusIdle, Note: notePersisterOff}
+
+		return []uint32{}, off, off
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

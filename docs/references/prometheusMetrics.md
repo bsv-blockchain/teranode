@@ -438,7 +438,7 @@ The download gauges and the `download_*_total` counters are published from the 3
 
 ## Blob Store Metrics
 
-The metered blob store wrapper records these metrics for each store. The `store` label names the store: `tx`, `subtree`, `temp` or `block`.
+The metered blob store wrapper records these metrics for each store. The `store` label names the store: `tx`, `subtree`, `temp`, `block` or `block_persister`.
 
 | Metric Name | Type | Description |
 |-------------|------|-------------|
