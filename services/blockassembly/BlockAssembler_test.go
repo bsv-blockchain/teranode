@@ -3469,7 +3469,9 @@ type queuedChildSkippingIterator struct {
 func (it *queuedChildSkippingIterator) Next(context.Context) ([]*utxoStore.UnminedTransaction, error) {
 	it.next++
 	if it.next == 1 {
-		return []*utxoStore.UnminedTransaction{{Node: &subtreepkg.Node{Hash: it.missingParent}, Skip: true}}, nil
+		// an unmined coinbase comes back as a Skip record with no Node, beside
+		// the hashed skip of the missing external parent
+		return []*utxoStore.UnminedTransaction{{Skip: true}, {Node: &subtreepkg.Node{Hash: it.missingParent}, Skip: true}}, nil
 	}
 	if it.next == 2 {
 		it.queueChild() // this partition has finished, but the load has not
@@ -3511,6 +3513,7 @@ func TestLoadUnminedTransactionsDropsQueuedChildOfMissingExternalParent(t *testi
 	ba.utxoStore = &queuedChildSkippingStore{Store: items.utxoStore, iterator: it}
 
 	require.NoError(t, ba.loadUnminedTransactions(ctx, false))
+	require.Equal(t, map[chainhash.Hash]struct{}{parent: {}}, ba.unminedDropHashes, "only the hashed skip joins the drop set")
 	require.NoError(t, ba.drainUnminedDropHashes("drainQueue_startup", false))
 
 	_, childPlaced := stp.GetCurrentTxMap().Get(child)
