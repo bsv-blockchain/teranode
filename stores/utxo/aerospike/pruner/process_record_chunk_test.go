@@ -7,6 +7,7 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -123,4 +124,109 @@ func TestProcessRecordChunk_RecordWithoutInputs(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, processed)
 	require.Equal(t, 0, skipped)
+}
+
+func TestProcessRecordChunk_ClearsParentRefsOfConflictingRecords(t *testing.T) {
+	ctx := context.Background()
+
+	var childTxID chainhash.Hash
+	for i := range childTxID {
+		childTxID[i] = 0x55
+	}
+
+	build := func(svc *Service, conflicting interface{}) []*aerospike.Result {
+		key, err := aerospike.NewKey(svc.namespace, svc.set, childTxID[:])
+		require.NoError(t, err)
+
+		bins := aerospike.BinMap{
+			svc.fieldTxID:     childTxID.CloneBytes(),
+			svc.fieldInputs:   []interface{}{},
+			svc.fieldExternal: false,
+		}
+
+		if conflicting != nil {
+			bins[svc.fieldConflicting] = conflicting
+		}
+
+		return []*aerospike.Result{{Record: &aerospike.Record{Key: key, Bins: bins}}}
+	}
+
+	newSvc := func(t *testing.T, defensive bool, fn func(context.Context, *chainhash.Hash) error) *Service {
+		svc := newTestService(t)
+		svc.defensiveEnabled = defensive
+		svc.fieldConflicting = fields.Conflicting.String()
+		svc.clearParentRefs = fn
+
+		return svc
+	}
+
+	t.Run("conflicting record has its parent references cleared before deletion", func(t *testing.T) {
+		var calls []chainhash.Hash
+
+		svc := newSvc(t, true, func(_ context.Context, h *chainhash.Hash) error {
+			calls = append(calls, *h)
+			return nil
+		})
+
+		processed, skipped, err := svc.processRecordChunk(ctx, 1000, build(svc, true))
+		require.NoError(t, err)
+		require.Equal(t, 1, processed)
+		require.Equal(t, 0, skipped)
+		require.Equal(t, []chainhash.Hash{childTxID}, calls)
+	})
+
+	t.Run("record is kept when clearing parent references fails", func(t *testing.T) {
+		calls := 0
+
+		svc := newSvc(t, true, func(context.Context, *chainhash.Hash) error {
+			calls++
+			return errors.NewServiceError("boom")
+		})
+
+		processed, skipped, err := svc.processRecordChunk(ctx, 1000, build(svc, true))
+		require.NoError(t, err)
+		require.Equal(t, 0, processed)
+		require.Equal(t, 1, skipped)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("non-conflicting record is not cleared", func(t *testing.T) {
+		for _, conflicting := range []interface{}{nil, false} {
+			calls := 0
+
+			svc := newSvc(t, true, func(context.Context, *chainhash.Hash) error {
+				calls++
+				return nil
+			})
+
+			processed, skipped, err := svc.processRecordChunk(ctx, 1000, build(svc, conflicting))
+			require.NoError(t, err)
+			require.Equal(t, 1, processed)
+			require.Equal(t, 0, skipped)
+			require.Equal(t, 0, calls)
+		}
+	})
+
+	t.Run("non-defensive mode never clears", func(t *testing.T) {
+		calls := 0
+
+		svc := newSvc(t, false, func(context.Context, *chainhash.Hash) error {
+			calls++
+			return nil
+		})
+
+		processed, _, err := svc.processRecordChunk(ctx, 1000, build(svc, true))
+		require.NoError(t, err)
+		require.Equal(t, 1, processed)
+		require.Equal(t, 0, calls)
+	})
+
+	t.Run("defensive mode without a clear function deletes as before", func(t *testing.T) {
+		svc := newSvc(t, true, nil)
+
+		processed, skipped, err := svc.processRecordChunk(ctx, 1000, build(svc, true))
+		require.NoError(t, err)
+		require.Equal(t, 1, processed)
+		require.Equal(t, 0, skipped)
+	})
 }

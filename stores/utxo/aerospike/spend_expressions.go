@@ -32,11 +32,13 @@ type SpendState struct {
 	RecordUtxos int
 	// SpentExtraRecs is the number of spent extra records
 	SpentExtraRecs *int
+	// DAHVersion is the master's deleteAtHeight version after the write
+	DAHVersion dahVersion
 }
 
 // parseSpendState extracts the SpendState from Aerospike bins.
 func (s *Store) parseSpendState(bins aerospike.BinMap) (SpendState, error) {
-	state := SpendState{}
+	state := SpendState{DAHVersion: parseDAHVersion(bins)}
 
 	// Parse blockIDs
 	if blockIDs, ok := bins[fields.BlockIDs.String()]; ok && blockIDs != nil {
@@ -363,6 +365,9 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 		for _, bItem := range batch {
 			bItem.complete(errors.NewStorageError("[SPEND_BATCH_EXP] failed to batch spend", err))
 		}
+
+		s.recordSpendOutcome(err, takeSlots(batch))
+
 		return
 	}
 
@@ -404,6 +409,10 @@ func (s *Store) processSpendBatchResultsExpressions(
 	// completing them, so each item is still completed exactly once.
 	var retryThroughLua []*batchSpend
 
+	// Breaker slots by outcome. An item retried through Lua keeps its slot, and
+	// the Lua path accounts for it.
+	var successSlots, failureSlots, answerSlots, releasedSlots []breakerSlot
+
 	for idx, batchRecord := range batchRecords {
 		bItem, ok := spendIndex[idx]
 		if !ok {
@@ -419,6 +428,8 @@ func (s *Store) processSpendBatchResultsExpressions(
 				if aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
 					bItem.complete(errors.NewTxNotFoundError("transaction not found: %s", bItem.spend.TxID.String()))
 					errCount++
+					answerSlots = append(answerSlots, takeSlot(bItem))
+
 					continue
 				}
 
@@ -436,9 +447,17 @@ func (s *Store) processSpendBatchResultsExpressions(
 
 			bItem.complete(errors.NewStorageError("spend error for %s:%d", bItem.spend.TxID.String(), bItem.spend.Vout, batchRec.Err))
 			errCount++
-			if isInfrastructureFailure(batchRec.Err) {
+
+			switch {
+			case isInfrastructureFailure(batchRec.Err):
 				infraErrCount++
+				failureSlots = append(failureSlots, takeSlot(bItem))
+			case isServerAnswer(batchRec.Err):
+				answerSlots = append(answerSlots, takeSlot(bItem))
+			default:
+				releasedSlots = append(releasedSlots, takeSlot(bItem))
 			}
+
 			continue
 		}
 
@@ -446,6 +465,8 @@ func (s *Store) processSpendBatchResultsExpressions(
 		if batchRec.Record == nil || batchRec.Record.Bins == nil {
 			bItem.complete(nil)
 			okCount++
+			successSlots = append(successSlots, takeSlot(bItem))
+
 			continue
 		}
 
@@ -453,6 +474,8 @@ func (s *Store) processSpendBatchResultsExpressions(
 		if err != nil {
 			bItem.complete(errors.NewProcessingError("failed to parse spend state", err))
 			errCount++
+			releasedSlots = append(releasedSlots, takeSlot(bItem))
+
 			continue
 		}
 
@@ -469,25 +492,44 @@ func (s *Store) processSpendBatchResultsExpressions(
 				TotalExtraRecs:    state.TotalExtraRecs,
 				OldDeleteAtHeight: state.OldDeleteAtHeight,
 				NewDeleteAtHeight: state.NewDeleteAtHeight,
+				DAHVersion:        state.DAHVersion,
 			})
 		}
 
 		bItem.complete(nil)
 		okCount++
+		successSlots = append(successSlots, takeSlot(bItem))
 	}
 
 	// Record circuit-breaker outcome. Only count true infrastructure errors;
 	// data-state errors (KEY_NOT_FOUND_ERROR, FILTERED_OUT) take their own
 	// per-record branches above and are deliberately excluded from
-	// infraErrCount — issue #953.
-	if s.spendCircuitBreaker != nil {
-		if okCount > 0 {
-			s.spendCircuitBreaker.RecordSuccess()
+	// infraErrCount — issue #953. A data-state answer still proves the server
+	// answered, so a probe among those items counts as a success, and a probe
+	// with no usable answer gives its slot back.
+	if infraErrCount > 0 {
+		// A closed-admission success resets earlier failures, but the failure
+		// in this batch must remain counted. Probe successes must wait until
+		// after the failure, or carried successes could close half-open first.
+		for _, slot := range successSlots {
+			if !slot.taken {
+				s.spendCircuitBreaker.RecordSuccess(slot)
+				break
+			}
 		}
-		if infraErrCount > 0 {
-			s.spendCircuitBreaker.RecordFailure()
+		s.spendCircuitBreaker.RecordBatchFailure(failureSlots)
+		for _, slot := range successSlots {
+			if slot.taken {
+				s.spendCircuitBreaker.RecordSuccess(slot)
+			}
 		}
+	} else if okCount > 0 {
+		s.recordSpendSuccess(successSlots)
 	}
+
+	s.recordServerAnswer(answerSlots)
+
+	s.releaseSlots(releasedSlots)
 
 	prometheusUtxoMapSpend.Add(float64(okCount))
 	if errCount > 0 {
@@ -498,7 +540,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 	var postErr error
 
 	for bh, txids := range extraRecordsByHeight {
-		if err := s.IncrementSpentRecordsMulti(txids, 1, bh); err != nil {
+		if err := s.IncrementSpentRecordsMulti(ctx, txids, 1, bh); err != nil {
 			postErr = errors.Join(postErr, err)
 		}
 	}

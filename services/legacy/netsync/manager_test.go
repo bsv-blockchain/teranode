@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-batcher/v2"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -34,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
+	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
@@ -1003,4 +1005,186 @@ func TestHandleCheckSyncPeer_SpeedArmRespectsAssociationThroughput(t *testing.T)
 		require.True(t, state.inDemotionCooldown(),
 			"a peer sending nothing on any stream is stalled and must still be demoted")
 	})
+}
+
+// syncStateCases are the FSM states the issue 2003 gate is judged in. A cached
+// IDLE accepts: it is what a healthy node at the tip reads while the blockchain
+// service restarts.
+var syncStateCases = []struct {
+	state   blockchain2.FSMStateType
+	refuses bool
+}{
+	{blockchain2.FSMStateCATCHINGBLOCKS, true},
+	{blockchain2.FSMStateRUNNING, false},
+	{blockchain2.FSMStateIDLE, false},
+}
+
+// gatedSyncManager returns a sync manager whose validator writes tx to a real
+// UTXO store when called, with both issue 2003 gates reading state. The
+// validator stores the extended tx it was given here, because the wire form
+// legacy hands it carries no parent amounts to compute a fee from.
+func gatedSyncManager(t *testing.T, name string, state blockchain2.FSMStateType, tx *bt.Tx) (*SyncManager, *peer.Peer, *sql.Store) {
+	t.Helper()
+
+	store := newUnlockFailureStore(t, name)
+	sm, p := newUnlockSyncManager(t, &validator.MockValidator{
+		ValidateFunc: func(ctx context.Context, _ *bt.Tx) (*meta.Data, error) {
+			return store.Create(ctx, tx, 1)
+		},
+	})
+	sm.utxoStore = store
+	sm.peerNotifier = &recordingNotifier{MockPeerNotifier: &MockPeerNotifier{}}
+
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+	sm.blockchainClient = blockchainClient
+	sm.txGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyTx)
+	sm.orphanGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyOrphan)
+	sm.orphanEvictionGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyOrphanEviction)
+
+	return sm, p, store
+}
+
+// TestHandleTxMsg_RefusedWhileSyncing pins issue 2003 on the legacy tx route.
+// A peer may send tx without an inv, so the inv gate does not cover it. In
+// CATCHINGBLOCKS the tx is dropped before the validator, so the UTXO store never
+// sees it, and it is not recorded as rejected, so the peer can offer it again
+// once the node is RUNNING.
+func TestHandleTxMsg_RefusedWhileSyncing(t *testing.T) {
+	initPrometheusMetrics()
+
+	for _, tt := range syncStateCases {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			btTx := transactions.CreateTestTransactionChainWithCount(t, 3)[1]
+			sm, p, store := gatedSyncManager(t, "netsync_gate_tx_"+tt.state.String(), tt.state, btTx)
+
+			msg := wire.NewMsgTx(1)
+			require.NoError(t, msg.Deserialize(bytes.NewReader(btTx.Bytes())))
+
+			refusedBefore := sm.txGate.RefusedTotal()
+
+			sm.handleTxMsg(&txMsg{tx: bsvutil.NewTx(msg), peer: p})
+
+			_, getErr := store.Get(t.Context(), btTx.TxIDChainHash())
+			_, rejected := sm.rejectedTxns.Get(*btTx.TxIDChainHash())
+			require.False(t, rejected, "a refused or accepted tx is not a rejected one")
+
+			if tt.refuses {
+				require.ErrorIs(t, getErr, errors.ErrTxNotFound, "a refused tx must not reach the UTXO store")
+				require.InDelta(t, refusedBefore+1, sm.txGate.RefusedTotal(), 0)
+
+				return
+			}
+
+			require.NoError(t, getErr, "an accepted tx is in the UTXO store")
+			require.InDelta(t, refusedBefore, sm.txGate.RefusedTotal(), 0)
+		})
+	}
+}
+
+// TestEvictOrphan_RefusedWhileSyncing covers the other legacy write: an orphan
+// parked while RUNNING gets one last validation when the pool evicts it, which
+// can happen after the node has fallen back into a sync.
+func TestEvictOrphan_RefusedWhileSyncing(t *testing.T) {
+	initPrometheusMetrics()
+
+	for _, tt := range syncStateCases {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			orphan := transactions.CreateTestTransactionChainWithCount(t, 3)[1]
+			sm, _, store := gatedSyncManager(t, "netsync_gate_orphan_"+tt.state.String(), tt.state, orphan)
+
+			refusedBefore := sm.orphanEvictionGate.RefusedTotal()
+
+			require.True(t, sm.evictOrphan(*orphan.TxIDChainHash(), &orphanTxAndParents{tx: orphan, addedAt: time.Now()}))
+
+			_, getErr := store.Get(t.Context(), orphan.TxIDChainHash())
+
+			if tt.refuses {
+				require.ErrorIs(t, getErr, errors.ErrTxNotFound, "a refused orphan must not reach the UTXO store")
+				require.InDelta(t, refusedBefore+1, sm.orphanEvictionGate.RefusedTotal(), 0)
+
+				return
+			}
+
+			require.NoError(t, getErr, "an accepted orphan is in the UTXO store")
+			require.InDelta(t, refusedBefore, sm.orphanEvictionGate.RefusedTotal(), 0)
+		})
+	}
+}
+
+// TestProcessOrphanTransactions_RefusedOnceTheNodeStartsSyncing pins the orphan
+// walk's own gate (issue 2003). handleTxMsg reads the FSM once, before the
+// parent's validation; the node can fall into a sync during that validation or
+// the walk that follows. Here the first read says RUNNING and every later one
+// CATCHINGBLOCKS: the parent is stored, and the child parked behind it must not
+// be, nor announced, nor left in the pool. The RUNNING row is the control, where
+// the same walk stores and announces the child.
+func TestProcessOrphanTransactions_RefusedOnceTheNodeStartsSyncing(t *testing.T) {
+	initPrometheusMetrics()
+
+	for _, tt := range []struct {
+		name        string
+		laterState  blockchain2.FSMStateType
+		childStored bool
+	}{
+		{"sync starts mid walk", blockchain2.FSMStateCATCHINGBLOCKS, false},
+		{"stays running", blockchain2.FSMStateRUNNING, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+			parent, child := txs[0], txs[1]
+
+			// The validator stores the extended form of whichever tx it is given,
+			// because the wire form handleTxMsg decodes carries no parent amounts.
+			extended := map[chainhash.Hash]*bt.Tx{*parent.TxIDChainHash(): parent, *child.TxIDChainHash(): child}
+			store := newUnlockFailureStore(t, "netsync_gate_orphan_walk_"+tt.laterState.String())
+			sm, p := newUnlockSyncManager(t, &validator.MockValidator{
+				ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+					return store.Create(ctx, extended[*tx.TxIDChainHash()], 1)
+				},
+			})
+			sm.utxoStore = store
+			notifier := &recordingNotifier{MockPeerNotifier: &MockPeerNotifier{}}
+			sm.peerNotifier = notifier
+
+			running := blockchain2.FSMStateRUNNING
+			later := tt.laterState
+			blockchainClient := &blockchain2.Mock{}
+			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&running, nil).Once()
+			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&later, nil)
+			sm.blockchainClient = blockchainClient
+			sm.txGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyTx)
+			sm.orphanGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyOrphan)
+
+			parents := txmap.NewSyncedMap[chainhash.Hash, struct{}]()
+			parents.Set(*parent.TxIDChainHash(), struct{}{})
+			sm.orphanTxs.Set(*child.TxIDChainHash(), &orphanTxAndParents{tx: child, parents: parents, addedAt: time.Now()})
+
+			msg := wire.NewMsgTx(1)
+			require.NoError(t, msg.Deserialize(bytes.NewReader(parent.Bytes())))
+
+			refusedBefore := sm.orphanGate.RefusedTotal()
+
+			sm.handleTxMsg(&txMsg{tx: bsvutil.NewTx(msg), peer: p})
+
+			_, parentErr := store.Get(t.Context(), parent.TxIDChainHash())
+			require.NoError(t, parentErr, "the parent was read as RUNNING and is stored")
+
+			_, childErr := store.Get(t.Context(), child.TxIDChainHash())
+			_, stillParked := sm.orphanTxs.Get(*child.TxIDChainHash())
+			require.False(t, stillParked, "the child leaves the pool whether it is stored or refused")
+
+			if !tt.childStored {
+				require.ErrorIs(t, childErr, errors.ErrTxNotFound, "a child walked after the sync started must not reach the UTXO store")
+				require.Equal(t, []chainhash.Hash{*parent.TxIDChainHash()}, notifier.announced(), "only the parent is announced")
+				require.InDelta(t, refusedBefore+1, sm.orphanGate.RefusedTotal(), 0)
+
+				return
+			}
+
+			require.NoError(t, childErr, "a child walked while RUNNING is stored")
+			require.ElementsMatch(t, []chainhash.Hash{*parent.TxIDChainHash(), *child.TxIDChainHash()}, notifier.announced())
+			require.InDelta(t, refusedBefore, sm.orphanGate.RefusedTotal(), 0)
+		})
+	}
 }

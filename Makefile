@@ -177,7 +177,7 @@ install-tools:
 .PHONY: test
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
-	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=20m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
 
 # run the tests too slow for `make test` under -race and coverage (TERANODE_HEAVY_TESTS), without -race.
 # The PR test job runs it after `make test`.
@@ -196,7 +196,8 @@ longtest:
 # run the soak test: the in-process daemon under steady tx load for SOAK_DURATION, failing if heap or goroutine
 # counts trend upward. No -race: the detector skews memory and throughput, which is what this test measures.
 # SOAK_TIMEOUT must exceed SOAK_DURATION by at least 10m. Other knobs (SOAK_WARMUP, SOAK_SAMPLE_INTERVAL,
-# SOAK_TXS_PER_CYCLE, SOAK_UTXO_STORE, SOAK_OUTPUT_DIR, SOAK_INJECT_LEAK) are read from the environment.
+# SOAK_TXS_PER_CYCLE, SOAK_UTXO_STORE, SOAK_OUTPUT_DIR, SOAK_INJECT_LEAK and the SOAK_*_TOLERANCE* settings) are
+# read from the environment; see docs/howto/runningTests.md.
 # Example: make soaktest SOAK_DURATION=2h SOAK_TIMEOUT=150m
 SOAK_DURATION ?= 30m
 SOAK_TIMEOUT ?= 60m
@@ -259,7 +260,14 @@ FUZZ_TARGETS = \
 	services/legacy/peer:FuzzReadWireMessage \
 	services/legacy/peer:FuzzStreamingBlockFraming \
 	services/rpc/bsvjson:FuzzParseRPCRequest \
-	services/rpc/bsvjson:FuzzUnmarshalCmd
+	services/rpc/bsvjson:FuzzUnmarshalCmd \
+	util/lane:FuzzDecodeDiskPayload \
+	util/lane:FuzzDecodeHoleData \
+	util/lane:FuzzDecodeSubtreePositions \
+	util/lane:FuzzDecodeProofFile \
+	util/lane:FuzzDecodeSubtreeBitmaps \
+	util/lane/backfill:FuzzOpenManifest \
+	stores/utxo/meta:FuzzNewDataFromLaneMetaBytes
 
 # Per-target budget. The nightly workflow uses 5m; the default here is kept
 # short so `make fuzz` is usable as a pre-push check.

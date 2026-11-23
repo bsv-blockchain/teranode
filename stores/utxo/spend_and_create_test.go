@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,6 +59,22 @@ func (f *fakeSequentialStore) Unspend(_ context.Context, spends []*Spend, _ ...b
 type boundedSequentialStore struct {
 	fakeSequentialStore
 	bound time.Duration
+}
+
+type laneSequentialStore struct {
+	fakeSequentialStore
+	LanePositions
+}
+
+func TestSequentialSpendAndCreateRejectsInvalidPositionBeforeSpending(t *testing.T) {
+	f := &laneSequentialStore{}
+	f.SetLanePositionSource(fixedLanePosition(1))
+	_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, f, bt.NewTx(), 100,
+		WithLanePosition(1<<56))
+	require.Error(t, err)
+	require.Zero(t, f.spendCalls, "invalid named metadata must fail before the first spend")
+	require.Zero(t, f.createCalls)
+	require.Zero(t, f.unspendCalls, "there must be nothing to roll back")
 }
 
 func (b *boundedSequentialStore) SpendRollbackTimeout() time.Duration { return b.bound }
@@ -292,5 +309,103 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.ErrorIs(t, err, errors.ErrInvalidArgument)
 		require.Equal(t, 0, f.spendCalls)
 		require.Equal(t, 0, f.createCalls)
+	})
+}
+
+// laneSpenderStore is a laneSequentialStore whose spend can record the spender's lane position.
+// countedLanePosition is a lane position source that counts how often it is asked.
+type countedLanePosition struct {
+	position uint64
+	calls    int
+}
+
+func (c *countedLanePosition) Next(context.Context) (uint64, error) {
+	c.calls++
+	return c.position, nil
+}
+
+type laneSpenderStore struct {
+	laneSequentialStore
+	laneSpendCalls int
+	laneSpendPos   uint64
+}
+
+func (l *laneSpenderStore) SpendWithLanePosition(_ context.Context, _ *bt.Tx, _ uint32, position uint64, _ IgnoreFlags) ([]*Spend, error) {
+	l.laneSpendCalls++
+	l.laneSpendPos = position
+
+	return l.spends, l.spendErr
+}
+
+// A store that can record the spender's position gets it only when the record has one: with lane
+// positions off there is no source and every spend goes through the plain Spend, as before.
+func TestSequentialSpendAndCreateRecordsTheSpenderPositionOnlyWithOne(t *testing.T) {
+	tx := bt.NewTx()
+
+	t.Run("off", func(t *testing.T) {
+		f := &laneSpenderStore{}
+		f.createMeta = &meta.Data{}
+
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, f, tx, 100)
+		require.NoError(t, err)
+		require.Equal(t, 1, f.spendCalls)
+		require.Zero(t, f.laneSpendCalls)
+	})
+
+	t.Run("shadow", func(t *testing.T) {
+		f := &laneSpenderStore{}
+		f.createMeta = &meta.Data{}
+		f.SetLanePositionSource(fixedLanePosition(lane.Pack(3, 9)))
+
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, f, tx, 100)
+		require.NoError(t, err)
+		require.Zero(t, f.spendCalls)
+		require.Equal(t, 1, f.laneSpendCalls)
+		require.Equal(t, lane.Pack(3, 9), f.laneSpendPos)
+	})
+
+	t.Run("a named position is the one the spend records", func(t *testing.T) {
+		f := &laneSpenderStore{}
+		f.createMeta = &meta.Data{}
+		f.SetLanePositionSource(fixedLanePosition(lane.Pack(3, 9)))
+
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, f, tx, 100, WithLanePosition(lane.Pack(5, 7)))
+		require.NoError(t, err)
+		require.Zero(t, f.spendCalls)
+		require.Equal(t, 1, f.laneSpendCalls)
+		require.Equal(t, lane.Pack(5, 7), f.laneSpendPos, "the caller's position, not one from the source")
+	})
+
+	t.Run("spend only with a named position records it and takes nothing", func(t *testing.T) {
+		f := &laneSpenderStore{}
+		source := &countedLanePosition{position: lane.Pack(3, 9)}
+		f.SetLanePositionSource(source)
+
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, f, tx, 100, WithSpendOnly(), WithLanePosition(lane.Pack(6, 4)))
+		require.NoError(t, err)
+		require.Zero(t, f.spendCalls)
+		require.Equal(t, 1, f.laneSpendCalls)
+		require.Equal(t, lane.Pack(6, 4), f.laneSpendPos, "the record's position, which the caller already wrote")
+		require.Zero(t, source.calls, "a spend-only call takes no position")
+		require.Zero(t, f.createCalls)
+	})
+
+	t.Run("spend only with an invalid named position spends nothing", func(t *testing.T) {
+		f := &laneSpenderStore{}
+
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, f, tx, 100, WithSpendOnly(), WithLanePosition(1<<56))
+		require.ErrorIs(t, err, errors.ErrInvalidArgument)
+		require.Zero(t, f.spendCalls)
+		require.Zero(t, f.laneSpendCalls)
+	})
+
+	t.Run("spend only takes no position", func(t *testing.T) {
+		f := &laneSpenderStore{}
+		f.SetLanePositionSource(fixedLanePosition(lane.Pack(3, 9)))
+
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, f, tx, 100, WithSpendOnly())
+		require.NoError(t, err)
+		require.Equal(t, 1, f.spendCalls)
+		require.Zero(t, f.laneSpendCalls)
 	})
 }

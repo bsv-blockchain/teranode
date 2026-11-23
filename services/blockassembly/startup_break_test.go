@@ -33,6 +33,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -55,6 +56,7 @@ func newRecoveryTestAssembler(t *testing.T, store utxostore.Store, bc *blockchai
 		stats:            gocore.NewStat("startup-break-test"),
 		utxoStore:        store,
 		blockchainClient: bc,
+		subtreeProcessor: &subtreeprocessor.MockSubtreeProcessor{},
 	}
 	ba.setBestBlockHeader(model.GenesisBlockHeader, 0)
 
@@ -86,6 +88,7 @@ func TestStartup_RefusesWhenIteratorConstructionFails(t *testing.T) {
 	// type-assertion doesn't panic; loadUnminedTransactions must ignore it because
 	// err != nil.
 	iter := new(utxostore.MockUnminedTxIterator)
+	iter.On("Close").Return(nil).Maybe()
 	store.On("GetUnminedTxIterator").
 		Return(iter, errors.NewProcessingError("utxo store unavailable"))
 
@@ -220,6 +223,8 @@ func TestStartup_RefusesOnCorruptCheckpointAtLiveHeight(t *testing.T) {
 	}
 
 	bc := &blockchain.Mock{}
+	// No mark of skipped fork transactions is pending.
+	bc.On("GetState", mock.Anything, SkippedForkMarkStateKey).Return([]byte(nil), errors.NewNotFoundError("no record"))
 	bc.On("GetState", mock.Anything, mock.Anything).Return(corruptState, nil)
 	// Chain is well past genesis — adopting the tip here would corrupt the UTXO set.
 	bc.On("GetBestBlockHeader", mock.Anything).

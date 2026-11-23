@@ -60,6 +60,16 @@ Decisions are made through consensus whenever possible. If consensus cannot be r
 2. **Gather Feedback** – Contributors and maintainers provide feedback.
 3. **Vote or Merge** – If no objections remain, maintainers approve and merge the change.
 
+### Releases
+
+Maintainers decide whether a stable release ships, under the consensus model above. This authority is separate from the authority to merge code.
+
+- Each stable release has a go/no-go decision record, `docs/releases/vX.Y.Z-checklist.md`. It names the approving maintainer and the date.
+- Any maintainer can stop a release by recording a No-Go decision with the readiness criterion that failed. The No-Go stands until the maintainers record a Go.
+- No stable release ships while a Critical or High finding is open, unless the record holds a waiver for it with an owner, a date, a reason and a close-by date.
+
+The criteria and the procedure are in [Release Process](docs/howto/releaseProcess.md).
+
 ## Contributions
 
 ### Contribution Guidelines

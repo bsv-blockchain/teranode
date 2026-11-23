@@ -387,15 +387,26 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, fileType fileformat.Fi
 	// the process. Mirrors the file store's pattern at
 	// stores/blob/file/file.go:996-1002 (validateFileHeader closes the
 	// underlying *os.File on mismatch).
+	//
+	// Unknown magic or a wrong file type is a corrupt object: an S3 put is all or nothing, so a
+	// retry reads the same bytes, and the error carries a BlobCorrupt cause. A short header here
+	// is not marked, because on a stream it can also be a connection dropped mid-body.
 	header := &fileformat.Header{}
 	if err := header.Read(result.Body); err != nil {
 		_ = result.Body.Close()
+
+		if errors.Is(err, fileformat.ErrUnknownMagic) {
+			return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] missing or invalid header", g.bucket, aws.ToString(objectKey),
+				errors.NewBlobCorruptError("header unreadable", err))
+		}
+
 		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] missing or invalid header", g.bucket, aws.ToString(objectKey), err)
 	}
 	// Optionally, verify the header matches the expected fileType
 	if header.FileType() != fileType {
 		_ = result.Body.Close()
-		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] header filetype mismatch: got %s, want %s", g.bucket, aws.ToString(objectKey), header.FileType(), fileType)
+		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] header filetype mismatch", g.bucket, aws.ToString(objectKey),
+			errors.NewBlobCorruptError("got %s, want %s", header.FileType(), fileType))
 	}
 
 	return result.Body, nil
@@ -435,10 +446,19 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 		return nil, err
 	}
 
-	// Skip the header bytes
+	// Skip the header bytes. The whole object is in content, so a header that is too short or
+	// has unknown magic is a corrupt object, not a failed read, and a retry would get the same.
 	header, err := fileformat.ReadHeaderFromBytes(content)
 	if err != nil {
-		err = errors.NewStorageError("[S3] [%s/%s] failed to read header", g.bucket, aws.ToString(objectKey), err)
+		err = errors.NewStorageError("[S3] [%s/%s] failed to read header", g.bucket, aws.ToString(objectKey), errors.NewBlobCorruptError("header unreadable", err))
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	if header.FileType() != fileType {
+		err = errors.NewStorageError("[S3] [%s/%s] header filetype mismatch", g.bucket, aws.ToString(objectKey),
+			errors.NewBlobCorruptError("got %s, want %s", header.FileType(), fileType))
 		span.RecordError(err)
 
 		return nil, err

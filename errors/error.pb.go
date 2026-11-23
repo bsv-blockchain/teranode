@@ -72,6 +72,9 @@ const (
 	ERR_TX_CONSENSUS            ERR = 40
 	ERR_TX_CREATING             ERR = 41
 	ERR_TX_UNLOCK_FAILED        ERR = 42
+	// Rejected because every input that failed to spend is already spent by a different tx
+	// or is an output of a conflicting tx. Only the validator sets it; a store never does.
+	ERR_TX_REJECTED_CONFLICTING ERR = 43
 	ERR_TX_ERROR                ERR = 49
 	// Service errors 50-59
 	ERR_SERVICE_UNAVAILABLE  ERR = 50
@@ -100,6 +103,7 @@ const (
 	ERR_BLOB_EXISTS               ERR = 90
 	ERR_BLOB_NOT_FOUND            ERR = 91
 	ERR_BLOB_FOOTER_SIZE_MISMATCH ERR = 92
+	ERR_BLOB_CORRUPT              ERR = 93
 	ERR_BLOB_ERROR                ERR = 99
 	// State errors 100-109
 	ERR_STATE_INITIALIZATION ERR = 100
@@ -125,6 +129,10 @@ const (
 	// (not yet: see services/legacy/peer streamingBlockHandler). Wrapped inside the BLOCK_INVALID
 	// verdict at the sites that raise it, never the outermost code.
 	ERR_BLOCK_BODY_MISMATCH ERR = 122
+	// A block whose id is not above its parent's id. Ids come from one sequence and a child's id is
+	// taken only after its parent is stored, so a child always sits above its parent; the ancestry
+	// queries bound their walk by that. StoreBlock refuses a block that would break it.
+	ERR_BLOCK_ID_ORDER ERR = 123
 )
 
 // Enum value maps for ERR.
@@ -170,6 +178,7 @@ var (
 		40:  "TX_CONSENSUS",
 		41:  "TX_CREATING",
 		42:  "TX_UNLOCK_FAILED",
+		43:  "TX_REJECTED_CONFLICTING",
 		49:  "TX_ERROR",
 		50:  "SERVICE_UNAVAILABLE",
 		51:  "SERVICE_NOT_STARTED",
@@ -193,6 +202,7 @@ var (
 		90:  "BLOB_EXISTS",
 		91:  "BLOB_NOT_FOUND",
 		92:  "BLOB_FOOTER_SIZE_MISMATCH",
+		93:  "BLOB_CORRUPT",
 		99:  "BLOB_ERROR",
 		100: "STATE_INITIALIZATION",
 		101: "CATCHUP_IN_PROGRESS",
@@ -207,6 +217,7 @@ var (
 		120: "BLOCK_CORRUPT",
 		121: "BLOCK_POLICY_DECLINED",
 		122: "BLOCK_BODY_MISMATCH",
+		123: "BLOCK_ID_ORDER",
 	}
 	ERR_value = map[string]int32{
 		"UNKNOWN":                       0,
@@ -249,6 +260,7 @@ var (
 		"TX_CONSENSUS":                  40,
 		"TX_CREATING":                   41,
 		"TX_UNLOCK_FAILED":              42,
+		"TX_REJECTED_CONFLICTING":       43,
 		"TX_ERROR":                      49,
 		"SERVICE_UNAVAILABLE":           50,
 		"SERVICE_NOT_STARTED":           51,
@@ -272,6 +284,7 @@ var (
 		"BLOB_EXISTS":                   90,
 		"BLOB_NOT_FOUND":                91,
 		"BLOB_FOOTER_SIZE_MISMATCH":     92,
+		"BLOB_CORRUPT":                  93,
 		"BLOB_ERROR":                    99,
 		"STATE_INITIALIZATION":          100,
 		"CATCHUP_IN_PROGRESS":           101,
@@ -286,6 +299,7 @@ var (
 		"BLOCK_CORRUPT":                 120,
 		"BLOCK_POLICY_DECLINED":         121,
 		"BLOCK_BODY_MISMATCH":           122,
+		"BLOCK_ID_ORDER":                123,
 	}
 )
 
@@ -420,7 +434,7 @@ const file_errors_error_proto_rawDesc = "" +
 	"\fwrappedError\x18\x04 \x01(\v2\x0e.errors.TErrorR\fwrappedError\x12\x12\n" +
 	"\x04file\x18\x05 \x01(\tR\x04file\x12\x12\n" +
 	"\x04line\x18\x06 \x01(\x05R\x04line\x12\x1a\n" +
-	"\bfunction\x18\a \x01(\tR\bfunction*\xed\f\n" +
+	"\bfunction\x18\a \x01(\tR\bfunction*\xb0\r\n" +
 	"\x03ERR\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x14\n" +
 	"\x10INVALID_ARGUMENT\x10\x01\x12\x16\n" +
@@ -464,7 +478,8 @@ const file_errors_error_proto_rawDesc = "" +
 	"\tTX_POLICY\x10'\x12\x10\n" +
 	"\fTX_CONSENSUS\x10(\x12\x0f\n" +
 	"\vTX_CREATING\x10)\x12\x14\n" +
-	"\x10TX_UNLOCK_FAILED\x10*\x12\f\n" +
+	"\x10TX_UNLOCK_FAILED\x10*\x12\x1b\n" +
+	"\x17TX_REJECTED_CONFLICTING\x10+\x12\f\n" +
 	"\bTX_ERROR\x101\x12\x17\n" +
 	"\x13SERVICE_UNAVAILABLE\x102\x12\x17\n" +
 	"\x13SERVICE_NOT_STARTED\x103\x12\x18\n" +
@@ -489,7 +504,8 @@ const file_errors_error_proto_rawDesc = "" +
 	"\vKAFKA_ERROR\x10Y\x12\x0f\n" +
 	"\vBLOB_EXISTS\x10Z\x12\x12\n" +
 	"\x0eBLOB_NOT_FOUND\x10[\x12\x1d\n" +
-	"\x19BLOB_FOOTER_SIZE_MISMATCH\x10\\\x12\x0e\n" +
+	"\x19BLOB_FOOTER_SIZE_MISMATCH\x10\\\x12\x10\n" +
+	"\fBLOB_CORRUPT\x10]\x12\x0e\n" +
 	"\n" +
 	"BLOB_ERROR\x10c\x12\x18\n" +
 	"\x14STATE_INITIALIZATION\x10d\x12\x17\n" +
@@ -505,7 +521,8 @@ const file_errors_error_proto_rawDesc = "" +
 	"\x16NETWORK_PEER_MALICIOUS\x10t\x12\x11\n" +
 	"\rBLOCK_CORRUPT\x10x\x12\x19\n" +
 	"\x15BLOCK_POLICY_DECLINED\x10y\x12\x17\n" +
-	"\x13BLOCK_BODY_MISMATCH\x10zB+Z)github.com/bsv-blockchain/teranode/errorsb\x06proto3"
+	"\x13BLOCK_BODY_MISMATCH\x10z\x12\x12\n" +
+	"\x0eBLOCK_ID_ORDER\x10{B+Z)github.com/bsv-blockchain/teranode/errorsb\x06proto3"
 
 var (
 	file_errors_error_proto_rawDescOnce sync.Once

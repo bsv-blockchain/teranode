@@ -9,6 +9,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 )
 
 // deferredBlockDrain is the end of a moveForwardBlock that the caller runs
@@ -29,6 +30,10 @@ type deferredBlockDrain struct {
 	transactionMap    *SortedHashSet
 	losingTxHashesMap txmap.TxMap
 	conflictingHashes map[chainhash.Hash]struct{}
+	// ackConflictIntents is set when the block has conflicting nodes, so ProcessConflicting ran
+	// for it and left a forward intent to acknowledge. It does not depend on how many
+	// transactions the operation demoted, which can be none.
+	ackConflictIntents bool
 }
 
 // runDeferredBlockDrain runs the end of a moveForwardBlock that
@@ -71,6 +76,13 @@ func (stp *SubtreeProcessor) runDeferredBlockDrain(ctx context.Context, block *m
 	// The clear is moveForwardBlock's commit point, so a storage error from it
 	// keeps the label it had when the clear ran inside moveForwardBlock.
 	stp.drainAndLogDiskTxMapErr("moveForwardBlock_commit")
+	if !stp.drainResetRequested.Load() && drain.ackConflictIntents {
+		// The block is committed. A failed acknowledgement is only reported, as in moveForwardBlock:
+		// the finished intent stays pending, and the next startup replays and acknowledges it.
+		if err := utxo.CompleteConflictIntentsForBlock(ctx, stp.utxoStore, *block.Hash()); err != nil {
+			stp.logger.Errorf("[SubtreeProcessor][%s] conflict WAL acknowledgement failed after commit; the intent stays pending until startup recovery: %v", block.String(), err)
+		}
+	}
 }
 
 // drainQueueAfterBlock drains the queue as dequeueDuringBlockMovement does -
@@ -88,7 +100,7 @@ func (stp *SubtreeProcessor) drainQueueAfterBlock(ctx context.Context, drain *de
 		return stp.dequeueDuringBlockMovement(drain.transactionMap, drain.losingTxHashesMap, drain.conflictingHashes, false)
 	}
 
-	return stp.forEachDrainChunk(drainChunkItems, func(batches []*TxBatch) error {
+	return stp.forEachDrainChunk(drainChunkItems, func(batches []*TxBatch) (int, error) {
 		return stp.addDrainedBatches(ctx, batches, drain)
 	})
 }
@@ -107,8 +119,8 @@ var drainStartHook func()
 var drainChunkItems = 1 << 20 // a var so tests can make the drain cross chunks
 
 // addDrainedBatches adds one chunk of drained batches, in parallel unless a
-// tx in it has no inpoints.
-func (stp *SubtreeProcessor) addDrainedBatches(ctx context.Context, batches []*TxBatch, drain *deferredBlockDrain) error {
+// tx in it has no inpoints. It reports how many it placed in subtrees.
+func (stp *SubtreeProcessor) addDrainedBatches(ctx context.Context, batches []*TxBatch, drain *deferredBlockDrain) (int, error) {
 	total := 0
 	for _, batch := range batches {
 		total += len(batch.nodes)
@@ -144,13 +156,22 @@ func (stp *SubtreeProcessor) addDrainedBatches(ctx context.Context, batches []*T
 
 	prometheusSubtreeProcessorDequeuedTxs.Add(float64(total))
 
-	return stp.parallelBuildRemainderSubtrees(ctx, kept, false)
+	if err := stp.parallelBuildRemainderSubtrees(ctx, kept, false); err != nil {
+		return 0, err
+	}
+
+	return len(kept), nil
 }
 
 // addDrainedNodesSequentially is dequeueDuringBlockMovement's per-tx loop
-// for nodes already taken from the queue, without conflicting hashes.
+// for nodes already taken from the queue, without conflicting hashes. It
+// reports how many it placed in subtrees: a duplicate that placeNode skipped
+// is not counted, and a node that placeNode put in a subtree is counted even
+// when completing that subtree failed.
 func (stp *SubtreeProcessor) addDrainedNodesSequentially(nodes []subtreepkg.Node, inpoints []*subtreepkg.TxInpoints,
-	transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap) error {
+	transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap) (int, error) {
+	placed := 0
+
 	for i, node := range nodes {
 		if transactionMap != nil && transactionMap.Exists(node.Hash) {
 			continue
@@ -160,14 +181,19 @@ func (stp *SubtreeProcessor) addDrainedNodesSequentially(nodes []subtreepkg.Node
 			continue
 		}
 
-		if err := stp.addNode(node, inpoints[i], false); err != nil {
+		wasPlaced, err := stp.placeNode(node, inpoints[i], false)
+		if err != nil {
 			stp.logger.Errorf("[SubtreeProcessor] error adding node %s during sequential remainder processing: %v", node.Hash.String(), err)
+		}
+
+		if wasPlaced {
+			placed++
 		}
 	}
 
 	prometheusSubtreeProcessorDequeuedTxs.Add(float64(len(nodes)))
 
-	return nil
+	return placed, nil
 }
 
 // filterDrainedNodes reports, per node, whether it is neither in the block

@@ -88,7 +88,7 @@ type RPCServer struct {
     authsha [sha256.Size]byte
 
     // limitauthsha contains the SHA256 hash of the HTTP basic auth string for limited-level access
-    // This is used for authenticating clients with restricted access (read-only operations)
+    // This is used for authenticating clients with restricted access (read-only commands and the submission commands)
     limitauthsha [sha256.Size]byte
 
     // numClients tracks the number of connected RPC clients for connection limiting
@@ -295,7 +295,7 @@ Implements the two-tier HTTP Basic authentication system for RPC clients. It val
     1. **Extracts the Authorization header** from the HTTP request
     2. **Validates the credentials** against both admin and limited-user authentication strings
     3. **Uses time-constant comparison** operations to prevent timing attacks
-    4. **Distinguishes between admin users** (who can perform state-changing operations) and limited users (who can only perform read-only operations)
+    4. **Distinguishes between admin users** (who can run every command) and limited users (who can run only the commands that `rpcAccessPolicy` does not mark admin-only)
 
 !!! warning "Security Considerations"
 
@@ -362,7 +362,7 @@ Some key handlers include:
     **Authentication Settings:**
 
     - **`rpc_user` and `rpc_pass`**: Credentials for RPC authentication with full admin privileges
-    - **`rpc_limit_user` and `rpc_limit_pass`**: Credentials for limited RPC access (read-only operations)
+    - **`rpc_limit_user` and `rpc_limit_pass`**: Credentials for limited RPC access (read-only commands plus `sendrawtransaction`, `submitblock`, `getminingcandidate` and `submitminingsolution`)
 
     **Connection Settings:**
 
@@ -409,18 +409,23 @@ Authentication is performed using HTTP Basic Auth.
 Admin users can execute all RPC commands. Limited users can execute the following commands:
 
 **Read-only commands:**
-createrawtransaction, decoderawtransaction, decodescript, estimatefee, getbestblock, getbestblockhash,
-getblock, getblockcount, getblockhash, getblockheader, getcfilter, getcfilterheader, getcurrentnet,
-getdifficulty, getheaders, getinfo, getnettotals, getnetworkhashps, getrawmempool, getrawtransaction,
-gettxout, gettxoutproof, help, searchrawtransactions, uptime, validateaddress, verifymessage,
-verifytxoutproof, version
+createrawtransaction, decoderawtransaction, decodescript, estimatefee, getbestblock,
+getbestblockhash, getblock, getblockcount, getblockhash, getblockheader, getcfilter,
+getcfilterheader, getcurrentnet, getdifficulty, getheaders, getinfo, getnettotals, getnetworkhashps,
+getrawmempool, getrawtransaction, gettxout, gettxoutproof, help, searchrawtransactions, uptime,
+validateaddress, verifymessage, verifytxoutproof, version
 
 **State-changing commands (also available to limited users):**
-sendrawtransaction, submitblock, getminingcandidate, submitminingsolution, freeze, unfreeze, reassign
+getminingcandidate, sendrawtransaction, submitblock, submitminingsolution
 
 **Admin-only commands (not available to limited users):**
-generate, generatetoaddress, getblockbyheight, getblockchaininfo, getchaintips, getmininginfo,
-getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, clearbanned, stop
+addnode, clearbanned, debuglevel, freeze, generate, generatetoaddress, getaddednodeinfo,
+getblockbyheight, getblockchaininfo, getblocktemplate, getchaintips, getconnectioncount,
+getgenerate, gethashespersec, getmempoolinfo, getmininginfo, getpeerinfo, invalidateblock, isbanned,
+listbanned, node, ping, reassign, reconsiderblock, setban, setgenerate, stop, unfreeze, verifychain
+
+The classification lives in `rpcAccessPolicy` in `services/rpc/Server.go`. Every registered handler must
+have an entry. A method with no entry is denied to limited users.
 
 ### GRPC API Key Authentication
 
@@ -888,7 +893,7 @@ Returns information for creating a new block.
 
 1. `parameters` (object, optional):
 
-   - `provideCoinbaseTx` (boolean, optional, default=false): If true, includes the coinbase transaction in the response
+   - `provideCoinbaseTx` (boolean, optional, default=false): If true, includes the coinbase transaction in the response. This is the coinbase block assembly keeps on the candidate's job, paying the configured `miner_wallet_private_keys` addresses, and the one a solution without its own coinbase is mined with. The call fails if block assembly could not build one, for example because no miner wallet keys are configured
    - `verbosity` (numeric, optional, default=0): 0 for standard response, 1 to include subtree hashes
 
 **Returns:**
@@ -947,11 +952,13 @@ Submits a solved block to the network.
    {
        "id": "string",          // Mining candidate ID
        "nonce": number,         // Block nonce
-       "coinbase": "string",    // Coinbase transaction
+       "coinbase": "string",    // Coinbase transaction (optional, see below)
        "time": number,          // Block time
        "version": number        // Block version
    }
    ```
+
+   If `coinbase` is omitted, the block is mined with the coinbase block assembly kept on the candidate's job, the one `getminingcandidate` returns with `provideCoinbaseTx`, as in bitcoin-sv. The miner must then have hashed that coinbase. `version` goes into the block header only. Omitting `coinbase` fails if block assembly could not build one, for example because no miner wallet keys are configured.
 
 **Returns:**
 

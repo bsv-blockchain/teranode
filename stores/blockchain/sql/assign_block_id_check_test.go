@@ -21,7 +21,7 @@ func TestCheckCallerSuppliedBlockID_ClosedDB(t *testing.T) {
 	s := newReservedIDTestStore(t)
 	require.NoError(t, s.db.Close()) // the cleanup still closes the store once
 
-	err := s.checkCallerSuppliedBlockID(context.Background(), block1.Hash(), 1)
+	_, err := s.checkCallerSuppliedBlockID(context.Background(), block1.Hash(), 1)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrStorageError), "got %v", err)
 }
@@ -35,7 +35,7 @@ func TestCheckCallerSuppliedBlockID_ReservationLookupFails(t *testing.T) {
 	_, err := s.db.ExecContext(ctx, `DROP TABLE block_id_reservations`)
 	require.NoError(t, err)
 
-	err = s.checkCallerSuppliedBlockID(ctx, block1.Hash(), 1)
+	_, err = s.checkCallerSuppliedBlockID(ctx, block1.Hash(), 1)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrStorageError), "got %v", err)
 	require.Contains(t, err.Error(), "failed to look up what holds caller-supplied block id 1")
@@ -55,7 +55,7 @@ func TestCheckCallerSuppliedBlockID_InjectedLookupFailure(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).WillReturnError(errors.NewProcessingError("injected lookup failure"))
 
-	err = s.checkCallerSuppliedBlockID(context.Background(), &h, 7)
+	_, err = s.checkCallerSuppliedBlockID(context.Background(), &h, 7)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrStorageError), "got %v", err)
 	require.Contains(t, err.Error(), "failed to look up what holds caller-supplied block id 7")
@@ -75,7 +75,9 @@ func TestCheckCallerSuppliedBlockID_OneRoundTrip(t *testing.T) {
 		AddRow(false, nil, nil, nil, int64(9))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).WillReturnRows(rows)
 
-	require.NoError(t, s.checkCallerSuppliedBlockID(context.Background(), &h, 7))
+	alreadyStored, err := s.checkCallerSuppliedBlockID(context.Background(), &h, 7)
+	require.NoError(t, err)
+	require.False(t, alreadyStored)
 	require.NoError(t, mock.ExpectationsWereMet(), "the check must issue exactly one statement")
 }
 

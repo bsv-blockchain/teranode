@@ -24,8 +24,6 @@
     - [GetBlockHeadersFromCommonAncestorRequest](#GetBlockHeadersFromCommonAncestorRequest)
     - [GetBlockHeadersFromHeightRequest](#GetBlockHeadersFromHeightRequest)
     - [GetBlockHeadersFromHeightResponse](#GetBlockHeadersFromHeightResponse)
-    - [GetBlockHeadersFromOldestRequest](#GetBlockHeadersFromOldestRequest)
-    - [GetBlockHeadersFromTillRequest](#GetBlockHeadersFromTillRequest)
     - [GetBlockHeadersRequest](#GetBlockHeadersRequest)
     - [GetBlockHeadersResponse](#GetBlockHeadersResponse)
     - [GetBlockHeadersToCommonAncestorRequest](#GetBlockHeadersToCommonAncestorRequest)
@@ -51,7 +49,6 @@
     - [GetLastNBlocksResponse](#GetLastNBlocksResponse)
     - [GetLastNInvalidBlocksRequest](#GetLastNInvalidBlocksRequest)
     - [GetLastNInvalidBlocksResponse](#GetLastNInvalidBlocksResponse)
-    - [GetLatestBlockHeaderFromBlockLocatorRequest](#GetLatestBlockHeaderFromBlockLocatorRequest)
     - [GetMedianTimeRequest](#GetMedianTimeRequest)
     - [GetMedianTimeResponse](#GetMedianTimeResponse)
     - [GetNextBlockIDResponse](#GetNextBlockIDResponse)
@@ -278,39 +275,8 @@ swagger:model GetBlockHeaderResponse
 | subtrees_set | [bool](#bool) |  | Subtrees status |
 | invalid | [bool](#bool) |  | Validity status |
 | processed_at | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Timestamp when block was processed |
-
-
-
-
-
-
-<a name="GetLatestBlockHeaderFromBlockLocatorRequest"></a>
-
-### GetLatestBlockHeaderFromBlockLocatorRequest
-GetLatestBlockHeaderFromBlockLocatorRequest retrieves the latest block header using a block locator.
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| bestBlockHash | [bytes](#bytes) |  | Best block hash |
-| blockLocatorHashes | [bytes](#bytes) | repeated | Block locator hashes |
-
-
-
-
-
-
-<a name="GetBlockHeadersFromOldestRequest"></a>
-
-### GetBlockHeadersFromOldestRequest
-GetBlockHeadersFromOldestRequest retrieves block headers starting from the oldest block.
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| chainTipHash | [bytes](#bytes) |  | Chain tip hash |
-| targetHash | [bytes](#bytes) |  | Target block hash |
-| numberOfHeaders | [uint64](#uint64) |  | Maximum number of hashes to return |
+| median_time_past | [uint32](#uint32) |  | Median Time Past (MTP) - median of last 11 block timestamps (BIP113) |
+| mined_set_generation | [uint64](#uint64) |  | Bumped by every write that clears mined_set; SetBlockMinedSet compares against it |
 
 
 
@@ -898,6 +864,7 @@ SetBlockMinedSetRequest marks a block as mined.
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
 | blockHash | [bytes](#bytes) |  | Hash of the block to mark as mined |
+| mined_set_generation | [uint64](#uint64) | optional | The block's mined_set generation (GetBlockHeaderResponse.mined_set_generation) when the caller's tagging run started. Every writer that clears mined_set bumps it, so the write is refused with ERR_STATE_ERROR if it has changed since. Absent means a caller that predates the field: the write is unconditional, as it was before. |
 
 
 
@@ -1150,13 +1117,10 @@ BlockchainAPI service provides comprehensive blockchain management functionality
 | GetBlockHeaders | [GetBlockHeadersRequest](#blockchain_api-GetBlockHeadersRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves headers for multiple blocks. |
 | GetBlockHeadersToCommonAncestor | [GetBlockHeadersToCommonAncestorRequest](#blockchain_api-GetBlockHeadersToCommonAncestorRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves headers from a block to its common ancestor. |
 | GetBlockHeadersFromCommonAncestor | [GetBlockHeadersFromCommonAncestorRequest](#blockchain_api-GetBlockHeadersFromCommonAncestorRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves headers from a common ancestor to a target block. |
-| GetBlockHeadersFromTill | [GetBlockHeadersFromTillRequest](#blockchain_api-GetBlockHeadersFromTillRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers between two specified blocks. |
 | GetBlockHeadersFromHeight | [GetBlockHeadersFromHeightRequest](#blockchain_api-GetBlockHeadersFromHeightRequest) | [GetBlockHeadersFromHeightResponse](#blockchain_api-GetBlockHeadersFromHeightResponse) | Retrieves block headers starting from a specific height. |
 | GetBlockHeadersByHeight | [GetBlockHeadersByHeightRequest](#blockchain_api-GetBlockHeadersByHeightRequest) | [GetBlockHeadersByHeightResponse](#blockchain_api-GetBlockHeadersByHeightResponse) | Retrieves block headers between two specified heights. |
 | GetBlocksByHeight | [GetBlocksByHeightRequest](#blockchain_api-GetBlocksByHeightRequest) | [GetBlocksByHeightResponse](#blockchain_api-GetBlocksByHeightResponse) | Retrieves full blocks between two specified heights. |
 | FindBlocksContainingSubtree | [FindBlocksContainingSubtreeRequest](#blockchain_api-FindBlocksContainingSubtreeRequest) | [FindBlocksContainingSubtreeResponse](#blockchain_api-FindBlocksContainingSubtreeResponse) | Finds all blocks that contain the specified subtree hash. |
-| GetLatestBlockHeaderFromBlockLocator | [GetLatestBlockHeaderFromBlockLocatorRequest](#blockchain_api-GetLatestBlockHeaderFromBlockLocatorRequest) | [GetBlockHeaderResponse](#blockchain_api-GetBlockHeaderResponse) | Retrieves the latest block header using a block locator. |
-| GetBlockHeadersFromOldest | [GetBlockHeadersFromOldestRequest](#blockchain_api-GetBlockHeadersFromOldestRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers starting from the oldest block. |
 | GetBlockHeaderIDs | [GetBlockHeadersRequest](#blockchain_api-GetBlockHeadersRequest) | [GetBlockHeaderIDsResponse](#blockchain_api-GetBlockHeaderIDsResponse) | Retrieves block header IDs for a range of blocks. |
 | GetBestBlockHeader | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBlockHeaderResponse](#blockchain_api-GetBlockHeaderResponse) | Retrieves the header of the current best block. |
 | CheckBlockIsInCurrentChain | [CheckBlockIsCurrentChainRequest](#blockchain_api-CheckBlockIsCurrentChainRequest) | [CheckBlockIsCurrentChainResponse](#blockchain_api-CheckBlockIsCurrentChainResponse) | Verifies if specified blocks are in the main chain. |

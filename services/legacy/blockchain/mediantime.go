@@ -6,6 +6,7 @@ package blockchain
 
 import (
 	"math"
+	"net"
 	"sort"
 	"sync"
 	"time"
@@ -111,12 +112,16 @@ func (m *medianTime) AddTimeSample(sourceID string, timeVal time.Time) {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 
-	// Don't add time data from the same source.
-	if _, exists := m.knownIDs[sourceID]; exists {
+	// Don't add time data from the same source. A source is a host, not a
+	// connection: peers are identified as "host:port", and keying on that would
+	// let one host vote once per port it connects from. SV Node keys its seen
+	// set on the IP address alone (AddTimeData in timedata.cpp).
+	sourceKey := timeSampleSourceKey(sourceID)
+	if _, exists := m.knownIDs[sourceKey]; exists {
 		return
 	}
 
-	m.knownIDs[sourceID] = struct{}{}
+	m.knownIDs[sourceKey] = struct{}{}
 
 	// Truncate the provided offset to seconds and append it to the slice
 	// of offsets while respecting the maximum number of allowed entries by
@@ -209,6 +214,18 @@ func (m *medianTime) Offset() time.Duration {
 	defer m.mtx.Unlock()
 
 	return time.Duration(m.offsetSecs) * time.Second
+}
+
+// timeSampleSourceKey reduces a peer address to the host that owns it, so that
+// "203.0.113.5:8333" and "203.0.113.5:51234" count as one source. An id that is
+// not a host:port pair is used as given.
+func timeSampleSourceKey(sourceID string) string {
+	host, _, err := net.SplitHostPort(sourceID)
+	if err != nil {
+		return sourceID
+	}
+
+	return host
 }
 
 // NewMedianTime returns a new instance of concurrency-safe implementation of

@@ -11,8 +11,25 @@ import (
 )
 
 // ValidateHeaderProofOfWork validates that a block header meets the proof of work requirement.
-// It checks that the block hash is less than or equal to the target difficulty.
-func ValidateHeaderProofOfWork(header *model.BlockHeader) error {
+// It checks that the target the header declares is not easier than the network's
+// proof-of-work limit, and that the block hash is less than or equal to that target.
+//
+// Checking the hash against the target the header chose for itself proves nothing on its
+// own: a fabricated header declares an easy target and meets it in a couple of hashes. The
+// limit bound is what makes the check meaningful. params may be nil, in which case no limit
+// is enforced (the same convention as model.BlockHeader.HasMetPowLimit). The limit diagnostic is
+// carried as text, not as the wrapped cause: HasMetPowLimit's error is a BlockInvalidError, and
+// wrapping it would make the peer's lie about its own header read as a verdict on the announced
+// block, which stops catch-up before the alternative peers are tried. It is not a
+// substitute for the expected-difficulty rule, which this path does not run.
+func ValidateHeaderProofOfWork(header *model.BlockHeader, params *chaincfg.Params) error {
+	if limitErr := header.HasMetPowLimit(params); limitErr != nil {
+		return errors.NewNetworkInvalidResponseError(
+			"[validateHeaderProofOfWork][%s] block header declares a target easier than the network limit: %s",
+			header.Hash().String(), limitErr.Error(),
+		)
+	}
+
 	// Use the built-in method to check if header meets target difficulty
 	ok, hashNum, err := header.HasMetTargetDifficulty()
 
@@ -126,3 +143,26 @@ func ValidateHeaderAgainstCheckpoints(header *model.BlockHeader, height uint32, 
 // - Checkpoint conflicts (if height is known)
 //
 // Processes headers individually with context cancellation checks.
+
+// ValidateChainConnection reports whether headers form one chain: each header's parent is the
+// header before it, and the first header's parent is startHash when startHash is not nil.
+// An empty slice is a valid chain.
+func ValidateChainConnection(headers []*model.BlockHeader, startHash *chainhash.Hash) bool {
+	if len(headers) == 0 {
+		return true
+	}
+
+	// First header should connect to startHash if provided
+	if startHash != nil && !headers[0].HashPrevBlock.IsEqual(startHash) {
+		return false
+	}
+
+	// Each subsequent header should connect to the previous
+	for i := 1; i < len(headers); i++ {
+		if !headers[i].HashPrevBlock.IsEqual(headers[i-1].Hash()) {
+			return false
+		}
+	}
+
+	return true
+}

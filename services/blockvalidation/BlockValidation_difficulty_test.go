@@ -494,9 +494,9 @@ type countingSubtreeValidationClient struct {
 	checkBlockSubtreesCalls atomic.Int32
 }
 
-func (c *countingSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string) error {
+func (c *countingSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string, keepBlockAssemblyHandoff bool) error {
 	c.checkBlockSubtreesCalls.Add(1)
-	return c.Interface.CheckBlockSubtrees(ctx, block, peerID, baseURL)
+	return c.Interface.CheckBlockSubtrees(ctx, block, peerID, baseURL, keepBlockAssemblyHandoff)
 }
 
 // TestValidateBlock_PoWCheckedBeforeSubtreeValidation pins the ordering
@@ -818,7 +818,7 @@ func TestReValidateBlock_BelowCheckpointStillEnforcesTargetDifficulty(t *testing
 
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, countingClient)
 
-	err := bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test"})
+	err := bv.reValidateBlock(context.Background(), revalidateBlockData{block: block, baseURL: "test"})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "failed PoW must surface as BlockInvalid, got: %v", err)
 	require.Contains(t, err.Error(), "does not meet target difficulty")

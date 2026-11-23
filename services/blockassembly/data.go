@@ -25,6 +25,9 @@ type Data struct {
 
 	// Parents is a list of parent transaction hashes
 	TxInpoints subtree.TxInpoints
+
+	// ValidatedHeight is the block height the transaction was validated at
+	ValidatedHeight uint32
 }
 
 // NewFromBytes deserializes a byte array into a Data structure.

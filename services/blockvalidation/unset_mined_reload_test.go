@@ -3,7 +3,12 @@ package blockvalidation
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io/fs"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -14,9 +19,11 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	blobfile "github.com/bsv-blockchain/teranode/stores/blob/file"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -259,4 +266,192 @@ func TestReloadSubtreesForInvalidBlock_ClosesLoadedSubtreesOnReadError(t *testin
 	entries, err := os.ReadDir(mmapDir)
 	require.NoError(t, err)
 	require.Empty(t, entries, "the subtree loaded before the read failure must be closed, removing its mmap backing file")
+}
+
+// TestReloadSubtreesForInvalidBlock_CorruptCopyIsPermanent pins the one rule for a
+// subtree file that is present but unusable, whichever part of it is broken.
+//
+// It runs four corrupt copies: a bad header (the store's header check fails), a
+// bad body (the header passes and the subtree does not parse), a well-formed
+// subtree with another root, and damaged node bytes under an intact stored root.
+// They are the same permanent fault: the store writes whole files, so a retry
+// reads the same bytes. All four now try the FileTypeSubtreeToCheck copy, and when no copy is usable the subtree is skipped
+// with the corrupt-subtree counter raised, rather than returned for a retry that
+// would hold the block at mined_set=false and block assembly with it.
+//
+// It uses a real file store, because only the file and S3 stores check the header;
+// the memory store has none, so it could not show the bad-header case.
+func TestReloadSubtreesForInvalidBlock_CorruptCopyIsPermanent(t *testing.T) {
+	ctx := context.Background()
+
+	initPrometheusMetrics()
+
+	st, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, st.AddNode(chainhash.HashH([]byte("corrupt-copy-0")), 1, 0))
+	require.NoError(t, st.AddNode(chainhash.HashH([]byte("corrupt-copy-1")), 1, 0))
+
+	serialized, err := st.Serialize()
+	require.NoError(t, err)
+
+	nBits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	coinbase, err := bt.NewTxFromString(model.CoinbaseHex)
+	require.NoError(t, err)
+
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      1,
+		Bits:           *nBits,
+	}
+
+	block, err := model.NewBlock(header, coinbase, []*chainhash.Hash{st.RootHash()}, 2, 123, 0, 0)
+	require.NoError(t, err)
+
+	// newStore returns a file store holding the subtree as FileTypeSubtree, rewritten on
+	// disk by corrupt, and as FileTypeSubtreeToCheck when withFallback is set.
+	newStore := func(t *testing.T, corrupt func(raw []byte) []byte, withFallback bool) blob.Store {
+		t.Helper()
+
+		dir := t.TempDir()
+
+		storeURL, err := url.Parse("file://" + dir)
+		require.NoError(t, err)
+
+		store, err := blobfile.New(ulogger.TestLogger{}, storeURL, options.WithBlobDeletionScheduler(noopBlobDeletionScheduler{}))
+		require.NoError(t, err)
+
+		require.NoError(t, store.Set(ctx, st.RootHash()[:], fileformat.FileTypeSubtree, serialized))
+
+		if withFallback {
+			require.NoError(t, store.Set(ctx, st.RootHash()[:], fileformat.FileTypeSubtreeToCheck, serialized))
+		}
+
+		var subtreeFile string
+
+		require.NoError(t, filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && strings.HasSuffix(path, "."+string(fileformat.FileTypeSubtree)) {
+				subtreeFile = path
+			}
+
+			return err
+		}))
+		require.NotEmpty(t, subtreeFile, "the subtree file must be on disk")
+
+		raw, err := os.ReadFile(subtreeFile)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(subtreeFile, corrupt(raw), 0o600))
+
+		return store
+	}
+
+	badHeader := func([]byte) []byte { return []byte("abc") }
+	badBody := func(raw []byte) []byte { return append(append([]byte{}, raw[:8]...), 0xff, 0xff, 0xff) }
+
+	// A well-formed subtree under the wrong key: the header and body are valid, but its nodes
+	// hash to another root, so unmining them would leave the block's real transactions tagged.
+	foreign, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, foreign.AddNode(chainhash.HashH([]byte("foreign-0")), 1, 0))
+	require.NoError(t, foreign.AddNode(chainhash.HashH([]byte("foreign-1")), 1, 0))
+
+	foreignSerialized, err := foreign.Serialize()
+	require.NoError(t, err)
+
+	foreignBody := func(raw []byte) []byte { return append(append([]byte{}, raw[:8]...), foreignSerialized...) }
+
+	// Damaged node bytes under an intact root field. The serialized subtree starts with the
+	// root (32 bytes), fees, size and node count (8 bytes each), so the first node's hash
+	// begins 56 bytes into the body. Deserializing keeps the stored root, so only hashing the
+	// nodes shows that this copy no longer lists the subtree's transactions.
+	damagedNode := func(raw []byte) []byte {
+		out := append([]byte{}, raw...)
+		out[8+56] ^= 0xff
+
+		return out
+	}
+
+	for _, tc := range []struct {
+		name    string
+		corrupt func([]byte) []byte
+	}{
+		{name: "bad header", corrupt: badHeader},
+		{name: "bad body", corrupt: badBody},
+		{name: "foreign subtree", corrupt: foreignBody},
+		{name: "damaged node under an intact root", corrupt: damagedNode},
+	} {
+		t.Run(tc.name+" falls back to the subtree-to-check copy", func(t *testing.T) {
+			before := promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt)
+			u := &BlockValidation{logger: ulogger.TestLogger{}, subtreeStore: newStore(t, tc.corrupt, true)}
+
+			require.NoError(t, u.reloadSubtreesForInvalidBlock(ctx, block))
+			require.Len(t, block.SubtreeSlices, 1)
+			require.NotNil(t, block.SubtreeSlices[0], "the subtree-to-check copy must be used")
+			require.NoError(t, model.ValidateSubtreeNodesMatchKey(block.SubtreeSlices[0], st.RootHash()), "the nodes used must hash to the subtree hash")
+			require.Equal(t, before, promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt))
+
+			require.NoError(t, block.ReleaseSubtreeNodes(nil))
+		})
+
+		t.Run(tc.name+" with no usable copy is skipped and counted", func(t *testing.T) {
+			before := promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt)
+			logger := &errorRecordingLogger{Logger: ulogger.TestLogger{}}
+			mmapDir := t.TempDir()
+			u := &BlockValidation{logger: logger, subtreeStore: newStore(t, tc.corrupt, false), mmapDir: mmapDir}
+
+			require.NoError(t, u.reloadSubtreesForInvalidBlock(ctx, block), "a corrupt file is permanent, so it must not be returned for a retry")
+			require.Len(t, block.SubtreeSlices, 1)
+			require.Nil(t, block.SubtreeSlices[0])
+			require.Equal(t, before+1, promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt))
+
+			// The operator finds the subtree from this line, so it must be an ERROR naming both hashes.
+			lines := logger.errorLines()
+			require.Len(t, lines, 1)
+			require.Contains(t, lines[0], "manual_intervention_required")
+			require.Contains(t, lines[0], block.Hash().String())
+			require.Contains(t, lines[0], st.RootHash().String())
+
+			// A copy that parsed and was then rejected must be closed, removing its mmap backing file.
+			entries, err := os.ReadDir(mmapDir)
+			require.NoError(t, err)
+			require.Empty(t, entries, "a rejected copy must be closed")
+		})
+	}
+
+	t.Run("absent subtree is skipped without the corrupt counter", func(t *testing.T) {
+		before := promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt)
+		logger := &errorRecordingLogger{Logger: ulogger.TestLogger{}}
+		u := &BlockValidation{logger: logger, subtreeStore: blobmemory.New()}
+
+		require.NoError(t, u.reloadSubtreesForInvalidBlock(ctx, block))
+		require.Nil(t, block.SubtreeSlices[0])
+		require.Equal(t, before, promtestutil.ToFloat64(prometheusBlockValidationRevertSubtreeCorrupt))
+		require.Empty(t, logger.errorLines(), "an absent subtree is not a manual-intervention case")
+	})
+}
+
+// errorRecordingLogger keeps each rendered Errorf line and passes every call on.
+type errorRecordingLogger struct {
+	ulogger.Logger
+
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *errorRecordingLogger) Errorf(format string, args ...interface{}) {
+	l.mu.Lock()
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+	l.mu.Unlock()
+
+	l.Logger.Errorf(format, args...)
+}
+
+func (l *errorRecordingLogger) errorLines() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string(nil), l.lines...)
 }

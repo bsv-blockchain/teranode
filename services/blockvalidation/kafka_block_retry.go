@@ -184,7 +184,8 @@ func isRecoverableBlockMessageError(err error) bool {
 		errors.Is(err, errors.ErrStorageError) ||
 		errors.Is(err, errors.ErrThresholdExceeded) ||
 		errors.Is(err, errors.ErrContextCanceled) ||
-		errors.Is(err, errors.ErrExternal)
+		errors.Is(err, errors.ErrExternal) ||
+		isLocalProcessingFault(err)
 }
 
 // runBlockHandler runs blockHandler in the caller's goroutine, so when it returns the
