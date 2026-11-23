@@ -1115,3 +1115,57 @@ func TestBlockParentsHoldsUpToItsCapWhileTheChainLoads(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	require.Equal(t, agree+maxPendingParents, answers(ReaderBlockParent, KindAgree, lane.ViaRow), "each held parent answered once")
 }
+
+// A load for block validation publishes the index's size, though the tip has not moved.
+func TestPrepareUpdatesTheSizeGauges(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+
+	b1 := c.add(nil)
+
+	r := newReader(ulogger.TestLogger{}, store, 100)
+	follow(t, r)
+
+	c.add(b1)
+	fork := c.add(b1, takes(t, 3, 4)) // a side block; the best tip stays the first block at its height
+
+	_, ok := prepareView(r, context.Background(), fork.hash)
+	require.True(t, ok)
+
+	st := r.Snapshot().Stats()
+	require.Equal(t, float64(st.Blocks), testutil.ToFloat64(prometheusLaneReaderIndexBlocks))
+	require.Equal(t, float64(st.Rows), testutil.ToFloat64(prometheusLaneReaderIndexRows))
+	require.Equal(t, float64(st.Bytes), testutil.ToFloat64(prometheusLaneReaderIndexBytes))
+}
+
+// The parent check's shadow gives up on its own deadline while another load holds the token, and
+// counts its parents not_ready.
+func TestBlockParentsGivesUpOnItsOwnDeadline(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+
+	b1 := c.add(nil)
+
+	r := newReader(ulogger.TestLogger{}, store, 100)
+	follow(t, r)
+
+	b2 := c.add(b1)
+
+	old := prepareTimeout
+	prepareTimeout = 100 * time.Millisecond
+
+	t.Cleanup(func() { prepareTimeout = old })
+
+	r.loading <- struct{}{} // another load holds the token, and never lets go
+
+	t.Cleanup(func() { <-r.loading })
+
+	before := answers(ReaderBlockParent, KindNotReady, lane.ViaNone)
+
+	bp := r.BlockParents(context.Background(), b2.hash)
+	bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id})
+
+	require.Eventually(t, func() bool {
+		return answers(ReaderBlockParent, KindNotReady, lane.ViaNone) == before+1
+	}, 3*time.Second, 10*time.Millisecond)
+}

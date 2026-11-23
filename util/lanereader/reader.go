@@ -476,6 +476,7 @@ func (r *Reader) prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainV
 
 	idx := r.idx.Load()
 	idx.Publish()
+	r.publishMetrics()
 
 	if v, ok := idx.Snapshot().ViewFrom(hash); ok {
 		return v, ""

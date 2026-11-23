@@ -10,16 +10,14 @@ import (
 	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
-const (
-	// prepareTimeout bounds how long loading a block's ancestry for its parent check may take,
-	// waiting for another load included. The load runs beside the block's validation, never in its
-	// way.
-	prepareTimeout = 10 * time.Second
+// prepareTimeout bounds how long loading a block's ancestry for its parent check may take,
+// waiting for another load included. The load runs beside the block's validation, never in its
+// way. A variable so a test can shorten it.
+var prepareTimeout = 10 * time.Second
 
-	// maxPendingParents bounds the parents a block's check holds while its ancestry loads; past it
-	// they are counted not_ready.
-	maxPendingParents = 100_000
-)
+// maxPendingParents bounds the parents a block's check holds while its ancestry loads; past it
+// they are counted not_ready.
+const maxPendingParents = 100_000
 
 // BlockParents is the lanes shadow of one block's parent check (model.LaneParentObserver): told of
 // each parent record the check reads, it answers the same question from the index, on the chain

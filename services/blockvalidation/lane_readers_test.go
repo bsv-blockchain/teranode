@@ -375,7 +375,11 @@ type gatedHeaderSource struct {
 }
 
 func (g *gatedHeaderSource) GetBlockHeaders(ctx context.Context, h *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	<-g.release
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	}
 
 	return g.Source.GetBlockHeaders(ctx, h, n)
 }
@@ -452,4 +456,51 @@ func TestShadowLaneDuplicatesDoesNotWaitForItsLoad(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindAgree) == agree+1
 	}, 10*time.Second, 10*time.Millisecond)
+}
+
+// The duplicate shadow gives up on its own deadline when its load never finishes, and counts
+// not_ready.
+func TestShadowLaneDuplicatesGivesUpOnItsOwnDeadline(t *testing.T) {
+	u, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	store, err := blockchainsql.New(ulogger.TestLogger{}, u, tSettings)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = store.Close(context.Background()) })
+
+	genesis, _, err := store.GetBestBlockHeader(context.Background())
+	require.NoError(t, err)
+
+	source := &gatedHeaderSource{Source: store, release: make(chan struct{})}
+	close(source.release)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		lanereader.Start(context.Background(), nil, test.CreateBaseTestSettings(t), nil)
+	})
+
+	r := lanereader.Start(ctx, ulogger.TestLogger{}, tSettings, source)
+	require.Eventually(t, func() bool { return r.Snapshot() != nil }, 10*time.Second, 10*time.Millisecond)
+	cancel()
+
+	old := duplicatesTimeout
+	duplicatesTimeout = 100 * time.Millisecond
+
+	t.Cleanup(func() { duplicatesTimeout = old })
+
+	blk := &model.Block{Header: &model.BlockHeader{Version: 1, Timestamp: 1729259950, Nonce: 92, HashPrevBlock: genesis.Hash(),
+		HashMerkleRoot: &chainhash.Hash{}, Bits: model.NBit{0xff, 0xff, 0x7f, 0x20}}, Height: 1}
+
+	source.release = make(chan struct{}) // never released
+
+	notReady := laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindNotReady)
+
+	require.NoError(t, shadowLaneDuplicates(context.Background(), blk, 99, nil, nil))
+	require.Eventually(t, func() bool {
+		return laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindNotReady) == notReady+1
+	}, 3*time.Second, 10*time.Millisecond)
 }

@@ -16,8 +16,9 @@ import (
 // comparison run in the background; once the chain is in, each parent's lookup, about 100 ns,
 // runs on the parent check's own goroutine. At off there is no lane index and both do nothing.
 
-// duplicatesTimeout bounds loading a block's ancestry for the duplicate check's shadow.
-const duplicatesTimeout = 10 * time.Second
+// duplicatesTimeout bounds loading a block's ancestry for the duplicate check's shadow, waiting
+// for another load included. A variable so a test can shorten it.
+var duplicatesTimeout = 10 * time.Second
 
 // laneParentsContext is ctx carrying the shadow of block's parent check, judged on the chain
 // ending at its parent; ctx itself at off.
