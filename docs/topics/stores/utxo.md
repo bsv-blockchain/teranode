@@ -370,7 +370,15 @@ Aerospike:
 - If the network's chain has that block at that height and it contains `<spender>`, this is the first time the spender is mined. The refusal is the left-behind spend, so free the output.
 - If the network does not have that block, keep the refusal. The peer's block is not on the chain the rest of the network follows.
 
-**Free the output on Sql (PostgreSQL or SQLite).** Stop the services that write to the UTXO store, then run one transaction. Hashes are stored in internal byte order, the reverse of the hex in the log line. Reverse a txid with `echo <txid> | fold -w2 | tac | tr -d '\n'`. On PostgreSQL write each as `decode('<reversed hex>', 'hex')`; on SQLite write it as `X'<reversed hex>'` and use `substr` in place of `substring`.
+**Free the output with `teranode-cli free-spent-output`, on either store.** Run it with the node's settings context, and the parent, output index and spender from the log line, in the hex the log prints:
+
+```bash
+SETTINGS_CONTEXT=<context> ./teranode-cli free-spent-output --parent <parent> --vout <vout> --spender <spender>
+```
+
+It refuses when `<spender>` has a record in the store, because the output is then spent by a stored transaction. It calls the store's `Unspend`, which clears the spend only while the output still names `<spender>`, and with it the recorded spend height, `spentUtxos` on Aerospike and the parent's delete-at-height. It then reads the output back and fails if the spend is still there. The node can keep running. Legacy sync retries the parked block by itself, and the spend is written fresh. `cmd/reconsiderblock` is not needed, because the block was never marked invalid.
+
+**By hand on Sql (PostgreSQL or SQLite), if the command cannot run.** Stop the services that write to the UTXO store, then run one transaction. Hashes are stored in internal byte order, the reverse of the hex in the log line. Reverse a txid with `echo <txid> | fold -w2 | tac | tr -d '\n'`. On PostgreSQL write each as `decode('<reversed hex>', 'hex')`; on SQLite write it as `X'<reversed hex>'` and use `substr` in place of `substring`.
 
 ```sql
 BEGIN;
@@ -386,7 +394,7 @@ COMMIT;
 
 The first statement clears the spend only if it still names `<spender>`, as `Unspend` does. The second clears the parent's delete-at-height, so the pruner cannot delete the parent before the spender spends it again; the next spend of the parent sets it again. Start the services. Legacy sync retries the parked block by itself, and the spend is now written fresh. `cmd/reconsiderblock` is not needed, because the block was never marked invalid.
 
-**Aerospike has no supported way to free one output today.** The spend lives inside the record's `utxos` bin, and `spentUtxos`, `spendHeights` and the delete-at-height must change with it. The store's `Unspend` keeps them in step, but no operator command calls it for a spender that has no record. Do not edit the record with `aql`. Report the log line with both heights.
+**On Aerospike use only the command.** The spend lives inside the record's `utxos` bin, and `spentUtxos`, `spendHeights` and the delete-at-height must change with it. The store's `Unspend`, which the command calls, keeps them in step. Do not edit the record with `aql`.
 
 ### 4.7. UTXO Batch Processing and External Storage mode
 
