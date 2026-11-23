@@ -108,7 +108,7 @@ func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpoin
 
 		// removed while the subtree was being stored: its position is in the backup beside its inpoints
 		if laneBits != nil {
-			laneBits.Add(deletedLanePosition(deletedPositions, node.Hash))
+			laneBits.Add(removedLanePosition(parents, deletedPositions, node.Hash))
 		}
 
 		if deletedTxs == nil {
@@ -131,6 +131,39 @@ func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpoin
 	}
 
 	return out, nil
+}
+
+// removedLanePosition returns the lane position of a member the pool map did not hold when it was
+// read: the backup kept beside deletedTxs, or, when the backup is gone too, the pool map's record
+// read again. The processor removes and re-adds members while a storage worker reads them: a
+// re-chain backs a tx up, deletes it, re-adds it and then drops the backup, so a worker that missed
+// it in the map can find the backup already dropped and the tx back in the map.
+func removedLanePosition(pool any, deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64], hash chainhash.Hash) uint64 {
+	if position := deletedLanePosition(deletedPositions, hash); position != 0 {
+		return position
+	}
+
+	return poolLanePosition(pool, hash)
+}
+
+// poolLanePosition reads hash's lane position from the pool map, 0 when it holds none or does not
+// hold hash. A map that has PositionWithErr (the disk map) is read with it, so a read error is not
+// recorded on the map, where the processor's next check would take it for its own.
+func poolLanePosition(pool any, hash chainhash.Hash) uint64 {
+	switch m := pool.(type) {
+	case interface {
+		PositionWithErr(hash chainhash.Hash) (uint64, error)
+	}:
+		position, _ := m.PositionWithErr(hash)
+
+		return position
+	case interface {
+		Position(hash chainhash.Hash) uint64
+	}:
+		return m.Position(hash)
+	default:
+		return 0
+	}
 }
 
 // deletedLanePosition returns the lane position backed up for hash when it was removed from the pool

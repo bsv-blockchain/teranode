@@ -230,39 +230,26 @@ func (o *ownLaneBitmaps) lookupLocked(roots []*chainhash.Hash) (bitmaps []lane.L
 // kept. The coinbase placeholder is skipped.
 //
 // It runs on a subtree storage worker, beside the processor, so the disk map is read with
-// PositionWithErr: a read error that Position recorded on the map would be taken by the
-// processor's next check for its own, and fail that block movement into a reset. A position that
-// cannot be read is none, and counted.
+// PositionWithErr (see poolLanePosition). A position that cannot be read is none, and counted.
 func subtreeLanePositions(subtree *subtreepkg.Subtree, parentTxMap subtreeprocessor.TxInpointsMap,
 	deletedTxs *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints], deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64]) (laneBits *lane.BitmapsBuilder, lost int) {
 	laneBits = lane.NewBitmapsBuilder()
-
-	withErr, readsWithErr := parentTxMap.(interface {
-		PositionWithErr(hash chainhash.Hash) (uint64, error)
-	})
 
 	for _, node := range subtree.Nodes {
 		if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 			continue
 		}
 
-		if parentTxMap == nil || !parentTxMap.Exists(node.Hash) {
-			if deletedTxs == nil || !deletedTxs.Exists(node.Hash) {
-				lost++
-				continue
-			}
-
-			laneBits.Add(deletedLanePosition(deletedPositions, node.Hash))
-
-			continue
+		// the processor may remove or re-add the member between reads, so a 0 is checked against
+		// the removal backup and the map again before the member counts as without a position
+		position := poolLanePosition(parentTxMap, node.Hash)
+		if position == 0 {
+			position = removedLanePosition(parentTxMap, deletedPositions, node.Hash)
 		}
 
-		var position uint64
-
-		if readsWithErr {
-			position, _ = withErr.PositionWithErr(node.Hash)
-		} else {
-			position = parentTxMap.Position(node.Hash)
+		if position == 0 && (parentTxMap == nil || !parentTxMap.Exists(node.Hash)) && (deletedTxs == nil || !deletedTxs.Exists(node.Hash)) {
+			lost++
+			continue
 		}
 
 		laneBits.Add(position)

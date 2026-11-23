@@ -1104,3 +1104,63 @@ func TestServingACandidateKeepsItsSubtreesLaneBitmaps(t *testing.T) {
 	_, missing := o.server.ownLaneBitmaps.get(roots)
 	require.Zero(t, missing, "the candidate's subtrees keep their bitmaps")
 }
+
+// removedMidReadMap holds every member but reads no position for any: the processor removed the
+// member, backing it up, between the worker's existence check and its position read.
+type removedMidReadMap struct {
+	subtreeprocessor.TxInpointsMap
+}
+
+func (removedMidReadMap) PositionWithErr(chainhash.Hash) (uint64, error) { return 0, nil }
+
+// reAddedMap holds no member on the first position read of each and its position on the next: a
+// re-chain deleted the member, then re-added it and dropped the backup, while the worker read it.
+type reAddedMap struct {
+	subtreeprocessor.TxInpointsMap
+	reads map[chainhash.Hash]int
+}
+
+func (m reAddedMap) PositionWithErr(hash chainhash.Hash) (uint64, error) {
+	m.reads[hash]++
+	if m.reads[hash] == 1 {
+		return 0, nil
+	}
+
+	return m.TxInpointsMap.Position(hash), nil
+}
+
+// TestSubtreeLanePositionsSurvivesRemovalDuringTheRead: a member the processor removes or re-adds
+// while a storage worker reads its position keeps that position, taken from the removal backup or
+// from the map read again, rather than counting as without one.
+func TestSubtreeLanePositionsSurvivesRemovalDuringTheRead(t *testing.T) {
+	st, txMap := laneSealSubtree(t, "removal-during-read")
+
+	t.Run("removed after the existence check", func(t *testing.T) {
+		deletedPositions := txmap.NewSyncedMap[chainhash.Hash, uint64]()
+		for i, node := range st.Nodes[1:] {
+			deletedPositions.Set(node.Hash, lane.Pack(4, uint64(20+i)))
+		}
+
+		laneBits, lost := subtreeLanePositions(st, removedMidReadMap{TxInpointsMap: txMap}, nil, deletedPositions)
+		require.Zero(t, lost)
+		require.Zero(t, laneBits.Unpositioned())
+		require.Equal(t, []uint64{20, 21, 22}, laneBits.Subtree(*st.RootHash()).Lanes[4].ToArray())
+	})
+
+	t.Run("re-added with its backup dropped", func(t *testing.T) {
+		laneBits, lost := subtreeLanePositions(st, reAddedMap{TxInpointsMap: txMap, reads: map[chainhash.Hash]int{}}, nil, txmap.NewSyncedMap[chainhash.Hash, uint64]())
+		require.Zero(t, lost)
+		require.Zero(t, laneBits.Unpositioned())
+		require.Equal(t, []uint64{20, 21, 22}, laneBits.Subtree(*st.RootHash()).Lanes[4].ToArray())
+	})
+}
+
+// TestRemovedLanePositionReadsThePoolAgain: a member the meta pass missed in the pool, whose
+// removal backup is already dropped because a re-chain put it back, takes its position from the
+// pool map read again.
+func TestRemovedLanePositionReadsThePoolAgain(t *testing.T) {
+	st, txMap := laneSealSubtree(t, "removed-reread")
+
+	require.Equal(t, lane.Pack(4, 21), removedLanePosition(txMap, txmap.NewSyncedMap[chainhash.Hash, uint64](), st.Nodes[2].Hash))
+	require.Zero(t, removedLanePosition(nil, nil, st.Nodes[2].Hash))
+}

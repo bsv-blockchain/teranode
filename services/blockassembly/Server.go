@@ -1007,7 +1007,7 @@ func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSub
 					txInpoints = &deletedTxInpoints
 
 					// and its lane position from the backup beside it
-					position = deletedLanePosition(subtreeRequest.DeletedPositions, node.Hash)
+					position = removedLanePosition(subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions, node.Hash)
 				}
 			}
 
