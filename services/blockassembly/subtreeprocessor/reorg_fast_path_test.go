@@ -428,6 +428,22 @@ func TestReorgScenario_FastPathDeclinesAnUnreadableLostSubtree(t *testing.T) {
 	}, "read_failed")
 }
 
+// A file stored under a lost subtree's key that is another subtree (here a winning block's) has leaves the
+// delta cannot tell from the real ones: the lost block's own transactions in that subtree would be dropped
+// without a trace. The stored root in the file header must match the key.
+func TestReorgScenario_FastPathDeclinesAForeignFileUnderALostSubtreeKey(t *testing.T) {
+	requireDeclinedLikeSlow(t, smallScenarioConfig(), func(sc *reorgScenario) {
+		require.Greater(t, len(sc.lost.Subtrees), 1)
+
+		foreign, err := sc.blobStore.Get(t.Context(), sc.forward[0].Subtrees[0][:], fileformat.FileTypeSubtree)
+		require.NoError(t, err)
+
+		key := sc.lost.Subtrees[1][:]
+		require.NoError(t, sc.blobStore.Del(t.Context(), key, fileformat.FileTypeSubtree))
+		require.NoError(t, sc.blobStore.Set(t.Context(), key, fileformat.FileTypeSubtree, foreign))
+	}, "read_failed")
+}
+
 // The disk tx map keeps a hint of the chained subtree each transaction is in, and a removal reads it. The
 // rebuild gives every chained node the hint of its new subtree, so the first removal after the reorg is
 // as cheap as before it.
@@ -456,7 +472,7 @@ func TestReorgScenario_FastPathLeavesEveryChainedNodeWithItsSubtreeHint(t *testi
 	}
 }
 
-// The memory gate: live heap plus the set plus the pending set at 48 bytes each must stay within three
+// The memory gate: live heap plus the set plus the pending set twice (the flat copy of the survivors and the new subtrees) at 48 bytes each must stay within three
 // quarters of GOMEMLIMIT, when one is set.
 func TestReorgScenario_FastPathMemoryGate(t *testing.T) {
 	defer func(prev func() (uint64, int64)) { reorgMemoryStats = prev }(reorgMemoryStats)
@@ -481,9 +497,9 @@ func TestReorgScenario_FastPathMemoryGate(t *testing.T) {
 
 	t.Run("the pending set tips it over", func(t *testing.T) {
 		cfg := smallScenarioConfig()
-		// the set of about 1550 hashes x 33 B fits in the 120 kB of headroom, 2000 pending x 48 B on top does not
+		// the set of about 1550 hashes x 33 B fits in the 200 kB of headroom, 2000 pending x 48 B once (96 kB) still fits, twice (192 kB) does not
 		limit := int64(1 << 20)
-		reorgMemoryStats = func() (uint64, int64) { return uint64(limit*3/4) - 120_000, limit }
+		reorgMemoryStats = func() (uint64, int64) { return uint64(limit*3/4) - 200_000, limit }
 
 		requireFastPathDeclines(t, cfg, "memory")
 	})

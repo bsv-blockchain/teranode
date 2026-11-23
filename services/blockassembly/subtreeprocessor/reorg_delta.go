@@ -1,7 +1,9 @@
 package subtreeprocessor
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"sync/atomic"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -104,6 +106,20 @@ func (stp *SubtreeProcessor) computeReorgDelta(ctx context.Context, lost []*mode
 
 			defer func() { _ = reader.Close() }()
 
+			// The stored root leads the file. A file that is another subtree has leaves that could all
+			// be winners', and the lost block's own transactions in this subtree would be dropped.
+			var stored chainhash.Hash
+
+			if _, err = io.ReadFull(reader, stored[:]); err != nil {
+				return errors.NewProcessingError("error reading the root of lost subtree: %s", root.String(), err)
+			}
+
+			if stored != *root {
+				return errors.NewProcessingError("lost subtree does not match its key %s: file was built for %s", root.String(), stored.String())
+			}
+
+			body := io.MultiReader(bytes.NewReader(stored[:]), reader)
+
 			// One bucket keeps the leaves in node order. The subtree's own leaf count is only
 			// read inside the deserializer, so size by the block's average (subtrees are full
 			// but the last), bounded by what a subtree may hold, to skip the append doublings.
@@ -112,7 +128,7 @@ func (stp *SubtreeProcessor) computeReorgDelta(ctx context.Context, lost []*mode
 
 			var conflicting []chainhash.Hash
 
-			if err = deserializeHashesIntoBuckets(reader, func(chainhash.Hash) uint16 { return 0 }, maxSize, &leaves, &conflicting); err != nil {
+			if err = deserializeHashesIntoBuckets(body, func(chainhash.Hash) uint16 { return 0 }, maxSize, &leaves, &conflicting); err != nil {
 				return errors.NewProcessingError("error deserializing lost subtree: %s", root.String(), err)
 			}
 

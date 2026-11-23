@@ -163,8 +163,10 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks, 
 		setBytes += block.TransactionCount * fastPathSetBytesPerHash
 	}
 
+	// The pending set is charged twice: the flat copy of the survivors (copySurvivors) is alive while the
+	// build copies it into the new subtrees, and the old subtrees are alive until the install.
 	if live, limit := reorgMemoryStats(); limit > 0 && limit < 1<<62 &&
-		live+setBytes+uint64(nodeCount)*fastPathBytesPerPending > uint64(limit)/4*3 { //nolint:gosec // limit is positive
+		live+setBytes+2*uint64(nodeCount)*fastPathBytesPerPending > uint64(limit)/4*3 { //nolint:gosec // limit is positive
 		return nil, "memory"
 	}
 

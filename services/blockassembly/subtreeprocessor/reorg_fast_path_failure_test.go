@@ -7,7 +7,9 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/stretchr/testify/require"
 )
 
@@ -283,4 +285,106 @@ func TestReorgScenario_FastPathEveryInstalledNodeIsInTheMapAtEveryBeat(t *testin
 		require.NoError(t, sc.run(t))
 		require.GreaterOrEqual(t, checked, 4, "the fast path beats at least four times")
 	}
+}
+
+// coinbaseDeleteStore runs onDelete when the coinbase of the lost block is deleted, the last step of
+// removeCoinbaseUtxos, and returns what it returns.
+type coinbaseDeleteStore struct {
+	utxo.Store
+
+	onDelete func() error
+}
+
+func (s *coinbaseDeleteStore) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	if err := s.onDelete(); err != nil {
+		return err
+	}
+
+	return s.Store.Delete(ctx, hash)
+}
+
+// The coinbase removal is the first change the fast path makes to the store, and effective D1 is flagged
+// mined from there on, in no installed subtree: a failure inside the removal, or the length check right
+// after it, must still leave effective D1 recorded for the reset.
+func TestReorgScenario_FastPathFailureInsideTheCoinbaseRemovalEndsInAResetThatSweepsEffectiveD1(t *testing.T) {
+	for name, inject := range map[string]func(sc *reorgScenario) error{
+		"the removal fails": func(*reorgScenario) error { return errors.NewStorageError("injected coinbase delete failure") },
+		"the removal takes a transaction out of the assembly": func(sc *reorgScenario) error {
+			sc.stp.currentTxMap.Delete(sc.pendingOrder()[0])
+
+			return nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sc := newReorgScenario(t, smallScenarioConfig())
+			real := sc.stp.utxoStore
+			failing := true
+
+			sc.stp.utxoStore = &coinbaseDeleteStore{Store: real, onDelete: func() error {
+				if failing {
+					return inject(sc)
+				}
+
+				return nil
+			}}
+
+			require.Error(t, recordingFastPath(&fastPathRun{})(t, sc))
+			require.NotEmpty(t, sc.stp.reorgPendingD1, "effective D1 is recorded before the coinbase is touched")
+
+			failing = false
+
+			requireResetRecoversEveryUnminedTx(t, sc)
+		})
+	}
+}
+
+// Design section 5 item 10: a removal accepted after the flag pass is not in the flags. The first
+// template may contain the transaction, as it can after any Remove; the processor applies the removal
+// when it resumes its removal channel.
+func TestReorgScenario_FastPathRemovalAcceptedAfterTheFlagPassIsAppliedOnTheNextDequeue(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+	sc.stp.settings.BlockAssembly.ReorgFastPath = true
+
+	var removed chainhash.Hash
+
+	for _, h := range sc.pendingOrder() {
+		if !sc.inWinners(h) && !sc.inLost(h) {
+			removed = h
+
+			break
+		}
+	}
+
+	require.NotZero(t, removed)
+
+	fired := false
+
+	sc.stp.SetProgressHook(func() {
+		// the first beat of the fast path is after the flag pass
+		if !fired && sc.stp.reorgPendingD1 != nil {
+			fired = true
+
+			require.NoError(t, sc.stp.Remove(t.Context(), removed))
+		}
+	})
+
+	var rec fastPathRun
+
+	require.NoError(t, recordingFastPath(&rec)(t, sc))
+	require.True(t, rec.applied, "declined: %v", rec.reasons)
+	require.True(t, fired)
+
+	require.Contains(t, txHashes(assemblyNodes(sc.stp)), removed, "the first template may hold the transaction")
+
+	select {
+	case h := <-sc.stp.removeTxCh:
+		require.Equal(t, removed, h)
+		require.NoError(t, sc.stp.removeTxFromSubtrees(t.Context(), h))
+	case <-time.After(5 * time.Second):
+		t.Fatal("the removal reached no channel")
+	}
+
+	require.NotContains(t, txHashes(assemblyNodes(sc.stp)), removed)
+	require.False(t, sc.stp.currentTxMap.Exists(removed))
+	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
 }
