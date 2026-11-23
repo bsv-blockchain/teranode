@@ -335,8 +335,8 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 // lane positions.
 var laneTxMetaReceived = txmetacache.NewLaneTxMetaReceived("subtreevalidation")
 
-// laneShadow reports whether lane positions are on, which is when this consumer counts the formats
-// of the txmeta entries it receives.
+// laneShadow reports whether lane positions are on. This consumer counts a plain ADD entry only
+// then, and counts every ADDLane and ADDOwn entry it receives whatever its own setting.
 func (u *Server) laneShadow() bool {
 	return u.settings != nil && u.settings.UtxoStore.LaneMigration.Stamps()
 }
