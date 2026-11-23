@@ -69,7 +69,7 @@ func TestSelectBestPeersForCatchup_AbsurdHeightRejectedWithoutValidatedWork(t *t
 	srv := newPeerSelectionServer(peers, 10_000)
 
 	for _, targetHeight := range []uint32{0, 100, 50_000, 700_000} {
-		got, err := srv.selectBestPeersForCatchup(ctx, targetHeight, nil, 0)
+		got, err := srv.selectBestPeersForCatchup(ctx, targetHeight, nil, 0, true)
 		require.NoError(t, err)
 		require.Empty(t, got, "peer with Height=MaxUint32 and no validated work must be rejected for target %d", targetHeight)
 	}
@@ -113,7 +113,7 @@ func TestSelectBestPeersForCatchup_ValidatedWorkPeerIncluded(t *testing.T) {
 	}
 
 	srv := newPeerSelectionServer(peers, 10_000)
-	got, err := srv.selectBestPeersForCatchup(ctx, targetHeight, localWork, localBestHeight)
+	got, err := srv.selectBestPeersForCatchup(ctx, targetHeight, localWork, localBestHeight, true)
 	require.NoError(t, err)
 	require.Len(t, got, 2, "both peers should be eligible")
 
@@ -153,7 +153,7 @@ func TestSelectBestPeersForCatchup_ValidatedBehindTipProbeEligible(t *testing.T)
 
 	srv := newPeerSelectionServer(peers, 10_000)
 	// localBestHeight=180: peer.Height(200) <= 180+10000=10180 → probe-eligible.
-	got, err := srv.selectBestPeersForCatchup(ctx, 100, localWork, 180)
+	got, err := srv.selectBestPeersForCatchup(ctx, 100, localWork, 180, true)
 	require.NoError(t, err)
 	require.Len(t, got, 1, "peer with validated work not ahead but plausible height must be probe-eligible")
 	require.Equal(t, peer.ID("behind-peer").String(), got[0].ID)
@@ -182,7 +182,7 @@ func TestSelectBestPeersForCatchup_NoDataHubURLExcluded(t *testing.T) {
 	}
 
 	srv := newPeerSelectionServer(peers, 10_000)
-	got, err := srv.selectBestPeersForCatchup(ctx, 100, localWork, 180)
+	got, err := srv.selectBestPeersForCatchup(ctx, 100, localWork, 180, true)
 	require.NoError(t, err)
 	require.Empty(t, got, "peer with no DataHub URL must be excluded even if validated work is ahead")
 }
@@ -209,7 +209,7 @@ func TestSelectBestPeersForCatchup_ProbeBoundedByLocalTip(t *testing.T) {
 	}
 
 	srv := newPeerSelectionServer([]*p2p.PeerInfo{atExactLead, onePastLead}, maxLead)
-	got, err := srv.selectBestPeersForCatchup(ctx, targetHeight, nil, localBestHeight)
+	got, err := srv.selectBestPeersForCatchup(ctx, targetHeight, nil, localBestHeight, true)
 	require.NoError(t, err)
 	require.Len(t, got, 1, "only the peer at exactly the lead boundary should be accepted")
 	require.Equal(t, peer.ID("at-exact-lead").String(), got[0].ID)
@@ -234,7 +234,7 @@ func TestSelectBestPeersForCatchup_HostileTargetHeightDoesNotNarrowProbe(t *test
 	}
 
 	srv := newPeerSelectionServer([]*p2p.PeerInfo{honestPeer}, maxLead)
-	got, err := srv.selectBestPeersForCatchup(ctx, hostileTargetHeight, nil, localBestHeight)
+	got, err := srv.selectBestPeersForCatchup(ctx, hostileTargetHeight, nil, localBestHeight, true)
 	require.NoError(t, err)
 	require.Len(t, got, 1, "honest mainnet peer must be reachable despite hostile low targetHeight")
 	require.Equal(t, peer.ID("honest-mainnet-peer").String(), got[0].ID)
@@ -267,7 +267,7 @@ func TestSelectBestPeersForCatchup_NilLocalWorkValidatedPeerProbeEligible(t *tes
 	srv := newPeerSelectionServer(peers, 10_000)
 	// localChainWork=nil: aheadByValidatedWork is always false, but probeEligible
 	// must still admit the peer (Height 490 >= target 400 and <= 500+10000).
-	got, err := srv.selectBestPeersForCatchup(ctx, targetHeight, nil, localBestHeight)
+	got, err := srv.selectBestPeersForCatchup(ctx, targetHeight, nil, localBestHeight, true)
 	require.NoError(t, err)
 	require.Len(t, got, 1, "validated peer must be probe-eligible when localChainWork is nil")
 }
@@ -301,7 +301,7 @@ func TestSelectBestPeersForCatchup_BelowTargetOnlyViaValidatedWork(t *testing.T)
 	}
 
 	srv := newPeerSelectionServer([]*p2p.PeerInfo{belowTargetProbe, belowTargetValidated}, 10_000)
-	got, err := srv.selectBestPeersForCatchup(ctx, targetHeight, []byte{0x00, 0x00, 0x01}, localBestHeight)
+	got, err := srv.selectBestPeersForCatchup(ctx, targetHeight, []byte{0x00, 0x00, 0x01}, localBestHeight, true)
 	require.NoError(t, err)
 	require.Len(t, got, 1, "a probe peer below the target height must not be selected")
 	require.Equal(t, peer.ID("below-target-validated").String(), got[0].ID)
@@ -417,26 +417,36 @@ func TestTryAlternativePeersForCatchup_GatesOnLocalTip(t *testing.T) {
 		"the validated-ahead peer must be tried first, the near probe second, and the far probe never")
 }
 
-// TestTryAlternativePeersForCatchup_TipReadErrorBoundsProbeAtZero pins what happens
-// when the local tip cannot be read: no work is known, so no peer is validated-ahead,
-// and the probe window is measured from height zero.
-func TestTryAlternativePeersForCatchup_TipReadErrorBoundsProbeAtZero(t *testing.T) {
+// TestTryAlternativePeersForCatchup_TipReadErrorFallsBackToTargetFloor pins the
+// fallback when the local tip cannot be read: no work is known, so no peer is
+// validated-ahead, and with no tip to bound against the probe window has no upper
+// bound. Every peer at or above the target is tried, as before the validated-work
+// gate existed, so a blockchain RPC failure does not turn alternative-peer catchup
+// off. A peer below the target is still skipped.
+func TestTryAlternativePeersForCatchup_TipReadErrorFallsBackToTargetFloor(t *testing.T) {
 	ctx := context.Background()
 
 	const maxLead = uint32(10_000)
+	const targetHeight = uint32(500_000)
 
-	inWindow := &p2p.PeerInfo{
-		ID:         peer.ID("in-window"),
-		Height:     maxLead,
-		DataHubURL: "http://in-window/api/v1",
+	// Measured from height zero, both of these would be far outside the window.
+	atTarget := &p2p.PeerInfo{
+		ID:         peer.ID("at-target"),
+		Height:     targetHeight,
+		DataHubURL: "http://at-target/api/v1",
 	}
-	pastWindow := &p2p.PeerInfo{
-		ID:         peer.ID("past-window"),
-		Height:     maxLead + 1,
-		DataHubURL: "http://past-window/api/v1",
+	farAhead := &p2p.PeerInfo{
+		ID:         peer.ID("far-ahead"),
+		Height:     targetHeight + 10*maxLead,
+		DataHubURL: "http://far-ahead/api/v1",
+	}
+	belowTarget := &p2p.PeerInfo{
+		ID:         peer.ID("below-target"),
+		Height:     targetHeight - 1,
+		DataHubURL: "http://below-target/api/v1",
 	}
 
-	srv := newPeerSelectionServer([]*p2p.PeerInfo{inWindow, pastWindow}, maxLead)
+	srv := newPeerSelectionServer([]*p2p.PeerInfo{atTarget, belowTarget, farAhead}, maxLead)
 	tipClient, _ := newBestHeaderRecorder(t, errors.NewServiceError("blockchain unavailable"))
 	srv.blockchainClient = tipClient
 
@@ -452,13 +462,14 @@ func TestTryAlternativePeersForCatchup_TipReadErrorBoundsProbeAtZero(t *testing.
 	mr := chainhash.HashH([]byte("alt-err-merkle"))
 	block := &model.Block{
 		Header: &model.BlockHeader{HashPrevBlock: &prev, HashMerkleRoot: &mr},
-		Height: 100,
+		Height: targetHeight,
 	}
 
 	succeeded, _ := srv.tryAlternativePeersForCatchup(ctx, block, "")
 	require.False(t, succeeded)
 	require.Equal(t, 1, tipClient.calls)
-	require.Equal(t, []string{peer.ID("in-window").String()}, tried)
+	require.Equal(t, []string{peer.ID("at-target").String(), peer.ID("far-ahead").String()}, tried,
+		"with the local tip unknown every peer at or above the target must be tried, and none below it")
 }
 
 // TestTryAlternativePeersForCatchup_NoP2PClientSkipsTipRead verifies the early return

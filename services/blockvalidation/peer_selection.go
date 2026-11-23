@@ -35,13 +35,19 @@ type PeerForCatchup struct {
 //     against localBestHeight (our own tip), not targetHeight, so a hostile block with
 //     a manipulated height field cannot shrink or expand the probe window.
 //
+// localTipKnown is false when the local tip could not be read. There is then no tip to
+// bound the probe window against, so the upper bound is skipped and any peer at or above
+// targetHeight is probe-eligible, as before the validated-work gate existed. Bounding
+// from height zero instead would reject every peer on a chain past the lead and turn
+// alternative-peer catchup off until the blockchain service recovers.
+//
 // Peers with validated history that do NOT exceed the local tip remain probe-eligible —
 // they are known-good sources and may still have the block we need. The validated-work
 // gate determines tier ordering (and therefore retry priority), not admission.
 //
 // Validated-ahead peers are returned before probe candidates. Both tiers preserve the
 // p2p server's reputation ordering (highest score first).
-func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uint32, localChainWork []byte, localBestHeight uint32) ([]PeerForCatchup, error) {
+func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uint32, localChainWork []byte, localBestHeight uint32, localTipKnown bool) ([]PeerForCatchup, error) {
 	if u.p2pClient == nil {
 		u.logger.Debugf("[peer_selection] P2P client not available, using fallback peer selection")
 		return nil, nil
@@ -79,9 +85,10 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 		// height. Bounding against localBestHeight (not targetHeight) means a hostile
 		// block height field cannot manipulate which peers are reachable. Peers with
 		// validated work that does not exceed the local tip are still known-good
-		// sources and remain probe-eligible here.
+		// sources and remain probe-eligible here. With the local tip unknown there is
+		// nothing to bound against, so only the target floor applies.
 		probeEligible := p.Height >= targetHeight &&
-			uint64(p.Height) <= uint64(localBestHeight)+maxUnvalidatedLead
+			(!localTipKnown || uint64(p.Height) <= uint64(localBestHeight)+maxUnvalidatedLead)
 
 		if !aheadByValidatedWork && !probeEligible {
 			u.logger.Debugf("[peer_selection] Skipping peer %s (work not ahead, height %d ineligible for target %d with local tip %d)", p.ID.String(), p.Height, targetHeight, localBestHeight)
@@ -157,20 +164,30 @@ func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model
 
 	blockHash := block.Hash()
 
-	var localChainWork []byte
-	var localBestHeight uint32
+	var (
+		localChainWork  []byte
+		localBestHeight uint32
+		localTipKnown   bool
+	)
+
 	if u.blockchainClient != nil {
 		tipCtx, cancel := context.WithTimeout(ctx, catchupReputationReportTimeout)
-		defer cancel()
-		if _, meta, err := u.blockchainClient.GetBestBlockHeader(tipCtx); err == nil && meta != nil {
+		_, meta, err := u.blockchainClient.GetBestBlockHeader(tipCtx)
+		cancel()
+
+		switch {
+		case err != nil:
+			u.logger.Warnf("[peer_selection] Failed to read local chain tip for catchup peer gating, admitting any peer at or above target height %d: %v", block.Height, err)
+		case meta == nil:
+			u.logger.Warnf("[peer_selection] Local chain tip read returned no metadata, admitting any peer at or above target height %d", block.Height)
+		default:
 			localChainWork = meta.ChainWork
 			localBestHeight = meta.Height
-		} else if err != nil {
-			u.logger.Warnf("[peer_selection] Failed to read local chain tip for catchup peer gating: %v", err)
+			localTipKnown = true
 		}
 	}
 
-	bestPeers, peerErr := u.selectBestPeersForCatchup(ctx, block.Height, localChainWork, localBestHeight)
+	bestPeers, peerErr := u.selectBestPeersForCatchup(ctx, block.Height, localChainWork, localBestHeight, localTipKnown)
 	if peerErr != nil {
 		u.logger.Warnf("[catchup] Failed to get best peers from P2P service: %v", peerErr)
 	}
