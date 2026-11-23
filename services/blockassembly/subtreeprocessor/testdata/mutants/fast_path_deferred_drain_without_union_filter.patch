@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_deferred_drain.go b/services/blockassembly/subtreeprocessor/reorg_deferred_drain.go
+index a0b8e4056..327927e61 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_deferred_drain.go
++++ b/services/blockassembly/subtreeprocessor/reorg_deferred_drain.go
+@@ -75,7 +75,7 @@ func (stp *SubtreeProcessor) runDeferredReorgDrain(ctx context.Context) {
+ 	stp.phases.count("fast_drain_queue", int(stp.QueueLength()))
+ 
+ 	if err := stp.runHandlerWithRecover("deferredReorgDrain", func() error {
+-		return stp.drainQueueAfterBlock(ctx, drain)
++		return stp.drainQueueAfterBlock(ctx, &deferredBlockDrain{drainQueue: true})
+ 	}); err != nil {
+ 		stp.logger.Errorf("[SubtreeProcessor][reorgInPlace] error draining the queue after the reorg, requesting a block assembly reset: %v", err)
+ 		stp.drainResetRequested.Store(true)

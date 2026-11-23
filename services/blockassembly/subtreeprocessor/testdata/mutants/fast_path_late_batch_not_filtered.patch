@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index d4414883a..72cc8af38 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -1328,7 +1328,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
+ 									continue
+ 								}
+ 
+-								if reorgFilter != nil && reorgFilter.exists(hash) {
++								if reorgFilter != nil && false && reorgFilter.exists(hash) {
+ 									b.nodes[i].Hash = zeroHash // Mined by a block of the last reorg
+ 									continue
+ 								}
