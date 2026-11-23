@@ -39,6 +39,12 @@ var (
 	// this wait comes before it.
 	prometheusSubtreeProcessorReorgTipToStart prometheus.Histogram
 
+	// prometheusSubtreeProcessorReorgFastPathDeclined counts the fork reorgs the in-place fast path
+	// (blockassembly_reorgFastPath) declined before it changed anything, by the first check that failed.
+	// prometheusSubtreeProcessorReorgFastPathApplied counts the ones it applied.
+	prometheusSubtreeProcessorReorgFastPathDeclined *prometheus.CounterVec
+	prometheusSubtreeProcessorReorgFastPathApplied  prometheus.Counter
+
 	prometheusSubtreeProcessorDynamicSubtreeSize prometheus.Gauge
 
 	// prometheusSubtreeProcessorStoredPrefixOldestUnstored is the age in seconds of the oldest
@@ -242,6 +248,25 @@ func _initPrometheusMetrics() {
 			Name:      "reorg_tip_to_start_seconds",
 			Help:      "Time from the start of the block-announcement pass that leads to a fork reorg (a tip change or a best-tip replay) to the processor starting that reorg",
 			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 19),
+		},
+	)
+
+	prometheusSubtreeProcessorReorgFastPathDeclined = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "reorg_fast_path_declined_total",
+			Help:      "Fork reorgs the in-place fast path declined before changing anything, by reason",
+		},
+		[]string{"reason"},
+	)
+
+	prometheusSubtreeProcessorReorgFastPathApplied = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "reorg_fast_path_applied_total",
+			Help:      "Fork reorgs applied in place by the fast path",
 		},
 	)
 
