@@ -853,7 +853,7 @@ func (ba *BlockAssembly) subtreeNotificationSender(ctx context.Context, resultCh
 			nextSeq++
 
 			// Send notification if needed
-			if !r.skipNotification && r.storedOK {
+			if (!r.skipNotification || r.request.WantsAnnounce()) && r.storedOK {
 				ba.logger.Infof("[BlockAssembly:Init][%s] sending subtree notification", r.request.Subtree.RootHash().String())
 				ba.sendSubtreeNotification(ctx, *r.request.Subtree.RootHash())
 			} else {

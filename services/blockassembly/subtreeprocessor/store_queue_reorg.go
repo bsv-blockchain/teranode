@@ -17,7 +17,8 @@ import (
 // never sent, or was dropped, is sent now, once. With a deadline the wait is for each request's
 // typed result and a store that did not finish within it, failed, or left the meta unwritten fails
 // the reorg; without one the wait is for ErrChan, as it always was, which a failed write answers
-// with nil.
+// with nil, and a store never fails the reorg. A request dropped while the reorg waits for it is sent
+// again, once.
 func (stp *SubtreeProcessor) awaitQueuedStores(ctx context.Context, caller string, deadline time.Duration) error {
 	q := stp.storeQueue
 	waits := make([]*storeItem, len(stp.chainedSubtrees))
@@ -41,27 +42,18 @@ func (stp *SubtreeProcessor) awaitQueuedStores(ctx context.Context, caller strin
 			continue
 		}
 
-		if stp.storedSet != nil && stp.storedSet.HasFailed(root) && deadline == 0 {
-			continue
-		}
-
 		if stp.storedSet != nil && stp.storedSet.HasFailed(root) {
+			if deadline == 0 {
+				continue
+			}
+
 			return errors.NewStorageError("[%s] subtree %d was not stored", caller, i)
 		}
 
-		if err := stp.sendNewSubtree(ctx, NewSubtreeRequest{
-			Subtree:           st,
-			ParentTxMap:       stp.currentTxMap,
-			superseded:        stp.supersedeToken(),
-			DeletedTxs:        stp.deletedTxs,
-			SkipNotification:  true,
-			ErrChan:           make(chan error, 1),
-			OnStorageComplete: func() { stp.cleanupDeletedTxs(st) },
-		}); err != nil {
-			return errors.NewProcessingError("[%s] context cancelled while sending subtree", caller, err)
+		var err error
+		if waits[i], err = stp.sendForAwait(ctx, caller, st); err != nil {
+			return err
 		}
-
-		waits[i] = q.entry(st)
 	}
 
 	for i, it := range waits {
@@ -69,51 +61,103 @@ func (stp *SubtreeProcessor) awaitQueuedStores(ctx context.Context, caller strin
 			continue
 		}
 
-		if deadline == 0 {
-			select {
-			case <-it.first:
-				if q.wasDropped(it) {
-					return errors.NewStorageError("[%s] subtree %d was not stored: its request was dropped", caller, i)
-				}
-
-				if it.firstErr != nil {
-					return errors.NewProcessingError("[%s] error sending subtree to the store queue", caller, it.firstErr)
-				}
-			case <-ctx.Done():
-				return errors.NewProcessingError("[%s] context cancelled while awaiting subtree stores", caller, ctx.Err())
+		for resent := false; ; {
+			dropped, err := stp.awaitOne(ctx, caller, i, it, deadline, timer)
+			if err != nil {
+				return err
 			}
 
-			continue
-		}
-
-		select {
-		case r := <-it.result:
-			if !r.OK() {
-				return errors.NewStorageError("[%s] subtree %d was not stored (cancelled %t)", caller, i, r.Cancelled, r.Err)
+			if !dropped || resent {
+				break
 			}
-		case <-timer:
-			return errors.NewStorageError("[%s] subtree %d did not finish storing within %s", caller, i, deadline)
-		case <-ctx.Done():
-			return errors.NewProcessingError("[%s] context cancelled while awaiting subtree stores", caller, ctx.Err())
+
+			resent = true
+
+			if it, err = stp.sendForAwait(ctx, caller, stp.chainedSubtrees[i]); err != nil {
+				return err
+			}
 		}
 	}
 
 	return nil
 }
 
-// announceChainedSubtrees announces the chain after the reorg's marks. A stored subtree is announced
-// by a request that stores nothing; one that is not stored yet is sent to the store again, which
-// announces it when it is.
-func (stp *SubtreeProcessor) announceChainedSubtrees(ctx context.Context, caller string) error {
-	for _, st := range stp.chainedSubtrees {
-		req := NewSubtreeRequest{Subtree: st, AnnounceOnly: true}
+// sendForAwait sends st to the store, silently, for a reorg that waits for it.
+func (stp *SubtreeProcessor) sendForAwait(ctx context.Context, caller string, st *subtreepkg.Subtree) (*storeItem, error) {
+	if err := stp.sendNewSubtree(ctx, NewSubtreeRequest{
+		Subtree:           st,
+		ParentTxMap:       stp.currentTxMap,
+		superseded:        stp.supersedeToken(),
+		DeletedTxs:        stp.deletedTxs,
+		SkipNotification:  true,
+		ErrChan:           make(chan error, 1),
+		OnStorageComplete: func() { stp.cleanupDeletedTxs(st) },
+	}); err != nil {
+		return nil, errors.NewProcessingError("[%s] context cancelled while sending subtree", caller, err)
+	}
 
-		if stp.storedSet == nil || !stp.storedSet.Has(*st.RootHash()) {
-			if stp.storeQueue.entry(st) != nil {
-				// still being stored, or retried: another full store would only add to the backlog
-				continue
+	return stp.storeQueue.entry(st), nil
+}
+
+// awaitOne waits for one request and reports whether the queue dropped it instead.
+func (stp *SubtreeProcessor) awaitOne(ctx context.Context, caller string, i int, it *storeItem, deadline time.Duration, timer <-chan time.Time) (dropped bool, err error) {
+	if it == nil {
+		return false, nil
+	}
+
+	if deadline == 0 {
+		select {
+		case <-it.first:
+			if stp.storeQueue.wasDropped(it) {
+				return true, nil
 			}
 
+			if it.firstErr != nil {
+				return false, errors.NewProcessingError("[%s] error sending subtree to the store queue", caller, it.firstErr)
+			}
+		case <-ctx.Done():
+			return false, errors.NewProcessingError("[%s] context cancelled while awaiting subtree stores", caller, ctx.Err())
+		}
+
+		return false, nil
+	}
+
+	select {
+	case r := <-it.result:
+		if r.Cancelled && stp.storeQueue.wasDropped(it) {
+			return true, nil
+		}
+
+		if !r.OK() {
+			return false, errors.NewStorageError("[%s] subtree %d was not stored (cancelled %t)", caller, i, r.Cancelled, r.Err)
+		}
+	case <-timer:
+		return false, errors.NewStorageError("[%s] subtree %d did not finish storing within %s", caller, i, deadline)
+	case <-ctx.Done():
+		return false, errors.NewProcessingError("[%s] context cancelled while awaiting subtree stores", caller, ctx.Err())
+	}
+
+	return false, nil
+}
+
+// announceChainedSubtrees announces the chain after the reorg's marks. A stored subtree is announced
+// by a request that stores nothing. One whose request is still outstanding, queued or being retried,
+// is told to announce when it is stored: the forward step sent it silently, and another full store
+// would only add to the backlog. One with no request is sent to the store, which announces it.
+func (stp *SubtreeProcessor) announceChainedSubtrees(ctx context.Context, caller string) error {
+	for _, st := range stp.chainedSubtrees {
+		stored := stp.storedSet != nil && stp.storedSet.Has(*st.RootHash())
+
+		if !stored && stp.storeQueue.AnnounceOnSuccess(st) {
+			// it may have been stored while it was being marked
+			if stored = stp.storedSet != nil && stp.storedSet.Has(*st.RootHash()); !stored {
+				continue
+			}
+		}
+
+		req := NewSubtreeRequest{Subtree: st, AnnounceOnly: true}
+
+		if !stored {
 			req = NewSubtreeRequest{
 				Subtree:           st,
 				ParentTxMap:       stp.currentTxMap,
@@ -156,7 +200,9 @@ func (stp *SubtreeProcessor) wantRestored(chained []*subtreepkg.Subtree) {
 }
 
 // runDroppedCleanups runs the deletedTxs cleanups of the requests the queue dropped. It runs on the
-// processor goroutine, which is the one that unmaps a retired subtree, so it never reads a closed one.
+// processor goroutine, which is the one that unmaps a retired subtree, and closeRetiredSubtrees takes
+// a subtree's queued requests out, and runs their cleanups, before it unmaps it: a request for a
+// subtree that is closed holds no callback.
 func (stp *SubtreeProcessor) runDroppedCleanups() {
 	for _, cleanup := range stp.storeQueue.takeCleanups() {
 		cleanup()

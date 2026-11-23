@@ -10,6 +10,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/stretchr/testify/mock"
@@ -715,8 +716,9 @@ func TestStoreQueue_EnforceBlockMaxSizeDoesNotWaitForTheStores(t *testing.T) {
 	}
 }
 
-// A subtree whose request is still queued or being retried is not sent again, by the announce after
-// the marks or by the watch.
+// A subtree whose request is still queued or being retried is not stored again by the announce after
+// the marks: its request is told to announce when it is stored. The watch does not send a queued one
+// again either, but does send one a worker has, since a write with no deadline can hang.
 func TestStoreQueue_ASubtreeStillBeingStoredIsNotSentAgain(t *testing.T) {
 	q := NewStoreQueue(1 << 40)
 	stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) { stp.storeQueue = q })
@@ -728,40 +730,124 @@ func TestStoreQueue_ASubtreeStillBeingStoredIsNotSentAgain(t *testing.T) {
 	require.NoError(t, stp.announceChainedSubtrees(context.Background(), "test"))
 	require.Equal(t, before, q.Len(), "the announce did not send a second store")
 
-	stp.sendChainedSubtreeAgain(0, chainRoot(stp, 0), time.Now())
-	require.Equal(t, before, q.Len(), "the watch did not send it again either")
-}
-
-// A request dropped while the reorg waits for it did not store: with no deadline the reorg used to
-// count its ErrChan answer as stored.
-func TestStoreQueue_AReorgWaitingForADroppedRequestReportsItNotStored(t *testing.T) {
-	q := NewStoreQueue(StoreRequestBytes(chainRequest(t, 1)))
-	stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) { stp.storeQueue = q })
-	addStoredPrefixTxs(t, stp, 8*5)
-	require.GreaterOrEqual(t, len(stp.chainedSubtrees), 4)
-
-	done := make(chan error, 1)
-
-	go func() { done <- stp.awaitQueuedStores(context.Background(), "test", 0) }()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	time.Sleep(200 * time.Millisecond) // the reorg is waiting for the first request
-
-	// the first request stores; the second is admitted when it settles, and is then dropped
 	first, _, ok := q.Take(ctx)
 	require.True(t, ok)
-	first.Answered(nil)
-	first.Settled()
+	require.True(t, first.WantsAnnounce(), "and it announces once it is stored, though the forward step sent it silently")
 
-	require.Eventually(t, func() bool { return q.Len() > 0 && q.Held() > 0 }, 5*time.Second, 5*time.Millisecond)
-	q.Stale(stp.chainedSubtrees[1])
+	stp.sendChainedSubtreeAgain(1, chainRoot(stp, 1), time.Now())
+	require.Equal(t, before-1, q.Len(), "the watch did not send a queued subtree again")
 
-	select {
-	case err := <-done:
-		require.ErrorContains(t, err, "dropped")
-	case <-time.After(10 * time.Second):
-		t.Fatal("the reorg kept waiting for a dropped request")
+	stp.sendChainedSubtreeAgain(0, chainRoot(stp, 0), time.Now())
+	require.Equal(t, before, q.Len(), "a worker has had the first for as long as the watch waited: it is sent again")
+}
+
+// A request dropped while the reorg waits for it is sent again, once. With no deadline a store never
+// fails the reorg; with one, the deadline still applies.
+func TestStoreQueue_AReorgWaitingForADroppedRequestSendsItAgain(t *testing.T) {
+	for name, deadline := range map[string]time.Duration{"no deadline": 0, "deadline": 5 * time.Second} {
+		t.Run(name, func(t *testing.T) {
+			q := NewStoreQueue(StoreRequestBytes(chainRequest(t, 1)))
+			set := NewStoredSet()
+			stp, _ := newStoredPrefixProcessor(t, 8, set, func(stp *SubtreeProcessor) { stp.storeQueue = q })
+			addStoredPrefixTxs(t, stp, 8*5)
+			require.GreaterOrEqual(t, len(stp.chainedSubtrees), 4)
+
+			done := make(chan error, 1)
+
+			go func() { done <- stp.awaitQueuedStores(context.Background(), "test", deadline) }()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			time.Sleep(200 * time.Millisecond) // the reorg is waiting for the first request
+
+			// the first request stores; the second is admitted when it settles, and is then dropped
+			first, _, ok := q.Take(ctx)
+			require.True(t, ok)
+			answerFromQueue(first, set, StoreResult{SubtreeStored: true, MetaNotApplicable: true})
+
+			require.Eventually(t, func() bool { return q.Len() > 0 && q.Held() > 0 }, 5*time.Second, 5*time.Millisecond)
+			q.Stale(stp.chainedSubtrees[1])
+
+			// every request taken from here on is stored, the dropped one's replacement included
+			go func() {
+				for {
+					req, _, ok := q.Take(ctx)
+					if !ok {
+						return
+					}
+
+					answerFromQueue(req, set, StoreResult{SubtreeStored: true, MetaNotApplicable: true})
+				}
+			}()
+
+			select {
+			case err := <-done:
+				require.NoError(t, err, "the reorg waited for the new request, and did not fail on the drop")
+			case <-time.After(10 * time.Second):
+				t.Fatal("the reorg kept waiting for a dropped request")
+			}
+		})
+	}
+}
+
+// Retired, with its request still queued; its mapping is closed; a later push at the limit drops the
+// request. The callback would read unmapped nodes. The request goes, with its callback, before the
+// subtree is closed.
+func TestStoreQueue_ARetiredSubtreesQueuedRequestGoesBeforeItIsUnmapped(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+	stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) {
+		stp.storeQueue = q
+		stp.mmapDir = t.TempDir()
+	})
+	addStoredPrefixTxs(t, stp, 8*5)
+	require.GreaterOrEqual(t, len(stp.chainedSubtrees), 4)
+
+	x := stp.chainedSubtrees[3]
+	require.True(t, x.IsMmapBacked(), "precondition: mmap mode")
+
+	hash := x.Nodes[1].Hash
+	stp.deletedTxs.Set(hash, subtreepkg.TxInpoints{})
+
+	stp.retireChainedSubtrees() // no pressure: its request stays queued
+	stp.precomputedMiningData.Store(nil)
+	require.NotNil(t, q.entry(x))
+
+	stp.closeRetiredSubtrees()
+
+	require.Nil(t, q.entry(x), "no request of a closed subtree is left to drop later")
+
+	_, held := stp.deletedTxs.Get(hash)
+	require.False(t, held, "its callback ran while it was mapped")
+
+	require.Empty(t, q.takeCleanups(), "and no callback is left that would read it after")
+}
+
+// handleMoveForwardRequest's rollback puts its chain back after the block's rechain retired it.
+func TestStoreQueue_AFailedMoveForwardLeavesItsRestoredChainWanted(t *testing.T) {
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	q := NewStoreQueue(StoreRequestBytes(chainRequest(t, 1))) // room for one request
+	stp.storeQueue = q
+
+	for i := 0; i < 400; i++ {
+		n := subtreepkg.Node{Hash: chainhash.HashH([]byte{byte(i), byte(i >> 8), 9}), Fee: 1, SizeInBytes: 100}
+		require.NoError(t, stp.AddDirectly(&n, &subtreepkg.TxInpoints{}, true))
+	}
+
+	chained := append([]*subtreepkg.Subtree(nil), stp.chainedSubtrees...)
+	require.GreaterOrEqual(t, len(chained), 2)
+
+	stp.diskTxMap.recordErr(errors.NewStorageError("badger write failed"))
+	stp.Start(context.Background())
+
+	require.Error(t, stp.MoveForwardBlock(block), "the pending map error fails the block")
+
+	for i, st := range chained {
+		it := q.entry(st)
+		require.NotNil(t, it, "restored subtree %d has a request", i)
+		require.False(t, it.stale, "and it is wanted")
 	}
 }

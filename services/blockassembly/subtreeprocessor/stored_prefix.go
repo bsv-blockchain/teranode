@@ -138,8 +138,9 @@ func (stp *SubtreeProcessor) sendChainedSubtreeAgain(i int, root chainhash.Hash,
 	}
 
 	if stp.storeQueue != nil {
-		if stp.storeQueue.entry(st) != nil {
-			return // still queued or being stored
+		// A request a worker has is not recovered by waiting: a write with no deadline can hang.
+		if stp.storeQueue.queued(st) {
+			return
 		}
 
 		stp.storeQueue.Push(req)

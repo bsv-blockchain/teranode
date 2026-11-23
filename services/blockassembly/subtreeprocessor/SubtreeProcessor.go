@@ -103,6 +103,8 @@ type NewSubtreeRequest struct {
 
 	answered func(err error) // set by a StoreQueue: see Answered
 	settled  func()          // set by a StoreQueue: see Settled
+
+	wantAnnounce func() bool // set by a StoreQueue: see WantsAnnounce
 }
 
 // moveBlockRequest represents a request to move a block in the chain.
@@ -4905,6 +4907,12 @@ func (stp *SubtreeProcessor) closeRetiredSubtrees() {
 		if _, ok := held[st]; ok {
 			kept = append(kept, st)
 			continue
+		}
+
+		// its queued store requests go first, with their callbacks, which read its nodes
+		if stp.storeQueue != nil {
+			stp.storeQueue.removeQueued(st)
+			stp.runDroppedCleanups()
 		}
 
 		st.Close()

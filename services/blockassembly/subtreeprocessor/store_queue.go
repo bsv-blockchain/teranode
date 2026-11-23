@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -77,12 +78,14 @@ type StoreQueue struct {
 
 // storeItem is a request in the queue, until its store is settled or it is dropped.
 type storeItem struct {
-	req     NewSubtreeRequest
-	bytes   uint64
-	stale   bool
-	charged bool
-	done    bool
-	dropped bool
+	req      NewSubtreeRequest
+	bytes    uint64
+	stale    bool
+	charged  bool
+	done     bool
+	dropped  bool
+	taken    bool        // a worker has it
+	announce atomic.Bool // announce on success, whatever SkipNotification says
 
 	// first is closed once ErrChan was answered, with the error in firstErr; result is the request's
 	// Result. A reorg that finds its subtree already sent waits on these instead of sending it again.
@@ -107,6 +110,7 @@ func (q *StoreQueue) Push(req NewSubtreeRequest) {
 	it.result = req.Result
 	req.answered = func(err error) { q.answered(it, err) }
 	req.settled = func() { q.settled(it) }
+	req.wantAnnounce = it.announce.Load
 	it.req = req
 
 	q.mu.Lock()
@@ -245,6 +249,7 @@ func (q *StoreQueue) pickLocked() *storeItem {
 	if len(q.snapshots) > 0 {
 		it := q.snapshots[0]
 		q.snapshots = removeAt(q.snapshots, 0)
+		it.taken = true
 
 		return it
 	}
@@ -260,6 +265,7 @@ func (q *StoreQueue) pickLocked() *storeItem {
 
 	it := q.ready[i]
 	q.ready = removeAt(q.ready, i)
+	it.taken = true
 
 	return it
 }
@@ -296,11 +302,15 @@ func (q *StoreQueue) admitLocked() (dropped []*storeItem) {
 }
 
 // dropStaleLocked removes every stale chain request that has not been taken.
-func (q *StoreQueue) dropStaleLocked() (dropped []*storeItem) {
-	isStale := func(it *storeItem) bool { return it.stale }
+func (q *StoreQueue) dropStaleLocked() []*storeItem {
+	return q.dropLocked(func(it *storeItem) bool { return it.stale })
+}
 
+// dropLocked removes the requests that match and have not been taken, and queues their
+// OnStorageComplete callbacks for the processor (see takeCleanups).
+func (q *StoreQueue) dropLocked(match func(*storeItem) bool) (dropped []*storeItem) {
 	for _, it := range q.ready {
-		if it.stale {
+		if match(it) {
 			q.held -= it.bytes
 			it.charged = false
 		}
@@ -308,12 +318,12 @@ func (q *StoreQueue) dropStaleLocked() (dropped []*storeItem) {
 
 	for _, list := range []*[]*storeItem{&q.ready, &q.waiting} {
 		for _, it := range *list {
-			if it.stale {
+			if match(it) {
 				dropped = append(dropped, it)
 			}
 		}
 
-		*list = slices.DeleteFunc(*list, isStale)
+		*list = slices.DeleteFunc(*list, match)
 	}
 
 	for _, it := range dropped {
@@ -328,6 +338,59 @@ func (q *StoreQueue) dropStaleLocked() (dropped []*storeItem) {
 	}
 
 	return dropped
+}
+
+// removeQueued drops the requests of st that no worker has taken, and queues their callbacks. The
+// processor calls it before it unmaps st: a request that outlived its subtree's mapping would hold a
+// callback that reads unmapped nodes.
+func (q *StoreQueue) removeQueued(st *subtreepkg.Subtree) {
+	q.mu.Lock()
+
+	var dropped []*storeItem
+
+	if len(q.byTree[st]) > 0 {
+		dropped = q.dropLocked(func(it *storeItem) bool { return !it.req.AnnounceOnly && it.req.Subtree == st && !it.taken })
+		dropped = append(dropped, q.admitLocked()...)
+	}
+
+	q.signalLocked()
+	q.mu.Unlock()
+
+	finishDropped(dropped)
+}
+
+// queued reports whether st has a request that no worker has taken.
+func (q *StoreQueue) queued(st *subtreepkg.Subtree) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for _, it := range q.byTree[st] {
+		if !it.taken {
+			return true
+		}
+	}
+
+	return false
+}
+
+// AnnounceOnSuccess makes the outstanding request for st announce its subtree when it is stored,
+// whatever its SkipNotification says, and reports whether there was one. A fork reorg's forward steps
+// send silently and the reorg announces after its marks, which a subtree still being written, or
+// retried, would otherwise miss.
+func (q *StoreQueue) AnnounceOnSuccess(st *subtreepkg.Subtree) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	items := q.byTree[st]
+	if len(items) == 0 {
+		return false
+	}
+
+	for _, it := range items {
+		it.announce.Store(true)
+	}
+
+	return true
 }
 
 func (q *StoreQueue) unregisterLocked(it *storeItem) {
@@ -428,6 +491,12 @@ func (r NewSubtreeRequest) Answered(err error) {
 		r.answered(err)
 	}
 }
+
+// WantsAnnounce reports whether the queue was told to announce the request's subtree once it is stored.
+func (r NewSubtreeRequest) WantsAnnounce() bool { return r.wantAnnounce != nil && r.wantAnnounce() }
+
+// WantsAnnounceFunc is WantsAnnounce as a function, or nil without a queue.
+func (r NewSubtreeRequest) WantsAnnounceFunc() func() bool { return r.wantAnnounce }
 
 // SettledFunc is Settled as a function, or nil without a queue, so a request that has none costs a
 // holder of it nothing.

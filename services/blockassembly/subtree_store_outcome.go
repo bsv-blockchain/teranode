@@ -35,6 +35,9 @@ type subtreeStoreOutcome struct {
 	// skip is the request's SkipNotification, honoured by a late announcement.
 	skip bool
 
+	// wants is the request's WantsAnnounce: a fork reorg switches a silent request to announcing.
+	wants func() bool
+
 	// late is the notification sender's input for the announcement of a subtree a retry stored.
 	// Nil when no sender runs, in which case the announcement is sent directly.
 	late chan<- chainhash.Hash
@@ -51,7 +54,7 @@ type subtreeStoreOutcome struct {
 }
 
 func newSubtreeStoreOutcome(request subtreeprocessor.NewSubtreeRequest, metaApplicable bool, late chan<- chainhash.Hash) *subtreeStoreOutcome {
-	o := &subtreeStoreOutcome{result: request.Result, skip: request.SkipNotification, late: late, pending: 1, settled: request.SettledFunc()}
+	o := &subtreeStoreOutcome{result: request.Result, skip: request.SkipNotification, late: late, pending: 1, settled: request.SettledFunc(), wants: request.WantsAnnounceFunc()}
 	if metaApplicable {
 		o.pending++
 	} else {
@@ -204,7 +207,7 @@ func (r *subtreeRetrySend) exhausted() {
 // announcements of subtrees stored later.
 func (ba *BlockAssembly) announceLate(ctx context.Context, subtreeRetry *subtreeRetrySend) {
 	if o := subtreeRetry.outcome; o != nil {
-		if o.skip {
+		if o.skip && (o.wants == nil || !o.wants()) {
 			return
 		}
 

@@ -250,3 +250,22 @@ func TestStoreQueueListener_AnAnnounceOnlyRequestAnnouncesWithoutStoring(t *test
 func TestStoreQueueListener_WithoutAQueueTheOutcomeHoldsNoSettledHook(t *testing.T) {
 	require.Nil(t, newSubtreeStoreOutcome(subtreeprocessor.NewSubtreeRequest{}, true, nil).settled)
 }
+
+// A fork reorg's forward steps send silently. A subtree whose first write failed is still being
+// retried when the reorg announces: it is announced when the retry stores it.
+func TestStoreQueueListener_ARetriedSubtreeIsAnnouncedOnceTheReorgAsksForIt(t *testing.T) {
+	server, q, p := startQueueListener(t)
+
+	fault := blobfault.New(server.subtreeStore)
+	server.subtreeStore = fault
+
+	subtree, txMap := makeSubtree(t, 2)
+	fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{FailTimes: 2})
+	result := make(chan subtreeprocessor.StoreResult, 1)
+
+	q.Push(subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap, SkipNotification: true, ErrChan: make(chan error, 1), Result: result})
+	require.True(t, q.AnnounceOnSuccess(subtree), "the request is outstanding")
+
+	require.True(t, awaitResult(t, result).OK())
+	p.requireAnnounced(t, subtree.RootHash())
+}
