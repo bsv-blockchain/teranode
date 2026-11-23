@@ -95,7 +95,7 @@ func TestIdleKeepAliveConnectionIsClosed(t *testing.T) {
 	cancel, errCh := startServer(t, srv)
 	defer func() {
 		cancel()
-		<-errCh
+		require.NoError(t, <-errCh)
 	}()
 
 	conn, err := net.Dial("tcp", srv.Addr())
@@ -116,7 +116,7 @@ func TestSlowRequestBodyConnectionIsClosed(t *testing.T) {
 	cancel, errCh := startServer(t, srv)
 	defer func() {
 		cancel()
-		<-errCh
+		require.NoError(t, <-errCh)
 	}()
 
 	conn, err := net.Dial("tcp", srv.Addr())
@@ -156,7 +156,7 @@ func TestHealthRequiresToken(t *testing.T) {
 	cancel, errCh := startServer(t, srv)
 	defer func() {
 		cancel()
-		<-errCh
+		require.NoError(t, <-errCh)
 	}()
 
 	url := "http://" + srv.Addr() + "/health"
@@ -262,7 +262,7 @@ func TestWebSocketOutlivesTheHTTPTimeouts(t *testing.T) {
 	cancel, errCh := startServer(t, srv)
 	defer func() {
 		cancel()
-		<-errCh
+		_ = <-errCh
 	}()
 
 	conn := authedWS(t, srv)

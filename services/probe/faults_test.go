@@ -279,7 +279,7 @@ func TestPanicInCloseDuringStopIsRecovered(t *testing.T) {
 	require.NotPanics(t, func() { _ = srv.Stop(context.Background()) })
 
 	select {
-	case <-errCh:
+	case _ = <-errCh:
 	case <-time.After(10 * time.Second):
 		require.FailNow(t, "Start did not return")
 	}

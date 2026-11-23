@@ -143,7 +143,7 @@ func runProbe(t *testing.T, srv *Server) chan error {
 		go func() { _ = srv.Stop(context.Background()) }()
 
 		select {
-		case <-done:
+		case _ = <-done:
 		case <-time.After(10 * time.Second):
 			t.Error("probe did not stop")
 		}
