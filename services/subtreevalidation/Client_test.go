@@ -232,24 +232,27 @@ func TestClient_CheckSubtreeFromBlock_GRPCError(t *testing.T) {
 }
 
 func TestClient_CheckBlockSubtrees_Success(t *testing.T) {
-	ctx := context.Background()
-	client := createTestClient()
-	mockAPIClient := client.apiClient.(*MockSubtreeValidationAPIClient)
-
-	// Create test block
-	block := createTestBlock()
-	baseURL := "http://example.com"
-
-	// Mock successful response
-	response := &subtreevalidation_api.CheckBlockSubtreesResponse{}
-	mockAPIClient.On("CheckBlockSubtrees", ctx, mock.MatchedBy(func(req *subtreevalidation_api.CheckBlockSubtreesRequest) bool {
-		return req.BaseUrl == baseURL && len(req.Block) > 0
-	}), mock.Anything).Return(response, nil)
-
-	err := client.CheckBlockSubtrees(ctx, block, "", baseURL)
-
-	assert.NoError(t, err)
-	mockAPIClient.AssertExpectations(t)
+	for _, keep := range []bool{false, true} {
+		name := "handoff off"
+		if keep {
+			name = "handoff on"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			client := createTestClient()
+			mockAPIClient := client.apiClient.(*MockSubtreeValidationAPIClient)
+			block := createTestBlock()
+			baseURL := "http://example.com"
+			const peerID = "test-peer"
+			response := &subtreevalidation_api.CheckBlockSubtreesResponse{}
+			mockAPIClient.On("CheckBlockSubtrees", ctx, mock.MatchedBy(func(req *subtreevalidation_api.CheckBlockSubtreesRequest) bool {
+				return req.BaseUrl == baseURL && req.PeerId == peerID && len(req.Block) > 0 && req.KeepBlockAssemblyHandoff == keep
+			}), mock.Anything).Return(response, nil).Once()
+			err := client.CheckBlockSubtrees(ctx, block, peerID, baseURL, keep)
+			require.NoError(t, err)
+			mockAPIClient.AssertExpectations(t)
+		})
+	}
 }
 
 func TestClient_CheckBlockSubtrees_SerializationError(t *testing.T) {
@@ -262,7 +265,7 @@ func TestClient_CheckBlockSubtrees_SerializationError(t *testing.T) {
 	}
 	baseURL := "http://example.com"
 
-	err := client.CheckBlockSubtrees(ctx, block, "", baseURL)
+	err := client.CheckBlockSubtrees(ctx, block, "", baseURL, false)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to serialize block for subtree validation")
@@ -281,10 +284,28 @@ func TestClient_CheckBlockSubtrees_GRPCError(t *testing.T) {
 	grpcErr := status.Error(codes.Internal, "internal processing error")
 	mockAPIClient.On("CheckBlockSubtrees", ctx, mock.Anything, mock.Anything).Return(nil, grpcErr)
 
-	err := client.CheckBlockSubtrees(ctx, block, "", baseURL)
+	err := client.CheckBlockSubtrees(ctx, block, "", baseURL, false)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "internal processing error")
+	mockAPIClient.AssertExpectations(t)
+}
+
+// TestClient_CheckBlockSubtrees_DeadlineExceeded pins that a timed-out call still matches
+// context.DeadlineExceeded. UnwrapGRPC turns it into a plain ERR_ERROR, and only the message
+// text carries it; the block validation worker relies on that to requeue the block.
+func TestClient_CheckBlockSubtrees_DeadlineExceeded(t *testing.T) {
+	ctx := context.Background()
+	client := createTestClient()
+	mockAPIClient := client.apiClient.(*MockSubtreeValidationAPIClient)
+
+	grpcErr := status.Error(codes.DeadlineExceeded, "context deadline exceeded")
+	mockAPIClient.On("CheckBlockSubtrees", ctx, mock.Anything, mock.Anything).Return(nil, grpcErr)
+
+	err := client.CheckBlockSubtrees(ctx, createTestBlock(), "", "http://example.com", false)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 	mockAPIClient.AssertExpectations(t)
 }
 

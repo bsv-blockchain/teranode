@@ -2,13 +2,11 @@ package netsync
 
 import (
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-wire"
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
-	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,9 +41,7 @@ func inboundSyncPeer(t *testing.T, sm *SyncManager, idx uint8, lastBlock int32, 
 
 	state := &peerSyncState{
 		syncCandidate: true,
-		requestedTxns: expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),
 	}
-	t.Cleanup(state.requestedTxns.Stop)
 	state.noteBestKnownHeight(lastBlock)
 
 	sm.peerStates.Set(inbound, state)

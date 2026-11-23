@@ -139,6 +139,33 @@ func TestIsTransientLocalError(t *testing.T) {
 	}
 }
 
+func TestIsBlockSpendRuleViolation(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{name: "nil error", err: nil, expected: false},
+		{name: "coinbase immature", err: NewTxCoinbaseImmatureError("coinbase is not spendable yet"), expected: true},
+		{name: "non final", err: NewUtxoNonFinalError("transaction is not final"), expected: true},
+		// The validator re-derives every input's parent output data from this node's store,
+		// so a mismatch is the store disagreeing with itself, not the block.
+		{name: "utxo hash mismatch", err: NewUtxoHashMismatchError("utxo hash mismatch"), expected: false},
+		{name: "wrapped coinbase immature", err: NewProcessingError("outer", NewProcessingError("error spending utxos", NewTxCoinbaseImmatureError("immature"))), expected: true},
+		// Frozen depends on this node's alert-system state, not on the block.
+		{name: "frozen utxo", err: NewUtxoFrozenError("utxo is frozen"), expected: false},
+		// A double spend is a conflict, not a broken rule.
+		{name: "spent utxo", err: New(ERR_UTXO_SPENT, "utxo already spent"), expected: false},
+		{name: "plain processing error", err: NewProcessingError("boom"), expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, IsBlockSpendRuleViolation(tt.err))
+		})
+	}
+}
+
 func TestIsNetworkError(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -391,6 +418,20 @@ func TestGetErrorCategory(t *testing.T) {
 			name:     "corrupt block body is categorised as block, not malicious",
 			err:      NewBlockCorruptError("corrupt body"),
 			expected: "block",
+		},
+		{
+			// A corrupt stored blob renders "BLOB_CORRUPT" and would match the same substring.
+			// It is a fault in this node's own storage, not a peer's, so it is "blob".
+			name:     "corrupt stored blob is categorised as blob, not malicious",
+			err:      NewStorageError("[File][GetIoReader] header filetype mismatch", NewBlobCorruptError("got a, want b")),
+			expected: "blob",
+		},
+		{
+			// The context check stays first, as it does for a corrupt block: a cancelled read is
+			// reported as a cancellation whatever else its chain holds.
+			name:     "context error stays context with a blob-corrupt cause in its chain",
+			err:      NewContextCanceledError("read cancelled", NewBlobCorruptError("header unreadable")),
+			expected: "context",
 		},
 		{
 			// The early-out must not over-reach: a genuinely malicious error still categorises

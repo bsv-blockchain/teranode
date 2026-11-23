@@ -11,7 +11,6 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -195,7 +194,7 @@ func TestFillHeaderCache_AFillForADepartedPeerInstallsNothing(t *testing.T) {
 	sm.headerCache = cache.WithOwnerLive(sm.headerOwnerLive)
 
 	peer, _, _ := connectRacePeer(t, 248, 1000)
-	sm.peerStates.Set(peer, &peerSyncState{requestedTxns: expiringmap.New[chainhash.Hash, struct{}](time.Hour)})
+	sm.peerStates.Set(peer, &peerSyncState{})
 
 	stall.arm()
 

@@ -8,9 +8,12 @@ import (
 
 	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,9 +33,8 @@ func buildTXmetaBatchMessage(t *testing.T, entries []txmetaTestEntry) []byte {
 		// 1-byte action
 		buf = append(buf, entry.action)
 
-		if entry.action == txmetacache.WireActionADD {
-			metaBytes, err := entry.meta.MetaBytes()
-			require.NoError(t, err)
+		if entry.action == txmetacache.WireActionADD || entry.action == txmetacache.WireActionADDLane {
+			metaBytes := entryContent(t, entry)
 
 			// 4-byte content length
 			lenBuf := make([]byte, 4)
@@ -54,6 +56,89 @@ type txmetaTestEntry struct {
 	hash   chainhash.Hash
 	action byte
 	meta   meta.Data
+	// raw, when set, is the entry's content as is, in place of one built from meta.
+	raw []byte
+}
+
+// entryContent is an ADD entry's MetaBytes, or an ADDLane entry's lane encoding with one position
+// per parent.
+func entryContent(t *testing.T, entry txmetaTestEntry) []byte {
+	t.Helper()
+
+	if entry.raw != nil {
+		return entry.raw
+	}
+
+	if entry.action == txmetacache.WireActionADDLane {
+		parents := make([]uint64, len(entry.meta.TxInpoints.ParentTxHashes))
+		for i := range parents {
+			parents[i] = lane.Pack(9, uint64(i)+1) //nolint:gosec // i counts up from 0
+		}
+
+		b, err := entry.meta.LaneMetaBytesInto(nil, parents)
+		require.NoError(t, err)
+
+		return b
+	}
+
+	b, err := entry.meta.MetaBytes()
+	require.NoError(t, err)
+
+	return b
+}
+
+// Relay announces a transaction whose entry is in the lane encoding, which the validator sends at
+// utxostore_laneMigration shadow, exactly as one in the plain encoding, in both wire formats, and
+// still skips one that arrived in a block.
+func TestProcessTXmetaBatchMessage_LaneEntriesAreAnnounced(t *testing.T) {
+	relayed, err := chainhash.NewHashFromStr("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	require.NoError(t, err)
+
+	inBlock, err := chainhash.NewHashFromStr("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	require.NoError(t, err)
+
+	entries := []txmetaTestEntry{
+		{hash: *relayed, action: txmetacache.WireActionADDLane, meta: meta.Data{Fee: 423, SizeInBytes: 250, LanePosition: lane.Pack(9, 100)}},
+		{hash: *inBlock, action: txmetacache.WireActionADDLane, meta: meta.Data{Fee: 500, SizeInBytes: 250, InBlock: true, LanePosition: lane.Pack(9, 101)}},
+	}
+
+	for name, build := range map[string]func(*testing.T, []txmetaTestEntry) []byte{
+		"v1": buildTXmetaBatchMessage,
+		"v2": buildTXmetaBatchMessageV2,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var mu sync.Mutex
+			var announced []*TxHashAndFee
+
+			sm := &SyncManager{
+				logger: ulogger.TestLogger{},
+				txAnnounceBatcher: batcher.NewWithDeduplication[TxHashAndFee](100, 50*time.Millisecond, func(batch []*TxHashAndFee) {
+					mu.Lock()
+					announced = append(announced, batch...)
+					mu.Unlock()
+				}, false),
+			}
+
+			require.NoError(t, sm.processTXmetaBatchMessage(build(t, entries)))
+
+			require.Eventually(t, func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+
+				return len(announced) == 1
+			}, 2*time.Second, 10*time.Millisecond)
+
+			time.Sleep(100 * time.Millisecond)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			require.Len(t, announced, 1, "the in-block entry is not announced")
+			require.Equal(t, *relayed, announced[0].TxHash)
+			require.Equal(t, uint64(423), announced[0].Fee)
+			require.Equal(t, uint64(250), announced[0].Size)
+		})
+	}
 }
 
 // buildTXmetaBatchMessageV2 constructs a v2 wire-format batch message: an
@@ -79,9 +164,8 @@ func buildTXmetaBatchMessageV2(t *testing.T, entries []txmetaTestEntry) []byte {
 		// 1-byte action
 		buf = append(buf, entry.action)
 
-		if entry.action == txmetacache.WireActionADD {
-			metaBytes, err := entry.meta.MetaBytes()
-			require.NoError(t, err)
+		if entry.action == txmetacache.WireActionADD || entry.action == txmetacache.WireActionADDLane {
+			metaBytes := entryContent(t, entry)
 
 			lenBuf := make([]byte, 4)
 			binary.LittleEndian.PutUint32(lenBuf, uint32(len(metaBytes)))
@@ -511,4 +595,99 @@ func TestProcessTXmetaBatchMessage_CoinbaseFiltering(t *testing.T) {
 
 		require.Empty(t, announced)
 	})
+}
+
+// relayLaneCount reads teranode_lane_txmeta_messages_total{side="legacy", format}.
+func relayLaneCount(t *testing.T, format string) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range families {
+		if family.GetName() != "teranode_lane_txmeta_messages_total" {
+			continue
+		}
+
+		for _, m := range family.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+
+			if labels["side"] == "legacy" && labels["format"] == format {
+				return m.GetCounter().GetValue()
+			}
+		}
+	}
+
+	return 0
+}
+
+// A lane entry that does not decode is not announced, and the entries after it still are. Relay
+// counts every lane entry, the malformed one included, whatever its own setting, and a plain entry
+// only at utxostore_laneMigration shadow.
+func TestProcessTXmetaBatchMessage_MalformedLaneEntryDropsOnlyItself(t *testing.T) {
+	bad, err := chainhash.NewHashFromStr("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+	require.NoError(t, err)
+
+	good, err := chainhash.NewHashFromStr("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+	require.NoError(t, err)
+
+	plain := meta.Data{Fee: 500, SizeInBytes: 250}
+	plainBytes, err := plain.MetaBytes()
+	require.NoError(t, err)
+
+	entries := []txmetaTestEntry{
+		// Plain MetaBytes under the ADDLane action: the lane decode refuses it.
+		{hash: *bad, action: txmetacache.WireActionADDLane, raw: plainBytes},
+		{hash: *good, action: txmetacache.WireActionADD, meta: meta.Data{Fee: 600, SizeInBytes: 250}},
+	}
+
+	for _, tc := range []struct {
+		name     string
+		settings *settings.Settings
+		legacy   float64
+	}{
+		{name: "off", settings: &settings.Settings{}, legacy: 0},
+		{name: "shadow", settings: &settings.Settings{UtxoStore: settings.UtxoStoreSettings{LaneMigration: settings.LaneMigrationShadow}}, legacy: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var announced []*TxHashAndFee
+
+			sm := &SyncManager{
+				logger:   ulogger.TestLogger{},
+				settings: tc.settings,
+				txAnnounceBatcher: batcher.NewWithDeduplication[TxHashAndFee](100, 50*time.Millisecond, func(batch []*TxHashAndFee) {
+					mu.Lock()
+					announced = append(announced, batch...)
+					mu.Unlock()
+				}, false),
+			}
+
+			lanes, legacy := relayLaneCount(t, "lane"), relayLaneCount(t, "legacy")
+
+			require.NoError(t, sm.processTXmetaBatchMessage(buildTXmetaBatchMessage(t, entries)))
+
+			require.Eventually(t, func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+
+				return len(announced) == 1
+			}, 2*time.Second, 10*time.Millisecond)
+
+			time.Sleep(100 * time.Millisecond)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			require.Len(t, announced, 1, "the malformed lane entry is not announced")
+			require.Equal(t, *good, announced[0].TxHash, "the entry after it still is")
+			require.Equal(t, uint64(600), announced[0].Fee)
+
+			require.InDelta(t, lanes+1, relayLaneCount(t, "lane"), 0, "the malformed lane entry still counts as lane")
+			require.InDelta(t, legacy+tc.legacy, relayLaneCount(t, "legacy"), 0, "a plain entry counts only at shadow")
+		})
+	}
 }

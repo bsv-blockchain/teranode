@@ -19,7 +19,7 @@ type bestBlockIDResult struct {
 // the block's identity (chain-membership checks, fork detection, off-chain set rebuild)
 // without the full BlockHeader or BlockHeaderMeta.
 //
-// The query mirrors GetBestBlockHeader's ordering (chain_work DESC, peer_id ASC, id ASC)
+// The query mirrors GetBestBlockHeader's ordering (chain_work DESC, id ASC)
 // to guarantee identical tie-breaking. Results are cached in responseCache and
 // automatically invalidated by ResetResponseCache().
 func (s *SQL) getBestBlockID(ctx context.Context) (uint32, *chainhash.Hash, error) {
@@ -36,7 +36,7 @@ func (s *SQL) getBestBlockID(ctx context.Context) (uint32, *chainhash.Hash, erro
 		SELECT b.id, b.hash
 		FROM blocks b
 		WHERE invalid = false
-		ORDER BY chain_work DESC, peer_id ASC, id ASC
+		ORDER BY chain_work DESC, id ASC
 		LIMIT 1
 	`
 

@@ -194,6 +194,21 @@ func TestNewBlockExistsError(t *testing.T) {
 	assert.Nil(t, err.Data(), "error data should be nil when params are provided")
 }
 
+// TestNewBlockIDOrderError checks the constructor carries its own code, so Is matches it and
+// no other refusal, and that the code stays in the block category and out of the malicious bucket.
+func TestNewBlockIDOrderError(t *testing.T) {
+	err := NewBlockIDOrderError("block %s id %d is not above parent id %d", "aa", 5, 7)
+
+	require.Equal(t, ERR_BLOCK_ID_ORDER, err.Code())
+	require.Equal(t, "block aa id 5 is not above parent id 7", err.Message())
+	require.True(t, Is(NewStorageError("store block", err), ErrBlockIDOrder), "the code must be found through a wrapper")
+	require.False(t, Is(NewInvalidArgumentError("x"), ErrBlockIDOrder), "an unrelated refusal must not match")
+	require.False(t, Is(err, ErrInvalidArgument))
+	require.Equal(t, "BLOCK_ID_ORDER", ERR_BLOCK_ID_ORDER.String())
+	require.Equal(t, "block", errorCodeCategory(ERR_BLOCK_ID_ORDER))
+	require.False(t, IsMaliciousResponseError(err), "an id-order refusal is never a verdict on a peer")
+}
+
 // TestNewBlockError tests the NewBlockError function to ensure it creates an error with the correct code and message.
 func TestNewBlockError(t *testing.T) {
 	message := "test block error %s %d"
@@ -519,6 +534,22 @@ func TestNewBlobError(t *testing.T) {
 	assert.Equal(t, ERR_BLOB_ERROR, err.Code(), "error code should be ERR_BLOB_ERROR")
 	assert.Equal(t, "test blob error param1 42", err.Message(), "error message should match")
 	assert.Nil(t, err.Data(), "error data should be nil when params are provided")
+}
+
+// TestNewBlobCorruptError pins the blob-corrupt code and that IsBlobCorrupt finds it as the
+// cause under a StorageError, the shape the file and S3 stores return for a bad header.
+func TestNewBlobCorruptError(t *testing.T) {
+	err := NewBlobCorruptError("test blob corrupt error %s %d", "param1", 42)
+
+	assert.Equal(t, ERR_BLOB_CORRUPT, err.Code(), "error code should be ERR_BLOB_CORRUPT")
+	assert.Equal(t, "test blob corrupt error param1 42", err.Message(), "error message should match")
+
+	wrapped := NewStorageError("header unreadable", NewBlobCorruptError("bad magic"))
+	assert.True(t, IsBlobCorrupt(wrapped), "the corrupt cause must be found under the StorageError")
+	assert.True(t, Is(wrapped, ErrStorageError), "the StorageError must stay for existing callers")
+
+	assert.False(t, IsBlobCorrupt(nil))
+	assert.False(t, IsBlobCorrupt(NewStorageError("disk read failed")))
 }
 
 // TestNewBlobFooterSizeMismatchError tests the NewBlobFooterSizeMismatchError function to ensure it creates an error with the correct code and message.

@@ -1,0 +1,219 @@
+package validator
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
+	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/stretchr/testify/require"
+)
+
+// leaseLike is a lane position source with the allocator's Start and Ready: it holds a lease once
+// leased is set, and gives no positions without one.
+type leaseLike struct {
+	started atomic.Bool
+	// startCtx is false if Start was given a nil context.
+	startCtx atomic.Bool
+	leased   atomic.Bool
+	n        atomic.Uint64
+	// readies counts Ready calls.
+	readies atomic.Int64
+
+	// startErr is what Start returns.
+	startErr error
+}
+
+func (s *leaseLike) Start(ctx context.Context) error {
+	s.started.Store(true)
+	s.startCtx.Store(ctx != nil)
+	return s.startErr
+}
+
+func (s *leaseLike) Ready() error {
+	s.readies.Add(1)
+
+	if !s.leased.Load() {
+		return errors.NewServiceUnavailableError("no lane lease yet")
+	}
+
+	return nil
+}
+
+func (s *leaseLike) Next(context.Context) (uint64, error) {
+	if !s.leased.Load() {
+		return lane.None, errors.NewServiceUnavailableError("no lane lease")
+	}
+
+	return lane.Pack(5, s.n.Add(1)), nil
+}
+
+func newLaneLeaseValidator(t *testing.T, source *leaseLike) (*Validator, utxo.Store) {
+	t.Helper()
+
+	return newLaneLeaseValidatorWithLogger(t, source, ulogger.TestLogger{})
+}
+
+func newLaneLeaseValidatorWithLogger(t *testing.T, source *leaseLike, logger ulogger.Logger) (*Validator, utxo.Store) {
+	t.Helper()
+
+	ctx := context.Background()
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BatcherDrainMode = true
+
+	storeURL, err := url.Parse("sqlitememory:///lanelease")
+	require.NoError(t, err)
+
+	store, err := sql.New(ctx, ulogger.TestLogger{}, tSettings, storeURL)
+	require.NoError(t, err)
+
+	taker, ok := utxo.As[utxo.LanePositionTaker](store)
+	require.True(t, ok)
+	taker.SetLanePositionSource(source)
+
+	v, err := New(ctx, logger, tSettings, store, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	return v.(*Validator), store
+}
+
+func TestValidatorIsNotReadyWithoutALease(t *testing.T) {
+	source := &leaseLike{}
+	v, _ := newLaneLeaseValidator(t, source)
+
+	require.True(t, source.started.Load(), "a validator starts its lease when it is built")
+	require.True(t, source.startCtx.Load(), "the lease starts on the validator's context")
+	require.Zero(t, source.readies.Load(), "New starts the lease and does not wait for it")
+
+	_, msg, _ := v.Health(context.Background(), false)
+	require.Contains(t, msg, "LaneLease: BAD")
+}
+
+// The lane lease check on its own, since Health is not ready for other reasons in a unit test too:
+// with no lease it reports 503 and an error, and with one it reports 200 and no error.
+func TestLaneLeaseCheckReportsServiceUnavailableWithoutALease(t *testing.T) {
+	source := &leaseLike{}
+	_, store := newLaneLeaseValidator(t, source)
+
+	holder, ok := utxo.As[utxo.LanePositionHolder](store)
+	require.True(t, ok)
+
+	check := laneLeaseCheck(holder)
+
+	status, msg, err := check(context.Background(), false)
+	require.Equal(t, http.StatusServiceUnavailable, status)
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.Contains(t, msg, "LaneLease: BAD")
+
+	source.leased.Store(true)
+
+	status, msg, err = check(context.Background(), false)
+	require.Equal(t, http.StatusOK, status)
+	require.NoError(t, err)
+	require.Equal(t, "LaneLease: GOOD", msg)
+}
+
+// warnRecorder keeps the warnings logged through it.
+type warnRecorder struct {
+	ulogger.TestLogger
+	mu    sync.Mutex
+	warns []string
+}
+
+func (l *warnRecorder) Warnf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.warns = append(l.warns, fmt.Sprintf(format, args...))
+}
+
+// A lease that cannot start does not stop the validator being built: the failure is logged, and
+// readiness reports a validator with no lease as not ready, so it takes no traffic.
+func TestValidatorIsBuiltWhenItsLeaseCannotStart(t *testing.T) {
+	source := &leaseLike{startErr: errors.NewServiceUnavailableError("blockchain service is down")}
+	logger := &warnRecorder{}
+	v, _ := newLaneLeaseValidatorWithLogger(t, source, logger)
+
+	require.True(t, source.started.Load())
+
+	logger.mu.Lock()
+	require.Contains(t, strings.Join(logger.warns, "\n"), "could not start the lane lease", "the start failure is logged")
+	logger.mu.Unlock()
+
+	_, msg, _ := v.Health(context.Background(), false)
+	require.Contains(t, msg, "LaneLease: BAD")
+}
+
+func TestValidatorBecomesReadyOnceItsLeaseOpens(t *testing.T) {
+	source := &leaseLike{}
+	v, _ := newLaneLeaseValidator(t, source)
+
+	source.leased.Store(true)
+
+	_, msg, _ := v.Health(context.Background(), false)
+	require.Contains(t, msg, "LaneLease: GOOD")
+}
+
+// A transaction validated with no lease fails with service unavailable, all the way out of
+// Validate, and is neither stored nor judged invalid: nothing about the transaction is wrong.
+func TestValidateFailsWithServiceUnavailableWithoutALanePosition(t *testing.T) {
+	const height = 1_000
+
+	source := &leaseLike{}
+	v, store := newLaneLeaseValidator(t, source)
+
+	w := tests.BuildMultiWorkload(t, 0xc9, 1, 1)
+
+	source.leased.Store(true)
+	w.StoreRoots(t, store, height-1)
+	source.leased.Store(false)
+
+	_, err := v.Validate(context.Background(), w.Txs[0], height,
+		WithSkipPolicyChecks(true),
+		WithSkipScriptValidation(true),
+		WithAddTXToBlockAssembly(false),
+		WithSkipTxMetaPublishing(true),
+		WithCandidateParentMedianTime(1),
+		WithUnconfirmedParentsAtCandidateHeight(true))
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.False(t, errors.Is(err, errors.ErrTxInvalid), "a missing lane position says nothing about the transaction")
+
+	_, err = store.Get(context.Background(), w.Txs[0].TxIDChainHash(), fields.Fee)
+	require.ErrorIs(t, err, errors.ErrTxNotFound)
+}
+
+// A New that fails takes no lease: the lease starts only once everything else in New has succeeded,
+// so a validator that is never built holds no lane.
+func TestValidatorNewThatFailsStartsNoLease(t *testing.T) {
+	ctx := context.Background()
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BatcherDrainMode = true
+	tSettings.Kafka.TxMetaConfig = nil
+
+	storeURL, err := url.Parse("sqlitememory:///laneleasefail")
+	require.NoError(t, err)
+
+	store, err := sql.New(ctx, ulogger.TestLogger{}, tSettings, storeURL)
+	require.NoError(t, err)
+
+	source := &leaseLike{}
+	taker, ok := utxo.As[utxo.LanePositionTaker](store)
+	require.True(t, ok)
+	taker.SetLanePositionSource(source)
+
+	_, err = New(ctx, ulogger.TestLogger{}, tSettings, store, nil, nil, nil, nil, nil)
+	require.Error(t, err, "pre-condition: New fails with no txmeta Kafka URL")
+	require.False(t, source.started.Load(), "a New that fails started the lane lease")
+}

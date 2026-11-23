@@ -2,6 +2,7 @@ package subtreevalidation
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"sync"
 	"sync/atomic"
@@ -40,10 +41,21 @@ var opTrue = bscript.NewFromBytes([]byte{0x51})
 type countingStore struct {
 	utxo.Store
 	multiCalls atomic.Int64
+
+	// callers are the callers the lists named, in order.
+	mu      sync.Mutex
+	callers []utxo.Caller
 }
 
 func (c *countingStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
 	c.multiCalls.Add(1)
+
+	if options, err := utxo.ParseCreateOptions(opts...); err == nil {
+		c.mu.Lock()
+		c.callers = append(c.callers, options.Caller)
+		c.mu.Unlock()
+	}
+
 	return c.Store.SpendAndCreateMulti(ctx, txs, blockHeight, opts...)
 }
 
@@ -116,7 +128,7 @@ func newBatchedFixture(t *testing.T, state blockchain.FSMStateType) *batchedFixt
 	localClient, err := blockchain.NewLocalClient(logger, tSettings, &blockchainstore.MockStore{}, subtreeStore, base)
 	require.NoError(t, err)
 
-	blockchainClient := &fsmStateOverrideClient{ClientI: localClient, state: state}
+	blockchainClient := &fsmStateOverrideClient{ClientI: localClient, state: state, tipHeight: batchedTestHeight - 1}
 
 	txmeta := kafka.NewKafkaAsyncProducerMockWithBuffer(10_000)
 
@@ -347,6 +359,12 @@ func TestCheckBlockSubtreesBatched_WritesThroughSpendAndCreateMulti(t *testing.T
 	require.NoError(t, checkBlock(t, f, storeBlock(t, f, txs, false)))
 	require.Positive(t, f.store.multiCalls.Load(), "catch-up above the checkpoint must take the batch path")
 
+	f.store.mu.Lock()
+	for i, c := range f.store.callers {
+		require.Equal(t, utxo.CallerSubtreeValidation, c, "list %d names subtree validation for the burned lane position counter", i)
+	}
+	f.store.mu.Unlock()
+
 	requireCreatedUnmined(t, f, txs)
 
 	spy := f.server.validatorClient.(*publishSpy)
@@ -354,6 +372,39 @@ func TestCheckBlockSubtreesBatched_WritesThroughSpendAndCreateMulti(t *testing.T
 		inBlock, ok := spy.published[*tx.TxIDChainHash()]
 		require.True(t, ok, "txmeta must be published for created tx %d", i)
 		require.True(t, inBlock, "published as in-block, as the validator publishes block transactions")
+	}
+}
+
+// The batch path hands nothing to block assembly, so a short catchup from RUNNING that keeps
+// the hand-off on (issue 2067) takes the level path, and a request without the flag, as an
+// older block validation sends, still takes the batch path.
+func TestCheckBlockSubtreesBatched_KeptHandoffTakesLevelPath(t *testing.T) {
+	for _, keep := range []bool{false, true} {
+		t.Run(fmt.Sprintf("keep=%v", keep), func(t *testing.T) {
+			f := newBatchedFixture(t, blockchain.FSMStateCATCHINGBLOCKS)
+
+			roots := []*bt.Tx{storedRoot(t, f, 1, opTrue), storedRoot(t, f, 2, opTrue)}
+			txs := chainedTxs(t, roots, 3)
+			block := storeBlock(t, f, txs, false)
+
+			blockBytes, err := block.Bytes()
+			require.NoError(t, err)
+
+			_, err = f.server.CheckBlockSubtrees(context.Background(), &subtreevalidation_api.CheckBlockSubtreesRequest{
+				Block:                    blockBytes,
+				BaseUrl:                  "legacy",
+				KeepBlockAssemblyHandoff: keep,
+			})
+			require.NoError(t, err)
+
+			if keep {
+				require.Zero(t, f.store.multiCalls.Load(), "a kept hand-off must take the level path")
+			} else {
+				require.Positive(t, f.store.multiCalls.Load(), "without the flag catch-up above the checkpoint takes the batch path")
+			}
+
+			requireCreatedUnmined(t, f, txs)
+		})
 	}
 }
 

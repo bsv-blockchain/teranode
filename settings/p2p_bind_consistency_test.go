@@ -159,13 +159,17 @@ func readSettingsFile(t *testing.T, path string) settingsConf {
 			continue
 		}
 
-		// Strip a trailing comment, then surrounding quotes.
-		value := m[2]
-		if idx := strings.Index(value, " #"); idx >= 0 {
-			value = value[:idx]
+		// Strip a comment, then one pair of surrounding quotes, exactly as
+		// gocore does: it cuts at the first # and unquotes only a value longer
+		// than two characters, so `key = ""` stays the literal "" at runtime.
+		value, _, _ := strings.Cut(m[2], "#")
+		value = strings.TrimSpace(value)
+
+		if len(value) > 2 && value[0] == '"' && value[len(value)-1] == '"' {
+			value = value[1 : len(value)-1]
 		}
 
-		conf[m[1]] = strings.Trim(strings.TrimSpace(value), `"`)
+		conf[m[1]] = value
 	}
 
 	require.NotEmpty(t, conf, "parsed no settings from %s", path)

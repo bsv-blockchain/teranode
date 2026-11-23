@@ -32,7 +32,17 @@ type e2eCache struct {
 	c *txmetacache.ImprovedCache
 }
 
-func (e *e2eCache) Delete(_ context.Context, _ *chainhash.Hash) error { return nil }
+// DeleteDemoted shadows the embedded zero TxMetaCache's, which has no backend.
+func (e *e2eCache) DeleteDemoted(hashes []chainhash.Hash) {
+	for i := range hashes {
+		_ = e.Delete(context.Background(), &hashes[i])
+	}
+}
+
+func (e *e2eCache) Delete(_ context.Context, hash *chainhash.Hash) error {
+	e.c.Del(hash[:])
+	return nil
+}
 
 func (e *e2eCache) SetCacheFromBytes(key, value []byte) error {
 	_ = e.c.Set(key, value)
@@ -683,4 +693,25 @@ func BenchmarkTxmetaProducerReceiver_V2_Batch100(b *testing.B) {
 
 func BenchmarkTxmetaProducerReceiver_V2_Batch1000(b *testing.B) {
 	benchmarkTxmetaProducerReceiver_V2(b, 1000, 32)
+}
+
+// TestTxmetaE2E_BlockAssemblyDeleteEvicts pins the contract between block
+// assembly's eviction producer and this handler: a txmetacache.EncodeDeleteBatch
+// message removes the named entries from the cache, so a tx demoted to
+// conflicting is no longer served as non-conflicting from it.
+func TestTxmetaE2E_BlockAssemblyDeleteEvicts(t *testing.T) {
+	h := newTxmetaE2EHarness(t, "v1", 32)
+	defer h.close()
+
+	hashes, payloads := makeUniqueHashes(t, 4, 64)
+	h.publishV1(t, hashes, payloads)
+	h.waitProcessed(t, 4, 5*time.Second)
+
+	evicted := hashes[:2]
+	require.NoError(t, h.server.txmetaHandler(h.ctx, &kafka.KafkaMessage{Value: txmetacache.EncodeDeleteBatch(evicted)}))
+
+	for i := range hashes {
+		_, ok := h.cache.GetRaw(hashes[i][:])
+		require.Equalf(t, i >= len(evicted), ok, "entry %d: evicted=%v, still cached=%v", i, i < len(evicted), ok)
+	}
 }

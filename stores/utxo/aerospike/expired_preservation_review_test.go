@@ -117,7 +117,7 @@ func TestApplyChildDAHFollowUps_ErrorLineNamesFailedTxIDs(t *testing.T) {
 	ids := make([]chainhash.Hash, 15)
 	for i := range ids {
 		ids[i] = chainhash.Hash{byte(i + 1)}
-		f.addUnset(&ids[i], 1)
+		f.addUnset(&ids[i], 1, dahVersion{})
 	}
 
 	res := s.applyChildDAHFollowUps(context.Background(), &f)
@@ -176,7 +176,7 @@ func TestSetDAHForChildRecordsMulti_MissingPageWarnNamesMasters(t *testing.T) {
 		items[i] = childDAHItem{TxID: &ids[i], ChildCount: 2, DeleteAtHeight: 10}
 	}
 
-	require.NoError(t, s.SetDAHForChildRecordsMulti(items), "a missing page is benign")
+	require.NoError(t, s.setDAHForChildRecordsMultiAt(items), "a missing page is benign")
 	require.Len(t, logger.warns, 1)
 
 	line := logger.warns[0]

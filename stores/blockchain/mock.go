@@ -24,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/usql"
 )
 
@@ -567,6 +568,12 @@ func (m *MockStore) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader,
 	return m.BestBlock.Header, &model.BlockHeaderMeta{Height: m.BestBlock.Height}, nil
 }
 
+// GetBestBlockHeaderUncached answers exactly as GetBestBlockHeader does here, because the mock
+// has no cache to skip.
+func (m *MockStore) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return m.GetBestBlockHeader(ctx)
+}
+
 // GetBlockHeader retrieves a block header and its metadata by the block's hash.
 func (m *MockStore) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	m.mu.RLock()
@@ -609,17 +616,22 @@ func (m *MockStore) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Ha
 	return headers, metas, nil
 }
 
-// GetBlockHeadersFromTill retrieves block headers between two specified blocks.
-func (m *MockStore) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
-}
-
-func (m *MockStore) GetForkedBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic(implementMe)
+// GetBlockHeadersByParentLinks walks parent links exactly as GetBlockHeaders does here, because
+// the mock has no main-chain flag to select by.
+func (m *MockStore) GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return m.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
 }
 
 func (m *MockStore) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
+}
+
+func (m *MockStore) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
+}
+
+func (m *MockStore) ClearBestTipLowWater(ctx context.Context, expected []byte) error {
+	return nil
 }
 
 // GetBlockHeadersByHeight retrieves block headers within a specified height range.
@@ -681,6 +693,58 @@ func (m *MockStore) RevalidateBlock(ctx context.Context, blockHash *chainhash.Ha
 	panic(implementMe)
 }
 
+func (m *MockStore) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lane.LeaseID, lane.Grant, int, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (lane.Grant, bool, bool, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) ReleaseLaneLease(ctx context.Context, req options.LaneLeaseRelease) (bool, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) CloseStaleLaneLeases(ctx context.Context, closeAfter time.Duration) (int, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane.MapRow) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) LaneMapRowsEndingAbove(ctx context.Context, laneNum uint8, above uint64) ([]lane.BlockMapRow, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) InsertLaneConversionSegment(ctx context.Context, seg lane.ConversionSegment) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) LaneConversionSegments(ctx context.Context) ([]lane.ConversionSegment, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) InsertLaneConversionBlocks(ctx context.Context, segment uint32, blocks []lane.ConversionBlock) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) LaneConversionBlocks(ctx context.Context, segment uint32) ([]lane.ConversionBlock, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) CompleteLaneConversionSegment(ctx context.Context, segment uint32, auditDigest chainhash.Hash) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) LaneConversionComplete(ctx context.Context, segment uint32) (bool, error) {
+	panic(implementMe)
+}
+
 func (m *MockStore) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	panic(implementMe)
 }
@@ -723,7 +787,7 @@ func (m *MockStore) GetBlockIsMined(_ context.Context, blockHash *chainhash.Hash
 	return isMined, nil
 }
 
-func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, expectedGeneration *uint64) error {
 	panic(implementMe)
 }
 
@@ -758,10 +822,6 @@ func (m *MockStore) SetBlockPersistedAt(ctx context.Context, blockHash *chainhas
 // GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
 func (m *MockStore) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
 	return []*model.Block{}, nil
-}
-
-func (m *MockStore) GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error) {
-	panic(implementMe)
 }
 
 func (m *MockStore) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {

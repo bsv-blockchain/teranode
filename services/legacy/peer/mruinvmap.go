@@ -82,6 +82,13 @@ func (m *mruInventoryMap) Add(iv *wire.InvVect) {
 		return
 	}
 
+	// Keep a copy, never the caller's pointer. A decoded inv message holds all
+	// its items, up to 50,000, in one backing array, so keeping a pointer to
+	// one item would keep the whole message alive for as long as the item
+	// stays in the map.
+	stored := *iv
+	iv = &stored
+
 	// Evict the least recently used entry (back of the list) if the the new
 	// entry would exceed the size limit for the map.  Also reuse the list
 	// node so a new one doesn't have to be allocated.

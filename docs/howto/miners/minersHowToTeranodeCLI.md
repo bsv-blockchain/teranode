@@ -17,6 +17,7 @@ Usage: teranode-cli <command> [options]
     Available Commands:
     aerospikekafkaconnector  Read Aerospike CDC from Kafka and filter by txID bin
     aerospikereader      Aerospike Reader
+    audit-mined-set      List blocks stored with mined_set true whose transactions lack the block id or are still locked (read-only; remedy is a resync)
     bitcointoutxoset     Bitcoin to Utxoset
     checkblock           Check block - fetches a block and validates it using the block validation service
     checkblockassembly   Check block assembly state by validating unmined transaction inputs (read-only)
@@ -30,6 +31,7 @@ Usage: teranode-cli <command> [options]
     loadunminedbench     Benchmark loadUnminedTransactions with CPU and memory profiling
     logs                 Interactive log viewer with filtering and search
     monitor              Live TUI dashboard for monitoring node status
+    prepare-lane-schema  Install the UTXO store's lane columns, empty, at lane migration step off (node must be stopped)
     reconsiderblock      Reconsider a block that was previously marked as invalid
     remainderbench       Benchmark processRemainderTransactionsAndDequeue with CPU and memory profiling
     resetblockassembly   Reset block assembly state
@@ -106,6 +108,12 @@ Usage: teranode-cli <command> [options]
 |                      |                                                | `--batch-size` - Updates per transaction (default: 1000)        |
 |                      |                                                | `--start-height` - Starting block height (default: 650286)      |
 |                      |                                                | `--end-height` - Ending block height (default: 0 for tip)       |
+| `audit-mined-set`    | List blocks stored with mined_set true whose   | `--start-height` - First height to audit (default: 0)           |
+|                      | sampled transactions lack the block ID or are  | `--end-height` - Last height to audit (required)                |
+|                      | still locked (read-only; remedy is a resync)   | `--max-blocks` - Refuse a wider range (default: 10000)          |
+| `prepare-lane-schema`| Install the UTXO store's lane columns, empty,  | none                                                             |
+|                      | at lane migration step off (node must be       |                                                                  |
+|                      | stopped; run as the tables' owner)             |                                                                  |
 | `rewindblockchain`   | Rewind blockchain DB, UTXO store and subtree   | `--target-height` - Height to rewind to (default: Block Assembly's saved height) |
 |                      | blobs to Block Assembly's persisted height     | `--dry-run` - Report the plan without modifying any store        |
 |                      | (DESTRUCTIVE - node must be stopped)           | `--assume-yes` - Skip the interactive confirmation               |
@@ -565,6 +573,8 @@ The CLI will exit with status code 1 when:
 - Invalid commands are provided
 - Required arguments are missing
 - Command execution fails
+
+`audit-mined-set` also exits 1 when it finds an affected block, and exits 2 when no block is affected but every audited block is `UNCHECKED`. Exit 2 means nothing could be checked, which is not a pass.
 
 ## Environment
 
