@@ -157,10 +157,20 @@ func TestDisagreementLogIsRateLimited(t *testing.T) {
 
 	require.Equal(t, int64(5), logger.warns.Load(), "the first five, then none within the minute")
 
-	// A minute later, one more.
 	g, ok := r.disagree.gates.Load(ReaderValidator + "/" + KindLanesOnly)
 	require.True(t, ok)
-	g.(*logGate).last.Store(time.Now().Add(-2 * time.Minute).UnixNano())
+
+	// 59 seconds after the last line, still nothing.
+	g.(*logGate).last.Store(time.Now().Add(-59 * time.Second).UnixNano())
+
+	for range 20 {
+		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, 0)
+	}
+
+	require.Equal(t, int64(5), logger.warns.Load(), "nothing within the minute")
+
+	// 61 seconds after it, one more.
+	g.(*logGate).last.Store(time.Now().Add(-61 * time.Second).UnixNano())
 
 	for range 20 {
 		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, 0)

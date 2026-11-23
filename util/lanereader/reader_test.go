@@ -237,10 +237,31 @@ func TestReaderAtOffDoesNothing(t *testing.T) {
 	_, ok := prepareView(r, t.Context(), chainhash.Hash{})
 	require.False(t, ok)
 
+	initMetrics()
+
+	total := func() float64 {
+		var sum float64
+
+		for _, reader := range readers {
+			for _, k := range kinds {
+				for _, v := range []lane.Via{lane.ViaNone, lane.ViaRow, lane.ViaFloor} {
+					sum += answers(reader, k, v)
+				}
+			}
+		}
+
+		return sum
+	}
+
+	before := total()
+
 	r.BlockParents(t.Context(), chainhash.Hash{}).ObserveParent(chainhash.Hash{}, lane.Pack(1, 1), []uint32{1})
 	r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(1, 1), true, 1)
 	r.CompareBlocks(ReaderBlockParent, nil, chainhash.Hash{}, lane.Pack(1, 1), []uint32{1})
 	r.compareDuplicates(nil, KindNotReady, chainhash.Hash{}, 1, false)
+	r.ShadowDuplicates(t.Context(), chainhash.Hash{}, 1, false)
+
+	require.Equal(t, before, total(), "a nil reader counts nothing")
 }
 
 // Each kind of comparison is counted once, under its reader and what answered.

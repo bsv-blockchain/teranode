@@ -47,7 +47,8 @@ const (
 	pollInterval = time.Second
 
 	// walkBatch is how many headers one step of a walk back along the chain reads, and maxWalk
-	// how far back a walk goes looking for a block the index holds before it rebuilds instead.
+	// how far back a walk goes looking for a block the index holds before it rebuilds instead,
+	// checked between batches, so at most 1,024 headers (walkLimit).
 	walkBatch = 64
 	maxWalk   = 1_000
 
@@ -313,7 +314,8 @@ func (r *Reader) rebuild(ctx context.Context, tip chainhash.Hash, reason string)
 var errBehindIndex = errors.NewProcessingError("block is below the lane index's start")
 
 // loadAncestry loads into the index every block from hash back to the first one it holds. It
-// reports false when it found none within maxWalk blocks, and errBehindIndex, before any walk, when
+// reports false when it found none within maxWalk blocks, rounded up to whole batches of
+// walkBatch (1,024 headers at the defaults), and errBehindIndex, before any walk, when
 // hash is below start. The caller holds the load token.
 func (r *Reader) loadAncestry(ctx context.Context, hash chainhash.Hash, start uint32) (bool, error) {
 	idx := r.idx.Load()
@@ -368,6 +370,13 @@ func (r *Reader) loadAncestry(ctx context.Context, hash chainhash.Hash, start ui
 	}
 
 	return true, r.load(ctx, idx, headers, metas)
+}
+
+// walkLimit is how many headers a walk back reads at most: maxWalk rounded up to whole batches.
+func (r *Reader) walkLimit() int {
+	batch := int(r.walkBatch) //nolint:gosec // a batch is small
+
+	return (r.maxWalk + batch - 1) / batch * batch
 }
 
 // load reads the rows of each block and adds the blocks to idx.
@@ -470,7 +479,7 @@ func (r *Reader) prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainV
 
 	if !found {
 		r.markUnreachable(hash, s.TipID())
-		r.prepareFailed("no_held_ancestor", "[lanereader] block %s has no block the lane index holds within %d blocks back; its checks count not_loaded until the tip moves", hash.String(), r.maxWalk)
+		r.prepareFailed("no_held_ancestor", "[lanereader] block %s has no block the lane index holds within %d blocks back; its checks count not_loaded until the tip moves", hash.String(), r.walkLimit())
 
 		return nil, KindNotLoaded
 	}
