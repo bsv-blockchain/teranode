@@ -159,15 +159,10 @@ func removedLanePosition(pool any, deletedPositions *txmap.SyncedMap[chainhash.H
 		return position, true
 	}
 
-	if position := poolLanePosition(pool, hash); position != 0 {
+	// back in the pool, or gone: one read that says both, so a tx cleared between two reads is
+	// not taken as present without a position
+	if position, found := poolLookupPosition(pool, hash); found {
 		return position, true
-	}
-
-	if m, ok := pool.(interface {
-		Exists(hash chainhash.Hash) bool
-	}); ok && m.Exists(hash) {
-		// re-added after the read above: read it once more
-		return poolLanePosition(pool, hash), true
 	}
 
 	return 0, false
@@ -182,6 +177,32 @@ type laneCollector struct {
 
 func newLaneCollector() *laneCollector {
 	return &laneCollector{BitmapsBuilder: lane.NewBitmapsBuilder()}
+}
+
+// poolLookupPosition reads hash's lane position from the pool map and whether the map holds hash.
+// Both pool maps answer from one read (LookupPosition); a map without it is asked whether it holds
+// hash after its position read, and a read error counts as not held.
+func poolLookupPosition(pool any, hash chainhash.Hash) (uint64, bool) {
+	if m, ok := pool.(interface {
+		LookupPosition(hash chainhash.Hash) (uint64, bool, error)
+	}); ok {
+		position, found, err := m.LookupPosition(hash)
+
+		return position, found && err == nil
+	}
+
+	if position := poolLanePosition(pool, hash); position != 0 {
+		return position, true
+	}
+
+	if m, ok := pool.(interface {
+		Exists(hash chainhash.Hash) bool
+	}); ok && m.Exists(hash) {
+		// re-added after the read above: read it once more
+		return poolLanePosition(pool, hash), true
+	}
+
+	return 0, false
 }
 
 // poolLanePosition reads hash's lane position from the pool map, 0 when it holds none or does not

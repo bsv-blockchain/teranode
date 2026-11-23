@@ -1094,6 +1094,27 @@ func (m *DiskTxMap) PositionWithErr(hash chainhash.Hash) (uint64, error) {
 	return position, nil
 }
 
+// LookupPosition returns hash's lane position and whether the map holds hash, from one pinned
+// entry, so a tx deleted or re-added between two reads cannot be seen as present with no
+// position. A read error is returned, not recorded on the map, as PositionWithErr does.
+func (m *DiskTxMap) LookupPosition(hash chainhash.Hash) (uint64, bool, error) {
+	s, g, entry, exists := m.pinEntry(hash)
+	if !exists {
+		return 0, false, nil
+	}
+
+	defer unpin(s, g)
+
+	payload, magic, err := readRecord(g, g.logOf(hash), entryOffset(entry))
+	if err != nil {
+		return 0, false, err
+	}
+
+	_, position := splitPositioned(payload, magic)
+
+	return position, true, nil
+}
+
 // readEntry reads and decodes the record of hash's entry in g, which the caller has pinned.
 func (m *DiskTxMap) readEntry(g *generation, hash chainhash.Hash, entry uint64) (*subtreepkg.TxInpoints, uint64, error) {
 	logIdx := g.logOf(hash)

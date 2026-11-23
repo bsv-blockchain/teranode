@@ -479,6 +479,23 @@ func (s *SplitTxInpointsMap) Position(hash chainhash.Hash) uint64 {
 	return recordPosition(b.record(h))
 }
 
+// LookupPosition returns hash's lane position and whether the map holds hash, read under one
+// bucket lock, so a tx deleted or re-added between two reads cannot be seen as present with no
+// position.
+func (s *SplitTxInpointsMap) LookupPosition(hash chainhash.Hash) (uint64, bool, error) {
+	b := s.bucket(hash)
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	h, ok := b.handle(hash)
+	if !ok {
+		return 0, false, nil
+	}
+
+	return recordPosition(b.record(h)), true, nil
+}
+
 func (s *SplitTxInpointsMap) Length() int {
 	length := 0
 

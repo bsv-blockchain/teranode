@@ -2757,4 +2757,22 @@ func TestIngestHandsLanePositionsOnlyAtShadow(t *testing.T) {
 	t.Run("a tx without a position", func(t *testing.T) {
 		require.Nil(t, handedPositions(t, true, columnar(nil)))
 	})
+
+	t.Run("AddTxBatch hands each tx its own position", func(t *testing.T) {
+		second, third := lane.Pack(2, 41), lane.Pack(3, 42)
+
+		several := func(ba *BlockAssembly) error {
+			requests := make([]*blockassembly_api.AddTxRequest, 3)
+			for i, p := range []uint64{0, second, third} {
+				hash := chainhash.HashH([]byte{byte(i), 0x5a})
+				requests[i] = &blockassembly_api.AddTxRequest{Txid: hash[:], Fee: 1, Size: 100, TxInpoints: parentLinks, LanePosition: p}
+			}
+
+			_, err := ba.AddTxBatch(context.Background(), &blockassembly_api.AddTxBatchRequest{TxRequests: requests})
+
+			return err
+		}
+
+		require.Equal(t, []uint64{0, second, third}, handedPositions(t, true, several))
+	})
 }

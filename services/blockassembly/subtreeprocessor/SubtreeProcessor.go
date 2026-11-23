@@ -1640,11 +1640,13 @@ func (stp *SubtreeProcessor) forgetLanePosition(hash chainhash.Hash) {
 // deleted from currentTxMap, at utxostore_laneMigration shadow, so a subtree being stored with it
 // meanwhile keeps it in its lane bitmaps.
 //
-// The two backups are written position first and dropped inpoints first (cleanupDeletedTxs), and a
-// storage worker reads the position before the inpoints. So a worker that finds the inpoints
-// backup also finds the position backup, even when another storage request's cleanup drops them
-// meanwhile: a worker whose position read comes after the drop finds no inpoints either, and its
-// meta pass fails rather than storing bitmaps without the tx.
+// The two backups are separate maps. They are written position first and dropped inpoints first
+// (cleanupDeletedTxs), and a storage worker reads the position before the inpoints, which narrows
+// the window in which a worker finds one without the other but does not close it: another storage
+// request's cleanup can drop a backup between the processor's two writes. So 0 is recorded for a
+// tx without a position, and a worker that finds the inpoints backup but no position entry treats
+// the position as unknown: the subtree's lane bitmaps are not kept or written, while its meta is
+// still stored.
 func (stp *SubtreeProcessor) backUpLanePosition(hash chainhash.Hash) {
 	if stp.deletedPositions == nil {
 		return

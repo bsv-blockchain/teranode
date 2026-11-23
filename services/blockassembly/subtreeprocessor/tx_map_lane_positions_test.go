@@ -335,3 +335,43 @@ func TestDiskTxMapPositionWithErrLeavesNoErrorOnTheMap(t *testing.T) {
 	require.Zero(t, m.Position(hash))
 	require.Error(t, m.TakeErr(), "the processor's own read records it")
 }
+
+// TestLookupPositionSaysWhetherTheMapHoldsTheTx: LookupPosition answers a tx's position and
+// whether the map holds it from one read, on both maps: a positioned tx, one without a position,
+// and one the map does not hold.
+func TestLookupPositionSaysWhetherTheMapHoldsTheTx(t *testing.T) {
+	for name, m := range laneTestMaps(t) {
+		t.Run(name, func(t *testing.T) {
+			lookup := m.(interface {
+				LookupPosition(hash chainhash.Hash) (uint64, bool, error)
+			})
+
+			positioned := chainhash.HashH([]byte("lookup-positioned-" + name))
+			plain := chainhash.HashH([]byte("lookup-plain-" + name))
+			missing := chainhash.HashH([]byte("lookup-missing-" + name))
+
+			m.SetAt(positioned, laneTestInpoints(1), lane.Pack(6, 9))
+			m.Set(plain, laneTestInpoints(2))
+
+			position, found, err := lookup.LookupPosition(positioned)
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Equal(t, lane.Pack(6, 9), position)
+
+			position, found, err = lookup.LookupPosition(plain)
+			require.NoError(t, err)
+			require.True(t, found, "held, without a position")
+			require.Zero(t, position)
+
+			_, found, err = lookup.LookupPosition(missing)
+			require.NoError(t, err)
+			require.False(t, found)
+
+			require.True(t, m.Delete(positioned))
+
+			_, found, err = lookup.LookupPosition(positioned)
+			require.NoError(t, err)
+			require.False(t, found, "deleted")
+		})
+	}
+}
