@@ -65,6 +65,7 @@ func newBootStateBlockchain(t *testing.T, configured string, params *chaincfg.Pa
 
 	tSettings := &settings.Settings{ChainCfgParams: params}
 	tSettings.BlockChain.InitializeNodeInState = configured
+	setLaneLeaseTimings(tSettings)
 
 	store, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)

@@ -262,9 +262,9 @@ func TestHandleBlockNotification_SuppressesConsecutiveDuplicateTip(t *testing.T)
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil).Maybe()
 	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).
-		Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+		Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100, SubtreesSet: true}, nil).Maybe()
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).
-		Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+		Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100, SubtreesSet: true}, nil).Maybe()
 	mockBlockchain.On("GetState", mock.Anything, mock.Anything).
 		Return([]byte(nil), errors.NewNotFoundError("not set")).Maybe()
 
@@ -304,9 +304,9 @@ func TestHandleBlockNotification_EmptyMeshDoesNotArmSuppression(t *testing.T) {
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil).Maybe()
 	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).
-		Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+		Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100, SubtreesSet: true}, nil).Maybe()
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).
-		Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+		Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100, SubtreesSet: true}, nil).Maybe()
 	mockBlockchain.On("GetState", mock.Anything, mock.Anything).
 		Return([]byte(nil), errors.NewNotFoundError("not set")).Maybe()
 

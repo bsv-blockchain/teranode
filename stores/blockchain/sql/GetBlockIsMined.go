@@ -82,7 +82,9 @@ func (s *SQL) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (b
 	}
 
 	// Cache the mining status result
-	cacheOp.Set(isMined, s.cacheTTL)
+	if isMined {
+		cacheOp.Set(isMined, s.cacheTTL)
+	}
 
 	return isMined, nil
 }

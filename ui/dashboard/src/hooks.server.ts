@@ -1,6 +1,37 @@
 import type { Handle } from '@sveltejs/kit'
 
 /**
+ * The Content-Security-Policy served with the dashboard.
+ *
+ * This hook does NOT run in production: the dashboard is built with adapter-static and served by
+ * the Go asset service, so the authoritative copy is the constant in
+ * services/asset/httpimpl/http.go. Fix that one; this copy is kept byte-identical to it so
+ * development and production cannot drift apart, and it is exported so the browser test asserts the
+ * same string rather than a fourth transcription of it.
+ *
+ * It is defence in depth, not a strict policy: 'unsafe-inline' is required by the three inline
+ * scripts the built dashboard carries, so inline event handlers still fire, and connect-src stays
+ * wide because the dashboard drives remote teranode instances.
+ *
+ * ws: is listed explicitly rather than left to 'self'. The dashboard does open its live feed over
+ * ws:// when it is served over plain http - routes/api/config/websocket/+server.ts picks the scheme
+ * from the page's own protocol - and whether 'self' covers a same-origin ws:// URL is a CSP3
+ * refinement rather than something the directive plainly says. Naming the scheme costs nothing here
+ * and removes the dependence on that refinement. The request host is deliberately not interpolated.
+ */
+export const CONTENT_SECURITY_POLICY =
+  "default-src 'self'; " +
+  "script-src 'self' 'unsafe-inline'; " +
+  "style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data:; " +
+  "font-src 'self' data:; " +
+  "object-src 'none'; " +
+  "base-uri 'self'; " +
+  "form-action 'self'; " +
+  "frame-ancestors 'none'; " +
+  "connect-src 'self' https: wss: ws:"
+
+/**
  * Server-side middleware to protect routes that require authentication
  */
 export const handle: Handle = async ({ event, resolve }) => {
@@ -42,23 +73,9 @@ export const handle: Handle = async ({ event, resolve }) => {
     // Prevent MIME type sniffing
     response.headers.set('X-Content-Type-Options', 'nosniff')
 
-    // Build dynamic connect-src based on the request host so that the CSP works
-    // regardless of whether the dashboard is accessed via localhost or a remote hostname.
-    const host = event.request.headers.get('host') ?? 'localhost:8090'
-    const httpOrigin = `http://${host}`
-    const wsOrigin = `ws://${host}`
-    const wssOrigin = `wss://${host}`
-
-    // Content Security Policy with allowances for the asset service, centrifuge websocket, and external teranode instances
-    // Allow connections to any https:// URL for teranode instances, but restrict other resource types
-    response.headers.set(
-      'Content-Security-Policy',
-      "default-src 'self'; " +
-        "script-src 'self' 'unsafe-inline'; " +
-        "style-src 'self' 'unsafe-inline'; " +
-        "img-src 'self' data:; " +
-        `connect-src 'self' ${httpOrigin} ${wsOrigin} ${wssOrigin} https: wss:;`,
-    )
+    // Content Security Policy. See CONTENT_SECURITY_POLICY above for why this copy exists and
+    // what the policy does and does not buy.
+    response.headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY)
 
     // Referrer policy
     response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')

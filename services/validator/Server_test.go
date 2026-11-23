@@ -14,11 +14,13 @@ import (
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/labstack/echo/v4"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -495,4 +497,138 @@ func TestHandleSingleTxAttachesVerdictHeader(t *testing.T) {
 	// behaves exactly as before.
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	require.Contains(t, rec.Body.String(), "[handleSingleTx] Failed to process transaction: ")
+}
+
+// TestHandleKafkaTxMessage_RefusedWhileSyncing pins issue 2003 on the validator
+// Kafka consumer: in CATCHINGBLOCKS the message is dropped and committed
+// without the validator, the only thing that writes the UTXO store, ever
+// seeing it. RUNNING and a cached IDLE both validate. The gRPC and HTTP
+// endpoints are left ungated on purpose, because block and subtree validation
+// use them during catch-up.
+func TestHandleKafkaTxMessage_RefusedWhileSyncing(t *testing.T) {
+	initPrometheusMetrics()
+
+	for _, tt := range []struct {
+		state   blockchain.FSMStateType
+		refuses bool
+	}{
+		{blockchain.FSMStateCATCHINGBLOCKS, true},
+		{blockchain.FSMStateRUNNING, false},
+		{blockchain.FSMStateIDLE, false},
+	} {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			state := tt.state
+			blockchainClient := &blockchain.Mock{}
+			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+			// NewServer builds the gate, so this also checks the wiring.
+			server := NewServer(ulogger.TestLogger{}, test.CreateBaseTestSettings(t), nil, blockchainClient, nil, nil, nil, nil, nil)
+
+			validated := 0
+			server.validator = &MockValidator{
+				ValidateFunc: func(context.Context, *bt.Tx) (*meta.Data, error) {
+					validated++
+					return &meta.Data{}, nil
+				},
+			}
+
+			refusedBefore := server.unminedTxGate.RefusedTotal()
+
+			require.NoError(t, server.handleKafkaTxMessage(context.Background(), kafkaTxMessage(t)))
+
+			if tt.refuses {
+				require.Equal(t, 0, validated, "a refused tx must not reach the validator or the UTXO store")
+				require.InDelta(t, refusedBefore+1, server.unminedTxGate.RefusedTotal(), 0)
+
+				return
+			}
+
+			require.Equal(t, 1, validated)
+			require.InDelta(t, refusedBefore, server.unminedTxGate.RefusedTotal(), 0)
+		})
+	}
+}
+
+// TestValidateTransaction_NotRefusedWhileSyncing is the other half of issue
+// 2003: subtree and block validation call this endpoint during catch-up to
+// check a block's own transactions, so CATCHINGBLOCKS must not refuse here.
+func TestValidateTransaction_NotRefusedWhileSyncing(t *testing.T) {
+	initPrometheusMetrics()
+
+	state := blockchain.FSMStateCATCHINGBLOCKS
+	blockchainClient := &blockchain.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+	server := NewServer(ulogger.TestLogger{}, test.CreateBaseTestSettings(t), nil, blockchainClient, nil, nil, nil, nil, nil)
+
+	validated := 0
+	server.validator = &MockValidator{
+		ValidateFunc: func(context.Context, *bt.Tx) (*meta.Data, error) {
+			validated++
+			return &meta.Data{}, nil
+		},
+	}
+
+	_, err := server.ValidateTransaction(context.Background(), &validator_api.ValidateTransactionRequest{TransactionData: sampleTx, BlockHeight: 100})
+	require.NoError(t, err)
+	require.Equal(t, 1, validated)
+}
+
+// A Kafka transaction that block assembly refused at its in-memory limit was valid: the node had
+// no room for it. It must not count or log as an invalid transaction, once per message, on top of
+// the validator's own rate-limited drop warning.
+func TestHandleKafkaTxMessage_HeldLimitShedIsNotInvalid(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := &capturingLogger{}
+
+	server := NewServer(logger, test.CreateBaseTestSettings(t), nil, nil, nil, nil, nil, nil, nil)
+	server.validator = &MockValidator{
+		ValidateFunc: func(context.Context, *bt.Tx) (*meta.Data, error) {
+			return nil, heldLimitShed()
+		},
+	}
+
+	invalidBefore := testutil.ToFloat64(prometheusInvalidTransactions)
+	heldBefore := testutil.ToFloat64(prometheusHeldLimitShedTransactions)
+
+	require.NoError(t, server.handleKafkaTxMessage(context.Background(), kafkaTxMessage(t)), "the offset is committed without a second error line")
+	require.Equal(t, invalidBefore, testutil.ToFloat64(prometheusInvalidTransactions), "a held shed is not an invalid transaction")
+	require.Equal(t, heldBefore+1, testutil.ToFloat64(prometheusHeldLimitShedTransactions), "it is counted on its own")
+
+	for _, line := range logger.lines {
+		require.NotContains(t, line, "Invalid tx", "no per-message invalid-tx line for a held shed")
+	}
+}
+
+// With block assembly at its limit the validator sheds an ingest transaction before it touches the
+// UTXO store. The Kafka handler must treat that early shed as it treats block assembly's own: the
+// offset is committed, the transaction is not invalid, and it is counted once as a held shed.
+func TestHandleKafkaTxMessage_EarlyHeldShedIsNotInvalidAndCountedOnce(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := &capturingLogger{}
+	v, spy, baStore, realStore, childTx, parentTx, _ := recoverySetupWithLogger(t, "kafka_early_held_shed", 1)
+	v.heldGate = atLimitGate(t)
+
+	server := NewServer(logger, test.CreateBaseTestSettings(t), nil, nil, nil, nil, nil, nil, nil)
+	server.validator = v
+
+	invalidBefore := testutil.ToFloat64(prometheusInvalidTransactions)
+	heldBefore := testutil.ToFloat64(prometheusHeldLimitShedTransactions)
+	droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
+
+	require.NoError(t, server.handleKafkaTxMessage(context.Background(), kafkaTxMessageFor(t, childTx.ExtendedBytes())), "the offset is committed")
+	require.Equal(t, invalidBefore, testutil.ToFloat64(prometheusInvalidTransactions), "a held shed is not an invalid transaction")
+	require.Equal(t, heldBefore+1, testutil.ToFloat64(prometheusHeldLimitShedTransactions), "it is counted once, by the handler")
+	require.Equal(t, droppedBefore+1, testutil.ToFloat64(prometheusValidatorShedDroppedTotal), "the drop of an ingest transaction is still counted")
+
+	require.Equal(t, 0, baStore.calls, "block assembly was never called")
+	require.Equal(t, 0, spy.unspendCalls)
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "the parent was never spent")
+
+	for _, line := range logger.lines {
+		require.NotContains(t, line, "Invalid tx", "no per-message invalid-tx line for a held shed")
+	}
 }

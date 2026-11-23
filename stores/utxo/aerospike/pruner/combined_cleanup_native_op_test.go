@@ -44,7 +44,7 @@ func TestBuildCombinedCleanupRecords_PrefersNativeBuilderOverUDF(t *testing.T) {
 
 	s := &Service{
 		luaPackage: "teranode", // provider always sets this as the UDF fallback
-		buildAddDeletedChildrenRecord: func(p *aerospike.BatchUDFPolicy, key *aerospike.Key, childHashes []interface{}) aerospike.BatchRecordIfc {
+		buildAddDeletedChildrenRecord: func(p *aerospike.BatchUDFPolicy, key *aerospike.Key, childHashes []*chainhash.Hash) aerospike.BatchRecordIfc {
 			nativeCalls++
 			return aerospike.NewBatchWrite(aerospike.NewBatchWritePolicy(), key, aerospike.TouchOp())
 		},

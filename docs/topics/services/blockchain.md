@@ -112,11 +112,11 @@ Explanation of the sequences:
 
 ### 2.3. Sending new block notifications to the Block Persister
 
-The Blockchain service, after adding a new block, emits a Kafka notification which is received by the Block Persister service. The Block Persister service is responsible for post-processing the block and storing it in a file format, in a persistent data store (such as S3).
+The Blockchain service, after adding a new block, emits a `blocks-final` Kafka notification. The Block Persister service does **not** consume this topic — the only Kafka consumer of `blocks-final` is the Legacy P2P service (`netsync.SyncManager`), which uses it to announce new blocks to legacy (pre-libp2p) peers. The Block Persister instead polls the Blockchain service over gRPC (`GetBlocksNotPersisted`), waking every `blockpersister_persistSleep` (default 10s), and post-processes each returned block into a file format in a persistent data store (such as S3).
 
 ![blockchain_send_to_block_persister.svg](img/plantuml/blockchain/blockchain_send_to_block_persister.svg)
 
-The Blockchain service, based on standard practices, will retry sending the message until Kafka receives it. In case of Kafka downtime, the service will keep retrying for as long as the message is not sent.
+The Blockchain service, based on standard practices, will retry sending the `blocks-final` message until Kafka receives it. In case of Kafka downtime, the service will keep retrying for as long as the message is not sent.
 
 ### 2.4. Getting a block from the blockchain
 
@@ -432,10 +432,8 @@ stores/blockchain
     ├── GetBlockStats.go
     ├── GetBlock_test.go
     ├── GetBlocks.go
-    ├── GetBlocksByTime.go
     ├── GetBlocksMinedNotSet.go
     ├── GetBlocksSubtreesNotSet.go
-    ├── GetForkedBlockHeaders.go
     ├── GetHashOfAncestorBlock.go
     ├── GetHashOfAncestorBlock_test.go
     ├── GetHeader.go
@@ -542,7 +540,7 @@ Block notifications are serialized using Protocol Buffers and contain:
 
 #### Topics
 
-- **Blocks-Final**: Used for finalized block notifications, consumed by the Block Persister service.
+- **Blocks-Final**: Used for finalized block notifications, consumed by the Legacy P2P service (`netsync.SyncManager`) — not the Block Persister, which has no Kafka consumer and instead polls the Blockchain service over gRPC.
 
 #### Error Handling
 
@@ -574,33 +572,13 @@ The Blockchain Service implements sophisticated chain reorganization handling wi
 - Uses rollback and catch-up operations to handle chain reorganizations
 - Selects the active tip purely by cumulative chainwork (most-work-wins); tip selection itself is **not** depth-capped. Deep-reorg / secret-mining protection is enforced in the Block Validation catchup path rather than by a blockchain-level reorg-depth limit (see *Configuration Options* below).
 
-##### Optimized Longest Chain Selection
+##### Longest Chain Selection
 
-The service employs an optimized algorithm for tracking and selecting the longest valid chain:
+- **Chainwork, not height**: Each block row stores its cumulative `chain_work` from genesis. The best block is the valid block with the most `chain_work`, with ties broken by `peer_id` and then `id` (`getBestBlockID`).
+- **One transaction for a fork insert**: For a block that does not extend the current best, `StoreBlock` writes the row and repairs the `on_main_chain` flags in one SQL transaction.
+- **Response cache**: the best block, `GetChainTips` and `GetForkedBlockHeaders` results sit in the store's general response cache. `StoreBlock`, `InvalidateBlock` and `RevalidateBlock` reset it, so the next query reads the new state. Cached chain-tip results expire after 2 minutes.
 
-**Key Features:**
-
-- **Efficient Chain Comparison**: Uses cumulative proof-of-work (chainwork) rather than simple block height for chain selection
-- **Fast Fork Detection**: Maintains indexed fork points to quickly identify competing chains
-- **Minimal Database Queries**: Caches chain tips and their accumulated work to reduce database load
-- **Parallel Validation**: Can validate multiple competing chain tips simultaneously
-
-**Implementation Details:**
-
-1. **Chainwork Tracking**: Each block stores cumulative chainwork from genesis, allowing O(1) chain strength comparison
-2. **Fork Point Cache**: Maintains an in-memory cache of recent fork points for rapid reorganization detection
-3. **Tip Management**: Tracks multiple competing chain tips with their associated metadata:
-    - Total chainwork
-    - Block height
-    - Last validation timestamp
-    - Fork depth from main chain
-
-**Performance Benefits:**
-
-- Reduced latency in chain selection during high fork activity
-- Lower database load through intelligent caching
-- Faster recovery from network partitions
-- Improved resilience to chain split scenarios
+There is no dedicated tip-tracking structure and no fork-point index. For the order in which the Blockchain service, Block Validation, Block Assembly and the UTXO store react to a reorg, see [Reorg Coordination Order](../architecture/teranode-overall-system-design.md#921-reorg-coordination-order).
 
 **Configuration Options:**
 

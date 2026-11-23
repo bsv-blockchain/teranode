@@ -102,7 +102,7 @@ log.Infof("Batch completed: %d removed, %d retries incremented", removedCount, r
 **Use Case**: Multiple pruner instances, distributed processing, guaranteed no duplicates
 
 **Methods**:
-- `AcquireBlobDeletionBatch(height, limit, lock_timeout)` - Get batch with lock token
+- `AcquireBlobDeletionBatch(height, limit, lock_timeout, exclude_store_types)` - Get batch with lock token, leaving out the listed store types
 - `CompleteBlobDeletionBatch(batch_token, completed_ids[], failed_ids[], max_retries)` - Complete batch
 
 **Pros**:
@@ -121,7 +121,7 @@ log.Infof("Batch completed: %d removed, %d retries incremented", removedCount, r
 ```go
 // Acquire batch with lock
 batchToken, deletions, err := blockchainClient.AcquireBlobDeletionBatch(
-    ctx, currentHeight, 1000, 300) // 300s = 5min timeout
+    ctx, currentHeight, 1000, 300, nil) // 300s = 5min timeout; nil = no store types excluded
 
 if batchToken == "" {
     log.Info("No deletions available")

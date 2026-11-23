@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,11 +38,60 @@ func TestBlockAssemblyTxMapDirs_SinglePath(t *testing.T) {
 }
 
 // Unset must stay empty — that is what selects the in-memory SplitTxInpointsMap.
+// The shipped default is checked in the committed settings.conf, not through
+// NewSettings, so a developer's settings_local.conf that sets the key can neither
+// fail this test nor mask a committed value.
 func TestBlockAssemblyTxMapDirs_DefaultEmpty(t *testing.T) {
+	requireUnsetInCommittedConf(t, "blockassembly_txMapDirs")
+	ignoreLocalConf(t, "blockassembly_txMapDirs")
+
 	tSettings := NewSettings()
 
 	require.Empty(t, tSettings.BlockAssembly.TxMapDirs,
 		"default must be empty so the in-memory map stays the default behaviour")
+}
+
+// blockassembly_subtreeMmapDir and blockvalidation_subtreeMmapDir were dead the
+// same way blockassembly_txMapDirs was: both fields are declared with full
+// documentation and both are consumed downstream -- BlockAssembler passes
+// SubtreeMmapDir to subtreeprocessor.WithMmapDir, BlockValidation copies it to
+// its own mmapDir and branches on it in subtreeFromBytesWithMmap -- but
+// NewSettings never read either one. Both were therefore always "", so the
+// `!= ""` guards never fired and NewTreeByLeafCountMmap / NewSubtreeFromReaderMmap
+// were unreachable by any configuration. As with TxMapDirs there is no fallback
+// log line to find it by, because the mmap path is never entered at all.
+func TestBlockAssemblySubtreeMmapDir_EnvIsRead(t *testing.T) {
+	t.Setenv("blockassembly_subtreeMmapDir", "/data/subtree-mmap")
+
+	tSettings := NewSettings()
+
+	require.Equal(t, "/data/subtree-mmap", tSettings.BlockAssembly.SubtreeMmapDir,
+		"the path must reach the setting, or mmap-backed subtree Nodes can never be enabled")
+}
+
+func TestBlockValidationSubtreeMmapDir_EnvIsRead(t *testing.T) {
+	t.Setenv("blockvalidation_subtreeMmapDir", "/data/subtree-mmap")
+
+	tSettings := NewSettings()
+
+	require.Equal(t, "/data/subtree-mmap", tSettings.BlockValidation.SubtreeMmapDir,
+		"the path must reach the setting, or mmap-backed subtree loading can never be enabled")
+}
+
+// Unset must stay empty: that is what selects heap-allocated Nodes, which is the
+// documented default and the behaviour every existing deployment has today.
+func TestSubtreeMmapDir_DefaultEmpty(t *testing.T) {
+	for _, key := range []string{"blockassembly_subtreeMmapDir", "blockvalidation_subtreeMmapDir"} {
+		requireUnsetInCommittedConf(t, key)
+		ignoreLocalConf(t, key)
+	}
+
+	tSettings := NewSettings()
+
+	require.Empty(t, tSettings.BlockAssembly.SubtreeMmapDir,
+		"default must be empty so heap-allocated Nodes stay the default behaviour")
+	require.Empty(t, tSettings.BlockValidation.SubtreeMmapDir,
+		"default must be empty so heap-allocated Nodes stay the default behaviour")
 }
 
 // knownDeadKeys are settings that are declared on Settings (and therefore
@@ -51,10 +101,8 @@ func TestBlockAssemblyTxMapDirs_DefaultEmpty(t *testing.T) {
 // retired, others are live bugs. blockassembly_txMapDirs was one of these until
 // it cost ~100 GB of block-assembly heap per node on dev-ovh-1.
 //
-// Two of these are worth calling out as the same bug in the same feature:
-// blockassembly_subtreeMmapDir and blockvalidation_subtreeMmapDir are the
-// subtree half of the mmap work that blockassembly_txMapDirs was the TxMap half
-// of. Any deployment that has mounted a volume for them is getting nothing.
+// blockassembly_subtreeMmapDir and blockvalidation_subtreeMmapDir -- the subtree
+// half of the same mmap feature -- were on this list and are now wired up.
 //
 // This list must only ever shrink. Delete an entry when you wire the key up.
 var knownDeadKeys = map[string]struct{}{
@@ -64,13 +112,11 @@ var knownDeadKeys = map[string]struct{}{
 	"postgres_circuitBreakerCooldown":              {},
 	"postgres_circuitBreakerFailureWindow":         {},
 	"aerospike_enable_preserve_filter_expressions": {},
-	"blockassembly_subtreeMmapDir":                 {},
 	"blockchain_postgres_pool":                     {},
 	"blockchain_raw_miner_tag":                     {},
 	"blockchain_subscription_timeout":              {},
 	"blockchain_peerRegistryStore":                 {},
 	"blockchain_peerRegistrySaveInterval":          {},
-	"blockvalidation_subtreeMmapDir":               {},
 	"utxostore_postgres_pool":                      {},
 	"p2p_peer_map_max_size":                        {},
 	"p2p_peer_map_ttl":                             {},
@@ -158,7 +204,9 @@ func collectKeyTags(typ reflect.Type, seen map[reflect.Type]bool) []string {
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
 
-		if key, ok := field.Tag.Lookup("key"); ok && key != "" {
+		// key:"-" marks a field as deliberately not a setting (same marker
+		// export.go honours), so it is not a key that anything should read.
+		if key, ok := field.Tag.Lookup("key"); ok && key != "" && key != keyTagExempt {
 			keys = append(keys, key)
 		}
 
@@ -166,4 +214,52 @@ func collectKeyTags(typ reflect.Type, seen map[reflect.Type]bool) []string {
 	}
 
 	return keys
+}
+
+// requireUnsetInCommittedConf fails if the committed settings.conf gives key a
+// non-empty value in any context.
+func requireUnsetInCommittedConf(t *testing.T, key string) {
+	t.Helper()
+
+	for k, v := range readCommittedSettingsConf(t) {
+		if k == key || strings.HasPrefix(k, key+".") {
+			require.Empty(t, v, "settings.conf sets %s", k)
+		}
+	}
+}
+
+// readSettingsFile must read values the way gocore does, or
+// requireUnsetInCommittedConf passes a committed value that NewSettings sees as
+// set. gocore v1.1.0 strips a pair of quotes only from a value longer than two
+// characters, so `key = ""` reaches NewSettings as the literal "", and it cuts a
+// value at the first #, not only at " #".
+func TestReadSettingsFile_MatchesGocoreValueParsing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.conf")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"quotedEmpty = \"\"\n"+
+			"quotedPath = \"/data/x\"\n"+
+			"singleQuote = \"\n"+
+			"hashInValue = /data/x#y\n"+
+			"spacedComment = /data/z # note\n",
+	), 0o600))
+
+	conf := readSettingsFile(t, path)
+
+	require.Equal(t, `""`, conf["quotedEmpty"])
+	require.Equal(t, "/data/x", conf["quotedPath"])
+	require.Equal(t, `"`, conf["singleQuote"])
+	require.Equal(t, "/data/x", conf["hashInValue"])
+	require.Equal(t, "/data/z", conf["spacedComment"])
+}
+
+// ignoreLocalConf blanks key in the environment, which gocore reads before any
+// file, when a loaded conf sets it, so a settings_local.conf cannot reach
+// NewSettings. Without one, as in CI, NewSettings still falls back to the code
+// default.
+func ignoreLocalConf(t *testing.T, key string) {
+	t.Helper()
+
+	if _, found := gocore.Config().Get(key); found {
+		t.Setenv(key, "")
+	}
 }

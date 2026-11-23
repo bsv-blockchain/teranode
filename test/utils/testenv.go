@@ -123,6 +123,7 @@ func (t *TeranodeTestEnv) SetupDockerNodes() error {
 		mapSettings := t.TConfig.Teranode.SettingsMap()
 		for key, val := range mapSettings {
 			settings := settings.NewSettings(val)
+			settings.GRPCAdminAPIKey = "docker-e2e-test-admin-key"
 			nodeName := strings.ReplaceAll(key, "SETTINGS_CONTEXT_", "teranode")
 			svNodeName := strings.ReplaceAll(nodeName, "tera", "sv")
 			t.Nodes = append(t.Nodes, TeranodeTestClient{
@@ -609,9 +610,11 @@ func (t *TeranodeTestEnv) GetMappedPort(nodeName string, port string) (network.P
 }
 
 // StopDockerNodes stops the Docker Compose services and removes volumes.
+// Each suite run uses a fresh project name (suite.testid), so volumes left
+// behind here are never reused and pile up on the Docker host.
 func (t *TeranodeTestEnv) StopDockerNodes() error {
 	if t != nil && t.Compose != nil {
-		if err := t.Compose.Down(t.Context); err != nil {
+		if err := t.Compose.Down(t.Context, tc.RemoveOrphans(true), tc.RemoveVolumes(true)); err != nil {
 			return err
 		}
 	}
@@ -619,7 +622,11 @@ func (t *TeranodeTestEnv) StopDockerNodes() error {
 	return nil
 }
 
-// RestartDockerNodes restarts the Docker Compose services.
+// RestartDockerNodes restarts the Docker Compose services. It keeps the
+// project's named volumes so the nodes come back with their chain state, and
+// StopDockerNodes removes them at the end of the test. The anonymous volumes
+// that this Down detaches from the old containers are not removed by that
+// final teardown, so each restart leaves one set of them behind.
 func (t *TeranodeTestEnv) RestartDockerNodes(envSettings map[string]string) error {
 	if t.Compose != nil {
 		if err := t.Compose.Down(t.Context); err != nil {
@@ -646,6 +653,7 @@ func (t *TeranodeTestEnv) RestartDockerNodes(envSettings map[string]string) erro
 		order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
 		for idx, key := range order {
 			settings := settings.NewSettings(envSettings[key])
+			settings.GRPCAdminAPIKey = "docker-e2e-test-admin-key"
 			t.Nodes[idx].Name = nodeNames[idx]
 			t.Nodes[idx].Settings = settings
 			t.Logger.Infof("Settings context: %s", envSettings[key])

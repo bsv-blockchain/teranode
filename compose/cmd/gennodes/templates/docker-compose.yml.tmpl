@@ -118,6 +118,13 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode{{ .Index }}.test"
+      # Required since the blockchain service began enforcing admin auth:
+      # without it the node exits at startup with CONFIGURATION (5). Set as
+      # an env var because gocore resolves the environment before any
+      # settings context. Matches compose/docker-compose-ss.yml. Guards
+      # nothing real (regtest, private docker network) but must be >= 16
+      # chars and not one of util.knownPlaceholderAPIKeys.
+      grpc_admin_api_key: docker-e2e-test-admin-key
       JAEGER_SERVICE_NAME: teranode{{ .Index }}
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831

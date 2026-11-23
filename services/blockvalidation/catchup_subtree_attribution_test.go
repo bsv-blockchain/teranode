@@ -163,8 +163,8 @@ func (c *subtreeAttributionP2PClient) ReportValidatedChainProgress(_ context.Con
 func (c *subtreeAttributionP2PClient) IsPeerMalicious(_ context.Context, _ string) (bool, string, error) {
 	return false, "", nil
 }
-func (c *subtreeAttributionP2PClient) IsPeerUnhealthy(_ context.Context, _ string) (bool, string, float32, error) {
-	return false, "", 0, nil
+func (c *subtreeAttributionP2PClient) IsPeerUnhealthy(_ context.Context, _ string) (bool, string, float32, bool, error) {
+	return false, "", 0, false, nil
 }
 func (c *subtreeAttributionP2PClient) RecordBytesDownloaded(_ context.Context, _ string, _ uint64) error {
 	return nil
@@ -221,7 +221,7 @@ func TestFetchSubtreeDataForBlock_StrikesTheServingPeerNotThePrimary(t *testing.
 	require.NoError(t, subtreeA.AddNode(*txs[3].TxIDChainHash(), 3, 13))
 	hashA := subtreeA.RootHash()
 
-	var nodeBytesA []byte
+	nodeBytesA := make([]byte, 0, len(subtreepkg.CoinbasePlaceholderHashValue)+len(txs[1].TxIDChainHash())+len(txs[2].TxIDChainHash())+len(txs[3].TxIDChainHash()))
 	nodeBytesA = append(nodeBytesA, subtreepkg.CoinbasePlaceholderHashValue[:]...)
 	nodeBytesA = append(nodeBytesA, txs[1].TxIDChainHash()[:]...)
 	nodeBytesA = append(nodeBytesA, txs[2].TxIDChainHash()[:]...)

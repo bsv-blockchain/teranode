@@ -86,23 +86,29 @@ func TestValidateBlock_CorruptBody_NotWrappedInvalidOverRPC(t *testing.T) {
 		"a corrupt body must NOT be surfaced as ERR_BLOCK_INVALID across the RPC boundary (bitcoin-sv/teranode#4692)")
 }
 
-// TestQuickValidateBlock_CorruptSubtreeVerdictUnwrapped pins the quickValidateBlock corrupt guard
-// (bitcoin-sv/teranode#4692): a corrupt-body verdict from processBlockSubtrees (here a merkle-root
-// mismatch surfaced by validateSubtrees) must be returned UNWRAPPED — IsBlockCorrupt true — and must
-// NOT be shadowed by the outer ErrProcessing wrap, which would mis-route it as a transient local
-// failure and retry the same corrupt body instead of re-downloading a fresh one.
+// TestQuickValidateBlock_CorruptSubtreeVerdictUnwrapped pins the quickValidateBlock corrupt
+// classification (bitcoin-sv/teranode#4692): a corrupt-body verdict must be returned UNWRAPPED —
+// IsBlockCorrupt true — and must NOT be shadowed by an outer ErrProcessing wrap, which would
+// mis-route it as a transient local failure and retry the same corrupt body instead of
+// re-downloading a fresh one.
 //
-// Mutation proof: deleting the `if errors.IsBlockCorrupt(err) { return err }` guard makes the error
-// fall through to NewProcessingError, so IsBlockCorrupt goes false and errors.Is(err, ErrProcessing)
-// goes true — reddening both assertions below.
+// Since bitcoin-sv/teranode#4838 the verdict for this body is produced by the whole-block binding
+// pass rather than by validateSubtrees at the tail, and so arrives BEFORE any UTXO work — which
+// this test now also asserts. The tail guard it used to exercise is still in place for a fault a
+// later batch surfaces.
+//
+// Mutation proof: wrapping bindSubtreeBodyToHeader's error at its call site in
+// errors.NewProcessingError makes IsBlockCorrupt go false and errors.Is(err, ErrProcessing) go
+// true — reddening both classification assertions; removing the call entirely reddens the
+// no-mutation assertion.
 func TestQuickValidateBlock_CorruptSubtreeVerdictUnwrapped(t *testing.T) {
 	suite := NewCatchupTestSuite(t)
 	defer suite.Cleanup()
-	setupQuickValidateMocks(suite)
+	setupQuickValidateMocksBodyRejected(suite)
 
 	block := buildOneSubtreeBlock(t, suite, 100)
-	// Zero the header merkle root so the final validateSubtrees CheckMerkleRoot cannot match the
-	// computed root — an unbound body-derived defect classified ERR_BLOCK_CORRUPT.
+	// Zero the header merkle root so CheckMerkleRoot cannot match the computed root — an unbound
+	// body-derived defect classified ERR_BLOCK_CORRUPT.
 	block.Header.HashMerkleRoot = &chainhash.Hash{}
 
 	err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
@@ -111,18 +117,19 @@ func TestQuickValidateBlock_CorruptSubtreeVerdictUnwrapped(t *testing.T) {
 		"a corrupt subtree verdict must be returned unwrapped, got: %v", err)
 	require.False(t, errors.Is(err, errors.ErrProcessing),
 		"a corrupt verdict must NOT be shadowed by an outer ErrProcessing (bitcoin-sv/teranode#4692)")
+	suite.MockUTXOStore.AssertNotCalled(t, "SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	suite.MockBlockchain.AssertNotCalled(t, "AssignBlockID", mock.Anything, mock.Anything)
 }
 
-// TestQuickValidateBlockAsync_CorruptSubtreeVerdictUnwrapped is the async twin of the guard above:
-// the corrupt-body verdict from processBlockSubtreesPipelineAsync must likewise be returned unwrapped
-// and not shadowed by ErrProcessing (bitcoin-sv/teranode#4692).
+// TestQuickValidateBlockAsync_CorruptSubtreeVerdictUnwrapped is the async twin of the check above:
+// the corrupt-body verdict must likewise be returned unwrapped and not shadowed by ErrProcessing
+// (bitcoin-sv/teranode#4692), and must precede any UTXO work (bitcoin-sv/teranode#4838).
 //
-// Mutation proof: same as the sync test — deleting the `if errors.IsBlockCorrupt(err) { return err }`
-// guard in quickValidateBlockAsync reddens both assertions.
+// Mutation proof: same as the sync test.
 func TestQuickValidateBlockAsync_CorruptSubtreeVerdictUnwrapped(t *testing.T) {
 	suite := NewCatchupTestSuite(t)
 	defer suite.Cleanup()
-	setupQuickValidateMocks(suite)
+	setupQuickValidateMocksBodyRejected(suite)
 
 	block := buildOneSubtreeBlock(t, suite, 100)
 	block.Header.HashMerkleRoot = &chainhash.Hash{}
@@ -137,6 +144,8 @@ func TestQuickValidateBlockAsync_CorruptSubtreeVerdictUnwrapped(t *testing.T) {
 		"a corrupt subtree verdict must be returned unwrapped on the async path, got: %v", err)
 	require.False(t, errors.Is(err, errors.ErrProcessing),
 		"a corrupt verdict must NOT be shadowed by an outer ErrProcessing (bitcoin-sv/teranode#4692)")
+	suite.MockUTXOStore.AssertNotCalled(t, "SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	suite.MockBlockchain.AssertNotCalled(t, "AssignBlockID", mock.Anything, mock.Anything)
 }
 
 // TestTryQuickValidation_CorruptPath pins the catchup quick-path corrupt branch
@@ -159,10 +168,19 @@ func TestQuickValidateBlockAsync_CorruptSubtreeVerdictUnwrapped(t *testing.T) {
 // freshly-written FileTypeSubtree blob present after the call, reddening the "blob removed"
 // assertion; reverting to the old wide per-hash delete would also delete
 // FileTypeSubtreeToCheck/FileTypeSubtreeData, reddening the "untouched" assertions.
+//
+// These two fixtures no longer reach the build phase (the body fails at the whole-block
+// binding pass), so the cleanup they drive has nothing of quick validation's OWN to delete.
+// Coverage for removeCatchupSubtreeFiles deleting a freshly built FileTypeSubtree now lives in
+// TestTryQuickValidation_LateCorruptPath_WaitsForDelayedWriteBeforeCleanup (the corrupt branch,
+// via a late corrupt verdict after the build phase), and in
+// TestTryQuickValidation_LaterBatchFailure_SweepsOwnSubtreeFiles and
+// TestTryQuickValidation_UnquarantinedAbort_SweepsOwnSubtreeFiles, which use a body that binds
+// cleanly and fails in a later batch (bitcoin-sv/teranode#4838).
 func TestTryQuickValidation_CorruptPath(t *testing.T) {
 	suite := NewCatchupTestSuite(t)
 	defer suite.Cleanup()
-	setupQuickValidateMocks(suite)
+	setupQuickValidateMocksBodyRejected(suite)
 
 	rec := &banScoreRecorder{}
 	suite.Server.blockValidation.p2pClient = rec
@@ -173,8 +191,9 @@ func TestTryQuickValidation_CorruptPath(t *testing.T) {
 	subtreeHash := block.Subtrees[0]
 
 	// The peer-supplied blobs (fetched by an earlier, different producer, before quick validation
-	// ever runs) are present before the corrupt drop. FileTypeSubtree does not exist yet — it is
-	// only written during this attempt's own build+queue phase.
+	// ever runs) are present before the corrupt drop. FileTypeSubtree does not exist — and since
+	// bitcoin-sv/teranode#4838 it never will for this body, because the whole-block binding pass
+	// rejects it before the build+queue phase runs at all.
 	for _, ft := range []fileformat.FileType{fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData} {
 		present, err := suite.Server.subtreeStore.Exists(suite.Ctx, subtreeHash[:], ft)
 		require.NoError(t, err)
@@ -203,10 +222,11 @@ func TestTryQuickValidation_CorruptPath(t *testing.T) {
 
 	require.Equal(t, []string{"peer-corrupt"}, rec.struck(), "the serving peer must be struck for the corrupt body")
 
-	// removeCatchupSubtreeFiles ran and deleted exactly the freshly-written FileTypeSubtree blob.
+	// An unbound body never reaches the build+queue phase, so quick validation wrote nothing of
+	// its own for cleanup to delete (bitcoin-sv/teranode#4838).
 	stillThereSubtree, err := suite.Server.subtreeStore.Exists(suite.Ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 	require.NoError(t, err)
-	require.False(t, stillThereSubtree, "the freshly-written FileTypeSubtree blob must be removed after the corrupt drop")
+	require.False(t, stillThereSubtree, "an unbound body must never have a FileTypeSubtree built for it")
 
 	// The pre-existing, non-freshly-written blobs must survive: provenance is per-(hash,
 	// fileType), so cleanup must not sweep siblings this attempt never touched.
@@ -236,17 +256,28 @@ func TestTryQuickValidation_CorruptPath(t *testing.T) {
 // FileTypeSubtreeData present after cleanup, reddening the "same-attempt fresh types deleted"
 // assertions; widening removeCatchupSubtreeFiles back to a per-hash delete would instead delete
 // the untouched sibling hash's blobs, reddening the "unrelated hash untouched" assertions.
+//
+// These two fixtures no longer reach the build phase (the body fails at the whole-block
+// binding pass), so the cleanup they drive has nothing of quick validation's OWN to delete.
+// Coverage for removeCatchupSubtreeFiles deleting a freshly built FileTypeSubtree now lives in
+// TestTryQuickValidation_LateCorruptPath_WaitsForDelayedWriteBeforeCleanup (the corrupt branch,
+// via a late corrupt verdict after the build phase), and in
+// TestTryQuickValidation_LaterBatchFailure_SweepsOwnSubtreeFiles and
+// TestTryQuickValidation_UnquarantinedAbort_SweepsOwnSubtreeFiles, which use a body that binds
+// cleanly and fails in a later batch (bitcoin-sv/teranode#4838).
 func TestTryQuickValidation_CorruptPath_MergesFetchAndQuickFreshness(t *testing.T) {
 	suite := NewCatchupTestSuite(t)
 	defer suite.Cleanup()
-	setupQuickValidateMocks(suite)
+	setupQuickValidateMocksBodyRejected(suite)
 
 	rec := &banScoreRecorder{}
 	suite.Server.blockValidation.p2pClient = rec
 
 	block := buildOneSubtreeBlock(t, suite, 100)
-	// Zero the header merkle root so quickValidateBlockAsync's final merkle check fails corrupt,
-	// AFTER this block's own FileTypeSubtree has already been built and queued.
+	// Zero the header merkle root so quickValidateBlockAsync fails corrupt. Since
+	// bitcoin-sv/teranode#4838 that happens at the whole-block binding pass, so this attempt's own
+	// FileTypeSubtree is never built — the types under test here are the FETCH phase's, which is
+	// what the merge exists for.
 	block.Header.HashMerkleRoot = &chainhash.Hash{}
 	subtreeHash := block.Subtrees[0]
 
@@ -292,12 +323,12 @@ func TestTryQuickValidation_CorruptPath_MergesFetchAndQuickFreshness(t *testing.
 	require.True(t, errors.IsBlockCorrupt(err), "the corrupt verdict must propagate, got: %v", err)
 	require.Equal(t, []string{"peer-corrupt"}, rec.struck(), "the serving peer must be struck for the corrupt body")
 
-	// All three same-attempt fresh types for THIS hash are gone: quick validation's own
-	// FileTypeSubtree, and the fetch phase's FileTypeSubtreeToCheck/FileTypeSubtreeData.
+	// The fetch phase's two types for THIS hash are gone, and quick validation's own
+	// FileTypeSubtree was never built for a body that did not bind.
 	for _, ft := range []fileformat.FileType{fileformat.FileTypeSubtree, fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData} {
 		exists, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, subtreeHash[:], ft)
 		require.NoError(t, existsErr)
-		require.False(t, exists, "%s was freshly written by this attempt (fetch phase or quick validation) and must be removed", ft)
+		require.False(t, exists, "%s must not survive the corrupt drop for this hash", ft)
 	}
 
 	// The unrelated sibling hash was never marked fresh by anything this attempt did, and must
@@ -396,6 +427,85 @@ func TestValidateBlocksOnChannel_CorruptBody_CleansUpAndPreservesClassification(
 		stillThere, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, subtreeHash[:], ft)
 		require.NoError(t, existsErr)
 		require.False(t, stillThere, "%s must be removed after a full-validation corrupt verdict", ft)
+	}
+}
+
+// TestValidateBlocksOnChannel_UnboundTxInvalidKeepsBlobsAndReportsMalicious is a regression for
+// bitcoin-sv/teranode#4844. An invalid transaction in an unbound subtree list comes back from
+// ValidateBlockWithOptions as corrupt, so the direct peer path re-downloads it under the
+// corrupt-attempt cap. On catch-up it used to take the corrupt branch too: the verified subtree
+// blobs were deleted, the hash was recorded as a corrupt body, the cycle aborted for a re-download
+// of identical bytes, and the malicious report never fired. It is now a consensus rejection: the
+// blobs stay, no corrupt hash is recorded, the primary is reported malicious, and the error still
+// aborts the cycle.
+func TestValidateBlocksOnChannel_UnboundTxInvalidKeepsBlobsAndReportsMalicious(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	rec := &catchupReportRecorder{}
+	suite.Server.p2pClient = rec
+
+	suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
+	suite.MockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
+		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
+	suite.MockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).
+		Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 99, MinedSet: true}, nil).Maybe()
+	suite.MockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	easyNBits, _ := model.NewNBitFromString("207fffff")
+	suite.MockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(easyNBits, nil).Maybe()
+
+	// Subtree validation reports an invalid transaction, which ValidateBlockWithOptions turns into
+	// the unbound invalid-transaction verdict.
+	subtreeVal := &subtreevalidation.MockSubtreeValidation{}
+	subtreeVal.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(errors.NewTxInvalidError("transaction in subtree is invalid"))
+	suite.Server.blockValidation.subtreeValidationClient = subtreeVal
+
+	block := buildOneSubtreeBlock(t, suite, 100)
+	// Re-mine: buildOneSubtreeBlock sets the merkle root after mining, and the full path checks PoW
+	// before subtree validation.
+	for {
+		if ok, _, _ := block.Header.HasMetTargetDifficulty(); ok {
+			break
+		}
+		block.Header.Nonce++
+	}
+	subtreeHash := block.Subtrees[0]
+
+	catchupCtx := &CatchupContext{
+		blockUpTo:          block,
+		baseURL:            "http://peer",
+		peerID:             "peer-primary",
+		startTime:          time.Now(),
+		useQuickValidation: false,
+	}
+
+	freshlyWritten := map[chainhash.Hash]map[fileformat.FileType]struct{}{
+		*subtreeHash: {
+			fileformat.FileTypeSubtreeToCheck: {},
+			fileformat.FileTypeSubtreeData:    {},
+		},
+	}
+
+	validateBlocksChan := make(chan blockForValidation, 1)
+	validateBlocksChan <- blockForValidation{block: block, freshlyWritten: freshlyWritten}
+	close(validateBlocksChan)
+
+	var size atomic.Int64
+	size.Store(1)
+
+	err := suite.Server.validateBlocksOnChannel(validateBlocksChan, context.Background(), catchupCtx, &size, nil)
+	require.Error(t, err, "the verdict must still abort the cycle")
+	require.True(t, isUnboundTxInvalidVerdict(err), "got: %v", err)
+
+	require.Empty(t, catchupCtx.corruptBlockHash, "a consensus rejection must not be recorded as a corrupt body")
+	require.Equal(t, []string{"peer-primary"}, rec.maliciousReported(),
+		"the primary must be reported malicious for an invalid transaction in its subtree list")
+
+	for _, ft := range []fileformat.FileType{fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData} {
+		stillThere, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, subtreeHash[:], ft)
+		require.NoError(t, existsErr)
+		require.True(t, stillThere, "%s was verified against its name and must be kept", ft)
 	}
 }
 
@@ -544,15 +654,16 @@ func (l *warnCaptureLogger) warned() []string {
 }
 
 // TestNewBlockValidation_OptimisticMiningPeerDisabled_WarnsAtStartup pins the F5 startup warning
-// (bitcoin-sv/teranode#4692): when optimistic mining is globally enabled but disabled on peer-served
-// and catch-up blocks (OptimisticMining && !OptimisticMiningPeerBlocks), NewBlockValidation must emit
-// a single warning naming the restore knob. The warning is logged synchronously at construction, so a
-// cancelled context tears down the background workers immediately.
+// (bitcoin-sv/teranode#4692): when optimistic mining is globally enabled but the peer-blocks opt-in is
+// not set (OptimisticMining && !OptimisticMiningPeerBlocks), optimistic mining stays off on every
+// validation path, and NewBlockValidation must emit a single warning naming the restore knob. The
+// warning is logged synchronously at construction, so a cancelled context tears down the background
+// workers immediately.
 //
 // Mutation proof: deleting the Warnf guard in NewBlockValidation drops the message, reddening the
 // positive case; the negative controls confirm it is not emitted otherwise.
 func TestNewBlockValidation_OptimisticMiningPeerDisabled_WarnsAtStartup(t *testing.T) {
-	const wantPhrase = "optimistic mining is enabled but disabled on peer-served"
+	const wantPhrase = "optimistic mining is enabled but stays off on every validation path"
 
 	newWith := func(t *testing.T, optimistic, peerBlocks bool) *warnCaptureLogger {
 		t.Helper()
@@ -585,7 +696,7 @@ func TestNewBlockValidation_OptimisticMiningPeerDisabled_WarnsAtStartup(t *testi
 
 	t.Run("optimistic on, peer-blocks off: warns", func(t *testing.T) {
 		require.True(t, warnedFor(newWith(t, true, false)),
-			"must warn that optimistic mining is disabled on peer-served/catch-up blocks")
+			"must warn that optimistic mining stays off on every validation path")
 	})
 
 	t.Run("optimistic on, peer-blocks on: no warning", func(t *testing.T) {

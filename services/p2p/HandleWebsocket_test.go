@@ -389,12 +389,17 @@ func TestHandleWebSocket(t *testing.T) {
 	// Signal that server is ready
 	serverReady <- struct{}{}
 
+	// Generous upper bounds: each wait returns as soon as its event happens, and a loaded
+	// CI runner (the package runs under -race next to every other package) can take
+	// longer than 2s to deliver the first frames.
+	const wait = 10 * time.Second
+
 	t.Run("Normal operation", func(t *testing.T) {
 		// Wait for server to be ready
 		select {
 		case <-serverReady:
 			t.Log("Server is ready")
-		case <-time.After(2 * time.Second):
+		case <-time.After(wait):
 			t.Fatal("Timeout waiting for server to be ready")
 		}
 
@@ -411,7 +416,7 @@ func TestHandleWebSocket(t *testing.T) {
 		select {
 		case <-connectedCh:
 			t.Log("Server acknowledged connection")
-		case <-time.After(2 * time.Second):
+		case <-time.After(wait):
 			t.Fatal("Timeout waiting for server connection acknowledgment")
 		}
 
@@ -419,7 +424,7 @@ func TestHandleWebSocket(t *testing.T) {
 
 		// First, read the initial node_status message that's sent automatically
 		t.Log("Reading initial node_status message")
-		err = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+		err = ws.SetReadDeadline(time.Now().Add(wait))
 		require.NoError(t, err)
 
 		messageType, message, err := ws.ReadMessage()
@@ -441,7 +446,7 @@ func TestHandleWebSocket(t *testing.T) {
 		// Read the test message
 		t.Log("Waiting for test message")
 
-		err = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+		err = ws.SetReadDeadline(time.Now().Add(wait))
 		require.NoError(t, err)
 
 		messageType, message, err = ws.ReadMessage()
@@ -1329,10 +1334,12 @@ func TestHandleWebSocket_InboundFrameLimits(t *testing.T) {
 
 	// requireServerClosed reads until an error and asserts it is a real
 	// close/reset from the server, not the client's own read deadline (a
-	// timeout here would mean the server never closed - a false pass).
+	// timeout here would mean the server never closed - a false pass). The
+	// deadline is an upper bound: under -race on a loaded runner the server can
+	// take more than 5s to work through a flood before it closes.
 	requireServerClosed := func(t *testing.T, ws *websocket.Conn) {
 		t.Helper()
-		require.NoError(t, ws.SetReadDeadline(time.Now().Add(5*time.Second)))
+		require.NoError(t, ws.SetReadDeadline(time.Now().Add(15*time.Second)))
 
 		for {
 			if _, _, err := ws.ReadMessage(); err != nil {
@@ -1602,8 +1609,13 @@ func TestHandleWebSocket_InitialStatusPrecedesBroadcasts(t *testing.T) {
 
 	wsURL, notificationCh := newWebSocketTestServer(t, s)
 
-	// Broadcast remote node_status messages continuously while the client
-	// connects; the first message it reads must still be our own node's.
+	// Broadcast remote node_status messages for as long as the client
+	// connects, so broadcasts race its registration; the first message it
+	// reads must still be our own node's. The fan-out is non-blocking, so on a
+	// slow runner the flood can fill the client's buffer before its write pump
+	// drains it, and the client is evicted by design before it reads anything.
+	// That is not what this test checks, so an eviction before the first read
+	// is a retry, not a failure.
 	stopFlood := make(chan struct{})
 	defer close(stopFlood)
 
@@ -1617,15 +1629,24 @@ func TestHandleWebSocket_InitialStatusPrecedesBroadcasts(t *testing.T) {
 		}
 	}()
 
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	require.NoError(t, err)
+	var data []byte
 
-	defer ws.Close()
+	require.Eventually(t, func() bool {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			return false
+		}
 
-	require.NoError(t, ws.SetReadDeadline(time.Now().Add(2*time.Second)))
+		defer ws.Close()
 
-	_, data, err := ws.ReadMessage()
-	require.NoError(t, err)
+		if err = ws.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			return false
+		}
+
+		_, data, err = ws.ReadMessage()
+
+		return err == nil // evicted before the first read: try again
+	}, 10*time.Second, 10*time.Millisecond, "never read a first message from a connection that wasn't evicted")
 
 	var msg notificationMsg
 	require.NoError(t, json.Unmarshal(data, &msg))

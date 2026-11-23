@@ -435,7 +435,7 @@ For large transactions stored externally:
 
 ## 4. Technology
 
-- **Language**: Go 1.26+
+- **Language**: Go 1.27+
 - **Communication**: gRPC (port 8096), Protocol Buffers
 - **Storage**: Store-agnostic (Aerospike or SQL via interface)
 - **Metrics**: Prometheus
@@ -530,7 +530,6 @@ For complete settings reference, see [Pruner Settings Reference](../../reference
 |---------|------|---------|-------------|
 | `startPruner` | bool | `true` | Enable/disable Pruner service |
 | `pruner_grpcPort` | int | `8096` | gRPC server port |
-| `pruner_jobTimeout` | duration | `10m` | Timeout for pruning operation completion |
 
 ### Chunk Processing Settings
 

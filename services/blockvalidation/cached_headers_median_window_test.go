@@ -46,6 +46,7 @@ func TestValidateBlock_CachedHeadersShortWindowIsRefused(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	// The flip: optimistic mining ON is what routes CachedHeaders into CheckHeaderContextual.
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	coinbaseTx, err := bt.NewTxFromString(model.CoinbaseHex)
 	require.NoError(t, err)
@@ -91,10 +92,15 @@ func TestValidateBlock_CachedHeadersShortWindowIsRefused(t *testing.T) {
 	require.False(t, cachedHeaders[len(cachedHeaders)-1].HashPrevBlock.IsEqual(&chainhash.Hash{}),
 		"the run must not reach genesis, or the carve-out would legitimately accept it")
 
+	// The header commits to the body, so subtree validation's body binding passes
+	// and the run reaches the header check this test is about.
+	merkleRoot, err := subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size()))
+	require.NoError(t, err)
+
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  parent.Hash(),
-		HashMerkleRoot: subtree.RootHash(),
+		HashMerkleRoot: merkleRoot,
 		Timestamp:      now + 100,
 		Bits:           *nBits,
 	}
@@ -210,6 +216,7 @@ func runHeaderContextRetryReachesAddBlock(t *testing.T, disableOptimisticMining 
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	coinbaseTx, err := bt.NewTxFromString(model.CoinbaseHex)
 	require.NoError(t, err)
@@ -321,11 +328,12 @@ func runHeaderContextRetryReachesAddBlock(t *testing.T, disableOptimisticMining 
 	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).
 		Return([]uint32{1, 0}, nil).Maybe()
-	mockBlockchain.On("SetBlockMinedSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockBlockchain.On("SetBlockMinedSet", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockBlockchain.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil).Maybe()
 	mockBlockchain.On("GetBlockHeadersFromHeight", mock.Anything, mock.Anything, mock.Anything).
 		Return(goodRun, goodMeta, nil).Maybe()
 	mockBlockchain.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	mockBlockchain.On("CheckBlockIsAncestorOfBlock", mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 
 	notificationChan := make(chan *blockchain_api.Notification, 1)
 	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(notificationChan, nil).Maybe()

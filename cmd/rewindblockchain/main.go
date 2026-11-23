@@ -50,6 +50,15 @@ func main() {
 
 	flag.Parse()
 
+	// flag stops at the first positional argument and ignores every flag after
+	// it, so `--assume-yes 1749330 --force-deep` would rewind to the default
+	// height without asking. Refuse instead (same guard as teranode-cli).
+	if flag.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "rewindblockchain takes no positional arguments (got %q); use --target-height\n", flag.Args())
+		flag.Usage()
+		os.Exit(2)
+	}
+
 	if showVersion {
 		fmt.Println("rewindblockchain dev")
 		return

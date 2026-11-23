@@ -12,6 +12,11 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// defaultMaxLastNBlocks is the hard ceiling applied to the 'n' parameter, matching
+// GetNBlocks and block_handler.go. Asset.MaxLastNBlocks can only tighten this, never
+// loosen it.
+const defaultMaxLastNBlocks = 1000
+
 // GetLastNBlocks handles HTTP GET requests to retrieve the most recent blocks
 // in the blockchain. It supports filtering and optional inclusion of orphaned blocks.
 //
@@ -112,6 +117,21 @@ func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid 'n' parameter", err).Error())
 		}
+	}
+
+	if n < 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("'n' parameter must not be negative").Error())
+	}
+
+	// n is always bounded, including the default: the hard ceiling matches GetNBlocks
+	// and block_handler.go, and the operator setting can only tighten it further.
+	maxN := int64(defaultMaxLastNBlocks)
+	if configuredMaxN := int64(h.settings.Asset.MaxLastNBlocks); configuredMaxN > 0 && configuredMaxN < maxN {
+		maxN = configuredMaxN
+	}
+
+	if n > maxN {
+		n = maxN
 	}
 
 	fromHeight := uint64(0)
