@@ -111,6 +111,13 @@ func Current() *Reader { return current.Load() }
 // none. The Reader follows the chain until ctx ends. A Reader started earlier in the process is
 // replaced.
 func Start(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, source Source) *Reader {
+	return StartConnecting(ctx, logger, tSettings, func(context.Context) (Source, error) { return source, nil }, 0)
+}
+
+// StartConnecting is Start with a source still to connect: the Reader is the process's at once,
+// so parent checks count not_ready while connect is retried every retry until it succeeds or ctx
+// ends. Then the Reader follows the chain from that source.
+func StartConnecting(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, connect func(context.Context) (Source, error), retry time.Duration) *Reader {
 	if !tSettings.UtxoStore.LaneMigration.Stamps() {
 		current.Store(nil)
 
@@ -122,10 +129,29 @@ func Start(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setti
 		settleDepth = uint32(tSettings.ChainCfgParams.CoinbaseMaturity)
 	}
 
-	r := newReader(logger, source, settleDepth)
+	r := newReader(logger, nil, settleDepth)
 	current.Store(r)
 
-	go r.follow(ctx)
+	go func() {
+		for {
+			source, err := connect(ctx)
+			if err == nil {
+				// The follower publishes the first snapshot after this, and the reads that use the
+				// source wait for a snapshot.
+				r.source = source
+				r.follow(ctx)
+
+				return
+			}
+
+			if ctx.Err() != nil {
+				return
+			}
+
+			r.logger.Warnf("[lanereader] connecting to the blockchain service for the lane index, retrying in %s: %v", retry, err)
+			sleep(ctx, retry)
+		}
+	}()
 
 	return r
 }

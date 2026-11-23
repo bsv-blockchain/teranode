@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/settings"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	blockchainsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
@@ -1405,4 +1406,50 @@ func TestReaderWalkEndsAtGenesisInAFullBatch(t *testing.T) {
 	require.Empty(t, kind)
 	require.NotNil(t, v)
 	require.True(t, v.Lookup(lane.Pack(4, 3)).Mined, "the fork's rows are loaded")
+}
+
+// While the source connects, the Reader is already the process's, and its parent checks count
+// not_ready; a failed connect is retried, and once one succeeds the Reader follows the chain.
+func TestReaderCountsNotReadyWhileItConnects(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+	b1 := c.add(nil, takes(t, 2, 7))
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	t.Cleanup(func() { Start(context.Background(), nil, test.CreateBaseTestSettings(t), nil) })
+
+	var attempts atomic.Int32
+
+	release := make(chan struct{})
+
+	r := StartConnecting(t.Context(), ulogger.TestLogger{}, tSettings, func(ctx context.Context) (Source, error) {
+		if attempts.Add(1) == 1 {
+			return nil, errors.NewServiceError("not yet")
+		}
+
+		select {
+		case <-release:
+			return store, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}, 10*time.Millisecond)
+
+	require.Same(t, r, Current())
+
+	requireCounted(t, ReaderValidator, KindNotReady, lane.ViaNone, func() {
+		Current().CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), true, b1.height)
+	})
+
+	require.Eventually(t, func() bool { return attempts.Load() >= 2 }, 5*time.Second, 5*time.Millisecond, "a failed connect is retried")
+
+	close(release)
+
+	require.Eventually(t, func() bool { return r.Snapshot() != nil }, 5*time.Second, 10*time.Millisecond)
+
+	requireCounted(t, ReaderValidator, KindAgree, lane.ViaRow, func() {
+		Current().CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), true, b1.height)
+	})
 }

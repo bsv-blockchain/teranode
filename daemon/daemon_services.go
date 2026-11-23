@@ -799,7 +799,7 @@ const laneReaderConnectRetry = 5 * time.Second
 // startLaneReader starts the process's lane index at utxostore_laneMigration shadow; at off it
 // starts nothing and opens no connection. The index's blockchain client connects in the
 // background: creating it waits for the blockchain service, which this same process may not have
-// started yet, and the index must never hold up a service's start.
+// started yet, so the index does not hold up a service's start.
 func (d *Daemon) startLaneReader(ctx context.Context, appSettings *settings.Settings, createLogger func(string) ulogger.Logger) {
 	if !appSettings.UtxoStore.LaneMigration.Stamps() {
 		lanereader.Start(ctx, nil, appSettings, nil)
@@ -807,30 +807,9 @@ func (d *Daemon) startLaneReader(ctx context.Context, appSettings *settings.Sett
 		return
 	}
 
-	logger := createLogger(loggerLaneReader)
-
-	go func() {
-		for {
-			blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger(loggerBlockchainClient), appSettings, serviceLaneReader)
-			if err == nil {
-				lanereader.Start(ctx, logger, appSettings, blockchainClient)
-
-				return
-			}
-
-			if ctx.Err() != nil {
-				return
-			}
-
-			logger.Warnf("[lanereader] connecting to the blockchain service for the lane index, retrying in %s: %v", laneReaderConnectRetry, err)
-
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(laneReaderConnectRetry):
-			}
-		}
-	}()
+	lanereader.StartConnecting(ctx, createLogger(loggerLaneReader), appSettings, func(ctx context.Context) (lanereader.Source, error) {
+		return d.daemonStores.GetBlockchainClient(ctx, createLogger(loggerBlockchainClient), appSettings, serviceLaneReader)
+	}, laneReaderConnectRetry)
 }
 
 // startSubtreeValidationService initializes and adds the SubtreeValidation service to the ServiceManager.

@@ -319,3 +319,25 @@ func itoa(v uint32) string {
 
 	return string(buf[i:])
 }
+
+// BenchmarkIndexTakenBeforeMainnet times the duplicate count of the newest block on mainnet's
+// backlog shape, the check block validation shadows once per peer block, and its allocations.
+func BenchmarkIndexTakenBeforeMainnet(b *testing.B) {
+	for _, spread := range []uint32{9, 30} {
+		b.Run("overlap="+itoa(spread), func(b *testing.B) {
+			takes, sample := mainnetShape(1_430, spread)
+			bi := buildBenchIndex(b, takes, sample)
+			v := bi.idx.Snapshot().Main()
+
+			_, _, hasRows := v.TakenBefore(benchBlocks)
+			require.True(b, hasRows)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for b.Loop() {
+				v.TakenBefore(benchBlocks)
+			}
+		})
+	}
+}
