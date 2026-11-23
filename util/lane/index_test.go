@@ -471,7 +471,7 @@ func TestIndexRefusesMalformedRows(t *testing.T) {
 		"first is zero":            {Lane: 3, First: 0, Last: 9, Tag: RowTagRange},
 		"first above last":         {Lane: 3, First: 10, Last: 9, Tag: RowTagRange},
 		"last past the maximum":    {Lane: 3, First: 5, Last: MaxPosition + 1, Tag: RowTagRange},
-		"unknown tag":              {Lane: 3, First: 5, Last: 9, Tag: 7},
+		"unknown tag":              {Lane: 3, First: 5, Last: 9, FirstHole: 6, Tag: 7, HoleData: portable(5, 9)},
 		"empty bitmap":             {Lane: 3, First: 5, Last: 9, Tag: RowTagRoaring64, HoleData: portable()},
 		"bitmap below the range":   {Lane: 3, First: 6, Last: 9, FirstHole: 7, Tag: RowTagRoaring64, HoleData: portable(5, 9)},
 		"bitmap short of the last": {Lane: 3, First: 5, Last: 10, FirstHole: 6, Tag: RowTagRoaring64, HoleData: portable(5, 9)},
