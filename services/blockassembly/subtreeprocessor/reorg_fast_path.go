@@ -84,6 +84,8 @@ type fastReorgPlan struct {
 func (stp *SubtreeProcessor) reorgInPlace(ctx context.Context, moveBackBlocks, moveForwardBlocks []*model.Block, moveBackConflicting [][]chainhash.Hash) (*reorgFastResult, error) {
 	plan, reason := stp.planFastReorg(ctx, moveBackBlocks, moveForwardBlocks, moveBackConflicting)
 	if plan == nil {
+		// the sets prepared for the winners are no use to the slow path, which allocates next
+		stp.releaseForkPrepared()
 		stp.declineFastPath(reason)
 
 		return nil, nil
@@ -158,9 +160,16 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks, 
 		return nil, "tx_map_length"
 	}
 
+	// A set prepared while the winners were validated is in the live heap already, so the gate does
+	// not charge it again, and it is not read again below.
+	preparedWinners, preparedConflicting, usePrepared := stp.takePreparedForkSet(moveForwardBlocks)
+
 	var setBytes uint64
-	for _, block := range moveForwardBlocks {
-		setBytes += block.TransactionCount * fastPathSetBytesPerHash
+
+	if !usePrepared {
+		for _, block := range moveForwardBlocks {
+			setBytes += block.TransactionCount * fastPathSetBytesPerHash
+		}
 	}
 
 	// The pending set is charged twice: the flat copy of the survivors (copySurvivors) is alive while the
@@ -193,7 +202,9 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks, 
 		err         error
 	)
 
-	if plan.winners, conflicting, err = stp.buildUnionSet(ctx, moveForwardBlocks); err != nil {
+	if usePrepared {
+		plan.winners, conflicting = preparedWinners, preparedConflicting
+	} else if plan.winners, conflicting, err = stp.buildUnionSet(ctx, moveForwardBlocks); err != nil {
 		stp.logger.Warnf("[reorgInPlace] cannot build the set of the winning blocks, declining: %v", err)
 
 		return nil, "read_failed"

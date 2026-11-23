@@ -1,11 +1,14 @@
 package subtreeprocessor
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"math"
 	"math/rand/v2"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +16,8 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
@@ -637,5 +642,237 @@ func TestReorgDifferential_FastPathUnionFilteredFinalDrain(t *testing.T) {
 	for h := range hashes {
 		require.Contains(t, slow.order, h, "the slow path kept the arrival")
 		require.NotContains(t, fast.order, h, "the fast path dropped it")
+	}
+}
+
+// keyLogStore notes how many bytes are read from each key of the subtree store. Opening a file is not
+// reading it: checkMoveForwardSubtreesOpen opens every winning subtree up front and closes it.
+type keyLogStore struct {
+	blob.Store
+	mu   sync.Mutex
+	read map[chainhash.Hash]int
+}
+
+type loggedReader struct {
+	io.ReadCloser
+	store *keyLogStore
+	key   chainhash.Hash
+}
+
+func (r *loggedReader) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+
+	r.store.mu.Lock()
+	r.store.read[r.key] += n
+	r.store.mu.Unlock()
+
+	return n, err
+}
+
+func (s *keyLogStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (io.ReadCloser, error) {
+	reader, err := s.Store.GetIoReader(ctx, key, fileType, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	return &loggedReader{ReadCloser: reader, store: s, key: chainhash.Hash(key)}, nil
+}
+
+// forwardBytesRead is how many bytes have been read from the winning blocks' subtrees.
+func (s *keyLogStore) forwardBytesRead(sc *reorgScenario) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	n := 0
+
+	for _, block := range sc.forward {
+		for _, st := range block.Subtrees {
+			n += s.read[*st]
+		}
+	}
+
+	return n
+}
+
+// logSubtreeReads starts noting the subtree reads of the scenario's processor.
+func logSubtreeReads(sc *reorgScenario) *keyLogStore {
+	log := &keyLogStore{Store: sc.stp.subtreeStore, read: make(map[chainhash.Hash]int)}
+	sc.stp.subtreeStore = log
+
+	return log
+}
+
+// prepareForwardSet puts into the processor's fork slot the set that PrepareBlock builds for the
+// scenario's winning blocks, from blocks[0] to blocks[n-1], built as it builds them. The scenario's
+// headers do not commit to their subtrees, so the bind in PrepareBlock is left out.
+func (sc *reorgScenario) prepareForwardSet(t testing.TB, n int) {
+	t.Helper()
+
+	blocks := sc.forward[:n]
+	e := &forkPrepared{tip: *sc.lost.Hash(), done: make(chan struct{}), cancel: func() {}}
+
+	for _, block := range blocks {
+		list := make([]chainhash.Hash, len(block.Subtrees))
+		for i, st := range block.Subtrees {
+			list[i] = *st
+		}
+
+		e.blocks = append(e.blocks, *block.Hash())
+		e.subtrees = append(e.subtrees, list)
+	}
+
+	var err error
+
+	e.txMap, e.conflicting, err = sc.stp.buildUnionSet(context.Background(), blocks)
+	require.NoError(t, err)
+	close(e.done)
+
+	sc.stp.preparedMu.Lock()
+	sc.stp.preparedFork = append(sc.stp.preparedFork, e)
+	sc.stp.preparedMu.Unlock()
+}
+
+// With the winning blocks' set prepared, the fast path uses it: the winners' subtrees are not read
+// again, and the reorg ends as it does without the set.
+func TestReorgFastPath_UsesTheSetPreparedForTheWinners(t *testing.T) {
+	cfg := smallScenarioConfig()
+
+	var (
+		reads    int
+		slotLeft int
+	)
+
+	prepared := func(t testing.TB, sc *reorgScenario) error {
+		sc.prepareForwardSet(t, len(sc.forward))
+
+		log := logSubtreeReads(sc)
+		err := fastReorgPath(t, sc)
+		reads, slotLeft = log.forwardBytesRead(sc), len(forkEntries(sc.stp))
+
+		return err
+	}
+
+	requireReorgEquivalent(t, cfg, slowReference, prepared)
+	require.Zero(t, reads, "the winners' subtrees are in the prepared set")
+	require.Zero(t, slotLeft, "the slot is let go")
+
+	// the control: the same reorg without the set reads them
+	requireReorgEquivalent(t, cfg, slowReference, func(t testing.TB, sc *reorgScenario) error {
+		log := logSubtreeReads(sc)
+		err := fastReorgPath(t, sc)
+		reads = log.forwardBytesRead(sc)
+
+		return err
+	})
+	require.Positive(t, reads)
+}
+
+// A set prepared for other blocks than the ones the reorg moves onto is not used.
+func TestReorgFastPath_IgnoresASetPreparedForOtherBlocks(t *testing.T) {
+	reads := 0
+
+	requireReorgEquivalent(t, smallScenarioConfig(), slowReference, func(t testing.TB, sc *reorgScenario) error {
+		sc.prepareForwardSet(t, 1)
+
+		log := logSubtreeReads(sc)
+		err := fastReorgPath(t, sc)
+		reads = log.forwardBytesRead(sc)
+
+		return err
+	})
+	require.Positive(t, reads, "the set is of the first winner only, so the winners are read")
+}
+
+// The sets are let go whenever the fast path declines, before the slow path allocates: at a gate
+// before the set is taken, and at one after.
+func TestReorgFastPath_LetsGoOfThePreparedSetsWhenItDeclines(t *testing.T) {
+	for name, c := range map[string]struct {
+		reason string
+		tweak  func(cfg *reorgScenarioConfig)
+	}{
+		"before the set is taken": {"tx_map_length", func(cfg *reorgScenarioConfig) { cfg.duplicateInPending = 4 }},
+		"after the set is taken":  {"hits_exceed_survivors", func(cfg *reorgScenarioConfig) { cfg.pendingInWinners = 0.9 }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := smallScenarioConfig()
+			c.tweak(&cfg)
+
+			left := -1
+
+			var rec fastPathRun
+
+			requireReorgEquivalent(t, cfg, slowReference, func(t testing.TB, sc *reorgScenario) error {
+				sc.prepareForwardSet(t, 1)
+				sc.prepareForwardSet(t, 2)
+
+				err := recordingFastPath(&rec)(t, sc)
+				left = len(forkEntries(sc.stp))
+
+				return err
+			})
+			require.Equal(t, []string{c.reason}, rec.reasons)
+			require.Zero(t, left)
+		})
+	}
+}
+
+// The memory gate charges the winners' set only when the fast path has to build it: a prepared set is
+// in the live heap already.
+func TestReorgFastPath_MemoryGateDoesNotChargeAPreparedSetTwice(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+
+	var setBytes uint64
+	for _, block := range sc.forward {
+		setBytes += block.TransactionCount * fastPathSetBytesPerHash
+	}
+
+	pending := uint64(sc.stp.currentTxMap.Length())
+	live := uint64(1 << 20)
+	// three quarters of the limit sit between the two sums
+	limit := int64((live + 2*pending*fastPathBytesPerPending + setBytes/2) / 3 * 4)
+
+	old := reorgMemoryStats
+	reorgMemoryStats = func() (uint64, int64) { return live, limit }
+
+	defer func() { reorgMemoryStats = old }()
+
+	var rec fastPathRun
+
+	require.NoError(t, recordingFastPath(&rec)(t, sc))
+	require.Equal(t, []string{"memory"}, rec.reasons, "built from the store, the set is charged")
+
+	prepared := newReorgScenario(t, smallScenarioConfig())
+	prepared.prepareForwardSet(t, len(prepared.forward))
+
+	rec = fastPathRun{}
+
+	require.NoError(t, recordingFastPath(&rec)(t, prepared))
+	require.True(t, rec.applied, "prepared, the set is not charged again: %v", rec.reasons)
+}
+
+// The differential harness still matches the slow path on prepared sets, over what the fast path's own
+// differential cases run.
+func TestReorgDifferential_FastPathWithPreparedSetsMatchesSlow(t *testing.T) {
+	configs := map[string]func(cfg *reorgScenarioConfig){
+		"small":         func(cfg *reorgScenarioConfig) {},
+		"one winner":    func(cfg *reorgScenarioConfig) { cfg.forwardBlocks = 1 },
+		"hits at front": func(cfg *reorgScenarioConfig) { cfg.hitsAtFront = true },
+		"disk map":      func(cfg *reorgScenarioConfig) { cfg.diskTxMap = true },
+	}
+
+	for name, tweak := range configs {
+		t.Run(name, func(t *testing.T) {
+			cfg := smallScenarioConfig()
+			tweak(&cfg)
+
+			var rec fastPathRun
+
+			requireReorgEquivalent(t, cfg, slowReference, func(t testing.TB, sc *reorgScenario) error {
+				sc.prepareForwardSet(t, len(sc.forward))
+
+				return recordingFastPath(&rec)(t, sc)
+			})
+			require.True(t, rec.applied, "declined: %v", rec.reasons)
+		})
 	}
 }
